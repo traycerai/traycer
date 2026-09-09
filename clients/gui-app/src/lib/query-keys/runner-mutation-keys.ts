@@ -81,6 +81,9 @@ export const runnerMutationKeys = {
   // heap walk.
   captureHeapSnapshot: () =>
     ["runner.diagnostics.captureHeapSnapshot"] as const,
+  // Per-isolate JS heap readout of this renderer (Diagnostics → Memory): the
+  // page plus every dedicated worker, which a heap snapshot cannot see.
+  measureJsHeaps: () => ["runner.diagnostics.measureJsHeaps"] as const,
   // Force-refresh the registry update probe (bypasses the desktop's 24h
   // on-disk cache). Used by the Settings → Host Updates row's
   // "Check now" / "Retry" buttons so stale cached failures don't survive
@@ -91,7 +94,13 @@ export const runnerMutationKeys = {
   // reloads. Keyed so the destructive action dedups and shows in devtools.
   clearAllLocalData: () => ["runner.clearAllLocalData"] as const,
   mermaidPngDownload: () => ["runner.mermaidPngDownload"] as const,
+  // The desktop link bridge (`useOpenExternalLink`) - every URL that leaves
+  // the app goes through this one mutation.
   openExternalLink: () => ["runner.openExternalLink"] as const,
+  // Login import: the macOS Full Disk Access pane, via its own RunnerHost
+  // method (the http(s)-only external-link gate refuses the pane's scheme).
+  openFullDiskAccessSettings: () =>
+    ["runner.openFullDiskAccessSettings"] as const,
   // Re-open a file the desktop save dialog just wrote (`fileDrops.openSavedFile`).
   openSavedFile: () => ["runner.fileDrops.openSavedFile"] as const,
   // Windows frameless title-bar menu strip: pop up a top-level native submenu.

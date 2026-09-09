@@ -25,13 +25,22 @@ import { createReportIssueContext } from "@/lib/report-issue-context";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
 
 /**
- * The row's status glyph: the epic's notification indicator when it has one,
- * its running state when an agent is working, and a plain layers icon
- * otherwise. Status rather than an action, which is why both list bodies keep
- * it however far they trim the rest of the row.
+ * A task row's status: the epic's notification indicator when it has one, its
+ * running state when an agent is working, and `defaultIcon` otherwise. Every
+ * surface that lists tasks reads the same two sources through this one
+ * component, so a task that is running or wants attention looks the same in
+ * the desktop list, the phone's history and the phone's nav drawer. Phases
+ * have no live agent activity and are never looked up for it.
+ *
+ * `defaultIcon` is what an idle, unread-free row shows: a glyph where the
+ * surface wants every row to carry one, or `null` where a row without status
+ * should carry nothing at all.
  */
-export function HistoryRowLeadingIcon(props: {
+export function HistoryRowStatusIcon(props: {
   readonly item: HistoryItem;
+  readonly testIdPrefix: string;
+  readonly className: string | undefined;
+  readonly defaultIcon: ReactNode;
 }): ReactNode {
   const activityStatus = useEpicActivityStatus(
     props.item.taskType === "epic" ? props.item.epicId : null,
@@ -45,15 +54,33 @@ export function HistoryRowLeadingIcon(props: {
       state={indicatorState}
       running={activityStatus === "idle" ? false : activityStatus}
       subjectId={props.item.epicId}
-      testIdPrefix="epics-list-row"
-      className="text-muted-foreground group-hover/list-row:text-foreground"
+      testIdPrefix={props.testIdPrefix}
+      className={props.className}
       style={undefined}
       runningTitle="Task activity in progress"
+      defaultIcon={props.defaultIcon}
+      statusPresentation="message"
+      agentSurface="gui"
+    />
+  );
+}
+
+/**
+ * The history row's leading glyph: the task's status, and a plain layers icon
+ * when it has none. Status rather than an action, which is why both list
+ * bodies keep it however far they trim the rest of the row.
+ */
+export function HistoryRowLeadingIcon(props: {
+  readonly item: HistoryItem;
+}): ReactNode {
+  return (
+    <HistoryRowStatusIcon
+      item={props.item}
+      testIdPrefix="epics-list-row"
+      className="text-muted-foreground group-hover/list-row:text-foreground"
       defaultIcon={
         <Layers className="size-4 shrink-0 text-muted-foreground group-hover/list-row:text-foreground" />
       }
-      statusPresentation="message"
-      agentSurface="gui"
     />
   );
 }

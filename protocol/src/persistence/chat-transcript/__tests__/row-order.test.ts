@@ -6,6 +6,7 @@ import type {
 import {
   compareCanonicalRowOrder,
   eventMaterializesTranscriptRow,
+  importedChatMarkerRowSource,
   notificationAnchorRowSource,
   sortIntoCanonicalRowOrder,
   type CanonicalRowOrderKey,
@@ -260,5 +261,67 @@ describe("eventMaterializesTranscriptRow", () => {
     });
 
     expect(eventMaterializesTranscriptRow(event)).toBe(false);
+  });
+});
+
+describe("importedChatMarkerRowSource", () => {
+  const wellFormed = {
+    sourceProvider: "claude",
+    nativeSessionId: "native-1",
+    importedAt: 9_000,
+    sourceCwd: "/repo",
+  };
+
+  it("returns the parsed provenance for a well-formed chat.imported, and the event materializes a row", () => {
+    const event = makeChatEvent({
+      eventId: "e-import",
+      type: "chat.imported",
+      timestamp: 9_000,
+      message: null,
+      metadata: wellFormed,
+    });
+    expect(importedChatMarkerRowSource(event)).toEqual(wellFormed);
+    expect(eventMaterializesTranscriptRow(event)).toBe(true);
+  });
+
+  it("returns null for chat.imported with metadata: null", () => {
+    const event = makeChatEvent({
+      eventId: "e-import",
+      type: "chat.imported",
+      timestamp: 9_000,
+      message: null,
+      metadata: null,
+    });
+    expect(importedChatMarkerRowSource(event)).toBeNull();
+    expect(eventMaterializesTranscriptRow(event)).toBe(false);
+  });
+
+  it("returns null when a required field is missing or empty - the renderer draws no row either", () => {
+    for (const metadata of [
+      { ...wellFormed, sourceCwd: "" },
+      { ...wellFormed, importedAt: "yesterday" },
+      { sourceProvider: "claude" },
+    ]) {
+      const event = makeChatEvent({
+        eventId: "e-import",
+        type: "chat.imported",
+        timestamp: 9_000,
+        message: null,
+        metadata,
+      });
+      expect(importedChatMarkerRowSource(event)).toBeNull();
+      expect(eventMaterializesTranscriptRow(event)).toBe(false);
+    }
+  });
+
+  it("returns null for an unrelated event type carrying the same bag", () => {
+    const event = makeChatEvent({
+      eventId: "e-other",
+      type: "chat.forked",
+      timestamp: 9_000,
+      message: null,
+      metadata: wellFormed,
+    });
+    expect(importedChatMarkerRowSource(event)).toBeNull();
   });
 });

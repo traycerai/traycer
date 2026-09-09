@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
@@ -300,5 +300,27 @@ describe("terminal sidebar fleet identity consumers", () => {
         }),
       ]),
     );
+  });
+
+  it("pins each opened row, so clicking a second row keeps the first open", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab(EPIC_ID, "Epic");
+
+    render(wrapper(<TerminalsPanelBody epicId={EPIC_ID} tabId={tabId} />));
+
+    const hostARow = screen.getByText("Host A shell").closest("button");
+    const hostBRow = screen.getByText("Host B shell").closest("button");
+    if (hostARow === null || hostBRow === null) {
+      throw new Error("expected both fleet rows");
+    }
+
+    fireEvent.click(hostARow);
+    fireEvent.click(hostBRow);
+
+    // Double-click on a terminal row is RENAME, so a `single` (preview)
+    // gesture would leave NO gesture that pins the tile: the second row's
+    // preview would evict the first one's.
+    const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
+    expect(Object.keys(canvas?.tilesByInstanceId ?? {})).toHaveLength(2);
   });
 });

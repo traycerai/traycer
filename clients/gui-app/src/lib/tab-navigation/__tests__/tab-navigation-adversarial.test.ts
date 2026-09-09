@@ -1220,6 +1220,95 @@ describe("adversarial navigation: permanent observer & hydration queue", () => {
     expect(requireSerial(nav.lastEnvelope())).toBeGreaterThan(0);
   });
 
+  it("rejects a superseded pre-hydration activation before navigating it", () => {
+    const a = openEpic("epic-a", "A");
+    const b = openEpic("epic-b", "B");
+    seedCommittedLayout({
+      version: 2,
+      items: [
+        { kind: "tab", id: tabItemId(a.ref), ref: a.ref },
+        { kind: "tab", id: tabItemId(b.ref), ref: b.ref },
+      ],
+      activeItemId: tabItemId(a.ref),
+      systemTabs: { history: null, settings: null },
+    });
+    const navA = makeDeferredNavigate();
+    const navB = makeDeferredNavigate();
+    const onARejected = vi.fn();
+    const onBRejected = vi.fn();
+
+    activateTabIntent(navA.asNavigate, epicIntent("epic-a", a.tabId), {
+      onRejected: onARejected,
+    });
+    activateTabIntent(navB.asNavigate, epicIntent("epic-b", b.tabId), {
+      onRejected: onBRejected,
+    });
+
+    expect(onARejected).toHaveBeenCalledTimes(1);
+    expect(onARejected.mock.calls[0]?.[0]).toEqual(
+      new Error("Another task was opened before this task could open."),
+    );
+    expect(navA.calls).toHaveLength(0);
+    expect(navB.calls).toHaveLength(0);
+
+    releaseHydration(navB.asNavigate);
+
+    expect(navA.calls).toHaveLength(0);
+    expect(navB.calls).toHaveLength(1);
+    expect(onBRejected).not.toHaveBeenCalled();
+    expect(navB.lastEnvelope().targetRefKey).toBe(tabRefKey(b.ref));
+  });
+
+  it("reports an invalid queued activation after hydration releases it", () => {
+    const first = openEpic("epic-phase", "Phase Epic");
+    const second = openEpic("epic-phase", "Phase Epic other tab");
+    seedCommittedLayout({
+      version: 2,
+      items: [
+        { kind: "tab", id: tabItemId(first.ref), ref: first.ref },
+        { kind: "tab", id: tabItemId(second.ref), ref: second.ref },
+      ],
+      activeItemId: tabItemId(first.ref),
+      systemTabs: { history: null, settings: null },
+    });
+    const unsubscribeRace = tabCommandCoordinator.subscribe(() => {
+      const current = useEpicCanvasStore.getState().tabsById[first.tabId];
+      if (current?.epicId === "epic-phase") {
+        resolveTabEpicIdentity(first.tabId, "epic-phase", "epic-racer");
+      }
+    });
+    onTestFinished(unsubscribeRace);
+    const nav = makeDeferredNavigate();
+    const onRejected = vi.fn();
+
+    expect(
+      activateTabIntent(
+        nav.asNavigate,
+        completeEpicMigrationIntent({
+          sourceEpicId: "epic-phase",
+          epicId: "epic-migrated",
+          tabId: first.tabId,
+          focus: {
+            focusedAt: 123,
+            focusArtifactId: undefined,
+            focusThreadId: undefined,
+            migrationSource: undefined,
+          },
+          nestedFocus: null,
+        }),
+        { replace: true, onRejected },
+      ),
+    ).toBe(true);
+    expect(nav.calls).toHaveLength(0);
+
+    releaseHydration(nav.asNavigate);
+
+    expect(onRejected).toHaveBeenCalledWith(
+      new Error("The task could not be opened. Try again."),
+    );
+    expect(nav.calls).toHaveLength(0);
+  });
+
   it("pre-hydration /draft/new creates and routes one draft only after hydration", () => {
     const nav = makeDeferredNavigate();
     const location = {
@@ -2148,7 +2237,7 @@ describe("adversarial navigation: Resource Monitor nested + Phase completion", (
             name: "Resource chat",
             hostId: "host-resource",
           },
-          preview: false,
+          gesture: "explicit",
         },
         includeNestedFocus: true,
       }),
@@ -2252,6 +2341,7 @@ describe("adversarial navigation: Resource Monitor nested + Phase completion", (
     });
     onTestFinished(unsubscribeRace);
 
+    const onRejected = vi.fn();
     let result: boolean | undefined;
     expect(() => {
       result = activateTabIntent(
@@ -2268,10 +2358,13 @@ describe("adversarial navigation: Resource Monitor nested + Phase completion", (
           },
           nestedFocus: null,
         }),
-        { replace: true },
+        { replace: true, onRejected },
       );
     }).not.toThrow();
     expect(result).toBe(false);
+    expect(onRejected).toHaveBeenCalledWith(
+      new Error("The task could not be opened. Try again."),
+    );
     expect(nav.calls.length).toBe(0);
     expect(useEpicCanvasStore.getState().tabsById[first.tabId]?.epicId).toBe(
       "epic-racer",

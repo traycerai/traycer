@@ -7,13 +7,13 @@ import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 
 const hookMocks = vi.hoisted(() => ({
   request: vi.fn<(method: string, payload: unknown) => Promise<unknown>>(),
-  openTileInTab: vi.fn(),
-  openTileInPane: vi.fn(),
+  openTile: vi.fn(),
+  /** The epic's nested-focus seam, as `useEpicTileNavigation` receives it. */
+  navigateNested: vi.fn(),
+  /** The seam each `openTileWithNavigation` call was handed. */
+  navigationSeams: new Array<NavigateNestedFocus>(),
   markArtifactPendingCreate: vi.fn(),
   unmarkArtifactPendingCreate: vi.fn(),
-  navigateNested: vi.fn(
-    (_epicId: string, _tabId: string, prepare: () => unknown) => prepare(),
-  ),
 }));
 
 interface FakeHostClient {
@@ -60,34 +60,40 @@ vi.mock("@/lib/host/runtime", () => ({
   useHostBinding: () => ({ hostClient: fakeHostClient }),
 }));
 
-// The placeholder open is routed through the nested-focus navigation
-// boundary: `navigateNested` is mocked to synchronously invoke `prepare()`
-// (mirroring `bundle-open-button.test.tsx`), and the `prepare...FocusTarget`
-// store helpers forward to the same `openTileInTab` / `openTileInPane` spies
-// the pre-migration tests asserted on directly, so this proves the boundary
-// is exercised without rewriting every existing assertion.
+// The placeholder open goes through the one `openTile` seam, so the spy
+// receives the whole intent (target tab, gesture, placement, dedupe) and the
+// assertions below read the placement decision straight off it.
 vi.mock("@/stores/epics/canvas/store", () => ({
   useEpicCanvasStore: <T,>(selector: (s: unknown) => T): T =>
     selector({
-      prepareOpenTileInTabFocusTarget: (tabId: string, node: unknown) => {
-        hookMocks.openTileInTab(tabId, node);
-        return null;
-      },
-      prepareOpenTileInPaneFocusTarget: (
-        tabId: string,
-        paneId: string,
-        node: unknown,
-      ) => {
-        hookMocks.openTileInPane(tabId, paneId, node);
-        return null;
-      },
       markArtifactPendingCreate: hookMocks.markArtifactPendingCreate,
       unmarkArtifactPendingCreate: hookMocks.unmarkArtifactPendingCreate,
     }),
 }));
 
+// `useEpicTileNavigation` itself stays REAL, so the test also proves the hook
+// commits through the nested-focus route boundary (T5) rather than mutating
+// the canvas behind it: the executor seam is captured and compared against the
+// epic's own `navigateNestedFocus`.
 vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
   useEpicNestedFocusNavigation: () => hookMocks.navigateNested,
+}));
+
+vi.mock("@/lib/canvas/tile-open/open-tile", () => ({
+  MANUAL_TILE_OPEN: { createTab: true, pipOrigin: "manual" },
+  commitWithoutNavigation: (
+    _epicId: string,
+    _tabId: string,
+    prepare: () => unknown,
+  ) => prepare(),
+  openTileWithNavigation: (
+    intent: TileOpenIntent,
+    navigateNested: NavigateNestedFocus,
+  ) => {
+    hookMocks.navigationSeams.push(navigateNested);
+    hookMocks.openTile(intent);
+    return null;
+  },
 }));
 
 vi.mock("sonner", () => ({
@@ -114,6 +120,9 @@ import {
 } from "@/hooks/agent/use-create-tui-agent";
 import { TuiForkProfileRejectedError } from "@/lib/tui-fork-profile-rejection";
 import { peekPreparedTerminalAgentLaunch } from "@/stores/terminals/prepared-terminal-agent-launch-store";
+import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
+import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 
 const EPIC_ID = "epic-1";
 const TAB_ID = "tab-1";
@@ -195,11 +204,10 @@ function setupSequencedMock(): {
 describe("useCreateTuiAgent", () => {
   beforeEach(() => {
     hookMocks.request.mockReset();
-    hookMocks.openTileInTab.mockReset();
-    hookMocks.openTileInPane.mockReset();
+    hookMocks.openTile.mockReset();
+    hookMocks.navigationSeams.length = 0;
     hookMocks.markArtifactPendingCreate.mockReset();
     hookMocks.unmarkArtifactPendingCreate.mockReset();
-    hookMocks.navigateNested.mockClear();
     useTuiForkProfileSupportedMock.mockReset();
     useTuiForkProfileSupportedMock.mockReturnValue(true);
   });
@@ -262,7 +270,7 @@ describe("useCreateTuiAgent", () => {
           tabId: TAB_ID,
           parentId: null,
           title: "",
-          placement: { kind: "active-tile" },
+          placement: null,
           harnessId: "claude",
           model: null,
           reasoningEffort: null,
@@ -357,7 +365,7 @@ describe("useCreateTuiAgent", () => {
           tabId: TAB_ID,
           parentId: null,
           title: "",
-          placement: { kind: "active-tile" },
+          placement: null,
           harnessId: "claude",
           model: null,
           reasoningEffort: null,
@@ -411,7 +419,7 @@ describe("useCreateTuiAgent", () => {
         tabId: TAB_ID,
         parentId: null,
         title: "",
-        placement: { kind: "active-tile" },
+        placement: null,
         harnessId: "claude",
         model: null,
         reasoningEffort: null,
@@ -486,7 +494,7 @@ describe("useCreateTuiAgent", () => {
         tabId: TAB_ID,
         parentId: null,
         title: "",
-        placement: { kind: "active-tile" },
+        placement: null,
         harnessId: "claude",
         model: null,
         reasoningEffort: null,
@@ -561,7 +569,7 @@ describe("useCreateTuiAgent", () => {
         tabId: TAB_ID,
         parentId: "source-parent",
         title: "Fork - Source terminal",
-        placement: { kind: "active-tile" },
+        placement: null,
         harnessId: "claude",
         model: "claude-sonnet-4",
         reasoningEffort: "high",
@@ -580,7 +588,7 @@ describe("useCreateTuiAgent", () => {
       expect(startState.resolve).not.toBeNull();
     });
     expect(statuses).toEqual(["forking-session"]);
-    expect(hookMocks.openTileInTab).not.toHaveBeenCalled();
+    expect(hookMocks.openTile).not.toHaveBeenCalled();
     expect(hookMocks.markArtifactPendingCreate).not.toHaveBeenCalled();
     expect(calls.some((c) => c.method === "epic.createTuiAgent")).toBe(false);
 
@@ -658,13 +666,16 @@ describe("useCreateTuiAgent", () => {
       worktreeBusyPaths: [],
     });
     expect(statuses).toEqual(["forking-session", "starting-terminal"]);
-    expect(hookMocks.openTileInTab).toHaveBeenCalledTimes(1);
-    expect(hookMocks.openTileInTab).toHaveBeenCalledWith(
-      TAB_ID,
+    expect(hookMocks.openTile).toHaveBeenCalledTimes(1);
+    expect(hookMocks.openTile).toHaveBeenCalledWith(
       expect.objectContaining({
-        type: "terminal-agent",
-        name: "Fork - Source terminal",
-        pendingTuiHarnessId: "claude",
+        target: { tabId: TAB_ID },
+        gesture: "explicit",
+        node: expect.objectContaining({
+          type: "terminal-agent",
+          name: "Fork - Source terminal",
+          pendingTuiHarnessId: "claude",
+        }) as EpicCanvasTileRef,
       }),
     );
 
@@ -735,7 +746,7 @@ describe("useCreateTuiAgent", () => {
           tabId: TAB_ID,
           parentId: "source-parent",
           title: "Continue - profile-b",
-          placement: { kind: "active-tile" },
+          placement: null,
           harnessId: "claude",
           model: null,
           reasoningEffort: null,
@@ -764,8 +775,7 @@ describe("useCreateTuiAgent", () => {
     expect(methodOrder).not.toContain("agent.tui.prepareLaunch");
     expect(methodOrder).not.toContain("epic.createTuiAgent");
     // Nothing created: no placeholder tab, no pending-create mark.
-    expect(hookMocks.openTileInTab).not.toHaveBeenCalled();
-    expect(hookMocks.openTileInPane).not.toHaveBeenCalled();
+    expect(hookMocks.openTile).not.toHaveBeenCalled();
     expect(hookMocks.markArtifactPendingCreate).not.toHaveBeenCalled();
     expect(hookMocks.unmarkArtifactPendingCreate).not.toHaveBeenCalled();
 
@@ -820,7 +830,7 @@ describe("useCreateTuiAgent", () => {
         tabId: TAB_ID,
         parentId: "source-parent",
         title: "Continue - ambient",
-        placement: { kind: "active-tile" },
+        placement: null,
         harnessId: "claude",
         model: null,
         reasoningEffort: null,
@@ -860,7 +870,7 @@ describe("useCreateTuiAgent", () => {
         tabId: TAB_ID,
         parentId: "source-parent",
         title: "Fork - same profile",
-        placement: { kind: "active-tile" },
+        placement: null,
         harnessId: "claude",
         model: null,
         reasoningEffort: null,
@@ -901,7 +911,7 @@ describe("useCreateTuiAgent", () => {
         tabId: TAB_ID,
         parentId: "source-parent",
         title: "Continue - profile-b (unsupported host)",
-        placement: { kind: "active-tile" },
+        placement: null,
         harnessId: "claude",
         model: null,
         reasoningEffort: null,
@@ -974,7 +984,7 @@ describe("useCreateTuiAgent", () => {
         tabId: TAB_ID,
         parentId: "source-parent",
         title: "Continue - profile-b",
-        placement: { kind: "active-tile" },
+        placement: null,
         harnessId: "claude",
         model: null,
         reasoningEffort: null,
@@ -1033,7 +1043,7 @@ describe("useCreateTuiAgent", () => {
   it("opens the canvas tab placeholder BEFORE agent.tui.prepareLaunch blocks on setup", async () => {
     // Acceptance: "landing Worktree-mode terminal-agent navigates and
     // opens/persists a terminal-agent placeholder before setup
-    // completion." The hook must call `openTileInTab` before
+    // completion." The hook must call `openTile` before
     // `agent.tui.prepareLaunch` resolves so the user has a visible
     // terminal-agent canvas tab inside the Epic for the entire setup
     // wait. We block `agent.tui.prepareLaunch` on a manual resolver
@@ -1087,7 +1097,7 @@ describe("useCreateTuiAgent", () => {
         tabId: TAB_ID,
         parentId: null,
         title: "",
-        placement: { kind: "active-tile" },
+        placement: null,
         harnessId: "claude",
         model: null,
         reasoningEffort: null,
@@ -1109,18 +1119,20 @@ describe("useCreateTuiAgent", () => {
     await waitFor(() => {
       expect(startResolvers.length).toBe(1);
     });
-    expect(hookMocks.openTileInTab).toHaveBeenCalledTimes(1);
-    const placeholderCall = hookMocks.openTileInTab.mock.calls[0] as [
-      string,
+    expect(hookMocks.openTile).toHaveBeenCalledTimes(1);
+    const placeholderCall = hookMocks.openTile.mock.calls[0] as [
       {
-        id: string;
-        type: string;
-        name: string;
-        pendingTuiHarnessId: TuiHarnessId | undefined;
+        target: { tabId: string };
+        node: {
+          id: string;
+          type: string;
+          name: string;
+          pendingTuiHarnessId: TuiHarnessId | undefined;
+        };
       },
     ];
-    const placeholderTabId = placeholderCall[0];
-    const placeholderNode = placeholderCall[1];
+    const placeholderTabId = placeholderCall[0].target.tabId;
+    const placeholderNode = placeholderCall[0].node;
     expect(placeholderTabId).toBe(TAB_ID);
     expect(placeholderNode.type).toBe("terminal-agent");
     expect(placeholderNode.pendingTuiHarnessId).toBe("claude");
@@ -1130,7 +1142,7 @@ describe("useCreateTuiAgent", () => {
       ([method]) => method === "worktree.create",
     );
     expect(worktreeRequestIndex).toBeGreaterThanOrEqual(0);
-    expect(hookMocks.openTileInTab.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(hookMocks.openTile.mock.invocationCallOrder[0]).toBeLessThan(
       hookMocks.request.mock.invocationCallOrder[worktreeRequestIndex],
     );
     const ownerId = (bindingCall?.payload as { ownerId: string }).ownerId;
@@ -1171,7 +1183,7 @@ describe("useCreateTuiAgent", () => {
         tabId: TAB_ID,
         parentId: null,
         title: "",
-        placement: { kind: "active-tile" },
+        placement: null,
         harnessId: "claude",
         model: null,
         reasoningEffort: null,
@@ -1250,7 +1262,7 @@ describe("useCreateTuiAgent", () => {
           tabId: TAB_ID,
           parentId: null,
           title: "",
-          placement: { kind: "active-tile" },
+          placement: null,
           harnessId: "claude",
           model: null,
           reasoningEffort: null,
@@ -1281,13 +1293,14 @@ describe("useCreateTuiAgent", () => {
     // user is not stranded outside the Epic context on failure. The
     // recovery surface is the placeholder + toast - no hidden
     // unrecoverable owner state is created.
-    expect(hookMocks.openTileInTab).toHaveBeenCalledTimes(1);
+    expect(hookMocks.openTile).toHaveBeenCalledTimes(1);
     const createCall = calls.find((c) => c.method === "worktree.create");
     expect(createCall).toBeDefined();
-    const placeholderNode = hookMocks.openTileInTab.mock.calls[0][1] as {
-      id: string;
-      type: string;
-    };
+    const placeholderNode = (
+      hookMocks.openTile.mock.calls[0][0] as {
+        node: { id: string; type: string };
+      }
+    ).node;
     expect(placeholderNode.id).toBe(
       (createCall?.payload as { ownerId: string }).ownerId,
     );
@@ -1309,7 +1322,7 @@ describe("useCreateTuiAgent", () => {
         tabId: TAB_ID,
         parentId: null,
         title: "",
-        placement: { kind: "active-tile" },
+        placement: null,
         harnessId: "claude",
         model: null,
         reasoningEffort: null,
@@ -1332,7 +1345,7 @@ describe("useCreateTuiAgent", () => {
     expect(methodOrder.indexOf("agent.tui.prepareLaunch")).toBeLessThan(
       methodOrder.indexOf("epic.createTuiAgent"),
     );
-    expect(hookMocks.openTileInTab).toHaveBeenCalledTimes(1);
+    expect(hookMocks.openTile).toHaveBeenCalledTimes(1);
 
     queryClient.clear();
   });
@@ -1350,7 +1363,7 @@ describe("useCreateTuiAgent", () => {
         tabId: TAB_ID,
         parentId: null,
         title: "",
-        placement: { kind: "active-tile" },
+        placement: null,
         harnessId: "claude",
         model: null,
         reasoningEffort: null,
@@ -1403,7 +1416,7 @@ describe("useCreateTuiAgent", () => {
         tabId: TAB_ID,
         parentId: null,
         title: "",
-        placement: { kind: "active-tile" },
+        placement: null,
         harnessId: "claude",
         model: null,
         reasoningEffort: null,
@@ -1452,7 +1465,7 @@ describe("useCreateTuiAgent", () => {
         tabId: TAB_ID,
         parentId: null,
         title: "",
-        placement: { kind: "active-tile" },
+        placement: null,
         harnessId: "claude",
         model: null,
         reasoningEffort: null,
@@ -1530,7 +1543,7 @@ describe("useCreateTuiAgent", () => {
         tabId: TAB_ID,
         parentId: null,
         title: "",
-        placement: { kind: "active-tile" },
+        placement: null,
         harnessId: "claude",
         model: null,
         reasoningEffort: null,
@@ -1621,7 +1634,7 @@ describe("useCreateTuiAgent", () => {
         tabId: TAB_ID,
         parentId: null,
         title: "",
-        placement: { kind: "active-tile" },
+        placement: null,
         harnessId: "claude",
         model: null,
         reasoningEffort: null,
@@ -1681,7 +1694,7 @@ describe("useCreateTuiAgent", () => {
         tabId: TAB_ID,
         parentId: null,
         title: "",
-        placement: { kind: "active-tile" },
+        placement: null,
         harnessId: "claude",
         model: null,
         reasoningEffort: null,
@@ -1706,15 +1719,21 @@ describe("useCreateTuiAgent", () => {
     ).tuiAgentId;
     expect(persistedId).toBe(ownerId);
     expect(returned).toBe(ownerId);
-    expect(hookMocks.openTileInTab).toHaveBeenCalledWith(
-      TAB_ID,
-      expect.objectContaining({ id: ownerId, type: "terminal-agent" }),
+    expect(hookMocks.openTile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: { tabId: TAB_ID },
+        gesture: "explicit",
+        node: expect.objectContaining({
+          id: ownerId,
+          type: "terminal-agent",
+        }) as EpicCanvasTileRef,
+      }),
     );
 
     queryClient.clear();
   });
 
-  it("routes the active-tile placeholder open through the nested-focus navigation boundary", async () => {
+  it("opens the active-tile placeholder with no explicit placement so the setting decides", async () => {
     const { calls } = setupSequencedMock();
     const queryClient = makeQueryClient();
     const { result } = renderHook(() => useCreateTuiAgent(), {
@@ -1727,7 +1746,7 @@ describe("useCreateTuiAgent", () => {
         tabId: TAB_ID,
         parentId: null,
         title: "",
-        placement: { kind: "active-tile" },
+        placement: null,
         harnessId: "claude",
         model: null,
         reasoningEffort: null,
@@ -1743,21 +1762,27 @@ describe("useCreateTuiAgent", () => {
     });
 
     expect(calls.length).toBeGreaterThan(0);
-    expect(hookMocks.navigateNested).toHaveBeenCalledTimes(1);
-    expect(hookMocks.navigateNested).toHaveBeenCalledWith(
-      EPIC_ID,
-      TAB_ID,
-      expect.any(Function),
+    // Placement stays `null` on the intent: the resolver reads the
+    // conversation tile-placement setting rather than the hook picking a pane.
+    expect(hookMocks.openTile).toHaveBeenCalledTimes(1);
+    expect(hookMocks.openTile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: { tabId: TAB_ID },
+        gesture: "explicit",
+        placement: null,
+        node: expect.objectContaining({
+          type: "terminal-agent",
+        }) as EpicCanvasTileRef,
+      }),
     );
-    // The boundary's prepared target actually reached the tab-targeted
-    // opener, not the pane-targeted one.
-    expect(hookMocks.openTileInTab).toHaveBeenCalledTimes(1);
-    expect(hookMocks.openTileInPane).not.toHaveBeenCalled();
+    // ...and the open is COMMITTED through the epic's nested-focus seam, so it
+    // writes the route params instead of only mutating the canvas.
+    expect(hookMocks.navigationSeams).toEqual([hookMocks.navigateNested]);
 
     queryClient.clear();
   });
 
-  it("routes the target-group placeholder open through prepareOpenTileInPaneFocusTarget via the navigation boundary", async () => {
+  it("carries a target-group placement through to the open intent", async () => {
     const { calls } = setupSequencedMock();
     const queryClient = makeQueryClient();
     const { result } = renderHook(() => useCreateTuiAgent(), {
@@ -1771,7 +1796,7 @@ describe("useCreateTuiAgent", () => {
         tabId: TAB_ID,
         parentId: null,
         title: "",
-        placement: { kind: "target-group", groupId },
+        placement: { kind: "tab", paneId: groupId, index: null },
         harnessId: "claude",
         model: null,
         reasoningEffort: null,
@@ -1787,19 +1812,17 @@ describe("useCreateTuiAgent", () => {
     });
 
     expect(calls.length).toBeGreaterThan(0);
-    expect(hookMocks.navigateNested).toHaveBeenCalledTimes(1);
-    expect(hookMocks.navigateNested).toHaveBeenCalledWith(
-      EPIC_ID,
-      TAB_ID,
-      expect.any(Function),
+    expect(hookMocks.openTile).toHaveBeenCalledTimes(1);
+    expect(hookMocks.openTile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: { tabId: TAB_ID },
+        gesture: "explicit",
+        placement: { kind: "tab", paneId: groupId, index: null },
+        node: expect.objectContaining({
+          type: "terminal-agent",
+        }) as EpicCanvasTileRef,
+      }),
     );
-    expect(hookMocks.openTileInPane).toHaveBeenCalledTimes(1);
-    expect(hookMocks.openTileInPane).toHaveBeenCalledWith(
-      TAB_ID,
-      groupId,
-      expect.objectContaining({ type: "terminal-agent" }),
-    );
-    expect(hookMocks.openTileInTab).not.toHaveBeenCalled();
 
     queryClient.clear();
   });

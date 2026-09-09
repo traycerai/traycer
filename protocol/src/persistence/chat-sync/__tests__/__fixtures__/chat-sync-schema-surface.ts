@@ -15,7 +15,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 2
+              "const": 4
             }
           },
           "required": [
@@ -457,7 +457,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 2
+              "const": 4
             }
           },
           "required": [
@@ -827,6 +827,7 @@ export const chatSyncSchemaSurfaceBaseline = {
                               "harness.error",
                               "history.deleted",
                               "chat.forked",
+                              "chat.imported",
                               "setup.creating",
                               "setup.running",
                               "setup.succeeded",
@@ -1213,7 +1214,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 2
+              "const": 4
             }
           },
           "required": [
@@ -1288,7 +1289,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 2
+              "const": 4
             }
           },
           "required": [
@@ -1538,31 +1539,6 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                   "type": "string"
                                                 }
                                               },
-                                              "attributes": {
-                                                "type": "array",
-                                                "items": {
-                                                  "type": "object",
-                                                  "properties": {
-                                                    "name": {
-                                                      "type": "string"
-                                                    },
-                                                    "value": {
-                                                      "type": "string"
-                                                    }
-                                                  },
-                                                  "required": [
-                                                    "name",
-                                                    "value"
-                                                  ],
-                                                  "additionalProperties": false
-                                                }
-                                              },
-                                              "outerHtml": {
-                                                "type": "string"
-                                              },
-                                              "outerHtmlTruncated": {
-                                                "type": "boolean"
-                                              },
                                               "textPreview": {
                                                 "anyOf": [
                                                   {
@@ -1658,9 +1634,6 @@ export const chatSyncSchemaSurfaceBaseline = {
                                               "tagName",
                                               "elementId",
                                               "classNames",
-                                              "attributes",
-                                              "outerHtml",
-                                              "outerHtmlTruncated",
                                               "textPreview",
                                               "ariaRole",
                                               "accessibleName",
@@ -2446,6 +2419,30 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                 }
                                               ]
                                             },
+                                            "agentMessageReceipt": {
+                                              "default": null,
+                                              "anyOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "receiverAgentId": {
+                                                      "type": "string"
+                                                    },
+                                                    "messageId": {
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "receiverAgentId",
+                                                    "messageId"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
                                             "managedCommand": {
                                               "default": null,
                                               "anyOf": [
@@ -2826,6 +2823,7 @@ export const chatSyncSchemaSurfaceBaseline = {
                                             "taskTodoItems",
                                             "error",
                                             "agentMessageSend",
+                                            "agentMessageReceipt",
                                             "managedCommand",
                                             "progress",
                                             "backgroundOutput",
@@ -4004,6 +4002,21 @@ export const chatSyncSchemaSurfaceBaseline = {
                                               "type": "string",
                                               "const": "autonomous_resume"
                                             },
+                                            "deliveryPlacement": {
+                                              "default": null,
+                                              "anyOf": [
+                                                {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "turn_start",
+                                                    "in_turn"
+                                                  ]
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
                                             "triggers": {
                                               "type": "array",
                                               "items": {
@@ -4134,6 +4147,7 @@ export const chatSyncSchemaSurfaceBaseline = {
                                             "status",
                                             "timestamp",
                                             "type",
+                                            "deliveryPlacement",
                                             "triggers"
                                           ],
                                           "additionalProperties": false
@@ -4440,6 +4454,17 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                   },
                                                   "multiSelect": {
                                                     "type": "boolean"
+                                                  },
+                                                  "allowsCustomAnswer": {
+                                                    "default": null,
+                                                    "anyOf": [
+                                                      {
+                                                        "type": "boolean"
+                                                      },
+                                                      {
+                                                        "type": "null"
+                                                      }
+                                                    ]
                                                   }
                                                 },
                                                 "required": [
@@ -4447,7 +4472,8 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                   "question",
                                                   "header",
                                                   "options",
-                                                  "multiSelect"
+                                                  "multiSelect",
+                                                  "allowsCustomAnswer"
                                                 ],
                                                 "additionalProperties": false
                                               }
@@ -5266,6 +5292,7 @@ export const chatSyncSchemaSurfaceBaseline = {
                           "harness.error",
                           "history.deleted",
                           "chat.forked",
+                          "chat.imported",
                           "setup.creating",
                           "setup.running",
                           "setup.succeeded",

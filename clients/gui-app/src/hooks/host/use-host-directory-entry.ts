@@ -38,7 +38,7 @@ export { hostDirectoryEntryEquals };
  * propagates.
  */
 export function useHostDirectoryEntry(
-  hostId: string,
+  hostId: string | null,
 ): HostDirectoryEntry | null {
   const directory = useHostDirectory();
   const cacheRef = useRef<HostDirectoryEntry | null>(null);
@@ -50,7 +50,10 @@ export function useHostDirectoryEntry(
       // this hook's own `getSnapshot` reads the directory directly, so a
       // harness that supplies a directory without installing a registry
       // source keeps working unchanged.
-      const unsubscribeRegistry = subscribeHostRowChanged(hostId, callback);
+      const unsubscribeRegistry =
+        hostId === null
+          ? () => undefined
+          : subscribeHostRowChanged(hostId, callback);
       const subscription = directory.onChange(() => {
         callback();
       });
@@ -62,7 +65,7 @@ export function useHostDirectoryEntry(
     [directory, hostId],
   );
   const getSnapshot = useCallback(() => {
-    const next = directory.findById(hostId);
+    const next = hostId === null ? null : directory.findById(hostId);
     if (hostDirectoryEntryEquals(cacheRef.current, next)) {
       return cacheRef.current;
     }

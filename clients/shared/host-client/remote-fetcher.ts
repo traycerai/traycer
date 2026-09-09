@@ -5,6 +5,7 @@ import {
   type HostStatusDTO,
 } from "@traycer/protocol/host/host-status";
 import type { AuthEra } from "../auth/request-context-provider";
+import { applyHostKeyPins } from "./host-key-pin";
 import type { HostDirectoryEntry } from "./host-directory";
 
 /**
@@ -96,7 +97,16 @@ export async function fetchRegisteredHostsViaHttp(
     // fails closed (see `host-status.ts`).
     return { kind: "network-error" };
   }
-  return { kind: "ok", response: parsed.data };
+  // The one place a host's Noise static key enters this client, so the one
+  // place trust-on-first-use can gate it (H11). A host whose key changed is
+  // dropped here and never reaches a surface that could offer to dial it.
+  return {
+    kind: "ok",
+    response: {
+      ...parsed.data,
+      hosts: await applyHostKeyPins(parsed.data.hosts),
+    },
+  };
 }
 
 /**

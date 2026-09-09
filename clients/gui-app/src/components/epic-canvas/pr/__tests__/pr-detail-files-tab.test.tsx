@@ -1,13 +1,6 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type {
   PrDetailCore,
   PrFilesSection,
@@ -16,6 +9,12 @@ import { PrDetailFilesTab } from "@/components/epic-canvas/pr/pr-detail-files-ta
 import { prDiffTileId } from "@/lib/pr/pr-diff-tile";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { RunnerHostContext } from "@/providers/runner-host-context";
+
+const openLink = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/links/open-link", () => ({
+  useOpenLink: () => openLink,
+  useOpenLinkWithPending: () => ({ isPending: false, openLink }),
+}));
 
 /**
  * The Files tab keeps the GitHub-sourced file list; the DIFF is a tile the
@@ -96,15 +95,13 @@ function renderTab(args: {
   readonly core: PrDetailCore;
   readonly hostId: string;
   readonly viewTabId: string;
-  readonly runnerHost?: MockRunnerHost | null;
 }): void {
   render(
     <QueryClientProvider client={newQueryClient()}>
-      <RunnerHostContext.Provider value={args.runnerHost ?? null}>
+      <RunnerHostContext.Provider value={null}>
         <PrDetailFilesTab
           core={args.core}
           files={FILES}
-          epicId="epic-1"
           viewTabId={args.viewTabId}
           hostId={args.hostId}
           onQuoteFile={null}
@@ -112,18 +109,6 @@ function renderTab(args: {
       </RunnerHostContext.Provider>
     </QueryClientProvider>,
   );
-}
-
-function createRunnerHost(): MockRunnerHost {
-  return new MockRunnerHost({
-    signInUrl: "https://auth.traycer.test/sign-in",
-    authnBaseUrl: "https://auth.traycer.test",
-    localHost: null,
-    hosts: [],
-    workspaceFolderPickerPaths: undefined,
-    hasLocalHost: undefined,
-    traycerCli: undefined,
-  });
 }
 
 /** Every tile currently open on `tabId`, regardless of pane position. */
@@ -141,6 +126,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  openLink.mockReset();
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
 });
 
@@ -212,51 +198,25 @@ describe("PrDetailFilesTab", () => {
     expect(link.getAttribute("href")).toBe(
       "https://github.com/acme/widgets/pull/7/files",
     );
+    // `href` for anchor semantics, but the click never navigates natively -
+    // there is no `target`/`rel` new-tab path left to bypass the setting (A6).
+    expect(link.getAttribute("target")).toBeNull();
   });
 
-  it("routes the GitHub footer link through the RunnerHost bridge instead of a bare new-tab anchor", async () => {
-    // A plain `target="_blank"` anchor opens a second, unmanaged browser
-    // surface in the desktop shell; every other GitHub link on this tile
-    // goes through `useRunnerOpenExternalLink` instead, and this one used to
-    // be the one exception.
-    const host = createRunnerHost();
-    const openExternalLink = vi
-      .spyOn(host, "openExternalLink")
-      .mockResolvedValue(undefined);
+  it("routes the GitHub footer link through the link seam as a `github` open", () => {
+    // One egress seam, no shell-dependent fork: there is no longer a
+    // "bridge bound → intercept, else native new tab" pair to keep in sync,
+    // so the footer link honours the `github` setting everywhere (A1, A6).
     const viewTabId = openRealTab();
-    renderTab({
-      core: core({}),
-      hostId: "host-1",
-      viewTabId,
-      runnerHost: host,
-    });
+    renderTab({ core: core({}), hostId: "host-1", viewTabId });
 
-    const link = screen.getByTestId("pr-detail-files-github-footer-link");
-    fireEvent.click(link);
+    fireEvent.click(screen.getByTestId("pr-detail-files-github-footer-link"));
 
-    // `waitFor` rather than a zero-delay timer flush: the latter pins the
-    // assertion to the mutation's exact microtask depth.
-    await waitFor(() => {
-      expect(openExternalLink).toHaveBeenCalledTimes(1);
-    });
-    expect(openExternalLink).toHaveBeenCalledWith(
+    expect(openLink).toHaveBeenCalledTimes(1);
+    expect(openLink).toHaveBeenCalledWith(
       "https://github.com/acme/widgets/pull/7/files",
-    );
-  });
-
-  it("leaves the footer link's native new-tab navigation alone with no RunnerHost bound", () => {
-    const viewTabId = openRealTab();
-    renderTab({
-      core: core({}),
-      hostId: "host-1",
-      viewTabId,
-      runnerHost: null,
-    });
-
-    const link = screen.getByTestId("pr-detail-files-github-footer-link");
-    expect(link.getAttribute("target")).toBe("_blank");
-    expect(link.getAttribute("href")).toBe(
-      "https://github.com/acme/widgets/pull/7/files",
+      "github",
+      expect.anything(),
     );
   });
 
@@ -273,7 +233,6 @@ describe("PrDetailFilesTab", () => {
               totalCount: 0,
               isTruncated: false,
             }}
-            epicId="epic-1"
             viewTabId={viewTabId}
             hostId="host-1"
             onQuoteFile={null}

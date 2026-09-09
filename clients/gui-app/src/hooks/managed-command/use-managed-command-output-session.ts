@@ -79,6 +79,7 @@ export function useManagedCommandOutputSession(args: {
               close: () => stream.close(),
             };
           },
+          null,
         );
         return {
           loadOlder: (frame) => owned.client.stream.loadOlder(frame),

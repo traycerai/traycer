@@ -51,6 +51,9 @@ function chatProjection(overrides: Partial<ChatProjection>): ChatProjection {
     userId: "user-a",
     hostId: "host-1",
     isTitleEditedByUser: false,
+    // Neutral scaffolding for the "already served" side of the union - no
+    // specific plane in mind, so the registry/neutral default applies.
+    docResident: false,
     settings: null,
     archivedAt: null,
     ...overrides,
@@ -91,6 +94,10 @@ describe("chatProjectionFromPendingCreation", () => {
       userId: "user-a",
       hostId: "h",
       isTitleEditedByUser: false,
+      // A creation THIS client made through `epic.createChat`, which writes the
+      // registry - so the stand-in is store-homed by construction and keeps its
+      // rename affordance in exactly the create-then-rename window.
+      docResident: false,
       settings: null,
       archivedAt: null,
     });

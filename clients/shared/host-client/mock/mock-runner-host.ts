@@ -160,6 +160,9 @@ export class MockRunnerHost implements IRunnerHost {
   // instead), so this never needs to vary per test the way `authnBaseUrl` does.
   readonly relayBaseUrl: string = "wss://relay.test.invalid/attach";
   readonly hasLocalHost: boolean;
+  // Browser-tab flavoured, like `fileSave` below: a tab's own clipboard takes
+  // images, so image-copy affordances render by default in tests.
+  readonly canCopyImages: boolean = true;
   readonly openedExternalLinks: string[] = [];
   readonly notificationsSent: Array<{
     readonly title: string;
@@ -296,6 +299,7 @@ export class MockRunnerHost implements IRunnerHost {
   readonly hostTray: null = null;
   readonly zoom: null = null;
   readonly pushPermission: null = null;
+  readonly systemBack: null = null;
   readonly deviceFlow: MockDeviceFlowHost = new MockDeviceFlowHost();
 
   /**
@@ -593,6 +597,10 @@ export class MockRunnerHost implements IRunnerHost {
   }
 
   async openMicrophoneSettings(): Promise<void> {
+    // No-op: no OS settings pane in the in-memory host.
+  }
+
+  async openFullDiskAccessSettings(): Promise<void> {
     // No-op: no OS settings pane in the in-memory host.
   }
 

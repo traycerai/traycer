@@ -20,6 +20,7 @@ import type {
   InterviewAnswer,
   UserMessageSender,
 } from "@traycer/protocol/persistence/epic/schemas";
+import { importedProvenance } from "@traycer/protocol/persistence/epic/chat-events";
 import type {
   BackgroundItem,
   ChatQueuedPromptItem,
@@ -118,9 +119,12 @@ import { useChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import {
+  dispatchedWorktreeIntentForDisplay,
   isWindowedTranscript,
+  projectQueueWithPendingCancellations,
   type ChatSessionState,
   type ChatSessionStoreHandle,
+  type PreSnapshotRetryEvidence,
 } from "@/stores/chats/chat-session-store";
 import type {
   OrdinalRange,
@@ -145,6 +149,7 @@ import {
   coldJumpOrdinal,
   hostLocatorForJumpTarget,
   messageIdForBlock,
+  landingBlockIdForJumpTarget,
   messageIdForTranscriptTarget,
   sentMessageAnchorId,
 } from "@/components/epic-canvas/renderers/chat-tile-jump-logic";
@@ -180,6 +185,7 @@ import {
   type ChatDeadTileBannerReason,
 } from "./dead-tile-banner";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import { useRecordHostOlderThanDataRefusal } from "@/hooks/chats/use-host-refuses-epic-store";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
@@ -201,7 +207,11 @@ import {
   buildSubmittedChatJSONContent,
   type SlashCommandCatalog,
 } from "@/lib/composer/tiptap-json-content";
-import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
+import {
+  buildChatRunSettings,
+  importedChatSettingsSeed,
+} from "@/lib/composer/chat-run-settings";
+import type { ProviderId } from "@/components/home/data/landing-options";
 import {
   deriveWorktreeBindingWorkspaceAvailability,
   effectiveMissingWorktreePaths,
@@ -270,9 +280,13 @@ import {
 } from "./chat-tile-session-state";
 import { toast } from "sonner";
 import type { ChatSurfaceNode } from "./chat-tile-types";
-import { ChatTileLoading, ChatTileError } from "./chat-tile-runtime-gate";
+import {
+  ChatTileLoading,
+  ChatTilePreSnapshotGate,
+} from "./chat-tile-runtime-gate";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import { chatTileCatalogActivity } from "./chat-tile-surface-activity";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 const EMPTY_WORKSPACE_PATH_SET: ReadonlySet<string> = new Set();
 const EMPTY_BACKGROUND_STOP_TASK_IDS: ReadonlySet<string> = new Set();
@@ -321,6 +335,18 @@ interface ChatTileSessionViewProps {
    * permission. `null` on every live tile - the ordinary path is untouched.
    */
   readonly readOnlyNotice: string | null;
+  /**
+   * Whether this view is driven by a live `chat.subscribe` session, as opposed
+   * to a published copy's synthesized state.
+   *
+   * Explicit rather than inferred from `readOnlyNotice === null`, which does
+   * discriminate the two today by coincidence: that field is a composer-lock
+   * REASON, and the day a live tile grows one, refusal recording would go
+   * silently dead. Nothing else on the props or the handle says which kind of
+   * session this is - the synthesized state is deliberately shaped to look
+   * like a loaded one, since for rendering the transcript it is.
+   */
+  readonly isLiveSession: boolean;
 }
 
 function buildModelReasoningLabels(
@@ -562,6 +588,7 @@ export function ChatTile(props: ChatTileProps) {
           isActive={isActive}
           currentEpicId={epicId}
           readOnlyNotice={null}
+          isLiveSession
         />
       </TombstonedProfileProvider>
     </div>
@@ -781,6 +808,20 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
   // `epic.readChatAttachment`" verdict per build so the upgrade re-probes.
   const attachmentHostEntry = useHostDirectoryEntry(hostId);
   const attachmentHostVersion = attachmentHostEntry?.version ?? null;
+  // What this live open learned about its host, for the sidebar's and the
+  // canvas's NEXT open decision: a `HOST_OLDER_THAN_DATA` close means every
+  // chat in this epic is unreadable on this host build, so their rows route
+  // to the published copy until the host is updated (the build key above is
+  // what retires that verdict) or a snapshot lands here again.
+  useRecordHostOlderThanDataRefusal({
+    hostId,
+    epicId: view.currentEpicId,
+    hostVersion: attachmentHostVersion,
+    fatalCloseCode: view.fatalClose?.code ?? null,
+    snapshotLoaded: view.snapshotLoaded,
+    isLiveSession: props.isLiveSession,
+    retry: view.onChatRetry,
+  });
   const attachmentScope = useMemo<ChatAttachmentScopeValue>(
     () => ({
       epicId: view.currentEpicId,
@@ -798,7 +839,7 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
     ],
   );
   const systemOverlayActive = useAnySystemOverlayActive();
-  const tileNavigation = useEpicTileNavigation();
+  const { openTile } = useEpicTileNavigation();
   const [backgroundScrollRequest, setBackgroundScrollRequest] =
     useState<ChatMessageScrollRequest | null>(null);
   const backgroundScrollRequestIdRef = useRef(0);
@@ -873,7 +914,7 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
   }, []);
   // Cross-tile transcript jumps (today: the communication-graph timeline).
   // Parked in a store rather than called directly because the jump is issued
-  // from another tile, possibly before this one exists - `openTileInEpic`
+  // from another tile, possibly before this one exists - `openTile`
   // mounts it and the request is waiting here when it renders.
   const transcriptJump = useChatTranscriptJumpStore(
     (s) => s.requestsByChatId[chatTranscriptJumpKey(hostId, props.node.id)],
@@ -946,6 +987,10 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
       requestTranscriptOrdinal(null);
       return;
     }
+    // A block or receipt target names a CARD, not a row: resolved once, up
+    // front, because the landing below scrolls to that card rather than to
+    // its owning row.
+    const landingBlockId = landingBlockIdForJumpTarget(view.messages, target);
     const resolveTargetMessageId = (): string | null => {
       if (target.kind === "message") {
         return messageIdForTranscriptTarget(view.messages, target.messageId);
@@ -979,7 +1024,9 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
           view.messages.find((message) => message.id === firstRowId)?.id ?? null
         );
       }
-      return messageIdForBlock(view.messages, target.blockId);
+      return landingBlockId === null
+        ? null
+        : messageIdForBlock(view.messages, landingBlockId);
     };
     const messageId = resolveTargetMessageId();
     if (messageId === null) {
@@ -992,19 +1039,19 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
       //
       // Only for a target whose ROW ID is derivable client-side - a user
       // message and an event anchor, whose row ids are the message id and
-      // `chatTranscriptEventRowId`. A block or a sent-message anchor is
-      // identified by walking rendered models, which a cold row has none of,
+      // `chatTranscriptEventRowId`. A block, sent-message or receipt anchor
+      // is identified by walking rendered models, which a cold row has none of,
       // and resolving those needs the host to locate the row.
       requestTranscriptOrdinal(
         coldJumpOrdinal(view.transcriptWindow, target, hostLocatedOrdinal),
       );
       return;
     }
-    if (target.kind === "block") {
+    if (landingBlockId !== null) {
       scrollToBlock(
-        target.blockId,
+        landingBlockId,
         transcriptJumpCardKind(
-          target.blockId,
+          landingBlockId,
           view.lower.backgroundItems ?? [],
         ),
       );
@@ -1089,9 +1136,23 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
         });
         return {
           onClick: () =>
-            tileNavigation.openTilePreviewInTab(view.viewTabId, tile),
+            openTile(
+              tileIntent(
+                tile,
+                { tabId: view.viewTabId },
+                "single",
+                "direct_ui",
+              ),
+            ),
           onDoubleClick: () =>
-            tileNavigation.openTileInTab(view.viewTabId, tile),
+            openTile(
+              tileIntent(
+                tile,
+                { tabId: view.viewTabId },
+                "double",
+                "direct_ui",
+              ),
+            ),
         };
       },
       cumulative: (filePath) => {
@@ -1102,9 +1163,23 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
         });
         return {
           onClick: () =>
-            tileNavigation.openTilePreviewInTab(view.viewTabId, tile),
+            openTile(
+              tileIntent(
+                tile,
+                { tabId: view.viewTabId },
+                "single",
+                "direct_ui",
+              ),
+            ),
           onDoubleClick: () =>
-            tileNavigation.openTileInTab(view.viewTabId, tile),
+            openTile(
+              tileIntent(
+                tile,
+                { tabId: view.viewTabId },
+                "double",
+                "direct_ui",
+              ),
+            ),
         };
       },
       cumulativeBundle: (filePaths) => {
@@ -1113,7 +1188,15 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
           chatId: view.node.id,
           filePaths,
         });
-        return () => tileNavigation.openTileInTab(view.viewTabId, tile);
+        return () =>
+          openTile(
+            tileIntent(
+              tile,
+              { tabId: view.viewTabId },
+              "explicit",
+              "direct_ui",
+            ),
+          );
       },
       hash: (request) => {
         const tile = makeSnapshotHashDiffTile({
@@ -1126,13 +1209,27 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
         });
         return {
           onClick: () =>
-            tileNavigation.openTilePreviewInTab(view.viewTabId, tile),
+            openTile(
+              tileIntent(
+                tile,
+                { tabId: view.viewTabId },
+                "single",
+                "direct_ui",
+              ),
+            ),
           onDoubleClick: () =>
-            tileNavigation.openTileInTab(view.viewTabId, tile),
+            openTile(
+              tileIntent(
+                tile,
+                { tabId: view.viewTabId },
+                "double",
+                "direct_ui",
+              ),
+            ),
         };
       },
     }),
-    [hostId, tileNavigation, view.node.id, view.viewTabId],
+    [hostId, openTile, view.node.id, view.viewTabId],
   );
 
   return (
@@ -1156,6 +1253,7 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
               <ChatSessionMessagesSurface
                 snapshotLoaded={view.snapshotLoaded}
                 fatalClose={view.fatalClose}
+                preSnapshotRetries={view.preSnapshotRetries}
                 onRetry={view.onChatRetry}
                 restoreContext={view.restoreContext}
                 node={view.node}
@@ -1442,6 +1540,9 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       connectionStatus: s.connectionStatus,
       fatalClose: s.fatalClose,
       snapshotLoaded: s.snapshotLoaded,
+      // Written only while `snapshotLoaded` is false and cleared by the
+      // snapshot, so a loaded tile's renders never move with it.
+      preSnapshotRetries: s.preSnapshotRetries,
       transcriptBaselineEpoch: s.transcriptBaselineEpoch,
       transcriptHydrationSequence: s.transcriptHydrationSequence,
       coldRewrittenMessageIds: s.coldRewrittenMessageIds,
@@ -1489,6 +1590,15 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       refreshMissingWorktreePaths: s.refreshMissingWorktreePaths,
     })),
   );
+  const projectedQueue = useMemo(
+    () =>
+      projectQueueWithPendingCancellations(
+        state.queue,
+        state.pendingActions,
+        state.acceptedActions,
+      ),
+    [state.queue, state.pendingActions, state.acceptedActions],
+  );
   const chatWorktreeStagingKeyId = useMemo(
     () =>
       worktreeStagingKeyString({
@@ -1502,6 +1612,16 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   );
   const stagedChatWorktreeIntent = useWorktreeIntentStagingStore(
     (s) => s.intentByKey[chatWorktreeStagingKeyId],
+  );
+  const consumedWorktreeIntentClientActionId = useWorktreeIntentStagingStore(
+    (s) =>
+      s.consumedForDispatchByKey[chatWorktreeStagingKeyId]?.clientActionId ??
+      null,
+  );
+  const inFlightChatWorktreeIntent = dispatchedWorktreeIntentForDisplay(
+    state.pendingActions,
+    state.acceptedActions,
+    consumedWorktreeIntentClientActionId,
   );
   const stagedChatWorkspacePaths = useMemo<ReadonlySet<string>>(() => {
     if (stagedChatWorktreeIntent === undefined) {
@@ -1679,23 +1799,24 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
   // and its remount key, neither of which a content-free managed-command item
   // could supply.
   const editingQueueItem =
-    state.queue.items.find(
+    projectedQueue.items.find(
       (item): item is ChatQueuedPromptItem =>
         item.kind === "prompt" &&
         item.queueItemId === uiState.editingQueueItemId,
     ) ?? null;
   const activeEditingQueueItemId = editingQueueItem?.queueItemId ?? null;
   const chatSettingsSeed = state.chat?.settings ?? null;
+  const importedSourceProvider =
+    importedProvenance(state.events)?.sourceProvider ?? null;
   const {
     composerFallbackSettingsSeed,
-    epicRunSettings,
-    globalLastRunSettings,
     initialComposerSettings,
     setEpicRunSettings,
   } = useChatTileComposerSettingsSeeds({
     currentEpicId,
     persistedChatSettings: chatSettingsSeed,
     defaultRunSettings,
+    importedSourceProvider,
   });
   useInitializeChatComposerSettings({
     snapshotLoaded: state.snapshotLoaded,
@@ -1852,16 +1973,14 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
         editingQueueItemSettings:
           editingQueueItem === null ? null : editingQueueItem.settings,
         persistedChatSettings: state.chat?.settings ?? null,
-        epicRunSettings,
-        globalLastRunSettings,
+        fallbackSettingsSeed: composerFallbackSettingsSeed,
         defaultRunSettings,
       }),
     [
       state.currentComposerSettings,
       editingQueueItem,
       state.chat?.settings,
-      epicRunSettings,
-      globalLastRunSettings,
+      composerFallbackSettingsSeed,
       defaultRunSettings,
     ],
   );
@@ -2709,6 +2828,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
           // would make sense for.
           hasActiveTurn: composerActiveTurnStatus !== null,
           ownerLabel: node.name,
+          inFlightWorktreeIntent: inFlightChatWorktreeIntent,
           missingWorktreePaths: effectiveMissingPaths,
           bindingResolved: state.snapshotLoaded,
           onBindingCommitted: clearMissingPathsAfterBindingCommit,
@@ -2722,6 +2842,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       node.id,
       node.name,
       state.worktreeBinding,
+      inFlightChatWorktreeIntent,
       effectiveMissingPaths,
       state.snapshotLoaded,
       activeTurnStatus,
@@ -2898,7 +3019,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     () => ({
       editingItem: editingQueueItem,
       editingItemId: activeEditingQueueItemId,
-      value: state.queue,
+      value: projectedQueue,
       resumeRequested: pendingQueueIntent.resumeRequested,
       keepPausedRequested: pendingQueueIntent.keepPausedRequested,
       onPause: chatActions.pauseQueue,
@@ -2916,7 +3037,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     [
       editingQueueItem,
       activeEditingQueueItemId,
-      state.queue,
+      projectedQueue,
       pendingQueueIntent,
       chatActions.pauseQueue,
       chatActions.resumeQueue,
@@ -2988,6 +3109,7 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     transcriptHydrationSequence: state.transcriptHydrationSequence,
     coldRewrittenMessageIds: state.coldRewrittenMessageIds,
     fatalClose: state.fatalClose,
+    preSnapshotRetries: state.preSnapshotRetries,
     onChatRetry: () => handle.store.getState().retry(),
     restoreContext,
     messages: pinnedTodoRenderState.messages,
@@ -3113,6 +3235,8 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
 interface ChatSessionMessagesSurfaceProps {
   readonly snapshotLoaded: boolean;
   readonly fatalClose: FatalErrorDetails | null;
+  /** Failed pre-snapshot attempts; see `ChatTilePreSnapshotGate`. */
+  readonly preSnapshotRetries: PreSnapshotRetryEvidence | null;
   readonly onRetry: () => void;
   readonly restoreContext: ChatRestoreContextValue;
   readonly node: ChatSurfaceNode;
@@ -3188,16 +3312,29 @@ function ContextUsageChipForChat(props: {
 function ChatSessionMessagesSurface(
   props: ChatSessionMessagesSurfaceProps,
 ): ReactNode {
-  // A fatal close before any snapshot (CHAT_INVALID, CHAT_NOT_VISIBLE, …) means
-  // the host will never send one. Surface the reason + a retry instead of an
-  // indefinite spinner.
-  if (!props.snapshotLoaded && props.fatalClose !== null) {
-    return <ChatTileError details={props.fatalClose} onRetry={props.onRetry} />;
+  // Until the real `chat.subscribe` snapshot lands (~0.5s - the host is
+  // local-first) the gate owns this surface: the loading skeleton, the fatal
+  // close the host will never follow with a snapshot, and the streak of failed
+  // attempts a host that never closes fatally would otherwise spin on forever.
+  // The snapshot then renders the user message + real turn state in one
+  // transition; there is no optimistic seed.
+  if (!props.snapshotLoaded) {
+    return (
+      // Keyed by the chat, because the gate's stall deadline is anchored at
+      // its own first render. Tiles are one chat for life and the surface host
+      // keys records by instance, so this never actually remounts today - it
+      // is here so that stays true by construction rather than by a property
+      // of a component two layers up: a gate instance carried over to another
+      // chat would inherit the first one's start and declare the new load
+      // stalled on sight.
+      <ChatTilePreSnapshotGate
+        key={props.node.id}
+        fatalClose={props.fatalClose}
+        retries={props.preSnapshotRetries}
+        onRetry={props.onRetry}
+      />
+    );
   }
-  // Show the loading skeleton until the real `chat.subscribe` snapshot lands
-  // (~0.5s - the host is local-first). The snapshot then renders the user
-  // message + real turn state in one transition; there is no optimistic seed.
-  if (!props.snapshotLoaded) return <ChatTileLoading />;
   // Pick the in-progress "thinking" verb once per turn, seeded on the chat plus
   // the RUNNING TURN's id - NOT the indicator row id, which flips from
   // `assistant:live` to `assistant:<turnId>` mid-turn and would otherwise
@@ -3252,6 +3389,8 @@ function useChatTileComposerSettingsSeeds(input: {
   readonly currentEpicId: string;
   readonly persistedChatSettings: ChatRunSettings | null;
   readonly defaultRunSettings: ChatRunSettings;
+  /** The provider an imported chat came from, `null` for a native chat. */
+  readonly importedSourceProvider: ProviderId | null;
 }) {
   // This tile's composer is bound to the TAB host for life, so its last-run
   // fallback seeds read that host's buckets and the on-send write below lands
@@ -3271,17 +3410,28 @@ function useChatTileComposerSettingsSeeds(input: {
     );
   const epicRunSettings =
     settingsFromEpicRunSettingsEntry(epicRunSettingsEntry);
-  const composerFallbackSettingsSeed = fallbackSettingsSeedForChatComposer(
-    epicRunSettings,
-    globalLastRunSettings,
+  const { defaultRunSettings, importedSourceProvider } = input;
+  const composerFallbackSettingsSeed = useMemo(
+    () =>
+      fallbackSettingsSeedForChatComposer({
+        epicRunSettings,
+        globalLastRunSettings,
+        defaultRunSettings,
+        importedSourceProvider,
+      }),
+    [
+      epicRunSettings,
+      globalLastRunSettings,
+      defaultRunSettings,
+      importedSourceProvider,
+    ],
   );
   const initialComposerSettings = currentSettingsForChatTile({
     liveSettings: null,
     editingQueueItemSettings: null,
     persistedChatSettings: input.persistedChatSettings,
-    epicRunSettings,
-    globalLastRunSettings,
-    defaultRunSettings: input.defaultRunSettings,
+    fallbackSettingsSeed: composerFallbackSettingsSeed,
+    defaultRunSettings,
   });
   // Consumers (the send/steer paths) keep the pre-host 3-param shape; the tab
   // host is bound here, the single site that knows it.
@@ -3293,8 +3443,6 @@ function useChatTileComposerSettingsSeeds(input: {
 
   return {
     composerFallbackSettingsSeed,
-    epicRunSettings,
-    globalLastRunSettings,
     initialComposerSettings,
     setEpicRunSettings: setEpicRunSettingsForTabHost,
   };
@@ -3367,11 +3515,33 @@ function useChatWorkspaceAvailability(
   );
 }
 
-function fallbackSettingsSeedForChatComposer(
-  epicRunSettings: ChatRunSettings | null,
-  globalLastRunSettings: ChatRunSettings | null,
-): ChatRunSettings | null {
-  return epicRunSettings ?? globalLastRunSettings;
+/**
+ * What seeds this chat until (or unless) the chat's own settings do.
+ *
+ * For a native chat that is the last-used pair, epic-scoped first. An imported
+ * chat overrides the PROVIDER with the one it was imported from - see
+ * `importedChatSettingsSeed` - because a chat whose own settings never resolved
+ * would otherwise continue a Codex transcript under whatever the user last ran.
+ *
+ * Both readers of an unsettled chat's provider take this one answer: the lower
+ * composer as its `fallbackSettingsSeed`, and the tile's own send paths through
+ * `currentSettingsForChatTile`. They used to derive it separately, and the tile
+ * won - it committed the remembered pair as the chat's live settings on mount,
+ * which then outranked the composer's imported fallback from the next render on.
+ */
+function fallbackSettingsSeedForChatComposer(input: {
+  readonly epicRunSettings: ChatRunSettings | null;
+  readonly globalLastRunSettings: ChatRunSettings | null;
+  readonly defaultRunSettings: ChatRunSettings;
+  readonly importedSourceProvider: ProviderId | null;
+}): ChatRunSettings | null {
+  const remembered = input.epicRunSettings ?? input.globalLastRunSettings;
+  if (input.importedSourceProvider === null) return remembered;
+  return importedChatSettingsSeed(
+    remembered,
+    input.defaultRunSettings,
+    input.importedSourceProvider,
+  );
 }
 
 function settingsFromEpicRunSettingsEntry(
@@ -3380,6 +3550,16 @@ function settingsFromEpicRunSettingsEntry(
   return entry === null ? null : entry.settings;
 }
 
+/**
+ * Commits the mount-time seed as the chat's live composer settings, once.
+ *
+ * The resolved-model gate is what lets an imported chat's provenance survive
+ * this hop: `importedChatSettingsSeed` names the source provider and no model,
+ * so nothing is committed here and the toolbar resolves that provider's own
+ * catalog default instead. Committing an unresolved seed would freeze a model
+ * this hook only guessed, and `state.currentComposerSettings` outranks the
+ * composer's fallback seed for the rest of the chat's life.
+ */
 function useInitializeChatComposerSettings(input: {
   readonly snapshotLoaded: boolean;
   readonly currentComposerSettings: ChatRunSettings | null;
@@ -3409,20 +3589,29 @@ function chatRunSettingsModelResolved(settings: ChatRunSettings): boolean {
   return settings.model.length > 0;
 }
 
+/**
+ * What this chat runs its next turn under, most specific source first.
+ *
+ * `fallbackSettingsSeed` is the single slot the remembered pair and an imported
+ * chat's provenance share (see `fallbackSettingsSeedForChatComposer`), and it
+ * sits BELOW `persistedChatSettings` on purpose: a chat whose own
+ * `ChatRunSettings` resolved has already committed to a provider, and neither a
+ * remembered pair nor a provenance guess may overrule it. Above that slot is
+ * only what the user is doing right now - a live toolbar edit, or the queue
+ * item open for editing.
+ */
 function currentSettingsForChatTile(input: {
   readonly liveSettings: ChatRunSettings | null;
   readonly editingQueueItemSettings: ChatRunSettings | null;
   readonly persistedChatSettings: ChatRunSettings | null;
-  readonly epicRunSettings: ChatRunSettings | null;
-  readonly globalLastRunSettings: ChatRunSettings | null;
+  readonly fallbackSettingsSeed: ChatRunSettings | null;
   readonly defaultRunSettings: ChatRunSettings;
 }): ChatRunSettings {
   return (
     input.liveSettings ??
     input.editingQueueItemSettings ??
     input.persistedChatSettings ??
-    input.epicRunSettings ??
-    input.globalLastRunSettings ??
+    input.fallbackSettingsSeed ??
     input.defaultRunSettings
   );
 }

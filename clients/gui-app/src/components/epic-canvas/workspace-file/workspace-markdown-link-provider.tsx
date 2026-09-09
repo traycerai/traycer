@@ -5,6 +5,7 @@ import {
   type MarkdownLinkPolicy,
 } from "@/markdown/links/markdown-link-context";
 import { useMemo, type ReactNode } from "react";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 interface WorkspaceMarkdownLinkProviderProps {
   readonly tabId: string;
@@ -22,7 +23,7 @@ interface WorkspaceMarkdownLinkProviderProps {
 export function WorkspaceMarkdownLinkProvider(
   props: WorkspaceMarkdownLinkProviderProps,
 ) {
-  const tileNavigation = useEpicTileNavigation();
+  const { openTile } = useEpicTileNavigation();
   const linkPolicy = useMemo<MarkdownLinkPolicy>(
     () => ({
       supersedePendingFileLink: () => undefined,
@@ -40,17 +41,15 @@ export function WorkspaceMarkdownLinkProvider(
           link.path,
         );
         if (ref === null) return false;
-        tileNavigation.openTilePreviewInTab(props.tabId, ref);
+        // A markdown link click is a single-click gesture (C4/C11); the
+        // anchor hands over the link, not the mouse event, so no modifiers.
+        openTile(
+          tileIntent(ref, { tabId: props.tabId }, "single", "direct_ui"),
+        );
         return true;
       },
     }),
-    [
-      props.hostId,
-      props.filePath,
-      props.tabId,
-      props.workspacePath,
-      tileNavigation,
-    ],
+    [props.hostId, props.filePath, props.tabId, props.workspacePath, openTile],
   );
 
   return (

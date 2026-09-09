@@ -5,6 +5,7 @@ import {
   HostTransportFailureError,
   RetryableTransportError,
   type HostRequestAuthority,
+  type HostRequestOptions,
   type IHostMessenger,
   type RequestOfMethod,
   type ResponseOfMethod,
@@ -112,6 +113,7 @@ export class MockHostMessenger<
     readonly method: string;
     readonly params: unknown;
     readonly requestId: string;
+    readonly idempotencyKey: string | null;
     readonly authority: HostRequestAuthority;
   }> = [];
   readonly phases: MockPhaseEvent[] = [];
@@ -141,21 +143,22 @@ export class MockHostMessenger<
     method: Method,
     params: RequestOfMethod<Registry, Method>,
     responseTimeoutMs: number,
-    authority: HostRequestAuthority,
+    options: HostRequestOptions,
   ): Promise<ResponseOfMethod<Registry, Method>> {
     // The mock runs handlers inline with no transport timers, so the extended
     // response budget has nothing to bound - the call delegates unchanged.
     void responseTimeoutMs;
-    return this.request(method, params, authority);
+    return this.request(method, params, options);
   }
 
   async request<Method extends keyof Registry & string>(
     method: Method,
     params: RequestOfMethod<Registry, Method>,
-    authority: HostRequestAuthority,
+    options: HostRequestOptions,
   ): Promise<ResponseOfMethod<Registry, Method>> {
+    const { idempotencyKey, authority } = options;
     const requestId = this.requestIdProvider();
-    this.calls.push({ method, params, requestId, authority });
+    this.calls.push({ method, params, requestId, idempotencyKey, authority });
 
     this.emit({ kind: "open", method, requestId });
     this.emit({ kind: "auth", method, requestId });
@@ -282,7 +285,14 @@ function restampHostRpcError(
     holders: cause.holders,
   };
   if (cause instanceof RetryableTransportError) {
-    return new RetryableTransportError(details);
+    // Carried from the cause, not re-decided: the whole point of this restamp
+    // is to preserve the contract the caller's error already states, and
+    // `replaySafetyFromKey` is the part of it that decides whether a retry of
+    // this call may go out unkeyed.
+    return new RetryableTransportError({
+      ...details,
+      replaySafetyFromKey: cause.replaySafetyFromKey,
+    });
   }
   if (cause instanceof HostTransportFailureError) {
     return new HostTransportFailureError(details);

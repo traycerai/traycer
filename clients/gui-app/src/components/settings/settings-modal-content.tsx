@@ -7,6 +7,7 @@ import {
 } from "@/lib/settings-sections";
 import { GeneralSettingsPanel } from "@/components/settings/panels/general-settings-panel";
 import { AppearanceSettingsPanel } from "@/components/settings/panels/appearance-settings-panel";
+import { OpeningBehaviorPanel } from "@/components/settings/panels/opening-behavior-panel";
 import { KeybindingsSettingsPanel } from "@/components/settings/panels/keybindings-settings-panel";
 import { ShellSettingsPanel } from "@/components/settings/panels/shell-settings-panel";
 import { WorktreesSettingsPanel } from "@/components/settings/panels/worktrees-settings-panel";
@@ -63,39 +64,33 @@ export function SettingsModalContent(
   );
 }
 
+/**
+ * The panel each section renders. A `Record` keyed by the union rather than a
+ * `switch`: `satisfies` keeps it exhaustive (a new section id is a compile
+ * error here) without a `case` per entry.
+ */
+const SETTINGS_PANELS = {
+  general: GeneralSettingsPanel,
+  appearance: AppearanceSettingsPanel,
+  "opening-behavior": OpeningBehaviorPanel,
+  "app-notifications": AppNotificationsSettingsPanel,
+  providers: ProvidersSettingsPanel,
+  notifications: NotificationsSettingsPanel,
+  agents: AgentsSettingsPanel,
+  keybindings: KeybindingsSettingsPanel,
+  shell: ShellSettingsPanel,
+  worktrees: WorktreesSettingsPanel,
+  host: HostSettingsPanel,
+  devices: DevicesSessionsPanel,
+  "link-phone": LinkPhonePanel,
+  "app-diagnostics": AppDiagnosticsSettingsPanel,
+  diagnostics: DiagnosticsSettingsPanel,
+  usage: UsageSettingsPanel,
+} satisfies Record<SettingsSectionId, () => ReactNode>;
+
 export function SettingsPanelForSection(props: {
   readonly section: SettingsSectionId;
 }): ReactNode {
-  switch (props.section) {
-    case "general":
-      return <GeneralSettingsPanel />;
-    case "appearance":
-      return <AppearanceSettingsPanel />;
-    case "app-notifications":
-      return <AppNotificationsSettingsPanel />;
-    case "providers":
-      return <ProvidersSettingsPanel />;
-    case "notifications":
-      return <NotificationsSettingsPanel />;
-    case "agents":
-      return <AgentsSettingsPanel />;
-    case "keybindings":
-      return <KeybindingsSettingsPanel />;
-    case "shell":
-      return <ShellSettingsPanel />;
-    case "worktrees":
-      return <WorktreesSettingsPanel />;
-    case "host":
-      return <HostSettingsPanel />;
-    case "devices":
-      return <DevicesSessionsPanel />;
-    case "link-phone":
-      return <LinkPhonePanel />;
-    case "app-diagnostics":
-      return <AppDiagnosticsSettingsPanel />;
-    case "diagnostics":
-      return <DiagnosticsSettingsPanel />;
-    case "usage":
-      return <UsageSettingsPanel />;
-  }
+  const Panel = SETTINGS_PANELS[props.section];
+  return <Panel />;
 }

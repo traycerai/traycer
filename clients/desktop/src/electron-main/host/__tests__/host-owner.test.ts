@@ -393,6 +393,10 @@ describe("readHostServiceOwner", () => {
       ),
       substrateFile: join(root, "substrate.json"),
       transitionJournalFile: join(root, "transition.json"),
+      browserTelemetryFile: join(root, "browser-telemetry.jsonl"),
+      browserTelemetryRotatedFile: join(root, "browser-telemetry.jsonl.1"),
+      browserTraceFile: join(root, "browser-trace.jsonl"),
+      browserTraceRotatedFile: join(root, "browser-trace.jsonl.1"),
       environment: "production",
     };
   }

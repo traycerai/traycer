@@ -1,6 +1,9 @@
 import { z } from "zod";
 
-import { chatSessionAnchorSchema } from "@traycer/protocol/persistence/epic/senders";
+import {
+  chatSessionAnchorSchema,
+  chatSessionAnchorSchemaPreAntigravity,
+} from "@traycer/protocol/persistence/epic/senders";
 
 /**
  * # What a row renders WITH
@@ -114,6 +117,19 @@ export const transcriptRowContextSchema = z.object({
 });
 
 export type TranscriptRowContext = z.infer<typeof transcriptRowContextSchema>;
+
+/**
+ * Frozen copy bound to the released windowed line (`chat.subscribe@1.8`).
+ *
+ * Only `sessionAnchor` differs: it takes the anchor union as 1.3.0 shipped it,
+ * without the Antigravity arm. Everything else is shared with the live schema
+ * by spreading `.shape`, so a field added above reaches both copies and only
+ * the discriminant this freeze exists to withhold stays behind.
+ */
+export const transcriptRowContextSchemaPreAntigravity =
+  transcriptRowContextSchema.extend({
+    sessionAnchor: chatSessionAnchorSchemaPreAntigravity.optional(),
+  });
 
 /** The many rows whose rendering depends on nothing around them. */
 export const EMPTY_ROW_CONTEXT: TranscriptRowContext = {};

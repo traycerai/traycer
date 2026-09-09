@@ -7,7 +7,6 @@ import {
 import { goBack } from "@/lib/commands/actions/history-navigation";
 import { createPersistentMemoryHistory } from "@/lib/persistent-history";
 import type { RouterHistory } from "@tanstack/react-router";
-import { reopenClosedResourceOwnerTile } from "@/lib/resources/reopen-closed-resource-owner-tile";
 import { queryClient } from "@/lib/query-client";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { commitPlainTerminalDeletion } from "@/lib/terminals/plain-terminal-presentation-invalidation";
@@ -216,38 +215,6 @@ describe("<TopLevelTabHost /> evicted epic tombstone restore", () => {
       useEpicCanvasStore.getState().closedTilePayloadsByTabId[evictedTabId]?.[
         legacy.instanceId
       ],
-    ).toBeUndefined();
-    expect(
-      useEpicCanvasStore.getState().closedTilePayloadsByTabId[evictedTabId]?.[
-        future.instanceId
-      ],
-    ).toBeDefined();
-    expect(
-      useEpicCanvasStore.getState().closedTilePayloadsByTabId[evictedTabId]?.[
-        otherId.instanceId
-      ],
-    ).toBeDefined();
-
-    useEpicCanvasStore.setState((state) => ({
-      closedTilePayloadsByTabId: {
-        ...state.closedTilePayloadsByTabId,
-        [evictedTabId]: {
-          ...state.closedTilePayloadsByTabId[evictedTabId],
-          [legacy.instanceId]: { node: legacy, pendingCreate: false },
-        },
-      },
-    }));
-
-    expect(
-      reopenClosedResourceOwnerTile({
-        epicId: evictedTabId,
-        tabId: evictedTabId,
-        node: legacy,
-      }),
-    ).toBe(false);
-    expect(
-      useEpicCanvasStore.getState().canvasByTabId[evictedTabId]
-        ?.tilesByInstanceId[legacy.instanceId],
     ).toBeUndefined();
     expect(
       useEpicCanvasStore.getState().closedTilePayloadsByTabId[evictedTabId]?.[

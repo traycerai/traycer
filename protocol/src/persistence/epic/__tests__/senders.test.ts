@@ -153,3 +153,48 @@ describe("Reasonix persisted records", () => {
     expect(anchor.accentColor).toBeNull();
   });
 });
+
+describe("Antigravity persisted records", () => {
+  it("accepts an antigravity chat run-settings tuple", () => {
+    const settings = chatRunSettingsSchema.parse({
+      harnessId: "antigravity",
+      model: "gemini-3-pro",
+      permissionMode: "supervised",
+      reasoningEffort: null,
+      agentMode: "regular",
+    });
+
+    expect(settings.harnessId).toBe("antigravity");
+    expect(settings.reasoningEffort).toBeNull();
+    // The two `.default(...)` backstops still apply to a brand-new harness.
+    expect(settings.serviceTier).toBeNull();
+    expect(settings.profileId).toBeNull();
+  });
+
+  it("parses an antigravity session anchor as a session-granularity ACP anchor", () => {
+    // Session granularity like reasonix: `agy_acp_server`'s `session/load`
+    // reloads the whole ACP session and there is no per-message truncation
+    // point, so the anchor carries just the ACP session id.
+    const anchor = chatSessionAnchorSchema.parse({
+      harnessId: "antigravity",
+      hostId: "host-1",
+      sessionId: "acp-session-1",
+      sessionWorkspaceSnapshot: {
+        workspaceKind: "session-snapshot" as const,
+        primaryWorkspace: "/repo",
+        secondaryWorkspaces: [],
+      },
+      createdAt: 100,
+      coveredUntilMessageId: null,
+    });
+
+    expect(anchor).toMatchObject({
+      harnessId: "antigravity",
+      sessionId: "acp-session-1",
+    });
+    expect(anchor).not.toHaveProperty("opencodeUserMessageId");
+    // Profile snapshot fields default the same way every other anchor's do.
+    expect(anchor.profileId).toBeNull();
+    expect(anchor.accentColor).toBeNull();
+  });
+});

@@ -137,7 +137,10 @@ describe("tab.new dispatch (blank tab in active group)", () => {
     const blankGroupId = activeGroup(tabId).id;
 
     // Picking content while the blank is active replaces it (browser new-tab).
-    useEpicCanvasStore.getState().openTileInPane(tabId, blankGroupId, SPEC_B);
+    useEpicCanvasStore.getState().openTileInPane(tabId, blankGroupId, SPEC_B, {
+      mode: "permanent",
+      index: null,
+    });
 
     const group = activeGroup(tabId);
     expect(group.tabs.map((t) => t.id)).toEqual([SPEC_A.id, SPEC_B.id]);

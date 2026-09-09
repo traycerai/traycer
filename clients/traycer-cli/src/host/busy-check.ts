@@ -1,8 +1,8 @@
 import {
   isValidLocalHostWebsocketUrl,
+  publishedHostProcessGone,
   readHostPidMetadata,
 } from "./pid-metadata";
-import { isProcessAlive } from "../store/cli-lock";
 import type { Environment } from "../runner/environment";
 import { cliError, CLI_ERROR_CODES } from "../runner/errors";
 import { probeHostActivityBusy } from "@traycer-clients/shared/host-client/host-activity-probe";
@@ -53,9 +53,11 @@ async function probeHostForRestart(
   ) {
     return "no-host";
   }
-  // A stale pid.json whose process has exited is not a live host - a reinstall
-  // has nothing to lose.
-  if (!isProcessAlive(metadata.pid)) {
+  // A stale pid.json whose process has exited - or whose pid now belongs to an
+  // unrelated process - is not a live host: a reinstall has nothing to lose,
+  // and probing the dead endpoint below would read as "busy" (fail-safe) and
+  // block the repair.
+  if (publishedHostProcessGone(metadata)) {
     return "no-host";
   }
   // A live host: probe its `/activity` side-channel. Any reachable-but-

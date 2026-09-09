@@ -1,11 +1,9 @@
 import { useMemo, useRef, useState, type ReactNode } from "react";
-import { Copy, Download } from "lucide-react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import { useUsageImageExport } from "@/hooks/usage-analytics/use-usage-image-export";
@@ -40,6 +38,7 @@ import { UsageChatBreakdown } from "@/components/usage-analytics/usage-chat-brea
 import { UsageHarnessSplit } from "@/components/usage-analytics/usage-harness-split";
 import { UsageStatTiles } from "@/components/usage-analytics/usage-stat-tiles";
 import { UsageWindowPicker } from "@/components/usage-analytics/usage-window-picker";
+import { UsageExportImageActions } from "@/components/usage-analytics/usage-export-image-actions";
 import {
   UsageDialogFrame,
   USAGE_DIALOG_SHEET_CLASSES,
@@ -113,23 +112,18 @@ export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
   const contentRef = useRef<HTMLDivElement | null>(null);
   const exportReady =
     query.data !== undefined && query.data.summary.totals.factCount > 0;
-  const { mutation, copyImage, downloadImage } = useUsageImageExport({
-    getExportNode: () =>
-      contentRef.current?.querySelector<HTMLElement>(
-        USAGE_EXPORT_REGION_SELECTOR,
-      ) ?? null,
-    fileName: `traycer-usage-${String(windowDays)}d.png`,
-    heading: "Usage",
-    subheading: "Cost and token usage for this task.",
-    errorSource: "Epic usage dialog",
-    analyticsSource: "epic_dialog",
-  });
-  // One export runs at a time, so BOTH buttons go disabled while either is
-  // pending; only the button that started it shows the spinner, which is
-  // what the variables discriminate.
-  const isExporting = mutation.isPending;
-  const isCopying = isExporting && mutation.variables.action === "copy";
-  const isDownloading = isExporting && mutation.variables.action === "download";
+  const { pendingAction, copyImage, shareImage, downloadImage } =
+    useUsageImageExport({
+      getExportNode: () =>
+        contentRef.current?.querySelector<HTMLElement>(
+          USAGE_EXPORT_REGION_SELECTOR,
+        ) ?? null,
+      fileName: `traycer-usage-${String(windowDays)}d.png`,
+      heading: "Usage",
+      subheading: "Cost and token usage for this task.",
+      errorSource: "Epic usage dialog",
+      analyticsSource: "epic_dialog",
+    });
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -163,46 +157,16 @@ export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
                   sheet tier the footer column-reverses, so this group
                   stacks below it, full width like its sibling. */}
               <div className="flex gap-2 max-[28rem]:flex-col sm:mr-auto">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="max-[28rem]:w-full"
-                  data-testid="epic-usage-copy-image"
-                  disabled={!exportReady || isExporting}
-                  onClick={copyImage}
-                >
-                  {isCopying ? (
-                    <AgentSpinningDots
-                      className="size-3"
-                      testId={undefined}
-                      variant={undefined}
-                    />
-                  ) : (
-                    <Copy aria-hidden />
-                  )}
-                  Copy image
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="max-[28rem]:w-full"
-                  data-testid="epic-usage-download-image"
-                  disabled={!exportReady || isExporting}
-                  onClick={downloadImage}
-                >
-                  {isDownloading ? (
-                    <AgentSpinningDots
-                      className="size-3"
-                      testId={undefined}
-                      variant={undefined}
-                    />
-                  ) : (
-                    <Download aria-hidden />
-                  )}
-                  Download image
-                </Button>
+                <UsageExportImageActions
+                  exportReady={exportReady}
+                  pendingAction={pendingAction}
+                  copyImage={copyImage}
+                  shareImage={shareImage}
+                  downloadImage={downloadImage}
+                  testIdPrefix="epic-usage"
+                  variant="labelled"
+                  buttonClassName="max-[28rem]:w-full"
+                />
               </div>
               <Button
                 type="button"

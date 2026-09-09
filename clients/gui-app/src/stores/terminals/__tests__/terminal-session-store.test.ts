@@ -274,6 +274,68 @@ describe("createTerminalSessionStore", () => {
     });
   });
 
+  it("rebuilds a lost retained transport when its owner requests a reprobe", () => {
+    const callbacks: TerminalStreamCallbacks[] = [];
+    const close = vi.fn();
+    const handle = createTerminalSessionStore({
+      scope: { kind: "epic", epicId: "epic-1" },
+      sessionId: "terminal-1",
+      cols: 80,
+      rows: 24,
+      reattachMode: "fresh",
+      kind: "terminal",
+      streamClientFactory: (streamArgs) => {
+        callbacks.push(streamArgs.callbacks);
+        return { sendAction: () => undefined, close };
+      },
+    });
+
+    callbacks[0]?.onConnectionStatus("closed", null);
+    expect(handle.store.getState().status).toBe("lost");
+    handle.store.getState().retryTransport();
+
+    expect(callbacks).toHaveLength(2);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(handle.store.getState()).toMatchObject({
+      connectionStatus: "connecting",
+      status: "creating",
+    });
+    handle.dispose();
+  });
+
+  it("restores a recoverable lost state when reprobe construction throws", () => {
+    const callbacks: TerminalStreamCallbacks[] = [];
+    const close = vi.fn();
+    let attempts = 0;
+    const handle = createTerminalSessionStore({
+      scope: { kind: "epic", epicId: "epic-1" },
+      sessionId: "terminal-1",
+      cols: 80,
+      rows: 24,
+      reattachMode: "fresh",
+      kind: "terminal",
+      streamClientFactory: (streamArgs) => {
+        attempts += 1;
+        if (attempts > 1) throw new Error("subscription wiring failed");
+        callbacks.push(streamArgs.callbacks);
+        return { sendAction: () => undefined, close };
+      },
+    });
+
+    callbacks[0]?.onConnectionStatus("closed", null);
+    expect(() => handle.store.getState().retryTransport()).toThrow(
+      "subscription wiring failed",
+    );
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(handle.store.getState()).toMatchObject({
+      connectionStatus: "closed",
+      status: "lost",
+      snapshotLoaded: false,
+    });
+
+    handle.dispose();
+  });
+
   it("marks the session 'reaped' (definitive) on a TERMINAL_NOT_FOUND fatal, not the recoverable 'lost'", () => {
     const harness = createHarness();
     harness.callbacks().onConnectionStatus("open", null);

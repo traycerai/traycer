@@ -1,3 +1,11 @@
+// The Overview re-provides a scoped STREAM binding beside its unary one (for
+// the Data & migration group), and the real hook reads `useAuthService` -
+// which this suite deliberately does not stand up. `null` keeps the panel on
+// the ambient stream, the arrangement every assertion below already assumed.
+vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
+  useScopedStreamBinding: () => null,
+}));
+
 // Same boundary as the sibling Overview suites: mock `useHostScope` and
 // `@/lib/host`'s `useHostBinding` rather than standing up a host runtime.
 const scopeOverrides = vi.hoisted((): { current: Record<string, unknown> } => ({
@@ -255,7 +263,11 @@ describe("<HostSettingsPanel /> Overview updates region — sticky vs transient 
             manifest: updateCheckManifest("1.6.0"),
           }),
         "host.update.install": () =>
-          Promise.resolve({ outcome: "cli-failed" as const }),
+          Promise.resolve({
+            outcome: "cli-failed" as const,
+            reason: null,
+            storeFloor: null,
+          }),
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);

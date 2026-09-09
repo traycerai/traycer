@@ -11,7 +11,6 @@ import { useRegisteredHosts } from "@/hooks/auth/use-registered-hosts-query";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostLeases } from "@/hooks/host/use-host-lease";
 import { useSelectionAuthorityAttached } from "@/hooks/host/use-selection-authority-attached";
-import { useRemoteHostsPlanRestricted } from "@/hooks/host/use-remote-hosts-plan-gate";
 import { useNowMs } from "@/components/settings/panels/host-settings-panel-hooks";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useLocalHostSnapshot } from "@/components/settings/panels/host-settings-panel-hooks";
@@ -23,6 +22,9 @@ import {
   type HostScopeOption,
 } from "@/components/settings/host-scope/host-scope-model";
 import { hostListReadiness } from "@/components/settings/host-scope/host-scope-status";
+
+/** The cadence relative-time labels in the host pickers refresh at. */
+const HOST_OPTION_LABEL_TICK_MS = 60_000;
 
 /**
  * THE answer to "what hosts does this account have, and can I reach them".
@@ -130,15 +132,13 @@ export function useHostOptions(): HostOptions {
   // hook - narrators take this one, gates take that one - and this file is a
   // narrator in all four of its consumers.
   const activeHostId = useEffectiveHostId();
-  const nowMs = useNowMs();
+  // A minute: this clock only feeds relative-time labels, which are allowed to
+  // be up to a tick behind. Nothing here holds a gate on it.
+  const nowMs = useNowMs(HOST_OPTION_LABEL_TICK_MS);
 
   const directoryQuery = useHostDirectoryList();
   const registryQuery = useRegisteredHosts();
   const localSnapshot = useLocalHostSnapshot(runnerHost);
-  // Same gate the header and workspace pickers consult, so no picker can offer
-  // a remote route another one already refuses.
-  const remoteHostsPlanRestricted = useRemoteHostsPlanRestricted();
-
   const directory = directoryQuery.data;
   const registry = registryQuery.data;
 
@@ -251,7 +251,6 @@ export function useHostOptions(): HostOptions {
         hasLiveSession,
         leases,
         authorityAttached,
-        remoteHostsPlanRestricted,
         localHostSettingUp,
         nowMs,
       }),
@@ -265,7 +264,6 @@ export function useHostOptions(): HostOptions {
       leases,
       authorityAttached,
       localHostSettingUp,
-      remoteHostsPlanRestricted,
       nowMs,
     ],
   );

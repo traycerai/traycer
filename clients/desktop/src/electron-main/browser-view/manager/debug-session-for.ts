@@ -33,7 +33,7 @@ export class BrowserViewDebugSessions {
 
   ensure(entry: BrowserViewEntry): BrowserDebugSession {
     if (entry.debugSession !== null) return entry.debugSession;
-    const webContents = entry.view.webContents;
+    const webContents = entry.webContents;
     const session = new BrowserDebugSession({
       webContents,
       onDetached: (reason) => {

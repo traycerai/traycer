@@ -28,6 +28,7 @@ vi.mock("@/hooks/epic/use-epic-sweep-worktree-candidates-query", () => ({
     checkedAt: testState.checkedAt,
     canRefresh: true,
     refresh: testState.refresh,
+    prove: testState.refresh,
   }),
 }));
 
@@ -94,6 +95,8 @@ describe("SweepWorktreesDialog refresh", () => {
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Refresh sweep"
         onOpenChange={() => {}}
       />,
@@ -112,13 +115,15 @@ describe("SweepWorktreesDialog refresh", () => {
     expect(testState.refresh).toHaveBeenCalledOnce();
   });
 
-  it("keeps the cached snapshot visible but non-actionable while rechecking", () => {
+  it("keeps the cached snapshot visible AND selectable while rechecking", () => {
     testState.isPending = true;
 
     render(
       <SweepWorktreesDialog
         epicIds={["epic-1"]}
         hostClient={null}
+        hostChoice={null}
+        fleetPending={false}
         taskTitle="Refresh sweep"
         onOpenChange={() => {}}
       />,
@@ -127,13 +132,21 @@ describe("SweepWorktreesDialog refresh", () => {
     expect(screen.getByText("traycer/refresh")).toBeTruthy();
     expect(screen.queryByText("Checking worktrees…")).toBeNull();
     expect(screen.getByTestId("sweep-worktrees-checked-at")).toBeTruthy();
-    const checkbox = screen.getByTestId<HTMLButtonElement>(
-      "sweep-worktrees-checkbox",
-    );
-    const confirm = screen.getByTestId<HTMLButtonElement>(
-      "sweep-worktrees-confirm",
-    );
-    expect(checkbox.disabled).toBe(true);
-    expect(confirm.disabled).toBe(true);
+    // The flow never holds the user: rows stay selectable and Remove stays
+    // live through a refresh, because the click re-proves before acting.
+    const checkbox = screen.getByRole<HTMLButtonElement>("checkbox", {
+      name: "Sweep worktree traycer/refresh",
+    });
+    const confirm = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Remove 1 worktree",
+    });
+    expect(checkbox.disabled).toBe(false);
+    expect(confirm.disabled).toBe(false);
+    // Only the Refresh control itself waits for the in-flight read.
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", {
+        name: "Refresh worktree details",
+      }).disabled,
+    ).toBe(true);
   });
 });

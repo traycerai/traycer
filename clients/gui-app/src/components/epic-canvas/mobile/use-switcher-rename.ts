@@ -5,6 +5,9 @@ import { useEpicRenameTuiAgent } from "@/hooks/epic/use-epic-tui-agent-mutations
 import { useEpicRenameArtifact } from "@/hooks/epic/use-epic-node-mutations";
 import { useTerminalRenameFor } from "@/hooks/terminal/use-terminal-rename-for-mutation";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
+import { resolveChatWriteRoute } from "@/hooks/epic/use-chat-write-route";
+import { getEpicSessionHandleHostId } from "@/lib/registries/epic-session-registry";
+import { settleDetachedEpicMutation } from "@/lib/artifacts/detached-epic-mutation";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
 /** The renameable kinds a mobile surface can address, and how they rename. */
@@ -64,11 +67,18 @@ export function useSwitcherRename(
   const epicHandle = useOpenEpicHandle();
   const renameChat = useEpicRenameChat();
   const renameTuiAgent = useEpicRenameTuiAgent();
-  const renameArtifact = useEpicRenameArtifact(true);
+  // `null`: the node being renamed arrives as an argument to the returned
+  // callback, not at hook-call time, and no caller of this hook reads
+  // `isPending`.
+  const renameArtifact = useEpicRenameArtifact(null, true);
   const renameTerminal = useTerminalRenameFor(useEpicSessionHostClient());
 
-  return useCallback(
-    (kind, nodeId, title) => {
+  const commit = useCallback(
+    async (
+      kind: SwitcherRowKind,
+      nodeId: string,
+      title: string,
+    ): Promise<void> => {
       // Trimmed for BOTH the stamp and the RPC - and for the raw terminal
       // too, whose arm previously sat above this guard and would send a
       // whitespace-only title straight to `terminal.rename`. The overlay
@@ -91,38 +101,82 @@ export function useSwitcherRename(
       if (kind === "terminal-agent") {
         const agents = epicHandle.store.getState().tuiAgents.byId;
         if (!Object.hasOwn(agents, nodeId) || agents[nodeId].docResident) {
-          epicHandle.store.getState().renameArtifact(nodeId, trimmed);
+          // `void`: the doc write is a round trip now, and this arm's whole
+          // point is that it needs no stamp to retire and nothing to await.
+          //
+          // Detached is not the same as unhandled, though. The write crosses
+          // the worker bridge, and `mutation/apply` rejects for faults that
+          // are not disposal - a handler throw, a malformed bridge response -
+          // so without a terminal rejection arm this surface is an unhandled
+          // rejection rather than a rename that quietly did not happen. There
+          // is nothing to roll back (no optimistic stamp was taken) and
+          // nothing to tell the user that the doc itself will not tell them:
+          // the title simply stays as it was. So this records and stops.
+          settleDetachedEpicMutation(
+            epicHandle.store.getState().renameArtifact(nodeId, trimmed),
+            "mobile switcher",
+            "doc-resident rename",
+          );
           return;
         }
       }
-      const requestId = epicHandle.store
+      if (kind === "artifact") {
+        renameArtifact.mutate({ epicId, artifactId: nodeId, title: trimmed });
+        return;
+      }
+      // Last line for a chat the host's chat store cannot address. The menu
+      // entry that reaches this is already disabled (`switcher-row-actions`),
+      // so this catches the surfaces that rename without one - the current-tile
+      // bar's inline edit. Nothing is sent AND nothing is written to the doc:
+      // on a host with a record plane the doc is not the authority, so a local
+      // write loses to record-wins on the next answer. No overlay stamp
+      // either - an optimistic patch for a mutation that is never sent is a
+      // row that renames and then snaps back, which is the dnd commit's rule
+      // for a move it cannot make.
+      if (
+        resolveChatWriteRoute({
+          chatsById: epicHandle.store.getState().chats.byId,
+          isChatRow: kind === "chat",
+          nodeId,
+          sessionHostId: getEpicSessionHandleHostId(epicHandle),
+        }) === "unavailable"
+      ) {
+        return;
+      }
+      const requestId = await epicHandle.store
         .getState()
         .beginRenameMutation(nodeId, trimmed);
       // Retire rides the `mutateAsync` promise - never a per-call
       // `onSettled`, which TanStack drops on unmount and replaces on a
       // consecutive `mutate()`. Contract note in `use-rename-canvas-tab.ts`.
-      const retire = (outcome: "landed" | "failed"): void => {
+      const retire = async (outcome: "landed" | "failed"): Promise<void> => {
         if (requestId === null) return;
-        epicHandle.store.getState().retirePendingMutation(requestId, outcome);
+        await epicHandle.store
+          .getState()
+          .retirePendingMutation(requestId, outcome);
       };
-      const landed = (): void => {
-        retire("landed");
+      const landed = async (): Promise<void> => {
+        await retire("landed");
       };
-      const failed = (): void => {
-        retire("failed");
+      const failed = async (): Promise<void> => {
+        await retire("failed");
       };
       if (kind === "chat") {
-        void renameChat
-          .mutateAsync({ epicId, chatId: nodeId, title: trimmed })
-          .then(landed, failed);
-      } else if (kind === "terminal-agent") {
-        void renameTuiAgent
-          .mutateAsync({ epicId, tuiAgentId: nodeId, title: trimmed })
-          .then(landed, failed);
+        settleDetachedEpicMutation(
+          renameChat
+            .mutateAsync({ epicId, chatId: nodeId, title: trimmed })
+            .then(landed, failed),
+          "mobile switcher",
+          "chat rename settlement",
+        );
       } else {
-        void renameArtifact
-          .mutateAsync({ epicId, artifactId: nodeId, title: trimmed })
-          .then(landed, failed);
+        settleDetachedEpicMutation(
+          renameTuiAgent
+            .mutateAsync({ epicId, tuiAgentId: nodeId, title: trimmed })
+            .then(landed, failed),
+          "mobile switcher",
+          "terminal-agent rename settlement",
+        );
       }
     },
     [
@@ -133,5 +187,22 @@ export function useSwitcherRename(
       renameTerminal,
       renameTuiAgent,
     ],
+  );
+
+  // The returned callback stays VOID-returning, which is what the declared
+  // type says and what a DOM handler needs - so the fire-and-forget is made
+  // explicit here rather than left as a promise assignable-to-void by
+  // accident, and terminated rather than merely discarded: `commit` awaits the
+  // write-route resolution and the doc-resident arm, either of which can
+  // reject after the row has already been handed back to the switcher.
+  return useCallback(
+    (kind: SwitcherRowKind, nodeId: string, title: string): void => {
+      settleDetachedEpicMutation(
+        commit(kind, nodeId, title),
+        "mobile switcher",
+        "rename commit",
+      );
+    },
+    [commit],
   );
 }

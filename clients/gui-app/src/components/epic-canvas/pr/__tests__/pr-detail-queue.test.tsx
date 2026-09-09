@@ -4,6 +4,7 @@ import type {
   PrAttentionItem,
   PrAttentionQueue,
 } from "@/lib/pr/pr-attention-queue";
+import type { LinkClickEvent } from "@/lib/links/open-link";
 import { PrDetailQueue } from "@/components/epic-canvas/pr/pr-detail-queue";
 import { tooltipTextFor } from "@/components/ui/__tests__/tooltip-probe";
 
@@ -39,7 +40,7 @@ function queue(overrides: Partial<PrAttentionQueue>): PrAttentionQueue {
 
 function renderQueue(
   value: PrAttentionQueue,
-  onOpenDetails: (url: string) => void,
+  onOpenDetails: (url: string, event: LinkClickEvent) => void,
 ): void {
   render(
     <PrDetailQueue
@@ -109,12 +110,16 @@ describe("PrDetailQueue", () => {
     expect(screen.queryByTestId("pr-detail-queue-row")).toBeNull();
   });
 
-  it("makes the headline itself the link, like the Checks tab", () => {
-    const opened: string[] = [];
-    renderQueue(queue({}), (url) => opened.push(url));
+  it("makes the headline itself the link, like the Checks tab, and passes the click event through", () => {
+    const opened: [string, LinkClickEvent][] = [];
+    renderQueue(queue({}), (url, event) => opened.push([url, event]));
 
     fireEvent.click(screen.getByTestId("pr-detail-queue-headline"));
-    expect(opened).toEqual(["https://github.com/acme/widgets/pull/7#review-1"]);
+    expect(opened).toHaveLength(1);
+    expect(opened[0]?.[0]).toBe(
+      "https://github.com/acme/widgets/pull/7#review-1",
+    );
+    expect(opened[0]?.[1]).toBeTruthy();
   });
 
   it("renders a headline with no url as plain text, not a dead control", () => {

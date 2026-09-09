@@ -2,12 +2,13 @@ import type { SyntheticEvent } from "react";
 import type {
   BrowserNavState,
   BrowserScreencastUnsupportedFeature,
+  BrowserSessionProfileKind,
 } from "@traycer/protocol/host/browser/contracts";
 import type {
   TileChromeCapabilities,
   TileController,
 } from "@/components/epic-canvas/renderers/tile-controller";
-import { normalizeBrowserAddressInput } from "@/lib/browser-view/link-routing/browser-link-routing-core";
+import { normalizeBrowserAddressInput } from "@/lib/browser-view/browser-tab-display";
 import { useAddressDraft } from "@/components/epic-canvas/renderers/use-address-draft";
 import type { BrowserViewViewportPresetId } from "@traycer-clients/shared/platform/browser-view";
 import { toast } from "sonner";
@@ -40,6 +41,7 @@ const SCREENCAST_UNSUPPORTED_INTERACTION_TOASTS = {
 const UNUSED_VIEWPORT_PRESET: BrowserViewViewportPresetId = "responsive";
 
 interface UseScreencastTileChromeArgs {
+  readonly profile: BrowserSessionProfileKind;
   readonly navState: BrowserNavState;
   readonly initialUrl: string;
   readonly disabled: boolean;
@@ -84,19 +86,31 @@ export function useScreencastTileChrome(
   const addressValue = draft.addressValue;
   const navigateToUrl = (url: string): void => {
     draft.onAddressSubmitted(url);
-    onNavigateUrl(url);
+    if (url === normalizeBrowserAddressInput(liveUrl)) {
+      onReload();
+    } else {
+      onNavigateUrl(url);
+    }
+  };
+
+  const onAddressFocusChange = (focused: boolean): void => {
+    draft.onAddressFocusChange(focused);
+    if (focused) draft.focusAddress();
   };
 
   const controller: TileController = {
     capabilities: SCREENCAST_TILE_CHROME_CAPABILITIES,
+    profile: args.profile,
     url: liveUrl,
     addressValue,
+    selectAddressOnFocus: true,
+    setAddressInput: draft.setAddressInput,
+    focusAddress: draft.focusAddress,
     canGoBack: navState.canGoBack,
     canGoForward: navState.canGoForward,
     zoomPercent: 100,
     viewportPreset: UNUSED_VIEWPORT_PRESET,
     disabled,
-    cookieCryptoState: null,
     zoomLocked: false,
     annotation: null,
     onNavigate: (event: SyntheticEvent<HTMLFormElement, SubmitEvent>) => {
@@ -105,7 +119,7 @@ export function useScreencastTileChrome(
       navigateToUrl(url);
     },
     onAddressChange: draft.onAddressChange,
-    onAddressFocusChange: draft.onAddressFocusChange,
+    onAddressFocusChange,
     onBack: () => {
       if (!navState.canGoBack) return;
       onBack();
@@ -120,12 +134,15 @@ export function useScreencastTileChrome(
     onResetZoom: ignoreChromeAction,
     onViewportPresetChange: ignoreViewportPreset,
     onOpenDevTools: ignoreChromeAction,
+    // A screencast tile watches a headless context on the host; there is no
+    // local jar here to clear, and the host's own eviction is what reaches it.
+    onClearSite: null,
   };
 
   return {
     controller,
     navigateToUrl,
-    onAddressFocusChange: draft.onAddressFocusChange,
+    onAddressFocusChange,
   };
 }
 

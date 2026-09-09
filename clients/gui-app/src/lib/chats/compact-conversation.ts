@@ -20,8 +20,8 @@ import { isOptimisticQueuedItem } from "@/stores/chats/optimistic-queue";
  * no command, so it supports compaction but not on demand. Reasonix is the same
  * shape for a different reason - it has `/compact` in its TUI but NOT in its ACP
  * `available_commands_update`, and compacts on a `compact_ratio` threshold plus
- * a model-facing `compress` tool, so there is no command to stamp. amp, droid
- * and cursor have no compaction at all.
+ * a model-facing `compress` tool, so there is no command to stamp. amp, droid,
+ * cursor and antigravity have no compaction at all.
  */
 export function findManualCompactCommand(
   commands: ReadonlyArray<GuiAgentCommandOption>,

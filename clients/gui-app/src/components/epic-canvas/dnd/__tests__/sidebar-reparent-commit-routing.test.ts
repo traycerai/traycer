@@ -20,6 +20,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
 import { hostQueryKeys } from "@/lib/query-keys";
 import type { TreeNode, TreeSlice } from "@/stores/epics/open-epic/types";
+import {
+  recordNegotiatedHostMethods,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { appLogger } from "@/lib/logger";
 
 const seam = vi.hoisted(() => {
   // Typed through a helper rather than an `as TreeSlice` on the literal: the
@@ -60,6 +65,28 @@ const seam = vi.hoisted(() => {
     retirePendingMutation: vi.fn<
       (requestId: string, outcome: "landed" | "failed") => boolean
     >(() => true),
+    /**
+     * Chats the record plane STATED are doc-homed. Everything in
+     * `recordIds` that is dropped as a chat projects `docResident: false`; an
+     * id listed here projects `true`, which is what makes the chat arm of the
+     * addressability gate reachable.
+     */
+    docHomedChatIds: [] as readonly string[],
+    /**
+     * T11's write-command queue, absent from this fake since it landed. Three
+     * ARTIFACT tests in this file were failing on `enqueueWriteCommand is not a
+     * function` before the chat gate existed - a stale fake, not a defect in
+     * the code under test.
+     *
+     * Resolves rather than returning bare `null`: the artifact branch in
+     * `root-dnd-commits.ts` now chains `.catch(...)` directly off this call's
+     * return value (the unhandled-rejection fix), and a synchronous `null`
+     * has no `.catch` to call - another stale-fake gap, not a defect in the
+     * code under test.
+     */
+    enqueueWriteCommand: vi.fn<(intent: unknown) => unknown>(() =>
+      Promise.resolve(null),
+    ),
   };
 });
 
@@ -98,9 +125,27 @@ vi.mock("@/lib/registries/epic-session-registry", () => ({
             ]),
             allIds: [...seam.recordIds, ...seam.docResidentIds],
           },
+          // The chat half of the union the gate reads. `docResident` is the
+          // fact `routeChatWrite` consults on a host that HAS a record plane;
+          // on a host without one the gate never reaches it.
+          chats: {
+            byId: Object.fromEntries<{
+              id: string;
+              docResident: boolean | null;
+            }>([
+              ...seam.recordIds.map(
+                (id) => [id, { id, docResident: false }] as const,
+              ),
+              ...seam.docHomedChatIds.map(
+                (id) => [id, { id, docResident: true }] as const,
+              ),
+            ]),
+            allIds: [...seam.recordIds, ...seam.docHomedChatIds],
+          },
           reparentArtifact: seam.reparentArtifact,
           beginReparentMutation: seam.beginReparentMutation,
           retirePendingMutation: seam.retirePendingMutation,
+          enqueueWriteCommand: seam.enqueueWriteCommand,
         }),
       },
       ...handle,
@@ -143,8 +188,11 @@ function treeOf(nodes: readonly TreeNode[]): TreeSlice {
 
 const queryClient = new QueryClient();
 
-function drop(sourceNodeId: string, newParentId: string | null): void {
-  commitSidebarReparentDrop({
+async function drop(
+  sourceNodeId: string,
+  newParentId: string | null,
+): Promise<void> {
+  await commitSidebarReparentDrop({
     epicId: "epic-1",
     sourceNodeId,
     newParentId,
@@ -161,6 +209,13 @@ beforeEach(() => {
   seam.request.mockResolvedValue({ updated: true });
   seam.recordIds = [];
   seam.docResidentIds = [];
+  seam.docHomedChatIds = [];
+  seam.enqueueWriteCommand.mockClear();
+  // The chat arm of the gate reads THIS host's negotiated record-plane
+  // coverage, which is process-wide module state. Cleared per test so one
+  // test's host cannot decide another's: with nothing recorded the host reads
+  // as floor-era, which is the permissive arm.
+  resetNegotiatedManifests();
   seam.hasClient = true;
   seam.tree = seam.emptyTree();
   seam.beginReparentMutation.mockClear();
@@ -179,7 +234,7 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     seam.request.mockResolvedValueOnce({ updated: true });
     const invalidate = vi.spyOn(queryClient, "invalidateQueries");
 
-    drop("tui-1", "tui-parent");
+    await drop("tui-1", "tui-parent");
 
     // The optimistic overlay stamps BEFORE the RPC fires, so the row moves at
     // drop time rather than waiting on the round trip.
@@ -220,7 +275,7 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     seam.recordIds = ["tui-1", "tui-parent"];
     seam.request.mockRejectedValueOnce(new Error("host refused the move"));
 
-    drop("tui-1", "tui-parent");
+    await drop("tui-1", "tui-parent");
 
     expect(seam.beginReparentMutation).toHaveBeenCalledWith(
       "tui-1",
@@ -234,7 +289,7 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     });
   });
 
-  it("writes the doc for a terminal agent the host serves no record for", () => {
+  it("writes the doc for a terminal agent the host serves no record for", async () => {
     // The legacy-host case. `epic.listTuiAgents` is unsupported there, so the
     // record slice is empty and the agent renders from the doc's `tuiAgents`
     // map - which is also where its parent pointer still lives. Absent from
@@ -250,7 +305,7 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     ]);
     seam.recordIds = [];
 
-    drop("tui-legacy", "tui-parent");
+    await drop("tui-legacy", "tui-parent");
 
     expect(seam.reparentArtifact).toHaveBeenCalledWith(
       "tui-legacy",
@@ -261,7 +316,7 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     expect(seam.request).not.toHaveBeenCalled();
   });
 
-  it("routes a docResident: true agent to the Y.Doc branch even though it is not absent from the union", () => {
+  it("routes a docResident: true agent to the Y.Doc branch even though it is not absent from the union", async () => {
     // `epic.listTuiAgents@1.1` unions the doc-resident remainder INTO the
     // same table `epic.listTuiAgents` records fill, so "absent from the
     // union" stopped being a reliable doc-only tell - this id is very much
@@ -279,7 +334,7 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     ]);
     seam.docResidentIds = ["tui-frozen"];
 
-    drop("tui-frozen", "tui-parent");
+    await drop("tui-frozen", "tui-parent");
 
     expect(seam.reparentArtifact).toHaveBeenCalledWith(
       "tui-frozen",
@@ -288,7 +343,80 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     expect(seam.request).not.toHaveBeenCalled();
   });
 
-  it("sends a chat through epic.reparentChat even with no terminal records", () => {
+  it("sends a doc-homed chat through epic.reparentChat on a FLOOR-ERA host", async () => {
+    // No handshake recorded, so this host has no chat record plane at all -
+    // and `epic.reparentChat` is on `RELEASED_FLOOR_METHOD_NAMES`, so it exists
+    // there and resolves a doc chat through the host's own storage seam.
+    //
+    // Ablation: gate the chat arm on `docResident` ALONE and this drop stops
+    // being sent - every chat reparent on every floor-era host silently
+    // disabled, which is why the predicate reads the host's coverage first.
+    seam.tree = treeOf([
+      node("chat-doc", "chat", null),
+      node("chat-parent", "chat", null),
+    ]);
+    seam.docHomedChatIds = ["chat-doc"];
+
+    await drop("chat-doc", "chat-parent");
+
+    expect(seam.request).toHaveBeenCalledWith("epic.reparentChat", {
+      epicId: "epic-1",
+      chatId: "chat-doc",
+      newParentId: "chat-parent",
+    });
+  });
+
+  it("REFUSES a doc-homed chat on a host that serves the chat record plane", async () => {
+    // The plane exists and states this row lives in the doc, so the writer
+    // cannot address it: `epic.reparentChat` would name no registry row and
+    // fail HOST-SIDE, after the row rendered fine. Nothing is sent, and
+    // nothing is written to the doc either - on a host with a record plane the
+    // doc is not the authority, so a local write would lose to record-wins on
+    // the next answer and read as an affordance that works while changing
+    // nothing.
+    recordNegotiatedHostMethods("host-1", [
+      "epic.listChatRecords",
+      "epic.reparentChat",
+    ]);
+    seam.tree = treeOf([
+      node("chat-doc", "chat", null),
+      node("chat-parent", "chat", null),
+    ]);
+    seam.docHomedChatIds = ["chat-doc"];
+
+    await drop("chat-doc", "chat-parent");
+
+    expect(seam.request).not.toHaveBeenCalled();
+    expect(seam.reparentArtifact).not.toHaveBeenCalled();
+    // No optimistic stamp either: an overlay patch for a mutation that is never
+    // sent is a row that moves and then snaps back on the next answer.
+    expect(seam.beginReparentMutation).not.toHaveBeenCalled();
+  });
+
+  it("still sends a STORE-homed chat on a host that serves the record plane", async () => {
+    // The other half of the same host: the plane stated this row is in the
+    // store, so it is addressable. Without this, the test above would pass just
+    // as well against a gate that refused every chat on a record-plane host.
+    recordNegotiatedHostMethods("host-1", [
+      "epic.listChatRecords",
+      "epic.reparentChat",
+    ]);
+    seam.tree = treeOf([
+      node("chat-store", "chat", null),
+      node("chat-parent", "chat", null),
+    ]);
+    seam.recordIds = ["chat-store"];
+
+    await drop("chat-store", "chat-parent");
+
+    expect(seam.request).toHaveBeenCalledWith("epic.reparentChat", {
+      epicId: "epic-1",
+      chatId: "chat-store",
+      newParentId: "chat-parent",
+    });
+  });
+
+  it("sends a chat through epic.reparentChat even with no terminal records", async () => {
     // Chats are NOT gated on the terminal-agent record slice: `epic.reparentChat`
     // has routed chats since chats-off-YJS, and a doc-only chat resolves through
     // the same storage seam on the host. Gating them too would restore the
@@ -299,7 +427,7 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     ]);
     seam.recordIds = [];
 
-    drop("chat-1", "chat-parent");
+    await drop("chat-1", "chat-parent");
 
     expect(seam.request).toHaveBeenCalledWith("epic.reparentChat", {
       epicId: "epic-1",
@@ -309,16 +437,21 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     expect(seam.reparentArtifact).not.toHaveBeenCalled();
   });
 
-  it("dual-writes an artifact drop to the doc and epic.reparentArtifact", () => {
-    // The store seam alone would stay green on a persist no-op: the RPC
-    // assertion is the one that would have caught shipping the dual-write
-    // with a mock that returned undefined (falsy → mutated guard skips RPC).
+  it("enqueues an artifact drop as a write command, with no direct doc write", async () => {
+    // RETARGETED, not patched. T11 moved the artifact reparent off the
+    // dual-write (a local `reparentArtifact` Y write PLUS an
+    // `epic.reparentArtifact` RPC) onto the write-command queue, which owns
+    // ordering, idempotency and the rejected/superseded lifecycle. The
+    // assertion follows the seam: the command must carry the same intent the
+    // direct pair used to express, and the direct Y write must NOT still
+    // happen beside it - a doc write racing a queued command is exactly the
+    // double-apply the queue exists to prevent.
     seam.tree = treeOf([
       node("spec-1", "spec", null),
       node("spec-parent", "spec", null),
     ]);
 
-    commitSidebarReparentDrop({
+    await commitSidebarReparentDrop({
       epicId: "epic-1",
       sourceNodeId: "spec-1",
       newParentId: "spec-parent",
@@ -327,25 +460,32 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
       queryClient,
     });
 
-    expect(seam.reparentArtifact).toHaveBeenCalledWith("spec-1", "spec-parent");
-    expect(seam.request).toHaveBeenCalledTimes(1);
-    expect(seam.request).toHaveBeenCalledWith("epic.reparentArtifact", {
-      epicId: "epic-1",
+    expect(seam.enqueueWriteCommand).toHaveBeenCalledTimes(1);
+    expect(seam.enqueueWriteCommand).toHaveBeenCalledWith({
+      kind: "reparent-artifact",
       artifactId: "spec-1",
-      newParentId: "spec-parent",
+      parentId: "spec-parent",
     });
+    // The queue is the only writer now. A surviving direct write would apply
+    // the move twice - once locally, once when the command commits.
+    expect(seam.reparentArtifact).not.toHaveBeenCalled();
+    // And the RPC is the queue's to send, not this file's.
+    expect(seam.request).not.toHaveBeenCalled();
   });
 
-  it("keeps the artifact doc write when the session has no client", () => {
-    // Unlike a record-backed agent (silent cancel), an artifact pointer
-    // still lives in the doc: no serving client skips the RPC, not the Y write.
+  it("still enqueues an artifact drop when the session has no client", async () => {
+    // Unlike a record-backed agent (silent cancel), an artifact drop is always
+    // accepted locally: the queue holds it and sends it when a transport comes
+    // back, which is the whole point of an offline-tolerant write path. Before
+    // T11 this branch asserted the doc write survived a missing client; the
+    // command queue is now what survives it.
     seam.tree = treeOf([
       node("spec-1", "spec", null),
       node("spec-parent", "spec", null),
     ]);
     seam.hasClient = false;
 
-    commitSidebarReparentDrop({
+    await commitSidebarReparentDrop({
       epicId: "epic-1",
       sourceNodeId: "spec-1",
       newParentId: "spec-parent",
@@ -354,11 +494,16 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
       queryClient,
     });
 
-    expect(seam.reparentArtifact).toHaveBeenCalledWith("spec-1", "spec-parent");
+    expect(seam.enqueueWriteCommand).toHaveBeenCalledWith({
+      kind: "reparent-artifact",
+      artifactId: "spec-1",
+      parentId: "spec-parent",
+    });
+    expect(seam.reparentArtifact).not.toHaveBeenCalled();
     expect(seam.request).not.toHaveBeenCalled();
   });
 
-  it("does not fall back to a doc write when a record-backed agent has no client", () => {
+  it("does not fall back to a doc write when a record-backed agent has no client", async () => {
     // A session with no serving client is a silent cancel, not a licence to
     // write the doc: the pointer for this row lives on the host, so a Y write
     // would be a no-op the user reads as a move.
@@ -369,7 +514,7 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     seam.recordIds = ["tui-1", "tui-parent"];
     seam.hasClient = false;
 
-    drop("tui-1", "tui-parent");
+    await drop("tui-1", "tui-parent");
 
     expect(seam.request).not.toHaveBeenCalled();
     expect(seam.reparentArtifact).not.toHaveBeenCalled();
@@ -377,5 +522,139 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     // cancel must not leave a phantom pending mutation behind.
     expect(seam.beginReparentMutation).not.toHaveBeenCalled();
     expect(seam.retirePendingMutation).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Rejections are asserted through Node's own `process` event rather than a
+ * DOM `unhandledrejection` listener: `vitest.config.ts` sets
+ * `dangerouslyIgnoreUnhandledErrors` and the setup file registers a
+ * process-level swallow, so an empty-array assertion taken off the DOM event
+ * reads the same whether nothing rejected or nothing fired at all. Mirrors
+ * `epic-title-write-settlement.test.ts`'s helpers of the same names.
+ */
+function captureUnhandledRejections(): {
+  readonly seen: unknown[];
+  readonly stop: () => void;
+} {
+  const seen: unknown[] = [];
+  const onUnhandled = (reason: unknown): void => {
+    seen.push(reason);
+  };
+  process.on("unhandledRejection", onUnhandled);
+  return {
+    seen,
+    stop: () => {
+      process.off("unhandledRejection", onUnhandled);
+    },
+  };
+}
+
+/** Two macrotasks: one for the `.catch` to run, one for Node to judge it. */
+async function drainRejections(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+describe("commitSidebarReparentDrop never lets a queue failure escape as an unhandled rejection", () => {
+  it("an artifact enqueue rejection is logged, a teardown answer is not, and neither is ever unhandled", async () => {
+    // The artifact-family branch: `enqueueWriteCommand(...)` is fire-and-
+    // forget from this file's own return value, so its `.catch` is the only
+    // thing standing between a rejection and an unhandled one.
+    seam.tree = treeOf([
+      node("spec-1", "spec", null),
+      node("spec-parent", "spec", null),
+    ]);
+    const capture = captureUnhandledRejections();
+    const errorSpy = vi.spyOn(appLogger, "error").mockImplementation(() => {});
+
+    try {
+      // A generic worker/bridge fault: logged.
+      seam.enqueueWriteCommand.mockRejectedValueOnce(
+        new Error("worker bridge fault"),
+      );
+      await commitSidebarReparentDrop({
+        epicId: "epic-1",
+        sourceNodeId: "spec-1",
+        newParentId: "spec-parent",
+        panelId: "artifacts",
+        viewTabId: "tab-1",
+        queryClient,
+      });
+      await drainRejections();
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+
+      errorSpy.mockClear();
+
+      // TEARDOWN, which is deliberately NOT a rejection on this path and so
+      // deliberately not a log. `callOrNullOnTeardown` in the store maps
+      // `BridgeDisposedError` to a `null` answer before it ever reaches here
+      // - a torn-down session refused the command, it did not fault - so the
+      // shape to pin is a resolved `null`, not a thrown cancellation. (A
+      // `EpicSessionEndedError` arm would be unreachable: only
+      // `waitForWriteCommand` raises that.)
+      seam.enqueueWriteCommand.mockResolvedValueOnce(null);
+      await commitSidebarReparentDrop({
+        epicId: "epic-1",
+        sourceNodeId: "spec-1",
+        newParentId: "spec-parent",
+        panelId: "artifacts",
+        viewTabId: "tab-1",
+        queryClient,
+      });
+      await drainRejections();
+      expect(errorSpy).not.toHaveBeenCalled();
+
+      // Neither rejection ever escaped as an unhandled rejection - the
+      // defect this fix closes. Before it, the artifact branch's
+      // `enqueueWriteCommand(...)` call had no `.catch` at all.
+      expect(capture.seen).toEqual([]);
+    } finally {
+      capture.stop();
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("a reparent-mutation retirement rejection is logged, an inert teardown answer is not, and neither is ever unhandled", async () => {
+    // The registry-rpc branch's `retire` closure: only reached for a
+    // registry-backed row (a terminal agent the host serves a record for),
+    // after `epic.reparentChat` answers.
+    seam.tree = treeOf([
+      node("tui-1", "terminal-agent", null),
+      node("tui-parent", "terminal-agent", null),
+    ]);
+    seam.recordIds = ["tui-1", "tui-parent"];
+    const capture = captureUnhandledRejections();
+    const errorSpy = vi.spyOn(appLogger, "error").mockImplementation(() => {});
+
+    try {
+      seam.request.mockResolvedValueOnce({ updated: true });
+      seam.retirePendingMutation.mockRejectedValueOnce(
+        new Error("retirement bridge fault"),
+      );
+      await drop("tui-1", "tui-parent");
+      await drainRejections();
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+
+      errorSpy.mockClear();
+
+      // The teardown shape again, and again not a rejection: `applyMutation`
+      // answers a disposed session with the shared INERT result, which this
+      // member reads back as `false`. Nothing to log.
+      seam.request.mockResolvedValueOnce({ updated: true });
+      seam.retirePendingMutation.mockResolvedValueOnce(false);
+      await drop("tui-1", "tui-parent");
+      await drainRejections();
+      expect(errorSpy).not.toHaveBeenCalled();
+
+      // Before the fix, `retire` awaited `retirePendingMutation` with no
+      // try/catch at all, so BOTH rejections above would have escaped as
+      // unhandled - one of them from inside a `.then` whose own `.catch`
+      // this closure sits behind.
+      expect(capture.seen).toEqual([]);
+    } finally {
+      capture.stop();
+      errorSpy.mockRestore();
+    }
   });
 });

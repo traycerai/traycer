@@ -18,6 +18,19 @@ export interface ConfirmDestructiveDialogProps {
   /** Label for the destructive action button (e.g. "Delete" or "Remove"). */
   actionLabel: string;
   isPending: boolean;
+  /**
+   * Why this action cannot be performed at all, or `null` when it can.
+   *
+   * Disables confirm and renders the reason. Deliberately not optional: a
+   * caller that can be blocked and a caller that never is must both say so,
+   * because the failure of the omitted case is an enabled destructive button.
+   *
+   * For a MULTI-target action the reason must name the blocking targets. A
+   * refusal that does not say which row to deselect turns a clean refusal into
+   * a dead end - the whole reason refusing beats partially succeeding is that
+   * the user can act on it.
+   */
+  blockedReason: string | null;
   onConfirm: () => void;
 }
 
@@ -30,6 +43,7 @@ export function ConfirmDestructiveDialog(props: ConfirmDestructiveDialogProps) {
     cascadeSummary,
     actionLabel,
     isPending,
+    blockedReason,
     onConfirm,
   } = props;
 
@@ -63,6 +77,14 @@ export function ConfirmDestructiveDialog(props: ConfirmDestructiveDialogProps) {
                 nested under it.
               </p>
             ) : null}
+            {blockedReason !== null ? (
+              <p
+                className="text-ui-sm leading-relaxed font-medium text-destructive wrap-anywhere"
+                data-testid="confirm-blocked-reason"
+              >
+                {blockedReason}
+              </p>
+            ) : null}
           </div>
         </div>
 
@@ -83,7 +105,7 @@ export function ConfirmDestructiveDialog(props: ConfirmDestructiveDialogProps) {
             type="button"
             variant="destructive"
             size="sm"
-            disabled={isPending}
+            disabled={isPending || blockedReason !== null}
             onClick={onConfirm}
             data-testid="confirm-action"
           >

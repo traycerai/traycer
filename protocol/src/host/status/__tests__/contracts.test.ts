@@ -5,10 +5,12 @@ import {
   hostStatusUpgradeV10ToV11,
   hostStatusUpgradeV11ToV12,
   hostStatusUpgradeV12ToV13,
+  hostStatusUpgradeV13ToV14,
   hostStatusV10,
   hostStatusV11,
   hostStatusV12,
   hostStatusV13,
+  hostStatusV14,
 } from "../contracts";
 
 const V10_RESPONSE = {
@@ -180,11 +182,120 @@ describe("host.status@1.2 busyBreakdown", () => {
   });
 });
 
+const STORE_FORMATS = {
+  chatDb: {
+    current: 9,
+    onDiskMax: 9,
+    epicCount: 2,
+    survey: "complete",
+  },
+};
+
+describe("host.status@1.4 storeFormats", () => {
+  it("round-trips the current chat format and the completed survey", () => {
+    const parsed = hostStatusV14.responseSchema.parse({
+      ...V11_RESPONSE,
+      busyBreakdown: BUSY_BREAKDOWN,
+      updateOperation: null,
+      updateTransaction: null,
+      storeFormats: STORE_FORMATS,
+    });
+    expect(parsed.storeFormats).toEqual(STORE_FORMATS);
+  });
+
+  it("preserves null as an unknown survey, rather than an empty store", () => {
+    const parsed = hostStatusV14.responseSchema.parse({
+      ...V11_RESPONSE,
+      busyBreakdown: null,
+      updateOperation: null,
+      updateTransaction: null,
+      storeFormats: null,
+    });
+    expect(parsed.storeFormats).toBeNull();
+  });
+
+  it("upgrades a v1.3 response with storeFormats: null", () => {
+    const parsed = hostStatusV13.responseSchema.parse({
+      ...V11_RESPONSE,
+      busyBreakdown: BUSY_BREAKDOWN,
+      updateOperation: null,
+      updateTransaction: null,
+    });
+    const upgraded = hostStatusUpgradeV13ToV14.upgradeResponse(parsed);
+    expect(upgraded.storeFormats).toBeNull();
+    expect(() => hostStatusV14.responseSchema.parse(upgraded)).not.toThrow();
+  });
+
+  it("rejects non-positive current formats and negative survey counts", () => {
+    expect(
+      hostStatusV14.responseSchema.safeParse({
+        ...V11_RESPONSE,
+        busyBreakdown: null,
+        updateOperation: null,
+        updateTransaction: null,
+        storeFormats: {
+          chatDb: {
+            current: 0,
+            onDiskMax: null,
+            epicCount: 0,
+            survey: "complete",
+          },
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      hostStatusV14.responseSchema.safeParse({
+        ...V11_RESPONSE,
+        busyBreakdown: null,
+        updateOperation: null,
+        updateTransaction: null,
+        storeFormats: {
+          chatDb: {
+            current: 9,
+            onDiskMax: null,
+            epicCount: -1,
+            survey: "complete",
+          },
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("distinguishes a failed survey from a completed empty survey", () => {
+    const base = {
+      ...V11_RESPONSE,
+      busyBreakdown: null,
+      updateOperation: null,
+      updateTransaction: null,
+    };
+    const failed = hostStatusV14.responseSchema.parse({
+      ...base,
+      storeFormats: {
+        chatDb: { current: 9, onDiskMax: null, epicCount: 1, survey: "failed" },
+      },
+    });
+    const empty = hostStatusV14.responseSchema.parse({
+      ...base,
+      storeFormats: {
+        chatDb: {
+          current: 9,
+          onDiskMax: null,
+          epicCount: 0,
+          survey: "complete",
+        },
+      },
+    });
+    expect(failed.storeFormats?.chatDb.survey).toBe("failed");
+    expect(empty.storeFormats?.chatDb.survey).toBe("complete");
+    expect(failed.storeFormats).not.toEqual(empty.storeFormats);
+  });
+});
+
 describe("host.status registry membership", () => {
-  it("installs @1.0 through @1.3 on the unary registry at major 1", () => {
+  it("installs @1.0 through @1.4 on the unary registry at major 1", () => {
     const entry = hostRpcRegistry["host.status"];
     expect(entry).toBeDefined();
-    expect(entry[1].latestMinor).toBe(3);
+    expect(entry[1].latestMinor).toBe(4);
     expect(entry[1].versions[0].contract).toBe(hostStatusV10);
     expect(entry[1].versions[1].contract).toBe(hostStatusV11);
     expect(entry[1].versions[2].contract).toBe(hostStatusV12);
@@ -194,6 +305,10 @@ describe("host.status registry membership", () => {
     expect(entry[1].versions[3].contract).toBe(hostStatusV13);
     expect(entry[1].versions[3].upgradeFromPreviousVersion).toBe(
       hostStatusUpgradeV12ToV13,
+    );
+    expect(entry[1].versions[4].contract).toBe(hostStatusV14);
+    expect(entry[1].versions[4].upgradeFromPreviousVersion).toBe(
+      hostStatusUpgradeV13ToV14,
     );
   });
 });

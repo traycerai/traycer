@@ -4,7 +4,7 @@ import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-m
 import { classifyRecoverableForkFailure } from "@/lib/chats/recoverable-fork-refusal";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
-import { buildTransientHostClient } from "@/hooks/host/use-host-client-for";
+import { buildDialableHostClient } from "@/hooks/host/use-host-client-for";
 import type { CreateChatMutationInput } from "@/hooks/epic/use-epic-chat-mutations";
 import {
   openCreatedChatWhenProjected,
@@ -96,7 +96,7 @@ export interface CloneChatOnHostSwitchArgs {
   readonly sourceSettings: ChatRunSettings | null;
   /** App-wide client used to mint throwaway clients against the source and
    *  target hosts for the `providers.list` profile-identity lookup (never
-   *  bound as the active host - see `buildTransientHostClient`). */
+   *  bound as the active host - see `buildDialableHostClient`). */
   readonly globalClient: HostClient<HostRpcRegistry>;
   /** An explicit profile picked in the target-host recovery UI. `null` means
    *  this is the initial identity-mapping attempt; the object wrapper keeps an
@@ -302,7 +302,7 @@ async function resolveSettingsForClone(
   const targetClient =
     targetEntry === null
       ? null
-      : buildTransientHostClient(args.globalClient, targetEntry);
+      : buildDialableHostClient(args.globalClient, targetEntry);
   if (targetClient === null) {
     const providerId = providerCliIdForHarness(args.sourceSettings.harnessId);
     if (providerId !== null) {
@@ -318,7 +318,7 @@ async function resolveSettingsForClone(
   const sourceClient =
     sourceEntry === null
       ? null
-      : buildTransientHostClient(args.globalClient, sourceEntry);
+      : buildDialableHostClient(args.globalClient, sourceEntry);
 
   const resolved = await resolveClonedChatSettings({
     sourceSettings: args.sourceSettings,

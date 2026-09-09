@@ -1,3 +1,4 @@
+import { INERT_ROOT_STATE_PORT } from "@/stores/epics/open-epic/test-support/root-state-port-fixture";
 import {
   afterEach,
   beforeEach,
@@ -29,21 +30,6 @@ import type { OpenEpicSessionRegistry } from "@/stores/epics/open-epic/session-r
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
 
-const electronTabsMocks = vi.hoisted(() => ({
-  drainElectronTabHandoffs: vi.fn<() => Promise<void>>(),
-}));
-
-vi.mock("@/lib/browser-view/sessions/electron-tabs", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("@/lib/browser-view/sessions/electron-tabs")
-    >();
-  return {
-    ...actual,
-    drainElectronTabHandoffs: electronTabsMocks.drainElectronTabHandoffs,
-  };
-});
-
 interface RunnerHostOnWindow {
   runnerHost?: unknown;
 }
@@ -61,6 +47,11 @@ type QuitDecisionPayload =
 interface FakeSessionState {
   isDirty: boolean;
   unsyncedQueueSize: number;
+  // Read by the registry's eligibility key on every session it materializes
+  // (the cap's data-loss gate is `isDirty` + these two), so a fake that omits
+  // it fails inside the registry rather than in anything this suite asserts.
+  writeCommands: readonly never[];
+  hostTransportStatus: "open";
   snapshotMeta: { epicLight: { title: string } | null } | null;
   discardUnsyncedEdits: () => void;
 }
@@ -77,6 +68,8 @@ function buildHandle(epicId: string, title: string): FakeHandle {
   const state: FakeSessionState = {
     isDirty: false,
     unsyncedQueueSize: 0,
+    writeCommands: [],
+    hostTransportStatus: "open",
     snapshotMeta: { epicLight: { title } },
     discardUnsyncedEdits: () => {
       handle.discardCalls += 1;
@@ -100,14 +93,23 @@ function buildHandle(epicId: string, title: string): FakeHandle {
   const handle: FakeHandle = {
     epicId,
     userId: null,
-    doc,
-    awareness: {} as never,
+    hostId: "test-host",
+    // A production handle has no `doc` / `awareness`: the replica lives on the
+    // worker thread and a `Y.Doc` cannot cross a structured clone.
+    projection: {
+      accept: () => null,
+      apply: () => {},
+      reject: () => {},
+    },
+    body: { applyDocUpdate: () => {}, applyAwareness: () => {} },
     store,
     dispose: () => undefined,
     detachTransport: () => undefined,
     requestFreshSnapshot: () => undefined,
+    retryTransport: () => undefined,
     isClean: () => !state.isDirty,
     hotArtifactRoomIdsForTests: () => [],
+    ...INERT_ROOT_STATE_PORT,
     setDirty: (isDirty, queueSize) => {
       state.isDirty = isDirty;
       state.unsyncedQueueSize = queueSize;
@@ -1050,55 +1052,5 @@ describe("QuitInterceptBridge", () => {
       decision: "userConfirmedDiscard",
     });
     expect(screen.queryByTestId("quit-intercept-dialog")).toBeNull();
-  });
-  it("reports the browser handoff drain even when the drain REJECTS", async () => {
-    // `browser.sessions` disconnecting mid-handoff rejects the drain. Swallowed
-    // without a reply, main's waiter sat out its whole
-    // BROWSER_HANDOFF_DRAIN_TIMEOUT_MS - a 10s stall on quit and on every
-    // window close that hits this path.
-    const respondBrowserHandoffsDrained = vi.fn(() => Promise.resolve());
-    let emitDrain: ((request: { readonly requestId: string }) => void) | null =
-      null;
-    const windowHost = window as WindowMutable;
-    windowHost.runnerHost = {
-      appLifecycle: {
-        setUnsyncedEditsSnapshot: vi.fn(() => Promise.resolve()),
-        respondToQuitRequest: vi.fn(() => Promise.resolve()),
-        onQuitRequested: vi.fn(() => ({ dispose: () => undefined })),
-        onDrainBrowserHandoffs: vi.fn(
-          (handler: (request: { readonly requestId: string }) => void) => {
-            emitDrain = handler;
-            return {
-              dispose: () => {
-                emitDrain = null;
-              },
-            };
-          },
-        ),
-        respondBrowserHandoffsDrained,
-      },
-    };
-    electronTabsMocks.drainElectronTabHandoffs.mockImplementation(() =>
-      Promise.reject(new Error("browser sessions disconnected")),
-    );
-
-    render(<QuitInterceptBridge />);
-
-    const emit = emitDrain as
-      | ((request: { readonly requestId: string }) => void)
-      | null;
-    if (emit === null) throw new Error("no drain subscriber");
-    act(() => {
-      emit({ requestId: "drain-1" });
-    });
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    expect(respondBrowserHandoffsDrained).toHaveBeenCalledTimes(1);
-    expect(respondBrowserHandoffsDrained).toHaveBeenCalledWith({
-      requestId: "drain-1",
-    });
   });
 });

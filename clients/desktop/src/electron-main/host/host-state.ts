@@ -346,12 +346,20 @@ export function deriveActivationState(
 export function attestedInstallGenerationFromDisk(
   record: DesktopHostInstallRecord,
 ): string {
-  return encodeInstallGeneration({
-    installId: record.installId,
-    installedAt: record.installedAt,
-    archiveSha256: record.archiveSha256,
-    version: record.version,
-  });
+  // The RECORD, never a rebuilt `{installId, installedAt, archiveSha256,
+  // version}` literal (cold review of the Q3 supervisor-admission patch, F1;
+  // the CLI's five sites were migrated in `bafc226ec`). Any value carrying the
+  // four fields satisfies `InstallGenerationIdentity`, so a per-site mapping
+  // buys nothing and can drift with no type error - point `installedAt` at a
+  // different field here and nothing catches it.
+  //
+  // That matters HERE specifically because this string is compared against one
+  // the CLI computes: desktop main captures the fingerprint from disk and
+  // forwards it to `host stamp-runtime`'s CAS, which recomputes it on the
+  // other side of a process boundary. Byte-identical construction is the whole
+  // basis of that comparison, and a drift would fail closed and silently - the
+  // CAS simply stops matching.
+  return encodeInstallGeneration(record);
 }
 
 /** Re-exported so callers of this module don't need a second import for the

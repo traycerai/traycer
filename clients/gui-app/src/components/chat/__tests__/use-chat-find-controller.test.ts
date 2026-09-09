@@ -334,8 +334,6 @@ function makeTranscriptWithInterviewDetailNeedle(): ReadonlyArray<ChatMessageMod
         kind: "interview",
         status: "completed",
         toolName: "AskUserQuestion",
-        title: null,
-        description: null,
         questions: [
           {
             questionId: "q1",
@@ -343,6 +341,7 @@ function makeTranscriptWithInterviewDetailNeedle(): ReadonlyArray<ChatMessageMod
             header: null,
             options: [],
             multiSelect: false,
+            allowsCustomAnswer: null,
           },
         ],
         answers: [

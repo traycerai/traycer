@@ -20,6 +20,10 @@ class FakeZoomController {
     return this.percent;
   }
 
+  getZoomFactor(): number {
+    return this.percent / 100;
+  }
+
   zoomIn(): Promise<ZoomPercent> {
     this.requests.push("in");
     return this.setZoomPercent(110);

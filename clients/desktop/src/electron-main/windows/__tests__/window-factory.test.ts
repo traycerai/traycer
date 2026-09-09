@@ -226,9 +226,30 @@ describe("loadMainWindow", () => {
       expect.objectContaining({
         webPreferences: expect.objectContaining({
           additionalArguments: ["--traycer-initial-route=%2Fepics%2Fepic-a"],
+          webviewTag: true,
         }),
       }),
     ]);
+  });
+
+  it("installs webview attach guards on the trusted main window", () => {
+    createMainWindowForTest({
+      preloadPath: "/preload.js",
+      windowId: "window-a",
+      initialRoute: "/",
+      zoomFactor: 1,
+      placement: createFirstLaunchWindowPlacement(),
+    });
+
+    expect(electronState.webContentsOnChannels).toEqual(
+      expect.arrayContaining([
+        "will-attach-webview",
+        "did-attach-webview",
+        "did-start-navigation",
+        "render-process-gone",
+        "destroyed",
+      ]),
+    );
   });
 
   it("keeps the dev display name after the renderer updates its document title", () => {
@@ -350,6 +371,24 @@ describe("loadMainWindow", () => {
           symbolColor: "#e5e5e5",
           height: 54,
         },
+      }),
+    ]);
+  });
+
+  it("keeps compositing and timers running while the window is occluded", () => {
+    createMainWindowForTest({
+      preloadPath: "/preload.js",
+      windowId: "window-a",
+      initialRoute: "/",
+      zoomFactor: 1,
+      placement: createFirstLaunchWindowPlacement(),
+    });
+
+    expect(electronState.browserWindowOptions).toEqual([
+      expect.objectContaining({
+        webPreferences: expect.objectContaining({
+          backgroundThrottling: false,
+        }),
       }),
     ]);
   });

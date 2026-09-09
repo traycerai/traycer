@@ -77,6 +77,24 @@ export type IncompatibilityUpgradeGuidance = {
 export const RPC_REQUEST_TIMEOUT_FATAL_CODE = "RPC_REQUEST_TIMEOUT";
 
 /**
+ * Host-to-client unary capability: this exact host handshake accepts a stable
+ * per-request idempotency key and deduplicates it for the authenticated user.
+ *
+ * Capability names are semantic versions. If the guarantee ever changes, a
+ * new name must be introduced; this string must never be redefined in place.
+ */
+export const UNARY_CAPABILITY_IDEMPOTENCY_KEY = "unary.idempotencyKey";
+
+/**
+ * Client-to-host capability for the first write-path command contract.
+ *
+ * A host may emit write-path-specific typed errors only after the caller
+ * advertises this name. As with every capability name, changed semantics get
+ * a new name instead of silently widening this contract.
+ */
+export const CLIENT_CAPABILITY_EPIC_WRITE_PATH_V1 = "epic.writePath/1";
+
+/**
  * Fatal code a host emits on every live connection when it is deliberately
  * standing itself down and expects to come back - the restart tombstone
  * (connection registry §3 / D5 / M1). Always paired with `retryable: true`
@@ -184,6 +202,8 @@ export type ClientOpenFrame = {
   readonly token: string;
   readonly manifest: ConnectionManifest;
   readonly optionalManifest?: ConnectionManifest;
+  /** Additive capabilities this client can classify or receive. */
+  readonly capabilities?: readonly string[];
   /**
    * Who is connecting - see {@link ClientHandshakeIdentity}. Optional on the
    * wire so an old client's omission reaches the host's deliberate
@@ -203,6 +223,14 @@ export type ClientRequestFrame = {
   readonly method: string;
   readonly schemaVersion: SchemaVersion;
   readonly params: unknown;
+  /**
+   * Non-null only after this connection's host openAck advertised
+   * {@link UNARY_CAPABILITY_IDEMPOTENCY_KEY}. New clients send `null` for an
+   * ordinary or unnegotiated request; released clients omit the additive field
+   * and released hosts strip it. Only a negotiated non-null value claims retry
+   * safety.
+   */
+  readonly idempotencyKey?: string | null;
 };
 
 /**
@@ -232,6 +260,8 @@ export type HostOpenAckFrame = {
   readonly kind: "openAck";
   readonly manifest: ConnectionManifest;
   readonly optionalManifest?: ConnectionManifest;
+  /** Additive capabilities this exact host connection can honour. */
+  readonly capabilities?: readonly string[];
 };
 
 /**
@@ -368,6 +398,7 @@ export const clientOpenFrameSchema = z.object({
   token: z.string(),
   manifest: connectionManifestSchema,
   optionalManifest: connectionManifestSchema.optional(),
+  capabilities: z.array(z.string()).optional(),
   // Additive/optional in BOTH directions: a released old host's copy of this
   // schema strips it (so a new client still connects), and a released old
   // client omits it (so a new host sees "no identity" and applies its legacy
@@ -382,6 +413,7 @@ export const clientRequestFrameSchema = z.object({
   method: z.string().min(1),
   schemaVersion: schemaVersionSchema,
   params: z.unknown(),
+  idempotencyKey: z.string().min(1).nullable().optional(),
 });
 
 /** Canonical schema for the client `fatalError` frame. */
@@ -406,6 +438,7 @@ export const hostOpenAckFrameSchema = z.object({
   kind: z.literal("openAck"),
   manifest: connectionManifestSchema,
   optionalManifest: connectionManifestSchema.optional(),
+  capabilities: z.array(z.string()).optional(),
 });
 
 /**

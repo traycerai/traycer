@@ -1,14 +1,17 @@
 import {
   type MouseEvent,
   type ReactNode,
+  type RefObject,
   use,
   useCallback,
   useEffect,
   useEffectEvent,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
+import { useIsMutating } from "@tanstack/react-query";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { AnimatePresence, m } from "motion/react";
 import { traycerInfo } from "@traycer-clients/shared/platform/traycer-info";
@@ -16,27 +19,69 @@ import geistPixelSquareUrl from "@/assets/fonts/GeistPixel-Square.woff2?url";
 import onboardingBackdropUrl from "@/assets/brand/gradient-bg.jpg?url";
 import { BrandMark } from "@/components/auth/cinematic-backdrop";
 import {
-  ONBOARDING_ACTS,
+  actEyebrow,
+  actUsesSoloStage,
+  onboardingActsFor,
+  type DesktopOnboardingActId,
   type OnboardingAct,
+  type OnboardingActId,
 } from "@/components/onboarding/onboarding-acts";
-import { OnboardingDetectedAgents } from "@/components/onboarding/onboarding-detected-agents";
 import {
-  OnboardingDiorama,
+  OnboardingAgentGuidePane,
   type OnboardingAgentGuideState,
-} from "@/components/onboarding/onboarding-diorama";
+} from "@/components/onboarding/onboarding-agent-guide-pane";
+import { OnboardingDetectedAgents } from "@/components/onboarding/onboarding-detected-agents";
+import type { OnboardingHostPicker } from "@/components/onboarding/onboarding-host-picker-model";
+import { OnboardingHostPickerBar } from "@/components/onboarding/onboarding-host-picker";
+import { OnboardingDiorama } from "@/components/onboarding/onboarding-diorama";
+import {
+  OnboardingPhoneDiorama,
+  type OnboardingPhoneSceneId,
+} from "@/components/onboarding/onboarding-phone-diorama";
+import { OnboardingLoginImportStage } from "@/components/onboarding/onboarding-login-import-stage";
+import { OnboardingSessionImportStage } from "@/components/onboarding/onboarding-session-import-stage";
 import { OnboardingThemePicker } from "@/components/onboarding/onboarding-theme-picker";
+import {
+  useSessionImportScan,
+  type SessionImportScanHandle,
+} from "@/components/session-import/use-session-import-scan";
 import { useAgentSelectionGuideGlobalOnboardingDraftQuery } from "@/hooks/agent/use-agent-selection-guide-global-onboarding-draft-query";
 import { useAgentSelectionGuideSetGlobalMutation } from "@/hooks/agent/use-agent-selection-guide-set-global-mutation";
-import { RunnerHostContext } from "@/providers/runner-host-context";
+import { useLoginImportAvailable } from "@/hooks/browser/use-login-import-available";
+import { useSessionImportAvailable } from "@/hooks/session-import/use-session-import-available";
+import { browserMutationKeys } from "@/lib/query-keys";
 import { getClientAppVersionLabel } from "@/lib/app-version";
 import { shortcutHintsVisible } from "@/lib/keybindings/shortcut-hints";
+import { useOpenLink } from "@/lib/links/open-link";
+import { HostRuntimeContext, useHostBinding } from "@/lib/host";
 import {
-  selectIsLastStep,
-  selectStep,
+  useHostScopeFor,
+  type HostScope,
+} from "@/components/settings/host-scope/use-host-scope";
+import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
+import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
+import { useScopedStreamBinding } from "@/components/settings/host-scope/use-scoped-stream-binding";
+import { isMobileApp } from "@/lib/mobile-app";
+import { readSafeAreaInsets } from "@/lib/safe-area-insets";
+import {
+  clampOnboardingStep,
+  isLastOnboardingStep,
   useOnboardingStore,
 } from "@/stores/onboarding/onboarding-store";
+import { useOnboardingTourOpenStore } from "@/stores/onboarding/onboarding-tour-open-store";
+import {
+  StreamRuntimeContext,
+  useStreamHostId,
+  useStreamRuntimeBinding,
+} from "@/lib/host/stream-runtime-context";
+import {
+  sessionImportIsRunning,
+  useSessionImportRun,
+} from "@/stores/session-import/session-import-run-store";
+import { useFeatureAnnouncementsStore } from "@/stores/settings/feature-announcements-store";
 import { cn } from "@/lib/utils";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { onMiddleClick } from "@/lib/dom/on-middle-click";
 
 const ACT_EASE = [0.32, 0.72, 0, 1] as const;
 const ONBOARDING_FOOTER_LINKS = [
@@ -84,8 +129,9 @@ const ONBOARDING_STYLE = `
   padding-bottom: var(--onboarding-stage-bottom-pad);
 }
 
-/* When the mini-app is dropped (providers act), the providers list owns the
-   remaining space so long provider catalogs can scroll. */
+/* When the mini-app is dropped (providers act, and the mobile tour's agent
+   guide), the addon owns the remaining space so long provider catalogs and the
+   guide editor can scroll. */
 .onboarding-stage-content--solo {
   grid-template-rows: minmax(0, 1fr);
 }
@@ -164,6 +210,13 @@ const ONBOARDING_STYLE = `
   .onboarding-stage-content {
     grid-template-columns: minmax(18rem, 0.52fr) minmax(0, 1.48fr);
     grid-template-rows: minmax(0, 1fr);
+  }
+
+  /* An act with no miniature at all (mobile providers / agent guide) has one
+     child, so it must not be held to the left track of the two-column grid on
+     a wide phone or a tablet. */
+  .onboarding-stage-content--no-miniature {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .onboarding-shell {
@@ -292,12 +345,412 @@ const ONBOARDING_STYLE = `
     --onboarding-body-width: 100%;
     --onboarding-diorama-width: min(100%, 24rem);
   }
+}
+
+/* Installed mobile app only - the class is set off isMobileApp(), never the
+   viewport, so a narrow desktop window keeps the exact desktop pixels. The
+   tour claims the phone: the version footer goes and its grid row collapses,
+   gutters tighten, and the freed height flows to the stage card so the
+   miniature can breathe. Actions and progress drop low to hug the card's
+   bottom edge. Declared after every media tier, so these win at any size. */
+.onboarding-shell--mobile-app {
+  --onboarding-shell-rows: 3.5rem minmax(0, 1fr) 0rem;
+  --onboarding-section-x: 0.5rem;
+  --onboarding-stage-pad: clamp(1rem, 2.4vh, 1.5rem);
+  --onboarding-stage-bottom-pad: 4.25rem;
+  --onboarding-stage-gap: clamp(0.875rem, 2vh, 1.25rem);
+  --onboarding-copy-rail-top: 0.5rem;
+  --onboarding-action-inset: 1rem;
+  --onboarding-diorama-max-height: min(58vh, 36rem);
+  --onboarding-body-width: 21rem;
+}
+
+.onboarding-shell--mobile-app footer {
+  display: none;
+}
+
+/* Chrome-level polish scoped to the installed app: rounded hairline progress
+   segments and softer button corners. Same-specificity utilities lose to the
+   two-class selectors, which is the point - no component code branches. */
+.onboarding-shell--mobile-app .onboarding-progress {
+  gap: 0.25rem;
+}
+
+.onboarding-shell--mobile-app .onboarding-progress span {
+  border-radius: 9999px;
+}
+
+.onboarding-shell--mobile-app .onboarding-actions button {
+  border-radius: 0.625rem;
+}
+
+/* One orchestrated entrance per act: eyebrow band, then copy, then addon rise
+   in turn. The act wrapper remounts per act (key=act.id), so the beat replays
+   on every advance. */
+@keyframes onboarding-copy-rise {
+  from {
+    opacity: 0;
+    transform: translateY(0.5rem);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.onboarding-shell--mobile-app .onboarding-copy > * {
+  animation: onboarding-copy-rise 0.45s cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
+.onboarding-shell--mobile-app .onboarding-copy > :nth-child(2) {
+  animation-delay: 80ms;
+}
+
+.onboarding-shell--mobile-app .onboarding-copy > :nth-child(3) {
+  animation-delay: 160ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .onboarding-shell--mobile-app .onboarding-copy > * {
+    animation: none;
+  }
 }`;
 
-function ActCopy(props: { act: OnboardingAct }) {
-  const { act } = props;
+/**
+ * How far a drag must travel sideways before it changes act. Absolute, like
+ * every other touch threshold in this app: a thumb covers the same distance on
+ * a small phone as on a tablet, so a fraction of the viewport would be a flick
+ * on one and a haul on the other.
+ */
+const ACT_SWIPE_COMMIT_PX = 56;
+
+/**
+ * How decisively the horizontal travel must beat the vertical at the release.
+ * The stage carries the tour's only scrolling surfaces - the provider catalog
+ * and the agent-guide editor - so "mostly sideways" is not enough: a diagonal a
+ * scroller could plausibly own stays with the scroller.
+ */
+const ACT_SWIPE_DOMINANCE = 1.5;
+
+/**
+ * Cross-axis travel that abandons the gesture, judged on every MOVE rather than
+ * only at the release. A finger that has already scrolled the providers list is
+ * not owed an act change because it happened to drift back to level on its way
+ * out, and reading the endpoints alone cannot tell those two drags apart.
+ */
+const ACT_SWIPE_CROSS_FAIL_PX = 24;
+
+/**
+ * The strip at each side of the screen the platform's own back/forward swipes
+ * own - the same 32px `use-edge-nav-swipe.ts` reserves, measured the same way
+ * (from the app surface, so a landscape sensor housing moves the zone rather
+ * than swallowing it). The platform's own navigation must keep working over
+ * the tour, so the tour never answers a swipe that starts in its strip.
+ */
+const ACT_SWIPE_EDGE_ZONE_PX = 32;
+
+/**
+ * Targets a swipe is never taken from: the keyboard handler's guard
+ * (`button, a, input, textarea, select`) plus `[contenteditable]`. The extra
+ * arm is the agent-guide act, whose editor is a CodeMirror surface rather than
+ * a `textarea` - a horizontal drag inside it is the caret being pulled through
+ * the text, not a request for the next act.
+ */
+const ACT_SWIPE_EXEMPT_TARGETS =
+  "button, a, input, textarea, select, [contenteditable]";
+
+/**
+ * What Skip / Back / Continue are worth in height on the shell they are playing
+ * in: nothing on desktop, which keeps its own tiers, and iOS's 44pt floor on
+ * the installed app, where 36px is under what a thumb can reliably hit.
+ *
+ * The tall-viewport tier is restated rather than left to cascade. A modern
+ * phone clears `min-height: 920px` in portrait, and `tailwind-merge` only
+ * displaces a class whose modifiers match - so without it exactly those phones
+ * would fall through to the desktop's 40px bump.
+ *
+ * Resolved once and handed to all three buttons, rather than branched at each
+ * of them: the page answers the platform question in one place per concern.
+ */
+function actionHeightClass(mobileApp: boolean): string {
+  return mobileApp ? "h-11 [@media(min-height:920px)]:h-11" : "";
+}
+
+type ActSwipeDirection = "forward" | "back";
+
+interface ActSwipeTracking {
+  readonly pointerId: number;
+  readonly startX: number;
+  readonly startY: number;
+  /** Set once the drag declares itself vertical. Never unset - direction lock. */
+  abandoned: boolean;
+}
+
+/** Whether a touch landed in the strip the platform's navigation swipes own. */
+function withinActSwipeEdgeZone(clientX: number): boolean {
+  const insets = readSafeAreaInsets();
+  if (clientX <= insets.left + ACT_SWIPE_EDGE_ZONE_PX) return true;
+  return clientX >= window.innerWidth - insets.right - ACT_SWIPE_EDGE_ZONE_PX;
+}
+
+/**
+ * Horizontal swipe across the stage: left for the next act, right for the
+ * previous one. The tour teaches a swipe-native app, so it should answer one.
+ *
+ * It reports a DIRECTION and nothing else. What that leads to is the page's
+ * business, and the page spends it on the very callbacks the Back and Continue
+ * buttons call - so the agent-guide save gate, the finish-on-the-last-act
+ * branch and the navigation analytics all hold with no second copy of any of
+ * them. Nothing here is lower-level than the buttons.
+ *
+ * Mobile only, and inert rather than merely quiet on desktop: the effect
+ * installs no listeners at all there. A narrow desktop window renders the same
+ * stacked layout, and a horizontal drag in one is a trackpad scroll.
+ *
+ * The recognizer is deliberately small. It never calls `preventDefault`, so it
+ * takes nothing from the scrollers underneath it and nothing from text
+ * selection; the price is that it cannot reserve a gesture from the web view's
+ * scroller the way the shell's edge swipe must, which it does not need to -
+ * there is nothing on the stage that pans sideways to lose the race to.
+ *
+ * A pointer passes through two states. It is undecided until the release,
+ * except that a move whose vertical travel dominates abandons it outright: that
+ * is what keeps a scroll of the provider catalog from ending as an act change,
+ * and it is judged while the drag is happening rather than from where it
+ * finished.
+ *
+ * Down on the surface, move and release on the window, so a swipe that leaves
+ * the stage mid-flight still completes rather than being stranded.
+ */
+function useActSwipe(
+  surfaceRef: RefObject<HTMLDivElement | null>,
+  enabled: boolean,
+  onSwipe: (direction: ActSwipeDirection) => void,
+): void {
+  // Read at event time, never closed over: the listeners are installed once and
+  // must not be torn down and rebuilt on every act change.
+  const onSwipeRef = useRef(onSwipe);
+  useEffect(() => {
+    onSwipeRef.current = onSwipe;
+  });
+
+  useEffect(() => {
+    if (!enabled) return;
+    const surface = surfaceRef.current;
+    if (surface === null) return;
+    let tracking: ActSwipeTracking | null = null;
+
+    const handlePointerDown = (event: PointerEvent): void => {
+      // A second finger is a pinch or a two-finger pan; the tracked pointer's
+      // coordinates stop describing the gesture either way.
+      tracking = null;
+      if (!event.isPrimary) return;
+      if (withinActSwipeEdgeZone(event.clientX)) return;
+      if (
+        event.target instanceof HTMLElement &&
+        event.target.closest(ACT_SWIPE_EXEMPT_TARGETS) !== null
+      ) {
+        return;
+      }
+      tracking = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        abandoned: false,
+      };
+    };
+
+    const handlePointerMove = (event: PointerEvent): void => {
+      const started = tracking;
+      if (started === null) return;
+      if (event.pointerId !== started.pointerId) return;
+      if (started.abandoned) return;
+      const crossPx = Math.abs(event.clientY - started.startY);
+      if (crossPx <= ACT_SWIPE_CROSS_FAIL_PX) return;
+      if (crossPx >= Math.abs(event.clientX - started.startX)) {
+        started.abandoned = true;
+      }
+    };
+
+    const handlePointerUp = (event: PointerEvent): void => {
+      const started = tracking;
+      if (started === null) return;
+      if (event.pointerId !== started.pointerId) return;
+      tracking = null;
+      if (started.abandoned) return;
+      const travelPx = event.clientX - started.startX;
+      const crossPx = Math.abs(event.clientY - started.startY);
+      if (Math.abs(travelPx) < ACT_SWIPE_COMMIT_PX) return;
+      if (Math.abs(travelPx) < crossPx * ACT_SWIPE_DOMINANCE) return;
+      onSwipeRef.current(travelPx < 0 ? "forward" : "back");
+    };
+
+    const handlePointerCancel = (event: PointerEvent): void => {
+      if (tracking === null) return;
+      if (event.pointerId !== tracking.pointerId) return;
+      tracking = null;
+    };
+
+    const options = { passive: true };
+    surface.addEventListener("pointerdown", handlePointerDown, options);
+    window.addEventListener("pointermove", handlePointerMove, options);
+    window.addEventListener("pointerup", handlePointerUp, options);
+    window.addEventListener("pointercancel", handlePointerCancel, options);
+    return () => {
+      surface.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerCancel);
+    };
+  }, [enabled, surfaceRef]);
+}
+
+/** What an act puts in the stage's second column on the shell it plays in. */
+type OnboardingMiniature =
+  | { readonly kind: "desktop"; readonly actId: DesktopOnboardingActId }
+  | { readonly kind: "phone"; readonly scene: OnboardingPhoneSceneId }
+  | { readonly kind: "session-import" }
+  | { readonly kind: "login-import" }
+  | { readonly kind: "none" };
+
+/**
+ * The tour's ONE diorama branch (the act list itself is the other platform
+ * read). Narrowing happens per case, so the desktop miniature only ever
+ * receives an id it can draw - no cast, and a new act id fails to compile until
+ * it says what it shows.
+ *
+ * The two acts that do real setup work drop the miniature on a phone: providers
+ * already stacked to its list-only layout below `lg`, and the agent guide moves
+ * its editor into the copy rail, where a phone keyboard can reach it. Session
+ * import and login import are desktop-only (the mobile tour never lists
+ * them), and show no miniature at all - their stages are the live wizard and
+ * the live import flow.
+ */
+function miniatureForAct(actId: OnboardingActId): OnboardingMiniature {
+  const mobile = isMobileApp();
+  switch (actId) {
+    case "task-tabs":
+    case "navigation":
+    case "command-theme":
+      return { kind: "desktop", actId };
+    case "task-context":
+      return mobile
+        ? { kind: "phone", scene: "story" }
+        : { kind: "desktop", actId };
+    case "providers":
+    case "agent-guide":
+      return mobile ? { kind: "none" } : { kind: "desktop", actId };
+    case "session-import":
+      return { kind: "session-import" };
+    case "login-import":
+      return { kind: "login-import" };
+    case "mobile-tasks":
+      return { kind: "phone", scene: "drawer" };
+    case "mobile-switcher":
+      return { kind: "phone", scene: "switcher" };
+  }
+}
+
+/**
+ * The stage's miniature column. The live miniature follows the user's real
+ * theme on every act, so the preview always matches what the app looks like
+ * for them - it renders with the same semantic tokens as the real shell.
+ * Session import has no mock-up to preview: its window holds the real wizard,
+ * reading the user's real machine.
+ */
+function OnboardingMiniatureColumn(props: {
+  readonly actId: OnboardingActId;
+  readonly addon: OnboardingAct["addon"];
+  readonly miniature: OnboardingMiniature;
+  readonly agentGuide: OnboardingAgentGuideState;
+  readonly hostPicker: OnboardingHostPicker;
+  readonly sessionImportScan: SessionImportScanHandle;
+  readonly onBeforeImportedTaskOpen: () => Promise<boolean>;
+}) {
+  const { actId, addon, miniature, agentGuide, hostPicker, sessionImportScan } =
+    props;
+  if (miniature.kind === "none") return null;
+  const phone = miniature.kind === "phone";
+  let content: ReactNode;
+  if (miniature.kind === "phone") {
+    content = <OnboardingPhoneDiorama scene={miniature.scene} />;
+  } else if (miniature.kind === "session-import") {
+    content = (
+      <OnboardingSessionImportStage
+        scan={sessionImportScan}
+        hostPicker={hostPicker}
+        onBeforeTaskOpen={props.onBeforeImportedTaskOpen}
+      />
+    );
+  } else if (miniature.kind === "login-import") {
+    content = <OnboardingLoginImportStage />;
+  } else {
+    content = (
+      <OnboardingDiorama
+        actId={miniature.actId}
+        agentGuide={agentGuide}
+        hostPicker={hostPicker}
+      />
+    );
+  }
+  return (
+    <div
+      className={cn(
+        "onboarding-diorama-wrap mx-auto w-full min-w-0 self-start lg:mx-0 lg:self-center",
+        // The providers list carries the act on its own; drop the mini-app
+        // when stacked. (Command-theme keeps its diorama, which itself shows
+        // just the Cmd+K palette when stacked.)
+        addon === "agents" && "max-lg:hidden",
+        // The phone frame is container-led: the grid row it sits in is its
+        // height budget, so it can never run under the actions bar the way a
+        // viewport-led height could.
+        phone && "h-full min-h-0 self-stretch",
+      )}
+    >
+      {/* Fade the mini-app in place on each act so it never slides up from
+          the bottom when reappearing (e.g. providers → handoff). */}
+      <m.div
+        key={actId}
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.25, ease: ACT_EASE }}
+        className={cn("w-full min-w-0", phone && "h-full min-h-0")}
+      >
+        {content}
+      </m.div>
+    </div>
+  );
+}
+
+/**
+ * Stacked screens: blur + fade the desktop mini-app's lower edge behind the
+ * actions bar so it reads as a clean footer, not a cut-off pane. The phone
+ * frame is height-contained by its grid row and never reaches this band, so
+ * the band would only smear its bottom bezel - the desktop miniature and the
+ * session-import wizard window only.
+ */
+function OnboardingStageEdgeFade(props: { readonly visible: boolean }) {
+  if (!props.visible) return null;
+  return (
+    <div
+      aria-hidden="true"
+      className="pointer-events-none absolute inset-x-0 bottom-0 z-[5] h-[6rem] bg-gradient-to-t from-[#303b37] via-[#303b37]/75 to-transparent backdrop-blur-sm [mask-image:linear-gradient(to_top,black_55%,transparent)] lg:hidden"
+    />
+  );
+}
+
+function ActCopy(props: {
+  readonly act: OnboardingAct;
+  readonly eyebrow: string;
+  readonly agentGuide: OnboardingAgentGuideState;
+  readonly hostPicker: OnboardingHostPicker;
+}) {
+  const { act, eyebrow, agentGuide, hostPicker } = props;
   const headingRef = useRef<HTMLHeadingElement | null>(null);
-  const isAgentsAct = act.addon === "agents";
+  // Both addons that own the rest of the rail rather than sitting under the
+  // body: the providers list, and the mobile tour's agent-guide editor.
+  const isStretchedAddon = actUsesSoloStage(act);
 
   useEffect(() => {
     headingRef.current?.focus({ preventScroll: true });
@@ -305,17 +758,19 @@ function ActCopy(props: { act: OnboardingAct }) {
 
   return (
     <m.div
+      data-testid="onboarding-act"
+      data-act-id={act.id}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       transition={{ duration: 0.28, ease: ACT_EASE }}
       className={cn(
         "onboarding-copy flex min-h-0 w-full flex-col items-center text-center lg:items-start lg:text-left",
-        isAgentsAct && "h-full",
+        isStretchedAddon && "h-full",
       )}
     >
       <p className="onboarding-copy-kicker hidden font-mono leading-normal font-medium tracking-[0.07em] text-white/55 uppercase lg:block">
-        {act.eyebrow}
+        {eyebrow}
       </p>
       <div className="onboarding-copy-inner flex w-full flex-col items-center lg:items-start">
         <h1
@@ -329,9 +784,27 @@ function ActCopy(props: { act: OnboardingAct }) {
           {act.body}
         </p>
       </div>
-      {isAgentsAct ? (
+      {act.addon === "agents" ? (
         <div className="onboarding-addon flex min-h-0 w-full flex-1 flex-col self-center overflow-hidden pt-1 text-left lg:self-start">
           <OnboardingDetectedAgents />
+        </div>
+      ) : null}
+      {/* No `onboarding-addon` width cap here: the editor is the act on a
+          phone, so it takes the rail's full width and whatever height the
+          stretched layout leaves it. */}
+      {act.addon === "agent-guide" ? (
+        <div className="flex min-h-0 w-full flex-1 flex-col self-stretch overflow-hidden pt-1 text-left">
+          {/* The phone rail has no mini-app window to carry the picker as its
+              title, so the editor is headed with the same bar here. */}
+          <OnboardingHostPickerBar
+            picker={hostPicker}
+            trafficLights={false}
+            className="rounded-t-lg"
+          />
+          <OnboardingAgentGuidePane
+            agentGuide={agentGuide}
+            hostPicker={hostPicker}
+          />
         </div>
       ) : null}
       {act.addon === "theme" ? (
@@ -343,14 +816,17 @@ function ActCopy(props: { act: OnboardingAct }) {
   );
 }
 
-function ProgressRail(props: { activeIndex: number }) {
-  const { activeIndex } = props;
+function ProgressRail(props: {
+  readonly acts: ReadonlyArray<OnboardingAct>;
+  readonly activeIndex: number;
+}) {
+  const { acts, activeIndex } = props;
   return (
     <div
       aria-hidden="true"
       className="onboarding-progress flex items-center gap-0.5"
     >
-      {ONBOARDING_ACTS.map((act, index) => (
+      {acts.map((act, index) => (
         <span
           key={act.id}
           className={cn(
@@ -397,7 +873,225 @@ function OnboardingWordmark() {
   );
 }
 
+/**
+ * The session scan starts with the tour, not with its last act: reading every
+ * session on the machine takes a while, and the acts before the import one are
+ * exactly that while. Only a tour that will actually show the act pays for it -
+ * the phone tour never lists it, capability or not - and it pauses while a run
+ * is in flight. A finished run does not hold it back: a replayed tour after an
+ * earlier import would otherwise wait for the whole scan at the last act.
+ */
+function useOnboardingSessionImportScan(
+  acts: ReadonlyArray<OnboardingAct>,
+): SessionImportScanHandle {
+  const tourShowsSessionImport = acts.some(
+    (act) => act.id === "session-import",
+  );
+  // The run on the host the tour is streaming against: another machine
+  // importing is no reason to hold this one's scan back.
+  const streamHostId = useStreamHostId();
+  const sessionImportRun = useSessionImportRun(streamHostId);
+  const sessionImportRunInFlight = sessionImportIsRunning(sessionImportRun);
+  return useSessionImportScan(
+    tourShowsSessionImport && !sessionImportRunInFlight,
+  );
+}
+
+/**
+ * The tour, scoped to ONE host of the user's choosing.
+ *
+ * Both host-dependent acts read a real machine - the session scan lists what
+ * is on it, the agent guide is stored on it - and a person with several hosts
+ * should not have to replay the tour once per machine. The pick is held here,
+ * in page state rather than a store, because it belongs to this tour: it must
+ * not leak into Settings' own scope or outlive the tour.
+ *
+ * Both runtimes are re-provided, and both are needed: the guide draft is a
+ * unary host RPC (`HostRuntimeContext`), while the session scan and every run
+ * started from the wizard ride the STREAM (`StreamRuntimeContext`). Swapping
+ * only one is how a surface reads host B's sessions over host A's transport.
+ * They wrap `OnboardingTour` rather than sitting inside it because the hooks
+ * that must move - the scan gate, the guide query and its mutation - are the
+ * tour's own.
+ *
+ * Rendering both providers UNCONDITIONALLY is load-bearing (the pattern
+ * `ResourceMonitorPopover` documents): mounting them only once a pick resolves
+ * changes the element type at this position, so React would remount the whole
+ * tour - and reset the act the user is on - the instant a host was chosen.
+ *
+ * Safe to re-provide here because the tour contains no composer and therefore
+ * no microphone path: `useDictationAvailability` / `useVoiceDictation` are
+ * app-wide by design (see `useScopedHostBinding`), and a grep of the
+ * onboarding and session-import trees finds neither.
+ */
 export function OnboardingPage(props: { readonly replay: boolean }) {
+  const [scopedHostId, setScopedHostId] = useState<string | null>(null);
+  const scope = useHostScopeFor({ scopedHostId, setScopedHostId });
+  // The tour this shell can run, not the full catalog: the installed app plays
+  // the phone tour, an AMBIENT host that cannot scan sessions never reaches the
+  // session-import act, whose stage is the live wizard, and a machine that
+  // cannot import logins (no browser bridge, or saving off) never reaches the
+  // login-import act, whose stage is the live import flow. Everything below
+  // counts acts off this list, so an omitted act is unreachable rather than
+  // merely blank.
+  //
+  // Read HERE, above the re-providers, so the tour's length is a fact about
+  // this app and not about the machine the picker happens to point at. Read
+  // below them it would move with a pick, retiring the act a user is standing
+  // on - the displacement the act re-seating in `OnboardingTour` exists to
+  // stop. The cost of that choice is that the act can outlive its capability
+  // on a PICKED host, so the session-import stage asks the same question again
+  // of the client the import would run on and refuses there.
+  const sessionImportAvailable = useSessionImportAvailable();
+  const loginImportAvailable = useLoginImportAvailable();
+  const acts = useMemo(
+    () => onboardingActsFor({ sessionImportAvailable, loginImportAvailable }),
+    [loginImportAvailable, sessionImportAvailable],
+  );
+  const scopedBinding = useScopedHostBinding(scope);
+  const ambientBinding = useHostBinding();
+  const scopedStreamBinding = useScopedStreamBinding(scope);
+  const ambientStreamBinding = use(StreamRuntimeContext);
+  return (
+    <HostRuntimeContext.Provider value={scopedBinding ?? ambientBinding}>
+      <StreamRuntimeContext.Provider
+        value={scopedStreamBinding ?? ambientStreamBinding}
+      >
+        <OnboardingTour
+          replay={props.replay}
+          acts={acts}
+          scope={scope}
+          scopedHostId={scopedHostId}
+          setScopedHostId={setScopedHostId}
+        />
+      </StreamRuntimeContext.Provider>
+    </HostRuntimeContext.Provider>
+  );
+}
+
+/**
+ * The tour's host pick as the stages see it, and the one way to change it.
+ *
+ * Save FIRST, then commit the pick. The mutation `saveAgentGuideDraft` calls is
+ * bound to the host the tour is on at this moment, so a pick committed ahead
+ * of it would write the departing host's draft onto the arriving one. A failed
+ * save keeps the current host selected and leaves the pane's own "Not saved"
+ * status showing, rather than silently dropping an edit.
+ */
+function useOnboardingHostPicker(input: {
+  readonly scope: HostScope;
+  /** `null` while the tour follows the host it opened on. */
+  readonly scopedHostId: string | null;
+  readonly setScopedHostId: (hostId: string) => void;
+  readonly saveAgentGuideDraft: () => Promise<boolean>;
+  /**
+   * Whether there is an edit to carry AND a host to carry it to. A save that
+   * cannot succeed must not be the thing standing between the user and the
+   * pick: a host that went away mid-tour would otherwise refuse every write,
+   * and with it every attempt to leave it.
+   */
+  readonly hasDraftToSaveBeforeSwitch: () => boolean;
+  readonly resetAgentGuideDraftForNextHost: () => void;
+}): OnboardingHostPicker {
+  const {
+    scope,
+    scopedHostId,
+    setScopedHostId,
+    saveAgentGuideDraft,
+    hasDraftToSaveBeforeSwitch,
+    resetAgentGuideDraftForNextHost,
+  } = input;
+  // The host a settling guide save should land the tour on, and whether one is
+  // already carrying a pick - see `selectHost`.
+  const pendingHostPickRef = useRef<string | null>(null);
+  const hostPickSaveInFlightRef = useRef(false);
+
+  const selectHost = useCallback(
+    (hostId: string): void => {
+      // Naming the host already being read changes nothing to carry over; it
+      // only pins the tour to it.
+      if (hostId === scopedHostId || hostId === scope.hostId) {
+        // Latest pick wins here too: a destination an earlier pick recorded
+        // must not land after the user came back to this host.
+        pendingHostPickRef.current = null;
+        setScopedHostId(hostId);
+        return;
+      }
+      // LATEST PICK WINS. `saveAgentGuideDraft` reports `false` for two
+      // opposite things - the write was refused, and a write is already in
+      // flight - and treating both as "stay put" dropped the second pick of
+      // any B-then-C pair: the tour landed on B, which the user had already
+      // moved off. The destination is a ref the settling save reads, so a
+      // pick made mid-write REPLACES the one being carried instead of
+      // starting a second write of the same draft.
+      pendingHostPickRef.current = hostId;
+      if (hostPickSaveInFlightRef.current) return;
+      if (!hasDraftToSaveBeforeSwitch()) {
+        // Nothing to carry, or nowhere reachable to carry it: switch now.
+        pendingHostPickRef.current = null;
+        resetAgentGuideDraftForNextHost();
+        setScopedHostId(hostId);
+        return;
+      }
+      hostPickSaveInFlightRef.current = true;
+      void saveAgentGuideDraft().then((saved) => {
+        hostPickSaveInFlightRef.current = false;
+        const destination = pendingHostPickRef.current;
+        pendingHostPickRef.current = null;
+        // A REFUSED write keeps the tour where it is - moving on would leave
+        // the edit nowhere - and the pane's own "Not saved" status says so.
+        if (!saved || destination === null) return;
+        resetAgentGuideDraftForNextHost();
+        setScopedHostId(destination);
+      });
+    },
+    [
+      hasDraftToSaveBeforeSwitch,
+      resetAgentGuideDraftForNextHost,
+      saveAgentGuideDraft,
+      scope.hostId,
+      scopedHostId,
+      setScopedHostId,
+    ],
+  );
+
+  // Read INSIDE the providers, so it is the transport the stages actually use.
+  // `useScopedStreamBinding` fills its binding in an effect, so the scope can
+  // say `ready` for host B while this still names host A - the stages must not
+  // render live content through that gap. The UNARY half needs no twin: under
+  // an explicit pick `deriveHostScopeStatus` only answers `ready` once the
+  // transient client exists, and that client is built synchronously by
+  // `useHostClientFor`'s `useMemo`, so there is no commit where the scope is
+  // usable and `HostRuntimeContext` is still the ambient binding.
+  const streamBinding = useStreamRuntimeBinding();
+  const streamOnPickedHost =
+    streamBinding !== null && streamBinding.hostId === scope.hostId;
+  // Memoised because it is threaded through four layers - the miniature
+  // column, the diorama, its scene and the guide pane - and a fresh object per
+  // render defeats any memo one of them grows later. (It cannot hold its
+  // identity yet: `useHostScopeFor` builds a new `scope` every render, so this
+  // memo only starts paying once the scope is memoised at its source.)
+  return useMemo<OnboardingHostPicker>(
+    () => ({
+      scope,
+      onSelectHost: selectHost,
+      hasExplicitPick: scopedHostId !== null,
+      streamOnPickedHost,
+    }),
+    [scope, selectHost, scopedHostId, streamOnPickedHost],
+  );
+}
+
+function OnboardingTour(props: {
+  readonly replay: boolean;
+  /** The tour being played - see `OnboardingPage` for why it is decided there. */
+  readonly acts: ReadonlyArray<OnboardingAct>;
+  readonly scope: HostScope;
+  /** `null` while the tour follows the host it opened on. */
+  readonly scopedHostId: string | null;
+  readonly setScopedHostId: (hostId: string) => void;
+}) {
+  const { acts, scope, scopedHostId, setScopedHostId } = props;
   // Draft + provider-derived default live in one state object so the
   // query-sync effect mirrors them through a single trailing setState call
   // (React's effect-sync rule only permits the final statement to set state).
@@ -412,15 +1106,36 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
   const agentGuideInitializedRef = useRef(false);
   const agentGuideAutoDefaultRef = useRef(false);
   const agentGuideLastDefaultRef = useRef("");
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  // The page's other platform read (`miniatureForAct` has the first): the
+  // interaction polish the installed app gets and a desktop window must not -
+  // swipe between acts, and controls a thumb can actually hit.
+  const mobileApp = isMobileApp();
+  const actionHeight = actionHeightClass(mobileApp);
   const navigate = useNavigate();
   const router = useRouter();
   const { replay } = props;
-  const step = useOnboardingStore(selectStep);
-  const isLastAct = useOnboardingStore(selectIsLastStep);
+  const sessionImportScan = useOnboardingSessionImportScan(acts);
+  // An import the login-import act started is a desktop write that may be
+  // sitting on a keystore prompt; Continue holds until it settles so the
+  // stage is there to show the outcome. Skip does not: the write finishes
+  // either way, and the user can always leave.
+  const loginImportPending =
+    useIsMutating({ mutationKey: browserMutationKeys.importLogins() }) > 0;
+  // Read the raw step and clamp here: negotiation can retire an act while the
+  // user is already past its new end, and the clamp is what keeps the page on
+  // a real act until the next move re-seats the store.
+  const storedStep = useOnboardingStore((state) => state.step);
+  const step = clampOnboardingStep(storedStep, acts.length);
+  const isLastAct = isLastOnboardingStep(storedStep, acts.length);
   const advanceStep = useOnboardingStore((state) => state.advance);
   const retreat = useOnboardingStore((state) => state.retreat);
   const complete = useOnboardingStore((state) => state.complete);
+  const consumeAnnouncement = useFeatureAnnouncementsStore(
+    (state) => state.consume,
+  );
   const restart = useOnboardingStore((state) => state.restart);
+  const reseat = useOnboardingStore((state) => state.reseat);
   const agentGuideQuery = useAgentSelectionGuideGlobalOnboardingDraftQuery();
   const agentGuideSetMutation = useAgentSelectionGuideSetGlobalMutation();
   const {
@@ -430,7 +1145,32 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
     reset: resetAgentGuideSetMutation,
   } = agentGuideSetMutation;
 
-  const act = ONBOARDING_ACTS[step];
+  const act = acts[step];
+  // The act list can change under the user: session import resolving
+  // `unsupported` drops its act, and login import resolving available
+  // inserts one right after it (`useLoginImportAvailable` is false until the
+  // save-logins read answers). The store's position is an INDEX, so either
+  // would move a user past that point onto whichever act now sits at their
+  // index - a user on the agent guide would find themselves on the login
+  // import. Re-seated by act id instead: the ref carries the act of the
+  // previous commit, and the layout effect below runs before this commit
+  // paints, so the user stays on the act they can see. An act that vanished
+  // under the user leaves the clamped index in place, as before.
+  const seatedActIdRef = useRef<OnboardingAct["id"]>(act.id);
+  useLayoutEffect(() => {
+    const seated = seatedActIdRef.current;
+    const index = acts.findIndex((entry) => entry.id === seated);
+    if (index < 0) return;
+    const current = clampOnboardingStep(
+      useOnboardingStore.getState().step,
+      acts.length,
+    );
+    if (acts[current]?.id !== seated) reseat(index);
+  }, [acts, reseat]);
+  useLayoutEffect(() => {
+    seatedActIdRef.current = act.id;
+  });
+  const miniature = miniatureForAct(act.id);
   const isAgentGuideAct = act.id === "agent-guide";
   const agentGuideQueryData = agentGuideQuery.data;
   const agentGuideWaitingForProviderSettlement =
@@ -443,6 +1183,14 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
   useLayoutEffect(() => {
     restart();
   }, [restart]);
+
+  // Presence, for app-level ambient surfaces: while the tour has the screen,
+  // the import-progress toast holds instead of floating over the stage.
+  const setTourOpen = useOnboardingTourOpenStore((state) => state.setOpen);
+  useEffect(() => {
+    setTourOpen(true);
+    return () => setTourOpen(false);
+  }, [setTourOpen]);
 
   useEffect(() => {
     Analytics.getInstance().track(AnalyticsEvent.OnboardingStarted, {
@@ -508,6 +1256,13 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
 
   const saveAgentGuideDraft = useCallback(async (): Promise<boolean> => {
     if (agentGuideSaving) return false;
+    // A picked host that cannot be reached has nothing to save to. The
+    // providers above fall back to the ambient binding in that state, so a
+    // write here would land the picked host's draft on the ambient host's
+    // guide. Report success so Skip and Finish can still leave the tour.
+    if (scopedHostId !== null && !isHostScopeUsable(scope.status)) {
+      return true;
+    }
     // The guide is optional. When it has not loaded, or still reflects an
     // in-flight generated default with no saved content yet, there is no
     // stable draft to persist. Report success so Skip/Escape and the final
@@ -543,8 +1298,36 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
     agentGuideQueryData,
     agentGuideSaving,
     agentGuideWaitingForProviderSettlement,
+    scope.status,
+    scopedHostId,
     setAgentGuideGlobal,
   ]);
+
+  const resetAgentGuideDraftForNextHost = useCallback((): void => {
+    // The arriving host's query must initialise the editor from ITS OWN
+    // content, so every ref the sync effect reads goes back to cold.
+    agentGuideInitializedRef.current = false;
+    agentGuideDirtyRef.current = false;
+    agentGuideAutoDefaultRef.current = false;
+    agentGuideLastDefaultRef.current = "";
+    agentGuideDraftRef.current = null;
+  }, []);
+  // Read at switch time, not render time: the dirty bit is a ref the editor
+  // flips on every keystroke, and whether the departing host can still take
+  // a write is `scope.status` as of the click.
+  const scopeStatus = scope.status;
+  const hasDraftToSaveBeforeSwitch = useCallback(
+    (): boolean => agentGuideDirtyRef.current && isHostScopeUsable(scopeStatus),
+    [scopeStatus],
+  );
+  const hostPicker = useOnboardingHostPicker({
+    scope,
+    scopedHostId,
+    setScopedHostId,
+    saveAgentGuideDraft,
+    hasDraftToSaveBeforeSwitch,
+    resetAgentGuideDraftForNextHost,
+  });
 
   const agentGuideState: OnboardingAgentGuideState = {
     value: agentGuideDraft ?? agentGuideDefault,
@@ -555,7 +1338,8 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
     onValueChange: updateAgentGuideDraft,
     onRevertToDefault: revertAgentGuideDraft,
   };
-  const advanceDisabled = (isAgentGuideAct || isLastAct) && agentGuideSaving;
+  const advanceDisabled =
+    ((isAgentGuideAct || isLastAct) && agentGuideSaving) || loginImportPending;
 
   // Finishing the tour must never leave the app on the tabless landing.
   // Replay-from-settings sets `?replay=true` (and pushed /onboarding onto the
@@ -574,6 +1358,20 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
             : AnalyticsEvent.OnboardingSkipped,
           { last_step: act.id },
         );
+        // The tour is this release's announcement surface, so finishing it -
+        // completed or skipped, act reached or not - consumes the
+        // announcement: the release toast is for a user who finished
+        // onboarding BEFORE the feature existed, and whoever leaves this
+        // tour is not that user. Unconditional on purpose, since every
+        // narrower rule had a hole: the act's availability is `false` while
+        // the saved-logins read is still pending, so an immediate Skip saw
+        // no act; an act the list held can be dropped again before it is
+        // reached; and on a shell with no bridge the toast never shows, so
+        // consuming costs nothing. Before `complete()`, which is what makes
+        // the toast eligible. `session-import` is deliberately NOT consumed
+        // here: its toast exists to reach the user who never saw the import
+        // act, and the wizard consumes the id itself on mount.
+        consumeAnnouncement("login-import");
         complete();
         if (replay) {
           router.history.back();
@@ -582,17 +1380,31 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
         void navigate({ to: "/draft/new", replace: true });
       });
     },
-    [act.id, complete, navigate, replay, router, saveAgentGuideDraft],
+    [
+      act.id,
+      complete,
+      consumeAnnouncement,
+      navigate,
+      replay,
+      router,
+      saveAgentGuideDraft,
+    ],
   );
 
   const retreatWithAnalytics = useCallback((): void => {
-    const destination = ONBOARDING_ACTS[Math.max(0, step - 1)] ?? act;
-    retreat();
+    // Back holds for the same reason Continue does: leaving the act unmounts
+    // the flow while the desktop's write goes on, so its Done step could
+    // never show what the import did, and coming back would offer a fresh
+    // flow over logins already replaced. Skip stays open - the write
+    // finishes either way, and the user can always leave the tour.
+    if (loginImportPending) return;
+    const destination = acts[Math.max(0, step - 1)] ?? act;
+    retreat(acts.length);
     Analytics.getInstance().track(AnalyticsEvent.OnboardingNavigated, {
       direction: "back",
       step: destination.id,
     });
-  }, [act, retreat, step]);
+  }, [act, acts, loginImportPending, retreat, step]);
 
   const advance = useCallback((): void => {
     if (advanceDisabled) return;
@@ -601,15 +1413,15 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
         finish("completed");
         return;
       }
-      const destination = ONBOARDING_ACTS[step + 1] ?? act;
-      advanceStep();
+      const destination = acts[step + 1] ?? act;
+      advanceStep(acts.length);
       Analytics.getInstance().track(AnalyticsEvent.OnboardingNavigated, {
         direction: "continue",
         step: destination.id,
       });
     };
     advancePastCurrent();
-  }, [act, advanceDisabled, advanceStep, finish, isLastAct, step]);
+  }, [act, acts, advanceDisabled, advanceStep, finish, isLastAct, step]);
   const handleKeyboardAdvance = useEffectEvent((): void => advance());
   const handleKeyboardRetreat = useEffectEvent((): void =>
     retreatWithAnalytics(),
@@ -645,10 +1457,26 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
+  // The same two callbacks the Back and Continue buttons are wired to, so a
+  // swipe is those buttons - save gate, finish branch and analytics included -
+  // rather than a second route into the store.
+  useActSwipe(stageRef, mobileApp, (direction) => {
+    if (direction === "forward") {
+      advance();
+      return;
+    }
+    retreatWithAnalytics();
+  });
+
   return (
     // h-full, not h-svh: the standalone shell owns the viewport height and
     // reserves the Windows title-bar band above this page.
-    <main className="onboarding-shell relative isolate flex h-full flex-1 overflow-hidden bg-[#0f1917] text-white">
+    <main
+      className={cn(
+        "onboarding-shell relative isolate flex h-full flex-1 overflow-hidden bg-[#0f1917] text-white",
+        mobileApp && "onboarding-shell--mobile-app",
+      )}
+    >
       <style>{ONBOARDING_STYLE}</style>
       <div
         className="pointer-events-none absolute inset-0 bg-cover bg-center opacity-40"
@@ -677,7 +1505,10 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
               data-testid="onboarding-skip"
               onClick={() => finish("skipped")}
               disabled={agentGuideSaving}
-              className="absolute right-10 flex h-9 items-center justify-center gap-2 rounded px-2 font-heading text-[0.875rem] leading-[1.125rem] font-normal tracking-normal text-white transition-colors hover:bg-white/10 disabled:pointer-events-none disabled:opacity-55 [@media(min-height:920px)]:h-10 [@media(min-height:920px)]:text-[0.9375rem] max-sm:right-5"
+              className={cn(
+                "absolute right-10 flex h-9 items-center justify-center gap-2 rounded px-2 font-heading text-[0.875rem] leading-[1.125rem] font-normal tracking-normal text-white transition-colors hover:bg-white/10 disabled:pointer-events-none disabled:opacity-55 [@media(min-height:920px)]:h-10 [@media(min-height:920px)]:text-[0.9375rem] max-sm:right-5",
+                actionHeight,
+              )}
             >
               <span>Skip intro</span>
               <Kbd tone="light">Esc</Kbd>
@@ -687,6 +1518,7 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
 
         <section className="min-h-0 px-[var(--onboarding-section-x)]">
           <div
+            ref={stageRef}
             className="relative h-full min-h-0 overflow-hidden rounded-[0.875rem] bg-[#303b37] bg-cover bg-center shadow-[0_2rem_6rem_rgba(0,0,0,0.34),inset_0_1px_0_rgba(255,255,255,0.05)]"
             style={{ backgroundImage: `url(${onboardingBackdropUrl})` }}
           >
@@ -695,70 +1527,76 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
             <div
               className={cn(
                 "onboarding-stage-content relative mx-auto grid h-full min-h-0 w-full max-w-[104rem] items-start overflow-hidden",
-                // The providers act needs a stretched copy rail so its list can scroll.
-                act.addon === "agents" && "onboarding-stage-content--solo",
+                // The providers act - and the mobile tour's agent guide - need a
+                // stretched copy rail so their addon can scroll.
+                actUsesSoloStage(act) && "onboarding-stage-content--solo",
+                miniature.kind === "none" &&
+                  "onboarding-stage-content--no-miniature",
               )}
             >
               <div className="onboarding-copy-rail flex min-h-0 min-w-0 flex-col items-center lg:items-start">
                 <div className="hidden w-full justify-center lg:flex lg:justify-start">
-                  <ProgressRail activeIndex={step} />
+                  <ProgressRail acts={acts} activeIndex={step} />
                 </div>
 
                 <div className="mt-7 w-full min-w-0">
                   <AnimatePresence mode="wait" initial={false}>
-                    <ActCopy key={act.id} act={act} />
+                    <ActCopy
+                      key={act.id}
+                      act={act}
+                      eyebrow={actEyebrow(act, step)}
+                      agentGuide={agentGuideState}
+                      hostPicker={hostPicker}
+                    />
                   </AnimatePresence>
                 </div>
               </div>
 
-              {/*
-                The live miniature follows the user's real theme on every act, so
-                the preview always matches what the app looks like for them. It
-                renders with the same semantic tokens as the real shell.
-              */}
-              <div
-                className={cn(
-                  "onboarding-diorama-wrap mx-auto w-full min-w-0 self-start lg:mx-0 lg:self-center",
-                  // The providers list carries the act on its own; drop the
-                  // mini-app when stacked. (Command-theme keeps its diorama,
-                  // which itself shows just the Cmd+K palette when stacked.)
-                  act.addon === "agents" && "max-lg:hidden",
-                )}
-              >
-                {/* Fade the mini-app in place on each act so it never slides up
-                    from the bottom when reappearing (e.g. providers → handoff). */}
-                <m.div
-                  key={step}
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  transition={{ duration: 0.25, ease: ACT_EASE }}
-                  className="w-full min-w-0"
-                >
-                  <OnboardingDiorama
-                    stage={step}
-                    agentGuide={agentGuideState}
-                  />
-                </m.div>
-              </div>
+              <OnboardingMiniatureColumn
+                actId={act.id}
+                addon={act.addon}
+                miniature={miniature}
+                agentGuide={agentGuideState}
+                hostPicker={hostPicker}
+                sessionImportScan={sessionImportScan}
+                onBeforeImportedTaskOpen={async () => {
+                  if (!(await saveAgentGuideDraft())) return false;
+                  Analytics.getInstance().track(
+                    AnalyticsEvent.OnboardingCompleted,
+                    { last_step: act.id },
+                  );
+                  consumeAnnouncement("login-import");
+                  // AppShell owns tab-navigation hydration. Finish the tour
+                  // before requesting a task tab so that hydration can run.
+                  complete();
+                  return true;
+                }}
+              />
             </div>
-            {/* Stacked screens: blur + fade the mini-app's lower edge behind the
-                actions bar so it reads as a clean footer, not a cut-off pane. */}
-            <div
-              aria-hidden="true"
-              className="pointer-events-none absolute inset-x-0 bottom-0 z-[5] h-[6rem] bg-gradient-to-t from-[#303b37] via-[#303b37]/75 to-transparent backdrop-blur-sm [mask-image:linear-gradient(to_top,black_55%,transparent)] lg:hidden"
+            <OnboardingStageEdgeFade
+              visible={
+                miniature.kind === "desktop" ||
+                miniature.kind === "session-import" ||
+                miniature.kind === "login-import"
+              }
             />
             <div className="onboarding-actions absolute z-10 flex items-center justify-end gap-3">
               <div className="mr-auto flex min-w-0 max-w-[14rem] flex-1 flex-col gap-1.5 lg:hidden">
                 <p className="truncate font-mono text-[0.6875rem] leading-none font-medium tracking-[0.07em] text-white/55 uppercase">
-                  {act.eyebrow}
+                  {actEyebrow(act, step)}
                 </p>
-                <ProgressRail activeIndex={step} />
+                <ProgressRail acts={acts} activeIndex={step} />
               </div>
               {step > 0 ? (
                 <button
                   type="button"
+                  data-testid="onboarding-back"
                   onClick={retreatWithAnalytics}
-                  className="flex h-9 items-center justify-center gap-2 rounded px-3 font-heading text-[0.875rem] leading-[1.125rem] font-medium text-white transition-colors hover:bg-white/10 [@media(min-height:920px)]:h-10 [@media(min-height:920px)]:px-4 [@media(min-height:920px)]:text-[0.9375rem]"
+                  disabled={loginImportPending}
+                  className={cn(
+                    "flex h-9 items-center justify-center gap-2 rounded px-3 font-heading text-[0.875rem] leading-[1.125rem] font-medium text-white transition-colors hover:bg-white/10 disabled:pointer-events-none disabled:opacity-55 [@media(min-height:920px)]:h-10 [@media(min-height:920px)]:px-4 [@media(min-height:920px)]:text-[0.9375rem]",
+                    actionHeight,
+                  )}
                 >
                   <Kbd tone="light">←</Kbd>
                   <span>Back</span>
@@ -771,6 +1609,7 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
                 disabled={advanceDisabled}
                 className={cn(
                   "flex h-9 items-center justify-center gap-2 rounded bg-white px-3 font-heading text-[0.875rem] leading-[1.125rem] font-medium text-black transition-opacity hover:opacity-85 disabled:pointer-events-none disabled:opacity-55 [@media(min-height:920px)]:h-10 [@media(min-height:920px)]:px-4 [@media(min-height:920px)]:text-[0.9375rem]",
+                  actionHeight,
                 )}
               >
                 <span>{isLastAct ? "Start building" : "Continue"}</span>
@@ -790,24 +1629,14 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
 }
 
 function OnboardingFooterLinks() {
-  const runnerHost = use(RunnerHostContext);
-
-  const openInBrowser = useCallback((url: string) => {
-    window.open(url, "_blank", "noopener,noreferrer");
-  }, []);
+  const openLink = useOpenLink();
 
   const openFooterLink = useCallback(
     (event: MouseEvent<HTMLAnchorElement>, url: string) => {
       event.preventDefault();
-      if (runnerHost !== null) {
-        void runnerHost.openExternalLink(url).catch(() => {
-          openInBrowser(url);
-        });
-        return;
-      }
-      openInBrowser(url);
+      void openLink(url, "docs", event);
     },
-    [openInBrowser, runnerHost],
+    [openLink],
   );
 
   return (
@@ -817,9 +1646,10 @@ function OnboardingFooterLinks() {
           <li key={link.label}>
             <a
               href={link.url}
-              target="_blank"
-              rel="noreferrer"
               onClick={(event) => openFooterLink(event, link.url)}
+              onAuxClick={onMiddleClick((event) =>
+                openFooterLink(event, link.url),
+              )}
               className="transition-colors hover:text-white/80"
             >
               {link.label}

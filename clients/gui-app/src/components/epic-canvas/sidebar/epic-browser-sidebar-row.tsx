@@ -30,6 +30,7 @@ import { cn } from "@/lib/utils";
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { findPaneById } from "@/stores/epics/canvas/tile-tree";
+import { SIDEBAR_REVEAL_HIGHLIGHT_CLASS } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 
 interface BrowserTabRowProps {
   readonly epicId: string;
@@ -44,6 +45,10 @@ interface BrowserTabRowProps {
   >;
   readonly duplicateTitles: ReadonlySet<string>;
   readonly onOpenTab: (
+    session: BrowserSessionInfo,
+    tab: BrowserTabInfo,
+  ) => void;
+  readonly onOpenTabPermanently: (
     session: BrowserSessionInfo,
     tab: BrowserTabInfo,
   ) => void;
@@ -75,6 +80,7 @@ export function BrowserTabRow(props: BrowserTabRowProps) {
     chatById,
     duplicateTitles,
     onOpenTab,
+    onOpenTabPermanently,
     onOpenDrivingChat,
     onCloseTab,
   } = props;
@@ -146,6 +152,7 @@ export function BrowserTabRow(props: BrowserTabRowProps) {
     <li>
       <div
         data-active={isActive}
+        data-sidebar-node-id={tile.id}
         data-testid={`epic-browser-sidebar-row-${tab.tabId}`}
         className={cn(
           "group/browser-row relative grid h-8 min-w-0 cursor-pointer grid-cols-[minmax(0,1fr)_auto_auto] items-center rounded-md transition-colors duration-100 motion-reduce:transition-none",
@@ -154,6 +161,7 @@ export function BrowserTabRow(props: BrowserTabRowProps) {
             : "text-foreground/75 hover:bg-accent/70 hover:text-accent-foreground",
           isClosing && "opacity-60",
           isDragging && "cursor-grabbing opacity-60",
+          SIDEBAR_REVEAL_HIGHLIGHT_CLASS,
         )}
       >
         <TooltipWrapper
@@ -168,8 +176,15 @@ export function BrowserTabRow(props: BrowserTabRowProps) {
             {...listeners}
             type="button"
             aria-label={`${title}, ${identity.url}${stateLabel}`}
+            aria-keyshortcuts="Shift+Enter"
             className="flex h-8 min-w-0 cursor-pointer items-center gap-2 rounded-md px-2 pr-1 text-left text-ui-sm outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing"
             onClick={() => onOpenTab(session, tab)}
+            onDoubleClick={() => onOpenTabPermanently(session, tab)}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" || !event.shiftKey) return;
+              event.preventDefault();
+              onOpenTabPermanently(session, tab);
+            }}
           >
             <BrowserFavicon
               faviconUrl={

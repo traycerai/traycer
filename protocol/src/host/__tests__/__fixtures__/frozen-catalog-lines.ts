@@ -956,7 +956,8 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
                   "hermes",
                   "omp",
                   "huggingface",
-                  "reasonix"
+                  "reasonix",
+                  "antigravity"
                 ]
               },
               "label": {
@@ -2260,7 +2261,8 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
                       "hermes",
                       "omp",
                       "huggingface",
-                      "reasonix"
+                      "reasonix",
+                      "antigravity"
                     ]
                   },
                   {
@@ -8418,7 +8420,8 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
                   "hermes",
                   "omp",
                   "huggingface",
-                  "reasonix"
+                  "reasonix",
+                  "antigravity"
                 ]
               },
               "enabled": {
@@ -9007,6 +9010,30 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
                       "default": true,
                       "type": "boolean"
                     },
+                    "apiKey": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "supported": {
+                              "type": "boolean"
+                            },
+                            "configured": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "supported",
+                            "configured"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "launchCommand": {
                       "default": null,
                       "anyOf": [
@@ -9333,7 +9360,8 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
                             "hermes",
                             "omp",
                             "huggingface",
-                            "reasonix"
+                            "reasonix",
+                            "antigravity"
                           ]
                         }
                       },
@@ -11378,7 +11406,8 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
                     "hermes",
                     "omp",
                     "huggingface",
-                    "reasonix"
+                    "reasonix",
+                    "antigravity"
                   ]
                 },
                 "model": {
@@ -11506,7 +11535,8 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
                         "hermes",
                         "omp",
                         "huggingface",
-                        "reasonix"
+                        "reasonix",
+                        "antigravity"
                       ]
                     },
                     "scope": {
@@ -11564,7 +11594,8 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
                         "hermes",
                         "omp",
                         "huggingface",
-                        "reasonix"
+                        "reasonix",
+                        "antigravity"
                       ]
                     },
                     "scope": {
@@ -11622,7 +11653,8 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
                         "hermes",
                         "omp",
                         "huggingface",
-                        "reasonix"
+                        "reasonix",
+                        "antigravity"
                       ]
                     },
                     "scope": {
@@ -11680,7 +11712,8 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
                         "hermes",
                         "omp",
                         "huggingface",
-                        "reasonix"
+                        "reasonix",
+                        "antigravity"
                       ]
                     },
                     "scope": {
@@ -11747,7 +11780,8 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
                         "hermes",
                         "omp",
                         "huggingface",
-                        "reasonix"
+                        "reasonix",
+                        "antigravity"
                       ]
                     },
                     "scope": {

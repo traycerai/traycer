@@ -46,6 +46,30 @@ export const RPC_ERROR_CODES = [
   // error with role-specific copy, distinct from the generic epic-access
   // FORBIDDEN whose "check Task access" guidance would mislead here.
   "E_ROLE_FORBIDDEN",
+  // The epic document is sealed, newer than this host understands, or cannot
+  // be read safely. Distinct from FORBIDDEN: the caller may hold editor access
+  // while the document itself is intentionally read-only.
+  "E_EPIC_READ_ONLY",
+  // A keyed unary was refused before resolver dispatch because the bounded
+  // replay cache had no safe slot. The command definitely did not run and may
+  // retry with the SAME key once capacity returns. This meaning is part of the
+  // negotiated `unary.idempotencyKey` capability; changing it requires a new
+  // capability name, never a reinterpretation of this code.
+  "E_IDEMPOTENCY_CACHE_SATURATED",
+  // The original keyed unary exceeded the host's in-flight replay ceiling.
+  // The host will never dispatch the key again while that execution remains
+  // live, but it can no longer promise a committed or rejected answer to a
+  // later joiner. Clients reconcile this ambiguous outcome through echo/TTL.
+  "E_IDEMPOTENCY_OUTCOME_UNKNOWN",
+  // The original keyed unary SETTLED, and its response was too large for the
+  // host to retain for replay. Distinct from E_IDEMPOTENCY_OUTCOME_UNKNOWN in
+  // the one way a client acts on: there the answer is unknowable, here it is
+  // known and simply not kept, so the command definitely ran and must NOT be
+  // retried under the same key expecting a result. The host keeps the key
+  // precisely so the retry cannot re-execute it. Additive and degrade-safe
+  // like E_INVALID_ARGUMENT - a client that does not know this code sees an
+  // ordinary 409.
+  "E_IDEMPOTENCY_REPLAY_TOO_LARGE",
   "TERMINAL_ID_TAKEN",
   // A durable terminal is mid-delete. 409, not 500: the caller can retry
   // after the marker settles. Additive and degrade-safe like E_INVALID_ARGUMENT.

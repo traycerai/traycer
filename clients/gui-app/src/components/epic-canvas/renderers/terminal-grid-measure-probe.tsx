@@ -1,5 +1,7 @@
 import { Suspense } from "react";
 import { TerminalXtermHost } from "@/hooks/agent/use-terminal-tile-bootstrap";
+import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
+import { TabBodySelectedContext } from "@/components/epic-canvas/canvas/tab-body-selected-context";
 import type { TerminalTileFindKind } from "@/components/epic-canvas/renderers/terminal-tile-find-adapter";
 
 const dropInput = (): void => {};
@@ -34,34 +36,50 @@ export function TerminalGridMeasureProbe(props: {
   readonly chrome: "padded" | "flush";
   readonly onMeasured: (cols: number, rows: number) => void;
 }) {
+  // The probe PRESENTS its host unconditionally, whatever the enclosing tab
+  // says. Terminal tabs are pinned-mounted and conceal with `visibility`, so a
+  // terminal opened in a background tab (every worktree setup terminal) mounts
+  // this probe into a correctly-sized but unselected body - and a measurement
+  // taken there must still be the one the live host will agree with. The grid
+  // is calibrated to whichever renderer is installed (see
+  // `XtermRendererController.isRendererSettled`), so measuring without the
+  // canvas renderer would seed `terminal.create` with a grid the tile
+  // contradicts the moment it is first shown. Presenting costs the accelerated
+  // canvases only for the span of the measurement - the live host takes the
+  // same engine moments later, and an engine nobody presents drops them again
+  // after the grace.
   return (
     <Suspense fallback={null}>
-      <TerminalXtermHost
-        sessionId={props.sessionId}
-        hostId={props.hostId}
-        tileKind={props.tileKind}
-        chrome={props.chrome}
-        instanceId={props.instanceId}
-        effectiveCols={0}
-        effectiveRows={0}
-        onUserInput={dropInput}
-        onContainerResize={props.onMeasured}
-        onWriterReady={ignoreWriter}
-        shouldFocusOnActivePane={false}
-        // A landing-panel open can park focus before this probe mounts. Leave
-        // that request parked for the live host: focusing the probe would both
-        // route early keystrokes into `dropInput` and lose DOM focus when the
-        // persistent xterm container is reparented into the live host.
-        registerImperativeFocus={false}
-        findTargetId={null}
-        // The engine must survive the probe -> live-host swap (that is the
-        // point); if the tab closes before a session ever registers, the
-        // release path detects the orphan and disposes it.
-        keepAlive
-        // Measure-only: the live host takes the same engine moments later and
-        // owns every reader of it.
-        onTerminalReady={null}
-      />
+      <PaneVisibilityContext value>
+        <TabBodySelectedContext value>
+          <TerminalXtermHost
+            sessionId={props.sessionId}
+            hostId={props.hostId}
+            tileKind={props.tileKind}
+            chrome={props.chrome}
+            instanceId={props.instanceId}
+            effectiveCols={0}
+            effectiveRows={0}
+            onUserInput={dropInput}
+            onContainerResize={props.onMeasured}
+            onWriterReady={ignoreWriter}
+            shouldFocusOnActivePane={false}
+            // A landing-panel open can park focus before this probe mounts. Leave
+            // that request parked for the live host: focusing the probe would both
+            // route early keystrokes into `dropInput` and lose DOM focus when the
+            // persistent xterm container is reparented into the live host.
+            registerImperativeFocus={false}
+            findTargetId={null}
+            // The engine must survive the probe -> live-host swap (that is the
+            // point); if the tab closes before a session ever registers, the
+            // release path detects the orphan and disposes it.
+            keepAlive
+            // Measure-only: the live host takes the same engine moments later and
+            // owns every reader of it.
+            onTerminalReady={null}
+          />
+        </TabBodySelectedContext>
+      </PaneVisibilityContext>
     </Suspense>
   );
 }

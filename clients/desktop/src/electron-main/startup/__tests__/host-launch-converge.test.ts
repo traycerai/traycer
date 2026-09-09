@@ -5,7 +5,9 @@ import type {
   ApplyStagedOk,
   ApplyStagedTrigger,
   ConvergeReadyOk,
+  ConvergeReadyVersionPolicy,
   HostControllerStatus,
+  LocalHostMutationIntent,
   MutationOutcome,
 } from "../../host/host-controller-types";
 import type { HostRegistryUpdateState } from "../../../ipc-contracts/host-management-types";
@@ -143,8 +145,22 @@ function fakeHostController(
   activateInstalledOutcome: MutationOutcome<ActivateInstalledOk>,
 ): IpcHostController & {
   readonly applyStagedCalls: readonly [ApplyStagedTrigger, boolean][];
-  readonly activateInstalledCalls: readonly boolean[];
+  readonly activateInstalledCalls: readonly [boolean, boolean][];
   readonly convergeReadyCalls: readonly boolean[];
+  /**
+   * The full 3-arg call, `force` alongside the intent/version-policy every
+   * launch-converge call site is required to pass. Kept alongside the
+   * force-only `convergeReadyCalls` above (which every existing assertion in
+   * this file already reads) rather than replacing it, since every call site
+   * here passes the SAME `{kind:"background"}, "keep-installed"` pair -
+   * `convergeReadyPolicyCalls` exists to pin that uniformity once, not to
+   * duplicate every force-only assertion.
+   */
+  readonly convergeReadyPolicyCalls: readonly [
+    boolean,
+    LocalHostMutationIntent,
+    ConvergeReadyVersionPolicy,
+  ][];
   readonly stageLatestCalls: number;
   /**
    * How many times status was sampled. Lets a test wait for an actor that
@@ -160,8 +176,13 @@ function fakeHostController(
   readonly callOrder: readonly string[];
 } {
   const applyStagedCalls: [ApplyStagedTrigger, boolean][] = [];
-  const activateInstalledCalls: boolean[] = [];
+  const activateInstalledCalls: [boolean, boolean][] = [];
   const convergeReadyCalls: boolean[] = [];
+  const convergeReadyPolicyCalls: [
+    boolean,
+    LocalHostMutationIntent,
+    ConvergeReadyVersionPolicy,
+  ][] = [];
   const callOrder: string[] = [];
   let stageLatestCalls = 0;
   let getStatusCalls = 0;
@@ -178,6 +199,9 @@ function fakeHostController(
     },
     get convergeReadyCalls() {
       return convergeReadyCalls;
+    },
+    get convergeReadyPolicyCalls() {
+      return convergeReadyPolicyCalls;
     },
     get stageLatestCalls() {
       return stageLatestCalls;
@@ -198,14 +222,18 @@ function fakeHostController(
     },
     async activateInstalled(
       force: boolean,
+      promoteReadyStage: boolean,
     ): Promise<MutationOutcome<ActivateInstalledOk>> {
-      activateInstalledCalls.push(force);
+      activateInstalledCalls.push([force, promoteReadyStage]);
       return activateInstalledOutcome;
     },
     async convergeReady(
       force: boolean,
+      intent: LocalHostMutationIntent,
+      versionPolicy: ConvergeReadyVersionPolicy,
     ): Promise<MutationOutcome<ConvergeReadyOk>> {
       convergeReadyCalls.push(force);
+      convergeReadyPolicyCalls.push([force, intent, versionPolicy]);
       callOrder.push("convergeReady");
       return { kind: "ok", value: { running: true, version: "1.4.0" } };
     },
@@ -279,7 +307,11 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
       fakeStatus(true, "unavailable", false),
       {
         kind: "ok",
-        value: { appliedVersion: "1.4.1", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.1",
+          runningActivated: true,
+          applied: true,
+        },
       },
       { kind: "ok", value: { activated: true } },
     );
@@ -289,6 +321,84 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
 
     expect(controller.applyStagedCalls).toEqual([["launch", false]]);
     expect(controller.activateInstalledCalls).toEqual([]);
+    // `applied: true` (bytes actually moved) never falls through to the
+    // activation/recovery arms - unlike the parked (`applied: false`) cases
+    // below, which re-sample status and run them.
+    expect(controller.convergeReadyCalls).toEqual([]);
+  });
+
+  // Final hold model (Codex P2 series, afc39760d and follow-ups): the version
+  // hold is no longer a desktop-side gate at all - any snapshot this process
+  // holds can be raced by a terminal downgrade, so `host apply --respect-hold`
+  // under the CLI's own mutation lock is the ONLY authority, and the launch
+  // reconcile ALWAYS calls `applyStaged("launch", false)` when `updateReady`.
+  // `ApplyStagedOk.applied` reports what the CLI actually decided: `false`
+  // when it parked a held (and still-viable) install, `true` when bytes
+  // moved. A parked apply started nothing, so the arms below must re-sample
+  // status and run against what the host actually looks like now.
+  it("re-samples status and activates when the launch apply is parked, leaving activation debt", async () => {
+    const status = fakeStatus(true, "unavailable", false);
+    const armStatus = fakeStatus(true, "pendingActivation", false);
+    const controller = fakeHostController(
+      status,
+      {
+        kind: "ok",
+        value: {
+          appliedVersion: "1.4.0",
+          runningActivated: true,
+          applied: false,
+        },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+    vi.spyOn(controller, "getStatus")
+      .mockResolvedValueOnce(status)
+      .mockResolvedValueOnce(status)
+      .mockResolvedValue(armStatus);
+
+    await runLaunchHostConvergeReconcile(controller, fakeMenu());
+
+    expect(controller.applyStagedCalls).toEqual([["launch", false]]);
+    expect(controller.activateInstalledCalls).toEqual([[false, false]]);
+    expect(controller.convergeReadyCalls).toEqual([]);
+  });
+
+  // A held host that is DOWN does NOT take the `ok/applied:false` branch:
+  // `noOpApplyOutcome` (real controller) only returns `ok/applied:false` when
+  // the reachability probe finds a live endpoint - an unreachable no-op is
+  // `installed-not-converged` instead (a `failed`-shaped outcome), which
+  // `recoverAfterFailedApply` - not the parked-`ok` arm above - routes to
+  // `convergeReady`. That path is already covered by the
+  // "recovers an absent service after %s" table below (its
+  // "bytes that committed without converging" row is exactly this CLI no-op
+  // shape, against `fakeStatus(true, "unavailable", false)`); nothing new to
+  // add here.
+
+  it("returns without running the activation/recovery arms when the re-sampled status is removed-by-user after a parked apply", async () => {
+    const status = fakeStatus(true, "unavailable", false);
+    const armStatus = fakeStatus(true, "unavailable", true);
+    const controller = fakeHostController(
+      status,
+      {
+        kind: "ok",
+        value: {
+          appliedVersion: "1.4.0",
+          runningActivated: true,
+          applied: false,
+        },
+      },
+      { kind: "ok", value: { activated: true } },
+    );
+    vi.spyOn(controller, "getStatus")
+      .mockResolvedValueOnce(status)
+      .mockResolvedValueOnce(status)
+      .mockResolvedValue(armStatus);
+
+    await runLaunchHostConvergeReconcile(controller, fakeMenu());
+
+    expect(controller.applyStagedCalls).toEqual([["launch", false]]);
+    expect(controller.activateInstalledCalls).toEqual([]);
+    expect(controller.convergeReadyCalls).toEqual([]);
   });
 
   it("F7: stages a release before deciding launch convergence, then applies that same launch", async () => {
@@ -298,7 +408,11 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
       initial,
       {
         kind: "ok",
-        value: { appliedVersion: "1.4.1", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.1",
+          runningActivated: true,
+          applied: true,
+        },
       },
       { kind: "ok", value: { activated: true } },
     );
@@ -319,14 +433,22 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
       fakeStatus(false, "pendingActivation", false),
       {
         kind: "ok",
-        value: { appliedVersion: "1.4.1", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.1",
+          runningActivated: true,
+          applied: true,
+        },
       },
       { kind: "ok", value: { activated: true } },
     );
 
     await runLaunchHostConvergeReconcile(controller, fakeMenu());
 
-    expect(controller.activateInstalledCalls).toEqual([false]);
+    // Finding (final): every launch activation suppresses stage promotion
+    // unconditionally - `promoteReadyStage` is always `false` here, not just
+    // for a held host, so a launch never indirectly reverts a held install
+    // via the "ready update supersedes activation debt" optimization.
+    expect(controller.activateInstalledCalls).toEqual([[false, false]]);
     expect(controller.applyStagedCalls).toEqual([]);
     // The activate branch never moves `installedVersion` - no re-probe needed.
     expect(refreshRegistryUpdateStateMock).not.toHaveBeenCalled();
@@ -337,7 +459,11 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
       fakeStatus(false, "activated", false),
       {
         kind: "ok",
-        value: { appliedVersion: "1.4.1", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.1",
+          runningActivated: true,
+          applied: true,
+        },
       },
       { kind: "ok", value: { activated: true } },
     );
@@ -354,7 +480,11 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
       fakeStatus(false, "unavailable", false),
       {
         kind: "ok",
-        value: { appliedVersion: "1.4.1", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.1",
+          runningActivated: true,
+          applied: true,
+        },
       },
       { kind: "ok", value: { activated: true } },
     );
@@ -366,16 +496,16 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
     expect(controller.activateInstalledCalls).toEqual([]);
   });
 
-  // An unavailable service is not registered at all, so the host is
-  // unreachable until it is. `stageLatest()` joins a controller-owned release
-  // download that can run for minutes on a slow link; recovering after it
-  // would leave the user hostless for that entire window.
   it("recovers an unavailable service BEFORE joining the release download", async () => {
     const controller = fakeHostController(
       fakeStatus(false, "unavailable", false),
       {
         kind: "ok",
-        value: { appliedVersion: "1.4.1", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.1",
+          runningActivated: true,
+          applied: true,
+        },
       },
       { kind: "ok", value: { activated: true } },
     );
@@ -386,6 +516,14 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
     // Exactly once: the post-stage arm must not re-run a recovery that the
     // pre-stage pass already performed.
     expect(controller.convergeReadyCalls).toEqual([false]);
+    // Ticket 4 (installId-bound hold): launch recovery is background
+    // liveness only - it must never move the installed version as a side
+    // effect of bringing a down host back up, so it always requests
+    // `"keep-installed"` under a `background` intent (never a user-repair,
+    // which would clear the removal sentinel).
+    expect(controller.convergeReadyPolicyCalls).toEqual([
+      [false, { kind: "background" }, "keep-installed"],
+    ]);
   });
 
   // Applying is itself the fastest route back to a running host and
@@ -400,7 +538,11 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
       { ...fakeStatus(false, "unavailable", false), installedVersion: null },
       {
         kind: "ok",
-        value: { appliedVersion: "1.4.1", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.1",
+          runningActivated: true,
+          applied: true,
+        },
       },
       { kind: "ok", value: { activated: true } },
     );
@@ -417,7 +559,11 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
       fakeStatus(true, "unavailable", false),
       {
         kind: "ok",
-        value: { appliedVersion: "1.4.1", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.1",
+          runningActivated: true,
+          applied: true,
+        },
       },
       { kind: "ok", value: { activated: true } },
     );
@@ -490,66 +636,16 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
     expect(controller.convergeReadyCalls).toEqual([]);
   });
 
-  it("does not recover after a failed apply when the service is present anyway", async () => {
-    // A failed apply is not by itself an activation problem. Without this the
-    // arm would fire on every unsuccessful update, turning an ordinary "stayed
-    // on the old version" into a service cycle.
-    const controller = fakeHostController(
-      fakeStatus(true, "activated", false),
-      { kind: "failed", message: "apply failed" },
-      { kind: "ok", value: { activated: true } },
-    );
-
-    await runLaunchHostConvergeReconcile(controller, fakeMenu());
-
-    expect(controller.convergeReadyCalls).toEqual([]);
-  });
-
-  it("does not turn a failed apply into a first install on a host that was never installed", async () => {
-    const controller = fakeHostController(
-      { ...fakeStatus(true, "unavailable", false), installedVersion: null },
-      { kind: "failed", message: "apply failed" },
-      { kind: "ok", value: { activated: true } },
-    );
-
-    await runLaunchHostConvergeReconcile(controller, fakeMenu());
-
-    expect(controller.convergeReadyCalls).toEqual([]);
-  });
-
-  it("does not recover when the user removed the host during the apply", async () => {
-    // The apply can take minutes. `removedByUser` is therefore re-read after
-    // it rather than inherited from the pre-apply sample - a user who removed
-    // the host mid-update must not be handed a reinstall.
-    const base = fakeHostController(
-      fakeStatus(true, "unavailable", false),
-      { kind: "failed", message: "apply failed" },
-      { kind: "ok", value: { activated: true } },
-    );
-    let statusReads = 0;
-    const controller: IpcHostController & {
-      readonly convergeReadyCalls: readonly boolean[];
-    } = {
-      ...base,
-      // Reads 1 and 2 are the initial and post-stage samples; the third is the
-      // one this arm takes after the apply returns.
-      async getStatus(): Promise<HostControllerStatus> {
-        statusReads += 1;
-        return fakeStatus(true, "unavailable", statusReads > 2);
-      },
-    };
-
-    await runLaunchHostConvergeReconcile(controller, fakeMenu());
-
-    expect(controller.convergeReadyCalls).toEqual([]);
-  });
-
   it("P1: does not resurrect a host removed by the user", async () => {
     const controller = fakeHostController(
       fakeStatus(false, "pendingActivation", true),
       {
         kind: "ok",
-        value: { appliedVersion: "1.4.1", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.1",
+          runningActivated: true,
+          applied: true,
+        },
       },
       { kind: "ok", value: { activated: true } },
     );
@@ -565,7 +661,11 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
       fakeStatus(false, "pendingActivation", false),
       {
         kind: "ok",
-        value: { appliedVersion: "1.4.1", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.1",
+          runningActivated: true,
+          applied: true,
+        },
       },
       { kind: "ok", value: { activated: true } },
     );
@@ -573,7 +673,11 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
       fakeStatus(false, "activated", false),
       {
         kind: "ok",
-        value: { appliedVersion: "1.4.1", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.1",
+          runningActivated: true,
+          applied: true,
+        },
       },
       { kind: "ok", value: { activated: true } },
     );
@@ -610,7 +714,9 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
       await vi.waitFor(() => {
         expect(background).toHaveBeenCalledOnce();
         expect(launchOneController.applyStagedCalls).toEqual([]);
-        expect(launchOneController.activateInstalledCalls).toEqual([false]);
+        expect(launchOneController.activateInstalledCalls).toEqual([
+          [false, false],
+        ]);
       });
 
       __setDesktopStartupTestHooks(hooks(launchTwoController));
@@ -632,7 +738,11 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
       readyStatus,
       {
         kind: "ok",
-        value: { appliedVersion: "1.4.1", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.1",
+          runningActivated: true,
+          applied: true,
+        },
       },
       { kind: "ok", value: { activated: true } },
     );
@@ -677,7 +787,11 @@ describe("runLaunchHostConvergeReconcile (fixup B1 + B2)", () => {
       fakeStatus(true, "unavailable", false),
       {
         kind: "ok",
-        value: { appliedVersion: "1.4.1", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.1",
+          runningActivated: true,
+          applied: true,
+        },
       },
       { kind: "ok", value: { activated: true } },
     );
@@ -716,7 +830,11 @@ describe("armLocalHostBootOnSignIn", () => {
       neverInstalled(false),
       {
         kind: "ok",
-        value: { appliedVersion: "1.4.1", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.1",
+          runningActivated: true,
+          applied: true,
+        },
       },
       { kind: "ok", value: { activated: true } },
     );
@@ -775,7 +893,11 @@ describe("armLocalHostBootOnSignIn", () => {
       neverInstalled(false),
       {
         kind: "ok",
-        value: { appliedVersion: "1.4.1", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.1",
+          runningActivated: true,
+          applied: true,
+        },
       },
       { kind: "ok", value: { activated: true } },
     );
@@ -844,7 +966,11 @@ describe("armLocalHostBootOnSignIn", () => {
       neverInstalled(false),
       {
         kind: "ok",
-        value: { appliedVersion: "1.4.1", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.1",
+          runningActivated: true,
+          applied: true,
+        },
       },
       { kind: "ok", value: { activated: true } },
     );
@@ -864,7 +990,11 @@ describe("armLocalHostBootOnSignIn", () => {
       neverInstalled(false),
       {
         kind: "ok",
-        value: { appliedVersion: "1.4.1", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.1",
+          runningActivated: true,
+          applied: true,
+        },
       },
       { kind: "ok", value: { activated: true } },
     );
@@ -887,7 +1017,11 @@ describe("armLocalHostBootOnSignIn", () => {
       neverInstalled(false),
       {
         kind: "ok",
-        value: { appliedVersion: "1.4.1", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.1",
+          runningActivated: true,
+          applied: true,
+        },
       },
       { kind: "ok", value: { activated: true } },
     );
@@ -914,7 +1048,11 @@ describe("armLocalHostBootOnSignIn", () => {
       neverInstalled(false),
       {
         kind: "ok",
-        value: { appliedVersion: "1.4.1", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.1",
+          runningActivated: true,
+          applied: true,
+        },
       },
       { kind: "ok", value: { activated: true } },
     );
@@ -973,7 +1111,11 @@ describe("armLocalHostBootOnSignIn", () => {
       neverInstalled(true),
       {
         kind: "ok",
-        value: { appliedVersion: "1.4.1", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.1",
+          runningActivated: true,
+          applied: true,
+        },
       },
       { kind: "ok", value: { activated: true } },
     );
@@ -999,7 +1141,11 @@ describe("armLocalHostBootOnSignIn", () => {
       fakeStatus(false, "activated", false),
       {
         kind: "ok",
-        value: { appliedVersion: "1.4.1", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.1",
+          runningActivated: true,
+          applied: true,
+        },
       },
       { kind: "ok", value: { activated: true } },
     );
@@ -1025,7 +1171,11 @@ describe("armLocalHostBootOnSignIn", () => {
       fakeStatus(false, "unavailable", false),
       {
         kind: "ok",
-        value: { appliedVersion: "1.4.1", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.1",
+          runningActivated: true,
+          applied: true,
+        },
       },
       { kind: "ok", value: { activated: true } },
     );
@@ -1042,7 +1192,11 @@ describe("armLocalHostBootOnSignIn", () => {
       fakeStatus(false, "activated", false),
       {
         kind: "ok",
-        value: { appliedVersion: "1.4.1", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.1",
+          runningActivated: true,
+          applied: true,
+        },
       },
       { kind: "ok", value: { activated: true } },
     );
@@ -1077,7 +1231,11 @@ describe("armLocalHostBootOnSignIn", () => {
       neverInstalled(false),
       {
         kind: "ok",
-        value: { appliedVersion: "1.4.1", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.1",
+          runningActivated: true,
+          applied: true,
+        },
       },
       { kind: "ok", value: { activated: true } },
     );
@@ -1135,7 +1293,11 @@ describe("armLocalHostBootOnSignIn", () => {
       neverInstalled(false),
       {
         kind: "ok",
-        value: { appliedVersion: "1.4.1", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.1",
+          runningActivated: true,
+          applied: true,
+        },
       },
       { kind: "ok", value: { activated: true } },
     );
@@ -1178,7 +1340,11 @@ describe("armLocalHostBootOnSignIn", () => {
       neverInstalled(false),
       {
         kind: "ok",
-        value: { appliedVersion: "1.4.1", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.1",
+          runningActivated: true,
+          applied: true,
+        },
       },
       { kind: "ok", value: { activated: true } },
     );
@@ -1225,7 +1391,11 @@ describe("armLocalHostBootOnSignIn", () => {
       neverInstalled(false),
       {
         kind: "ok",
-        value: { appliedVersion: "1.4.1", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.1",
+          runningActivated: true,
+          applied: true,
+        },
       },
       { kind: "ok", value: { activated: true } },
     );
@@ -1272,7 +1442,11 @@ describe("armLocalHostBootOnSignIn", () => {
       neverInstalled(false),
       {
         kind: "ok",
-        value: { appliedVersion: "1.4.1", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.1",
+          runningActivated: true,
+          applied: true,
+        },
       },
       { kind: "ok", value: { activated: true } },
     );
@@ -1316,7 +1490,11 @@ describe("armLocalHostBootOnSignIn", () => {
       neverInstalled(false),
       {
         kind: "ok",
-        value: { appliedVersion: "1.4.1", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.1",
+          runningActivated: true,
+          applied: true,
+        },
       },
       { kind: "ok", value: { activated: true } },
     );
@@ -1381,7 +1559,11 @@ describe("armLocalHostBootOnSignIn", () => {
       neverInstalled(false),
       {
         kind: "ok",
-        value: { appliedVersion: "1.4.1", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.1",
+          runningActivated: true,
+          applied: true,
+        },
       },
       { kind: "ok", value: { activated: true } },
     );
@@ -1440,16 +1622,6 @@ describe("applyHostUpdateMenuState", () => {
     );
     expect(menu.setHostUpdateAvailableVersion).toHaveBeenCalledWith("1.4.0");
   });
-
-  it("sets the installed version for activationUnknown debt (no ready update)", () => {
-    const menu = fakeMenu();
-    applyHostUpdateMenuState(
-      menu,
-      fakeStatus(false, "activationUnknown", false),
-    );
-    expect(menu.setHostUpdateAvailableVersion).toHaveBeenCalledWith("1.4.0");
-  });
-
   it("a ready update supersedes activation debt", () => {
     // updateReady + pendingActivation both true is the coexistence case the
     // reconcile explicitly prioritizes - the menu must show the ready
@@ -1491,7 +1663,11 @@ describe("refreshHostRegistryIfNotRemoved", () => {
       fakeStatus(false, "unavailable", false),
       {
         kind: "ok",
-        value: { appliedVersion: "1.4.1", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.1",
+          runningActivated: true,
+          applied: true,
+        },
       },
       { kind: "ok", value: { activated: true } },
     );
@@ -1511,7 +1687,11 @@ describe("refreshHostRegistryIfNotRemoved", () => {
       fakeStatus(true, "unavailable", false),
       {
         kind: "ok",
-        value: { appliedVersion: "1.4.1", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.1",
+          runningActivated: true,
+          applied: true,
+        },
       },
       { kind: "ok", value: { activated: true } },
     );

@@ -88,12 +88,7 @@ export async function stampRuntime(
     });
     return { outcome: "superseded", reason: "no-install-record" };
   }
-  const currentGeneration = encodeInstallGeneration({
-    installId: installed.installId,
-    installedAt: installed.installedAt,
-    archiveSha256: installed.archiveSha256,
-    version: installed.version,
-  });
+  const currentGeneration = encodeInstallGeneration(installed);
   if (currentGeneration !== opts.expectedInstallGeneration) {
     logger.info("Host stamp-runtime superseded - generation mismatch", {
       environment: opts.environment,

@@ -1,27 +1,29 @@
 import type {
   BrowserSessionInfo,
-  BrowserSessionsClientFrame,
-  BrowserSessionsServerFrame,
+  BrowserSessionsUxClientFrame,
+  BrowserSessionsUxServerFrame,
   BrowserTabIdentity,
+  BrowserTabPreview,
 } from "@traycer/protocol/host/browser/contracts";
-import { BrowserSessionsStreamClient } from "@traycer-clients/shared/host-transport/browser-sessions-stream-client";
 import type {
-  StreamCloseReason,
-  StreamConnectionStatus,
-} from "@traycer-clients/shared/host-transport/i-stream-session";
-import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
+  BrowserSessionsLifecycle,
+  BrowserViewBridge,
+  BrowserViewNativeTabCapability,
+} from "@traycer-clients/shared/platform/browser-view";
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
+import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 import { appLogger } from "@/lib/logger";
-import { surfaceAgentTab } from "@/lib/browser-view/tiles/agent-tab-surfacing";
+import { surfaceHostOpenedTab } from "@/lib/browser-view/tiles/surface-host-opened-tab";
+import { browserSessionsReducer } from "@/lib/browser-view/sessions/browser-sessions-stream";
 import {
-  browserSessionsLifecycle,
-  browserSessionsReducer,
-  type BrowserSessionsLifecycle,
-} from "@/lib/browser-view/sessions/browser-sessions-stream";
+  openBrowserSessionsSession,
+  type BrowserSessionsSession,
+} from "@/lib/browser-view/sessions/browser-sessions-session";
 import {
-  createElectronTabs,
-  type ElectronTabs,
-} from "@/lib/browser-view/sessions/electron-tabs";
+  publishElectronTabBinding,
+  removeOwnedElectronTabBinding,
+  removeOwnedElectronTabBindings,
+} from "@/lib/browser-view/sessions/electron-tab-directory";
 import {
   applyPipCaption,
   applyPipHostLifecycle,
@@ -32,6 +34,13 @@ export interface BrowserSessionsState {
   readonly lifecycle: BrowserSessionsLifecycle;
   /** True only after the current stream incarnation supplied its full snapshot. */
   readonly inventoryReady: boolean;
+  /**
+   * Can THIS client put a native Electron tab on this coordinator's host?
+   * See {@link canMaterializeElectronTab} - surfaces read it to decide whether
+   * a native branch is reachable for them at all, rather than inferring one
+   * from host-side facts that describe some other client's window.
+   */
+  readonly canMaterializeElectron: boolean;
   readonly items: readonly BrowserSessionInfo[];
   readonly errorMessage: string | null;
   readonly retry: () => void;
@@ -47,6 +56,11 @@ export interface BrowserSessionsState {
  * The registry is module-global because several React surfaces (the canvas
  * tiles, the sidebar, the PiP bridge) subscribe to the same stream and must
  * not each open one - consumers refcount into a single coordinator.
+ *
+ * On the desktop the SOCKET is not here: main owns it, and this coordinator
+ * holds the UX projection of it (browser-security-hardening H10). What the
+ * coordinator kept is exactly what it is for - which streams should exist, the
+ * session inventory it renders, and the three user-initiated tab requests.
  */
 export interface BrowserSessionsOwner {
   readonly hostId: string;
@@ -55,28 +69,127 @@ export interface BrowserSessionsOwner {
 
 interface BrowserSessionsCoordinatorRuntime {
   readonly browserView: BrowserViewBridge | null;
+  /**
+   * The signed-in user this stream is opened for. Not sent to main, which
+   * reads it from the desktop auth session it owns; it only decides whether
+   * asking is worth an IPC. `null` until the request context resolves - the
+   * coordinator exists, and restarts when the identity arrives.
+   */
+  readonly userId: string | null;
+  /**
+   * THIS machine's host id, or null on a shell with no local host. A UX gate
+   * only: the Electron lifecycle election runs in main (H10), which declares
+   * its own id, so this decides whether a surface may offer a native branch at
+   * all rather than what the host elects.
+   */
+  readonly localHostId: string | null;
+  /**
+   * The retained Epic surface this consumer can present a host-opened tab in.
+   * Null for app-global consumers (for example the command palette) which can
+   * use the coordinator but do not own a canvas destination.
+   */
+  readonly presentation: BrowserSessionsPresentation | null;
+  /**
+   * Router-bound nested-focus commit supplied by this React consumer. The
+   * coordinator is shared outside React, so server-pushed foreground tabs use
+   * the callback paired with the selected presenter instead of reaching for a
+   * module-global router.
+   */
+  readonly navigateNested: NavigateNestedFocus;
   readonly openTransport: (hostId: string) => DurableStreamTransport;
 }
 
-type PendingCloseRequest = {
-  readonly resolve: () => void;
-  readonly reject: (error: Error) => void;
-};
-
-type PendingOpenRequest = {
-  readonly resolve: (result: BrowserTabIdentity) => void;
-  readonly reject: (error: Error) => void;
-};
-
-interface BrowserSessionsActionChannel {
-  readonly owner: BrowserSessionsOwner;
-  lifecycle: BrowserSessionsLifecycle;
-  readonly sendClientFrame: (frame: BrowserSessionsClientFrame) => void;
+interface BrowserSessionsPresentation {
+  readonly viewTabId: string;
+  readonly visible: boolean;
+  readonly focused: boolean;
 }
+
+interface BrowserSessionsPresenter {
+  readonly viewTabId: string;
+  readonly navigateNested: NavigateNestedFocus;
+}
+
+/**
+ * Resource ownership and presentation ownership are deliberately separate.
+ * The first coordinator consumer owns the stream/browserView until release,
+ * but a host push belongs in the currently focused retained Epic surface.
+ * Falling back focused -> visible -> retained preserves hidden-Epic surfacing
+ * when no surface is currently presented without letting insertion order pick
+ * a background duplicate while a focused one exists.
+ */
+function selectBrowserSessionsPresenters(
+  runtimes: ReadonlyMap<symbol, BrowserSessionsCoordinatorRuntime>,
+): readonly BrowserSessionsPresenter[] {
+  const byViewTabId = new Map<
+    string,
+    { readonly presenter: BrowserSessionsPresenter; readonly priority: number }
+  >();
+  for (const candidate of runtimes.values()) {
+    const presentation = candidate.presentation;
+    if (presentation === null) continue;
+    const presenter = {
+      viewTabId: presentation.viewTabId,
+      navigateNested: candidate.navigateNested,
+    };
+    // Focused beats merely visible beats hidden - as a chain, because a
+    // nested ternary is the one shape the lint config refuses.
+    let priority = 2;
+    if (presentation.focused) priority = 0;
+    else if (presentation.visible) priority = 1;
+    const previous = byViewTabId.get(presentation.viewTabId);
+    if (previous === undefined || priority < previous.priority) {
+      byViewTabId.set(presentation.viewTabId, { presenter, priority });
+    }
+  }
+  return [...byViewTabId.values()]
+    .sort((left, right) => left.priority - right.priority)
+    .map(({ presenter }) => presenter);
+}
+
+/**
+ * Can this client materialize an Electron tab on `hostId`?
+ *
+ * The client half of the host's `isCoLocatedLifecycleCandidate`: a native
+ * `browserView` bridge to place the tab in, and a host that is THIS machine's
+ * own - the host refuses the lifecycle election otherwise, and the transport
+ * vantage it actually decides on (`local-ws`) is exactly the one a client in
+ * that position reaches it over. A GUI attached to a remote host is a pure
+ * viewer, however capable its own shell is.
+ *
+ * Deliberately NOT gated on the stream handshake having completed:
+ * `electronTabLifecycleReady` is per connection, and a surface asking whether
+ * a native branch exists for it at all is asking a durable question. The
+ * per-connection half it would add is `inventoryReady`, which every such
+ * surface already reads.
+ */
+function canMaterializeElectronTab(
+  runtime: BrowserSessionsCoordinatorRuntime,
+  hostId: string,
+): boolean {
+  return runtime.browserView !== null && runtime.localHostId === hostId;
+}
+
+/** One outstanding request/response pair, keyed by its `requestId`. */
+type PendingRequests<T> = Map<
+  string,
+  {
+    readonly resolve: (result: T) => void;
+    readonly reject: (error: Error) => void;
+  }
+>;
 
 interface BrowserSessionsCoordinator {
   readonly owner: BrowserSessionsOwner;
+  readonly epicId: string;
   state: BrowserSessionsState;
+  /**
+   * Snapshot-only capture of one tab on this coordinator's host, for a chat
+   * pinned to ANOTHER host (spec decision #10). It hangs off the coordinator
+   * rather than off `BrowserSessionsState` because only the mention picker
+   * calls it, keyed by coordinator.
+   */
+  captureTabPreview: (tabId: string) => Promise<BrowserTabPreview>;
   upsertConsumer: (
     consumerId: symbol,
     runtime: BrowserSessionsCoordinatorRuntime,
@@ -90,6 +203,13 @@ const browserSessionsCoordinators = new Map<
   BrowserSessionsCoordinator
 >();
 const browserSessionsCoordinatorListeners = new Map<string, Set<() => void>>();
+/**
+ * Listeners on the REGISTRY rather than one coordinator: the mention picker
+ * aggregates every host whose browser surfaces are open in this epic, so it
+ * has to hear a coordinator appearing or disappearing too, not just a frame
+ * on a key it already knows.
+ */
+const browserSessionsRegistryListeners = new Set<() => void>();
 
 export function browserSessionsCoordinatorKey(
   epicId: string,
@@ -101,6 +221,13 @@ export function browserSessionsCoordinatorKey(
 export function hasBrowserSessionsCoordinator(key: string): boolean {
   return browserSessionsCoordinators.has(key);
 }
+
+/**
+ * Bound on one `captureTabPreview`: a preview is a live screenshot of a tab
+ * that may be dormant, wedged or gone, and the mention picker awaiting it has
+ * no other way out.
+ */
+const TAB_PREVIEW_TIMEOUT_MS = 5_000;
 
 export function browserSessionsCoordinatorState(
   key: string | null,
@@ -168,6 +295,70 @@ function notifyBrowserSessionsCoordinator(key: string): void {
   browserSessionsCoordinatorListeners
     .get(key)
     ?.forEach((listener) => listener());
+  browserSessionsRegistryListeners.forEach((listener) => listener());
+}
+
+/** One live coordinator, addressed by the registry key that reaches it. */
+export interface BrowserSessionsCoordinatorEntry {
+  readonly key: string;
+  readonly state: BrowserSessionsState;
+}
+
+/** Every live coordinator for `epicId`, in registry (insertion) order. */
+export function browserSessionsCoordinatorsForEpic(
+  epicId: string,
+): readonly BrowserSessionsCoordinatorEntry[] {
+  const out: BrowserSessionsCoordinatorEntry[] = [];
+  browserSessionsCoordinators.forEach((coordinator, key) => {
+    if (coordinator.epicId === epicId)
+      out.push({ key, state: coordinator.state });
+  });
+  return out;
+}
+
+/**
+ * The live session with this id on ANY host whose coordinator is open, or
+ * `null`.
+ *
+ * Composer chips (browser-tab mentions, annotation cards) carry a
+ * `sessionId`/`tabId` and no host, and they render inside a chat tile that is
+ * bound to ONE host's sessions stream. Session ids are host-minted uuids, so
+ * scanning the registry cannot resolve the wrong session.
+ */
+export function browserSessionAcrossCoordinators(
+  sessionId: string,
+): BrowserSessionInfo | null {
+  for (const coordinator of browserSessionsCoordinators.values()) {
+    const session = coordinator.state.items.find(
+      (item) => item.sessionId === sessionId,
+    );
+    if (session !== undefined) return session;
+  }
+  return null;
+}
+
+/**
+ * Requests one snapshot preview over the named coordinator's stream. Rejects
+ * when that coordinator is gone or its stream is not live.
+ */
+export function captureBrowserTabPreview(
+  key: string,
+  tabId: string,
+): Promise<BrowserTabPreview> {
+  const coordinator = browserSessionsCoordinators.get(key);
+  if (coordinator === undefined) {
+    return Promise.reject(new Error("Browser sessions stream is not ready."));
+  }
+  return coordinator.captureTabPreview(tabId);
+}
+
+export function subscribeToBrowserSessionsCoordinators(
+  listener: () => void,
+): () => void {
+  browserSessionsRegistryListeners.add(listener);
+  return () => {
+    browserSessionsRegistryListeners.delete(listener);
+  };
 }
 
 function createBrowserSessionsCoordinator(args: {
@@ -177,16 +368,19 @@ function createBrowserSessionsCoordinator(args: {
   readonly owner: BrowserSessionsOwner;
   readonly runtime: BrowserSessionsCoordinatorRuntime;
 }): BrowserSessionsCoordinator {
-  const pendingCloses = new Map<string, PendingCloseRequest>();
-  const pendingOpens = new Map<string, PendingOpenRequest>();
+  const pendingCloses: PendingRequests<void> = new Map();
+  const pendingOpens: PendingRequests<BrowserTabIdentity> = new Map();
+  const pendingPreviews: PendingRequests<BrowserTabPreview> = new Map();
   const runtimes = new Map<symbol, BrowserSessionsCoordinatorRuntime>([
     [args.consumerId, args.runtime],
   ]);
+  const tabBindingOwner = Symbol("browser-sessions-tabs");
   let activeConsumerId: symbol | null = args.consumerId;
   let runtime = args.runtime;
-  let actionChannel: BrowserSessionsActionChannel | null = null;
-  let stopCurrentStream = (): void => undefined;
+  let session: BrowserSessionsSession | null = null;
+  let lifecycle: BrowserSessionsLifecycle = "connecting";
   let disposed = false;
+
   const publish = (state: BrowserSessionsState): void => {
     if (disposed) return;
     coordinator.state = state;
@@ -197,69 +391,154 @@ function createBrowserSessionsCoordinator(args: {
     patch: Partial<
       Pick<
         BrowserSessionsState,
-        "errorMessage" | "inventoryReady" | "items" | "lifecycle"
+        | "canMaterializeElectron"
+        | "errorMessage"
+        | "inventoryReady"
+        | "items"
+        | "lifecycle"
       >
     >,
   ): void => {
     publish({ ...coordinator.state, ...patch });
   };
 
-  const activeChannel = (): BrowserSessionsActionChannel | null => {
-    const channel = actionChannel;
-    return channel !== null &&
-      channel.lifecycle === "live" &&
-      channel.owner === args.owner
-      ? channel
-      : null;
+  /**
+   * Republishes the Electron capability after `runtime` was swapped. A
+   * `browserView` swap restarts the stream and republishes it anyway, but a
+   * `localHostId` that only resolves later does not - and that is the ordinary
+   * case on a cold desktop start.
+   */
+  const publishElectronCapability = (): void => {
+    const capable = canMaterializeElectronTab(runtime, args.owner.hostId);
+    if (capable === coordinator.state.canMaterializeElectron) return;
+    patchState({ canMaterializeElectron: capable });
   };
 
-  const closeTab = (sessionId: string, tabId: string): Promise<void> => {
-    const channel = activeChannel();
-    if (channel === null) {
+  /**
+   * Sends one request frame and resolves on the answer that carries its
+   * `requestId`. `timeoutMs` bounds the wait for a host that never answers at
+   * all; a closed stream rejects every pending request through
+   * `rejectPendingRequests` instead.
+   */
+  const sendRequest = <T>(
+    pending: PendingRequests<T>,
+    timeoutMs: number | null,
+    frame: (requestId: string) => BrowserSessionsUxClientFrame,
+  ): Promise<T> => {
+    const live = session;
+    if (live === null || lifecycle !== "live") {
       return Promise.reject(new Error("Browser sessions stream is not ready."));
     }
     const requestId = crypto.randomUUID();
-    return new Promise<void>((resolve, reject) => {
-      pendingCloses.set(requestId, { resolve, reject });
+    return new Promise<T>((resolve, reject) => {
+      const timer =
+        timeoutMs === null
+          ? null
+          : window.setTimeout(() => {
+              pending.delete(requestId);
+              reject(new Error("Browser sessions request timed out."));
+            }, timeoutMs);
+      const settle = (): void => {
+        pending.delete(requestId);
+        if (timer !== null) window.clearTimeout(timer);
+      };
+      pending.set(requestId, {
+        resolve: (result) => {
+          settle();
+          resolve(result);
+        },
+        reject: (error) => {
+          settle();
+          reject(error);
+        },
+      });
       try {
-        channel.sendClientFrame({
-          kind: "closeTab",
-          hasBinaryPayload: false,
-          requestId,
-          sessionId,
-          tabId,
-        });
+        live.send(frame(requestId));
       } catch (error) {
-        pendingCloses.delete(requestId);
+        settle();
         reject(error instanceof Error ? error : new Error(String(error)));
       }
     });
   };
+
+  const closeTab = (sessionId: string, tabId: string): Promise<void> =>
+    sendRequest(pendingCloses, null, (requestId) => ({
+      kind: "closeTab",
+      hasBinaryPayload: false,
+      requestId,
+      sessionId,
+      tabId,
+    }));
 
   const openTab = (
     sessionId: string | null,
     url: string,
-  ): Promise<BrowserTabIdentity> => {
-    const channel = activeChannel();
-    if (channel === null) {
-      return Promise.reject(new Error("Browser sessions stream is not ready."));
+  ): Promise<BrowserTabIdentity> =>
+    sendRequest(pendingOpens, null, (requestId) => ({
+      kind: "openTab",
+      hasBinaryPayload: false,
+      requestId,
+      sessionId,
+      url,
+    }));
+
+  const captureTabPreview = (tabId: string): Promise<BrowserTabPreview> =>
+    sendRequest(pendingPreviews, TAB_PREVIEW_TIMEOUT_MS, (requestId) => ({
+      kind: "captureTabPreview",
+      hasBinaryPayload: false,
+      requestId,
+      tabId,
+    }));
+
+  const rejectEveryPendingRequest = (): void => {
+    const closed = new Error("Browser sessions stream closed.");
+    rejectPendingRequests(pendingCloses, closed);
+    rejectPendingRequests(pendingOpens, closed);
+    rejectPendingRequests(pendingPreviews, closed);
+  };
+
+  const onStatus = (
+    next: BrowserSessionsLifecycle,
+    errorMessage: string | null,
+  ): void => {
+    const wasLive = lifecycle === "live";
+    lifecycle = next;
+    applyPipHostLifecycle(args.epicId, args.owner.hostId, next);
+    if (next !== "live" && wasLive) {
+      rejectEveryPendingRequest();
+      removeOwnedElectronTabBindings(tabBindingOwner);
     }
-    const requestId = crypto.randomUUID();
-    return new Promise<BrowserTabIdentity>((resolve, reject) => {
-      pendingOpens.set(requestId, { resolve, reject });
-      try {
-        channel.sendClientFrame({
-          kind: "openTab",
-          hasBinaryPayload: false,
-          requestId,
-          sessionId,
-          url,
-        });
-      } catch (error) {
-        pendingOpens.delete(requestId);
-        reject(error instanceof Error ? error : new Error(String(error)));
-      }
+    patchState({
+      lifecycle: next,
+      inventoryReady: next === "live" && coordinator.state.inventoryReady,
+      errorMessage,
     });
+  };
+
+  const onFrame = (frame: BrowserSessionsUxServerFrame): void => {
+    handleBrowserSessionsFrame({
+      frame,
+      epicId: args.epicId,
+      hostId: args.owner.hostId,
+      setItems: (items) => {
+        patchState({
+          items,
+          inventoryReady:
+            frame.kind === "snapshot" || coordinator.state.inventoryReady,
+        });
+      },
+      pendingCloses,
+      pendingOpens,
+      pendingPreviews,
+      presenters: selectBrowserSessionsPresenters(runtimes),
+      currentItems: () => coordinator.state.items,
+    });
+  };
+
+  const onTabBound = (capability: BrowserViewNativeTabCapability): void => {
+    const browserView = runtime.browserView;
+    if (browserView === null) return;
+    publishElectronTabBinding(tabBindingOwner, browserView, capability);
   };
 
   const start = (): void => {
@@ -267,168 +546,59 @@ function createBrowserSessionsCoordinator(args: {
       items: [],
       lifecycle: "connecting",
       inventoryReady: false,
+      canMaterializeElectron: canMaterializeElectronTab(
+        runtime,
+        args.owner.hostId,
+      ),
       errorMessage: null,
     });
-    const transport = runtime.openTransport(args.owner.hostId);
-    let stream: BrowserSessionsStreamClient | null = null;
-    const channel: BrowserSessionsActionChannel = {
-      owner: args.owner,
-      lifecycle: "connecting",
-      sendClientFrame: (frame) => {
-        stream?.sendClientFrame(frame);
-      },
-    };
-    actionChannel = channel;
-    const browserView = runtime.browserView;
-    const electronTabs = createElectronTabs({
-      hostId: args.owner.hostId,
-      native: browserView,
-      sendFrame: (frame) => {
-        if (actionChannel !== channel) return;
-        stream?.sendClientFrame(frame);
-      },
-    });
-    let electronLifecycleReadySentForConnection = false;
-    let snapshotReadyForConnection = false;
-    let connectionStatus: StreamConnectionStatus = "connecting";
-    let connectionGeneration = 0;
-    const sendLifecycleReadyIfReady = (): void => {
-      if (
-        actionChannel !== channel ||
-        browserView === null ||
-        connectionStatus !== "open" ||
-        !snapshotReadyForConnection ||
-        electronLifecycleReadySentForConnection
-      ) {
-        return;
-      }
-      electronLifecycleReadySentForConnection = true;
-      stream?.sendClientFrame({
-        kind: "electronTabLifecycleReady",
-        hasBinaryPayload: false,
-      });
-    };
-
-    const onConnectionStatus = (
-      status: StreamConnectionStatus,
-      reason: StreamCloseReason | null,
-    ): void => {
-      if (actionChannel !== channel) return;
-      const wasOpen = connectionStatus === "open";
-      connectionStatus = status;
-      const lifecycle = browserSessionsLifecycle(status, reason);
-      applyPipHostLifecycle(args.epicId, args.owner.hostId, lifecycle);
-      channel.lifecycle = lifecycle;
-      if (status === "open") {
-        electronTabs.connect();
-        sendLifecycleReadyIfReady();
-      } else {
-        if (wasOpen) connectionGeneration += 1;
-        electronTabs.disconnect();
-        electronLifecycleReadySentForConnection = false;
-        snapshotReadyForConnection = false;
-        rejectPendingRequests(
-          pendingCloses,
-          new Error("Browser sessions stream closed."),
-        );
-        rejectPendingRequests(
-          pendingOpens,
-          new Error("Browser sessions stream closed."),
-        );
-      }
-      patchState({
-        lifecycle,
-        inventoryReady: status === "open" && coordinator.state.inventoryReady,
-        errorMessage: browserSessionsError(status, reason),
-      });
-    };
-
-    const onServerFrame = (frame: BrowserSessionsServerFrame): void => {
-      if (actionChannel !== channel) return;
-      const frameGeneration = connectionGeneration;
-      handleBrowserSessionsFrame({
-        frame,
+    lifecycle = "connecting";
+    session = openBrowserSessionsSession({
+      key: {
         epicId: args.epicId,
         hostId: args.owner.hostId,
-        setItems: (items) => {
-          patchState({
-            items,
-            inventoryReady:
-              frame.kind === "snapshot" || coordinator.state.inventoryReady,
-          });
+        identityKey: args.owner.identityKey,
+      },
+      userId: runtime.userId,
+      browserView: runtime.browserView,
+      openTransport: runtime.openTransport,
+      callbacks: {
+        onStatus,
+        onFrame,
+        onTabBound,
+        onTabReleased: (capability) => {
+          removeOwnedElectronTabBinding(tabBindingOwner, capability);
         },
-        pendingCloses,
-        pendingOpens,
-        browserView,
-        electronTabs,
-        sendClientFrame: (response) => {
-          if (
-            actionChannel !== channel ||
-            connectionStatus !== "open" ||
-            connectionGeneration !== frameGeneration
-          ) {
-            appLogger.warn(
-              "[browser] discarded response from an obsolete stream generation",
-              { frameKind: response.kind },
-            );
-            return;
-          }
-          stream?.sendClientFrame(response);
-        },
-        currentItems: () => coordinator.state.items,
-      });
-      if (
-        frame.kind === "snapshot" &&
-        (connectionStatus === "connecting" || connectionStatus === "open") &&
-        frameGeneration === connectionGeneration
-      ) {
-        snapshotReadyForConnection = true;
-        sendLifecycleReadyIfReady();
-      }
-    };
+      },
+    });
+  };
 
-    try {
-      stream = new BrowserSessionsStreamClient({
-        wsStreamClient: transport.wsStreamClient,
-        epicId: args.epicId,
-        callbacks: { onServerFrame, onConnectionStatus },
-      });
-    } catch (cause) {
-      electronTabs.dispose();
-      transport.close();
-      throw cause;
-    }
-    const opened = stream;
-
-    stopCurrentStream = () => {
-      if (actionChannel === channel) actionChannel = null;
-      electronTabs.dispose();
-      opened.close();
-      transport.close();
-      rejectPendingRequests(
-        pendingCloses,
-        new Error("Browser sessions stream closed."),
-      );
-      rejectPendingRequests(
-        pendingOpens,
-        new Error("Browser sessions stream closed."),
-      );
-    };
+  const stop = (): void => {
+    session?.close();
+    session = null;
+    lifecycle = "closed";
+    removeOwnedElectronTabBindings(tabBindingOwner);
+    rejectEveryPendingRequest();
   };
 
   const restart = (): void => {
     if (disposed) return;
-    stopCurrentStream();
-    stopCurrentStream = (): void => undefined;
+    stop();
     start();
   };
 
   const coordinator: BrowserSessionsCoordinator = {
     owner: args.owner,
+    epicId: args.epicId,
+    captureTabPreview,
     state: {
       hostId: args.owner.hostId,
       lifecycle: "connecting",
       inventoryReady: false,
+      canMaterializeElectron: canMaterializeElectronTab(
+        args.runtime,
+        args.owner.hostId,
+      ),
       items: [],
       errorMessage: null,
       retry: restart,
@@ -438,10 +608,10 @@ function createBrowserSessionsCoordinator(args: {
     upsertConsumer: (consumerId, nextRuntime) => {
       runtimes.set(consumerId, nextRuntime);
       if (activeConsumerId !== consumerId) return;
-      const browserViewChanged =
-        runtime.browserView !== nextRuntime.browserView;
+      const changed = runtimeChanged(runtime, nextRuntime);
       runtime = nextRuntime;
-      if (browserViewChanged) restart();
+      publishElectronCapability();
+      if (changed) restart();
     },
     release: (consumerId) => {
       runtimes.delete(consumerId);
@@ -453,50 +623,56 @@ function createBrowserSessionsCoordinator(args: {
       }
       const [nextConsumerId, nextRuntime] = next;
       activeConsumerId = nextConsumerId;
-      const browserViewChanged =
-        runtime.browserView !== nextRuntime.browserView;
+      const changed = runtimeChanged(runtime, nextRuntime);
       runtime = nextRuntime;
-      if (browserViewChanged) restart();
+      publishElectronCapability();
+      if (changed) restart();
       return runtimes.size;
     },
     dispose: () => {
       if (disposed) return;
       disposed = true;
-      stopCurrentStream();
-      stopCurrentStream = (): void => undefined;
+      stop();
     },
   };
   start();
   return coordinator;
 }
 
+function runtimeChanged(
+  current: BrowserSessionsCoordinatorRuntime,
+  next: BrowserSessionsCoordinatorRuntime,
+): boolean {
+  return (
+    current.browserView !== next.browserView || current.userId !== next.userId
+  );
+}
+
 function handleCloseAck(
-  frame: Extract<BrowserSessionsServerFrame, { readonly kind: "actionAck" }>,
-  pendingCloses: Map<string, PendingCloseRequest>,
+  frame: Extract<BrowserSessionsUxServerFrame, { readonly kind: "actionAck" }>,
+  pendingCloses: PendingRequests<void>,
 ): void {
   const pending = pendingCloses.get(frame.requestId);
   if (pending === undefined) return;
-  pendingCloses.delete(frame.requestId);
   if (frame.ok) pending.resolve();
   else pending.reject(new Error(frame.reason ?? "Browser action failed."));
 }
 
 /**
- * The one router for `browser.sessions` server frames. Every frame kind names
- * the subsystem that owns it, and the exhaustive default makes a protocol
- * addition a compile error instead of a frame that silently falls through.
+ * The one router for the frames a renderer may see. Its parameter is the
+ * protocol's UX projection, so a jar frame is not merely unhandled here - it
+ * cannot be handed to it (H10).
  */
 function handleBrowserSessionsFrame(args: {
-  readonly frame: BrowserSessionsServerFrame;
+  readonly frame: BrowserSessionsUxServerFrame;
   readonly epicId: string;
   readonly hostId: string;
   readonly currentItems: () => readonly BrowserSessionInfo[];
   readonly setItems: (items: readonly BrowserSessionInfo[]) => void;
-  readonly pendingCloses: Map<string, PendingCloseRequest>;
-  readonly pendingOpens: Map<string, PendingOpenRequest>;
-  readonly browserView: BrowserViewBridge | null;
-  readonly electronTabs: ElectronTabs;
-  readonly sendClientFrame: (frame: BrowserSessionsClientFrame) => void;
+  readonly pendingCloses: PendingRequests<void>;
+  readonly pendingOpens: PendingRequests<BrowserTabIdentity>;
+  readonly pendingPreviews: PendingRequests<BrowserTabPreview>;
+  readonly presenters: readonly BrowserSessionsPresenter[];
 }): void {
   const frame = args.frame;
   switch (frame.kind) {
@@ -508,68 +684,22 @@ function handleBrowserSessionsFrame(args: {
       if (nextItems !== null) args.setItems(nextItems);
       return;
     }
-    case "createElectronTab":
-    case "electronTabAccepted":
-    case "releaseElectronTab":
-    case "cdpRequest":
-      args.electronTabs.handleFrame(frame);
-      return;
     case "actionAck":
-      // Handoff acks and close acks share one frame kind; the Electron layer
-      // claims only the request ids it registered.
-      if (args.electronTabs.handleFrame(frame)) return;
       handleCloseAck(frame, args.pendingCloses);
       return;
-    default:
-      handleBrowserSessionsSubsystemFrame({
-        frame,
-        epicId: args.epicId,
-        hostId: args.hostId,
-        pendingOpens: args.pendingOpens,
-        browserView: args.browserView,
-        sendClientFrame: args.sendClientFrame,
-      });
-  }
-}
-
-/**
- * Second half of the router: every frame kind the session-list and Electron
- * tab layers above do not claim. Kept as its own function so each half stays
- * under the lint complexity cap; the `never` binding below still turns a new
- * protocol frame kind into a compile error.
- */
-type BrowserSessionsSubsystemFrame = Exclude<
-  BrowserSessionsServerFrame,
-  {
-    readonly kind:
-      | "snapshot"
-      | "sessionCreated"
-      | "sessionUpdated"
-      | "sessionClosed"
-      | "createElectronTab"
-      | "electronTabAccepted"
-      | "releaseElectronTab"
-      | "cdpRequest"
-      | "actionAck";
-  }
->;
-
-function handleBrowserSessionsSubsystemFrame(args: {
-  readonly frame: BrowserSessionsSubsystemFrame;
-  readonly epicId: string;
-  readonly hostId: string;
-  readonly pendingOpens: Map<string, PendingOpenRequest>;
-  readonly browserView: BrowserViewBridge | null;
-  readonly sendClientFrame: (frame: BrowserSessionsClientFrame) => void;
-}): void {
-  const frame = args.frame;
-  switch (frame.kind) {
-    case "openTabResult": {
-      const pending = args.pendingOpens.get(frame.requestId);
+    case "openTabResult":
+      handleOpenTabResult(frame, args.pendingOpens);
+      return;
+    case "tabPreviewResult": {
+      const pending = args.pendingPreviews.get(frame.requestId);
       if (pending === undefined) return;
-      args.pendingOpens.delete(frame.requestId);
-      if (frame.result.ok) pending.resolve(frame.result);
-      else pending.reject(new Error(frame.result.reason));
+      pending.resolve({
+        ok: frame.ok,
+        screenshotBase64: frame.screenshotBase64,
+        url: frame.url,
+        title: frame.title,
+        reason: frame.reason,
+      });
       return;
     }
     case "caption":
@@ -581,29 +711,30 @@ function handleBrowserSessionsSubsystemFrame(args: {
         cellTitle: frame.cellTitle,
       });
       return;
-    case "agentTabOpened":
-      surfaceAgentTab({
-        epicId: args.epicId,
-        hostId: args.hostId,
-        sessionId: frame.sessionId,
-        tabId: frame.tabId,
-      });
-      return;
-    case "capturePrimaryProfile":
-      handlePrimaryProfileCaptureFrame({
-        frame,
-        browserView: args.browserView,
-        sendClientFrame: args.sendClientFrame,
-      });
+    case "tabOpened":
+      for (const presenter of args.presenters) {
+        if (
+          surfaceHostOpenedTab({
+            epicId: args.epicId,
+            viewTabId: presenter.viewTabId,
+            hostId: args.hostId,
+            sessionId: frame.sessionId,
+            tabId: frame.tabId,
+            source: frame.source,
+            navigateNested: presenter.navigateNested,
+          })
+        ) {
+          break;
+        }
+      }
       return;
     case "burstStarted":
     case "burstEnded":
-    case "pong":
       return;
     default: {
-      // Unreachable: the stream client validates every frame against
-      // `browserSessionsServerFrameSchema` before it gets here. The `never`
-      // binding is what turns a new protocol frame kind into a compile error.
+      // Unreachable: the union is the protocol's own UX projection, so the
+      // `never` binding turns a new renderer-reachable frame kind into a
+      // compile error.
       const unhandled: never = frame;
       void unhandled;
       appLogger.warn("[browser] unhandled browser.sessions frame", {
@@ -613,69 +744,17 @@ function handleBrowserSessionsSubsystemFrame(args: {
   }
 }
 
-function handlePrimaryProfileCaptureFrame(args: {
-  readonly frame: Extract<
-    BrowserSessionsServerFrame,
-    { readonly kind: "capturePrimaryProfile" }
-  >;
-  readonly browserView: BrowserViewBridge | null;
-  readonly sendClientFrame: (frame: BrowserSessionsClientFrame) => void;
-}): void {
-  const requestId = args.frame.requestId;
-  if (args.browserView === null) {
-    args.sendClientFrame({
-      kind: "primaryProfileCaptured",
-      hasBinaryPayload: false,
-      requestId,
-      storageState: null,
-      status: "unavailable",
-      reason: "Desktop browser bridge is unavailable.",
-    });
-    return;
-  }
-  void args.browserView
-    .capturePrimaryProfile()
-    .then((result) => {
-      if (result.status === "unavailable") {
-        args.sendClientFrame({
-          kind: "primaryProfileCaptured",
-          hasBinaryPayload: false,
-          requestId,
-          storageState: null,
-          status: "unavailable",
-          reason: result.reason,
-        });
-        return;
-      }
-      args.sendClientFrame({
-        kind: "primaryProfileCaptured",
-        hasBinaryPayload: false,
-        requestId,
-        storageState: result.storageState,
-        status: "captured",
-        reason: null,
-      });
-    })
-    .catch((error: unknown) => {
-      args.sendClientFrame({
-        kind: "primaryProfileCaptured",
-        hasBinaryPayload: false,
-        requestId,
-        storageState: null,
-        status: "failed",
-        reason: error instanceof Error ? error.message : String(error),
-      });
-    });
-}
-
-function browserSessionsError(
-  status: StreamConnectionStatus,
-  reason: StreamCloseReason | null,
-): string | null {
-  if (reason?.kind === "fatalError") return reason.details.reason;
-  if (status === "reconnecting") return "Reconnecting browser sessions.";
-  if (status === "closed") return "Browser sessions stream closed.";
-  return null;
+function handleOpenTabResult(
+  frame: Extract<
+    BrowserSessionsUxServerFrame,
+    { readonly kind: "openTabResult" }
+  >,
+  pendingOpens: PendingRequests<BrowserTabIdentity>,
+): void {
+  const pending = pendingOpens.get(frame.requestId);
+  if (pending === undefined) return;
+  if (frame.result.ok) pending.resolve(frame.result);
+  else pending.reject(new Error(frame.result.reason));
 }
 
 function rejectPendingRequests<

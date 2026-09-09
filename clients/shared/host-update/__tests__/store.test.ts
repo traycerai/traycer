@@ -21,8 +21,17 @@ import {
   type UpdateAttemptLockHandle,
 } from "../lock";
 import { updateAttemptLockPath, updateAttemptRecordPath } from "../paths";
-import type { HostUpdateAttemptIdentity } from "../record";
-import { TERMINAL_ATTEMPT_RETENTION_MS } from "../record";
+import type {
+  HostUpdateAttemptClaimBaseline,
+  HostUpdateAttemptIdentity,
+  HostUpdateAttemptPhase,
+  HostUpdateAttemptVerification,
+} from "../record";
+import {
+  HOST_UPDATE_ATTEMPT_PHASES,
+  TERMINAL_ATTEMPT_RETENTION_MS,
+  isActivePhase,
+} from "../record";
 import {
   __sameRecordFileIdentityForTest,
   __setBeforeRecordOpenHookForTest,
@@ -39,23 +48,51 @@ import {
   type ExecutorOnlyAttemptMutationIntent,
   type PublicAttemptMutationIntent,
 } from "../store";
-import type { AttemptClaimRequest } from "../transition";
+import type {
+  ActiveHostUpdateAttemptPhase,
+  AttemptClaimRequest,
+} from "../transition";
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * A narrowing form of the same condition `AttemptClaimRequest`'s union states:
+ * active, and not the one phase an `activate` birth is legal at. The body is
+ * the source predicates, so the derived list stays derived - this only tells
+ * the compiler what the filter already guarantees.
+ */
+function isIllegalActivateBirthPhase(
+  phase: HostUpdateAttemptPhase,
+): phase is Exclude<ActiveHostUpdateAttemptPhase, "preparing"> {
+  return isActivePhase(phase) && phase !== "preparing";
+}
 
 function baseCreateRequest(
   overrides: Partial<AttemptClaimRequest>,
 ): AttemptClaimRequest {
-  return {
+  const { initialPhase, initialContinuation, ...rest } = {
     targetVersion: "1.2.3",
     trigger: "manual",
     action: "start",
     expected: null,
     newAttemptId: "attempt-1",
     initialPhase: "downloading",
+    initialContinuation: null,
+    claim: null,
     nowIso: "2026-01-01T00:00:00.000Z",
     ...overrides,
-  };
+  } as const;
+  // The dependent union, honoured rather than routed around: a fixture must
+  // not be able to build a pair production cannot. `Partial<AttemptClaimRequest>`
+  // distributes over the union, so a spread alone would re-admit
+  // `downloading` + `activate`.
+  if (initialContinuation === "activate") {
+    if (initialPhase !== "preparing") {
+      throw new Error("fixture: `activate` may be born only at `preparing`");
+    }
+    return { ...rest, initialPhase, initialContinuation };
+  }
+  return { ...rest, initialPhase, initialContinuation };
 }
 
 const dirs: string[] = [];
@@ -394,6 +431,8 @@ describe("commitAttemptMutation - illegal transitions are structurally unreprese
           continuation: "resume-apply",
           progress: null,
           error: null,
+          claimRefresh: null,
+          verification: null,
           nowIso: "2026-01-01T00:01:00.000Z",
         },
       },
@@ -459,6 +498,8 @@ describe("commitAttemptMutation - illegal transitions are structurally unreprese
           continuation: null,
           progress: null,
           error: null,
+          claimRefresh: null,
+          verification: null,
           nowIso: "2026-01-01T00:02:00.000Z",
         },
       },
@@ -487,6 +528,8 @@ describe("commitAttemptMutation - illegal transitions are structurally unreprese
           continuation: null,
           progress: null,
           error: null,
+          claimRefresh: null,
+          verification: null,
           nowIso: "2026-01-01T00:02:00.000Z",
         },
       },
@@ -504,6 +547,8 @@ describe("commitAttemptMutation - illegal transitions are structurally unreprese
           continuation: null,
           progress: null,
           error: null,
+          claimRefresh: null,
+          verification: null,
           nowIso: "2026-01-01T00:03:00.000Z",
         },
       },
@@ -613,6 +658,8 @@ describe("commitAttemptMutation - byte authority and round trips", () => {
                 continuation: null,
                 progress: { percent: 10, bytes: 20, totalBytes: 200 },
                 error: null,
+                claimRefresh: null,
+                verification: null,
                 nowIso: "2026-01-01T00:02:00.000Z",
               },
             },
@@ -631,6 +678,8 @@ describe("commitAttemptMutation - byte authority and round trips", () => {
             continuation: "resume-apply",
             progress: null,
             error: null,
+            claimRefresh: null,
+            verification: null,
             nowIso: "2026-01-01T00:01:00.000Z",
           },
         },
@@ -738,6 +787,8 @@ describe("commitAttemptMutation - byte authority and round trips", () => {
           continuation: null,
           progress,
           error,
+          claimRefresh: null,
+          verification: null,
           nowIso: "2026-01-01T00:02:00.000Z",
         },
       },
@@ -779,6 +830,8 @@ describe("commitAttemptMutation - byte authority and round trips", () => {
           continuation: null,
           progress,
           error: null,
+          claimRefresh: null,
+          verification: null,
           nowIso: "2026-01-01T00:02:00.000Z",
         },
       },
@@ -789,6 +842,97 @@ describe("commitAttemptMutation - byte authority and round trips", () => {
     });
     expect(await readFile(updateAttemptRecordPath(dir), "utf8")).toBe(before);
   });
+
+  /**
+   * Every active birth phase EXCEPT the one legal one, derived from the source
+   * constants rather than typed out (CodeRabbit round 2). A phase added to
+   * `HOST_UPDATE_ATTEMPT_PHASES` is covered here the day it lands, which a
+   * hand-written array cannot promise.
+   */
+  const ILLEGAL_ACTIVATE_BIRTH_PHASES = HOST_UPDATE_ATTEMPT_PHASES.filter(
+    isIllegalActivateBirthPhase,
+  );
+
+  it("covers every active phase but 'preparing' (the list is derived, not typed)", () => {
+    // The `it.each` below is only as good as this list, and an empty or
+    // accidentally-narrowed one would pass silently.
+    expect(ILLEGAL_ACTIVATE_BIRTH_PHASES.length).toBeGreaterThan(0);
+    expect(ILLEGAL_ACTIVATE_BIRTH_PHASES).not.toContain("preparing");
+    for (const phase of ILLEGAL_ACTIVATE_BIRTH_PHASES) {
+      expect(isActivePhase(phase)).toBe(true);
+    }
+  });
+
+  it.each(ILLEGAL_ACTIVATE_BIRTH_PHASES)(
+    "rejects an 'activate' birth at '%s' (Codex #1773)",
+    async (initialPhase) => {
+      // `AttemptClaimRequest` pairs the birth phase and the birth continuation,
+      // so this is unconstructible in TypeScript - hence the directive below,
+      // which is itself a second assertion: it fails the build the moment the
+      // union stops rejecting the pair. This decoder is the SAME rule where the
+      // type is gone, because `commitAttemptMutation` takes its intent as a
+      // plain JavaScript value.
+      //
+      // `createdRecord` writes both fields verbatim, so accepting the pair puts
+      // a record on disk that is durably ACTIVE and cannot progress:
+      // `continuationPhaseOrderRejected` refuses every successor `activate`
+      // allows, none of which is reachable from `downloading`.
+      // Falsification (the ablation): delete the
+      // `initialContinuation === "activate"` clause from
+      // `normalizeClaimRequest` and this reddens - the create commits.
+      const dir = await freshDir();
+      const handle = await acquireHandle(dir, `activate-birth-${initialPhase}`);
+      const outcome = await commitAttemptMutation({
+        handle,
+        intent: {
+          kind: "create",
+          request: {
+            ...baseCreateRequest({}),
+            initialPhase,
+            // @ts-expect-error the type forbids this pair; plain JavaScript can
+            // still hand it to the public entry, which is what the decoder is
+            // for.
+            initialContinuation: "activate",
+          },
+        },
+      });
+      expect(outcome).toMatchObject({
+        kind: "rejected",
+        reason: "intent-invalid",
+      });
+      await expect(stat(updateAttemptRecordPath(dir))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+  );
+
+  it.each([
+    ["the one legal 'activate' birth", "preparing", "activate"],
+    ["an ordinary birth with no continuation", "downloading", null],
+  ] as const)(
+    "still commits %s (Codex #1773 positive control)",
+    async (label, initialPhase, initialContinuation) => {
+      // The controls that keep the clause above from being a blanket refusal:
+      // both of these are what production actually builds.
+      const dir = await freshDir();
+      const handle = await acquireHandle(dir, `activate-control-${label}`);
+      const outcome = await commitAttemptMutation({
+        handle,
+        intent: {
+          kind: "create",
+          request: baseCreateRequest(
+            initialContinuation === "activate"
+              ? { initialPhase: "preparing", initialContinuation }
+              : { initialPhase, initialContinuation },
+          ),
+        },
+      });
+      expect(outcome.kind).toBe("committed");
+      if (outcome.kind !== "committed") return;
+      expect(outcome.record.phase).toBe(initialPhase);
+      expect(outcome.record.continuation).toBe(initialContinuation);
+    },
+  );
 
   it("snapshots proxy-shaped progress values and writes exactly the validated snapshot", async () => {
     const dir = await freshDir();
@@ -823,6 +967,8 @@ describe("commitAttemptMutation - byte authority and round trips", () => {
           continuation: null,
           progress,
           error: null,
+          claimRefresh: null,
+          verification: null,
           nowIso: "2026-01-01T00:02:00.000Z",
         },
       },
@@ -845,6 +991,8 @@ describe("commitAttemptMutation - continuation provenance", () => {
   const advanceDefaults = {
     progress: null,
     error: null,
+    claimRefresh: null,
+    verification: null,
     nowIso: "2026-01-01T00:05:00.000Z",
   } as const;
 
@@ -1186,6 +1334,210 @@ describe("commitAttemptMutation - continuation provenance", () => {
       expect(verifying.record.phase).toBe("verifying");
       expect(verifying.record.continuation).toBe("activate");
     }
+  });
+});
+
+describe("commitAttemptMutation - claim baseline (D19) reconstruction and round trip", () => {
+  const claim: HostUpdateAttemptClaimBaseline = {
+    installedVersion: "1.0.0",
+    installGeneration: "gen-a",
+    stageFingerprint: "fp-a",
+    allowDowngrade: false,
+  };
+
+  it("preserves the claim baseline across create -> park -> resume", async () => {
+    const dir = await freshDir();
+    const handle = await acquireHandle(dir, "claim-round-trip");
+    const created = await commitAttemptMutation({
+      handle,
+      intent: { kind: "create", request: baseCreateRequest({ claim }) },
+    });
+    expect(created.kind).toBe("committed");
+    if (created.kind !== "committed") return;
+    expect(created.record.claim).toEqual(claim);
+
+    const parked = await commitAttemptMutation({
+      handle,
+      intent: {
+        kind: "advance",
+        held: created.identity,
+        advance: {
+          phase: "waiting-for-work",
+          continuation: "resume-apply",
+          progress: null,
+          error: null,
+          claimRefresh: null,
+          verification: null,
+          nowIso: "2026-01-01T00:01:00.000Z",
+        },
+      },
+    });
+    expect(parked.kind).toBe("committed");
+    if (parked.kind !== "committed") return;
+    expect(parked.record.claim).toEqual(claim);
+
+    const resumed = await commitAttemptMutation({
+      handle,
+      intent: {
+        kind: "resume",
+        request: baseCreateRequest({
+          action: "resume-apply",
+          expected: parked.identity,
+          initialPhase: "preparing",
+          nowIso: "2026-01-01T00:02:00.000Z",
+        }),
+      },
+    });
+    expect(resumed.kind).toBe("committed");
+    if (resumed.kind !== "committed") return;
+    expect(resumed.record.claim).toEqual(claim);
+
+    const onDisk = await readUpdateAttemptRecord(dir);
+    expect(onDisk.kind).toBe("valid");
+    if (onDisk.kind === "valid") expect(onDisk.value.claim).toEqual(claim);
+  });
+
+  it("keeps a claim-less record claim-less across a park with no refresh", async () => {
+    const dir = await freshDir();
+    const handle = await acquireHandle(dir, "claim-less-park");
+    const created = await commitAttemptMutation({
+      handle,
+      intent: { kind: "create", request: baseCreateRequest({}) },
+    });
+    expect(created.kind).toBe("committed");
+    if (created.kind !== "committed") return;
+    expect("claim" in created.record).toBe(false);
+
+    const parked = await commitAttemptMutation({
+      handle,
+      intent: {
+        kind: "advance",
+        held: created.identity,
+        advance: {
+          phase: "waiting-for-work",
+          continuation: "resume-apply",
+          progress: null,
+          error: null,
+          claimRefresh: null,
+          verification: null,
+          nowIso: "2026-01-01T00:01:00.000Z",
+        },
+      },
+    });
+    expect(parked.kind).toBe("committed");
+    if (parked.kind !== "committed") return;
+    expect("claim" in parked.record).toBe(false);
+
+    const onDisk = await readUpdateAttemptRecord(dir);
+    expect(onDisk.kind).toBe("valid");
+    if (onDisk.kind === "valid") expect("claim" in onDisk.value).toBe(false);
+  });
+
+  it("commits a resume via action 'continue', which the pre-ticket action allowlist rejected as intent-invalid", async () => {
+    const dir = await freshDir();
+    const handle = await acquireHandle(dir, "continue-action-allowlist");
+    const created = await commitAttemptMutation({
+      handle,
+      intent: { kind: "create", request: baseCreateRequest({}) },
+    });
+    expect(created.kind).toBe("committed");
+    if (created.kind !== "committed") return;
+
+    const parked = await commitAttemptMutation({
+      handle,
+      intent: {
+        kind: "advance",
+        held: created.identity,
+        advance: {
+          phase: "waiting-for-work",
+          continuation: "resume-apply",
+          progress: null,
+          error: null,
+          claimRefresh: null,
+          verification: null,
+          nowIso: "2026-01-01T00:01:00.000Z",
+        },
+      },
+    });
+    expect(parked.kind).toBe("committed");
+    if (parked.kind !== "committed") return;
+
+    const resumed = await commitAttemptMutation({
+      handle,
+      intent: {
+        kind: "resume",
+        request: baseCreateRequest({
+          action: "continue",
+          expected: parked.identity,
+          initialPhase: "preparing",
+          nowIso: "2026-01-01T00:02:00.000Z",
+        }),
+      },
+    });
+    expect(resumed.kind).toBe("committed");
+    if (resumed.kind !== "committed") return;
+    expect(resumed.record.continuation).toBe("resume-apply");
+  });
+
+  it("sameRecord's reconstruction sees a claim change: a park-refresh's new baseline is what the committed bytes decode back to, not the record's prior one", async () => {
+    // `sameRecord` and `sameRecovery` are module-private (they validate the
+    // encoder's own output inside `encodeValidatedRecord`), so this is pinned
+    // through a decoded read rather than a direct call: if `claim` were
+    // dropped from that comparison, a decode/encode bug losing the refreshed
+    // baseline could still commit successfully.
+    const dir = await freshDir();
+    const handle = await acquireHandle(dir, "same-record-claim-change");
+    const priorClaim: HostUpdateAttemptClaimBaseline = {
+      installedVersion: "1.0.0",
+      installGeneration: "gen-a",
+      stageFingerprint: null,
+      allowDowngrade: false,
+    };
+    const created = await commitAttemptMutation({
+      handle,
+      intent: {
+        kind: "create",
+        request: baseCreateRequest({ claim: priorClaim }),
+      },
+    });
+    expect(created.kind).toBe("committed");
+    if (created.kind !== "committed") return;
+
+    const parked = await commitAttemptMutation({
+      handle,
+      intent: {
+        kind: "advance",
+        held: created.identity,
+        advance: {
+          phase: "waiting-for-work",
+          continuation: "resume-apply",
+          progress: null,
+          error: null,
+          claimRefresh: {
+            installedVersion: "2.0.0",
+            installGeneration: "gen-b",
+            stageFingerprint: "fp-b",
+          },
+          verification: null,
+          nowIso: "2026-01-01T00:01:00.000Z",
+        },
+      },
+    });
+    expect(parked.kind).toBe("committed");
+    if (parked.kind !== "committed") return;
+    const refreshedClaim = {
+      installedVersion: "2.0.0",
+      installGeneration: "gen-b",
+      stageFingerprint: "fp-b",
+      allowDowngrade: false,
+    };
+    expect(parked.record.claim).toEqual(refreshedClaim);
+
+    const onDisk = await readUpdateAttemptRecord(dir);
+    expect(onDisk.kind).toBe("valid");
+    if (onDisk.kind !== "valid") return;
+    expect(onDisk.value.claim).toEqual(refreshedClaim);
+    expect(onDisk.value.claim).not.toEqual(priorClaim);
   });
 });
 
@@ -1605,6 +1957,8 @@ describe("commitExecutorOnlyAttemptMutation - recover intent", () => {
           continuation: "resume-apply",
           progress: null,
           error: null,
+          claimRefresh: null,
+          verification: null,
           nowIso: "2026-01-01T00:01:00.000Z",
         },
       },
@@ -1748,6 +2102,49 @@ describe("commitExecutorOnlyAttemptMutation - recover intent", () => {
     });
     expect(outcome.kind).toBe("committed");
   });
+
+  it("commits the C/R collision through the store's live-input normalizer and recomputed decideAttemptRecovery as resume-new-generation/activate - the SAME decision the pure function gives directly", async () => {
+    // The ablation this pin must redden: if `normalizeRecoveryRunningEvidence`
+    // lowered `foreign` to `unbound` instead of preserving it, this would
+    // commit a `failed` record (`recovery-evidence-contradiction`) instead of
+    // resuming - the executor's chosen continuation and the stored record
+    // would then disagree about the same evidence.
+    const dir = await freshDir();
+    const handle = await acquireHandle(dir, "recover-cr-collision");
+    const created = await commitAttemptMutation({
+      handle,
+      intent: {
+        kind: "create",
+        request: baseCreateRequest({ targetVersion: "1.2.3" }),
+      },
+    });
+    expect(created.kind).toBe("committed");
+    if (created.kind !== "committed") return;
+
+    const outcome = await commitExecutorOnlyAttemptMutation({
+      handle,
+      intent: {
+        kind: "recover",
+        recovery: {
+          expected: created.identity,
+          action: "activate",
+          requestedTargetVersion: "1.2.3",
+          evidence: {
+            installed: { kind: "verified", version: "1.2.3" },
+            staged: { kind: "absent" },
+            running: { kind: "foreign", runtimeIdentity: "1.2.3" },
+          },
+          nowIso: "2026-01-01T00:04:00.000Z",
+        },
+      },
+    });
+    expect(outcome.kind).toBe("committed");
+    if (outcome.kind !== "committed") return;
+    expect(outcome.record.phase).toBe("preparing");
+    expect(outcome.record.execution).toBe("active");
+    expect(outcome.record.continuation).toBe("activate");
+    expect(outcome.record.error).toBeNull();
+  });
 });
 
 // Ticket 03 final-authority cold review, P0 (class swept to its full shape):
@@ -1849,6 +2246,8 @@ describe("commitAttemptMutation - executor-only intents (recover / advance-to-co
             continuation: null,
             progress: null,
             error: null,
+            claimRefresh: null,
+            verification: null,
             nowIso: "2026-01-01T00:00:00.000Z",
           },
         },
@@ -1948,6 +2347,8 @@ describe("commitAttemptMutation - executor-only intents (recover / advance-to-co
           continuation: null,
           progress: null,
           error: null,
+          claimRefresh: null,
+          verification: null,
           nowIso: "2026-01-01T00:04:00.000Z",
         },
       }),
@@ -2035,6 +2436,8 @@ describe("commitAttemptMutation - handle authority", () => {
           continuation: null,
           progress: null,
           error: null,
+          claimRefresh: null,
+          verification: null,
           nowIso: "2026-01-01T00:05:00.000Z",
         },
       },
@@ -2054,6 +2457,8 @@ describe("commitAttemptMutation - handle authority", () => {
           continuation: null,
           progress: null,
           error: null,
+          claimRefresh: null,
+          verification: null,
           nowIso: "2026-01-01T00:06:00.000Z",
         },
       },
@@ -2121,6 +2526,8 @@ describe("commitAttemptMutation - handle authority", () => {
           continuation: null,
           progress: null,
           error: null,
+          claimRefresh: null,
+          verification: null,
           nowIso: "2026-01-01T00:05:00.000Z",
         },
       },
@@ -2237,6 +2644,8 @@ describe("pruneTerminalAttemptRecord - release cannot overtake an in-flight prun
           continuation: null,
           progress: null,
           error: { code: "x", message: "y", phase: "downloading" },
+          claimRefresh: null,
+          verification: null,
           nowIso: "2020-01-01T00:00:00.000Z",
         },
       },
@@ -2701,6 +3110,8 @@ describe("pruneTerminalAttemptRecord", () => {
           continuation: null,
           progress: null,
           error: { code: "x", message: "y", phase: "downloading" },
+          claimRefresh: null,
+          verification: null,
           nowIso: completedAtIso,
         },
       },
@@ -2953,4 +3364,243 @@ describe("AttemptMutationIntent - exhaustive shape", () => {
       "supersede",
     ]);
   });
+});
+
+// `sameRecord` owns `verification` too (CR2 item 1).
+//
+// `encodeValidatedRecord` and the post-write re-read exist to make one
+// sentence true: "the bytes subsequently fsynced and renamed are therefore
+// exactly the record the transition authorized". `sameRecord` enumerated every
+// other key of the record and skipped `verification`, so a record whose
+// verification was not ours compared EQUAL and the commit reported success.
+//
+// The rows are split by WHICH seam they pin, because the two are defended by
+// different code and only one of them is `sameVerification`'s:
+//
+//  - the intent gate. `normalizeVerification` already reconstructs the value
+//    on every channel, executor included, so an unknown mode is refused and an
+//    extra property is stripped BEFORE a record exists. The row below marked
+//    "the intent gate" pins that, not the round trip - deleting
+//    `sameVerification` leaves it green, which is the honest reading.
+//  - the post-write re-read, where the bytes are a FOREIGN writer's and were
+//    never normalized by us. That is `sameVerification`'s seam, and all three
+//    of its arms are reachable there.
+describe("commitExecutorOnlyAttemptMutation - the terminal verification round trip", () => {
+  const IDENTITY = { mode: "identity" } as const;
+  const VERSION_ONLY = {
+    mode: "version-only",
+    reason: "pid-start-stamp-missing",
+    floor: "1.1.5",
+  } as const;
+
+  /**
+   * Builds a verification the compiler would refuse, the way a plugin or a
+   * plain-JavaScript caller actually reaches this channel: property assignment
+   * onto an empty object, never a chained assertion.
+   */
+  function forcedVerification(
+    raw: Readonly<Record<string, unknown>>,
+  ): HostUpdateAttemptVerification {
+    const forced = {} as HostUpdateAttemptVerification;
+    for (const [key, value] of Object.entries(raw)) {
+      Object.defineProperty(forced, key, {
+        value,
+        enumerable: true,
+        configurable: true,
+      });
+    }
+    return forced;
+  }
+
+  /**
+   * `verifying` is the only legal predecessor of `complete`, so the walk is
+   * part of the fixture rather than a detail: an advance that never became
+   * legal would be refused as `intent-not-legal`, and a row asserting only
+   * "not committed" would pass for a reason that has nothing to do with
+   * verification.
+   */
+  async function verifyingHandle(name: string): Promise<{
+    readonly dir: string;
+    readonly handle: UpdateAttemptLockHandle;
+    readonly identity: HostUpdateAttemptIdentity;
+  }> {
+    const dir = await freshDir();
+    const handle = await acquireHandle(dir, name);
+    const created = await commitAttemptMutation({
+      handle,
+      intent: { kind: "create", request: baseCreateRequest({}) },
+    });
+    expect(created.kind).toBe("committed");
+    if (created.kind !== "committed") throw new Error("create failed");
+    let identity = created.identity;
+    for (const phase of ["preparing", "verifying"] as const) {
+      const advanced = await commitAttemptMutation({
+        handle,
+        intent: {
+          kind: "advance",
+          held: identity,
+          advance: {
+            phase,
+            continuation: null,
+            progress: null,
+            error: null,
+            claimRefresh: null,
+            verification: null,
+            nowIso: "2026-01-01T00:01:00.000Z",
+          },
+        },
+      });
+      expect(advanced.kind).toBe("committed");
+      if (advanced.kind !== "committed") throw new Error(`${phase} failed`);
+      identity = advanced.identity;
+    }
+    return { dir, handle, identity };
+  }
+
+  async function completeWith(
+    name: string,
+    verification: HostUpdateAttemptVerification,
+  ): Promise<{ readonly outcome: AttemptCommitOutcome; readonly dir: string }> {
+    const { dir, handle, identity } = await verifyingHandle(name);
+    const outcome = await commitExecutorOnlyAttemptMutation({
+      handle,
+      intent: {
+        kind: "advance",
+        held: identity,
+        advance: {
+          phase: "complete",
+          continuation: null,
+          progress: null,
+          error: null,
+          claimRefresh: null,
+          verification,
+          nowIso: "2026-01-01T00:02:00.000Z",
+        },
+      },
+    });
+    return { outcome, dir };
+  }
+
+  /**
+   * Arms the directory-sync seam - the one hook that fires AFTER the rename
+   * and BEFORE the re-read - to overwrite the canonical record the way a
+   * foreign writer racing this commit would. It rewrites only `verification`,
+   * so every other field the round trip compares is byte-identical by
+   * construction and cannot be what a failure is attributed to.
+   */
+  function foreignWriteDuringSync(
+    dir: string,
+    replacement: Readonly<Record<string, string>>,
+  ): void {
+    __setDirectorySyncHookForTest(async (_dir, stage) => {
+      if (stage !== "sync") return;
+      const path = updateAttemptRecordPath(dir);
+      const record = JSON.parse(await readFile(path, "utf8")) as Record<
+        string,
+        unknown
+      >;
+      record.verification = replacement;
+      await writeFile(path, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+    });
+  }
+
+  it("writes an `identity` verification and reads back exactly it", async () => {
+    const { outcome, dir } = await completeWith("verify-identity", IDENTITY);
+    expect(outcome.kind).toBe("committed");
+    if (outcome.kind !== "committed") return;
+    expect(outcome.record.verification).toEqual(IDENTITY);
+    const read = await readUpdateAttemptRecord(dir);
+    expect(read.kind).toBe("valid");
+    if (read.kind !== "valid") return;
+    expect(read.value.verification).toEqual(IDENTITY);
+  });
+
+  it("writes a `version-only` verification with its reason and floor intact", async () => {
+    const { outcome, dir } = await completeWith(
+      "verify-version-only",
+      VERSION_ONLY,
+    );
+    expect(outcome.kind).toBe("committed");
+    if (outcome.kind !== "committed") return;
+    expect(outcome.record.verification).toEqual(VERSION_ONLY);
+    const read = await readUpdateAttemptRecord(dir);
+    expect(read.kind).toBe("valid");
+    if (read.kind !== "valid") return;
+    expect(read.value.verification).toEqual(VERSION_ONLY);
+  });
+
+  // The intent gate, NOT the round trip. `normalizeVerification` refuses a
+  // mode it cannot rebuild, so no record is ever constructed and nothing
+  // reaches disk. Kept because that is the guarantee a JS caller actually
+  // meets - but it stays green with `sameVerification` deleted, so it must
+  // never be cited as evidence for the comparison below.
+  it("the intent gate: refuses an unknown verification mode forced past the type boundary", async () => {
+    const { outcome, dir } = await completeWith(
+      "verify-unknown-mode",
+      forcedVerification({ mode: "attested-by-some-future-leg" }),
+    );
+    expect(outcome).toMatchObject({
+      kind: "rejected",
+      reason: "intent-invalid",
+    });
+    const read = await readUpdateAttemptRecord(dir);
+    expect(read.kind).toBe("valid");
+    if (read.kind !== "valid") return;
+    expect(read.value.phase).toBe("verifying");
+    expect(read.value.verification).toBeUndefined();
+  });
+
+  // The three arms of `sameVerification`, each at the only seam that can reach
+  // it: a foreign record landing between our rename and our read-back.
+  // Reporting `committed` here would tell the executor its own verification is
+  // durable when the bytes on disk carry someone else's.
+  // Skipped on Windows for the same reason the durability rows above are:
+  // `syncDirectory` returns before the hook there, so the seam does not exist
+  // and the row would assert nothing.
+  it.skipIf(process.platform === "win32").each([
+    {
+      what: "a mode this build DROPS on decode",
+      ours: VERSION_ONLY,
+      replacement: { mode: "attested-by-some-future-leg" },
+      name: "foreign-dropped-mode",
+    },
+    {
+      what: "the other known mode",
+      ours: IDENTITY,
+      replacement: VERSION_ONLY,
+      name: "foreign-other-mode",
+    },
+    {
+      what: "the same mode with a different floor",
+      ours: VERSION_ONLY,
+      replacement: { ...VERSION_ONLY, floor: "9.9.9" },
+      name: "foreign-other-floor",
+    },
+  ])(
+    "refuses to report committed when a foreign write replaces the verification with $what",
+    async ({ ours, replacement, name }) => {
+      const { dir, handle, identity } = await verifyingHandle(name);
+      foreignWriteDuringSync(dir, replacement);
+      const outcome = await commitExecutorOnlyAttemptMutation({
+        handle,
+        intent: {
+          kind: "advance",
+          held: identity,
+          advance: {
+            phase: "complete",
+            continuation: null,
+            progress: null,
+            error: null,
+            claimRefresh: null,
+            verification: ours,
+            nowIso: "2026-01-01T00:02:00.000Z",
+          },
+        },
+      });
+      expect(outcome).toMatchObject({
+        kind: "durability-unverified",
+        cause: "post-write-roundtrip-mismatch",
+      });
+    },
+  );
 });

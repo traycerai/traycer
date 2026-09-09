@@ -4,7 +4,6 @@ import type { PipCaptureIpcPayload } from "../../../../ipc-contracts/pip-capture
 import type {
   BrowserViewCapturedImage,
   BrowserViewDebugger,
-  BrowserViewFrameImage,
   BrowserViewWebContents,
   BrowserViewWindowOpenDetails,
   BrowserViewWindowOpenResult,
@@ -192,12 +191,6 @@ export class FakeWebContents
   private readonly captureResolvers: Array<
     (image: BrowserViewCapturedImage) => void
   > = [];
-
-  beginFrameSubscription(
-    _callback: (image: BrowserViewFrameImage) => void,
-  ): void {}
-
-  endFrameSubscription(): void {}
 
   setCaptureBytes(bytes: Uint8Array): void {
     this.bytes = bytes;

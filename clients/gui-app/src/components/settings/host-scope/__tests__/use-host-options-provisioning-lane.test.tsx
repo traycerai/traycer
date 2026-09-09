@@ -54,10 +54,6 @@ vi.mock("@/hooks/host/use-host-lease", () => ({
 vi.mock("@/hooks/host/use-selection-authority-attached", () => ({
   useSelectionAuthorityAttached: () => true,
 }));
-vi.mock("@/hooks/host/use-remote-hosts-plan-gate", () => ({
-  useRemoteHostsPlanRestricted: () => false,
-}));
-
 // `useHostOptions` (and, transitively, `useRunnerHostControllerStatusQuery`)
 // resolve `@/providers/use-runner-host` at STATIC import time, so the mock
 // factory has to be the hoisted `vi.mock` form - a per-test `vi.doMock` runs

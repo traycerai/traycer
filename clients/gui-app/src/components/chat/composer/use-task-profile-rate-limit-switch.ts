@@ -3,7 +3,9 @@ import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { ModelOption } from "@/components/home/data/landing-options";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import { useChatRunSettingsBatch } from "@/hooks/chats/use-chat-run-settings-query";
 import { useEpicUpdateChatProfile } from "@/hooks/epic/use-epic-chat-mutations";
+import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import type { ChatsSlice } from "@/stores/epics/open-epic/types";
@@ -16,8 +18,9 @@ interface AffectedTaskChat {
 export interface TaskProfileRateLimitSwitch {
   /**
    * How many chats in this task (epic) a task-wide switch would move off the
-   * limited profile - every chat on this tab's host whose persisted settings
-   * pin the same harness + profile, always counting this chat itself. `1`
+   * limited profile - every registry-backed chat on this tab's host whose
+   * persisted settings pin the same harness + profile, always counting this
+   * chat itself. `1`
    * (just this chat) whenever the epic store is unavailable, so the banner
    * simply hides the task-wide affordance on surfaces without an epic.
    */
@@ -70,12 +73,12 @@ export function taskChatInheritsProfileSwitch(
 
 /**
  * Task-wide counterpart of the composer's rate-limit switch prompt: finds the
- * sibling chats of this task that are pinned to the SAME limited profile so
- * the banner can offer "switch all N chats in this task", not just the
- * current session. Reads the open-epic store's chat projections (which carry
- * each chat's persisted `settings` and `hostId`), so unopened chats count
- * too - a durable per-chat pin is exactly what an incoming agent-to-agent
- * message would run on.
+ * registry-backed sibling chats of this task that are pinned to the SAME
+ * limited profile so the banner can offer "switch all N chats in this task",
+ * not just the current session. The record projection establishes which new
+ * chats belong to this tab's host; authoritative run settings are then read
+ * from that host. Legacy doc-only chats and chats on other hosts are outside
+ * this operation by design.
  */
 export function useTaskProfileRateLimitSwitch(input: {
   readonly enabled: boolean;
@@ -91,10 +94,11 @@ export function useTaskProfileRateLimitSwitch(input: {
     input;
   const selectedModelSlug = selectedModel?.slug ?? null;
   const tabHostId = useTabHostId();
+  const tabHostClient = useTabHostClient();
   const epicHandle = useMaybeOpenEpicHandle();
   // Gated on `enabled` (not just `epicHandle`): every mounted composer in the
   // task calls this hook, so without the gate each one subscribes to the
-  // full `chats` slice and re-renders on every chat-list mutation even in
+  // full `chatRecords` slice and re-renders on every record-list mutation even in
   // the common case where the profile isn't limited and `affected` below
   // would short-circuit to `NO_AFFECTED` anyway.
   const subscribe = useCallback(
@@ -104,36 +108,50 @@ export function useTaskProfileRateLimitSwitch(input: {
     },
     [enabled, epicHandle],
   );
-  const chats = useSyncExternalStore<ChatsSlice | null>(subscribe, () =>
-    !enabled || epicHandle === null ? null : epicHandle.store.getState().chats,
+  const chatRecords = useSyncExternalStore<ChatsSlice | null>(subscribe, () =>
+    !enabled || epicHandle === null
+      ? null
+      : epicHandle.store.getState().chatRecords,
   );
 
+  const candidateChatIds = useMemo<ReadonlyArray<string>>(() => {
+    if (!enabled || chatRecords === null || epicId === null) return [];
+    return chatRecords.allIds.filter((candidateChatId) => {
+      const chat = chatRecords.byId[candidateChatId];
+      return chat.hostId === tabHostId && candidateChatId !== chatId;
+    });
+  }, [chatId, chatRecords, enabled, epicId, tabHostId]);
+
+  const settingsQueries = useChatRunSettingsBatch({
+    client: tabHostClient,
+    epicId: epicId ?? "",
+    chatIds: candidateChatIds,
+    enabled: enabled && epicId !== null && selectedModelSlug !== null,
+  });
+
   const affected = useMemo<ReadonlyArray<AffectedTaskChat>>(() => {
-    if (!enabled || chats === null || epicId === null) {
+    if (!enabled || epicId === null) {
       return NO_AFFECTED;
     }
-    return chats.allIds
-      .map((id) => chats.byId[id])
-      .filter((chat) => chat.hostId === tabHostId)
-      .flatMap((chat) => {
-        const settings = chat.settings;
-        if (
-          settings === null ||
-          !taskChatInheritsProfileSwitch(settings, {
-            harnessId,
-            profileId,
-            selectedModelSlug,
-          })
-        ) {
-          return [];
-        }
-        return [{ chatId: chat.id, settings }];
-      });
+    return candidateChatIds.flatMap((candidateChatId, index) => {
+      const settings = settingsQueries[index]?.data?.settings ?? null;
+      if (
+        settings === null ||
+        !taskChatInheritsProfileSwitch(settings, {
+          harnessId,
+          profileId,
+          selectedModelSlug,
+        })
+      ) {
+        return [];
+      }
+      return [{ chatId: candidateChatId, settings }];
+    });
   }, [
     enabled,
-    chats,
     epicId,
-    tabHostId,
+    candidateChatIds,
+    settingsQueries,
     harnessId,
     profileId,
     selectedModelSlug,
@@ -142,9 +160,7 @@ export function useTaskProfileRateLimitSwitch(input: {
   // The current chat always counts (its composer holds the limited profile
   // even when its persisted record lags, e.g. never-sent or pre-capability
   // records).
-  const affectedChatCount = affected.some((chat) => chat.chatId === chatId)
-    ? affected.length
-    : affected.length + 1;
+  const affectedChatCount = affected.length + 1;
 
   const updateChatProfile = useEpicUpdateChatProfile();
   const updateChatProfileMutate = updateChatProfile.mutate;
@@ -170,8 +186,8 @@ export function useTaskProfileRateLimitSwitch(input: {
         // switch immediately instead of stomping it on its next send. This is
         // local display state, not a wire persist.
         //
-        // Peeked on THIS TAB'S host, which is also the host `affected` was
-        // filtered by (`chat.hostId === tabHostId` above): the sibling being
+        // Peeked on THIS TAB'S host, which is also the host the registry
+        // candidates were filtered by: the sibling being
         // re-seeded is by construction a chat of this tab's host, and a
         // same-id chat on another host is a different agent whose composer
         // must not be touched by this switch.

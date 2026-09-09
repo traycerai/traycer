@@ -1,11 +1,26 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { cleanup, render, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  render as renderUi,
+  type RenderResult,
+  waitFor,
+} from "@testing-library/react";
 import { TerminalXtermHost } from "@/components/epic-canvas/renderers/terminal-tile-xterm";
 import {
   __disposeAllXtermHostsForTests,
   __getXtermHostEntryForTests,
 } from "@/components/epic-canvas/renderers/xterm-host-registry";
 import type { Terminal } from "@xterm/xterm";
+import type { ReactNode } from "react";
+import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
+
+/**
+ * Every link surface below reaches the external-link bridge mutation, which
+ * needs a `QueryClientProvider` above it.
+ */
+function render(ui: ReactNode): RenderResult {
+  return renderUi(ui, { wrapper: WithTestQueryClient });
+}
 
 const INSTANCE_ID = "unicode-width-instance";
 

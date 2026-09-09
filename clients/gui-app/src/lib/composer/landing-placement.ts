@@ -1,6 +1,9 @@
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import { hostUnavailability } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { HostRpcRegistry } from "@/lib/host";
+import { hasReadyRemoteSession } from "@traycer-clients/shared/host-transport/remote/index";
+import { dialableHostEndpointFor } from "@/lib/host/transport-key";
 
 /**
  * Display name for a host the composer is about to talk about. The generic
@@ -103,7 +106,29 @@ export function resolveLandingPlacement(
   if (target.client === null) {
     return {
       kind: "refused",
-      message: `${target.hostLabel} can't be reached right now. Pick another device and try again.`,
+      message: `Traycer can't access ${target.hostLabel} for this account right now. Sign in again or pick another device.`,
+    };
+  }
+  const clientWithOptionalActiveHost: {
+    readonly getActiveHost?: () => HostDirectoryEntry | null;
+  } = target.client;
+  const activeHost = clientWithOptionalActiveHost.getActiveHost?.();
+  if (activeHost === null) {
+    return {
+      kind: "refused",
+      message: `${target.hostLabel} is starting. Wait for it to come up and send again.`,
+    };
+  }
+  if (
+    activeHost !== undefined &&
+    dialableHostEndpointFor(
+      activeHost,
+      hasReadyRemoteSession(activeHost.hostId),
+    ) === null
+  ) {
+    return {
+      kind: "refused",
+      message: unavailableLandingTargetMessage(activeHost, target.hostLabel),
     };
   }
   // Identity, not liveness: a requester pinned to a host answers with that
@@ -129,4 +154,17 @@ export function resolveLandingPlacement(
     hostId: target.resolvedHostId,
     client: target.client,
   };
+}
+
+function unavailableLandingTargetMessage(
+  activeHost: HostDirectoryEntry,
+  hostLabel: string,
+): string {
+  if (activeHost.websocketUrl === null) {
+    return `${hostLabel} is starting. Wait for it to come up and send again.`;
+  }
+  if (hostUnavailability(activeHost) === "plan-restricted") {
+    return `${hostLabel} isn't available on your plan.`;
+  }
+  return `${hostLabel} is offline. Wait for it to come up and send again.`;
 }

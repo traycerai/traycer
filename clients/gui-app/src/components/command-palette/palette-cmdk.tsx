@@ -612,6 +612,59 @@ function RowStatusBadge({ children }: { readonly children: string }) {
   );
 }
 
+function FlatSubpageRows(props: {
+  readonly items: ReadonlyArray<CommandItemShape>;
+  readonly onSelect: (item: CommandItemShape) => void;
+}) {
+  return props.items.map((item) => (
+    <PaletteItemRow
+      key={item.id}
+      value={buildCmdkValue(item)}
+      keywords={[...item.keywords]}
+      disabled={item.disabled === true}
+      onSelect={() => props.onSelect(item)}
+    >
+      <SubpageItemLabel label={item.label} />
+      {item.hostBadge !== undefined ? (
+        <RowStatusBadge>{item.hostBadge}</RowStatusBadge>
+      ) : null}
+      {item.statusBadge !== undefined ? (
+        <RowStatusBadge>{item.statusBadge}</RowStatusBadge>
+      ) : null}
+    </PaletteItemRow>
+  ));
+}
+
+function BrowserSubpageView(props: {
+  readonly items: ReadonlyArray<CommandItemShape>;
+  readonly onSelect: (item: CommandItemShape) => void;
+}) {
+  const browserActions = props.items.filter(
+    (item) => item.id === "open:browser:host" || item.id === "open:browser:new",
+  );
+  const inventoryItems = props.items.filter(
+    (item) => item.id !== "open:browser:host" && item.id !== "open:browser:new",
+  );
+  const hostLabel = browserActions.find(
+    (item) => item.id === "open:browser:host",
+  )?.statusBadge;
+  return (
+    <>
+      <CommandGroup heading="Browser">
+        <FlatSubpageRows items={browserActions} onSelect={props.onSelect} />
+      </CommandGroup>
+      <CommandGroup
+        heading={
+          hostLabel === undefined ? "Open tabs" : `Open tabs on ${hostLabel}`
+        }
+        className="pt-3"
+      >
+        <FlatSubpageRows items={inventoryItems} onSelect={props.onSelect} />
+      </CommandGroup>
+    </>
+  );
+}
+
 interface SubpageViewProps {
   readonly subpage: CommandSubpage;
   readonly ctx: CommandContext;
@@ -621,6 +674,9 @@ interface SubpageViewProps {
 export function SubpageView(props: SubpageViewProps) {
   const { subpage, ctx, onSelect } = props;
   const items = subpage.useItems(ctx);
+  if (subpage.id === "open:browser") {
+    return <BrowserSubpageView items={items} onSelect={onSelect} />;
+  }
   let rows: ReactNode;
   if (subpage.id === "open:agents") {
     rows = <AgentSubpageRows items={items} onSelect={onSelect} />;
@@ -629,23 +685,7 @@ export function SubpageView(props: SubpageViewProps) {
   } else if (items.some((item) => item.pathTreeRow !== undefined)) {
     rows = <PathSubpageRows items={items} onSelect={onSelect} />;
   } else {
-    rows = items.map((item) => (
-      <PaletteItemRow
-        key={item.id}
-        value={buildCmdkValue(item)}
-        keywords={[...item.keywords]}
-        disabled={item.disabled === true}
-        onSelect={() => onSelect(item)}
-      >
-        <SubpageItemLabel label={item.label} />
-        {item.hostBadge !== undefined ? (
-          <RowStatusBadge>{item.hostBadge}</RowStatusBadge>
-        ) : null}
-        {item.statusBadge !== undefined ? (
-          <RowStatusBadge>{item.statusBadge}</RowStatusBadge>
-        ) : null}
-      </PaletteItemRow>
-    ));
+    rows = <FlatSubpageRows items={items} onSelect={onSelect} />;
   }
   return (
     <>

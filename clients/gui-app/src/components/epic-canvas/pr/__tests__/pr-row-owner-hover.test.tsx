@@ -12,11 +12,12 @@ import type {
   PrLightItem,
   PrOwnerRef,
 } from "@traycer/protocol/host/pr-schemas";
-import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 import type { EpicTreeIndex, EpicTreeNode } from "@/lib/epic-selectors";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { PrRow, type PrRowEntry } from "@/components/epic-canvas/pr/pr-row";
 import { prDetailTileId } from "@/lib/pr/pr-detail-tile";
+import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
 /**
  * Hovering ANY part of a PR row reveals the chats it came from - the row's
@@ -29,8 +30,7 @@ import { prDetailTileId } from "@/lib/pr/pr-detail-tile";
  * and neither is observable with the row stubbed out.
  */
 
-const openTileInEpic =
-  vi.fn<(epicId: string, node: EpicCanvasTileRef) => null>();
+const openTile = vi.fn<(intent: TileOpenIntent) => null>();
 
 /** Parent links the epic tree reports, rewritten per test. Empty = all roots. */
 let parentByNodeId: Readonly<Record<string, string | null>> = {};
@@ -84,7 +84,7 @@ vi.mock("@/lib/epic-selectors", async (importActual) => ({
 }));
 
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
-  useEpicTileNavigation: () => ({ openTileInEpic }),
+  useEpicTileNavigation: () => ({ openTile }),
 }));
 
 // `EpicSessionGate` reads the RAW context, not the mocked projection hooks, so
@@ -188,7 +188,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   cleanup();
-  openTileInEpic.mockReset();
+  openTile.mockReset();
   parentByNodeId = {};
   deletedNodeIds = new Set<string>();
   presentNodeIds = [];
@@ -244,11 +244,20 @@ describe("PrRow owner hover card", () => {
 
     fireEvent.click(within(list).getByLabelText("Open Chat chat-2"));
 
-    const [epicId, node] = openTileInEpic.mock.calls[0];
-    expect(epicId).toBe("epic-1");
-    expect(node.id).toBe("chat-2");
-    expect(node.type).toBe("chat");
-    expect(node.hostId).toBe("host-1");
+    expect(openTile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: { epicId: "epic-1" },
+        gesture: "explicit",
+        modifiers: null,
+        placement: null,
+        dedupe: true,
+        node: expect.objectContaining({
+          id: "chat-2",
+          type: "chat",
+          hostId: "host-1",
+        }) as EpicCanvasTileRef,
+      }),
+    );
     // Left open it would sit over the tile it just opened until the pointer
     // happened to leave the row.
     expect(hoverCard()).toBeNull();

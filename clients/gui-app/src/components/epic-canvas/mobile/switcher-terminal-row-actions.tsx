@@ -1,3 +1,4 @@
+import { useSidebarCopyIdMenuEntry } from "@/components/epic-canvas/sidebar/use-sidebar-copy-id-menu-entry";
 import { useState } from "react";
 import { MoreHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -19,15 +20,14 @@ import type { ListedTerminalSidebarSession } from "@/lib/terminals/reconcile-ter
 
 /**
  * The per-row "…" actions for a raw terminal in the mobile switcher: the same
- * Rename and Close the desktop row offers, gated by the same lifetime
- * authority (a durable row renames and closes through the host projection, a
+ * Rename, Copy ID, and Close the desktop row offers. Mutations use the same
+ * lifetime authority (a durable row renames and closes through the host projection, a
  * compatibility row through the legacy manager RPCs, an unreachable or
  * capability-unknown one not at all). Only the rename affordance differs -
  * desktop edits the row in place, which has no touch analog, so this opens the
  * shared rename dialog and drives the identical mutation from it.
  *
- * Editor-gated on top of that: a viewer's mutation is server-rejected, so an
- * ungated menu would only lead to a dead end.
+ * Mutations require editor access; copying the session ID is always available.
  */
 export function SwitcherTerminalRowActions(props: {
   readonly epicId: string;
@@ -49,12 +49,13 @@ export function SwitcherTerminalRowActions(props: {
     authority,
   });
 
-  if (!canMutate) return null;
+  const copyIdEntry = useSidebarCopyIdMenuEntry(session.sessionId);
 
   const entries = terminalRowMenuEntries({
-    closeDisabled: actions.closeDisabled,
+    copyIdEntry,
+    closeDisabled: !canMutate || actions.closeDisabled,
     onStartRename: () => setRenameOpen(true),
-    renameDisabled: !actions.canRename,
+    renameDisabled: !canMutate || !actions.canRename,
     onRequestClose: actions.requestClose,
     testIds: {
       rename: {
@@ -83,7 +84,7 @@ export function SwitcherTerminalRowActions(props: {
             <MoreHorizontal className="size-4" />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
+        <DropdownMenuContent align="end" className="w-max">
           <SidebarDropdownMenuItems entries={entries} />
         </DropdownMenuContent>
       </DropdownMenu>

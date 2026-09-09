@@ -48,18 +48,25 @@ vi.mock("../../store/paths", () => ({
 // on the file). Default to "no host running"; the guard test overrides it.
 let livePid: number | null = null;
 
-vi.mock("../pid-metadata", () => ({
-  readHostPidMetadata: async () =>
-    livePid === null
-      ? null
-      : {
-          pid: livePid,
-          hostId: "host-1",
-          version: "1.0.0",
-          websocketUrl: "ws://127.0.0.1:7100/rpc",
-          startedAt: new Date(0).toISOString(),
-        },
-}));
+vi.mock("../pid-metadata", async () => {
+  // Only the read is stubbed; `publishedHostProcessGone` stays real so the
+  // guard judges `livePid` by the real liveness probe.
+  const actual =
+    await vi.importActual<typeof import("../pid-metadata")>("../pid-metadata");
+  return {
+    ...actual,
+    readHostPidMetadata: async () =>
+      livePid === null
+        ? null
+        : {
+            pid: livePid,
+            hostId: "host-1",
+            version: "1.0.0",
+            websocketUrl: "ws://127.0.0.1:7100/rpc",
+            startedAt: new Date(0).toISOString(),
+          },
+  };
+});
 
 const {
   MAX_HOST_LOG_BYTES,

@@ -7,11 +7,9 @@ import {
   readDesktopLogLevelSync,
 } from "./desktop-log-level";
 import {
-  BEARER_PATTERN,
-  SENSITIVE_INLINE_VALUE_PATTERN,
+  redactSensitiveText,
   SENSITIVE_KEY_PATTERN,
-  SENSITIVE_QUERY_PARAM_PATTERN,
-} from "./sensitive-text-patterns";
+} from "@traycer/protocol/utils/text/redaction";
 
 export type SafeLogValue =
   | string
@@ -50,18 +48,53 @@ export function initLogger(): void {
   // electron-log's stdout/stderr capture doesn't leak debug payloads to a
   // user's system console; the dev slot keeps `debug`.
   log.transports.console.level = isDevBuild ? "debug" : "info";
+  installSanitizingHook();
   log.info("[desktop] logger initialised", { logPath });
+}
+
+/**
+ * Runs {@link sanitizeLogValue} over every structured argument of every log
+ * call, in one place, before any transport sees it.
+ *
+ * Redaction used to be per-call-site opt-in, which is the wrong shape for a
+ * guarantee: it holds only where someone remembered, and a log line that
+ * carries a token is written by the site that did NOT remember. A hook is
+ * the only version of this that a new call site inherits.
+ *
+ * Strings go through the shared leaf's `redactSensitiveText` and NOT the
+ * capped {@link redactLogText}: a template-literal log line is the most common leak
+ * shape there is (`log.info(\`… ${cookieHeader}\`)`), so leaving strings alone
+ * would exempt exactly the argument that leaks most - while truncating the
+ * developer's own message would rewrite what the log says. Objects, arrays
+ * and `Error`s take the structured path, which does cap.
+ *
+ * Idempotent, so a site that still sanitizes on its own is unaffected: a
+ * value already rendered `<redacted>` re-renders to itself.
+ */
+function installSanitizingHook(): void {
+  log.hooks.push((message) => {
+    message.data = message.data.map(sanitizeLogArgument);
+    return message;
+  });
+}
+
+function sanitizeLogArgument(value: unknown): unknown {
+  if (typeof value === "string") return redactSensitiveText(value);
+  if (value === null || typeof value !== "object") return value;
+  return sanitizeLogValue(value, 0);
 }
 
 export function resolveDesktopLogPath(): string {
   return join(app.getPath("userData"), "traycer-desktop.log");
 }
 
+/**
+ * The shared credential-detection leaf plus the single-log-line length cap.
+ * The cap is a log-line policy and lives here, not in the leaf: folding it in
+ * is what made the previous copy of this function unusable anywhere else.
+ */
 export function redactLogText(value: string): string {
-  const redacted = value
-    .replace(SENSITIVE_QUERY_PARAM_PATTERN, "$1<redacted>")
-    .replace(BEARER_PATTERN, "Bearer <redacted>")
-    .replace(SENSITIVE_INLINE_VALUE_PATTERN, "$1<redacted>");
+  const redacted = redactSensitiveText(value);
   return redacted.length > MAX_LOG_STRING_LENGTH
     ? `${redacted.slice(0, MAX_LOG_STRING_LENGTH)}...<truncated>`
     : redacted;

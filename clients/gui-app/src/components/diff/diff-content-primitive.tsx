@@ -1,3 +1,4 @@
+import { useThemeRevision } from "@/providers/use-theme-revision";
 import {
   useMemo,
   type KeyboardEvent,
@@ -10,6 +11,7 @@ import {
   hydratePartialDiff,
   parseDiffFromFile,
   parsePatchFiles,
+  type DiffsThemeNames,
   type FileContents,
   type FileDiffContentsLoader,
   type FileDiffMetadata,
@@ -159,14 +161,16 @@ export function DiffContentFrame(props: DiffContentFrameProps): ReactNode {
 export function DiffContentPrimitive(
   props: DiffContentPrimitiveProps,
 ): ReactNode {
+  useThemeRevision();
   const { resolvedTheme } = useResolvedTheme();
+  const themeName = resolveDiffThemeName(resolvedTheme);
   const parsed = useMemo(() => {
     const cacheKey = buildPatchCacheKey(
       props.patch,
-      `${resolvedTheme}:${props.cacheScope}`,
+      `${themeName}:${props.cacheScope}`,
     );
     return parsePatchFiles(props.patch, cacheKey);
-  }, [resolvedTheme, props.patch, props.cacheScope]);
+  }, [themeName, props.patch, props.cacheScope]);
   const parsedFileDiffs = useMemo(
     () => parsed.flatMap((patchGroup) => patchGroup.files),
     [parsed],
@@ -179,7 +183,6 @@ export function DiffContentPrimitive(
       hydrateFileDiffForEdit(fileDiff, editOldFile ?? null, editNewFile),
     );
   }, [parsedFileDiffs, editOldFile, editNewFile]);
-  const themeName = resolveDiffThemeName(resolvedTheme);
   const highlightReady = useDiffsDiffHighlightReady({
     fileDiffs,
     theme: themeName,
@@ -282,7 +285,7 @@ function renderDiffContentBody(args: {
   readonly nonEmptyEditorReady: boolean;
   readonly props: DiffContentPrimitiveProps;
   readonly pierreOverflow: "wrap" | "scroll";
-  readonly themeName: "pierre-light" | "pierre-dark";
+  readonly themeName: DiffsThemeNames;
   readonly resolvedTheme: ResolvedTheme;
 }): ReactNode {
   const { emptyFileEditSession, props } = args;
@@ -293,6 +296,15 @@ function renderDiffContentBody(args: {
   const diffUnsafeCSS = args.nonEmptyEditorReady
     ? `${DIFF_PANEL_WITH_FIND_UNSAFE_CSS}\n/* traycer-edit-cache-ready */`
     : DIFF_PANEL_WITH_FIND_UNSAFE_CSS;
+  // Ahead of every branch below, including the empty-file editor: the gate is
+  // what holds a `@pierre/diffs` component back until the worker pool is in
+  // context, and a component that mounts without one highlights on the main
+  // thread for the rest of its life (see `use-diff-highlight-ready.ts`). An
+  // empty new file is the one surface where that lifetime is spent growing -
+  // the person is typing into it - so it is the last place to skip the wait.
+  if (!args.highlightReady) {
+    return <DiffHighlightLoading testId="diff-highlighting" />;
+  }
   if (emptyFileEditSession !== null) {
     return (
       <File
@@ -310,9 +322,6 @@ function renderDiffContentBody(args: {
         }}
       />
     );
-  }
-  if (!args.highlightReady) {
-    return <DiffHighlightLoading testId="diff-highlighting" />;
   }
   return args.fileDiffs.map((fileDiff) => (
     <FileDiff

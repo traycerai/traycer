@@ -182,6 +182,27 @@ export interface HostFsLayout {
    * Lockstep with the CLI's `hostTransitionJournalPath`.
    */
   readonly transitionJournalFile: string;
+  /**
+   * The browser agent surface's self-verification trace (JSONL), beside
+   * `logFile` in the same slot-resolved `rootDir` - hand-mirrors the host's
+   * `browserTraceLogPath` (`traycer-host/src/paths.ts:389-405`), which this
+   * bundle cannot import (separate repo). `browserTraceRotatedFile` is the
+   * `.1` rotation sibling the shared buffered writer (plan D2) renames the
+   * live file to once it exceeds its cap; report-issue reads `.1` then the
+   * live file, concatenated in that order, before windowing (plan D3).
+   * Absence of either file is the normal state outside dev/staging - this
+   * trace is off by default in production.
+   */
+  readonly browserTraceFile: string;
+  readonly browserTraceRotatedFile: string;
+  /**
+   * The always-on PII-free counter slice (`browser-telemetry.ts`), beside the
+   * trace it filters - hand-mirrors the host's `browserTelemetryLogPath`.
+   * `browserTelemetryRotatedFile` is its `.1` rotation sibling, same shape as
+   * `browserTraceRotatedFile` above.
+   */
+  readonly browserTelemetryFile: string;
+  readonly browserTelemetryRotatedFile: string;
   readonly environment: Environment;
 }
 
@@ -222,6 +243,10 @@ export function getHostFsLayout(environment: Environment): HostFsLayout {
     ),
     substrateFile: join(rootDir, "substrate.json"),
     transitionJournalFile: join(rootDir, "transition.json"),
+    browserTraceFile: join(rootDir, "browser-trace.jsonl"),
+    browserTraceRotatedFile: join(rootDir, "browser-trace.jsonl.1"),
+    browserTelemetryFile: join(rootDir, "browser-telemetry.jsonl"),
+    browserTelemetryRotatedFile: join(rootDir, "browser-telemetry.jsonl.1"),
     environment,
   };
 }

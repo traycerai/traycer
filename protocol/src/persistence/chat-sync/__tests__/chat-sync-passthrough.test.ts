@@ -65,6 +65,7 @@ const autonomousResumeBlock: JsonObject = {
   status: "completed",
   timestamp: 11,
   type: "autonomous_resume",
+  deliveryPlacement: null,
   triggers: [],
   wakeTriggers: [
     {
@@ -159,7 +160,7 @@ const unknownEvent: JsonObject = {
 };
 
 const persistedMessageShard: JsonObject = {
-  schemaVersion: { major: 1, minor: 2 },
+  schemaVersion: CHAT_SYNC_SCHEMA_VERSION,
   chatId: "chat-1",
   section: "messages",
   messages: [userMessage, assistantMessage, unknownMessage],
@@ -168,7 +169,7 @@ const persistedMessageShard: JsonObject = {
 };
 
 const persistedEventShard: JsonObject = {
-  schemaVersion: { major: 1, minor: 2 },
+  schemaVersion: CHAT_SYNC_SCHEMA_VERSION,
   chatId: "chat-1",
   section: "events",
   messages: [],
@@ -254,7 +255,7 @@ describe("chat-shard passthrough", () => {
     );
 
     const graduatedHostPrivate: JsonObject = {
-      schemaVersion: { major: 1, minor: 2 },
+      schemaVersion: CHAT_SYNC_SCHEMA_VERSION,
       chatId: "chat-1",
       section: "host-private",
       messages: [],
@@ -315,7 +316,7 @@ describe("chat-shard section coherence", () => {
   it("rejects a host-private shard with no envelope", () => {
     expect(() =>
       parse({
-        schemaVersion: { major: 1, minor: 2 },
+        schemaVersion: CHAT_SYNC_SCHEMA_VERSION,
         chatId: "chat-1",
         section: "host-private",
         messages: [],
@@ -488,6 +489,45 @@ describe("chat-sync writer helpers", () => {
     expect(preserved.raw.triggers).toEqual([]);
     // The wakeup trigger must go back into `wakeTriggers`, not inline.
     expect(preserved.raw.wakeTriggers).toHaveLength(1);
+  });
+
+  it("preserves explicit delivery placement through sync decode and re-encode", () => {
+    for (const deliveryPlacement of ["in_turn", "turn_start"] as const) {
+      const raw = {
+        ...autonomousResumeBlock,
+        deliveryPlacement,
+      };
+      const parsed = parse({
+        ...persistedMessageShard,
+        messages: [{ ...assistantMessage, blocks: [raw] }],
+      }).messages[0].value;
+      if (parsed === null || parsed.role !== "assistant") {
+        throw new Error("expected an interpreted assistant message");
+      }
+      const resume = parsed.blocks[0].value;
+      if (resume === null || resume.type !== "autonomous_resume") {
+        throw new Error("expected an interpreted autonomous_resume block");
+      }
+      expect(resume.deliveryPlacement).toBe(deliveryPlacement);
+      expect(preserveChatMessage(parsed).raw).toMatchObject({
+        blocks: [{ deliveryPlacement }],
+      });
+    }
+
+    const absent = { ...autonomousResumeBlock };
+    delete absent.deliveryPlacement;
+    const parsedAbsent = parse({
+      ...persistedMessageShard,
+      messages: [{ ...assistantMessage, blocks: [absent] }],
+    }).messages[0].value;
+    if (parsedAbsent === null || parsedAbsent.role !== "assistant") {
+      throw new Error("expected an interpreted assistant message");
+    }
+    const resumeAbsent = parsedAbsent.blocks[0].value;
+    if (resumeAbsent === null || resumeAbsent.type !== "autonomous_resume") {
+      throw new Error("expected an interpreted autonomous_resume block");
+    }
+    expect(resumeAbsent.deliveryPlacement).toBeNull();
   });
 
   it("round-trips an event through the writer helper", () => {

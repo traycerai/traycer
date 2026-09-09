@@ -984,3 +984,87 @@ describe("fetch watchdogs and heartbeat semantics", () => {
     expect(inactivityExpired).toBe(false);
   });
 });
+
+describe("HTTP client shutdown", () => {
+  // The CLI has one global undici dispatcher and its normal exit path closes
+  // it. A command still running when some exit closed the client (the
+  // process-fatal path now leaves it open for the interrupted command, so
+  // this is a non-runner path or a fatal after the command settled) meets a
+  // closed client on its next attempt. Retrying that is not just wasted - it
+  // ends in `E_REGISTRY_UNAVAILABLE`, and a registry that was never asked gets
+  // blamed for a failure that happened inside this process.
+
+  // Mirrors undici's own class (lib/core/errors.js): the name and, decisively,
+  // the `UND_ERR_CLOSED` code.
+  class ClientClosedError extends Error {
+    readonly code = "UND_ERR_CLOSED";
+    constructor() {
+      super("The client is closed");
+      this.name = "ClientClosedError";
+    }
+  }
+
+  // `fetch` never surfaces that error directly - it reports its own opaque
+  // TypeError and hangs the real one off `cause`.
+  function fetchFailedFromClosedClient(): TypeError {
+    return new TypeError("fetch failed", { cause: new ClientClosedError() });
+  }
+
+  it("fails fetchText after ONE attempt, and not as a registry outage", async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.reject(fetchFailedFromClosedClient()),
+    );
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    const outcome = await fetchText(RESOURCE_URL, {
+      signal: null,
+      onHeartbeat: () => undefined,
+    }).then(
+      () => ({ kind: "ok" as const }),
+      (error: unknown) => ({ kind: "error" as const, error }),
+    );
+
+    // The budget is 4 attempts with 750ms between them. Every one of them
+    // would have been spent without reaching the network.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(outcome.kind).toBe("error");
+    if (outcome.kind === "error") {
+      const error = outcome.error;
+      expect(error).toBeInstanceOf(CliError);
+      if (error instanceof CliError) {
+        expect(error.code).not.toBe("E_REGISTRY_UNAVAILABLE");
+        expect(error.code).toBe("E_UNEXPECTED");
+        expect(error.message).toContain("HTTP client was shut down");
+      }
+    }
+  });
+
+  it("fails a download the same way and LEAVES the partial on disk", async () => {
+    const destPath = join(workDir, "shutdown-partial.tar.gz");
+    writeFileSync(destPath, "abc");
+    const opts = downloadOptions(destPath, "abcdef");
+    const fetchMock = vi.fn(() =>
+      Promise.reject(fetchFailedFromClosedClient()),
+    );
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    const outcome = await downloadToFile(opts).then(
+      () => ({ kind: "ok" as const }),
+      (error: unknown) => ({ kind: "error" as const, error }),
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(outcome.kind).toBe("error");
+    if (outcome.kind === "error") {
+      const error = outcome.error;
+      expect(error).toBeInstanceOf(CliError);
+      if (error instanceof CliError) {
+        expect(error.code).toBe("E_UNEXPECTED");
+      }
+    }
+    // The CliError branch this check has to precede discards the partial. Our
+    // client went away; the bytes the origin actually sent are still good, and
+    // the next invocation resumes them.
+    expect(readFileSync(destPath, "utf8")).toBe("abc");
+  });
+});

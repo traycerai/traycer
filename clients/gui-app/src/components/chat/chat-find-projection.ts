@@ -18,6 +18,7 @@ import {
   adjacentDedupedProgressItems,
   cleanSubagentNotificationText,
 } from "@/components/chat/segments/subagent-display";
+import { importedChatMarkerLabel } from "@/components/chat/segments/imported-chat-marker-display";
 import { singleSpecialSegment } from "@/components/chat/chat-special-segment";
 import { parseTraycerNextStepsMarkdown } from "@/markdown/traycer-next-steps";
 import { composerDisplayPlainText } from "@/lib/composer/composer-clipboard";
@@ -173,6 +174,7 @@ function chatFindUnitsForMessage(
   }
 
   // A synthesized row whose single segment is a setup-card / forked-chat-link
+  // / imported-chat-marker
   // renders that segment's own find anchor and no content block (the render side
   // is renderSingleSpecialSegment in chat-message.tsx; both key off the shared
   // singleSpecialSegment predicate), so index the segment.
@@ -267,6 +269,7 @@ function activityGroupChildSearchUnits(
   args: ActivityGroupChildSearchUnitsArgs,
 ): ReadonlyArray<ChatFindUnit> {
   const { segment, groupId, groupChain, tileInstanceId } = args;
+  if (segment.kind === "autonomous_resume") return [];
   if (segment.kind === "reasoning" && args.headerlessReasoning) return [];
   if (segment.kind === "subagent") {
     const renderId = segment.id;
@@ -364,9 +367,6 @@ function interviewSearchUnits(
   const model = deriveInterviewReviewModel({
     blockId: segment.id,
     status: segment.status,
-    toolName: segment.toolName,
-    title: segment.title,
-    description: segment.description,
     questions: segment.questions,
     answers: segment.answers,
     draftAnswers: segment.draftAnswers,
@@ -451,6 +451,19 @@ function segmentSearchText(segment: MessageSegment): ReadonlyArray<string> {
       return [
         normalizeSearchableText(`Forked from ${segment.sourceChatTitle}`),
       ];
+    case "imported-chat-marker":
+      // The marker's own label, and nothing else it does not paint. The raw
+      // `sourceProvider` id is never on screen (the row shows "Claude Code"),
+      // and `sourceCwd` lives in a tooltip portal outside the find anchor -
+      // indexing either counts matches the highlighter has no text to paint.
+      return [
+        normalizeSearchableText(
+          importedChatMarkerLabel({
+            sourceProvider: segment.sourceProvider,
+            importedAt: segment.importedAt,
+          }),
+        ),
+      ];
     case "setup-card":
       return [
         normalizeSearchableText(
@@ -483,6 +496,8 @@ function activityGroupChildHeaderSearchText(
   segment: ActivityGroupModel["segments"][number],
 ): ReadonlyArray<string> {
   switch (segment.kind) {
+    case "autonomous_resume":
+      return [];
     case "tool":
       return toolSegmentSearchText(segment);
     case "command":
@@ -517,15 +532,15 @@ function approvalHeaderSearchText(
 
 function toolSegmentSearchText(segment: ToolSegment): ReadonlyArray<string> {
   if (segment.agentMessageSend !== null) {
+    // The header's "Sent message" label is screen-reader-only, so it is not
+    // indexed: a find hit on it would highlight nothing. The collapsed
+    // preview is what actually paints.
     return [
       normalizeSearchableText(
-        [
-          "Sent message",
-          formatSingleLine(segment.agentMessageSend.message, {
-            maxLength: CHAT_FIND_PREVIEW_MAX_LENGTH,
-            ellipsis: "…",
-          }),
-        ].join(" "),
+        formatSingleLine(segment.agentMessageSend.message, {
+          maxLength: CHAT_FIND_PREVIEW_MAX_LENGTH,
+          ellipsis: "…",
+        }),
       ),
     ];
   }

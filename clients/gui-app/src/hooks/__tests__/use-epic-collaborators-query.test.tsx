@@ -56,6 +56,8 @@ const fakeClient: HostRequester<HostRpcRegistry> = {
   getRequestContextUserId: () => null,
   onChange: () => () => undefined,
   request: () => Promise.reject(new Error("unused in this test")),
+  requestWithIdempotencyKey: () =>
+    Promise.reject(new Error("unused in this test")),
   requestWithSignal: () => Promise.reject(new Error("unused in this test")),
   requestWithResponseTimeout: () =>
     Promise.reject(new Error("unused in this test")),

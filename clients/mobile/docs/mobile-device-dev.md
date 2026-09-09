@@ -58,7 +58,7 @@ Then the demo loop:
 
 1. In a Mac browser, open the slot's gui-app URL (printed by
    `make dev-gui-app`) and sign in.
-2. Open **Settings → Link a phone**. A QR renders and re-mints every 50 s.
+2. Open **Settings → Link mobile app**. A QR renders and re-mints every 50 s.
 3. On the phone: open Traycer → **Scan from desktop** → point at the QR.
    The phone signs in as its own `mobile` session (check Settings →
    Sessions on the desktop — a "Mobile app" row appears).
@@ -77,7 +77,7 @@ make dev-ios            # terminal 2, exactly one Simulator booted
 ```
 
 In the Simulator: **Scan from desktop** → paste the code from the desktop's
-Link-a-phone panel (`Cmd-V` pastes the Mac clipboard into the Simulator).
+Link mobile app panel (`Cmd-V` pastes the Mac clipboard into the Simulator).
 
 ## Troubleshooting
 

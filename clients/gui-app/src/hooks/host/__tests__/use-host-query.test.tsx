@@ -8,7 +8,11 @@ import {
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  mockLocalHostEntry,
+  mockRemoteHostEntry,
+} from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import {
   installHostConnectionRegistrySource,
@@ -160,6 +164,81 @@ describe("useHostQuery auth readiness", () => {
     });
   });
 
+  it("fetches no-data on the RPC endpoint edge without refetching an Infinity-cached slot", async () => {
+    const fixture = createEndpointGatedHostQueryFixture();
+    const rendered = renderHook(
+      () =>
+        useHostQuery({
+          cacheKeyIdentity: undefined,
+          client: fixture.client,
+          method: "host.status",
+          params: {},
+          options: { staleTime: Infinity },
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+
+    expect(rendered.result.current.fetchStatus).toBe("idle");
+    expect(fixture.requestCount.value).toBe(0);
+
+    act(() => {
+      fixture.publishEndpoint(true);
+    });
+
+    await waitFor(() => {
+      expect(rendered.result.current.data?.ready).toBe(true);
+    });
+    expect(fixture.requestCount.value).toBe(1);
+
+    act(() => {
+      fixture.publishEndpoint(false);
+    });
+    act(() => {
+      fixture.publishEndpoint(true);
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(fixture.requestCount.value).toBe(1);
+  });
+
+  it("retries an errored no-data query when the RPC endpoint returns", async () => {
+    const fixture = createEndpointGatedHostQueryFixture();
+    fixture.setRequestFailure(true);
+    const rendered = renderHook(
+      () =>
+        useHostQuery({
+          cacheKeyIdentity: undefined,
+          client: fixture.client,
+          method: "host.status",
+          params: {},
+          options: { staleTime: Infinity },
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+
+    act(() => {
+      fixture.publishEndpoint(true);
+    });
+    await waitFor(() => expect(rendered.result.current.error).not.toBeNull());
+    expect(fixture.requestCount.value).toBe(1);
+
+    act(() => {
+      fixture.publishEndpoint(false);
+    });
+    await waitFor(() => {
+      expect(rendered.result.current.fetchStatus).toBe("idle");
+    });
+    act(() => {
+      fixture.setRequestFailure(false);
+    });
+    act(() => {
+      fixture.publishEndpoint(true);
+    });
+
+    await waitFor(() => expect(rendered.result.current.data?.ready).toBe(true));
+    expect(fixture.requestCount.value).toBe(2);
+  });
+
   it("rejects mutations without a client with a host RPC error", async () => {
     const fixture = createHostQueryFixture();
     const rendered = renderHook(
@@ -224,6 +303,113 @@ describe("useHostQuery auth readiness", () => {
     });
 
     expect(order).toEqual(["response", "success"]);
+  });
+
+  it("dispatches through the requester resolved from mutation variables", async () => {
+    const remoteEntry = mockRemoteHostEntry;
+    const requestHosts: string[] = [];
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "req-fn-client",
+      handlers: {
+        "host.status": () => {
+          if (messenger.calls.length === 0) {
+            throw new Error("expected a host.status messenger call");
+          }
+          const call = messenger.calls[messenger.calls.length - 1];
+          requestHosts.push(call.authority.endpoint.hostId);
+          return {
+            ready: true,
+            hostVersion: "1.2.3",
+            protocolVersion: { major: 1, minor: 0 },
+            busy: false,
+            busySessionCount: 0,
+            updateProgress: null,
+            busyBreakdown: null,
+            updateOperation: null,
+            updateTransaction: null,
+            storeFormats: null,
+          };
+        },
+      },
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { mutations: { retry: false } },
+    });
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) => {
+        if (hostId === mockLocalHostEntry.hostId) return mockLocalHostEntry;
+        if (hostId === remoteEntry.hostId) return remoteEntry;
+        return null;
+      },
+      messenger,
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "tok-1",
+      }),
+    );
+    const localClient = spine.createRequester(mockLocalHostEntry);
+    const remoteClient = spine.createRequester(remoteEntry);
+    const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+      <QueryClientProvider client={queryClient}>
+        {props.children}
+      </QueryClientProvider>
+    );
+
+    const rendered = renderHook(
+      () =>
+        useHostMutation({
+          client: (variables: { readonly hostId: string }) =>
+            variables.hostId === remoteEntry.hostId
+              ? remoteClient
+              : localClient,
+          method: "host.status",
+          options: null,
+          mapVariables: () => ({}),
+        }),
+      { wrapper: Wrapper },
+    );
+
+    await act(async () => {
+      await rendered.result.current.mutateAsync({ hostId: remoteEntry.hostId });
+    });
+
+    expect(requestHosts).toEqual([remoteEntry.hostId]);
+    spine.dispose();
+  });
+
+  it("fails closed when the client resolver returns null, without dispatching", async () => {
+    const fixture = createHostQueryFixture();
+    const rendered = renderHook(
+      () =>
+        useHostMutation({
+          client: () => null,
+          method: "host.status",
+          options: null,
+          mapVariables: () => ({}),
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+
+    let caught: unknown;
+    await act(async () => {
+      try {
+        await rendered.result.current.mutateAsync({});
+      } catch (error) {
+        caught = error;
+      }
+    });
+
+    expect(caught).toMatchObject({
+      code: "RPC_ERROR",
+      requestId: "client-unavailable",
+      method: "host.status",
+    });
+    expect(fixture.requestCount.value).toBe(0);
   });
 });
 
@@ -690,6 +876,7 @@ function createHostQueryFixture(): {
             // which is exactly what host.status@1.2-and-older peers send.
             updateOperation: null,
             updateTransaction: null,
+            storeFormats: null,
           };
         },
       },
@@ -701,6 +888,91 @@ function createHostQueryFixture(): {
     </QueryClientProvider>
   );
   return { client, requestCount, Wrapper };
+}
+
+function createEndpointGatedHostQueryFixture(): {
+  readonly client: HostClient<HostRpcRegistry>;
+  readonly publishEndpoint: (present: boolean) => void;
+  readonly setRequestFailure: (shouldFail: boolean) => void;
+  readonly requestCount: { value: number };
+  readonly Wrapper: (props: { readonly children: ReactNode }) => ReactNode;
+} {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, staleTime: 0, gcTime: 0 },
+    },
+  });
+  const requestCount = { value: 0 };
+  let shouldFail = false;
+  let entry: HostDirectoryEntry = {
+    ...mockLocalHostEntry,
+    websocketUrl: null,
+  };
+  const listeners = new Set<() => void>();
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? entry : null,
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "req-endpoint-edge",
+      handlers: {
+        "host.status": () => {
+          requestCount.value += 1;
+          if (shouldFail) throw new Error("host is unavailable");
+          return {
+            ready: true,
+            hostVersion: "1.2.3",
+            protocolVersion: { major: 1, minor: 0 },
+            busy: false,
+            busySessionCount: 0,
+            updateProgress: null,
+            busyBreakdown: null,
+            updateOperation: null,
+            updateTransaction: null,
+            storeFormats: null,
+          };
+        },
+      },
+    }),
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+  );
+  installHostConnectionRegistrySource({
+    directory: {
+      findById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? entry : null,
+      onDirectoryChanged: (listener) => {
+        listeners.add(listener);
+        return { dispose: () => listeners.delete(listener) };
+      },
+    },
+    leases: null,
+  });
+  const publishEndpoint = (present: boolean): void => {
+    entry = {
+      ...entry,
+      websocketUrl: present ? mockLocalHostEntry.websocketUrl : null,
+    };
+    for (const listener of listeners) listener();
+  };
+  const setRequestFailure = (nextShouldFail: boolean): void => {
+    shouldFail = nextShouldFail;
+  };
+  const Wrapper = (props: { readonly children: ReactNode }): ReactNode => (
+    <QueryClientProvider client={queryClient}>
+      {props.children}
+    </QueryClientProvider>
+  );
+  return {
+    client: spine.createRequesterForHostId(mockLocalHostEntry.hostId),
+    publishEndpoint,
+    setRequestFailure,
+    requestCount,
+    Wrapper,
+  };
 }
 
 function createConditionHostQueryFixture(): {

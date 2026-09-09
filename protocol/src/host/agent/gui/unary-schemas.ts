@@ -8,6 +8,7 @@ import {
   guiHarnessIdSchemaV50,
   guiHarnessIdSchemaV60,
   guiHarnessIdSchemaV70,
+  guiHarnessIdSchemaV80,
 } from "@traycer/protocol/host/agent/shared";
 import { PROVIDER_AUTH_STATUS_SCHEMA } from "@traycer/protocol/host/provider-schemas";
 import {
@@ -412,6 +413,28 @@ export const listGuiHarnessesResponseSchemaV71 = z.object({
 });
 export type ListGuiHarnessesResponseV71 = z.infer<
   typeof listGuiHarnessesResponseSchemaV71
+>;
+
+// ── Frozen protocol-v8.0 catalog row + response ────────────────────────────
+// v8.0 shipped in `cli-v1.3.0` / `host-v1.3.0`, which was cut from a branch
+// that predates Antigravity. Until now v8.0 bound the LIVE row, on the (then
+// true) reading that it was the unreleased head line - so the id added to the
+// live enum afterwards silently widened a line already in the field.
+//
+// The BODY is `guiHarnessOptionBaseShapeV71`, not the live row: that shape is
+// byte-identical to the live body at this cut, and binding it here is what
+// keeps v8.0 from drifting the next time a field is added above - the exact
+// half-frozen row the V70 note describes. Do NOT add fields or ids here; add
+// fields to `guiHarnessOptionSchema`, which only v9.0 (the head line) binds.
+export const guiHarnessOptionSchemaV80 = z.object({
+  id: guiHarnessIdSchemaV80,
+  ...guiHarnessOptionBaseShapeV71,
+});
+export const listGuiHarnessesResponseSchemaV80 = z.object({
+  harnesses: z.array(guiHarnessOptionSchemaV80),
+});
+export type ListGuiHarnessesResponseV80 = z.infer<
+  typeof listGuiHarnessesResponseSchemaV80
 >;
 
 export type ListGuiHarnessesResponse = z.infer<

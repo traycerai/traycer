@@ -28,10 +28,6 @@ import type { RunnerIpcBridge } from "./runner-ipc-bridge";
  */
 const UPDATE_FRESH_UNSYNCED_SNAPSHOT_TIMEOUT_MS = 500;
 
-const browserHandoffsDrainedSchema = z.object({
-  requestId: z.string().min(1),
-});
-
 export function registerLifecycleIpc(bridge: RunnerIpcBridge): void {
   bridge.handleInvoke(RunnerHostInvoke.appLifecycleQuit, () => {
     log.info("[runner-ipc] app quit requested by renderer");
@@ -192,16 +188,6 @@ export function registerLifecycleIpc(bridge: RunnerIpcBridge): void {
       bridge.appLifecycleReadyWindowIds.add(windowId);
       bridge.unsyncedEditsSnapshots.set(windowId, parsed.snapshot);
       waiter.resolve(parsed.snapshot);
-    },
-  );
-
-  bridge.handleInvoke(
-    RunnerHostInvoke.browserHandoffsDrained,
-    (event, payload: unknown) => {
-      const windowId = bridge.resolveSenderWindowId(event);
-      const parsed = browserHandoffsDrainedSchema.safeParse(payload);
-      if (windowId === null || !parsed.success) return;
-      bridge.acknowledgeBrowserHandoffsDrained(windowId, parsed.data.requestId);
     },
   );
 }

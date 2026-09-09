@@ -8,6 +8,7 @@ import {
   Keyboard,
   LineChart,
   Palette,
+  PanelsTopLeft,
   QrCode,
   Server,
   ShieldCheck,
@@ -19,6 +20,7 @@ import { isMobileApp } from "@/lib/mobile-app";
 export type SettingsSectionId =
   | "general"
   | "appearance"
+  | "opening-behavior"
   | "app-notifications"
   | "providers"
   | "notifications"
@@ -98,9 +100,10 @@ export interface SettingsSection {
  * stay contiguous per group or the sidebar renders a group heading twice.
  *
  * Only the first ten entries can carry a digit
- * (`SINGLE_DIGIT_LEADER_INDEX_LIMIT`), and there are now fifteen. Worktrees,
- * the host's Notifications, Agent selection, Shell and Diagnostics are the
- * eleventh through fifteenth and go without.
+ * (`SINGLE_DIGIT_LEADER_INDEX_LIMIT`), and there are now sixteen. Providers,
+ * Worktrees, the host's Notifications, Agent selection, Shell and Diagnostics
+ * are the eleventh through sixteenth and go without. Providers is the newest
+ * to lose one, to Opening behavior taking the third Application slot.
  *
  * Worktrees is the one that lost a digit to the app-scoped Notifications
  * entry below. That follows from keeping Application entries together at the
@@ -108,7 +111,7 @@ export interface SettingsSection {
  * diverge from both sidebar reading order and command-palette row order.
  *
  * Section `id`s are a compatibility surface — routes (`/settings/<id>`), the
- * settings-modal switch, the command palette and remembered tab paths all key
+ * settings-modal panel table, the command palette and remembered tab paths key
  * off them — so ids never change even when labels do.
  */
 export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
@@ -122,6 +125,15 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     id: "appearance",
     label: "Appearance",
     icon: Palette,
+    group: "app",
+  },
+  // Where a click LANDS - links, tile placement, and agent-opened browser
+  // tabs. One page rather than a control each in Browser, Appearance and
+  // General, because all three answer the same question.
+  {
+    id: "opening-behavior",
+    label: "Opening behavior",
+    icon: PanelsTopLeft,
     group: "app",
   },
   // Application and Host intentionally both have a Notifications page. The
@@ -161,7 +173,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   // account, regardless of which host this window looks at.
   {
     id: "link-phone",
-    label: "Link a phone",
+    label: "Link mobile app",
     icon: QrCode,
     group: "account",
   },
@@ -247,11 +259,11 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
  *   the chip arms to "Press chord…" and can never resolve, and an existing
  *   binding can never be removed. A section whose every control needs a
  *   hardware keyboard is a dead end on a phone, not a sparse page.
- * - **Link a phone — the role is backwards.** The panel DISPLAYS a QR and a
+ * - **Link mobile app — the role is backwards.** The panel DISPLAYS a QR and a
  *   one-time code for another device to read, and in the mobile app that
  *   device is the one holding the panel: the phone is the SCANNER
  *   (`link-code-sign-in.tsx` redeems a code this panel mints, and its own copy
- *   says "On your desktop, open Settings → Link a phone"). A phone could
+ *   says "On your desktop, open Settings → Link mobile app"). A phone could
  *   physically show the code to a second phone, so this is a product decision
  *   about which end of the pairing each build is, not an inability.
  */

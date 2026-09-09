@@ -38,7 +38,7 @@ export const authQueryKeys = {
     authService,
     userId,
   ],
-  // "Link a phone" one-time code, keyed to the live AuthService and signed-in
+  // "Link mobile app" one-time code, keyed to the live AuthService and signed-in
   // user like `userSessions`. The query re-mints on an interval while the
   // panel is open; keying by user keeps a previous account's still-cached
   // code from ever rendering for its replacement.

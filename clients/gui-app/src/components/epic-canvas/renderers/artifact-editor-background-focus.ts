@@ -20,8 +20,12 @@ interface ShouldHandleArtifactEditorBackgroundFocusParams {
   readonly clientX: number;
 }
 
+// `[role='menu']` covers a menu portalled INTO the editor root - the bubble
+// bar's folded formatting menu lives there so the bar survives the menu taking
+// focus - whose rows are not buttons and would otherwise read as a click on
+// the page background, collapsing the very selection the command is for.
 const EDITOR_CHROME_SELECTOR =
-  "button, a[href], input, textarea, select, [role='button'], " +
+  "button, a[href], input, textarea, select, [role='button'], [role='menu'], " +
   ".tc-editor-toolbar, .tc-editor-bubble-menu, .tc-node-block-toolbar";
 
 export function shouldHandleArtifactEditorBackgroundFocus(

@@ -124,6 +124,37 @@ export const DIAL_FAILURE_RESTATE_MS = 5 * 60 * 1000;
 export const REMOTE_SESSION_LINGER_MS = 60_000;
 
 /**
+ * Negative-cache window for an attach-grant `plan_restricted` verdict.
+ *
+ * The verdict closes its `RemoteSession` terminally. Without a cache, the next
+ * registry/render acquisition immediately replaces that closed session and
+ * asks authn again, producing a cross-session request loop even though each
+ * individual session correctly stopped. Keep the verdict for the host's
+ * standing cadence, then permit one fresh session to probe for a policy
+ * change. A changed auth epoch, host key, or relay URL has a different session
+ * identity and therefore bypasses this cache intentionally.
+ */
+export const PLAN_RESTRICTED_REPROBE_MS = HOST_STANDING_BOUND_MS;
+
+/** Fatal code carried by a terminal attach-grant entitlement denial. */
+export const PLAN_RESTRICTED_FATAL_CODE = "PLAN_RESTRICTED";
+export const PLAN_RESTRICTED_CLOSED_REASON = "plan-restricted";
+
+export function planRestrictedClosedReason(reprobeAt: number): string {
+  return `${PLAN_RESTRICTED_CLOSED_REASON}:${reprobeAt}`;
+}
+
+export function planRestrictedReprobeAtFromClosedReason(
+  reason: string | null,
+): number | null {
+  if (reason === null) return null;
+  const prefix = `${PLAN_RESTRICTED_CLOSED_REASON}:`;
+  if (!reason.startsWith(prefix)) return null;
+  const value = Number(reason.slice(prefix.length));
+  return Number.isFinite(value) ? value : null;
+}
+
+/**
  * Relay keepalive cadence. The client sends the `relay-ping` string on this
  * interval; the relay auto-responds `relay-pong` WITHOUT waking the DO
  * (`setWebSocketAutoResponse`). Missing `PONG_TIMEOUT` worth of pongs means the
@@ -132,6 +163,21 @@ export const REMOTE_SESSION_LINGER_MS = 60_000;
  */
 export const RELAY_PING_INTERVAL_MS = 25_000;
 export const RELAY_PONG_TIMEOUT_MS = 60_000;
+
+/**
+ * Ceiling on how far measurement may stretch the AWAITING window, as a
+ * multiple of {@link RELAY_AWAITING_PONG_TIMEOUT_MS}.
+ *
+ * One estimator sizes both windows, and they are not the same kind of window.
+ * The idle one can absorb whatever a slow path needs - it is already a
+ * minute. The awaiting one is a DETECTION window whose entire value is being
+ * fast, and it is armed exactly when the user is waiting on an answer; a
+ * single stalled sample near the estimator's clamp would push 12s past a
+ * minute and hand the loss back to the idle detector this window exists to
+ * pre-empt. Three keeps a genuinely slow path measurable (36s) while keeping
+ * the fast lane fast.
+ */
+export const RELAY_AWAITING_DEADLINE_CAP_MULTIPLE = 3;
 
 /**
  * Deadline for the answer to a WAKE-time ping (`RelaySocket.pokeKeepalive`),

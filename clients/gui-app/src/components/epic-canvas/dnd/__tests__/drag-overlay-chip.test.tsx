@@ -68,6 +68,7 @@ describe("<EpicRootDragOverlayContent />", () => {
           cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
           status: { state: "running", pid: 7, startedAtMs: 1 },
           chatId: "chat-1",
+          relaunchOnHostRestart: false,
           createdAtMs: 1,
           updatedAtMs: 1,
         }),
@@ -134,25 +135,20 @@ describe("<EpicRootDragOverlayContent />", () => {
   });
 
   /**
-   * Native-view occlusion: a chip that is not inside a `[data-browser-overlay]`
-   * element paints UNDER a live browser tile's `WebContentsView`, i.e. it is
-   * invisible exactly while it is being dragged over one. The published-chat
-   * chip shipped that way when the marker was pasted per chip, so the marker
-   * now lives once on the shared overlay wrapper and these cases pin that every
-   * variant renders inside it - the coordinator matches
-   * `[data-browser-overlay]` and uses that element's own rect
-   * (`collectBrowserOverlaySurfaces`), so an ancestor counts.
+   * One shared wrapper around every chip variant. Guest tiles are ordinary
+   * DOM now, so this is stacking rather than native-view occlusion, but the
+   * wrapper still has to be a single ancestor: a per-chip marker nested a
+   * second surface for the same chip, which is the shape the published-chat
+   * miss came from.
    */
-  describe("native-view occlusion marker", () => {
+  describe("drag overlay wrapper", () => {
     function overlayMarker(): HTMLElement {
-      const markers = document.querySelectorAll<HTMLElement>(
-        '[data-browser-overlay="drag-overlay"]',
-      );
+      const markers = screen.getAllByTestId("drag-overlay-marker");
       // Exactly one: a per-chip marker re-added under this wrapper would nest a
       // second occlusion surface for the same chip, which is the shape the
       // published-chat miss came from.
       expect(markers.length).toBe(1);
-      return markers.item(0);
+      return markers[0];
     }
 
     function startTileDrag(tile: EpicCanvasTileRef): void {
@@ -238,7 +234,7 @@ describe("<EpicRootDragOverlayContent />", () => {
     ];
 
     namedTileVariants.forEach((tile) => {
-      it(`marks the ${tile.type} chip for occlusion`, () => {
+      it(`wraps the ${tile.type} chip`, () => {
         startTileDrag(tile);
         render(<EpicRootDragOverlayContent />);
 
@@ -247,7 +243,7 @@ describe("<EpicRootDragOverlayContent />", () => {
       });
     });
 
-    it("marks the git-diff chip for occlusion", () => {
+    it("wraps the git-diff chip", () => {
       const tile = makeGitBundleDiffTile({
         hostId: "host-1",
         runningDir: "/work/traycer",
@@ -262,7 +258,7 @@ describe("<EpicRootDragOverlayContent />", () => {
       expect(marker.contains(chip)).toBe(true);
     });
 
-    it("marks the workspace-folder chip for occlusion", () => {
+    it("wraps the workspace-folder chip", () => {
       const source: EpicCanvasWorkspaceFolderDragData = {
         kind: WORKSPACE_FOLDER_DND_TYPE,
         epicId: "epic-1",
@@ -279,7 +275,7 @@ describe("<EpicRootDragOverlayContent />", () => {
       expect(marker.contains(screen.getByText("Folder chip"))).toBe(true);
     });
 
-    it("marks the left-panel rail chip for occlusion", () => {
+    it("wraps the left-panel rail chip", () => {
       const panel = LEFT_PANEL_DEFINITIONS[0];
       const source: EpicCanvasLeftPanelRailDragData = {
         kind: LEFT_PANEL_RAIL_ITEM_DND_TYPE,

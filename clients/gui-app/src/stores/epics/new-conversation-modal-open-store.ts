@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-import type { ConversationTilePlacement } from "@/lib/canvas/conversation-tile-placement";
+import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
 
 /**
  * Transient "open the New Conversation modal here" request. Set from the
@@ -16,7 +16,12 @@ import type { ConversationTilePlacement } from "@/lib/canvas/conversation-tile-p
 export interface NewConversationModalOpenRequest {
   readonly epicId: string;
   readonly tabId: string;
-  readonly placement: ConversationTilePlacement;
+  /**
+   * Explicit placement for the tile the modal creates, or `null` to let the
+   * conversation tile-placement setting decide (C3, C8). Only the in-pane
+   * PaneOpener names a pane; the sidebar `+` and the palette pass `null`.
+   */
+  readonly placement: ExplicitTilePlacement | null;
   /**
    * Parent conversation id when the modal was opened to create a CHILD chat
    * (the per-row `+` in the chats tree). `null` for a top-level chat (sidebar

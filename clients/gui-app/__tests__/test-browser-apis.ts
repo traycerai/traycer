@@ -1,5 +1,95 @@
 import { configure } from "@testing-library/react";
 import { vi } from "vitest";
+import { createFakeBridgePair } from "@traycer-clients/shared/replica-runtime/worker/test-support/fake-bridge-pair";
+import { createFakeWorkerTarget } from "@traycer-clients/shared/replica-runtime/worker/test-support/fake-worker-target";
+import { startEpicRuntimeWorkerHost } from "@/stores/epics/open-epic/runtime/worker/epic-runtime-worker-host";
+import { __setEpicRuntimeWorkerFactoryForTests } from "@/lib/registries/epic-runtime-worker-factory-slot";
+
+// ── The epic runtime worker, for every jsdom suite ──────────────────────────
+//
+// ONE place, not a `beforeEach` in thirty files. jsdom has no `Worker`, and the
+// production factory is the only site that calls
+// `new Worker(new URL(...), { type: "module" })` - the literal form Vite must
+// see and jsdom cannot execute. Installing the in-process factory here means a
+// suite that mounts a session gets the REAL worker host, over a fake bridge
+// pair, on this thread, with no per-file wiring.
+//
+// The single opt-out is `__setEpicRuntimeWorkerFactoryForTests(null)` in a
+// suite that knows why - which today means only a suite deliberately reaching
+// for a real `Worker`, and no jsdom suite may do that.
+//
+// Constructed LAZILY, per call: each spawn gets its own pair and its own host,
+// because a shared pair would let two sessions' frames interleave on one
+// transport and a shared host would have `installCore` dispose the first
+// session's core when the second arrived (`epic-runtime-worker-host.ts:141`).
+//
+// CORELESS, and no longer "inert until the flip" - which is what this comment
+// said, and it stopped being true when `epic-runtime-worker-entry.ts` started
+// calling `installEpicRuntimeCore`. The entry composes a runtime now; what this
+// factory does not do is run the entry.
+//
+// So a host started HERE has no core and answers "not held" to everything,
+// while the same spawn in production carries a full runtime. That is deliberate
+// and it is the honest default: a suite that merely mounts a session must not
+// be handed a live replica it did not ask for, and the suites that DO want one
+// build it themselves (`open-store-for-test.ts` installs a core on its own
+// pair; `arm-b-accounting-equality.test.ts` installs one behind a spawned
+// worker's port, which is what makes the owed #4 pin's second arm exist at
+// all).
+//
+// The correction matters beyond this file: §8 argued Arm B was not
+// constructible BECAUSE the entry did not compose, and that argument expired
+// with this comment. A reader checking the claim would have found this text and
+// stopped.
+__setEpicRuntimeWorkerFactoryForTests(() => {
+  const pair = createFakeBridgePair("sync");
+  const host = startEpicRuntimeWorkerHost(pair.worker);
+  return {
+    ...createFakeWorkerTarget(pair),
+    terminate: () => {
+      host.shutdown();
+    },
+    // Unreachable here, and stated rather than left to a default: this host
+    // runs in THIS thread, so there is no module fetch to fail and no DOM
+    // event to report one. The real `Worker` is the only implementor that can
+    // ever call this listener.
+    onWorkerFault: () => {},
+  };
+});
+
+// ── The session's durable transport, for every jsdom suite ──────────────────
+//
+// The SAME shape as the worker default above, and here for the same reason: one
+// place, not a `beforeEach` in thirty files. A suite that merely mounts a
+// session must not be handed a live socket it did not ask for.
+//
+// WHY IT BECAME NECESSARY, since a reader will otherwise wonder why thirty
+// suites managed without it. `EpicSessionProvider` used to SKIP opening a
+// transport when a test had installed a stream-factory override
+// (`__setEpicStreamClientFactoryForTests`), so most suites reached
+// `openTransport` never, and the handful that stubbed it could safely stub it
+// with a THROW. That override is deleted: a stream factory built on MAIN cannot
+// cross `postMessage` to a runtime that lives in the worker, so overriding it
+// could not do what its name promised. With the branch gone the provider opens
+// UNCONDITIONALLY (`epic-session-provider.tsx`, the `openTransport` call in
+// `createHandle`), and every suite that mounts a session reaches the real hook -
+// which dials a real socket off `useHostClient()` and dies on the first member a
+// test's host stub does not implement. Five suites failed exactly that way,
+// through `createEpicSessionTestHarness`, none of them naming a transport
+// anywhere in their source.
+//
+// A suite that cares about the transport still mocks this module itself, and a
+// file-level `vi.mock` takes precedence over this one - twenty do. The suite
+// that exercises the real dialing path targets `durable-stream-transport.ts`,
+// a different module, and is untouched by this.
+vi.mock("@/lib/host/use-durable-stream-transport", async () => {
+  const { fakeDurableStreamTransports } =
+    await import("@/lib/host/test-support/fake-durable-stream-transport");
+  return {
+    useDurableStreamTransportFactory: () =>
+      fakeDurableStreamTransports().opener,
+  };
+});
 
 // CI stability net. A stray late async error - an `unhandledRejection` or
 // `uncaughtException` from a timer, socket, or microtask that fires AFTER a

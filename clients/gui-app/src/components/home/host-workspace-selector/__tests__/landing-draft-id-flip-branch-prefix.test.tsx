@@ -254,6 +254,7 @@ vi.mock(
 );
 
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostMethodSchemaVersion: () => null,
   useHostSupportsMethod: () => true,
 }));
 

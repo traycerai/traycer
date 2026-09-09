@@ -1,7 +1,7 @@
 /**
  * Two sections are not offered in the installed mobile app, for two different
  * reasons: Keybindings because chord capture reads `keydown` on `window` and a
- * touch shell can never commit one, and Link a phone because the panel is the
+ * touch shell can never commit one, and Link mobile app because the panel is the
  * DISPLAY end of a pairing whose scanner end is the mobile app itself.
  *
  * The table itself keeps both, because ids resolve routes, remembered tab

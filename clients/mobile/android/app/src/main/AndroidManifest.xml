@@ -77,4 +77,28 @@
         to "granted".
     -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!--
+        A direct download (IFileSaveHost.downloadFile) writes into the SHARED
+        Documents folder, which is external storage. Same rule as the line
+        above: the Filesystem plugin declares the matching @Permission alias
+        but contributes no <uses-permission> of its own, so without this the
+        write is refused on the API levels that still gate it and the plugin
+        reports "file permissions denied" without ever prompting.
+
+        maxSdkVersion 28 is where the gate ends, not a guess: it is what the
+        plugin's own check encodes - granted outright from API 33, and from
+        API 30 for a directory-rooted path, because an app may write files it
+        creates under Documents with no permission at all. Declaring it past
+        28 asks for something the platform no longer honours.
+
+        API 29 is the one level with no route: scoped storage is enforced there
+        and the Documents relaxation is not yet in place, so a direct download
+        fails loudly. The share sheet still works, and buying that one level
+        back would mean requestLegacyExternalStorage - opting the whole app out
+        of scoped storage - which is not a trade worth making for it.
+    -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
 </manifest>

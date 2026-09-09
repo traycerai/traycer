@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { createReportIssueContext } from "@/lib/report-issue-context";
+import { useOpenLink } from "@/lib/links/open-link";
 import {
   Dialog,
   DialogContent,
@@ -22,7 +23,6 @@ export function AboutDetailsDialog(props: AboutDetailsDialogProps): ReactNode {
         key={props.open ? "open" : "closed"}
         open={props.open}
         support={props.support}
-        openExternalLink={props.openExternalLink}
       />
     </Dialog>
   );
@@ -31,28 +31,19 @@ export function AboutDetailsDialog(props: AboutDetailsDialogProps): ReactNode {
 interface AboutDetailsDialogContentProps {
   readonly open: boolean;
   readonly support: import("@/lib/windows/types").DesktopSupportBridge | null;
-  readonly openExternalLink: (url: string) => Promise<void>;
 }
 
 function AboutDetailsDialogContent(
   props: AboutDetailsDialogContentProps,
 ): ReactNode {
   const snapshot = useSupportSnapshot(props.open, props.support);
-  const [linkError, setLinkError] = useState<string | null>(null);
-
-  const openLink = (url: string): void => {
-    setLinkError(null);
-    void props.openExternalLink(url).catch(() => {
-      setLinkError("Could not open the selected link.");
-    });
-  };
 
   let snapshotContent: ReactNode;
   if (snapshot.status === "ready") {
     snapshotContent = (
       <>
         <DetailsGrid snapshot={snapshot.snapshot} />
-        <SupportLinks snapshot={snapshot.snapshot} openLink={openLink} />
+        <SupportLinks snapshot={snapshot.snapshot} />
       </>
     );
   } else if (snapshot.status === "unavailable") {
@@ -89,24 +80,6 @@ function AboutDetailsDialogContent(
         </DialogDescription>
       </DialogHeader>
       <div className="grid gap-3">{snapshotContent}</div>
-      {linkError === null ? null : (
-        <div
-          className="flex items-center gap-2 text-ui-sm text-destructive"
-          role="alert"
-        >
-          <span>{linkError}</span>
-          <ReportIssueAction
-            context={createReportIssueContext({
-              title: "Couldn't open the link",
-              message: null,
-              code: null,
-              source: "About Traycer",
-            })}
-            presentation="link"
-            className="h-auto p-0 text-current"
-          />
-        </div>
-      )}
       <DialogFooter showCloseButton>
         {snapshot.status === "ready" ? (
           <CopyDetailsButton snapshot={snapshot.snapshot} />
@@ -253,10 +226,10 @@ function DetailsGrid(props: DetailsGridProps): ReactNode {
 
 interface SupportLinksProps {
   readonly snapshot: DesktopSupportSnapshot;
-  readonly openLink: (url: string) => void;
 }
 
 function SupportLinks(props: SupportLinksProps): ReactNode {
+  const openLink = useOpenLink();
   return (
     <div className="flex flex-wrap gap-2 pt-1">
       {props.snapshot.links.map((entry) => (
@@ -265,7 +238,9 @@ function SupportLinks(props: SupportLinksProps): ReactNode {
           type="button"
           variant="outline"
           size="sm"
-          onClick={() => props.openLink(entry.url)}
+          onClick={() => {
+            void openLink(entry.url, "docs", null);
+          }}
         >
           <ExternalLink />
           {entry.label}

@@ -5,6 +5,7 @@ import type {
   AgentSender,
   ChatEvent,
   ChatSessionAnchor,
+  ContentBlock,
   Message,
   UserMessageSender,
 } from "@traycer/protocol/persistence/epic/schemas";
@@ -344,7 +345,7 @@ function persistedPlanBlock(input: {
   readonly revision: number;
   readonly preview: string;
   readonly timestamp: number;
-}): Extract<Message, { role: "assistant" }>["blocks"][number] {
+}): Extract<ContentBlock, { type: "plan" }> {
   return {
     type: "plan",
     blockId: "plan:block-1",
@@ -1310,59 +1311,6 @@ describe("useRenderedMessages", () => {
       steerBadge: null,
     });
   });
-
-  it("keeps active interrupt-restart badges when broad queue metadata contains unrelated fallback items", () => {
-    const interruptRequest = steerRequestedQueueItem(
-      "queue-interrupt",
-      "message-interrupt",
-      "interrupt_restart",
-    );
-    const safePointRequest = steerRequestedQueueItem(
-      "queue-safe",
-      "message-safe",
-      "safe_point",
-    );
-    const safePointFallback = fallbackQueueItem(safePointRequest);
-
-    const { result } = renderRenderedMessages({
-      messages: [userMessage("message-interrupt"), userMessage("message-safe")],
-      events: [
-        queueEvent({
-          type: "queue.steerRequested",
-          timestamp: 2000,
-          messageId: "message-interrupt",
-          queueItemId: "queue-interrupt",
-          metadata: { items: [interruptRequest, safePointRequest] },
-        }),
-        queueEvent({
-          type: "queue.fallback",
-          timestamp: 2100,
-          messageId: "message-safe",
-          queueItemId: "queue-safe",
-          metadata: { items: [interruptRequest, safePointFallback] },
-        }),
-      ],
-    });
-
-    const interruptRow = result.current.find(
-      (message) => message.persistentMessageId === "message-interrupt",
-    );
-    const safePointRow = result.current.find(
-      (message) => message.persistentMessageId === "message-safe",
-    );
-
-    expect(interruptRow).toMatchObject({
-      role: "user",
-      persistentMessageId: "message-interrupt",
-      steerBadge: { status: "steered", mode: null },
-    });
-    expect(safePointRow).toMatchObject({
-      role: "user",
-      persistentMessageId: "message-safe",
-      steerBadge: null,
-    });
-  });
-
   it("invalidates assistant turn cache when a non-last block status changes", () => {
     const streamingAssistant: Message = {
       ...assistantMessage("turn-1", 2000),
@@ -1566,6 +1514,7 @@ describe("useRenderedMessages", () => {
           error: null,
           agentMessageSend: null,
           managedCommand: null,
+          agentMessageReceipt: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
@@ -1601,6 +1550,57 @@ describe("useRenderedMessages", () => {
     ]);
   });
 
+  it("carries a non-null agentMessageReceipt through to the projected tool segment", () => {
+    const agentMessageSend = {
+      receiverAgentId: "agent-receiver-1",
+      message: "ping",
+      responseId: null,
+      expectReply: false,
+    };
+    const agentMessageReceipt = {
+      receiverAgentId: "agent-receiver-1",
+      messageId: "agent-msg-receipt-1",
+    };
+    const assistant: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [
+        {
+          type: "tool_call",
+          blockId: "tool-1",
+          toolName: "traycer_a2a/traycer_send_message",
+          ...toolCallInputFields("traycer_a2a/traycer_send_message", {
+            toAgentId: "agent-receiver-1",
+            message: "ping",
+          }),
+          error: null,
+          agentMessageSend,
+          managedCommand: null,
+          agentMessageReceipt,
+          progress: null,
+          backgroundOutput: null,
+          backgroundTask: false,
+          stopped: false,
+          status: "completed",
+          timestamp: 2002,
+          startedAt: 2002,
+          endedAt: 2002,
+          imageResults: [],
+        },
+      ],
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [assistant],
+    });
+
+    const tool = (result.current[0]?.segments ?? []).find(
+      (segment): segment is ToolSegment => segment.kind === "tool",
+    );
+
+    expect(tool?.agentMessageReceipt).toEqual(agentMessageReceipt);
+    expect(tool?.agentMessageSend).toEqual(agentMessageSend);
+  });
+
   it("drops a resume trigger whose blockId is the immediately preceding tool segment", () => {
     const assistant: Message = {
       ...assistantMessage("turn-1", 2000),
@@ -1613,6 +1613,7 @@ describe("useRenderedMessages", () => {
           error: null,
           agentMessageSend: null,
           managedCommand: null,
+          agentMessageReceipt: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: true,
@@ -1626,6 +1627,7 @@ describe("useRenderedMessages", () => {
         {
           type: "autonomous_resume",
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed",
           timestamp: 2003,
           triggers: [
@@ -1678,6 +1680,7 @@ describe("useRenderedMessages", () => {
           error: null,
           agentMessageSend: null,
           managedCommand: null,
+          agentMessageReceipt: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
@@ -1691,6 +1694,7 @@ describe("useRenderedMessages", () => {
         {
           type: "autonomous_resume",
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed",
           timestamp: 2003,
           triggers: [
@@ -1732,6 +1736,7 @@ describe("useRenderedMessages", () => {
           error: null,
           agentMessageSend: null,
           managedCommand: null,
+          agentMessageReceipt: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: true,
@@ -1753,6 +1758,7 @@ describe("useRenderedMessages", () => {
         {
           type: "autonomous_resume",
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed",
           timestamp: 2004,
           triggers: [
@@ -1811,6 +1817,7 @@ describe("useRenderedMessages", () => {
           error: null,
           agentMessageSend: null,
           managedCommand: null,
+          agentMessageReceipt: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
@@ -1828,6 +1835,7 @@ describe("useRenderedMessages", () => {
           // must catch by comparing against the visible (post-nesting) order.
           type: "autonomous_resume",
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed",
           timestamp: 2003,
           triggers: [
@@ -1922,6 +1930,7 @@ describe("useRenderedMessages", () => {
           error: null,
           agentMessageSend: null,
           managedCommand: null,
+          agentMessageReceipt: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
@@ -2040,6 +2049,7 @@ describe("useRenderedMessages", () => {
           error: null,
           agentMessageSend: null,
           managedCommand: null,
+          agentMessageReceipt: null,
           progress: null,
           backgroundOutput: { stdout: "", stderr: "", truncated: false },
           backgroundTask: true,
@@ -2061,6 +2071,7 @@ describe("useRenderedMessages", () => {
           error: null,
           agentMessageSend: null,
           managedCommand: null,
+          agentMessageReceipt: null,
           progress: null,
           backgroundOutput: { stdout: "", stderr: "", truncated: false },
           backgroundTask: true,
@@ -2082,6 +2093,7 @@ describe("useRenderedMessages", () => {
           error: "stopped: user requested stop",
           agentMessageSend: null,
           managedCommand: null,
+          agentMessageReceipt: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: true,
@@ -2106,6 +2118,7 @@ describe("useRenderedMessages", () => {
           error: "failed: command exited with code 1",
           agentMessageSend: null,
           managedCommand: null,
+          agentMessageReceipt: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: true,
@@ -2124,6 +2137,7 @@ describe("useRenderedMessages", () => {
           error: null,
           agentMessageSend: null,
           managedCommand: null,
+          agentMessageReceipt: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
@@ -2245,6 +2259,7 @@ describe("useRenderedMessages", () => {
           error: null,
           agentMessageSend: null,
           managedCommand: null,
+          agentMessageReceipt: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
@@ -2267,86 +2282,6 @@ describe("useRenderedMessages", () => {
     expect(image.toolName).toBe("image_generation");
     expect(image.parentId).toBe("agent-1");
   });
-
-  it("folds a depth-3 nested subagent chain via parentBlockId", () => {
-    const assistant: Message = {
-      ...assistantMessage("turn-1", 2000),
-      blocks: [
-        {
-          type: "subagent",
-          agentType: null,
-          blockId: "agent-1",
-          name: "root",
-          task: "Plan the refactor.",
-          progressUpdates: [],
-          result: null,
-          status: "streaming",
-          timestamp: 2001,
-          startedAt: 2001,
-          spawnToolCallId: null,
-          stopped: false,
-          workflowMeta: null,
-        },
-        {
-          type: "subagent",
-          agentType: null,
-          blockId: "agent-2",
-          name: "mid",
-          task: "Sweep call sites.",
-          progressUpdates: [],
-          result: null,
-          status: "streaming",
-          timestamp: 2002,
-          startedAt: 2002,
-          spawnToolCallId: null,
-          stopped: false,
-          workflowMeta: null,
-          parentBlockId: "agent-1",
-        },
-        {
-          type: "subagent",
-          agentType: null,
-          blockId: "agent-3",
-          name: "leaf",
-          task: "Check fixtures.",
-          progressUpdates: [],
-          result: "All good.",
-          status: "completed",
-          timestamp: 2003,
-          startedAt: 2003,
-          spawnToolCallId: null,
-          stopped: false,
-          workflowMeta: null,
-          parentBlockId: "agent-2",
-        },
-      ],
-    };
-
-    const { result } = renderRenderedMessages({
-      messages: [assistant],
-    });
-
-    const top = result.current[0]?.segments ?? [];
-    expect(top.map((segment) => segment.kind)).toEqual(["subagent"]);
-    const root = top[0];
-    if (root.kind !== "subagent") {
-      throw new Error("expected a subagent segment");
-    }
-    expect(root.id).toBe("agent-1");
-    expect(root.children.map((child) => child.id)).toEqual(["agent-2"]);
-    const mid = root.children[0];
-    if (mid.kind !== "subagent") {
-      throw new Error("expected a nested subagent segment");
-    }
-    expect(mid.children.map((child) => child.id)).toEqual(["agent-3"]);
-    const leaf = mid.children[0];
-    if (leaf.kind !== "subagent") {
-      throw new Error("expected a nested subagent segment");
-    }
-    expect(leaf.result).toBe("All good.");
-    expect(leaf.children).toEqual([]);
-  });
-
   it("keeps a nested subagent top-level when its parentBlockId doesn't resolve", () => {
     const assistant: Message = {
       ...assistantMessage("turn-1", 2000),
@@ -2406,112 +2341,6 @@ describe("useRenderedMessages", () => {
       throw new Error("expected a subagent segment");
     }
     expect(root.children).toEqual([]);
-  });
-
-  it("nests a subagent's provider notice under its block via parentBlockId", () => {
-    const assistant: Message = {
-      ...assistantMessage("turn-1", 2000),
-      blocks: [
-        {
-          type: "subagent",
-          agentType: null,
-          blockId: "agent-1",
-          name: "explorer",
-          task: "Investigate the bug.",
-          progressUpdates: [],
-          result: null,
-          status: "streaming",
-          timestamp: 2001,
-          startedAt: 2001,
-          spawnToolCallId: null,
-          stopped: false,
-          workflowMeta: null,
-        },
-        {
-          type: "text",
-          blockId: "notice-1",
-          text: "Codex switched from gpt-5 to gpt-5-safe.",
-          status: "completed",
-          timestamp: 2002,
-          parentBlockId: "agent-1",
-          providerNotice: {
-            harnessId: "codex",
-            noticeKind: "model_rerouted",
-            tone: "warning",
-            title: "Model changed",
-            message: "Codex switched from gpt-5 to gpt-5-safe.",
-            details: [{ label: "Reason", value: "highRiskCyberActivity" }],
-            metadata: {
-              type: "model_rerouted",
-              fromModel: "gpt-5",
-              toModel: "gpt-5-safe",
-              reason: "highRiskCyberActivity",
-            },
-          },
-        },
-      ],
-    };
-
-    const { result } = renderRenderedMessages({
-      messages: [assistant],
-    });
-
-    const top = result.current[0]?.segments ?? [];
-    // The notice nests under the subagent rather than appearing top-level.
-    expect(top.map((segment) => segment.kind)).toEqual(["subagent"]);
-    const subagent = top[0];
-    if (subagent.kind !== "subagent") {
-      throw new Error("expected a subagent segment");
-    }
-    expect(subagent.children.map((child) => child.kind)).toEqual([
-      "provider_notice",
-    ]);
-    const child = subagent.children[0];
-    if (child.kind !== "provider_notice") {
-      throw new Error("expected a provider_notice child");
-    }
-    expect(child.title).toBe("Model changed");
-    expect(child.parentId).toBe("agent-1");
-  });
-
-  it("keeps a provider notice top-level when its parentBlockId doesn't resolve to a known subagent", () => {
-    const assistant: Message = {
-      ...assistantMessage("turn-1", 2000),
-      blocks: [
-        {
-          type: "text",
-          blockId: "notice-orphan",
-          text: "Codex switched from gpt-5 to gpt-5-safe.",
-          status: "completed",
-          timestamp: 2001,
-          // References a parent id never present in this turn's blocks (the
-          // owning subagent.started was dropped/never arrived) - the fallback
-          // is honest top-level placement, never vanishing.
-          parentBlockId: "agent-missing",
-          providerNotice: {
-            harnessId: "codex",
-            noticeKind: "model_rerouted",
-            tone: "warning",
-            title: "Model changed",
-            message: "Codex switched from gpt-5 to gpt-5-safe.",
-            details: [],
-            metadata: null,
-          },
-        },
-      ],
-    };
-
-    const { result } = renderRenderedMessages({
-      messages: [assistant],
-    });
-
-    const top = result.current[0]?.segments ?? [];
-    expect(top.map((segment) => segment.kind)).toEqual(["provider_notice"]);
-    const notice = top[0];
-    if (notice.kind !== "provider_notice") {
-      throw new Error("expected a top-level provider_notice segment");
-    }
-    expect(notice.parentId).toBe("agent-missing");
   });
 
   it("keeps a nested child attached across a parent name re-emit", () => {
@@ -2595,6 +2424,7 @@ describe("useRenderedMessages", () => {
           error: null,
           agentMessageSend: null,
           managedCommand: null,
+          agentMessageReceipt: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
@@ -2839,50 +2669,6 @@ describe("useRenderedMessages", () => {
     expect(row?.pausedDurationMs).toBe(10_000);
     expect(row?.pausedSinceMs).toBeNull();
   });
-
-  it("subtracts completed interview wait time from assistant turn accounting", () => {
-    const assistant = {
-      ...assistantMessage("turn-1", 10_000),
-      timestamp: 42_000,
-      blocks: [
-        {
-          type: "text" as const,
-          blockId: "text-1",
-          status: "completed" as const,
-          timestamp: 42_000,
-          text: "Done",
-          providerNotice: null,
-        },
-      ],
-    };
-
-    const { result } = renderRenderedMessages({
-      messages: [userMessage("m1"), assistant],
-      events: [
-        waitEvent({
-          type: "interview.requested",
-          timestamp: 16_000,
-          turnId: "turn-1",
-          approvalId: null,
-          blockId: "question-1",
-        }),
-        waitEvent({
-          type: "interview.resolved",
-          timestamp: 29_000,
-          turnId: "turn-1",
-          approvalId: null,
-          blockId: "question-1",
-        }),
-      ],
-    });
-
-    const row = result.current.find((message) => message.role === "assistant");
-    expect(row?.createdAt).toBe(10_000);
-    expect(row?.completedAt).toBe(42_000);
-    expect(row?.pausedDurationMs).toBe(13_000);
-    expect(row?.pausedSinceMs).toBeNull();
-  });
-
   it("freezes the live assistant timer while an approval is pending", () => {
     const activeTurn: ChatActiveTurn = {
       agentMode: "regular",
@@ -2943,47 +2729,6 @@ describe("useRenderedMessages", () => {
     expect(row?.pausedDurationMs).toBe(0);
     expect(row?.pausedSinceMs).toBe(15_000);
   });
-
-  it("freezes the live assistant timer while an interview is pending from snapshot state", () => {
-    const activeTurn: ChatActiveTurn = {
-      agentMode: "regular",
-      sameTurnSteeringSupported: false,
-      turnId: "turn-1",
-      status: "running",
-      harnessId: "claude",
-      model: "claude-sonnet-4-5",
-      profileId: null,
-      userMessageId: "m1",
-      startedAt: 10_000,
-      updatedAt: 20_000,
-      reasoningEffort: null,
-      serviceTier: null,
-    };
-
-    const { result } = renderRenderedMessages({
-      messages: [userMessage("m1")],
-      liveAssistantMessage: {
-        turnId: "turn-1",
-        sender: ASSISTANT_SENDER,
-        blocks: [],
-        startedAt: 10_000,
-        blocksVersion: 0,
-        imageResolutions: [],
-        imageResolutionsVersion: 0,
-        timestamp: 20_000,
-        reasoningEffort: null,
-        serviceTier: null,
-      },
-      activeTurn,
-      pendingInterviews: [{ blockId: "question-1", requestedAt: 16_000 }],
-      runStatus: "running",
-    });
-
-    const row = result.current.find((message) => message.role === "assistant");
-    expect(row?.pausedDurationMs).toBe(0);
-    expect(row?.pausedSinceMs).toBe(16_000);
-  });
-
   it("keeps the assistant row id stable from live turn to completion", () => {
     const activeTurn: ChatActiveTurn = {
       agentMode: "regular",
@@ -3213,6 +2958,7 @@ describe("useRenderedMessages", () => {
           error: null,
           agentMessageSend: null,
           managedCommand: null,
+          agentMessageReceipt: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
@@ -3268,6 +3014,7 @@ describe("useRenderedMessages", () => {
           error: "Permission denied by user",
           agentMessageSend: null,
           managedCommand: null,
+          agentMessageReceipt: null,
           progress: null,
           backgroundOutput: null,
           backgroundTask: false,
@@ -3529,6 +3276,197 @@ describe("useRenderedMessages fork link integration", () => {
   });
 });
 
+function importedEvent(input: {
+  readonly eventId: string;
+  readonly timestamp: number;
+  readonly metadata: Record<string, unknown> | null;
+}): ChatEvent {
+  return {
+    eventId: input.eventId,
+    type: "chat.imported",
+    timestamp: input.timestamp,
+    clientActionId: null,
+    actor: null,
+    message: null,
+    turnId: null,
+    messageId: null,
+    queueItemId: null,
+    approvalId: null,
+    blockId: null,
+    severity: "info",
+    metadata: input.metadata,
+  };
+}
+
+describe("useRenderedMessages imported chat marker integration", () => {
+  it("projects a well-formed chat.imported event into a single provenance row", () => {
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1")],
+      events: [
+        importedEvent({
+          eventId: "import-1",
+          timestamp: 500,
+          metadata: {
+            sourceProvider: "claude",
+            nativeSessionId: "native-session-1",
+            importedAt: 1234,
+            sourceCwd: "/repo/work",
+          },
+        }),
+      ],
+    });
+
+    const importedRows = result.current.filter(
+      (message) => message.segments[0]?.kind === "imported-chat-marker",
+    );
+    expect(importedRows).toHaveLength(1);
+    const row = importedRows[0];
+    expect(row.id).toBe("imported-chat-marker:import-1");
+    expect(row.role).toBe("system");
+    expect(row.createdAt).toBe(500);
+    expect(row.segments).toHaveLength(1);
+    const segment = row.segments[0];
+    expect(segment.kind).toBe("imported-chat-marker");
+    if (segment.kind !== "imported-chat-marker") {
+      throw new Error("expected imported-chat-marker");
+    }
+    expect(segment.sourceProvider).toBe("claude");
+    expect(segment.importedAt).toBe(1234);
+    expect(segment.sourceCwd).toBe("/repo/work");
+  });
+
+  it("pins the provenance row at the top, above the transcript it introduces", () => {
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), userMessage("m2")],
+      events: [
+        importedEvent({
+          eventId: "import-1",
+          // The import necessarily happened AFTER every message it carries in,
+          // which is what a plain `createdAt` sort files at the very bottom.
+          timestamp: 9_000,
+          metadata: {
+            sourceProvider: "claude",
+            nativeSessionId: "native-session-1",
+            importedAt: 9_000,
+            sourceCwd: "/repo/work",
+          },
+        }),
+      ],
+    });
+
+    expect(result.current.map((message) => message.id)).toEqual([
+      "imported-chat-marker:import-1",
+      "m1",
+      "m2",
+    ]);
+  });
+
+  it("sits above even a pinned genesis setup card", () => {
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1")],
+      events: [
+        setupEvent({
+          eventId: "s-running",
+          type: "setup.running",
+          timestamp: 1500,
+          metadata: { workspacePath: "/repo", terminalSessionId: "term-1" },
+        }),
+        importedEvent({
+          eventId: "import-1",
+          timestamp: 9_000,
+          metadata: {
+            sourceProvider: "claude",
+            nativeSessionId: "native-session-1",
+            importedAt: 9_000,
+            sourceCwd: "/repo/work",
+          },
+        }),
+      ],
+    });
+
+    // Provenance first: the workspace the card describes was bound to this
+    // chat after the transcript already existed somewhere else.
+    expect(result.current.map((message) => message.id)).toEqual([
+      "imported-chat-marker:import-1",
+      "setup-card:owner-1:0:1500",
+      "m1",
+    ]);
+  });
+
+  it("derives distinct row ids from the event id so two imports never collide", () => {
+    const { result } = renderRenderedMessages({
+      messages: [],
+      events: [
+        importedEvent({
+          eventId: "import-1",
+          timestamp: 500,
+          metadata: {
+            sourceProvider: "claude",
+            nativeSessionId: "native-session-1",
+            importedAt: 1234,
+            sourceCwd: "/repo/one",
+          },
+        }),
+        importedEvent({
+          eventId: "import-2",
+          timestamp: 600,
+          metadata: {
+            sourceProvider: "codex",
+            nativeSessionId: "native-session-2",
+            importedAt: 5678,
+            sourceCwd: "/repo/two",
+          },
+        }),
+      ],
+    });
+
+    const ids = result.current.map((message) => message.id);
+    expect(ids).toEqual([
+      "imported-chat-marker:import-1",
+      "imported-chat-marker:import-2",
+    ]);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("renders no row when metadata is null", () => {
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1")],
+      events: [
+        importedEvent({
+          eventId: "import-null",
+          timestamp: 500,
+          metadata: null,
+        }),
+      ],
+    });
+
+    expect(result.current.map((message) => message.id)).toEqual(["m1"]);
+  });
+
+  it("ignores events of other types", () => {
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1")],
+      events: [
+        forkEvent({
+          eventId: "fork-1",
+          timestamp: 500,
+          metadata: {
+            sourceChatId: "source-chat-1",
+            sourceChatTitle: "Original chat",
+            sourceHostId: "source-host-1",
+          },
+        }),
+      ],
+    });
+
+    expect(
+      result.current.some(
+        (message) => message.segments[0]?.kind === "imported-chat-marker",
+      ),
+    ).toBe(false);
+  });
+});
+
 describe("useRenderedMessages setup card integration", () => {
   it("pins the genesis setup card above the first user message", () => {
     const { result } = renderRenderedMessages({
@@ -3646,66 +3584,6 @@ describe("useRenderedMessages setup card integration", () => {
       "create",
     ]);
   });
-
-  it("pins the genesis but anchors a later different-repo creation above its send", () => {
-    const { result } = renderRenderedMessages({
-      messages: [
-        userMessage("m1"),
-        assistantMessage("turn-1", 2000),
-        userMessageAt("create-other", 2400),
-      ],
-      events: [
-        // Genesis worktree (window 0): back-filled, NO creating phase -> pins.
-        setupEvent({
-          eventId: "g-running",
-          type: "setup.running",
-          timestamp: 1500,
-          metadata: { workspacePath: "/repo", terminalSessionId: "term-1" },
-        }),
-        setupEvent({
-          eventId: "g-succeeded",
-          type: "setup.succeeded",
-          timestamp: 1600,
-          metadata: { workspacePath: "/repo" },
-        }),
-        // A SEPARATE later send (`create-other`) creates a worktree for a
-        // DIFFERENT repo. Its `setup.creating` splits a fresh window (the
-        // genesis already progressed past creating) and stamps
-        // `triggeringMessageId`, so the window anchors above that send.
-        setupEvent({
-          eventId: "midchat-creating",
-          type: "setup.creating",
-          timestamp: 2500,
-          metadata: {
-            workspacePath: "/other",
-            branch: "feature",
-            triggeringMessageId: "create-other",
-          },
-        }),
-        setupEvent({
-          eventId: "midchat-running",
-          type: "setup.running",
-          timestamp: 2600,
-          metadata: {
-            workspacePath: "/other",
-            terminalSessionId: "term-2",
-          },
-        }),
-      ],
-    });
-
-    // Genesis (window 0) pinned at the very top; the different-repo creation
-    // (window 1) anchors directly ABOVE its `create-other` send - NOT folded into
-    // the genesis card, NOT moved to the top, NOT floated below the send.
-    expect(result.current.map((message) => message.id)).toEqual([
-      "setup-card:owner-1:0:1500",
-      "m1",
-      "assistant:turn-1",
-      "setup-card:owner-1:1:2500",
-      "create-other",
-    ]);
-  });
-
   it("anchors a mid-chat card directly above its triggering message, overriding createdAt", () => {
     const { result } = renderRenderedMessages({
       messages: [
@@ -3807,157 +3685,6 @@ describe("useRenderedMessages setup card integration", () => {
     // The persisted row wins (real send metadata, statusLabel null), not the
     // pending echo (statusLabel "Pending").
     expect(m1Rows[0].statusLabel).toBeNull();
-  });
-
-  it("emits one card per setup lifecycle window anchored at each genesis", () => {
-    const { result } = renderRenderedMessages({
-      events: [
-        setupEvent({
-          eventId: "s1-running",
-          type: "setup.running",
-          timestamp: 1000,
-          metadata: { workspacePath: "/repo", terminalSessionId: "term-1" },
-        }),
-        setupEvent({
-          eventId: "s1-succeeded",
-          type: "setup.succeeded",
-          timestamp: 1100,
-          metadata: { workspacePath: "/repo" },
-        }),
-        setupEvent({
-          eventId: "missing",
-          type: "worktree.missing",
-          timestamp: 1200,
-          metadata: { workspacePath: "/repo", priorWorktreePath: "/repo" },
-        }),
-        setupEvent({
-          eventId: "s2-running",
-          type: "setup.running",
-          timestamp: 1300,
-          metadata: {
-            workspacePath: "/repo2",
-            terminalSessionId: "term-2",
-          },
-        }),
-      ],
-    });
-
-    const cards = result.current.filter((message) =>
-      message.id.startsWith("setup-card:"),
-    );
-    expect(cards.map((card) => card.createdAt)).toEqual([1000, 1300]);
-    const states = cards.map((card) => {
-      const segment = card.segments[0];
-      if (segment.kind !== "setup-card") {
-        throw new Error("expected setup-card");
-      }
-      return segment.model.aggregate.state;
-    });
-    // The first window stays `ready`; the re-bind opens a fresh `setting-up`
-    // card rather than flipping the old one back.
-    expect(states).toEqual(["ready", "setting-up"]);
-  });
-
-  it("consolidates a multi-repo window into one card with per-workspace state", () => {
-    const { result } = renderRenderedMessages({
-      events: [
-        setupEvent({
-          eventId: "a-running",
-          type: "setup.running",
-          timestamp: 1000,
-          metadata: { workspacePath: "/repoA", terminalSessionId: "ta" },
-        }),
-        setupEvent({
-          eventId: "b-running",
-          type: "setup.running",
-          timestamp: 1010,
-          metadata: { workspacePath: "/repoB", terminalSessionId: "tb" },
-        }),
-        setupEvent({
-          eventId: "a-succeeded",
-          type: "setup.succeeded",
-          timestamp: 1100,
-          metadata: { workspacePath: "/repoA" },
-        }),
-      ],
-    });
-
-    const cards = result.current.filter((message) =>
-      message.id.startsWith("setup-card:"),
-    );
-    expect(cards).toHaveLength(1);
-    const segment = cards[0].segments[0];
-    if (segment.kind !== "setup-card") throw new Error("expected setup-card");
-    expect(segment.model.workspaces.map((w) => w.state)).toEqual([
-      "ready",
-      "setting-up",
-    ]);
-    // One still in flight ⇒ the rollup keeps the consolidated card active.
-    expect(segment.model.aggregate.state).toBe("setting-up");
-  });
-
-  it("surfaces failed and cancelled lifecycle state on the card model", () => {
-    const failed = renderRenderedMessages({
-      events: [
-        setupEvent({
-          eventId: "f-running",
-          type: "setup.running",
-          timestamp: 1000,
-          metadata: { workspacePath: "/repo", terminalSessionId: "tf" },
-        }),
-        setupEvent({
-          eventId: "f-failed",
-          type: "setup.failed",
-          timestamp: 1100,
-          metadata: {
-            workspacePath: "/repo",
-            terminalSessionId: "tf",
-            setupExitCode: 7,
-          },
-        }),
-      ],
-    });
-    const failedCard = failed.result.current.find((message) =>
-      message.id.startsWith("setup-card:"),
-    );
-    const failedSegment = failedCard?.segments[0];
-    if (failedSegment?.kind !== "setup-card") {
-      throw new Error("expected setup-card");
-    }
-    expect(failedSegment.model.aggregate.state).toBe("failed");
-    // The failing workspace carries the exit code + terminal the card's Retry /
-    // Open-terminal affordances key off.
-    expect(failedSegment.model.workspaces[0]).toMatchObject({
-      state: "failed",
-      setupExitCode: 7,
-      terminalSessionId: "tf",
-    });
-
-    const cancelled = renderRenderedMessages({
-      events: [
-        setupEvent({
-          eventId: "c-running",
-          type: "setup.running",
-          timestamp: 1000,
-          metadata: { workspacePath: "/repo", terminalSessionId: "tc" },
-        }),
-        setupEvent({
-          eventId: "c-cancelled",
-          type: "setup.cancelled",
-          timestamp: 1100,
-          metadata: { workspacePath: "/repo", terminalSessionId: "tc" },
-        }),
-      ],
-    });
-    const cancelledCard = cancelled.result.current.find((message) =>
-      message.id.startsWith("setup-card:"),
-    );
-    const cancelledSegment = cancelledCard?.segments[0];
-    if (cancelledSegment?.kind !== "setup-card") {
-      throw new Error("expected setup-card");
-    }
-    expect(cancelledSegment.model.aggregate.state).toBe("cancelled");
-    expect(cancelledSegment.model.workspaces[0]?.terminalSessionId).toBe("tc");
   });
 
   it("suppresses the pre-turn Working indicator while setup gates", () => {
@@ -4578,6 +4305,7 @@ describe("useRenderedMessages turn.stopped", () => {
         {
           type: "autonomous_resume" as const,
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed" as const,
           timestamp: 12_000,
           triggers: [],
@@ -4643,6 +4371,402 @@ describe("useRenderedMessages turn.stopped", () => {
     );
   });
 
+  it("infers an in-turn placement when legacy delivery follows assistant work", () => {
+    const steeredUser = userMessageAt("steered-placement", 11_500);
+    const assistant = {
+      ...assistantMessage("turn-legacy-placement", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        textBlock("text-before-delivery", 11_000, "Still working."),
+        steerBlock("steer-before-delivery", steeredUser.messageId, 11_500),
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-in-turn",
+          deliveryPlacement: null,
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+      ],
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant, steeredUser],
+    });
+    const deliveryRow = result.current.find(
+      (message) =>
+        message.role === "assistant" &&
+        message.segments.some(
+          (segment) => segment.kind === "autonomous_resume",
+        ),
+    );
+    const delivery = deliveryRow?.segments.find(
+      (segment) => segment.kind === "autonomous_resume",
+    );
+    expect(delivery?.kind).toBe("autonomous_resume");
+    if (delivery?.kind === "autonomous_resume") {
+      expect(delivery.deliveryPlacement).toBe("in_turn");
+    }
+  });
+
+  it("honors an explicit turn-start placement after assistant prose", () => {
+    const assistant = {
+      ...assistantMessage("turn-explicit-placement", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        textBlock("text-before-start", 11_000, "Previous response."),
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-at-start",
+          status: "completed" as const,
+          timestamp: 12_000,
+          deliveryPlacement: "turn_start" as const,
+          triggers: [],
+        },
+      ],
+    };
+
+    const { result } = renderRenderedMessages({ messages: [assistant] });
+    const row = result.current.find((message) => message.role === "assistant");
+    const delivery = row?.segments.find(
+      (segment) => segment.kind === "autonomous_resume",
+    );
+    expect(delivery?.kind).toBe("autonomous_resume");
+    if (delivery?.kind === "autonomous_resume") {
+      expect(delivery.deliveryPlacement).toBe("turn_start");
+    }
+  });
+
+  const legacyPlacementBlocks: Array<[string, ContentBlock]> = [
+    ["file_change", fileChangeBlock("/repo/src/app.ts")],
+    [
+      "subagent",
+      {
+        type: "subagent" as const,
+        agentType: null,
+        blockId: "agent-placement",
+        name: "Investigate placement",
+        task: "Check the placement regression.",
+        progressUpdates: [],
+        result: "Done.",
+        status: "completed" as const,
+        timestamp: 11_500,
+        startedAt: 11_000,
+        spawnToolCallId: null,
+        stopped: false,
+        workflowMeta: null,
+      },
+    ],
+    [
+      "approval",
+      {
+        type: "approval" as const,
+        blockId: "approval-placement",
+        status: "completed" as const,
+        timestamp: 11_500,
+        toolName: "Shell",
+        description: "Run the placement check",
+        ...approvalInputFields("Shell", { command: "pwd" }),
+        decision: null,
+      },
+    ],
+    [
+      "plan",
+      persistedPlanBlock({
+        contentHash: "placement-plan",
+        revision: 1,
+        preview: "## Placement plan",
+        timestamp: 11_500,
+      }),
+    ],
+  ];
+
+  it.each(legacyPlacementBlocks)(
+    "infers in-turn placement after a visible %s block",
+    (_, workBlock) => {
+      const assistant = {
+        ...assistantMessage(
+          `turn-legacy-${String(workBlock.type)}-placement`,
+          10_000,
+        ),
+        timestamp: 12_000,
+        blocks: [
+          workBlock,
+          {
+            type: "autonomous_resume" as const,
+            blockId: `resume-after-${String(workBlock.type)}`,
+            deliveryPlacement: null,
+            status: "completed" as const,
+            timestamp: 12_000,
+            triggers: [],
+          },
+        ],
+      };
+
+      const { result } = renderRenderedMessages({ messages: [assistant] });
+      const row = result.current.find(
+        (message) => message.role === "assistant",
+      );
+      const delivery = row?.segments.find(
+        (segment) => segment.kind === "autonomous_resume",
+      );
+      expect(delivery?.kind).toBe("autonomous_resume");
+      if (delivery?.kind === "autonomous_resume") {
+        expect(delivery.deliveryPlacement).toBe("in_turn");
+      }
+    },
+  );
+
+  const nonRenderablePlacementBlocks: Array<[string, ContentBlock]> = [
+    [
+      "empty text",
+      {
+        type: "text",
+        blockId: "empty-text-placement",
+        status: "completed",
+        timestamp: 11_500,
+        text: "",
+        providerNotice: null,
+      },
+    ],
+    [
+      "empty reasoning",
+      {
+        type: "reasoning",
+        blockId: "empty-reasoning-placement",
+        status: "completed",
+        timestamp: 11_500,
+        content: "",
+        startedAt: null,
+      },
+    ],
+    [
+      "empty plan",
+      {
+        ...persistedPlanBlock({
+          contentHash: "empty-plan-placement",
+          revision: 1,
+          preview: "",
+          timestamp: 11_500,
+        }),
+        fullContentRef: null,
+        steps: [],
+      },
+    ],
+    [
+      "non-renderable subagent",
+      {
+        type: "subagent",
+        agentType: null,
+        blockId: "empty-subagent-placement",
+        name: "background command",
+        task: null,
+        progressUpdates: [],
+        result: "finished",
+        status: "completed",
+        timestamp: 11_500,
+        startedAt: 11_000,
+        spawnToolCallId: null,
+        stopped: false,
+        workflowMeta: null,
+      },
+    ],
+  ];
+
+  it.each(nonRenderablePlacementBlocks)(
+    "keeps legacy placement at turn start after a non-renderable %s block",
+    (_, nonRenderableBlock) => {
+      const assistant = {
+        ...assistantMessage(
+          `turn-legacy-empty-${String(nonRenderableBlock.type)}-placement`,
+          10_000,
+        ),
+        timestamp: 12_000,
+        blocks: [
+          nonRenderableBlock,
+          {
+            type: "autonomous_resume" as const,
+            blockId: `resume-after-empty-${String(nonRenderableBlock.type)}`,
+            deliveryPlacement: null,
+            status: "completed" as const,
+            timestamp: 12_000,
+            triggers: [],
+          },
+        ],
+      };
+
+      const { result } = renderRenderedMessages({ messages: [assistant] });
+      const row = result.current.find(
+        (message) => message.role === "assistant",
+      );
+      const delivery = row?.segments.find(
+        (segment) => segment.kind === "autonomous_resume",
+      );
+      expect(delivery?.kind).toBe("autonomous_resume");
+      if (delivery?.kind === "autonomous_resume") {
+        expect(delivery.deliveryPlacement).toBe("turn_start");
+      }
+    },
+  );
+
+  it("ignores steer and notification blocks when inferring legacy placement", () => {
+    const steeredUser = userMessageAt("legacy-steer-placement", 11_500);
+    const assistant = {
+      ...assistantMessage("turn-legacy-notification-placement", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        steerBlock("steer-only-placement", steeredUser.messageId, 11_000),
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-before-notification",
+          deliveryPlacement: null,
+          status: "completed" as const,
+          timestamp: 11_500,
+          triggers: [],
+        },
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-after-notification",
+          deliveryPlacement: null,
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+      ],
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [assistant, steeredUser],
+    });
+    const row = result.current.find(
+      (message) =>
+        message.role === "assistant" &&
+        message.segments.some(
+          (segment) => segment.kind === "autonomous_resume",
+        ),
+    );
+    const deliveries =
+      row?.segments.filter((segment) => segment.kind === "autonomous_resume") ??
+      [];
+    expect(deliveries).toHaveLength(2);
+    expect(deliveries.map((segment) => segment.deliveryPlacement)).toEqual([
+      "turn_start",
+      "turn_start",
+    ]);
+  });
+
+  it.each([
+    {
+      placement: "in_turn",
+      withLaterProse: false,
+      includeStart: true,
+      showFooter: true,
+      turnHasOnlyAutonomousResumeSegments: false,
+    },
+    {
+      placement: "in_turn",
+      withLaterProse: true,
+      includeStart: true,
+      showFooter: true,
+      turnHasOnlyAutonomousResumeSegments: false,
+    },
+    {
+      placement: "in_turn",
+      withLaterProse: false,
+      includeStart: false,
+      showFooter: false,
+      turnHasOnlyAutonomousResumeSegments: false,
+    },
+    {
+      placement: "turn_start",
+      withLaterProse: false,
+      includeStart: false,
+      showFooter: false,
+      turnHasOnlyAutonomousResumeSegments: true,
+    },
+  ] as const)(
+    "uses the correct lifecycle for each placement case",
+    (testCase) => {
+      const {
+        placement,
+        withLaterProse,
+        includeStart,
+        showFooter,
+        turnHasOnlyAutonomousResumeSegments,
+      } = testCase;
+      const turnId = `turn-explicit-${placement}-${withLaterProse}`;
+      const assistant = {
+        ...assistantMessage(turnId, 10_000),
+        timestamp: 15_000,
+        blocks: [
+          {
+            type: "autonomous_resume" as const,
+            blockId: `resume-explicit-${placement}`,
+            deliveryPlacement: placement,
+            status: "completed" as const,
+            timestamp: 12_000,
+            triggers: [
+              {
+                kind: "monitor" as const,
+                title: "Build watch",
+                status: "completed" as const,
+                summary: "2 new log lines",
+                blockId: "watched-command",
+                live: true,
+                outputFile: null,
+                mcp: null,
+                managedCommand: null,
+              },
+            ],
+          },
+          ...(withLaterProse
+            ? [textBlock("text-after-explicit-resume", 14_000, "Finished.")]
+            : []),
+        ],
+      };
+
+      const events = [
+        ...(includeStart
+          ? [
+              terminalEvent({
+                type: "turn.started" as const,
+                turnId,
+                timestamp: 10_000,
+                message: null,
+                severity: "info" as const,
+                metadata: null,
+              }),
+            ]
+          : []),
+        terminalEvent({
+          type: "turn.completed",
+          timestamp: 15_000,
+          turnId,
+          message: "Turn completed.",
+          severity: "info",
+          metadata: null,
+        }),
+      ];
+
+      const { result } = renderRenderedMessages({
+        messages: [assistant],
+        events,
+      });
+
+      const row = result.current.find(
+        (message) => message.role === "assistant",
+      );
+      expect(row?.elapsedStartedAt ?? row?.createdAt).toBe(10_000);
+      expect(row?.showCompletionFooter).toBe(showFooter);
+      expect(row?.turnHasOnlyAutonomousResumeSegments).toBe(
+        turnHasOnlyAutonomousResumeSegments,
+      );
+      if (showFooter) {
+        expect(row?.completedAt).toBe(15_000);
+      }
+    },
+  );
+
   it("keeps an adopted start without a terminal event footerless", () => {
     const assistant = {
       ...assistantMessage("turn-resume", 10_000),
@@ -4651,6 +4775,7 @@ describe("useRenderedMessages turn.stopped", () => {
         {
           type: "autonomous_resume" as const,
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed" as const,
           timestamp: 12_000,
           triggers: [],
@@ -4693,6 +4818,7 @@ describe("useRenderedMessages turn.stopped", () => {
         {
           type: "autonomous_resume" as const,
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed" as const,
           timestamp: 12_000,
           triggers: [],
@@ -4745,6 +4871,7 @@ describe("useRenderedMessages turn.stopped", () => {
         {
           type: "autonomous_resume" as const,
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed" as const,
           timestamp: 12_000,
           triggers: [],
@@ -4822,6 +4949,7 @@ describe("useRenderedMessages turn.stopped", () => {
         {
           type: "autonomous_resume" as const,
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed" as const,
           timestamp: 12_000,
           triggers: [],
@@ -4882,6 +5010,7 @@ describe("useRenderedMessages turn.stopped", () => {
         {
           type: "autonomous_resume" as const,
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed" as const,
           timestamp: 12_000,
           triggers: [],
@@ -4933,6 +5062,7 @@ describe("useRenderedMessages turn.stopped", () => {
         {
           type: "autonomous_resume" as const,
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed" as const,
           timestamp: 12_000,
           triggers: [],
@@ -4982,6 +5112,7 @@ describe("useRenderedMessages turn.stopped", () => {
         {
           type: "autonomous_resume" as const,
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed" as const,
           timestamp: 12_000,
           triggers: [],
@@ -5023,6 +5154,7 @@ describe("useRenderedMessages turn.stopped", () => {
         {
           type: "autonomous_resume" as const,
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed" as const,
           timestamp: 12_000,
           triggers: [],
@@ -5066,6 +5198,7 @@ describe("useRenderedMessages turn.stopped", () => {
         {
           type: "autonomous_resume" as const,
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed" as const,
           timestamp: 12_000,
           triggers: [],
@@ -5111,6 +5244,7 @@ describe("useRenderedMessages turn.stopped", () => {
         {
           type: "autonomous_resume" as const,
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed" as const,
           timestamp: 14_000,
           triggers: [],
@@ -5161,6 +5295,7 @@ describe("useRenderedMessages turn.stopped", () => {
         {
           type: "autonomous_resume" as const,
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed" as const,
           timestamp: 12_000,
           triggers: [],

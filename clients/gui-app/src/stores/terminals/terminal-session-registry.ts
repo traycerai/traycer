@@ -1,3 +1,12 @@
+import {
+  createSessionRegistry,
+  type SessionRegistry,
+} from "@traycer-clients/shared/replica-runtime";
+import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
+import {
+  DESKTOP_RETENTION_PROFILE,
+  getRetentionProfile,
+} from "@/stores/replica-memory/retention-profile";
 import type { TerminalSessionStoreHandle } from "@/stores/terminals/terminal-session-store";
 
 /**
@@ -26,7 +35,8 @@ export const PLAIN_TERMINAL_RELEASE_LINGER_MS = 10 * 60 * 1000;
  * running agents flush every lingering shell immediately). Mirrors
  * `DEFAULT_MAX_WARM_CHAT_SESSIONS`.
  */
-export const MAX_LINGERING_PLAIN_TERMINALS = 6;
+export const MAX_LINGERING_PLAIN_TERMINALS =
+  DESKTOP_RETENTION_PROFILE.maxLingeringPlainTerminals;
 
 /**
  * Owner-scoped identity for warm-presentation lookup. Terminal sessions
@@ -39,31 +49,51 @@ export type TerminalWarmSessionIdentity = {
   readonly sessionId: string;
 };
 
-interface RegistryEntry {
-  readonly instanceId: string;
+/**
+ * What this registry holds per tab instance: the handle, the owner host it was
+ * acquired for, and the status subscription that evicts it once the session
+ * becomes unreattachable.
+ *
+ * A record rather than the bare handle because the host is ACQUIRE-TIME
+ * identity that the handle does not carry, and it has to live in the same book
+ * as the entry it describes - a parallel `Map<instanceId, hostId>` is two
+ * records of one fact, free to disagree the moment an entry is rekeyed or
+ * evicted through a path that forgets it.
+ *
+ * It is deliberately NOT folded into the entry KEY (which is the tab instance
+ * id alone): a different host under the same instance id would then read as a
+ * different session, and the incumbent registry treats the host passed to a
+ * repeat `acquire` as ignorable rather than as grounds for a rebuild.
+ */
+interface TerminalRegistrySession {
   readonly handle: TerminalSessionStoreHandle;
   /** Bound owner host. `null` is the explicit hostless path. */
   readonly hostId: string | null;
-  readonly unsubscribeStatus: () => void;
-  leases: number;
-  /** Pending timed eviction for a lease-free, still-running plain terminal. */
-  lingerTimer: number | null;
   /**
-   * Monotonic release ordinal, orders warm-cap eviction (oldest first).
-   * `Date.now()` is not fine-grained enough - two releases in the same
-   * synchronous batch (e.g. `closeAllTabs`) can land on the same millisecond,
-   * making the sort order ambiguous - so a per-registry counter is used
-   * instead.
+   * Reaped and re-created on a rekey: the closure captures the instance id, so
+   * a subscription left under the old key would target an entry that no longer
+   * exists and the defunct handle would never be evicted.
    */
-  releaseSequence: number;
+  unsubscribeStatus: () => void;
 }
+
+/**
+ * Every terminal entry shares one scope. The registry's scope key
+ * discriminates REBUILDS within one identity, and this plane has no such
+ * axis: a tab instance id names one session for its whole life, and the host
+ * it is bound to is data on the entry rather than a rebuild trigger.
+ */
+const TERMINAL_SESSION_SCOPE = "terminal";
 
 /**
  * Per-renderer registry for live `terminal.subscribe` sessions, lease-counted
  * so the same tab instance can mount in more than one place (a split-reparent
  * transition, StrictMode double-mount) without each remount tearing down the
  * underlying stream client. Mirrors `ChatSessionRegistry` in shape, scoped to a
- * single window.
+ * single window - and now literally shares its mechanism: both, and the
+ * open-epic registry, run on {@link createSessionRegistry}, with the three
+ * policies that used to be three implementations expressed as this plane's
+ * answers below.
  *
  * Entries are keyed by the per-tab `instanceId`, not the host `sessionId`, so
  * two tab instances of the SAME PTY/TUI session each get their own handle and
@@ -81,12 +111,65 @@ interface RegistryEntry {
  * treats its chats and terminals identically.
  */
 export class TerminalSessionRegistry {
-  private readonly entries = new Map<string, RegistryEntry>();
-  private readonly listeners = new Set<() => void>();
-  private nextReleaseSequence = 0;
+  private readonly sessions: SessionRegistry<TerminalRegistrySession>;
+
+  constructor() {
+    this.sessions = createSessionRegistry<TerminalRegistrySession>({
+      environment: createRendererRuntimeEnvironment(),
+      policy: {
+        idleTtlMs: PLAIN_TERMINAL_RELEASE_LINGER_MS,
+        // The shell's retention profile (desktop:
+        // `MAX_LINGERING_PLAIN_TERMINALS`), read on every cap walk.
+        get maxWarm(): number {
+          return getRetentionProfile().maxLingeringPlainTerminals;
+        },
+        warmCapScope: "demand-free",
+        // "The count-bounded pool is the lingering plain terminals only ...
+        // counting them would let N running agents flush every lingering shell
+        // immediately."
+        busyCountsTowardWarmCap: false,
+        // A running terminal-agent "is kept warm indefinitely (its tab may
+        // reopen any time while the agent works)", so it is not on a clock at
+        // all - the status subscription below is what collects it.
+        maxActiveDeferMs: null,
+        // Ordered by release, which is what `releaseSequence` recorded.
+        refreshOrderOnRelease: true,
+        retainWhenIdle: ({ handle }) =>
+          shouldKeepLeaseFree(handle) || shouldLingerLeaseFree(handle),
+        // "Busy" here is the indefinite keep-warm class: a running
+        // terminal-agent. A lingering plain terminal is not busy - it is warm
+        // on a clock.
+        hasActiveWork: ({ handle }) => shouldKeepLeaseFree(handle),
+        // Nothing a terminal handle holds is lost by disposing it: the PTY runs
+        // host-side and a reattach replays scrollback.
+        isEvictable: () => true,
+        onBeforeDispose: () => "dispose",
+        dispose: (session) => {
+          session.unsubscribeStatus();
+          session.handle.dispose();
+        },
+        // Attachment intent follows lease state, not session kind: a
+        // lease-free running terminal-agent (indefinite keep-warm) or
+        // lingering plain terminal must not claim attention.
+        // `terminal.subscribe@1.6` carries viewer only on the open frame, so
+        // this reopens as `cache`. A THROW here is the disappearing-transport
+        // case and the registry fails toward disposal, because the captured
+        // factory throws when the directory or user is gone and a warm entry
+        // whose stream is already closed would only ever be revived dead.
+        onParked: ({ handle }) => {
+          handle.store.getState().setViewer("cache");
+        },
+        // Lease-free keep-warm / linger was tagged `cache`. A tile looking
+        // again is presentation; intent is open-frame-only so this reopens.
+        onRevived: ({ handle }) => {
+          handle.store.getState().setViewer("presentation");
+        },
+      },
+    });
+  }
 
   size(): number {
-    return this.entries.size;
+    return this.sessions.size();
   }
 
   /**
@@ -97,35 +180,26 @@ export class TerminalSessionRegistry {
    * sync as terminal tiles mount and unmount.
    */
   subscribe(listener: () => void): () => void {
-    this.listeners.add(listener);
-    return () => {
-      this.listeners.delete(listener);
-    };
-  }
-
-  private notify(): void {
-    for (const listener of Array.from(this.listeners)) {
-      listener();
-    }
+    return this.sessions.subscribe(listener);
   }
 
   /** Live session handles, for aggregate reads (e.g. agent-activity). */
   listHandles(): TerminalSessionStoreHandle[] {
-    return Array.from(this.entries.values(), (entry) => entry.handle);
+    return this.sessions.list().map((session) => session.handle);
   }
 
   /**
    * Live tab-instance ids bound to one host. Overview's `host.status`
    * refresh uses this so a membership change on host B does not void
-   * host A's settled busy. Reads `entry.hostId` (the acquire-time
-   * identity), not the WeakMap the React hook stamps — that map is only
-   * set by `useTerminalSessionHandle`.
+   * host A's settled busy. Reads the acquire-time identity, not the WeakMap
+   * the React hook stamps — that map is only set by
+   * `useTerminalSessionHandle`.
    */
   membershipIdsForHost(hostId: string): string[] {
     const ids: string[] = [];
-    for (const entry of this.entries.values()) {
-      if (entry.hostId !== hostId) continue;
-      ids.push(entry.instanceId);
+    for (const entry of this.sessions.entries()) {
+      if (entry.session.hostId !== hostId) continue;
+      ids.push(entry.key);
     }
     ids.sort();
     return ids;
@@ -138,12 +212,13 @@ export class TerminalSessionRegistry {
    * lease-free handle was evicted).
    */
   listInstanceIds(): string[] {
-    return Array.from(this.entries.keys());
+    return Array.from(this.sessions.keys());
   }
 
   get(instanceId: string): TerminalSessionStoreHandle | null {
-    const entry = this.entries.get(instanceId);
-    return entry === undefined ? null : entry.handle;
+    // `peek`, not `get`: this plane has never refreshed recency on a read, and
+    // its eviction order is the release order rather than a last-used one.
+    return this.sessions.peek(instanceId)?.handle ?? null;
   }
 
   acquire(
@@ -151,31 +226,14 @@ export class TerminalSessionRegistry {
     factory: () => TerminalSessionStoreHandle,
     hostId: string | null,
   ): TerminalSessionStoreHandle {
-    const existing = this.entries.get(instanceId);
-    if (existing !== undefined) {
-      this.cancelLinger(existing);
-      const wasLeaseFree = existing.leases === 0;
-      existing.leases += 1;
-      // Lease-free keep-warm / linger was tagged `cache`. A tile looking
-      // again is presentation; intent is open-frame-only so this reopens.
-      if (wasLeaseFree) {
-        existing.handle.store.getState().setViewer("presentation");
-      }
-      return existing.handle;
-    }
-    const handle = factory();
-    const entry: RegistryEntry = {
-      instanceId,
-      handle,
-      hostId,
-      unsubscribeStatus: this.watchDefunct(instanceId, handle),
-      leases: 1,
-      lingerTimer: null,
-      releaseSequence: 0,
-    };
-    this.entries.set(instanceId, entry);
-    this.notify();
-    return handle;
+    return this.sessions.acquire(instanceId, TERMINAL_SESSION_SCOPE, () => {
+      const handle = factory();
+      return {
+        handle,
+        hostId,
+        unsubscribeStatus: this.watchDefunct(instanceId, handle),
+      };
+    }).handle;
   }
 
   /**
@@ -225,13 +283,13 @@ export class TerminalSessionRegistry {
     identity: TerminalWarmSessionIdentity,
     newInstanceId: string,
   ): string | null {
-    if (this.entries.has(newInstanceId)) return null;
-    for (const entry of this.entries.values()) {
-      if (entry.handle.sessionId !== identity.sessionId) continue;
-      if (entry.hostId !== identity.hostId) continue;
-      if (entry.leases > 0) continue;
-      if (entry.handle.store.getState().status === "reaped") continue;
-      return entry.instanceId;
+    if (this.sessions.peekEntry(newInstanceId) !== null) return null;
+    for (const entry of this.sessions.entries()) {
+      if (entry.session.handle.sessionId !== identity.sessionId) continue;
+      if (entry.session.hostId !== identity.hostId) continue;
+      if (entry.demand > 0) continue;
+      if (entry.session.handle.store.getState().status === "reaped") continue;
+      return entry.key;
     }
     return null;
   }
@@ -244,32 +302,21 @@ export class TerminalSessionRegistry {
    * disposes engines whose instance id is no longer a registry member.
    */
   rekeyLeaseFreeEntry(oldInstanceId: string, newInstanceId: string): boolean {
-    const entry = this.entries.get(oldInstanceId);
-    if (entry === undefined) return false;
-    if (entry.leases > 0) return false;
-    if (this.entries.has(newInstanceId)) return false;
-    this.cancelLinger(entry);
-    entry.unsubscribeStatus();
-    const rekeyed: RegistryEntry = {
-      instanceId: newInstanceId,
-      handle: entry.handle,
-      hostId: entry.hostId,
-      unsubscribeStatus: this.watchDefunct(newInstanceId, entry.handle),
-      leases: 0,
-      lingerTimer: null,
-      releaseSequence: entry.releaseSequence,
-    };
-    this.entries.delete(oldInstanceId);
-    this.entries.set(newInstanceId, rekeyed);
-    // A lingering plain terminal keeps its timed eviction under the new id;
-    // without re-parking, an adoption whose acquire never lands (tile errored
-    // before the handle enabled) would leave the entry warm forever. The
-    // adopting acquire cancels this timer as usual.
-    if (shouldLingerLeaseFree(rekeyed.handle)) {
-      this.parkLingering(rekeyed);
-    }
-    this.notify();
-    return true;
+    const entry = this.sessions.peekEntry(oldInstanceId);
+    if (entry === null) return false;
+    const session = entry.session;
+    return this.sessions.transact(() => {
+      // Reaped before the move, so the surviving subscription is never the one
+      // that names the old key. Re-armed under whichever key the entry ends up
+      // at, including when the move loses its race.
+      session.unsubscribeStatus();
+      const moved = this.sessions.rekey(oldInstanceId, newInstanceId);
+      session.unsubscribeStatus = this.watchDefunct(
+        moved ? newInstanceId : oldInstanceId,
+        session.handle,
+      );
+      return moved;
+    });
   }
 
   /**
@@ -286,78 +333,21 @@ export class TerminalSessionRegistry {
     handle: TerminalSessionStoreHandle,
     transportAlive: boolean,
   ): void {
-    const entry = this.entries.get(instanceId);
-    if (entry === undefined) return;
+    const entry = this.sessions.peekEntry(instanceId);
+    if (entry === null) return;
     // A defunct handle may be replaced while an older consumer is still
     // mounted. Its eventual effect cleanup must not release a lease belonging
     // to the replacement incarnation now registered under the same instance.
-    if (entry.handle !== handle) return;
-    if (entry.leases <= 0) return;
-    entry.leases -= 1;
-    if (entry.leases > 0) return;
-    const keepOrLinger =
-      shouldKeepLeaseFree(entry.handle) || shouldLingerLeaseFree(entry.handle);
-    if (keepOrLinger && transportAlive) {
-      try {
-        // Attachment intent follows lease state, not session kind: a
-        // lease-free running terminal-agent (indefinite keep-warm) or
-        // lingering plain terminal must not claim attention.
-        // `terminal.subscribe@1.6` carries viewer only on the open frame,
-        // so this reopens as `cache`.
-        entry.handle.store.getState().setViewer("cache");
-      } catch {
-        this.entries.delete(instanceId);
-        this.disposeEntry(entry);
-        this.notify();
-        return;
-      }
-      if (shouldKeepLeaseFree(entry.handle)) return;
-      if (shouldLingerLeaseFree(entry.handle)) {
-        this.parkLingering(entry);
-        return;
-      }
-    }
-    this.entries.delete(instanceId);
-    this.disposeEntry(entry);
-    this.notify();
-  }
-
-  /**
-   * Park a lease-free, still-running plain terminal in the linger pool: keep
-   * the handle (live stream + warm engine) for the linger window so
-   * navigating back reattaches instantly instead of paying a full reconnect.
-   * The entry stays a registry member so the xterm follower keeps its engine;
-   * eviction happens on the timer, on session exit or stream loss (the status
-   * subscription above), on warm-cap overflow, or via forceRelease.
-   */
-  private parkLingering(entry: RegistryEntry): void {
-    entry.releaseSequence = this.nextReleaseSequence++;
-    entry.lingerTimer = window.setTimeout(() => {
-      entry.lingerTimer = null;
-      if (entry.leases > 0) return;
-      if (this.entries.get(entry.instanceId) !== entry) return;
-      this.entries.delete(entry.instanceId);
-      this.disposeEntry(entry);
-      this.notify();
-    }, PLAIN_TERMINAL_RELEASE_LINGER_MS);
-    this.evictLingerOverflow();
+    if (entry.session.handle !== handle) return;
+    this.sessions.release(instanceId, transportAlive ? "warm" : "dispose");
   }
 
   forceRelease(instanceId: string): void {
-    const entry = this.entries.get(instanceId);
-    if (entry === undefined) return;
-    this.entries.delete(instanceId);
-    this.disposeEntry(entry);
-    this.notify();
+    this.sessions.forceRelease(instanceId);
   }
 
   disposeAll(): void {
-    if (this.entries.size === 0) return;
-    for (const entry of this.entries.values()) {
-      this.disposeEntry(entry);
-    }
-    this.entries.clear();
-    this.notify();
+    this.sessions.disposeAll();
   }
 
   /**
@@ -367,43 +357,10 @@ export class TerminalSessionRegistry {
    * (close the tab, run recovery).
    */
   private evictDefunctLeaseFreeEntry(instanceId: string): void {
-    const entry = this.entries.get(instanceId);
-    if (entry === undefined) return;
-    if (entry.leases > 0) return;
-    this.entries.delete(instanceId);
-    this.disposeEntry(entry);
-    this.notify();
-  }
-
-  /**
-   * Enforces the linger cap after a release parks an entry in the linger pool.
-   * A live `lingerTimer` is the pool-membership marker, so lease-free warm
-   * terminal-agents (timer-less) are neither counted nor candidates.
-   */
-  private evictLingerOverflow(): void {
-    const lingering = Array.from(this.entries.values()).filter(
-      (entry) => entry.lingerTimer !== null,
-    );
-    const overflow = lingering.length - MAX_LINGERING_PLAIN_TERMINALS;
-    if (overflow <= 0) return;
-    lingering.sort((a, b) => a.releaseSequence - b.releaseSequence);
-    lingering.slice(0, overflow).forEach((entry) => {
-      this.entries.delete(entry.instanceId);
-      this.disposeEntry(entry);
-    });
-    this.notify();
-  }
-
-  private disposeEntry(entry: RegistryEntry): void {
-    this.cancelLinger(entry);
-    entry.unsubscribeStatus();
-    entry.handle.dispose();
-  }
-
-  private cancelLinger(entry: RegistryEntry): void {
-    if (entry.lingerTimer === null) return;
-    window.clearTimeout(entry.lingerTimer);
-    entry.lingerTimer = null;
+    const entry = this.sessions.peekEntry(instanceId);
+    if (entry === null) return;
+    if (entry.demand > 0) return;
+    this.sessions.discard(instanceId, "unusable");
   }
 }
 

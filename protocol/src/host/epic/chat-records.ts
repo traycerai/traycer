@@ -21,6 +21,8 @@ const textFrameFields = {
   hasBinaryPayload: z.literal(false),
 } as const;
 
+const sha256HexSchema = z.string().regex(/^[0-9a-f]{64}$/);
+
 /**
  * The epic's chat RECORDS, as its serving host's chat registry holds them.
  *
@@ -117,12 +119,20 @@ export type ChatRecordOrigin = z.infer<typeof chatRecordOriginSchema>;
  * ONE row shape, shared by the list read below and by the delta stream's
  * `upsert` frame, deliberately: the host applies its inbox to SQLite and then
  * pushes the same rows to its clients, so a poll and a push that disagreed
- * about the shape would be a bug with two places to fix. Both surfaces are
- * unreleased today, so sharing costs nothing. Once EITHER ships, this const is
- * frozen for that surface and the next field forks a versioned copy
- * (`chatRecordSummarySchemaV11`, the `hostNotificationEntrySchemaV21` pattern)
- * rather than being edited in place - a shared builder must never silently
- * rewrite a released shape.
+ * about the shape would be a bug with two places to fix.
+ *
+ * BOTH surfaces have now shipped (`epic.listChatRecords@1.0`,
+ * `host.chatRecords.subscribe@1.0`-`@1.2`), so this const is FROZEN: it is the
+ * row those released minors promised, and editing it in place would silently
+ * rewrite four released shapes at once. Every further field goes onto a fork,
+ * never here.
+ *
+ * The two surfaces' live rows have since DIVERGED, and the fork is per
+ * surface rather than shared: the list serves
+ * {@link chatRecordSummaryV12Schema} (this row plus `docResident` plus `head`)
+ * and the stream carries {@link chatRecordSummaryStreamV13Schema} (this row
+ * plus `head` alone). `docResident` is the field that cannot be shared - see
+ * the stream row's note for why a delta may not state it.
  */
 export const chatRecordSummarySchema = z.object({
   chatId: z.string().min(1),
@@ -209,11 +219,242 @@ export const chatRecordSummarySchema = z.object({
 });
 export type ChatRecordSummary = z.infer<typeof chatRecordSummarySchema>;
 
+/** FROZEN. `epic.listChatRecords@1.0` serves exactly this response. */
 export const listChatRecordsResponseSchema = z.object({
   chats: z.array(chatRecordSummarySchema),
 });
 export type ListChatRecordsResponse = z.infer<
   typeof listChatRecordsResponseSchema
+>;
+
+// ─── `epic.listChatRecords@1.1` - the doc-remainder union ──────────────────
+//
+// The chat half of the eviction `epic.listTuiAgents@1.1` already made for
+// terminal agents, and it is that minor's shape field-for-field, deliberately:
+// the two methods answer the same question about two record populations, and
+// two different answers to "where did this row come from" would be a seam
+// nobody could keep straight.
+//
+// ## The failure it prevents
+//
+// `epic.listChatRecords@1.0` answers out of this host's chat registry. That was
+// the whole population while every client also held an epic-doc replica and
+// unioned the doc's `chats` subtree in itself. The lanes DELETE that replica -
+// `epic.state.subscribe` carries typed rows, not a document - so any chat that
+// lives only in the doc reaches a lane client here or nowhere.
+//
+// Two populations are still doc-resident and neither is hypothetical:
+//
+//   1. NOT-YET-SWEPT rows. The chat-sync-v2 upgrade sweep deletes doc records
+//      once they are published; until an epic has been opened by an upgraded
+//      host, its pre-upgrade entries are still only in the document.
+//   2. FOREIGN-HOST rows. The sweep is gated on the BINDING host - it refuses
+//      to touch an entry another host owns, because that host may still be
+//      writing it. So a serving host's doc map legitimately holds entries bound
+//      to un-upgraded PEER hosts, and no registry read can produce them.
+//
+// The TUI resolver's own comment names the symptom exactly: they do not error,
+// they are simply absent.
+//
+// ## The gate is the CALLER'S DECLARATION, not its version
+//
+// Serving the remainder is correct for a caller with no doc replica and WRONG
+// for one that has it - duplicate rows, and a union that must then choose
+// between its live doc entry and this host's poll-time copy of the same entry.
+// That choice has no good answer.
+//
+// Gating on this method's own negotiated minor CANNOT answer the question:
+// whether a caller holds a replica is decided by which epic READ LANE it
+// subscribed to, negotiated independently on the same connection. A renderer
+// speaking `listChatRecords@1.1` while still on the monolith is not
+// hypothetical - it is every build between this change and the lane cutover.
+//
+// So `@1.1` grows its REQUEST. The client is the only party that knows, and a
+// fact it declares cannot drift out of step with a version it negotiated
+// elsewhere. Both `hasDocReplica` declarations - this one and
+// `epic.listTuiAgents`' - flip at the same cutover, for the same reason.
+
+/**
+ * The `@1.1` row: the `@1.0` summary plus its ORIGIN PLANE.
+ *
+ * Not to be confused with `origin`, which is already on the row and answers a
+ * different question - `own` / `foreign` is about WRITE AUTHORITY (does this
+ * host's outbox own the row), while `docResident` is about WHICH STORE the row
+ * was read out of. A foreign registry replica and a doc-resident entry are both
+ * un-writable here and are not the same thing: the first is addressable through
+ * the record-backed affordances by routing to its owning host, the second is
+ * not addressable through them at all.
+ *
+ * ## Why the client is told, rather than handed a seamless union
+ *
+ * A `@1.0` client derived exactly this bit from its own doc replica, and the
+ * GUI still routes on it: a doc-resident chat is NOT addressable through the
+ * registry-backed mutations, so a client that could not tell the two apart
+ * would send `epic.renameChat` / `epic.reparentChat` an id naming no registry
+ * row. Serving the union without the marker would fix the disappearance and
+ * silently introduce that mis-route - the worse bug of the two, because it
+ * fails on WRITE instead of on render.
+ *
+ * So the marker is not metadata. It is the doc-replica-derived distinction,
+ * preserved for a client that no longer has a doc replica to derive it from.
+ */
+export const chatRecordSummaryV11Schema = chatRecordSummarySchema.extend({
+  docResident: z.boolean(),
+});
+export type ChatRecordSummaryV11 = z.infer<typeof chatRecordSummaryV11Schema>;
+
+export const listChatRecordsResponseV11Schema = z.object({
+  chats: z.array(chatRecordSummaryV11Schema),
+});
+export type ListChatRecordsResponseV11 = z.infer<
+  typeof listChatRecordsResponseV11Schema
+>;
+
+/**
+ * The `@1.1` request: the `@1.0` request plus the caller's own answer to the
+ * only question that decides what this method should serve.
+ *
+ * `hasDocReplica: true` means the caller still holds a live epic-doc replica
+ * (it subscribed on `epic.subscribe@1`) and therefore already sees every
+ * doc-resident entry continuously, without this method's help. It gets registry
+ * rows only - exactly `@1.0` content.
+ *
+ * `false` means it has no replica (it reads the epic through
+ * `epic.state.subscribe`), so the doc-resident remainder reaches it here or
+ * nowhere.
+ *
+ * REQUIRED, not optional: a `@1.1` caller always knows this about itself, and
+ * an absent field would have to be given a default - which is precisely the
+ * host-side guess this field exists to remove.
+ */
+export const listChatRecordsRequestV11Schema =
+  listChatRecordsRequestSchema.extend({
+    hasDocReplica: z.boolean(),
+  });
+export type ListChatRecordsRequestV11 = z.infer<
+  typeof listChatRecordsRequestV11Schema
+>;
+
+/**
+ * The chat's CLOUD PUBLICATION stamp, as the record row carries it.
+ *
+ * Restated here rather than imported from the internal `@traycerai/common`
+ * chat schemas: this package is the OSS client<->host contract and may not
+ * depend on an internal one. The same three fields the cloud row holds, and
+ * the same meanings - it IS that stamp, replicated into the host's record
+ * table by the inbox and pushed on to clients.
+ *
+ * ## Why all three fields, when only one is read for freshness
+ *
+ * `headSha256` is the digest of the head document's exact bytes, and it is the
+ * only field a consumer keys a re-read on: it changes exactly when the
+ * published transcript changes, so it is a cache key that cannot produce a
+ * false hit. `publishedAt` is the ORDERING fact - server-monotonic, clamped
+ * inside the CAS so it strictly rises under the row lock - and it is what lets
+ * a consumer merge a head independently of `revision`, which orders METADATA
+ * and nothing else. `throughRecordSeq` is display/diagnostic only: two forked
+ * histories both number their turns, so ordering by it would permit exactly the
+ * overwrite the digest exists to refuse (the same warning
+ * `cloudChatSummarySchema` carries).
+ */
+export const chatRecordHeadStampSchema = z.object({
+  /** Digest of the head document's exact bytes. The freshness key. */
+  headSha256: sha256HexSchema,
+  /** Sequence the head was pinned at. A projection - never an ordering fact. */
+  throughRecordSeq: z.number().int().nonnegative(),
+  /**
+   * Server-monotonic publication time. The head's ONLY ordering fact. Bounded
+   * like the row's other timestamps: the server stamps and clamps it as an
+   * integer millisecond count, so a negative or fractional value cannot be a
+   * publication time and is refused at the wire.
+   */
+  publishedAt: z.number().int().nonnegative(),
+});
+export type ChatRecordHeadStamp = z.infer<typeof chatRecordHeadStampSchema>;
+
+// ─── `epic.listChatRecords@1.2` - the publication head on the row ───────────
+//
+// The live-sync half of the published-copy tile. A viewer holding a published
+// COPY of a chat - a collaborator's, or an owner's whose host is unreachable -
+// read the cloud once per tile mount and never again, because nothing in the
+// record row told it a new turn had been published. This carries the cloud
+// head stamp, so the copy can follow completed turns off a plane that already
+// exists.
+//
+// Additive minor on `@1.1`, whose REQUEST it takes unchanged: `hasDocReplica`
+// answers a question this change does not touch, and re-asking it would be a
+// second spelling of one fact. The `@1.1 -> @1.2` upgrade is therefore the
+// IDENTITY, leaving `head` absent rather than writing `null` - see the row's
+// own note on why those two are not the same statement.
+
+/**
+ * The `@1.2` row: the `@1.1` row plus the chat's cloud publication head.
+ *
+ * `.extend()`ed off {@link chatRecordSummaryV11Schema} rather than hand-copied
+ * BECAUSE that const is the released `@1.1` shape (the
+ * `tuiAgentRecordSummaryV11Schema` idiom, one file over): the derivation runs
+ * from the released shape into the new one, so nothing can flow the other way
+ * and rewrite a shipped line. The hand-copy discipline
+ * `chatRunSettingsSchemaV10` follows is the opposite direction - pinning a
+ * frozen copy of a schema that is still LIVE - and does not apply.
+ *
+ * ## `head` is optional AND nullable, and the two absences are not the same
+ *
+ * `null` is the host's positive statement that the row has no publication to
+ * point at: an own row (this host's live chat - the tile never reads a copy of
+ * something it is already serving), or a foreign row whose owner has never
+ * published. ABSENT is the wire's older story - a `@1.0`/`@1.1` peer's row
+ * upgraded onto this shape, which never carried the field at all. Consumers
+ * collapse the two (`record.head ?? null`); the schema keeps them apart so an
+ * upgrade path is never forced to put an affirmative "no head" claim in an
+ * older peer's mouth.
+ *
+ * The optionality is also what makes this a MINOR: an added key on a
+ * non-strict object is stripped by an older peer's schema, so the row still
+ * projects onto every released minor.
+ */
+export const chatRecordSummaryV12Schema = chatRecordSummaryV11Schema.extend({
+  head: chatRecordHeadStampSchema.nullable().optional(),
+});
+export type ChatRecordSummaryV12 = z.infer<typeof chatRecordSummaryV12Schema>;
+
+export const listChatRecordsResponseV12Schema = z.object({
+  chats: z.array(chatRecordSummaryV12Schema),
+});
+export type ListChatRecordsResponseV12 = z.infer<
+  typeof listChatRecordsResponseV12Schema
+>;
+
+/**
+ * The `host.chatRecords.subscribe@1.3` chat row: the FROZEN base row plus the
+ * publication head - and deliberately NOT {@link chatRecordSummaryV12Schema}.
+ *
+ * ## Why the stream row does not carry `docResident`
+ *
+ * `docResident` is a LIST-only field, and adding it here would make the host
+ * assert something it cannot know. The delta plane's own reasoning, in
+ * `chat-record-table.ts`'s `applyDelta`: this stream carries the base row,
+ * which says nothing about the home, and - unlike the terminal-agent twin -
+ * "a doc-homed row cannot produce a delta" is FALSE for chats, because
+ * `ChatRegistryService.acquire` deliberately announces doc-homed chats through
+ * `hydrateLegacyDocSecondary`. Stamping `docResident: false` on those rows
+ * would route their renames to a writer that cannot address them. So the
+ * consumer seeds `docResident: null` from a delta and lets the next `@1.1`+
+ * list answer state the home; `HeldChatRecordRow.docResident` is nullable for
+ * exactly that reason, and `chatRowSupersedesOnSnapshot` carries the waiver
+ * that lets the answer fill it.
+ *
+ * Do not "unify" this with the list row. The two surfaces answer different
+ * questions about provenance, and collapsing them re-introduces the routing
+ * bug above.
+ *
+ * `head` has the same optional-and-nullable meaning it has on the list row.
+ */
+export const chatRecordSummaryStreamV13Schema = chatRecordSummarySchema.extend({
+  head: chatRecordHeadStampSchema.nullable().optional(),
+});
+export type ChatRecordSummaryStreamV13 = z.infer<
+  typeof chatRecordSummaryStreamV13Schema
 >;
 
 /**
@@ -348,6 +589,67 @@ export const getChatRunSettingsResponseSchemaV10 = z.object({
 });
 export type GetChatRunSettingsResponseV10 = z.infer<
   typeof getChatRunSettingsResponseSchemaV10
+>;
+
+/**
+ * Frozen harness id set for `epic.getChatRunSettings@2.0`, as the `1.3.0` tags
+ * shipped it - everything through Reasonix, before Antigravity.
+ *
+ * v2.0 was opened to carry the ids v1.0 froze off, and bound the live
+ * persisted enum on the reading that it was the unreleased head. 1.3.0 was cut
+ * from a branch that predates Antigravity, so the tag froze v2.0 here while
+ * `main` widened the enum underneath it - the same trap one line down, which
+ * is the argument for pinning a released line the moment it ships rather than
+ * when the next id arrives.
+ *
+ * `.extract()` off the live persisted enum for the reason the V10 note gives:
+ * removing an id upstream then fails to compile here instead of silently
+ * narrowing a released line.
+ */
+const chatRunSettingsHarnessIdSchemaV20 = guiHarnessIdSchema.extract([
+  "claude",
+  "codex",
+  "opencode",
+  "traycer",
+  "cursor",
+  "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
+  "amp",
+  "devin",
+  "pi",
+  "hermes",
+  "omp",
+  "huggingface",
+  "reasonix",
+]);
+
+/**
+ * Frozen `epic.getChatRunSettings@2.0` settings tuple. Hand-copied off
+ * `chatRunSettingsSchema` for the same reason the V10 copy is: pinning only
+ * the id over a LIVE body is a half freeze.
+ */
+export const chatRunSettingsSchemaV20 = z.object({
+  harnessId: chatRunSettingsHarnessIdSchemaV20,
+  model: z.string().min(1),
+  permissionMode: permissionModeSchema,
+  reasoningEffort: z.string().nullable(),
+  serviceTier: z.string().nullable().default(null),
+  agentMode: agentModeSchema,
+  profileId: z.string().nullable().default(null),
+});
+export type ChatRunSettingsV20 = z.infer<typeof chatRunSettingsSchemaV20>;
+
+export const getChatRunSettingsResponseSchemaV20 = z.object({
+  settings: chatRunSettingsSchemaV20.nullable(),
+});
+export type GetChatRunSettingsResponseV20 = z.infer<
+  typeof getChatRunSettingsResponseSchemaV20
 >;
 
 /**
@@ -640,6 +942,74 @@ export type HostChatRecordsSubscribeServerFrameV12 = z.infer<
   typeof hostChatRecordsSubscribeServerFrameSchemaV12
 >;
 
+// ─── `host.chatRecords.subscribe@1.3` - the publication head on the row ─────
+//
+// The live-sync half of the published-copy tile: a foreign row's `upsert` now
+// carries the chat's cloud head stamp, so a viewer holding a published COPY
+// learns that a new turn was published instead of reading the cloud once per
+// tile mount. Frame KINDS are unchanged from `@1.2`; what grows is the row the
+// chat `upsert` carries.
+//
+// `@1.0`-`@1.2` stay installed and FROZEN on the pre-`head` row, and the gate
+// is the negotiated version exactly as it is for the `@1.1` kinds and the
+// `@1.2` cloud arm. An older subscriber's schema would strip `head` anyway -
+// this is an added key on a non-strict object, not a new frame kind - so the
+// freeze here is about what the CONTRACT promised, not about a parse that
+// would fail.
+//
+// The row is {@link chatRecordSummaryStreamV13Schema} - the base row plus
+// `head`, NOT the list's `@1.2` row. `docResident` stays off the wire here on
+// purpose; that schema's note carries the argument.
+//
+// Every arm is restated rather than spread from the frozen `@1.0` set: that
+// set embeds the pre-`head` `chatRecordSummarySchema` in its `upsert`, which
+// is precisely the arm this minor grows.
+export const hostChatRecordsSubscribeServerFrameSchemaV13 = z
+  .discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("upsert"),
+      ...textFrameFields,
+      epicId: z.string().min(1),
+      chatId: z.string().min(1),
+      revision: z.number().int().nonnegative(),
+      record: chatRecordSummaryStreamV13Schema,
+    }),
+    z.object({
+      kind: z.literal("remove"),
+      ...textFrameFields,
+      epicId: z.string().min(1),
+      chatId: z.string().min(1),
+      reason: chatRecordRemovalReasonSchema,
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      ...textFrameFields,
+    }),
+    // Unchanged from `@1.2`, restated for the same reason its own `tuiRemove`
+    // was: a frozen union declared above must not take a reference to a const
+    // introduced below it.
+    z.object({
+      kind: z.literal("tuiUpsert"),
+      ...textFrameFields,
+      epicId: z.string().min(1),
+      tuiAgentId: z.string().min(1),
+      revision: z.number().int().nonnegative(),
+      record: tuiAgentRecordSummaryV12Schema,
+    }),
+    z.object({
+      kind: z.literal("tuiRemove"),
+      ...textFrameFields,
+      epicId: z.string().min(1),
+      tuiAgentId: z.string().min(1),
+      reason: chatRecordRemovalReasonSchema,
+    }),
+  ])
+  .superRefine(refineChatUpsertEnvelope)
+  .superRefine(refineTuiUpsertEnvelope);
+export type HostChatRecordsSubscribeServerFrameV13 = z.infer<
+  typeof hostChatRecordsSubscribeServerFrameSchemaV13
+>;
+
 export const hostChatRecordsSubscribeClientFrameSchemaV10 =
   z.discriminatedUnion("kind", [
     z.object({
@@ -672,5 +1042,13 @@ export const hostChatRecordsSubscribeV12 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 2 } as const,
   openRequestSchema: hostChatRecordsSubscribeOpenRequestSchemaV10,
   serverFrameSchema: hostChatRecordsSubscribeServerFrameSchemaV12,
+  clientFrameSchema: hostChatRecordsSubscribeClientFrameSchemaV10,
+});
+
+export const hostChatRecordsSubscribeV13 = defineStreamRpcContract({
+  method: "host.chatRecords.subscribe",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  openRequestSchema: hostChatRecordsSubscribeOpenRequestSchemaV10,
+  serverFrameSchema: hostChatRecordsSubscribeServerFrameSchemaV13,
   clientFrameSchema: hostChatRecordsSubscribeClientFrameSchemaV10,
 });

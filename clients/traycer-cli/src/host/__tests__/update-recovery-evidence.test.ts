@@ -94,6 +94,7 @@ vi.mock("../../internal/host-rpc", () => ({
 
 // Imports must come AFTER the vi.mock calls so the mocked modules are in
 // place when `update-recovery-evidence` resolves them.
+import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import * as paths from "../../store/paths";
 import { writeHostInstallRecord } from "../../manifest/host-install";
 import { writeHostStagedRecordAt } from "../../manifest/host-staged";
@@ -195,6 +196,9 @@ function hostStatusResponse(
     // which is exactly what host.status@1.2-and-older peers send.
     updateOperation: null,
     updateTransaction: null,
+    // `null` = this fixture's host did not report on-disk store formats,
+    // which is what a host predating the field sends.
+    storeFormats: null,
     ...overrides,
   };
 }
@@ -716,6 +720,7 @@ describe("observeAttemptRecoveryEvidence - running snapshot flap fails closed (f
     const first = await observeAttemptRecoveryEvidence(
       "production",
       paths.hostHomeDir("production"),
+      "identity-required",
     );
 
     // Same recorded version, but the placed bytes changed underneath it -
@@ -727,6 +732,7 @@ describe("observeAttemptRecoveryEvidence - running snapshot flap fails closed (f
     const second = await observeAttemptRecoveryEvidence(
       "production",
       paths.hostHomeDir("production"),
+      "identity-required",
     );
 
     expect(sameAttemptRecoveryEvidenceObservation(first, second)).toBe(false);
@@ -744,6 +750,7 @@ describe("observeAttemptRecoveryEvidence - running snapshot flap fails closed (f
     const first = await observeAttemptRecoveryEvidence(
       "production",
       paths.hostHomeDir("production"),
+      "identity-required",
     );
 
     writePidMetadata({
@@ -753,6 +760,7 @@ describe("observeAttemptRecoveryEvidence - running snapshot flap fails closed (f
     const second = await observeAttemptRecoveryEvidence(
       "production",
       paths.hostHomeDir("production"),
+      "identity-required",
     );
 
     expect(sameAttemptRecoveryEvidenceObservation(first, second)).toBe(false);
@@ -770,6 +778,7 @@ describe("observeAttemptRecoveryEvidence - running snapshot flap fails closed (f
     const first = await observeAttemptRecoveryEvidence(
       "production",
       paths.hostHomeDir("production"),
+      "identity-required",
     );
 
     callHostRpcMock.mockResolvedValue(
@@ -778,6 +787,7 @@ describe("observeAttemptRecoveryEvidence - running snapshot flap fails closed (f
     const second = await observeAttemptRecoveryEvidence(
       "production",
       paths.hostHomeDir("production"),
+      "identity-required",
     );
 
     expect(first.evidence.running.kind).toBe("verified");
@@ -835,6 +845,394 @@ describe("observeAttemptRecoveryEvidence - running snapshot flap fails closed (f
   });
 });
 
+describe("observeAttemptRecoveryEvidence - the running leg is typed AGAINST the install record (D9)", () => {
+  /**
+   * A genuine, attested install fixture with a caller-chosen `runtimeVersion`
+   * - the field every case in this block classifies against - through the
+   * same real fs read `readInstalledObservation` performs.
+   */
+  async function writeInstalledExecutableWithRuntime(
+    version: string,
+    runtimeVersion: string | null,
+    installId: string,
+  ): Promise<void> {
+    const installDir = paths.hostInstallDir("production");
+    mkdirSync(installDir, { recursive: true });
+    const executablePath = join(installDir, "traycer-host");
+    writeFileSync(executablePath, "binary-bytes");
+    await writeHostInstallRecord("production", {
+      installId,
+      version,
+      runtimeVersion,
+      platform: "linux",
+      arch: "x64",
+      installedAt: "2026-01-01T00:00:00.000Z",
+      source: { kind: "registry", value: version },
+      archiveSha256: "a".repeat(64),
+      executableSha256: GENUINE_EXECUTABLE_SHA256,
+      signatureVerifiedAt: "2026-01-01T00:00:00.000Z",
+      signatureKeyId: "test-key",
+      sizeBytes: 1234,
+      executablePath,
+    });
+  }
+
+  function healthyRunning(reportedVersion: string): void {
+    writePidMetadata({
+      version: reportedVersion,
+      processStartIdentity: "linux:boot-a 4242",
+    });
+    identityVerdictMock.mockResolvedValue("current");
+    callHostRpcMock.mockResolvedValue(
+      hostStatusResponse({ ready: true, hostVersion: reportedVersion }),
+    );
+  }
+
+  it("C1: a staging build - the process reports the record's OWN runtimeVersion stamp, and the running leg reads the CATALOG version", async () => {
+    await writeInstalledExecutableWithRuntime(
+      "1.2.3",
+      "staging.1700000000.abc123",
+      "install-1",
+    );
+    healthyRunning("staging.1700000000.abc123");
+
+    const evidence = await readAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+    );
+    expect(evidence.running).toEqual({
+      kind: "verified",
+      version: "1.2.3",
+      owner: "host-home-bound",
+    });
+  });
+
+  it("C2: the C/R collision - the record's catalog version reported while the record names a DIFFERENT runtimeVersion - is `foreign`, never `verified`", async () => {
+    await writeInstalledExecutableWithRuntime(
+      "1.2.3",
+      "staging.1700000000.abc123",
+      "install-1",
+    );
+    healthyRunning("1.2.3");
+
+    const evidence = await readAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+    );
+    expect(evidence.running).toEqual({
+      kind: "foreign",
+      runtimeIdentity: "1.2.3",
+    });
+    // The "completes falsely" ablation, stated explicitly: dropping the C/R
+    // check reads this collision as the target being genuinely verified.
+    expect(evidence.running).not.toEqual({
+      kind: "verified",
+      version: "1.2.3",
+      owner: "host-home-bound",
+    });
+  });
+
+  it("C3: a different released build running - verified at THAT version, not the record's", async () => {
+    await writeInstalledExecutableWithRuntime("1.2.3", null, "install-1");
+    healthyRunning("2.0.0");
+
+    const evidence = await readAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+    );
+    expect(evidence.running).toEqual({
+      kind: "verified",
+      version: "2.0.0",
+      owner: "host-home-bound",
+    });
+  });
+
+  it("C4: a non-catalog identity with no record vouching for it is `foreign`", async () => {
+    await writeInstalledExecutableWithRuntime("1.2.3", null, "install-1");
+    healthyRunning("staging.1700000000.abc123");
+
+    const evidence = await readAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+    );
+    expect(evidence.running).toEqual({
+      kind: "foreign",
+      runtimeIdentity: "staging.1700000000.abc123",
+    });
+  });
+
+  it("C5: the fingerprint changes when `runtimeVersion` changes, even when the classification's OUTCOME does not", async () => {
+    // The process reports a DIFFERENT released build ("2.0.0") than the
+    // record's catalog version ("1.2.3") on both reads, so the classification
+    // takes the "plain catalog version other than the record's" branch
+    // regardless of `runtimeVersion` - the only axis this test moves.
+    await writeInstalledExecutableWithRuntime("1.2.3", null, "install-1");
+    healthyRunning("2.0.0");
+    const first = await observeAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+      "identity-required",
+    );
+
+    // Same executable bytes, same installedAt, same installId, same digests -
+    // ONLY `runtimeVersion` differs.
+    await writeInstalledExecutableWithRuntime(
+      "1.2.3",
+      "runtime-1.2.3-updated",
+      "install-1",
+    );
+    const second = await observeAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+      "identity-required",
+    );
+
+    expect(first.evidence.running).toEqual({
+      kind: "verified",
+      version: "2.0.0",
+      owner: "host-home-bound",
+    });
+    expect(second.evidence.running).toEqual(first.evidence.running);
+    expect(sameAttemptRecoveryEvidenceObservation(first, second)).toBe(false);
+  });
+
+  it("C6: the observation exposes the identity a park refreshes from - present with records, null with neither", async () => {
+    await writeInstalledExecutableWithRuntime("1.2.3", null, "install-1");
+    await writeStagedExecutable(
+      "2.0.0",
+      true,
+      "test-stage-id",
+      GENUINE_EXECUTABLE_SHA256,
+    );
+    identityVerdictMock.mockResolvedValue("dead");
+
+    const withRecords = await observeAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+      "identity-required",
+    );
+    expect(withRecords.installIdentity).toEqual({
+      installId: "install-1",
+      installedAt: "2026-01-01T00:00:00.000Z",
+      archiveSha256: "a".repeat(64),
+      version: "1.2.3",
+    });
+    expect(withRecords.stageFingerprint).toBe("test-stage-id");
+
+    rmSync(paths.hostInstallDir("production"), {
+      recursive: true,
+      force: true,
+    });
+    rmSync(paths.hostStagedDir("production"), { recursive: true, force: true });
+    const withoutRecords = await observeAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+      "identity-required",
+    );
+    expect(withoutRecords.installIdentity).toBeNull();
+    expect(withoutRecords.stageFingerprint).toBeNull();
+  });
+});
+
+describe("observeAttemptRecoveryEvidence - the running leg's DIAGNOSIS (Linux E13)", () => {
+  // Several distinct causes are one evidence kind on purpose - no decision may
+  // branch on the difference - so the diagnosis is the only place they are
+  // told apart. It is what the verify leg renders when it gives up, which is
+  // the whole reason a user is no longer told "not healthy" and nothing else.
+  it.each([
+    ["a dead pid", "dead", "absent", "host-process-dead"],
+    ["a RECYCLED pid", "mismatch", "absent", "host-process-recycled"],
+    [
+      "an indeterminate verdict",
+      "indeterminate",
+      "unreadable",
+      "pid-identity-indeterminate",
+    ],
+  ] as const)(
+    "tells %s apart while the evidence kind stays the same",
+    async (_label, verdict, kind, diagnosis) => {
+      // Falsification (the ablation): collapse the `dead` and `mismatch` arms
+      // of `readRunningObservation` back into one `absentRunning` and the
+      // recycled row reddens while the dead row still passes - which is
+      // exactly how the distinction was lost before.
+      writePidMetadata({
+        version: "1.2.3",
+        processStartIdentity: "linux:boot-a 4242",
+      });
+      identityVerdictMock.mockResolvedValue(verdict);
+
+      const observation = await observeAttemptRecoveryEvidence(
+        "production",
+        paths.hostHomeDir("production"),
+        "identity-required",
+      );
+
+      expect(observation.evidence.running.kind).toBe(kind);
+      expect(observation.runningDiagnosis).toBe(diagnosis);
+    },
+  );
+
+  it.each([
+    [
+      "an UNAUTHORIZED frame is a refusal",
+      "UNAUTHORIZED",
+      "host-refuses-authenticated-rpc",
+    ],
+    [
+      "a FORBIDDEN frame is a refusal",
+      "FORBIDDEN",
+      "host-refuses-authenticated-rpc",
+    ],
+    [
+      "any OTHER RPC error keeps the budgeted reading",
+      "WORKTREE_BUSY",
+      "host-rpc-unreachable",
+    ],
+  ] as const)("Q19: %s", async (_label, code, diagnosis) => {
+    // The gate is the RPC error CODE, never the host's wording. `WORKTREE_BUSY`
+    // is here as the negative: a host that answered with something that is not
+    // about admission has not decided anything the next poll cannot change, so
+    // it must NOT shorten the budget.
+    // Falsification: widen the code test in `authenticatedRefusalReason` and
+    // the third row reddens; narrow it to UNAUTHORIZED alone and the second
+    // does.
+    writePidMetadata({
+      version: "1.2.3",
+      processStartIdentity: "linux:boot-a 4242",
+    });
+    identityVerdictMock.mockResolvedValue("current");
+    callHostRpcMock.mockRejectedValue(
+      new HostRpcError({
+        code,
+        message: "no applicable key found in the JSON Web Key Set",
+        requestId: "r",
+        method: "host.status",
+        fatalDetails: null,
+      }),
+    );
+
+    const observation = await observeAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+      // The STRONG policy, deliberately. These rows are about how a REFUSAL
+      // classifies, and Q1's fallback is a separate axis: pinning them at
+      // `identity-required` keeps them meaning what they meant before Q1
+      // existed, and leaves the fallback's own rows to exercise the other arm.
+      "identity-required",
+    );
+
+    expect(observation.runningDiagnosis).toBe(diagnosis);
+    expect(observation.evidence.running).toEqual({ kind: "unreadable" });
+  });
+
+  it("Q19: the host's refusal text is CAPPED where it is minted", async () => {
+    // Cold review B: this string is host-authored and unbounded, it is
+    // interpolated into the verify failure's message, and that message is what
+    // `writer.fail` stores - which `host.status.operation.error` mirrors over
+    // the WIRE. So an unbounded value would sit beside a token whose whole
+    // contract is that it is a closed set of fixed strings.
+    //
+    // The wire, not a card: as of Q23 the GUI's `verification-refused` card
+    // renders fixed copy and no surface renders this text for this code. The
+    // cap holds on the durable record alone, and the mint's docblock carries
+    // the full reasoning including what was checked and found ABSENT (no size
+    // bound in either decoder).
+    //
+    // Capped at the MINT rather than at any consumer, because the durable
+    // record is the furthest-travelling consumer and capping one caller would
+    // leave it uncapped.
+    // Falsification: drop the `slice` and this reddens on the length.
+    writePidMetadata({
+      version: "1.2.3",
+      processStartIdentity: "linux:boot-a 4242",
+    });
+    identityVerdictMock.mockResolvedValue("current");
+    callHostRpcMock.mockRejectedValue(
+      new HostRpcError({
+        code: "UNAUTHORIZED",
+        message: "x".repeat(10_000),
+        requestId: "r",
+        method: "host.status",
+        fatalDetails: null,
+      }),
+    );
+
+    const observation = await observeAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+      // The STRONG policy, deliberately. These rows are about how a REFUSAL
+      // classifies, and Q1's fallback is a separate axis: pinning them at
+      // `identity-required` keeps them meaning what they meant before Q1
+      // existed, and leaves the fallback's own rows to exercise the other arm.
+      "identity-required",
+    );
+
+    expect(observation.runningRefusal).not.toBeNull();
+    // The code, a separator, the capped body and the truncation marker.
+    expect(observation.runningRefusal?.length).toBeLessThan(250);
+    expect(observation.runningRefusal?.startsWith("UNAUTHORIZED: ")).toBe(true);
+    expect(observation.runningRefusal?.endsWith("...")).toBe(true);
+  });
+
+  it("names a MISSING start stamp rather than lumping it in with an unreadable record", async () => {
+    // #1763's stamp: a record without it is refused rather than failed open,
+    // and "there is no stamp" is a different thing to fix than "the file is
+    // corrupt".
+    writePidMetadata({ version: "1.2.3", processStartIdentity: null });
+    identityVerdictMock.mockResolvedValue("current");
+
+    const observation = await observeAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+      "identity-required",
+    );
+
+    expect(observation.evidence.running).toEqual({ kind: "unreadable" });
+    expect(observation.runningDiagnosis).toBe("pid-start-stamp-missing");
+  });
+
+  it("names an absent pid record, and a home that is not this environment's", async () => {
+    identityVerdictMock.mockResolvedValue("dead");
+    const absent = await observeAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+      "identity-required",
+    );
+    expect(absent.runningDiagnosis).toBe("pid-metadata-absent");
+
+    const wrongHome = await observeAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("dev"),
+      "identity-required",
+    );
+    expect(wrongHome.runningDiagnosis).toBe("host-home-mismatch");
+  });
+
+  it("keeps the diagnosis OUT of the fingerprint, so it can never move an equality", async () => {
+    // It explains a reading; it must never participate in one.
+    writePidMetadata({
+      version: "1.2.3",
+      processStartIdentity: "linux:boot-a 4242",
+    });
+    identityVerdictMock.mockResolvedValue("dead");
+    const first = await observeAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+      "identity-required",
+    );
+    identityVerdictMock.mockResolvedValue("mismatch");
+    const second = await observeAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+      "identity-required",
+    );
+
+    expect(first.runningDiagnosis).toBe("host-process-dead");
+    expect(second.runningDiagnosis).toBe("host-process-recycled");
+    expect(sameAttemptRecoveryEvidenceObservation(first, second)).toBe(true);
+  });
+});
+
 // KNOWN GAP: `sameRegularFileIdentity` also fails closed when either side's
 // `dev`/`ino` reads as `0` (the Windows convention for "not a meaningful
 // identity"). That branch has no test here: forcing a zero-identity `Stats`
@@ -845,3 +1243,235 @@ describe("observeAttemptRecoveryEvidence - running snapshot flap fails closed (f
 // module - a targeted mock risks silently breaking every other fixture in
 // this file rather than proving the one branch. Real coverage needs either a
 // genuine Windows CI runner or a narrower seam than exists today.
+
+describe("observeAttemptRecoveryEvidence - Q1: the version-only fallback for a pre-stamp host", () => {
+  /** A healthy 1.2.0-era host: serving, correct version, and NO start stamp. */
+  function seedHealthyPreStampHost(): void {
+    writePidMetadata({ version: "1.2.3", processStartIdentity: null });
+    callHostRpcMock.mockResolvedValue(
+      hostStatusResponse({ ready: true, hostVersion: "1.2.3" }),
+    );
+  }
+
+  it("THE Q1 BUG: identity-required refuses a healthy pre-stamp host", async () => {
+    // The shipped behaviour, kept as the control this whole feature is
+    // measured against. The host is up and serving the exact version, and the
+    // verify leg polls this condition until its 45s budget is gone, then
+    // records a correct install as `failed`.
+    seedHealthyPreStampHost();
+
+    const observation = await observeAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+      "identity-required",
+    );
+
+    expect(observation.evidence.running).toEqual({ kind: "unreadable" });
+    expect(observation.runningDiagnosis).toBe("pid-start-stamp-missing");
+    expect(observation.identityCompared).toBe(false);
+    // Refused BEFORE the RPC - the host is never even asked.
+    expect(callHostRpcMock).not.toHaveBeenCalled();
+  });
+
+  it("THE FIX: version-only verifies that same host, and says identity was not compared", async () => {
+    seedHealthyPreStampHost();
+
+    const observation = await observeAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+      "version-only",
+    );
+
+    expect(observation.evidence.running).toEqual({
+      kind: "verified",
+      version: "1.2.3",
+      owner: "host-home-bound",
+    });
+    expect(observation.runningDiagnosis).toBe("classified");
+    // The half that keeps the record honest: verified, and verified WEAKLY.
+    expect(observation.identityCompared).toBe(false);
+    // The identity verdict was never consulted - there was no stamp to consult
+    // it with. This is what separates "skipped a check it could not make" from
+    // "made the check and ignored the answer".
+    expect(identityVerdictMock).not.toHaveBeenCalled();
+  });
+
+  it("FALLBACK, NOT BLANKET: version-only still compares identity when the host HAS a stamp", async () => {
+    // The row that proves `version-only` names what this run may fall back to
+    // rather than what it does regardless. Without it, a future edit could
+    // turn the policy into an unconditional skip and every other pin here
+    // would stay green.
+    writePidMetadata({
+      version: "1.2.3",
+      processStartIdentity: "linux:boot-a 4242",
+    });
+    identityVerdictMock.mockResolvedValue("current");
+    callHostRpcMock.mockResolvedValue(
+      hostStatusResponse({ ready: true, hostVersion: "1.2.3" }),
+    );
+
+    const observation = await observeAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+      "version-only",
+    );
+
+    expect(observation.evidence.running).toEqual({
+      kind: "verified",
+      version: "1.2.3",
+      owner: "host-home-bound",
+    });
+    expect(observation.identityCompared).toBe(true);
+    expect(identityVerdictMock).toHaveBeenCalled();
+  });
+
+  it("FALLBACK, NOT BLANKET: a RECYCLED pid still fails under version-only when there IS a stamp", async () => {
+    // The consequence of the row above, and the one that would actually hurt
+    // if the policy became a blanket skip: a stamped host whose pid now
+    // belongs to another process must still be caught, whatever the target's
+    // age. `absent`, not `verified`.
+    writePidMetadata({
+      version: "1.2.3",
+      processStartIdentity: "linux:boot-a 4242",
+    });
+    identityVerdictMock.mockResolvedValue("mismatch");
+    callHostRpcMock.mockResolvedValue(
+      hostStatusResponse({ ready: true, hostVersion: "1.2.3" }),
+    );
+
+    const observation = await observeAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+      "version-only",
+    );
+
+    expect(observation.evidence.running).toEqual({ kind: "absent" });
+    expect(observation.runningDiagnosis).toBe("host-process-recycled");
+    expect(observation.identityCompared).toBe(false);
+  });
+
+  it("the fallback keeps every OTHER check: a stamp-less host on the wrong version still fails", async () => {
+    // What `version-only` does NOT mean. The endpoint binding, readiness and
+    // the version agreement are all still enforced - only the identity
+    // comparison is skipped, and only because it cannot be made.
+    writePidMetadata({ version: "1.2.3", processStartIdentity: null });
+    callHostRpcMock.mockResolvedValue(
+      hostStatusResponse({ ready: true, hostVersion: "9.9.9" }),
+    );
+
+    const observation = await observeAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+      "version-only",
+    );
+
+    expect(observation.evidence.running).toEqual({ kind: "unreadable" });
+    expect(observation.runningDiagnosis).toBe("host-version-disagrees-pid");
+  });
+
+  it("the fallback keeps every OTHER check: a stamp-less host that is not ready still fails", async () => {
+    writePidMetadata({ version: "1.2.3", processStartIdentity: null });
+    callHostRpcMock.mockResolvedValue(
+      hostStatusResponse({ ready: false, hostVersion: "1.2.3" }),
+    );
+
+    const observation = await observeAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+      "version-only",
+    );
+
+    expect(observation.evidence.running).toEqual({ kind: "unreadable" });
+    expect(observation.runningDiagnosis).toBe("host-not-ready");
+  });
+
+  // ---- X1: the fallback's PRECONDITION, which was shipped unpinned --------
+  //
+  // Reviewer C's finding, and the shape is worth naming because it is now the
+  // third instance this round: a fix whose CONSEQUENCES are pinned while its
+  // PRECONDITION is not. The two rows above prove what the fallback does once
+  // it engages. Nothing proved what makes it engage - so two independent
+  // mutations (gate the arm on the policy instead of on the stamp; let an
+  // UNRECOGNIZED stamp earn the fallback) left all four suites green.
+  //
+  // The precondition is `processStartIdentityRead === "absent"`, and it is
+  // strictly narrower than `stamp === null`: an unparseable stamp also decodes
+  // to `null`. Collapsing the two is exactly the defect Q1 IS, one layer up -
+  // a host whose stamp is corrupt would silently buy the weaker check on the
+  // grounds that it had no stamp at all.
+  //
+  // `"not-a-stamp"` is PRESENT and does not parse: `isProcessStartIdentity`
+  // requires a `linux|darwin|win32` platform tag before the separator, so this
+  // decodes to `unrecognized` rather than to `absent`.
+  function seedUnparseableStampHost(): void {
+    writePidMetadata({
+      version: "1.2.3",
+      processStartIdentity: "not-a-stamp",
+    });
+    callHostRpcMock.mockResolvedValue(
+      hostStatusResponse({ ready: true, hostVersion: "1.2.3" }),
+    );
+  }
+
+  it("X1: an UNPARSEABLE stamp does not buy the fallback, even under version-only", async () => {
+    seedUnparseableStampHost();
+
+    const observation = await observeAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+      "version-only",
+    );
+
+    // Refused, not verified - and the diagnosis says WHICH of the two `null`
+    // stamps this was. A record that cannot be parsed is not evidence that the
+    // writer predates the field.
+    expect(observation.evidence.running).toEqual({ kind: "unreadable" });
+    expect(observation.runningDiagnosis).toBe("pid-start-stamp-unrecognized");
+    expect(observation.identityCompared).toBe(false);
+    expect(callHostRpcMock).not.toHaveBeenCalled();
+  });
+
+  it("X1 CONTROL: the same unparseable stamp under identity-required is unchanged", async () => {
+    // What this row establishes: the policy makes NO difference to an
+    // unparseable stamp, which is what makes the row above a statement about
+    // the STAMP rather than about the policy.
+    //
+    // It does not redden either of the two mutations that motivated X1 - under
+    // both, this row and the one above still refuse. The mutation it DOES hold
+    // against was named by reviewer C and measured rather than guessed:
+    // collapse the two diagnoses, so an unrecognized stamp reports
+    // `pid-start-stamp-missing` under either policy. That reddens both rows
+    // (49/51), which is what makes this a pin on the distinction the row above
+    // depends on rather than decoration. A control no mutation can redden
+    // should be cut; this one has a falsifier, so it stays.
+    seedUnparseableStampHost();
+
+    const observation = await observeAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+      "identity-required",
+    );
+
+    expect(observation.evidence.running).toEqual({ kind: "unreadable" });
+    expect(observation.runningDiagnosis).toBe("pid-start-stamp-unrecognized");
+    expect(observation.identityCompared).toBe(false);
+  });
+
+  it("the fallback keeps every OTHER check: a dead stamp-less host is caught by the RPC, not by liveness", async () => {
+    // Worth its own row because it is the check the fallback appears to lose.
+    // Without a stamp there is no identity verdict to report `dead`, but the
+    // host still has to ANSWER at its recorded endpoint - so a dead process
+    // fails here under a different token rather than passing.
+    writePidMetadata({ version: "1.2.3", processStartIdentity: null });
+    callHostRpcMock.mockRejectedValue(new Error("ECONNREFUSED"));
+
+    const observation = await observeAttemptRecoveryEvidence(
+      "production",
+      paths.hostHomeDir("production"),
+      "version-only",
+    );
+
+    expect(observation.evidence.running).toEqual({ kind: "unreadable" });
+    expect(observation.runningDiagnosis).toBe("host-rpc-unreachable");
+  });
+});

@@ -66,13 +66,11 @@ const QUESTION: InterviewQuestion = {
   header: null,
   options: [{ label: "A", description: null, preview: null }],
   multiSelect: false,
+  allowsCustomAnswer: null,
 };
 
 const ANSWERABLE_CARD: PendingInterviewView = {
   blockId: "streaming-block",
-  toolName: "AskUserQuestion",
-  title: null,
-  description: null,
   questions: [QUESTION],
   assistantMessageId: null,
 };

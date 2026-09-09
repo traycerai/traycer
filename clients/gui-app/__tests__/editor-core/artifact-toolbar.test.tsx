@@ -91,6 +91,7 @@ function RefOwnedToolbarHarness({
             className={undefined}
             scrollTarget={scrollTarget}
             commentAction={null}
+            quoteAction={null}
             suppressBubbleMenu={false}
           />
         </>
@@ -144,6 +145,7 @@ describe("ArtifactToolbar", () => {
           className={undefined}
           scrollTarget={null}
           commentAction={null}
+          quoteAction={null}
           suppressBubbleMenu={false}
         />
       </EditorContext.Provider>,
@@ -175,6 +177,7 @@ describe("ArtifactToolbar", () => {
           className={undefined}
           scrollTarget={null}
           commentAction={null}
+          quoteAction={null}
           suppressBubbleMenu={false}
         />
       </EditorContext.Provider>,
@@ -199,6 +202,7 @@ describe("ArtifactToolbar", () => {
           className={undefined}
           scrollTarget={null}
           commentAction={{ onStart: () => {} }}
+          quoteAction={null}
           suppressBubbleMenu
         />
       </EditorContext.Provider>,
@@ -230,6 +234,7 @@ describe("ArtifactToolbar", () => {
           className={undefined}
           scrollTarget={scrollContainer}
           commentAction={null}
+          quoteAction={null}
           suppressBubbleMenu={false}
         />
       </EditorContext.Provider>,
@@ -432,6 +437,7 @@ describe("ArtifactToolbar", () => {
           className={undefined}
           scrollTarget={null}
           commentAction={null}
+          quoteAction={null}
           suppressBubbleMenu={false}
         />
       </EditorContext.Provider>,
@@ -455,6 +461,7 @@ describe("ArtifactToolbar", () => {
           className={undefined}
           scrollTarget={scrollContainer}
           commentAction={null}
+          quoteAction={null}
           suppressBubbleMenu={false}
         />
       </EditorContext.Provider>,
@@ -483,6 +490,7 @@ describe("ArtifactToolbar", () => {
           className={undefined}
           scrollTarget={replacementScrollContainer}
           commentAction={null}
+          quoteAction={null}
           suppressBubbleMenu={false}
         />
       </EditorContext.Provider>,

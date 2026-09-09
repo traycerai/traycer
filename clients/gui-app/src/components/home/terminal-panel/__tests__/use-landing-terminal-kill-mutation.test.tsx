@@ -7,7 +7,7 @@ import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/hos
 const mocks = vi.hoisted(() => ({
   defaultRequest: vi.fn(),
   transientRequest: vi.fn(() => Promise.resolve({ killed: true })),
-  buildTransientHostClient: vi.fn(),
+  buildDialableHostClient: vi.fn(),
   findById: vi.fn(),
 }));
 
@@ -28,7 +28,7 @@ vi.mock("@/lib/host", () => ({
   useHostDirectory: () => ({ findById: mocks.findById }),
 }));
 vi.mock("@/hooks/host/use-host-client-for", () => ({
-  buildTransientHostClient: mocks.buildTransientHostClient,
+  buildDialableHostClient: mocks.buildDialableHostClient,
 }));
 
 import { useLandingTerminalKill } from "@/components/home/terminal-panel/use-landing-terminal-kill-mutation";
@@ -59,12 +59,12 @@ describe("useLandingTerminalKill", () => {
     cleanup();
     mocks.defaultRequest.mockReset();
     mocks.transientRequest.mockClear();
-    mocks.buildTransientHostClient.mockReset();
+    mocks.buildDialableHostClient.mockReset();
     mocks.findById.mockReset();
   });
 
   it("pins a kill to the tab host even when that host is currently selected", async () => {
-    mocks.buildTransientHostClient.mockReturnValue({
+    mocks.buildDialableHostClient.mockReturnValue({
       request: mocks.transientRequest,
     });
     const { result } = renderHook(() => useLandingTerminalKill(), {
@@ -76,7 +76,7 @@ describe("useLandingTerminalKill", () => {
       sessionId: "session-a",
     });
 
-    expect(mocks.buildTransientHostClient).toHaveBeenCalledWith(
+    expect(mocks.buildDialableHostClient).toHaveBeenCalledWith(
       expect.anything(),
       hostA,
     );
@@ -101,14 +101,14 @@ describe("useLandingTerminalKill", () => {
       result.current.mutateAsync({ hostId: "host-a", sessionId: "session-a" }),
     ).rejects.toThrow("Host client unavailable");
 
-    expect(mocks.buildTransientHostClient).not.toHaveBeenCalled();
+    expect(mocks.buildDialableHostClient).not.toHaveBeenCalled();
     expect(mocks.transientRequest).not.toHaveBeenCalled();
     expect(mocks.defaultRequest).not.toHaveBeenCalled();
   });
 
   it("fails the kill instead of falling back when the tab's host has no routable client", async () => {
     // The entry exists but cannot be dialled - no websocket URL, or signed out.
-    mocks.buildTransientHostClient.mockReturnValue(null);
+    mocks.buildDialableHostClient.mockReturnValue(null);
     const { result } = renderHook(() => useLandingTerminalKill(), {
       wrapper: QueryWrapper,
     });
@@ -117,7 +117,7 @@ describe("useLandingTerminalKill", () => {
       result.current.mutateAsync({ hostId: "host-a", sessionId: "session-a" }),
     ).rejects.toThrow("Host client unavailable");
 
-    expect(mocks.buildTransientHostClient).toHaveBeenCalledWith(
+    expect(mocks.buildDialableHostClient).toHaveBeenCalledWith(
       expect.anything(),
       hostA,
     );

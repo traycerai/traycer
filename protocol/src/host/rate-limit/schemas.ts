@@ -9,6 +9,7 @@ import {
   providerIdSchemaV50,
   providerIdSchemaV60,
   providerIdSchemaV70,
+  providerIdSchemaV80,
 } from "@traycer/protocol/host/provider-schemas";
 
 // `host.getRateLimitUsage` v1.0 request: no fields. Non-strict on purpose so a
@@ -849,6 +850,44 @@ export const providerRateLimitsSchemaV70 = z.union([
 ]);
 export type ProviderRateLimitsV70 = z.infer<typeof providerRateLimitsSchemaV70>;
 
+// Frozen pre-Antigravity unavailable arm: `provider` pinned to
+// `providerIdSchemaV80` (the id set `cli-v1.3.0` / `host-v1.3.0` shipped) so an
+// already-shipped `agent.getProviderProfileRateLimits@5.0` /
+// `providers.refreshProfileStatus@1.0` caller's strict decode never sees
+// `"antigravity"` in the `available: false` arm.
+const unavailableProviderRateLimitsSchemaV80 =
+  unavailableProviderRateLimitsSchemaV2.extend({
+    provider: providerIdSchemaV80,
+    credentialGeneration: z.string().min(1).optional(),
+  });
+
+/**
+ * Frozen provider union as the 1.3.0 tags shipped it - the live union with the
+ * `available: false` arm's `provider` pinned to `providerIdSchemaV80`.
+ *
+ * Bound by `agent.getProviderProfileRateLimits@5.0` and
+ * `providers.refreshProfileStatus@1.0`. Both lines used to range over the live
+ * union on the reading that they were the newest majors and no released peer
+ * had negotiated them - the sentence that stops being true the moment a tag
+ * ships, exactly as the v4.0 block above records. Antigravity is the first id
+ * added since 1.3.0.
+ *
+ * Every other arm is shared with the live union by reference: they carry no
+ * provider-id enum, so there is nothing for them to drift on.
+ */
+export const providerRateLimitsSchemaV80 = z.union([
+  codexRateLimitsSchema,
+  claudeCodeRateLimitsSchema,
+  openRouterRateLimitsSchema,
+  kiloCodeRateLimitsSchema,
+  grokRateLimitsSchema,
+  huggingFaceRateLimitsSchema,
+  openCodeRateLimitsSchema,
+  cursorRateLimitsSchema,
+  unavailableProviderRateLimitsSchemaV80,
+]);
+export type ProviderRateLimitsV80 = z.infer<typeof providerRateLimitsSchemaV80>;
+
 // v1.2 response = v1.0/v1.1 flat aperture fields (unchanged) + a nullable
 // provider-account snapshot, frozen at the v1 reason enum (see
 // `providerRateLimitsSchemaV1` above). Null both when the request didn't ask
@@ -946,6 +985,19 @@ export const providersRefreshProfileStatusResponseSchema = z.object({
 });
 export type ProvidersRefreshProfileStatusResponse = z.infer<
   typeof providersRefreshProfileStatusResponseSchema
+>;
+
+/**
+ * Frozen `providers.refreshProfileStatus@1.0` response: the `1.3.0` tags
+ * shipped this line, so it stops tracking the live union. Antigravity is the
+ * first id added since. v2.0 carries the live union with a fail-closed v2->v1
+ * bridge.
+ */
+export const providersRefreshProfileStatusResponseSchemaV10 = z.object({
+  providerRateLimits: providerRateLimitsSchemaV80,
+});
+export type ProvidersRefreshProfileStatusResponseV10 = z.infer<
+  typeof providersRefreshProfileStatusResponseSchemaV10
 >;
 
 /**

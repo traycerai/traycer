@@ -7,27 +7,39 @@
  * renderer, so N concurrently-streaming chats cost O(1) scheduler callbacks
  * per frame instead of N independent `requestAnimationFrame` registrations.
  *
- * Tick sources - two timers race, whichever fires first runs the tick and
- * cancels the other:
+ * Tick sources - one frame request and one timer, whichever fires first runs
+ * the tick and cancels the other:
  *
- * - `requestAnimationFrame`: the steady-state cadence while the window is
- *   visible. Visible stores flush every tick (display refresh rate).
- * - a `setTimeout` fallback (`FRAME_TIMEOUT_FALLBACK_MS`): rAF does not fire
- *   while the window is hidden/minimized, which previously let buffered
- *   deltas accumulate for the whole duration of a long uninterrupted stream.
- *   The timeout keeps draining buffers at a slow cadence with no
- *   `visibilitychange` listeners.
+ * - `requestAnimationFrame`: the cadence while the window is visible and a
+ *   visible store is due. The flush lands on a frame boundary.
+ * - the fallback `setTimeout` (`FRAME_TIMEOUT_FALLBACK_MS`), armed with every
+ *   frame: rAF does not fire while the window is hidden/minimized, which
+ *   previously let buffered deltas accumulate for the whole duration of a long
+ *   uninterrupted stream. The fallback keeps draining buffers at a slow
+ *   cadence with no `visibilitychange` listeners.
+ * - a deadline `setTimeout` at the next due time, when every pending store is
+ *   inside its interval (a hidden store's slow tier, or a visible store's
+ *   floor). For a visible store the deadline only hands off to a frame plus
+ *   its fallback - it never flushes the store itself - so a starved rAF keeps
+ *   a visible store at the fallback cadence instead of a timer cadence. The
+ *   fallback's due time survives those hand-offs: hidden-store deadlines
+ *   firing first re-arm the frame but never push the fallback later.
  *
  * Visibility tiers - each registration carries a visibility flag reported
  * from the React layer (chat is visible when ANY surface rendering it is
  * visible; default visible so an unreported store never starves):
  *
- * - visible: flushes on every tick.
+ * - visible: flushes on the next frame, then no more often than
+ *   `VISIBLE_FLUSH_MIN_INTERVAL_MS`. Every flush is a React commit of the
+ *   streaming row plus a style/layout/paint pass, and each of those allocates
+ *   Blink-heap garbage; on a 120 Hz display an uncapped rAF cadence cost
+ *   ~1 MB/s of that per streaming chat. ~30 flushes/s is well past what a
+ *   reader can perceive at token cadence and a quarter of the work.
  * - hidden (`display:none` keep-alive tab, backgrounded pane): flushes only
- *   when `HIDDEN_FLUSH_INTERVAL_MS` has elapsed since its last flush. Passive
- *   consumers (epic-sidebar progress, notification triggers) stay live at the
- *   slow cadence while the per-token render work for invisible streams drops
- *   to ~2 writes/second.
+ *   when `HIDDEN_FLUSH_INTERVAL_MS` has elapsed since its last flush (or its
+ *   registration, before the first). Passive consumers (epic-sidebar
+ *   progress, notification triggers) stay live at the slow cadence while the
+ *   per-token render work for invisible streams drops to ~2 writes/second.
  */
 
 /** Fallback tick delay while rAF is starved (hidden/minimized window). */
@@ -35,6 +47,9 @@ export const FRAME_TIMEOUT_FALLBACK_MS = 500;
 
 /** Minimum interval between flushes for stores with no visible surface. */
 export const HIDDEN_FLUSH_INTERVAL_MS = 500;
+
+/** Minimum interval between two flushes of a visible store (~30 Hz). */
+export const VISIBLE_FLUSH_MIN_INTERVAL_MS = 32;
 
 /**
  * Timer seam. Production uses rAF + window timeouts (see
@@ -89,9 +104,18 @@ interface RegistrationState {
   readonly flush: () => void;
   readonly hasPending: () => boolean;
   visible: boolean;
-  lastFlushAt: number;
+  /** When the store registered; the hidden tier counts from here before the first flush. */
+  readonly registeredAt: number;
+  /** `null` until the first flush: a visible store's first flush is never held back. */
+  lastFlushAt: number | null;
   active: boolean;
 }
+
+/**
+ * What woke the tick. A `deadline` timer hands visible stores off to a frame
+ * (see the module comment); `frame` and `fallback` flush everything due.
+ */
+type TickSource = "frame" | "fallback" | "deadline";
 
 export function createStreamFlushCoordinator(
   timers: StreamFlushTimers,
@@ -101,12 +125,22 @@ export function createStreamFlushCoordinator(
   let frameHandle: number | null = null;
   let timerHandle: number | null = null;
   let timerDueAt: number | null = null;
+  /**
+   * When the fallback for the pending frame is due; non-null exactly while a
+   * frame is pending. Preserved across a deadline tick (which cancels and
+   * re-arms the frame) so a starved rAF beside a stream of earlier
+   * hidden-store deadlines still flushes the visible store at the ORIGINAL
+   * fallback time, instead of pushing it out by 500 ms every time a deadline
+   * fires first. Dropped with the frame everywhere else.
+   */
+  let fallbackDueAt: number | null = null;
 
   function disarm(): void {
     if (frameHandle !== null) {
       timers.cancelFrame(frameHandle);
       frameHandle = null;
     }
+    fallbackDueAt = null;
     if (timerHandle !== null) {
       timers.clearTimer(timerHandle);
       timerHandle = null;
@@ -114,61 +148,94 @@ export function createStreamFlushCoordinator(
     }
   }
 
+  /** Earliest time this entry may flush again; `-Infinity` for a visible store that never has. */
+  function dueAt(entry: RegistrationState): number {
+    if (entry.visible) {
+      return entry.lastFlushAt === null
+        ? Number.NEGATIVE_INFINITY
+        : entry.lastFlushAt + VISIBLE_FLUSH_MIN_INTERVAL_MS;
+    }
+    // A hidden store that never flushed waits out a full interval from
+    // registration, so a hidden stream never fans out on its first delta.
+    return (entry.lastFlushAt ?? entry.registeredAt) + HIDDEN_FLUSH_INTERVAL_MS;
+  }
+
   function isEntryDue(entry: RegistrationState, now: number): boolean {
     if (!entry.hasPending()) return false;
-    if (entry.visible) return true;
-    return now - entry.lastFlushAt >= HIDDEN_FLUSH_INTERVAL_MS;
+    return now >= dueAt(entry);
   }
 
-  function armFrame(): void {
-    if (frameHandle !== null) return;
-    frameHandle = timers.requestFrame(tick);
-    // An already-armed earlier timer is kept - firing sooner is harmless and
-    // re-arming on every per-token requestFlush would churn timers.
-    if (timerHandle === null) {
-      timerDueAt = timers.now() + FRAME_TIMEOUT_FALLBACK_MS;
-      timerHandle = timers.setTimer(tick, FRAME_TIMEOUT_FALLBACK_MS);
-    }
-  }
-
-  function armTimerAt(dueAt: number): void {
-    // Frame mode already ticks sooner than any hidden-store deadline.
-    if (frameHandle !== null) return;
+  /**
+   * One timer at a time, always the earliest deadline asked for: an earlier
+   * armed timer is kept (every timer's tick re-arms whatever it did not
+   * cover), a later one is replaced.
+   */
+  function armTimer(source: "fallback" | "deadline", dueTime: number): void {
+    const now = timers.now();
+    const due = Math.max(dueTime, now);
     if (timerHandle !== null) {
-      if (timerDueAt !== null && timerDueAt <= dueAt) return;
+      if (timerDueAt !== null && timerDueAt <= due) return;
       timers.clearTimer(timerHandle);
       timerHandle = null;
     }
-    const delay = Math.max(0, dueAt - timers.now());
-    timerDueAt = timers.now() + delay;
-    timerHandle = timers.setTimer(tick, delay);
+    timerDueAt = due;
+    timerHandle = timers.setTimer(() => tick(source), due - now);
+  }
+
+  /** A frame, paired with the fallback that stands in for it while rAF is starved. */
+  function armFrame(): void {
+    if (frameHandle === null) {
+      frameHandle = timers.requestFrame(() => tick("frame"));
+    }
+    if (fallbackDueAt === null) {
+      fallbackDueAt = timers.now() + FRAME_TIMEOUT_FALLBACK_MS;
+    }
+    armTimer("fallback", fallbackDueAt);
+  }
+
+  /** Arms for one entry: a frame if it is due now, else a deadline at its due time. */
+  function armFor(entry: RegistrationState, now: number): void {
+    const due = dueAt(entry);
+    if (due <= now && entry.visible) {
+      armFrame();
+      return;
+    }
+    armTimer("deadline", due);
   }
 
   function rearm(): void {
     const now = timers.now();
-    let earliestHiddenDueAt: number | null = null;
+    let frameNeeded = false;
+    let earliestDeadline: number | null = null;
     for (const entry of entries) {
       if (!entry.hasPending()) continue;
-      if (entry.visible) {
-        armFrame();
-        return;
+      const due = dueAt(entry);
+      if (entry.visible && due <= now) {
+        frameNeeded = true;
+        continue;
       }
-      const dueAt = entry.lastFlushAt + HIDDEN_FLUSH_INTERVAL_MS;
-      earliestHiddenDueAt =
-        earliestHiddenDueAt === null
-          ? dueAt
-          : Math.min(earliestHiddenDueAt, dueAt);
+      earliestDeadline =
+        earliestDeadline === null ? due : Math.min(earliestDeadline, due);
     }
-    if (earliestHiddenDueAt !== null) {
-      armTimerAt(Math.max(earliestHiddenDueAt, now));
-    }
+    if (frameNeeded) armFrame();
+    else fallbackDueAt = null; // no frame to stand in for
+    // Armed even beside a frame: a hidden store's deadline must not wait for
+    // a frame that a throttled rAF may never deliver.
+    if (earliestDeadline !== null) armTimer("deadline", earliestDeadline);
   }
 
-  function tick(): void {
+  function tick(source: TickSource): void {
+    // A deadline tick stands in for neither the frame nor its fallback: the
+    // frame is re-requested in `rearm` and the fallback keeps its due time.
+    const preservedFallbackDueAt = source === "deadline" ? fallbackDueAt : null;
     disarm();
+    fallbackDueAt = preservedFallbackDueAt;
     const now = timers.now();
     for (const entry of entries) {
       if (!isEntryDue(entry, now)) continue;
+      // A visible store flushes on a frame (or the fallback standing in for
+      // one); its floor deadline only re-arms that pairing, in `rearm`.
+      if (source === "deadline" && entry.visible) continue;
       entry.lastFlushAt = now;
       entry.flush();
     }
@@ -181,25 +248,24 @@ export function createStreamFlushCoordinator(
         flush: input.flush,
         hasPending: input.hasPending,
         visible: true,
-        lastFlushAt: 0,
+        registeredAt: timers.now(),
+        lastFlushAt: null,
         active: true,
       };
       entries.add(entry);
       return {
         requestFlush: () => {
           if (!entry.active || !entry.hasPending()) return;
-          if (entry.visible) {
-            armFrame();
-            return;
-          }
-          armTimerAt(entry.lastFlushAt + HIDDEN_FLUSH_INTERVAL_MS);
+          armFor(entry, timers.now());
         },
         setVisible: (visible) => {
           if (!entry.active || entry.visible === visible) return;
           entry.visible = visible;
-          // A newly-visible store with a buffered tail should paint on the
-          // next frame, not wait out the hidden-tier interval.
-          if (visible && entry.hasPending()) armFrame();
+          // Re-arm for the new tier: a newly-visible store with a buffered
+          // tail paints on the next frame (or as soon as its floor allows)
+          // instead of waiting out the hidden interval, and a newly-hidden one
+          // gets its own deadline instead of riding the frame's fallback.
+          if (entry.hasPending()) armFor(entry, timers.now());
         },
         unregister: () => {
           if (!entry.active) return;

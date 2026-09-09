@@ -42,8 +42,12 @@ export function useCommGraphAgents(): CommGraphAgents {
       name: chat.title,
       hostId: chat.hostId,
       parentId: chat.parentId,
-      harnessId: null,
+      // A chat's harness and model live in its persisted run settings, which
+      // are absent until the chat has been given some.
+      harnessId: chat.settings?.harnessId ?? null,
+      model: chat.settings?.model ?? null,
       archived: chat.archivedAt !== null,
+      archivedAt: chat.archivedAt,
       createdAt: chat.createdAt,
     }));
     const agentNodes = terminalAgents.map<CommGraphAgentNode>((agent) => ({
@@ -53,7 +57,9 @@ export function useCommGraphAgents(): CommGraphAgents {
       hostId: agent.hostId,
       parentId: agent.parentId,
       harnessId: agent.harnessId,
+      model: agent.model,
       archived: agent.archivedAt !== null,
+      archivedAt: agent.archivedAt,
       createdAt: agent.createdAt,
     }));
     return [...chatNodes, ...agentNodes];

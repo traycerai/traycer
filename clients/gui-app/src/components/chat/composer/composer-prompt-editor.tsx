@@ -34,6 +34,7 @@ import {
 import { normalizeComposerContentWithSelection } from "@/lib/composer/composer-content-normalizer";
 import { hasClaimableFileTransfer } from "@/lib/files/file-transfer-paths";
 import { usePaneActivationFocusIntent } from "@/components/epic-canvas/pane-activation";
+import { usePaneFocusProbe } from "@/components/epic-tabs/pane-visibility-context";
 
 import { buildComposerExtensions } from "./editor/editor-config";
 import type {
@@ -55,6 +56,7 @@ import {
 } from "@/hooks/composer/use-composer-paste";
 import type { ImageAttachmentAttrs } from "./editor/extensions/image-attachment-extension";
 import type { ComposerPickerStore } from "./picker/composer-picker-store";
+import { bumpComposerDraftGeneration } from "@/lib/composer/composer-draft-generation";
 
 const composerEditorIncarnations = new WeakMap<
   Editor,
@@ -296,6 +298,9 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     ref,
   } = props;
   const paneActivationFocusIntent = usePaneActivationFocusIntent();
+  // The live half of `isActive` for the focus registry: a render-time flag can
+  // be one commit stale when another surface selects a composer to focus.
+  const isPaneFocusedNow = usePaneFocusProbe();
 
   // Tiptap's `useEditor` extension chain is built once (`buildComposerExtensions`
   // is memoized with empty editor deps). The plugin closure inside calls
@@ -438,8 +443,9 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
         isEligible: () => editor.view.dom.isConnected,
       },
       isActive,
+      isPaneFocusedNow,
     );
-  }, [composerSurfaceId, editor, isActive]);
+  }, [composerSurfaceId, editor, isActive, isPaneFocusedNow]);
 
   useEffect(() => {
     if (editor === null) return;
@@ -516,6 +522,9 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
 
   const clear = useCallback(() => {
     if (editor === null) return;
+    // Whatever async work was filling THIS draft (a cross-host tab screenshot
+    // still in flight) must not write into the empty one that replaces it.
+    bumpComposerDraftGeneration(editor);
     editor.chain().clearContent().focus().run();
   }, [editor]);
 
@@ -530,6 +539,7 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
         content,
         selection,
       );
+      bumpComposerDraftGeneration(editor);
       editor.commands.setContent(normalized.content, { emitUpdate });
       if (normalized.selection !== null) {
         editor.commands.setTextSelection({

@@ -1,3 +1,11 @@
+// The Overview re-provides a scoped STREAM binding beside its unary one (for
+// the Data & migration group), and the real hook reads `useAuthService` -
+// which this suite deliberately does not stand up. `null` keeps the panel on
+// the ambient stream, the arrangement every assertion below already assumed.
+vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
+  useScopedStreamBinding: () => null,
+}));
+
 // The Overview's whole premise: local and remote render from the SAME
 // components reading the SAME RPCs. Mocked at the scope/binding boundary the
 // same way `shell-settings-panel.test.tsx` does — these suites render the

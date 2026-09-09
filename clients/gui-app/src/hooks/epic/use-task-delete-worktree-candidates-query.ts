@@ -36,6 +36,8 @@ export interface TaskDeleteWorktreeCandidate {
 export interface TaskDeleteWorktreeCandidatesResult {
   readonly candidates: ReadonlyArray<TaskDeleteWorktreeCandidate>;
   readonly isError: boolean;
+  /** True while the host-wide census can still add cleanup choices. */
+  readonly isFetching: boolean;
 }
 
 const EMPTY_CANDIDATES: ReadonlyArray<TaskDeleteWorktreeCandidate> = [];
@@ -115,7 +117,7 @@ export function useTaskDeleteWorktreeCandidates(
   const fetchWorktreePagesNormalized =
     (): Promise<WorktreeListAllForHostResponseV14> =>
       withHostQueryErrorBoundary("worktree.listAllForHost", fetchWorktreePages);
-  const { data, isError } = useQuery(
+  const { data, isError, isFetching } = useQuery(
     queryOptions<WorktreeListAllForHostResponseV14, HostRpcError>({
       queryKey: hostQueryKeys.method<
         HostRpcRegistry,
@@ -163,5 +165,5 @@ export function useTaskDeleteWorktreeCandidates(
     });
   }, [deletedEpicIds, isError, worktrees]);
 
-  return { candidates, isError };
+  return { candidates, isError, isFetching };
 }

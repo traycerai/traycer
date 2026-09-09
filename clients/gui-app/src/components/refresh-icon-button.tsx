@@ -16,6 +16,8 @@ interface RefreshIconButtonProps {
   readonly className?: string;
   /** External loading state when the caller's backing query remains active. */
   readonly refreshing?: boolean;
+  /** When present, disables refresh and explains why in the tooltip/name. */
+  readonly disabledReason?: string;
 }
 
 /**
@@ -26,16 +28,24 @@ interface RefreshIconButtonProps {
  * spinner.
  */
 export function RefreshIconButton(props: RefreshIconButtonProps) {
-  const { onRefresh, label, className, refreshing: externalRefreshing } = props;
+  const {
+    onRefresh,
+    label,
+    className,
+    refreshing: externalRefreshing,
+    disabledReason,
+  } = props;
   const { refreshing, trigger } = useRefreshSpinner({
     onRefresh,
     externalRefreshing: externalRefreshing === true,
     timeoutMs: REFRESH_TIMEOUT_MS,
   });
+  const effectiveLabel =
+    disabledReason === undefined ? label : `${label} — ${disabledReason}`;
 
   return (
     <TooltipWrapper
-      label={label}
+      label={effectiveLabel}
       side="top"
       sideOffset={undefined}
       align={undefined}
@@ -43,9 +53,9 @@ export function RefreshIconButton(props: RefreshIconButtonProps) {
       <span className="inline-flex">
         <button
           type="button"
-          aria-label={label}
+          aria-label={effectiveLabel}
           onClick={trigger}
-          disabled={refreshing}
+          disabled={refreshing || disabledReason !== undefined}
           className={cn(
             "flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent disabled:hover:text-muted-foreground",
             className,

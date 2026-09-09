@@ -1,4 +1,8 @@
-import type { BrowserScreencastClientFrame } from "@traycer/protocol/host/browser/contracts";
+import type {
+  BrowserScreencastAgentCursorType,
+  BrowserScreencastCaptureMode,
+  BrowserScreencastClientFrame,
+} from "@traycer/protocol/host/browser/contracts";
 import { SCREENCAST_ARM_BUFFER_CLICK_SLOP_PX } from "@/components/epic-canvas/renderers/screencast-arm-buffer";
 import { hasPlatformModKey } from "@/lib/keybindings/chord";
 
@@ -50,6 +54,23 @@ export interface ScreencastFrameSize {
 }
 
 /**
+ * Where the agent driving a tab last pointed. Lives beside
+ * {@link ScreencastFrameSize} because the two are read together: the overlay
+ * maps this through that geometry, the exact inverse of the pointer path
+ * below. Every screencast surface produces one - the tile from its session,
+ * PiP from its own subscription - so it cannot belong to either.
+ */
+export interface AgentCursorPosition {
+  readonly type: BrowserScreencastAgentCursorType;
+  /** Normalized [0,1] against the surface the host mapped it to. */
+  readonly normalizedX: number;
+  readonly normalizedY: number;
+  readonly label: string;
+  /** Distinguishes consecutive identical positions (a click at rest). */
+  readonly id: number;
+}
+
+/**
  * The pointer shape the encoder reads. Named and exported because a translated
  * gesture - a finger drag re-expressed as a wheel - has no DOM event that
  * carries the right `button` / `buttons`, and must supply them itself.
@@ -80,8 +101,20 @@ interface ScreencastPointerFrameRequest {
   readonly deltaX: number;
   readonly deltaY: number;
   readonly clickCount: number;
-  readonly castSequence: number | null;
-  readonly image: HTMLImageElement | null;
+  /**
+   * The surface the coordinates were taken against, as one number the host
+   * compares back: the painted frame's sequence on the JPEG plane, the host's
+   * viewport epoch on the video plane. `null` means the tile has nothing
+   * correlatable to click on yet, so no frame is built at all.
+   */
+  readonly correlationToken: number | null;
+  /** Which plane's token {@link correlationToken} is, for the wire's two fields. */
+  readonly captureMode: BrowserScreencastCaptureMode;
+  /**
+   * The element the plane paints into - `<img>` on the JPEG plane, `<video>`
+   * on the video plane. Only its box is read, so the union stays `HTMLElement`.
+   */
+  readonly surface: HTMLElement | null;
   readonly frameSize: ScreencastFrameSize | null;
 }
 
@@ -91,15 +124,17 @@ export function buildScreencastPointerFrame(
   const normalized = normalizedPointerPosition({
     clientX: request.event.clientX,
     clientY: request.event.clientY,
-    image: request.image,
+    surface: request.surface,
     frameSize: request.frameSize,
     clampToEdge: request.clampToEdge,
   });
-  if (request.castSequence === null || normalized === null) return null;
+  if (request.correlationToken === null || normalized === null) return null;
+  const onVideo = request.captureMode === "video";
   return {
     kind: "pointer",
     type: request.type,
-    castSequence: request.castSequence,
+    castSequence: onVideo ? null : request.correlationToken,
+    viewportEpoch: onVideo ? request.correlationToken : null,
     ...normalized,
     button:
       request.type === "wheel" ? "none" : pointerButton(request.event.button),
@@ -177,22 +212,39 @@ export function isScreencastModChord(
   );
 }
 
+/**
+ * The box a frame actually paints inside a surface of `box`, under the
+ * `object-contain` letterboxing both display planes use - null when the
+ * surface has no area yet.
+ *
+ * Shared by the two directions this mapping runs in: pointer input out
+ * (below) and the agent ghost cursor back in (`agent-cursor-overlay.tsx`).
+ * They must stay exact inverses, so they read the same box.
+ */
+function containFit(
+  box: { readonly width: number; readonly height: number },
+  frameSize: ScreencastFrameSize,
+): { readonly width: number; readonly height: number } | null {
+  const scale = Math.min(
+    box.width / frameSize.width,
+    box.height / frameSize.height,
+  );
+  if (!Number.isFinite(scale) || scale <= 0) return null;
+  return { width: frameSize.width * scale, height: frameSize.height * scale };
+}
+
 function normalizedPointerPosition(request: {
   readonly clientX: number;
   readonly clientY: number;
-  readonly image: HTMLImageElement | null;
+  readonly surface: HTMLElement | null;
   readonly frameSize: ScreencastFrameSize | null;
   readonly clampToEdge: boolean;
 }): { readonly normalizedX: number; readonly normalizedY: number } | null {
-  if (request.image === null || request.frameSize === null) return null;
-  const rect = request.image.getBoundingClientRect();
-  const scale = Math.min(
-    rect.width / request.frameSize.width,
-    rect.height / request.frameSize.height,
-  );
-  if (!Number.isFinite(scale) || scale <= 0) return null;
-  const width = request.frameSize.width * scale;
-  const height = request.frameSize.height * scale;
+  if (request.surface === null || request.frameSize === null) return null;
+  const rect = request.surface.getBoundingClientRect();
+  const painted = containFit(rect, request.frameSize);
+  if (painted === null) return null;
+  const { width, height } = painted;
   const rawX = request.clientX - rect.left - (rect.width - width) / 2;
   const rawY = request.clientY - rect.top - (rect.height - height) / 2;
   const x = request.clampToEdge ? Math.min(width, Math.max(0, rawX)) : rawX;

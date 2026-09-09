@@ -13,7 +13,15 @@ import {
 } from "@/editor-core";
 import { useActivateCommentThread } from "@/hooks/comments/use-activate-comment-thread";
 import { useEpicCommentThreadsForClient } from "@/hooks/comments/use-epic-comment-threads";
+import {
+  resolveArtifactCommentThreads,
+  useEpicLaneCommentThreads,
+  useEpicLaneCommentThreadsDroppedAt,
+} from "@/hooks/comments/use-lane-comment-threads";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import { ArtifactAttachmentScopeContext } from "@/lib/attachments/artifact-attachment-scope-context";
+import { useArtifactAttachmentScopeValue } from "@/lib/attachments/use-artifact-attachment-scope-value";
 import { useLoadDeadline } from "@/hooks/host/use-load-deadline";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { collabTileNotice } from "./collab-tile-availability-copy";
@@ -30,6 +38,7 @@ import { startCommentDraft } from "@/lib/comments/start-comment-draft";
 import {
   useChildIdsOf,
   useEpicArtifactBodyAvailability,
+  useEpicArtifactBodySubscribeAnswered,
   useEpicArtifactBodyAwareness,
   useEpicArtifactFragment,
   useEpicPermissionRole,
@@ -74,6 +83,11 @@ import { seedArtifactTitleHeading } from "./artifact-editor-seed";
 import { useArtifactDocTitleFollow } from "./use-artifact-doc-title-follow";
 import { useCollabTileEditor } from "./use-collab-tile-editor";
 import { useArtifactLinkOpener } from "./use-artifact-link-opener";
+import { ArtifactQuotePopover } from "./artifact-quote/artifact-quote-popover";
+import {
+  useArtifactQuoteSurface,
+  type ArtifactQuoteSurface,
+} from "./artifact-quote/use-artifact-quote-surface";
 import { useArtifactImagePaste } from "@/hooks/artifacts/use-artifact-image-paste";
 import type { UseComposerPasteResult } from "@/hooks/composer/use-composer-paste";
 
@@ -135,8 +149,53 @@ export function CollabTileBody(props: CollabTileBodyProps) {
   const fragment = useEpicArtifactFragment(props.node.id);
   const artifactRoomAwareness = useEpicArtifactBodyAwareness(props.node.id);
   const bodyAvailability = useEpicArtifactBodyAvailability(props.node.id);
+  const bodySubscribeAnswered = useEpicArtifactBodySubscribeAnswered(
+    props.node.id,
+  );
   const snapshotLoaded = useEpicSnapshotLoaded();
   const fragmentDoc = fragment?.doc ?? null;
+
+  /**
+   * Latched, because the question this tile has is "has this body EVER been
+   * answered", and the map underneath can go back to empty:
+   * `dropAllOnViewerDowngrade` clears every entry at once. That is a DROP, and
+   * a drop is something the reader should be told about - without the latch it
+   * would read as "not asked yet" and hold the placeholder for the full 15 s
+   * tile budget.
+   *
+   * Both arms clear the map on a downgrade, by different routes, and the
+   * routes differ in what happens NEXT - which is what this latch is really
+   * reading. `@1` runs `rooms.dropAllOnViewerDowngrade()` from
+   * `applyRootSnapshot` and then stays down, keeping no body state at all; the
+   * lane arm runs `applyPermissionChanged` -> `requestFreshSnapshot()` ->
+   * `rooms.reset(...)`, which clears the same map and then RE-SUBSCRIBES as a
+   * viewer. So on `@1` the latch reports a durable drop, and on lanes it
+   * reports a window that is about to be answered again.
+   *
+   * The derived-state idiom (`use-load-deadline.ts` uses the same shape for
+   * the same reason): seeded from the CURRENT answer, so a tile that mounts
+   * onto an already-refused body states it on its first frame instead of
+   * flashing a placeholder, and advanced by a guarded render-phase set rather
+   * than an effect, so there is no commit in which the latch disagrees with
+   * what is on screen. A remount resets it, which is correct - a fresh tile
+   * genuinely has no answer of its own yet.
+   *
+   * Do not remove the latch on the grounds that it over-reports. It does: the
+   * downgrade is not the only path that empties the map - `resetInternal`
+   * (replace-replica, resume-too-old, reseed, teardown) does too, and through
+   * that window the latch keeps saying the host refused this document while a
+   * legitimate re-subscribe is in flight. That window reads exactly the same
+   * on HEAD, so the latch RETAINS a wrong state rather than introducing one,
+   * and dropping it would trade the drop case for the reseed case rather than
+   * fix anything. Telling the two apart needs a signal the body plane does not
+   * currently send.
+   */
+  const [bodyAnsweredOnce, setBodyAnsweredOnce] = useState(
+    bodySubscribeAnswered,
+  );
+  if (bodySubscribeAnswered && !bodyAnsweredOnce) {
+    setBodyAnsweredOnce(true);
+  }
 
   const bodyPending =
     !snapshotLoaded ||
@@ -156,6 +215,7 @@ export function CollabTileBody(props: CollabTileBodyProps) {
       <CollabTileSkeleton
         testId={props.testId}
         bodyAvailability={bodyAvailability}
+        subscribeAnswered={bodyAnsweredOnce}
         budgetElapsed={loadBudgetElapsed}
       />
     );
@@ -184,20 +244,35 @@ export function CollabTileBody(props: CollabTileBodyProps) {
  * The pulsing bars are kept for the short, genuinely-loading window - they
  * are a good placeholder for content that is coming - and retired the moment
  * the answer is anything else.
+ *
+ * "The answer", precisely: `subscribeAnswered` is false until the body plane
+ * has stated something about this artifact, and an UNANSWERED tile is a
+ * loading one however `bodyAvailability` reads. The two are separate props
+ * rather than one pre-collapsed value so the DOM carries both - a tile that
+ * looks stuck can be told apart from one that was refused without re-running
+ * the app.
  */
 function CollabTileSkeleton(props: {
   readonly testId: string;
   readonly bodyAvailability: EpicArtifactRoomAvailability;
+  readonly subscribeAnswered: boolean;
   readonly budgetElapsed: boolean;
 }) {
   const testIdSuffix =
-    props.bodyAvailability === "unavailable" ? "unavailable" : "loading";
-  const notice = collabTileNotice(props.bodyAvailability, props.budgetElapsed);
+    props.subscribeAnswered && props.bodyAvailability === "unavailable"
+      ? "unavailable"
+      : "loading";
+  const notice = collabTileNotice(
+    props.bodyAvailability,
+    props.budgetElapsed,
+    props.subscribeAnswered,
+  );
 
   return (
     <div
       data-testid={`${props.testId}-${testIdSuffix}`}
       data-artifact-room-availability={props.bodyAvailability}
+      data-body-subscribe-answered={props.subscribeAnswered ? "true" : "false"}
       data-budget-elapsed={props.budgetElapsed ? "true" : "false"}
       className="mx-auto flex w-full max-w-3xl flex-col gap-3 px-6 py-8"
     >
@@ -271,33 +346,69 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
   // one, which answers a different machine mid re-point (D15). Resolved once
   // here and handed to both comment popovers so all three share one cache key.
   const tabHostClient = useTabHostClient();
+  // The byte scope for images inside THIS artifact's body. On the lane arm the
+  // root doc is never seeded, so its `attachments` map cannot answer and the
+  // node view asks the host instead; the id pair is the authorization subject
+  // that read is checked against. Resolved once per tile for the same reason
+  // the chat tile resolves its own: a body can hold many images, and resolving
+  // per image would put a directory query observer behind every one.
+  const artifactAttachmentScope = useArtifactAttachmentScopeValue(
+    epicId,
+    node.id,
+    useTabHostId(),
+    tabHostClient,
+  );
+  // Read BEFORE the query below, which now takes it: the poll has to know
+  // whether the lane is still pushing to decide its cadence.
+  const laneDroppedAt = useEpicLaneCommentThreadsDroppedAt();
   const threadsQuery = useEpicCommentThreadsForClient({
     client: tabHostClient,
     epicId,
     artifactType: commentArtifactKind ?? "spec",
     artifactId: node.id,
-    options: { enabled: commentsSupported },
+    options: { enabled: commentsSupported, laneDroppedAt },
   });
   const clearFlashThread = useCommentThreadsStore((s) => s.clearFlashThread);
+  // The state lane's records for this artifact, or `null` where it has said
+  // nothing. Resolved once here and fed to the decoration sets AND the hover
+  // preview below, because they must agree by construction: a thread the
+  // preview can show while `liveThreadIds` has never heard of it is a thread
+  // whose anchor the decoration layer strips as an orphan, leaving nothing to
+  // hover.
+  const laneThreads = useEpicLaneCommentThreads(node.id);
+  const commentThreads = useMemo(
+    () =>
+      resolveArtifactCommentThreads({
+        laneThreads,
+        laneDroppedAt,
+        pollThreads:
+          threadsQuery.data === undefined ? null : threadsQuery.data.threads,
+        pollUpdatedAt:
+          threadsQuery.dataUpdatedAt === 0 ? null : threadsQuery.dataUpdatedAt,
+      }),
+    [laneDroppedAt, laneThreads, threadsQuery.data, threadsQuery.dataUpdatedAt],
+  );
   const resolvedThreadIds = useMemo(
     () =>
-      (threadsQuery.data?.threads ?? []).reduce(
+      (commentThreads.threads ?? []).reduce(
         (ids, thread) => (thread.resolved ? ids.add(thread.threadId) : ids),
         new Set<string>(),
       ),
-    [threadsQuery.data],
+    [commentThreads.threads],
   );
-  // `null` until the thread list resolves so we don't transiently treat
-  // every anchor as orphan during initial load. Once loaded, anchors
-  // whose `threadId` is missing from this set get filtered out of the
-  // decoration layer - a defense against historical orphan marks left in
-  // production docs before the host-side strip shipped.
+  // `null` until SOME source resolves the thread list so we don't transiently
+  // treat every anchor as orphan during initial load - and a lane that has said
+  // nothing about this artifact is not such a source, which is why this reads
+  // the resolved value rather than the lane slice. Once loaded, anchors whose
+  // `threadId` is missing from this set get filtered out of the decoration
+  // layer - a defense against historical orphan marks left in production docs
+  // before the host-side strip shipped.
   const liveThreadIds = useMemo<ReadonlySet<string> | null>(
     () =>
-      threadsQuery.data === undefined
+      commentThreads.threads === null
         ? null
-        : new Set(threadsQuery.data.threads.map((thread) => thread.threadId)),
-    [threadsQuery.data],
+        : new Set(commentThreads.threads.map((thread) => thread.threadId)),
+    [commentThreads.threads],
   );
   const ownedDraftRange = useMemo(
     () =>
@@ -389,6 +500,22 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
       },
     };
   }, [commentsSupported, editor, epicId, viewTabId, tileId, node.id, setDraft]);
+
+  // Send to chat: the excerpt is frozen the moment the button is pressed and
+  // kept tile-local - a sibling pane editing the same artifact must not adopt
+  // it. The same artifact kinds that take comments can be quoted.
+  const quote = useArtifactQuoteSurface({
+    epicId,
+    viewTabId,
+    artifactId: node.id,
+    artifactKind: commentArtifactKind,
+    editor,
+  });
+  const selectionSurfaceOpen = isSelectionSurfaceOpen({
+    ownedDraftRange,
+    linkPopoverOpen,
+    quoteOpen: quote.isOpen,
+  });
 
   useEffect(() => {
     const rootElement = editorRootRef.current;
@@ -510,15 +637,13 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
       // this existing handler so the rail never attaches a scroll listener of
       // its own (the lesson the chat rail's own consolidation encodes).
       headingMinimapRefreshRef.current();
-      if (editor === null || ownedDraftRange !== null || linkPopoverOpen) {
-        return;
-      }
+      if (editor === null || selectionSurfaceOpen) return;
       // TipTap's native BubbleMenu scroll listener is trailing-debounced.
       // Drive its documented escape hatch from this existing handler so the
       // selection toolbar tracks every native tile scroll event immediately.
       updateArtifactToolbarPosition(editor);
     },
-    [editor, linkPopoverOpen, onScrollRestoration, ownedDraftRange],
+    [editor, onScrollRestoration, selectionSurfaceOpen],
   );
 
   // The heading rail is a sibling of the scroller, not a child: the scroller is
@@ -551,7 +676,11 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
               {editor !== null && isEpicArtifactKind(node.type) ? (
                 <ArtifactFindAdapterRegistration editor={editor} node={node} />
               ) : null}
-              <EditorContent editor={editor} />
+              <ArtifactAttachmentScopeContext.Provider
+                value={artifactAttachmentScope}
+              >
+                <EditorContent editor={editor} />
+              </ArtifactAttachmentScopeContext.Provider>
             </div>
             {editor !== null ? (
               <ArtifactToolbar
@@ -559,7 +688,8 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
                 className={undefined}
                 scrollTarget={scrollContainer}
                 commentAction={commentAction}
-                suppressBubbleMenu={ownedDraftRange !== null || linkPopoverOpen}
+                quoteAction={quote.action}
+                suppressBubbleMenu={selectionSurfaceOpen}
               />
             ) : null}
           </div>
@@ -588,19 +718,26 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
               hostClient={tabHostClient}
               artifactType={commentArtifactKind}
               artifactId={node.id}
+              laneThreads={laneThreads}
+              laneDroppedAt={laneDroppedAt}
               editor={editor}
               resolvedThreadIds={resolvedThreadIds}
               onActivateThread={onActivateThread}
             />
           </>
         ) : null}
+        <ArtifactQuotePopoverMount
+          epicId={epicId}
+          viewTabId={viewTabId}
+          editor={editor}
+          quote={quote}
+        />
         {editor !== null ? (
           <ArtifactLinkPopover
             editor={editor}
             editable={editable}
             scrollContainer={scrollContainer}
             openLink={artifactLinkOpener.openLink}
-            openLinkPending={artifactLinkOpener.isExternalPending}
             onOpenChange={setLinkPopoverOpen}
           />
         ) : null}
@@ -641,6 +778,53 @@ function ArtifactHeadingMinimapMount(props: {
       refreshRef={props.refreshRef}
       scroller={props.scroller}
       side={side}
+    />
+  );
+}
+
+/**
+ * Whether a surface other than the bubble bar owns the current selection: the
+ * comment draft, the link popover, or the send-to-chat picker. The bar hides
+ * for it and the scroll handler stops repositioning it, which is what keeps
+ * the interaction single-modal. One predicate, so the next such surface is
+ * added in one place - and, like the gates below, so its conditions do not
+ * count against `CollabTileBodyEditor`'s complexity ceiling.
+ */
+function isSelectionSurfaceOpen(input: {
+  readonly ownedDraftRange: {
+    readonly from: number;
+    readonly to: number;
+  } | null;
+  readonly linkPopoverOpen: boolean;
+  readonly quoteOpen: boolean;
+}): boolean {
+  return (
+    input.ownedDraftRange !== null || input.linkPopoverOpen || input.quoteOpen
+  );
+}
+
+/**
+ * Gate for the send-to-chat picker, kept out of `CollabTileBodyEditor` for the
+ * same reason as the heading rail above: its two null checks would otherwise
+ * count against that component's complexity ceiling.
+ */
+function ArtifactQuotePopoverMount(props: {
+  readonly epicId: string;
+  readonly viewTabId: string;
+  readonly editor: Editor | null;
+  readonly quote: ArtifactQuoteSurface;
+}) {
+  const { editor, quote } = props;
+  if (editor === null || quote.snapshot === null) return null;
+  return (
+    <ArtifactQuotePopover
+      epicId={props.epicId}
+      viewTabId={props.viewTabId}
+      editor={editor}
+      snapshot={quote.snapshot}
+      onSendToChat={quote.actions.quoteToChat}
+      onSendToNewChat={quote.actions.quoteToNewChat}
+      onDone={quote.dismiss}
     />
   );
 }

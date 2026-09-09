@@ -239,9 +239,9 @@ function renderBody(args: {
   readonly onRangeDrift: (() => void) | undefined;
   readonly preferences: DiffViewerPreferences | undefined;
 }): RenderResult {
-  // The GitHub links here go through `useRunnerOpenExternalLink`, which is a
-  // TanStack mutation - so the body needs a client even though nothing in
-  // the monolith cases fetches. In the app it always has one.
+  // The body needs a QueryClient even though nothing in the monolith cases
+  // fetches - other host queries in the tree depend on one. In the app it
+  // always has one.
   return render(
     bodyTree({
       ...args,

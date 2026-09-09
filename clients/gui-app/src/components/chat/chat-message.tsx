@@ -8,6 +8,7 @@ import { chatFindSegmentUnitId } from "./chat-find";
 import { singleSpecialSegment } from "./chat-special-segment";
 import { UserMessageBody } from "./chat-message-user-body";
 import { ForkedChatLinkSegment } from "./segments/forked-chat-link-segment";
+import { ImportedChatMarkerSegment } from "./segments/imported-chat-marker-segment";
 import type { InterviewDeliveryRetryAction } from "./segments/interview-delivery-retry-action";
 import { SetupCardSegment } from "./segments/setup-card-segment";
 import type { NextStepActionHandler } from "./segments/next-steps-action-group";
@@ -102,7 +103,8 @@ function messageAlignmentClass(message: ChatMessageModel): string {
 }
 
 // A synthesized row can carry a single full-width "special" segment (a
-// setup-card or a forked-chat-link) with no sender/body. Render it directly,
+// setup-card, a forked-chat-link or an imported-chat-marker) with no
+// sender/body. Render it directly,
 // bypassing the role branches below.
 function renderSingleSpecialSegment(
   message: ChatMessageModel,
@@ -131,6 +133,17 @@ function renderSingleSpecialSegment(
           sourceChatId={segment.sourceChatId}
           sourceChatTitle={segment.sourceChatTitle}
           sourceHostId={segment.sourceHostId}
+        />
+      </div>
+    );
+  }
+  if (segment.kind === "imported-chat-marker") {
+    return (
+      <div data-chat-find-unit={chatFindSegmentUnitId(segment.id)}>
+        <ImportedChatMarkerSegment
+          sourceProvider={segment.sourceProvider}
+          importedAt={segment.importedAt}
+          sourceCwd={segment.sourceCwd}
         />
       </div>
     );

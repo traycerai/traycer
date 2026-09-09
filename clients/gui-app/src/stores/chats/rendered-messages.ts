@@ -24,6 +24,7 @@ import { steeredMessageIdsFromEvents } from "@traycer/protocol/persistence/chat-
 import {
   compareCanonicalRowOrder,
   forkedChatLinkRowSource,
+  importedChatMarkerRowSource,
   notificationAnchorRowSource,
 } from "@traycer/protocol/persistence/chat-transcript/row-order";
 // Identity of the assistant turn a record contributes to (records sharing a key
@@ -43,6 +44,7 @@ import {
   assistantTurnNeedsTrailingRow,
   chatTranscriptEventRowId,
   forkedChatLinkRowId,
+  importedChatMarkerRowId,
   nestedSteeredMessageIds,
   planAssistantTurnRows,
   queueSteerRowId,
@@ -991,6 +993,11 @@ export function useRenderedMessages(
     [input.events],
   );
 
+  const importedChatMarkerMessages = useMemo(
+    () => buildImportedChatMarkerMessages(input.events),
+    [input.events],
+  );
+
   // The live row's blocks merge INTO a persisted turn only when a persisted
   // assistant message already shares its `turnId` (multi-record / post-snapshot
   // turns). The store routes streamed deltas to EITHER `messages` or
@@ -1263,7 +1270,9 @@ export function useRenderedMessages(
     );
 
     // `baseRows` = everything that sorts by `createdAt`. Assembled before the
-    // cards so the common case can early-out without the anchor machinery.
+    // cards so the common case can early-out without the anchor machinery. The
+    // imported-chat markers are deliberately NOT here - they are pinned (see
+    // `pinImportedChatMarkers`), so sorting them would only file them wrongly.
     const baseRows = [
       ...persisted,
       ...activeTurn,
@@ -1279,7 +1288,10 @@ export function useRenderedMessages(
     // `createdAt` sort. Skips the per-render anchor Set/Map/weave entirely. This
     // memo re-runs on every streamed delta, so the no-card path must stay cheap.
     if (setupCardEntries.length === 0) {
-      return baseRows.sort(compareCanonicalRowOrder);
+      return pinImportedChatMarkers(
+        importedChatMarkerMessages,
+        baseRows.sort(compareCanonicalRowOrder),
+      );
     }
 
     // Pin the chat's GENESIS setup card to the top - but ONLY when window 0 is
@@ -1338,7 +1350,10 @@ export function useRenderedMessages(
       }
       woven = interleaved;
     }
-    return pinGenesisCard ? [setupCardEntries[0].message, ...woven] : woven;
+    return pinImportedChatMarkers(
+      importedChatMarkerMessages,
+      pinGenesisCard ? [setupCardEntries[0].message, ...woven] : woven,
+    );
   }, [
     persisted,
     activeTurn,
@@ -1346,6 +1361,7 @@ export function useRenderedMessages(
     live,
     stoppedWithoutAssistantRecords,
     forkedChatLinkMessages,
+    importedChatMarkerMessages,
     notificationAnchorMessages,
     setupCardRows,
     setupCardEntries,
@@ -1459,6 +1475,74 @@ function buildForkedChatLinkMessages(
             sourceChatId,
             sourceChatTitle,
             sourceHostId,
+          },
+        ],
+        structuredContent: null,
+        attachments: [],
+        settings: null,
+        createdAt: event.timestamp,
+        completedAt: null,
+        stopped: null,
+        persistentMessageId: null,
+        senderLabel: null,
+        assistantMeta: null,
+        statusLabel: null,
+        runState: null,
+        agentSenderInfo: null,
+        agentMessage: null,
+        sessionAnchor: null,
+        steerBadge: null,
+      },
+    ];
+  });
+}
+
+/**
+ * Pin the imported-chat provenance markers above everything else.
+ *
+ * Two reasons they cannot sort by `createdAt` like ordinary rows. Their
+ * timestamp is the IMPORT time, which is later than every message they
+ * introduce, so a chronological sort files them at the very bottom - under the
+ * transcript they are meant to introduce. And what they say ("Imported from
+ * Claude Code") is about the whole chat's origin, which is why they sit above
+ * even a pinned genesis setup card: the workspace that card describes was
+ * bound to this chat after the transcript already existed elsewhere.
+ */
+function pinImportedChatMarkers(
+  markers: ReadonlyArray<ChatMessageModel>,
+  rows: ReadonlyArray<ChatMessageModel>,
+): ReadonlyArray<ChatMessageModel> {
+  return markers.length === 0 ? rows : [...markers, ...rows];
+}
+
+/**
+ * Project a `chat.imported` event into the transcript's provenance row.
+ *
+ * Filtered and identified THROUGH the projection's own helpers: the host
+ * numbers this row's ordinal from `importedChatMarkerRowSource`, and a row that
+ * existed here but not there is exactly what the windowed transcript used to
+ * lose - an event no row needs is never served on reopen (spec
+ * `session-import.md` §8e).
+ */
+function buildImportedChatMarkerMessages(
+  events: ReadonlyArray<ChatEvent>,
+): ReadonlyArray<ChatMessageModel> {
+  return events.flatMap((event) => {
+    const source = importedChatMarkerRowSource(event);
+    if (source === null) return [];
+    const id = importedChatMarkerRowId(event.eventId);
+    return [
+      {
+        id,
+        role: "system",
+        content: "",
+        segments: [
+          {
+            id: `${id}:marker`,
+            kind: "imported-chat-marker",
+            sourceProvider: source.sourceProvider,
+            importedAt: source.importedAt,
+            sourceCwd: source.sourceCwd,
           },
         ],
         structuredContent: null,
@@ -1920,14 +2004,19 @@ function turnInitiatedByAutonomousResume(
 
 /**
  * Timestamp of the resume divider (the first non-steer block, when it is an
- * `autonomous_resume`), or `null` for a turn not initiated by one.
+ * `autonomous_resume`), or `null` for a turn not initiated by one. An explicit
+ * in-turn delivery never establishes a new lifecycle window, even if the
+ * provider had not produced any other block when it arrived.
  */
 function autonomousResumeNotifiedAt(
   blocks: ReadonlyArray<ContentBlock>,
 ): number | null {
   for (const block of blocks) {
     if (block.type === "steer") continue;
-    return block.type === "autonomous_resume" ? block.timestamp : null;
+    return block.type === "autonomous_resume" &&
+      block.deliveryPlacement !== "in_turn"
+      ? block.timestamp
+      : null;
   }
   return null;
 }
@@ -2494,6 +2583,30 @@ interface AssistantTurnRenderInput {
   readonly chatId: string;
 }
 
+/** Infer legacy placement before steer boundaries split a turn into rows. */
+function resolveResumeDeliveryPlacements(
+  blocks: ReadonlyArray<ContentBlock>,
+): ReadonlyArray<ContentBlock> {
+  let hasAssistantWork = false;
+  return blocks.map((block) => {
+    if (block.type === "autonomous_resume") {
+      const placement = block.deliveryPlacement ?? null;
+      if (placement !== null) return block;
+      return {
+        ...block,
+        deliveryPlacement: hasAssistantWork ? "in_turn" : "turn_start",
+      };
+    }
+    // Use the renderer's existing block vocabulary and visibility rules.
+    // Steer markers map to null; notifications were handled above and do not
+    // constitute assistant work by themselves.
+    if (!hasAssistantWork && blockToSegment(block) !== null) {
+      hasAssistantWork = true;
+    }
+    return block;
+  });
+}
+
 /**
  * Renders one turn's rows from the SHARED plan.
  *
@@ -2507,7 +2620,7 @@ interface AssistantTurnRenderInput {
 function renderAssistantTurnRows(
   input: AssistantTurnRenderInput,
 ): ReadonlyArray<ChatMessageModel> {
-  const blocks = input.acc.blocks;
+  const blocks = resolveResumeDeliveryPlacements(input.acc.blocks);
   const plan = planAssistantTurnRows(blocks);
   const rowIdByBlockId = assistantRowIdsByBlockId(plan, blocks, input.turnKey);
 
@@ -2587,7 +2700,11 @@ function withTurnCompletion(
   );
   const turnHasOnlyAutonomousResumeSegments =
     turnReplySegments.length > 0 &&
-    turnReplySegments.every((segment) => segment.kind === "autonomous_resume");
+    turnReplySegments.every(
+      (segment) =>
+        segment.kind === "autonomous_resume" &&
+        segment.deliveryPlacement !== "in_turn",
+    );
   const stopped: ChatMessageStoppedInfo | null =
     input.stopped === null
       ? null
@@ -3863,6 +3980,7 @@ const BLOCK_HANDLERS: {
     error: block.error,
     agentMessageSend: block.agentMessageSend,
     managedCommand: block.managedCommand,
+    agentMessageReceipt: block.agentMessageReceipt,
     isStreaming: block.status === "streaming",
     endState: segmentEndState(block.status),
     stopped: block.stopped,
@@ -3985,13 +4103,15 @@ const BLOCK_HANDLERS: {
   autonomous_resume: (block) => ({
     kind: "autonomous_resume",
     triggers: block.triggers,
+    deliveryPlacement: block.deliveryPlacement ?? null,
   }),
   interview: (block) => ({
     kind: "interview",
     status: block.status,
     toolName: block.toolName,
-    title: block.title,
-    description: block.description,
+    // The block's card-level `title` / `description` are persisted for
+    // history but deliberately not projected: the GUI renders only the
+    // per-question header, so nothing downstream reads them.
     questions: block.questions,
     answers: block.answers,
     draftAnswers: block.draftAnswers,

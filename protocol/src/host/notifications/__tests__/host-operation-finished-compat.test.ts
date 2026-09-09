@@ -11,13 +11,14 @@ import {
   hiddenHostNotificationKinds,
   hostNotificationEntrySchema,
   hostNotificationEntrySchemaV21,
+  hostNotificationEntrySchemaV22,
   hostNotificationsCloudFeedSubscribeServerFrameSchemaV10,
   hostNotificationsCloudFeedSubscribeServerFrameSchemaV11,
   hostNotificationsCloudFeedSubscribeV10,
   hostNotificationsCloudFeedSubscribeV11,
   hostNotificationsFeedSubscribeV10,
   hostNotificationsFeedSubscribeV11,
-  hostNotificationsListDowngradeV21ToV10,
+  hostNotificationsListDowngradeV22ToV10,
   hostNotificationsListResponseSchema,
   hostNotificationsListResponseSchemaV10,
   hostNotificationsListResponseSchemaV21,
@@ -238,22 +239,22 @@ describe("released schemas stay frozen", () => {
 });
 
 describe("registry wiring", () => {
-  it("advertises @2.1 as the canonical list minor with @2.0 still installed", () => {
+  it("advertises @2.2 as the canonical list minor with @2.0/@2.1 still installed", () => {
     const line = hostRpcRegistry["host.notifications.list"][2];
-    expect(line.latestMinor).toBe(1);
+    expect(line.latestMinor).toBe(2);
     expect(line.versions[0].contract).toBe(hostNotificationsListV20);
     expect(line.versions[1].contract).toBe(hostNotificationsListV21);
     expect(line.versions[1].upgradeFromPreviousVersion).toBe(
       hostNotificationsListUpgradeV20ToV21,
     );
     expect(line.downgradePathsFromLatest[1]).toBe(
-      hostNotificationsListDowngradeV21ToV10,
+      hostNotificationsListDowngradeV22ToV10,
     );
   });
 
-  it("advertises feed @1.1 with @1.0 still installed for older peers", () => {
+  it("advertises feed @1.2 with @1.0/@1.1 still installed for older peers", () => {
     const line = hostStreamRpcRegistry["host.notifications.feed.subscribe"][1];
-    expect(line.latestMinor).toBe(1);
+    expect(line.latestMinor).toBe(2);
     expect(line.versions[0].contract).toBe(hostNotificationsFeedSubscribeV10);
     expect(line.versions[1].contract).toBe(hostNotificationsFeedSubscribeV11);
   });
@@ -362,6 +363,7 @@ describe("negotiated-version visibility projection", () => {
         );
         expect(hiddenHostNotificationKinds(surface, version)).toEqual([
           "host.operation.finished",
+          "browser.human.needed",
         ]);
       }
     }
@@ -371,13 +373,13 @@ describe("negotiated-version visibility projection", () => {
     expect(
       hiddenHostNotificationKinds(
         { method: "host.notifications.feed.subscribe" },
-        { major: 1, minor: 1 },
+        { major: 1, minor: 2 },
       ),
     ).toEqual([]);
   });
 
   it("covers every kind the entry unions can carry", () => {
-    const armKinds = hostNotificationEntrySchemaV21.options.map(
+    const armKinds = hostNotificationEntrySchemaV22.options.map(
       (option) => option.shape.kind.value,
     );
     expect([...ALL_HOST_NOTIFICATION_KINDS].sort()).toEqual(
@@ -421,9 +423,9 @@ describe("channel-emission capability", () => {
   });
 });
 
-describe("@2.1 -> @1.0 downgrade", () => {
+describe("@2.2 -> @1.0 downgrade", () => {
   it("cannot hand a v1.1.7 caller an arm it has no parser for", () => {
-    const result = hostNotificationsListDowngradeV21ToV10.downgradeResponse({
+    const result = hostNotificationsListDowngradeV22ToV10.downgradeResponse({
       entries: [AGENT_STOPPED_ENTRY, OPERATION_FINISHED_ENTRY],
       nextCursor: { kind: "chronological", updatedAt: 1, id: "x" },
     });

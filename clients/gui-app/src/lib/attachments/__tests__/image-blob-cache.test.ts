@@ -3,8 +3,32 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createImageBlobCache,
   type ImageBlobOps,
+  type ImageBytesFetcher,
   type ImageBytesResult,
+  type ScopedImageBytesFetcher,
 } from "@/lib/attachments/image-blob-cache";
+
+/** The scope every case here shares unless it is specifically about scoping. */
+const TEST_SCOPE = "test-scope";
+
+/**
+ * Wrap a bare byte source as a scoped one.
+ *
+ * `acquire` takes a {@link ScopedImageBytesFetcher} rather than a bare
+ * function precisely so a byte source cannot reach the cache without saying
+ * what it authorizes against - see `scopeFor` below for the cases that vary
+ * it.
+ */
+function scoped(fetch: ImageBytesFetcher): ScopedImageBytesFetcher {
+  return { scopeKey: TEST_SCOPE, fetch };
+}
+
+function scopeFor(
+  scopeKey: string,
+  fetch: ImageBytesFetcher,
+): ScopedImageBytesFetcher {
+  return { scopeKey, fetch };
+}
 
 function makeOps(): {
   ops: ImageBlobOps;
@@ -38,6 +62,63 @@ describe("image-blob-cache", () => {
     vi.useRealTimers();
   });
 
+  it("asks the byte source for the SUBJECT, not for the cache identity", async () => {
+    // The scoped key and the fetch argument are two different values that were
+    // one parameter. A caller passing the scoped identity for the key thereby
+    // asked its RPC for `["scope","h1"]`, every request missed, and no
+    // persisted image ever resolved. Nothing asserted this because the cache's
+    // own suite still handed `acquire` a bare function - the type that made
+    // scoping mandatory at the hooks never reached here.
+    const seen: string[] = [];
+    const fetcher = vi.fn((subject: string) => {
+      seen.push(subject);
+      return Promise.resolve({
+        bytes: new Uint8Array([1]),
+        mediaType: null,
+      });
+    });
+    const { ops } = makeOps();
+    const cache = createImageBlobCache(ops, 1000);
+
+    await cache.acquire("h1", "image/png", scoped(fetcher), "grace").promise;
+
+    expect(seen).toEqual(["h1"]);
+  });
+
+  it("keeps two scopes on separate entries for the same subject", async () => {
+    // The round-27 property, asserted at the cache rather than at the hook:
+    // `acquire` serves a resolved entry WITHOUT running the second acquirer's
+    // fetcher, so sharing across scopes would let one subject's authorization
+    // stand in for another's. Both fetchers must run and two URLs must exist.
+    const first = vi.fn(() =>
+      Promise.resolve({ bytes: new Uint8Array([1]), mediaType: null }),
+    );
+    const second = vi.fn(() =>
+      Promise.resolve({ bytes: new Uint8Array([2]), mediaType: null }),
+    );
+    const { ops, created } = makeOps();
+    const cache = createImageBlobCache(ops, 1000);
+
+    const a = await cache.acquire(
+      "shared-hash",
+      "image/png",
+      scopeFor("artifact-a", first),
+      "grace",
+    ).promise;
+    const b = await cache.acquire(
+      "shared-hash",
+      "image/png",
+      scopeFor("artifact-b", second),
+      "grace",
+    ).promise;
+
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(1);
+    expect(a.url).not.toBe(b.url);
+    expect(created).toHaveLength(2);
+    expect(cache.size()).toBe(2);
+  });
+
   it("fetches bytes once per hash and shares one URL across acquirers", async () => {
     const fetcher = vi.fn(() =>
       Promise.resolve({ bytes: new Uint8Array([1, 2, 3]), mediaType: null }),
@@ -45,8 +126,8 @@ describe("image-blob-cache", () => {
     const { ops, created } = makeOps();
     const cache = createImageBlobCache(ops, 1000);
 
-    const leaseA = cache.acquire("h1", "image/png", fetcher, "grace");
-    const leaseB = cache.acquire("h1", "image/png", fetcher, "grace");
+    const leaseA = cache.acquire("h1", "image/png", scoped(fetcher), "grace");
+    const leaseB = cache.acquire("h1", "image/png", scoped(fetcher), "grace");
     const [a, b] = await Promise.all([leaseA.promise, leaseB.promise]);
 
     expect(a.url).toBe(b.url);
@@ -70,8 +151,12 @@ describe("image-blob-cache", () => {
     const { ops, createdTypes } = makeOps();
     const cache = createImageBlobCache(ops, 1000);
 
-    const resolution = await cache.acquire("h1", "image/png", fetcher, "grace")
-      .promise;
+    const resolution = await cache.acquire(
+      "h1",
+      "image/png",
+      scoped(fetcher),
+      "grace",
+    ).promise;
 
     expect(createdTypes).toEqual(["image/svg+xml"]);
     expect(resolution.mediaType).toBe("image/svg+xml");
@@ -84,8 +169,12 @@ describe("image-blob-cache", () => {
     const { ops, createdTypes } = makeOps();
     const cache = createImageBlobCache(ops, 1000);
 
-    const resolution = await cache.acquire("h1", "image/png", fetcher, "grace")
-      .promise;
+    const resolution = await cache.acquire(
+      "h1",
+      "image/png",
+      scoped(fetcher),
+      "grace",
+    ).promise;
 
     expect(createdTypes).toEqual(["image/png"]);
     expect(resolution.mediaType).toBe("image/png");
@@ -101,9 +190,13 @@ describe("image-blob-cache", () => {
     const { ops } = makeOps();
     const cache = createImageBlobCache(ops, 1000);
 
-    await cache.acquire("h1", "image/png", fetcher, "grace").promise;
-    const onHit = await cache.acquire("h1", "image/png", fetcher, "grace")
-      .promise;
+    await cache.acquire("h1", "image/png", scoped(fetcher), "grace").promise;
+    const onHit = await cache.acquire(
+      "h1",
+      "image/png",
+      scoped(fetcher),
+      "grace",
+    ).promise;
 
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(onHit.mediaType).toBe("image/svg+xml");
@@ -116,7 +209,7 @@ describe("image-blob-cache", () => {
     const { ops, revoked } = makeOps();
     const cache = createImageBlobCache(ops, 1000);
 
-    const lease = cache.acquire("h1", "image/png", fetcher, "grace");
+    const lease = cache.acquire("h1", "image/png", scoped(fetcher), "grace");
     const url = (await lease.promise).url;
     lease.release();
     expect(revoked).toHaveLength(0);
@@ -133,11 +226,21 @@ describe("image-blob-cache", () => {
     const { ops, revoked, created } = makeOps();
     const cache = createImageBlobCache(ops, 1000);
 
-    const firstLease = cache.acquire("h1", "image/png", fetcher, "grace");
+    const firstLease = cache.acquire(
+      "h1",
+      "image/png",
+      scoped(fetcher),
+      "grace",
+    );
     const first = (await firstLease.promise).url;
     firstLease.release();
     await vi.advanceTimersByTimeAsync(500);
-    const secondLease = cache.acquire("h1", "image/png", fetcher, "grace");
+    const secondLease = cache.acquire(
+      "h1",
+      "image/png",
+      scoped(fetcher),
+      "grace",
+    );
     const second = (await secondLease.promise).url;
 
     expect(second).toBe(first);
@@ -161,7 +264,7 @@ describe("image-blob-cache", () => {
     const { ops, created, revoked } = makeOps();
     const cache = createImageBlobCache(ops, 1000);
 
-    const lease = cache.acquire("h1", "image/png", fetcher, "grace");
+    const lease = cache.acquire("h1", "image/png", scoped(fetcher), "grace");
     lease.release();
 
     await expect(lease.promise).rejects.toThrow();
@@ -178,10 +281,12 @@ describe("image-blob-cache", () => {
     const { ops } = makeOps();
     const cache = createImageBlobCache(ops, 1000);
 
-    const a = (await cache.acquire("h1", "image/png", fetcher, "grace").promise)
-      .url;
-    const b = (await cache.acquire("h2", "image/png", fetcher, "grace").promise)
-      .url;
+    const a = (
+      await cache.acquire("h1", "image/png", scoped(fetcher), "grace").promise
+    ).url;
+    const b = (
+      await cache.acquire("h2", "image/png", scoped(fetcher), "grace").promise
+    ).url;
 
     expect(a).not.toBe(b);
     expect(fetcher).toHaveBeenCalledTimes(2);
@@ -198,7 +303,7 @@ describe("image-blob-cache", () => {
     const lease = cache.acquire(
       "session-hash",
       "image/png",
-      fetcher,
+      scoped(fetcher),
       "session",
     );
     const url = (await lease.promise).url;
@@ -219,7 +324,12 @@ describe("image-blob-cache", () => {
     const { ops, revoked } = makeOps();
     const cache = createImageBlobCache(ops, 1000);
 
-    const lease = cache.acquire("clear-hash", "image/png", fetcher, "session");
+    const lease = cache.acquire(
+      "clear-hash",
+      "image/png",
+      scoped(fetcher),
+      "session",
+    );
     const url = (await lease.promise).url;
     lease.release();
     cache.clear();
@@ -238,16 +348,16 @@ describe("image-blob-cache", () => {
     const lease = cache.acquire(
       "referenced-hash",
       "image/png",
-      fetcher,
+      scoped(fetcher),
       "grace",
     );
     const url = (await lease.promise).url;
-    cache.discard("referenced-hash");
+    cache.discard(TEST_SCOPE, "referenced-hash");
 
     expect(revoked).toEqual([url]);
     expect(cache.size()).toBe(0);
-    cache.discard("referenced-hash");
-    cache.discard("unknown-hash");
+    cache.discard(TEST_SCOPE, "referenced-hash");
+    cache.discard(TEST_SCOPE, "unknown-hash");
     expect(revoked).toEqual([url]);
 
     // A release for the now-discarded generation must be a silent no-op.
@@ -266,7 +376,7 @@ describe("image-blob-cache", () => {
     const lease = cache.acquire(
       "session-discard-hash",
       "image/png",
-      fetcher,
+      scoped(fetcher),
       "session",
     );
     const url = (await lease.promise).url;
@@ -274,7 +384,7 @@ describe("image-blob-cache", () => {
     await vi.advanceTimersByTimeAsync(2000);
     expect(revoked).toHaveLength(0);
 
-    cache.discard("session-discard-hash");
+    cache.discard(TEST_SCOPE, "session-discard-hash");
     expect(revoked).toEqual([url]);
     expect(cache.size()).toBe(0);
   });
@@ -289,15 +399,15 @@ describe("image-blob-cache", () => {
     const firstLease = cache.acquire(
       "refetch-hash",
       "image/png",
-      fetcher,
+      scoped(fetcher),
       "grace",
     );
     const first = (await firstLease.promise).url;
-    cache.discard("refetch-hash");
+    cache.discard(TEST_SCOPE, "refetch-hash");
     const secondLease = cache.acquire(
       "refetch-hash",
       "image/png",
-      fetcher,
+      scoped(fetcher),
       "grace",
     );
     const second = (await secondLease.promise).url;
@@ -320,25 +430,25 @@ describe("image-blob-cache", () => {
     const oldLeaseA = cache.acquire(
       "aba-hash",
       "image/png",
-      oldFetcher,
+      scoped(oldFetcher),
       "grace",
     );
     const oldLeaseB = cache.acquire(
       "aba-hash",
       "image/png",
-      oldFetcher,
+      scoped(oldFetcher),
       "grace",
     );
     const oldUrl = (await oldLeaseA.promise).url;
     expect((await oldLeaseB.promise).url).toBe(oldUrl);
 
-    cache.discard("aba-hash");
+    cache.discard(TEST_SCOPE, "aba-hash");
     expect(revoked).toEqual([oldUrl]);
 
     const replacementLease = cache.acquire(
       "aba-hash",
       "image/png",
-      replacementFetcher,
+      scoped(replacementFetcher),
       "grace",
     );
     const replacementUrl = (await replacementLease.promise).url;
@@ -380,23 +490,23 @@ describe("image-blob-cache", () => {
     const oldLeaseA = cache.acquire(
       "aba-pending",
       "image/png",
-      oldFetcher,
+      scoped(oldFetcher),
       "grace",
     );
     const oldLeaseB = cache.acquire(
       "aba-pending",
       "image/png",
-      oldFetcher,
+      scoped(oldFetcher),
       "grace",
     );
     await oldLeaseA.promise;
     await oldLeaseB.promise;
-    cache.discard("aba-pending");
+    cache.discard(TEST_SCOPE, "aba-pending");
 
     const replacementLease = cache.acquire(
       "aba-pending",
       "image/png",
-      replacementFetcher,
+      scoped(replacementFetcher),
       "grace",
     );
     oldLeaseA.release();

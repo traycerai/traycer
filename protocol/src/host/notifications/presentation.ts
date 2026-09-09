@@ -1,5 +1,5 @@
 import {
-  type HostNotificationEntryV21,
+  type HostNotificationEntryV22,
   type HostNotificationOutcome,
 } from "@traycer/protocol/host/notifications/host-notifications";
 import {
@@ -29,7 +29,7 @@ export interface HostNotificationPresentation {
  * generic copy instead of throwing or exposing untrusted raw error text.
  */
 export function formatHostNotificationPresentation(
-  entry: HostNotificationEntryV21,
+  entry: HostNotificationEntryV22,
 ): HostNotificationPresentation {
   const known = parseKnownHostNotificationPayloadForKind(
     entry.kind,
@@ -80,7 +80,21 @@ export function formatHostNotificationPresentation(
         entry.payload,
         known,
       );
+    // Host-composed title, agent-authored reason as the context. The reason is
+    // the only thing that says WHICH wall was hit, so it leads the body; a
+    // payload this build cannot parse still gets the title and the status.
+    case "browser.human.needed":
+      return {
+        title: "Browser needs you",
+        body: `${browserHumanNeededReason(known) ?? "Browser"} • ${resolvableRequestStatus(entry.resolvedAt, "Waiting for you", "Resumed")}`,
+      };
   }
+}
+
+function browserHumanNeededReason(
+  known: HostNotificationKnownPayload | null,
+): string | null {
+  return known?.kind === "browser_human_needed" ? known.reason : null;
 }
 
 /**
@@ -88,7 +102,7 @@ export function formatHostNotificationPresentation(
  * per-FIELD fallback chain rather than a first-match-wins branch:
  *
  *  1. a KNOWN operation payload's own copy, when that arm supplies any
- *     (`hostOperationKnownCopy` - no arm supplies copy yet);
+ *     (`hostOperationKnownCopy`);
  *  2. the common `operation`/`title`/`message` convention read leniently off
  *     the open record, so an operation newer than this build still shows
  *     host-composed copy;
@@ -128,12 +142,10 @@ function hostOperationFinishedPresentation(
  * Per-operation copy for a payload arm this build fully understands, or
  * `null` to inherit the common-field/generic copy below it.
  *
- * Exhaustive over the known payload union so the first operation arm gets a
- * compile-visible slot here. Every arm that exists today is chat-scoped and
- * belongs to a different notification kind, so none of them may supply copy
- * for a host-wide row: their titles come from `taskTitle`/`chatTitle` fields
- * a host-wide operation payload does not have, and letting them answer would
- * render "Task" over the host's own composed title.
+ * Exhaustive over the known payload union so every operation arm gets a
+ * compile-visible slot here. A Task-scoped operation may replace the title
+ * with its Task name, but must retain the host-composed operation result in
+ * the body. Host-wide rows inherit the common payload copy unchanged.
  */
 export function hostOperationKnownCopy(
   payload: HostNotificationKnownPayload,
@@ -145,15 +157,24 @@ export function hostOperationKnownCopy(
     case "approval":
     case "interview":
     case "workspace_operation_failed":
+    // The browser park row's copy is composed above from the entry itself, not
+    // from the payload arm: `reason` is the body's context, never a title.
+    case "browser_human_needed":
       return null;
-    // Worktree deletion supplies no copy of its own on purpose: the host
-    // already composed `title`/`message` into the payload's common fields, and
-    // that exact wording is what reached email and notification hooks at mint
-    // time. Re-deriving it here would make the in-app row and the email
-    // disagree about the same command for no gain - the arm's value is the
-    // structured counts and the navigation target, not the prose.
-    case "worktree_deletion":
-      return null;
+    case "worktree_deletion": {
+      const taskTitle = nonEmptyTitle(payload.taskTitle ?? null);
+      if (
+        payload.source !== "task_sweep" ||
+        payload.epicId === undefined ||
+        taskTitle === null
+      ) {
+        return null;
+      }
+      return {
+        title: taskTitle,
+        body: `${payload.title} • ${payload.message}`,
+      };
+    }
   }
 }
 
@@ -216,6 +237,8 @@ function knownTaskTitle(payload: HostNotificationKnownPayload): string | null {
     case "workspace_operation_failed":
       return payload.taskTitle;
     case "worktree_deletion":
+      return payload.taskTitle ?? null;
+    case "browser_human_needed":
       return null;
   }
 }
@@ -230,6 +253,7 @@ function knownAgentName(payload: HostNotificationKnownPayload): string | null {
     case "interview":
     case "workspace_operation_failed":
     case "worktree_deletion":
+    case "browser_human_needed":
       return null;
   }
 }
@@ -244,6 +268,7 @@ function knownChatTitle(payload: HostNotificationKnownPayload): string | null {
     case "epic":
     case "agent_stalled":
     case "worktree_deletion":
+    case "browser_human_needed":
       return null;
   }
 }
@@ -263,6 +288,7 @@ function knownStoppedReason(
     case "interview":
     case "workspace_operation_failed":
     case "worktree_deletion":
+    case "browser_human_needed":
       return null;
   }
 }
@@ -281,6 +307,7 @@ function knownProviderId(
     case "interview":
     case "workspace_operation_failed":
     case "worktree_deletion":
+    case "browser_human_needed":
       return null;
   }
 }
@@ -311,6 +338,7 @@ function knownBackgroundWorkRunning(
     case "interview":
     case "workspace_operation_failed":
     case "worktree_deletion":
+    case "browser_human_needed":
       return false;
   }
 }

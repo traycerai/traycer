@@ -700,7 +700,6 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
           clearForkWorkspaces();
           const cancel = openCreatedChatWhenProjectedWithNavigation({
             intent: {
-              kind: "active-tile",
               epicId,
               tabId,
               chatId: result.chatId,
@@ -709,6 +708,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
               // that has never heard of this chat, and waiting out the whole
               // cross-host replication before anything appeared.
               hostId,
+              placement: null,
               source: "direct_ui",
             },
             navigateNestedFocus,
@@ -871,6 +871,10 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
                 registerActivation={false}
                 createProfileHostId={selectedHostId}
                 runTargetHostId={selectedHostId}
+                // A dialog has no terminal surface to open a setup terminal
+                // into, and its selected host may not be the tab's; the CTA
+                // shows its steps without the button.
+                terminalLoginSurface={null}
                 profileAdmission={null}
               />
             </div>

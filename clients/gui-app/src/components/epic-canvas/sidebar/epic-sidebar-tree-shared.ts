@@ -6,9 +6,39 @@
 import type { EpicNodeKind } from "@/lib/artifacts/node-display";
 import { cn } from "@/lib/utils";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { SIDEBAR_NODE_REVEAL_VISIBILITY_MS } from "@/stores/epics/sidebar-node-reveal-store";
 
 export const INDENT_PX = 16;
 export const BASE_PAD_LEFT = 8;
+
+/** Same visual treatment and lifetime as a communication-graph transcript jump. */
+export const SIDEBAR_REVEAL_HIGHLIGHT_CLASS =
+  "data-[sidebar-reveal-highlighted=true]:bg-primary/15 data-[sidebar-reveal-highlighted=true]:ring-2 data-[sidebar-reveal-highlighted=true]:ring-inset data-[sidebar-reveal-highlighted=true]:ring-primary/80 motion-safe:data-[sidebar-reveal-highlighted=true]:animate-pulse";
+
+export function flashSidebarElement(element: HTMLElement, nonce: number): void {
+  const revealNonce = String(nonce);
+  element.dataset.sidebarRevealHighlighted = "true";
+  element.dataset.sidebarRevealNonce = revealNonce;
+  window.setTimeout(() => {
+    if (element.dataset.sidebarRevealNonce !== revealNonce) return;
+    delete element.dataset.sidebarRevealHighlighted;
+    delete element.dataset.sidebarRevealNonce;
+  }, SIDEBAR_NODE_REVEAL_VISIBILITY_MS);
+}
+
+export function revealSidebarNode(
+  region: HTMLElement,
+  nodeId: string,
+  nonce: number,
+): boolean {
+  const row = Array.from(
+    region.querySelectorAll<HTMLElement>("[data-sidebar-node-id]"),
+  ).find((element) => element.dataset.sidebarNodeId === nodeId);
+  if (row === undefined) return false;
+  row.scrollIntoView({ block: "nearest", inline: "nearest" });
+  flashSidebarElement(row, nonce);
+  return true;
+}
 
 /**
  * Horizontal offset (from a row's own padding-left edge) to the center of its

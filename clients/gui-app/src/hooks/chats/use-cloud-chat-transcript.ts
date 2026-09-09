@@ -24,7 +24,15 @@ export function useCloudChatTranscript(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly identity: CloudChatIdentity | null;
   readonly enabled: boolean;
+  /**
+   * The head digest the epic's RECORD row carries for this chat, or `null`
+   * when it carries none. Joins the read's key and drives the payload list's
+   * head-edge refetch - see `useCloudChatRead` / `useCloudChatPayloadList`.
+   */
+  readonly recordHeadSha256: string | null;
 }): CloudChatTranscriptState {
+  // Both take the record head: the read keys on it, the list re-asks on its
+  // edge, so a new publication moves the two together.
   const read = useCloudChatRead(args);
   const payloads = useCloudChatPayloadList(args);
 

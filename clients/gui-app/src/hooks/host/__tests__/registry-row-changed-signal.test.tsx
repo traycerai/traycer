@@ -79,6 +79,11 @@ const LATE_HOST: HostDirectoryEntry = {
   version: "0.0.0-mock",
   transportDialability: "dialable",
 };
+const BOOTING_LATE_HOST: HostDirectoryEntry = {
+  ...LATE_HOST,
+  kind: "local",
+  websocketUrl: null,
+};
 
 /**
  * A fully-formed REMOTE row, because the additive case below turns on a field
@@ -139,6 +144,11 @@ class LateArrivingDirectory {
   /** The host finishes booting and its row lands in the directory. */
   publishLateHost(): void {
     this.entries = [LATE_HOST];
+    this.emit();
+  }
+
+  publishBootingLateHost(): void {
+    this.entries = [BOOTING_LATE_HOST];
     this.emit();
   }
 
@@ -210,6 +220,8 @@ describe("the registry's row-changed signal (P4.2 handoff)", () => {
     const { result } = renderHook(() => useReactiveHostReadiness(pinned));
     expect(result.current.hostId).toBeNull();
     expect(result.current.isReady).toBe(false);
+    expect(result.current.hasRpcEndpoint).toBe(false);
+    expect(result.current.canExecute).toBe(false);
 
     act(() => {
       directory.publishLateHost();
@@ -219,6 +231,40 @@ describe("the registry's row-changed signal (P4.2 handoff)", () => {
     // allowed to delete the slot on.
     expect(result.current.hostId).toBe(LATE_HOST_ID);
     expect(result.current.isReady).toBe(true);
+    expect(result.current.hasRpcEndpoint).toBe(true);
+    expect(result.current.canExecute).toBe(true);
+  });
+
+  it("keeps identity ready while a local row boots and enables execution when its endpoint lands", () => {
+    const directory = new LateArrivingDirectory();
+    directory.publishBootingLateHost();
+    const { pinned } = buildPinnedRequester(directory);
+    installHostConnectionRegistrySource({
+      directory: {
+        findById: (hostId) => directory.findById(hostId),
+        onDirectoryChanged: (listener) => directory.onChange(listener),
+      },
+      leases: null,
+    });
+
+    const { result } = renderHook(() => useReactiveHostReadiness(pinned));
+    expect(result.current).toMatchObject({
+      hostId: LATE_HOST_ID,
+      isReady: true,
+      hasRpcEndpoint: false,
+      canExecute: false,
+    });
+
+    act(() => {
+      directory.publishLateHost();
+    });
+
+    expect(result.current).toMatchObject({
+      hostId: LATE_HOST_ID,
+      isReady: true,
+      hasRpcEndpoint: true,
+      canExecute: true,
+    });
   });
 
   it("renders nothing on a directory emit that moved no row this consumer can see", () => {

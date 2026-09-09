@@ -1,0 +1,903 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ILogger, LogFields } from "../../logger";
+import type { Environment } from "../../runner/environment";
+import type { HostPidMetadata, HostPidMetadataEvidence } from "../pid-metadata";
+import { singleChatStoreSurveyRoot } from "../chat-store-survey-roots";
+import type { SwapQuiescence } from "../swap-quiescence";
+
+const mocks = vi.hoisted(() => ({
+  readHostPidMetadataEvidenceMock: vi.fn(),
+  macosServiceMayRespawnMock: vi.fn(),
+  linuxServiceMayRespawnMock: vi.fn(),
+}));
+
+vi.mock("../pid-metadata", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../pid-metadata")>();
+  return {
+    ...actual,
+    readHostPidMetadataEvidence: mocks.readHostPidMetadataEvidenceMock,
+  };
+});
+
+// `serviceManagerMayRespawn` shells out for real (`launchctl print` /
+// `systemctl --user is-active`) - left unmocked, every test that reaches the
+// "no process right now" arms spawns a genuine subprocess and is green only
+// by accident of what happens to be loaded/registered on the machine running
+// the suite. Same class as an earlier round's unmocked network yank-lookup.
+vi.mock("../../service/platforms/macos", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../service/platforms/macos")>();
+  return {
+    ...actual,
+    macosServiceMayRespawn: mocks.macosServiceMayRespawnMock,
+  };
+});
+vi.mock("../../service/platforms/linux", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../service/platforms/linux")>();
+  return {
+    ...actual,
+    linuxServiceMayRespawn: mocks.linuxServiceMayRespawnMock,
+  };
+});
+
+// Default to "will not respawn" so the pre-existing tests below - none of
+// which care about this arm - keep clearing exactly as before, without ever
+// touching the real platform probes.
+mocks.macosServiceMayRespawnMock.mockResolvedValue(false);
+mocks.linuxServiceMayRespawnMock.mockResolvedValue(false);
+
+const { observeSwapQuiescence, SERVICE_SETTLE_TIMEOUT_MS } =
+  await import("../swap-quiescence");
+
+async function withPlatform<T>(
+  platform: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  const original = Object.getOwnPropertyDescriptor(process, "platform");
+  if (original === undefined) {
+    throw new Error("process.platform descriptor missing");
+  }
+  Object.defineProperty(process, "platform", {
+    value: platform,
+    configurable: true,
+  });
+  try {
+    return await run();
+  } finally {
+    Object.defineProperty(process, "platform", original);
+  }
+}
+
+interface RecordedCall {
+  readonly level: "debug" | "info" | "warn" | "error";
+  readonly message: string;
+  readonly fields: LogFields;
+}
+
+function fakeLogger(): ILogger & { readonly calls: RecordedCall[] } {
+  const calls: RecordedCall[] = [];
+  return {
+    calls,
+    debug: (message, fields) => {
+      calls.push({ level: "debug", message, fields });
+    },
+    info: (message, fields) => {
+      calls.push({ level: "info", message, fields });
+    },
+    warn: (message, fields) => {
+      calls.push({ level: "warn", message, fields });
+    },
+    error: (message, fields) => {
+      calls.push({ level: "error", message, fields });
+    },
+  };
+}
+
+function samplePidMetadata(
+  overrides: Partial<HostPidMetadata>,
+): HostPidMetadata {
+  return {
+    pid: 4242,
+    hostId: "host-abc",
+    version: "1.2.4",
+    websocketUrl: "ws://127.0.0.1:1234",
+    startedAt: "2026-05-15T00:00:00.000Z",
+    processStartIdentity: null,
+    processStartIdentityRead: "absent",
+    layer0: null,
+    layer0Slot: null,
+    ...overrides,
+  };
+}
+
+const ENVIRONMENT: Environment = "production";
+
+// A pid essentially guaranteed not to be a live process on any platform this
+// suite runs on - `publishedHostProcessGone`'s liveness check is real, not
+// mocked, so the metadata fixture itself has to be the thing that decides
+// "gone" vs. "still running".
+const DEFINITELY_DEAD_PID = 999_999_999;
+
+// The settle budget is read from the monotonic clock, which vitest does not
+// fake by default - a suite that faked only `Date` and the timers would run
+// the loop against real elapsed time and never reach its deadline.
+const FAKED_TIMERS = [
+  "setTimeout",
+  "clearTimeout",
+  "setInterval",
+  "clearInterval",
+  "setImmediate",
+  "clearImmediate",
+  "Date",
+  "performance",
+] as const;
+
+/**
+ * Drive `observeSwapQuiescence` under fake timers past the whole settle
+ * window. The manager mocks answer per call, so a probe that keeps saying
+ * "may respawn" spends the window and one that flips settles at its next poll.
+ */
+async function observeThroughSettleWindow(
+  logger: ILogger,
+): Promise<SwapQuiescence> {
+  const pending = observeSwapQuiescence(
+    ENVIRONMENT,
+    singleChatStoreSurveyRoot("/tmp/host-home"),
+    logger,
+  );
+  await vi.advanceTimersByTimeAsync(SERVICE_SETTLE_TIMEOUT_MS + 1_000);
+  return await pending;
+}
+
+describe("observeSwapQuiescence", () => {
+  it("is established when no host has ever published pid.json (kind: absent)", async () => {
+    mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+      kind: "absent",
+    } satisfies HostPidMetadataEvidence);
+    const logger = fakeLogger();
+
+    await expect(
+      observeSwapQuiescence(
+        ENVIRONMENT,
+        singleChatStoreSurveyRoot("/tmp/host-home"),
+        logger,
+      ),
+    ).resolves.toEqual({
+      established: true,
+    });
+  });
+
+  it("is NOT established, with reason writer-unknown and a warn, when pid.json could not be read", async () => {
+    mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+      kind: "unreadable",
+      cause: "simulated EACCES",
+    } satisfies HostPidMetadataEvidence);
+    const logger = fakeLogger();
+
+    await expect(
+      observeSwapQuiescence(
+        ENVIRONMENT,
+        singleChatStoreSurveyRoot("/tmp/host-home"),
+        logger,
+      ),
+    ).resolves.toEqual({
+      established: false,
+      reason: "writer-unknown",
+    });
+
+    const warnCall = logger.calls.find((call) => call.level === "warn");
+    expect(warnCall).toBeDefined();
+    expect(warnCall?.message).toContain("could not be read");
+  });
+
+  it("is established when the published host process is provably gone", async () => {
+    mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+      kind: "read",
+      metadata: samplePidMetadata({ pid: DEFINITELY_DEAD_PID }),
+    } satisfies HostPidMetadataEvidence);
+    const logger = fakeLogger();
+
+    await expect(
+      observeSwapQuiescence(
+        ENVIRONMENT,
+        singleChatStoreSurveyRoot("/tmp/host-home"),
+        logger,
+      ),
+    ).resolves.toEqual({
+      established: true,
+    });
+  });
+
+  it("is NOT established, with reason writer-still-running, when the published host process is still alive", async () => {
+    mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+      kind: "read",
+      // This test process's own pid - guaranteed alive for the duration of
+      // the test, with no start-identity stamp to compare (so
+      // `publishedHostProcessGone` falls to its liveness-only answer).
+      metadata: samplePidMetadata({ pid: process.pid }),
+    } satisfies HostPidMetadataEvidence);
+    const logger = fakeLogger();
+
+    await expect(
+      observeSwapQuiescence(
+        ENVIRONMENT,
+        singleChatStoreSurveyRoot("/tmp/host-home"),
+        logger,
+      ),
+    ).resolves.toEqual({
+      established: false,
+      reason: "writer-still-running",
+    });
+  });
+
+  it("is NOT established, with reason unseen-writers, when the survey spans more than one root - and never even consults the pid record", async () => {
+    // `pid.json` is SLOT-scoped while the chat stores are IDENTITY-scoped.
+    // A pooled identity home carries no pid record at all, and the host
+    // holding it publishes into its own slot, which this process cannot
+    // enumerate - so every root beyond the one whose pid we can read is a
+    // store whose writer we cannot see, and its silence proves nothing.
+    // This check has to run BEFORE the pid read, not merely produce the
+    // same outcome after it - asserting the mock's call count is what
+    // proves the ordering rather than just the result. Cleared first since
+    // this file has no shared `beforeEach` and earlier tests left calls on
+    // the same mock.
+    mocks.readHostPidMetadataEvidenceMock.mockClear();
+    const logger = fakeLogger();
+
+    await expect(
+      observeSwapQuiescence(
+        ENVIRONMENT,
+        {
+          roots: [
+            { path: "/tmp/host-home", label: "host" },
+            { path: "/tmp/identity-a", label: "identity-a" },
+          ],
+          enumerationFailed: false,
+        },
+        logger,
+      ),
+    ).resolves.toEqual({ established: false, reason: "unseen-writers" });
+
+    expect(mocks.readHostPidMetadataEvidenceMock).not.toHaveBeenCalled();
+  });
+
+  it("is NOT established, with reason unseen-writers, for a SINGLE root that failed to ENUMERATE - and never even consults the pid record", async () => {
+    // A different shape than the multi-root case above: `roots.length` alone
+    // used to gate this, so `{roots: [one], enumerationFailed: true}` fell
+    // through to the pid read and could clear. `enumerationFailed` now
+    // triggers this arm on its own.
+    //
+    // The survey itself turns an unreadable enumeration into its own `*`
+    // failure, so on every path that actually consults this today the
+    // outcome would have refused anyway - this fix changes no observable
+    // behavior right now. It exists so quiescence answers HONESTLY as a
+    // standalone question ("I could not enumerate the roots" is not evidence
+    // that nothing is writing them), not because today's outcome would
+    // differ. Do not read the unchanged outcome as this being redundant.
+    mocks.readHostPidMetadataEvidenceMock.mockClear();
+    const logger = fakeLogger();
+
+    await expect(
+      observeSwapQuiescence(
+        ENVIRONMENT,
+        {
+          roots: [{ path: "/tmp/host-home", label: "host" }],
+          enumerationFailed: true,
+        },
+        logger,
+      ),
+    ).resolves.toEqual({ established: false, reason: "unseen-writers" });
+
+    expect(mocks.readHostPidMetadataEvidenceMock).not.toHaveBeenCalled();
+  });
+
+  describe("service-may-respawn (the throttle-window gap)", () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: [...FAKED_TIMERS] });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+      // Restore the "will not respawn" default so a test order change
+      // elsewhere in this file can't inherit a `true` left behind here.
+      mocks.macosServiceMayRespawnMock.mockResolvedValue(false);
+      mocks.linuxServiceMayRespawnMock.mockResolvedValue(false);
+    });
+
+    it("is NOT established, reason service-may-respawn, when pid.json is absent and the service manager keeps holding a job past the settle window", async () => {
+      mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+        kind: "absent",
+      } satisfies HostPidMetadataEvidence);
+      mocks.macosServiceMayRespawnMock.mockResolvedValue(true);
+      const logger = fakeLogger();
+
+      await withPlatform("darwin", async () => {
+        await expect(observeThroughSettleWindow(logger)).resolves.toEqual({
+          established: false,
+          reason: "service-may-respawn",
+        });
+      });
+    });
+
+    it("is NOT established, reason service-may-respawn, when the published process is provably gone but the service manager keeps holding a job", async () => {
+      mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+        kind: "read",
+        metadata: samplePidMetadata({ pid: DEFINITELY_DEAD_PID }),
+      } satisfies HostPidMetadataEvidence);
+      mocks.linuxServiceMayRespawnMock.mockResolvedValue(true);
+      const logger = fakeLogger();
+
+      await withPlatform("linux", async () => {
+        await expect(observeThroughSettleWindow(logger)).resolves.toEqual({
+          established: false,
+          reason: "service-may-respawn",
+        });
+      });
+    });
+
+    it("still clears a provably-gone process when the service manager says it will NOT respawn - the deliberate-stop flow", async () => {
+      mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+        kind: "read",
+        metadata: samplePidMetadata({ pid: DEFINITELY_DEAD_PID }),
+      } satisfies HostPidMetadataEvidence);
+      mocks.macosServiceMayRespawnMock.mockResolvedValue(false);
+      const logger = fakeLogger();
+
+      await withPlatform("darwin", async () => {
+        await expect(
+          observeSwapQuiescence(
+            ENVIRONMENT,
+            singleChatStoreSurveyRoot("/tmp/host-home"),
+            logger,
+          ),
+        ).resolves.toEqual({ established: true });
+      });
+    });
+
+    it("a LIVE pid short-circuits to writer-still-running without ever consulting the respawn probe", async () => {
+      mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+        kind: "read",
+        metadata: samplePidMetadata({ pid: process.pid }),
+      } satisfies HostPidMetadataEvidence);
+      mocks.macosServiceMayRespawnMock.mockClear();
+      const logger = fakeLogger();
+
+      await withPlatform("darwin", async () => {
+        await expect(
+          observeSwapQuiescence(
+            ENVIRONMENT,
+            singleChatStoreSurveyRoot("/tmp/host-home"),
+            logger,
+          ),
+        ).resolves.toEqual({
+          established: false,
+          reason: "writer-still-running",
+        });
+      });
+
+      // The pid answer is the more specific one - it short-circuits before
+      // the respawn probe is ever asked.
+      expect(mocks.macosServiceMayRespawnMock).not.toHaveBeenCalled();
+    });
+
+    it("on Windows, never consults the respawn probe - no crash-restart policy there - and clears", async () => {
+      mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+        kind: "absent",
+      } satisfies HostPidMetadataEvidence);
+      mocks.macosServiceMayRespawnMock.mockClear();
+      mocks.linuxServiceMayRespawnMock.mockClear();
+      const logger = fakeLogger();
+
+      await withPlatform("win32", async () => {
+        await expect(
+          observeSwapQuiescence(
+            ENVIRONMENT,
+            singleChatStoreSurveyRoot("/tmp/host-home"),
+            logger,
+          ),
+        ).resolves.toEqual({ established: true });
+      });
+
+      expect(mocks.macosServiceMayRespawnMock).not.toHaveBeenCalled();
+      expect(mocks.linuxServiceMayRespawnMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("the ordinary running-host downgrade (waiting for the service manager to settle)", () => {
+    // `beforeSwap` stops the host CHILD, the clean stop purges `pid.json`,
+    // and `stopService` returns while launchd/systemd still consider the
+    // SUPERVISOR running (it outlives its child by the whole post-mortem).
+    // Read once, that live supervisor would refuse the headline Settings >
+    // Update-now downgrade by its own stop. It is not exempted - nothing
+    // here can tell it from a supervisor between children, or from a SECOND
+    // supervisor whose child is still booting - it is waited out: a clean
+    // exit is one neither manager respawns, so the job settles on its own.
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: [...FAKED_TIMERS] });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+      mocks.macosServiceMayRespawnMock.mockResolvedValue(false);
+    });
+
+    it("supervisor still winding down at the first probe, settled by the next poll -> quiesced, with the pid record read again after the wait", async () => {
+      mocks.readHostPidMetadataEvidenceMock.mockClear();
+      mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+        kind: "absent",
+      } satisfies HostPidMetadataEvidence);
+      mocks.macosServiceMayRespawnMock
+        .mockResolvedValueOnce(true)
+        .mockResolvedValue(false);
+      const logger = fakeLogger();
+
+      await withPlatform("darwin", async () => {
+        await expect(observeThroughSettleWindow(logger)).resolves.toEqual({
+          established: true,
+        });
+      });
+      // Once before the manager was asked, once after it settled: a host
+      // started outside any manager during the wait would show in the second.
+      expect(mocks.readHostPidMetadataEvidenceMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("a manager that never held a job pays no wait at all", async () => {
+      mocks.readHostPidMetadataEvidenceMock.mockClear();
+      mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+        kind: "absent",
+      } satisfies HostPidMetadataEvidence);
+      mocks.macosServiceMayRespawnMock.mockResolvedValue(false);
+      const logger = fakeLogger();
+
+      await withPlatform("darwin", async () => {
+        // No timer advance: the answer must arrive without one.
+        await expect(
+          observeSwapQuiescence(
+            ENVIRONMENT,
+            singleChatStoreSurveyRoot("/tmp/host-home"),
+            logger,
+          ),
+        ).resolves.toEqual({ established: true });
+      });
+      expect(vi.getTimerCount()).toBe(0);
+      expect(mocks.readHostPidMetadataEvidenceMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("a second supervisor whose child is still booting never settles -> service-may-respawn once the window is spent, and not before (the competing-registration shape)", async () => {
+      // Dual CLI + Desktop registration, both children spawned before the
+      // install took its lock. A published and served; B is still in
+      // bootstrap with no `pid.json`. The install stops A cleanly - A's
+      // record is purged, A's supervisor exits 0 - and the manager still
+      // shows B's supervisor with a live pid for as long as B boots. The
+      // stop this install performed says nothing about B, so no exemption
+      // keyed on it may clear this; only settling would, and B does not.
+      mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+        kind: "absent",
+      } satisfies HostPidMetadataEvidence);
+      mocks.macosServiceMayRespawnMock.mockClear();
+      mocks.macosServiceMayRespawnMock.mockResolvedValue(true);
+      const logger = fakeLogger();
+
+      await withPlatform("darwin", async () => {
+        let settled = false;
+        const pending = observeSwapQuiescence(
+          ENVIRONMENT,
+          singleChatStoreSurveyRoot("/tmp/host-home"),
+          logger,
+        ).then((answer) => {
+          settled = true;
+          return answer;
+        });
+        // Still polling one second short of the window.
+        await vi.advanceTimersByTimeAsync(SERVICE_SETTLE_TIMEOUT_MS - 1_000);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1_000);
+        await expect(pending).resolves.toEqual({
+          established: false,
+          reason: "service-may-respawn",
+        });
+      });
+      // Polled every 500 ms across the window, not answered from one read.
+      expect(
+        mocks.macosServiceMayRespawnMock.mock.calls.length,
+      ).toBeGreaterThanOrEqual(SERVICE_SETTLE_TIMEOUT_MS / 500);
+      const refusal = logger.calls.find(
+        (call) => call.level === "info" && "waitedMs" in call.fields,
+      );
+      expect(refusal?.fields.waitedMs).toBeGreaterThanOrEqual(
+        SERVICE_SETTLE_TIMEOUT_MS,
+      );
+    });
+
+    it("a probe that hangs to its timeout cannot stretch the wait past the window - each probe is capped by the remaining budget", async () => {
+      // `launchctl print` can sit for its whole 10 s timeout on a wedged
+      // launchd. Without the cap the loop would spend 10 s, sleep, spend
+      // another 10 s, and refuse at ~20 s while claiming a 15 s bound.
+      mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+        kind: "absent",
+      } satisfies HostPidMetadataEvidence);
+      mocks.macosServiceMayRespawnMock.mockClear();
+      const probeTimeouts: number[] = [];
+      mocks.macosServiceMayRespawnMock.mockImplementation(
+        (_label: unknown, _runner: unknown, timeoutMs: number) => {
+          probeTimeouts.push(timeoutMs);
+          return new Promise<boolean>((resolve) => {
+            setTimeout(() => resolve(true), Math.min(10_000, timeoutMs));
+          });
+        },
+      );
+      const logger = fakeLogger();
+
+      await withPlatform("darwin", async () => {
+        let settled = false;
+        const pending = observeSwapQuiescence(
+          ENVIRONMENT,
+          singleChatStoreSurveyRoot("/tmp/host-home"),
+          logger,
+        ).then((answer) => {
+          settled = true;
+          return answer;
+        });
+        await vi.advanceTimersByTimeAsync(SERVICE_SETTLE_TIMEOUT_MS + 1_000);
+        expect(settled).toBe(true);
+        await expect(pending).resolves.toEqual({
+          established: false,
+          reason: "service-may-respawn",
+        });
+      });
+      // The first probe had the full per-call allowance; the second was cut
+      // to what the budget had left after it.
+      expect(probeTimeouts[0]).toBe(10_000);
+      expect(probeTimeouts[1] ?? Number.NaN).toBeLessThan(5_000);
+      const refusal = logger.calls.find(
+        (call) => call.level === "info" && "waitedMs" in call.fields,
+      );
+      expect(refusal?.fields.waitedMs).toBeLessThanOrEqual(
+        SERVICE_SETTLE_TIMEOUT_MS + 500,
+      );
+    });
+
+    it("a wall clock corrected backwards during the wait neither stretches nor shortens it", async () => {
+      mocks.readHostPidMetadataEvidenceMock.mockResolvedValue({
+        kind: "absent",
+      } satisfies HostPidMetadataEvidence);
+      mocks.macosServiceMayRespawnMock.mockResolvedValue(true);
+      const logger = fakeLogger();
+
+      await withPlatform("darwin", async () => {
+        let settled = false;
+        const pending = observeSwapQuiescence(
+          ENVIRONMENT,
+          singleChatStoreSurveyRoot("/tmp/host-home"),
+          logger,
+        ).then((answer) => {
+          settled = true;
+          return answer;
+        });
+        await vi.advanceTimersByTimeAsync(5_000);
+        // Ten minutes backwards, mid-wait. The budget is monotonic, so the
+        // remaining ten seconds are still ten seconds.
+        vi.setSystemTime(Date.now() - 600_000);
+        await vi.advanceTimersByTimeAsync(SERVICE_SETTLE_TIMEOUT_MS - 5_500);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1_000);
+        await expect(pending).resolves.toEqual({
+          established: false,
+          reason: "service-may-respawn",
+        });
+      });
+    });
+
+    it("a manager that settles while a host published during the wait -> writer-still-running, not quiesced", async () => {
+      mocks.readHostPidMetadataEvidenceMock
+        .mockResolvedValueOnce({
+          kind: "absent",
+        } satisfies HostPidMetadataEvidence)
+        .mockResolvedValue({
+          kind: "read",
+          metadata: samplePidMetadata({ pid: process.pid }),
+        } satisfies HostPidMetadataEvidence);
+      mocks.macosServiceMayRespawnMock
+        .mockResolvedValueOnce(true)
+        .mockResolvedValue(false);
+      const logger = fakeLogger();
+
+      await withPlatform("darwin", async () => {
+        await expect(observeThroughSettleWindow(logger)).resolves.toEqual({
+          established: false,
+          reason: "writer-still-running",
+        });
+      });
+    });
+  });
+});
+
+describe("macosServiceMayRespawn (field parsing, real launchctl-print classification)", () => {
+  // Genuine field parsing, not the module-level mock above: this describe
+  // block imports the REAL function via `importActual` and drives it with a
+  // fake `ProcessRunner`, so a regression in the field-parsing logic itself
+  // - not merely in `observeSwapQuiescence`'s use of the boolean - fails
+  // here. Real sample shapes from a live machine's `launchctl print`.
+  const label = {
+    id: "ai.traycer.host",
+    displayName: "Traycer Host",
+    environment: "production" as Environment,
+    devSlot: null,
+  };
+
+  function fakeRunner(
+    byTarget: (target: string) => { exitCode: number; stdout: string },
+  ) {
+    return async (
+      _command: string,
+      args: readonly string[],
+      _options: unknown,
+    ) => {
+      const target = args[args.length - 1] ?? "";
+      const { exitCode, stdout } = byTarget(target);
+      return { stdout, stderr: "", exitCode };
+    };
+  }
+
+  it("a throttled job (no supervisor pid, dirty last exit) may respawn", async () => {
+    const { macosServiceMayRespawn } = await vi.importActual<
+      typeof import("../../service/platforms/macos")
+    >("../../service/platforms/macos");
+
+    const respawn = await macosServiceMayRespawn(
+      label,
+      fakeRunner(() => ({
+        exitCode: 0,
+        stdout: "\tlast exit reason = JETSAM_REASON_MEMORY_IDLE_EXIT\n",
+      })),
+      10_000,
+    );
+
+    expect(respawn).toBe(true);
+  });
+
+  it("a live supervisor with a dead host CHILD may respawn - the inverted case: launchctl's pid is the supervisor, not pid.json's host", async () => {
+    // Reaching this function at all means `publishedHostProcessGone` already
+    // found the HOST CHILD gone (or never published). A live launchd `pid`
+    // here is the SUPERVISOR sitting between children - the internal
+    // crash-relaunch loop - which can spawn the next writer without launchd
+    // itself being involved.
+    const { macosServiceMayRespawn } = await vi.importActual<
+      typeof import("../../service/platforms/macos")
+    >("../../service/platforms/macos");
+
+    const respawn = await macosServiceMayRespawn(
+      label,
+      fakeRunner(() => ({ exitCode: 0, stdout: "\tpid = 1234\n" })),
+      10_000,
+    );
+
+    expect(respawn).toBe(true);
+  });
+
+  it("a clean-exited loaded job does not respawn", async () => {
+    const { macosServiceMayRespawn } = await vi.importActual<
+      typeof import("../../service/platforms/macos")
+    >("../../service/platforms/macos");
+
+    const respawn = await macosServiceMayRespawn(
+      label,
+      fakeRunner(() => ({
+        exitCode: 0,
+        stdout: "\tlast exit code = 0\n",
+      })),
+      10_000,
+    );
+
+    expect(respawn).toBe(false);
+  });
+
+  it("a loaded job that has NEVER run may respawn - RunAtLoad is about to start it (Codex)", async () => {
+    const { macosServiceMayRespawn } = await vi.importActual<
+      typeof import("../../service/platforms/macos")
+    >("../../service/platforms/macos");
+
+    const respawn = await macosServiceMayRespawn(
+      label,
+      fakeRunner(() => ({
+        exitCode: 0,
+        stdout: "\tlast exit code = (never exited)\n",
+      })),
+      10_000,
+    );
+
+    expect(respawn).toBe(true);
+  });
+
+  it("a job that is not loaded at all does not respawn", async () => {
+    const { macosServiceMayRespawn } = await vi.importActual<
+      typeof import("../../service/platforms/macos")
+    >("../../service/platforms/macos");
+
+    const respawn = await macosServiceMayRespawn(
+      label,
+      fakeRunner(() => ({
+        exitCode: 1,
+        stdout: "Could not find service in domain for port\n",
+      })),
+      10_000,
+    );
+
+    expect(respawn).toBe(false);
+  });
+
+  // The two cases below are a deliberate pair: both a spawn/timeout failure
+  // and launchctl's own "not loaded" answer surface as a non-zero exit code
+  // from `runCommand`, and they mean the OPPOSITE thing. Collapsing them was
+  // the bug: `tolerateNonZeroExit: true` resolves a spawn failure or a
+  // timeout as `exitCode: -1` (`process-runner.ts` maps a non-numeric
+  // `err.code` to it) - a probe that never ran - while launchctl's genuine
+  // "could not find service" answer is always a POSITIVE exit code. Reading
+  // the negative one as "not loaded" cleared a swap on a question that was
+  // never actually asked.
+  it("a probe that never ran (spawn failure or timeout, exitCode: -1) is UNPROVEN and may respawn - not the same as 'not loaded'", async () => {
+    const { macosServiceMayRespawn } = await vi.importActual<
+      typeof import("../../service/platforms/macos")
+    >("../../service/platforms/macos");
+
+    const respawn = await macosServiceMayRespawn(
+      label,
+      fakeRunner(() => ({ exitCode: -1, stdout: "" })),
+      10_000,
+    );
+
+    expect(respawn).toBe(true);
+  });
+
+  it("launchctl's own positive-exit-code 'could not find service' answer does not respawn", async () => {
+    const { macosServiceMayRespawn } = await vi.importActual<
+      typeof import("../../service/platforms/macos")
+    >("../../service/platforms/macos");
+
+    const respawn = await macosServiceMayRespawn(
+      label,
+      fakeRunner(() => ({
+        exitCode: 113,
+        stdout: "Could not find service in domain for port\n",
+      })),
+      10_000,
+    );
+
+    expect(respawn).toBe(false);
+  });
+
+  it("consults BOTH the CLI label and Desktop's SMAppService .agent label - the agent in its relaunch window still refuses", async () => {
+    const { macosServiceMayRespawn } = await vi.importActual<
+      typeof import("../../service/platforms/macos")
+    >("../../service/platforms/macos");
+    const seenTargets: string[] = [];
+
+    const respawn = await macosServiceMayRespawn(
+      label,
+      fakeRunner((target) => {
+        seenTargets.push(target);
+        if (target.endsWith(".agent")) {
+          return {
+            exitCode: 0,
+            stdout: "\tlast exit reason = JETSAM_REASON_MEMORY_IDLE_EXIT\n",
+          };
+        }
+        return { exitCode: 1, stdout: "Could not find service\n" };
+      }),
+      10_000,
+    );
+
+    expect(respawn).toBe(true);
+    // Both targets were actually probed, not just the CLI label - the
+    // whole point of the dual-label check.
+    expect(seenTargets).toHaveLength(2);
+    expect(seenTargets[0]).not.toContain(".agent");
+    expect(seenTargets[1]).toContain(".agent");
+  });
+});
+
+describe("macosServiceMayRespawn (one deadline across both labels)", () => {
+  const label = {
+    id: "ai.traycer.host",
+    displayName: "Traycer Host",
+    environment: "production" as Environment,
+    devSlot: null,
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: [...FAKED_TIMERS] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("a first launchctl that spends most of the budget leaves the second only the rest - the probe cannot exceed its caller's budget", async () => {
+    const { macosServiceMayRespawn } = await vi.importActual<
+      typeof import("../../service/platforms/macos")
+    >("../../service/platforms/macos");
+    const timeouts: number[] = [];
+    const runner = async (
+      _command: string,
+      _args: readonly string[],
+      options: { readonly timeoutMs: number },
+    ) => {
+      timeouts.push(options.timeoutMs);
+      // The CLI label's probe sits for nine of the ten seconds before
+      // answering "not loaded"; the Desktop label's must then get ~one.
+      const wait = timeouts.length === 1 ? 9_000 : 0;
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, wait);
+      });
+      return { stdout: "Could not find service", stderr: "", exitCode: 113 };
+    };
+
+    const pending = macosServiceMayRespawn(label, runner, 10_000);
+    await vi.advanceTimersByTimeAsync(9_000);
+    await vi.runAllTimersAsync();
+    await expect(pending).resolves.toBe(false);
+
+    expect(timeouts[0]).toBe(10_000);
+    expect(timeouts[1] ?? Number.NaN).toBeLessThanOrEqual(1_000);
+    expect(timeouts[1] ?? Number.NaN).toBeGreaterThan(0);
+  });
+
+  it("a first launchctl that spends the WHOLE budget leaves the second a 1 ms probe, and its timeout reads as may-respawn - the unasked label is never cleared", async () => {
+    const { macosServiceMayRespawn } = await vi.importActual<
+      typeof import("../../service/platforms/macos")
+    >("../../service/platforms/macos");
+    const timeouts: number[] = [];
+    const runner = async (
+      _command: string,
+      _args: readonly string[],
+      options: { readonly timeoutMs: number },
+    ) => {
+      timeouts.push(options.timeoutMs);
+      if (timeouts.length === 1) {
+        // Sits past the deadline before answering "not loaded".
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 12_000);
+        });
+        return { stdout: "Could not find service", stderr: "", exitCode: 113 };
+      }
+      // What `runCommand` returns for a probe that hit its timeout.
+      return { stdout: "", stderr: "", exitCode: -1 };
+    };
+
+    const pending = macosServiceMayRespawn(label, runner, 10_000);
+    await vi.runAllTimersAsync();
+    await expect(pending).resolves.toBe(true);
+
+    expect(timeouts).toEqual([10_000, 1]);
+  });
+});
+
+describe("linuxServiceMayRespawn (field parsing, real systemctl classification)", () => {
+  // Checked by inspection that this shape was already covered: anything
+  // that is not `inactive`/`failed`/`unknown` falls through to `true`,
+  // including the empty stdout a `-1` (spawn failure / timeout) resolve
+  // produces - `systemctl --user is-active` never runs. Pinned here rather
+  // than left to inspection, mirroring the macOS pair above.
+  const label = {
+    id: "ai.traycer.host",
+    displayName: "Traycer Host",
+    environment: "production" as Environment,
+    devSlot: null,
+  };
+
+  it("a probe that never ran (spawn failure or timeout, exitCode: -1, empty stdout) is UNPROVEN and may respawn", async () => {
+    const { linuxServiceMayRespawn } = await vi.importActual<
+      typeof import("../../service/platforms/linux")
+    >("../../service/platforms/linux");
+
+    const respawn = await linuxServiceMayRespawn(
+      label,
+      async () => ({
+        exitCode: -1,
+        stdout: "",
+        stderr: "",
+      }),
+      10_000,
+    );
+
+    expect(respawn).toBe(true);
+  });
+});

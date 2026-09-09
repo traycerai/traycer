@@ -1177,11 +1177,9 @@ function sha256File(path: string): Promise<string> {
 }
 
 /**
- * SemVer-ish comparison: returns 1 if `a` > `b`, -1 if `a` < `b`, 0 if
- * equal or unparseable. Used to decide "PATH CLI newer than bundled,
- * trust it". Pre-release suffixes are stripped - channel discrimination
- * isn't part of the v1 contract (review item 7: regression-tested so a
- * future contributor doesn't "fix" the strip without realizing).
+ * CLI newest-wins comparison: full SemVer precedence, with local-dev
+ * sentinels below releases. RC identifiers must participate: stripping them
+ * leaves a copied rc.1 CLI installed after Desktop updates to rc.2.
  *
  * Local-dev sentinel handling (review item 6): a bundled `0.0.0-local`
  * version (the placeholder readBundledCliVersion returns when the
@@ -1198,21 +1196,7 @@ export function compareSemver(a: string, b: string): number {
   if (aLocal && bLocal) return 0;
   if (aLocal) return -1;
   if (bLocal) return 1;
-  const parse = (v: string): number[] | null => {
-    const main = v.split("-")[0];
-    const parts = main.split(".").map((p) => Number.parseInt(p, 10));
-    if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) {
-      return null;
-    }
-    return parts;
-  };
-  const ap = parse(a);
-  const bp = parse(b);
-  if (ap === null || bp === null) return 0;
-  for (let i = 0; i < 3; i++) {
-    if (ap[i] !== bp[i]) return ap[i] > bp[i] ? 1 : -1;
-  }
-  return 0;
+  return compareHostVersions(a, b);
 }
 
 /**
@@ -1220,12 +1204,11 @@ export function compareSemver(a: string, b: string): number {
  * 1 if `a` > `b`, -1 if `a` < `b`, 0 if equal or unparseable. Build metadata
  * (`+...`) is ignored.
  *
- * This is the host "update available?" comparator. It deliberately does NOT
- * share {@link compareSemver}'s pre-release strip: that strip serves the CLI
- * bundled-vs-PATH trust decision where channel is out of scope, but the host
- * update check needs `1.0.0-rc.1 < 1.0.0` so a release-candidate host upgrades
- * to its GA instead of reading "up to date" forever. An unparseable core
- * triplet yields 0 so we never advertise an update we can't justify.
+ * Shared by the host "update available?" decision and CLI reconciliation
+ * (which adds local-dev sentinel handling in {@link compareSemver}). Both
+ * need `1.0.0-rc.1 < 1.0.0-rc.2 < 1.0.0` to discover newer releases.
+ * An unparseable core triplet yields 0 so we never advertise an update we
+ * can't justify.
  */
 export function compareHostVersions(a: string, b: string): number {
   const parse = (v: string): { core: number[]; pre: string[] } | null => {

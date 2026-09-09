@@ -5,6 +5,7 @@ import {
   Check,
   CheckCircle2,
   FolderX,
+  Globe,
   MessageCircle,
   MessageSquarePlus,
   MessageSquareX,
@@ -568,6 +569,10 @@ function notificationRowGlyph(row: MergedNotificationRow): RowGlyph {
     // kind itself says nothing about how the operation ended.
     case "host.operation.finished":
       return { icon: Bell, colorClassName: NEUTRAL_COLOR };
+    // Needs-action, but not an agent prompt: the shared tones return null for
+    // this kind, so the subject glyph is the whole signal.
+    case "browser.human.needed":
+      return { icon: Globe, colorClassName: NEUTRAL_COLOR };
     case null:
       return { icon: Bell, colorClassName: NEUTRAL_COLOR };
   }

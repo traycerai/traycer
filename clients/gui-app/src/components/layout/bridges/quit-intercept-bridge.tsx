@@ -18,7 +18,6 @@ import { drainDesktopTabsPersistence } from "@/stores/tabs/desktop-tabs-persiste
 import { appLogger } from "@/lib/logger";
 import { flushLiveReadingPositions } from "@/lib/reading-position";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
-import { drainElectronTabHandoffs } from "@/lib/browser-view/sessions/electron-tabs";
 
 /**
  * Terminal decision returned by the renderer to the Electron main process
@@ -47,17 +46,9 @@ interface AppLifecycleUnsyncedEditsEntry {
   readonly unsyncable?: boolean;
 }
 
-interface FreshUnsyncedSnapshotRequest {
-  readonly requestId: string;
-}
-
 interface FreshUnsyncedSnapshotResponse {
   readonly requestId: string;
   readonly snapshot: ReadonlyArray<UnsyncedEditsEntry>;
-}
-
-interface BrowserHandoffDrainRequest {
-  readonly requestId: string;
 }
 
 interface QuitRequest {
@@ -86,17 +77,11 @@ interface AppLifecycleWindowBridge {
   acknowledgeQuitRequest?: (requestId: string) => Promise<void>;
   respondToQuitRequest(decision: QuitDecisionPayload): Promise<void>;
   onGetFreshUnsyncedSnapshot?: (
-    handler: (request: FreshUnsyncedSnapshotRequest) => void,
+    handler: (request: { readonly requestId: string }) => void,
   ) => { dispose: () => void };
   respondFreshUnsyncedSnapshot?: (
     reply: FreshUnsyncedSnapshotResponse,
   ) => Promise<void>;
-  onDrainBrowserHandoffs?: (
-    handler: (request: BrowserHandoffDrainRequest) => void,
-  ) => { dispose: () => void };
-  respondBrowserHandoffsDrained?: (reply: {
-    readonly requestId: string;
-  }) => Promise<void>;
 }
 
 interface RunnerHostWindowShape {
@@ -201,33 +186,6 @@ export function QuitInterceptBridge(): null | React.ReactElement {
       subscription.dispose();
     };
   }, [appLifecycle, registry]);
-
-  useEffect(() => {
-    const onDrain = appLifecycle?.onDrainBrowserHandoffs;
-    const respond = appLifecycle?.respondBrowserHandoffsDrained;
-    if (onDrain === undefined || respond === undefined) return;
-    const subscription = onDrain((request) => {
-      // `allSettled`, not `then`: a drain REJECTS when `browser.sessions`
-      // disconnects mid-handoff (`rejectOwnedElectronTabHandoffAcks`), and
-      // swallowing that without replying left main's waiter to sit out its
-      // full `BROWSER_HANDOFF_DRAIN_TIMEOUT_MS` - a 10s stall on every quit
-      // and every window close that hits it. A failed drain is still "drained
-      // as far as this renderer can tell", so it must be reported, not
-      // withheld. Same shape as the fresh-snapshot reply above.
-      void Promise.allSettled([drainElectronTabHandoffs()])
-        .then(() => respond({ requestId: request.requestId }))
-        .catch((error: unknown) => {
-          appLogger.error(
-            "[quit-intercept] browser handoff drain reply failed",
-            { requestId: request.requestId },
-            error,
-          );
-        });
-    });
-    return () => {
-      subscription.dispose();
-    };
-  }, [appLifecycle]);
 
   useEffect(() => {
     if (appLifecycle === null) return;

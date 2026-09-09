@@ -50,6 +50,19 @@ vi.mock("@/hooks/use-epic-store", () => ({
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => ({ getActiveHostId: () => "host-1" }),
 }));
+// The card also derives PR pills from `pr.subscribeListForEpic` via this
+// hook - unmocked, it reaches for `useHostDirectoryEntryForHostId` (absent
+// from the partial host-client mock above) and a real stream client, neither
+// of which this file provides. This suite is about TUI identity chrome, not
+// PR pills, so an inert result suffices.
+vi.mock("@/hooks/pr/use-owner-pr-references", () => ({
+  useOwnerListPrReferences: () => ({
+    references: [],
+    isPending: false,
+    error: false,
+    sendRefresh: () => undefined,
+  }),
+}));
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   // The header's subject-harness warmup; targeting is covered by
   // `worktree-owner-settings-header.test.tsx`, so a no-op suffices here.
@@ -239,5 +252,51 @@ describe("TUI agent hover card identity (real HoverCard)", () => {
     const mark = screen.getByTestId("owner-settings-harness-mark");
     expect(mark.querySelector('span[style*="background-color"]')).toBeNull();
     expect(screen.queryByText(/error|missing|unknown/i)).toBeNull();
+  });
+
+  it("carries a caller's supplemental content inside the real hover card", () => {
+    // The card is the shared identity chrome; a caller (e.g. the office
+    // floor) appends its own line under it rather than replacing anything.
+    // This exercises the REAL HoverCard content, not a mocked stand-in, so a
+    // regression that dropped supplemental content from the render tree
+    // would show up here.
+    render(
+      <WorktreeOwnerMetadataTooltip
+        trigger={
+          <button type="button" data-testid="tui-row">
+            Terminal agent row
+          </button>
+        }
+        title="Managed terminal agent"
+        hostId="host-1"
+        epicId="epic-1"
+        ownerId="owner-1"
+        ownerKind="terminal-agent"
+        supplementalContent={
+          <span data-testid="caller-extra">Working · large model</span>
+        }
+        side="right"
+      />,
+    );
+    const trigger = screen.getByTestId("tui-row");
+    hoverIn(trigger);
+    settleOpenDelay();
+    expect(cardIsOpen()).toBe(true);
+
+    const cardContent = document.querySelector(
+      '[data-slot="hover-card-content"]',
+    );
+    if (cardContent === null) throw new Error("expected hover card content");
+    const extra = screen.getByTestId("caller-extra");
+    expect(cardContent.contains(extra)).toBe(true);
+
+    // The card's own title and identity chrome are still there, alongside
+    // the caller's line rather than instead of it.
+    expect(
+      screen.getByTestId("chat-navigator-hover-title-owner-1").textContent,
+    ).toBe("Managed terminal agent");
+    expect(screen.getByTestId("owner-settings-model").textContent).toContain(
+      "Claude Sonnet 4.5",
+    );
   });
 });

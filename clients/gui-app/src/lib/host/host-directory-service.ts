@@ -286,11 +286,62 @@ export class HostDirectoryService implements IHostDirectoryService {
   }
 
   /**
-   * Initializes the service. Subscribes to local host changes via
-   * `IRunnerHost.onLocalHostChange` and performs an initial remote fetch.
+   * Initializes the service and RESOLVES ONCE THE REGISTRY HAS ANSWERED.
+   *
+   * Prefer {@link startSeeded} on any path that paints: this one additionally
+   * waits out a `GET /api/v3/hosts` round trip, which is unbounded on a slow
+   * network. The two share one implementation and one request - the awaited
+   * `refresh()` below JOINS the background one `startSeeded` already issued
+   * (`refreshForEra` single-flights by era), so this costs a wait, not a
+   * second fetch.
+   *
    * Safe to call multiple times - subsequent calls are no-ops.
    */
   async start(): Promise<void> {
+    if (this.started) {
+      return;
+    }
+    await this.startSeeded();
+    // `startSeeded` gives up on a service disposed mid-seed; do not turn that
+    // into a fetch nobody is waiting for.
+    if (!this.isStarted()) {
+      return;
+    }
+    await this.refresh();
+  }
+
+  /**
+   * Initializes the service and resolves as soon as it can ANSWER - which is
+   * before the registry has said anything.
+   *
+   * Subscribes to local host changes via `IRunnerHost.onLocalHostChange` and
+   * issues the initial remote fetch WITHOUT waiting for it. Safe to call
+   * multiple times - subsequent calls are no-ops.
+   *
+   * This is what the renderer boot calls, and the reason is measured: the app
+   * shell renders `HostRuntimeBootFallback` until `auth.start()` and
+   * `directory.start()` both resolve, and those two accounted for 616 ms of
+   * the 968 ms to first paint on the production bundle - the cloud round trip
+   * being the unbounded half.
+   *
+   * Nothing that paints needs the listing. The row a launch binds to is the
+   * LOCAL host, and it is already present: `onLocalHostChange` replays its
+   * cached snapshot synchronously on subscribe, so `localEntry` is populated
+   * with no I/O at all. What the listing adds is the REMOTE rows, and this
+   * service already models their absence as a first-class state rather than
+   * as "zero" - `hasObservedRemoteListing` stays false, `getCardinality()`
+   * answers `"unknown"`, `hasSettledFleet()` answers false. That is the exact
+   * window a FAILED first fetch has always produced, so every consumer of it
+   * already exists and is already correct; this only makes the window happen
+   * on the success path too.
+   *
+   * What makes it safe rather than merely quick is the notification.
+   * `performRefresh` emits UNCONDITIONALLY when the observed flag flips,
+   * precisely because an empty directory is byte-identical either side of
+   * that crossing and the compared emit would swallow it - so consumers hear
+   * the listing land whether or not any row moved.
+   */
+  async startSeeded(): Promise<void> {
     if (this.started) {
       return;
     }
@@ -318,7 +369,7 @@ export class HostDirectoryService implements IHostDirectoryService {
       if (snapshot !== null && snapshot.hostId !== this.lastKnownLocalHostId) {
         this.adoptLocalHostId(snapshot.hostId);
       }
-      appLogger.debug("[host-directory] local host snapshot changed", {
+      appLogger.info("[host-directory] local host snapshot changed", {
         hostId: snapshot?.hostId ?? null,
         hasWebsocketUrl: snapshot !== null,
         status: snapshot === null ? "missing" : "available",
@@ -326,11 +377,42 @@ export class HostDirectoryService implements IHostDirectoryService {
       });
       this.emit();
     });
-    await this.refresh();
-    // Read through a method, not the bare field: `dispose()` can flip
-    // `this.started` to `false` while this `await` is pending, but a direct
-    // `this.started` read here is narrowed by the compiler to the literal
-    // `true` assigned above and the guard is flagged as dead code.
+    // Issued, not awaited. See this method's doc for why nothing that paints
+    // needs it.
+    //
+    // The `.catch` is DEFENCE, not a live path: `fetchRemoteOutcome` already
+    // collapses every fetcher rejection into `{ kind: "failed" }`, so nothing
+    // reaches it today. It is here for a future edit that lets one through -
+    // on the awaited path such a rejection propagates into the runtime
+    // provider's startup `try`, which logs `startup failed` and disposes auth,
+    // the runtime and this service, so a directory fetch that threw took the
+    // whole host runtime down with it. No test pins this, and the attempt is
+    // recorded in `host-directory-service-seeded-start.test.ts`: the property
+    // holds by construction (the `void`), which is a different claim from the
+    // one this `catch` makes, and no ablation of the catch itself can go red.
+    void this.refresh()
+      .then(() => {
+        // Replaces a diagnostic this change would otherwise have deleted.
+        // `[host-runtime] startup complete` logs `hostCardinality` at info,
+        // and now reports `"unknown"` every time - truthfully, since the
+        // listing is still in flight when boot completes, but uselessly. The
+        // real answer arrives here instead, at the same level, so a field
+        // report still says how many hosts the account had.
+        appLogger.info("[host-directory] initial listing settled", {
+          cardinality: this.getCardinality(),
+          remoteCount: this.remoteEntries.length,
+        });
+      })
+      .catch((error: unknown) => {
+        appLogger.warn("[host-directory] initial refresh failed", {
+          error: describeLogError(error),
+        });
+      });
+    // Read through a method, not the bare field: a listener woken by the
+    // synchronous local-host replay above can re-enter and `dispose()` this
+    // service before we get here, but a direct `this.started` read is narrowed
+    // by the compiler to the literal `true` assigned above and the guard is
+    // flagged as dead code.
     if (!this.isStarted()) {
       return;
     }

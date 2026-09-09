@@ -2,17 +2,22 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "@capacitor/app";
 import { Capacitor } from "@capacitor/core";
+import { Keyboard } from "@capacitor/keyboard";
 import { PushNotifications } from "@capacitor/push-notifications";
+import { init as initSentry } from "@sentry/browser";
 import {
   AndroidSettings,
   IOSSettings,
   NativeSettings,
 } from "capacitor-native-settings";
 import {
+  DESKTOP_RETENTION_PROFILE,
+  MOBILE_RETENTION_PROFILE,
   TraycerApp,
   hostRpcRegistry,
   setMobileApp,
   setMobileAppPlatform,
+  setRetentionProfile,
 } from "@traycer-clients/gui-app";
 import type {
   RemoteHostFetcher,
@@ -23,11 +28,14 @@ import {
   removeDevicePushTokenViaHttp,
 } from "@traycer-clients/shared/auth/push-token-fetcher";
 import "./index.css";
+import { startNativeKeyboardBridge } from "./native-keyboard-bridge";
 import { MobileRunnerHost } from "../mobile-runner-host";
+import { sentryInitOptions } from "../sentry";
 import { MobileDeviceDescriber } from "../device-describer";
-import { MobileFileSave } from "../file-save";
+import { MobileFileSave, supportsDirectDownload } from "../file-save";
 import { MobileLinkCodeScanner } from "../link-code-scanner";
 import { MobileLinkLoginDeepLinks } from "../link-login-deep-links";
+import { MobileSystemBack } from "../system-back";
 import {
   MobilePushRegistration,
   pushRegistrationTarget,
@@ -151,6 +159,17 @@ const remoteFetcher: RemoteHostFetcher | null =
   devHostFetch === null ? null : () => devHostFetch();
 
 function bootstrap(): void {
+  // Crash reporting comes up before anything that can fail, so a bootstrap
+  // error below is the first thing it sees rather than the one it misses.
+  // Synchronous and touching no OS capability, so it sits safely above the
+  // once-only deep-link read further down - that ordering rule is about
+  // nothing CONSUMING the launch URL first, and `init` reads nothing of the
+  // kind. A `null` here (no DSN baked - every local build) leaves reporting
+  // off and gui-app's own `isInitialized()` gate false, exactly as before.
+  const sentryOptions = sentryInitOptions(config);
+  if (sentryOptions !== null) {
+    initSentry(sentryOptions);
+  }
   document.documentElement.classList.add("traycer-mobile-client");
   // PRODUCT flag, not layout: unlocks mobile-app-only UX policy such as the
   // single-composer draft model and the link-code sign-in entry. See gui-app's
@@ -161,6 +180,17 @@ function bootstrap(): void {
   // inherit phone-only affordances like "Scan from desktop", which on the
   // desktop side of that loop is a nonsense offer.
   setMobileApp(Capacitor.isNativePlatform());
+  // MEMORY, not product: the installed app runs under iOS's 2 GB WebContent
+  // ceiling, so it keeps fewer hidden tabs mounted and fewer epic / chat /
+  // terminal sessions warm than the desktop does. Gated on the same native
+  // check: the dev browser tab has a desktop's memory and gets the desktop
+  // numbers. Read lazily by every registry, so ordering against their
+  // module evaluation does not matter.
+  setRetentionProfile(
+    Capacitor.isNativePlatform()
+      ? MOBILE_RETENTION_PROFILE
+      : DESKTOP_RETENTION_PROFILE,
+  );
   // The shell's platform, for copy that must name the right update channel
   // (TestFlight / the App Store vs Google Play). Gated on the same native
   // check as the flag above: the dev browser tab reports platform "web" and
@@ -171,6 +201,18 @@ function bootstrap(): void {
       ? nativePlatform
       : null,
   );
+  // Native-only: the Keyboard plugin has no web implementation, and the dev
+  // browser tab's overlay keyboard is already covered by gui-app's
+  // visualViewport fallback. Started before render so the first keyboard
+  // event after mount is never missed. Only iOS overlays the keyboard
+  // (`resize: none`), so only there does the bridge own `--keyboard-inset`;
+  // Android resizes its own webview and `100dvh` already tracks it.
+  if (Capacitor.isNativePlatform()) {
+    startNativeKeyboardBridge({
+      plugin: Keyboard,
+      drivesInset: nativePlatform === "ios",
+    });
+  }
   // APNs addressing follows code signing, not the backend set: staging and
   // production both ship distribution-signed (TestFlight / App Store rewrite
   // `aps-environment` to "production" at export), so only `dev` - the one
@@ -190,6 +232,33 @@ function bootstrap(): void {
     ? new MobileLinkLoginDeepLinks(App)
     : null;
   linkLoginDeepLinks?.start();
+  // Everything above stays SYNCHRONOUS, and the deep-link read above stays
+  // first: a QR scanned by the system camera makes the launch URL readable
+  // exactly once, so nothing may await before it. Only the remainder - which
+  // needs a capability the OS has to be asked for - moves behind an await.
+  // `void`, because a bootstrap failure has nowhere to be reported to.
+  void mount({ pushRegistration, linkLoginDeepLinks });
+}
+
+/**
+ * The rest of bootstrap, after the one thing the OS must be asked.
+ *
+ * `supportsDirectDownload()` is a plugin call, so the host cannot be built in
+ * the same tick as the synchronous setup above. The ordering that matters is
+ * unchanged: `pushRegistration.start` still runs after the host exists and
+ * still before the first render, so a cold-start notification tap is captured
+ * before the GUI mounts. What moved is that BOTH now happen one microtask
+ * later than they used to, and on Android after a bounded device probe.
+ */
+async function mount(input: {
+  readonly pushRegistration: MobilePushRegistration | null;
+  readonly linkLoginDeepLinks: MobileLinkLoginDeepLinks | null;
+}): Promise<void> {
+  const { pushRegistration, linkLoginDeepLinks } = input;
+  // Asked once, before the host exists, because `IFileSaveHost.downloadFile`
+  // is read synchronously at render time - a capability that resolved later
+  // would leave a Download control on screen that the shell cannot honour.
+  const directDownloads = await supportsDirectDownload();
   const host = new MobileRunnerHost({
     signInUrl: config.signInUrl,
     authnBaseUrl: config.authnBaseUrl,
@@ -231,7 +300,25 @@ function bootstrap(): void {
     // phone user saves through, and neither plugin has a web implementation
     // worth preferring over the browser save APIs gui-app already falls back
     // to in a tab.
-    fileSave: Capacitor.isNativePlatform() ? new MobileFileSave() : null,
+    fileSave: Capacitor.isNativePlatform()
+      ? new MobileFileSave(directDownloads)
+      : null,
+    // The one place this difference is allowed to be named. WKWebView honours
+    // an image clipboard write; Android's WebView RESOLVES it having written
+    // nothing, because Chromium reaches the Android clipboard for an image
+    // through an embedder-supplied image file provider and that embedder
+    // installs none. Nothing rejects, so gui-app cannot learn this by trying -
+    // it reads the capability instead, and simply does not offer a Copy that
+    // would report a success the clipboard never received. The dev web entry
+    // is a real browser tab, where the write works.
+    canCopyImages: Capacitor.getPlatform() !== "android",
+    // The other place a platform is named. Android is the one shell whose OS
+    // raises a back request - the hardware key and the system back gesture,
+    // which the OS takes before the WebView sees a touch, so the GUI's own
+    // edge swipe never fires there. iOS has neither, and its edge swipe IS
+    // that recognizer; the dev web entry has the browser's own back.
+    systemBack:
+      Capacitor.getPlatform() === "android" ? new MobileSystemBack(App) : null,
   });
   // After the host exists: registration follows the token store (sign-in,
   // app start while signed in, sign-out) and the host's resume edge (a

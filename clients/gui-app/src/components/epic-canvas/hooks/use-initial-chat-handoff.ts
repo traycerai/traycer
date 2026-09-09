@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useRef } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { displayTitle } from "@/lib/display-title";
-import {
-  ACTIVE_TILE_PLACEMENT,
-  openChatNodeWithPlacement,
-  type ConversationTilePlacement,
-} from "@/lib/canvas/conversation-tile-placement";
+import type {
+  ExplicitTilePlacement,
+  TileOpenIntent,
+} from "@/lib/canvas/tile-open/intent";
 import {
   useEpicChatRecords,
   useEpicConnectionStatus,
@@ -13,7 +12,7 @@ import {
   useEpicSnapshotLoaded,
 } from "@/lib/epic-selectors";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
-import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -90,16 +89,7 @@ export function useInitialChatHandoff(epicId: string, tabId: string): void {
   // epic chats. The chat tab is eager-opened (canvas state) + marked
   // pending-create so it survives until this projection catches up.
   const chatRecords = useEpicChatRecords();
-  const navigateNested = useEpicNestedFocusNavigation();
-  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareOpenTileInTabFocusTarget,
-  );
-  const prepareOpenTileInPaneFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareOpenTileInPaneFocusTarget,
-  );
-  const prepareSplitPaneWithNodeFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareSplitPaneWithNodeFocusTarget,
-  );
+  const { openTile } = useEpicTileNavigation();
   const markArtifactPendingCreate = useEpicCanvasStore(
     (s) => s.markArtifactPendingCreate,
   );
@@ -132,7 +122,7 @@ export function useInitialChatHandoff(epicId: string, tabId: string): void {
   );
   const handoffChatId = handoff?.chatId ?? null;
   const handoffStatus = handoff?.status ?? null;
-  const handoffPlacement = handoff?.placement ?? ACTIVE_TILE_PLACEMENT;
+  const handoffPlacement = handoff?.placement ?? null;
   const handoffCreatedAt = handoff?.createdAt ?? 0;
   const projectedChatId = projectedChat?.id ?? null;
   const projectedChatTitle = projectedChat?.title ?? null;
@@ -238,26 +228,7 @@ export function useInitialChatHandoff(epicId: string, tabId: string): void {
       handoffStatus,
       handoffPlacement,
       markArtifactPendingCreate,
-      openTileInTab: (targetTabId, node) => {
-        navigateNested(epicId, targetTabId, () =>
-          prepareOpenTileInTabFocusTarget(targetTabId, node),
-        );
-      },
-      openTileInPane: (targetTabId, paneId, node) => {
-        navigateNested(epicId, targetTabId, () =>
-          prepareOpenTileInPaneFocusTarget(targetTabId, paneId, node),
-        );
-      },
-      splitPaneWithNode: (targetTabId, targetPaneId, position, node) => {
-        navigateNested(epicId, targetTabId, () =>
-          prepareSplitPaneWithNodeFocusTarget(
-            targetTabId,
-            targetPaneId,
-            position,
-            node,
-          ),
-        );
-      },
+      openTile,
       openedChatIdRef,
       markedChatIdRef,
       projectedChatId,
@@ -272,11 +243,7 @@ export function useInitialChatHandoff(epicId: string, tabId: string): void {
     handoffStatus,
     handoffPlacement,
     markArtifactPendingCreate,
-    epicId,
-    navigateNested,
-    prepareOpenTileInPaneFocusTarget,
-    prepareOpenTileInTabFocusTarget,
-    prepareSplitPaneWithNodeFocusTarget,
+    openTile,
     projectedChatId,
     projectedChatTitle,
     scope,
@@ -327,20 +294,9 @@ interface CanvasHandoffTransitionInput {
   readonly tileHostId: string | null;
   readonly handoffChatId: string | null;
   readonly handoffStatus: InitialChatHandoff["status"] | null;
-  readonly handoffPlacement: ConversationTilePlacement;
+  readonly handoffPlacement: ExplicitTilePlacement | null;
   readonly markArtifactPendingCreate: (artifactId: string) => void;
-  readonly openTileInTab: (tabId: string, node: EpicCanvasTileRef) => void;
-  readonly openTileInPane: (
-    tabId: string,
-    paneId: string,
-    node: EpicCanvasTileRef,
-  ) => void;
-  readonly splitPaneWithNode: (
-    tabId: string,
-    targetPaneId: string,
-    position: "right" | "bottom",
-    node: EpicCanvasTileRef,
-  ) => void;
+  readonly openTile: (intent: TileOpenIntent) => void;
   readonly openedChatIdRef: { current: string | null };
   readonly markedChatIdRef: { current: string | null };
   readonly projectedChatId: string | null;
@@ -404,25 +360,23 @@ function runCanvasHandoffTransition(input: CanvasHandoffTransitionInput): void {
     !tabContainsTile(input.tabId, input.handoffChatId)
   ) {
     input.openedChatIdRef.current = input.handoffChatId;
-    // Opener placements (target-group / split) bypass dedup. If the target
-    // group is gone (closed mid-compose, or a stale id rehydrated on
-    // reload), fall back to the active tile so the chat always surfaces
-    // instead of vanishing.
+    // If the opener's target pane is gone (closed mid-compose, or a stale id
+    // rehydrated on reload), drop the explicit placement so the configured
+    // conversation placement decides and the chat always surfaces instead of
+    // vanishing.
     const effectivePlacement =
-      placement.kind === "active-tile" ||
-      tabContainsPane(input.tabId, placement.groupId)
+      placement === null || tabContainsPane(input.tabId, placement.paneId)
         ? placement
-        : ACTIVE_TILE_PLACEMENT;
-    openChatNodeWithPlacement(
-      {
-        openTileInTab: input.openTileInTab,
-        openTileInPane: input.openTileInPane,
-        splitPaneWithNode: input.splitPaneWithNode,
-      },
-      input.tabId,
+        : null;
+    input.openTile({
       node,
-      effectivePlacement,
-    );
+      target: { tabId: input.tabId },
+      gesture: "explicit",
+      modifiers: null,
+      placement: effectivePlacement,
+      dedupe: true,
+      source: "direct_ui",
+    });
   }
   if (input.projectedChatId === null) {
     input.markArtifactPendingCreate(input.handoffChatId);

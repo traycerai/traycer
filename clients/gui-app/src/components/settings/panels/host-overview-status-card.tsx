@@ -1,6 +1,5 @@
 import type { ReactNode, RefObject } from "react";
 import {
-  AlertTriangle,
   Check,
   Copy,
   Info,
@@ -240,45 +239,6 @@ export function HostOverviewNameAction(props: {
  * `local-host-restart-flow.tsx`). Re-adding an inline force control here would
  * put the two surfaces back out of step.
  */
-
-/**
- * A host update in flight, as the HOST reports it on `host.status`.
- *
- * `host.update.install` returns the moment the detached swap is started, so
- * this — not that response — is the only thing that can say how it is going.
- */
-export function HostOverviewUpdateProgress(props: {
-  readonly state: "updating" | "failed";
-  readonly error: string | null;
-}): ReactNode {
-  const failed = props.state === "failed";
-  return (
-    <div
-      className={
-        failed
-          ? "flex items-start gap-2 border-b border-destructive/30 bg-destructive/10 px-5 py-3 text-ui-sm text-destructive"
-          : "flex items-center gap-2 border-b border-border/40 bg-foreground/3 px-5 py-3 text-ui-sm text-muted-foreground"
-      }
-      data-testid="host-overview-update-progress"
-      data-state={props.state}
-    >
-      {failed ? (
-        <AlertTriangle className="mt-px size-4 shrink-0" aria-hidden />
-      ) : (
-        <AgentSpinningDots
-          className="size-3"
-          testId={undefined}
-          variant={undefined}
-        />
-      )}
-      <span className="min-w-0 flex-1">
-        {failed
-          ? (props.error ?? "The last update attempt failed on this host.")
-          : "Updating this host…"}
-      </span>
-    </div>
-  );
-}
 
 /** A quiet, non-blocking explanation under a control that has degraded. */
 export function HostOverviewNotice(props: {

@@ -1,4 +1,8 @@
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
+import {
+  useEpicLaneCommentThreads,
+  useEpicLaneCommentThreadsDroppedAt,
+} from "@/hooks/comments/use-lane-comment-threads";
 import { revealCommentThreadAnchor } from "@/lib/comments/comment-editor-registry";
 import { useEpicArtifact } from "@/lib/epic-selectors";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -26,6 +30,13 @@ export function CommentSidebarPanel(props: CommentSidebarPanelProps) {
   // `<TabHostProvider>`, so its host is the Epic SESSION's - not the app-wide
   // one, which re-points under it while this Epic keeps rendering (D15).
   const hostClient = useEpicSessionHostClient();
+  // The state lane's comment records, resolved here for the same reason the
+  // host client is: `CommentSidebar` reads no ambient context of its own.
+  const laneThreads = useEpicLaneCommentThreads(activeArtifactId);
+  // Resolved beside the rows, not inside `CommentSidebar`: the ambient reads
+  // belong to this wiring layer, which is what keeps the panel mountable on
+  // the mobile switcher, outside any epic session.
+  const laneDroppedAt = useEpicLaneCommentThreadsDroppedAt();
   const setFlashThread = useCommentThreadsStore((s) => s.setFlashThread);
   const anchorPositions = useArtifactAnchorPositions(epicId, activeArtifactId);
   const currentUserId = useAuthStore((state) => state.profile?.userId ?? null);
@@ -45,6 +56,8 @@ export function CommentSidebarPanel(props: CommentSidebarPanelProps) {
       hostClient={hostClient}
       artifactType={artifactKind}
       artifactId={activeArtifactId}
+      laneThreads={laneThreads}
+      laneDroppedAt={laneDroppedAt}
       anchorPositions={anchorPositions}
       currentUserId={currentUserId}
       canModerate={false}

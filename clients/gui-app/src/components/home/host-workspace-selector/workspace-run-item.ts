@@ -180,6 +180,34 @@ export function workspaceRunBranchLabel(input: {
   return workspaceFolderName(importIntent.worktreePath);
 }
 
+/**
+ * The branch an adopted (`import`) worktree was forked from, best effort:
+ * the disk entry's own `sourceBranch`, else the main checkout's branch, else
+ * the repository's main branch. `null` when the row is not an import or its
+ * disk metadata is not disk truth yet.
+ *
+ * `summary === null` is not the whole of that second condition: a pending row
+ * carries the binding-entry fallback (or a cache-served listing) whose
+ * `resolvedAt` is null, and `workspaceSummaryFromBindingEntry` builds its one
+ * entry from the BINDING - no `sourceBranch`, `isMain: false`, and a
+ * `mainBranch` taken from the folder's own checkout. Reading provenance off
+ * that answers with a branch that is not the source. Pending metadata is
+ * never rendered as disk truth here either, so omit the source instead.
+ */
+export function importedWorktreeSourceBranch(
+  item: WorkspaceRunItem,
+): string | null {
+  const intent = item.currentIntent;
+  if (intent?.kind !== "import" || item.summary === null) return null;
+  if (item.metadataPending) return null;
+  const matching =
+    item.summary.worktrees.find(
+      (worktree) => worktree.worktreePath === intent.worktreePath,
+    ) ?? null;
+  const mainEntry = item.summary.worktrees.find((worktree) => worktree.isMain);
+  return matching?.sourceBranch ?? mainEntry?.branch ?? item.summary.mainBranch;
+}
+
 /** Secondary source context for a new-worktree target label. */
 export function workspaceRunBranchSourceLabel(
   intent: WorktreeFolderIntent | null,

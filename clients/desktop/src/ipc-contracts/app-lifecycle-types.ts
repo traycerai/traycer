@@ -55,27 +55,14 @@ export interface QuitDecisionResponse {
 }
 
 /**
- * Main-to-renderer request for a fresh registry snapshot. The renderer reads
- * the live `OpenEpicSessionRegistry.getUnsyncedEdits()` synchronously and
- * replies via `respondFreshUnsyncedSnapshot` with the matching `requestId`.
- * Correlation by `requestId` lets the in-flight `requestFreshUnsyncedSnapshot`
- * promise ignore concurrent ambient `setUnsyncedEditsSnapshot` pushes.
+ * The renderer reads the live `OpenEpicSessionRegistry.getUnsyncedEdits()`
+ * synchronously and replies with the matching `requestId`. Correlation by
+ * `requestId` lets the in-flight `requestFreshUnsyncedSnapshot` promise ignore
+ * concurrent ambient `setUnsyncedEditsSnapshot` pushes.
  */
-export interface FreshUnsyncedSnapshotRequest {
-  readonly requestId: string;
-}
-
 export interface FreshUnsyncedSnapshotResponse {
   readonly requestId: string;
   readonly snapshot: UnsyncedEditsSnapshot;
-}
-
-export interface BrowserHandoffDrainRequest {
-  readonly requestId: string;
-}
-
-export interface BrowserHandoffDrainResponse {
-  readonly requestId: string;
 }
 
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
@@ -87,16 +74,10 @@ export interface AppLifecycleBridge {
   acknowledgeQuitRequest(requestId: string): Promise<void>;
   respondToQuitRequest(response: QuitDecisionResponse): Promise<void>;
   onGetFreshUnsyncedSnapshot(
-    handler: (request: FreshUnsyncedSnapshotRequest) => void,
+    handler: (request: { readonly requestId: string }) => void,
   ): Disposable;
   respondFreshUnsyncedSnapshot(
     reply: FreshUnsyncedSnapshotResponse,
-  ): Promise<void>;
-  onDrainBrowserHandoffs(
-    handler: (request: BrowserHandoffDrainRequest) => void,
-  ): Disposable;
-  respondBrowserHandoffsDrained(
-    reply: BrowserHandoffDrainResponse,
   ): Promise<void>;
   /**
    * Every Epic holding work that can never sync, across ALL windows.

@@ -894,6 +894,7 @@ export function accumulateEvent(
         {
           type: "tool_call",
           managedCommand: null,
+          agentMessageReceipt: null,
           blockId: event.blockId,
           status: "streaming",
           timestamp: event.timestamp,
@@ -928,6 +929,10 @@ export function accumulateEvent(
           // `agentMessageSend`: re-completing a block must not erase identity
           // the first completion established.
           managedCommand: event.managedCommand ?? existing.managedCommand,
+          // Same rule: the receipt is identity established by the completion
+          // that carried it, and a re-completion without one keeps it.
+          agentMessageReceipt:
+            event.agentMessageReceipt ?? existing.agentMessageReceipt,
           backgroundOutput: event.backgroundOutput ?? existing.backgroundOutput,
           startedAt: event.backgroundStartedAt ?? existing.startedAt,
           endedAt: event.timestamp,
@@ -960,6 +965,7 @@ export function accumulateEvent(
           error: null,
           agentMessageSend: event.agentMessageSend,
           managedCommand: event.managedCommand ?? null,
+          agentMessageReceipt: event.agentMessageReceipt ?? null,
           progress: null,
           backgroundOutput: event.backgroundOutput ?? null,
           startedAt: event.backgroundStartedAt ?? null,
@@ -997,6 +1003,7 @@ export function accumulateEvent(
         {
           type: "tool_call",
           managedCommand: null,
+          agentMessageReceipt: null,
           blockId: event.blockId,
           status: "errored",
           timestamp: event.timestamp,

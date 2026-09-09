@@ -200,4 +200,72 @@ describe("parseHostVersionsManifest", () => {
     expect(parsed.versions[0]?.yanked).toBe(true);
     expect(parsed.versions[0]?.deprecationReason).toBe("CVE-2026-9999");
   });
+
+  describe("storeFormats", () => {
+    it("parses to null when the field is absent (a pre-1.3.0 entry)", () => {
+      // VALID_MANIFEST's entry has no `storeFormats` key at all.
+      const parsed = parseHostVersionsManifest(VALID_MANIFEST, "test://absent");
+      expect(parsed.versions[0]?.storeFormats).toBeNull();
+    });
+
+    it("parses an explicit null the same as absent", () => {
+      const withNull = JSON.parse(JSON.stringify(VALID_MANIFEST));
+      withNull.versions[0].storeFormats = null;
+      const parsed = parseHostVersionsManifest(
+        withNull,
+        "test://explicit-null",
+      );
+      expect(parsed.versions[0]?.storeFormats).toBeNull();
+    });
+
+    it("parses a published { chatDb } object", () => {
+      const withFormats = JSON.parse(JSON.stringify(VALID_MANIFEST));
+      withFormats.versions[0].storeFormats = { chatDb: 9 };
+      const parsed = parseHostVersionsManifest(
+        withFormats,
+        "test://with-formats",
+      );
+      expect(parsed.versions[0]?.storeFormats).toEqual({ chatDb: 9 });
+    });
+
+    it("rejects a non-object storeFormats", () => {
+      const bad = JSON.parse(JSON.stringify(VALID_MANIFEST));
+      bad.versions[0].storeFormats = 5;
+      expect(() =>
+        parseHostVersionsManifest(bad, "test://storeformats-number"),
+      ).toThrow(CliError);
+    });
+
+    it("rejects an array storeFormats", () => {
+      const bad = JSON.parse(JSON.stringify(VALID_MANIFEST));
+      bad.versions[0].storeFormats = [];
+      expect(() =>
+        parseHostVersionsManifest(bad, "test://storeformats-array"),
+      ).toThrow(CliError);
+    });
+
+    it("rejects a non-numeric chatDb", () => {
+      const bad = JSON.parse(JSON.stringify(VALID_MANIFEST));
+      bad.versions[0].storeFormats = { chatDb: "9" };
+      expect(() =>
+        parseHostVersionsManifest(bad, "test://storeformats-string-chatdb"),
+      ).toThrow(CliError);
+    });
+
+    it("rejects a zero chatDb", () => {
+      const bad = JSON.parse(JSON.stringify(VALID_MANIFEST));
+      bad.versions[0].storeFormats = { chatDb: 0 };
+      expect(() =>
+        parseHostVersionsManifest(bad, "test://storeformats-zero-chatdb"),
+      ).toThrow(CliError);
+    });
+
+    it("rejects a non-integer chatDb", () => {
+      const bad = JSON.parse(JSON.stringify(VALID_MANIFEST));
+      bad.versions[0].storeFormats = { chatDb: 1.5 };
+      expect(() =>
+        parseHostVersionsManifest(bad, "test://storeformats-fractional-chatdb"),
+      ).toThrow(CliError);
+    });
+  });
 });

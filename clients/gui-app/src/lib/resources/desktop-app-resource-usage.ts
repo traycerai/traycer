@@ -33,6 +33,32 @@ export interface DesktopHeapSnapshotBridge {
   readonly takeHeapSnapshot: () => Promise<string | null>;
 }
 
+/**
+ * One V8 isolate in this renderer - the page, or a dedicated worker started
+ * from `url`. Mirrors the desktop's `RendererJsHeapIsolate`; the GUI reads it
+ * structurally off the runner host like every other desktop bridge here.
+ */
+export interface DesktopJsHeapIsolate {
+  readonly kind: "page" | "worker";
+  readonly url: string;
+  readonly usedBytes: number;
+  readonly totalBytes: number;
+  /** Blink-held memory for this isolate; `null` when the build omits it. */
+  readonly embedderBytes: number | null;
+  /** `ArrayBuffer` / WebAssembly backing stores, outside the JS heap. */
+  readonly backingStorageBytes: number | null;
+}
+
+export interface DesktopJsHeapBreakdown {
+  readonly capturedAt: number;
+  readonly workingSetBytes: number | null;
+  readonly isolates: ReadonlyArray<DesktopJsHeapIsolate>;
+}
+
+export interface DesktopJsHeapBridge {
+  readonly measureJsHeaps: () => Promise<DesktopJsHeapBreakdown | null>;
+}
+
 interface RunnerHostWindowShape {
   readonly platform:
     | {
@@ -43,6 +69,9 @@ interface RunnerHostWindowShape {
                 | undefined;
               readonly takeHeapSnapshot:
                 | (() => Promise<string | null>)
+                | undefined;
+              readonly measureJsHeaps:
+                | (() => Promise<DesktopJsHeapBreakdown | null>)
                 | undefined;
             }
           | undefined;
@@ -73,6 +102,36 @@ export function getDesktopHeapSnapshotBridge(): DesktopHeapSnapshotBridge | null
     .runnerHost;
   const takeHeapSnapshot = host?.platform?.diagnostics?.takeHeapSnapshot;
   return takeHeapSnapshot === undefined ? null : { takeHeapSnapshot };
+}
+
+/**
+ * Its own resolver for the same reason as the heap snapshot's: an older shell
+ * can carry the snapshot capability without this one, and the Memory group
+ * offers each button on its own bridge.
+ */
+export function getDesktopJsHeapBridge(): DesktopJsHeapBridge | null {
+  const host = (globalThis as { runnerHost?: RunnerHostWindowShape })
+    .runnerHost;
+  const measureJsHeaps = host?.platform?.diagnostics?.measureJsHeaps;
+  return measureJsHeaps === undefined ? null : { measureJsHeaps };
+}
+
+/**
+ * A human label for an isolate row. The worker's script URL is a hashed Vite
+ * chunk name, so the label reads the chunk's stem, which is stable across
+ * builds: `epic-runtime-worker-entry-<hash>.js` is the per-epic runtime,
+ * `worker-<hash>.js` is `@pierre/diffs`' highlighter (the only worker the app
+ * starts from a bare `worker` chunk), `pdf.worker.min-<hash>.mjs` is pdf.js.
+ */
+export function describeDesktopJsHeapIsolate(
+  isolate: DesktopJsHeapIsolate,
+): string {
+  if (isolate.kind === "page") return "This window";
+  const file = isolate.url.slice(isolate.url.lastIndexOf("/") + 1);
+  if (file.startsWith("epic-runtime-worker")) return "Epic runtime worker";
+  if (file.startsWith("pdf.worker")) return "PDF worker";
+  if (file.startsWith("worker-")) return "Diff highlighter worker";
+  return file === "" ? "Worker" : `Worker (${file})`;
 }
 
 export function desktopAppResourceUsageFromMetrics(

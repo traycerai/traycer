@@ -77,6 +77,7 @@ export type AnalyticsSettingsSection =
   | "keybindings"
   | "link-phone"
   | "notifications"
+  | "opening-behavior"
   | "providers"
   | "shell"
   | "usage"
@@ -91,10 +92,22 @@ export type AnalyticsArtifactKind = "review" | "spec" | "story" | "ticket";
  * carries no signal here. */
 export type AnalyticsUsageImageExportSource = "epic_dialog" | "settings";
 
-export type AnalyticsEditor = "cursor" | "vscode" | "windsurf" | "zed";
+/**
+ * Mirrors the protocol's `EditorId` registry. Spelled out rather than derived
+ * so a wire-level addition is a deliberate analytics decision: the union is a
+ * reported dimension, and widening it silently would put a value into the
+ * warehouse that no dashboard was built to expect.
+ */
+export type AnalyticsEditor =
+  | "cursor"
+  | "vscode"
+  | "vscodium"
+  | "windsurf"
+  | "zed";
 
 export type AnalyticsHarness =
   | "amp"
+  | "antigravity"
   | "claude"
   | "codex"
   | "copilot"
@@ -181,13 +194,23 @@ export type AnalyticsSessionAgeBucket =
  * 4 GB old-space ceiling with room to still report before an OOM. */
 export type AnalyticsResourcePressureTier = "elevated" | "high" | "critical";
 
+/** Every act id either tour can show, desktop and mobile alike. Mirrors
+ * `OnboardingActId` - a step the union does not carry is dropped by the
+ * allowed-values pinning below. */
 export type AnalyticsOnboardingStep =
   | "agent-guide"
   | "command-theme"
+  | "login-import"
+  | "mobile-switcher"
+  | "mobile-tasks"
   | "navigation"
   | "providers"
+  | "session-import"
   | "task-context"
   | "task-tabs";
+
+/** Which surface opened the import wizard - onboarding act or Settings. */
+export type AnalyticsSessionImportSurface = "dialog" | "onboarding";
 
 export type AnalyticsProviderOperation =
   | "ambient_drift"
@@ -201,6 +224,7 @@ export type AnalyticsProviderOperation =
 
 export type AnalyticsProvider =
   | "amp"
+  | "antigravity"
   | "claude-code"
   | "codex"
   | "copilot"
@@ -225,7 +249,7 @@ export type AnalyticsRole = "editor" | "owner" | "viewer";
 
 export type AnalyticsSetting =
   | "allowPrereleaseUpdates"
-  | "agentTabSurfacingMode"
+  | "agentTabSurfacing"
   | "artifactIconColorMode"
   | "artifactIconColors"
   | "chatTurnMinimapSide"
@@ -238,6 +262,7 @@ export type AnalyticsSetting =
   | "defaultSelection"
   | "defaultServiceTier"
   | "diffViewerPreferences"
+  | "linkOpen"
   | "pinContextUsageBreakdown"
   | "pointerCursors"
   | "preventSleepWhileRunning"
@@ -252,6 +277,7 @@ export type AnalyticsSetting =
   | "terminalFontFamily"
   | "terminalFontSize"
   | "theme"
+  | "tilePlacement"
   | "themePreset"
   | "uiFontFamily"
   | "uiFontSize"
@@ -302,6 +328,7 @@ export enum AnalyticsEvent {
   OnboardingCompleted = "onboarding_completed",
   OnboardingSkipped = "onboarding_skipped",
   OnboardingThemeChanged = "onboarding_theme_changed",
+  SessionImportStarted = "session_import_started",
   AgentGuideSaved = "agent_guide_saved",
   ProviderProfileLinkStarted = "provider_profile_link_started",
   ProviderProfileLinkSucceeded = "provider_profile_link_succeeded",
@@ -329,6 +356,10 @@ export enum AnalyticsEvent {
   WorkspaceRecentForgotten = "workspace_recent_forgotten",
   WorkspaceFileOpened = "workspace_file_opened",
   WorkspaceOpenedInEditor = "workspace_opened_in_editor",
+  // A PDF hit the 20 MiB asset-stream cap and fell back to "Open
+  // Externally" - the metric that decides whether the cap needs a
+  // per-type raise or range streaming (PDF preview design, Q6).
+  PdfPreviewTooLarge = "pdf_preview_too_large",
   WorktreeCreated = "worktree_created",
   WorktreeImported = "worktree_imported",
   WorktreeSelected = "worktree_selected",
@@ -545,6 +576,17 @@ export interface AnalyticsEventProperties {
   readonly [AnalyticsEvent.OnboardingThemeChanged]: {
     readonly theme: AnalyticsTheme;
   };
+  /**
+   * A user submitted the session-import wizard. The counts are what the
+   * feature is judged on - how much work people actually bring over, and from
+   * how many repos - and `surface` separates first-run adoption from the
+   * later Settings path.
+   */
+  readonly [AnalyticsEvent.SessionImportStarted]: {
+    readonly surface: AnalyticsSessionImportSurface;
+    readonly session_count: number;
+    readonly group_count: number;
+  };
   readonly [AnalyticsEvent.AgentGuideSaved]: { readonly customized: boolean };
   readonly [AnalyticsEvent.ProviderProfileLinkStarted]: SourceProperties & {
     readonly provider: AnalyticsProvider;
@@ -619,6 +661,10 @@ export interface AnalyticsEventProperties {
     readonly surface: AnalyticsWorkspaceSurface;
   };
   readonly [AnalyticsEvent.WorkspaceFileOpened]: SourceProperties;
+  readonly [AnalyticsEvent.PdfPreviewTooLarge]: {
+    /** Which asset-stream surface the over-cap PDF was requested from. */
+    readonly surface: "workspace" | "git-old" | "git-new";
+  };
   readonly [AnalyticsEvent.WorkspaceOpenedInEditor]: SourceProperties & {
     readonly editor: AnalyticsEditor;
   };
@@ -725,7 +771,7 @@ export interface AnalyticsEventProperties {
     readonly artifact_count: number;
   };
   readonly [AnalyticsEvent.UsageImageExported]: {
-    readonly action: "copy" | "download";
+    readonly action: "copy" | "download" | "share";
     readonly source: AnalyticsUsageImageExportSource;
   };
   readonly [AnalyticsEvent.CommentCreated]: { readonly has_mention: boolean };
@@ -995,6 +1041,7 @@ const ANALYTICS_COMMANDS = new Set<string>([
 
 const ANALYTICS_HARNESSES = new Set<string>([
   "amp",
+  "antigravity",
   "claude",
   "codex",
   "copilot",
@@ -1018,6 +1065,7 @@ const ANALYTICS_HARNESSES = new Set<string>([
 
 const ANALYTICS_PROVIDERS = new Set<string>([
   "amp",
+  "antigravity",
   "claude-code",
   "codex",
   "copilot",
@@ -1062,6 +1110,7 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
     keybindings: true,
     "link-phone": true,
     notifications: true,
+    "opening-behavior": true,
     providers: true,
     shell: true,
     usage: true,
@@ -1070,6 +1119,7 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
 );
 
 const ANALYTICS_SETTINGS = new Set<string>([
+  "agentTabSurfacing",
   "allowPrereleaseUpdates",
   "artifactIconColorMode",
   "artifactIconColors",
@@ -1082,6 +1132,7 @@ const ANALYTICS_SETTINGS = new Set<string>([
   "defaultSelection",
   "defaultServiceTier",
   "diffViewerPreferences",
+  "linkOpen",
   "pinContextUsageBreakdown",
   "pointerCursors",
   "preventSleepWhileRunning",
@@ -1094,6 +1145,7 @@ const ANALYTICS_SETTINGS = new Set<string>([
   "terminalFontSize",
   "theme",
   "themePreset",
+  "tilePlacement",
   "uiFontFamily",
   "uiFontSize",
   "voiceInputEnabled",
@@ -1126,8 +1178,11 @@ const ANALYTICS_THEMES = new Set<string>([
 const ANALYTICS_ONBOARDING_STEPS = new Set<string>([
   "agent-guide",
   "command-theme",
+  "mobile-switcher",
+  "mobile-tasks",
   "navigation",
   "providers",
+  "session-import",
   "task-context",
   "task-tabs",
 ]);
@@ -1257,6 +1312,7 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
     [AnalyticsEvent.TaskCreationFailed],
     ["source", "blocker", "mode"],
   ),
+  ...eventKeyEntries([AnalyticsEvent.PdfPreviewTooLarge], ["surface"]),
   ...eventKeyEntries(
     [AnalyticsEvent.HostSetupStarted, AnalyticsEvent.HostSetupSucceeded],
     ["reason"],
@@ -1284,6 +1340,10 @@ const EVENT_PROPERTY_KEYS = new Map<AnalyticsEvent, ReadonlyArray<string>>([
     ["last_step"],
   ),
   ...eventKeyEntries([AnalyticsEvent.OnboardingThemeChanged], ["theme"]),
+  ...eventKeyEntries(
+    [AnalyticsEvent.SessionImportStarted],
+    ["surface", "session_count", "group_count"],
+  ),
   ...eventKeyEntries([AnalyticsEvent.AgentGuideSaved], ["customized"]),
   ...eventKeyEntries(
     [AnalyticsEvent.ProviderProfileLinkStarted],
@@ -1678,6 +1738,11 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
     new Set(["center", "toast", "native"]),
   ),
   ...eventValueEntries(
+    [AnalyticsEvent.SessionImportStarted],
+    "surface",
+    new Set(["dialog", "onboarding"]),
+  ),
+  ...eventValueEntries(
     [
       AnalyticsEvent.NotificationActivationCompleted,
       AnalyticsEvent.NotificationPageLoaded,
@@ -1715,7 +1780,7 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
   ...eventValueEntries(
     [AnalyticsEvent.UsageImageExported],
     "action",
-    new Set(["copy", "download"]),
+    new Set(["copy", "download", "share"]),
   ),
   // Event-scoped so this `source` validates against the export surfaces, not
   // the global gesture-origin `ANALYTICS_SOURCES` fallback.
@@ -1808,9 +1873,11 @@ const COUNT_PROPERTY_KEYS = new Set<string>([
   "attachment_count",
   "failed_count",
   "file_count",
+  "group_count",
   "open_tabs",
   "requested_count",
   "script_count",
+  "session_count",
   "succeeded_count",
   "workspace_count",
 ]);

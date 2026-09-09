@@ -2,12 +2,16 @@ import "../../../../../__tests__/test-browser-apis";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useState, type ReactNode } from "react";
+import { EpicViewTabContext } from "@/components/epic-canvas/view-tab-context";
+import {
+  PaneSurfaceActivityContext,
+  PaneVisibilityContext,
+} from "@/components/epic-tabs/pane-visibility-context";
 import {
   BrowserSessionsHostProvider,
   BrowserSessionsProvider,
 } from "@/components/epic-canvas/renderers/browser-sessions-provider";
 import { useBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
-import type { BrowserViewBridge } from "@traycer-clients/shared/platform/browser-view";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -40,7 +44,17 @@ const hookState = vi.hoisted(() => ({
   },
   transportKey: "authenticated-host-test",
   ownerIdentityKey: "local\u0000host-test\u0000user-test",
-  browserViewBridge: null as FakeBridge | null,
+  localHostId: "host-test" as string | null,
+}));
+
+const surfaceHostOpenedTabMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@/lib/browser-view/tiles/surface-host-opened-tab", () => ({
+  surfaceHostOpenedTab: surfaceHostOpenedTabMock,
+}));
+
+vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
+  useReactiveLocalHostId: () => hookState.localHostId,
 }));
 
 vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
@@ -96,14 +110,8 @@ vi.mock("@/lib/host/stream-auth-revalidator", () => ({
   useStreamAuthRevalidator: () => null,
 }));
 
-const runnerHostMock = vi.hoisted(() => ({
-  get browserView() {
-    return hookState.browserViewBridge;
-  },
-}));
-
 vi.mock("@/providers/use-runner-host", () => ({
-  useRunnerHost: () => runnerHostMock,
+  useRunnerHost: () => ({ browserView: null }),
 }));
 
 /**
@@ -294,72 +302,6 @@ class FakeDurableTransport {
   }
 }
 
-class FakeBridge {
-  readonly ensureTab = vi.fn<BrowserViewBridge["ensureTab"]>((input) =>
-    Promise.resolve({
-      hostId: input.hostId,
-      sessionId: input.sessionId,
-      tabId: input.tabId,
-      registrationId: `native:${input.tabId}`,
-    }),
-  );
-  readonly acceptTab = vi.fn<BrowserViewBridge["acceptTab"]>(() =>
-    Promise.resolve(),
-  );
-  readonly attachSurface = vi.fn<BrowserViewBridge["attachSurface"]>(() =>
-    Promise.resolve(),
-  );
-  readonly detachSurface = vi.fn<BrowserViewBridge["detachSurface"]>(() =>
-    Promise.resolve(),
-  );
-  readonly releaseTab = vi.fn<BrowserViewBridge["releaseTab"]>(() =>
-    Promise.resolve(true),
-  );
-  readonly controlElectronTab = vi.fn<BrowserViewBridge["controlElectronTab"]>(
-    () => Promise.resolve(),
-  );
-  readonly dispatchElectronTabCdp = vi.fn<
-    BrowserViewBridge["dispatchElectronTabCdp"]
-  >(() => Promise.resolve({ kind: "cdpGetFrameTree", ok: true, frames: [] }));
-  readonly startPipCapture = vi.fn<BrowserViewBridge["startPipCapture"]>(() =>
-    Promise.resolve(),
-  );
-  readonly stopPipCapture = vi.fn<BrowserViewBridge["stopPipCapture"]>(() =>
-    Promise.resolve(),
-  );
-  readonly onPipCaptureFrame = vi.fn<BrowserViewBridge["onPipCaptureFrame"]>(
-    () => ({ dispose: () => {} }),
-  );
-  readonly onNativeTabStatusChange = vi.fn<
-    BrowserViewBridge["onNativeTabStatusChange"]
-  >(() => ({ dispose: () => {} }));
-  readonly onElectronTabHandoff = vi.fn<
-    BrowserViewBridge["onElectronTabHandoff"]
-  >(() => ({ dispose: () => {} }));
-  readonly capturePrimaryProfile = vi.fn<
-    BrowserViewBridge["capturePrimaryProfile"]
-  >(() =>
-    Promise.resolve({
-      status: "captured",
-      storageState: {
-        cookies: [
-          {
-            name: "t09_auth",
-            value: "signed-in",
-            domain: "example.test",
-            path: "/",
-            expires: -1,
-            httpOnly: true,
-            secure: true,
-            sameSite: "Lax",
-          },
-        ],
-        origins: [],
-      },
-      reason: null,
-    }),
-  );
-}
 const INITIAL_ENDPOINT = "ws://host-a/stream";
 const RESTARTED_ENDPOINT = "ws://host-b/stream";
 
@@ -413,53 +355,33 @@ function SharedProbe(props: { readonly id: string }): ReactNode {
   );
 }
 
+function PresentedBrowserSessionsProvider(props: {
+  readonly viewTabId: string;
+  readonly visible: boolean;
+  readonly focused: boolean;
+  readonly id: string;
+}): ReactNode {
+  return (
+    <EpicViewTabContext.Provider value={props.viewTabId}>
+      <PaneSurfaceActivityContext.Provider
+        value={{ visible: props.visible, focused: props.focused }}
+      >
+        <PaneVisibilityContext.Provider value={props.visible}>
+          <BrowserSessionsProvider epicId="epic-1">
+            <SharedProbe id={props.id} />
+          </BrowserSessionsProvider>
+        </PaneVisibilityContext.Provider>
+      </PaneSurfaceActivityContext.Provider>
+    </EpicViewTabContext.Provider>
+  );
+}
+
 function renderProvider(): void {
   render(
     <BrowserSessionsProvider epicId="epic-1">
       <Probe />
     </BrowserSessionsProvider>,
   );
-}
-
-function electronLifecycleReadinessFrames(
-  frames: ReadonlyArray<Record<string, unknown>>,
-): ReadonlyArray<Record<string, unknown>> {
-  return frames.filter((frame) => frame.kind === "electronTabLifecycleReady");
-}
-
-function electronProvisionedFrames(
-  frames: ReadonlyArray<Record<string, unknown>>,
-): ReadonlyArray<Record<string, unknown>> {
-  return frames.filter((frame) => frame.kind === "electronTabProvisioned");
-}
-
-function installNativeBridge(bridge: FakeBridge): void {
-  hookState.browserViewBridge = bridge;
-}
-
-async function expectCaptureServiced(
-  stream: FakeStreamSession,
-  requestId: string,
-): Promise<void> {
-  act(() => {
-    stream.emit(
-      {
-        kind: "capturePrimaryProfile",
-        hasBinaryPayload: false,
-        requestId,
-      },
-      null,
-    );
-  });
-  await waitFor(() => {
-    expect(stream.sentFrames).toContainEqual(
-      expect.objectContaining({
-        kind: "primaryProfileCaptured",
-        requestId,
-        status: "captured",
-      }),
-    );
-  });
 }
 
 function installTransport(dropUntilLive: boolean): void {
@@ -529,14 +451,14 @@ function browserSessionFixture(
 
 describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
   beforeEach(() => {
+    surfaceHostOpenedTabMock.mockClear();
+    surfaceHostOpenedTabMock.mockReturnValue(true);
     hookState.ownerIdentityKey = "local\u0000host-test\u0000user-test";
     installTransport(false);
-    hookState.browserViewBridge = null;
   });
 
   afterEach(() => {
     cleanup();
-    hookState.browserViewBridge = null;
   });
 
   it("opens exactly one epic-scoped browser.sessions subscription", () => {
@@ -604,6 +526,106 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
     rendered.unmount();
     expect(transport.closed).toBe(true);
     expect(stream.closed).toBe(true);
+  });
+
+  it("presents a host-opened tab in the focused retained view, not the first coordinator consumer", async () => {
+    render(
+      <>
+        <PresentedBrowserSessionsProvider
+          viewTabId="view-background"
+          visible={false}
+          focused={false}
+          id="background"
+        />
+        <PresentedBrowserSessionsProvider
+          viewTabId="view-focused"
+          visible
+          focused
+          id="focused"
+        />
+      </>,
+    );
+    const client = hookState.streamClient;
+    await waitFor(() => {
+      expect(client?.subscribes).toHaveLength(1);
+    });
+    const stream = client?.sessions[0];
+    if (stream === undefined) throw new Error("expected shared stream");
+
+    act(() => {
+      stream.emitStatus("open");
+      stream.emit(
+        {
+          kind: "tabOpened",
+          hasBinaryPayload: false,
+          sessionId: "session-popup",
+          tabId: "tab-popup",
+          source: "page",
+        },
+        null,
+      );
+    });
+
+    expect(surfaceHostOpenedTabMock).toHaveBeenCalledOnce();
+    expect(surfaceHostOpenedTabMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        epicId: "epic-1",
+        viewTabId: "view-focused",
+        sessionId: "session-popup",
+        tabId: "tab-popup",
+        source: "page",
+      }),
+    );
+  });
+
+  it("falls back when the preferred presenter was closed before delivery", async () => {
+    surfaceHostOpenedTabMock
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+    render(
+      <>
+        <PresentedBrowserSessionsProvider
+          viewTabId="view-focused-stale"
+          visible
+          focused
+          id="focused-stale"
+        />
+        <PresentedBrowserSessionsProvider
+          viewTabId="view-visible-fallback"
+          visible
+          focused={false}
+          id="visible-fallback"
+        />
+      </>,
+    );
+    const client = hookState.streamClient;
+    await waitFor(() => {
+      expect(client?.subscribes).toHaveLength(1);
+    });
+    const stream = client?.sessions[0];
+    if (stream === undefined) throw new Error("expected shared stream");
+
+    act(() => {
+      stream.emitStatus("open");
+      stream.emit(
+        {
+          kind: "tabOpened",
+          hasBinaryPayload: false,
+          sessionId: "session-popup",
+          tabId: "tab-popup",
+          source: "page",
+        },
+        null,
+      );
+    });
+
+    expect(surfaceHostOpenedTabMock).toHaveBeenCalledTimes(2);
+    expect(surfaceHostOpenedTabMock.mock.calls[0]?.[0]).toMatchObject({
+      viewTabId: "view-focused-stale",
+    });
+    expect(surfaceHostOpenedTabMock.mock.calls[1]?.[0]).toMatchObject({
+      viewTabId: "view-visible-fallback",
+    });
   });
 
   it("keeps different hosts separate for the same owner identity", async () => {
@@ -764,93 +786,8 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
     expect(ownerBTransport.closed).toBe(true);
   });
 
-  it("advertises native capability only after the stream snapshot", () => {
-    installNativeBridge(new FakeBridge());
-    renderProvider();
-    const stream = hookState.streamClient?.sessions[0];
-    if (stream === undefined) throw new Error("expected browser stream");
-
-    act(() => {
-      stream.emitStatus("open");
-    });
-
-    expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(0);
-    act(() => {
-      stream.emit(
-        { kind: "snapshot", hasBinaryPayload: false, sessions: [] },
-        null,
-      );
-    });
-    expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(1);
-  });
-
-  it("accepts a snapshot that arrives before the live status", () => {
-    installNativeBridge(new FakeBridge());
-    renderProvider();
-    const stream = hookState.streamClient?.sessions[0];
-    expect(stream).toBeDefined();
-    if (stream === undefined) {
-      throw new Error("expected browser.sessions stream session");
-    }
-
-    act(() => {
-      stream.emit(
-        { kind: "snapshot", hasBinaryPayload: false, sessions: [] },
-        null,
-      );
-    });
-    expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(0);
-
-    act(() => {
-      stream.emitStatus("open");
-    });
-    expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(1);
-  });
-
-  it("creates a native tab from the stream and returns the exact provisioned identity", async () => {
-    const bridge = new FakeBridge();
-    installNativeBridge(bridge);
-    renderProvider();
-    const stream = hookState.streamClient?.sessions[0];
-    expect(stream).toBeDefined();
-    if (stream === undefined) throw new Error("expected browser stream");
-    act(() => {
-      stream.emit(
-        {
-          kind: "createElectronTab",
-          hasBinaryPayload: false,
-          requestId: "create-1",
-          sessionId: "session-1",
-          tabId: "tab-1",
-          requestedUrl: "https://app.example",
-          reason: "session-bootstrap",
-          seedStorageState: null,
-        },
-        null,
-      );
-    });
-    await waitFor(() => {
-      expect(bridge.ensureTab).toHaveBeenCalledExactlyOnceWith({
-        hostId: "host-test",
-        sessionId: "session-1",
-        tabId: "tab-1",
-        requestedUrl: "https://app.example",
-        seedStorageState: null,
-      });
-      expect(stream.sentFrames).toContainEqual({
-        kind: "electronTabProvisioned",
-        hasBinaryPayload: false,
-        requestId: "create-1",
-        sessionId: "session-1",
-        tabId: "tab-1",
-        registrationId: "native:tab-1",
-      });
-    });
-  });
-
-  it("redials the same durable transport on a host restart and replays readiness", async () => {
+  it("redials the same durable transport on a host restart", async () => {
     installTransport(true);
-    installNativeBridge(new FakeBridge());
     const transport = hookState.durableTransport;
     expect(transport).toBeDefined();
     if (transport === null) {
@@ -884,17 +821,11 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
     expect(stream).toBeDefined();
     act(() => {
       stream.emitStatus("open");
-    });
-    expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(0);
-    act(() => {
       stream.emit(
         { kind: "snapshot", hasBinaryPayload: false, sessions: [] },
         null,
       );
     });
-    expect(stream.sentFrames).toContainEqual(
-      expect.objectContaining({ kind: "electronTabLifecycleReady" }),
-    );
 
     act(() => {
       hookState.hostEntry = {
@@ -941,14 +872,6 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
       params: { epicId: "epic-1" },
     });
     expect(stream.closed).toBe(false);
-    expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(1);
-    act(() => {
-      stream.emit(
-        { kind: "snapshot", hasBinaryPayload: false, sessions: [] },
-        null,
-      );
-    });
-    expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(2);
 
     cleanup();
     expect(transport.closed).toBe(true);
@@ -1232,175 +1155,5 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
     expect(
       stream.sentFrames.filter((frame) => frame.kind === "closeTab"),
     ).toHaveLength(1);
-  });
-});
-
-/**
- * Ticket-08-lift: real transport drops client frames until the stream is
- * live (`open`). Readiness therefore waits for the connection snapshot (and
- * repeats after reconnect), idempotently per connection.
- */
-describe("BrowserSessionsProvider (ticket 08-lift live readiness)", () => {
-  beforeEach(() => {
-    hookState.ownerIdentityKey = "local\u0000host-test\u0000user-test";
-    installTransport(true);
-    hookState.browserViewBridge = null;
-  });
-
-  afterEach(() => {
-    cleanup();
-    hookState.browserViewBridge = null;
-  });
-
-  it("releases an unaccepted native guest on disconnect instead of replaying it", async () => {
-    const bridge = new FakeBridge();
-    installNativeBridge(bridge);
-    renderProvider();
-    const stream = hookState.streamClient?.sessions[0];
-    expect(stream).toBeDefined();
-    if (stream === undefined) {
-      throw new Error("expected browser.sessions stream session");
-    }
-
-    act(() => {
-      stream.emitStatus("open");
-      stream.emit(
-        { kind: "snapshot", hasBinaryPayload: false, sessions: [] },
-        null,
-      );
-      stream.emit(
-        {
-          kind: "createElectronTab",
-          hasBinaryPayload: false,
-          requestId: "create-reconnect",
-          sessionId: "session-reconnect",
-          tabId: "tab-reconnect",
-          requestedUrl: "https://app.example/reconnect",
-          reason: "restore",
-          seedStorageState: null,
-        },
-        null,
-      );
-    });
-    await waitFor(() => {
-      expect(electronProvisionedFrames(stream.sentFrames)).toHaveLength(1);
-    });
-
-    const framesBeforeReconnect = stream.sentFrames.length;
-    act(() => {
-      stream.emitStatus("reconnecting");
-      stream.emitStatus("open");
-    });
-    expect(electronProvisionedFrames(stream.sentFrames)).toHaveLength(1);
-    act(() => {
-      stream.emit(
-        { kind: "snapshot", hasBinaryPayload: false, sessions: [] },
-        null,
-      );
-    });
-    const reconnectKinds = stream.sentFrames
-      .slice(framesBeforeReconnect)
-      .map((frame) => frame.kind);
-    expect(reconnectKinds).not.toContain("electronTabProvisioned");
-    expect(reconnectKinds).toContain("electronTabLifecycleReady");
-    expect(bridge.ensureTab).toHaveBeenCalledTimes(1);
-    expect(bridge.releaseTab).toHaveBeenCalledExactlyOnceWith({
-      hostId: "host-test",
-      sessionId: "session-reconnect",
-      tabId: "tab-reconnect",
-      registrationId: "native:tab-reconnect",
-    });
-
-    act(() => {
-      stream.emitStatus("open");
-    });
-    expect(electronProvisionedFrames(stream.sentFrames)).toHaveLength(1);
-  });
-
-  it("emits no native readiness pre-live, then exactly one after first live so primary capture is serviced", async () => {
-    installNativeBridge(new FakeBridge());
-    renderProvider();
-    const stream = hookState.streamClient?.sessions[0];
-    expect(stream).toBeDefined();
-    if (stream === undefined) {
-      throw new Error("expected browser.sessions stream session");
-    }
-
-    // Pre-live: production may attempt sync readiness, but the gate drops it.
-    expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(0);
-    expect(screen.getByTestId("lifecycle").textContent).toBe("connecting");
-
-    act(() => {
-      stream.emitStatus("open");
-    });
-    expect(screen.getByTestId("lifecycle").textContent).toBe("live");
-    expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(0);
-
-    act(() => {
-      stream.emit(
-        { kind: "snapshot", hasBinaryPayload: false, sessions: [] },
-        null,
-      );
-    });
-    expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(1);
-
-    await expectCaptureServiced(stream, "req-fresh-primary-1");
-
-    // Idempotent: repeated live notification on the same connection must not
-    // duplicate readiness frames.
-    act(() => {
-      stream.emitStatus("open");
-    });
-    expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(1);
-  });
-
-  it("emits exactly one readiness on the next live after reconnect and services a fresh capture", async () => {
-    installNativeBridge(new FakeBridge());
-    renderProvider();
-    const stream = hookState.streamClient?.sessions[0];
-    expect(stream).toBeDefined();
-    if (stream === undefined) {
-      throw new Error("expected browser.sessions stream session");
-    }
-
-    act(() => {
-      stream.emitStatus("open");
-    });
-    expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(0);
-    act(() => {
-      stream.emit(
-        { kind: "snapshot", hasBinaryPayload: false, sessions: [] },
-        null,
-      );
-    });
-    expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(1);
-    await expectCaptureServiced(stream, "req-primary-before-reconnect");
-
-    act(() => {
-      stream.emitStatus("reconnecting");
-    });
-    expect(screen.getByTestId("lifecycle").textContent).toBe("reconnecting");
-    // Frames during reconnect are dropped; readiness count stays at one.
-    expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(1);
-
-    act(() => {
-      stream.emitStatus("open");
-    });
-    expect(screen.getByTestId("lifecycle").textContent).toBe("live");
-    expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(1);
-    act(() => {
-      stream.emit(
-        { kind: "snapshot", hasBinaryPayload: false, sessions: [] },
-        null,
-      );
-    });
-    expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(2);
-
-    await expectCaptureServiced(stream, "req-primary-after-reconnect");
-
-    act(() => {
-      stream.emitStatus("open");
-    });
-    expect(electronLifecycleReadinessFrames(stream.sentFrames)).toHaveLength(2);
   });
 });

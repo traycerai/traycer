@@ -26,12 +26,7 @@ export async function attestInstallRuntime(
     };
   }
   return {
-    installGeneration: encodeInstallGeneration({
-      installId: record.installId,
-      installedAt: record.installedAt,
-      archiveSha256: record.archiveSha256,
-      version: record.version,
-    }),
+    installGeneration: encodeInstallGeneration(record),
     runtimeVersion: record.runtimeVersion,
     runtimeWasNull: record.runtimeVersion === null,
   };

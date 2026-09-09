@@ -54,11 +54,14 @@ function slowDown(seconds: number): Response {
 
 interface LinkFetchScript {
   tokenResponse: () => Response;
+  /** What the claim response carries as `matchCode`; `null` sends no field. */
+  matchCode: string | null;
 }
 
 function installLinkFetch(): { script: LinkFetchScript; restore: () => void } {
   const script: LinkFetchScript = {
     tokenResponse: () => json({ error: "authorization_pending" }, 428),
+    matchCode: null,
   };
   const originalFetch: unknown = (globalThis as { fetch?: unknown }).fetch;
   Object.defineProperty(globalThis, "fetch", {
@@ -73,6 +76,9 @@ function installLinkFetch(): { script: LinkFetchScript; restore: () => void } {
               status: "claimed",
               secret: "S".repeat(43),
               interval: ADVERTISED_INTERVAL_SECONDS,
+              ...(script.matchCode === null
+                ? {}
+                : { matchCode: script.matchCode }),
             },
             200,
           ),
@@ -221,6 +227,53 @@ describe("link-login poll progress", () => {
     } finally {
       recorder.dispose();
       restore();
+    }
+  });
+
+  it("carries the claim's match code on every emission of the poll, and null when the server sent none", async () => {
+    const service = makeService();
+    const { script, restore } = installLinkFetch();
+    script.matchCode = "47";
+    const recorder = recordProgress(service);
+    try {
+      const linkResult = service.signInWithLinkCode("ABCDE-FGHJK");
+      await vi.advanceTimersByTimeAsync(0);
+      // One pending poll: waiting → checking → waiting, all showing the code
+      // — the phone must keep displaying it until the wait is over.
+      await vi.advanceTimersByTimeAsync(ADVERTISED_INTERVAL_SECONDS * 1_000);
+      const codes = recorder.emissions
+        .filter((entry) => entry.progress !== null)
+        .map((entry) => entry.progress?.matchCode);
+      expect(codes.length).toBeGreaterThanOrEqual(3);
+      expect(new Set(codes)).toEqual(new Set(["47"]));
+
+      script.tokenResponse = () => json({ error: "access_denied" }, 400);
+      await vi.advanceTimersByTimeAsync(ADVERTISED_INTERVAL_SECONDS * 1_000);
+      await linkResult;
+    } finally {
+      recorder.dispose();
+      restore();
+    }
+
+    // An older server: the claim parses as before and the poll runs with
+    // nothing to show.
+    const older = makeService();
+    const olderFetch = installLinkFetch();
+    const olderRecorder = recordProgress(older);
+    try {
+      const linkResult = older.signInWithLinkCode("ABCDE-FGHJK");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(older.getLinkLoginProgress()).toMatchObject({
+        phase: "waiting",
+        matchCode: null,
+      });
+      olderFetch.script.tokenResponse = () =>
+        json({ error: "access_denied" }, 400);
+      await vi.advanceTimersByTimeAsync(ADVERTISED_INTERVAL_SECONDS * 1_000);
+      expect((await linkResult).kind).toBe("denied");
+    } finally {
+      olderRecorder.dispose();
+      olderFetch.restore();
     }
   });
 

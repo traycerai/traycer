@@ -9,6 +9,7 @@ import { use, useMemo, type ReactNode } from "react";
 import { TileCanvas } from "@/components/epic-canvas/canvas/tile-canvas";
 import { WorkspaceFileIconSpriteSheet } from "@/components/epic-canvas/workspace-file/workspace-file-icons";
 import { EpicConnectionPill } from "@/components/epic-canvas/panels/epic-connection-pill";
+import { EpicWriteCommandsEntryPoint } from "@/components/epic-canvas/panels/epic-write-commands-entry-point";
 import { EpicUsageEntryPoint } from "@/components/epic-canvas/panels/epic-usage-entry-point";
 import { EpicSweepAction } from "@/components/epic-canvas/panels/epic-sweep-action";
 import { EpicConnectionToasts } from "@/components/epic-canvas/panels/epic-connection-toasts";
@@ -208,7 +209,13 @@ function EpicShellStatusRow(props: EpicShellStatusRowProps) {
       // header carries app-wide status instead. Desktop (>=768px) is unchanged.
       className="flex h-10 shrink-0 items-center justify-end gap-1.5 px-3 text-foreground max-md:hidden"
     >
-      {props.sessionReady ? <EpicConnectionPill epicId={props.epicId} /> : null}
+      {props.sessionReady ? (
+        <>
+          <EpicConnectionPill epicId={props.epicId} />
+          {/* Beside the pill, not inside it: the pill claims, this one acts. */}
+          <EpicWriteCommandsEntryPoint />
+        </>
+      ) : null}
       {props.snapshotLoaded ? (
         <>
           <EpicUsageEntryPoint epicId={props.epicId} />

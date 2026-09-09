@@ -4,11 +4,13 @@ import {
   type ProviderManagedInstallErrorReason,
   type ProviderManagedVersions,
   type ProviderManagedVersionsUnavailable,
+  type ProviderPackRefreshOutcome,
   type ProviderPackVersion,
   type ProviderPackVersionCertification,
   type ProviderPackVersionInstallState,
   type ProviderPackVersionUnusableReason,
   type ProvidersInstallPackVersionResult,
+  type ProvidersRefreshPackDiscoveryResult,
   type ProvidersRemovePackVersionResult,
   type ProvidersUsePackVersionResult,
 } from "@traycer/protocol/host/provider-schemas";
@@ -512,6 +514,82 @@ export function packVersionUseRefusalMessage(
       return "Below the publisher's security minimum — cannot select";
     case "host-ineligible":
       return "This Traycer release cannot run this version";
+  }
+}
+
+/** The one line the footer draws after an on-demand update check. */
+export type PackDiscoveryCheckNotice = {
+  readonly kind: "info" | "error";
+  readonly message: string;
+};
+
+/**
+ * What the footer says about a completed check, from the wire outcome.
+ *
+ * `moved` is deliberately NEUTRAL. It means this host's target knowledge
+ * changed, which the host also reports for the first population of a
+ * never-derived pack and for a sibling host's pin move on a head identical to
+ * the one already running - so "found a new version" would be a claim this
+ * value cannot support. The `updateAvailable` banner and the version rows,
+ * refetched from `providers.list` on success, are the only things on this
+ * surface that say a newer version exists.
+ *
+ * `unchanged` is NEUTRAL for the mirror-image reason, and this is the one that
+ * is easy to get wrong twice. It means the registry's head did not move - NOT
+ * that nothing newer exists. A pack pinned to an older version has
+ * `updateAvailable` populated and its head perfectly still, so "Up to date."
+ * would render directly under a visible banner naming the version you do not
+ * have. `unchanged` is also what a never-published pack reads as. So the copy
+ * reports what the CHECK did and lets the banner speak for the versions; do
+ * not "improve" it back into a verdict about being current.
+ *
+ * The two failures are not interchangeable and do not share a sentence.
+ * `unreachable` leaves knowledge in place, so it invites a retry; `unusable`
+ * means the answer could not be trusted and the pack's update knowledge was
+ * CLEARED, which the copy has to admit rather than hide behind "try again".
+ *
+ * Exhaustive over the protocol enum, like every sibling here: a new member
+ * leaves the function with no ending return and fails the type-check.
+ */
+export function packDiscoveryCheckOutcomeNotice(
+  outcome: ProviderPackRefreshOutcome,
+): PackDiscoveryCheckNotice {
+  switch (outcome) {
+    case "moved":
+      return { kind: "info", message: "Checked the registry." };
+    case "unchanged":
+      return { kind: "info", message: "No changes found." };
+    case "unreachable":
+      return {
+        kind: "error",
+        message: "Couldn't reach the registry. Try again later.",
+      };
+    case "unusable":
+      return {
+        kind: "error",
+        message:
+          "The registry's answer couldn't be trusted. This pack's update knowledge was cleared until the next successful check.",
+      };
+  }
+}
+
+/**
+ * Primary user copy for a typed refresh-pack-discovery refusal.
+ *
+ * Exhaustive over the protocol enum. Neither code invites a retry, because
+ * neither clears on its own: `discovery-unavailable` is a property of the host
+ * (no discovery machinery to run), and `pack-disabled` names an action the user
+ * has to take first. `detail` is operator-facing only, same rule as every other
+ * typed refusal in this file.
+ */
+export function refreshPackDiscoveryRefusalMessage(
+  code: Extract<ProvidersRefreshPackDiscoveryResult, { ok: false }>["code"],
+): string {
+  switch (code) {
+    case "discovery-unavailable":
+      return "Update checks aren't available on this host right now.";
+    case "pack-disabled":
+      return "Enable this provider to check for updates.";
   }
 }
 

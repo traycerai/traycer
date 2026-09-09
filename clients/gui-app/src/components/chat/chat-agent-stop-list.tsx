@@ -1,5 +1,11 @@
 import { useDraggable } from "@dnd-kit/core";
-import { useCallback, useId, useMemo, type ReactNode } from "react";
+import {
+  useCallback,
+  useId,
+  useMemo,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import { v4 as uuidv4 } from "uuid";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { BackgroundActivityGlyph } from "@/components/notifications/background-activity-glyph";
@@ -13,6 +19,7 @@ import {
 import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
 import type { AgentRow } from "@/hooks/agent/use-agent-stop-controls";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
 import { useMaybeEpicTuiAgentHarnessId } from "@/lib/epic-selectors";
 import { cn } from "@/lib/utils";
 
@@ -88,7 +95,10 @@ function AgentStopRow(props: {
   readonly agent: AgentRow;
   readonly self: boolean;
   readonly compact: boolean;
-  readonly onOpen: (agent: AgentRow) => void;
+  readonly onOpen: (
+    agent: AgentRow,
+    event: MouseEvent<HTMLButtonElement>,
+  ) => void;
 }) {
   const { epicId, viewTabId, agent, self, compact, onOpen } = props;
   const occurrenceId = useId();
@@ -127,7 +137,10 @@ function AgentStopRow(props: {
     disabled: dragDisabled,
     data: dragData,
   });
-  const openAgent = useCallback(() => onOpen(agent), [agent, onOpen]);
+  const openAgent = useCallback(
+    (event: MouseEvent<HTMLButtonElement>) => onOpen(agent, event),
+    [agent, onOpen],
+  );
   // No grab affordance where the gesture is gone: the row is a plain button.
   const grabCursor = isDragging ? "cursor-grabbing" : "cursor-grab";
   const cursorClass = dragDisabled ? null : grabCursor;
@@ -222,18 +235,26 @@ export function AgentStopList(props: {
   readonly surface: "composer-panel" | "tui-popover";
 }) {
   const compact = props.surface === "composer-panel";
-  const tileNavigation = useEpicTileNavigation();
+  const { openTile } = useEpicTileNavigation();
   const openAgent = useCallback(
-    (agent: AgentRow) => {
-      tileNavigation.openTileInTab(props.viewTabId, {
-        id: agent.id,
-        instanceId: uuidv4(),
-        type: nodeKindForSurface(agent.surface),
-        name: agent.title,
-        hostId: agent.hostId,
+    (agent: AgentRow, event: MouseEvent<HTMLButtonElement>) => {
+      openTile({
+        node: {
+          id: agent.id,
+          instanceId: uuidv4(),
+          type: nodeKindForSurface(agent.surface),
+          name: agent.title,
+          hostId: agent.hostId,
+        },
+        target: { tabId: props.viewTabId },
+        gesture: "explicit",
+        modifiers: modifiersFromMouseEvent(event),
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
       });
     },
-    [props.viewTabId, tileNavigation],
+    [props.viewTabId, openTile],
   );
   return (
     <ul className="m-0 flex list-none flex-col gap-0.5 p-1.5">

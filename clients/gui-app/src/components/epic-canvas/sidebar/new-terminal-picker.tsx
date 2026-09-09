@@ -27,13 +27,13 @@ import {
   type TerminalLaunchTarget,
 } from "@/components/epic-canvas/sidebar/new-terminal-tile-ref";
 import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
-import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import {
   usePanelHeaderMenuOpen,
   usePanelHeaderMenuStore,
 } from "@/stores/epics/panel-header-menu-store";
 import { isHostSwitcherListInteraction } from "@/components/settings/host-scope/host-switcher-portal";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 interface NewTerminalPickerProps {
   readonly epicId: string;
@@ -67,10 +67,7 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
     setFocusedLastRender(paneFocused);
     if (!paneFocused) setIsOpen(false);
   }
-  const navigateNested = useEpicNestedFocusNavigation();
-  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareOpenTileInTabFocusTarget,
-  );
+  const { openTile } = useEpicTileNavigation();
 
   const handleOpenChange = useCallback(
     (open: boolean) => {
@@ -85,23 +82,18 @@ export function NewTerminalPicker(props: NewTerminalPickerProps) {
 
   const handleLaunch = useCallback(
     (target: TerminalLaunchTarget) => {
-      navigateNested(epicId, tabId, () =>
-        prepareOpenTileInTabFocusTarget(
-          tabId,
+      openTile(
+        tileIntent(
           mintNewEpicTerminalTile({ ...target, epicId }),
+          { tabId },
+          "explicit",
+          "direct_ui",
         ),
       );
       setIsOpen(false);
       if (onLaunched !== null) onLaunched();
     },
-    [
-      navigateNested,
-      prepareOpenTileInTabFocusTarget,
-      epicId,
-      tabId,
-      setIsOpen,
-      onLaunched,
-    ],
+    [openTile, epicId, tabId, setIsOpen, onLaunched],
   );
 
   return (

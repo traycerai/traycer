@@ -10,10 +10,20 @@
  *
  * A `null` value means "no active filter" - render everything.
  */
-import { createContext, use, useMemo } from "react";
-import { useChildIds, useEpicTreeIndex } from "@/lib/epic-selectors";
+import { createContext, use } from "react";
+import { useShallow } from "zustand/react/shallow";
+import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
+import { useChildIds } from "@/lib/epic-selectors";
+import { useEpicStore } from "@/hooks/use-epic-store";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
+import { localChatLastActiveAtById } from "@/lib/chats/unified-chat-list";
+import type { OpenEpicState } from "@/stores/epics/open-epic/store";
 import type { TreeNode } from "@/stores/epics/open-epic/types";
-import { sortNodeIds, type NodeComparator } from "@/lib/epic-sort";
+import {
+  sortNodeIdsWithClock,
+  type NodeComparator,
+  type NodeSortClock,
+} from "@/lib/epic-sort";
 
 type PanelTreeFilter = (type: string | null | undefined) => boolean;
 
@@ -34,6 +44,74 @@ export const SidebarSortContext = createContext<NodeComparator | null>(null);
 
 function useSidebarComparator(): NodeComparator | null {
   return use(SidebarSortContext);
+}
+
+/**
+ * The per-node content clock the panel's sort reads in place of a node's
+ * `updatedAt` (see `NodeSortClock`), or `null` when the panel has none - the
+ * artifact panel, whose nodes carry no replicated stamp. Published by the
+ * panel body beside {@link SidebarSortContext} so a nested child list sorts by
+ * the same clock the root list and the row's idle-time chip do.
+ */
+export const SidebarSortClockContext = createContext<NodeSortClock | null>(
+  null,
+);
+
+function useSidebarSortClock(): NodeSortClock | null {
+  return use(SidebarSortClockContext);
+}
+
+/**
+ * The own-cloud fold a surface OUTSIDE a chat panel cannot supply. Frozen at
+ * module scope so the derived clock below keeps a stable input.
+ */
+const NO_OWN_CLOUD_CHATS: ReadonlyMap<string, CloudChatSummary> = new Map();
+
+/**
+ * The chat content clock for ANY surface that orders chats, panel or not.
+ *
+ * The chat panel builds this clock once for the whole projection and publishes
+ * it through {@link SidebarSortClockContext}; a surface rendered inside that
+ * panel takes it verbatim, so the two can never disagree about an order. A
+ * surface with no panel above it - the send-to-chat picker, reached from a
+ * terminal quote, an artifact quote or a browser annotation - derives the same
+ * clock from the same store inputs instead of sorting on the projection's raw
+ * `updatedAt`, which for a foreign row is a metadata stamp that a publication
+ * does not move.
+ *
+ * ## What the derived clock does not have, and why it does not matter
+ *
+ * The panel additionally folds its own CLOUD LIST in
+ * (`ownCloudChatByLocalId`), which needs two host queries this surface does
+ * not issue. Nothing is lost for the case this exists for: `chatRowLastActiveAt`
+ * consults the record head FIRST and falls back to the cloud row only when
+ * there is no head, so a published foreign chat sorts identically here. A
+ * foreign chat that has never published still sorts on its metadata stamp -
+ * exactly what this surface did for every row before.
+ *
+ * ## Re-render hygiene
+ *
+ * Derived INSIDE the store selector, under `useShallow`. The projector re-mints
+ * `chats.byId` on every record change, so a raw subscription would re-render
+ * every consumer on activity none of them display - the churn class
+ * `sidebar-chat-row-node-churn.test.tsx` pins. The clock holds only the entries
+ * that DIFFER from a node's own stamp, so a shallow compare hands back the
+ * previous map whenever no chat's content time moved.
+ */
+export function useEpicChatSortClock(): NodeSortClock | null {
+  const provided = useSidebarSortClock();
+  const sessionHostId = useEpicSessionHostId();
+  const derived = useEpicStore(
+    useShallow((state: OpenEpicState): NodeSortClock =>
+      localChatLastActiveAtById({
+        chatsById: state.chats.byId,
+        recordHeads: state.chatRecordHeads,
+        sessionHostId,
+        ownCloudChatByLocalId: NO_OWN_CLOUD_CHATS,
+      }),
+    ),
+  );
+  return provided ?? derived;
 }
 
 /**
@@ -67,27 +145,75 @@ export function mergeForcedExpanded(
  * Child ids of `parentId` that survive both the panel's structural
  * `treeFilter` (chat vs artifact node kinds) and the active visibility filter.
  * Shared by both panel trees so the filtering rule lives in one place.
+ *
+ * ## Subscribed to the ANSWER, not to the tree
+ *
+ * This runs once per ROW in both panels, so what it subscribes to is what every
+ * row subscribes to. It used to read `useEpicTreeIndex()` - the whole `tree`
+ * slice - and derive from it in a `useMemo`. That re-rendered every row
+ * whenever the slice's identity moved, and the slice moves on any record
+ * change: `TreeNode` carries `updatedAt`, and the host stamps it on every body
+ * write batch, so a burst of typing in one artifact re-rendered all forty rows
+ * at ~4 Hz.
+ *
+ * `memo` on the row could never have stopped that. It guards against a
+ * re-render propagated from a parent with equal props; a store subscription
+ * inside the component is an independent trigger. The fix has to be here, at
+ * what the row subscribes to.
+ *
+ * So the derivation moved INSIDE the selector and the result is compared
+ * shallowly: a row re-renders only when its own answer changes. The identity
+ * pass-through for a childless parent is kept and matters more than before -
+ * it is what makes a leaf row, which is most of them, compare equal for free.
+ *
+ * The cost is that the filter and sort now run per notification rather than per
+ * change, which the file next door names as the trade
+ * (`epic-selectors.ts`: "`useShallow` bails the subscriber's re-render but not
+ * the recompute"). That is the right side of it here: the work is a filter over
+ * one row's children, and what it buys is not re-rendering a whole subtree.
+ *
+ * ## `useShallow` is load-bearing for CORRECTNESS, not only for cost
+ *
+ * Do not remove it to "simplify" this. A deriving selector mints a fresh array
+ * every call and `useSyncExternalStore` compares snapshots with `Object.is`, so
+ * without an equality wrapper every notification looks like a change: the
+ * subscriber re-renders, derives another new array, and React stops it with
+ * "Maximum update depth exceeded". Dropping it does not degrade this hook back
+ * to the whole-slice behaviour it replaced - it breaks the panel outright. The
+ * same holds for every `useShallow` selector added alongside this one in
+ * `epic-sidebar-artifact-tree.tsx` and `epic-sidebar-chat-tree.tsx`.
  */
 export function useFilteredPanelChildIds(
   parentId: string,
   treeFilter: PanelTreeFilter,
 ): readonly string[] {
-  const tree = useEpicTreeIndex();
   const childIds = useChildIds(parentId);
   const visibleIds = useSidebarVisibleIds();
   const comparator = useSidebarComparator();
-  return useMemo(() => {
-    if (childIds.length === 0) return childIds;
-    const filtered = childIds.filter((childId) => {
-      if (!Object.hasOwn(tree.nodeById, childId)) return false;
-      if (!treeFilter(tree.nodeById[childId].type)) return false;
-      if (visibleIds !== null && !visibleIds.has(childId)) return false;
-      return true;
-    });
-    // `childIds` arrive in projector (default) order; re-sort only when the
-    // panel has a non-default mode (`comparator !== null`).
-    return sortNodeIds(filtered, tree.nodeById, comparator);
-  }, [childIds, tree, treeFilter, visibleIds, comparator]);
+  const clock = useSidebarSortClock();
+  return useEpicStore(
+    useShallow((state: OpenEpicState): readonly string[] => {
+      // Same identity out as in, so a childless row - the common case, and
+      // every leaf - is shallow-equal to its previous answer by reference.
+      if (childIds.length === 0) return childIds;
+      const nodeById = state.tree.nodeById;
+      const filtered = childIds.filter((childId) => {
+        if (!Object.hasOwn(nodeById, childId)) return false;
+        if (!treeFilter(nodeById[childId].type)) return false;
+        if (visibleIds !== null && !visibleIds.has(childId)) return false;
+        return true;
+      });
+      // `childIds` arrive in projector (default) order; re-sort only when the
+      // panel has a non-default mode (`comparator !== null`) or the clock
+      // corrects one of these siblings' stamps.
+      //
+      // A recency comparator reads `updatedAt`, so under one a stamp CAN
+      // legitimately reorder siblings and the rows that moved do re-render.
+      // That is the sort doing its job, not churn, and it is why the pin for
+      // this asserts under the default order.
+      return sortNodeIdsWithClock(filtered, nodeById, comparator, clock);
+    }),
+  );
 }
 
 /**

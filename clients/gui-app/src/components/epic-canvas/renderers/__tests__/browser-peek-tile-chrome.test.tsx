@@ -1,20 +1,22 @@
 import "../../../../../__tests__/test-browser-apis";
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-} from "@testing-library/react";
+import { act, cleanup, fireEvent, screen } from "@testing-library/react";
+import { renderPeekTile } from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-render";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  BrowserPeekTile,
-  type BrowserPeekNode,
-} from "@/components/epic-canvas/renderers/browser-peek-tile";
-import {
   FakeStreamClient,
+  PEEK_NODE,
+  clearScreencastOwner,
+  hostDirectoryEntryModule,
+  hostStreamClientForWithAuthModule,
+  liveStream as fixtureLiveStream,
+  streamAuthRevalidatorModule,
+  tabHostIdModule,
+  tileBodyVisibleModule,
+  runnerOpenExternalLinkModule,
+  tileRoleRunnerHostModule,
   type FakeStreamSession,
 } from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-stream-fixture";
+import { BrowserPeekTile } from "@/components/epic-canvas/renderers/browser-peek-tile";
 import { useScreencastArmedStore } from "@/stores/screencast-armed-store";
 
 const toast = vi.hoisted(() => vi.fn());
@@ -24,40 +26,36 @@ const hookState = vi.hoisted(() => ({
   visible: true,
 }));
 
+vi.mock("@/providers/use-runner-host", () => tileRoleRunnerHostModule());
+
+vi.mock("@/hooks/runner/use-open-external-link-mutation", () =>
+  runnerOpenExternalLinkModule(),
+);
+
 vi.mock("sonner", () => ({
   toast,
 }));
 
-vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
-  useTabHostId: () => "host-test",
-}));
+vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () =>
+  tabHostIdModule(),
+);
 
-vi.mock("@/components/epic-canvas/hooks/use-tile-body-visible", () => ({
-  useTileBodyVisible: () => hookState.visible,
-}));
+vi.mock("@/components/epic-canvas/hooks/use-tile-body-visible", () =>
+  tileBodyVisibleModule(hookState),
+);
 
-vi.mock("@/hooks/host/use-host-directory-entry", () => ({
-  useHostDirectoryEntry: () => ({ hostId: "host-test" }),
-}));
+vi.mock("@/hooks/host/use-host-directory-entry", () =>
+  hostDirectoryEntryModule(),
+);
 
-vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
-  useHostStreamClientFor: () => hookState.streamClient,
-  authenticatedHostStreamKey: () => "authenticated-host-test",
-  authenticatedOwnerIdentityKey: () => "local\u0000host-test\u0000user-test",
-}));
+vi.mock("@/hooks/host/use-host-stream-client-for", () =>
+  hostStreamClientForWithAuthModule(hookState),
+);
 
-vi.mock("@/lib/host/stream-auth-revalidator", () => ({
-  useStreamAuthRevalidator: () => null,
-}));
+vi.mock("@/lib/host/stream-auth-revalidator", () =>
+  streamAuthRevalidatorModule(),
+);
 
-const PEEK_NODE: BrowserPeekNode = {
-  id: "browser-peek-headless-1",
-  instanceId: "peek-instance-1",
-  hostId: "host-test",
-  sessionId: "headless-1",
-  tabId: "headless-tab-1",
-  initialUrl: "http://localhost:3000",
-};
 const PEEK_OWNER_ID = [
   PEEK_NODE.hostId,
   PEEK_NODE.sessionId,
@@ -71,12 +69,7 @@ const URL_C = "https://example.com/c";
 const DRAFT_URL = "https://draft.example/path";
 
 function liveStream(): FakeStreamSession {
-  const sessions = hookState.streamClient?.sessions ?? [];
-  const stream = sessions.at(-1);
-  if (stream === undefined) {
-    throw new Error("expected browser.screencast stream");
-  }
-  return stream;
+  return fixtureLiveStream(hookState);
 }
 
 function overlayButton(): HTMLElement {
@@ -141,11 +134,6 @@ function armPeekTile(stream: FakeStreamSession): void {
   });
 }
 
-function clearScreencastOwner(): void {
-  const store = useScreencastArmedStore.getState();
-  if (store.ownerId !== null) store.release(store.ownerId);
-}
-
 describe("BrowserPeekTile toolbar chrome", () => {
   beforeEach(() => {
     hookState.visible = true;
@@ -161,12 +149,13 @@ describe("BrowserPeekTile toolbar chrome", () => {
   });
 
   it("hides the controlling chip until armed and release disarms that epoch", async () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -200,12 +189,13 @@ describe("BrowserPeekTile toolbar chrome", () => {
   });
 
   it("toasts once per unsupportedInteraction feature", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -220,12 +210,13 @@ describe("BrowserPeekTile toolbar chrome", () => {
   });
 
   it("keeps the focused address draft when the agent navigates", async () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -252,12 +243,13 @@ describe("BrowserPeekTile toolbar chrome", () => {
   });
 
   it("auto-arms from a cold toolbar back click and sends goBack only after confirmation", async () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -308,12 +300,13 @@ describe("BrowserPeekTile toolbar chrome", () => {
   });
 
   it("flushes every pending cold toolbar nav after arm confirmation", async () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -366,12 +359,13 @@ describe("BrowserPeekTile toolbar chrome", () => {
   });
 
   it("drops a pending arm and cold nav when revoked before confirmation", async () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -426,12 +420,13 @@ describe("BrowserPeekTile toolbar chrome", () => {
   });
 
   it("replaces a submitted address with the next live url", () => {
-    render(
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -452,13 +447,14 @@ describe("BrowserPeekTile toolbar chrome", () => {
     expect(addressInput().value).toBe(URL_B);
   });
 
-  it("disarms after leaving the tile from the address bar", async () => {
-    render(
+  it("keeps control after leaving the tile from the address bar", async () => {
+    renderPeekTile(
       <BrowserPeekTile
         viewTabId="view-tab-1"
         paneId="pane-1"
         epicId="epic-1"
         node={PEEK_NODE}
+        completeMeans="ended"
       />,
     );
     const stream = liveStream();
@@ -470,7 +466,9 @@ describe("BrowserPeekTile toolbar chrome", () => {
     fireEvent.blur(addressInput(), { relatedTarget: document.body });
     await flushMacrotask();
 
-    expect(useScreencastArmedStore.getState().ownerId).toBeNull();
-    expect(screen.queryByText("Controlling")).toBeNull();
+    // Focus is not ownership (ticket 20): the badge follows the arm, so it
+    // stays legible across a click into the address bar and out of the tile.
+    expect(useScreencastArmedStore.getState().ownerId).toBe(PEEK_OWNER_ID);
+    expect(screen.getByText("Controlling")).not.toBeNull();
   });
 });

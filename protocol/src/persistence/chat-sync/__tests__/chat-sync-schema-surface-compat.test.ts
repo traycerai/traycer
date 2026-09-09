@@ -2,6 +2,7 @@ import { getRecordSchema } from "@traycer/protocol/framework/index";
 import { chatHeadStorageSchema } from "@traycer/protocol/persistence/chat-sync/head";
 import type { JsonObject } from "@traycer/protocol/persistence/chat-sync/json";
 import { chatShardStorageSchema } from "@traycer/protocol/persistence/chat-sync/shard";
+import { CHAT_SYNC_SCHEMA_VERSION } from "@traycer/protocol/persistence/chat-sync/version";
 import { persistenceRecordRegistry } from "@traycer/protocol/persistence/registry";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
@@ -92,7 +93,7 @@ describe("registered chat-sync persistence surface is frozen", () => {
  */
 describe("chat-sync storage projections describe the wire", () => {
   const wireHead: JsonObject = {
-    schemaVersion: { major: 1, minor: 2 },
+    schemaVersion: CHAT_SYNC_SCHEMA_VERSION,
     parentHeadSha256: null,
     throughRecordSeq: 4,
     capturedAt: 1_700_000_000_000,
@@ -128,7 +129,7 @@ describe("chat-sync storage projections describe the wire", () => {
   // PROJECTION cannot express that - a refinement has no JSON-Schema form - so
   // this record has to satisfy both to prove the two describe the same wire.
   const wireShard: JsonObject = {
-    schemaVersion: { major: 1, minor: 2 },
+    schemaVersion: CHAT_SYNC_SCHEMA_VERSION,
     chatId: "chat-1",
     section: "messages",
     messages: [

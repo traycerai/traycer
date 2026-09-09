@@ -77,9 +77,6 @@ describe("InterviewSegment", () => {
         <InterviewSegment
           blockId="interview-1"
           status="completed"
-          toolName="AskUserQuestion"
-          title="Need input"
-          description={null}
           questions={[
             {
               questionId: "q1",
@@ -87,6 +84,7 @@ describe("InterviewSegment", () => {
               header: null,
               options: [],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ]}
           answers={[
@@ -128,9 +126,6 @@ describe("InterviewSegment", () => {
         <InterviewSegment
           blockId="interview-carried"
           status="completed"
-          toolName="AskUserQuestion"
-          title="Need input"
-          description={null}
           questions={[]}
           answers={[]}
           draftAnswers={[]}
@@ -159,9 +154,6 @@ describe("InterviewSegment", () => {
         <InterviewSegment
           blockId="interview-carried-settled"
           status="completed"
-          toolName="AskUserQuestion"
-          title="Need input"
-          description={null}
           questions={[]}
           answers={[]}
           draftAnswers={[]}
@@ -188,9 +180,6 @@ describe("InterviewSegment", () => {
         <InterviewSegment
           blockId="interview-skipped"
           status="errored"
-          toolName="AskUserQuestion"
-          title="Need input"
-          description={null}
           questions={[
             {
               questionId: "q1",
@@ -198,6 +187,7 @@ describe("InterviewSegment", () => {
               header: null,
               options: [],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ]}
           answers={[]}
@@ -218,15 +208,12 @@ describe("InterviewSegment", () => {
     expect(onFork).toHaveBeenCalledWith("ab-worktree", "interview-skipped");
   });
 
-  it("expands into a read-only pager with framing, headers, and static options", () => {
+  it("expands into a read-only pager with headers and static options", () => {
     render(
       <InterviewTestProviders>
         <InterviewSegment
           blockId="interview-exact"
           status="completed"
-          toolName="AskUserQuestion"
-          title="Deployment strategy"
-          description="Choose how the rollout should proceed."
           questions={[
             {
               questionId: "q1",
@@ -237,6 +224,7 @@ describe("InterviewSegment", () => {
                 { label: "Beta", description: "Beta details", preview: null },
               ],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
             {
               questionId: "q2",
@@ -247,6 +235,7 @@ describe("InterviewSegment", () => {
                 { label: "Full", description: null, preview: null },
               ],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ]}
           answers={[
@@ -294,15 +283,18 @@ describe("InterviewSegment", () => {
     fireEvent.click(disclosure);
 
     expect(disclosure.getAttribute("aria-expanded")).toBe("true");
-    expect(screen.getAllByText("Deployment strategy")).toHaveLength(2);
-    expect(
-      screen.getByText("Choose how the rollout should proceed."),
-    ).toBeTruthy();
     expect(screen.getByText("Scope")).toBeTruthy();
     expect(screen.getByText("Which scope?")).toBeTruthy();
     expect(screen.getByText("Selected answer")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Beta" })).toBeNull();
     expect(screen.getByRole("button", { name: "Beta details" })).toBeTruthy();
+
+    // The historical/resolved card's `?` (`StaticOptionRow`) is the same
+    // disclosure affordance as the live card's: clicking it reveals the
+    // option's description inline, below the row.
+    expect(screen.queryByText("Beta details")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Beta details" }));
+    expect(screen.getByText("Beta details")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Next question" }));
 
@@ -322,9 +314,6 @@ describe("InterviewSegment", () => {
         <InterviewSegment
           blockId="interview-draft"
           status="completed"
-          toolName="AskUserQuestion"
-          title={null}
-          description={null}
           questions={[
             {
               questionId: "q1",
@@ -335,6 +324,7 @@ describe("InterviewSegment", () => {
                 { label: "Beta", description: null, preview: null },
               ],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ]}
           answers={[]}
@@ -379,9 +369,6 @@ describe("InterviewSegment", () => {
         <InterviewSegment
           blockId="interview-unlabelled-draft"
           status="completed"
-          toolName="AskUserQuestion"
-          title={null}
-          description={null}
           questions={[]}
           answers={[]}
           draftAnswers={[
@@ -421,6 +408,7 @@ describe("InterviewSegment", () => {
       header: null,
       options: [],
       multiSelect: false,
+      allowsCustomAnswer: null,
     };
     const secondQuestion: InterviewQuestion = {
       questionId: "q2",
@@ -428,6 +416,7 @@ describe("InterviewSegment", () => {
       header: null,
       options: [],
       multiSelect: false,
+      allowsCustomAnswer: null,
     };
     const firstAnswer: InterviewAnswer = {
       questionId: "q1",
@@ -451,9 +440,6 @@ describe("InterviewSegment", () => {
         <InterviewSegment
           blockId="interview-shrink"
           status="completed"
-          toolName="AskUserQuestion"
-          title={null}
-          description={null}
           questions={questions}
           answers={answers}
           draftAnswers={[]}
@@ -495,9 +481,6 @@ describe("InterviewSegment", () => {
         <InterviewSegment
           blockId="interview-force"
           status="completed"
-          toolName="AskUserQuestion"
-          title={null}
-          description={null}
           questions={[
             {
               questionId: "q1",
@@ -505,6 +488,7 @@ describe("InterviewSegment", () => {
               header: null,
               options: [],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ]}
           answers={[
@@ -559,9 +543,6 @@ describe("InterviewSegment", () => {
         <InterviewSegment
           blockId="interview-force-valid"
           status="completed"
-          toolName="AskUserQuestion"
-          title={null}
-          description={null}
           questions={[
             {
               questionId: "q1",
@@ -569,6 +550,7 @@ describe("InterviewSegment", () => {
               header: null,
               options: [],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ]}
           answers={[
@@ -621,9 +603,6 @@ describe("InterviewSegment", () => {
         <InterviewSegment
           blockId="interview-force-rapid"
           status="completed"
-          toolName="AskUserQuestion"
-          title={null}
-          description={null}
           questions={[
             {
               questionId: "q1",
@@ -631,6 +610,7 @@ describe("InterviewSegment", () => {
               header: null,
               options: [],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ]}
           answers={[]}
@@ -675,9 +655,6 @@ describe("InterviewSegment", () => {
         <InterviewSegment
           blockId="interview-target-page"
           status="completed"
-          toolName="AskUserQuestion"
-          title={null}
-          description={null}
           questions={[
             {
               questionId: "q1",
@@ -685,6 +662,7 @@ describe("InterviewSegment", () => {
               header: null,
               options: [],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
             {
               questionId: "q2",
@@ -692,6 +670,7 @@ describe("InterviewSegment", () => {
               header: null,
               options: [],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ]}
           answers={[
@@ -755,9 +734,6 @@ describe("InterviewSegment", () => {
         <InterviewSegment
           blockId="interview-manual-page"
           status="completed"
-          toolName="AskUserQuestion"
-          title={null}
-          description={null}
           questions={[
             {
               questionId: "q1",
@@ -765,6 +741,7 @@ describe("InterviewSegment", () => {
               header: null,
               options: [],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
             {
               questionId: "q2",
@@ -772,6 +749,7 @@ describe("InterviewSegment", () => {
               header: null,
               options: [],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ]}
           answers={[]}
@@ -808,9 +786,6 @@ describe("InterviewSegment", () => {
         <InterviewSegment
           blockId="interview-details"
           status="completed"
-          toolName="AskUserQuestion"
-          title={null}
-          description={null}
           questions={[
             {
               questionId: "q1",
@@ -821,6 +796,7 @@ describe("InterviewSegment", () => {
                 { label: "Beta", description: "Beta details", preview: null },
               ],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ]}
           answers={[]}
@@ -853,6 +829,75 @@ describe("InterviewSegment", () => {
     expect(screen.getAllByText("Beta details")).toHaveLength(1);
   });
 
+  // A detail the user expanded by hand and the one search pins are the same
+  // text rendered by two owners. Pinning must not show it twice, and the
+  // pinned `?` has no toggle to close a duplicate; clearing the pin hands the
+  // row's own expansion back.
+  it("yields a hand-expanded detail to the search pin and restores it when the pin clears", () => {
+    const blockId = "interview-details";
+    const view = (targetUnitId: string | null) => (
+      <InterviewTestProviders>
+        <FindForceController
+          blockId={blockId}
+          forcedOpen
+          targetUnitId={targetUnitId}
+        />
+        <InterviewSegment
+          blockId={blockId}
+          status="completed"
+          questions={[
+            {
+              questionId: "q1",
+              question: "Which scope?",
+              header: null,
+              options: [
+                { label: "Alpha", description: null, preview: null },
+                { label: "Beta", description: "Beta details", preview: null },
+              ],
+              multiSelect: false,
+              allowsCustomAnswer: null,
+            },
+          ]}
+          answers={[]}
+          draftAnswers={[]}
+          outcome="answered"
+          settlement={null}
+          error={null}
+          delivery={null}
+          forkedWithoutAnswer={false}
+          interviewDeliveryRetry={null}
+          forkAction={null}
+        />
+      </InterviewTestProviders>
+    );
+    const { rerender } = render(view(null));
+
+    fireEvent.click(screen.getByRole("button", { name: "Beta details" }));
+    expect(
+      screen.getAllByRole("note", { name: "Option details" }),
+    ).toHaveLength(1);
+
+    rerender(
+      view(`interview:${blockId}:question:0:option-description:option:1`),
+    );
+    const pinned = screen.getAllByRole("note", { name: "Option details" });
+    expect(pinned).toHaveLength(1);
+    const describedBy = screen
+      .getByRole("button", { name: "Beta details" })
+      .getAttribute("aria-describedby");
+    expect(document.getElementById(describedBy ?? "")).toBe(pinned[0]);
+
+    rerender(view(null));
+    expect(
+      screen.getAllByRole("note", { name: "Option details" }),
+    ).toHaveLength(1);
+    expect(
+      screen
+        .getByRole("button", { name: "Beta details" })
+        .getAttribute("aria-expanded"),
+    ).toBe("true");
+  });
+
   it("scopes pinned option detail ids to each mounted card view", () => {
     const blockId = "interview-details";
     const card = (tileInstanceId: string) => (
@@ -867,9 +912,6 @@ describe("InterviewSegment", () => {
           <InterviewSegment
             blockId={blockId}
             status="completed"
-            toolName="AskUserQuestion"
-            title={null}
-            description={null}
             questions={[
               {
                 questionId: "q1",
@@ -880,6 +922,7 @@ describe("InterviewSegment", () => {
                   { label: "Beta", description: "Beta details", preview: null },
                 ],
                 multiSelect: false,
+                allowsCustomAnswer: null,
               },
             ]}
             answers={[]}
@@ -930,9 +973,6 @@ describe("InterviewSegment", () => {
         <InterviewSegment
           blockId="interview-delivery"
           status="completed"
-          toolName="AskUserQuestion"
-          title={null}
-          description={null}
           questions={[
             {
               questionId: "q1",
@@ -940,6 +980,7 @@ describe("InterviewSegment", () => {
               header: null,
               options: [],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ]}
           answers={[
@@ -984,9 +1025,6 @@ describe("InterviewSegment", () => {
         <InterviewSegment
           blockId="interview-delivery-retry"
           status="completed"
-          toolName="AskUserQuestion"
-          title={null}
-          description={null}
           questions={[
             {
               questionId: "q1",
@@ -994,6 +1032,7 @@ describe("InterviewSegment", () => {
               header: null,
               options: [],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ]}
           answers={[

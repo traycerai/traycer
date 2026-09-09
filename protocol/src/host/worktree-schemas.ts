@@ -883,8 +883,8 @@ export type WorktreeDeleteRequestV11 = z.infer<
 >;
 
 /**
- * Present consent must be a real digest — empty and non-digest
- * strings are rejected rather than silently treated as "no consent".
+ * Released @1.2 wire validation remains frozen even though the host now
+ * ignores the revision. Empty and non-digest strings still fail parsing.
  */
 export const expectedHoldersRevisionFieldSchema = z
   .string()
@@ -892,10 +892,8 @@ export const expectedHoldersRevisionFieldSchema = z
   .optional();
 
 /**
- * A consent revision without `stopOwners: true` can never be honored
- * (absent-revision + stopOwners false is T7 refuse-on-busy; a present
- * revision with stopOwners false would be silently ignored). Refuse
- * at parse instead.
+ * Frozen @1.2 constraint: a present revision still requires
+ * `stopOwners: true`, even though current hosts ignore the revision value.
  */
 export function refineConsentRevisionRequiresStopOwners(
   value: {
@@ -914,14 +912,11 @@ export function refineConsentRevisionRequiresStopOwners(
 }
 
 /**
- * `worktree.delete@1.2` request. `expectedHoldersRevision` is the
- * digest of the inventory the caller reviewed. When present with
- * `stopOwners: true`, the host compares it to a fresh inventory
- * digest before teardown; mismatch refuses with
- * `WORKTREE_HOLDERS_CHANGED` and does not stop or delete. Absent
- * reproduces @1.1 (stop whatever the fresh read finds). Present-empty
- * and non-digest values, and a revision with `stopOwners: false`,
- * fail parse.
+ * `worktree.delete@1.2` request. `expectedHoldersRevision` is retained for
+ * released-wire compatibility, but hosts accept and ignore it since consent
+ * now covers whichever owners are active when deletion runs. The existing
+ * digest and `stopOwners: true` parse constraints remain frozen. Remove the
+ * field only after the protocol minor-removal window permits it.
  *
  * Degrade: a 1.1 host's request schema strips
  * `expectedHoldersRevision`. A 1.1 client talking to a 1.2 host is

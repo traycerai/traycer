@@ -1,11 +1,7 @@
 import {
-  BASIC_AUTH_PATTERN,
-  BEARER_PATTERN,
-  QUOTED_SENSITIVE_INLINE_VALUE_PATTERN,
+  redactSensitiveText,
   SENSITIVE_KEY_PATTERN,
-  SENSITIVE_QUERY_PARAM_PATTERN,
-  TOKEN_SHAPE_PATTERN,
-} from "./sensitive-text-patterns";
+} from "@traycer/protocol/utils/text/redaction";
 
 /**
  * The support-specific scrubber (ticket 09 / tech-plan T6): applied at
@@ -16,9 +12,9 @@ import {
  * Deliberately does NOT reuse `logger.ts`'s `redactLogText`: that helper caps
  * output at 1,000 chars, which would silently truncate exactly the 500-line /
  * 512 KB log tails and multi-KB stack traces this scrubber exists to protect.
- * It reuses the same token/secret/bearer/api-key regexes (`sensitive-text-
- * patterns.ts`) so detection never drifts between the two call sites, then
- * adds a pass `redactLogText` has never had: absolute-path pseudonymization.
+ * It reuses the same detection leaf
+ * (`@traycer/protocol/utils/text/redaction`) so detection never drifts
+ * between the two call sites, then adds a pass `redactLogText` has never had: absolute-path pseudonymization.
  * `host.log` is written with zero redaction at source
  * (`traycer-host/src/bootstrap/host-logger.ts`), so this module is its only
  * line of defense, and paths - workspace directories, usernames, install
@@ -158,21 +154,7 @@ function scrubSupportTextWithPseudonyms(
 }
 
 function scrubLine(line: string, pathPseudonyms: Map<string, string>): string {
-  const redacted = line
-    .replace(SENSITIVE_QUERY_PARAM_PATTERN, "$1<redacted>")
-    .replace(BEARER_PATTERN, "Bearer <redacted>")
-    .replace(BASIC_AUTH_PATTERN, "Basic <redacted>")
-    // The quoted-key-tolerant superset (code review, finding #3): matches
-    // everything the plain `SENSITIVE_INLINE_VALUE_PATTERN` logger.ts still
-    // uses unchanged, plus JSON/YAML-style `"password": "value"` forms whose
-    // closing key-quote sits between the word and the separator.
-    .replace(QUOTED_SENSITIVE_INLINE_VALUE_PATTERN, "$1<redacted>")
-    // Token-shape redaction (code review, finding N2): a bare high-entropy
-    // key pasted into free text (user intent, a log line, an error message)
-    // has no key/assignment context at all for the patterns above to key
-    // off of - this matches the token's own published prefix shape instead.
-    .replace(TOKEN_SHAPE_PATTERN, "<redacted>");
-  return pseudonymizeAbsolutePaths(redacted, pathPseudonyms);
+  return pseudonymizeAbsolutePaths(redactSensitiveText(line), pathPseudonyms);
 }
 
 /**

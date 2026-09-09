@@ -20,6 +20,7 @@ interface PromotableModalFrameProps {
   readonly closeTestId: string;
   readonly onPromote: () => void;
   readonly onClose: () => void;
+  readonly onOpenAutoFocus: ((event: Event) => void) | undefined;
   readonly children: ReactNode;
 }
 
@@ -93,6 +94,7 @@ export function PromotableModalFrame(
         data-slot="dialog-content"
         aria-describedby={undefined}
         className={cn(FRAME_CONTENT_CLASS, props.contentClassName)}
+        onOpenAutoFocus={props.onOpenAutoFocus}
         onPointerDownOutside={preventUnlessGenuineBackdropGesture}
         onInteractOutside={preventUnlessGenuineBackdropGesture}
         {...props.dataAttributes}

@@ -341,10 +341,11 @@ describe("sanitizeAttachRequest", () => {
     }
     expect(element.selector).toBe("main > h1");
     expect(element.tagName).toBe("h1");
-    expect(element.attributes).toEqual([
-      { name: "data-kind", value: "heading" },
-      { name: "aria-level", value: "1" },
-    ]);
+    // Raw markup and attributes are dropped by the capture schema; the
+    // bounded text snippet is what survives.
+    expect(element).not.toHaveProperty("outerHtml");
+    expect(element).not.toHaveProperty("attributes");
+    expect(element.textPreview).toBe("Example");
     expect(element.computedStyles).toEqual([
       { property: "display", value: "block" },
       { property: "font-size", value: "26px" },
@@ -399,10 +400,18 @@ describe("sanitizeAttachRequest", () => {
   });
 
   it("trims by UTF-8 bytes so a unit-counted payload cannot sneak past the budget", () => {
+    // Weight carried by a field the capture actually keeps: `outerHtml` is
+    // no longer part of a capture, so a payload built out of it would be
+    // trimmed to nothing before the budget was ever the reason.
     const fatElements = Array.from({ length: 25 }, (_unused, index) => ({
       selector: `p.euro-${index}`,
       tagName: "p",
-      outerHtml: "€".repeat(4000),
+      // Sized so the payload is UNDER the budget counted in UTF-16 units and
+      // OVER it counted in UTF-8 bytes, which is the whole point here.
+      computedStyles: Array.from({ length: 20 }, () => ({
+        property: "display",
+        value: "€".repeat(300),
+      })),
       boundingBox: { x: 0, y: 0, width: 10, height: 10 },
     }));
     const raw = { ...VALID_ATTACH, elements: fatElements };

@@ -169,6 +169,7 @@ function rowRole(source: TranscriptRowSource): RowSkeletonEntry["role"] {
     case "notification-anchor":
       return "assistant";
     case "forked-chat-link":
+    case "imported-chat-marker":
     case "setup-card":
       return "system";
   }
@@ -398,6 +399,7 @@ function rowBodyFingerprint(
     case "stopped-turn":
     case "forked-chat-link":
     case "notification-anchor":
+    case "imported-chat-marker":
       absorbRecord(lookup.eventsById.get(source.eventId));
       break;
     case "setup-card":

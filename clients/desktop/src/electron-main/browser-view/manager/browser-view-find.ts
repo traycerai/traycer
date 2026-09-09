@@ -63,7 +63,7 @@ export class BrowserViewFind {
       errorMessage: null,
     });
     try {
-      const electronRequestId = entry.view.webContents.findInPage(input.query, {
+      const electronRequestId = entry.webContents.findInPage(input.query, {
         forward: input.forward,
         findNext: input.findNext,
         matchCase: input.matchCase,
@@ -76,7 +76,7 @@ export class BrowserViewFind {
     } catch (err) {
       log.warn("[browser-view] findInPage failed", {
         error: describeLogError(err),
-        webContentsId: entry.view.webContents.id,
+        webContentsId: entry.webContents.id,
       });
       this.emit(entry, {
         appRequestId: input.requestId,
@@ -99,7 +99,7 @@ export class BrowserViewFind {
       matchCase: entry.findState.matchCase,
       sessionsByElectronRequestId: new Map(),
     };
-    entry.view.webContents.stopFindInPage("clearSelection");
+    entry.webContents.stopFindInPage("clearSelection");
     this.emit(entry, {
       appRequestId: input.requestId,
       query: "",

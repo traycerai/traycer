@@ -24,15 +24,12 @@ import {
   CREATED_EPIC_UNAVAILABLE_RETRY_DELAYS_MS,
   markEpicCreatedThisSession,
 } from "@/lib/epics/session-created-epics";
+import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  __getOpenEpicRegistryForTests,
-  __setEpicStreamClientFactoryForTests,
-} from "@/lib/registries/epic-session-registry";
-import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -70,12 +67,18 @@ const fakeFactory: EpicStreamClientFactory = () => ({
   close: () => {},
 });
 
-function registerSession(epicId: string): OpenEpicStoreHandle {
-  const handle = createOpenEpicStore({
-    epicId,
-    streamClientFactory: fakeFactory,
+function registerSession(epicId: string): OpenedStoreForTest {
+  const handle = openStoreForTest({
+    epicId: epicId,
     userId: null,
-    onAuthError: null,
+    // The factories go to the COMPOSITION now: the store stopped
+    // constructing a runtime, so a `streamClientFactory` has nowhere
+    // else to go.
+    factories: {
+      streamClientFactory: fakeFactory,
+      laneSelection: null,
+    },
+    writeCommand: null,
   });
   __getOpenEpicRegistryForTests().acquire(epicId, () => handle);
   return handle;
@@ -210,7 +213,6 @@ describe("EpicAccessCoordinator", () => {
   afterEach(() => {
     cleanup();
     __getOpenEpicRegistryForTests().disposeAll();
-    __setEpicStreamClientFactoryForTests(null);
     useAuthStore.getState().setSignedOut();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useTabsStore.setState(useTabsStore.getInitialState(), true);
@@ -653,9 +655,29 @@ describe("EpicAccessCoordinator", () => {
         // Still open: a spent slot is not a verdict.
         expect(useEpicCanvasStore.getState().openTabOrder).toEqual(["tab-1"]);
         expect(toastInfo).not.toHaveBeenCalled();
-        // `requestFreshSnapshot` resets `snapshotFetchError` to null; simulate
-        // the retry itself failing the same way the real reconnect would, so
-        // the next slot is taken by a genuine re-arrival.
+        // Simulate the retry itself failing the same way the real reconnect
+        // would, so the next slot is taken by a genuine re-ARRIVAL. The
+        // arrival is the point: the coordinator arms the next slot on the
+        // error TRANSITIONING back in, not on its presence.
+        //
+        // Cleared explicitly first, and that is what the relocation changed.
+        // `snapshotFetchError` is the WORKER's state now, projected to main,
+        // and `requestFreshSnapshot` clears it by publishing a change-gated
+        // patch. The worker never saw the direct `setState` below, so after the
+        // first cycle its own value is already null and it emits nothing for
+        // this field - main keeps the error the test wrote, the re-seed is a
+        // no-op transition, and the loop stalls one slot short with the third
+        // retry never fired. Only the first iteration worked, on a clear the
+        // worker still had a reason to publish.
+        //
+        // Writing both halves here keeps the simulation at ONE layer instead of
+        // depending on the worker to supply half of it.
+        act(() => {
+          handle.store.setState({ snapshotFetchError: null });
+        });
+        await act(async () => {
+          await Promise.resolve();
+        });
         act(() => {
           handle.store.setState({ snapshotFetchError: unavailableError });
         });

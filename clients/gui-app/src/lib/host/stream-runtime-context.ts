@@ -32,6 +32,22 @@ export interface StreamRuntimeBinding {
    * `null` only when the owner genuinely cannot name one.
    */
   readonly hostId: string | null;
+  /**
+   * Pins the transport for a consumer that outlives the surface this binding
+   * was read from, returning the matching release.
+   *
+   * A run started from a host-scoped panel keeps streaming after the panel
+   * closes, and the scoped transport is reference-counted: without a pin it
+   * closes at that panel's unmount and takes the run's subscription with it.
+   * The returned release must be called exactly once, when the run's own need
+   * for the transport ends.
+   *
+   * Both scoped and app-wide transports provide a lease: the app-wide client
+   * can be replaced when the window changes hosts. `null` promises that the
+   * transport cannot close under its consumers. Providers keep this binding
+   * object stable for the lifetime of its client.
+   */
+  readonly retain: (() => () => void) | null;
 }
 
 export const StreamRuntimeContext = createContext<StreamRuntimeBinding | null>(
@@ -74,6 +90,23 @@ export function useStreamHostId(): string | null {
   const value = use(StreamRuntimeContext);
   const client = useWsStreamClient();
   return client === null ? null : (value?.hostId ?? null);
+}
+
+/**
+ * The whole binding a surface sits under, for the callers that must HAND IT
+ * ON rather than read from it: starting an import or a migration aims a run at
+ * one machine, and the target travels with the request as a single value -
+ * transport, host name and transport lease together. Reading those three from
+ * three hooks is how a run ends up filed under one host and executed on
+ * another.
+ *
+ * `null` whenever `useWsStreamClient` is, for the reason `useStreamHostId`
+ * gives: no caller may name a host it has no working stream to.
+ */
+export function useStreamRuntimeBinding(): StreamRuntimeBinding | null {
+  const value = use(StreamRuntimeContext);
+  const client = useWsStreamClient();
+  return client === null ? null : value;
 }
 
 /**

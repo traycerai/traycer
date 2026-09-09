@@ -14,7 +14,7 @@ import type {
 import { MaterialFileIcon } from "@/components/material-file-icon";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { BrowserFavicon } from "@/components/epic-canvas/browser-favicon";
-import { useMaybeBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
+import { useLiveBrowserSession } from "@/lib/browser-view/sessions/use-live-browser-session";
 import {
   browserTabFaviconUrl,
   resolveTabTitle,
@@ -117,13 +117,17 @@ export function ComposerMentionDecorator({
 }
 
 /**
- * The browser-tab chip resolves LIVE against the epic's browser sessions
- * context rather than trusting the attachment's captured title/favicon: a
+ * The browser-tab chip resolves LIVE against every open browser-sessions
+ * coordinator rather than trusting the attachment's captured title/favicon: a
  * tab's title (and even its url) changes as it navigates, so a static chip
  * would go stale the moment the page did. When the tab no longer exists in
  * that live set - closed, or the session gone - the chip falls back to the
  * attachment's captured label and dims, mirroring how `BrowserReferenceChips`
  * degrades a reference whose target is gone rather than erroring.
+ *
+ * Not the surrounding `BrowserSessionsContext`: inside a chat tile that is
+ * bound to a remote host, that context is the TILE host's stream, and the
+ * picker legitimately offers tabs from every host with a coordinator.
  */
 function BrowserTabMentionDecorator({
   density,
@@ -133,11 +137,9 @@ function BrowserTabMentionDecorator({
   readonly mention: BrowserTabMentionAttachment;
 }): ReactElement {
   const classNames = composerInlineChipClassNames(density);
-  const sessions = useMaybeBrowserSessionsContext();
+  const session = useLiveBrowserSession(mention.sessionId);
   const liveTab =
-    sessions?.items
-      .find((session) => session.sessionId === mention.sessionId)
-      ?.tabs.find((tab) => tab.tabId === mention.tabId) ?? null;
+    session?.tabs.find((tab) => tab.tabId === mention.tabId) ?? null;
   const missing = liveTab === null;
   const label = liveTab !== null ? resolveTabTitle(liveTab) : mention.label;
   const tooltip = liveTab !== null ? liveTab.url : mention.url;

@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { useShallow } from "zustand/react/shallow";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { SettingsGroup } from "@/components/settings/settings-group";
@@ -23,13 +22,6 @@ import type {
   DesktopWindowsBridge,
 } from "@/lib/windows/types";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
-import {
-  epicsSeen,
-  taskChainsSeen,
-  useMigrationRunStore,
-  type MigrationRunState,
-} from "@/stores/migration/migration-run-store";
-import { startMigrationRun } from "@/components/migration/migration-run-handle";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { trackSettingChanged, type AnalyticsSetting } from "@/lib/analytics";
@@ -38,17 +30,7 @@ import { getFeatureSettingsBridge } from "@/lib/desktop-feature-settings";
 import { useRunnerFeatureSettingsQuery } from "@/hooks/runner/use-runner-feature-settings-query";
 import { useRunnerAgentRolesSet } from "@/hooks/runner/use-runner-agent-roles-set-mutation";
 
-const MIGRATION_PROGRESS_LABEL = "Migrating tasks";
 const MOD_ENTER_LABEL = `${modLabel()}+Enter`;
-
-function formatMigrationProgress(state: MigrationRunState): string | null {
-  if (state.status !== "running") return null;
-  if (state.totals === null) return MIGRATION_PROGRESS_LABEL;
-  const { totalTaskChains, totalLocalEpics } = state.totals;
-  const tasks = `${taskChainsSeen(state.counts)}/${totalTaskChains}`;
-  const epics = `${epicsSeen(state.counts)}/${totalLocalEpics}`;
-  return `${MIGRATION_PROGRESS_LABEL} - tasks ${tasks}, epics ${epics}`;
-}
 
 function trackGeneralSetting(setting: AnalyticsSetting): void {
   trackSettingChanged("general", setting);
@@ -57,18 +39,6 @@ function trackGeneralSetting(setting: AnalyticsSetting): void {
 export function GeneralSettingsPanel() {
   const navigate = useNavigate();
   const restartOnboarding = useOnboardingStore((s) => s.restart);
-  const migrationState = useMigrationRunStore(
-    useShallow((s) => ({
-      status: s.status,
-      totals: s.totals,
-      counts: s.counts,
-      finalSuccess: s.finalSuccess,
-      remoteRunning: s.remoteRunning,
-    })),
-  );
-  const migrationProgressLabel = formatMigrationProgress(migrationState);
-  const migrationIsRunning =
-    migrationState.status === "running" || migrationState.remoteRunning;
   const showGlobalResourceMonitor = useSettingsStore(
     (s) => s.showGlobalResourceMonitor,
   );
@@ -237,8 +207,14 @@ export function GeneralSettingsPanel() {
           </SettingsGroup>
         ) : null}
 
+        {/* One row, and named for the SUBJECT rather than for itself: the
+            tour is a window-level replay of onboarding, so it belongs on the
+            app-wide page. Import and Data migration used to sit beside it and
+            do not - each moves one machine's local data, and neither could
+            name the machine from here. Both are now on that host's own
+            Overview, under the sidebar's host picker. */}
         <SettingsGroup
-          title="Setup & migration"
+          title="Onboarding"
           tone="default"
           dataTestId={undefined}
           fill={false}
@@ -261,34 +237,6 @@ export function GeneralSettingsPanel() {
                 }}
               >
                 Replay tour
-              </Button>
-            }
-          />
-          <SettingsRow
-            label="Data migration"
-            description={
-              migrationProgressLabel ??
-              "Retry moving local SQLite tasks and epics to cloud."
-            }
-            control={
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={migrationIsRunning}
-                data-testid="settings-reattempt-migration"
-                onClick={() => {
-                  startMigrationRun();
-                }}
-              >
-                {migrationIsRunning ? (
-                  <AgentSpinningDots
-                    className="text-muted-foreground"
-                    testId="settings-reattempt-migration-spinner"
-                    variant={undefined}
-                  />
-                ) : null}
-                Re-attempt migration
               </Button>
             }
           />
@@ -406,6 +354,7 @@ function SettingsLocalAppStateSection() {
         }
       />
       <ConfirmDestructiveDialog
+        blockedReason={null}
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
         title="Clear local app state?"

@@ -8,6 +8,7 @@ import type {
   ModelOption,
   PermissionMode,
   HarnessModelSelection,
+  ProviderId,
   ReasoningLevel,
   ServiceTier,
 } from "@/components/home/data/landing-options";
@@ -44,6 +45,39 @@ export function buildChatRunSettings(input: {
     // mode; nothing reads it back.
     agentMode: "regular",
     profileId: selection.profileId,
+  };
+}
+
+/**
+ * The composer seed for an imported chat whose own `ChatRunSettings` is null.
+ *
+ * An imported chat belongs to the provider it was imported FROM, and the host
+ * says so in its settings tuple - except when it could not, because the source
+ * provider listed no model at import time. The composer would then fall back to
+ * whatever the user last ran, and answer a Codex transcript with Claude. This
+ * puts the provenance back in charge of that one field.
+ *
+ * The model is left empty on purpose: the toolbar resolves a provider's own
+ * default from its catalog for any seed that carries none, so naming one here
+ * would only be a second, staler guess. `profileId` is cleared for the same
+ * reason the toolbar clears it when it reroutes a provider - a remembered
+ * profile belongs to the provider it was remembered for.
+ *
+ * Permission, reasoning, and tier are carried through untouched. So is the
+ * unavailable-provider case: a source provider that is not authenticated on
+ * this host is rerouted by the toolbar's own availability pass, exactly as an
+ * unavailable default would be.
+ */
+export function importedChatSettingsSeed(
+  rememberedSettings: ChatRunSettings | null,
+  defaultSettings: ChatRunSettings,
+  sourceProvider: ProviderId,
+): ChatRunSettings {
+  return {
+    ...(rememberedSettings ?? defaultSettings),
+    harnessId: sourceProvider,
+    model: "",
+    profileId: null,
   };
 }
 

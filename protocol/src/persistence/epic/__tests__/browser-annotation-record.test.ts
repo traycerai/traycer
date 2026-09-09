@@ -22,9 +22,6 @@ const FULL_ANNOTATION = {
       tagName: "h1",
       elementId: null,
       classNames: ["hero"],
-      attributes: [{ name: "class", value: "hero" }],
-      outerHtml: '<h1 class="hero">Example Domain</h1>',
-      outerHtmlTruncated: false,
       textPreview: "Example Domain",
       ariaRole: "heading",
       accessibleName: "Example Domain",
@@ -144,5 +141,54 @@ describe("live send frame browserAnnotations default", () => {
       throw new Error("expected send frame");
     }
     expect(parsed.browserAnnotations).toEqual([FULL_ANNOTATION]);
+  });
+});
+
+/**
+ * Root cause H: annotation records used to persist `outerHtml` and every raw
+ * attribute, which put page content - a filled-in form, a `value=` on an
+ * input, a token in a `data-` attribute - into collaborator-readable chat
+ * persistence and into the model prompt.
+ */
+describe("page markup never survives the capture schema", () => {
+  const legacyElement = {
+    ...FULL_ANNOTATION.elements[0],
+    attributes: [
+      { name: "class", value: "hero" },
+      { name: "data-session", value: "sessionid=abc123" },
+    ],
+    outerHtml: '<h1 class="hero" data-session="sessionid=abc123">Hi</h1>',
+    outerHtmlTruncated: false,
+  };
+
+  it("strips markup and raw attributes off a record written before the change", () => {
+    const parsed = browserAnnotationRecordSchema.parse({
+      ...FULL_ANNOTATION,
+      elements: [legacyElement],
+    });
+    const element = parsed.elements[0];
+    expect(element).not.toHaveProperty("outerHtml");
+    expect(element).not.toHaveProperty("outerHtmlTruncated");
+    expect(element).not.toHaveProperty("attributes");
+    expect(JSON.stringify(parsed)).not.toContain("sessionid=abc123");
+    // What the projection keeps: how to find it, what it says, where it sits.
+    expect(element?.selector).toBe(FULL_ANNOTATION.elements[0]?.selector);
+    expect(element?.textPreview).toBe(FULL_ANNOTATION.elements[0]?.textPreview);
+    expect(element?.boundingBox).toEqual(
+      FULL_ANNOTATION.elements[0]?.boundingBox,
+    );
+  });
+
+  it("strips them on the live send frame too, not only at rest", () => {
+    const parsed = chatSubscribeClientFrameSchema.parse({
+      ...sendFrameWithoutAnnotations(),
+      browserAnnotations: [{ ...FULL_ANNOTATION, elements: [legacyElement] }],
+    });
+    if (parsed.kind !== "send") {
+      throw new Error("expected send frame");
+    }
+    expect(JSON.stringify(parsed.browserAnnotations)).not.toContain(
+      "sessionid=abc123",
+    );
   });
 });

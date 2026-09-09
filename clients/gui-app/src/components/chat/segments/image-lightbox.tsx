@@ -8,11 +8,16 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { useOpenSavedFile } from "@/hooks/files/use-open-saved-file";
-import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
+import { useOpenLinkWithPending } from "@/lib/links/open-link";
 import { imageMutationKeys } from "@/lib/query-keys";
 import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { cn } from "@/lib/utils";
 import { useFileSaveHost } from "@/hooks/files/use-file-save-host";
+import { useCanCopyImages } from "@/hooks/images/use-can-copy-images";
+import {
+  canDownloadToDevice,
+  hasSeparateDownloadRoute,
+} from "@/lib/files/save-blob-to-disk";
 
 import {
   type ImageAction,
@@ -38,7 +43,7 @@ const UntrustedSvgLightbox = lazy(() =>
 );
 
 export function ImageLightbox(props: ImageLightboxProps): ReactNode {
-  const openExternalLink = useRunnerOpenExternalLink();
+  const openInBrowser = useOpenLinkWithPending();
   const contentRef = useRef<HTMLDivElement>(null);
   const fileSave = useFileSaveHost();
   const openSaved = useOpenSavedFile();
@@ -46,8 +51,16 @@ export function ImageLightbox(props: ImageLightboxProps): ReactNode {
   const suggestedName =
     props.suggestedName ?? imageFileName(alt, props.src, props.mediaType);
   const remoteUrl = /^https:/i.test(props.src) ? props.src : null;
+  // Three facts, all required: the bytes must be local, the media type must be
+  // one the clipboard takes, and the SHELL must actually reach the system
+  // clipboard with an image - Android's WebView resolves that write having
+  // written nothing.
+  const canCopyOnShell = useCanCopyImages();
   const canCopy =
-    remoteUrl === null && isClipboardImageMediaType(props.mediaType);
+    remoteUrl === null &&
+    isClipboardImageMediaType(props.mediaType) &&
+    canCopyOnShell;
+  const canShare = hasSeparateDownloadRoute(fileSave);
 
   const imageAction = useMutation<void, Error, ImageAction>({
     mutationKey: imageMutationKeys.perform(),
@@ -68,15 +81,20 @@ export function ImageLightbox(props: ImageLightboxProps): ReactNode {
     <ImageActions
       pendingAction={imageAction.isPending ? imageAction.variables : null}
       canCopy={canCopy}
+      canShare={canShare}
+      canDownload={canDownloadToDevice(fileSave)}
       remote={
         remoteUrl === null
           ? null
           : {
-              pending: openExternalLink.isPending,
-              onOpen: () => openExternalLink.mutate(remoteUrl),
+              pending: openInBrowser.isPending,
+              onOpen: (event) => {
+                void openInBrowser.openLink(remoteUrl, "image", event);
+              },
             }
       }
       onCopy={() => imageAction.mutate("copy")}
+      onShare={() => imageAction.mutate("share")}
       onDownload={() => imageAction.mutate("download")}
     />
   );

@@ -117,6 +117,8 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
     super({
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
+      // This endpoint resolves no host, so there is none to name.
+      hostId: null,
       endpoint: () => null,
       bearer: () => null,
       auth: null,
@@ -203,7 +205,7 @@ function makeSwappableStreamWrapper(
   const wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={queryClient}>
       <StreamRuntimeContext.Provider
-        value={{ wsStreamClient: holder.current, hostId: null }}
+        value={{ wsStreamClient: holder.current, hostId: null, retain: null }}
       >
         {children}
       </StreamRuntimeContext.Provider>
@@ -272,6 +274,7 @@ describe("useGitListChangedFilesSubscription", () => {
           value={{
             wsStreamClient: mockWsStreamClient,
             hostId: null,
+            retain: null,
           }}
         >
           {children}
@@ -760,6 +763,8 @@ describe("useGitListChangedFilesSubscription", () => {
     const closedClient = new WsStreamClient<HostStreamRpcRegistry>({
       clientIdentity: TEST_CLIENT_IDENTITY,
       registry: hostStreamRpcRegistry,
+      // This endpoint resolves no host, so there is none to name.
+      hostId: null,
       endpoint: () => null,
       bearer: () => null,
       auth: null,

@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { prosemirrorJSONToYXmlFragment } from "@tiptap/y-tiptap";
 import * as Y from "yjs";
+import { serializeArtifactMarkdown } from "@/lib/artifacts/artifact-export";
 import { artifactDocumentBundle } from "@/editor-core";
 import { createArtifactExport } from "@/lib/artifacts";
 import { unzipSync } from "fflate";
 
-function createFragment(markdown: string): Y.XmlFragment {
+/**
+ * Still round-trips through a real `Y.XmlFragment` rather than handing the
+ * builder its input string back: the export used to serialize the fragment
+ * itself, so parsing and re-serializing here keeps these expectations pinned to
+ * the same bytes that change moved OUT of the builder.
+ */
+function createBody(markdown: string): string {
   const doc = new Y.Doc();
   const fragment = doc.getXmlFragment("artifact-body");
   prosemirrorJSONToYXmlFragment(
@@ -13,7 +20,7 @@ function createFragment(markdown: string): Y.XmlFragment {
     artifactDocumentBundle.markdownManager.parse(markdown),
     fragment,
   );
-  return fragment;
+  return serializeArtifactMarkdown(fragment);
 }
 
 describe("createArtifactExport", () => {
@@ -35,12 +42,12 @@ describe("createArtifactExport", () => {
           {
             id: "artifact-1",
             title: "First",
-            fragment: createFragment("# First"),
+            markdown: createBody("# First"),
           },
           {
             id: "artifact-2",
             title: "Second",
-            fragment: createFragment("# Second"),
+            markdown: createBody("# Second"),
           },
         ],
         format: "markdown",
@@ -56,7 +63,7 @@ describe("createArtifactExport", () => {
         {
           id: "artifact-1",
           title: "Release plan",
-          fragment: createFragment("# Release plan\n\n- [ ] Ship it"),
+          markdown: createBody("# Release plan\n\n- [ ] Ship it"),
         },
       ],
       format: "markdown",
@@ -75,17 +82,17 @@ describe("createArtifactExport", () => {
         {
           id: "parent",
           title: "Roadmap?/Q3",
-          fragment: createFragment("# Parent"),
+          markdown: createBody("# Parent"),
         },
         {
           id: "child",
           title: "roadmap:/q3",
-          fragment: createFragment("# Child"),
+          markdown: createBody("# Child"),
         },
         {
           id: "reserved",
           title: "CON",
-          fragment: createFragment("# Reserved"),
+          markdown: createBody("# Reserved"),
         },
       ],
       format: "markdown",
@@ -114,7 +121,7 @@ describe("createArtifactExport", () => {
         {
           id: "unicode",
           title: `${"a".repeat(119)}🐇tail`,
-          fragment: createFragment("Unicode"),
+          markdown: createBody("Unicode"),
         },
       ],
       format: "markdown",
@@ -131,7 +138,7 @@ describe("createArtifactExport", () => {
         {
           id: "artifact-pdf",
           title: "Design",
-          fragment: createFragment("# Design\n\nPortable content"),
+          markdown: createBody("# Design\n\nPortable content"),
         },
       ],
       format: "pdf",
@@ -154,7 +161,7 @@ describe("createArtifactExport", () => {
           {
             id: "missing",
             title: "Missing review",
-            fragment: null,
+            markdown: null,
           },
         ],
         format: "markdown",

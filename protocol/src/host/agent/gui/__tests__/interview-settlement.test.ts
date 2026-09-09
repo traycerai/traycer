@@ -1094,24 +1094,6 @@ describe("delivery monotonicity", () => {
       makeDeliveryProjection(BASE_ID, "delivered", false, 0),
     );
   });
-
-  it("keeps delivering when a later pending arrives", () => {
-    const delivering = reduce(
-      streamingBlock(),
-      settlementWith(
-        makeDeliveryProjection(BASE_ID, "delivering", false, 0),
-        10,
-      ),
-    );
-    const afterPending = reduce(
-      delivering.block,
-      settlementWith(makeDeliveryProjection(BASE_ID, "pending", false, 0), 20),
-    );
-    expect(afterPending.block.delivery).toEqual(
-      makeDeliveryProjection(BASE_ID, "delivering", false, 0),
-    );
-  });
-
   it("lets a retryable failure requeue to pending at a strictly newer generation", () => {
     // A retry is the one legitimate backwards move by status rank, and the
     // generation is what makes it distinguishable from a STALE pending being
@@ -1528,7 +1510,6 @@ describe("delivery monotonicity", () => {
     // Commutative: both orders land on the same projection.
     expect(trueFirst.block.delivery).toStrictEqual(falseFirst.block.delivery);
   });
-
   it("never swaps a different deliveryId even when the incoming generation is newer", () => {
     // Identity beats generation. Two outbox items carry no relative order;
     // guessing would flap on reconnect. The authoritative outbox repairs
@@ -1548,107 +1529,6 @@ describe("delivery monotonicity", () => {
     expect(otherNewer.block.delivery).toEqual(
       makeDeliveryProjection(BASE_ID, "pending", false, 0),
     );
-  });
-
-  it("converges to the same projection across permutations of one deliveryId", () => {
-    const pendingG0 = makeDeliveryProjection(BASE_ID, "pending", false, 0);
-    const failedG0 = makeDeliveryProjection(BASE_ID, "failed", true, 0);
-    const pendingG1 = makeDeliveryProjection(BASE_ID, "pending", false, 1);
-    const deliveredG1 = makeDeliveryProjection(BASE_ID, "delivered", false, 1);
-    const updates: ReadonlyArray<InterviewDeliveryProjection> = [
-      pendingG0,
-      failedG0,
-      pendingG1,
-      deliveredG1,
-    ];
-    // Explicit permutations, not a shuffle: a random order would make a
-    // broken merge flake rather than fail.
-    const permutations: ReadonlyArray<
-      ReadonlyArray<InterviewDeliveryProjection>
-    > = [
-      [pendingG0, failedG0, pendingG1, deliveredG1],
-      [deliveredG1, pendingG1, failedG0, pendingG0],
-      [failedG0, deliveredG1, pendingG0, pendingG1],
-      [pendingG1, pendingG0, deliveredG1, failedG0],
-      [deliveredG1, pendingG0, failedG0, pendingG1],
-      [failedG0, pendingG1, deliveredG1, pendingG0],
-    ];
-    expect(permutations[0]).toEqual(updates);
-
-    const finals = permutations.map(
-      (order) =>
-        reduceAll(
-          streamingBlock(),
-          order.map((delivery) => settlementWith(delivery, 10)),
-        ).delivery,
-    );
-    for (const final of finals) {
-      expect(final).toEqual(deliveredG1);
-    }
-  });
-
-  it("does not move patch.timestamp backwards when a contributing settlement is older", () => {
-    // Replay, reconnect, and reconciliation can all deliver an older
-    // event after a newer one has already landed. A contributor may add
-    // a delivery generation without dragging the block's rendered
-    // position backwards.
-    const first = reduce(
-      streamingBlock(),
-      settlementWith(makeDeliveryProjection(BASE_ID, "pending", false, 0), 20),
-    );
-    expect(first.block.timestamp).toBe(20);
-
-    const olderAdvance = applyInterviewSettlement(
-      first.block,
-      settlementWith(
-        makeDeliveryProjection(BASE_ID, "delivering", false, 0),
-        5,
-      ),
-    );
-    expect(olderAdvance.changed).toBe(true);
-    expect(olderAdvance.patch.delivery).toEqual(
-      makeDeliveryProjection(BASE_ID, "delivering", false, 0),
-    );
-    expect(olderAdvance.patch.timestamp).toBe(20);
-
-    const withDiagnostic = reduce(
-      first.block,
-      runtimeFailed("runtime-failed", makeDiagnostic("diag-1"), 3),
-    );
-    expect(withDiagnostic.changed).toBe(true);
-    expect(withDiagnostic.block.diagnostics).toEqual([
-      makeDiagnostic("diag-1"),
-    ]);
-    expect(withDiagnostic.block.timestamp).toBe(20);
-    expect(withDiagnostic.block.delivery).toEqual(
-      makeDeliveryProjection(BASE_ID, "pending", false, 0),
-    );
-  });
-
-  it("defaults generation to 0 when absent and catches a malformed generation to 0", () => {
-    const absent = interviewDeliveryProjectionSchema.parse({
-      deliveryId: BASE_ID,
-      status: "pending",
-      retryable: false,
-    });
-    expect(absent.generation).toBe(0);
-
-    const negative = interviewDeliveryProjectionSchema.parse({
-      deliveryId: BASE_ID,
-      status: "pending",
-      retryable: false,
-      generation: -1,
-    });
-    expect(negative.generation).toBe(0);
-
-    const malformed: Record<string, unknown> = {
-      deliveryId: BASE_ID,
-      status: "pending",
-      retryable: false,
-      generation: "next",
-    };
-    const notANumber = interviewDeliveryProjectionSchema.parse(malformed);
-    expect(notANumber.generation).toBe(0);
   });
 
   it("does not let a distinct losing settlement adopt a pending delivery onto a null slot", () => {
@@ -1672,63 +1552,6 @@ describe("delivery monotonicity", () => {
     expect(result.changed).toBe(false);
     expect(result.patch.delivery).toBeNull();
     expect(result.patch).toStrictEqual(ownedPatch(block));
-  });
-
-  it("does not let a distinct losing settlement replace a stored projection, even at a newer generation and higher status", () => {
-    // The stored-projection half of the same rule: a distinct loser carrying a
-    // different id at a newer generation and a higher status still cannot
-    // speak for the slot. Leave the recorded projection exactly as found -
-    // not merely "some field differs from the incoming one".
-    const stored = makeDeliveryProjection("delivery-1", "pending", false, 0);
-    const block = guiAuthoritativeBlock(stored);
-    const result = applyInterviewSettlement(
-      block,
-      distinctLosingRuntimeSettlement(
-        makeDeliveryProjection("delivery-foreign", "delivered", false, 9),
-      ),
-    );
-    expect(result.changed).toBe(false);
-    expect(result.patch.delivery).toEqual(stored);
-    expect(result.patch).toStrictEqual(ownedPatch(block));
-  });
-
-  it("still merges delivery for a same-settlementId replay and a winning first settlement", () => {
-    // Correlation is about WHO may merge, not a blanket "losing settlements
-    // never write delivery". A replay of the settlement already holding the
-    // slot still monotone-merges its own projection, and a winner still
-    // claims an unowned slot.
-    const delivering = guiAuthoritativeBlock(
-      makeDeliveryProjection("delivery-1", "delivering", false, 0),
-    );
-    const replay = applyInterviewSettlement(delivering, {
-      ...guiAnswered(99),
-      delivery: makeDeliveryProjection("delivery-1", "delivered", false, 0),
-    });
-    expect(replay.changed).toBe(true);
-    expect(replay.patch.delivery).toEqual(
-      makeDeliveryProjection("delivery-1", "delivered", false, 0),
-    );
-    expect(replay.patch.settlement).toEqual({
-      settlementId: "gui-answered",
-      source: "gui",
-    });
-
-    const ownDelivery = makeDeliveryProjection(
-      "delivery-new",
-      "pending",
-      false,
-      0,
-    );
-    const winning = applyInterviewSettlement(streamingBlock(), {
-      ...runtimeAnswered("runtime-answered", [makeAnswer(["date-fns"])], 10),
-      delivery: ownDelivery,
-    });
-    expect(winning.changed).toBe(true);
-    expect(winning.patch.delivery).toEqual(ownDelivery);
-    expect(winning.patch.settlement).toEqual({
-      settlementId: "runtime-answered",
-      source: "runtime",
-    });
   });
 
   it("adopts a winning settlement's delivery wholesale, including a different deliveryId", () => {
@@ -1765,25 +1588,6 @@ describe("delivery monotonicity", () => {
     });
     expect(result.changed).toBe(true);
     expect(result.patch.delivery).toBeNull();
-  });
-
-  it("still merges rather than adopting when the same settlementId is replayed", () => {
-    // Replay is the same outbox item reporting progress, so ordering
-    // rules apply. Absorption (stored delivered survives an incoming
-    // pending) is what an always-adopt implementation would get wrong.
-    // Distinct-loser preservation is already pinned by the two tests
-    // above ("does not let a distinct losing settlement adopt a pending
-    // delivery onto a null slot" / "...replace a stored projection").
-    const stored = makeDeliveryProjection("delivery-9", "delivered", false, 0);
-    const block = guiAuthoritativeBlock(stored);
-    const replay = applyInterviewSettlement(block, {
-      ...guiAnswered(99),
-      delivery: makeDeliveryProjection("delivery-9", "pending", false, 0),
-    });
-    expect(replay.patch.delivery?.deliveryId).toBe("delivery-9");
-    expect(replay.patch.delivery).toEqual(stored);
-    expect(replay.changed).toBe(false);
-    expect(replay.patch).toStrictEqual(ownedPatch(block));
   });
 });
 

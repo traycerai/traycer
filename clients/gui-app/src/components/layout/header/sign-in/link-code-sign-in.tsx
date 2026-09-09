@@ -113,7 +113,7 @@ function useLinkLoginClaimInFlight(isRedeeming: boolean): boolean {
 
 /**
  * QR link-code sign-in: redeems a one-time code minted by the desktop's
- * Settings → Link a phone panel. The camera is a capability
+ * Settings → Link mobile app panel. The camera is a capability
  * (`runnerHost.linkCodeScanner`), not an assumption — where it is absent
  * (browser dev shell) or denied, the typed-code field IS the flow, so every
  * failure lands as an inline notice above a still-usable field.
@@ -283,8 +283,8 @@ export function LinkCodeSignIn(props: {
             data-testid="link-code-signin-panel"
           >
             <p className="text-center text-ui-sm opacity-80">
-              On your desktop, open Settings → Link a phone, then type the code
-              shown under the QR.
+              On your desktop, open Settings → Link mobile app, then type the
+              code shown under the QR.
             </p>
             {codeEntryForm}
             {noticeLine}
@@ -298,10 +298,15 @@ export function LinkCodeSignIn(props: {
                 over its backdrop while `outline` sets a surface with no text
                 color of its own, so the label pins its foreground - otherwise
                 it inherits the hero's white onto the light surface. */}
+            {/* Gated like Scan: a claim is one attempt, and opening the
+                entry form mid-claim offers a second one with nothing useful
+                to type — no approver surface shows a code while a claim
+                awaits its decision. */}
             <Button
               type="button"
               size="lg"
               variant="outline"
+              disabled={claimInFlight}
               data-testid="link-code-signin-manual"
               onClick={() => {
                 setOpen(true);
@@ -322,6 +327,7 @@ export function LinkCodeSignIn(props: {
         type="button"
         size={props.isHero ? "default" : "sm"}
         variant="link"
+        disabled={claimInFlight}
         data-testid="link-code-signin-open"
         onClick={() => {
           setOpen(true);
@@ -342,7 +348,7 @@ export function LinkCodeSignIn(props: {
       data-testid="link-code-signin-panel"
     >
       <p className="text-center text-ui-sm opacity-80">
-        On your desktop, open Settings → Link a phone, then scan the QR — or
+        On your desktop, open Settings → Link mobile app, then scan the QR — or
         type the code shown under it.
       </p>
       {scanner !== null ? (

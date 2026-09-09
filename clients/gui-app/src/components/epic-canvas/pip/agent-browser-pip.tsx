@@ -14,10 +14,10 @@ import type {
   BrowserSessionInfo,
   BrowserTabInfo,
 } from "@traycer/protocol/host/browser/contracts";
-import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
+import { PipPreviewSurface } from "@/components/epic-canvas/pip/pip-preview-surface";
 import { useBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
-import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import {
   browserTabFaviconUrl,
@@ -33,7 +33,11 @@ import {
   PIP_RESIZE_STEP_PX,
   readViewportSize,
 } from "@/lib/browser-view/pip/pip-geometry";
-import { usePipOwnedFrame } from "@/lib/browser-view/pip/pip-frame-capture";
+import {
+  usePipOwnedFrame,
+  type PipPreview,
+} from "@/lib/browser-view/pip/pip-frame-capture";
+import { usePipSharedVideoStream } from "@/lib/browser-view/pip/pip-video-plane";
 import { useRemotePipSessions } from "@/lib/browser-view/pip/use-pip-epic-sessions";
 import {
   captionFreshness,
@@ -49,15 +53,11 @@ import {
 import { cn } from "@/lib/utils";
 import { useEpicChatRecords } from "@/lib/epic-selectors";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
-import {
-  findOpenTileInTab,
-  useEpicCanvasStore,
-} from "@/stores/epics/canvas/store";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
 import type { EpicPipGeometry } from "@/stores/epics/canvas/types";
 
 const PIP_DRAG_CLICK_SLOP_PX = 4;
-const PIP_OVERLAY_KIND = "pip";
 
 export function AgentBrowserPip(props: {
   readonly epicId: string;
@@ -122,7 +122,15 @@ function AgentBrowserPipSurface(props: {
   readonly items: readonly BrowserSessionInfo[];
 }): ReactElement {
   const { epicId, snapshot } = props;
-  const frameSrc = usePipOwnedFrame(epicId, snapshot);
+  const preview = usePipOwnedFrame(epicId, snapshot);
+  // The DISPLAYED target, not the pending one: a switch keeps painting the old
+  // tab until its replacement has frames, and the video plane must not jump
+  // ahead of that.
+  const stream = usePipSharedVideoStream({
+    hostId: snapshot.target?.hostId ?? "",
+    sessionId: snapshot.target?.sessionId ?? "",
+    tabId: snapshot.target?.tabId ?? "",
+  });
   const persisted = useEpicCanvasStore(
     (state) => state.pipGeometryByEpicId[epicId],
   );
@@ -338,8 +346,6 @@ function AgentBrowserPipSurface(props: {
       aria-label="Browser picture in picture"
       aria-hidden={!displayed}
       data-testid="agent-browser-pip"
-      data-browser-overlay={PIP_OVERLAY_KIND}
-      data-browser-overlay-id={`agent-browser-pip-${epicId}`}
       data-pip-selection-id={snapshot.target?.selectionId ?? ""}
       data-pip-host-id={snapshot.target?.hostId ?? ""}
       data-pip-health={snapshot.streamHealth}
@@ -358,7 +364,8 @@ function AgentBrowserPipSurface(props: {
         viewTabId={props.viewTabId}
         snapshot={snapshot}
         items={props.items}
-        frameSrc={frameSrc}
+        preview={preview}
+        stream={stream}
         dragMovedRef={dragMovedRef}
         onHeaderPointerDown={(event) => handlePointerDown(event, "move")}
         onResizePointerDown={(event) => handlePointerDown(event, "resize")}
@@ -390,14 +397,15 @@ function PipWindow(props: {
   readonly viewTabId: string;
   readonly snapshot: PipSnapshot;
   readonly items: readonly BrowserSessionInfo[];
-  readonly frameSrc: string | null;
+  readonly preview: PipPreview;
+  readonly stream: MediaStream | null;
   readonly dragMovedRef: { current: boolean };
   readonly onHeaderPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
   readonly onResizePointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
 }): ReactElement {
-  const { snapshot, frameSrc, dragMovedRef } = props;
+  const { snapshot, dragMovedRef } = props;
   const meta = usePipTargetMeta(snapshot.target, props.items);
-  const openTile = useOpenPipTarget(props.epicId, props.viewTabId, props.items);
+  const openTile = useOpenPipTarget(props.viewTabId, props.items);
   const restore = (): void => {
     if (snapshot.target === null || !meta.available) return;
     openTile(snapshot.target);
@@ -470,22 +478,7 @@ function PipWindow(props: {
           restore();
         }}
       >
-        {frameSrc === null ? (
-          <span className="absolute inset-0 flex items-center justify-center text-muted-foreground">
-            <AgentSpinningDots
-              className={undefined}
-              testId="agent-browser-pip-loading"
-              variant={undefined}
-            />
-          </span>
-        ) : (
-          <img
-            src={frameSrc}
-            alt="Browser preview"
-            className="h-full w-full object-contain outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10"
-            draggable={false}
-          />
-        )}
+        <PipPreviewSurface preview={props.preview} stream={props.stream} />
         <PipCaptionBadge caption={snapshot.caption} />
         {snapshot.pendingTarget !== null ? (
           <span className="absolute inset-x-2 bottom-2 rounded-md bg-background/85 px-2 py-1 text-center text-ui-xs text-muted-foreground">
@@ -634,43 +627,45 @@ function usePipTargetMeta(
   };
 }
 
+/**
+ * Restoring a PiP to the canvas is a MOVE back, not a placement decision: the
+ * browser category's setting would split (or re-pip) it, so the intent names
+ * an explicit tab placement in the canvas's active pane - the pane the
+ * floating window was detached over. `dedupe` still focuses the tile when it
+ * is already open somewhere in this tab.
+ */
 function useOpenPipTarget(
-  epicId: string,
   viewTabId: string,
   items: readonly BrowserSessionInfo[],
 ): (target: PipTarget) => void {
-  const navigateNested = useEpicNestedFocusNavigation();
-  const prepareOpen = useEpicCanvasStore(
-    (state) => state.prepareOpenTileInTabFocusTarget,
-  );
-  const prepareFocus = useEpicCanvasStore(
-    (state) => state.prepareSetActiveTileTabFocusTarget,
+  const { openTile } = useEpicTileNavigation();
+  const activePaneId = useEpicCanvasStore(
+    (state) => state.canvasByTabId[viewTabId]?.activePaneId ?? null,
   );
   return useCallback(
     (target: PipTarget) => {
       const session = findPipSession(items, target.hostId, target.sessionId);
       const tab = session?.tabs.find((item) => item.tabId === target.tabId);
       if (session === undefined || tab === undefined) return;
-      const tile = makeBrowserSessionTileRef({
-        hostId: target.hostId,
-        sessionId: target.sessionId,
-        tabId: target.tabId,
+      openTile({
+        node: makeBrowserSessionTileRef({
+          hostId: target.hostId,
+          sessionId: target.sessionId,
+          tabId: target.tabId,
+        }),
+        target: { tabId: viewTabId },
+        gesture: "explicit",
+        modifiers: null,
+        // No pane yet (an empty canvas): the executor seeds the root pane.
+        placement:
+          activePaneId === null
+            ? null
+            : { kind: "tab", paneId: activePaneId, index: null },
+        dedupe: true,
+        source: "direct_ui",
       });
-      const existingPointer = findOpenTileInTab(viewTabId, {
-        id: tile.id,
-        hostId: target.hostId,
-      });
-      navigateNested(epicId, viewTabId, () =>
-        existingPointer === null
-          ? prepareOpen(viewTabId, tile)
-          : prepareFocus(
-              viewTabId,
-              existingPointer.paneId,
-              existingPointer.instanceId,
-            ),
-      );
     },
-    [epicId, items, navigateNested, prepareFocus, prepareOpen, viewTabId],
+    [activePaneId, items, openTile, viewTabId],
   );
 }
 

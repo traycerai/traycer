@@ -1,6 +1,6 @@
 import { z } from "zod";
 import {
-  chatSchema,
+  chatSchemaPreImported,
   chatSchemaPreReasonix,
   deletedEpicArtifactSchema,
   epicArtifactSchema,
@@ -51,7 +51,11 @@ export const epicSchemaPreReasonix = z.object({
  */
 export const epicSchema = z.object({
   ...epicIdentityFields,
-  chats: z.record(z.string(), chatSchema),
+  // The live epic record's chats keep the event-type enum pinned to its
+  // pre-`chat.imported` vocabulary: adding an enum value to a persisted
+  // record is breaking, and the legacy `chats` map never carries an imported
+  // chat. See `chatSchemaPreImported`.
+  chats: z.record(z.string(), chatSchemaPreImported),
   ...epicNonChatFields,
   // TUI agent sessions live alongside chats in their own map. Records carry
   // resume metadata (harnessId + harnessSessionId + hostId +

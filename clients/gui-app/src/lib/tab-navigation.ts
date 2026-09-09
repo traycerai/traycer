@@ -25,6 +25,11 @@ import {
   type TabNavigationIntent,
 } from "@/lib/tab-navigation/intents";
 import { parseNestedFocusTargetFromSearch } from "@/lib/epic-nested-focus-route";
+import {
+  commitWithoutNavigation,
+  MANUAL_TILE_OPEN,
+  openTileWithNavigation,
+} from "@/lib/canvas/tile-open/open-tile";
 import { hasRestoredTabs } from "@/lib/has-restored-tabs";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { activeHostIdOrNull } from "@/lib/host/runtime";
@@ -51,7 +56,9 @@ import {
   type PersistedTabStripLayout,
 } from "@/stores/tabs/layout";
 import type { TabRef } from "@/stores/tabs/types";
+import { isRouteBookkeepingState } from "@/lib/tab-navigation/route-bookkeeping";
 import { normalizeEpicFocusSearch } from "@/routes/epic-route-search";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
 
 export {
   completeEpicMigrationIntent,
@@ -101,7 +108,13 @@ export interface TabNavigationLocation {
   readonly search: Readonly<Record<string, unknown>> | undefined;
 }
 
-export type TabNavigationOptions = Pick<NavigateOptions, "replace" | "search">;
+export type TabNavigationOptions = Pick<
+  NavigateOptions,
+  "replace" | "search"
+> & {
+  /** Rejected before navigate runs, including a superseded hydration queue entry. */
+  readonly onRejected?: (error: Error) => void;
+};
 
 export interface TabNavigationDiagnostics {
   readonly pendingTokenCount: number;
@@ -571,10 +584,20 @@ export class TabNavigationController {
   ): boolean {
     this.navigator = navigate;
     if (!this.hydrationReady) {
+      const superseded = this.queuedActivation;
       this.queuedActivation = { navigate, intent, options };
+      superseded?.options?.onRejected?.(
+        new Error("Another task was opened before this task could open."),
+      );
       return true;
     }
-    return this.executeActivation(navigate, intent, options);
+    const accepted = this.executeActivation(navigate, intent, options);
+    if (!accepted) {
+      options?.onRejected?.(
+        new Error("The task could not be opened. Try again."),
+      );
+    }
+    return accepted;
   }
 
   /**
@@ -590,13 +613,26 @@ export class TabNavigationController {
     options: TabNavigationOptions | undefined,
   ): boolean {
     this.navigator = navigate;
-    if (!this.hydrationReady) return false;
+    if (!this.hydrationReady) {
+      options?.onRejected?.(
+        new Error("The tabs could not be paired. Try again."),
+      );
+      return false;
+    }
     const layoutBefore = currentLayout();
     const focusedRef = command.focusedRef;
     const canonical = this.canonicalIntent(intent, focusedRef);
-    if (canonical === null) return false;
+    if (canonical === null) {
+      options?.onRejected?.(
+        new Error("The tabs could not be paired. Try again."),
+      );
+      return false;
+    }
     const priorRef = backingRefOfLayout(layoutBefore);
     if (priorRef === null || !tabCommandCoordinator.pairTabs(command)) {
+      options?.onRejected?.(
+        new Error("The tabs could not be paired. Try again."),
+      );
       return false;
     }
     const replace =
@@ -671,6 +707,15 @@ export class TabNavigationController {
       // difference decides what the landing means - see the resolver's landing
       // branch.
       this.resolveExternalLocation(location, false, true, navigate);
+      return;
+    }
+
+    // Bookkeeping commits carry no activation envelope, so they must be told
+    // apart BEFORE the external split - and a bookkeeping replace of an entry
+    // that carried an envelope inherits that stale envelope through its
+    // `state` spread, so this check also has to precede envelope matching.
+    if (isRouteBookkeepingState(location.state)) {
+      this.resolveBookkeepingLocation(location, navigate);
       return;
     }
 
@@ -768,11 +813,16 @@ export class TabNavigationController {
     const queuedActivation = this.queuedActivation;
     this.queuedActivation = null;
     if (queuedActivation !== null) {
-      this.executeActivation(
+      const accepted = this.executeActivation(
         queuedActivation.navigate,
         queuedActivation.intent,
         queuedActivation.options,
       );
+      if (!accepted) {
+        queuedActivation.options?.onRejected?.(
+          new Error("The task could not be opened. Try again."),
+        );
+      }
     }
   }
 
@@ -1013,9 +1063,19 @@ export class TabNavigationController {
     if (preparation === null) return null;
     const canvas = useEpicCanvasStore.getState();
     if (preparation.kind === "open-tile") {
-      return preparation.preview
-        ? canvas.prepareOpenTilePreviewInTabFocusTarget(tabId, preparation.node)
-        : canvas.prepareOpenTileInTabFocusTarget(tabId, preparation.node);
+      // `commitWithoutNavigation`: this target is folded into the tab
+      // navigation envelope being built here, so the open must not issue a
+      // route write of its own.
+      return openTileWithNavigation(
+        tileIntent(
+          preparation.node,
+          { tabId },
+          preparation.gesture,
+          "direct_ui",
+        ),
+        commitWithoutNavigation,
+        MANUAL_TILE_OPEN,
+      );
     }
     return canvas.prepareSetActiveTileTabFocusTarget(
       tabId,
@@ -1474,6 +1534,57 @@ export class TabNavigationController {
       case "settings":
         this.resolveExternalSystem(location, ref.kind, navigate);
     }
+  }
+
+  /**
+   * A commit `use-epic-route-synchronization` marked as same-tab bookkeeping:
+   * a replace recording tile-focus search onto the route its tab was already
+   * showing. While that tab is still the focused one this IS the ordinary
+   * external fast path, so it is delegated verbatim. But the replace is
+   * issued fire-and-forget from an effect, so it can commit LATE - after the
+   * user activated another tab - and then it is stale by construction, never
+   * user intent. Treating it as external is what silently swallowed a draft
+   * activation (staging 2026-08-31): the external authority superseded the
+   * pending activation, the epic tab was re-activated, and the activation's
+   * own commit then read as stale and was repaired away - a dead click with
+   * nothing on screen or in diagnostics to show for it.
+   */
+  private resolveBookkeepingLocation(
+    location: TabNavigationLocation,
+    navigate: NavigateFn,
+  ): void {
+    const routed = routedTabTarget(location.pathname);
+    if (
+      routed !== null &&
+      refsEqual(focusedRefOfLayout(currentLayout()), routed.ref)
+    ) {
+      // Seizing authority is for commits that REPLACE what the app is doing,
+      // and bookkeeping never is - so it is taken only when nothing is in
+      // flight. A pending navigation to this same tab (re-activating the
+      // active tab issues a `focus-replace`) would otherwise be superseded
+      // here, and its own commit would then arrive with a lower serial, read
+      // as stale, and be repaired away - losing the search / nested-focus
+      // state it was carrying. The delegate below needs no authority of its
+      // own: for the focused ref it is the #1474 fast path, which only
+      // remembers the route.
+      if (this.pending.size === 0) this.establishExternalAuthority();
+      this.resolveExternalLocation(location, false, false, navigate);
+      return;
+    }
+    // Stale. A pending user navigation will re-assert the URL when its own
+    // commit lands, so touching the authority here would only supersede it -
+    // the exact failure this branch exists to prevent. With nothing pending,
+    // the URL is left naming a tab the layout is not showing; repair it back
+    // toward what the strip renders, the same aim every correction takes.
+    if (this.pending.size > 0) return;
+    const backing = this.backingNavigation();
+    if (destinationMatches(backing.destination, location)) return;
+    this.issueCorrection(navigate, {
+      navigation: backing,
+      kind: "repair-replace",
+      attempt: 0,
+      correctionKey: locationIdentity(location),
+    });
   }
 
   private resolveExternalEpic(

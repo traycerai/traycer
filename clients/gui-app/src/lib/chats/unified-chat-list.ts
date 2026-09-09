@@ -1,10 +1,14 @@
+import type { ChatRecordHeadStamp } from "@traycer/protocol/host/epic/chat-records";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import {
   DEFAULT_SORT_MODE,
   makeNodeComparator,
   type NodeComparator,
+  type NodeSortClock,
   type SortableNode,
 } from "@/lib/epic-sort";
+import { chatRecordKey } from "@/stores/epics/open-epic/chat-record-head";
+import type { ChatProjection } from "@/stores/epics/open-epic/types";
 
 /**
  * One agents list per task, across every host - the sidebar's whole ordering
@@ -197,21 +201,44 @@ export function cloudChatLastActiveAt(chat: CloudChatSummary): number {
  *
  * The serving host's own record comes straight from its chat store and is the
  * freshest answer. A record replicated from a different owner host carries a
- * metadata timestamp instead, so its matching cloud head is authoritative.
+ * metadata timestamp instead, so a publication clock is authoritative: the
+ * record row's own head (`recordHeadPublishedAt`, pushed by the record stream
+ * as the owner publishes) first, then the cloud list's `publishedAt` (polled,
+ * so it can lag the head by up to its stale window), then that list's
+ * metadata stamp for a row that has never published. Sorting and the idle-time
+ * chip both read this one value, so a chat that just streamed a turn floats
+ * to where its chip says it belongs.
  */
 export function chatRowLastActiveAt(input: {
   readonly recordUpdatedAt: number;
   readonly ownerHostId: string | null;
   readonly sessionHostId: string | null;
   readonly cloudChat: CloudChatSummary | null;
+  /** `record.head.publishedAt` off the epic's record row, or `null`. */
+  readonly recordHeadPublishedAt: number | null;
 }): number {
   const isForeignRecord =
     input.ownerHostId !== null &&
     input.sessionHostId !== null &&
     input.ownerHostId !== input.sessionHostId;
-  return isForeignRecord && input.cloudChat !== null
+  if (!isForeignRecord) return input.recordUpdatedAt;
+  if (input.recordHeadPublishedAt !== null) return input.recordHeadPublishedAt;
+  return input.cloudChat !== null
     ? cloudChatLastActiveAt(input.cloudChat)
     : input.recordUpdatedAt;
+}
+
+/**
+ * A cloud-only row's content clock: the record head when the epic's record
+ * table holds one for this identity, else the cloud list's own answer. The
+ * record head arrives by push and is the fresher of the two; the list is what
+ * the row exists on at all.
+ */
+export function cloudChatRowLastActiveAt(
+  chat: CloudChatSummary,
+  recordHeadPublishedAt: number | null,
+): number {
+  return recordHeadPublishedAt ?? cloudChatLastActiveAt(chat);
 }
 
 /**
@@ -233,6 +260,88 @@ export function cloudChatSortable(chat: CloudChatSummary): SortableNode {
   };
 }
 
+function recordHeadPublishedAt(
+  recordHeads: Readonly<Record<string, ChatRecordHeadStamp>>,
+  ownerUserId: string | null,
+  chatId: string,
+): number | null {
+  if (ownerUserId === null) return null;
+  const key = chatRecordKey(ownerUserId, chatId);
+  return Object.hasOwn(recordHeads, key) ? recordHeads[key].publishedAt : null;
+}
+
+/**
+ * The content clock each LOCAL chat sorts by, keyed by node id, for every
+ * chat in the projection - roots and nested children alike, since a child
+ * list is sorted by the same rule as the root list and a foreign chat is
+ * nested under its parent exactly as often as it is a root.
+ *
+ * Computed with the rule the row's idle-time chip renders
+ * (`chatRowLastActiveAt`), so the order and the chip cannot disagree about
+ * which chat moved last. Only chats whose clock differs from the projection's
+ * own `updatedAt` are entered - a foreign record, owned by another host, whose
+ * `updatedAt` is a metadata replica. `recordHeads` is the epic's record table
+ * (`OpenEpicState.chatRecordHeads`, keyed by `chatRecordKey`), pushed as
+ * owners publish.
+ */
+export function localChatLastActiveAtById(input: {
+  readonly chatsById: Readonly<Record<string, ChatProjection>>;
+  readonly recordHeads: Readonly<Record<string, ChatRecordHeadStamp>>;
+  readonly sessionHostId: string | null;
+  readonly ownCloudChatByLocalId: ReadonlyMap<string, CloudChatSummary>;
+}): NodeSortClock {
+  const byId = new Map<string, number>();
+  for (const nodeId of Object.keys(input.chatsById)) {
+    const chat = input.chatsById[nodeId];
+    const lastActiveAt = chatRowLastActiveAt({
+      recordUpdatedAt: chat.updatedAt,
+      ownerHostId: chat.hostId,
+      sessionHostId: input.sessionHostId,
+      cloudChat: input.ownCloudChatByLocalId.get(nodeId) ?? null,
+      recordHeadPublishedAt: recordHeadPublishedAt(
+        input.recordHeads,
+        chat.userId,
+        nodeId,
+      ),
+    });
+    if (lastActiveAt !== chat.updatedAt) byId.set(nodeId, lastActiveAt);
+  }
+  return byId;
+}
+
+/**
+ * The content clock each row of the interleaved ROOT list sorts by, keyed by
+ * the entry key `mergeChatListEntries` mints: every local override from
+ * `localChatLastActiveAtById` re-keyed as a local row, plus each cloud row
+ * whose record head the epic's record table holds
+ * (`cloudChatRowLastActiveAt`). A nested local chat is entered too and simply
+ * never looked up, which is cheaper than filtering to roots here and lets
+ * the two maps stay one computation apart rather than two rules.
+ */
+export function chatListLastActiveAtByKey(input: {
+  readonly localLastActiveAtById: NodeSortClock;
+  readonly recordHeads: Readonly<Record<string, ChatRecordHeadStamp>>;
+  readonly cloudChats: readonly CloudChatSummary[];
+}): ReadonlyMap<string, number> {
+  const byKey = new Map<string, number>();
+  for (const [nodeId, lastActiveAt] of input.localLastActiveAtById) {
+    byKey.set(localChatRowKey(nodeId), lastActiveAt);
+  }
+  for (const chat of input.cloudChats) {
+    const publishedAt = recordHeadPublishedAt(
+      input.recordHeads,
+      chat.identity.ownerUserId,
+      chat.identity.chatId,
+    );
+    if (publishedAt === null) continue;
+    byKey.set(
+      cloudChatRowKey(chat.identity),
+      cloudChatRowLastActiveAt(chat, publishedAt),
+    );
+  }
+  return byKey;
+}
+
 /**
  * The single ordered list: local roots and cloud-only rows, interleaved.
  *
@@ -242,6 +351,13 @@ export function cloudChatSortable(chat: CloudChatSummary): SortableNode {
  * `DEFAULT_SORT_MODE` is exactly what `compareNodes` sorts the projection by,
  * so re-applying it reproduces the incoming local order rather than perturbing
  * it, and gives the cloud rows a place in it.
+ *
+ * `lastActiveAtByKey` overrides a row's `updatedAt` sort key, keyed by the
+ * entry key this function mints (`localChatRowKey` / `cloudChatRowKey`). It
+ * carries the SAME value the row's idle-time chip renders - a foreign record's
+ * publication clock (`chatRowLastActiveAt`), a cloud row's record head
+ * (`cloudChatRowLastActiveAt`) - so the order and the chip cannot disagree
+ * about which chat moved last. A row absent from it sorts by its own stamp.
  *
  * Local rows keep their tree identity: only ROOTS take part in the interleave,
  * and a nested child still renders under its parent. A cloud row is always a
@@ -255,25 +371,33 @@ export function mergeChatListEntries(input: {
   readonly nodeById: Readonly<Record<string, SortableNode>>;
   readonly cloudChats: readonly CloudChatSummary[];
   readonly comparator: NodeComparator | null;
+  readonly lastActiveAtByKey: ReadonlyMap<string, number>;
 }): readonly UnifiedChatEntry[] {
   const compare = input.comparator ?? makeNodeComparator(DEFAULT_SORT_MODE);
+  const withLastActiveAt = (
+    key: string,
+    sortable: SortableNode,
+  ): SortableNode => {
+    const lastActiveAt = input.lastActiveAtByKey.get(key);
+    return lastActiveAt === undefined || lastActiveAt === sortable.updatedAt
+      ? sortable
+      : { ...sortable, updatedAt: lastActiveAt };
+  };
   const rows: { entry: UnifiedChatEntry; sortable: SortableNode }[] = [];
   for (const nodeId of input.localRootIds) {
     // Root ids are drawn from the same tree as `nodeById`, so every id
     // resolves; a defensive skip here would hide a projector bug instead.
+    const key = localChatRowKey(nodeId);
     rows.push({
-      entry: { kind: "local", key: localChatRowKey(nodeId), nodeId },
-      sortable: input.nodeById[nodeId],
+      entry: { kind: "local", key, nodeId },
+      sortable: withLastActiveAt(key, input.nodeById[nodeId]),
     });
   }
   for (const chat of input.cloudChats) {
+    const key = cloudChatRowKey(chat.identity);
     rows.push({
-      entry: {
-        kind: "cloud",
-        key: cloudChatRowKey(chat.identity),
-        chat,
-      },
-      sortable: cloudChatSortable(chat),
+      entry: { kind: "cloud", key, chat },
+      sortable: withLastActiveAt(key, cloudChatSortable(chat)),
     });
   }
   rows.sort((a, b) => compare(a.sortable, b.sortable));

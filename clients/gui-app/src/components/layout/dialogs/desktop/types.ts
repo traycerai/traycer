@@ -7,9 +7,7 @@ export interface DesktopSupportDialogProps {
   readonly support: DesktopSupportBridge | null;
 }
 
-export interface AboutDetailsDialogProps extends DesktopSupportDialogProps {
-  readonly openExternalLink: (url: string) => Promise<void>;
-}
+export type AboutDetailsDialogProps = DesktopSupportDialogProps;
 
 export interface OpenEpicInNewWindowDialogProps {
   readonly open: boolean;

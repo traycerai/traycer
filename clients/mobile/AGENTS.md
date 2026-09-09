@@ -46,6 +46,17 @@ lifecycle, authn, cloud UI, or the dev-slot allocator.
   platform-agnostic; platform only picks `pushRegistrationTarget`. Also backs
   the `IRunnerHost.pushPermission` capability the Settings row reads.
 - `src/web/main.tsx` — mounts the shared GUI.
+- `src/sentry.ts` — crash-reporting options; `main.tsx` inits `@sentry/browser`
+  with them first thing. The DSN is `TRAYCER_MOBILE_SENTRY_DSN` at build time
+  (`""` = off, the local default); sourcemaps are emitted only when
+  `SENTRY_ORG` / `SENTRY_PROJECT` / `SENTRY_AUTH_TOKEN` are all exported, and
+  the upload plugin deletes them before `cap sync` copies `dist/web` into the
+  app. Every event and breadcrumb passes the shared scrub
+  (`clients/shared/platform/sentry-scrub.ts`, the same hooks the desktop
+  renderer installs) - not optional, the link-login code rides in a query
+  string. `@sentry/browser` and NOT `@sentry/capacitor`, deliberately - the
+  header comment in `src/sentry.ts` has the version-carrier reason. WebView
+  layer only; native crashes are not reported yet.
 - `src/web/index.css` — its `@source` for `gui-app` is required or shared
   utility classes vanish from the bundle. `mobile.css` — mobile-only overrides.
 - `scripts/dev-run.ts` + `dev-ios.ts` / `dev-android.ts` — slot-consuming

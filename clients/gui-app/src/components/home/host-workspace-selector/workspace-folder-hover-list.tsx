@@ -3,7 +3,11 @@ import { HOVER_PREVIEW_SCROLL_CLASS } from "@/components/ui/hover-preview-surfac
 import { cn } from "@/lib/utils";
 import { CopyPathButton } from "./copy-path-button";
 import type { WorkspaceRunItem } from "./workspace-run-item";
-import { stagedFolderApplyHint, workspaceRunPath } from "./workspace-run-item";
+import {
+  importedWorktreeSourceBranch,
+  stagedFolderApplyHint,
+  workspaceRunPath,
+} from "./workspace-run-item";
 import { WorkspaceModeIcon } from "./workspace-mode-icon";
 
 /**
@@ -36,6 +40,9 @@ export function WorkspaceFolderHoverList(props: {
       {props.items.map((item) => {
         const runPath = workspaceRunPath(item);
         const applyHint = stagedFolderApplyHint(item);
+        // An adopted worktree's provenance. A new worktree's source already
+        // reads in its apply hint ("From <source> · created on send").
+        const sourceBranch = importedWorktreeSourceBranch(item);
         return (
           <div key={item.key} className="flex min-w-0 flex-col gap-0.5">
             <div className="flex min-w-0 items-start gap-1.5">
@@ -55,6 +62,14 @@ export function WorkspaceFolderHoverList(props: {
                   >
                     {item.branchLabel}
                   </span>
+                  {sourceBranch !== null ? (
+                    <span
+                      className="min-w-0 break-words leading-4 text-muted-foreground/70"
+                      data-testid="workspace-hover-source-branch"
+                    >
+                      from {sourceBranch}
+                    </span>
+                  ) : null}
                 </span>
               </div>
             </div>

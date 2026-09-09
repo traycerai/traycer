@@ -10,6 +10,7 @@ import type {
   ComposerToolbarStoreState,
 } from "@/stores/composer/composer-toolbar-store";
 import type { PermissionMode } from "@/components/home/data/landing-options";
+import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
 
 interface ChatComposerToolbarSlotProps {
   readonly store: ComposerToolbarStore;
@@ -29,6 +30,9 @@ interface ChatComposerToolbarSlotProps {
    *  prop of the same name. */
   readonly createProfileHostId: string | null;
   readonly runTargetHostId: string | null;
+  /** Where the picker's setup terminal lands - see `HarnessModelPicker`'s
+   *  prop of the same name. */
+  readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
 }
 
 interface ChatComposerToolbarSlotViewProps extends ChatComposerToolbarSlotProps {
@@ -85,6 +89,7 @@ function ChatComposerToolbarSlotView(props: ChatComposerToolbarSlotViewProps) {
       settingsLocked={props.settingsLocked}
       createProfileHostId={props.createProfileHostId}
       runTargetHostId={props.runTargetHostId}
+      terminalLoginSurface={props.terminalLoginSurface}
     />
   );
 }

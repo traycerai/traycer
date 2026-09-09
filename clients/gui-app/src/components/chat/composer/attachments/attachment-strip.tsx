@@ -1,7 +1,7 @@
 import { useMemo, type ReactNode } from "react";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
-import { type ImageBytesFetcher } from "@/lib/attachments/image-blob-cache";
+import { type ScopedImageBytesFetcher } from "@/lib/attachments/image-blob-cache";
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
 import { buildImageAttachmentDisplayLabels } from "@/lib/composer/image-attachment-labels";
 
@@ -10,8 +10,12 @@ import { ImageAttachmentChip } from "./image-attachment-chip";
 export interface AttachmentStripProps {
   content: JsonContent;
   onRemoveImage: (id: string) => void;
-  /** Byte source for hash-only chips (epic doc for chat, IndexedDB for landing). */
-  fetcher: ImageBytesFetcher;
+  /**
+   * Byte source for hash-only chips (epic doc for chat, IndexedDB for landing),
+   * bundled with the subject its bytes are authorized against - the blob cache
+   * keys on both, so a bare function is deliberately not accepted here.
+   */
+  fetcher: ScopedImageBytesFetcher;
   /** Same-session synchronous object-URL lookup; chat passes a no-op. */
   sessionObjectUrl: (hash: string) => string | null;
   /** Non-image chips sharing the same one-row scroller. */

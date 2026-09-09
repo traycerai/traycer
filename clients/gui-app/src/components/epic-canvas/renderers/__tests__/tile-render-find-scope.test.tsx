@@ -12,6 +12,12 @@ import {
   type TileFindStateSnapshot,
 } from "@/stores/tile-find";
 
+// The tile's own sessions stream is not this suite's subject; the boundary
+// needs a host runtime this harness does not mount.
+vi.mock("@/components/epic-canvas/renderers/browser-sessions-provider", () => ({
+  BrowserSessionsHostBoundary: (props: { readonly children: ReactNode }) =>
+    props.children,
+}));
 vi.mock("@/components/epic-canvas/renderers/chat-tile", () => ({
   ChatTile: () => <div data-testid="renderer-chat" />,
 }));

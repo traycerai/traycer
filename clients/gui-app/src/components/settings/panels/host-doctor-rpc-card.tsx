@@ -390,6 +390,7 @@ export function HostDoctorRpcCard(props: {
       )}
       <DoctorRerunRow pending={doctorRun.isPending} onRerun={run} />
       <ConfirmDestructiveDialog
+        blockedReason={null}
         open={freePortIssue !== null}
         onOpenChange={(open) => {
           if (!open) setFreePortIssue(null);
@@ -553,8 +554,10 @@ function DoctorFixControl(props: {
   if (isLogs && !props.logsServable) return null;
   const isRpcRestart = !isLogs && route === "rpc";
   // EVERY bridge-routed repair is a controller LIFECYCLE write, not just the
-  // restart pair: `host-install-latest` converges to latest and
-  // `service-install` adds a service cycle. None of them belongs to a mutation
+  // restart pair: `host-install-latest` converges to this build's pinned host
+  // (the version-seeking `converge-latest` repair, so it can replace a host
+  // too old for this client) and `service-install` adds a service cycle. None
+  // of them belongs to a mutation
   // any lifecycle gate reads — the local-fix key is `hostRunDoctor` — so
   // without this they render live while the page is armed and their click is
   // then refused, which is a worse answer than a disabled control.

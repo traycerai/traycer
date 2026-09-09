@@ -89,10 +89,12 @@ export function wireAvailabilityRecovery(args: {
       trailingTimer = null;
     }
     lastNotifiedAt = args.now();
-    appLogger.info(
-      "[stream] host availability recovered - refetching host-scoped queries",
-      {},
-    );
+    // Debug, not info: this fires once per stream client (a dozen or more per
+    // window), and the host-scope sweep it feeds is coalesced per host below
+    // this wiring. The sweep logs itself, with counts, in
+    // `createHostQueryInvalidator`; counting THESE lines as sweeps over-reported
+    // a 2026-09-03 field investigation by the client count.
+    appLogger.debug("[stream] host availability recovered", {});
     args.target.notifyRecoveredForNamedHost();
   };
   const disposeEvidence = args.wsStreamClient.subscribeAvailabilityRecovered(

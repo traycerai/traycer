@@ -16,12 +16,15 @@ import {
   useSwitcherRename,
   type SwitcherRowKind,
 } from "@/components/epic-canvas/mobile/use-switcher-rename";
-import { useEpicPermissionRole } from "@/lib/epic-selectors";
+import { useEpicPermissionRole, useEpicNodeHostId } from "@/lib/epic-selectors";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { useEpicDeleteChat } from "@/hooks/epic/use-epic-chat-mutations";
+import { useChatWriteRoute } from "@/hooks/epic/use-chat-write-route";
+import { CHAT_NOT_ADOPTED_COPY } from "@/stores/epics/open-epic/chat-write-routing";
 import { useEpicDeleteTuiAgent } from "@/hooks/epic/use-epic-tui-agent-mutations";
 import { useEpicDeleteArtifact } from "@/hooks/epic/use-epic-node-mutations";
 import { useTerminalKillFor } from "@/hooks/terminal/use-terminal-kill-for-mutation";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
 import { findOpenArtifactInTab } from "@/stores/epics/canvas/canvas-selectors";
@@ -61,9 +64,16 @@ export function SwitcherRowActions(props: SwitcherRowActionsProps) {
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   const rename = useSwitcherRename(epicId);
+  // Rename and Delete both reach `ChatRegistryWriter` for a chat row, so both
+  // are gated together. `"artifact"` and `"terminal"` rows are never chats.
+  const writeRoute = useChatWriteRoute(kind === "chat", nodeId);
+  const chatWriteUnavailable = writeRoute === "unavailable";
   const deleteChat = useEpicDeleteChat();
+  const ownerHostId = useEpicNodeHostId(nodeId);
+  const sessionHostId = useEpicSessionHostId();
+  const mutationHostId = ownerHostId ?? sessionHostId;
   const deleteTuiAgent = useEpicDeleteTuiAgent();
-  const deleteArtifact = useEpicDeleteArtifact();
+  const deleteArtifact = useEpicDeleteArtifact(nodeId);
   // The row's terminal lives on the host the switcher LISTS (the Epic
   // session's), so kill goes to that same client - never the ambient one.
   const killTerminal = useTerminalKillFor(
@@ -97,10 +107,7 @@ export function SwitcherRowActions(props: SwitcherRowActionsProps) {
 
   const confirmDelete = useCallback(() => {
     if (kind === "chat")
-      deleteChat.mutate(
-        { epicId, chatId: nodeId },
-        { onSuccess: closeOpenTile },
-      );
+      deleteChat.mutate({ epicId, chatId: nodeId, hostId: mutationHostId });
     else if (kind === "terminal-agent")
       deleteTuiAgent.mutate(
         { epicId, tuiAgentId: nodeId },
@@ -120,6 +127,7 @@ export function SwitcherRowActions(props: SwitcherRowActionsProps) {
     epicId,
     kind,
     nodeId,
+    mutationHostId,
   ]);
 
   // Terminal "Close" terminates the PTY immediately (no confirm - desktop
@@ -145,8 +153,8 @@ export function SwitcherRowActions(props: SwitcherRowActionsProps) {
       id: "rename",
       label: "Rename",
       icon: <Pencil className="size-3.5" />,
-      disabled: false,
-      disabledTooltip: null,
+      disabled: chatWriteUnavailable,
+      disabledTooltip: chatWriteUnavailable ? CHAT_NOT_ADOPTED_COPY : null,
       variant: "default",
       testIds: {
         dropdown: `switcher-rename-${nodeId}`,
@@ -160,8 +168,8 @@ export function SwitcherRowActions(props: SwitcherRowActionsProps) {
       id: "delete",
       label: deleteLabel,
       icon: <Trash2 className="size-3.5" />,
-      disabled: isTerminal ? killTerminal.isPending : false,
-      disabledTooltip: null,
+      disabled: isTerminal ? killTerminal.isPending : chatWriteUnavailable,
+      disabledTooltip: chatWriteUnavailable ? CHAT_NOT_ADOPTED_COPY : null,
       variant: "destructive",
       testIds: {
         dropdown: `switcher-delete-${nodeId}`,
@@ -200,6 +208,7 @@ export function SwitcherRowActions(props: SwitcherRowActionsProps) {
       />
       {isTerminal ? null : (
         <ConfirmDestructiveDialog
+          blockedReason={null}
           open={confirmOpen}
           onOpenChange={setConfirmOpen}
           title={`Delete "${name}"?`}

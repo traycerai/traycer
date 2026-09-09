@@ -45,9 +45,21 @@ interface ExtraResourceEntry {
   readonly filter: ReadonlyArray<string>;
 }
 
+interface PlatformExtraResources {
+  readonly mac: ReadonlyArray<ExtraResourceEntry>;
+  readonly win: ReadonlyArray<ExtraResourceEntry>;
+  readonly linux: ReadonlyArray<ExtraResourceEntry>;
+}
+
 interface ParsedDesktopPackage {
   readonly extraResources: ReadonlyArray<ExtraResourceEntry>;
+  readonly platformExtraResources: PlatformExtraResources;
   readonly winIcon: string | undefined;
+}
+
+interface PlatformBuildSection {
+  readonly icon?: string;
+  readonly extraResources?: ReadonlyArray<ExtraResourceEntry>;
 }
 
 function readDesktopPackage(): ParsedDesktopPackage {
@@ -55,11 +67,34 @@ function readDesktopPackage(): ParsedDesktopPackage {
   const parsed: {
     build?: {
       extraResources?: ReadonlyArray<ExtraResourceEntry>;
-      win?: { icon?: string };
+      mac?: PlatformBuildSection;
+      win?: PlatformBuildSection;
+      linux?: PlatformBuildSection;
     };
   } = JSON.parse(raw);
   const extraResources = parsed.build?.extraResources ?? [];
-  return { extraResources, winIcon: parsed.build?.win?.icon };
+  return {
+    extraResources,
+    platformExtraResources: {
+      mac: parsed.build?.mac?.extraResources ?? [],
+      win: parsed.build?.win?.extraResources ?? [],
+      linux: parsed.build?.linux?.extraResources ?? [],
+    },
+    winIcon: parsed.build?.win?.icon,
+  };
+}
+
+/**
+ * Every `extraResources` entry electron-builder will evaluate for a given
+ * platform: the top-level list plus that platform's own list (app-builder-lib
+ * `getFileMatchers` concatenates the two - platform entries ADD to the
+ * top-level ones, they do not replace them).
+ */
+function allExtraResourcesFor(
+  pkg: ParsedDesktopPackage,
+  platform: keyof PlatformExtraResources,
+): ReadonlyArray<ExtraResourceEntry> {
+  return [...pkg.extraResources, ...pkg.platformExtraResources[platform]];
 }
 
 describe("desktop package.json - extraResources shape", () => {
@@ -113,11 +148,51 @@ describe("desktop package.json - extraResources shape", () => {
     }
   });
 
-  it("keeps the bundled CLI staging (the only host-lifecycle bridge Desktop ships)", () => {
-    const cliEntry = pkg.extraResources.find((entry) => entry.to === "cli");
-    expect(cliEntry).toBeTruthy();
-    expect(cliEntry?.from).toBe("resources/cli");
+  // The bundled CLI is the only host-lifecycle bridge Desktop ships, and it
+  // is staged PER TARGET ARCH. A single arch-blind `resources/cli` -> `cli`
+  // mapping copies every staged `<platform>-<arch>/` dir into every app, and
+  // the macOS release job stages arm64 AND x64 before one `electron-builder
+  // --mac` builds both apps - so the arm64 bundle shipped an x86_64-only
+  // Mach-O and macOS 26 flagged it as an Intel app (traycerai/traycer#1528).
+  // electron-builder's `${arch}` file macro is the supported way to scope a
+  // resource to the arch being packed; the platform prefix has to be literal
+  // per platform because `${os}` expands to `mac`/`win`/`linux`, not the
+  // `process.platform` value the runtime discovery layer keys on.
+  const CLI_PLATFORM_PREFIX: Record<keyof PlatformExtraResources, string> = {
+    mac: "darwin",
+    win: "win32",
+    linux: "linux",
+  };
+
+  it("does not map resources/cli arch-blind at the top level", () => {
+    const archBlind = pkg.extraResources.filter(
+      (entry) =>
+        entry.to === "cli" ||
+        entry.to.startsWith("cli/") ||
+        entry.from === "resources/cli" ||
+        entry.from.startsWith("resources/cli/"),
+    );
+    expect(archBlind).toEqual([]);
   });
+
+  it.each(["mac", "win", "linux"] as const)(
+    "stages exactly the %s target arch's CLI via the ${arch} macro",
+    (platform) => {
+      const prefix = CLI_PLATFORM_PREFIX[platform];
+      const cliEntries = allExtraResourcesFor(pkg, platform).filter(
+        (entry) => entry.to === "cli" || entry.to.startsWith("cli/"),
+      );
+      expect(cliEntries).toHaveLength(1);
+      const entry = cliEntries[0];
+      expect(entry.from).toBe(`resources/cli/${prefix}-\${arch}`);
+      expect(entry.to).toBe(`cli/${prefix}-\${arch}`);
+      // The runtime resolves `<resourcesPath>/cli/<platform>-<arch>/<binary>`
+      // (cli-discovery.ts) and the macOS afterPack hook copies
+      // `cli/darwin-<arch>/traycer` into the helper app - the `to` must keep
+      // that exact shape, not flatten to `cli/`.
+      expect(entry.to).not.toBe("cli");
+    },
+  );
 
   it("embeds the Windows app icon for Start menu and desktop shortcuts", () => {
     expect(pkg.winIcon).toBe("icon.ico");

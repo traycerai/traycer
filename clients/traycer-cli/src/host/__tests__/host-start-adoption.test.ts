@@ -104,6 +104,7 @@ describe("host-start parent adoption", () => {
             child.unref();
             return child;
           },
+          () => undefined,
         );
         expect(admission.kind).toBe("ran");
         return admission;
@@ -124,6 +125,7 @@ describe("host-start parent adoption", () => {
     expect(first).toEqual({ kind: "absent" });
 
     let callbackCalls = 0;
+    let beside = 0;
     const admission = await defaultRunHostStartDeps.admitHostStartSpawn(
       { environment: "production", cwd: null },
       async () => {
@@ -132,9 +134,18 @@ describe("host-start parent adoption", () => {
         child.unref();
         return child;
       },
+      () => {
+        beside += 1;
+      },
     );
     expect(admission.kind).toBe("ran");
     expect(callbackCalls).toBe(1);
+    // No durable attempt stands here, so the supervisor has nothing to
+    // announce and must stay silent rather than log a line about a record that
+    // does not exist. This is the counter's only load-bearing assertion: the
+    // adoption-grant test above returns before the contender runs, so a
+    // counter there would watch nothing.
+    expect(beside).toBe(0);
   });
 
   it("rejects a forged, wrong-home, expired, or stale-token adoption instead of spawning", async () => {

@@ -56,6 +56,10 @@ export interface CommGraphAgentNodeData extends Record<string, unknown> {
   readonly archived: boolean;
   readonly hostStatus: CommGraphNodeHostStatus;
   readonly activityTier: AgentActivityTier | null;
+  /** This agent's name matches the tile's current find query. */
+  readonly searchMatched: boolean;
+  /** Changes for each search so the finite blink restarts on repeat searches. */
+  readonly searchHighlightNonce: number;
   /**
    * The cursor sits on a message whose OTHER endpoint is not on this canvas, so
    * there is no edge for it to travel along. Every drawable exchange pulses its
@@ -106,6 +110,7 @@ export const CommGraphAgentNodeView = memo(function CommGraphAgentNodeView(
   const roleClaims = useEpicAgentRoleClaims(data.agentId);
   const button = (
     <button
+      key={data.searchHighlightNonce}
       type="button"
       // This is the KEYBOARD path, and only incidentally a mouse one. React
       // Flow's `onNodeClick` (wired on the canvas) is what handles the mouse:
@@ -118,6 +123,7 @@ export const CommGraphAgentNodeView = memo(function CommGraphAgentNodeView(
       data-archived={data.archived ? "true" : "false"}
       data-host-status={data.hostStatus}
       data-pulsing={data.pulsing ? "true" : "false"}
+      data-search-match={data.searchMatched ? "true" : "false"}
       className={cn(
         "flex w-full flex-col gap-1 rounded-lg border bg-card px-3 py-2 text-left text-ui-xs shadow-sm hover:border-primary/50",
         data.archived && "border-dashed opacity-50",
@@ -125,6 +131,8 @@ export const CommGraphAgentNodeView = memo(function CommGraphAgentNodeView(
         data.activityTier === "turn" && "border-primary ring-2 ring-primary/30",
         data.activityTier === "background" && "border-primary/50",
         data.pulsing && "animate-pulse border-primary ring-2 ring-primary/60",
+        data.searchMatched &&
+          "comm-graph-search-match border-primary ring-2 ring-primary/60",
       )}
     >
       {/* React Flow requires handles to exist, but the edges are FLOATING -
@@ -189,6 +197,9 @@ export const CommGraphAgentNodeView = memo(function CommGraphAgentNodeView(
       ownerHostUnreachable={hoverHostReachability.status === "unreachable"}
       ownerKind={hoverOwnerKind}
       roleClaims={roleClaims}
+      // The graph node adds nothing of its own: everything it knows about an
+      // agent is already in the shared card.
+      extraContent={null}
       // Upward: a node can sit anywhere on the canvas, and the space below it
       // is where the transport bar is docked.
       side="top"

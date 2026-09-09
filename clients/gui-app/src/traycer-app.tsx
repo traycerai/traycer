@@ -1,10 +1,15 @@
+import { ThemeEditorHost } from "@/components/settings/themes/theme-editor-host";
 import { ChatUsageDialog } from "@/components/chat/chat-usage-dialog";
+import { PersistentBrowserGuestHost } from "@/components/epic-canvas/browser-guest/persistent-browser-guest-host";
 import { AppUpdateToastController } from "@/components/layout/bridges/app-update-toast-controller";
+import { LoginImportAnnouncementController } from "@/components/layout/bridges/login-import-announcement-controller";
+import { SessionImportAnnouncementController } from "@/components/layout/bridges/session-import-announcement-controller";
 import { DesktopZoomController } from "@/components/layout/bridges/desktop-zoom-controller";
 import { HostControllerStatusListener } from "@/components/layout/bridges/host-controller-status-listener";
 import { LinkLoginDeepLinkBridge } from "@/components/layout/bridges/link-login-deep-link-bridge";
 import { RunnerHostBridges } from "@/components/layout/bridges/runner-host-bridges";
 import { WorktreeDeleteProgressToastBridge } from "@/components/layout/bridges/worktree-delete-progress-toast-bridge";
+import { SessionImportProgressToastBridge } from "@/components/layout/bridges/session-import-progress-toast-bridge";
 import { ReportIssueDialogHost } from "@/components/layout/dialogs/report-issue-dialog-host";
 import { HostRuntimeBootFallback } from "@/components/host/host-runtime-boot-fallback";
 import { RootErrorBoundary } from "@/components/errors/root-error-boundary";
@@ -17,6 +22,7 @@ import {
   type MessengerFactory,
 } from "@/lib/host";
 import { HostStreamProvider } from "@/lib/host/stream-runtime";
+import { SessionImportRunController } from "@/components/session-import/session-import-run-controller";
 import {
   HostReadinessControllerProvider,
   HostScopeReady,
@@ -24,6 +30,7 @@ import {
 import { queryClient } from "@/lib/query-client";
 import { EpicSessionLifecycleBridge } from "@/providers/auth-lifecycle-bridge";
 import { AuthSessionExpiredToastBridge } from "@/providers/auth-session-expired-toast-bridge";
+import { HostTrustAlertBridge } from "@/providers/host-trust-alert-bridge";
 import { CommandPaletteProvider } from "@/providers/command-palette-provider";
 import { HostCredentialProvisionProvider } from "@/providers/host-credential-provision-provider";
 import { ComposerRunSettingsPersistLifecycleBridge } from "@/providers/composer-run-settings-persist-lifecycle-bridge";
@@ -192,6 +199,7 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
 
   return (
     <RunnerHostProvider runnerHost={props.runnerHost}>
+      <PersistentBrowserGuestHost />
       <LazyMotion features={domMax}>
         <WindowsBridgeProvider>
           <ResourceTelemetryBridge />
@@ -202,6 +210,7 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
                   <DesktopZoomController />
                   <ReportIssueDialogHost />
                   <Toaster />
+                  <ThemeEditorHost />
                   <HostRuntimeProvider
                     registry={props.registry}
                     messengerFactory={props.messengerFactory ?? null}
@@ -258,6 +267,7 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
       <SupportContextRegistryBridge router={props.router} />
       <WindowsBridgeAuthSessionBridge>
         <AuthSessionExpiredToastBridge />
+        <HostTrustAlertBridge />
         <HostCredentialProvisionProvider>
           <EpicSessionLifecycleBridge>
             <ComposerRunSettingsPersistLifecycleBridge>
@@ -276,6 +286,12 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
                                 <ProvidersChangedStreamMount />
                                 <ChatRecordsStreamMount />
                               </HostScopeReady>
+                              {/* Above the shell split on purpose: the onboarding tour
+                                  renders through `StandaloneShell`, not `AppShell`, so a
+                                  mount inside the app shell left the tour's Import button
+                                  with no run handle to call. This is the lowest node both
+                                  shells share that still has the host stream. */}
+                              <SessionImportRunController />
                               <AppLocalNotificationsPersistLifecycleBridge>
                                 <ReadingPositionPersistLifecycleBridge>
                                   <NotificationsSessionProvider
@@ -317,8 +333,11 @@ function TraycerAppRuntimeSurface(props: TraycerAppRuntimeSurfaceProps) {
       <RunnerHostBridges />
       <HostControllerStatusListener />
       <AppUpdateToastController />
+      <LoginImportAnnouncementController />
+      <SessionImportAnnouncementController />
       <LinkLoginDeepLinkBridge />
       <WorktreeDeleteProgressToastBridge />
+      <SessionImportProgressToastBridge />
       <HarnessCatalogPrefetcher />
       <RateLimitQueueProvider />
       <HistoryPruneProvider router={props.router} />

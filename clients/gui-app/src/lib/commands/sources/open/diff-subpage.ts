@@ -77,6 +77,7 @@ function changedFileLeaves(
             file,
             repositoryContext: null,
           }),
+          dedupe: false,
           navigateNestedFocus: ctx.router.navigateNestedFocus,
         }),
     }),

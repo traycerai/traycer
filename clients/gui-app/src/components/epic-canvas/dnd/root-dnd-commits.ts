@@ -34,6 +34,12 @@ import {
   type RectLike,
 } from "@/components/epic-canvas/dnd/dnd";
 import { computeTabDropIndex } from "@/components/epic-canvas/dnd/tab-strip-drop-preview";
+import type { ExplicitTilePlacement } from "@/lib/canvas/tile-open/intent";
+import {
+  MANUAL_TILE_OPEN,
+  openTileWithNavigation,
+} from "@/lib/canvas/tile-open/open-tile";
+import { findOpenTileInTab } from "@/stores/epics/canvas/canvas-selectors";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { findPaneById } from "@/stores/epics/canvas/tile-tree";
 import {
@@ -71,6 +77,8 @@ import {
   type ProjectedReparentNode,
 } from "@/lib/reparent-projection-rules";
 import type { OpenEpicState } from "@/stores/epics/open-epic/store";
+import { routeChatWrite } from "@/stores/epics/open-epic/chat-write-routing";
+import { readEpicDocRecordArms } from "@/stores/epics/open-epic/doc-record-arms";
 import { appLogger } from "@/lib/logger";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { toHostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -465,13 +473,60 @@ function placeResolvedCanvasTile(
   ) {
     return false;
   }
-  const canvasStore = useEpicCanvasStore.getState();
-  if (preview.kind === "empty-shell") {
-    if (target.kind !== "empty-shell") return false;
-    navigateNested(epicId, target.viewTabId, () =>
-      canvasStore.prepareOpenTileInTabFocusTarget(target.viewTabId, tile),
+  // A drop position IS the placement decision, so it travels as the intent's
+  // explicit placement (C7) - center lands as a tab at the drop index, an
+  // edge splits. Everything else (focus, route, analytics) is the resolver's.
+  //
+  // A ref ALREADY OPEN in this canvas moves to the drop target instead of
+  // opening: dedupe would otherwise resolve to focus-existing and ignore the
+  // position the user dropped at. This is the same resolution the pre-intent
+  // `insertNodeOnTabStrip` / `splitPaneAtEdge` did for a `node` source, only
+  // spelled at the call site now that placement travels in the intent.
+  const openDroppedTile = (
+    viewTabId: string,
+    placement: ExplicitTilePlacement | null,
+  ): boolean => {
+    if (placement !== null) {
+      const existing = findOpenTileInTab(viewTabId, tile);
+      if (existing !== null) {
+        const canvasStore = useEpicCanvasStore.getState();
+        navigateNested(epicId, viewTabId, () =>
+          placement.kind === "tab"
+            ? canvasStore.prepareMoveActiveTabOnTabStripFocusTarget(viewTabId, {
+                sourcePaneId: existing.paneId,
+                tabId: existing.instanceId,
+                targetPaneId: placement.paneId,
+                targetIndex: placement.index ?? 0,
+              })
+            : canvasStore.prepareSplitPaneWithTabFocusTarget(viewTabId, {
+                sourcePaneId: existing.paneId,
+                tabId: existing.instanceId,
+                targetPaneId: placement.paneId,
+                position: placement.edge,
+              }),
+        );
+        return true;
+      }
+    }
+    openTileWithNavigation(
+      {
+        node: tile,
+        target: { tabId: viewTabId },
+        gesture: "explicit",
+        modifiers: null,
+        placement,
+        dedupe: true,
+        source: "direct_ui",
+      },
+      navigateNested,
+      MANUAL_TILE_OPEN,
     );
     return true;
+  };
+  if (preview.kind === "empty-shell") {
+    if (target.kind !== "empty-shell") return false;
+    // No pane to name yet: the executor seeds the root pane.
+    return openDroppedTile(target.viewTabId, null);
   }
   if (target.kind === "empty-shell") return false;
   if (
@@ -482,37 +537,24 @@ function placeResolvedCanvasTile(
     return false;
   }
   if (preview.kind === "artifact-tab-strip") {
-    navigateNested(epicId, target.viewTabId, () =>
-      canvasStore.prepareInsertNodeOnTabStripFocusTarget(
-        target.viewTabId,
-        preview.groupId,
-        preview.index,
-        tile,
-      ),
-    );
-    return true;
+    return openDroppedTile(target.viewTabId, {
+      kind: "tab",
+      paneId: preview.groupId,
+      index: preview.index,
+    });
   }
   if (preview.position === "center") {
-    navigateNested(epicId, target.viewTabId, () =>
-      canvasStore.prepareInsertNodeOnTabStripFocusTarget(
-        target.viewTabId,
-        preview.groupId,
-        target.kind === "artifact-tab-group-body" ? target.tabCount : 0,
-        tile,
-      ),
-    );
-    return true;
+    return openDroppedTile(target.viewTabId, {
+      kind: "tab",
+      paneId: preview.groupId,
+      index: target.kind === "artifact-tab-group-body" ? target.tabCount : 0,
+    });
   }
-  const position = preview.position;
-  navigateNested(epicId, target.viewTabId, () =>
-    canvasStore.prepareSplitPaneWithNodeFocusTarget(
-      target.viewTabId,
-      preview.groupId,
-      position,
-      tile,
-    ),
-  );
-  return true;
+  return openDroppedTile(target.viewTabId, {
+    kind: "split",
+    paneId: preview.groupId,
+    edge: preview.position,
+  });
 }
 
 export function commitResolvedCanvasDrop(
@@ -654,11 +696,10 @@ function isDocOnlyTerminalAgent(
   state: OpenEpicState,
   node: ProjectedReparentNode,
 ): boolean {
-  if (node.type !== "terminal-agent") return false;
-  // Read the UNION, not the record slice. Absence from `tuiAgentRecords` is
-  // still a doc-only tell on a `@1.0` host, but it is the union that holds
-  // every agent the user can actually grab, and its `docResident` answers for
-  // both planes on every host version.
+  // Read the UNION, not the record slice, on BOTH planes. Absence from the
+  // record slice is still a doc-only tell on a `@1.0` host, but it is the
+  // union that holds every agent the user can actually grab, and its
+  // `docResident` answers for both planes on every host version.
   //
   // `Object.hasOwn` rather than an `=== undefined` compare, for the same
   // reason the record-slice version used it: `byId` is a `Record<string, T>`,
@@ -666,9 +707,47 @@ function isDocOnlyTerminalAgent(
   // - a node id the union does not carry. The undefined check is unreachable
   // to the type system and reachable at runtime, which is exactly the shape
   // `no-unnecessary-condition` refuses to let through.
+  //
+  // CHATS are gated too now, but through `routeChatWrite` rather than through
+  // this function's `docResident` test, because the chat plane needs a second
+  // fact this one cannot see: whether the host serves a chat record plane AT
+  // ALL. `epic.reparentChat` is on `RELEASED_FLOOR_METHOD_NAMES`, so on a
+  // floor-era host it works and every chat projects from the doc - a home-only
+  // gate would disable the affordance on exactly the hosts that need no gate.
+  // See `chat-write-routing.ts`; the chat arm is applied at the call site.
+  if (node.type !== "terminal-agent") return false;
   const byId = state.tuiAgents.byId;
   if (!Object.hasOwn(byId, node.id)) return true;
   return byId[node.id].docResident;
+}
+
+/**
+ * Where an agent-family reparent goes: the RPC, the doc, or nowhere.
+ *
+ * Two planes, two different unaddressability rules, and crucially two different
+ * ANSWERS when the row is unaddressable. A terminal agent whose home is the doc
+ * has a doc write as its correct route - that is the `@1.0`-host case
+ * `isDocOnlyTerminalAgent` was written for. A chat the record plane will not
+ * address has NO route: on a host that serves that plane the doc is not the
+ * authority, so a local write loses to record-wins on the next answer and reads
+ * as an affordance that works while changing nothing. Collapsing the two into
+ * one boolean is what sent a refused chat down the doc-write branch.
+ */
+function agentReparentRoute(
+  state: OpenEpicState,
+  node: ProjectedReparentNode,
+  hostId: string | null,
+): "registry-rpc" | "doc" | "unavailable" {
+  if (node.type === "terminal-agent") {
+    return isDocOnlyTerminalAgent(state, node) ? "doc" : "registry-rpc";
+  }
+  if (node.type !== "chat") return "doc";
+  return routeChatWrite({
+    chat: Object.hasOwn(state.chats.byId, node.id)
+      ? state.chats.byId[node.id]
+      : undefined,
+    docArm: readEpicDocRecordArms(hostId),
+  });
 }
 
 /**
@@ -695,9 +774,9 @@ function isDocOnlyTerminalAgent(
  * branch below, and `handleDragEnd` additionally ends the drag in a `finally`
  * so no future escape from this function can strand the session.
  */
-export function commitSidebarReparentDrop(
+export async function commitSidebarReparentDrop(
   input: SidebarReparentDropInput,
-): void {
+): Promise<void> {
   const handle = getOpenEpicRegistry().peek(input.epicId);
   if (handle === null) return;
   // Evaluated against the PROJECTED tree, not the doc maps: a registry-backed
@@ -721,10 +800,21 @@ export function commitSidebarReparentDrop(
   ) {
     return;
   }
-  if (
-    evaluation.node.family === "agent" &&
-    !isDocOnlyTerminalAgent(state, evaluation.node)
-  ) {
+  // Resolved before the branch: the chat arm of the addressability test needs
+  // the session host to read this host's negotiated record-plane coverage, and
+  // the terminal arm needs nothing - so one read serves both.
+  const reparentHostId = getEpicSessionHandleHostId(handle);
+  const agentRoute =
+    evaluation.node.family === "agent"
+      ? agentReparentRoute(state, evaluation.node, reparentHostId)
+      : "doc";
+  // A chat the host's record plane will not address has nowhere to go, so the
+  // drop is a silent cancel - this file's own rule for a move it cannot make -
+  // rather than a doc write the next record answer would erase. No overlay
+  // stamp either: an optimistic patch for a mutation that is never sent is a
+  // row that moves and then snaps back.
+  if (agentRoute === "unavailable") return;
+  if (evaluation.node.family === "agent" && agentRoute === "registry-rpc") {
     // The agent family's parent pointer lives on the HOST's record (chat
     // registry row, or the terminal agent's tenant row), not on the doc: a
     // doc write would land on an entry that no longer exists or, for a
@@ -736,7 +826,7 @@ export function commitSidebarReparentDrop(
     // way the hook-based chat mutations surface theirs.
     const client = getEpicSessionHandleHostClient(handle);
     if (client === null) return;
-    const sessionHostId = getEpicSessionHandleHostId(handle);
+    const sessionHostId = reparentHostId;
     const movedNodeType = evaluation.node.type;
     // The optimistic overlay (Phase 1.1): a registry-backed row has no doc
     // entry, so without this the drop had no local feedback and the node sat
@@ -745,12 +835,45 @@ export function commitSidebarReparentDrop(
     // projected tree the gate above read, synchronously, so it cannot refuse
     // a move that gate accepted; `null` (same parent, viewer) makes retire a
     // no-op.
-    const requestId = handle.store
+    // AWAITED: the overlay stamp is minted by the worker's queue now, so the
+    // id comes back over the bridge. Everything below reads `requestId`, and a
+    // promise here is TRUTHY - the `=== null` guards would pass and a promise
+    // would be handed to `retirePendingMutation` as if it were an id.
+    const requestId = await handle.store
       .getState()
       .beginReparentMutation(input.sourceNodeId, input.newParentId);
-    const retire = (outcome: "landed" | "failed"): void => {
+    // TOTAL, and that is what makes the two `void retire(...)` calls below
+    // safe. `retirePendingMutation` is a worker round trip now rather than a
+    // local store write, so it can reject - and both call sites discard the
+    // promise, one of them from INSIDE a `.then` whose `.catch` a `void`
+    // severs. Left bare, a failed retirement was an unhandled rejection on
+    // both the success and the failure path.
+    //
+    // The residual is named rather than hidden: a retirement that fails leaves
+    // the optimistic reparent stamp installed, so the row can stay projected
+    // under the attempted parent until the projection's dead sweep or a
+    // refetch catches up. Logging is the honest floor - there is no second
+    // authority to ask, and re-trying a retirement whose worker is gone would
+    // be the same call with the same answer.
+    const retire = async (outcome: "landed" | "failed"): Promise<void> => {
       if (requestId === null) return;
-      handle.store.getState().retirePendingMutation(requestId, outcome);
+      try {
+        await handle.store.getState().retirePendingMutation(requestId, outcome);
+      } catch (error: unknown) {
+        // No teardown arm, for the same reason as the enqueue path below:
+        // `applyMutation` answers a disposed session with the shared INERT
+        // result rather than a rejection, so what lands here is a real fault.
+        appLogger.error(
+          "[epic-dnd] reparent mutation retirement failed",
+          {
+            epicId: input.epicId,
+            sourceNodeId: input.sourceNodeId,
+            newParentId: input.newParentId,
+            outcome,
+          },
+          error,
+        );
+      }
     };
     void client
       .request("epic.reparentChat", {
@@ -776,10 +899,12 @@ export function commitSidebarReparentDrop(
         } else {
           invalidateEpicChatRecords(input.queryClient, sessionHostId);
         }
-        retire("landed");
+        // `void`: the retire is a round trip now, and this settle handler
+        // returns synchronously.
+        void retire("landed");
       })
       .catch((error: unknown) => {
-        retire("failed");
+        void retire("failed");
         toastFromHostError(
           toHostRpcError(error, "epic.reparentChat"),
           "Couldn't move this agent.",
@@ -816,39 +941,70 @@ export function commitSidebarReparentDrop(
     // A rejection is logged, never toasted: an invalid drop is a silent cancel
     // by this file's own rule, and two reads of one tree disagreeing is an
     // internal invariant mismatch the user cannot act on.
-    let mutated = false;
-    try {
-      mutated = handle.store
+    if (evaluation.node.family === "artifact") {
+      // The RESULT is discarded - the queue mints its id over the bridge and
+      // the surface reacts to the projected write-command list, so nothing
+      // here reads it - but the REJECTION is not. That distinction is the
+      // whole point of the `catch`: `enqueueWriteCommand` is async and rejects
+      // on a worker-handler or bridge-response fault, and a bare `void` turned
+      // every one of those into an unhandled rejection that also lost the only
+      // record that this drop recorded no command at all. Exactly what the
+      // sibling branch below already says about its own `await`.
+      void handle.store
         .getState()
-        .reparentArtifact(input.sourceNodeId, input.newParentId);
-    } catch (error: unknown) {
-      appLogger.error(
-        "[epic-dnd] doc reparent rejected after the projected gate passed",
-        {
-          epicId: input.epicId,
-          sourceNodeId: input.sourceNodeId,
-          newParentId: input.newParentId,
-          nodeType: evaluation.node.type,
-        },
-        error,
-      );
-      return;
-    }
-    if (mutated && evaluation.node.family === "artifact") {
-      const artifactClient = getEpicSessionHandleHostClient(handle);
-      if (artifactClient !== null) {
-        void artifactClient
-          .request("epic.reparentArtifact", {
+        .enqueueWriteCommand({
+          kind: "reparent-artifact",
+          artifactId: input.sourceNodeId,
+          parentId: input.newParentId,
+        })
+        .catch((error: unknown) => {
+          // No teardown arm here, deliberately. Teardown is already absorbed
+          // UPSTREAM: `enqueueWriteCommand` runs through
+          // `callOrNullOnTeardown`, which maps `BridgeDisposedError` to a
+          // `null` answer and rethrows everything else. So a rejection that
+          // reaches this point is by construction a genuine fault - a worker
+          // handler that threw, a bridge response that did not match - and
+          // every one of them is worth the log. (`EpicSessionEndedError` is
+          // raised only by `waitForWriteCommand`, never on this path, so a
+          // cancellation branch here would be unreachable code asserting a
+          // teardown story that belongs one layer down.)
+          //
+          // Logged, never toasted - this file's own rule for a reparent that
+          // does not commit, stated in the comment above.
+          appLogger.error(
+            "[epic-dnd] artifact reparent enqueue rejected",
+            {
+              epicId: input.epicId,
+              sourceNodeId: input.sourceNodeId,
+              newParentId: input.newParentId,
+            },
+            error,
+          );
+        });
+    } else {
+      try {
+        // AWAITED, and that is load-bearing rather than tidiness. The member
+        // is async now, so the illegal-move guard's throw arrives as a
+        // REJECTION - a `void`ed call would sail past this `catch` and become
+        // an unhandled rejection, losing the log below and the early return
+        // that stops the tab snapshot being written for a move the doc
+        // refused. A comment here previously claimed the throw was still
+        // synchronous; an async function has no synchronous throw.
+        await handle.store
+          .getState()
+          .reparentArtifact(input.sourceNodeId, input.newParentId);
+      } catch (error: unknown) {
+        appLogger.error(
+          "[epic-dnd] doc reparent rejected after the projected gate passed",
+          {
             epicId: input.epicId,
-            artifactId: input.sourceNodeId,
+            sourceNodeId: input.sourceNodeId,
             newParentId: input.newParentId,
-          })
-          .catch((error: unknown) => {
-            toastFromHostError(
-              toHostRpcError(error, "epic.reparentArtifact"),
-              "Couldn't move this artifact.",
-            );
-          });
+            nodeType: evaluation.node.type,
+          },
+          error,
+        );
+        return;
       }
     }
   }

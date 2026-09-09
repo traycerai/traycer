@@ -1,4 +1,11 @@
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   AlertCircle,
   ChevronRight,
@@ -33,6 +40,12 @@ import {
   useLeftPanelSectionCollapsed,
   useMainPanelCollapsed,
 } from "@/stores/epics/left-panel-store";
+import { tileIntent } from "@/lib/canvas/tile-open/intent";
+import {
+  clearSidebarNodeRevealRequest,
+  useSidebarNodeRevealRequest,
+} from "@/stores/epics/sidebar-node-reveal-store";
+import { revealSidebarNode } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 
 /**
  * Pull Requests panel body. Subscribes in foreground mode on the canvas host
@@ -116,7 +129,7 @@ function PrPanelBodyContent(props: {
   readonly isPending: boolean;
   readonly hasCachedData: boolean;
 }): ReactNode {
-  const tileNavigation = useEpicTileNavigation();
+  const { openTile } = useEpicTileNavigation();
   const groups = useMemo(() => groupPrItemsByRepo(props.items), [props.items]);
   const [collapsedRepos, setCollapsedRepos] = useState<ReadonlySet<string>>(
     new Set<string>(),
@@ -131,7 +144,6 @@ function PrPanelBodyContent(props: {
 
   const hostId = props.hostId;
   const epicId = props.epicId;
-  const openTileInEpic = tileNavigation.openTileInEpic;
   const buildEntry = useCallback(
     (item: PrLightItem): PrRowEntry => {
       const identified = fullyIdentifiedPrBase(item);
@@ -158,18 +170,50 @@ function PrPanelBodyContent(props: {
           tileArgs === null
             ? null
             : () => {
-                openTileInEpic(
-                  epicId,
-                  makePrDetailTile({
-                    ...tileArgs,
-                    name: formatPrRowTitle(item),
-                  }),
+                openTile(
+                  tileIntent(
+                    makePrDetailTile({
+                      ...tileArgs,
+                      name: formatPrRowTitle(item),
+                    }),
+                    { epicId },
+                    "explicit",
+                    "direct_ui",
+                  ),
                 );
               },
       };
     },
-    [epicId, hostId, openTileInEpic],
+    [epicId, hostId, openTile],
   );
+  const regionRef = useRef<HTMLDivElement>(null);
+  const revealRequest = useSidebarNodeRevealRequest(props.tabId);
+  const revealedRepo =
+    revealRequest === null
+      ? undefined
+      : groups.find((group) =>
+          group.items.some(
+            (item) => buildEntry(item).tileId === revealRequest.nodeId,
+          ),
+        );
+  const revealedRepoLabel =
+    revealedRepo === undefined
+      ? null
+      : formatRepoGroupLabel(revealedRepo.repoIdentifier);
+  useLayoutEffect(() => {
+    if (revealRequest === null || revealedRepoLabel === null) return;
+    if (
+      regionRef.current === null ||
+      !revealSidebarNode(
+        regionRef.current,
+        revealRequest.nodeId,
+        revealRequest.nonce,
+      )
+    ) {
+      return;
+    }
+    clearSidebarNodeRevealRequest(props.tabId, revealRequest.nonce);
+  }, [props.tabId, revealRequest, revealedRepoLabel]);
 
   if (props.isPending && !props.hasCachedData) {
     return (
@@ -205,6 +249,7 @@ function PrPanelBodyContent(props: {
 
   return (
     <div
+      ref={regionRef}
       // Groups are separated by WHITESPACE, not another hairline. With every
       // repo header and every row sharing one continuous ruled stack, a header
       // read as just another row and the eye could not find where one repo's
@@ -238,9 +283,10 @@ function PrPanelBodyContent(props: {
           epicId={props.epicId}
           tabId={props.tabId}
           group={group}
-          collapsed={collapsedRepos.has(
-            formatRepoGroupLabel(group.repoIdentifier),
-          )}
+          collapsed={
+            collapsedRepos.has(formatRepoGroupLabel(group.repoIdentifier)) &&
+            revealedRepoLabel !== formatRepoGroupLabel(group.repoIdentifier)
+          }
           onToggle={toggleRepo}
           buildEntry={buildEntry}
         />

@@ -196,4 +196,58 @@ describe("uninstallHost", () => {
 
     expect(result.removedStagedDir).toBe(true);
   });
+
+  // Final hold model: uninstall is the ONE place a version hold is removed
+  // (`resetHeldHostVersion`) - a later fresh install of the same version must
+  // not inherit a stale hold and silently park its updates. Exercised against
+  // the real hold-record file (same sandboxed `os.homedir()` this suite
+  // already mocks for `store/paths`), not a mock, since the point is the
+  // record is actually gone from disk afterward.
+  it("resets the held-host-version record on uninstall", async () => {
+    const { uninstallHost } = await import("../uninstall");
+    const { setHeldHostVersion } = await import("../../host/held-host-version");
+    const { hostHeldVersionRecordPath, readHostHeldVersion } =
+      await import("@traycer/protocol/config/installation");
+    mkdirSync(installDirFor(ENV), { recursive: true });
+    // `setHeldHostVersion` reaches the record through the CLI's OWN
+    // `ensureHostHomeDir` (module-constant `HOST_HOME`, frozen at this
+    // suite's static import time - before `beforeEach` ever points
+    // `os.homedir()` at the sandbox), while the record's actual path comes
+    // from the protocol package's call-time `hostHeldVersionRecordPath`
+    // (which DOES see the sandbox). Pre-creating the real parent here keeps
+    // the write inside the sandbox rather than leaking into whatever
+    // pre-sandbox path `HOST_HOME` froze to.
+    mkdirSync(join(hostHeldVersionRecordPath(ENV), ".."), {
+      recursive: true,
+    });
+    await setHeldHostVersion(ENV, "1.2.0", "install-a");
+    expect(existsSync(hostHeldVersionRecordPath(ENV))).toBe(true);
+
+    await uninstallHost({
+      environment: ENV,
+      purgeChannelRuntime: false,
+      verifyMutationCapability: testMutationVerifier,
+    });
+
+    expect(existsSync(hostHeldVersionRecordPath(ENV))).toBe(false);
+    await expect(readHostHeldVersion(ENV)).resolves.toBeNull();
+  });
+
+  it("uninstalling with nothing held is a no-op for the hold record (never throws)", async () => {
+    const { uninstallHost } = await import("../uninstall");
+    const { hostHeldVersionRecordPath } =
+      await import("@traycer/protocol/config/installation");
+    mkdirSync(installDirFor(ENV), { recursive: true });
+    expect(existsSync(hostHeldVersionRecordPath(ENV))).toBe(false);
+
+    await expect(
+      uninstallHost({
+        environment: ENV,
+        purgeChannelRuntime: false,
+        verifyMutationCapability: testMutationVerifier,
+      }),
+    ).resolves.toBeDefined();
+
+    expect(existsSync(hostHeldVersionRecordPath(ENV))).toBe(false);
+  });
 });

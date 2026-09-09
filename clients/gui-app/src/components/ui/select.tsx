@@ -112,6 +112,7 @@ function SelectTrigger({
 }
 
 function SelectContent({
+  ref,
   className,
   children,
   position = "popper",
@@ -139,12 +140,14 @@ function SelectContent({
   // Radix's side - an `item-aligned` list positions itself over the trigger and
   // ignores collision geometry - so the width cap is what carries that case.
   const safeAreaInsets = useSafeAreaCollisionPadding();
+  // Read above the early return, like the hooks above it: hook order must
+  // not depend on concealment.
   if (concealed) return null;
   return (
     <SelectPrimitive.Portal>
       <SelectPrimitive.Content
+        ref={ref}
         data-slot="select-content"
-        data-browser-overlay="select"
         data-align-trigger={position === "item-aligned"}
         collisionPadding={collisionPadding ?? safeAreaInsets}
         className={cn(
@@ -251,7 +254,7 @@ function SelectScrollUpButton({
     <SelectPrimitive.ScrollUpButton
       data-slot="select-scroll-up-button"
       className={cn(
-        "z-10 flex cursor-default items-center justify-center bg-popover py-1 [&_svg:not([class*='size-'])]:size-4",
+        "z-10 flex cursor-default items-center justify-center bg-transparent py-1 [&_svg:not([class*='size-'])]:size-4",
         className,
       )}
       {...props}
@@ -269,7 +272,7 @@ function SelectScrollDownButton({
     <SelectPrimitive.ScrollDownButton
       data-slot="select-scroll-down-button"
       className={cn(
-        "z-10 flex cursor-default items-center justify-center bg-popover py-1 [&_svg:not([class*='size-'])]:size-4",
+        "z-10 flex cursor-default items-center justify-center bg-transparent py-1 [&_svg:not([class*='size-'])]:size-4",
         className,
       )}
       {...props}

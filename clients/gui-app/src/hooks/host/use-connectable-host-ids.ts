@@ -2,8 +2,8 @@ import { useMemo } from "react";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { isAdministrableRoute } from "@/components/settings/host-scope/host-scope-model";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
-import { useRemoteHostsPlanRestricted } from "@/hooks/host/use-remote-hosts-plan-gate";
 import { useRemoteSessionsPollReadiness } from "@/hooks/host/use-remote-sessions-poll-readiness";
+import { useHostLeases } from "@/hooks/host/use-host-lease";
 
 const EMPTY_ENTRIES: readonly HostDirectoryEntry[] = [];
 const EMPTY_HOST_IDS: readonly string[] = [];
@@ -46,7 +46,7 @@ export interface ConnectableHosts {
 export function useConnectableHostIds(): ConnectableHosts {
   const directory = useHostDirectoryList();
   const entries = directory.data ?? EMPTY_ENTRIES;
-  const planRestricted = useRemoteHostsPlanRestricted();
+  const leases = useHostLeases();
   const hostIds = useMemo(
     () => entries.map((entry) => entry.hostId),
     [entries],
@@ -56,13 +56,22 @@ export function useConnectableHostIds(): ConnectableHosts {
   // entry has to move this answer, and a cache read frozen in a memo cannot.
   const hasLiveSession = useRemoteSessionsPollReadiness(hostIds);
   const connectableHostIds = useMemo(() => {
+    const planRestrictedHostIds = new Set(
+      leases
+        .filter(
+          (lease) =>
+            lease.status === "dead" && lease.dead.reason === "plan-restricted",
+        )
+        .map((lease) => lease.hostId),
+    );
     const connectable = entries.flatMap((entry) =>
-      isAdministrableRoute(entry, planRestricted, hasLiveSession(entry.hostId))
+      !planRestrictedHostIds.has(entry.hostId) &&
+      isAdministrableRoute(entry, hasLiveSession(entry.hostId))
         ? [entry.hostId]
         : [],
     );
     return connectable.length === 0 ? EMPTY_HOST_IDS : connectable;
-  }, [entries, hasLiveSession, planRestricted]);
+  }, [entries, hasLiveSession, leases]);
   return {
     hostIds: connectableHostIds,
     // `isLoading` is `pending && fetching`, which is false for a settled

@@ -134,7 +134,6 @@ function EpicSweepActionBody(props: {
         epicIds={sweepOpen ? epicIds : null}
         surfaceHostClient={sessionHostClient}
         surfaceHostId={sessionHostId}
-        occupiedHostIds={nodeHostIds}
         taskTitle={tabName}
         onOpenChange={(open) => {
           if (!open) setSweepOpen(false);

@@ -420,7 +420,14 @@ async function npmInterpreterInvocation(manifest: {
 // `engines.node` in `clients/traycer-cli/package.json`; npm enforces that
 // field at INSTALL time, which says nothing about the interpreter a service
 // definition written later will name.
-const MIN_NODE_VERSION: readonly [number, number, number] = [20, 18, 1];
+//
+// 22.13.0 is `node:sqlite`'s first flag-free release, and the chat-store
+// survey behind the store-format floor cannot open a single store without it.
+// Pinning an older interpreter here would write a service definition whose
+// host could never be checked for a downgrade that destroys chat history -
+// the failure this floor exists to prevent - so the version check refuses
+// instead.
+const MIN_NODE_VERSION: readonly [number, number, number] = [22, 13, 0];
 
 // First `node` on PATH that is actually usable as this CLI's interpreter.
 //

@@ -42,10 +42,9 @@ const prepareRemote = vi.hoisted(() =>
 const commit = vi.hoisted(() => vi.fn());
 const abort = vi.hoisted(() => vi.fn());
 
-const acquireArtifactBodyLease = vi.hoisted(() =>
-  vi.fn(() => {
-    return () => {};
-  }),
+const releaseArtifactBody = vi.hoisted(() => vi.fn());
+const acquireResidentArtifactBodyLease = vi.hoisted(() =>
+  vi.fn(() => ({ release: releaseArtifactBody, resident: Promise.resolve() })),
 );
 const getArtifactFragment = vi.hoisted(() =>
   vi.fn((): Y.XmlFragment | null => null),
@@ -76,7 +75,7 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
   useOpenEpicHandle: () => ({
     store: {
       getState: () => ({
-        acquireArtifactBodyLease,
+        acquireResidentArtifactBodyLease,
         getArtifactFragment,
       }),
     },
@@ -85,6 +84,16 @@ vi.mock("@/providers/use-open-epic-handle", () => ({
 
 vi.mock("@/lib/artifacts/node-display", () => ({
   isEpicArtifactKind: () => true,
+  // Read at module load by the settings store, which the link seam pulls in.
+  DEFAULT_EPIC_NODE_ICON_COLORS: {
+    chat: "#38bdf8",
+    "terminal-agent": "#22d3ee",
+    spec: "#fbbf24",
+    ticket: "#a78bfa",
+    story: "#34d399",
+    review: "#fb7185",
+    terminal: "#94a3b8",
+  },
 }));
 
 let fragmentDoc: Y.Doc;
@@ -124,7 +133,8 @@ afterEach(() => {
   prepareRemote.mockReset();
   commit.mockReset();
   abort.mockReset();
-  acquireArtifactBodyLease.mockClear();
+  acquireResidentArtifactBodyLease.mockClear();
+  releaseArtifactBody.mockClear();
   getArtifactFragment.mockClear();
   getArtifactFragment.mockImplementation(() => fragment);
   prepareBytes.mockResolvedValue({
@@ -191,7 +201,15 @@ describe("AddImageToArtifactButton", () => {
     });
     expect(prepareBytes).toHaveBeenCalledTimes(1);
     expect(imageNodeCount()).toBe(1);
-    expect(acquireArtifactBodyLease).toHaveBeenCalledWith("artifact-a");
+    // `"linger"` is asserted, not tolerated: this surface inserts an image the
+    // user is about to keep editing, so its lease must outlive the mutation by
+    // the linger window rather than ending the body's lifecycle at release.
+    // The export path is the other arm and passes `"immediate"`.
+    expect(acquireResidentArtifactBodyLease).toHaveBeenCalledWith(
+      "artifact-a",
+      "linger",
+    );
+    expect(releaseArtifactBody).toHaveBeenCalledTimes(1);
   });
 
   it("rolls back the Y node when finish rejects mid-sequence", async () => {
@@ -214,6 +232,7 @@ describe("AddImageToArtifactButton", () => {
     expect(await screen.findByText(/could not be committed/i)).toBeTruthy();
     expect(imageNodeCount()).toBe(0);
     expect(commit).toHaveBeenCalledWith("artifact-a", "op-client");
+    expect(releaseArtifactBody).toHaveBeenCalledTimes(1);
   });
 
   it("retries not-yet-converged and keeps the Y node after commit", async () => {
@@ -341,5 +360,6 @@ describe("AddImageToArtifactButton", () => {
     expect(prepareRemote).toHaveBeenCalled();
     expect(abort).toHaveBeenCalledWith("artifact-a", "op-remote");
     expect(imageNodeCount()).toBe(0);
+    expect(releaseArtifactBody).toHaveBeenCalledTimes(1);
   });
 });

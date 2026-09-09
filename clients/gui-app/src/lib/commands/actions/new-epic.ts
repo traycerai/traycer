@@ -8,19 +8,13 @@
  * The controller creates the draft only after it captures the current selection,
  * keeping navigation cancellation able to restore the tab the user started on.
  */
-import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { newDraftTabIntent } from "@/lib/tab-navigation/intents";
-import { activeHostIdOrNull } from "@/lib/host/runtime";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
 
 export function openNewEpicIntent() {
-  // The new draft lands on the landing surface, which follows the app-wide
-  // active host - seed it from that host's last-run bucket.
-  return newDraftTabIntent(
-    useComposerRunSettingsStore
-      .getState()
-      .getGlobalRunSettings(activeHostIdOrNull()),
-  );
+  // Resolve default settings together with the workspace when the draft is
+  // created, so both use the composer's current placement host.
+  return newDraftTabIntent(null);
 }
 
 export function openNewEpic(router: KeybindingRouter): void {

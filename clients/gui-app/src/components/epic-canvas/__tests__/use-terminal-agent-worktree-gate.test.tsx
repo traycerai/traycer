@@ -70,7 +70,7 @@ describe("useTerminalAgentWorktreeGate", () => {
       sourceTuiAgentId: null,
       sourceProfileId: null,
       onStatusChange: null,
-      placement: { kind: "active-tile" },
+      placement: null,
     });
     expect(
       useWorktreeIntentMemoryStore.getState().getEpicIntent(EPIC_ID, HOST_ID),

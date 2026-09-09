@@ -1,13 +1,9 @@
 import type { Event, Input, RenderProcessGoneDetails, Result } from "electron";
-import type {
-  BrowserViewElectronTabHandoffChange,
-  BrowserViewStatus,
-} from "@traycer-clients/shared/platform/browser-view";
+import type { BrowserViewStatus } from "@traycer-clients/shared/platform/browser-view";
 import { log } from "../../app/logger";
-import type {
-  BrowserViewPopupWindow,
-  ManagedBrowserView,
-} from "../browser-view-port";
+import { guestNavigationGuards } from "../browser-guest-navigation";
+import type { BrowserViewWebContents } from "../browser-view-port";
+import type { BrowserSessionProfile } from "../browser-session";
 import type { BrowserViewAnnotationHost } from "./browser-view-annotation-host";
 import type { BrowserViewChords } from "./browser-view-chords";
 import type {
@@ -19,16 +15,11 @@ import {
   type BrowserViewEntryRegistry,
 } from "./browser-view-entry-registry";
 import type { BrowserViewFind } from "./browser-view-find";
-import type { BrowserViewGeometry } from "./browser-view-geometry";
-import type { BrowserViewOverlay } from "./browser-view-overlay";
 import type { BrowserViewPopups } from "./browser-view-popups";
 import type { BrowserViewDebugSessions } from "./debug-session-for";
 
 interface BrowserViewEntryFactoryOptions {
-  readonly createView: () => ManagedBrowserView;
   readonly entries: BrowserViewEntryRegistry<BrowserViewEntry>;
-  readonly geometry: BrowserViewGeometry;
-  readonly overlay: BrowserViewOverlay;
   readonly annotations: BrowserViewAnnotationHost;
   readonly find: BrowserViewFind;
   readonly popups: BrowserViewPopups;
@@ -36,7 +27,8 @@ interface BrowserViewEntryFactoryOptions {
   readonly debugSessions: BrowserViewDebugSessions;
   readonly observePrimaryProfileOrigin: (
     url: string,
-    webContents: ManagedBrowserView["webContents"],
+    webContents: BrowserViewWebContents,
+    profile: BrowserSessionProfile,
   ) => void;
   readonly setStatus: (
     entry: BrowserViewEntry,
@@ -44,10 +36,8 @@ interface BrowserViewEntryFactoryOptions {
     reason: string | null,
   ) => void;
   readonly emitStatus: (entry: BrowserViewEntry) => void;
-  readonly closeEntry: (
-    entry: BrowserViewEntry,
-    handoffReason: BrowserViewElectronTabHandoffChange["reason"] | null,
-  ) => void;
+  readonly emitFocus: (entry: BrowserViewEntry) => void;
+  readonly closeEntry: (entry: BrowserViewEntry) => void;
 }
 
 /**
@@ -57,10 +47,7 @@ interface BrowserViewEntryFactoryOptions {
  * the coordinator only owns what a caller asks for.
  */
 export class BrowserViewEntryFactory {
-  private readonly createView: () => ManagedBrowserView;
   private readonly entries: BrowserViewEntryRegistry<BrowserViewEntry>;
-  private readonly geometry: BrowserViewGeometry;
-  private readonly overlay: BrowserViewOverlay;
   private readonly annotations: BrowserViewAnnotationHost;
   private readonly find: BrowserViewFind;
   private readonly popups: BrowserViewPopups;
@@ -68,7 +55,8 @@ export class BrowserViewEntryFactory {
   private readonly debugSessions: BrowserViewDebugSessions;
   private readonly observePrimaryProfileOrigin: (
     url: string,
-    webContents: ManagedBrowserView["webContents"],
+    webContents: BrowserViewWebContents,
+    profile: BrowserSessionProfile,
   ) => void;
   private readonly setStatus: (
     entry: BrowserViewEntry,
@@ -76,16 +64,11 @@ export class BrowserViewEntryFactory {
     reason: string | null,
   ) => void;
   private readonly emitStatus: (entry: BrowserViewEntry) => void;
-  private readonly closeEntry: (
-    entry: BrowserViewEntry,
-    handoffReason: BrowserViewElectronTabHandoffChange["reason"] | null,
-  ) => void;
+  private readonly emitFocus: (entry: BrowserViewEntry) => void;
+  private readonly closeEntry: (entry: BrowserViewEntry) => void;
 
   constructor(options: BrowserViewEntryFactoryOptions) {
-    this.createView = options.createView;
     this.entries = options.entries;
-    this.geometry = options.geometry;
-    this.overlay = options.overlay;
     this.annotations = options.annotations;
     this.find = options.find;
     this.popups = options.popups;
@@ -94,38 +77,37 @@ export class BrowserViewEntryFactory {
     this.observePrimaryProfileOrigin = options.observePrimaryProfileOrigin;
     this.setStatus = options.setStatus;
     this.emitStatus = options.emitStatus;
+    this.emitFocus = options.emitFocus;
     this.closeEntry = options.closeEntry;
   }
 
-  create(
+  createFromWebContents(
     requestedUrl: string,
     identity: BrowserViewNativeIdentity,
+    profile: BrowserSessionProfile,
+    webContents: BrowserViewWebContents,
   ): BrowserViewEntry {
-    const view = this.createView();
     const entry: BrowserViewEntry = {
       surface: null,
       surfaceBindingId: null,
       guestKey: nativeGuestKey(identity.key),
       identity,
-      view,
+      profile,
+      webContents,
       listeners: {
         "before-input-event": (event: Event, input: Input): void => {
           this.handleBeforeInputEvent(entry, event, input);
         },
-        "did-create-window": (window: BrowserViewPopupWindow): void => {
-          this.popups.handleDidCreateWindow(entry, window);
-        },
-        "did-frame-finish-load": (): void => {
-          if (entry.internalNavigation) return;
-          this.overlay.invalidateSnapshot(entry, "frame-finish-load");
-        },
-        "did-finish-load": (): void => {
-          if (entry.internalNavigation) return;
-          this.overlay.invalidateSnapshot(entry, "finish-load");
-        },
         "did-navigate": (_event: Event, url: string): void => {
           this.handleCommittedNavigation(entry, url);
         },
+        // The page-initiated half of the guest scheme gate (browser security
+        // review, root cause C). `navigate` in the manager covers what this
+        // process asks for; these cover what the page asks for on its own -
+        // a link, a scripted `location =`, a server redirect, a subframe.
+        ...guestNavigationGuards(() =>
+          this.popups.hadRecentGuestGesture(webContents),
+        ),
         "did-start-navigation": (
           _event: Event,
           _url: string,
@@ -144,14 +126,13 @@ export class BrowserViewEntryFactory {
         "found-in-page": (_event: Event, result: Result): void => {
           this.find.handleFoundInPage(entry, result);
         },
+        focus: (): void => {
+          this.emitFocus(entry);
+        },
         "page-title-updated": (): void => {
           if (entry.internalNavigation) return;
-          entry.currentTitle = entry.view.webContents.getTitle();
-          this.overlay.invalidateSnapshot(entry, "page-title-updated");
+          entry.currentTitle = entry.webContents.getTitle();
           this.emitStatus(entry);
-        },
-        paint: (): void => {
-          this.overlay.invalidateSnapshot(entry, "paint");
         },
         "render-process-gone": (
           _event: Event,
@@ -159,11 +140,11 @@ export class BrowserViewEntryFactory {
         ): void => {
           this.handleRenderProcessGone(entry, details.reason);
         },
+        destroyed: (): void => {
+          this.closeEntry(entry);
+        },
       },
-      parentWindowId: null,
       desiredVisible: false,
-      bounds: null,
-      lastAppliedBounds: null,
       requestedUrl,
       currentUrl: requestedUrl,
       currentTitle: "",
@@ -179,20 +160,20 @@ export class BrowserViewEntryFactory {
       debugSession: null,
       annotationSession: null,
       devToolsWindow: null,
-      viewportPreset: "responsive",
-      overlayOwnerIds: [],
-      overlaySnapshotStale: false,
-      overlayAwaitingPaintAck: false,
-      overlayParked: false,
-      visible: null,
-      lastLoggedVisible: null,
       rendererResetPending: false,
       closePromise: null,
       internalNavigation: false,
     };
-    const webContents = view.webContents;
+    this.popups.installGuestGesture(webContents);
+    // The tile's opener context is a live view of the entry: read at open time,
+    // so a `window.open` resolves against the tile's current location and
+    // surface. A popup gets its own context installed by the popups module.
     webContents.setWindowOpenHandler((details) =>
-      this.popups.handleWindowOpen(entry, details),
+      this.popups.handleWindowOpen(
+        { surface: entry.surface, currentUrl: entry.currentUrl },
+        details,
+        webContents,
+      ),
     );
     for (const [event, handler] of Object.entries(entry.listeners)) {
       webContents.on(event, handler);
@@ -219,18 +200,24 @@ export class BrowserViewEntryFactory {
     url: string,
   ): void {
     if (entry.internalNavigation) return;
+    // The renderer-owned guest is born at `about:blank`, and that birth
+    // navigation commits on this listener after the entry already carries the
+    // host's intended `requestedUrl`. Recording it here would overwrite that
+    // intent with `about:blank`, so the accepted initial navigation would then
+    // load `about:blank` and the tile would hang. Guest-driven navigations
+    // only count once the host has accepted the tab and issued its intended
+    // navigation.
+    if (!entry.identity.lifecycle.accepted) return;
     entry.currentUrl = url;
     entry.requestedUrl = url;
-    entry.currentTitle = entry.view.webContents.getTitle();
-    this.observePrimaryProfileOrigin(url, entry.view.webContents);
+    entry.currentTitle = entry.webContents.getTitle();
+    this.observePrimaryProfileOrigin(url, entry.webContents, entry.profile);
     entry.certificateError = null;
-    this.overlay.invalidateSnapshot(entry, "navigation-committed");
     this.setStatus(entry, "ready", null);
     void this.debugSessions
       .ensure(entry)
       .enableAfterCommit()
       .catch(() => undefined);
-    this.geometry.applyVisibility(entry);
   }
 
   private handleInPageNavigation(
@@ -240,12 +227,14 @@ export class BrowserViewEntryFactory {
   ): void {
     if (entry.internalNavigation) return;
     if (!isMainFrame) return;
+    // See handleCommittedNavigation: a pre-acceptance guest navigation must not
+    // overwrite the host's intended initial URL.
+    if (!entry.identity.lifecycle.accepted) return;
     entry.currentUrl = url;
     entry.requestedUrl = url;
-    entry.currentTitle = entry.view.webContents.getTitle();
-    this.observePrimaryProfileOrigin(url, entry.view.webContents);
+    entry.currentTitle = entry.webContents.getTitle();
+    this.observePrimaryProfileOrigin(url, entry.webContents, entry.profile);
     this.annotations.end(entry, "navigation");
-    this.overlay.invalidateSnapshot(entry, "in-page-navigation");
     this.emitStatus(entry);
   }
 
@@ -254,10 +243,12 @@ export class BrowserViewEntryFactory {
     detail: string,
   ): void {
     this.annotations.end(entry, "crash");
-    this.overlay.invalidateSnapshot(entry, "render-process-gone");
+    // A crashed guest is reported as a plain `dead` tab status and its
+    // renderer guest is released. There is nothing to capture from a gone
+    // renderer and nothing to hand off - the host re-materializes the durable
+    // tab later.
     this.setStatus(entry, "dead", detail);
-    this.geometry.applyVisibility(entry);
-    this.closeEntry(entry, "crash-no-capture");
+    this.closeEntry(entry);
   }
 
   private handleBeforeInputEvent(
@@ -266,10 +257,18 @@ export class BrowserViewEntryFactory {
     input: Input,
   ): void {
     if (input.type !== "keyDown") return;
+    // The guest seam runs BEFORE the macOS app-menu accelerator and is the
+    // only place in the chain that knows a browser tile has focus, so the
+    // whole focus-scoped input policy is decided here. `preventDefault` is
+    // what stops a menu equivalent (Cmd+W's "Close Tab") from also firing.
     const reserved = this.chords.match(input);
     if (reserved !== null) {
       event.preventDefault();
-      this.chords.forwardToHostWindow(entry, reserved);
+      // Every reserved chord is one-shot - holding Cmd+T at ~25 Hz would open
+      // (and split for) a tab per repeat - but the repeat is still CLAIMED
+      // above, or it walks straight into the menu equivalent while the first
+      // press's asynchronous close is still in flight.
+      if (!input.isAutoRepeat) this.chords.dispatch(entry.surface, reserved);
       return;
     }
     if (!(input.control || input.meta || input.shift || input.alt)) return;
@@ -291,7 +290,7 @@ export function applyEntryZoom(
   factor: number,
 ): boolean {
   if (entry.annotationSession?.zoomLocked() === true) return false;
-  entry.view.webContents.setZoomFactor(factor);
+  entry.webContents.setZoomFactor(factor);
   return true;
 }
 
@@ -299,7 +298,7 @@ export function steppedEntryZoom(
   entry: BrowserViewEntry,
   direction: 1 | -1,
 ): number {
-  const current = entry.view.webContents.getZoomFactor();
+  const current = entry.webContents.getZoomFactor();
   if (direction === 1) {
     return (
       BROWSER_ZOOM_FACTORS.find((factor) => factor > current + 0.001) ??

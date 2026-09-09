@@ -533,13 +533,13 @@ describe("failing closed", () => {
 
 describe("the version gate", () => {
   it("refuses a head above this reader's minimum WITHOUT fetching a part", async () => {
-    // A 1.4 writer that declares older readers cannot safely INTERPRET this
+    // A 1.5 writer that declares older readers cannot safely INTERPRET this
     // publication. The minimum may not exceed the head's own version, so
     // exercising it at all requires publishing as a future writer.
     const published = await publishCloudChat({
       ...DEFAULT_PUBLISH,
-      payloadMinor: 4,
-      minReaderVersion: { major: 1, minor: 4 },
+      payloadMinor: 5,
+      minReaderVersion: { major: 1, minor: 5 },
     });
     const port = recordingPort(servingBehaviour(published));
 
@@ -575,9 +575,14 @@ describe("the version gate", () => {
     const published = await publishCloudChat(DEFAULT_PUBLISH);
     const serving = servingBehaviour(published);
     // Forged at the document level: the major is pinned in both the writer AND
-    // the reader schema, so no schema in this build will produce one.
+    // the reader schema, so no schema in this build will produce one. The minor
+    // is read off the published document rather than written in, because a
+    // literal turns every minor bump into a silently-passing test - the forge
+    // stops matching, the head stays valid, and the gate is never exercised.
+    const canonicalVersion = `"schemaVersion":{"major":${CHAT_SYNC_SCHEMA_VERSION.major},"minor":${CHAT_SYNC_SCHEMA_VERSION.minor}}`;
+    expect(published.headDocument).toContain(canonicalVersion);
     const foreign = published.headDocument.replace(
-      `"schemaVersion":{"major":${CHAT_SYNC_SCHEMA_VERSION.major},"minor":${CHAT_SYNC_SCHEMA_VERSION.minor}}`,
+      canonicalVersion,
       '"schemaVersion":{"major":9,"minor":0}',
     );
     const foreignSha = await webCryptoSha256Hex(utf8Bytes(foreign));

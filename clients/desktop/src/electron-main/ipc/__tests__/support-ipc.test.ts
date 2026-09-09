@@ -21,6 +21,7 @@ const VALID_FORM = {
   allowContact: false,
   includeDesktopLog: true,
   includeHostLog: true,
+  includeBrowserDiagnostics: true,
   includeDiagnostics: true,
   images: [],
   overrideTitle: null,
@@ -275,6 +276,34 @@ describe("parseSupportSubmitReportRequest", () => {
     expect(result.includeDesktopLog).toBe(false);
     expect(result.includeHostLog).toBe(true);
   });
+
+  it("rejects a missing includeBrowserDiagnostics key", () => {
+    const {
+      includeBrowserDiagnostics: _includeBrowserDiagnostics,
+      ...withoutKey
+    } = VALID_FORM;
+    expect(() => parseSupportSubmitReportRequest(withoutKey)).toThrow();
+  });
+
+  it("rejects a non-boolean includeBrowserDiagnostics", () => {
+    expect(() =>
+      parseSupportSubmitReportRequest({
+        ...VALID_FORM,
+        includeBrowserDiagnostics: "on",
+      }),
+    ).toThrow();
+  });
+
+  it.each([true, false])(
+    "round-trips includeBrowserDiagnostics %s",
+    (value) => {
+      const result = parseSupportSubmitReportRequest({
+        ...VALID_FORM,
+        includeBrowserDiagnostics: value,
+      });
+      expect(result.includeBrowserDiagnostics).toBe(value);
+    },
+  );
 
   it("rejects a missing includeDiagnostics key", () => {
     const { includeDiagnostics: _includeDiagnostics, ...withoutKey } =
@@ -923,6 +952,15 @@ describe("parseSupportReadFrozenLogTailInput", () => {
       parseSupportReadFrozenLogTailInput({ draftId: 1, target: "nonsense" }),
     ).toThrow();
   });
+
+  it.each(["browserTelemetry", "browserTrace"])(
+    "accepts the browser diagnostics target %s",
+    (target) => {
+      expect(
+        parseSupportReadFrozenLogTailInput({ draftId: 1, target }),
+      ).toEqual({ draftId: 1, target });
+    },
+  );
 
   it("rejects a non-integer draftId", () => {
     expect(() =>

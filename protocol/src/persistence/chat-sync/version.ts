@@ -39,7 +39,26 @@ import { z } from "zod";
  * because a payload's self-identifying version is what a detached repair
  * candidate is trusted on.
  */
-export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 2 } as const;
+// 1.3 adds `chat.imported` to `KNOWN_CHAT_EVENT_TYPES`. A new chat-event type
+// is a MINOR here and only here: the unknown-variant passthrough
+// (`passthrough.ts`) is what lets an older reader meet the event, keep it whole
+// in `raw`, and re-publish it unchanged - the mechanism `COMPATIBILITY.md`
+// names as reclassifying this class of addition from breaking to additive.
+// (Renumbered from 1.2 when main's interview-settlement bump took that minor.)
+// 1.3 also drops `outerHtml` and the raw `attributes` map from the browser
+// annotation record (root cause H: page content in collaborator-readable chat
+// persistence); both fields are unreleased, so this takes no bump of its own.
+//
+// 1.3 also carries `tool_call.agentMessageReceipt` (the receiver-side message
+// id a `traycer_send_message` call landed as - a `chat.subscribe@1.7+` field
+// that lands in a publication). It rides this still-unreleased minor rather
+// than opening 1.4: `host-v1.2.0` shipped chat-sync 1.1, so 1.3 is already the
+// next line a released reader will meet. Defaulted `null`, so a 1.1 record
+// parses unchanged and residual capture (§3) carries it through an older
+// publisher losslessly - `CHAT_SYNC_1_1_READER_FLOOR` stays where it is.
+// 1.4 adds autonomous_resume.deliveryPlacement, defaulting to unknown for
+// old data. It is presentation metadata; the minimum reader does not change.
+export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 4 } as const;
 
 export type ChatSyncSchemaVersion = typeof CHAT_SYNC_SCHEMA_VERSION;
 

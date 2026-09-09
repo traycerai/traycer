@@ -261,6 +261,7 @@ function ApplyNowControl(props: {
         {label}
       </Button>
       <ConfirmDestructiveDialog
+        blockedReason={null}
         open={open}
         onOpenChange={(next) => {
           if (!next) setArmedHostId(null);

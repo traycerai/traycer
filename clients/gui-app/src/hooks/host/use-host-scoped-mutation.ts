@@ -1,4 +1,8 @@
-import { useQueryClient, type UseMutationResult } from "@tanstack/react-query";
+import {
+  useQueryClient,
+  type MutationScope,
+  type UseMutationResult,
+} from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   HostRpcError,
@@ -20,12 +24,15 @@ import {
   type AnalyticsProviderOperation,
 } from "@/lib/analytics";
 
-interface HostScopedMutationContext {
+interface HostScopedMutationContext<Captured> {
   readonly hostId: string | null;
+  /** Whatever `captureContext` read at send time; `undefined` without one. */
+  readonly captured: Captured;
 }
 
 interface UseHostScopedMutationArgs<
   Method extends keyof HostRpcRegistry & string,
+  Captured,
 > {
   readonly method: Method;
   readonly mutationKey: ReadonlyArray<unknown>;
@@ -47,17 +54,56 @@ interface UseHostScopedMutationArgs<
    * surface - belongs here, not in a `mutate(vars, { onSuccess })` at the call
    * site.
    */
+  /**
+   * `hostId` is the one captured in `onMutate` - the host this request was
+   * SENT on, which is not necessarily the one the client addresses by the time
+   * it answers (a surface whose target host moved mid-flight re-points the
+   * client underneath). A caller that files the response against a host must
+   * use this one, per the host-swap rule in gui-app AGENTS.md.
+   */
   readonly onSuccess?:
     | ((
         data: ResponseOfMethod<HostRpcRegistry, Method>,
         variables: RequestOfMethod<HostRpcRegistry, Method>,
+        hostId: string | null,
+        captured: Captured,
       ) => void)
+    | undefined;
+  /**
+   * Per-request state to hand `onSuccess` alongside the host id. Runs inside
+   * `onMutate` - before the request is dispatched, once per `mutate()`, in
+   * the order the `mutate()`s were called - and its answer travels with THAT
+   * mutation to its own `onSuccess`. A caller that stashes per-press state in
+   * a ref and reads it back in `onSuccess` gets the LAST press's value
+   * instead: the mutation-level callback closes over the ref, not over the
+   * call, and nothing serializes two `mutate()`s on one observer.
+   *
+   * `onMutate` is not synchronous with `mutate()` (TanStack awaits the
+   * cache-level hook first), so a caller pairing state to a press must hand
+   * it over in press ORDER - a queue - not by reading "the current" value.
+   */
+  readonly captureContext?:
+    | ((variables: RequestOfMethod<HostRpcRegistry, Method>) => Captured)
     | undefined;
   /**
    * Codes the caller handles inline (a confirm dialog). The default toast is
    * skipped so the user is not told to "stop the run" AND asked to confirm.
    */
   readonly silentCodes?: readonly HostRpcError["code"][];
+  /**
+   * TanStack mutation scope. Mutations sharing a scope id run one at a time,
+   * in the order they were fired.
+   *
+   * For mutations whose ARRIVAL order at the host carries meaning, which the
+   * host-side scheduling policy cannot supply: `HostRequestCoordinator` keys
+   * its queues by `[hostId, userId, method, params]`, so it orders a method
+   * against itself and never two different methods against each other. A
+   * set/clear pair for the same resource is the shape that needs this.
+   *
+   * Omit it unless that ordering is load-bearing - a shared scope also
+   * serializes unrelated calls that happen to use the same hook.
+   */
+  readonly scope?: MutationScope | undefined;
 }
 
 /**
@@ -67,13 +113,14 @@ interface UseHostScopedMutationArgs<
  */
 export function useHostScopedMutation<
   Method extends keyof HostRpcRegistry & string,
+  Captured = undefined,
 >(
-  args: UseHostScopedMutationArgs<Method>,
+  args: UseHostScopedMutationArgs<Method, Captured>,
 ): UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, Method>,
   HostRpcError,
   RequestOfMethod<HostRpcRegistry, Method>,
-  HostScopedMutationContext
+  HostScopedMutationContext<Captured>
 > {
   const client = useHostClient();
   return useHostScopedMutationForClient(client, args);
@@ -81,28 +128,42 @@ export function useHostScopedMutation<
 
 export function useHostScopedMutationForClient<
   Method extends keyof HostRpcRegistry & string,
+  Captured = undefined,
 >(
   client: HostClient<HostRpcRegistry> | null,
-  args: UseHostScopedMutationArgs<Method>,
+  args: UseHostScopedMutationArgs<Method, Captured>,
 ): UseMutationResult<
   ResponseOfMethod<HostRpcRegistry, Method>,
   HostRpcError,
   RequestOfMethod<HostRpcRegistry, Method>,
-  HostScopedMutationContext
+  HostScopedMutationContext<Captured>
 > {
   const queryClient = useQueryClient();
-  return useHostMutation<HostRpcRegistry, Method, HostScopedMutationContext>({
+  return useHostMutation<
+    HostRpcRegistry,
+    Method,
+    HostScopedMutationContext<Captured>
+  >({
     client,
     method: args.method,
     mapVariables: (variables) => variables,
     options: {
       mutationKey: args.mutationKey,
-      onMutate: () => ({ hostId: client?.getActiveHostId() ?? null }),
+      scope: args.scope,
+      onMutate: (variables) => ({
+        hostId: client?.getActiveHostId() ?? null,
+        // `undefined` is what `Captured` IS when no capture was asked for;
+        // the cast only names that fact for the compiler.
+        captured:
+          args.captureContext === undefined
+            ? (undefined as Captured)
+            : args.captureContext(variables),
+      }),
       onSuccess: (data, variables, ctx) => {
         trackScopedMutationSuccess(args.mutationKey, variables);
         // Before the host-id gate: this work is the caller's, and a null host
         // id is a reason to skip invalidation, not to skip the caller.
-        args.onSuccess?.(data, variables);
+        args.onSuccess?.(data, variables, ctx.hostId, ctx.captured);
         if (ctx.hostId === null) return;
         for (const method of args.invalidateMethods) {
           void queryClient.invalidateQueries({
@@ -127,6 +188,14 @@ const PROVIDER_MUTATION_OPERATIONS: Readonly<
   [providersMutationKeys.setEnabled()[0]]: "enabled",
   [providersMutationKeys.setApiKey()[0]]: "api_key",
   [providersMutationKeys.clearApiKey()[0]]: "api_key",
+  // The per-profile twins report the SAME operation as the provider-wide pair
+  // above. `api_key` answers "did this user configure a key", and where the
+  // credential is scoped does not change that - splitting them into a second
+  // operation would break the metric's continuity for no analytical gain,
+  // while leaving them out undercounts every provider whose key is per-account
+  // (today: Antigravity, whose key has no provider-wide form at all).
+  [providersMutationKeys.setProfileApiKey()[0]]: "api_key",
+  [providersMutationKeys.clearProfileApiKey()[0]]: "api_key",
   [providersMutationKeys.setTerminalAgentArgs()[0]]: "terminal_args",
   [providersMutationKeys.setEnvOverride()[0]]: "env_override",
   [providersMutationKeys.deleteEnvOverride()[0]]: "env_override",

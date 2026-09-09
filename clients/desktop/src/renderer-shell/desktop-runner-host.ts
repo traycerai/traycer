@@ -72,9 +72,11 @@ import type {
   DisplayTopology,
   FileSaveInput,
   FileSaveResult,
+  HostKeyPinMismatch,
   InstalledFont,
   PendingCertificateError,
   ProcessMetricsSnapshot,
+  RendererJsHeapBreakdown,
   TrustedCertificateEntry,
   Vibrancy,
 } from "../ipc-contracts/platform-types";
@@ -90,6 +92,7 @@ export type {
   CertificateTrustScope,
   DisplaySnapshot,
   DisplayTopology,
+  HostKeyPinMismatch,
   PendingCertificateError,
   ProcessMetricsSnapshot,
   TrustedCertificateEntry,
@@ -135,6 +138,7 @@ import type {
   GlobalShortcutStatus,
 } from "../ipc-contracts/global-shortcuts-types";
 import type {
+  DesktopAuthSessionSetResult,
   DesktopAuthSessionSnapshot,
   DesktopRuntimePlatform,
   DesktopTopLevelMenuId,
@@ -209,6 +213,7 @@ export interface DesktopPreloadBridge {
   ): Promise<readonly string[]>;
   requestMicrophoneAccess(): Promise<"granted" | "denied">;
   openMicrophoneSettings(): Promise<void>;
+  openFullDiskAccessSettings(): Promise<void>;
   beginAuthAttempt(): void;
   onAuthCallback(handler: () => void): {
     dispose: () => void;
@@ -414,6 +419,7 @@ export interface DesktopPlatformBridge {
   diagnostics: {
     getMetrics(): Promise<ProcessMetricsSnapshot>;
     takeHeapSnapshot(): Promise<string | null>;
+    measureJsHeaps(): Promise<RendererJsHeapBreakdown | null>;
     traceStart(): Promise<boolean>;
     traceStop(): Promise<string | null>;
   };
@@ -457,6 +463,11 @@ export interface DesktopPlatformBridge {
     dismissPending(id: string): Promise<void>;
     showSystemDialog(certificate: unknown, message: string): Promise<boolean>;
     onPending(handler: (entry: PendingCertificateError) => void): {
+      dispose: () => void;
+    };
+  };
+  hostKeyPin: {
+    onMismatch(handler: (entry: HostKeyPinMismatch) => void): {
       dispose: () => void;
     };
   };
@@ -622,7 +633,9 @@ export interface DesktopWindowsBridge {
   };
   authSession: {
     get(): Promise<DesktopAuthSessionSnapshot>;
-    set(snapshot: DesktopAuthSessionSnapshot): Promise<void>;
+    set(
+      snapshot: DesktopAuthSessionSnapshot,
+    ): Promise<DesktopAuthSessionSetResult>;
     onChange(handler: (snapshot: DesktopAuthSessionSnapshot) => void): {
       dispose: () => void;
     };
@@ -653,6 +666,9 @@ export class DesktopRunnerHost implements IRunnerHost {
   readonly authnBaseUrl: string;
   readonly relayBaseUrl: string;
   readonly hasLocalHost: boolean = true;
+  // The renderer's own clipboard takes images, and where a MIME type defeats
+  // it the main-process nativeImage bridge picks the write up.
+  readonly canCopyImages: boolean = true;
 
   readonly secureStorage: ISecureStorage;
   readonly tokenStore: ITokenStore;
@@ -678,6 +694,9 @@ export class DesktopRunnerHost implements IRunnerHost {
   // No OS push on the desktop: notifications here are native `show` calls, not
   // an APNs/FCM permission the user can revoke from a settings app.
   readonly pushPermission: null = null;
+  // No OS back request on the desktop: back is the header arrows, the mouse
+  // buttons and the keybinding, all of which the GUI owns itself.
+  readonly systemBack: null = null;
   readonly hostControllerStatus: DesktopHostControllerStatusBridge;
   readonly selectionAuthority: SelectionAuthorityClient;
   private readonly refreshSelectionFleet: () => Promise<void>;
@@ -911,6 +930,10 @@ export class DesktopRunnerHost implements IRunnerHost {
 
   openMicrophoneSettings(): Promise<void> {
     return this.bridge.openMicrophoneSettings();
+  }
+
+  openFullDiskAccessSettings(): Promise<void> {
+    return this.bridge.openFullDiskAccessSettings();
   }
 
   openExternalLink(url: string): Promise<void> {
@@ -1161,7 +1184,13 @@ function isEphemeralDropPath(filePath: string): boolean {
 function buildDesktopFileSave(bridge: DesktopFileDropsBridge): IFileSaveHost {
   return {
     saveFile: (request) => bridge.saveFile(request),
+    // The native dialog writes the file the user named.
+    saveRoute: "download" as const,
     openSavedFile: (path) => bridge.openSavedFile(path),
+    // The save dialog already writes the file the user named, so there is no
+    // second, chooser-free route to offer - and nothing here for a surface to
+    // split into separate "share" and "download" affordances.
+    downloadFile: null,
   };
 }
 

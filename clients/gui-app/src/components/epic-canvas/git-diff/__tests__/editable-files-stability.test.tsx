@@ -40,6 +40,7 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostMethodSchemaVersion: () => null,
   useHostSupportsMethod: () => true,
 }));
 

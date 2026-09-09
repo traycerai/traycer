@@ -157,4 +157,49 @@ describe("openPipHeadlessStream", () => {
     handle.close();
     expect(harness.closeCount.value).toBe(1);
   });
+
+  it("answers an rttProbe and does not forward it as a frame", () => {
+    // M54: the host TIMES this reply, and a mirror that never answers reads as
+    // a dead link. Mutation: moving the `rttProbe` arm below `input.onFrame`,
+    // or dropping its `return` - the probe then either takes the consumer's
+    // latency on its measurement, or reaches a consumer that has no arm for
+    // it and gets acked as a pixel frame.
+    const harness = createScreencastClientHarness();
+    const received: BrowserScreencastServerFrame[] = [];
+
+    openPipHeadlessStream({
+      client: harness.client,
+      epicId: "epic-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      maxWidth: 480,
+      maxHeight: 360,
+      quality: 50,
+      onFrame: (frame) => {
+        received.push(frame);
+      },
+    });
+
+    harness.deliverServerFrame(
+      {
+        kind: "rttProbe",
+        hasBinaryPayload: false,
+        probeId: 12,
+        controlPlaneRttMs: 41,
+      },
+      null,
+    );
+
+    expect(harness.sentClientFrames).toEqual([
+      {
+        envelope: {
+          kind: "rttProbeAck",
+          hasBinaryPayload: false,
+          probeId: 12,
+        },
+        binaryPayload: null,
+      },
+    ]);
+    expect(received).toEqual([]);
+  });
 });

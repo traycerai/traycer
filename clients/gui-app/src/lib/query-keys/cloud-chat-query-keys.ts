@@ -37,14 +37,21 @@ export const cloudChatQueryKeys = {
   /**
    * One chat, resolved and assembled.
    *
-   * Keyed on the identity triple only, never on the head digest: the read has
-   * to run before anybody knows which head it landed on, so a digest in the key
-   * would be a value the key's own consumer cannot supply.
+   * Keyed on the identity triple AND the head digest the RECORD row carries
+   * (`""` when the row has none). The digest is not the one the read lands
+   * on - nobody knows that before the read runs - it is the one the epic's
+   * record table was last told about, which the host's record stream pushes
+   * as the owner publishes. A new head is therefore a new key: the read
+   * re-resolves without any polling, and the old key's entry is dropped by
+   * its `gcTime: 0`. When the record carries no head (an older owner host,
+   * or a row whose feed upsert has not arrived) the key is `""` and the read
+   * behaves exactly as it did before the digest joined the key.
    */
   read: (
     hostId: string | null,
     viewerUserId: string,
     identity: CloudChatIdentity,
+    recordHeadSha256: string,
   ) =>
     [
       ...cloudChatQueryKeys.scope(hostId, viewerUserId),
@@ -52,6 +59,7 @@ export const cloudChatQueryKeys = {
       identity.taskId,
       identity.ownerUserId,
       identity.chatId,
+      recordHeadSha256,
     ] as const,
 
   /**

@@ -7,6 +7,7 @@ import {
   __getXtermHostEntryForTests,
   acquireXtermHost,
   adoptWarmSessionInstance,
+  createXtermRendererController,
   hasPeerXtermHostForSession,
   peekXtermHostGridForSession,
   rekeyXtermHost,
@@ -32,12 +33,18 @@ function makeEntry(sessionId: string, hostId: string | null): XtermHostEntry {
     term,
     fitAddon: new FitAddon(),
     searchAddon: new SearchAddon(),
-    canvasAddon: null,
+    // Canvas-free engine: this suite is about engine identity across rekeys,
+    // not renderer lifetime, so the controller's loader reports the renderer
+    // unavailable and it stays permanently DOM-rendered.
+    rendererController: createXtermRendererController({
+      loadCanvasAddon: () => null,
+      refreshAllRows: () => undefined,
+    }),
     writerProxy: () => undefined,
     live: {
       onUserInput: () => undefined,
       onContainerResize: () => undefined,
-      openExternalLink: () => undefined,
+      openLink: () => undefined,
       getFindTargetId: () => null,
       onSearchResults: () => undefined,
     },
@@ -86,7 +93,7 @@ describe("xterm host viewport continuity", () => {
     const entry = acquireXtermHost("old-instance", makeEntryForTests);
     // Release the React mount before a warm-session adoption. The engine keeps
     // xterm's normal-buffer viewport inside the Terminal object itself.
-    releaseXtermHost("old-instance", true);
+    releaseXtermHost("old-instance", true, false);
 
     expect(rekeyXtermHost("old-instance", "new-instance")).toBe(true);
     const reacquired = acquireXtermHost("new-instance", () => {
@@ -106,7 +113,7 @@ describe("xterm host viewport continuity", () => {
 
   it("refuses an occupied destination without losing the warm source", () => {
     const source = acquireXtermHost("warm-source", makeEntryForTests);
-    releaseXtermHost("warm-source", true);
+    releaseXtermHost("warm-source", true, false);
     const destination = acquireXtermHost("occupied-target", makeEntryForTests);
 
     expect(rekeyXtermHost("warm-source", "occupied-target")).toBe(false);
@@ -129,7 +136,7 @@ describe("xterm host fleet identity", () => {
     const engineA = acquireXtermHost("inst-a", () =>
       makeEntry(SHARED_ID, HOST_A),
     );
-    releaseXtermHost("inst-a", true);
+    releaseXtermHost("inst-a", true, false);
     registry.release("inst-a", ownedA.handle, true);
 
     adoptWarmSessionInstance(
@@ -153,7 +160,7 @@ describe("xterm host fleet identity", () => {
     const engineA = acquireXtermHost("inst-a", () =>
       makeEntry(SHARED_ID, HOST_A),
     );
-    releaseXtermHost("inst-a", true);
+    releaseXtermHost("inst-a", true, false);
     registry.release("inst-a", ownedA.handle, true);
 
     const ownedB = createOwnedHandle(SHARED_ID);
@@ -173,7 +180,7 @@ describe("xterm host fleet identity", () => {
     const engineA = acquireXtermHost("inst-a", () =>
       makeEntry(SHARED_ID, HOST_A),
     );
-    releaseXtermHost("inst-a", true);
+    releaseXtermHost("inst-a", true, false);
 
     expect(
       peekXtermHostGridForSession({ hostId: HOST_A, sessionId: SHARED_ID }),
@@ -224,7 +231,7 @@ describe("xterm host fleet identity", () => {
     const engineA = acquireXtermHost("inst-a", () =>
       makeEntry(SHARED_ID, HOST_A),
     );
-    releaseXtermHost("inst-a", true);
+    releaseXtermHost("inst-a", true, false);
     registry.release("inst-a", ownedA.handle, true);
 
     adoptWarmSessionInstance(

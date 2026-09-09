@@ -1,4 +1,4 @@
-import { type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import {
   epicsSeen,
+  migrationModalRun,
+  MIGRATION_RUN_IDLE,
   taskChainsSeen,
   useMigrationRunStore,
   type MigrationRunState,
@@ -13,14 +15,19 @@ import {
 
 const MIGRATION_PROGRESS_LABEL = "Migrating tasks";
 
+/**
+ * ONE modal for the whole app, whichever machine raised it: it blocks the app
+ * while a migration runs, so a second host migrating at the same time is not a
+ * second modal. `migrationModalRun` picks whose progress it shows - a live
+ * migration first, then a failure nobody has acknowledged.
+ */
 export function MigrationBlockingModalHost(): ReactNode {
-  const status = useMigrationRunStore((s) => s.status);
-  const totals = useMigrationRunStore((s) => s.totals);
-  const counts = useMigrationRunStore((s) => s.counts);
-  const finalSuccess = useMigrationRunStore((s) => s.finalSuccess);
+  const runs = useMigrationRunStore((s) => s.runs);
   const remoteRunning = useMigrationRunStore((s) => s.remoteRunning);
   const reset = useMigrationRunStore((s) => s.reset);
+  const entry = useMemo(() => migrationModalRun(runs), [runs]);
 
+  const status = entry?.run.status ?? "idle";
   const isErrorAck = status === "error";
   const isRunning = status === "running" || remoteRunning;
   const open = isRunning || isErrorAck;
@@ -59,14 +66,18 @@ export function MigrationBlockingModalHost(): ReactNode {
           {isRunning ? (
             <RunningBody
               status={status}
-              totals={totals}
-              counts={counts}
+              totals={entry?.run.totals ?? null}
+              counts={entry?.run.counts ?? MIGRATION_RUN_IDLE.counts}
               isRemote={status !== "running" && remoteRunning}
             />
           ) : (
             <ErrorBody
-              finalSuccess={finalSuccess}
-              onAcknowledge={() => reset()}
+              finalSuccess={entry?.run.finalSuccess ?? null}
+              // Acknowledges the failure this modal is showing, and only it:
+              // another host's run is not this button's to retire.
+              onAcknowledge={() => {
+                if (entry !== null) reset(entry.hostId);
+              }}
             />
           )}
         </DialogPrimitive.Content>

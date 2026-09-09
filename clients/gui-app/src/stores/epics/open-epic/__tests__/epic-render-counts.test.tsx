@@ -13,11 +13,11 @@ import { Profiler, type ProfilerOnRenderCallback } from "react";
 import { act, cleanup, render } from "@testing-library/react";
 import * as Y from "yjs";
 import { createArtifactInDocForTests } from "./projection-helpers-test-shims";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import { useStore } from "zustand";
@@ -53,7 +53,7 @@ function makeMeta(): SnapshotMetaEpic {
   };
 }
 
-function newSession(): OpenEpicStoreHandle {
+function newSession(): OpenedStoreForTest {
   const captured: { value: EpicStreamCallbacks | null } = { value: null };
   const factory: EpicStreamClientFactory = (_id, callbacks) => {
     captured.value = callbacks;
@@ -66,11 +66,21 @@ function newSession(): OpenEpicStoreHandle {
       close: () => undefined,
     };
   };
-  const handle = createOpenEpicStore({
+  const handle = openStoreForTest({
     epicId: "epic-render-counts",
-    streamClientFactory: factory,
     userId: null,
-    onAuthError: null,
+    // The factories go to the COMPOSITION now, not the store:
+    // `createOpenEpicStore` stopped constructing a runtime, so a
+    // suite that used to hand it a `streamClientFactory` has nothing
+    // to hand it. `handle.doc` still resolves because this harness
+    // builds the runtime in THIS thread.
+    factories: {
+      streamClientFactory: factory,
+      laneSelection: null,
+    },
+    // Explicit: `null` means this suite never writes, so a write in
+    // one that said so fails rather than resolving quietly.
+    writeCommand: null,
   });
   if (captured.value === null) throw new Error("factory not invoked");
   captured.value.onSnapshot(makeMeta(), Y.encodeStateAsUpdate(new Y.Doc()));
@@ -95,7 +105,7 @@ afterEach(() => {
 });
 
 describe("epic projector render-count regressions", () => {
-  it("editing artifact A does NOT re-render a component subscribed to artifact B", () => {
+  it("editing artifact A does NOT re-render a component subscribed to artifact B", async () => {
     const handle = newSession();
     const idA = createArtifactInDocForTests(handle.doc, "spec", null);
     const idB = createArtifactInDocForTests(handle.doc, "spec", null);
@@ -118,17 +128,17 @@ describe("epic projector render-count regressions", () => {
     const initial = spy.counts.get("b") ?? 0;
     expect(initial).toBeGreaterThan(0);
 
-    act(() => {
-      handle.store.getState().renameArtifact(idA, "A renamed once");
-      handle.store.getState().renameArtifact(idA, "A renamed twice");
-      handle.store.getState().renameArtifact(idA, "A renamed thrice");
+    await act(async () => {
+      await handle.store.getState().renameArtifact(idA, "A renamed once");
+      await handle.store.getState().renameArtifact(idA, "A renamed twice");
+      await handle.store.getState().renameArtifact(idA, "A renamed thrice");
     });
 
     expect(spy.counts.get("b") ?? 0).toBe(initial);
     handle.dispose();
   });
 
-  it("editing artifact title does NOT re-render the connection-status subscriber", () => {
+  it("editing artifact title does NOT re-render the connection-status subscriber", async () => {
     const handle = newSession();
     const idA = createArtifactInDocForTests(handle.doc, "spec", null);
 
@@ -147,16 +157,16 @@ describe("epic projector render-count regressions", () => {
 
     const initial = spy.counts.get("conn") ?? 0;
 
-    act(() => {
-      handle.store.getState().renameArtifact(idA, "Title 1");
-      handle.store.getState().renameArtifact(idA, "Title 2");
+    await act(async () => {
+      await handle.store.getState().renameArtifact(idA, "Title 1");
+      await handle.store.getState().renameArtifact(idA, "Title 2");
     });
 
     expect(spy.counts.get("conn") ?? 0).toBe(initial);
     handle.dispose();
   });
 
-  it("tree slice stays referentially stable when only a title changes", () => {
+  it("tree slice stays referentially stable when only a title changes", async () => {
     const handle = newSession();
     const id = createArtifactInDocForTests(handle.doc, "spec", null);
 
@@ -175,8 +185,8 @@ describe("epic projector render-count regressions", () => {
     );
     const initial = spy.counts.get("root") ?? 0;
 
-    act(() => {
-      handle.store.getState().renameArtifact(id, "Title only");
+    await act(async () => {
+      await handle.store.getState().renameArtifact(id, "Title only");
     });
 
     expect(spy.counts.get("root") ?? 0).toBe(initial);

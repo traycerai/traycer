@@ -62,10 +62,7 @@ const browserCanvasState = vi.hoisted(() => ({
 }));
 
 const tileNavigationMocks = vi.hoisted(() => ({
-  openTileInEpic: vi.fn(),
-  openTileInTab: vi.fn(),
-  openTilePreviewInEpic: vi.fn(),
-  openTilePreviewInTab: vi.fn(),
+  openTile: vi.fn(),
 }));
 vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
   useEpicTileNavigation: () => tileNavigationMocks,
@@ -204,7 +201,7 @@ function resetTestState(): void {
   testState.draggableInputs = [];
   testState.activeArtifactId = null;
   testState.activeArtifact = null;
-  tileNavigationMocks.openTileInEpic.mockClear();
+  tileNavigationMocks.openTile.mockClear();
 }
 
 describe("<EpicLeftPanelRail />", () => {
@@ -234,7 +231,7 @@ describe("<EpicLeftPanelRail />", () => {
 
     fireEvent.click(screen.getByTestId("epic-rail-terminals"));
 
-    expect(tileNavigationMocks.openTileInEpic).not.toHaveBeenCalled();
+    expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
   });
 
   it("renders default registry panels and registers rail icon and background drop targets", () => {

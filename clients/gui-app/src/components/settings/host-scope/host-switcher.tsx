@@ -208,7 +208,13 @@ export function HostSwitcher(props: {
   readonly activeHostId: string | null;
   readonly onSelect: (hostId: string) => void;
   /** How this list ends — see `HostSwitcherAction`. */
-  readonly action: HostSwitcherAction;
+  /**
+   * `null` for a surface with nowhere to send host management - the onboarding
+   * tour renders outside the app shell, so the Settings overlay it would open
+   * has no surface to appear on, and a row that does nothing is worse than no
+   * row. The empty-list branch then states the fact and offers no verb.
+   */
+  readonly action: HostSwitcherAction | null;
   /** Where this picker sits — see `HostSwitcherSurface`. */
   readonly surface: HostSwitcherSurface;
   /**
@@ -265,8 +271,15 @@ export function HostSwitcher(props: {
   const binding = useHostBinding();
   useRefreshHostDirectoryOnOpen(open, binding?.directory ?? null);
   const { hosts, selected } = props;
-  const action = HOST_SWITCHER_ACTIONS[props.action.kind];
-  const ActionIcon = action.icon;
+  // Resolved once, as one value, so the two render sites below narrow on a
+  // local rather than on a prop a closure cannot keep narrowed.
+  const trailingAction =
+    props.action === null
+      ? null
+      : {
+          ...HOST_SWITCHER_ACTIONS[props.action.kind],
+          onSelect: props.action.onSelect,
+        };
   const surface = HOST_SWITCHER_SURFACES[props.surface];
 
   // The empty state keys on the LIST, not on the selection.
@@ -316,15 +329,15 @@ export function HostSwitcher(props: {
         {/* Genuinely zero hosts is exactly when this action matters most, and
             it used to be unreachable here — the only opener lived in a popover
             this branch returned before rendering. */}
-        {props.isLoading ? null : (
+        {props.isLoading || trailingAction === null ? null : (
           <button
             type="button"
-            onClick={props.action.onSelect}
+            onClick={trailingAction.onSelect}
             className="inline-flex items-center gap-1.5 self-start rounded-md px-1 py-0.5 text-ui-xs text-primary transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-            data-testid={action.emptyTestId}
+            data-testid={trailingAction.emptyTestId}
           >
-            <ActionIcon className="size-3.5 shrink-0" />
-            {action.label}
+            <trailingAction.icon className="size-3.5 shrink-0" />
+            {trailingAction.label}
           </button>
         )}
       </div>
@@ -393,22 +406,24 @@ export function HostSwitcher(props: {
                 />
               ))}
             </CommandGroup>
-            <CommandGroup>
-              <CommandItem
-                value={action.commandValue}
-                keywords={[...action.keywords]}
-                onSelect={() => {
-                  setOpen(false);
-                  props.action.onSelect();
-                }}
-                data-testid={action.testId}
-              >
-                <ActionIcon className="size-4 shrink-0 text-muted-foreground" />
-                <span className="min-w-0 flex-1 truncate text-ui-sm">
-                  {action.label}
-                </span>
-              </CommandItem>
-            </CommandGroup>
+            {trailingAction === null ? null : (
+              <CommandGroup>
+                <CommandItem
+                  value={trailingAction.commandValue}
+                  keywords={[...trailingAction.keywords]}
+                  onSelect={() => {
+                    setOpen(false);
+                    trailingAction.onSelect();
+                  }}
+                  data-testid={trailingAction.testId}
+                >
+                  <trailingAction.icon className="size-4 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1 truncate text-ui-sm">
+                    {trailingAction.label}
+                  </span>
+                </CommandItem>
+              </CommandGroup>
+            )}
           </CommandList>
         </Command>
         {/* The same "a FAILED list is not an empty account" rule, at its third

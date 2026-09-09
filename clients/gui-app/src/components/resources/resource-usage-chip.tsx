@@ -10,6 +10,7 @@ import {
   formatMemoryBytes,
   formatProcessCount,
 } from "@/lib/resources/format-resource-usage";
+import { UNAVAILABLE_DASH } from "@/lib/resources/memory-metric";
 import { cn } from "@/lib/utils";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -55,7 +56,8 @@ function ResourceChipSeparator() {
 
 interface ResourceUsageChipProps {
   readonly cpuPercent: number;
-  readonly rssBytes: number;
+  readonly rssBytes: number | null;
+  readonly pssBytes: number | null;
   readonly processCount: number;
   /** Prefix for the accessible label / hover title, e.g. "Resource usage". */
   readonly label: string;
@@ -70,10 +72,21 @@ interface ResourceUsageChipProps {
  */
 export function ResourceUsageChip(props: ResourceUsageChipProps) {
   const cpu = formatCpuPercent(props.cpuPercent);
-  const memory = formatMemoryBytes(props.rssBytes);
+  // One row is its own scope, so the popover's complete-scope rule reduces to
+  // "PSS when this row has one". The metric is named in the VISIBLE text, not
+  // only in the accessible one: two chips on screen otherwise show numbers
+  // that are not comparable with nothing to tell them apart.
+  const memoryMetric = props.pssBytes === null ? "RSS" : "PSS";
+  const memoryBytes = props.pssBytes ?? props.rssBytes;
+  const memory =
+    memoryBytes === null
+      ? UNAVAILABLE_DASH
+      : `${formatMemoryBytes(memoryBytes)} ${memoryMetric}`;
   const processes = formatProcessCount(props.processCount);
   const processWord = pluralize(props.processCount, "process", "processes");
-  const description = `${props.label}: ${cpu} CPU, ${memory} memory, ${processes} ${processWord}`;
+  const memoryDescription =
+    memoryBytes === null ? "memory unavailable" : memory;
+  const description = `${props.label}: ${cpu} CPU, ${memoryDescription}, ${processes} ${processWord}`;
 
   return (
     <ResourceChipFrame
@@ -115,6 +128,7 @@ export function OwnerResourceChip(props: OwnerResourceChipProps) {
     <ResourceUsageChip
       cpuPercent={usage.cpuPercent}
       rssBytes={usage.rssBytes}
+      pssBytes={usage.pssBytes}
       processCount={usage.processCount}
       label="Resource usage"
       className={props.className}
@@ -138,6 +152,7 @@ export function EpicResourceChip(props: EpicResourceChipProps) {
     <ResourceUsageChip
       cpuPercent={usage.cpuPercent}
       rssBytes={usage.rssBytes}
+      pssBytes={usage.pssBytes}
       processCount={usage.processCount}
       label="Epic resource usage"
       className={props.className}

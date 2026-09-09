@@ -1,3 +1,4 @@
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTheme } from "next-themes";
 import { Toaster as Sonner, type ToasterProps } from "sonner";
 import { DismissableLayer } from "radix-ui/internal";
@@ -9,6 +10,16 @@ import {
 } from "lucide-react";
 import { ProgressToastIcon } from "@/components/ui/progress-toast-icon";
 import { cn } from "@/lib/utils";
+import {
+  listTileRects,
+  subscribeTileRects,
+} from "@/lib/browser-view/tiles/tile-rect-registry";
+import {
+  DEFAULT_TOASTER_ANCHOR,
+  pickToasterAnchor,
+  type ToasterAnchor,
+  type ToasterSize,
+} from "@/components/ui/toaster-anchor";
 
 const TOAST_CLASS_NAME = cn("cn-toast", "group/toast");
 const TOAST_CLOSE_BUTTON_CLASS_NAME = cn(
@@ -31,10 +42,61 @@ const TOAST_CANCEL_BUTTON_CLASS_NAME = cn(
 const INTERACTIVE_ELEMENT_SELECTOR =
   "button, a, input, textarea, select, [role='button']";
 const NOTIFICATION_TOAST_ACTION_SELECTOR = "[data-notification-toast-action]";
+// The outer `<section>` sonner renders is a static, zero-height wrapper -
+// the fixed, painted surface is one `<ol data-sonner-toaster>` per toast
+// position, and sonner (2.0.8) mounts each only once a toast exists for
+// that position. Size is measured from those lists so toast placement can
+// prefer anchors that miss live browser tiles.
+const SONNER_TOASTER_LIST_SELECTOR = "[data-sonner-toaster]";
 
 const Toaster = ({ ...props }: ToasterProps) => {
   const { theme = "system" } = useTheme();
   const toasterTheme = normalizeToasterTheme(theme);
+  const sectionRef = useRef<HTMLElement | null>(null);
+  // Sonner mounts the `<ol>` only while a toast exists (see the selector
+  // comment above), so this is also the "is a toast currently visible" flag
+  // - `recomputeAnchor` reads it to honor invariant 10's other half:
+  // don't re-anchor a toaster a toast is already showing on.
+  const toastVisibleRef = useRef(false);
+  // The toaster's own last-measured rect, cached across the `<ol>` mounting
+  // and unmounting so a prospective anchor rect never has to hardcode a
+  // size - see `toaster-anchor.ts`.
+  const toasterSizeRef = useRef<ToasterSize | null>(null);
+  const [anchor, setAnchor] = useState<ToasterAnchor>(DEFAULT_TOASTER_ANCHOR);
+
+  const recomputeAnchor = useCallback(() => {
+    if (toastVisibleRef.current) return;
+    setAnchor(
+      pickToasterAnchor({
+        toasterSize: toasterSizeRef.current,
+        viewport: { width: window.innerWidth, height: window.innerHeight },
+        tileRects: listTileRects(),
+      }),
+    );
+  }, []);
+
+  useEffect(() => {
+    const section = sectionRef.current;
+    if (section === null) return;
+    const sync = (): void => {
+      const first = section.querySelector<HTMLElement>(
+        SONNER_TOASTER_LIST_SELECTOR,
+      );
+      if (first !== null) {
+        const rect = first.getBoundingClientRect();
+        toasterSizeRef.current = { width: rect.width, height: rect.height };
+      }
+      toastVisibleRef.current = first !== null;
+    };
+    sync();
+    const observer = new MutationObserver(sync);
+    observer.observe(section, { childList: true, subtree: true });
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
+
+  useEffect(() => subscribeTileRects(recomputeAnchor), [recomputeAnchor]);
 
   return (
     <DismissableLayer.Branch
@@ -42,6 +104,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
       onClick={activateNotificationToastSurface}
     >
       <Sonner
+        ref={sectionRef}
         theme={toasterTheme}
         className="toaster group"
         icons={{
@@ -68,6 +131,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
         }}
         {...props}
         closeButton={props.closeButton ?? true}
+        position={props.position ?? anchor}
       />
     </DismissableLayer.Branch>
   );

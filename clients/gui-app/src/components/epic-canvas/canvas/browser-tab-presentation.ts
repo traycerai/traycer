@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { BrowserTabInfo } from "@traycer/protocol/host/browser/contracts";
-import { useMaybeBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
+import { useBrowserSessionsForHost } from "@/components/epic-canvas/renderers/use-browser-sessions";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 import {
   browserTabOrigin,
@@ -30,11 +30,15 @@ function settleBrowserTabPresentation(
 
 export function useBrowserTabPresentation(
   tab: EpicCanvasTileRef,
+  epicId: string,
 ): BrowserTabPresentation | null {
-  const sessions = useMaybeBrowserSessionsContext();
+  const sessions = useBrowserSessionsForHost({
+    hostId: tab.type === "browser-session" ? tab.hostId : null,
+    epicId,
+  });
   const session =
     tab.type === "browser-session"
-      ? sessions?.items.find(
+      ? sessions.items.find(
           (candidate) =>
             candidate.hostId === tab.hostId &&
             candidate.sessionId === tab.sessionId,

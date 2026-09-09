@@ -7,6 +7,14 @@ export const providersMutationKeys = {
     ["providers.setProfileEnabled", hostId, providerId] as const,
   setApiKey: () => ["providers.setApiKey"] as const,
   clearApiKey: () => ["providers.clearApiKey"] as const,
+  // Distinct from `setApiKey`/`clearApiKey` above, which are the PROVIDER-wide
+  // store. The per-profile methods are separate RPCs precisely because a
+  // profile scope cannot ride the released provider-wide request (it would be
+  // projected away and widen the write to every profile), so their mutation
+  // keys must not collide either - a shared key would make one profile's paste
+  // read as pending on another.
+  setProfileApiKey: () => ["providers.setProfileApiKey"] as const,
+  clearProfileApiKey: () => ["providers.clearProfileApiKey"] as const,
   setTerminalAgentArgs: () => ["providers.setTerminalAgentArgs"] as const,
   setEnvOverride: () => ["providers.setEnvOverride"] as const,
   deleteEnvOverride: () => ["providers.deleteEnvOverride"] as const,
@@ -21,6 +29,7 @@ export const providersMutationKeys = {
   removePackVersion: () => ["providers.removePackVersion"] as const,
   usePackVersion: () => ["providers.usePackVersion"] as const,
   setPackPolicy: () => ["providers.setPackPolicy"] as const,
+  refreshPackDiscovery: () => ["providers.refreshPackDiscovery"] as const,
   renameProfile: () => ["providers.renameProfile"] as const,
   recolorProfile: () => ["providers.recolorProfile"] as const,
   removeProfile: () => ["providers.removeProfile"] as const,

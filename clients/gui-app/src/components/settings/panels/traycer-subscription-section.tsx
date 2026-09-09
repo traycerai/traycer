@@ -22,6 +22,7 @@ import {
   TraycerAccountSelect,
   TraycerSubscriptionView,
 } from "@/components/settings/panels/traycer-subscription-views";
+import { ignoreError } from "@/lib/browser-view/ignore-error";
 import { resolvePlatformBaseUrl } from "@/lib/auth/platform-base-url";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import {
@@ -32,6 +33,7 @@ import {
 } from "@/lib/auth/traycer-subscription-content";
 import { useAuthUser } from "@/hooks/auth/use-auth-user-query";
 import { useRefreshCreditsOnTraycerTurn } from "@/hooks/auth/use-refresh-credits-on-traycer-turn";
+import { useOpenLink } from "@/lib/links/open-link";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import {
   resolveAccountContext,
@@ -44,6 +46,7 @@ export function TraycerSubscriptionSection() {
   // refetches credits. Only mounted here, so it costs nothing elsewhere.
   useRefreshCreditsOnTraycerTurn();
   const runnerHost = useRunnerHost();
+  const openLink = useOpenLink();
   const stored = useAccountContextStore((s) => s.accountContext);
   const setAccountContext = useAccountContextStore((s) => s.setAccountContext);
 
@@ -64,11 +67,16 @@ export function TraycerSubscriptionSection() {
         <div className="flex items-center gap-1">
           <button
             type="button"
-            onClick={() => {
-              void runnerHost.openExternalLink(manageUrl);
-              Analytics.getInstance().track(
-                AnalyticsEvent.SubscriptionManagementOpened,
-                { source: "direct_ui" },
+            onClick={(event) => {
+              // Same as the user menu: the event carries the modifiers (L9),
+              // and the analytics event means "opened", not "asked" (R11).
+              void openLink(manageUrl, "account", event).then(
+                () =>
+                  Analytics.getInstance().track(
+                    AnalyticsEvent.SubscriptionManagementOpened,
+                    { source: "direct_ui" },
+                  ),
+                ignoreError,
               );
             }}
             className="inline-flex w-fit items-center gap-1.5 rounded px-1 text-ui-xs font-medium text-primary transition-colors hover:text-primary/80 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"

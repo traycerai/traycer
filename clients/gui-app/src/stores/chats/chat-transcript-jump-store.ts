@@ -6,7 +6,7 @@
  * has no such context - the target tile may not even be mounted yet when the
  * jump is issued. So the request is parked here by chat id and the chat tile
  * picks it up on its next render, whether that is the current one or the first
- * one after `openTileInEpic` mounts it. Host identity is part of the key:
+ * one after `openTile` mounts it. Host identity is part of the key:
  * separate hosts may legitimately expose the same chat id.
  *
  * Session-only and deliberately not persisted: a jump is a navigation intent,
@@ -42,6 +42,16 @@ export type ChatTranscriptJumpTarget =
       readonly messageText: string;
       readonly timestamp: number;
     }
+  /**
+   * The SENDER-side card again, named EXACTLY from the receiver's side. The
+   * receiver knows its own delivered message id, and the sender's send block
+   * carries that id as `agentMessageReceipt.messageId` (stamped by the host
+   * at tool completion), so the "Received message" card can point at the
+   * one card that produced it with no text or clock heuristic. Misses for a
+   * send persisted before receipts existed, and then times out quietly like
+   * any absent target.
+   */
+  | { readonly kind: "receipt"; readonly messageId: string }
   /**
    * The very start of the transcript - where this agent's life began. Used
    * by the communication graph's Created rows: a creation has no message of

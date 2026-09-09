@@ -338,9 +338,11 @@ export function armLocalHostBootOnSignIn(
           log.info("[host-controller] local host boot deferred to a sign-in");
           return;
         }
-        const outcome = await hostController.convergeReady(false, {
-          kind: "background",
-        });
+        const outcome = await hostController.convergeReady(
+          false,
+          { kind: "background" },
+          "keep-installed",
+        );
         if (outcome.kind === "ok") {
           settle();
           log.info("[host-controller] local host boot complete", {
@@ -461,7 +463,11 @@ export async function runLaunchHostConvergeReconcile(
   // controller coalesces the two onto one job.
   const recovery =
     !initialStatus.updateReady && isUnavailableInstalledHost(initialStatus)
-      ? await hostController.convergeReady(false, { kind: "background" })
+      ? await hostController.convergeReady(
+          false,
+          { kind: "background" },
+          "keep-installed",
+        )
       : null;
   if (recovery !== null) {
     log.info("[host-controller] launch converge recovered an absent service", {
@@ -485,27 +491,82 @@ export async function runLaunchHostConvergeReconcile(
   let outcome: MutationOutcome<
     ApplyStagedOk | ActivateInstalledOk | ConvergeReadyOk
   > | null = null;
+  // The status the activation/recovery arms below decide from. Re-sampled
+  // when the launch apply turns out to be a no-op (see `applied`), because
+  // that apply started nothing and the arms must see the host as it is now.
+  let armStatus = status;
   if (status.updateReady) {
+    // A ready stage ALWAYS reaches the CLI. The version hold - a deliberately
+    // downgraded install that the launch-time apply must not revert - is
+    // decided by `host apply --respect-hold` UNDER the CLI mutation lock, keyed
+    // on the install record as it is at that moment, not by any desktop-side
+    // snapshot: a terminal downgrade can commit between any sample this
+    // process takes and the apply, and a snapshot that suppressed the call
+    // would let that race park a withdrawn (yanked) host or revert a fresh
+    // downgrade. The CLI keeps a held, viable host and answers `applied:
+    // false`; it applies over a held host the registry has yanked; and an
+    // explicit "Update now" is not this path and always applies.
     const applied = await hostController.applyStaged("launch", false);
-    outcome = await recoverAfterFailedApply(hostController, applied);
-  } else if (
-    status.activation === "pendingActivation" ||
-    status.activation === "activationUnknown"
-  ) {
-    outcome = await hostController.activateInstalled(false);
-  } else if (isUnavailableInstalledHost(status) && recovery === null) {
-    // `recovery === null` keeps this from re-running a recovery the pre-stage
-    // pass already attempted, since repeating a failure seconds later helps
-    // nobody.
-    outcome = backgroundMutationOutcome(
-      await hostController.convergeReady(false, { kind: "background" }),
-    );
+    if (applied.kind === "ok" && !applied.value.applied) {
+      // Parked (or nothing was staged by the time the CLI looked) on a host
+      // that is REACHABLE. Nothing started, so any activation debt it carries
+      // still has to be discharged - fall through to the arms below on a
+      // fresh status. (A held host that is DOWN does not arrive here: the
+      // controller reports a no-op against an unreachable host as
+      // `installedNotConverged`, and `recoverAfterFailedApply` below starts it
+      // on its own bytes via the keep-installed converge.)
+      log.info(
+        "[host-controller] launch converge left the installed host in place; continuing to activation/recovery",
+        {
+          installedVersion: applied.value.appliedVersion,
+          stagedVersion: status.stagedVersion,
+        },
+      );
+      armStatus = await hostController.getStatus();
+      if (armStatus.removedByUser) {
+        log.info(
+          "[host-controller] launch converge skipped after apply removal",
+        );
+        return;
+      }
+    } else {
+      outcome = await recoverAfterFailedApply(hostController, applied);
+    }
+  }
+  if (outcome === null) {
+    if (
+      armStatus.activation === "pendingActivation" ||
+      armStatus.activation === "activationUnknown"
+    ) {
+      // `promoteReadyStage: false` for EVERY launch activation. A launch
+      // activation exists to activate the INSTALLED bytes when there is
+      // activation debt - never to promote a stage. `activateInstalled` re-runs
+      // `stageLatest()` internally and would otherwise promote a stage that
+      // becomes ready across that await with `respectHold: false`, reverting a
+      // deliberate downgrade. A known-ready update is already handled by the
+      // `applyStaged("launch")` branch above, under the authoritative CLI
+      // `--respect-hold` guard; anything that only becomes ready
+      // mid-activation waits for the next launch's apply branch. So launch
+      // never promotes here.
+      outcome = await hostController.activateInstalled(false, false);
+    } else if (isUnavailableInstalledHost(armStatus) && recovery === null) {
+      // `recovery === null` keeps this from re-running a recovery the
+      // pre-stage pass already attempted, since repeating a failure seconds
+      // later helps nobody.
+      outcome = backgroundMutationOutcome(
+        await hostController.convergeReady(
+          false,
+          { kind: "background" },
+          "keep-installed",
+        ),
+      );
+    }
   }
 
   const effectiveOutcome = outcome ?? recovery;
   if (effectiveOutcome === null) {
     log.info("[host-controller] launch converge has no activation debt", {
-      activation: status.activation,
+      activation: armStatus.activation,
     });
     return;
   }
@@ -580,6 +641,10 @@ async function recoverAfterFailedApply(
     { applyKind: applied.kind },
   );
   return backgroundMutationOutcome(
-    await hostController.convergeReady(false, { kind: "background" }),
+    await hostController.convergeReady(
+      false,
+      { kind: "background" },
+      "keep-installed",
+    ),
   );
 }

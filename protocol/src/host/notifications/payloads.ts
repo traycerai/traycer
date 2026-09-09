@@ -280,6 +280,41 @@ export function parseHostOperationCommonPayload(
  */
 export const HOST_OPERATION_WORKTREE_DELETION = "worktree.deletion";
 
+export const HOST_NOTIFICATION_WORKTREE_DELETION_FAILURE_KINDS = [
+  "busy",
+  "not_managed",
+  "teardown_failed",
+  "removal_failed",
+] as const;
+export const hostNotificationWorktreeDeletionFailureKindSchema = z.enum(
+  HOST_NOTIFICATION_WORKTREE_DELETION_FAILURE_KINDS,
+);
+export type HostNotificationWorktreeDeletionFailureKind = z.infer<
+  typeof hostNotificationWorktreeDeletionFailureKindSchema
+>;
+
+const hostNotificationWorktreeDeletionFailureCountSchema = z
+  .number()
+  .int()
+  .positive();
+
+/**
+ * Known failure counts, represented as an object with optional known keys
+ * instead of an enum-keyed `z.record`. Besides making partial aggregates
+ * natural, `z.object` strips unknown keys by default: a future host can add a
+ * category without making an older client reject the entire durable payload.
+ */
+export const hostNotificationWorktreeDeletionFailureKindsSchema = z.object({
+  busy: hostNotificationWorktreeDeletionFailureCountSchema.optional(),
+  not_managed: hostNotificationWorktreeDeletionFailureCountSchema.optional(),
+  teardown_failed:
+    hostNotificationWorktreeDeletionFailureCountSchema.optional(),
+  removal_failed: hostNotificationWorktreeDeletionFailureCountSchema.optional(),
+});
+export type HostNotificationWorktreeDeletionFailureKinds = z.infer<
+  typeof hostNotificationWorktreeDeletionFailureKindsSchema
+>;
+
 /**
  * `host.operation.finished` payload for a worktree-deletion command - the
  * first operation arm, and the template for every later one.
@@ -307,13 +342,43 @@ export const hostNotificationWorktreeDeletionPayloadSchema = z
     /** Open string, not the wire enum: a row minted by a newer host with a
      * source this build has never heard of must still render and route. */
     source: idSchema,
+    /** Task that initiated a single-Task sweep. */
+    epicId: idSchema.optional(),
+    /** Read-time title for a single-Task sweep. */
+    taskTitle: z.string().optional(),
     requestedCount: z.number().int().nonnegative(),
     deletedCount: z.number().int().nonnegative(),
     failedCount: z.number().int().nonnegative(),
+    /** Optional for rows minted before failure categorization existed. */
+    failureKinds: hostNotificationWorktreeDeletionFailureKindsSchema.optional(),
   })
   .catchall(z.unknown());
 export type HostNotificationWorktreeDeletionPayload = z.infer<
   typeof hostNotificationWorktreeDeletionPayloadSchema
+>;
+
+/**
+ * `browser.human.needed` payload: the parked session's tile plus the agent's
+ * own reason for parking.
+ *
+ * `reason` is model-authored prose and is the only copy this row has, so it is
+ * rendered as the body and never as a title or an identifier. `sessionId` and
+ * `tabId` address the tile the click deep-links to; they are host-local by
+ * construction (browser sessions never move hosts), so the row's originHostId
+ * is what says where to open it.
+ */
+export const hostNotificationBrowserHumanNeededPayloadSchema = z
+  .object({
+    kind: z.literal("browser_human_needed"),
+    epicId: idSchema,
+    chatId: idSchema,
+    sessionId: idSchema,
+    tabId: idSchema,
+    reason: z.string().min(1),
+  })
+  .catchall(z.unknown());
+export type HostNotificationBrowserHumanNeededPayload = z.infer<
+  typeof hostNotificationBrowserHumanNeededPayloadSchema
 >;
 
 export const hostNotificationKnownPayloadSchema = z.discriminatedUnion("kind", [
@@ -324,6 +389,7 @@ export const hostNotificationKnownPayloadSchema = z.discriminatedUnion("kind", [
   hostNotificationApprovalPayloadSchema,
   hostNotificationInterviewPayloadSchema,
   hostNotificationWorktreeDeletionPayloadSchema,
+  hostNotificationBrowserHumanNeededPayloadSchema,
 ]);
 export type HostNotificationKnownPayload = z.infer<
   typeof hostNotificationKnownPayloadSchema
@@ -385,5 +451,7 @@ function payloadKindMatchesNotificationKind(
     // property the whole payload tier exists to provide.
     case "host.operation.finished":
       return payloadKind === "worktree_deletion";
+    case "browser.human.needed":
+      return payloadKind === "browser_human_needed";
   }
 }

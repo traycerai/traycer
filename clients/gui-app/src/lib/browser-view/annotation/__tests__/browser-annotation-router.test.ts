@@ -22,6 +22,9 @@ function chat(title: string, hostId: string | null): ChatProjection {
     userId: null,
     hostId,
     isTitleEditedByUser: false,
+    // Neutral scaffolding: this suite exercises route resolution, not doc
+    // residency.
+    docResident: false,
     settings: null,
     archivedAt: null,
   };

@@ -3,10 +3,15 @@ import type {
   CanonicalTerminalSessionInfoWithCurrentCwd,
 } from "@traycer/protocol/host/terminal/unary-schemas";
 import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
+import {
+  PROVIDER_DISPLAY_NAMES,
+  type ProviderId,
+} from "@traycer/protocol/host/provider-schemas";
 import { terminalSessionTitle } from "@/lib/terminals/terminal-title";
 import { selectPlainTerminalViewModel } from "@/lib/terminals/plain-terminal-authority";
 import {
   hostAcknowledgedTab,
+  isProviderLoginLandingTab,
   terminalSessionKey,
   type LandingTerminalTabRef,
 } from "@/stores/home/landing-terminal-store";
@@ -21,6 +26,42 @@ export interface LandingTerminalReconciliationInput {
   /** Tombstones captured before their kill retries begin. */
   readonly excludedSessionKeys: ReadonlySet<string>;
   readonly mintInstanceId: () => string;
+  /**
+   * The provider a listed session was opened to sign in to, or `null` for an
+   * ordinary terminal. Injected rather than read here so this stays pure, the
+   * same way `mintInstanceId` is.
+   *
+   * Adoption needs it because `terminal.list` carries no origin: a sign-in
+   * session started in ANOTHER window (or before this renderer reloaded)
+   * arrives here as an ordinary running session, and an adopted ref without
+   * the marker is one a tile will happily `terminal.create` under - spawning a
+   * bare shell with none of the provider's spawn env, which looks like the
+   * sign-in terminal and cannot sign anyone in.
+   */
+  readonly providerLoginProviderFor: (sessionId: string) => ProviderId | null;
+}
+
+/**
+ * `tab` with its sign-in provenance applied, or `tab` unchanged.
+ *
+ * Only ever ADDS the marker: a tab that already carries it keeps its recorded
+ * provider (the registry is bounded and evicts, so a later miss must not
+ * un-classify a tab that was classified when the record was still there).
+ */
+function classifyLandingTab(
+  tab: LandingTerminalTabRef,
+  input: Pick<LandingTerminalReconciliationInput, "providerLoginProviderFor">,
+): LandingTerminalTabRef {
+  if (isProviderLoginLandingTab(tab)) return tab;
+  const originProviderId = input.providerLoginProviderFor(tab.sessionId);
+  if (originProviderId === null) return tab;
+  return {
+    ...tab,
+    name: `${PROVIDER_DISPLAY_NAMES[originProviderId]} sign-in`,
+    titleSource: "manual",
+    origin: "provider-login",
+    originProviderId,
+  };
 }
 
 export interface LandingTerminalReconciliationResult {
@@ -38,6 +79,17 @@ export interface HostAuthoritativeLandingTerminalReconciliationInput {
   readonly terminals: readonly PlainTerminalProjection[];
   readonly excludedTerminalKeys: ReadonlySet<string>;
   readonly mintInstanceId: () => string;
+  /**
+   * Same injected registry read as the legacy pass, for the same reason - a
+   * plain snapshot carries no origin either.
+   *
+   * A manager-owned sign-in session is never PROJECTED here, so this pass has
+   * nothing to adopt from it. What it does have is a tab: one adopted without
+   * the marker while the host still read `legacy`, which after the switch is
+   * unacknowledged, unprojected, and therefore both `importLegacy` bait and a
+   * `terminal.plain.create` bare shell. Only the registry can tell it apart.
+   */
+  readonly providerLoginProviderFor: (sessionId: string) => ProviderId | null;
 }
 
 export function resolveLandingTerminalTitleCwd(input: {
@@ -102,19 +154,35 @@ export function reconcileLandingTerminalTabs(
       return [tab];
     }
     matchedSessionIds.add(session.sessionId);
-    if (session.status === "exited") {
-      exitedInstanceIds.push(tab.instanceId);
+    // Provenance can arrive AFTER the tab. Another window can list a running
+    // sign-in session before this one has been told what it is, and that pass
+    // adopts an ordinary tab; from then on the session is MATCHED, so without
+    // this the adoption branch below never reconsiders it and the tab stays
+    // legacy-importable - and recreatable as a bare shell - for life.
+    const classified = classifyLandingTab(tab, input);
+    // A sign-in tab outlives its session's exit: its tile shows the ended
+    // state with a restart, the way the epic sign-in tile does. Dropping it
+    // here would retract the only surface that can restart the sign-in.
+    if (session.status === "exited" && !isProviderLoginLandingTab(classified)) {
+      exitedInstanceIds.push(classified.instanceId);
       return [];
     }
-    if (tab.titleSource === "manual") return [tab];
-    const name = defaultLandingTerminalTitle(session, tab.cwd);
-    return [name === tab.name ? tab : { ...tab, name }];
+    if (classified.titleSource === "manual") return [classified];
+    const name = defaultLandingTerminalTitle(session, classified.cwd);
+    return [name === classified.name ? classified : { ...classified, name }];
   });
 
-  const adoptedTabs = sessions.flatMap((session) => {
+  // Sign-ins first, through the one adoption rule both arms share, then
+  // ordinary running sessions the registry does not claim.
+  const signInTabs = adoptListedProviderLoginSessions({
+    ...input,
+    tabs: survivingTabs,
+  });
+  const ordinaryTabs = sessions.flatMap((session) => {
     if (
       session.status !== "running" ||
-      matchedSessionIds.has(session.sessionId)
+      matchedSessionIds.has(session.sessionId) ||
+      input.providerLoginProviderFor(session.sessionId) !== null
     ) {
       return [];
     }
@@ -128,7 +196,20 @@ export function reconcileLandingTerminalTabs(
     };
     return [tab];
   });
-  const nextTabs = [...tabs, ...adoptedTabs];
+  const adoptedTabs = [...signInTabs, ...ordinaryTabs];
+  const retired = new Set(
+    retiredProviderLoginPredecessors({
+      tabs,
+      activeHostId: input.activeHostId,
+      sessions: input.sessions,
+      providerLoginProviderFor: input.providerLoginProviderFor,
+    }),
+  );
+  const nextTabs = [
+    ...tabs.filter((tab) => !retired.has(tab.instanceId)),
+    ...adoptedTabs,
+  ];
+  const retiredAny = retired.size > 0;
   const activeInstanceId = resolveActiveInstanceId(
     input.activeInstanceId,
     nextTabs,
@@ -142,8 +223,220 @@ export function reconcileLandingTerminalTabs(
     collapseWhenEmpty:
       nextTabs.length === 0 &&
       (exitedInstanceIds.length > 0 ||
+        retiredAny ||
         survivingTabs.length !== input.tabs.length),
   };
+}
+
+/**
+ * The ref for a listed sign-in session this window did not open. Same shape
+ * the opening path writes, so every reader downstream - the adopt-only tile,
+ * the legacy-import exclusion, the close and rename paths - classifies a
+ * session discovered here exactly as one this window opened. Manual title for
+ * the same reason: the host names it "<Provider> sign-in" and reconciliation
+ * must not retitle it from cwd.
+ */
+function providerLoginLandingTab(input: {
+  readonly instanceId: string;
+  readonly hostId: string;
+  readonly session: Pick<CanonicalTerminalSessionInfo, "sessionId" | "cwd">;
+  readonly providerId: ProviderId;
+}): LandingTerminalTabRef {
+  return {
+    instanceId: input.instanceId,
+    sessionId: input.session.sessionId,
+    hostId: input.hostId,
+    cwd: input.session.cwd,
+    name: `${PROVIDER_DISPLAY_NAMES[input.providerId]} sign-in`,
+    titleSource: "manual",
+    origin: "provider-login",
+    originProviderId: input.providerId,
+  };
+}
+
+/**
+ * What the registry-claimed sessions the host lists say about each provider:
+ * which of them are RUNNING. Computed over every listed claimed session,
+ * tombstoned ones included - a tombstone means "raise no tab for this
+ * session", not "this session did not happen", and a running successor the
+ * user just closed still supersedes its predecessor until the kill lands.
+ *
+ * Exited sessions carry no weight here, deliberately. The host lists an
+ * exited sign-in through a grace window and evicts it on `terminal.kill`, so
+ * the set of exited sessions is a moving, partial record of retries: which
+ * of them is "the one to show" changes with every close, and every rule
+ * built on it (newest wins, tombstoned newest still wins, ...) left a case
+ * where a close resurrected an older retry. An ended sign-in tab exists for
+ * the window that HAD the tab - it keeps it through the exit (matched arm) -
+ * and any other window starts a sign-in from the picker, so nothing is lost
+ * by never adopting one.
+ */
+interface ProviderLoginListing {
+  readonly runningSessionIds: ReadonlySet<string>;
+}
+
+function listedProviderLoginSessions(
+  sessions: LandingTerminalReconciliationInput["sessions"],
+): LandingTerminalReconciliationInput["sessions"] {
+  return sessions.filter(
+    (session) =>
+      session.scope.kind === "independent" &&
+      session.sessionKind === "terminal",
+  );
+}
+
+function summarizeProviderLoginListing(
+  sessions: LandingTerminalReconciliationInput["sessions"],
+  providerLoginProviderFor: (sessionId: string) => ProviderId | null,
+): ReadonlyMap<ProviderId, ProviderLoginListing> {
+  const summary = new Map<ProviderId, { runningSessionIds: Set<string> }>();
+  for (const session of sessions) {
+    if (session.status !== "running") continue;
+    const providerId = providerLoginProviderFor(session.sessionId);
+    if (providerId === null) continue;
+    const entry = summary.get(providerId) ?? {
+      runningSessionIds: new Set<string>(),
+    };
+    entry.runningSessionIds.add(session.sessionId);
+    summary.set(providerId, entry);
+  }
+  return summary;
+}
+
+/**
+ * Whether the tab standing for a sign-in session is one this window should
+ * keep showing for its provider: yes while its session runs, and yes while
+ * nothing for that provider runs (an ended tab is the "Start again" surface);
+ * no once the provider has a running session that is not this one - a
+ * restart killed this predecessor.
+ */
+function providerLoginSessionIsCurrent(
+  listing: ProviderLoginListing | undefined,
+  sessionId: string,
+): boolean {
+  if (listing === undefined) return true;
+  return (
+    listing.runningSessionIds.has(sessionId) ||
+    listing.runningSessionIds.size === 0
+  );
+}
+
+/**
+ * The RUNNING sign-in sessions the host lists that this window has no tab
+ * for, as sign-in tabs. Shared by both arms.
+ *
+ * The capable arm reconciles against the plain-terminal projection, and a
+ * host-created sign-in session is never in it: the host made it for
+ * `providers.startTerminalLogin`, through the session manager, so the plain
+ * registry has no row for it. Without this the capable arm could classify a
+ * tab that already existed but never CREATE one - so a sign-in started in
+ * another window, whose record arrived through the shared registry, had no
+ * tab on a capable host and its code stayed invisible there.
+ *
+ * Sign-in sessions ONLY - a session the registry does not claim is left to the
+ * projection, which is the capable host's authority over ordinary terminals.
+ * A tombstoned session (closed here, kill still in flight) is never adopted:
+ * that would resurrect a tab the user just closed. It still counts in the
+ * per-provider listing above while it runs, so its predecessor stays retired
+ * until the kill lands. Exited sessions are not adopted at all - see
+ * `ProviderLoginListing` for why.
+ */
+export function adoptListedProviderLoginSessions(
+  input: Pick<
+    LandingTerminalReconciliationInput,
+    | "tabs"
+    | "activeHostId"
+    | "sessions"
+    | "excludedSessionKeys"
+    | "mintInstanceId"
+    | "providerLoginProviderFor"
+  >,
+): ReadonlyArray<LandingTerminalTabRef> {
+  const tabbedSessionIds = new Set(
+    input.tabs
+      .filter((tab) => tab.hostId === input.activeHostId)
+      .map((tab) => tab.sessionId),
+  );
+  const listed = listedProviderLoginSessions(input.sessions);
+  const listing = summarizeProviderLoginListing(
+    listed,
+    input.providerLoginProviderFor,
+  );
+  return listed.flatMap((session) => {
+    if (
+      session.status !== "running" ||
+      tabbedSessionIds.has(session.sessionId) ||
+      input.excludedSessionKeys.has(
+        terminalSessionKey(input.activeHostId, session.sessionId),
+      )
+    ) {
+      return [];
+    }
+    const providerId = input.providerLoginProviderFor(session.sessionId);
+    if (providerId === null) return [];
+    if (
+      !providerLoginSessionIsCurrent(listing.get(providerId), session.sessionId)
+    ) {
+      return [];
+    }
+    return [
+      providerLoginLandingTab({
+        instanceId: input.mintInstanceId(),
+        hostId: input.activeHostId,
+        session,
+        providerId,
+      }),
+    ];
+  });
+}
+
+/**
+ * The sign-in tabs the host's listing has SUPERSEDED: this host's tabs whose
+ * session is not running while another sign-in for the same provider is.
+ * Returned as instance ids for the caller to drop in the same pass that
+ * adopts, in both arms - and to count as removals, so a pass that retires
+ * the last tab collapses the panel instead of leaving an empty one open for
+ * the auto-spawn to fill with a plain shell the user never asked for.
+ *
+ * A restart kills its predecessor, and only the window that pressed it
+ * retires that tab (`openLandingSignInTerminal`). Every other window that
+ * shows the predecessor - adopted, or reclassified once its provenance
+ * arrived - would otherwise hold it beside the successor and have two
+ * "Start again" tabs for one provider, the stale one restarting only itself.
+ * Judged from the listing rather than from what THIS pass adopted: the
+ * successor may already be a tab here, adopted as an ordinary terminal
+ * before its record arrived and classified since, in which case nothing is
+ * adopted and the predecessor still has to go. A tab whose own session is
+ * still running is never retired: two live sign-ins are the host's to
+ * resolve, not this window's to hide.
+ */
+export function retiredProviderLoginPredecessors(input: {
+  readonly tabs: ReadonlyArray<LandingTerminalTabRef>;
+  readonly activeHostId: string;
+  readonly sessions: LandingTerminalReconciliationInput["sessions"];
+  readonly providerLoginProviderFor: (sessionId: string) => ProviderId | null;
+}): ReadonlyArray<string> {
+  const listing = summarizeProviderLoginListing(
+    listedProviderLoginSessions(input.sessions),
+    input.providerLoginProviderFor,
+  );
+  return input.tabs
+    .filter((tab) => {
+      if (
+        tab.hostId !== input.activeHostId ||
+        !isProviderLoginLandingTab(tab)
+      ) {
+        return false;
+      }
+      const providerId =
+        tab.originProviderId ?? input.providerLoginProviderFor(tab.sessionId);
+      if (providerId === null) return false;
+      return !providerLoginSessionIsCurrent(
+        listing.get(providerId),
+        tab.sessionId,
+      );
+    })
+    .map((tab) => tab.instanceId);
 }
 
 /**
@@ -161,13 +454,14 @@ export function reconcileHostAuthoritativeLandingTerminalTabs(
   const matchedTerminalIds = new Set<string>();
   const removedInstanceIds: string[] = [];
 
-  const tabs = input.tabs.flatMap((tab) => {
-    if (tab.hostId !== input.hostId) return [tab];
-    const terminalKey = terminalSessionKey(tab.hostId, tab.sessionId);
+  const tabs = input.tabs.flatMap((rawTab) => {
+    if (rawTab.hostId !== input.hostId) return [rawTab];
+    const terminalKey = terminalSessionKey(rawTab.hostId, rawTab.sessionId);
     if (input.excludedTerminalKeys.has(terminalKey)) {
-      removedInstanceIds.push(tab.instanceId);
+      removedInstanceIds.push(rawTab.instanceId);
       return [];
     }
+    const tab = classifyLandingTab(rawTab, input);
     const projection = projectionById.get(tab.sessionId);
     if (projection === undefined) {
       if (tab.hostAuthorityAcknowledged === true) {
@@ -239,7 +533,9 @@ function landingTerminalTabsEqual(
     left.titleSource === right.titleSource &&
     left.hostAuthorityAcknowledged === right.hostAuthorityAcknowledged &&
     left.pendingCreate === right.pendingCreate &&
-    left.sourceStoreVersion === right.sourceStoreVersion
+    left.sourceStoreVersion === right.sourceStoreVersion &&
+    left.origin === right.origin &&
+    left.originProviderId === right.originProviderId
   );
 }
 

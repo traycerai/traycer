@@ -6,7 +6,12 @@ import type {
   InterviewQuestion,
   InterviewQuestionOption,
 } from "@traycer/protocol/persistence/epic/schemas";
-import { InterviewOptionDetailsButton } from "@/components/chat/segments/interview-visuals";
+import {
+  InterviewOptionDetailsButton,
+  InterviewOptionDetailsRegion,
+} from "@/components/chat/segments/interview-visuals";
+import { useInterviewOptionDetailsDisclosure } from "@/components/chat/segments/use-interview-option-details-disclosure";
+import { questionAllowsCustomAnswer } from "@/components/chat/segments/interview-custom-answer";
 import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
 import type { DraftAnswer } from "./interview-draft";
@@ -41,8 +46,12 @@ const ANSWER_TEXTAREA_CLASS =
 interface QuestionPageProps {
   question: InterviewQuestion;
   draft: DraftAnswer;
-  // Gates auto-focus so a background pane's field never steals focus.
-  isActive: boolean;
+  // The card's own focus-ownership answer (`useInterviewCard`'s
+  // `focusActive`): the tile is active AND its pane is focused AND its tab is
+  // selected. Gates auto-focus so a field in a background pane - or in a
+  // background top-level tab, which the tile flag alone does not exclude -
+  // never steals focus.
+  focusActive: boolean;
   // True while a Submit/Skip this card sent is in flight or accepted but
   // unresolved. Natively disables every option button and text field so they
   // are neither focusable, typeable, nor exposed as actionable to assistive
@@ -60,7 +69,7 @@ export function QuestionPage(props: QuestionPageProps) {
   const {
     question,
     draft,
-    isActive,
+    focusActive,
     disabled,
     pendingOptionIndex,
     onToggleOption,
@@ -70,9 +79,10 @@ export function QuestionPage(props: QuestionPageProps) {
   } = props;
 
   // Callback ref for the free-text inputs: they appear exactly when the user
-  // chose to type, so focus belongs in them - but only when this tab is active.
-  // Memoized on isActive so the same node re-focuses when the tab becomes active
-  // (the ref re-runs) and never steals focus while inactive. The focus is
+  // chose to type, so focus belongs in them - but only when this card owns
+  // focus. Memoized on `focusActive` so the same node re-focuses when the tab
+  // becomes active (the ref re-runs) and never steals focus while the card is
+  // in a background pane or top-level tab. The focus is
   // deferred one frame for the same reason as the card itself: a pane is
   // activated on pointerdown, and the trailing mousedown's native focus would
   // otherwise steal focus before this runs (see useInterviewCard).
@@ -81,7 +91,7 @@ export function QuestionPage(props: QuestionPageProps) {
   // a tap. Tapping the field there focuses it the ordinary way.
   const focusFieldIfActive = useCallback(
     (node: HTMLInputElement | HTMLTextAreaElement | null) => {
-      if (!isActive || disabled || node === null || isMobileApp()) return;
+      if (!focusActive || disabled || node === null || isMobileApp()) return;
       const frame = window.requestAnimationFrame(() => {
         node.focus({ preventScroll: true });
       });
@@ -91,12 +101,19 @@ export function QuestionPage(props: QuestionPageProps) {
     // restores focus when a rejected action clears the busy gate: a disabled
     // field cannot take focus, and a callback ref only re-fires when its
     // identity changes, not merely when the prop it reads changes.
-    [disabled, isActive],
+    [disabled, focusActive],
   );
 
   // A question with no options is pure free-text: a single textarea that
   // focuses itself so the user can type right away.
+  //
+  // Withdrawing free text leaves such a question with no answer channel at
+  // all, which the raiser is not supposed to produce (see
+  // `allowsCustomAnswer`) - options are the only other channel and there are
+  // none. Render no input rather than a field whose contents provably cannot
+  // be delivered; Skip stays available, so the card is still resolvable.
   if (question.options.length === 0) {
+    if (!questionAllowsCustomAnswer(question)) return null;
     return (
       <textarea
         ref={focusFieldIfActive}
@@ -134,14 +151,16 @@ export function QuestionPage(props: QuestionPageProps) {
           );
         })}
       </ul>
-      <OtherRow
-        selected={draft.otherSelected}
-        value={draft.otherText}
-        disabled={disabled}
-        inputRef={focusFieldIfActive}
-        onSelect={onToggleOther}
-        onValueChange={onOtherTextChange}
-      />
+      {questionAllowsCustomAnswer(question) ? (
+        <OtherRow
+          selected={draft.otherSelected}
+          value={draft.otherText}
+          disabled={disabled}
+          inputRef={focusFieldIfActive}
+          onSelect={onToggleOther}
+          onValueChange={onOtherTextChange}
+        />
+      ) : null}
     </div>
   );
 }
@@ -234,13 +253,14 @@ function OptionRow(props: OptionRowProps) {
     onToggle,
   } = props;
   const shouldReduceMotion = useReducedMotion();
+  const disclosure = useInterviewOptionDetailsDisclosure();
   return (
     <m.div
       animate={
         pending && !shouldReduceMotion ? { scale: [1, 1.015, 1] } : { scale: 1 }
       }
       transition={QUESTION_TRANSITION}
-      className="w-full"
+      className="flex w-full flex-col gap-1.5"
     >
       <div
         className={cn(
@@ -281,11 +301,15 @@ function OptionRow(props: OptionRowProps) {
             option={option}
             className="pointer-events-auto relative z-20 self-center"
             pinnedDetailRegionId={null}
+            disclosure={disclosure}
           />
         )}
         <span aria-hidden className="pointer-events-none min-w-0 flex-1" />
         {badge}
       </div>
+      {option === null ? null : (
+        <InterviewOptionDetailsRegion option={option} disclosure={disclosure} />
+      )}
     </m.div>
   );
 }

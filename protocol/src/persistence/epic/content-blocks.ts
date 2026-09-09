@@ -239,6 +239,22 @@ export const agentMessageSendSchema = z.object({
 });
 export type AgentMessageSend = z.infer<typeof agentMessageSendSchema>;
 
+// Where a `traycer_send_message` call LANDED: the receiver's own transcript
+// message id, pre-minted by the host at delivery time and returned in the
+// tool's result. The result-side sibling of `agentMessageSend` (which reads the
+// call's input at `tool_call.started`): the receipt does not exist until the
+// host has served the call, so it is stamped at `tool_call.completed` from the
+// result, exactly like `toolCallManagedCommandSchema`. It is the same id the
+// communication graph records as the event's receiver-side origin ref, which is
+// what lets the sender's "Sent message" card jump to the exact row in the
+// receiver's scrollback. Null for a TUI receiver (its receipt is an inbox event,
+// not a transcript row) and for every block persisted before this field.
+export const agentMessageReceiptSchema = z.object({
+  receiverAgentId: z.string(),
+  messageId: z.string(),
+});
+export type AgentMessageReceipt = z.infer<typeof agentMessageReceiptSchema>;
+
 // Structured rendering of a tool call's input - the collapsed summary line
 // (`inputSummary`) plus this optional expand body. Computed on the host at
 // block-build time from the raw harness input, which is itself NOT persisted (it
@@ -433,6 +449,12 @@ export const toolCallBlockSchema = z.object({
   taskTodoItems: z.array(parsedTaskTodoSchema).nullable().default(null),
   error: z.string().nullable(),
   agentMessageSend: agentMessageSendSchema.nullable().default(null),
+  // Where that send landed in the receiver's transcript - see
+  // `agentMessageReceiptSchema`. Null for every other tool call and for blocks
+  // persisted before this field. Deliberately NOT on the hand-frozen
+  // `toolCallBlockSchemaPreImage` below, so released `chat.subscribe` lines
+  // never observe it.
+  agentMessageReceipt: agentMessageReceiptSchema.nullable().default(null),
   // The shell a `traycer_run_shell` call created - see
   // `toolCallManagedCommandSchema`. Null for every other tool call.
   managedCommand: toolCallManagedCommandSchema.nullable().default(null),
@@ -480,6 +502,31 @@ export const toolCallBlockSchema = z.object({
   imageResults: z.array(imageGenerationResultSchema).default([]),
 });
 export type ToolCallBlock = z.infer<typeof toolCallBlockSchema>;
+
+// Wire-freeze copy of `toolCallBlockSchema` as `chat.subscribe@1.6` shipped it
+// in `host-v1.2.0`: image results present, `agentMessageReceipt` absent. Bound
+// to `@1.6` via `contentBlockSchemaPreSettlement`, so that released line never
+// observes a receipt. Hand-frozen, NOT derived from the live shape via
+// `.omit()`, for the same reason as `toolCallBlockSchemaPreImage` below.
+export const toolCallBlockSchemaPreReceipt = z.object({
+  ...baseBlockFields,
+  status: actionBlockStatus,
+  type: z.literal("tool_call"),
+  toolName: z.string(),
+  inputSummary: z.string().nullable().default(null),
+  inputDetail: toolInputDetailSchema.nullable().default(null),
+  taskTodoItems: z.array(parsedTaskTodoSchema).nullable().default(null),
+  error: z.string().nullable(),
+  agentMessageSend: agentMessageSendSchema.nullable().default(null),
+  managedCommand: toolCallManagedCommandSchema.nullable().default(null),
+  progress: z.string().nullable().default(null),
+  backgroundOutput: backgroundTaskOutputSchema.nullable().default(null),
+  startedAt: z.number().nullable().default(null),
+  endedAt: z.number().nullable().default(null),
+  backgroundTask: z.boolean().nullable().default(false),
+  stopped: z.boolean().default(false),
+  imageResults: z.array(imageGenerationResultSchema).default([]),
+});
 
 // Wire-freeze copy of `toolCallBlockSchema` from before `imageResults`
 // existed (`chat.subscribe@1.0-1.5`). Bound (via the frozen content-block
@@ -877,21 +924,67 @@ export type AutonomousResumeWakeTrigger = z.infer<
 // plain functions (not just wrapped in the codec below) so the storage layer's
 // hot read/write funnels - `denormalizeMessages` / `toStoredBlock` in
 // `chat-message-collections.ts` - can normalize without a full schema parse.
-const persistedAutonomousResumeBlockSchema = z.object({
-  ...baseBlockFields,
+/**
+ * Where the host inserted this notification in the transcript, not whether
+ * the harness acknowledged/consumed a steer. `null` is historical/unknown;
+ * readers may infer placement from the original turn's preceding blocks.
+ */
+export const autonomousResumeDeliveryPlacementSchema = z
+  .enum(["turn_start", "in_turn"])
+  .nullable()
+  .default(null);
+export type AutonomousResumeDeliveryPlacement = z.infer<
+  typeof autonomousResumeDeliveryPlacementSchema
+>;
+
+// Checkpoint for chat.subscribe 1.8 (also reused by older wire lines).
+// V18 names in this file refer to that RPC version, not the independent
+// chat-sync storage version. The current schema extends this checkpoint.
+const domainAutonomousResumeBlockSchemaV18 = z.object({
+  blockId: z.string(),
+  status: z.enum(["streaming", "completed", "errored"]),
+  timestamp: z.number(),
+  parentBlockId: z.string().nullish(),
   type: z.literal("autonomous_resume"),
   triggers: z.array(autonomousResumeTriggerSchema),
-  wakeTriggers: z.array(autonomousResumeWakeTriggerSchema).default([]),
 });
+const persistedAutonomousResumeBlockSchemaV18 =
+  domainAutonomousResumeBlockSchemaV18.extend({
+    wakeTriggers: z.array(autonomousResumeWakeTriggerSchema).default([]),
+  });
+type AutonomousResumeBlockV18 = z.infer<
+  typeof domainAutonomousResumeBlockSchemaV18
+>;
+type PersistedAutonomousResumeBlockV18 = z.infer<
+  typeof persistedAutonomousResumeBlockSchemaV18
+>;
+type RawStoredAutonomousResumeBlockV18 = Omit<
+  PersistedAutonomousResumeBlockV18,
+  "wakeTriggers"
+> & {
+  wakeTriggers: AutonomousResumeWakeTrigger[] | undefined;
+};
+
+// Reinsert the trigger fields after placement to retain the existing JSON
+// Schema property/required order as well as its meaning.
+const persistedAutonomousResumeBlockSchema =
+  persistedAutonomousResumeBlockSchemaV18
+    .omit({ triggers: true, wakeTriggers: true })
+    .extend({
+      deliveryPlacement: autonomousResumeDeliveryPlacementSchema,
+      triggers: persistedAutonomousResumeBlockSchemaV18.shape.triggers,
+      wakeTriggers: persistedAutonomousResumeBlockSchemaV18.shape.wakeTriggers,
+    });
 export type PersistedAutonomousResumeBlock = z.infer<
   typeof persistedAutonomousResumeBlockSchema
 >;
 
-const domainAutonomousResumeBlockSchema = z.object({
-  ...baseBlockFields,
-  type: z.literal("autonomous_resume"),
-  triggers: z.array(autonomousResumeTriggerSchema),
-});
+const domainAutonomousResumeBlockSchema = domainAutonomousResumeBlockSchemaV18
+  .omit({ triggers: true })
+  .extend({
+    deliveryPlacement: autonomousResumeDeliveryPlacementSchema,
+    triggers: domainAutonomousResumeBlockSchemaV18.shape.triggers,
+  });
 export type AutonomousResumeBlock = z.infer<
   typeof domainAutonomousResumeBlockSchema
 >;
@@ -905,8 +998,11 @@ export type AutonomousResumeBlock = z.infer<
 // this shape - `.default([])` only exists after a parse.
 export type RawStoredAutonomousResumeBlock = Omit<
   PersistedAutonomousResumeBlock,
-  "wakeTriggers"
-> & { wakeTriggers: AutonomousResumeWakeTrigger[] | undefined };
+  "wakeTriggers" | "deliveryPlacement"
+> & {
+  wakeTriggers: AutonomousResumeWakeTrigger[] | undefined;
+  deliveryPlacement?: AutonomousResumeDeliveryPlacement;
+};
 
 // Merges `wakeTriggers` into `triggers` (wakeup entries last, matching
 // construction order in `buildAutonomousResumeBlock`) and accepts legacy
@@ -918,6 +1014,18 @@ export type RawStoredAutonomousResumeBlock = Omit<
 export function decodeAutonomousResumeBlock(
   stored: RawStoredAutonomousResumeBlock,
 ): AutonomousResumeBlock {
+  const { deliveryPlacement, ...historical } = stored;
+  return {
+    ...decodeAutonomousResumeBlockV18(historical),
+    deliveryPlacement: deliveryPlacement ?? null,
+  };
+}
+
+// Shared historical conversion: newer codecs may add normalization around
+// this function, but must not change how the 1.8 wire is interpreted.
+function decodeAutonomousResumeBlockV18(
+  stored: RawStoredAutonomousResumeBlockV18,
+): AutonomousResumeBlockV18 {
   const { wakeTriggers, ...rest } = stored;
   if (wakeTriggers === undefined || wakeTriggers.length === 0) return rest;
   return {
@@ -952,6 +1060,15 @@ function isWakeupTrigger(
 export function encodeAutonomousResumeBlock(
   domain: AutonomousResumeBlock,
 ): PersistedAutonomousResumeBlock {
+  return {
+    ...encodeAutonomousResumeBlockV18(domain),
+    deliveryPlacement: domain.deliveryPlacement,
+  };
+}
+
+function encodeAutonomousResumeBlockV18(
+  domain: AutonomousResumeBlockV18,
+): PersistedAutonomousResumeBlockV18 {
   const triggers = domain.triggers.filter(
     (trigger) => !isWakeupTrigger(trigger),
   );
@@ -983,6 +1100,20 @@ export const autonomousResumeBlockSchema = z.codec(
     encode: (domain) =>
       encodeAutonomousResumeBlock(
         domainAutonomousResumeBlockSchema.parse(domain),
+      ),
+  },
+);
+
+// Frozen wire shape for chat.subscribe through 1.8. Keep the field absent
+// on both JSON-schema surfaces; normalization belongs to the live decoder.
+export const autonomousResumeBlockSchemaV18 = z.codec(
+  persistedAutonomousResumeBlockSchemaV18,
+  domainAutonomousResumeBlockSchemaV18,
+  {
+    decode: decodeAutonomousResumeBlockV18,
+    encode: (domain) =>
+      encodeAutonomousResumeBlockV18(
+        domainAutonomousResumeBlockSchemaV18.parse(domain),
       ),
   },
 );
@@ -1023,8 +1154,71 @@ export const interviewQuestionSchema = z.object({
   header: z.string().nullable(),
   options: z.array(interviewQuestionOptionSchema),
   multiSelect: z.boolean(),
+  /**
+   * Whether this question can be answered with free text ("Other"), as opposed
+   * to a listed option only.
+   *
+   * Set by whoever raised the interview, because it is a property of the
+   * ANSWER CHANNEL rather than of the question's wording. An interview that
+   * rides an ACP `session/request_permission` is the case that needs it: that
+   * request's answer carries an option id and nothing else, so free text has
+   * nowhere to travel. Offering "Other" there produces a question the user can
+   * type into and whose answer cannot be delivered - the text is silently
+   * dropped on the way back to the agent.
+   *
+   * Additive + nullable, like `sender` above: questions persisted before this
+   * field parse to `null`, and `null` means "unstated", which every renderer
+   * treats exactly as it did before - free text offered. Only an explicit
+   * `false` withdraws it, so no existing transcript changes shape and a host
+   * that never sets the field keeps today's behaviour.
+   *
+   * INVARIANT for the raiser: do not combine `false` with an empty `options`.
+   * Options are then the only surviving answer channel and there are none, so
+   * the question cannot be answered at all - the renderer offers no input for
+   * that pair, leaving Skip as the only exit.
+   *
+   * It is an invariant for the RAISER, and deliberately not a `.refine()`
+   * here. This schema is both the persistence schema for stored epic content
+   * and the wire schema released streamchat lines project
+   * (`runtimeInterviewQuestionSchema` aliases it), so rejecting the pair would
+   * not withdraw one bad question - it would fail the parse of the whole
+   * content block, and drop a live interview frame from a peer host entitled
+   * to send it. A skippable question is a smaller harm than an unreadable
+   * transcript. The pair is refused where it can actually be decided instead:
+   * every per-harness bridge makes it unreachable by construction, the generic
+   * tool-call normalizer downgrades it to `null` (it reads whatever JSON a
+   * tool emitted, so it is the one producer that can be handed the
+   * contradiction), and the renderer's no-input branch is the fail-safe for
+   * anything that still gets through.
+   */
+  allowsCustomAnswer: z.boolean().nullable().default(null),
 });
 export type InterviewQuestion = z.infer<typeof interviewQuestionSchema>;
+
+// Wire-freeze copy of `interviewQuestionSchema` from before
+// `allowsCustomAnswer`. Bound to every `chat.subscribe` line through `@1.6`,
+// alongside the block-level freezes that carry the same boundary.
+//
+// Hand-frozen field-for-field; NOT derived from the live shape, for the same
+// reason `interviewBlockSchemaPreSettlement` is - a later field added above
+// must not silently leak in here.
+//
+// This is the leaf the freeze has to happen at, and it is easy to miss: the
+// block-level freezes DELEGATED `questions` to the live schema, so they were
+// frozen against block FIELDS and wide open one level down. A field added to a
+// question therefore reached `@1.0` through a schema whose own comment
+// promises the opposite.
+//
+// `@1.7`/`@1.8` deliberately do NOT take this: they follow the live interview
+// shape, which is the same thing they already do for `settlement`, `delivery`
+// and every other additive block field. The freeze boundary is `@1.6`.
+export const interviewQuestionSchemaPreCustomAnswer = z.object({
+  questionId: z.string().nullable(),
+  question: z.string(),
+  header: z.string().nullable(),
+  options: z.array(interviewQuestionOptionSchema),
+  multiSelect: z.boolean(),
+});
 
 /**
  * Where a selected option actually came from, recorded at submission time.
@@ -1271,13 +1465,17 @@ export type InterviewBlock = z.infer<typeof interviewBlockSchema>;
 // observes `outcome`/`draftAnswers`/`settlement`/`diagnostics`/`delivery`, nor
 // the answers' `selection`. Hand-frozen field-for-field; NOT derived from the
 // live shape (a later field added above must not silently leak in here).
+//
+// `questions` takes the frozen QUESTION schema for the same reason: freezing
+// this object's own keys left the leaf delegated to the live shape, so a field
+// added to a question still reached these lines.
 export const interviewBlockSchemaPreSettlement = z.object({
   ...baseBlockFields,
   type: z.literal("interview"),
   toolName: z.string().nullable(),
   title: z.string().nullable(),
   description: z.string().nullable(),
-  questions: z.array(interviewQuestionSchema),
+  questions: z.array(interviewQuestionSchemaPreCustomAnswer),
   answers: z.array(interviewAnswerSchemaPreSettlement),
   error: z.string().nullable(),
   metadata: z.record(z.string(), z.unknown()).nullable(),
@@ -1483,24 +1681,26 @@ export const contentBlockSchemaPreImage = z.discriminatedUnion("type", [
   planBlockSchemaPreReasonix,
   errorBlockSchema,
   compactionBlockSchema,
-  autonomousResumeBlockSchema,
+  autonomousResumeBlockSchemaV18,
   steerBlockSchemaPreReasonix,
   interviewBlockSchemaPreSettlement,
   artifactOperationBlockSchema,
 ]);
 
 // Wire-freeze copy of `contentBlockSchema` as `chat.subscribe@1.6` shipped it
-// in `host-v1.2.0-rc.1`: the LIVE `tool_call` (that line does carry image
-// results) with `interview` swapped for its pre-settlement freeze, so the RC
-// cohort in the field keeps decoding exactly the block union it was shipped
-// with. `text`/`plan`/`steer` additionally take their pre-Reasonix freezes:
-// `1.6` is released with a nineteen-id harness enum, so it cannot observe a
-// Reasonix id either. Bound to `@1.6` via `messageSchemaPreSettlement` /
-// `chatSchemaV16`. Every other member reuses the live sub-schema.
+// in `host-v1.2.0-rc.1`: `tool_call` swapped for its pre-receipt freeze (that
+// line does carry image results, but `host-v1.2.0` shipped it without
+// `agentMessageReceipt`), and `interview` swapped for its pre-settlement
+// freeze, so the RC cohort in the field keeps decoding exactly the block union
+// it was shipped with. `text`/`plan`/`steer` additionally take their
+// pre-Reasonix freezes: `1.6` is released with a nineteen-id harness enum, so
+// it cannot observe a Reasonix id either. Bound to `@1.6` via
+// `messageSchemaPreSettlement` / `chatSchemaV16`. Every other member reuses
+// the live sub-schema.
 export const contentBlockSchemaPreSettlement = z.discriminatedUnion("type", [
   textBlockSchemaPreReasonix,
   reasoningBlockSchema,
-  toolCallBlockSchema,
+  toolCallBlockSchemaPreReceipt,
   fileChangeBlockSchema,
   commandBlockSchema,
   subAgentBlockSchema,
@@ -1509,7 +1709,7 @@ export const contentBlockSchemaPreSettlement = z.discriminatedUnion("type", [
   planBlockSchemaPreReasonix,
   errorBlockSchema,
   compactionBlockSchema,
-  autonomousResumeBlockSchema,
+  autonomousResumeBlockSchemaV18,
   steerBlockSchemaPreReasonix,
   interviewBlockSchemaPreSettlement,
   artifactOperationBlockSchema,
@@ -1529,3 +1729,22 @@ export const contentBlockSchemaPreSettlement = z.discriminatedUnion("type", [
 export type PersistedContentBlock =
   | Exclude<ContentBlock, AutonomousResumeBlock>
   | PersistedAutonomousResumeBlock;
+
+/** chat.subscribe 1.8 checkpoint; 1.9 adds notification placement. */
+export const contentBlockSchemaV18 = z.discriminatedUnion("type", [
+  textBlockSchema,
+  reasoningBlockSchema,
+  toolCallBlockSchema,
+  fileChangeBlockSchema,
+  commandBlockSchema,
+  subAgentBlockSchema,
+  approvalBlockSchema,
+  todoBlockSchema,
+  planBlockSchema,
+  errorBlockSchema,
+  compactionBlockSchema,
+  autonomousResumeBlockSchemaV18,
+  steerBlockSchema,
+  interviewBlockSchema,
+  artifactOperationBlockSchema,
+]);

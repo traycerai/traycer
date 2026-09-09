@@ -37,7 +37,10 @@ function renderRowsState(
 ): void {
   render(
     <TooltipProvider>
-      {ModelRowsState({ ...props, onOpenProviderSettings: () => undefined })}
+      {ModelRowsState({
+        ...props,
+        onOpenProviderSettings: () => undefined,
+      })}
     </TooltipProvider>,
   );
 }
@@ -57,9 +60,14 @@ describe("<ModelRowsState /> catalog and model failure report actions", () => {
     renderRowsState({
       catalogLoading: false,
       catalogError: true,
+      hostUnavailableLabel: null,
       hasQuery: false,
       activeProvider: null,
       rowsCount: 0,
+      activeProviderState: null,
+      terminalLoginSurface: null,
+      runTargetHostId: null,
+      onClosePicker: () => undefined,
     });
 
     screen.getByRole("option", { name: "Couldn't load providers" });
@@ -70,9 +78,14 @@ describe("<ModelRowsState /> catalog and model failure report actions", () => {
     renderRowsState({
       catalogLoading: false,
       catalogError: true,
+      hostUnavailableLabel: null,
       hasQuery: false,
       activeProvider: null,
       rowsCount: 0,
+      activeProviderState: null,
+      terminalLoginSurface: null,
+      runTargetHostId: null,
+      onClosePicker: () => undefined,
     });
 
     act(() => {
@@ -95,9 +108,14 @@ describe("<ModelRowsState /> catalog and model failure report actions", () => {
     renderRowsState({
       catalogLoading: false,
       catalogError: true,
+      hostUnavailableLabel: null,
       hasQuery: false,
       activeProvider: null,
       rowsCount: 0,
+      activeProviderState: null,
+      terminalLoginSurface: null,
+      runTargetHostId: null,
+      onClosePicker: () => undefined,
     });
 
     act(() => {
@@ -130,9 +148,14 @@ describe("<ModelRowsState /> catalog and model failure report actions", () => {
     renderRowsState({
       catalogLoading: false,
       catalogError: false,
+      hostUnavailableLabel: null,
       hasQuery: false,
       activeProvider: provider,
       rowsCount: 0,
+      activeProviderState: null,
+      terminalLoginSurface: null,
+      runTargetHostId: null,
+      onClosePicker: () => undefined,
     });
 
     // The raw host reason is still shown to the user inline (existing UX) -
@@ -165,9 +188,14 @@ describe("<ModelRowsState /> catalog and model failure report actions", () => {
     renderRowsState({
       catalogLoading: false,
       catalogError: false,
+      hostUnavailableLabel: null,
       hasQuery: false,
       activeProvider: null,
       rowsCount: 0,
+      activeProviderState: null,
+      terminalLoginSurface: null,
+      runTargetHostId: null,
+      onClosePicker: () => undefined,
     });
     screen.getByRole("option", { name: "No models available" });
     expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
@@ -179,9 +207,14 @@ describe("<ModelRowsState /> catalog and model failure report actions", () => {
     renderRowsState({
       catalogLoading: true,
       catalogError: false,
+      hostUnavailableLabel: null,
       hasQuery: false,
       activeProvider: null,
       rowsCount: 0,
+      activeProviderState: null,
+      terminalLoginSurface: null,
+      runTargetHostId: null,
+      onClosePicker: () => undefined,
     });
     screen.getByRole("option", { name: "Loading models" });
     expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
@@ -198,12 +231,36 @@ describe("<ModelRowsState /> catalog and model failure report actions", () => {
     renderRowsState({
       catalogLoading: false,
       catalogError: false,
+      hostUnavailableLabel: null,
       hasQuery: false,
       activeProvider: provider,
       rowsCount: 0,
+      activeProviderState: null,
+      terminalLoginSurface: null,
+      runTargetHostId: null,
+      onClosePicker: () => undefined,
     });
 
     screen.getByRole("button", { name: "Add API key" });
+    expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
+  });
+
+  it("shows host availability instead of a generic catalog failure while the endpoint is absent", () => {
+    renderRowsState({
+      catalogLoading: false,
+      catalogError: true,
+      hostUnavailableLabel: "This device is starting",
+      hasQuery: false,
+      activeProvider: null,
+      rowsCount: 0,
+      activeProviderState: null,
+      terminalLoginSurface: null,
+      runTargetHostId: null,
+      onClosePicker: () => undefined,
+    });
+
+    screen.getByRole("option", { name: "This device is starting" });
+    expect(screen.queryByText("Couldn't load providers")).toBeNull();
     expect(screen.queryByRole("button", { name: "Report issue" })).toBeNull();
   });
 });

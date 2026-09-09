@@ -11,6 +11,7 @@ import { HarnessModelPicker } from "@/components/home/pickers/harness-model-pick
 import type { DictationPreparingStatus } from "@/hooks/composer/use-dictation-availability";
 import type { ChatActiveTurn } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
+import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
 
 interface ComposerToolbarRightProps {
   store: ComposerToolbarStore;
@@ -30,6 +31,9 @@ interface ComposerToolbarRightProps {
    *  prop of the same name. */
   createProfileHostId: string | null;
   readonly runTargetHostId: string | null;
+  /** Where the picker's setup terminal lands - see `HarnessModelPicker`'s
+   *  prop of the same name. */
+  readonly terminalLoginSurface: ProviderTerminalLoginSurface | null;
 }
 
 function ComposerToolbarRightImpl(props: ComposerToolbarRightProps) {
@@ -47,6 +51,7 @@ function ComposerToolbarRightImpl(props: ComposerToolbarRightProps) {
     dictationPreparing,
     createProfileHostId,
     runTargetHostId,
+    terminalLoginSurface,
   } = props;
   // Block sending until the model slug resolves to a concrete value - an
   // empty slug is the transient "catalog still loading" marker and must never
@@ -71,6 +76,7 @@ function ComposerToolbarRightImpl(props: ComposerToolbarRightProps) {
         registerActivation
         createProfileHostId={createProfileHostId}
         runTargetHostId={runTargetHostId}
+        terminalLoginSurface={terminalLoginSurface}
         profileAdmission={null}
       />
       {dictation !== null ? <ComposerMicButton control={dictation} /> : null}

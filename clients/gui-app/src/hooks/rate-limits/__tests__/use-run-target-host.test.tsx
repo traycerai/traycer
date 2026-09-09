@@ -45,6 +45,19 @@ vi.mock("@/lib/host/runtime", () => ({
     return globalClientRef.value;
   },
 }));
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useHostClient: () => {
+      if (globalClientRef.value === null) {
+        throw new Error("test global client not configured");
+      }
+      return globalClientRef.value;
+    },
+    useHostBinding: () => ({ hostClient: globalClientRef.value, hostId: null }),
+  };
+});
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   useHostDirectoryList: () => ({ data: directoryRef.entries }),
 }));
@@ -189,7 +202,10 @@ describe("useRunTargetHost", () => {
       wrapper: wrapperFor(new QueryClient()),
     });
 
-    expect(result.current.client).toBeNull();
+    // An explicit id receives an identity requester even before its row
+    // appears. Readiness keeps it out of the queue until that requester can
+    // resolve the row, so it still never falls back to the default host.
+    expect(result.current.client).not.toBeNull();
     expect(result.current.hostId).not.toBe("default-host");
     expect(result.current.hostId).toBeNull();
     expect(result.current.isReady).toBe(false);

@@ -71,6 +71,9 @@ function makeChatProjection(
     userId: null,
     hostId: null,
     isTitleEditedByUser: false,
+    // Neutral scaffolding: these rows exercise the overlay applier's
+    // rename/reparent mechanics, with no plane in mind.
+    docResident: false,
     settings: null,
     archivedAt: null,
   };

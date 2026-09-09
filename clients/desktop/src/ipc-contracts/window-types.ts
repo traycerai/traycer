@@ -113,6 +113,29 @@ export interface DesktopAuthSessionSnapshot {
   readonly profile: DesktopAuthSessionProfile | null;
 }
 
+/**
+ * Why main refused to adopt a renderer-pushed auth session. Every value is a
+ * statement about the TOKEN, never about who sent it, so it is safe to log and
+ * safe to show. See `electron-main/auth/bearer-verifier.ts`.
+ */
+export type DesktopAuthSessionRefusalReason =
+  | "malformed-token"
+  | "unsupported-algorithm"
+  | "unknown-signing-key"
+  | "key-source-unavailable"
+  | "bad-signature"
+  | "expired"
+  | "issuer-mismatch"
+  | "audience-mismatch"
+  | "subject-mismatch";
+
+export type DesktopAuthSessionSetResult =
+  | { readonly outcome: "accepted" }
+  | {
+      readonly outcome: "refused";
+      readonly reason: DesktopAuthSessionRefusalReason;
+    };
+
 export type OpenEpicInNewWindowResult =
   | { readonly result: "focused"; readonly windowId: string }
   | { readonly result: "moved"; readonly windowId: string }
@@ -186,7 +209,19 @@ export interface MenuCommandPayload {
   readonly windowId: string;
 }
 
-export type SupportLogTarget = "desktop" | "host";
+// `browserTelemetry`/`browserTrace` (plan D3, ticket 03): the always-on
+// PII-free counter slice and the (env-gated) full self-verification trace,
+// both JSONL, both beside `host.log` in the same `HostFsLayout.rootDir` -
+// see `browserTelemetryFile`/`browserTraceFile` in `host-paths.ts`. Unlike
+// `desktop`/`host`, absence of the trace file is the normal production
+// state, so every consumer of this target must go through the
+// existence-filtered `SupportSnapshot.logs` manifest rather than assuming a
+// browser target always resolves to a real file.
+export type SupportLogTarget =
+  | "desktop"
+  | "host"
+  | "browserTelemetry"
+  | "browserTrace";
 
 export type SupportLinkId =
   | "website"
@@ -407,6 +442,15 @@ export interface SupportSubmitReportRequest {
   // exists to remove.
   readonly includeDesktopLog: boolean;
   readonly includeHostLog: boolean;
+  // One toggle covering both browser diagnostic files (plan D3, ticket 03):
+  // `browser-telemetry.jsonl` (always-on PII-free counters) and
+  // `browser-trace.jsonl` (env-gated full trace). Default on, same shape as
+  // `includeDesktopLog`/`includeHostLog` - withholds both frozen tails from
+  // the private submission / diagnostic bundle when false. A single flag
+  // rather than two: the consent panel renders one "Browser diagnostics" row
+  // for both files, and there is no scenario where a user wants one but not
+  // the other.
+  readonly includeBrowserDiagnostics: boolean;
   // Consent panel's diagnostics toggle: gates layer-0, process metrics,
   // version/platform/host tags+contexts, and provider info on BOTH the
   // Sentry event and the diagnostic bundle's environment block - not just

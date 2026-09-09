@@ -10,16 +10,17 @@ import {
   gitBundleGroupLabel,
   makeGitBundleDiffTile,
 } from "@/lib/git/git-diff-tile";
-import { useEpicNestedFocusNavigation } from "@/hooks/epic/use-epic-nested-focus-navigation";
-import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
+import { modifiersFromMouseEvent } from "@/lib/canvas/tile-open/intent";
 import type {
   GitDiffBundleGroup,
   GitDiffRepositoryContext,
 } from "@/stores/epics/canvas/types";
 import { useDraggable } from "@dnd-kit/core";
 import { FileDiff } from "lucide-react";
-import type { ReactNode } from "react";
+import type { MouseEvent, ReactNode } from "react";
 import { useCallback, useMemo } from "react";
+import { onMiddleClick } from "@/lib/dom/on-middle-click";
 
 export interface BundleOpenButtonProps {
   readonly epicId: string;
@@ -32,10 +33,7 @@ export interface BundleOpenButtonProps {
 }
 
 export function BundleOpenButton(props: BundleOpenButtonProps): ReactNode {
-  const navigateNested = useEpicNestedFocusNavigation();
-  const prepareOpenTileInTabFocusTarget = useEpicCanvasStore(
-    (s) => s.prepareOpenTileInTabFocusTarget,
-  );
+  const { openTile } = useEpicTileNavigation();
   const tile = useMemo(
     () =>
       makeGitBundleDiffTile({
@@ -61,17 +59,20 @@ export function BundleOpenButton(props: BundleOpenButtonProps): ReactNode {
     data: dragData,
     disabled: props.disabled || dragDisabled,
   });
-  const openBundle = useCallback(() => {
-    navigateNested(props.epicId, props.viewTabId, () =>
-      prepareOpenTileInTabFocusTarget(props.viewTabId, tile),
-    );
-  }, [
-    navigateNested,
-    prepareOpenTileInTabFocusTarget,
-    props.epicId,
-    props.viewTabId,
-    tile,
-  ]);
+  const openBundle = useCallback(
+    (event: MouseEvent<HTMLButtonElement>) => {
+      openTile({
+        node: tile,
+        target: { tabId: props.viewTabId },
+        gesture: "explicit",
+        modifiers: modifiersFromMouseEvent(event),
+        placement: null,
+        dedupe: true,
+        source: "direct_ui",
+      });
+    },
+    [openTile, props.viewTabId, tile],
+  );
 
   return (
     <Button
@@ -83,6 +84,7 @@ export function BundleOpenButton(props: BundleOpenButtonProps): ReactNode {
       aria-label={`Open ${gitBundleGroupLabel(props.group)}`}
       disabled={props.disabled}
       onClick={openBundle}
+      onAuxClick={onMiddleClick(openBundle)}
       className="text-muted-foreground hover:text-foreground"
     >
       <FileDiff className="size-4" />

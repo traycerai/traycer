@@ -113,15 +113,27 @@ interface ComposerToolbarDerived {
   readonly harnessLabel: string | null;
   /**
    * True only when the loaded catalog of the selected harness covers the
-   * resolved model slug - by exact slug OR by alias, since a held alias is a
+   * USER'S model slug - by exact slug OR by alias, since a held alias is a
    * valid runnable selection and not a dead one. The surface emit is NOT gated
    * on this - live-settings / last-run propagate immediately. It is the signal
    * the memory-recording wrapper reads at WRITE time, so an unvalidated or
    * stale remembered slug - sourced from memory, not a loaded list - is never
    * written to memory before the catalog proves it valid. An empty / unresolved
-   * slug is covered by neither pass, so is never confirmed.
+   * slug is covered by neither pass, so is never confirmed - and neither is a
+   * display-healed one (`selectionHealedForDisplay`): the catalog covers the
+   * row being SHOWN, not the slug the user chose.
    */
   readonly selectionCatalogConfirmed: boolean;
+  /**
+   * The user's non-empty slug is absent from the loaded catalog, so `selection`
+   * presents the catalog's first row in its place. Display and launch only:
+   * the raw sticky slug is never rewritten and no settings emit carries the
+   * substitute, so the chat's persisted model survives a catalog that merely
+   * failed to list it. A catalog is only as trustworthy as the probe behind it
+   * - one fabricated or truncated list used to rewrite the chat's model for
+   * good, on every device sharing the chat.
+   */
+  readonly selectionHealedForDisplay: boolean;
 }
 
 export interface ComposerToolbarState extends ComposerToolbarDerived {
@@ -213,12 +225,21 @@ export function createComposerToolbarStore(
       // chat, or the harness becoming available).
       const rerouted =
         derived.selection.harnessId !== values.selection.harnessId;
-      // Defer only when the slug is still unresolved (catalog loading) or the
-      // harness was surface-rerouted - the surface emit (live-settings/last-run)
-      // is NOT gated on catalog confirmation. Memory integrity is enforced at the
-      // write site (the recording wrapper reads `selectionCatalogConfirmed`), so
-      // the toolbar still propagates a held remembered slug immediately.
-      if (settings.model.length === 0 || rerouted) {
+      // Defer only when the slug is still unresolved (catalog loading), the
+      // harness was surface-rerouted, or the slug is a display-only heal - the
+      // surface emit (live-settings/last-run) is NOT gated on catalog
+      // confirmation. Memory integrity is enforced at the write site (the
+      // recording wrapper reads `selectionCatalogConfirmed`), so the toolbar
+      // still propagates a held remembered slug immediately. A healed slug is
+      // held like a reroute: the substitute row is what a Send launches on
+      // (the submit path reads the derived state), but it is never written to
+      // the chat as its model - the user's next explicit model pick flushes
+      // the deferred edit together with the real choice.
+      if (
+        settings.model.length === 0 ||
+        rerouted ||
+        derived.selectionHealedForDisplay
+      ) {
         set({ values, ...derived, pendingSettingsEmit: true });
         return;
       }
@@ -286,12 +307,11 @@ export function createComposerToolbarStore(
         const state = get();
         if (sameCatalog(state.catalog, catalog)) return;
         const derived = deriveToolbarState(state.values, catalog, state);
-        // The emit/heal decision (the two intentionally-different raw-vs-derived
-        // comparisons) lives in one named, testable place.
-        const { emit, healedValues } = decideCatalogTransition(state, derived);
+        // The emit decision lives in one named, testable place. A catalog push
+        // never touches `values`: the raw sticky selection is the user's.
+        const emit = decideCatalogTransition(state, derived);
         set({
           catalog,
-          values: healedValues,
           ...derived,
           // Only an emit clears the deferred flag; a silent push leaves it as-is.
           pendingSettingsEmit: emit ? false : state.pendingSettingsEmit,
@@ -358,16 +378,13 @@ function deriveToolbarState(
           modelSlug: resolvedSlug,
           profileId: availabilitySelection.profileId,
         };
-  // True ONLY when the loaded catalog covers the resolved slug - by exact slug
-  // or by alias. The surface emit is NOT gated on this (live-settings propagate
-  // immediately); it is the signal the `recordingOnSettingsChange` wrapper reads
-  // at write time so an unvalidated / stale remembered slug is never written to
-  // memory before the catalog proves it valid. Once loaded, the resolved
-  // FALLBACK slug (delisted case) is what becomes confirmed, letting the memory
-  // write self-heal a dead slug.
-  const selectionCatalogConfirmed =
-    catalogLoadedForHarness &&
-    modelCoveredByCatalog(models, selection.harnessId, resolvedSlug);
+  const { selectionHealedForDisplay, selectionCatalogConfirmed } =
+    classifyResolvedSlug(
+      availabilitySelection.modelSlug,
+      selection,
+      models,
+      catalogLoadedForHarness,
+    );
   const selectedModel = findSelectedModel(models, selection);
   // Harness-level capabilities (currently just supportedPermissionModes) come
   // from `listGuiHarnesses`. `null` covers both "catalog still loading" and
@@ -399,6 +416,7 @@ function deriveToolbarState(
     supportedPermissionModes,
     harnessLabel: selectedHarness?.label ?? null,
     selectionCatalogConfirmed,
+    selectionHealedForDisplay,
   };
   // Preserve the previous `selection` reference when nothing changed so slice
   // subscribers (picker, send gate) don't wake on every catalog push. Must
@@ -417,60 +435,72 @@ function deriveToolbarState(
 }
 
 /**
+ * How the derived slug relates to the user's raw one, once the catalog for the
+ * harness has loaded.
+ *
+ * `selectionHealedForDisplay`: a non-empty raw slug the loaded catalog cannot
+ * resolve is presented as the first row - for display and launch only. Never
+ * written back, never emitted, never confirmed.
+ *
+ * `selectionCatalogConfirmed`: true ONLY when the loaded catalog covers the
+ * USER'S slug - by exact slug or by alias. The surface emit is NOT gated on
+ * this (live-settings propagate immediately); it is the signal the
+ * `recordingOnSettingsChange` wrapper reads at write time so an unvalidated /
+ * stale remembered slug is never written to memory before the catalog proves
+ * it valid. The display-healed substitute is covered by the catalog but is not
+ * the user's choice, so it is excluded: memory keeps the slug the user picked
+ * until they pick another.
+ */
+function classifyResolvedSlug(
+  rawSlug: string,
+  selection: HarnessModelSelection,
+  models: ReadonlyArray<ModelOption>,
+  catalogLoadedForHarness: boolean,
+): {
+  selectionHealedForDisplay: boolean;
+  selectionCatalogConfirmed: boolean;
+} {
+  const selectionHealedForDisplay =
+    catalogLoadedForHarness &&
+    rawSlug.length > 0 &&
+    selection.modelSlug !== rawSlug;
+  const selectionCatalogConfirmed =
+    catalogLoadedForHarness &&
+    !selectionHealedForDisplay &&
+    modelCoveredByCatalog(models, selection.harnessId, selection.modelSlug);
+  return { selectionHealedForDisplay, selectionCatalogConfirmed };
+}
+
+/**
  * Decide, on a fresh catalog push, whether the resolved settings should EMIT to
- * the surface and whether the RAW sticky slug should be HEALED to the resolved
- * one. Extracted from `setCatalog` so the two comparisons - which intentionally
- * key off DIFFERENT baselines (the previous derived slug for the emit, the raw
- * sticky slug for the heal) - are named and unit-testable in one place rather
- * than inlined into an already-busy action. `healedValues === state.values`
- * whenever nothing is healed, so the caller spreads it unconditionally.
+ * the surface. Only a DEFERRED user edit ever emits from here: a catalog load
+ * on its own never changes the chat's settings.
+ *
+ * In particular a catalog that does not list the user's slug does NOT emit the
+ * first-row substitute, and the raw sticky slug is NOT rewritten to it. That
+ * "self-heal" used to be the policy, and it turned a single bad catalog into a
+ * permanent rewrite: a harness probe that timed out answered with a fabricated
+ * one-row catalog, the store healed every chat on that harness onto the
+ * fabricated id, persisted it, and every later turn failed to select a model
+ * the CLI never knew - on every device sharing the chat, since each healed
+ * toward the first row of whatever list IT had been handed. The substitute is
+ * display/launch only (`selectionHealedForDisplay`); the persisted model only
+ * changes when the user picks one.
  */
 function decideCatalogTransition(
   state: ComposerToolbarState,
   derived: ComposerToolbarDerived,
-): { emit: boolean; healedValues: ComposerToolbarValues } {
+): boolean {
   // Reroute guard: never emit while the derived harness is a surface clamp of
   // the user's choice, or the rerouted harness would leak into settings.
   const rerouted =
     derived.selection.harnessId !== state.values.selection.harnessId;
-  // A catalog LOAD that resolves a previously-CONCRETE slug to a different
-  // concrete slug - the delisted self-heal (a stale remembered slug X resolving
-  // to the first model Y) - must propagate an emit so the surface live-settings
-  // (and the memory write) pick up Y. Compared against the previous DERIVED slug
-  // (what the surface last saw), and gated on the NEW derived selection being
-  // catalog-confirmed: otherwise an UNLOAD (the query detaches,
-  // `modelsLoaded:false`, derive falls back to holding the raw still-stale slug)
-  // would look like a Y->X change and re-emit the dead slug. The empty ->
-  // first-model INITIAL resolution stays silent (prev slug was ""), matching the
-  // seed-doesn't-emit behavior.
-  const resolvedSlugSelfHealed =
-    derived.selectionCatalogConfirmed &&
-    state.selection.modelSlug.length > 0 &&
-    derived.selection.modelSlug !== state.selection.modelSlug;
-  const emit =
+  return (
+    state.pendingSettingsEmit &&
     !rerouted &&
-    derived.selection.modelSlug.length > 0 &&
-    (state.pendingSettingsEmit || resolvedSlugSelfHealed);
-  if (!emit) return { emit: false, healedValues: state.values };
-  // Heal the RAW sticky slug to the confirmed resolved one on a delisting
-  // (loaded catalog, raw slug concretely absent, not rerouted), so later
-  // load/unload cycles don't keep re-deriving the X->Y transition or re-emitting
-  // Y. Compared against the RAW sticky slug - the distinct baseline from the
-  // emit decision above. Only `modelSlug` is healed (never `harnessId`, so the
-  // reroute write-guard is untouched), and only for a confirmed delisting.
-  const healedValues =
-    derived.selectionCatalogConfirmed &&
-    state.values.selection.modelSlug.length > 0 &&
-    derived.selection.modelSlug !== state.values.selection.modelSlug
-      ? {
-          ...state.values,
-          selection: {
-            ...state.values.selection,
-            modelSlug: derived.selection.modelSlug,
-          },
-        }
-      : state.values;
-  return { emit: true, healedValues };
+    !derived.selectionHealedForDisplay &&
+    derived.selection.modelSlug.length > 0
+  );
 }
 
 function sameCatalog(
@@ -515,9 +545,8 @@ function modelCoveredByCatalog(
 // - loaded but empty / absent -> first model (an empty slug resolves to the
 //   preferred model; a non-empty-but-absent slug was DELISTED).
 //
-// This is the store's MUTATING model lookup: whatever it returns can be written
-// back into the raw sticky `values.selection.modelSlug` by `healedValues`. Only
-// a slug the catalog CANNOT resolve at all is rewritten:
+// What it returns is the DERIVED slug only; the raw sticky
+// `values.selection.modelSlug` is never rewritten from it:
 //
 //   - Any alias match holds the slug verbatim. Rewriting it to the matched
 //     row's slug looks like a repair and is the opposite: rows are keyed by
@@ -529,8 +558,9 @@ function modelCoveredByCatalog(
 //     read-only `findSelectedModel` resolves the same alias, so the row renders,
 //     answers capability questions, and runs - only the stored string is left
 //     alone. See the `alias` variant of `ModelMatch`.
-//   - `none` - loaded, and no row claims the slug by either pass - is the
-//     genuinely delisted case, and heals to the preferred model.
+//   - `none` - loaded, and no row claims the slug by either pass - presents
+//     the preferred model in its place, for display and launch only
+//     (`selectionHealedForDisplay`).
 function resolveModelSlug(
   harnessId: ProviderId,
   modelSlug: string,

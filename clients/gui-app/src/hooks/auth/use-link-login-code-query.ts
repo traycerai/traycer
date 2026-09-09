@@ -90,7 +90,7 @@ function linkLoginCodeQueryOptions(
 }
 
 /**
- * Mints and auto-rotates the "Link a phone" public code while the consuming
+ * Mints and auto-rotates the "Link mobile app" public code while the consuming
  * surface is mounted AND `active`. The panel deactivates the rotation the
  * moment a phone claims the displayed code — a fresh QR must not replace the
  * one whose claimant the user is being asked to approve.

@@ -4,20 +4,23 @@ import {
   type UpdateExecutorCohortVerdict,
 } from "../update-executor-cohort";
 
-// Ticket 03's rollout fence: CLI-owned, static release policy, not a
+// The CLI's rollout fence: CLI-owned, static release policy, not a
 // runtime/environment toggle. There is deliberately no shipped setter or
-// exported test-only bypass - Ticket 07 is the sole authorized cutover
-// point. Every platform must stay shadow/disabled, unconditionally, for
-// every input; the CLI executor test module gets its "eligible" verdicts
-// exclusively from a test-file-scoped `vi.mock` of this module, never from
-// a real code path here.
-describe("decideUpdateExecutorCohort - static shadow-only, no enable seam", () => {
+// exported test-only bypass.
+//
+// AFTER THE CUTOVER it returns `eligible` for every shipped platform: `host
+// update` runs every arm on the attempt executor from `host/update-run.ts`,
+// and a shadow verdict would refuse the command outright. The function stays
+// - rather than the gate being deleted - so a future rollout has one explicit
+// place to narrow, and so every caller's `!== "eligible"` arm stays reachable
+// from a test-file-scoped `vi.mock` of this module.
+describe("decideUpdateExecutorCohort - static, eligible on every shipped platform", () => {
   it.each(["darwin", "win32", "linux"] as const)(
-    "returns shadow/disabled for %s with zero side effects",
+    "returns eligible for %s with zero side effects",
     (platform) => {
       expect(decideUpdateExecutorCohort(platform)).toEqual({
-        kind: "shadow",
-        reason: "disabled",
+        kind: "eligible",
+        platform,
       });
     },
   );
@@ -27,8 +30,8 @@ describe("decideUpdateExecutorCohort - static shadow-only, no enable seam", () =
     const second = decideUpdateExecutorCohort("linux");
     expect(first).toEqual(second);
     expect(decideUpdateExecutorCohort("darwin")).toEqual({
-      kind: "shadow",
-      reason: "disabled",
+      kind: "eligible",
+      platform: "darwin",
     });
   });
 
@@ -46,15 +49,14 @@ describe("decideUpdateExecutorCohort - static shadow-only, no enable seam", () =
   //
   // The eligible arm used to be `Exclude<HostInstallPlatform, "darwin">`, which
   // put a ROLLOUT decision in a TYPE. The cost was not a disabled path but an
-  // untestable one: once packaged-macOS verification was delegated to a CLI
-  // claimant, an eligible darwin verdict could not be constructed even with
-  // this module mocked, and the repo bans the casts that would force one.
+  // untestable one: an eligible darwin verdict could not be constructed even
+  // with this module mocked, and the repo bans the casts that would force one.
   //
-  // Widening it restores expressibility ONLY. This test pins both halves of
-  // that sentence at once, which is what a future edit is most likely to break:
-  // an eligible darwin verdict is now constructible, and the shipped policy
-  // still never returns one.
-  it("can EXPRESS an eligible darwin verdict while production never RETURNS one", () => {
+  // The cutover INVERTED this test's second half: production now RETURNS
+  // eligible for darwin, which is precisely the verdict the old type could not
+  // express. Both halves are still worth pinning together - the type admits
+  // every shipped platform, and so does the shipped policy.
+  it("production RETURNS eligible for darwin - the verdict the old arm could not even express", () => {
     const expressible: UpdateExecutorCohortVerdict = {
       kind: "eligible",
       platform: "darwin",
@@ -62,9 +64,18 @@ describe("decideUpdateExecutorCohort - static shadow-only, no enable seam", () =
     expect(expressible.kind).toBe("eligible");
 
     // The same platform, through the real shipped policy.
-    expect(decideUpdateExecutorCohort("darwin")).toEqual({
+    expect(decideUpdateExecutorCohort("darwin")).toEqual(expressible);
+  });
+
+  // The shadow verdict is still REACHABLE - a narrowed rollout, and every
+  // caller's refusal arm, depend on it being constructible. Deleting the arm
+  // (rather than the policy that stopped selecting it) would silently make
+  // those arms dead code.
+  it("still expresses the shadow verdict, so a narrowed rollout stays representable", () => {
+    const shadow: UpdateExecutorCohortVerdict = {
       kind: "shadow",
       reason: "disabled",
-    });
+    };
+    expect(shadow.kind).toBe("shadow");
   });
 });

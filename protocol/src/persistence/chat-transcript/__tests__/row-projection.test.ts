@@ -682,6 +682,117 @@ describe("event rows", () => {
 
     expect(project([user], [started], null)).toEqual(["m-1"]);
   });
+
+  // The imported-chat marker was a renderer-side pin with no ordinal until
+  // 2026-09-03; the windowed transcript never served its event on reopen, so
+  // the row vanished (spec `session-import.md` §8e). Now it is a row like any
+  // other, seated where the renderer already drew it: above everything.
+  describe("imported-chat marker rows", () => {
+    function importedEvent(input: {
+      readonly eventId: string;
+      readonly timestamp: number;
+      readonly metadata: Record<string, unknown> | null;
+    }): ChatEvent {
+      return chatEventSchema.parse({
+        eventId: input.eventId,
+        type: "chat.imported",
+        timestamp: input.timestamp,
+        clientActionId: null,
+        actor: null,
+        message: null,
+        turnId: null,
+        messageId: null,
+        queueItemId: null,
+        approvalId: null,
+        blockId: null,
+        severity: "info",
+        metadata: input.metadata,
+      });
+    }
+    const WELL_FORMED = {
+      sourceProvider: "claude",
+      nativeSessionId: "native-1",
+      importedAt: 9_000,
+      sourceCwd: "/repo",
+    };
+
+    it("pins the marker at ordinal 0 even though its timestamp is later than every message", () => {
+      const user = userMessage({ messageId: "m-1", timestamp: 10 });
+      const imported = importedEvent({
+        eventId: "e-import",
+        timestamp: 9_000,
+        metadata: WELL_FORMED,
+      });
+
+      expect(project([user], [imported], null)).toEqual([
+        "imported-chat-marker:e-import",
+        "m-1",
+      ]);
+    });
+
+    it("sits above a pinned genesis setup card", () => {
+      const user = userMessage({ messageId: "m-1", timestamp: 10 });
+      const setup = chatEventSchema.parse({
+        eventId: "e-setup",
+        type: "setup.running",
+        timestamp: 5,
+        clientActionId: null,
+        actor: null,
+        message: null,
+        turnId: null,
+        messageId: null,
+        queueItemId: null,
+        approvalId: null,
+        blockId: null,
+        severity: "info",
+        metadata: { workspacePath: "/repo", terminalSessionId: "term-1" },
+      });
+      const imported = importedEvent({
+        eventId: "e-import",
+        timestamp: 9_000,
+        metadata: WELL_FORMED,
+      });
+
+      const rows = project([user], [setup, imported], null);
+      expect(rows[0]).toBe("imported-chat-marker:e-import");
+      expect(rows[1]).toMatch(/^setup-card:/);
+      expect(rows[2]).toBe("m-1");
+    });
+
+    it("keeps event-log order between two markers", () => {
+      const first = importedEvent({
+        eventId: "e-a",
+        timestamp: 9_000,
+        metadata: WELL_FORMED,
+      });
+      const second = importedEvent({
+        eventId: "e-b",
+        timestamp: 8_000,
+        metadata: WELL_FORMED,
+      });
+
+      expect(project([], [first, second], null)).toEqual([
+        "imported-chat-marker:e-a",
+        "imported-chat-marker:e-b",
+      ]);
+    });
+
+    it("gives a marker whose metadata does not parse no ordinal, matching the renderer", () => {
+      const user = userMessage({ messageId: "m-1", timestamp: 10 });
+      const malformed = importedEvent({
+        eventId: "e-bad",
+        timestamp: 9_000,
+        metadata: { sourceProvider: "claude" },
+      });
+      const nullMetadata = importedEvent({
+        eventId: "e-null",
+        timestamp: 9_000,
+        metadata: null,
+      });
+
+      expect(project([user], [malformed, nullMetadata], null)).toEqual(["m-1"]);
+    });
+  });
 });
 
 /**

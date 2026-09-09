@@ -91,6 +91,35 @@ describe("terminal result after a process-fatal failure", () => {
     expect(process.exitCode).toBe(1);
   });
 
+  it("a command that throws after a process-fatal failure still exits 1, not the thrown code", async () => {
+    // The fatal handler defers the watchdog to the runner while a command is
+    // in flight (see `finishAfterProcessFatal` in exit.ts) but records its 1
+    // at once; `recordExitCode` keeps the first non-zero code, so the thrown
+    // error's code cannot replace it. Ablation: drop the `recordExitCode(1)`
+    // from the in-flight arm and this reads 3.
+    const { finishAfterProcessFatal, markProcessFatal } =
+      await import("../exit");
+    const { runCommand } = await import("../runner");
+    const { CLI_ERROR_CODES, CliError } = await import("../errors");
+
+    await runCommand(
+      async () => {
+        markProcessFatal();
+        await finishAfterProcessFatal();
+        throw new CliError({
+          code: CLI_ERROR_CODES.UNEXPECTED,
+          message: "command failed after the fatal",
+          details: null,
+          exitCode: 3,
+        });
+      },
+      { json: true, quiet: null, noProgress: null, noBootstrap: null },
+    );
+
+    expect(terminalEnvelope()?.status).toBe("error");
+    expect(process.exitCode).toBe(1);
+  });
+
   it("still emits the ok envelope when no process-fatal occurred", async () => {
     const { runCommand } = await import("../runner");
 

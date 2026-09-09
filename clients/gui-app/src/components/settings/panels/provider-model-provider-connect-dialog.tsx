@@ -30,7 +30,7 @@ import {
 import { useProvidersModelProviderAuth } from "@/hooks/providers/use-providers-model-provider-auth-mutation";
 import { useProvidersAwaitModelProviderAuth } from "@/hooks/providers/use-providers-await-model-provider-auth-mutation";
 import { useProvidersCancelModelProviderAuth } from "@/hooks/providers/use-providers-cancel-model-provider-auth-mutation";
-import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
+import { useOpenLink } from "@/lib/links/open-link";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import {
   modelProviderAuthErrorDisposition,
@@ -146,7 +146,7 @@ export function ProviderModelProviderConnectDialog(props: {
   const auth = useProvidersModelProviderAuth();
   const awaitAuth = useProvidersAwaitModelProviderAuth();
   const cancelAuth = useProvidersCancelModelProviderAuth();
-  const openExternalLink = useRunnerOpenExternalLink();
+  const openLink = useOpenLink();
   const pendingAuthUpsert = useModelProviderPendingAuthStore((s) => s.upsert);
   const pendingAuthRemove = useModelProviderPendingAuthStore((s) => s.remove);
   const pendingAuthGet = useModelProviderPendingAuthStore((s) => s.get);
@@ -328,9 +328,9 @@ export function ProviderModelProviderConnectDialog(props: {
       }
       // Opened for both arms. `code` still needs the provider's page on screen
       // to produce the code the user is about to paste.
-      openExternalLink.mutate(result.authorizationUrl);
+      void openLink(result.authorizationUrl, "auth", null);
     },
-    [applyResult, openExternalLink, pendingAuthUpsert, pendingKey],
+    [applyResult, openLink, pendingAuthUpsert, pendingKey],
   );
 
   /**
@@ -561,7 +561,7 @@ export function ProviderModelProviderConnectDialog(props: {
         onCodeChange={setCode}
         onSubmitCode={handleSubmitCode}
         onReopen={() => {
-          openExternalLink.mutate(attempt.authorizationUrl);
+          void openLink(attempt.authorizationUrl, "auth", null);
         }}
         onCancel={handleCancelAttempt}
         submitting={auth.isPending}

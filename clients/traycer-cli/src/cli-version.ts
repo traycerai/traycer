@@ -12,6 +12,13 @@ import {
   CURRENT_CLIENT_COMPATIBILITY_EPOCH,
   type FirstPartyClientIdentity,
 } from "@traycer/protocol/framework/index";
+// One definition of the unreleased-build string, shared with the two policies
+// that must agree about it: this module's floor exemption in
+// `registry/client-floor.ts`, and the compatibility fence, which would
+// otherwise refuse a dev build as `cli-below-floor`. Shared is a leaf from
+// this package's point of view and imports nothing here, so the cycle this
+// module exists to avoid is not reintroduced.
+import { LOCAL_BUILD_VERSION } from "@traycer-clients/shared/host-version/non-release-identity";
 
 // Local/dev fallback when the build pipeline did not inject a version
 // (i.e. running under tsx / vitest or an unreleased local SEA build).
@@ -20,7 +27,7 @@ import {
 // esbuild define - when that path runs, `process.env.TRAYCER_CLI_VERSION`
 // is a literal string in the emitted JS so this fallback is unreachable
 // from a published binary.
-export const LOCAL_CLI_VERSION = "0.0.0-local";
+export const LOCAL_CLI_VERSION = LOCAL_BUILD_VERSION;
 
 /**
  * Resolve the version Commander should advertise. SEA builds get the

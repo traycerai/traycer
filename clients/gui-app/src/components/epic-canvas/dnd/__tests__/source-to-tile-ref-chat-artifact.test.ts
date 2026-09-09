@@ -11,10 +11,8 @@ import {
 } from "@/components/epic-canvas/dnd/root-dnd-commits";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
-import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-} from "@/stores/epics/open-epic/store";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
+import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type { ChatProjection } from "@/stores/epics/open-epic/types";
 
 const CHAT_ARTIFACT_SOURCE: EpicCanvasChatArtifactDragData = {
@@ -84,6 +82,9 @@ const SIDEBAR_CHAT: ChatProjection = {
   userId: null,
   hostId: null,
   isTitleEditedByUser: false,
+  // Neutral scaffolding: this suite exercises drag-source-to-tile mapping,
+  // not doc residency.
+  docResident: false,
   settings: null,
   archivedAt: null,
 };
@@ -104,11 +105,21 @@ describe("sourceToTileRef - sidebar-node branch", () => {
     // app host client mounted, that fallback resolves to
     // `UNKNOWN_HOST_PLACEHOLDER`, which is exactly what this arm rules out.
     const registry = __getOpenEpicRegistryForTests();
-    const handle = createOpenEpicStore({
+    const handle = openStoreForTest({
       epicId: "epic-dnd",
-      streamClientFactory: noopStreamClientFactory,
       userId: null,
-      onAuthError: null,
+      // The factories go to the COMPOSITION now, not the store:
+      // `createOpenEpicStore` stopped constructing a runtime, so a
+      // suite that used to hand it a `streamClientFactory` has nothing
+      // to hand it. `handle.doc` still resolves because this harness
+      // builds the runtime in THIS thread.
+      factories: {
+        streamClientFactory: noopStreamClientFactory,
+        laneSelection: null,
+      },
+      // Explicit: `null` means this suite never writes, so a write in
+      // one that said so fails rather than resolving quietly.
+      writeCommand: null,
     });
     handle.store.setState((s) => ({
       chats: {

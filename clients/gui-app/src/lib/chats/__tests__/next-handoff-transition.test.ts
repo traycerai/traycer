@@ -35,7 +35,7 @@ function makeHandoff(
       profileId: null,
     },
     worktreeIntent: null,
-    placement: { kind: "active-tile" },
+    placement: null,
     clientActionId: null,
     messageId: null,
     failureReason: null,
@@ -102,6 +102,7 @@ describe("nextHandoffTransition", () => {
       acceptedActions: {
         "action-1": {
           action: "send",
+          queueItemId: null,
           interviewBlockId: null,
           interviewDeliveryRetry: null,
           clientActionId: "action-1",
@@ -113,6 +114,7 @@ describe("nextHandoffTransition", () => {
           accountContext: null,
           deliveryPolicy: null,
           restoreWorktreeIntent: null,
+          displayWorktreeIntent: null,
           connectionEpoch: 0,
           confirmedByHost: false,
         },

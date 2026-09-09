@@ -21,14 +21,13 @@ import {
 } from "@/lib/registries/chat-session-registry";
 import { createChatSessionStore } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
-import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-} from "@/stores/epics/open-epic/store";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
+import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import {
   publishAgentActivity,
   resetAgentActivity,
 } from "@/__tests__/agent-activity-harness";
+import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
 const EPIC_ID = "epic-activity";
 const AGENT_ID = "chat-1";
@@ -54,11 +53,21 @@ function registerEmptySession(): void {
  */
 function registerSessionHoldingAgents(agentIds: readonly string[]): void {
   const handle = __getOpenEpicRegistryForTests().acquire(EPIC_ID, () =>
-    createOpenEpicStore({
+    openStoreForTest({
       epicId: EPIC_ID,
       userId: null,
-      streamClientFactory: noopStreamClientFactory,
-      onAuthError: null,
+      // The factories go to the COMPOSITION now, not the store:
+      // `createOpenEpicStore` stopped constructing a runtime, so a
+      // suite that used to hand it a `streamClientFactory` has nothing
+      // to hand it. `handle.doc` still resolves because this harness
+      // builds the runtime in THIS thread.
+      factories: {
+        streamClientFactory: noopStreamClientFactory,
+        laneSelection: null,
+      },
+      // Explicit: `null` means this suite never writes, so a write in
+      // one that said so fails rather than resolving quietly.
+      writeCommand: null,
     }),
   );
   handle.store.setState({ chats: { allIds: [...agentIds], byId: {} } });
@@ -82,6 +91,7 @@ function registerChatSession(
     },
     () =>
       createChatSessionStore({
+        environment: CHAT_STORE_TEST_ENVIRONMENT,
         hostId: "host-a",
         epicId: EPIC_ID,
         chatId,
@@ -111,6 +121,7 @@ function runningShell(chatId: string): ManagedCommand {
     cadence: { debounceMs: 500, maxWaitMs: 15_000, throttleMs: 5_000 },
     status: { state: "running", pid: 4242, startedAtMs: 1 },
     chatId,
+    relaunchOnHostRestart: false,
     createdAtMs: 1,
     updatedAtMs: 1,
   };

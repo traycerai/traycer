@@ -2,6 +2,7 @@ import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/versioned-record";
 import {
   contentBlockSchema,
+  contentBlockSchemaV18,
   contentBlockSchemaPreImage,
   contentBlockSchemaPreReasonix,
   contentBlockSchemaPreSettlement,
@@ -68,14 +69,6 @@ export type BrowserViewElementBoundingBox = z.infer<
   typeof browserViewElementBoundingBoxSchema
 >;
 
-export const browserViewElementAttributeSchema = z.object({
-  name: z.string(),
-  value: z.string(),
-});
-export type BrowserViewElementAttribute = z.infer<
-  typeof browserViewElementAttributeSchema
->;
-
 export const browserViewElementStyleSchema = z.object({
   property: z.string(),
   value: z.string(),
@@ -84,14 +77,23 @@ export type BrowserViewElementStyle = z.infer<
   typeof browserViewElementStyleSchema
 >;
 
+/**
+ * One annotated element as PERSISTED: how to find it, what it says, where it
+ * sits - never the markup.
+ *
+ * `outerHtml` and a verbatim `attributes` list used to ride here too, which
+ * put page content (a filled-in form, a `value=` on an input, a token in a
+ * `data-` attribute) into collaborator-readable chat persistence and into the
+ * model prompt. `textPreview` is the bounded, markup-free snippet that
+ * replaces both; the picker no longer captures either field, and a record
+ * written before this change still parses because Zod strips the keys it no
+ * longer declares.
+ */
 export const browserViewElementCaptureSchema = z.object({
   selector: z.string(),
   tagName: z.string(),
   elementId: z.string().nullable(),
   classNames: z.array(z.string()),
-  attributes: z.array(browserViewElementAttributeSchema),
-  outerHtml: z.string(),
-  outerHtmlTruncated: z.boolean(),
   textPreview: z.string().nullable(),
   ariaRole: z.string().nullable(),
   accessibleName: z.string().nullable(),
@@ -199,7 +201,9 @@ const userMessageSenderKindRefine = (
   });
 };
 
-export const userMessageSchema = z
+// Fixed field set for chat.subscribe 1.7/1.8. Extend the live export below
+// when adding message fields, leaving the historical definition unchanged.
+export const userMessageSchemaV18 = z
   .object({
     role: z.literal("user"),
     messageId: z.string(),
@@ -209,6 +213,9 @@ export const userMessageSchema = z
     sessionAnchor: chatSessionAnchorSchema.nullable(),
   })
   .superRefine(userMessageSenderKindRefine);
+// There is no user-message delta in 1.9. Alias the frozen schema until a
+// newer contract needs its own extension (including the sender-kind check).
+export const userMessageSchema = userMessageSchemaV18;
 export type UserMessage = z.infer<typeof userMessageSchema>;
 
 /**
@@ -286,7 +293,9 @@ export const imageResolutionEntrySchema = z.discriminatedUnion("state", [
 ]);
 export type ImageResolutionEntry = z.infer<typeof imageResolutionEntrySchema>;
 
-export const assistantMessageSchema = z.object({
+// Historical message fields; newer blocks are selected only by the live
+// extension below. Unchanged nested leaves follow the existing freeze pattern.
+export const assistantMessageSchemaV18 = z.object({
   role: z.literal("assistant"),
   /**
    * Stable, unique id for this assistant row, minted once at creation and never
@@ -299,7 +308,7 @@ export const assistantMessageSchema = z.object({
    */
   messageId: z.string().min(1),
   sender: agentSenderSchema,
-  blocks: z.array(contentBlockSchema),
+  blocks: z.array(contentBlockSchemaV18),
   /**
    * Wall-clock the turn began (ms). Set once at turn-start and never
    * overwritten; distinct from `timestamp` which the host rewrites on every
@@ -351,6 +360,9 @@ export const assistantMessageSchema = z.object({
    * consent chips (see `imageResolutionEntrySchema`).
    */
   imageResolutions: z.array(imageResolutionEntrySchema).default([]),
+});
+export const assistantMessageSchema = assistantMessageSchemaV18.extend({
+  blocks: z.array(contentBlockSchema),
 });
 export type AssistantMessage = z.infer<typeof assistantMessageSchema>;
 
@@ -552,4 +564,9 @@ export const assistantMessageSchemaPreSettlement = z.object({
 export const messageSchemaPreSettlement = z.discriminatedUnion("role", [
   userMessageSchemaV16,
   assistantMessageSchemaPreSettlement,
+]);
+
+export const messageSchemaV18 = z.discriminatedUnion("role", [
+  userMessageSchemaV18,
+  assistantMessageSchemaV18,
 ]);

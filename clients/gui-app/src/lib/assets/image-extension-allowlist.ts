@@ -37,3 +37,19 @@ export function isImageAssetPath(path: string): boolean {
 export function isSvgAssetPath(path: string): boolean {
   return extensionOf(path) === ".svg";
 }
+
+/**
+ * Whether `path`'s extension routes to the PDF viewer. Kept separate from
+ * `isImageAssetPath` because the two route to DIFFERENT renderers (an
+ * `<img>` vs the pdf.js viewer) and PDF additionally gates on the host
+ * having negotiated `workspace.streamAsset >= 1.1` - the caller owns that
+ * check, this is the extension half only.
+ */
+export function isPdfAssetPath(path: string): boolean {
+  return extensionOf(path) === ".pdf";
+}
+
+/** Any extension the asset stream can serve - the "should this enter asset mode at all" union. */
+export function isPreviewableAssetPath(path: string): boolean {
+  return isImageAssetPath(path) || isPdfAssetPath(path);
+}

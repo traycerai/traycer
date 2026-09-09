@@ -123,10 +123,13 @@ describe("<NotificationsSettingsPanel /> severity policy", () => {
     });
   });
 
-  it("renders three single-channel severity rows, not a channel matrix", async () => {
+  it("renders four single-channel severity rows, including Info", async () => {
     renderNotificationsSettings(undefined);
 
-    const needsAction = await screen.findByRole("switch", {
+    const info = await screen.findByRole("switch", {
+      name: "Info In-app notifications",
+    });
+    const needsAction = screen.getByRole("switch", {
       name: "Needs action In-app notifications",
     });
     const failure = screen.getByRole("switch", {
@@ -142,9 +145,13 @@ describe("<NotificationsSettingsPanel /> severity policy", () => {
         name: "In-app notifications",
       }),
     ).toBeTruthy();
+    expect(info.getAttribute("data-state")).toBe("checked");
     expect(needsAction.getAttribute("data-state")).toBe("checked");
     expect(failure.getAttribute("data-state")).toBe("checked");
     expect(done.getAttribute("data-state")).toBe("checked");
+    expect(
+      within(policy).getByTestId("notifications-severity-info"),
+    ).toBeTruthy();
     expect(
       within(policy).getByTestId("notifications-severity-needs_action"),
     ).toBeTruthy();
@@ -153,6 +160,11 @@ describe("<NotificationsSettingsPanel /> severity policy", () => {
     ).toBeTruthy();
     expect(
       within(policy).getByTestId("notifications-severity-done"),
+    ).toBeTruthy();
+    expect(
+      within(policy).getByText(
+        "Background host operations, including worktree cleanup.",
+      ),
     ).toBeTruthy();
     expect(within(policy).getByText("Approvals and interviews.")).toBeTruthy();
     expect(
@@ -165,7 +177,7 @@ describe("<NotificationsSettingsPanel /> severity policy", () => {
     ).toBeTruthy();
 
     // One switch per severity only - no channel-by-severity matrix cells.
-    expect(within(policy).getAllByRole("switch")).toHaveLength(3);
+    expect(within(policy).getAllByRole("switch")).toHaveLength(4);
     expect(screen.queryByTestId(/notifications-matrix-/)).toBeNull();
     expect(
       screen.queryByRole("switch", { name: /webhook notifications/i }),
@@ -180,17 +192,17 @@ describe("<NotificationsSettingsPanel /> severity policy", () => {
   it("writes severity toggles through setConfig while preserving email channel state", async () => {
     const fixture = renderNotificationsSettings(undefined);
 
-    const doneRenderer = await screen.findByRole("switch", {
-      name: "Done In-app notifications",
+    const infoRenderer = await screen.findByRole("switch", {
+      name: "Info In-app notifications",
     });
-    fireEvent.click(doneRenderer);
+    fireEvent.click(infoRenderer);
 
     await waitFor(() => {
       expect(fixture.setRequests).toHaveLength(1);
     });
-    expect(fixture.setRequests[0].matrix.done.renderer).toBe(false);
-    expect(fixture.setRequests[0].matrix.done.email).toBe(
-      makeNotificationConfig().matrix.done.email,
+    expect(fixture.setRequests[0].matrix.info.renderer).toBe(false);
+    expect(fixture.setRequests[0].matrix.info.email).toBe(
+      makeNotificationConfig().matrix.info.email,
     );
     expect(fixture.setRequests[0].channels.email).toEqual({
       host: "smtp.example.com",

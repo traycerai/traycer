@@ -9,11 +9,11 @@ import type {
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import {
   hostNotificationsSubscribeClientFrameSchema,
-  hostNotificationsSubscribeServerFrameSchemaV11,
-  type HostNotificationEntryV21,
+  hostNotificationsSubscribeServerFrameSchemaV12,
+  type HostNotificationEntryV22,
   type HostNotificationsAttentionCursor,
   type HostNotificationsChronologicalCursor,
-  type HostNotificationsSubscribeServerFrameV11,
+  type HostNotificationsSubscribeServerFrameV12,
   type HostNotificationsSummary,
 } from "@traycer/protocol/host/notifications/contracts";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
@@ -41,19 +41,20 @@ export const HOST_NOTIFICATIONS_INITIAL_RECENT_LIMIT = 50;
 export const HOST_NOTIFICATIONS_PRESENCE_HEARTBEAT_MS = 5_000;
 
 /**
- * The feed parses against the `@1.1` frame union, not the released `@1.0`
- * one. Stream versions negotiate to `min(client, host)` per method, so a GUI
- * built from this protocol tree lands on `@1.1` against a host built from it
- * too - and parsing those frames with the `@1.0` schema would reject any
- * `host.operation.finished` row, which this store treats as connection
- * corruption and answers with a reconnect into a snapshot carrying the same
- * row. Against an older host the negotiated version drops back to `@1.0`,
- * whose frames are a strict subset of this union and still parse.
+ * The feed parses against the NEWEST frame union (`@1.2`), not a released one.
+ * Stream versions negotiate to `min(client, host)` per method, so a GUI built
+ * from this protocol tree lands on `@1.2` against a host built from it too -
+ * and parsing those frames with an older schema would reject any
+ * `host.operation.finished` or `browser.human.needed` row, which this store
+ * treats as connection corruption and answers with a reconnect into a snapshot
+ * carrying the same row. Against an older host the negotiated version drops
+ * back to `@1.1`/`@1.0`, whose frames are strict subsets of this union and
+ * still parse.
  */
-export type HostNotificationFeedEntry = HostNotificationEntryV21;
+export type HostNotificationFeedEntry = HostNotificationEntryV22;
 
 export type HostNotificationsFeedFrame = Extract<
-  HostNotificationsSubscribeServerFrameV11,
+  HostNotificationsSubscribeServerFrameV12,
   | { readonly kind: "snapshot" }
   | { readonly kind: "upserted" }
   | { readonly kind: "readStateChanged" }
@@ -593,7 +594,7 @@ export function openHostNotificationsStream(
         return;
       }
       const parsed =
-        hostNotificationsSubscribeServerFrameSchemaV11.safeParse(envelope);
+        hostNotificationsSubscribeServerFrameSchemaV12.safeParse(envelope);
       if (!parsed.success) {
         reconnect();
         return;

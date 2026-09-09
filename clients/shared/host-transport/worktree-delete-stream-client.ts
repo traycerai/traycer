@@ -1,5 +1,4 @@
 import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
-import { HOLDERS_REVISION_DIGEST_PATTERN } from "@traycer/protocol/host/worktree-schemas";
 import {
   worktreeDeleteByPathServerFrameSchemaV12,
   type WorktreeDeleteByPathServerFrameV12,
@@ -36,14 +35,11 @@ export interface WorktreeDeleteStreamCallbacks {
    * T2 inventory on a 1.1+ busy `failed` frame; `undefined` when the host
    * omitted it (old host / non-busy failure). `code` is the @1.2 refusal
    * (`WORKTREE_BUSY` / `WORKTREE_HOLDERS_CHANGED`); `undefined` on 1.1.
-   * `holdersRevision` is the host digest on a 1.2 frame; `undefined` when
-   * omitted.
    */
   readonly onFailed: (
     reason: string,
     holders: readonly WorktreeBusyHolder[] | undefined,
     code: "WORKTREE_BUSY" | "WORKTREE_HOLDERS_CHANGED" | undefined,
-    holdersRevision: string | undefined,
   ) => void;
   /**
    * Connection-status changes. `reason` is non-null only on the `closed`
@@ -65,12 +61,6 @@ export interface WorktreeDeleteStreamClientOptions {
    * host strips the field).
    */
   readonly stopOwners: boolean;
-  /**
-   * `worktree.deleteByPath@1.2` v2 consent. Present with `stopOwners:
-   * true` is a digest compare against the fresh inventory before
-   * teardown. Absent reproduces @1.1 (a 1.1 host strips the field).
-   */
-  readonly expectedHoldersRevision: string | undefined;
   readonly callbacks: WorktreeDeleteStreamCallbacks;
 }
 
@@ -97,11 +87,6 @@ export class WorktreeDeleteStreamClient {
       worktreePath: options.worktreePath,
       scripts: options.scripts,
       ...(options.stopOwners ? { stopOwners: true } : {}),
-      ...(options.stopOwners &&
-      options.expectedHoldersRevision !== undefined &&
-      HOLDERS_REVISION_DIGEST_PATTERN.test(options.expectedHoldersRevision)
-        ? { expectedHoldersRevision: options.expectedHoldersRevision }
-        : {}),
     });
     this.session.onServerFrame((envelope, binaryPayload) => {
       this.handleServerFrame(envelope, binaryPayload);
@@ -149,12 +134,7 @@ export class WorktreeDeleteStreamClient {
         return;
       }
       case "failed": {
-        this.callbacks.onFailed(
-          frame.reason,
-          frame.holders,
-          frame.code,
-          frame.holdersRevision,
-        );
+        this.callbacks.onFailed(frame.reason, frame.holders, frame.code);
         return;
       }
       case "pong": {

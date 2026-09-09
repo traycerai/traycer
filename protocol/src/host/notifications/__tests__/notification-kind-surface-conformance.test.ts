@@ -98,6 +98,14 @@ const REPRESENTATIVE_ENTRIES: Readonly<
     resolvedAt: null,
     payload: {},
   },
+  "browser.human.needed": {
+    ...ENTRY_BASE,
+    kind: "browser.human.needed",
+    severity: "needs_action",
+    outcome: null,
+    resolvedAt: null,
+    payload: { sessionId: "session-1", tabId: "tab-1", reason: "Sign in" },
+  },
   "host.operation.finished": {
     ...ENTRY_BASE,
     kind: "host.operation.finished",

@@ -1,3 +1,11 @@
+// The Overview re-provides a scoped STREAM binding beside its unary one (for
+// the Data & migration group), and the real hook reads `useAuthService` -
+// which this suite deliberately does not stand up. `null` keeps the panel on
+// the ambient stream, the arrangement every assertion below already assumed.
+vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
+  useScopedStreamBinding: () => null,
+}));
+
 // `LocalHostDownActions` is the header cluster `HostOverviewPanel` renders
 // for THIS machine's own host when it is unreachable and the shell has a CLI
 // bridge. There is no Start verb (decision 2026-08-19): the local host's

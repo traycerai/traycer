@@ -112,6 +112,42 @@
 }
 
 /*
+ * A labeled command (Comment, Send to chat, the folded "Aa" formatting
+ * trigger): same height, tokens and hover as a formatting button, plus room
+ * for the words. The words are what tell two speech-bubble icons apart, so
+ * they never wrap and never truncate.
+ */
+.tc-editor-toolbar-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  height: 1.75rem;
+  padding: 0 0.5rem;
+  border-radius: var(--radius-sm, 0.375rem);
+  color: var(--color-foreground, hsl(0 0% 10%));
+  background: transparent;
+  border: 1px solid transparent;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.tc-editor-toolbar-action:hover:not([disabled]),
+.tc-editor-toolbar-action[data-state="open"] {
+  background: var(--color-accent, hsl(0 0% 96%));
+}
+
+.tc-editor-toolbar-action:focus-visible {
+  outline: none;
+  border-color: var(--color-ring, hsl(222 47% 40%));
+}
+
+/*
  * Editor body sits below the sticky toolbar. Top padding reserves clearance
  * for CollaborationCaret labels, which render absolute-positioned above the
  * caret span - without the padding, a remote caret on the first line would

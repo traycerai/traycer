@@ -15,22 +15,19 @@ import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id
  * host scope by render context.
  *
  * This is the in-tab form of `useHostClientForHostId`: the tab id is
- * non-null, so it always takes that hook's pinned-requester path, resolving
- * the entry from the runtime's live directory first and the directory Query
- * snapshot only as a fallback. Sharing that one resolution matters because a
+ * non-null, so it always takes that hook's identity-requester path. The
+ * requester re-reads the runtime's live directory row on every access. Sharing
+ * that one resolution matters because a
  * tab composer hands the SAME id to surfaces mounted beside it as a plain
  * `runTargetHostId` (the model picker, `ProviderProfileAddFlowHost`), which
  * resolve through `useHostClientForHostId` directly - so the toolbar store's
- * client and the picker's client are non-null in the same paint. The previous
- * snapshot-only lookup here returned `null` for the first render while the
- * picker beside it was already resolved, and every consumer treating `null`
- * as "not ready" (queries disabled, catalog empty) lagged the picker by a
+ * client and the picker's client represent the same identity in the same
  * paint.
  *
- * Still `null` when the directory does not hold the tab's host, the entry has
- * no websocket URL, or there is no authenticated request context (signed
- * out); callers keep treating `null` as "not ready" - `useHostQuery` disables
- * itself and the kill mutation no-ops.
+ * The client remains non-null while the row is absent, its RPC endpoint is
+ * absent, or the user is signed out. Its reactive readiness owns those
+ * execution gates, so a booting host can recover on the generic endpoint edge
+ * without reconstructing this requester.
  *
  * Must be called inside `<TabHostProvider>` (every tile renderer is wrapped).
  */

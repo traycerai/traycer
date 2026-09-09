@@ -4,9 +4,22 @@ import { DEFAULT_EPIC_NODE_ICON_COLORS } from "@/lib/artifacts/node-display";
 import { DEFAULT_DIFF_VIEWER_PREFERENCES } from "@/lib/diff/diff-viewer-preferences";
 import { DEFAULT_NOTIFICATION_CHIME_SOUNDS } from "@/lib/notifications/notification-chime";
 import {
+  DEFAULT_LINK_OPEN_SETTINGS,
+  DEFAULT_TILE_PLACEMENT_SETTINGS,
   DEFAULT_WORKTREE_BRANCH_PREFIX,
+  linkOpenModeForKind,
+  tilePlacementForCategory,
   useSettingsStore,
 } from "@/stores/settings/settings-store";
+
+/** Seeds localStorage with one persisted payload and rehydrates from it. */
+async function rehydrateFrom(state: Record<string, unknown>): Promise<void> {
+  window.localStorage.setItem(
+    "traycer-gui-app:settings",
+    JSON.stringify({ state, version: 1 }),
+  );
+  await useSettingsStore.persist.rehydrate();
+}
 
 function resetSettingsStore(): void {
   window.localStorage.clear();
@@ -20,10 +33,10 @@ function resetSettingsStore(): void {
     pinContextUsageBreakdown: false,
     chatTurnMinimapSide: "right",
     quoteReplyEnabled: true,
-    browserLinkDefaultMode: "in-app",
-    terminalBrowserLinkOpenMode: "in-app",
-    markdownBrowserLinkOpenMode: "in-app",
+    linkOpen: DEFAULT_LINK_OPEN_SETTINGS,
     browserDevOrigins: [],
+    tilePlacement: DEFAULT_TILE_PLACEMENT_SETTINGS,
+    agentTabSurfacing: "off",
     worktreeBranchPrefix: DEFAULT_WORKTREE_BRANCH_PREFIX,
     diffViewerPreferences: DEFAULT_DIFF_VIEWER_PREFERENCES,
     notificationChimeSounds: DEFAULT_NOTIFICATION_CHIME_SOUNDS,
@@ -435,58 +448,164 @@ describe("useSettingsStore", () => {
     expect(useSettingsStore.getState().quoteReplyEnabled).toBe(true);
   });
 
-  it("defaults in-app browser link settings to in-app mode", () => {
-    expect(useSettingsStore.getState().browserLinkDefaultMode).toBe("in-app");
-    expect(useSettingsStore.getState().terminalBrowserLinkOpenMode).toBe(
-      "in-app",
+  it("defaults link opening to in-app for every kind", () => {
+    expect(useSettingsStore.getState().linkOpen).toEqual(
+      DEFAULT_LINK_OPEN_SETTINGS,
     );
-    expect(useSettingsStore.getState().markdownBrowserLinkOpenMode).toBe(
-      "in-app",
-    );
+    expect(
+      linkOpenModeForKind(useSettingsStore.getState().linkOpen, "github"),
+    ).toBe("in-app");
     expect(useSettingsStore.getState().browserDevOrigins).toEqual([]);
   });
 
-  it("persists in-app browser link settings", () => {
-    useSettingsStore.getState().setBrowserLinkDefaultMode("per-kind");
-    useSettingsStore.getState().setTerminalBrowserLinkOpenMode("external");
-    useSettingsStore.getState().setMarkdownBrowserLinkOpenMode("in-app");
-    useSettingsStore.getState().addBrowserDevOrigin("http://localhost:5173");
-    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
+  it("defaults tile placement to per-category with a split browser", () => {
+    expect(useSettingsStore.getState().tilePlacement).toEqual({
+      default: "per-category",
+      content: "tab",
+      conversation: "tab",
+      browser: "split",
+    });
+    const placement = useSettingsStore.getState().tilePlacement;
+    expect(tilePlacementForCategory(placement, "content")).toBe("tab");
+    expect(tilePlacementForCategory(placement, "browser")).toBe("split");
+  });
 
-    expect(persisted ?? "").toContain('"browserLinkDefaultMode":"per-kind"');
-    expect(persisted ?? "").toContain(
-      '"terminalBrowserLinkOpenMode":"external"',
-    );
+  it("lets an explicit default override the per-kind and per-category rows", () => {
+    expect(
+      linkOpenModeForKind(
+        {
+          ...DEFAULT_LINK_OPEN_SETTINGS,
+          default: "external",
+          github: "in-app",
+        },
+        "github",
+      ),
+    ).toBe("external");
+    expect(
+      tilePlacementForCategory(
+        {
+          default: "split",
+          content: "tab",
+          conversation: "tab",
+          browser: "pip",
+        },
+        "browser",
+      ),
+    ).toBe("split");
+  });
+
+  it("patches link open settings and persists them", () => {
+    useSettingsStore.getState().setLinkOpen({ default: "per-kind" });
+    useSettingsStore.getState().setLinkOpen({ terminal: "external" });
+    useSettingsStore.getState().addBrowserDevOrigin("http://localhost:5173");
+    const linkOpen = useSettingsStore.getState().linkOpen;
+
+    expect(linkOpen.default).toBe("per-kind");
+    expect(linkOpen.terminal).toBe("external");
+    expect(linkOpen.markdown).toBe("in-app");
+    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
+    expect(persisted ?? "").toContain('"terminal":"external"');
     expect(persisted ?? "").toContain('"browserDevOrigins"');
   });
 
+  it("patches tile placement settings", () => {
+    useSettingsStore.getState().setTilePlacement({ browser: "pip" });
+
+    expect(useSettingsStore.getState().tilePlacement).toEqual({
+      ...DEFAULT_TILE_PLACEMENT_SETTINGS,
+      browser: "pip",
+    });
+  });
+
   it("defaults agent tab surfacing to off", () => {
-    expect(useSettingsStore.getState().agentTabSurfacingMode).toBe("off");
+    expect(useSettingsStore.getState().agentTabSurfacing).toBe("off");
   });
 
-  it("persists the agent tab surfacing mode", () => {
-    useSettingsStore.getState().setAgentTabSurfacingMode("pip");
+  it("persists the agent tab surfacing setting", () => {
+    useSettingsStore.getState().setAgentTabSurfacing("surface");
     const persisted = window.localStorage.getItem("traycer-gui-app:settings");
-    expect(persisted ?? "").toContain('"agentTabSurfacingMode":"pip"');
-
-    useSettingsStore.getState().setAgentTabSurfacingMode("tile");
-    const next = window.localStorage.getItem("traycer-gui-app:settings");
-    expect(next ?? "").toContain('"agentTabSurfacingMode":"tile"');
+    expect(persisted ?? "").toContain('"agentTabSurfacing":"surface"');
   });
 
-  it("repairs an invalid persisted agent tab surfacing mode to off", async () => {
-    useSettingsStore.setState({ agentTabSurfacingMode: "pip" });
-    window.localStorage.setItem(
-      "traycer-gui-app:settings",
-      JSON.stringify({
-        state: { agentTabSurfacingMode: "explode" },
-        version: 1,
-      }),
+  it("repairs an invalid persisted agent tab surfacing value to off", async () => {
+    useSettingsStore.setState({ agentTabSurfacing: "surface" });
+    await rehydrateFrom({ agentTabSurfacing: "explode" });
+
+    expect(useSettingsStore.getState().agentTabSurfacing).toBe("off");
+  });
+
+  it("migrates the legacy pip surfacing mode to surface, leaving placement alone", async () => {
+    await rehydrateFrom({ agentTabSurfacingMode: "pip" });
+
+    expect(useSettingsStore.getState().agentTabSurfacing).toBe("surface");
+    // The old key described AGENT-opened tabs; the browser placement governs
+    // every browser open, so carrying `pip` across would float every link.
+    expect(useSettingsStore.getState().tilePlacement).toEqual(
+      DEFAULT_TILE_PLACEMENT_SETTINGS,
     );
+  });
 
-    await useSettingsStore.persist.rehydrate();
+  it("migrates the legacy tile surfacing mode to surface, leaving placement alone", async () => {
+    await rehydrateFrom({ agentTabSurfacingMode: "tile" });
 
-    expect(useSettingsStore.getState().agentTabSurfacingMode).toBe("off");
+    expect(useSettingsStore.getState().agentTabSurfacing).toBe("surface");
+    expect(useSettingsStore.getState().tilePlacement).toEqual(
+      DEFAULT_TILE_PLACEMENT_SETTINGS,
+    );
+  });
+
+  it("keeps the legacy off surfacing mode off with default placement", async () => {
+    await rehydrateFrom({ agentTabSurfacingMode: "off" });
+
+    expect(useSettingsStore.getState().agentTabSurfacing).toBe("off");
+    expect(useSettingsStore.getState().tilePlacement).toEqual(
+      DEFAULT_TILE_PLACEMENT_SETTINGS,
+    );
+  });
+
+  it("carries legacy link modes into the new link shape", async () => {
+    await rehydrateFrom({
+      browserLinkDefaultMode: "per-kind",
+      terminalBrowserLinkOpenMode: "external",
+      markdownBrowserLinkOpenMode: "in-app",
+    });
+
+    expect(useSettingsStore.getState().linkOpen).toEqual({
+      default: "per-kind",
+      markdown: "in-app",
+      terminal: "external",
+      github: "in-app",
+      image: "in-app",
+    });
+  });
+
+  it("falls back to defaults for unknown legacy link values", async () => {
+    await rehydrateFrom({
+      browserLinkDefaultMode: "sideways",
+      terminalBrowserLinkOpenMode: "explode",
+    });
+
+    expect(useSettingsStore.getState().linkOpen).toEqual(
+      DEFAULT_LINK_OPEN_SETTINGS,
+    );
+  });
+
+  it("drops the legacy keys from the next persisted write", async () => {
+    await rehydrateFrom({
+      agentTabSurfacingMode: "pip",
+      browserLinkDefaultMode: "per-kind",
+      terminalBrowserLinkOpenMode: "external",
+      markdownBrowserLinkOpenMode: "in-app",
+    });
+    useSettingsStore.getState().setAgentTabSurfacing("off");
+    const persisted =
+      window.localStorage.getItem("traycer-gui-app:settings") ?? "";
+
+    expect(persisted).not.toContain("agentTabSurfacingMode");
+    expect(persisted).not.toContain("browserLinkDefaultMode");
+    expect(persisted).not.toContain("BrowserLinkOpenMode");
+    expect(persisted).toContain('"linkOpen"');
+    expect(persisted).toContain('"tilePlacement"');
   });
 
   it("dedupes, trims, and removes detected browser dev origins", () => {

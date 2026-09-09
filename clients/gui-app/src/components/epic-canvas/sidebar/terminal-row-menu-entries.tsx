@@ -2,7 +2,7 @@ import { Pencil, Trash2 } from "lucide-react";
 import type { SidebarRowMenuEntry } from "@/components/epic-canvas/sidebar/sidebar-row-menu-items";
 
 /**
- * Per-surface test ids for the two terminal row actions. The actions
+ * Per-surface test ids for terminal rename and close actions. The actions
  * themselves - which entries exist, in what order, with which labels and
  * disabled state - are the same everywhere; only what a test grabs them by
  * follows the surface's own naming.
@@ -13,6 +13,7 @@ export interface TerminalRowMenuTestIds {
 }
 
 export interface TerminalRowMenuEntriesProps {
+  readonly copyIdEntry: SidebarRowMenuEntry;
   readonly closeDisabled: boolean;
   readonly onStartRename: () => void;
   readonly renameDisabled: boolean;
@@ -21,7 +22,7 @@ export interface TerminalRowMenuEntriesProps {
 }
 
 /**
- * The "…" menu of a raw-terminal row: Rename, then a destructive Close.
+ * The "…" menu of a raw-terminal row: Rename, Copy ID, then a destructive Close.
  * Shared so a phone's menu can never quietly offer fewer actions - or
  * differently-gated ones - than the desktop row it mirrors.
  */
@@ -40,6 +41,7 @@ export function terminalRowMenuEntries(
       testIds: props.testIds.rename,
       onSelect: props.onStartRename,
     },
+    props.copyIdEntry,
     { kind: "separator", id: "before-close" },
     {
       kind: "item",

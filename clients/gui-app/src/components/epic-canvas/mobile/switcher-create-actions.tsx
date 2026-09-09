@@ -14,7 +14,6 @@ import { MobileNewTerminalDialog } from "@/components/epic-canvas/mobile/mobile-
 import { SwitcherNewItemRow } from "@/components/epic-canvas/mobile/switcher-list-row";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
-import { ACTIVE_TILE_PLACEMENT } from "@/lib/canvas/conversation-tile-placement";
 import {
   EPIC_NODE_ICONS,
   EPIC_NODE_LABELS,
@@ -39,7 +38,8 @@ interface SwitcherCreateProps {
  * than each teaching its own.
  *
  * Opens the shared New Conversation modal through the desktop funnel (force
- * chat mode, then request the modal with `ACTIVE_TILE_PLACEMENT`); the modal's
+ * chat mode, then request the modal with no explicit placement, so the
+ * conversation tile-placement setting decides); the modal's
  * Chat/Terminal interface switcher covers both a GUI chat and a TUI
  * terminal-agent, so one control serves the whole category. The modal replaces
  * the sheet, so the sheet closes as it opens.
@@ -51,7 +51,7 @@ export function SwitcherNewChatAction(props: SwitcherCreateProps) {
     useNewConversationModalOpenStore.getState().open({
       epicId,
       tabId,
-      placement: ACTIVE_TILE_PLACEMENT,
+      placement: null,
       parentId: null,
       hostId: null,
     });

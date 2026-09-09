@@ -1,20 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { WorktreeBusyHolder } from "@traycer/protocol/framework/worktree-busy-holders";
 import {
-  canSubmitExpectedHoldersRevision,
   formatHolderSentence,
-  formatStopHeading,
   formatTeardownActors,
   formatUncheckedInUseKnown,
   formatUncheckedInUseUnknown,
   formatUnknownHolderConsequence,
   holderIdOf,
-  sanitizeHoldersRevision,
   UNNAMED_AGENT_FALLBACK,
 } from "@/lib/worktree/teardown-holder-copy";
-
-const REV_A =
-  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 const OWNER: WorktreeBusyHolder["ownerRef"] = {
   epicId: "epic-1",
@@ -114,7 +108,7 @@ describe("teardown holder copy", () => {
     );
   });
 
-  it("echoes a holdersRevision only when it is a 64-hex digest", () => {
+  it("reads a holder identity when the host provides one", () => {
     const withId = {
       ...holder({
         holdKind: "chat-turn",
@@ -124,12 +118,6 @@ describe("teardown holder copy", () => {
       holderId: "epic-1:chat:chat-1",
     };
     expect(holderIdOf(withId)).toBe("epic-1:chat:chat-1");
-    expect(canSubmitExpectedHoldersRevision(REV_A)).toBe(true);
-    expect(canSubmitExpectedHoldersRevision(undefined)).toBe(false);
-    expect(canSubmitExpectedHoldersRevision("")).toBe(false);
-    expect(canSubmitExpectedHoldersRevision("rev-1")).toBe(false);
-    expect(sanitizeHoldersRevision(REV_A)).toBe(REV_A);
-    expect(sanitizeHoldersRevision("rev-abc")).toBeUndefined();
   });
 
   it("never uses Run directory as a name when the map is empty", () => {
@@ -171,14 +159,5 @@ describe("teardown holder copy", () => {
     expect(
       actors[0]?.evidence.some((line) => line.includes("idle session")),
     ).toBe(true);
-  });
-
-  it("does not claim an exact process count when unknown inventories are mixed in", () => {
-    expect(formatStopHeading({ knownActors: 1, unknownRows: 1 })).toBe(
-      "1 process will be stopped, and unidentified background work",
-    );
-    expect(formatStopHeading({ knownActors: 0, unknownRows: 2 })).toBe(
-      "Unidentified background work will be stopped",
-    );
   });
 });

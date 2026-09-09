@@ -45,7 +45,10 @@ import type {
   TokenRotateResult,
   TokenStoreChange,
 } from "@traycer-clients/shared/platform/runner-host";
-import { DesktopAuthSession } from "../auth/desktop-auth-session";
+import {
+  DesktopAuthSession,
+  type VerifiedDesktopAuthSessionSnapshot,
+} from "../auth/desktop-auth-session";
 import {
   createEmptyPerWindowSnapshot,
   PER_WINDOW_STATE_CAPABILITIES,
@@ -84,7 +87,9 @@ import { registerPowerIpc } from "./power-ipc";
 import { registerAppUpdateIpc } from "./app-update-ipc";
 import { registerGlobalShortcutsIpc } from "./global-shortcuts-ipc";
 import { registerZoomIpc } from "./zoom-ipc";
+import { zoomPercentToFactor } from "../windows/window-zoom";
 import { registerBrowserViewIpc } from "./browser-view-ipc";
+import type { BrowserSessionsRegistry } from "../browser-sessions/browser-sessions-owner";
 import { registerPipCaptureIpc } from "./pip-capture-ipc";
 import type { BrowserViewManager } from "../browser-view/browser-view-manager";
 import { registerMenuIpc } from "./menu-ipc";
@@ -99,6 +104,7 @@ import type {
   ApplyStagedOk,
   ApplyStagedTrigger,
   ConvergeReadyOk,
+  ConvergeReadyVersionPolicy,
   GuardedMutationOutcome,
   HostControllerStatus,
   LifecycleAdmissionBlock,
@@ -203,12 +209,17 @@ export interface IpcShellQuitState {
 }
 
 type IpcAuthSessionChangeListener = (
-  snapshot: DesktopAuthSessionSnapshot,
+  snapshot: VerifiedDesktopAuthSessionSnapshot,
 ) => void;
 
 export interface IpcDesktopAuthSession {
-  get(): DesktopAuthSessionSnapshot;
+  get(): VerifiedDesktopAuthSessionSnapshot;
   set(snapshot: DesktopAuthSessionSnapshot): void;
+  /**
+   * Adopts a session whose bearer main verified itself. Only the auth IPC,
+   * which runs the verification, calls it.
+   */
+  setVerified(snapshot: DesktopAuthSessionSnapshot): void;
   on(event: "change", listener: IpcAuthSessionChangeListener): void;
   off(event: "change", listener: IpcAuthSessionChangeListener): void;
 }
@@ -240,6 +251,7 @@ export interface IpcAuthTokenStore {
 
 export interface IpcZoomController {
   getZoomPercent(): ZoomPercent;
+  getZoomFactor(): number;
   zoomIn(): Promise<ZoomPercent>;
   zoomOut(): Promise<ZoomPercent>;
   reset(): Promise<ZoomPercent>;
@@ -289,15 +301,6 @@ type HostChangeListener = (
 ) => void;
 
 export const QUIT_REQUEST_SERVICE_ACK_TIMEOUT_MS = 1_000;
-
-/**
- * Upper bound on how long the quit/close path waits for a renderer to
- * acknowledge a browser handoff drain. A wedged renderer that never replies
- * must not make the app unquittable (`authorizeQuitAfterFlush` awaits this)
- * or the window unclosable (`handleWindowClose` already preventDefault'ed),
- * so the wait resolves as "drained as far as we can tell" instead of hanging.
- */
-export const BROWSER_HANDOFF_DRAIN_TIMEOUT_MS = 10_000;
 
 export interface QuitDecisionWaiter {
   readonly requestId: string;
@@ -398,6 +401,7 @@ export interface IpcHostController {
   convergeReady(
     force: boolean,
     intent: LocalHostMutationIntent,
+    versionPolicy: ConvergeReadyVersionPolicy,
   ): Promise<GuardedMutationOutcome<ConvergeReadyOk>>;
   stageLatest(): Promise<void>;
   applyStaged(
@@ -406,6 +410,14 @@ export interface IpcHostController {
   ): Promise<MutationOutcome<ApplyStagedOk>>;
   activateInstalled(
     force: boolean,
+    // When false, activate the installed bytes WITHOUT promoting a ready newer
+    // stage. The implicit launch reconcile passes false for EVERY launch
+    // activation (a known-ready update is handled by its own apply branch under
+    // the CLI hold guard; a stage that only becomes ready mid-activation must
+    // not be promoted here, or it could revert a held downgrade). Explicit
+    // callers (a GUI "Update"/activate click) pass true and keep the
+    // "ready update supersedes activation debt" behaviour.
+    promoteReadyStage: boolean,
   ): Promise<MutationOutcome<ActivateInstalledOk>>;
   installVersion(
     pin: string,
@@ -482,13 +494,6 @@ interface FreshSnapshotWaiter {
   readonly resolveStale: () => void;
 }
 
-interface BrowserHandoffDrainWaiter {
-  readonly windowId: string;
-  readonly resolve: () => void;
-  readonly reject: (error: Error) => void;
-  readonly timer: NodeJS.Timeout;
-}
-
 /**
  * Installs `ipcMain.handle` endpoints that back the preload `contextBridge`
  * surface. Each handler mirrors the shape of `IRunnerHost` from
@@ -528,11 +533,8 @@ export class RunnerIpcBridge {
    * `setUnsyncedEditsSnapshot` pushes during the wait do NOT settle these.
    */
   readonly freshSnapshotWaiters = new Map<string, FreshSnapshotWaiter>();
-  private readonly browserHandoffDrainWaiters = new Map<
-    string,
-    BrowserHandoffDrainWaiter
-  >();
   private browserViewManager: BrowserViewManager | null = null;
+  private browserSessions: BrowserSessionsRegistry | null = null;
 
   constructor(options: RunnerIpcBridgeOptions) {
     this.options = options;
@@ -581,9 +583,10 @@ export class RunnerIpcBridge {
     registerAppUpdateIpc(this);
     registerGlobalShortcutsIpc(this);
     registerZoomIpc(this);
-    const primaryBrowserViewManager = registerBrowserViewIpc(this);
-    this.browserViewManager = primaryBrowserViewManager;
-    registerPipCaptureIpc(this, primaryBrowserViewManager);
+    const browserView = registerBrowserViewIpc(this);
+    this.browserViewManager = browserView.manager;
+    this.browserSessions = browserView.sessions;
+    registerPipCaptureIpc(this, browserView.manager);
     registerMenuIpc(this);
     // Power IPC (renderer-driven sleep prevention) registers a `disposeFn`
     // that releases the OS power-save blocker on teardown.
@@ -824,17 +827,21 @@ export class RunnerIpcBridge {
     }));
   }
 
-  async drainBrowserHandoffs(): Promise<void> {
-    const windowIds = this.windowRegistry
-      .records()
-      .map((record) => record.windowId)
-      .filter((windowId) => this.canHandoffBrowserTabsForWindow(windowId));
-    await Promise.all(
-      windowIds.map((windowId) => this.handOffBrowserTabs(windowId)),
-    );
+  /**
+   * One last primary-profile capture per live `browser.sessions` stream this
+   * process holds, before the desktop routes go away.
+   *
+   * Main holds both the jar and the sockets now (H10), so this completes with
+   * no renderer involved - which is what makes a window closing mid-capture
+   * safe: the old path asked a renderer to capture and awaited an ack across a
+   * process that was being torn down.
+   */
+  async captureFinalBrowserState(): Promise<void> {
+    await this.browserSessions?.captureFinalPrimaryProfiles(null);
   }
 
-  canHandoffBrowserTabsForWindow(windowId: string): boolean {
+  /** The native-teardown gate: this window owns guests that are about to die. */
+  needsFinalBrowserCaptureForWindow(windowId: string): boolean {
     return (
       this.appLifecycleReadyWindowIds.has(windowId) &&
       this.browserViewManager?.hasNativeTabsForWindow(windowId) === true
@@ -843,74 +850,17 @@ export class RunnerIpcBridge {
 
   async prepareBrowserWindowClose(windowId: string): Promise<void> {
     const manager = this.browserViewManager;
-    if (manager === null || !this.canHandoffBrowserTabsForWindow(windowId)) {
+    if (manager === null || !this.needsFinalBrowserCaptureForWindow(windowId)) {
       return;
     }
     try {
-      await this.handOffBrowserTabs(windowId);
+      await this.browserSessions?.captureFinalPrimaryProfiles(windowId);
     } finally {
+      // Native teardown only. The host suspends the session to dormant on
+      // route loss and re-materializes the same durable tabs later, so a
+      // window close must never read as the user closing those tabs.
       await manager.closeNativeSessionsForWindow(windowId);
     }
-  }
-
-  /**
-   * Hand this window's native browser tabs back to the host: flush what main
-   * owns, then wait (bounded) for the renderer to acknowledge its own drain.
-   */
-  private async handOffBrowserTabs(windowId: string): Promise<void> {
-    await this.browserViewManager?.handoff.drainForWindow(windowId);
-    await this.requestBrowserHandoffDrain([windowId]);
-  }
-
-  private async requestBrowserHandoffDrain(
-    windowIds: readonly string[],
-  ): Promise<void> {
-    await Promise.all(
-      windowIds.map(
-        (windowId) =>
-          new Promise<void>((resolve, reject) => {
-            const requestId = randomUUID();
-            const timer = setTimeout(() => {
-              if (!this.browserHandoffDrainWaiters.delete(requestId)) return;
-              log.warn("[runner-ipc] browser handoff drain timed out", {
-                windowId,
-                timeoutMs: BROWSER_HANDOFF_DRAIN_TIMEOUT_MS,
-              });
-              resolve();
-            }, BROWSER_HANDOFF_DRAIN_TIMEOUT_MS);
-            this.browserHandoffDrainWaiters.set(requestId, {
-              windowId,
-              resolve,
-              reject,
-              timer,
-            });
-            if (
-              this.safeSendToWindow(
-                windowId,
-                RunnerHostEvent.drainBrowserHandoffs,
-                { requestId },
-              )
-            ) {
-              return;
-            }
-            this.browserHandoffDrainWaiters.delete(requestId);
-            clearTimeout(timer);
-            reject(
-              new Error(
-                `Browser handoff drain request could not be delivered to window ${windowId}`,
-              ),
-            );
-          }),
-      ),
-    );
-  }
-
-  acknowledgeBrowserHandoffsDrained(windowId: string, requestId: string): void {
-    const waiter = this.browserHandoffDrainWaiters.get(requestId);
-    if (waiter?.windowId !== windowId) return;
-    this.browserHandoffDrainWaiters.delete(requestId);
-    clearTimeout(waiter.timer);
-    waiter.resolve();
   }
 
   markRendererUnavailable(windowId: string): void {
@@ -921,10 +871,6 @@ export class RunnerIpcBridge {
     );
     this.settleFreshSnapshotWaitersAsStale(
       (waiter) => waiter.windowId === windowId,
-    );
-    this.rejectBrowserHandoffDrainWaiters(
-      (waiter) => waiter.windowId === windowId,
-      new Error("Renderer reset before acknowledging browser handoff drain"),
     );
   }
 
@@ -1010,12 +956,6 @@ export class RunnerIpcBridge {
     this.syncListeners.length = 0;
     this.rejectAllQuitDecisionWaiters(
       new Error("Runner IPC bridge disposed before quit decision resolved"),
-    );
-    this.rejectBrowserHandoffDrainWaiters(
-      () => true,
-      new Error(
-        "Runner IPC bridge disposed before browser handoff drain resolved",
-      ),
     );
     // Mirrors the quit-decision cleanup above: a fresh-snapshot request left
     // armed past dispose() would either fire its setTimeout against a bridge
@@ -1358,10 +1298,10 @@ export class RunnerIpcBridge {
     this.settleFreshSnapshotWaitersAsStale(
       (waiter) => !liveWindowIds.has(waiter.windowId),
     );
-    this.rejectBrowserHandoffDrainWaiters(
-      (waiter) => !liveWindowIds.has(waiter.windowId),
-      new Error("Browser handoff window closed before acknowledging the drain"),
-    );
+    // The jar-plane streams go with their window too. Each is the Electron
+    // lifecycle owner for the native tabs that window held, so one left open
+    // would hold their placement against a window that is gone.
+    this.browserSessions?.retainWindows(liveWindowIds);
   }
 
   removeQuitDecisionWaiter(requestId: string): QuitDecisionWaiter | null {
@@ -1423,18 +1363,6 @@ export class RunnerIpcBridge {
       if (predicate(waiter)) {
         waiter.resolveStale();
       }
-    }
-  }
-
-  private rejectBrowserHandoffDrainWaiters(
-    predicate: (waiter: BrowserHandoffDrainWaiter) => boolean,
-    error: Error,
-  ): void {
-    for (const [requestId, waiter] of this.browserHandoffDrainWaiters) {
-      if (!predicate(waiter)) continue;
-      this.browserHandoffDrainWaiters.delete(requestId);
-      clearTimeout(waiter.timer);
-      waiter.reject(error);
     }
   }
 }
@@ -1787,6 +1715,10 @@ class NullZoomController implements IpcZoomController {
 
   getZoomPercent(): ZoomPercent {
     return this.zoomPercent;
+  }
+
+  getZoomFactor(): number {
+    return zoomPercentToFactor(this.zoomPercent);
   }
 
   zoomIn(): Promise<ZoomPercent> {

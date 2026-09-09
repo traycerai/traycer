@@ -1,6 +1,7 @@
 import type { ChatReadAccumulatedFileChangeResponse } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import type { AccumulatedChangeRow } from "@/lib/chat/accumulated-change-rows";
 import type { ResolvedSnapshotDiff } from "@/lib/chat/resolve-snapshot-diff-content";
+import { isPdfAssetPath } from "@/lib/assets/image-extension-allowlist";
 
 /**
  * The two decisions behind a cumulative diff tile's contents, as plain
@@ -20,9 +21,24 @@ export interface FetchableAccumulatedChange {
 }
 
 /**
+ * Whether this path's section renders without ever reading the file's bytes.
+ *
+ * A PDF row shows `PDF_FILE_DIFF_COPY` on every surface - no patch is built
+ * and no line counts are taken - so its before/after are dead weight. An
+ * ASCII-authored PDF is the case that bites: the snapshot CAN capture it (it
+ * is text), so the row carries a digest and would otherwise be downloaded in
+ * full to be discarded, and a fetch that failed or came back stale would
+ * collapse the whole mixed bundle into the source-unavailable state over a
+ * file whose contents nothing was going to read.
+ */
+function rendersWithoutContents(filePath: string): boolean {
+  return isPdfAssetPath(filePath);
+}
+
+/**
  * Which of a tile's files need a contents fetch.
  *
- * Three reasons a path drops out, and they are not the same:
+ * Four reasons a path drops out, and they are not the same:
  *
  * - **No row.** The path was on the tile when it was opened and has since left
  *   the accumulated set - reverted, or edited back to its original. Nothing to
@@ -32,6 +48,10 @@ export interface FetchableAccumulatedChange {
  *   and no host version names yet. Resolved inline instead.
  * - **`hasContents: false`.** There is no before/after to ask for at all. A
  *   request would return nothing and the tile would spin waiting for it.
+ * - **Renders without contents.** A PDF section is the same on every surface
+ *   whatever the bytes say (see {@link rendersWithoutContents}). It still
+ *   gets a section - `contentlessAccumulatedChangePaths` names it - just not
+ *   a download.
  */
 export function fetchableAccumulatedChanges(
   filePaths: ReadonlyArray<string>,
@@ -43,8 +63,28 @@ export function fetchableAccumulatedChanges(
     if (row === undefined || row.digest === null || !row.hasContents) {
       return [];
     }
+    if (rendersWithoutContents(filePath)) return [];
     return [{ filePath, digest: row.digest }];
   });
+}
+
+/**
+ * The tile's paths that are resolved by EXISTENCE rather than by content: a
+ * row is there, so the section is there, but its bytes are never read.
+ *
+ * The row requirement is the whole point of taking `hostRows` here. Extension
+ * alone would keep synthesizing a section for a PDF that has since left the
+ * accumulated set, which is the same "gone rows must read as gone" rule the
+ * single-file cumulative tile follows.
+ */
+export function contentlessAccumulatedChangePaths(
+  filePaths: ReadonlyArray<string>,
+  hostRows: ReadonlyArray<AccumulatedChangeRow>,
+): ReadonlyArray<string> {
+  const knownPaths = new Set(hostRows.map((row) => row.filePath));
+  return filePaths.filter(
+    (filePath) => knownPaths.has(filePath) && rendersWithoutContents(filePath),
+  );
 }
 
 /**
@@ -104,6 +144,14 @@ export function mergeCumulativeDiffs(input: {
   readonly fetchable: ReadonlyArray<FetchableAccumulatedChange>;
   readonly fetches: ReadonlyArray<AccumulatedChangeFetchState>;
   /**
+   * Paths resolved by existence alone - see
+   * {@link contentlessAccumulatedChangePaths}. They enter the result with
+   * null contents so their section is rendered, and they are never
+   * outstanding: nothing is in flight for them, so they cannot hold the
+   * tile in its loading state or drop it into source-unavailable.
+   */
+  readonly contentless: ReadonlyArray<string>;
+  /**
    * How many of `filePaths` the host rows cannot speak to yet, because the
    * summary stream is still arriving.
    *
@@ -115,18 +163,44 @@ export function mergeCumulativeDiffs(input: {
    */
   readonly undeliveredPaths: number;
 }): CumulativeDiffResolution {
-  const { fetchable, fetches, filePaths, inline, undeliveredPaths } = input;
+  const {
+    contentless,
+    fetchable,
+    fetches,
+    filePaths,
+    inline,
+    undeliveredPaths,
+  } = input;
+  const fetched = new Map<string, ResolvedSnapshotDiff>();
+  const contentlessByPath = new Map<string, ResolvedSnapshotDiff>(
+    contentless.map((filePath) => [
+      filePath,
+      { filePath, beforeContent: null, afterContent: null },
+    ]),
+  );
+  const inlineByPath = new Map(inline.map((entry) => [entry.filePath, entry]));
+  // In the tile's order, whatever each path resolved through. Inline wins,
+  // then a completed fetch, then existence alone.
+  const orderResolved = (): ReadonlyArray<ResolvedSnapshotDiff> =>
+    filePaths.flatMap((filePath) => {
+      const entry =
+        inlineByPath.get(filePath) ??
+        fetched.get(filePath) ??
+        contentlessByPath.get(filePath);
+      return entry === undefined ? [] : [entry];
+    });
   if (fetchable.length === 0) {
     // Before the first chunk this is EVERY path, which is the case that
-    // rendered "source unavailable" for a bundle that was merely early.
+    // rendered "source unavailable" for a bundle that was merely early. A
+    // bundle of nothing BUT contentless rows lands here too, and its
+    // sections still have to come out.
     return {
-      resolved: inline,
+      resolved: orderResolved(),
       isLoading: undeliveredPaths > 0,
       stale: false,
       failed: false,
     };
   }
-  const fetched = new Map<string, ResolvedSnapshotDiff>();
   // Seeded, not assigned: a path the summary stream has not reached yet is
   // outstanding for the same reason a query still in flight is, and the tile
   // must keep loading rather than present a partial bundle as a whole one.
@@ -174,10 +248,5 @@ export function mergeCumulativeDiffs(input: {
       afterContent: fetch.data.afterContent,
     });
   }
-  const inlineByPath = new Map(inline.map((entry) => [entry.filePath, entry]));
-  const resolved = filePaths.flatMap((filePath) => {
-    const entry = inlineByPath.get(filePath) ?? fetched.get(filePath);
-    return entry === undefined ? [] : [entry];
-  });
-  return { resolved, isLoading, stale, failed };
+  return { resolved: orderResolved(), isLoading, stale, failed };
 }

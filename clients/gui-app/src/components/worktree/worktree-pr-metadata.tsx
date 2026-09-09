@@ -1,4 +1,4 @@
-import { use, type MouseEvent, type ReactNode } from "react";
+import type { MouseEvent, ReactNode } from "react";
 import type {
   WorktreeBinding,
   WorktreeHostEntryV12,
@@ -19,9 +19,8 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { useRunnerOpenExternalLink } from "@/hooks/runner/use-open-external-link-mutation";
+import { useOpenLink } from "@/lib/links/open-link";
 import { cn } from "@/lib/utils";
-import { RunnerHostContext } from "@/providers/runner-host-context";
 import {
   ownerWorkspaceMetadataItems,
   worktreePrReferences,
@@ -33,6 +32,7 @@ import {
   PR_STATE_PILL_CLASS,
   PR_STATE_TINT_CLASS,
 } from "@/components/worktree/worktree-pr-state-palette";
+import { onMiddleClick } from "@/lib/dom/on-middle-click";
 
 /**
  * PR pills for the Epic history list (page background) and the chat/owner
@@ -58,6 +58,27 @@ export function WorktreePrPills(props: {
   readonly openPrInApp: ((reference: WorktreePrReference) => void) | null;
 }): ReactNode {
   const references = worktreePrReferences(props.worktrees);
+  return (
+    <PrReferencePills
+      references={references}
+      detailOnHover={props.detailOnHover}
+      maximumVisible={props.maximumVisible}
+      className={props.className}
+      testId={props.testId}
+      openPrInApp={props.openPrInApp}
+    />
+  );
+}
+
+export function PrReferencePills(props: {
+  readonly references: readonly WorktreePrReference[];
+  readonly detailOnHover: boolean;
+  readonly maximumVisible: number | null;
+  readonly className: string | undefined;
+  readonly testId: string;
+  readonly openPrInApp: ((reference: WorktreePrReference) => void) | null;
+}): ReactNode {
+  const references = props.references;
   if (references.length === 0) return null;
   const visibleReferences =
     props.maximumVisible === null
@@ -212,8 +233,7 @@ function WorktreePrAnchor(props: {
   readonly className: string | undefined;
   readonly openPrInApp: ((reference: WorktreePrReference) => void) | null;
 }): ReactNode {
-  const runnerHost = use(RunnerHostContext);
-  const openExternalLink = useRunnerOpenExternalLink();
+  const openLink = useOpenLink();
   const openPr = (event: MouseEvent<HTMLAnchorElement>): void => {
     event.stopPropagation();
     // Cmd/Ctrl-click is the platform gesture for "open this where it actually
@@ -228,20 +248,18 @@ function WorktreePrAnchor(props: {
       props.openPrInApp(props.reference);
       return;
     }
-    if (runnerHost === null) return;
     event.preventDefault();
-    openExternalLink.mutate(props.reference.url);
+    void openLink(props.reference.url, "github", event);
   };
   return (
     <a
       href={props.reference.url}
-      target="_blank"
-      rel="noreferrer"
       aria-label={props.reference.ariaLabel}
       className={props.className}
       data-testid="worktree-context-pr-pill"
       data-pr-state={props.reference.state}
       onClick={openPr}
+      onAuxClick={onMiddleClick(openPr)}
     >
       <WorktreePrPillContent
         label={props.reference.label}
@@ -297,6 +315,7 @@ export function OwnerWorkspaceMetadataContent(props: {
   readonly binding: WorktreeBinding | null;
   readonly worktrees: readonly WorktreeHostEntryV12[];
   readonly workspaces: readonly WorktreeWorkspaceSummaryV14[];
+  readonly prReferences: readonly WorktreePrReference[];
   readonly pending: boolean;
   /** No host client to ask - the facts are unknown, not absent. */
   readonly hostUnavailable: boolean;
@@ -308,12 +327,26 @@ export function OwnerWorkspaceMetadataContent(props: {
     props.worktrees,
     props.workspaces,
   );
+  const remainingReferences = new Map(
+    props.prReferences.map((reference) => [reference.url, reference]),
+  );
+  const itemGroups = items.map((item) => {
+    const references = [...remainingReferences.values()].filter(
+      (reference) => reference.worktreePath === item.runPath,
+    );
+    for (const reference of references) {
+      remainingReferences.delete(reference.url);
+    }
+    return { item, references };
+  });
+  const ungroupedReferences = [...remainingReferences.values()];
+  const hasContent = items.length > 0 || props.prReferences.length > 0;
   // Ahead of the spinner, because this is the state that CANNOT resolve on its
   // own. The owner's host is unreachable, so no request is in flight and none
   // is coming; a spinner here waits for an event that never arrives. It also
   // outranks "No workspace linked", which would claim the owner runs nowhere
   // when the truth is only that nobody could be asked.
-  if (props.hostUnavailable && items.length === 0) {
+  if (props.hostUnavailable && !hasContent) {
     return (
       <span className="block px-3 py-2 text-ui-xs text-muted-foreground">
         Workspace unknown — host unreachable
@@ -333,7 +366,7 @@ export function OwnerWorkspaceMetadataContent(props: {
   //
   // Owners that DO have items keep rendering them through a refetch, so the
   // spinner only ever replaces the empty state, never populated content.
-  if (props.pending && items.length === 0) {
+  if (props.pending && !hasContent) {
     return (
       <span className="flex items-center gap-2 px-3 py-2 text-ui-xs">
         <AgentSpinningDots
@@ -345,14 +378,14 @@ export function OwnerWorkspaceMetadataContent(props: {
       </span>
     );
   }
-  if (props.error) {
+  if (props.error && !hasContent) {
     return (
       <span className="block px-3 py-2 text-ui-xs text-muted-foreground">
         Unable to load workspace details
       </span>
     );
   }
-  if (items.length === 0) {
+  if (!hasContent) {
     return (
       <span className="block px-3 py-2 text-ui-xs text-muted-foreground">
         No workspace linked
@@ -379,7 +412,7 @@ export function OwnerWorkspaceMetadataContent(props: {
       // this keeps it out of the Tab order while pointer/wheel scroll works.
       tabIndex={-1}
     >
-      {items.map((item) => (
+      {itemGroups.map(({ item, references }) => (
         <span
           key={item.key}
           className="flex min-w-0 flex-col gap-0.5 py-2 first:pt-0 last:pb-0"
@@ -393,18 +426,29 @@ export function OwnerWorkspaceMetadataContent(props: {
             <FolderGit2 className="mt-0.5 size-3 shrink-0" aria-hidden />
             <span className="break-all">{item.runPath}</span>
           </span>
-          {item.worktree === null ? null : (
-            <WorktreePrPills
-              worktrees={[item.worktree]}
-              detailOnHover={false}
-              maximumVisible={null}
-              className="mt-0.5 flex-wrap overflow-visible"
-              testId={`owner-workspace-prs-${item.key}`}
-              openPrInApp={props.openPrInApp}
-            />
-          )}
+          <PrReferencePills
+            references={references}
+            detailOnHover={false}
+            maximumVisible={null}
+            className="mt-0.5 flex-wrap overflow-visible"
+            testId={`owner-workspace-prs-${item.key}`}
+            openPrInApp={props.openPrInApp}
+          />
         </span>
       ))}
+      {ungroupedReferences.length === 0 ? null : (
+        <span className="flex min-w-0 flex-col gap-1 py-2 first:pt-0 last:pb-0">
+          <span className="text-ui-sm font-medium">Pull requests</span>
+          <PrReferencePills
+            references={ungroupedReferences}
+            detailOnHover={false}
+            maximumVisible={null}
+            className="flex-wrap overflow-visible"
+            testId="owner-unlinked-prs"
+            openPrInApp={props.openPrInApp}
+          />
+        </span>
+      )}
     </span>
   );
 }

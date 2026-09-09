@@ -18,8 +18,10 @@ import type {
   ApplyStagedOk,
   ApplyStagedTrigger,
   ConvergeReadyOk,
+  ConvergeReadyVersionPolicy,
   HostControllerStatus,
   LifecycleAdmissionBlock,
+  LocalHostMutationIntent,
   InstallVersionOk,
   MutationOutcome,
   MutationProgress,
@@ -245,6 +247,8 @@ class FakeHostController implements IpcHostController {
   }
   async convergeReady(
     _force: boolean,
+    _intent: LocalHostMutationIntent,
+    _versionPolicy: ConvergeReadyVersionPolicy,
   ): Promise<MutationOutcome<ConvergeReadyOk>> {
     return { kind: "ok", value: { running: true, version: "1.0.0" } };
   }
@@ -255,7 +259,7 @@ class FakeHostController implements IpcHostController {
   ): Promise<MutationOutcome<ApplyStagedOk>> {
     return {
       kind: "ok",
-      value: { appliedVersion: "1.0.0", runningActivated: true },
+      value: { appliedVersion: "1.0.0", runningActivated: true, applied: true },
     };
   }
   async activateInstalled(

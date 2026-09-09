@@ -50,6 +50,27 @@ import { cn } from "@/lib/utils";
  * Doctor card is Diagnostics. The landing banner needs its own copies because
  * it is nowhere near either. Adding a second pair here would be the layered
  * narration this codebase keeps deleting.
+ *
+ * The two record-derived parks (`legacy-update-facts.ts`) are the exception
+ * that proves the rule, and each gets exactly one control. **Restart** on
+ * activation debt is not a second Restart: it opens the SAME confirmation the
+ * overflow Restart opens, and it exists because the card's own sentence
+ * ("Update installed — restart host to finish") names that action and a
+ * sentence that names an action three clicks away is a dead end. **Force
+ * update…** on a staged wait has no counterpart anywhere else on the page -
+ * the version rows install without force, and force is precisely what a
+ * parked stage needs.
+ *
+ * ## The same two controls now serve a THIRD source, and this file cannot tell
+ *
+ * When the view carries an ATTEMPT and the host advertises the bound update
+ * methods, the panel routes these two handlers to `host.update.activate` and
+ * `host.update.continue` against that attempt instead (D17). Deliberately no
+ * new prop and no new branch here: the decision is "what is this park waiting
+ * for, and can this host be asked directly", which is a question about the
+ * host's capabilities and the attempt's continuation — neither of which this
+ * component has any business knowing. It renders a control when it is handed
+ * one, which is exactly as much as it did before.
  */
 export function HostOverviewOperationCard(props: {
   readonly view: FleetUpdateView;
@@ -59,10 +80,66 @@ export function HostOverviewOperationCard(props: {
    * the ellipsis on the button is a promise, and the confirmation is what
    * re-reads live work before anything happens.
    */
-  readonly onForceRestart: () => void;
+  readonly onForceRestart: (() => void) | null;
+  /**
+   * The way out of an activation park, whichever kind of park it is.
+   *
+   * For an ATTEMPT park on a host with `host.update.activate` this opens the
+   * activation dialog, whose Force dispatches the bound method — locally and
+   * remotely alike, which is new: the legacy route's busy verdict could only
+   * ever be answered on a Desktop-local host and toasted "declined" on a
+   * remote one.
+   *
+   * Otherwise the RECORDS say the install is ahead of the running host
+   * (activation debt, `legacy-update-facts.ts`) and this is the page's
+   * cooperative restart: the same confirm → transition id → busy verdict →
+   * force/defer flow the header's Restart runs. `null` when there is neither,
+   * and `null` when the scope cannot reach the host: the fact is a cached read
+   * that outlives reachability, and the sentence (rendered qualified) is
+   * evidence worth keeping while a dispatch through a dead route is not.
+   *
+   * Keyed on the FACT rather than on `view.kind`, deliberately. The kind is
+   * `waiting-to-activate` when nothing outranks the fact, but a retained
+   * `failed` marker from an earlier run outranks it and keeps its failure
+   * text — real evidence, not to be papered over — and the person still needs
+   * the way forward. So Restart renders beside either sentence.
+   */
+  readonly onRestart: (() => void) | null;
+  /**
+   * The way out of a staged/working wait, whichever kind it is.
+   *
+   * For an ATTEMPT park on a host with `host.update.continue` this opens the
+   * force dialog for that attempt — which works with NO stage on disk, the
+   * case the install route cannot express at all (there is no staged version
+   * to name). Otherwise the RECORDS say a newer host is staged and the running
+   * host is busy, and this dispatches
+   * `host.update.install {version: staged, force}` through the page's existing
+   * install mutation.
+   *
+   * `null` when there is neither, when the host reported no positive session
+   * count to name — `offersForceRestart` gates the button on exactly that
+   * count, for both sources — and when the scope cannot reach the host, as for
+   * `onRestart`.
+   */
+  readonly onForceUpdate: (() => void) | null;
+  /**
+   * Whether the region's CLI-floor lane is active — passed straight through to
+   * `describeUpdateOperation`, which is the only thing that reads it.
+   *
+   * A prop rather than something derived here for the reason the header of this
+   * file gives: the card decides nothing. "Is this host's CLI below the
+   * projected release's floor" is a question about the update region's summary
+   * walk, and the region already answers it to choose between Update now and
+   * the remedy row.
+   */
+  readonly cliFloorBlocked: boolean;
 }): ReactNode {
   const { view } = props;
-  const copy = describeUpdateOperation({ view, hostName: props.hostName });
+  const copy = describeUpdateOperation({
+    view,
+    hostName: props.hostName,
+    cliFloorBlocked: props.cliFloorBlocked,
+  });
   const percent = operationProgressPercent(view);
   const bytes = operationProgressBytes(view);
   const showProgress = showsProgressBar(view);
@@ -119,17 +196,25 @@ export function HostOverviewOperationCard(props: {
             {percent}%
           </span>
         )}
-        {offersForceRestart(view) ? (
+        {props.onRestart === null ? null : (
           <Button
             type="button"
             size="sm"
             variant="default"
             className="shrink-0"
-            onClick={props.onForceRestart}
-            data-testid="host-overview-operation-force-restart"
+            onClick={props.onRestart}
+            data-testid="host-overview-operation-restart"
           >
-            Force restart…
+            Restart
           </Button>
+        )}
+        {/* `offersForceRestart` gates both forces on a positive, host-reported
+            count; `ForceControl` picks which one. */}
+        {offersForceRestart(view) ? (
+          <ForceControl
+            onForceUpdate={props.onForceUpdate}
+            onForceRestart={props.onForceRestart}
+          />
         ) : null}
       </div>
       {showProgress ? (
@@ -140,5 +225,44 @@ export function HostOverviewOperationCard(props: {
         />
       ) : null}
     </div>
+  );
+}
+
+/**
+ * The one force control the card offers when `offersForceRestart` holds.
+ * Which force it is depends on WHO parked: a record-derived staged wait has
+ * no attempt to force-restart into, so its way forward is the updater itself
+ * re-run with `--force`; an attempt-record park keeps the force-restart route.
+ */
+function ForceControl(props: {
+  readonly onForceUpdate: (() => void) | null;
+  readonly onForceRestart: (() => void) | null;
+}): ReactNode {
+  if (props.onForceUpdate !== null) {
+    return (
+      <Button
+        type="button"
+        size="sm"
+        variant="default"
+        className="shrink-0"
+        onClick={props.onForceUpdate}
+        data-testid="host-overview-operation-force-update"
+      >
+        Force update…
+      </Button>
+    );
+  }
+  if (props.onForceRestart === null) return null;
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="default"
+      className="shrink-0"
+      onClick={props.onForceRestart}
+      data-testid="host-overview-operation-force-restart"
+    >
+      Force restart…
+    </Button>
   );
 }

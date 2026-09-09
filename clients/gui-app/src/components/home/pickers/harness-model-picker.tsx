@@ -14,6 +14,7 @@ import {
 } from "@/components/home/data/landing-options";
 import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
+import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
 import {
   commitProfileSelection,
   commitSelection,
@@ -79,6 +80,12 @@ import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { useProviderProfileEnablementPending } from "@/hooks/providers/use-providers-set-profile-enabled-mutation";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readiness";
+import {
+  useHostReachability,
+  type HostReachability,
+} from "@/hooks/agent/use-host-reachability";
+import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useCoarsePointer } from "@/hooks/ui/use-coarse-pointer";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -168,6 +175,16 @@ interface HarnessModelPickerProps {
    * renderer-default host while the composer is bound elsewhere.
    */
   runTargetHostId: string | null;
+  /**
+   * Where a provider's setup terminal lands when the picker's setup CTA
+   * starts one - the epic (and view) this picker's composer lives in, or the
+   * landing page whose terminal panel should open. Named by the composer,
+   * never inferred: the same session is visible on exactly one surface.
+   * `null` for a surface with no terminal to open into (fork dialogs, the
+   * add-node menu, the in-epic new-conversation modal); the CTA then shows
+   * the steps without the button. See the type's doc for the modal case.
+   */
+  terminalLoginSurface: ProviderTerminalLoginSurface | null;
   /** Forwarded to `HarnessModelTrigger`; see its `labelDisplay`. */
   labelDisplay: "responsive" | "model-only";
   /**
@@ -190,6 +207,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     registerActivation,
     createProfileHostId,
     runTargetHostId,
+    terminalLoginSurface,
     profileAdmission,
   } = props;
   const activityEnabled = useSurfaceActivity();
@@ -501,6 +519,18 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     [catalog.harnesses, tuiOnly],
   );
   const refreshCatalog = useRefreshHarnessCatalogForClient(runTargetClient);
+  const runTargetReadiness = useReactiveHostReadiness(runTargetClient);
+  const runTargetReachability = useHostReachability(
+    runTargetHostId ?? UNKNOWN_HOST_PLACEHOLDER,
+  );
+  const hostUnavailableLabel = modelPickerHostUnavailableLabel(
+    runTargetHostId,
+    runTargetReadiness.hasRpcEndpoint,
+    runTargetReachability,
+  );
+  const handleRefreshCatalog = useCallback(async () => {
+    await refreshCatalog();
+  }, [refreshCatalog]);
   const selectedModels = selectedModelsQuery.data?.models ?? EMPTY_MODELS;
   // "Pending" has to mean a fetch is actually coming. A disabled query with no
   // cached data reports `isPending` forever, so reading it raw would leave an
@@ -975,7 +1005,8 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         catalogHarnessesLoading={catalog.harnessesLoading}
         onEntryChange={handleRailEntryChange}
         onProfileChange={handleProfileChange}
-        onRefreshCatalog={refreshCatalog}
+        onRefreshCatalog={handleRefreshCatalog}
+        hostUnavailableLabel={hostUnavailableLabel}
         onOpenProviderSettings={openProviderSettings}
         onClosePicker={closeOnly}
         listRef={listRef}
@@ -994,6 +1025,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         serviceTierFooter={serviceTierFooter}
         createProfileHostId={createProfileHostId}
         runTargetHostId={runTargetHostId}
+        terminalLoginSurface={terminalLoginSurface}
         createProfileDisabled={createProfileGate.disabled}
         createProfileDisabledReason={createProfileGate.reason}
         profileAdmission={profileAdmission}
@@ -1376,4 +1408,23 @@ function modelRowsListKey(input: ModelRowsListKeyInput): string {
     ? `search:${activeProviderId}:${query}`
     : `browse:${activeProviderId}`;
   return `${openVersion}:${modeKey}`;
+}
+
+function modelPickerHostUnavailableLabel(
+  hostId: string | null,
+  hasRpcEndpoint: boolean,
+  reachability: HostReachability,
+): string | null {
+  if (hasRpcEndpoint && reachability.status !== "unreachable") {
+    return null;
+  }
+  if (hostId === null) return "No device available";
+  if (reachability.status === "checking") return "Checking device";
+  if (reachability.status === "unreachable") {
+    if (reachability.unavailability === "plan-restricted") {
+      return `${reachability.hostLabel} isn't available on your plan`;
+    }
+    return `${reachability.hostLabel} is offline`;
+  }
+  return `${reachability.hostLabel} is starting`;
 }

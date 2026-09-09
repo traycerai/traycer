@@ -24,6 +24,10 @@ import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-sto
 import type { ChatMessageUserActions } from "@/components/chat/chat-message";
 import { useSetA2AReceivedOpen } from "@/stores/chats/a2a-open-store-context";
 import {
+  chatTranscriptJumpKey,
+  useChatTranscriptJumpStore,
+} from "@/stores/chats/chat-transcript-jump-store";
+import {
   useChatCollapsibleTileInstanceId,
   useSetChatFindForcedOpen,
 } from "@/stores/chats/chat-find-force-store-context";
@@ -31,16 +35,24 @@ import { collectImageAtoms } from "@/lib/composer/image-atoms";
 import { bytesToBase64 } from "@/lib/composer/image-base64";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 
-const attachmentMocks = vi.hoisted(() => ({
-  fetcher: vi.fn((_hash: string, _signal: AbortSignal) =>
+const attachmentMocks = vi.hoisted(() => {
+  const fetch = vi.fn((_hash: string, _signal: AbortSignal) =>
     Promise.resolve({ bytes: new Uint8Array([1, 2, 3]), mediaType: null }),
-  ),
-  hasBytes: vi.fn(() => true),
-  readChatBytes: vi.fn(
-    (_hash: string): Promise<Uint8Array<ArrayBuffer> | null> =>
-      Promise.resolve(new Uint8Array([1, 2, 3])),
-  ),
-}));
+  );
+  return {
+    fetch,
+    // Built ONCE, not per call. These stand in for hooks that memoize, and
+    // the blob-url effect takes the fetcher as a dependency - a factory
+    // returning a fresh object each render re-runs that effect forever.
+    epicFetcher: { scopeKey: "test-epic-scope", fetch },
+    chatFetcher: { scopeKey: "test-chat-scope", fetch },
+    hasBytes: vi.fn(() => true),
+    readChatBytes: vi.fn(
+      (_hash: string): Promise<Uint8Array<ArrayBuffer> | null> =>
+        Promise.resolve(new Uint8Array([1, 2, 3])),
+    ),
+  };
+});
 const composerPickerMocks = vi.hoisted(() => ({
   useComposerPickerItems: vi.fn(),
 }));
@@ -104,16 +116,37 @@ function render(ui: ReactNode) {
 }
 
 vi.mock("@/lib/epic-selectors", () => ({
-  useEpicArtifact: (artifactId: string | null) =>
-    artifactId === "agent-sender-1"
-      ? {
-          id: "agent-sender-1",
-          parentId: null,
-          title: "Review Agent",
-          hostId: "host-1",
-        }
-      : null,
+  useEpicArtifact: (artifactId: string | null) => {
+    if (artifactId === "agent-sender-1") {
+      return {
+        id: "agent-sender-1",
+        parentId: null,
+        title: "Review Agent",
+        hostId: "host-1",
+      };
+    }
+    // A terminal-agent (TUI) sender: distinguished from a chat/artifact node
+    // by carrying `harnessId` - see `AgentMessageDisplayView`'s `openTarget`
+    // resolution in chat-message-user-body.tsx.
+    if (artifactId === "agent-sender-terminal") {
+      return {
+        id: "agent-sender-terminal",
+        harnessId: "claude",
+        hostId: "host-2",
+        title: "Terminal Agent",
+      };
+    }
+    return null;
+  },
   useOpenEpicId: () => "epic-1",
+}));
+
+const tileNavigationMocks = vi.hoisted(() => ({
+  openTile: vi.fn(() => null),
+}));
+
+vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
+  useEpicTileNavigation: () => ({ openTile: tileNavigationMocks.openTile }),
 }));
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
@@ -131,7 +164,7 @@ vi.mock(
     const actual = await importOriginal();
     return {
       ...actual,
-      useEpicImageFetcher: () => attachmentMocks.fetcher,
+      useEpicImageFetcher: () => attachmentMocks.epicFetcher,
       useEpicAttachmentBytesPresence: () => attachmentMocks.hasBytes,
     };
   },
@@ -143,7 +176,7 @@ vi.mock(
     const actual = await importOriginal();
     return {
       ...actual,
-      useChatImageFetcher: () => attachmentMocks.fetcher,
+      useChatImageFetcher: () => attachmentMocks.chatFetcher,
       useChatAttachmentByteReader: () => attachmentMocks.readChatBytes,
     };
   },
@@ -270,8 +303,8 @@ describe("<UserMessageBody /> agent messages", () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
-    attachmentMocks.fetcher.mockReset();
-    attachmentMocks.fetcher.mockImplementation((_hash, _signal) =>
+    attachmentMocks.fetch.mockReset();
+    attachmentMocks.fetch.mockImplementation((_hash, _signal) =>
       Promise.resolve({ bytes: new Uint8Array([1, 2, 3]), mediaType: null }),
     );
     attachmentMocks.hasBytes.mockReset();
@@ -283,6 +316,8 @@ describe("<UserMessageBody /> agent messages", () => {
 
     composerPickerMocks.useComposerPickerItems.mockClear();
     useWorkspaceFoldersStore.setState({ byHost: {} });
+    tileNavigationMocks.openTile.mockClear();
+    useChatTranscriptJumpStore.setState({ requestsByChatId: {} });
   });
 
   it("reveals the action chip for keyboard focus", () => {
@@ -855,19 +890,27 @@ describe("<UserMessageBody /> agent messages", () => {
       />,
     );
 
-    expect(screen.getByText("Received message")).toBeTruthy();
+    // The direction label is for assistive tech only: the icon plus "from"
+    // already say it, and the visible words were crowding the sender name out
+    // of narrow headers.
+    expect(screen.getByText("Received message").className).toContain("sr-only");
+    expect(screen.getByText("from")).toBeTruthy();
+    expect(screen.queryByText("from agent")).toBeNull();
     expect(screen.getByText("Review Agent")).toBeTruthy();
     expect(screen.getByText(/Investigate this failure/)).toBeTruthy();
     expect(screen.queryByText("Message")).toBeNull();
-    // The badge sits in the always-visible header next to the sender link, so
-    // it's already present before the card is expanded.
-    expect(screen.getByText("reply expected")).toBeTruthy();
+    // Reply-expected is a compact icon in the always-visible header; the
+    // spelled-out line only appears once the card is expanded.
+    expect(screen.getByRole("img", { name: "Reply expected" })).toBeTruthy();
+    expect(screen.queryByText("Reply expected")).toBeNull();
+    expect(screen.queryByText("reply expected")).toBeNull();
     expect(screen.queryByRole("button", { name: "Copy message" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: /Received message/ }));
 
     expect(screen.getByRole("button", { name: "Review Agent" })).toBeTruthy();
-    expect(screen.getByText("reply expected")).toBeTruthy();
+    expect(screen.getByRole("img", { name: "Reply expected" })).toBeTruthy();
+    expect(screen.getByText("Reply expected")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Copy message" })).toBeTruthy();
     expect(screen.queryByText("Message")).toBeNull();
     expect(
@@ -876,6 +919,47 @@ describe("<UserMessageBody /> agent messages", () => {
         .closest(".md-prose")
         ?.hasAttribute("data-quotable"),
     ).toBe(false);
+  });
+
+  it("parks a receipt jump for the sender's chat tile when the sender name is clicked", () => {
+    const message = agentMessage("Investigate this failure.");
+    render(<UserMessageBody actions={null} message={message} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Review Agent" }));
+
+    expect(tileNavigationMocks.openTile).toHaveBeenCalledTimes(1);
+    const state = useChatTranscriptJumpStore.getState();
+    const key = chatTranscriptJumpKey("host-1", "agent-sender-1");
+    expect(state.requestsByChatId[key]?.target).toEqual({
+      kind: "receipt",
+      messageId: message.id,
+    });
+  });
+
+  it("opens the tile but parks no jump when the sender resolves to a terminal agent", () => {
+    const message: ChatMessageModel = {
+      ...agentMessage("Investigate this failure."),
+      agentSenderInfo: {
+        agentId: "agent-sender-terminal",
+        senderTitle: "Terminal Agent",
+        expectReply: true,
+        responseId: "response-1",
+      },
+      agentMessage: {
+        kind: "agent",
+        content: AGENT_CONTENT,
+        fromAgentId: "agent-sender-terminal",
+        senderTitle: "Terminal Agent",
+        senderHarnessId: "claude",
+        reply: { expectsReply: true, responseId: "response-1" },
+      },
+    };
+    render(<UserMessageBody actions={null} message={message} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Terminal Agent" }));
+
+    expect(tileNavigationMocks.openTile).toHaveBeenCalledTimes(1);
+    expect(useChatTranscriptJumpStore.getState().requestsByChatId).toEqual({});
   });
 
   it("opens received A2A cards through the provider store", () => {

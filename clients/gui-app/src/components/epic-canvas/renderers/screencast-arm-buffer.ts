@@ -1,9 +1,14 @@
-export const SCREENCAST_ARM_BUFFER_TIMEOUT_MS = 1_000;
 export const SCREENCAST_ARM_BUFFER_CLICK_SLOP_PX = 4;
 
 export interface ScreencastArmGestureDown<T> {
   readonly payload: T;
-  readonly castSequence: number;
+  /**
+   * The surface the buffered press was aimed at, as one comparable number:
+   * the painted frame's sequence on the JPEG plane, the host's viewport epoch
+   * on the video plane. The buffer never interprets it - it only replays a
+   * gesture whose surface is still the one on screen when the arm lands.
+   */
+  readonly correlationToken: number;
   readonly clientX: number;
   readonly clientY: number;
   readonly isPrimary: boolean;
@@ -26,7 +31,7 @@ export interface ScreencastArmBuffer<T> {
   readonly storeMatchingUp: (up: ScreencastArmGestureUp<T>) => void;
   readonly noteMove: (clientX: number, clientY: number) => void;
   readonly takeIfCurrent: (
-    presentedSequence: number | null,
+    currentToken: number | null,
   ) => ScreencastArmGesture<T> | null;
   readonly drop: () => void;
   readonly hasPending: () => boolean;
@@ -38,8 +43,14 @@ interface PendingArmGesture<T> {
   readonly timeoutId: number;
 }
 
+/**
+ * `readTimeoutMs` is read when a press is stored, not captured once: the
+ * timeout is derived from the measured control-plane RTT (ticket 18), which
+ * arrives after the buffer is built and refines while the tile lives.
+ */
 export function createScreencastArmBuffer<T>(
   onDropped: () => void,
+  readTimeoutMs: () => number,
 ): ScreencastArmBuffer<T> {
   let pending: PendingArmGesture<T> | null = null;
 
@@ -61,7 +72,7 @@ export function createScreencastArmBuffer<T>(
       pending = {
         down,
         up: null,
-        timeoutId: window.setTimeout(drop, SCREENCAST_ARM_BUFFER_TIMEOUT_MS),
+        timeoutId: window.setTimeout(drop, readTimeoutMs()),
       };
     },
     storeMatchingUp: (up) => {
@@ -94,11 +105,11 @@ export function createScreencastArmBuffer<T>(
       }
       drop();
     },
-    takeIfCurrent: (presentedSequence) => {
+    takeIfCurrent: (currentToken) => {
       if (pending === null) return null;
       const gesture = pending;
       if (
-        presentedSequence !== gesture.down.castSequence ||
+        currentToken !== gesture.down.correlationToken ||
         gesture.up === null
       ) {
         drop();

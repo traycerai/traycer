@@ -141,7 +141,23 @@ vi.mock("@/lib/host/probe-workspace-file-exists", () => ({
 let pendingCancel: (() => void) | null = null;
 let disposed = false;
 let clickToken = 0;
-const previewTileInTab = vi.fn();
+const openTile = vi.fn();
+
+/**
+ * The intent every chat link open produces (C4): a single-click gesture into
+ * the chat's own tab, with placement left to the setting.
+ */
+function chatLinkIntent(node: unknown): unknown {
+  return {
+    node,
+    target: { tabId: TAB_ID },
+    gesture: "single",
+    modifiers: null,
+    placement: null,
+    dedupe: true,
+    source: "direct_ui",
+  };
+}
 const onAsyncFailure = vi.fn();
 
 function createHostClient(requestId: string): HostClient<HostRpcRegistry> {
@@ -182,7 +198,7 @@ function makeDeps(overrides: Partial<ChatLinkPolicyDeps>): ChatLinkPolicyDeps {
     client: DEFAULT_CLIENT,
     workspaceClient: WORKSPACE_CLIENT,
     navigate: (() => undefined) as never,
-    previewTileInTab,
+    openTile,
     ...overrides,
   };
 }
@@ -217,7 +233,7 @@ beforeEach(() => {
   pendingCancel = null;
   disposed = false;
   clickToken = 0;
-  previewTileInTab.mockReset();
+  openTile.mockReset();
   onAsyncFailure.mockReset();
   mocks.resolveArtifactByPath.mockReset();
   mocks.openProjectedSidebarNodeInTabWhenAvailable.mockReset();
@@ -276,7 +292,7 @@ describe("buildChatLinkPolicy", () => {
     const run = buildChatLinkPolicy(makeDeps({}));
     expect(run(fileLink({ isDirectory: true }), lifecycle)).toBe(false);
     expect(mocks.resolveArtifactByPath).not.toHaveBeenCalled();
-    expect(previewTileInTab).not.toHaveBeenCalled();
+    expect(openTile).not.toHaveBeenCalled();
   });
 
   it("opens a relative non-artifact path as a workspace-file preview after probing the root for existence", async () => {
@@ -299,11 +315,13 @@ describe("buildChatLinkPolicy", () => {
         client: WORKSPACE_CLIENT,
       }),
     );
-    expect(previewTileInTab).toHaveBeenCalledWith(TAB_ID, {
-      id: "content-1",
-      workspacePath: "/repo",
-      filePath: "src/app.ts",
-    });
+    expect(openTile).toHaveBeenCalledWith(
+      chatLinkIntent({
+        id: "content-1",
+        workspacePath: "/repo",
+        filePath: "src/app.ts",
+      }),
+    );
   });
 
   it("probes the tab-scoped workspace client even when it differs from the app-wide default host client", async () => {
@@ -331,7 +349,7 @@ describe("buildChatLinkPolicy", () => {
       mocks.candidateWorkspaceFileRefsForRelativeLinkPath,
     ).not.toHaveBeenCalled();
     expect(mocks.fetchWorkspaceFileExists).not.toHaveBeenCalled();
-    expect(previewTileInTab).not.toHaveBeenCalled();
+    expect(openTile).not.toHaveBeenCalled();
     expect(onAsyncFailure).toHaveBeenCalledTimes(1);
   });
 
@@ -346,7 +364,7 @@ describe("buildChatLinkPolicy", () => {
       42,
       7,
     );
-    expect(previewTileInTab).toHaveBeenCalledTimes(1);
+    expect(openTile).toHaveBeenCalledTimes(1);
   });
 
   it("probes every bound root and opens the first one that has the file", async () => {
@@ -365,11 +383,13 @@ describe("buildChatLinkPolicy", () => {
     expect(run(fileLink({ path: "app.ts" }), lifecycle)).toBe(true);
     await flush();
 
-    expect(previewTileInTab).toHaveBeenCalledWith(TAB_ID, {
-      id: "root-b-content",
-      workspacePath: "/repo-b",
-      filePath: "app.ts",
-    });
+    expect(openTile).toHaveBeenCalledWith(
+      chatLinkIntent({
+        id: "root-b-content",
+        workspacePath: "/repo-b",
+        filePath: "app.ts",
+      }),
+    );
   });
 
   it("prefers the first root by order even when a later root's probe settles first", async () => {
@@ -392,16 +412,18 @@ describe("buildChatLinkPolicy", () => {
 
     run(fileLink({ path: "app.ts" }), lifecycle);
     await flush();
-    expect(previewTileInTab).not.toHaveBeenCalled();
+    expect(openTile).not.toHaveBeenCalled();
 
     resolveRootA(true);
     await flush();
 
-    expect(previewTileInTab).toHaveBeenCalledWith(TAB_ID, {
-      id: "root-a-content",
-      workspacePath: "/repo-a",
-      filePath: "app.ts",
-    });
+    expect(openTile).toHaveBeenCalledWith(
+      chatLinkIntent({
+        id: "root-a-content",
+        workspacePath: "/repo-a",
+        filePath: "app.ts",
+      }),
+    );
   });
 
   it("opens the first root's hit immediately, without waiting on a still-pending lower-priority root", async () => {
@@ -424,11 +446,13 @@ describe("buildChatLinkPolicy", () => {
     run(fileLink({ path: "app.ts" }), lifecycle);
     await flush();
 
-    expect(previewTileInTab).toHaveBeenCalledWith(TAB_ID, {
-      id: "root-a-content",
-      workspacePath: "/repo-a",
-      filePath: "app.ts",
-    });
+    expect(openTile).toHaveBeenCalledWith(
+      chatLinkIntent({
+        id: "root-a-content",
+        workspacePath: "/repo-a",
+        filePath: "app.ts",
+      }),
+    );
   });
 
   it("reports a click failure when no bound root has the relative file", async () => {
@@ -438,7 +462,7 @@ describe("buildChatLinkPolicy", () => {
     run(fileLink({ path: "missing.ts" }), lifecycle);
     await flush();
 
-    expect(previewTileInTab).not.toHaveBeenCalled();
+    expect(openTile).not.toHaveBeenCalled();
     expect(onAsyncFailure).toHaveBeenCalledTimes(1);
   });
 
@@ -468,11 +492,13 @@ describe("buildChatLinkPolicy", () => {
         filePath: "sub-dir/index.md",
       }),
     );
-    expect(previewTileInTab).toHaveBeenCalledWith(TAB_ID, {
-      id: "dir-index-content",
-      workspacePath: "/repo",
-      filePath: "sub-dir/index.md",
-    });
+    expect(openTile).toHaveBeenCalledWith(
+      chatLinkIntent({
+        id: "dir-index-content",
+        workspacePath: "/repo",
+        filePath: "sub-dir/index.md",
+      }),
+    );
   });
 
   it("reports a click failure for a relative link without probing when there is no bound host", async () => {
@@ -485,7 +511,7 @@ describe("buildChatLinkPolicy", () => {
       mocks.candidateWorkspaceFileRefsForRelativeLinkPath,
     ).not.toHaveBeenCalled();
     expect(mocks.fetchWorkspaceFileExists).not.toHaveBeenCalled();
-    expect(previewTileInTab).not.toHaveBeenCalled();
+    expect(openTile).not.toHaveBeenCalled();
     expect(onAsyncFailure).toHaveBeenCalledTimes(1);
   });
 
@@ -512,10 +538,13 @@ describe("buildChatLinkPolicy", () => {
       mocks.openProjectedSidebarNodeInTabWhenAvailable,
     ).toHaveBeenCalledWith(
       expect.objectContaining({
-        tabId: TAB_ID,
         nodeId: "artifact-same",
         fallbackHostId: ACTIVE_HOST_ID,
-        openTileInTab: previewTileInTab,
+        // `expect.any` is an `any`-typed matcher; type it as the callback it
+        // stands in for so the object literal stays free of unsafe `any`.
+        openNode: expect.any(
+          Function,
+        ) as ProjectedSidebarNodeOpenArgs["openNode"],
       }),
     );
     // The cancel handle is retained so an unmount can tear the wait down.
@@ -579,13 +608,13 @@ describe("buildChatLinkPolicy", () => {
     run(fileLink({ path: SAME_EPIC_ARTIFACT_PATH }), lifecycle);
     await flush();
 
-    expect(previewTileInTab).toHaveBeenCalledTimes(1);
+    expect(openTile).toHaveBeenCalledTimes(1);
   });
 
   it("drops the rejected artifact fallback when a newer click has superseded it", async () => {
     // First click's resolve is held open so a newer click can supersede it
     // before it rejects; the second resolves to an artifact (opening via the
-    // projection waiter, not previewTileInTab).
+    // projection waiter, not `openTile`).
     let rejectFirstClick: (reason: Error) => void = () => undefined;
     const firstResolve = new Promise<ResolveArtifactByPathResult>(
       (_resolve, reject) => {
@@ -606,7 +635,7 @@ describe("buildChatLinkPolicy", () => {
     rejectFirstClick(new Error("transport"));
     await flush();
 
-    expect(previewTileInTab).not.toHaveBeenCalled();
+    expect(openTile).not.toHaveBeenCalled();
     expect(
       mocks.openProjectedSidebarNodeInTabWhenAvailable,
     ).toHaveBeenCalledTimes(1);
@@ -631,7 +660,7 @@ describe("buildChatLinkPolicy", () => {
     expect(
       mocks.openProjectedSidebarNodeInTabWhenAvailable,
     ).not.toHaveBeenCalled();
-    expect(previewTileInTab).not.toHaveBeenCalled();
+    expect(openTile).not.toHaveBeenCalled();
   });
 
   it("treats an artifact path as a plain file when there is no active host", async () => {
@@ -642,7 +671,7 @@ describe("buildChatLinkPolicy", () => {
     expect(mocks.resolveArtifactByPath).not.toHaveBeenCalled();
     await flush();
 
-    expect(previewTileInTab).toHaveBeenCalledTimes(1);
+    expect(openTile).toHaveBeenCalledTimes(1);
   });
 
   it("cancels a prior same-epic projection wait on a superseding plain-file click, without re-opening the prior link", async () => {
@@ -670,12 +699,14 @@ describe("buildChatLinkPolicy", () => {
     expect(cancelPriorWait).toHaveBeenCalledTimes(1);
     expect(pendingCancel).toBeNull();
     await flush();
-    expect(previewTileInTab).toHaveBeenCalledTimes(1);
-    expect(previewTileInTab).toHaveBeenLastCalledWith(TAB_ID, {
-      id: "content-1",
-      workspacePath: "/repo",
-      filePath: "src/app.ts",
-    });
+    expect(openTile).toHaveBeenCalledTimes(1);
+    expect(openTile).toHaveBeenLastCalledWith(
+      chatLinkIntent({
+        id: "content-1",
+        workspacePath: "/repo",
+        filePath: "src/app.ts",
+      }),
+    );
   });
 
   it("lets the newest click win when an earlier same-epic resolve settles out of order", async () => {
@@ -737,9 +768,11 @@ describe("buildChatLinkPolicy", () => {
       CHAT_HOST_ID,
       skillPath,
     );
-    expect(previewTileInTab).toHaveBeenCalledWith(TAB_ID, {
-      id: "abs-content",
-    });
+    expect(openTile).toHaveBeenCalledWith(
+      chatLinkIntent({
+        id: "abs-content",
+      }),
+    );
   });
 
   it("opens the direct absolute candidate when it exists, instead of coercing it into a directory reference (A)", async () => {
@@ -771,7 +804,7 @@ describe("buildChatLinkPolicy", () => {
 
     // README.md is a real file - not the `index.md` fallback, even though
     // BOTH candidates were probed.
-    expect(previewTileInTab).toHaveBeenCalledWith(TAB_ID, directRef);
+    expect(openTile).toHaveBeenCalledWith(chatLinkIntent(directRef));
   });
 
   it("falls back to the index.md candidate when the direct absolute target doesn't exist (A, C1)", async () => {
@@ -817,7 +850,7 @@ describe("buildChatLinkPolicy", () => {
       mocks.openProjectedSidebarNodeInTabWhenAvailable,
     ).not.toHaveBeenCalled();
     expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
-    expect(previewTileInTab).not.toHaveBeenCalled();
+    expect(openTile).not.toHaveBeenCalled();
   });
 
   it("opens the direct absolute candidate when NEITHER candidate is confirmed to exist, preserving the open-any-file capability", async () => {
@@ -847,7 +880,7 @@ describe("buildChatLinkPolicy", () => {
     run(fileLink({ path: "/repo/just-written.ts" }), lifecycle);
     await flush();
 
-    expect(previewTileInTab).toHaveBeenCalledWith(TAB_ID, directRef);
+    expect(openTile).toHaveBeenCalledWith(chatLinkIntent(directRef));
     expect(onAsyncFailure).not.toHaveBeenCalled();
     // A non-artifact-shaped miss never attempts the RPC at all.
     expect(mocks.resolveArtifactByPath).not.toHaveBeenCalled();
@@ -893,7 +926,7 @@ describe("buildChatLinkPolicy", () => {
     );
     // Cross-epic (differs from OPEN_EPIC_ID): navigate, not a same-epic preview.
     expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
-    expect(previewTileInTab).not.toHaveBeenCalled();
+    expect(openTile).not.toHaveBeenCalled();
   });
 
   it("falls back to the direct candidate when the artifact-shaped fallback also misses (#4)", async () => {
@@ -925,7 +958,7 @@ describe("buildChatLinkPolicy", () => {
     );
     await flush();
 
-    expect(previewTileInTab).toHaveBeenCalledWith(TAB_ID, directRef);
+    expect(openTile).toHaveBeenCalledWith(chatLinkIntent(directRef));
     expect(mocks.navigateToTabIntent).not.toHaveBeenCalled();
   });
 
@@ -952,7 +985,7 @@ describe("buildChatLinkPolicy", () => {
       }),
     );
     expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
-    expect(previewTileInTab).not.toHaveBeenCalled();
+    expect(openTile).not.toHaveBeenCalled();
   });
 
   it("routes a resolved RELATIVE workspace-file winner through the artifact resolver when it lands on an index.md (B)", async () => {
@@ -983,7 +1016,7 @@ describe("buildChatLinkPolicy", () => {
       }),
     );
     expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
-    expect(previewTileInTab).not.toHaveBeenCalled();
+    expect(openTile).not.toHaveBeenCalled();
   });
 
   it("falls back to opening the winning file when its index.md-shaped path doesn't resolve to a real artifact (B)", async () => {
@@ -1004,7 +1037,7 @@ describe("buildChatLinkPolicy", () => {
     );
     await flush();
 
-    expect(previewTileInTab).toHaveBeenCalledWith(TAB_ID, winner);
+    expect(openTile).toHaveBeenCalledWith(chatLinkIntent(winner));
   });
 
   it("keeps the artifact-null fallback a no-op with out-of-root synthesis disabled (D5)", async () => {
@@ -1019,7 +1052,7 @@ describe("buildChatLinkPolicy", () => {
     await flush();
 
     expect(mocks.workspaceFileRefFromAbsoluteFilePath).not.toHaveBeenCalled();
-    expect(previewTileInTab).not.toHaveBeenCalled();
+    expect(openTile).not.toHaveBeenCalled();
     expect(onAsyncFailure).toHaveBeenCalledTimes(1);
   });
 
@@ -1031,7 +1064,7 @@ describe("buildChatLinkPolicy", () => {
     run(fileLink({ path: SAME_EPIC_ARTIFACT_PATH }), lifecycle);
     await flush();
 
-    expect(previewTileInTab).not.toHaveBeenCalled();
+    expect(openTile).not.toHaveBeenCalled();
     expect(onAsyncFailure).toHaveBeenCalledTimes(1);
   });
 });

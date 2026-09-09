@@ -415,6 +415,39 @@ describe("<TileFindBar />", () => {
     }
   });
 
+  it("coalesces rapid browser typing into a single debounced search", () => {
+    vi.useFakeTimers();
+    try {
+      const adapter = createAdapter({
+        tileInstanceId: "tile-browser",
+        tileKind: "browser-session",
+        capabilities: FIND_ONLY,
+      });
+      registerAndOpen(adapter);
+      render(<TileFindBar tileInstanceId="tile-browser" />);
+
+      const input = screen.getByRole("textbox", { name: "Find in tile" });
+      fireEvent.change(input, { target: { value: "n" } });
+      fireEvent.change(input, { target: { value: "ne" } });
+      fireEvent.change(input, { target: { value: "nee" } });
+      fireEvent.change(input, { target: { value: "need" } });
+
+      // No search fires per keystroke while the browser debounce window is
+      // open - each keystroke would otherwise open its own findInPage session.
+      expect(adapter.searchInputs).toHaveLength(0);
+
+      act(() => {
+        vi.advanceTimersByTime(80);
+      });
+
+      expect(adapter.searchInputs).toEqual([
+        { requestId: 1, query: "need", matchCase: false },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("flushes a pending chat search immediately on Enter, then advances", () => {
     vi.useFakeTimers();
     try {

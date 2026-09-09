@@ -1,11 +1,21 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
-import { ONBOARDING_ACTS } from "@/components/onboarding/onboarding-acts";
 
-const LAST_STEP = ONBOARDING_ACTS.length - 1;
-const clampStep = (step: number): number =>
-  Math.min(Math.max(Math.trunc(step), 0), LAST_STEP);
+/**
+ * The tour's length is a per-host fact - an act whose capability the bound host
+ * lacks is dropped from the list (`onboardingActsFor`) - so the store cannot
+ * derive its own bounds from the act catalog. Every caller passes the count of
+ * the act list it is actually showing.
+ */
+const lastStepOf = (actCount: number): number => Math.max(0, actCount - 1);
+
+/** Current act, clamped so a step can't outrun the act list being shown. */
+export const clampOnboardingStep = (step: number, actCount: number): number =>
+  Math.min(Math.max(Math.trunc(step), 0), lastStepOf(actCount));
+
+export const isLastOnboardingStep = (step: number, actCount: number): boolean =>
+  clampOnboardingStep(step, actCount) >= lastStepOf(actCount);
 
 /**
  * First-launch onboarding state, persisted locally so the tour runs once per
@@ -18,23 +28,22 @@ interface OnboardingState {
   readonly completedAt: number | null;
   readonly step: number;
   /** Next act, or complete the tour if already on the last one. */
-  readonly advance: () => void;
+  readonly advance: (actCount: number) => void;
   /** Previous act (no-op on the first). */
-  readonly retreat: () => void;
+  readonly retreat: (actCount: number) => void;
   /** Finish the tour (also used by skip). */
   readonly complete: () => void;
   /** Return to the first act without changing completion state. */
   readonly restart: () => void;
+  /**
+   * Put the position on `step` directly: the page's re-seat when the act
+   * list changes under the user and the act they were on now sits at another
+   * index. Not a navigation, so it records nothing and completes nothing.
+   */
+  readonly reseat: (step: number) => void;
   /** Clear completion and return to the first act. */
   readonly reset: () => void;
 }
-
-/** Current act, clamped so a persisted step can't outrun a shorter act list. */
-export const selectStep = (state: OnboardingState): number =>
-  clampStep(state.step);
-
-export const selectIsLastStep = (state: OnboardingState): boolean =>
-  selectStep(state) >= LAST_STEP;
 
 const ONBOARDING_PERSIST_KEY = persistKey(STORE_KEYS.onboarding);
 
@@ -52,17 +61,24 @@ export const useOnboardingStore = create<OnboardingState>()(
     (set, get) => ({
       completedAt: null,
       step: 0,
-      advance: () => {
-        const step = clampStep(get().step);
-        if (step >= LAST_STEP) {
+      advance: (actCount) => {
+        const step = clampOnboardingStep(get().step, actCount);
+        if (step >= lastStepOf(actCount)) {
           set({ completedAt: Date.now() });
           return;
         }
         set({ step: step + 1 });
       },
-      retreat: () => set({ step: clampStep(get().step - 1) }),
+      // Clamped from the same place the page reads: when the act list shrinks
+      // under a user who is past its new end, Back must leave the act they can
+      // see rather than step down to the same clamped one.
+      retreat: (actCount) =>
+        set({
+          step: Math.max(0, clampOnboardingStep(get().step, actCount) - 1),
+        }),
       complete: () => set({ completedAt: Date.now() }),
       restart: () => set({ step: 0 }),
+      reseat: (step) => set({ step: Math.max(0, step) }),
       reset: () => set({ completedAt: null, step: 0 }),
     }),
     {

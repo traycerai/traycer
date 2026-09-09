@@ -8,11 +8,11 @@
 import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import { createArtifactInDocForTests } from "./projection-helpers-test-shims";
+import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
-  createOpenEpicStore,
-  type EpicStreamClientFactory,
-  type OpenEpicStoreHandle,
-} from "@/stores/epics/open-epic/store";
+  openStoreForTest,
+  type OpenedStoreForTest,
+} from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 
@@ -48,7 +48,7 @@ function makeMeta(): SnapshotMetaEpic {
 }
 
 function newSession(): {
-  handle: OpenEpicStoreHandle;
+  handle: OpenedStoreForTest;
   callbacks: EpicStreamCallbacks;
 } {
   const captured: { value: EpicStreamCallbacks | null } = { value: null };
@@ -63,11 +63,21 @@ function newSession(): {
       close: () => undefined,
     };
   };
-  const handle = createOpenEpicStore({
+  const handle = openStoreForTest({
     epicId: "epic-test",
-    streamClientFactory: factory,
     userId: null,
-    onAuthError: null,
+    // The factories go to the COMPOSITION now, not the store:
+    // `createOpenEpicStore` stopped constructing a runtime, so a
+    // suite that used to hand it a `streamClientFactory` has nothing
+    // to hand it. `handle.doc` still resolves because this harness
+    // builds the runtime in THIS thread.
+    factories: {
+      streamClientFactory: factory,
+      laneSelection: null,
+    },
+    // Explicit: `null` means this suite never writes, so a write in
+    // one that said so fails rather than resolving quietly.
+    writeCommand: null,
   });
   if (captured.value === null) throw new Error("factory not invoked");
   const seed = Y.encodeStateAsUpdate(new Y.Doc());
@@ -76,12 +86,12 @@ function newSession(): {
 }
 
 describe("projector full-projection fallback while a mutation is pending", () => {
-  it("an UNRELATED artifact's doc edit still shows the pending row's overlay", () => {
+  it("an UNRELATED artifact's doc edit still shows the pending row's overlay", async () => {
     const { handle } = newSession();
     const renamed = createArtifactInDocForTests(handle.doc, "spec", null);
     const other = createArtifactInDocForTests(handle.doc, "ticket", null);
 
-    const requestId = handle.store
+    const requestId = await handle.store
       .getState()
       .beginRenameMutation(renamed, "Optimistic title");
     if (requestId === null) throw new Error("expected a request id");
@@ -92,7 +102,7 @@ describe("projector full-projection fallback while a mutation is pending", () =>
     // An ordinary doc edit on a DIFFERENT node. With no pending mutation this
     // would take the incremental `applyPatches` path, which recomputes rows
     // purely from the doc and would drop the overlay for `renamed`.
-    handle.store.getState().renameArtifact(other, "Other renamed");
+    await handle.store.getState().renameArtifact(other, "Other renamed");
 
     expect(handle.store.getState().artifacts.byId[other].title).toBe(
       "Other renamed",
@@ -104,14 +114,14 @@ describe("projector full-projection fallback while a mutation is pending", () =>
     handle.dispose();
   });
 
-  it("reference stabilization: an untouched bystander row keeps its === identity through the full-projection fallback", () => {
+  it("reference stabilization: an untouched bystander row keeps its === identity through the full-projection fallback", async () => {
     const { handle } = newSession();
     const renamed = createArtifactInDocForTests(handle.doc, "spec", null);
     const other = createArtifactInDocForTests(handle.doc, "ticket", null);
     const bystander = createArtifactInDocForTests(handle.doc, "spec", null);
     const bystanderBefore = handle.store.getState().artifacts.byId[bystander];
 
-    const requestId = handle.store
+    const requestId = await handle.store
       .getState()
       .beginRenameMutation(renamed, "Optimistic title");
     if (requestId === null) throw new Error("expected a request id");
@@ -120,7 +130,7 @@ describe("projector full-projection fallback while a mutation is pending", () =>
     // in the projector) must reconcile against the previously published
     // state, not hand every consumer a fresh row reference just because a
     // pending mutation forced the full-projection path.
-    handle.store.getState().renameArtifact(other, "Other renamed");
+    await handle.store.getState().renameArtifact(other, "Other renamed");
 
     expect(handle.store.getState().artifacts.byId[bystander]).toBe(
       bystanderBefore,
@@ -128,11 +138,11 @@ describe("projector full-projection fallback while a mutation is pending", () =>
     handle.dispose();
   });
 
-  it("a doc edit that lands the pending row's OWN authoritative value keeps showing the overlay's chain rules", () => {
+  it("a doc edit that lands the pending row's OWN authoritative value keeps showing the overlay's chain rules", async () => {
     const { handle } = newSession();
     const id = createArtifactInDocForTests(handle.doc, "spec", null);
 
-    const requestId = handle.store
+    const requestId = await handle.store
       .getState()
       .beginRenameMutation(id, "Optimistic title");
     if (requestId === null) throw new Error("expected a request id");
@@ -163,16 +173,16 @@ describe("projector full-projection fallback while a mutation is pending", () =>
     handle.dispose();
   });
 
-  it("once the overlay empties, the next doc edit resumes the incremental path without error", () => {
+  it("once the overlay empties, the next doc edit resumes the incremental path without error", async () => {
     const { handle } = newSession();
     const id = createArtifactInDocForTests(handle.doc, "spec", null);
-    const requestId = handle.store
+    const requestId = await handle.store
       .getState()
       .beginRenameMutation(id, "Optimistic title");
     if (requestId === null) throw new Error("expected a request id");
-    handle.store.getState().retirePendingMutation(requestId, "failed");
+    await handle.store.getState().retirePendingMutation(requestId, "failed");
 
-    handle.store.getState().renameArtifact(id, "Plain rename");
+    await handle.store.getState().renameArtifact(id, "Plain rename");
 
     expect(handle.store.getState().artifacts.byId[id].title).toBe(
       "Plain rename",

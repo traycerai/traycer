@@ -76,13 +76,22 @@ function stageMocks(opts: {
   vi.doMock("../../host/bootstrap-log", () => ({
     readBootstrapMarkers: async () => [],
   }));
-  vi.doMock("../../host/pid-metadata", () => ({
-    readHostPidMetadata: async () => ({
-      pid: opts.hostPid,
-      version: "1.0.0",
-      websocketUrl: opts.websocketUrl,
-    }),
-  }));
+  vi.doMock("../../host/pid-metadata", async () => {
+    // Only the read is stubbed; `publishedHostProcessGone` stays real so the
+    // engine's liveness verdict follows the (mocked) `isProcessAlive` exactly
+    // as the sites under test do.
+    const actual = await vi.importActual<
+      typeof import("../../host/pid-metadata")
+    >("../../host/pid-metadata");
+    return {
+      ...actual,
+      readHostPidMetadata: async () => ({
+        pid: opts.hostPid,
+        version: "1.0.0",
+        websocketUrl: opts.websocketUrl,
+      }),
+    };
+  });
   vi.doMock("../../service", () => ({
     createServiceController: () => ({
       status: async () => ({

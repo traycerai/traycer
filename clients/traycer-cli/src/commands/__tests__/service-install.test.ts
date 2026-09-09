@@ -329,4 +329,65 @@ describe("buildServiceInstallCommand", () => {
       "host credential not provisioned (the host did not adopt it in time)",
     );
   });
+
+  it("--takeover surfaces a cli-host-stopped outcome (no Desktop agent, but a live CLI-label host stood down before the reload) in both the human line and the JSON payload", async () => {
+    // `standDownLiveCliLabelHost` (macos.ts) resolves this kind when
+    // `probeDesktopAgentOwnership` finds no Desktop SMAppService agent but
+    // the CLI label itself was loaded with a live pid - the KeepAlive-
+    // respawn race the guard exists to close. `controller.takeoverDesktopRegistration`
+    // is exercised through `takeoverDesktopRegistrationWithAttempt`
+    // (`../host/update-mutation`), which is real in this suite; only the
+    // controller itself is a mock, same as every other test in this file.
+    const takeoverDesktopRegistrationMock = vi.fn().mockResolvedValue({
+      kind: "cli-host-stopped",
+      cooperativeStop: "stopped",
+    });
+    mocks.createServiceControllerMock.mockReturnValue({
+      install: vi.fn().mockResolvedValue(undefined),
+      takeoverDesktopRegistration: takeoverDesktopRegistrationMock,
+      hostStartAdoptionLabel: vi.fn(async (label) => label.id),
+    });
+    mocks.runSignInPreflightMock.mockResolvedValue(signedInPreflight());
+    mocks.maybeProvisionCredentialMock.mockResolvedValue(null);
+
+    const command = buildServiceInstallCommand(baseArgs({ takeover: true }));
+    const result = await command(fakeCtx());
+
+    expect(takeoverDesktopRegistrationMock).toHaveBeenCalledTimes(1);
+    expect(result.human ?? "").toContain(
+      "the host already running under this label stood down cooperatively before the reload",
+    );
+    expect(result.data).toMatchObject({
+      takeover: { kind: "cli-host-stopped", cooperativeStop: "stopped" },
+    });
+  });
+
+  it("--takeover surfaces a cli-host-stopped/no-host outcome (no Desktop agent, and the CLI-label job was loaded with no running host) in both the human line and the JSON payload", async () => {
+    // `standDownLiveCliLabelHost` (macos.ts) resolves this kind when the
+    // CLI label is loaded as `cli-or-other` with `pid === null` - a clean
+    // prior exit or the throttle window before a respawn - so it is
+    // unloaded outright rather than asked to stand down.
+    const takeoverDesktopRegistrationMock = vi.fn().mockResolvedValue({
+      kind: "cli-host-stopped",
+      cooperativeStop: "no-host",
+    });
+    mocks.createServiceControllerMock.mockReturnValue({
+      install: vi.fn().mockResolvedValue(undefined),
+      takeoverDesktopRegistration: takeoverDesktopRegistrationMock,
+      hostStartAdoptionLabel: vi.fn(async (label) => label.id),
+    });
+    mocks.runSignInPreflightMock.mockResolvedValue(signedInPreflight());
+    mocks.maybeProvisionCredentialMock.mockResolvedValue(null);
+
+    const command = buildServiceInstallCommand(baseArgs({ takeover: true }));
+    const result = await command(fakeCtx());
+
+    expect(takeoverDesktopRegistrationMock).toHaveBeenCalledTimes(1);
+    expect(result.human ?? "").toContain(
+      "the job already loaded under this label had no host running and was unloaded before the reload",
+    );
+    expect(result.data).toMatchObject({
+      takeover: { kind: "cli-host-stopped", cooperativeStop: "no-host" },
+    });
+  });
 });

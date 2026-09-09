@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { formatRgb, oklch, parse } from "culori";
 import type { ITheme } from "@xterm/xterm";
 import { useResolvedTheme } from "@/providers/use-resolved-theme";
+import { useThemeRevision } from "@/providers/use-theme-revision";
 import { readCssVar, resolveCssColor, rgbify } from "@/lib/css-color";
 
 const ANSI_NAMES = [
@@ -39,8 +40,16 @@ function withAlpha(color: string, alpha: number): string {
   return formatted.length > 0 ? formatted : color;
 }
 function buildTerminalTheme(doc: Document): ITheme {
-  const foreground = resolveCssColor(doc, "--canvas-foreground", "#000000");
-  const background = resolveCssColor(doc, "--canvas", "#ffffff");
+  const foreground = resolveCssColor(
+    doc,
+    "--term-foreground",
+    resolveCssColor(doc, "--canvas-foreground", "#000000"),
+  );
+  const background = resolveCssColor(
+    doc,
+    "--term-background",
+    resolveCssColor(doc, "--canvas", "#ffffff"),
+  );
   const primary = resolveCssColor(doc, "--primary", "#3b82f6");
   // xterm 6 draws its own scrollbar (a VS Code-derived slider div), so it never
   // sees the app-wide `::-webkit-scrollbar` theme in index.css and would keep
@@ -62,7 +71,7 @@ function buildTerminalTheme(doc: Document): ITheme {
   // absolute lightness promise, not an emphasis direction: a dark-assuming TUI
   // paints bright-white on ANSI black, and a darker-shifted bright-white in a
   // light palette lands on black itself (see the light-palette invariant in
-  // terminal-themes.css).
+  // themes/builtin-palettes.ts).
   const brightDelta = 0.08;
   const brights = {} as Record<AnsiName, string>;
   for (const name of ANSI_NAMES) {
@@ -74,9 +83,13 @@ function buildTerminalTheme(doc: Document): ITheme {
   return {
     foreground,
     background,
-    cursor: foreground,
+    cursor: resolveCssColor(doc, "--term-cursor", foreground),
     cursorAccent: background,
-    selectionBackground: withAlpha(primary, 0.3),
+    selectionBackground: resolveCssColor(
+      doc,
+      "--term-selection",
+      withAlpha(primary, 0.3),
+    ),
     scrollbarSliderBackground: withAlpha(scrollbarSlider, 0.35),
     scrollbarSliderHoverBackground: withAlpha(scrollbarSlider, 0.6),
     scrollbarSliderActiveBackground: withAlpha(scrollbarSlider, 0.75),
@@ -112,6 +125,7 @@ function buildTerminalTheme(doc: Document): ITheme {
  * mount-then-effect flash of default colors.
  */
 export function useTerminalTheme(): ITheme {
+  const themeRevision = useThemeRevision();
   const { resolvedTheme, themePreset } = useResolvedTheme();
   return useMemo(() => {
     // `resolvedTheme` and `themePreset` are part of the memo's cache identity
@@ -121,6 +135,7 @@ export function useTerminalTheme(): ITheme {
     // `react-hooks/exhaustive-deps` can verify the deps array is complete.
     resolvedTheme;
     themePreset;
+    themeRevision;
     return buildTerminalTheme(document);
-  }, [resolvedTheme, themePreset]);
+  }, [resolvedTheme, themePreset, themeRevision]);
 }

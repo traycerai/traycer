@@ -11,7 +11,7 @@ import {
 import type { ChatLoadRangeRequest } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import {
   normalizeV16BrowserPayloadsInFrame,
-  normalizeV16MessagesInShallowSnapshot,
+  normalizeV16InterviewFieldsInFrame,
   projectChatClientFrameForVersion,
   supportsInterviewSettlementActions,
   type ProjectedChatSubscribeClientFrame,
@@ -605,16 +605,20 @@ export class ChatStreamClient {
       // envelope is validated deeply against the FROZEN `1.6` shapes, so this
       // is exact rather than permissive; the histories stay structural.
       //
-      // `1.6` lacks interview settlement and browser payload fields. The
-      // message history is structural on this path, so normalize those fields
-      // in place; then run the live SHALLOW schema to apply bounded defaults
-      // (notably queue payloads) and recover the exact live consumer type.
+      // `1.6` lacks interview settlement and browser payload fields. BOTH
+      // histories are structural on this path - `chat.events` is
+      // `z.custom(isStructuralRecord)` exactly like `chat.messages` - so
+      // neither parse strips anything inside them, and a chat event's
+      // `metadata` is where interview settlement reaches a subscriber the
+      // second way. Hence the whole-frame pass rather than the message-only
+      // one: it delegates the messages to `normalizeV16MessagesInShallowSnapshot`
+      // and walks the event log beside them. Then run the live SHALLOW schema
+      // to apply bounded defaults (notably queue payloads) and recover the
+      // exact live consumer type.
       const shallowV16 =
         chatSubscribeSnapshotServerFrameShallowSchemaV16.safeParse(envelope);
       if (shallowV16.success) {
-        normalizeV16MessagesInShallowSnapshot(
-          shallowV16.data.snapshot.chat.messages,
-        );
+        normalizeV16InterviewFieldsInFrame(shallowV16.data);
         const upgraded =
           chatSubscribeSnapshotServerFrameShallowSchema.safeParse(
             shallowV16.data,
@@ -643,6 +647,18 @@ export class ChatStreamClient {
       // refuses, through the door beside it. Snapshots return above and are
       // neutralized by their frozen parse; every other kind is untouched.
       normalizeV16BrowserPayloadsInFrame(frame);
+      // The third door: every remaining pre-`1.7` carrier of an interview -
+      // `1.0`-`1.5` snapshots (which match NEITHER fast path above and reach
+      // here whole), the durable event log on both frames that carry it, the
+      // two interview lifecycle frames, and `blockDelta`'s two arms.
+      // `messageAccepted` has an arm too, but defensively: its `message` binds
+      // `userMessageSchema`, so a parsed frame cannot hold an assistant
+      // message with interview blocks.
+      //
+      // That set was DERIVED from the outbound projector's case list rather
+      // than recalled - see the function's own comment, which also says why
+      // that is a heuristic and not a completeness proof.
+      normalizeV16InterviewFieldsInFrame(frame);
     }
     switch (frame.kind) {
       case "snapshot": {

@@ -21,6 +21,7 @@ import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-s
 import {
   assetStreamClientFrameSchema,
   assetStreamServerFrameSchema,
+  assetStreamServerFrameSchemaV11,
 } from "@traycer/protocol/host/asset-stream-schemas";
 
 export const workspaceStreamAssetOpenRequestSchema = z.object({
@@ -36,5 +37,22 @@ export const workspaceStreamAssetV10 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   openRequestSchema: workspaceStreamAssetOpenRequestSchema,
   serverFrameSchema: assetStreamServerFrameSchema,
+  clientFrameSchema: assetStreamClientFrameSchema,
+});
+
+/**
+ * 1.1 adds PDF: `application/pdf` joins the media-type enum, served with
+ * `width`/`height: null` on the same `assetHeader` frame. The 1.1 contract
+ * registers its OWN server-frame schema so 1.0's released wire schema stays
+ * frozen exactly (the compat gate diffs released versions literally); the
+ * host's resolver additionally consults the negotiated number to (a) reject
+ * `.pdf` requests on 1.0 streams with `assetError "not-image"` and (b)
+ * never emit the new enum literal to a client whose parser predates it.
+ */
+export const workspaceStreamAssetV11 = defineStreamRpcContract({
+  method: "workspace.streamAsset",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  openRequestSchema: workspaceStreamAssetOpenRequestSchema,
+  serverFrameSchema: assetStreamServerFrameSchemaV11,
   clientFrameSchema: assetStreamClientFrameSchema,
 });

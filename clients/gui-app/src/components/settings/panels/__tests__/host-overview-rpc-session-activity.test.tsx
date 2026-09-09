@@ -21,6 +21,7 @@ import {
   createTerminalSessionStore,
   type TerminalSessionStoreHandle,
 } from "@/stores/terminals/terminal-session-store";
+import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
 const HOST_A = "host-a";
 const HOST_B = "host-b";
@@ -92,6 +93,7 @@ function createChatHandle(
   chatId: string,
 ): ChatSessionStoreHandle {
   return createChatSessionStore({
+    environment: CHAT_STORE_TEST_ENVIRONMENT,
     hostId: "store-host",
     epicId,
     chatId,

@@ -1,3 +1,11 @@
+// The Overview re-provides a scoped STREAM binding beside its unary one (for
+// the Data & migration group), and the real hook reads `useAuthService` -
+// which this suite deliberately does not stand up. `null` keeps the panel on
+// the ambient stream, the arrangement every assertion below already assumed.
+vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
+  useScopedStreamBinding: () => null,
+}));
+
 // Mirrors `local-host-restart-flow.test.tsx`'s boundary exactly, because
 // `HostUpdateBanner`'s bound arm pulls in the SAME split
 // (`useHostBinding`) plus `useLocalHostUpdateOperation`'s own two leaf
@@ -268,6 +276,7 @@ function attemptStatus(
     busyBreakdown: null,
     updateOperation: operation,
     updateTransaction: { recordSchemaVersion: 2, authority: "attempt" },
+    storeFormats: null,
   };
 }
 
@@ -405,7 +414,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
         execution: "parked",
         busySessionCount: 2,
       }),
-      expectedPhrase: /Update will continue when 2 sessions finish/,
+      expectedPhrase: /Update waits for 2 sessions to finish/,
     },
     {
       name: "waiting-to-activate",
@@ -460,6 +469,24 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
       expect(text).not.toMatch(/^Updating this host/i);
     },
   );
+
+  // The coarse `updateProgress` marker beside `updateOperation:
+  // {kind:"none"}` - the shipped legacy `traycer host update` path's whole
+  // signal for "in flight", with no attempt record at all. Before this field
+  // reached the projection, a @1.3 local host running that path showed no
+  // operation branch here whatsoever while a real download/swap/restart was
+  // under way.
+  it("a local host reporting {kind:'none'} with coarse updateProgress {state:'updating'} shows the operation branch with 'Updating host'", async () => {
+    bindLocalHost({
+      "host.status": () => ({
+        ...attemptStatus({ kind: "none" }),
+        updateProgress: { state: "updating", error: null },
+      }),
+    });
+    renderBanner(undefined);
+    const text = await findPhaseText();
+    expect(text).toMatch(/Updating host/);
+  });
 
   // `restarting`-while-disconnected ("reconnecting") is a projection-level
   // rule (`connected` from `useReactiveHostReadiness`), already pinned
@@ -593,9 +620,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
     renderBanner(undefined);
     // Positive control that the banner rendered at all - an absent button is
     // trivially "absent" if nothing rendered.
-    expect(await findPhaseText()).toMatch(
-      /Update will continue when work finishes/,
-    );
+    expect(await findPhaseText()).toMatch(/Update waits for work to finish/);
     expect(screen.queryByTestId("host-update-banner-force-restart")).toBeNull();
   });
 
@@ -647,7 +672,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
     });
     expect(restartCalls).toBe(0);
     // The banner is untouched - still showing the same attempt.
-    expect(await findPhaseText()).toMatch(/Update will continue/);
+    expect(await findPhaseText()).toMatch(/Update waits for/);
   });
 
   it("Force restart… CONFIRM dispatches the cooperative host.restart RPC", async () => {
@@ -742,6 +767,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
                 busyBreakdown: null,
                 updateOperation: null,
                 updateTransaction: null,
+                storeFormats: null,
               }
             : { ...attemptStatus(operation), updateProgress },
       });
@@ -846,11 +872,54 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
       await screen.findByTestId("host-update-banner-operation-dismiss");
     });
 
+    it("Q19: a host-refuses-rpc record offers Diagnostics and NO Retry", async () => {
+      // The affordance set of `unavailable`, on the surface where a retry
+      // affordance actually exists. Retry is the one that must be absent: a
+      // host that refused the authenticated check will refuse it again, so the
+      // button's only outcome is the same refusal — and offering it is the
+      // failure arm's remedy arriving on a state that is not a failure.
+      //
+      // Dismiss must also be absent. `unavailable` is deliberately not
+      // dismissible (its whole purpose is to stay visible until repaired) and
+      // this inherits that: a refusal is a live condition, not an event to
+      // acknowledge.
+      bindLocalHost({
+        "host.status": () =>
+          attemptStatus(
+            baseAttempt({
+              phase: "failed",
+              execution: "terminal",
+              liveness: "interrupted",
+              error: {
+                code: "host-refuses-rpc",
+                message: "the host refused the authenticated check",
+                phase: "verifying",
+              },
+            }),
+          ),
+      });
+      renderBanner(undefined);
+      expect(await findPhaseText()).toContain(
+        "refused Traycer's authenticated check",
+      );
+      await screen.findByTestId("host-update-banner-operation-diagnostics");
+      expect(
+        screen.queryByTestId("host-update-banner-operation-retry"),
+      ).toBeNull();
+      expect(
+        screen.queryByTestId("host-update-banner-operation-dismiss"),
+      ).toBeNull();
+    });
+
     it("Retry dispatches applyStaged", async () => {
       const applyStaged = vi.fn(() =>
         Promise.resolve({
           kind: "ok" as const,
-          value: { appliedVersion: "2.1.0", runningActivated: true },
+          value: {
+            appliedVersion: "2.1.0",
+            runningActivated: true,
+            applied: true,
+          },
         }),
       );
       bindLocalHost({
@@ -921,6 +990,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
         hostId: LOCAL_HOST_ID,
         status: attemptStatus(failedAttempt),
         nowMs: Date.now(),
+        legacyFacts: null,
       });
       const view = projectFleetUpdateView({
         observation,
@@ -932,6 +1002,9 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
           view={view}
           hostName="This computer"
           onForceRestart={() => undefined}
+          onRestart={null}
+          onForceUpdate={null}
+          cliFloorBlocked={false}
         />,
       );
       const card = screen.getByTestId("host-overview-operation-card");
@@ -1070,6 +1143,12 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
         phase: "preparing",
         continuation: null,
         updatedAt: "2026-05-15T00:00:00Z",
+        error: null,
+        // The record leg alone, with no liveness proof behind it - which is
+        // what these host-down cases are about: a retained phase rendered as
+        // last-seen, outside the lifecycle gate.
+        liveness: "unknown",
+        livenessObservedAtMs: null,
       },
     };
 
@@ -1146,6 +1225,64 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
         expect(screen.queryByTestId("host-update-banner")).toBeNull();
       });
     });
+
+    it("does not turn a stale idle reading into an up-to-date banner", async () => {
+      let statusReads = 0;
+      bindLocalHost({
+        "host.status": () => {
+          statusReads += 1;
+          if (statusReads === 1) {
+            return attemptStatus({ kind: "none" });
+          }
+          throw new Error("host is starting");
+        },
+      });
+      const queryClient = renderWithControllerStatus({
+        ...HOST_DOWN_STATUS,
+        localAttempt: null,
+      });
+
+      await waitFor(() => {
+        expect(statusReads).toBe(1);
+      });
+      expect(screen.queryByTestId("host-update-banner")).toBeNull();
+
+      await queryClient.refetchQueries({ type: "active" });
+      await waitFor(() => {
+        expect(statusReads).toBe(2);
+      });
+
+      expect(screen.queryByTestId("host-update-banner")).toBeNull();
+      expect(screen.queryByText("Last seen: Host is up to date")).toBeNull();
+    });
+
+    it("still renders a retained attempt after the same successful-read then refetch-failure transition", async () => {
+      let statusReads = 0;
+      bindLocalHost({
+        "host.status": () => {
+          statusReads += 1;
+          if (statusReads === 1) {
+            return attemptStatus(baseAttempt({ phase: "preparing" }));
+          }
+          throw new Error("host is starting");
+        },
+      });
+      const queryClient = renderWithControllerStatus({
+        ...HOST_DOWN_STATUS,
+        localAttempt: null,
+      });
+
+      expect(await findPhaseText()).toBe("Preparing update to v2.1.0");
+      await queryClient.refetchQueries({ type: "active" });
+      await waitFor(() => {
+        expect(statusReads).toBe(2);
+      });
+
+      expect(await findPhaseText()).toBe(
+        "Last seen: Preparing update to v2.1.0",
+      );
+      expect(screen.queryByTestId("host-update-banner-qualified")).toBeNull();
+    });
   });
 
   // 10. Operation-lane Retry routes on intent like every other retry here.
@@ -1157,7 +1294,11 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
       const applyStaged = vi.fn(() =>
         Promise.resolve({
           kind: "ok" as const,
-          value: { appliedVersion: "2.1.0", runningActivated: true },
+          value: {
+            appliedVersion: "2.1.0",
+            runningActivated: true,
+            applied: true,
+          },
         }),
       );
       const activateInstalled = vi.fn(() =>

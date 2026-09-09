@@ -138,10 +138,11 @@ function MermaidRenderSession(props: {
     });
   }, [sourceCode]);
 
-  const { downloadMermaidPng, isDownloading } = useMermaidPngDownload({
-    svg: render.svg,
-    enabled: render.status === "ready",
-  });
+  const { downloadMermaidPng, shareMermaidPng, isDownloading } =
+    useMermaidPngDownload({
+      svg: render.svg,
+      enabled: render.status === "ready",
+    });
 
   const downloadDisabled = render.status !== "ready" || isDownloading;
   const renderedSvg = useMemo(
@@ -163,6 +164,7 @@ function MermaidRenderSession(props: {
         onToggleEdit={noop}
         onCopyCode={handleCopy}
         onDownloadPng={downloadMermaidPng}
+        onSharePng={shareMermaidPng}
         downloadDisabled={downloadDisabled}
       />
 
@@ -216,6 +218,7 @@ function MermaidRenderSession(props: {
         title={ariaLabel}
         onCopyCode={handleCopy}
         onDownloadPng={downloadMermaidPng}
+        onSharePng={shareMermaidPng}
         downloadDisabled={downloadDisabled}
       />
     </div>

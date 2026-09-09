@@ -26,8 +26,15 @@ vi.mock("@/hooks/comments/use-epic-comment-threads", () => ({
 }));
 
 function threadFixture(): CommentThreadWire {
+  return threadFixtureWith(THREAD_ID, QUOTED_TEXT);
+}
+
+function threadFixtureWith(
+  threadId: string,
+  quotedText: string,
+): CommentThreadWire {
   return {
-    threadId: THREAD_ID,
+    threadId,
     resolved: false,
     createdAt: 1,
     comments: [
@@ -39,7 +46,7 @@ function threadFixture(): CommentThreadWire {
         author: { userId: "user-1", fallbackHandle: "someone" },
       },
     ],
-    data: { createdByUserId: "user-1", quotedText: QUOTED_TEXT },
+    data: { createdByUserId: "user-1", quotedText },
   };
 }
 
@@ -91,6 +98,7 @@ function makeEditorWithLinkedAnchor(): {
 function renderPopover(
   editor: Editor,
   onActivateThread: (threadId: string) => void,
+  laneThreads: readonly CommentThreadWire[] | null,
 ) {
   return render(
     <ThreadAnchorHoverPopover
@@ -98,6 +106,8 @@ function renderPopover(
       hostClient={null}
       artifactType="spec"
       artifactId={ARTIFACT_ID}
+      laneThreads={laneThreads}
+      laneDroppedAt={null}
       editor={editor}
       resolvedThreadIds={new Set<string>()}
       onActivateThread={onActivateThread}
@@ -130,7 +140,7 @@ describe("<ThreadAnchorHoverPopover /> touch", () => {
   it("activates the thread on a tap, with no dwell to wait out", () => {
     const { editor, anchor } = makeEditorWithAnchor();
     const onActivateThread = vi.fn();
-    renderPopover(editor, onActivateThread);
+    renderPopover(editor, onActivateThread, null);
 
     fireEvent.pointerDown(anchor, { pointerType: "touch" });
     fireEvent.click(anchor);
@@ -147,7 +157,7 @@ describe("<ThreadAnchorHoverPopover /> touch", () => {
     // in the comments panel.
     const { editor, anchor } = makeEditorWithLinkedAnchor();
     const onActivateThread = vi.fn();
-    renderPopover(editor, onActivateThread);
+    renderPopover(editor, onActivateThread, null);
 
     fireEvent.pointerDown(anchor, { pointerType: "touch" });
     fireEvent.click(anchor);
@@ -160,7 +170,7 @@ describe("<ThreadAnchorHoverPopover /> touch", () => {
     // show would be cancelled before it ever fired - and there is no hover state
     // to reach the preview from either.
     const { editor, anchor } = makeEditorWithAnchor();
-    renderPopover(editor, vi.fn());
+    renderPopover(editor, vi.fn(), null);
 
     fireEvent.pointerOver(anchor, { pointerType: "touch" });
     // Block body, not a concise one: `advanceTimersByTime` returns the timer
@@ -176,7 +186,7 @@ describe("<ThreadAnchorHoverPopover /> touch", () => {
 describe("<ThreadAnchorHoverPopover /> mouse", () => {
   it("still opens the preview after the dwell", () => {
     const { editor, anchor } = makeEditorWithAnchor();
-    renderPopover(editor, vi.fn());
+    renderPopover(editor, vi.fn(), null);
 
     fireEvent.pointerOver(anchor, { pointerType: "mouse" });
     act(() => {
@@ -192,11 +202,63 @@ describe("<ThreadAnchorHoverPopover /> mouse", () => {
     // sentence.
     const { editor, anchor } = makeEditorWithAnchor();
     const onActivateThread = vi.fn();
-    renderPopover(editor, onActivateThread);
+    renderPopover(editor, onActivateThread, null);
 
     fireEvent.pointerDown(anchor, { pointerType: "mouse" });
     fireEvent.click(anchor);
 
     expect(onActivateThread).not.toHaveBeenCalled();
+  });
+});
+
+// The popover's own query is `enabled: false` - a cache-only read - so before
+// the lane arm existed the preview showed nothing until some other surface had
+// already populated that exact query cache key. These pin the lane as the
+// source that closes that cold-cache hole, per `resolveArtifactCommentThreads`
+// (`use-lane-comment-threads.ts`).
+describe("<ThreadAnchorHoverPopover /> state-lane threads", () => {
+  it("shows the preview from lane rows when the query cache holds nothing for this artifact", () => {
+    threads.value = [];
+    const { editor, anchor } = makeEditorWithAnchor();
+    renderPopover(editor, vi.fn(), [
+      threadFixtureWith(THREAD_ID, "lane quoted text"),
+    ]);
+
+    fireEvent.pointerOver(anchor, { pointerType: "mouse" });
+    act(() => {
+      vi.advanceTimersByTime(HOVER_DELAY_MS);
+    });
+
+    expect(screen.getByRole("button", { name: "Open thread" })).toBeTruthy();
+    expect(screen.getByText("lane quoted text")).toBeTruthy();
+  });
+
+  it("prefers lane content over cached content for the same thread id", () => {
+    threads.value = [threadFixtureWith(THREAD_ID, "cache quoted text")];
+    const { editor, anchor } = makeEditorWithAnchor();
+    renderPopover(editor, vi.fn(), [
+      threadFixtureWith(THREAD_ID, "lane quoted text"),
+    ]);
+
+    fireEvent.pointerOver(anchor, { pointerType: "mouse" });
+    act(() => {
+      vi.advanceTimersByTime(HOVER_DELAY_MS);
+    });
+
+    expect(screen.getByText("lane quoted text")).toBeTruthy();
+    expect(screen.queryByText("cache quoted text")).toBeNull();
+  });
+
+  it("renders nothing when neither the lane nor the cache holds the thread", () => {
+    threads.value = [];
+    const { editor, anchor } = makeEditorWithAnchor();
+    renderPopover(editor, vi.fn(), null);
+
+    fireEvent.pointerOver(anchor, { pointerType: "mouse" });
+    act(() => {
+      vi.advanceTimersByTime(HOVER_DELAY_MS);
+    });
+
+    expect(screen.queryByRole("button", { name: "Open thread" })).toBeNull();
   });
 });

@@ -6,11 +6,9 @@ import {
   screen,
   within,
 } from "@testing-library/react";
-import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { ProviderRateLimits } from "@traycer/protocol/host";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { formatResetFullDateTime } from "@/lib/relative-time";
-import { RunnerHostContext } from "@/providers/runner-host-context";
 import {
   ClaudeRateLimitView,
   CodexRateLimitView,
@@ -24,16 +22,10 @@ import {
   ProviderRateLimitDetail,
 } from "../provider-rate-limit-views";
 
-const openExternalLinkMock = vi.hoisted(() => ({
-  isPending: false,
-  mutate: vi.fn(),
-}));
+const openLinkMock = vi.hoisted(() => vi.fn());
 
-vi.mock("@/hooks/runner/use-open-external-link-mutation", () => ({
-  useRunnerOpenExternalLink: () => ({
-    mutate: openExternalLinkMock.mutate,
-    isPending: openExternalLinkMock.isPending,
-  }),
+vi.mock("@/lib/links/open-link", () => ({
+  useOpenLink: () => openLinkMock,
 }));
 
 type CodexRateLimits = Extract<ProviderRateLimits, { provider: "codex" }>;
@@ -70,7 +62,7 @@ function formatGrokPeriodDate(epochMs: number): string {
 
 afterEach(() => {
   cleanup();
-  openExternalLinkMock.isPending = false;
+  openLinkMock.mockClear();
 });
 
 describe("CodexRateLimitView (extended fields)", () => {
@@ -965,40 +957,19 @@ describe("OpenCodeRateLimitView", () => {
     expect(container.querySelector(".bg-red-500")).toBeNull();
   });
 
-  it("renders Manage Go pointing at the OpenCode auth page", () => {
+  it("opens the OpenCode auth page through openLink when Manage Go is clicked", () => {
+    // The app owns every URL egress (A6): Manage Go is a plain button, not an
+    // anchor, and the runner-pending disabled state it used to grow is gone.
     render(<OpenCodeRateLimitView data={openCode} />);
-    const link = screen.getByRole("link", { name: "Manage Go" });
-    expect(link.getAttribute("href")).toBe("https://opencode.ai/auth");
-  });
-
-  it("renders Manage Go as a disabled native button while the runner open is pending", () => {
-    // Regression: with a bound runner the pending state used to stay an
-    // `aria-disabled` href. It must be a real disabled button so the
-    // accessible name stays "Manage Go" and the click target is not an
-    // active anchor.
-    openExternalLinkMock.isPending = true;
-    render(
-      <RunnerHostContext.Provider
-        value={
-          new MockRunnerHost({
-            signInUrl: "https://auth.traycer.test/sign-in",
-            authnBaseUrl: "https://auth.traycer.test",
-            localHost: null,
-            hosts: [],
-            workspaceFolderPickerPaths: undefined,
-            hasLocalHost: undefined,
-            traycerCli: undefined,
-          })
-        }
-      >
-        <OpenCodeRateLimitView data={openCode} />
-      </RunnerHostContext.Provider>,
-    );
-
     const action = screen.getByRole("button", { name: "Manage Go" });
     expect(action.tagName).toBe("BUTTON");
-    expect(action instanceof HTMLButtonElement && action.disabled).toBe(true);
-    expect(screen.queryByRole("link", { name: "Manage Go" })).toBeNull();
+
+    fireEvent.click(action);
+    expect(openLinkMock).toHaveBeenCalledWith(
+      "https://opencode.ai/auth",
+      "account",
+      expect.objectContaining({ type: "click" }),
+    );
   });
 });
 
@@ -1122,7 +1093,7 @@ describe("ProviderRateLimitDetail dispatch", () => {
       />,
     );
     expect(screen.getByText("5-hour")).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Manage Go" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Manage Go" })).toBeTruthy();
   });
 });
 
