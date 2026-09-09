@@ -141,7 +141,9 @@ const LOG_ATTACHMENT_MAX_BYTES = REPORT_LOG_TAIL_MAX_BYTES;
 let tempDir = "";
 let hostLogPath = "";
 
-function buildService(signedInEmail: string | null): DesktopSupportService {
+function buildService(
+  signedInEmail: string | null | (() => string | null),
+): DesktopSupportService {
   const hostLayout: HostFsLayout = {
     rootDir: tempDir,
     pidMetadataFile: join(tempDir, "pid.json"),
@@ -164,8 +166,10 @@ function buildService(signedInEmail: string | null): DesktopSupportService {
     appName: "Traycer",
     host: { getSnapshot: () => null },
     authSession: {
-      get: () =>
-        signedInEmail === null
+      get: () => {
+        const email =
+          typeof signedInEmail === "function" ? signedInEmail() : signedInEmail;
+        return email === null
           ? { status: "signed-out", token: null, profile: null }
           : {
               status: "signed-in",
@@ -173,9 +177,10 @@ function buildService(signedInEmail: string | null): DesktopSupportService {
               profile: {
                 userId: "user-1",
                 userName: "Test User",
-                email: signedInEmail,
+                email,
               },
-            },
+            };
+      },
     },
     hostLayout,
   });
@@ -541,6 +546,35 @@ describe("DesktopSupportService.submitReport - private identity", () => {
     expect(
       (feedback as { name?: string; email?: string } | undefined)?.email,
     ).toBeUndefined();
+  });
+
+  it("uses the email frozen when the draft opened after the account changes", async () => {
+    let email: string | null = "first@traycer.ai";
+    const service = buildService(() => email);
+    await service.freezeEvidence(KEY, null);
+    email = "second@traycer.ai";
+
+    await service.submitReport(FORM, KEY);
+
+    const [feedback] = sentryMock.captureFeedback.mock.calls.at(-1) ?? [];
+    expect((feedback as { email?: string } | undefined)?.email).toBe(
+      "first@traycer.ai",
+    );
+  });
+
+  it("keeps a signed-out draft anonymous after sign-in", async () => {
+    let email: string | null = null;
+    const service = buildService(() => email);
+    await service.freezeEvidence(KEY, null);
+    email = "later@traycer.ai";
+
+    await service.submitReport(FORM, KEY);
+
+    const [feedback] = sentryMock.captureFeedback.mock.calls.at(-1) ?? [];
+    expect(
+      (feedback as { name?: string; email?: string } | undefined)?.name,
+    ).toBe("anonymous");
+    expect((feedback as { email?: string } | undefined)?.email).toBeUndefined();
   });
 });
 
@@ -944,6 +978,20 @@ describe("DesktopSupportService - evidence freeze semantics", () => {
 });
 
 describe("DesktopSupportService - freeze idempotency per key", () => {
+  it("reuses the original email for repeated freezes and captures a new draft's email", async () => {
+    let email: string | null = "first@traycer.ai";
+    const service = buildService(() => email);
+    const first = await service.freezeEvidence(KEY, null);
+    email = "second@traycer.ai";
+
+    const repeated = await service.freezeEvidence(KEY, null);
+    const next = await service.freezeEvidence("sender-1:2", null);
+
+    expect(repeated.contactEmail).toBe(first.contactEmail);
+    expect(repeated.contactEmail).toBe("first@traycer.ai");
+    expect(next.contactEmail).toBe("second@traycer.ai");
+  });
+
   it("mints one reportId per draft and reuses it across every submit call", async () => {
     const service = buildService(null);
     const { reportId } = await service.freezeEvidence(KEY, null);

@@ -321,7 +321,11 @@ function createRunnerHost(
           truncated: false,
         });
       },
-      freezeEvidence: () => Promise.resolve({ reportId: "rpt_frozen" }),
+      freezeEvidence: () =>
+        Promise.resolve({
+          reportId: "rpt_frozen",
+          contactEmail: harness.snapshot.user.email,
+        }),
       discardFrozenEvidence: () => Promise.resolve(),
       readFrozenLogTail: (input: {
         readonly draftId: number;
@@ -981,6 +985,40 @@ describe("Report issue capture dialog (deep interactions)", () => {
       expect(form.includeBrowserDiagnostics).toBe(true);
       expect(form.includeDiagnostics).toBe(false);
       expect(form.privateDiagnostics).toBeDefined();
+    });
+
+    it("shows the frozen draft email when the later snapshot differs", async () => {
+      const harness = createSupportBridgeHarness({
+        snapshot: {
+          ...baseSnapshot,
+          user: { ...baseSnapshot.user, email: "snapshot@traycer.ai" },
+        },
+        submitReport: undefined,
+        buildPublicDraft: undefined,
+        openExternalLink: undefined,
+        frozenDesktopLines: undefined,
+        frozenHostLines: undefined,
+      });
+      const runnerHost = createRunnerHost(harness);
+      const support = runnerHost.support;
+      openManualReport();
+      renderReportIssueDialog(
+        Object.assign(runnerHost, {
+          support: {
+            ...support,
+            freezeEvidence: () =>
+              Promise.resolve({
+                reportId: "rpt_frozen",
+                contactEmail: "frozen@traycer.ai",
+              }),
+          },
+        }),
+      );
+
+      expect(
+        await screen.findByText(/Your email \(frozen@traycer.ai\) is included/),
+      ).not.toBeNull();
+      expect(screen.queryByText(/snapshot@traycer.ai/)).toBeNull();
     });
 
     it("shows no follow-up email copy when signed out", async () => {

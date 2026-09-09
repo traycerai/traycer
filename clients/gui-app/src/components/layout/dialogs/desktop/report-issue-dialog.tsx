@@ -811,7 +811,7 @@ export function ReportIssueDialog(
             isDeliveryUnavailable={isDeliveryUnavailable}
             draftId={draftId}
             support={support}
-            contactEmail={snapshot?.user.email ?? null}
+            contactEmail={freezeEvidenceData?.contactEmail ?? null}
             onLogsTouched={() => setLogsTouchedByUser(true)}
             onSelectType={selectType}
             attachments={attachments}

@@ -93,6 +93,7 @@ interface FrozenLogTail {
 
 interface FrozenEvidence {
   readonly reportId: string;
+  readonly contactEmail: string | null;
   readonly desktop: FrozenLogTail;
   readonly host: FrozenLogTail;
   // Ticket 03 / plan D3: the always-on PII-free counter slice and the
@@ -243,7 +244,10 @@ export class DesktopSupportService {
     if (existing !== undefined) {
       const evidence =
         existing.kind === "ready" ? existing.evidence : await existing.promise;
-      return { reportId: evidence.reportId };
+      return {
+        reportId: evidence.reportId,
+        contactEmail: evidence.contactEmail,
+      };
     }
     const reportId = generateReportId();
     // Sighting is recorded once per logical open of this frozen-evidence key,
@@ -264,6 +268,7 @@ export class DesktopSupportService {
     }
     const promise = captureFrozenEvidence(
       reportId,
+      this.authSession.get().profile?.email ?? null,
       resolveDesktopLogPath(),
       this.hostLayout,
     );
@@ -281,7 +286,7 @@ export class DesktopSupportService {
     ) {
       this.setFrozenEvidence(frozenEvidenceKey, { kind: "ready", evidence });
     }
-    return { reportId };
+    return { reportId, contactEmail: evidence.contactEmail };
   }
 
   /**
@@ -404,7 +409,7 @@ export class DesktopSupportService {
         .join("\n\n"),
     );
 
-    const userEmail = snapshot.user.email;
+    const userEmail = frozen.contactEmail;
     const privateDiagnostics = form.privateDiagnostics;
     // Images ride to Sentry as opaque binary attachments, built directly from
     // `form.images` below - deliberately never folded into `contexts` (the
@@ -932,6 +937,7 @@ async function ensureLogFile(path: string): Promise<void> {
 
 async function captureFrozenEvidence(
   reportId: string,
+  contactEmail: string | null,
   desktopLogPath: string,
   hostLayout: HostFsLayout,
 ): Promise<FrozenEvidence> {
@@ -953,7 +959,14 @@ async function captureFrozenEvidence(
       LOG_ATTACHMENT_MAX_BYTES,
     ),
   ]);
-  return { reportId, desktop, host, browserTelemetry, browserTrace };
+  return {
+    reportId,
+    contactEmail,
+    desktop,
+    host,
+    browserTelemetry,
+    browserTrace,
+  };
 }
 
 async function captureLogTail(

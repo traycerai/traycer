@@ -271,6 +271,7 @@ export interface DesktopSupportFreezeEvidenceInput {
 
 export interface DesktopSupportFreezeEvidenceResult {
   readonly reportId: string;
+  readonly contactEmail: string | null;
 }
 
 /**

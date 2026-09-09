@@ -510,6 +510,7 @@ export interface SupportFreezeEvidenceResult {
   // Minted once per draft, at freeze time - not per submit call. Every retry
   // (T2) and the GitHub fallback prefill reuse this same id.
   readonly reportId: string;
+  readonly contactEmail: string | null;
 }
 
 /**
