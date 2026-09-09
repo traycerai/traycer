@@ -691,6 +691,49 @@ describe("HostDirectoryService", () => {
     expect(emits).toEqual([0]);
   });
 
+  it("announces the conclusion crossing when a new identity's listing lands on a byte-identical empty directory", async () => {
+    // The commit path's mirror of the failed arm's flip-gated emit, and the one
+    // shape that hides from every other signal: account A owns nothing and has
+    // been observed, the session switches to B, and B's own listing is empty
+    // too. The rows are byte-identical, `hasObservedRemoteListing` is `true`
+    // either side, so the compared emit sees nothing - while the SCOPED answer
+    // goes false (re-armed by the switch) -> true (B's attempt concluded).
+    // Without the crossing folded into the unconditional emit, that transition
+    // reaches no subscriber and a caller waiting on it waits forever.
+    const host = makeHost(null);
+    const { fetcher } = queuedFetcher([
+      { kind: "hosts", entries: [] },
+      { kind: "hosts", entries: [] },
+    ]);
+    let identity: string | null = "user-a";
+    const directory = makeDirectory({
+      authContextId: () => identity,
+      credentialGeneration: null,
+      runnerHost: host,
+      localHostIdSeeder: null,
+      remoteFetcher: fetcher,
+    });
+    await directory.start();
+
+    expect(directory.hasConcludedDiscovery()).toBe(true);
+    expect(directory.hasSettledFleet()).toBe(true);
+
+    const emits: number[] = [];
+    directory.onChange((entries) => {
+      emits.push(entries.length);
+    });
+    identity = "user-b";
+
+    // Re-armed by the switch alone, with the rows and the listing flag
+    // untouched - which is exactly why nothing else can carry the crossing.
+    expect(directory.hasConcludedDiscovery()).toBe(false);
+
+    await directory.refresh();
+
+    expect(directory.hasConcludedDiscovery()).toBe(true);
+    expect(emits).toEqual([0]);
+  });
+
   it("keeps a delivered listing a concluded attempt too - the weaker claim never disagrees", async () => {
     // The control for the case above: `hasConcludedDiscovery()` is weaker than
     // `hasSettledFleet()` in every state, never stronger, so no caller can

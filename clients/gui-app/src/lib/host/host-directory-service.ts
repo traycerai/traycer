@@ -999,6 +999,10 @@ export class HostDirectoryService implements IHostDirectoryService {
     // own no hosts" - the same lie the unknown state exists to prevent, just
     // reached from the other side.
     const observedBefore = this.hasObservedRemoteListing;
+    // Captured THROUGH the scoping, like the failed arm's: an identity switch
+    // re-arms the answer without any outcome committing, so the raw flag can
+    // sit at `true` across a transition this commit is the conclusion of.
+    const concludedBefore = this.hasConcludedDiscovery();
     this.hasObservedRemoteListing = outcome.kind === "hosts";
     // Tracked with the listing flag and cleared by the same outcome: a
     // `signed-out` is the fetcher saying it had no bearer to ask WITH, so
@@ -1009,6 +1013,15 @@ export class HostDirectoryService implements IHostDirectoryService {
       ? era.identity
       : null;
     const observedChanged = observedBefore !== this.hasObservedRemoteListing;
+    // The conclusion flag crosses on its own schedule, and the snapshot compare
+    // cannot see it. Two empty listings either side of an account switch are
+    // byte-identical rows with an identical observed flag, while the SCOPED
+    // answer goes false -> true because the new identity's own attempt has now
+    // concluded - so the compared emit would swallow the one notification its
+    // subscribers exist to receive. Same rule and same reason as the failed
+    // arm's emit: a flag nobody is told about is a flag no subscriber can act
+    // on.
+    const concludedChanged = concludedBefore !== this.hasConcludedDiscovery();
     // A host registered late - from the CLI, or from another machine - reaches
     // this directory through its own poll, while the selection authority's
     // fleet (desktop main) stays stale. Activate on it then refuses
@@ -1033,7 +1046,7 @@ export class HostDirectoryService implements IHostDirectoryService {
       requestFleetRefresh(this.runnerHost);
     }
     await this.reseedLocalHostIdIfUnknown();
-    if (observedChanged) {
+    if (observedChanged || concludedChanged) {
       // Crossing between "unknown" and "zero" changes `getCardinality()`'s
       // answer while an EMPTY directory stays byte-for-byte identical either
       // way - so the snapshot compare below would swallow the one emit that
