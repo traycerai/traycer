@@ -465,6 +465,7 @@ function createDirtyEpicHandle(
     tuiAgentIngestSeq: 0,
     ...EMPTY_PROJECTED_SLICES,
     chatRecords: EMPTY_CHATS_SLICE,
+    chatRecordHeads: {},
     chatRecordListAuthoritative: true,
     chatRetractions: {},
     tuiAgentRecords: EMPTY_PROJECTED_SLICES.tuiAgents,
