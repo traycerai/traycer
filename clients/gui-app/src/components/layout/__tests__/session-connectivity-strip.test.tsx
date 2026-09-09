@@ -114,6 +114,12 @@ describe("<SessionConnectivityStrip />", () => {
     renderStrip("interrupted-prolonged");
     expect(strip().textContent).toContain("Still reconnecting");
     expect(screen.getByTestId("session-connectivity-strip-retry")).toBeTruthy();
+    // The accessible name escalates with the visible line: a static label
+    // would keep announcing the first rung to a screen reader after the row
+    // had moved on.
+    expect(strip().getAttribute("aria-label")).toBe(
+      "Connection interrupted - still reconnecting",
+    );
     // Never a claim about the machine: the verdict cannot tell this device's
     // leg from the relay's host uplink, and a host is not necessarily a Mac.
     expect(strip().textContent).not.toMatch(/Mac|host|your machine/i);

@@ -34,6 +34,10 @@ import { cn } from "@/lib/utils";
  * bound session's own ready edge; surface churn can neither flicker nor
  * postpone it (see the store's announce/escalate deadlines).
  *
+ * The accessible name is derived from the same verdict the visible line is,
+ * so a screen reader and a pair of eyes are told the same thing - a static
+ * label would keep announcing the first rung after the row had escalated.
+ *
  * The copy names the CONNECTION and never the machine, for two reasons that
  * both bite: the verdict cannot distinguish this device's leg from the relay's
  * host uplink, and a host is not necessarily a Mac - the same string would
@@ -177,7 +181,12 @@ function resolveIndicator(input: {
     return {
       source: "session",
       state: input.connectivity,
-      ariaLabel: "Connection interrupted - reconnecting",
+      // Follows the verdict rather than being static: a fixed name would keep
+      // announcing the first rung after the row had escalated, so a screen
+      // reader and a pair of eyes would be told different things.
+      ariaLabel: prolonged
+        ? "Connection interrupted - still reconnecting"
+        : "Connection interrupted - reconnecting",
       escalated: prolonged,
       escalatedText: "Still reconnecting",
       wake: input.wakeSession,
