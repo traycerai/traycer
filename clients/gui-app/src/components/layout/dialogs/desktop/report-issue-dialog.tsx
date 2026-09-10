@@ -111,7 +111,7 @@ const ROUTE_TEMPLATE_LABELS: Readonly<
   "/settings/": "Settings",
   "/settings/agents": "Settings - Agents",
   "/settings/app-diagnostics": "Settings - App diagnostics",
-  "/settings/app-notifications": "Settings - Application notifications",
+  "/settings/app-notifications": "Settings - Sounds",
   "/settings/appearance": "Settings - Appearance",
   "/settings/devices": "Settings - Devices",
   "/settings/diagnostics": "Settings - Host diagnostics",

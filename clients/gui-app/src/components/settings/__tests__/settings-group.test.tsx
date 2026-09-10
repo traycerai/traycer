@@ -93,4 +93,22 @@ describe("SettingsGroup", () => {
         .closest("section"),
     ).toBe(section);
   });
+
+  it("omits the group heading when the page title already names the card", () => {
+    render(
+      <SettingsGroup
+        title={undefined}
+        tone="default"
+        dataTestId="settings-group-untitled"
+        fill={false}
+      >
+        <div>row</div>
+      </SettingsGroup>,
+    );
+
+    const section = screen.getByTestId("settings-group-untitled");
+    expect(section.tagName).toBe("SECTION");
+    expect(screen.queryByRole("heading")).toBeNull();
+    expect(section.querySelector(".rounded-lg")).not.toBeNull();
+  });
 });
