@@ -116,6 +116,8 @@ import {
   worktreeBindingIsFolderless,
 } from "@/hooks/composer/use-workspace-mention-roots";
 import { useChatSessionHandle } from "@/lib/registries/chat-session-registry";
+import { useEpicParked } from "@/lib/epics/epic-parking";
+import { useEpicDraftGuard } from "@/lib/epics/use-epic-draft-guard";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import {
@@ -477,10 +479,22 @@ export function ChatTile(props: ChatTileProps) {
       (chat) => chat.identity.chatId === node.id && cloudRowIsViewersOwn(chat),
     ) ??
       false);
+  // Renderer parking (plan C, decision C1): a parked epic holds no
+  // `chat.subscribe`, because that subscription claims a VISIBLE lease on the
+  // epic through the host's chat session and one survivor pins the slot.
+  //
+  // Folded into the existing readiness gate rather than added beside it: this
+  // argument already means "may this tile subscribe", and a parked epic is a
+  // reason it may not, in the same sense a missing record is. The registry
+  // also disposes this epic's sessions at park time - the two are not
+  // redundant, they are the release and the refusal to re-open: without this
+  // gate a tile still mounted at park time would re-acquire on its next
+  // render, immediately after the disposal.
+  const epicParked = useEpicParked(epicId);
   const handle = useChatSessionHandle(
     node.id,
     tabHostId,
-    chatRecord !== null || isCrossHostOpen || isCloudKnown,
+    !epicParked && (chatRecord !== null || isCrossHostOpen || isCloudKnown),
   );
   const reachability = useHostReachability(tabHostId);
   // The chat's own bounded load (invariant 6). `handle === null` is this
@@ -2060,6 +2074,17 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     uiState.inlineEdit,
     state,
   );
+  // The park veto (`lib/epics/epic-draft-guard.ts`). An inline edit's
+  // `currentContent` lives in this tile's own `chatTileUiReducer` state and is
+  // written nowhere else until Submit, so a park - which unmounts this tile
+  // with the rest of the canvas - would take it with it. The composer's own
+  // draft needs no such guard: it snapshots into `composer-draft-store` on
+  // every document change and outlives the unmount.
+  //
+  // `dirty` and not merely "an edit is open": opening one seeds
+  // `currentContent` from the saved message, so a pristine edit loses nothing
+  // and must not hold the epic resident.
+  useEpicDraftGuard(currentEpicId, activeInlineEdit?.dirty ?? false);
 
   const displayedMessages = useMemo(() => {
     if (activeInlineEdit === null) return renderedMessages;

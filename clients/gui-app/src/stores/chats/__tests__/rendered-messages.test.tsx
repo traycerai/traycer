@@ -3726,6 +3726,38 @@ describe("useRenderedMessages setup card integration", () => {
     expect(indicator?.id).toBe("assistant:turn-setup");
   });
 
+  it("threads the active turn's real startedAt onto the pre-turn indicator, distinct from its createdAt list anchor", () => {
+    const { result } = renderRenderedMessages({
+      activeTurn: { ...RUNNING_ACTIVE_TURN, startedAt: 5000 },
+      runStatus: "running",
+    });
+
+    const indicator = result.current.find(
+      (message) => message.role === "assistant",
+    );
+    // `createdAt` stays the list anchor (`max(rendered.createdAt) + 1`, here
+    // `0 + 1` on an empty transcript) - it must not be reused as the elapsed
+    // clock's start, which is why 5000 was chosen to be unmistakably not 1.
+    expect(indicator?.createdAt).toBe(1);
+    expect(indicator?.elapsedStartedAt).toBe(5000);
+    expect(indicator?.elapsedStartedAt).not.toBe(indicator?.createdAt);
+  });
+
+  it("omits elapsedStartedAt from the pre-turn indicator when no active turn exists yet", () => {
+    const { result } = renderRenderedMessages({
+      activeTurn: null,
+      runStatus: "running",
+    });
+
+    const indicator = result.current.find(
+      (message) => message.role === "assistant",
+    );
+    // Same list anchor as the active-turn case above - only the presence of
+    // `elapsedStartedAt` differs, since there is genuinely no known start.
+    expect(indicator?.createdAt).toBe(1);
+    expect(indicator?.elapsedStartedAt).toBeUndefined();
+  });
+
   it("still shows the Working indicator when setup has already completed", () => {
     const { result } = renderRenderedMessages({
       events: [
@@ -5727,6 +5759,56 @@ describe("useRenderedMessages turn.stopped", () => {
     expect(
       collectAssistantReplyText(trailingRow.stopped?.turnReplySegments ?? []),
     ).toBe("");
+  });
+
+  it("preserves the real send instant on an orphaned steer row's sentAt while re-anchoring createdAt to the turn start", () => {
+    // No persisted user message for "steer-msg-1" - renderSteerBlockUserMessage
+    // falls through to the orphaned (renderSteeredUserMessage) branch.
+    const assistant = {
+      ...assistantMessage("turn-1", 10_000),
+      timestamp: 100_500,
+      blocks: [steerBlock("block-1", "steer-msg-1", 100_000)],
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant],
+    });
+
+    const steerRow = result.current.find(
+      (row) => row.id === "steer:queue:block-1",
+    );
+    // A turn that started at 10_000 carries a steer actually sent at 100_000 -
+    // the gap is deliberately large so the two values can never be confused.
+    expect(steerRow?.sentAt).toBe(100_000);
+    // createdAt still anchors to the turn start (the sort position), not the
+    // real send time - re-deriving it from sentAt would reorder the row out
+    // of its turn.
+    expect(steerRow?.createdAt).toBe(10_000);
+    expect(steerRow?.sentAt).not.toBe(steerRow?.createdAt);
+  });
+
+  it("preserves the real send instant on a persisted-message steer row's sentAt while re-anchoring createdAt to the turn start", () => {
+    // A persisted user message for the steer exists - renderSteerBlockUserMessage
+    // takes the renderUserMessage branch instead of the orphaned one above.
+    const steeredUser = userMessageAt("m2", 100_000);
+    const assistant = {
+      ...assistantMessage("turn-1", 10_000),
+      timestamp: 100_500,
+      blocks: [steerBlock("block-1", steeredUser.messageId, 100_000)],
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant, steeredUser],
+    });
+
+    const steerRow = result.current.find(
+      (row) => row.id === steeredUser.messageId,
+    );
+    // Same large, unmistakable gap between the turn's start and the steer's
+    // real send time as the orphaned-branch case above.
+    expect(steerRow?.sentAt).toBe(100_000);
+    expect(steerRow?.createdAt).toBe(10_000);
+    expect(steerRow?.sentAt).not.toBe(steerRow?.createdAt);
   });
 
   it("shows the stopped marker only once the turn.stopped event actually lands, across a rerender", () => {

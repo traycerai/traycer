@@ -28,6 +28,17 @@ interface SharedClock {
   readonly sampledNow: () => number;
 }
 
+// Round-4 merge note: `origin/main` fixed the SAME defect independently, by
+// re-sampling and bumping `tick` inside `startIfNeeded` and notifying every
+// listener there. Kept this side because it is a superset with a narrower
+// guard, not because the other was wrong: `startIfNeeded` has exactly one
+// caller on both sides (`subscribe`), so bumping in `subscribe` covers every
+// path bumping in `startIfNeeded` does; this side additionally corrects the
+// newcomer's ALREADY-RENDERED first frame, coalesces the broadcast, and
+// guards `now > sampleTheRenderSaw` so a backwards system-clock jump cannot
+// thrash every listener. Taking both would double-bump and double-notify on
+// every cold start. The clock is also per-instance here rather than a module
+// singleton, which is what stops its sample leaking between fake-timer tests.
 /**
  * Exported for the subscribe-cost pin in `__tests__/relative-time.test.ts`.
  * Whether a mass mount costs a linear or a quadratic number of listener calls
@@ -354,6 +365,140 @@ export function formatAbsoluteDateTime(timestamp: number): string {
     minute: "2-digit",
     hour12: true,
   });
+}
+
+/**
+ * How much of the clock a message stamp spells out. The transcript row shows
+ * minutes; the assistant footer's hover card shows seconds, where it sits
+ * beside a duration that is itself second-precise.
+ */
+type MessageTimePrecision = "minute" | "second";
+
+/**
+ * Whether two epoch-ms instants fall on the same day in the VIEWER's timezone.
+ *
+ * Compared part by part rather than through a formatted string: the calendar
+ * parts are what the decision is about, and going through a formatter would
+ * tie "is this today" to a display format that is free to change.
+ */
+function isSameLocalDay(a: number, b: number): boolean {
+  const dateA = new Date(a);
+  const dateB = new Date(b);
+  return (
+    dateA.getFullYear() === dateB.getFullYear() &&
+    dateA.getMonth() === dateB.getMonth() &&
+    dateA.getDate() === dateB.getDate()
+  );
+}
+
+function formatDayScopedTime(
+  timestamp: number,
+  now: number,
+  precision: MessageTimePrecision,
+): string {
+  // No `hour12` here, unlike `formatResetDateTime`. A transcript stamp reads
+  // down a column of times the viewer scans, so it should be written the way
+  // their own locale writes a clock - "15:45" where that is the convention.
+  const time = new Date(timestamp).toLocaleTimeString(
+    undefined,
+    precision === "second"
+      ? { hour: "numeric", minute: "2-digit", second: "2-digit" }
+      : { hour: "numeric", minute: "2-digit" },
+  );
+  if (isSameLocalDay(timestamp, now)) return time;
+  return `${formatShortDate(timestamp)}, ${time}`;
+}
+
+/**
+ * A transcript row's own clock time, scoped to the day it happened on: the
+ * time alone when that day is today ("3:45 PM"), a short date ahead of it
+ * otherwise ("Sep 8, 3:45 PM").
+ *
+ * Absolute rather than relative on purpose. A chat is read as a timeline, and
+ * "2m ago" both churns every minute and makes two adjacent messages read
+ * identically; a clock time never goes stale and can be compared between rows.
+ * The date is dropped for today because that is the common case and the
+ * prefix would be noise on every row of a session held in one sitting - but it
+ * is never dropped otherwise, since these chats routinely span days.
+ *
+ * Pure, taking `now` as an argument. {@link useMessageTime} is the reactive
+ * form for a component that must survive a day rollover.
+ */
+export function formatMessageTime(timestamp: number, now: number): string {
+  return formatDayScopedTime(timestamp, now, "minute");
+}
+
+/**
+ * {@link formatMessageTime} with seconds, for the roomy detail surfaces (the
+ * assistant footer's hover card) where the extra precision is readable and
+ * the neighbouring duration is already stated to the second.
+ */
+export function formatMessageTimeWithSeconds(
+  timestamp: number,
+  now: number,
+): string {
+  return formatDayScopedTime(timestamp, now, "second");
+}
+
+/**
+ * Whether `timestamp` names an instant a message stamp can render at all.
+ *
+ * A persisted row can carry a number no `Date` represents - `8.64e15 + 1` is
+ * perfectly finite and still out of range - and `toISOString()` THROWS on one
+ * rather than producing "Invalid Date", so the stamp renders nothing for it.
+ * That decision has to be readable from outside the component: a call site
+ * drawing its own separator beside the stamp cannot see a `null` return, and
+ * would otherwise leave a lone " · " after the sender label. Exported so the
+ * separator and the stamp are decided by one predicate instead of two that
+ * can drift.
+ */
+export function hasRenderableMessageTime(timestamp: number): boolean {
+  return !Number.isNaN(new Date(timestamp).getTime());
+}
+
+/**
+ * The unabridged form of a message stamp - weekday, full date, year and time
+ * to the second - for the hover label behind {@link formatMessageTime}'s
+ * day-scoped one.
+ *
+ * This is what makes an absolute stamp safe to abbreviate on the row: the
+ * visible label drops the date for today and the year always, and the reader
+ * gets both back on demand rather than losing them. Pure and complete, so it
+ * needs no `now` and never goes stale.
+ */
+export function formatFullTimestamp(timestamp: number): string {
+  return new Date(timestamp).toLocaleString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+/**
+ * {@link formatMessageTime} bound to the shared 60s clock.
+ *
+ * The subscription is there for one transition only: a stamp showing "3:45 PM"
+ * has to become "Sep 10, 3:45 PM" once the day rolls over under a tab left
+ * open overnight. Reading the clock at render time instead would freeze the
+ * label at whatever the last render happened to observe, which is not coarse
+ * but wrong.
+ *
+ * Same leaf-component guidance as {@link useRelativeTimestamp}: call it from a
+ * small leaf (`<ChatMessageTimestamp />`) so the tick repaints that one element
+ * rather than the transcript row around it.
+ */
+export function useMessageTime(timestamp: number): string {
+  useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  // `sampledNowOf()`, not a bare `sampledNow`: this hook arrived from
+  // `origin/main`, where the clock's sample was a module-level binding. It is a
+  // per-instance closure on this branch (that is what stops one clock's sample
+  // leaking into another's fake-timer test), so the sample is read through the
+  // instance's accessor like every other hook in this file.
+  return formatMessageTime(timestamp, sampledNowOf());
 }
 
 /**

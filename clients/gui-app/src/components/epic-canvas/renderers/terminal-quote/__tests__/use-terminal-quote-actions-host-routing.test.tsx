@@ -32,7 +32,8 @@ const messengerRef = vi.hoisted(() => ({
   value: null as MockHostMessenger<HostRpcRegistry> | null,
 }));
 
-vi.mock("@/lib/host/runtime", () => ({
+vi.mock("@/lib/host/runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
   // The SPINE and the app-wide client are separate exports since redesign
   // P2.1; this stub stands in for both, which is what `useHostClientFor` and
   // `useHostClientForHostId` each reach for.
@@ -73,6 +74,17 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
 }));
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ authnBaseUrl: "https://authn.test" }),
+}));
+// `<TabHostProvider>` also mounts the cross-device drafts mirror, whose
+// session reaches `useHostDirectory()` / `useAuthService()` off a real
+// `<HostRuntimeProvider>` this suite deliberately does not stand up. The
+// mount's own escape hatch is a `null` `useHostBinding`, which is not
+// available here: the routing under test resolves a named host through that
+// binding, so it has to be non-null. Stub the mount - it renders `null`
+// either way and carries only drafts effects, which are not this suite's
+// subject.
+vi.mock("@/hooks/drafts/use-tab-draft-mirror", () => ({
+  TabDraftMirrorMount: () => null,
 }));
 
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";

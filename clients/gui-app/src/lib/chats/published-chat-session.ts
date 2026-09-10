@@ -373,11 +373,14 @@ export function publishedChatSessionState(
     pendingBackgroundStopAll: null,
     pendingBackgroundSessionStop: null,
     restore: null,
+    // No frames reach a published copy, so no completion is ever owed here.
+    settledRestoreCompletions: [],
     pendingActions: {},
     acceptedActions: {},
     pendingUserMessages: [],
     errorNotices: [],
     deliveredNoticeActionIds: new Set<string>(),
+    deliveredLastCopyActionIds: new Set<string>(),
     // Nothing streams into a published copy, so no card is ever opened here -
     // but the field is part of the state shape and a second construction site
     // that forgets one is how these two drift.

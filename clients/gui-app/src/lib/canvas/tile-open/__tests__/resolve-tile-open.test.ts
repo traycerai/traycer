@@ -117,6 +117,7 @@ const DEFAULT_SETTINGS: TilePlacementSettings = {
   content: "tab",
   conversation: "tab",
   browser: "split",
+  sideChat: "split",
 };
 
 function resolve(input: {
@@ -436,6 +437,7 @@ describe("setting and modifiers", () => {
     content: "tab",
     conversation: "tab",
     browser: "tab",
+    sideChat: "tab",
   };
 
   it("honors a flat (non-per-category) default", () => {
@@ -525,6 +527,7 @@ describe("single-tile viewport", () => {
         content: "tab",
         conversation: "tab",
         browser: "pip",
+        sideChat: "split",
       },
       canvas: SINGLE_PANE_CANVAS,
       singleTileViewport: true,
@@ -539,6 +542,7 @@ describe("pip", () => {
     content: "tab",
     conversation: "tab",
     browser: "pip",
+    sideChat: "split",
   };
 
   it("floats a browser tile", () => {
@@ -589,6 +593,7 @@ describe("category affinity", () => {
     content: "tab",
     conversation: "split",
     browser: "split",
+    sideChat: "split",
   };
 
   it("groups into the pane whose same-category tile is most recent", () => {
@@ -701,6 +706,7 @@ describe("empty panes", () => {
     content: "split",
     conversation: "split",
     browser: "split",
+    sideChat: "split",
   };
 
   /** p1 (active) holds a spec; p2 was opened and never filled. */
@@ -793,6 +799,232 @@ describe("empty panes", () => {
       kind: "split",
       tabId: TAB_ID,
       paneId: "p1",
+      edge: "right",
+      mode: "permanent",
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `beside` placement (side chats): a `/btw` names the pane its source chat
+// lives in; the "Side chats" row decides tab-versus-split. Category
+// affinity and empty-pane filling do NOT apply - the whole point of naming
+// the pane is that the tile lands next to it.
+// ---------------------------------------------------------------------------
+
+describe("beside placement", () => {
+  // p1 (active) holds CHAT_A; p2 (NOT active) holds SPEC_A - the named pane
+  // for these cases, so a wrong answer that lands in the active pane instead
+  // is caught rather than accidentally matching.
+  const TWO_PANE_CANVAS = canvasOf({
+    root: group("g1", "horizontal", [
+      pane("p1", [CHAT_A.instanceId]),
+      pane("p2", [SPEC_A.instanceId]),
+    ]),
+    activePaneId: "p1",
+    tiles: [CHAT_A, SPEC_A],
+  });
+
+  function besideIntent(
+    paneId: string,
+    overrides: Partial<TileOpenIntent>,
+  ): TileOpenIntent {
+    return {
+      ...BASE_INTENT,
+      node: CHAT_C,
+      placement: { kind: "beside", paneId, category: "side-chat" },
+      ...overrides,
+    };
+  }
+
+  it("splits to the right of the NAMED pane on the split row", () => {
+    expect(
+      resolve({
+        intent: besideIntent("p2", {}),
+        settings: { ...DEFAULT_SETTINGS, sideChat: "split" },
+        canvas: TWO_PANE_CANVAS,
+        singleTileViewport: false,
+      }),
+    ).toEqual({
+      kind: "split",
+      tabId: TAB_ID,
+      paneId: "p2",
+      edge: "right",
+      mode: "permanent",
+    });
+  });
+
+  it("opens as a tab of the NAMED pane on the tab row", () => {
+    expect(
+      resolve({
+        intent: besideIntent("p2", {}),
+        settings: { ...DEFAULT_SETTINGS, sideChat: "tab" },
+        canvas: TWO_PANE_CANVAS,
+        singleTileViewport: false,
+      }),
+    ).toEqual({
+      kind: "open-in-pane",
+      tabId: TAB_ID,
+      paneId: "p2",
+      mode: "permanent",
+      index: null,
+    });
+  });
+
+  it("alt inverts split -> tab", () => {
+    expect(
+      resolve({
+        intent: besideIntent("p2", {
+          modifiers: { ...NO_MODS, alt: true },
+        }),
+        settings: { ...DEFAULT_SETTINGS, sideChat: "split" },
+        canvas: TWO_PANE_CANVAS,
+        singleTileViewport: false,
+      }),
+    ).toEqual({
+      kind: "open-in-pane",
+      tabId: TAB_ID,
+      paneId: "p2",
+      mode: "permanent",
+      index: null,
+    });
+  });
+
+  it("alt inverts tab -> split", () => {
+    expect(
+      resolve({
+        intent: besideIntent("p2", {
+          modifiers: { ...NO_MODS, alt: true },
+        }),
+        settings: { ...DEFAULT_SETTINGS, sideChat: "tab" },
+        canvas: TWO_PANE_CANVAS,
+        singleTileViewport: false,
+      }),
+    ).toEqual({
+      kind: "split",
+      tabId: TAB_ID,
+      paneId: "p2",
+      edge: "right",
+      mode: "permanent",
+    });
+  });
+
+  it("shift forces a split even on the tab row", () => {
+    expect(
+      resolve({
+        intent: besideIntent("p2", {
+          modifiers: { ...NO_MODS, shift: true },
+        }),
+        settings: { ...DEFAULT_SETTINGS, sideChat: "tab" },
+        canvas: TWO_PANE_CANVAS,
+        singleTileViewport: false,
+      }),
+    ).toEqual({
+      kind: "split",
+      tabId: TAB_ID,
+      paneId: "p2",
+      edge: "right",
+      mode: "permanent",
+    });
+  });
+
+  it("clamps to the named pane on a single-tile viewport", () => {
+    expect(
+      resolve({
+        intent: besideIntent("p2", {}),
+        settings: { ...DEFAULT_SETTINGS, sideChat: "split" },
+        canvas: TWO_PANE_CANVAS,
+        singleTileViewport: true,
+      }),
+    ).toEqual({
+      kind: "open-in-pane",
+      tabId: TAB_ID,
+      paneId: "p2",
+      mode: "permanent",
+      index: null,
+    });
+  });
+
+  it("a flat (non-per-category) default wins over the row", () => {
+    const FLAT_TAB: TilePlacementSettings = {
+      default: "tab",
+      content: "tab",
+      conversation: "tab",
+      browser: "tab",
+      sideChat: "split",
+    };
+    expect(
+      resolve({
+        intent: besideIntent("p2", {}),
+        settings: FLAT_TAB,
+        canvas: TWO_PANE_CANVAS,
+        singleTileViewport: false,
+      }),
+    ).toEqual({
+      kind: "open-in-pane",
+      tabId: TAB_ID,
+      paneId: "p2",
+      mode: "permanent",
+      index: null,
+    });
+  });
+
+  describe("named pane not on the canvas", () => {
+    it("falls through to the configured split, right of the active pane", () => {
+      expect(
+        resolve({
+          intent: besideIntent("gone", {}),
+          settings: { ...DEFAULT_SETTINGS, sideChat: "split" },
+          canvas: SINGLE_PANE_CANVAS,
+          singleTileViewport: false,
+        }),
+      ).toEqual({
+        kind: "split",
+        tabId: TAB_ID,
+        paneId: "p1",
+        edge: "right",
+        mode: "permanent",
+      });
+    });
+
+    it("falls through to the configured tab, in the active pane", () => {
+      expect(
+        resolve({
+          intent: besideIntent("gone", {}),
+          settings: { ...DEFAULT_SETTINGS, sideChat: "tab" },
+          canvas: SINGLE_PANE_CANVAS,
+          singleTileViewport: false,
+        }),
+      ).toEqual({
+        kind: "open-in-pane",
+        tabId: TAB_ID,
+        paneId: "p1",
+        mode: "permanent",
+        index: null,
+      });
+    });
+  });
+
+  it("does not fill an existing empty pane - splits right of the named (occupied) pane instead", () => {
+    const canvas = canvasOf({
+      root: group("g1", "horizontal", [
+        pane("p1", []),
+        pane("p2", [SPEC_A.instanceId]),
+      ]),
+      activePaneId: "p1",
+      tiles: [SPEC_A],
+    });
+    expect(
+      resolve({
+        intent: besideIntent("p2", {}),
+        settings: { ...DEFAULT_SETTINGS, sideChat: "split" },
+        canvas,
+        singleTileViewport: false,
+      }),
+    ).toEqual({
+      kind: "split",
+      tabId: TAB_ID,
+      paneId: "p2",
       edge: "right",
       mode: "permanent",
     });

@@ -1,4 +1,5 @@
 import { act, render } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   afterEach,
   beforeEach,
@@ -59,10 +60,34 @@ function TestHarness(props: { readonly renderKey: number }): ReactElement {
 
 describe("use-epic-node-mutations under React Compiler", () => {
   let handle: OpenedStoreForTest;
+  let queryClient: QueryClient;
   let consoleErrorSpy: MockInstance<typeof console.error>;
+
+  /**
+   * `useEpicDeleteArtifact` invalidates the tombstone list
+   * (`epic.deletedArtifacts.list`) on success, so it holds a `useQueryClient`
+   * - the write itself still rides the write-command queue this pin drives.
+   * The provider is what the hook legitimately needs; nothing here reads the
+   * cache.
+   */
+  function tree(renderKey: number): ReactElement {
+    return (
+      <QueryClientProvider client={queryClient}>
+        <EpicSessionContext.Provider value={handle}>
+          <TestHarness renderKey={renderKey} />
+        </EpicSessionContext.Provider>
+      </QueryClientProvider>
+    );
+  }
 
   beforeEach(() => {
     window.localStorage.clear();
+    queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
     handle = openStoreForTest({
       epicId: "epic-compiler-pin",
       userId: null,
@@ -78,24 +103,13 @@ describe("use-epic-node-mutations under React Compiler", () => {
   afterEach(() => {
     consoleErrorSpy.mockRestore();
     handle.dispose();
+    queryClient.clear();
   });
 
   it("re-renders the same handle across multiple passes with no hook-order error", () => {
-    const { getByTestId, rerender } = render(
-      <EpicSessionContext.Provider value={handle}>
-        <TestHarness renderKey={1} />
-      </EpicSessionContext.Provider>,
-    );
-    rerender(
-      <EpicSessionContext.Provider value={handle}>
-        <TestHarness renderKey={2} />
-      </EpicSessionContext.Provider>,
-    );
-    rerender(
-      <EpicSessionContext.Provider value={handle}>
-        <TestHarness renderKey={3} />
-      </EpicSessionContext.Provider>,
-    );
+    const { getByTestId, rerender } = render(tree(1));
+    rerender(tree(2));
+    rerender(tree(3));
 
     // A store-driven re-render - the same trigger a real pending write
     // command uses - is what surfaces the trap: it re-renders the SAME

@@ -1,10 +1,12 @@
 import { memo, type ReactElement } from "react";
+import { hasRenderableMessageTime } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import { AssistantMessageBody } from "./chat-message-assistant-body";
 import { chatFindSegmentUnitId } from "./chat-find";
+import { ChatMessageTimestamp } from "./chat-message-timestamp";
 import { singleSpecialSegment } from "./chat-special-segment";
 import { UserMessageBody } from "./chat-message-user-body";
 import { ForkedChatLinkSegment } from "./segments/forked-chat-link-segment";
@@ -213,9 +215,25 @@ function ChatMessageImpl(props: ChatMessageProps) {
     message.statusLabel === null
       ? senderLabel
       : `${senderLabel} - ${message.statusLabel}`;
+  // A queued row leads with its status instead of a time: it has not been sent
+  // yet, so stamping it would read as a send time it does not have. A non-null
+  // `statusLabel` means exactly that here - the other two labels ("Streaming",
+  // "Completed") are applied under a `role === "assistant"` guard, and an
+  // assistant row returns above without ever reaching this overline.
+  // The separator is drawn here but the stamp decides whether it renders, so
+  // both hang off the same predicate: a persisted row can carry an instant a
+  // `Date` cannot represent, and a lone " · " after the label is worse than no
+  // stamp at all.
+  const sentAt = message.sentAt ?? message.createdAt;
   const sender = (
     <span className="text-overline font-medium text-muted-foreground/60">
       <span className="uppercase">{label}</span>
+      {message.statusLabel === null && hasRenderableMessageTime(sentAt) ? (
+        <>
+          <span aria-hidden> · </span>
+          <ChatMessageTimestamp timestamp={sentAt} />
+        </>
+      ) : null}
     </span>
   );
 

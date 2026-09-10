@@ -177,6 +177,9 @@ export function hostOperationKnownCopy(
         body: `${payload.title} • ${payload.message}`,
       };
     }
+    // Automatic cleanup retains the host-composed copy used by delivery hooks.
+    case "worktree_auto_cleanup":
+      return null;
   }
 }
 
@@ -240,6 +243,7 @@ function knownTaskTitle(payload: HostNotificationKnownPayload): string | null {
       return payload.taskTitle;
     case "worktree_deletion":
       return payload.taskTitle ?? null;
+    case "worktree_auto_cleanup":
     case "browser_human_needed":
       return null;
   }
@@ -255,6 +259,7 @@ function knownAgentName(payload: HostNotificationKnownPayload): string | null {
     case "interview":
     case "workspace_operation_failed":
     case "worktree_deletion":
+    case "worktree_auto_cleanup":
     case "browser_human_needed":
       return null;
   }
@@ -270,6 +275,7 @@ function knownChatTitle(payload: HostNotificationKnownPayload): string | null {
     case "epic":
     case "agent_stalled":
     case "worktree_deletion":
+    case "worktree_auto_cleanup":
     case "browser_human_needed":
       return null;
   }
@@ -290,6 +296,7 @@ function knownStoppedReason(
     case "interview":
     case "workspace_operation_failed":
     case "worktree_deletion":
+    case "worktree_auto_cleanup":
     case "browser_human_needed":
       return null;
   }
@@ -309,6 +316,7 @@ function knownProviderId(
     case "interview":
     case "workspace_operation_failed":
     case "worktree_deletion":
+    case "worktree_auto_cleanup":
     case "browser_human_needed":
       return null;
   }
@@ -340,6 +348,7 @@ function knownBackgroundWorkRunning(
     case "interview":
     case "workspace_operation_failed":
     case "worktree_deletion":
+    case "worktree_auto_cleanup":
     case "browser_human_needed":
       return false;
   }

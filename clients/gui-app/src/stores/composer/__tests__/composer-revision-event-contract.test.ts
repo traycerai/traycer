@@ -36,7 +36,9 @@ describe("composer revision event contract", () => {
 
     renderHook(() =>
       useChatComposerDraft({
-        taskId,
+        chatId: taskId,
+        epicId: "epic-1",
+        hostId: "host-1",
         editorRef: { current: handle },
         editorReadyTick: 1,
       }),

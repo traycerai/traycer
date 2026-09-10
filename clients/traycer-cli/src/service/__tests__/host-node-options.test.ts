@@ -25,7 +25,7 @@ describe("withHostNodeOptions", () => {
     expect(CANONICAL).toContain("--report-on-fatalerror");
     expect(CANONICAL).toContain("--report-compact");
     expect(CANONICAL).toContain("--report-directory=crash-reports");
-    expect(CANONICAL).toContain("--max-semi-space-size=16");
+    expect(CANONICAL).toContain("--max-semi-space-size=64");
     assertOnlyFlagTokens(CANONICAL);
   });
 
@@ -35,25 +35,29 @@ describe("withHostNodeOptions", () => {
       readonly input: string;
       readonly preservedPrefix: string | null;
     }> = [
-      // --max-semi-space-size
+      // --max-semi-space-size. The inherited value is 16 - the cap this helper
+      // used to append - and must not be the canonical one: an input that
+      // already carries the value we append makes the strip unobservable in
+      // everything except the duplicate count below, and 16 is also the exact
+      // string a host inherits from a plist written before the cap was raised.
       {
         name: "max-semi-space-size =value mid",
-        input: "--trace-warnings --max-semi-space-size=64 --inspect=0",
+        input: "--trace-warnings --max-semi-space-size=16 --inspect=0",
         preservedPrefix: "--trace-warnings --inspect=0",
       },
       {
         name: "max-semi-space-size =value leading",
-        input: "--max-semi-space-size=64 --trace-warnings",
+        input: "--max-semi-space-size=16 --trace-warnings",
         preservedPrefix: "--trace-warnings",
       },
       {
         name: "max-semi-space-size =value trailing",
-        input: "--trace-warnings --max-semi-space-size=64",
+        input: "--trace-warnings --max-semi-space-size=16",
         preservedPrefix: "--trace-warnings",
       },
       {
         name: "max-semi-space-size space-separated mid",
-        input: "--trace-warnings --max-semi-space-size 64 --inspect=0",
+        input: "--trace-warnings --max-semi-space-size 16 --inspect=0",
         preservedPrefix: "--trace-warnings --inspect=0",
       },
       // --report-directory
@@ -103,6 +107,22 @@ describe("withHostNodeOptions", () => {
       expect(result.match(/--max-semi-space-size/g)).toHaveLength(1);
       expect(result.match(/--report-directory/g)).toHaveLength(1);
     });
+  });
+
+  it("replaces the 16 MB cap a host inherited from an older plist", () => {
+    // The upgrade path for the cap being raised, and the reason the strip
+    // covers `--max-semi-space-size` at all rather than only appending. A
+    // macOS host installed before the raise has `--max-semi-space-size=16`
+    // baked into its LaunchAgent plist and inherits it through `process.env`;
+    // the supervisor is what corrects it, so a host that is never reinstalled
+    // still gets the new cap on its next start.
+    const result = withHostNodeOptions("--max-semi-space-size=16");
+
+    expect(result).toBe(CANONICAL);
+    expect(result).toContain("--max-semi-space-size=64");
+    expect(result).not.toContain("--max-semi-space-size=16");
+    expect(result.match(/--max-semi-space-size/g)).toHaveLength(1);
+    assertOnlyFlagTokens(result);
   });
 
   it("does not corrupt neighbors when a value CONTAINS another flag name", () => {

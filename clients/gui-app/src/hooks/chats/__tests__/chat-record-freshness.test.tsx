@@ -52,10 +52,7 @@ import {
   type OpenedStoreForTest,
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import {
-  invalidateEpicChatRecords,
-  useEpicSyncChatRecords,
-} from "@/hooks/chats/use-epic-chat-records";
+import { useEpicSyncChatRecords } from "@/hooks/chats/use-epic-chat-records";
 import {
   useEpicArchiveChat,
   useEpicCreateChatForHostClient,
@@ -517,45 +514,35 @@ describe("the record list runs on the table's cadence", () => {
   });
 });
 
-describe("a cached answer's fence degrades across a store generation change", () => {
-  it("does not retract a freshly-ingested row in a REOPENED epic's store when the cached answer's fence was captured against the OLD store", async () => {
-    // Generation A: read once, then advance A's ingest counter and force a
-    // second dispatch so the CACHED answer carries a comfortably non-zero
-    // `issuedAtSeq`, fenced against A's `ingestFenceIdentity`.
+// The session GENERATION is part of this read's cache key
+// (`cacheKeyIdentity: [viewerUserId, fenceIdentity]`). What that buys - a
+// park-then-show re-reading rather than replaying the pre-park answer, across
+// BOTH record hooks - is pinned end to end in
+// `record-reads-per-session-generation.test.tsx`, and is deliberately not
+// restated here.
+//
+// What this owns is the SHAPE of the mechanism, which nothing else asserts:
+// keyed, not invalidated. Those are two ways to make a reopened session read
+// again and they cost very differently, and the cheap-looking alternative -
+// `invalidateEpicChatRecords` on every session rebuild - is method-scoped, so
+// it would re-read every open epic's list on the host to refresh one.
+describe("the record list is keyed by store generation, not invalidated", () => {
+  it("gives a reopened session its own cache entry and leaves the superseded one in place", async () => {
     const viewA = renderHook(() => useEpicSyncChatRecords(EPIC_ID), {
       wrapper: fixture.Wrapper,
     });
     await settleFirstRead();
 
-    fixture.handle.store.getState().applyChatRecordDelta({
-      kind: "upsert",
-      epicId: EPIC_ID,
-      record: record({ chatId: "seed-in-a", revision: 1 }),
-    });
-    expect(fixture.handle.store.getState().peekChatIngestSeq()).toBe(1);
-
-    invalidateEpicChatRecords(fixture.queryClient, HOST_ID);
-    await waitFor(() => {
-      expect(fixture.listCalls.value).toBe(2);
-    });
-
-    // The epic is evicted and reopened: A's store is gone, but the
-    // QueryClient - and the answer it just cached, fenced against A - lives
-    // on. Same epic, same host, same viewer, so the cache key is unchanged.
+    // The epic is parked: the hook unmounts and the session is released. A's
+    // answer stays in the QueryClient, well inside its 10s `staleTime`.
     viewA.unmount();
+    const fenceInA = fixture.handle.store.getState().ingestFenceIdentity;
     fixture.handle.store.getState().dispose();
 
+    // Show: a fresh session, so a fresh generation. Same epic, same host, same
+    // viewer - everything about the key except the generation is unchanged.
     const handleB = newSession();
-    // Ingested into B BEFORE the stale cached answer applies to it - the row
-    // the bug retracts. B's own ingest counter restarts at 0/1, numerically
-    // smaller than A's captured fence, which is exactly what let the
-    // omission pass misread this as "already held when the answer issued".
-    handleB.store.getState().applyChatRecordDelta({
-      kind: "upsert",
-      epicId: EPIC_ID,
-      record: record({ chatId: "pushed-into-b", revision: 1 }),
-    });
-
+    expect(handleB.store.getState().ingestFenceIdentity).not.toBe(fenceInA);
     const WrapperB = (props: { readonly children: ReactNode }): ReactNode =>
       createElement(
         QueryClientProvider,
@@ -572,21 +559,22 @@ describe("a cached answer's fence degrades across a store generation change", ()
       );
     renderHook(() => useEpicSyncChatRecords(EPIC_ID), { wrapper: WrapperB });
 
-    // Confirms this is really the CACHED (A-fenced) answer reaching B, not a
-    // fresh read that would trivially get this right: same cache key, still
-    // within `staleTime`, so no third RPC fires.
-    expect(fixture.listCalls.value).toBe(2);
+    // Both entries really are entries: B fetched rather than being handed A's
+    // rows, which is what makes the count below two REAL slots rather than one
+    // slot plus an empty observer. (Sharing the entry reads exactly 1.)
     await waitFor(() => {
-      expect(handleB.store.getState().chatRecordListAuthoritative).toBe(true);
+      expect(fixture.listCalls.value).toBe(2);
     });
-    // The fix: `fenceIdentity` mismatches B's `ingestFenceIdentity`, so the
-    // applying effect degrades the fence to `null` before calling
-    // `applyChatRecords` - the conservative no-session path - instead of
-    // trusting A's numerically-larger-but-meaningless seq. Pre-fix this row
-    // read as omitted-and-already-held, and was retracted.
+
+    // KEYED, not invalidated. A's entry is still there, unobserved, waiting for
+    // the ordinary `gcTime` - so the cost of this fix is one superseded slot
+    // per session generation, bounded and self-collecting, and never a
+    // host-wide sweep of every open epic's list.
     expect(
-      Object.hasOwn(handleB.store.getState().chats.byId, "pushed-into-b"),
-    ).toBe(true);
+      fixture.queryClient
+        .getQueryCache()
+        .findAll({ queryKey: ["host", HOST_ID, "epic.listChatRecords"] }),
+    ).toHaveLength(2);
 
     handleB.store.getState().dispose();
   });

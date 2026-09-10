@@ -998,6 +998,27 @@ export default tseslint.config(
     },
   },
   {
+    // The park effect RETRACTS a session this window has already destroyed,
+    // which is the one shape this rule's "cascading renders" reasoning does
+    // not cover. The rule is about deriving state in an effect, where the
+    // cure is to compute during render instead; here the effect is reacting
+    // to an external system (the parking decider released the session and
+    // disposed the handle) and the write is a retraction of a value that is
+    // now a destroyed object.
+    //
+    // It was deferred to a microtask precisely to satisfy this rule, and that
+    // deferral was the defect: an unpark landing inside the microtask window
+    // runs the effect's cleanup, which cancelled the pending write, so the
+    // render that observed `parked === false` republished the disposed handle
+    // through `publishedSessionHandle` and consumers read a destroyed store.
+    // The cascade the rule warns about is one extra render; the cost of
+    // avoiding it here was handing consumers a destroyed Y.Doc.
+    files: ["src/providers/epic-session-provider.tsx"],
+    rules: {
+      "react-hooks/set-state-in-effect": "off",
+    },
+  },
+  {
     // Router -> store synchronization direction for an already-committed epic
     // route. This is the inverse of navigateToTabIntent's entry-point seam,
     // so it may read the store action directly while the rest of the app may

@@ -1417,7 +1417,18 @@ describe("selection authority IPC binding", () => {
       registry.add("window-a", 101, windowA);
       bridge.install();
 
-      expect(appState.listeners.get("render-process-gone")?.size).toBe(1);
+      // TWO app-level subscribers now, and both are the bridge's: the
+      // selection-authority detachment this suite is about, and the
+      // epic-visibility row clear in `epic-visibility-ipc.ts` (a crashed
+      // renderer must stop claiming to show its Epics, and the browser-view
+      // listener that would otherwise cover it is attached only for windows
+      // that have opened a browser tile).
+      //
+      // The count is the weaker half of this pin. The invariant that matters
+      // is the one below - `dispose()` removes EVERY listener the bridge
+      // registered - because a subscription surviving dispose is what leaks a
+      // dead bridge into the next one.
+      expect(appState.listeners.get("render-process-gone")?.size).toBe(2);
 
       bridge.dispose();
 

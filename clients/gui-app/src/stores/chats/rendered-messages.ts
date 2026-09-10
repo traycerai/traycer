@@ -858,6 +858,42 @@ function isInterviewWaitEndEvent(event: ChatEvent): boolean {
   );
 }
 
+/**
+ * The active turn's stable primitive fields, or all-`null` when no turn is
+ * running. Spelled out once here so `useRenderedMessages` reads them as plain
+ * values: a per-field `activeTurn?.x ?? null` at the call site is five
+ * branches in the hook body for no gain, and the absent turn is one decision,
+ * not five.
+ *
+ * `startedAt` is the turn's real wall-clock start. The pre-turn indicator is
+ * synthesized with a `createdAt` that is a list anchor rather than an instant,
+ * so this is the only place that row can learn when its turn actually began.
+ */
+function activeTurnPrimitives(activeTurn: ChatActiveTurn | null): {
+  readonly turnId: string | null;
+  readonly userMessageId: string | null;
+  readonly harnessId: ChatActiveTurn["harnessId"] | null;
+  readonly profileId: string | null;
+  readonly startedAt: number | null;
+} {
+  if (activeTurn === null) {
+    return {
+      turnId: null,
+      userMessageId: null,
+      harnessId: null,
+      profileId: null,
+      startedAt: null,
+    };
+  }
+  return {
+    turnId: activeTurn.turnId,
+    userMessageId: activeTurn.userMessageId,
+    harnessId: activeTurn.harnessId,
+    profileId: activeTurn.profileId,
+    startedAt: activeTurn.startedAt,
+  };
+}
+
 export function useRenderedMessages(
   input: RenderedMessagesInput,
   displayContext: RenderedMessagesDisplayContext,
@@ -866,10 +902,13 @@ export function useRenderedMessages(
   // on its stable primitive fields (not the object identity) to avoid busting
   // this memo each frame. These are all set at turn-start and never rewritten
   // per delta, so they make safe, churn-free deps.
-  const activeTurnId = input.activeTurn?.turnId ?? null;
-  const activeTurnUserMessageId = input.activeTurn?.userMessageId ?? null;
-  const activeTurnHarnessId = input.activeTurn?.harnessId ?? null;
-  const activeTurnProfileId = input.activeTurn?.profileId ?? null;
+  const {
+    turnId: activeTurnId,
+    userMessageId: activeTurnUserMessageId,
+    harnessId: activeTurnHarnessId,
+    profileId: activeTurnProfileId,
+    startedAt: activeTurnStartedAt,
+  } = activeTurnPrimitives(input.activeTurn);
   // Re-keyed from ROW ids to TURN keys once per publish. Every row of a turn
   // carries the same context object, so the map is at most one entry per
   // hydrated turn, and the derivations below all hold a turn key rather than a
@@ -1251,6 +1290,7 @@ export function useRenderedMessages(
       : renderPendingRunIndicator({
           activeRunState,
           activeTurnId,
+          activeTurnStartedAt,
           activeTurnMeta: pendingTurnMeta(activeTurnMetaInput, displayContext),
           turnPauseAccounting,
           rendered: [...persisted, ...activeTurn, ...pending, ...live],
@@ -1368,6 +1408,7 @@ export function useRenderedMessages(
     setupCardEntries,
     activeRunState,
     activeTurnId,
+    activeTurnStartedAt,
     activeTurnMetaInput,
     turnPauseAccounting,
     displayContext,
@@ -2656,12 +2697,21 @@ function renderAssistantTurnRows(
       // Anchor the nested steer row at the turn start too, so it stays
       // contiguous with its surrounding slices under the stable `createdAt`
       // sort instead of jumping out by its own block timestamp.
+      //
+      // That anchor is a sort position, NOT when the steer was sent - a turn
+      // that started at 10:00 can carry a steer sent at 10:20. `sentAt`
+      // captures whatever instant the renderer produced before the re-anchor,
+      // which is the real send time down either branch (a persisted user
+      // message's, or the block's), so the transcript stamp reports the
+      // moment the person actually typed rather than the turn's start.
+      const steerRow = renderSteerBlockUserMessage(
+        block,
+        input.ctx,
+        input.userMessagesById.get(block.messageId) ?? null,
+      );
       return {
-        ...renderSteerBlockUserMessage(
-          block,
-          input.ctx,
-          input.userMessagesById.get(block.messageId) ?? null,
-        ),
+        ...steerRow,
+        sentAt: steerRow.createdAt,
         createdAt: input.rowAnchorAt,
       };
     }
@@ -3304,6 +3354,13 @@ function renderLiveAssistant(
 function renderPendingRunIndicator(input: {
   readonly activeRunState: ChatMessageRunState | null;
   readonly activeTurnId: string | null;
+  /**
+   * The turn's real wall-clock start, or `null` in the short window before a
+   * turn id (and so a turn) exists. `createdAt` below cannot serve as one:
+   * it is a list anchor, so the elapsed timer would measure from the previous
+   * row's position rather than from when the turn actually began.
+   */
+  readonly activeTurnStartedAt: number | null;
   readonly activeTurnMeta: AssistantTurnMeta | null;
   readonly turnPauseAccounting: ReadonlyMap<string, TurnPauseAccounting>;
   readonly rendered: ReadonlyArray<ChatMessageModel>;
@@ -3311,6 +3368,7 @@ function renderPendingRunIndicator(input: {
   const {
     activeRunState,
     activeTurnId,
+    activeTurnStartedAt,
     activeTurnMeta,
     turnPauseAccounting,
     rendered,
@@ -3340,7 +3398,13 @@ function renderPendingRunIndicator(input: {
       structuredContent: null,
       attachments: [],
       settings: null,
+      // A list anchor, not an instant: it exists to sort this row last. The
+      // turn's real start rides `elapsedStartedAt` beside it, which is what
+      // the elapsed timer measures from.
       createdAt: latestCreatedAt + 1,
+      ...(activeTurnStartedAt === null
+        ? {}
+        : { elapsedStartedAt: activeTurnStartedAt }),
       completedAt: null,
       stopped: null,
       pausedDurationMs: pause.pausedDurationMs,
