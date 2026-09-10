@@ -1,3 +1,6 @@
+import { useBrowserViewport } from "./use-browser-viewport";
+import { BrowserViewportToolbar } from "./browser-viewport-toolbar";
+import { BrowserViewportHandles } from "./browser-viewport-handles";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import type {
@@ -147,6 +150,18 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
   const [zoomPercent, setZoomPercent] = useState(100);
+  const viewport = useBrowserViewport({
+    hostId,
+    sessionId: props.node.sessionId,
+    tabId: props.binding.tabId,
+    instanceId: props.node.instanceId,
+    visible,
+    disabled: false,
+    pageZoom: zoomPercent / 100,
+    native: true,
+  });
+  const { areaRef } = viewport;
+  const claimViewport = viewport.claim;
   const [surfaceAttachment, setSurfaceAttachment] =
     useState<SurfaceAttachmentState | null>(null);
   const surfaceLeaseRef = useRef<ElectronTabSurfaceLease | null>(null);
@@ -193,6 +208,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
   );
   usePublishBrowserGuestTile({
     surfaceRef,
+    viewport: viewport.guestViewport,
     registrationId,
     instanceId: props.node.instanceId,
     viewTabId: tileKey.viewTabId,
@@ -291,15 +307,16 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
   // forwarded, which is how every other host-shaped behaviour leaves this
   // body.
   useEffect(() => {
-    if (browserView === null || onNativeTileFocused === null) return;
+    if (browserView === null) return;
     const subscription = browserView.onTileFocused((focusedTile) => {
       if (!isSameBrowserViewTile(focusedTile, tileKey)) return;
-      onNativeTileFocused();
+      claimViewport();
+      onNativeTileFocused?.();
     });
     return () => {
       subscription.dispose();
     };
-  }, [browserView, onNativeTileFocused, tileKey]);
+  }, [browserView, onNativeTileFocused, tileKey, claimViewport]);
 
   useEffect(() => {
     if (browserView === null) return;
@@ -344,12 +361,6 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     canGoBack,
     canGoForward,
     zoomPercent,
-    persistViewportPreset: (preset) => {
-      // A placement that does not remember a viewport choice supplies no
-      // writer; the chrome still applies the preset for this tile's life.
-      props.persistViewportPreset?.(preset);
-    },
-    initialViewportPreset: props.node.viewportPreset,
     onAttemptedUrl: latchAttemptedUrl,
   });
 
@@ -486,6 +497,8 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
   return (
     <div
       className="flex h-full w-full flex-col bg-canvas text-foreground"
+      onPointerDownCapture={claimViewport}
+      onFocusCapture={claimViewport}
       data-testid={`agent-browser-tile-${props.node.instanceId}`}
     >
       <BrowserTileFindAdapterBridge
@@ -493,67 +506,72 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
         tileKey={tileKey}
       />
       <BrowserTileToolbar
-        controller={chromeController}
+        controller={{ ...chromeController, viewport: viewport.controller }}
         loading={effectiveStatus === "loading"}
         pictureInPicture={{
           disabled: props.onConvertToPip === null,
           convert: () => props.onConvertToPip?.(),
         }}
       />
+      <BrowserViewportToolbar controller={viewport.controller} />
       <div
-        ref={surfaceRef}
-        className={cn(
-          "relative min-h-0 bg-background",
-          props.node.viewportPreset === "responsive"
-            ? "flex-1"
-            : "mx-auto my-auto",
-        )}
-        style={viewportPresetSurfaceStyle(props.node.viewportPreset)}
+        ref={areaRef}
+        className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden"
       >
-        <ElectronTabSurfaceBaseLayer
-          showStartPage={showStartPage}
-          visible={visible}
-          scope={browserTileScope(placement)}
-          hostId={hostId}
-          onNavigate={navigateToUrl}
-        />
         <div
-          hidden={showStartPage}
-          // Transparent is not hidden: without this a presented, live guest
-          // still exposes the loader's role and "Reconnecting" text to
-          // assistive tech. Hide it from AT whenever it is not the shown layer.
-          aria-hidden={!overlay.visible}
+          ref={surfaceRef}
           className={cn(
-            "absolute inset-0 z-20 flex min-h-0 flex-col items-center justify-center gap-3 px-4 text-center",
-            overlay.visible ? "opacity-100" : "opacity-0",
-            // Pointer events are gated on the guest not yet being interactive,
-            // NOT on the same flag that hides the overlay: a presented, live
-            // guest must never be click-blocked by a stale loader. A terminal
-            // surface keeps them so its Retry stays clickable.
-            overlay.blocking ? "pointer-events-auto" : "pointer-events-none",
+            "relative min-h-0 bg-background",
+            viewport.paintedSize === null && "h-full w-full",
           )}
-          role={overlay.surface === "loading" ? "status" : "alert"}
-          aria-live={overlay.surface === "loading" ? "polite" : "assertive"}
-          aria-busy={
-            overlay.visible ? overlay.surface === "loading" : undefined
-          }
+          style={viewport.paintedSize ?? undefined}
         >
-          <ElectronTabSurfaceStatus
-            surface={overlay.surface}
-            reason={effectiveStatusReason}
+          <BrowserViewportHandles controller={viewport.controller} />
+          <ElectronTabSurfaceBaseLayer
+            showStartPage={showStartPage}
+            visible={visible}
+            scope={browserTileScope(placement)}
             hostId={hostId}
-            onRetry={retryNavigation}
+            onNavigate={navigateToUrl}
+          />
+          <div
+            hidden={showStartPage}
+            // Transparent is not hidden: without this a presented, live guest
+            // still exposes the loader's role and "Reconnecting" text to
+            // assistive tech. Hide it from AT whenever it is not the shown layer.
+            aria-hidden={!overlay.visible}
+            className={cn(
+              "absolute inset-0 z-20 flex min-h-0 flex-col items-center justify-center gap-3 px-4 text-center",
+              overlay.visible ? "opacity-100" : "opacity-0",
+              // Pointer events are gated on the guest not yet being interactive,
+              // NOT on the same flag that hides the overlay: a presented, live
+              // guest must never be click-blocked by a stale loader. A terminal
+              // surface keeps them so its Retry stays clickable.
+              overlay.blocking ? "pointer-events-auto" : "pointer-events-none",
+            )}
+            role={overlay.surface === "loading" ? "status" : "alert"}
+            aria-live={overlay.surface === "loading" ? "polite" : "assertive"}
+            aria-busy={
+              overlay.visible ? overlay.surface === "loading" : undefined
+            }
+          >
+            <ElectronTabSurfaceStatus
+              surface={overlay.surface}
+              reason={effectiveStatusReason}
+              hostId={hostId}
+              onRetry={retryNavigation}
+            />
+          </div>
+          <BrowserTileDownloadStrip
+            downloads={downloads}
+            onCancel={cancelDownload}
+          />
+          <BrowserTileCertificateInterstitial
+            certificateError={certificateError}
+            proceeding={certificateProceeding}
+            onProceed={proceedCertificate}
           />
         </div>
-        <BrowserTileDownloadStrip
-          downloads={downloads}
-          onCancel={cancelDownload}
-        />
-        <BrowserTileCertificateInterstitial
-          certificateError={certificateError}
-          proceeding={certificateProceeding}
-          onProceed={proceedCertificate}
-        />
       </div>
     </div>
   );
@@ -582,33 +600,6 @@ function ElectronTabSurfaceBaseLayer(props: {
       onNavigate={props.onNavigate}
     />
   );
-}
-
-const VIEWPORT_PRESET_SIZES: Readonly<
-  Record<
-    BrowserViewViewportPresetId,
-    { readonly width: number; readonly height: number } | null
-  >
-> = {
-  responsive: null,
-  mobile: { width: 390, height: 844 },
-  tablet: { width: 820, height: 1180 },
-  desktop: { width: 1440, height: 900 },
-};
-
-function viewportPresetSurfaceStyle(
-  preset: BrowserViewViewportPresetId,
-):
-  | { width: number; height: number; maxWidth: string; maxHeight: string }
-  | undefined {
-  const size = VIEWPORT_PRESET_SIZES[preset];
-  if (size === null) return undefined;
-  return {
-    width: size.width,
-    height: size.height,
-    maxWidth: "100%",
-    maxHeight: "100%",
-  };
 }
 
 function isStartPageUrl(statusUrl: string, initialUrl: string): boolean {

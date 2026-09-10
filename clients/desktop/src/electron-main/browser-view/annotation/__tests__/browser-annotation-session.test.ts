@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import type {
   BrowserAnnotationAttachPayload,
+  BrowserAnnotationAttachRequest,
   BrowserAnnotationSessionEvent,
   BrowserAnnotationTheme,
 } from "../../../../ipc-contracts/browser-annotation-types";
@@ -82,6 +83,7 @@ class FakeDebugger implements BrowserViewDebugger {
   failEvaluate = false;
   missingFrame = false;
   missingWorld = false;
+  prepareAttachPayload: BrowserAnnotationAttachRequest | null = null;
   readonly falseEvaluateExpressions = new Set<string>();
   readonly rejectEvaluateExpressions = new Set<string>();
   private attached: boolean;
@@ -153,6 +155,13 @@ class FakeDebugger implements BrowserViewDebugger {
       if (this.failEvaluate) {
         return Promise.resolve({
           exceptionDetails: { text: "inject failed" },
+        });
+      }
+      if (
+        expression.includes("globalThis.__traycerAnnotationPrepareAttach?.()")
+      ) {
+        return Promise.resolve({
+          result: { value: this.prepareAttachPayload },
         });
       }
       if (expression.includes("traycerAnnotationViewport")) {
@@ -301,6 +310,13 @@ interface SessionHarness {
 }
 
 function createHarness(attached: boolean): SessionHarness {
+  return createHarnessWith(attached, () => Promise.resolve(true));
+}
+
+function createHarnessWith(
+  attached: boolean,
+  onAttachedResult: (result: AttachedResult) => Promise<boolean>,
+): SessionHarness {
   const webContents = new FakeWebContents(attached);
   const debugSession = createDebugSession(webContents);
   const events: BrowserAnnotationSessionEvent[] = [];
@@ -315,7 +331,7 @@ function createHarness(attached: boolean): SessionHarness {
     },
     onAttached: (result) => {
       attachedEvents.push(result);
-      return Promise.resolve(true);
+      return onAttachedResult(result);
     },
   });
   return {
@@ -367,6 +383,7 @@ const VALID_ATTACH_PAYLOAD = {
         bottom: 22,
         left: 1,
       },
+      computedStyles: [],
     },
   ],
   comment: "look here",
@@ -648,6 +665,55 @@ describe("BrowserAnnotationSession annotation overlay", () => {
     expect(attached[0]?.targetChatId).toBe(TARGET_CHAT_ID);
     expect(session.isActive()).toBe(true);
     const expressions = evaluateExpressions(webContents.debugger);
+    expect(expressions).toContain(ANNOTATION_CAPTURE_FAILED_EXPRESSION);
+    expect(expressions).not.toContain(ANNOTATION_RESET_AFTER_ATTACH_EXPRESSION);
+  });
+
+  it("waits for an acknowledged capture before releasing viewport preservation", async () => {
+    const acknowledgement = Promise.withResolvers<boolean>();
+    const harness = createHarnessWith(true, () => acknowledgement.promise);
+    harness.webContents.debugger.prepareAttachPayload = VALID_ATTACH_PAYLOAD;
+    await harness.session.start();
+    emitBinding(
+      harness.webContents.debugger,
+      { type: "stateChanged", mode: "select", markCount: 1 },
+      77,
+    );
+
+    const preserving = harness.session.preserveBeforeViewportChange();
+    await flush();
+    expect(harness.webContents.captureCount).toBe(1);
+    expect(harness.attached).toHaveLength(1);
+
+    let resolved = false;
+    void preserving.then(() => {
+      resolved = true;
+    });
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    acknowledgement.resolve(true);
+    await expect(preserving).resolves.toBeUndefined();
+    expect(evaluateExpressions(harness.webContents.debugger)).toContain(
+      ANNOTATION_RESET_AFTER_ATTACH_EXPRESSION,
+    );
+  });
+
+  it("refuses viewport preservation when the capture acknowledgement fails", async () => {
+    const harness = createHarnessWith(true, () => Promise.resolve(false));
+    harness.webContents.debugger.prepareAttachPayload = VALID_ATTACH_PAYLOAD;
+    await harness.session.start();
+    emitBinding(
+      harness.webContents.debugger,
+      { type: "stateChanged", mode: "select", markCount: 1 },
+      77,
+    );
+
+    await expect(
+      harness.session.preserveBeforeViewportChange(),
+    ).rejects.toThrow("Couldn't save the annotation to a chat draft");
+    expect(harness.session.isActive()).toBe(true);
+    const expressions = evaluateExpressions(harness.webContents.debugger);
     expect(expressions).toContain(ANNOTATION_CAPTURE_FAILED_EXPRESSION);
     expect(expressions).not.toContain(ANNOTATION_RESET_AFTER_ATTACH_EXPRESSION);
   });

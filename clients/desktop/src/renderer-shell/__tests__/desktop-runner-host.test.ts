@@ -615,6 +615,8 @@ function buildFakeBridge(
       onNativeTabStatusChange: (_handler) => ({ dispose: () => undefined }),
       onGuestMountRequested: (_handler) => ({ dispose: () => undefined }),
       onGuestReleaseRequested: (_handler) => ({ dispose: () => undefined }),
+      onGuestViewportRequested: (_handler) => ({ dispose: () => undefined }),
+      reportGuestViewportResult: async () => undefined,
       reportAnnotationAttachResult: async () => undefined,
     },
     hostManagement: {

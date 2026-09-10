@@ -47,6 +47,7 @@ function TileProbe() {
   usePublishBrowserGuestTile({
     surfaceRef,
     registrationId: REGISTRATION_A,
+    viewport: null,
     instanceId: "tile-1",
     viewTabId: "view-1",
     paneId: "pane-1",

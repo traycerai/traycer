@@ -3,6 +3,7 @@ import type { BrowserWindowConstructorOptions } from "electron";
 import type {
   BrowserCdpResult,
   BrowserStorageState,
+  BrowserViewportGeometry,
 } from "@traycer/protocol/host/browser/contracts";
 import { RunnerHostEvent } from "../../ipc-contracts/ipc-channels";
 import type {
@@ -15,6 +16,7 @@ import type {
   BrowserViewNativeTabStatusChange,
   BrowserViewStatus,
   BrowserViewElectronTabControl,
+  BrowserViewElectronViewport,
   BrowserViewNativeTabCapability,
   BrowserViewTileKey,
   PipCaptureStartInput,
@@ -60,7 +62,6 @@ import {
 } from "./manager/browser-view-entry";
 import {
   BrowserViewEntryFactory,
-  applyEntryZoom,
   steppedEntryZoom,
 } from "./manager/browser-view-entry-factory";
 import {
@@ -79,6 +80,7 @@ import {
 } from "./manager/browser-view-provisioning";
 import { BrowserViewWindowAttachment } from "./manager/browser-view-window-attachment";
 import { BrowserViewDebugSessions } from "./manager/debug-session-for";
+import { BrowserViewViewport } from "./manager/browser-view-viewport";
 
 const DEVTOOLS_TITLE = "Traycer Browser DevTools";
 
@@ -204,6 +206,7 @@ export class BrowserViewManager {
   readonly find: BrowserViewFind;
   readonly chords: BrowserViewChords;
   readonly pip: BrowserViewPipCapture;
+  readonly viewport: BrowserViewViewport;
 
   constructor(options: BrowserViewManagerOptions) {
     this.createDevToolsWindow = options.createDevToolsWindow;
@@ -221,6 +224,12 @@ export class BrowserViewManager {
       send: options.send,
       debugSessions: this.debugSessions,
     });
+    this.viewport = new BrowserViewViewport(
+      this.entries,
+      this.annotations,
+      this.debugSessions,
+      options.send,
+    );
     this.find = new BrowserViewFind({
       entries: this.entries,
       send: options.send,
@@ -264,6 +273,28 @@ export class BrowserViewManager {
       },
       emitStatus: (entry) => {
         this.emitStatus(entry);
+      },
+      requestZoom: (entry, factor) => {
+        void this.trySetEntryZoom(entry, factor).catch((error: unknown) => {
+          log.warn("[browser-view] page zoom failed", {
+            error: describeLogError(error),
+          });
+        });
+      },
+      refreshViewport: (entry) => {
+        void this.viewport
+          .refreshAfterNavigation(entry)
+          .then(() => {
+            this.emitStatus(entry);
+          })
+          .catch((error: unknown) => {
+            log.warn(
+              "[browser-view] viewport recovery after navigation failed",
+              {
+                error: describeLogError(error),
+              },
+            );
+          });
       },
       emitFocus: (entry) => {
         if (entry.surface === null) return;
@@ -434,18 +465,30 @@ export class BrowserViewManager {
         this.moveEntryInHistory(entry, "forward");
         return true;
       case "zoomIn":
-        this.applyZoomStep(entry, 1);
+        await this.applyZoomStep(entry, 1);
         return true;
       case "zoomOut":
-        this.applyZoomStep(entry, -1);
+        await this.applyZoomStep(entry, -1);
         return true;
       case "resetZoom":
-        this.trySetEntryZoom(entry, 1);
+        await this.trySetEntryZoom(entry, 1);
         return true;
       case "openDevTools":
         this.openEntryDevTools(entry, windowId);
         return true;
     }
+  }
+
+  applyElectronTabViewport(
+    input: BrowserViewElectronViewport,
+  ): Promise<BrowserViewportGeometry> {
+    const entry = this.findExactNativeEntry(input);
+    if (entry === null)
+      return Promise.reject(new Error("The browser tab is unavailable."));
+    return this.viewport.apply(entry, input).then((applied) => {
+      this.emitStatus(entry);
+      return applied;
+    });
   }
 
   canTrustCertificateError(
@@ -796,12 +839,22 @@ export class BrowserViewManager {
     }
   }
 
-  private applyZoomStep(entry: BrowserViewEntry, direction: 1 | -1): void {
-    this.trySetEntryZoom(entry, steppedEntryZoom(entry, direction));
+  private applyZoomStep(
+    entry: BrowserViewEntry,
+    direction: 1 | -1,
+  ): Promise<void> {
+    return this.trySetEntryZoom(entry, steppedEntryZoom(entry, direction));
   }
 
-  private trySetEntryZoom(entry: BrowserViewEntry, factor: number): void {
-    if (applyEntryZoom(entry, factor)) this.emitStatus(entry);
+  private async trySetEntryZoom(
+    entry: BrowserViewEntry,
+    factor: number,
+  ): Promise<void> {
+    try {
+      await this.viewport.setZoom(entry, factor);
+    } finally {
+      this.emitStatus(entry);
+    }
   }
 
   private openEntryDevTools(entry: BrowserViewEntry, windowId: string): void {
@@ -1027,6 +1080,7 @@ export class BrowserViewManager {
   }
 
   private async destroyEntry(entry: BrowserViewEntry): Promise<void> {
+    this.viewport.forget(entry);
     const surface = entry.surface;
     const keyId = surface === null ? null : entryKeyId(surface);
     log.info("[browser-view] view destroy started", {

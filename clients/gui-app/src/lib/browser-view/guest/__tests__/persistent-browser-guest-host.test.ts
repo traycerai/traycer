@@ -1,3 +1,4 @@
+import { act } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { isPresentationLossBlur } from "@/components/epic-tabs/pane-visibility-context";
 import {
@@ -35,6 +36,18 @@ const PARTITION_A = "persist:guest-a";
 const PARTITION_B = "persist:guest-b";
 const INSTANCE_A = "tile-1";
 const ANCHOR_A = `--traycer-bv-${REGISTRATION_A}`;
+
+async function waitForViewportRequest(): Promise<void> {
+  await act(async () => {
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => resolve());
+      });
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
 
 interface RecordedActivation {
   readonly viewTabId: string;
@@ -167,6 +180,79 @@ describe("browserGuestCssAnchorName", () => {
 
 describe("persistent browser guest host", () => {
   describe("guest identity", () => {
+    it("keeps the guest identity while applying fixed scale and reset acknowledgements", async () => {
+      const bridge = new FakeBrowserViewBridge();
+      startHost(bridge, NOOP_ACTIVATE);
+      bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+      const owner = Symbol("tile");
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented: true,
+        viewport: { width: 640, height: 480, scale: 0.5 },
+      });
+      const first = guestNodes(REGISTRATION_A);
+
+      bridge.emitGuestViewportRequested({
+        requestId: "viewport-1",
+        registrationId: REGISTRATION_A,
+        revision: 1,
+        width: 800,
+        height: 600,
+      });
+      await waitForViewportRequest();
+      expect(bridge.guestViewportResultCalls).toEqual([
+        {
+          requestId: "viewport-1",
+          registrationId: REGISTRATION_A,
+          revision: 1,
+          applied: true,
+        },
+      ]);
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented: true,
+        viewport: { width: 800, height: 600, scale: 0.5 },
+      });
+      expect(guestNodes(REGISTRATION_A).wrapper).toBe(first.wrapper);
+      expect(guestNodes(REGISTRATION_A).webview).toBe(first.webview);
+      expect(first.webview.style.width).toBe("800px");
+      expect(first.webview.style.height).toBe("600px");
+      expect(first.webview.style.transform).toBe("scale(0.5)");
+
+      bridge.emitGuestViewportRequested({
+        requestId: "viewport-reset",
+        registrationId: REGISTRATION_A,
+        revision: 2,
+        width: 1280,
+        height: 800,
+      });
+      await waitForViewportRequest();
+      expect(bridge.guestViewportResultCalls.at(-1)).toEqual({
+        requestId: "viewport-reset",
+        registrationId: REGISTRATION_A,
+        revision: 2,
+        applied: true,
+      });
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented: true,
+        viewport: { width: 1280, height: 800, scale: 1 },
+      });
+      expect(guestNodes(REGISTRATION_A).webview).toBe(first.webview);
+      expect(first.webview.style.width).toBe("1280px");
+      expect(first.webview.style.height).toBe("800px");
+      expect(first.webview.style.transform).toBe("scale(1)");
+    });
+
     it("keeps the same wrapper parent, webview node, and partition across placement and pane changes", () => {
       const bridge = new FakeBrowserViewBridge();
       const first = recordingActivate();
@@ -193,6 +279,7 @@ describe("persistent browser guest host", () => {
         viewTabId: "view-1",
         paneId: "pane-1",
         presented: true,
+        viewport: null,
       });
       const presented = guestNodes(REGISTRATION_A);
       expect(presented.wrapper).toBe(created.wrapper);
@@ -209,6 +296,7 @@ describe("persistent browser guest host", () => {
         viewTabId: "view-1",
         paneId: "pane-2",
         presented: true,
+        viewport: null,
       });
       const moved = guestNodes(REGISTRATION_A);
       expect(moved.wrapper).toBe(created.wrapper);
@@ -235,6 +323,7 @@ describe("persistent browser guest host", () => {
         viewTabId: "view-1",
         paneId: "pane-2",
         presented: false,
+        viewport: null,
       });
       const retained = guestNodes(REGISTRATION_A);
       expect(retained.wrapper).toBe(created.wrapper);
@@ -252,6 +341,7 @@ describe("persistent browser guest host", () => {
         viewTabId: "view-1",
         paneId: "pane-1",
         presented: true,
+        viewport: null,
       });
       expect(queryWrapper(REGISTRATION_A)).toBeNull();
 
@@ -267,6 +357,7 @@ describe("persistent browser guest host", () => {
         viewTabId: "view-1",
         paneId: "pane-1",
         presented: true,
+        viewport: null,
       });
       const again = guestNodes(REGISTRATION_A);
       expect(again.wrapper).toBe(first.wrapper);
@@ -327,6 +418,7 @@ describe("persistent browser guest host", () => {
         viewTabId: "view-1",
         paneId: "pane-1",
         presented: true,
+        viewport: null,
       });
 
       webview.tabIndex = 0;
@@ -354,6 +446,7 @@ describe("persistent browser guest host", () => {
         viewTabId: "view-1",
         paneId: "pane-1",
         presented: true,
+        viewport: null,
       });
       bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
       const first = guestNodes(REGISTRATION_A);
@@ -417,6 +510,7 @@ describe("persistent browser guest host", () => {
         viewTabId: "view-1",
         paneId: "pane-1",
         presented: true,
+        viewport: null,
       });
       expect(wrapper.getAttribute("data-browser-guest-state")).toBe(
         "presented",
@@ -444,6 +538,7 @@ describe("persistent browser guest host", () => {
         viewTabId: "view-1",
         paneId: "pane-1",
         presented: false,
+        viewport: null,
       });
       expect(wrapper.getAttribute("data-browser-guest-state")).toBe("retained");
       // Retained keeps the unbound offscreen posture: a `display: none` guest
@@ -485,6 +580,7 @@ describe("persistent browser guest host", () => {
         viewTabId: "view-1",
         paneId: "pane-1",
         presented: true,
+        viewport: null,
       });
 
       webview.tabIndex = 0;
@@ -502,6 +598,7 @@ describe("persistent browser guest host", () => {
         viewTabId: "view-1",
         paneId: "pane-1",
         presented: false,
+        viewport: null,
       });
       expect(document.activeElement).not.toBe(webview);
       expect(wrapper.contains(document.activeElement)).toBe(false);
@@ -530,6 +627,7 @@ describe("persistent browser guest host", () => {
         viewTabId: "view-1",
         paneId: "pane-1",
         presented: false,
+        viewport: null,
       });
       dispatchPointerDown(wrapper);
       dispatchFocus(webview);
@@ -542,6 +640,7 @@ describe("persistent browser guest host", () => {
         viewTabId: "view-1",
         paneId: "pane-1",
         presented: true,
+        viewport: null,
       });
       dispatchPointerDown(wrapper);
       expect(recorded.pointerDowns).toHaveLength(1);

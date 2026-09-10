@@ -330,6 +330,13 @@ function applyCaptureFrame(input: {
   readonly onMeta: (patch: PipMetaPatch) => void;
   readonly onUrl: (url: string) => void;
 }): void {
+  if (
+    input.frame.kind === "viewportEpoch" &&
+    input.frame.logicalViewport !== null
+  ) {
+    input.onMeta({ frameSize: input.frame.logicalViewport, cursor: null });
+    return;
+  }
   if (input.frame.kind === "started" || input.frame.kind === "resized") {
     input.onMeta({
       frameSize: {

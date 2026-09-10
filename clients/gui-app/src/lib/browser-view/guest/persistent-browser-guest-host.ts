@@ -2,6 +2,7 @@ import type {
   BrowserViewBridge,
   BrowserViewGuestMountRequested,
   BrowserViewGuestReleaseRequested,
+  BrowserViewGuestViewportRequested,
 } from "@traycer-clients/shared/platform/browser-view";
 import { runPresentationLossBlur } from "@/components/epic-tabs/pane-visibility-context";
 import {
@@ -37,6 +38,11 @@ export interface BrowserGuestTilePlacement {
   readonly viewTabId: string;
   readonly paneId: string;
   readonly presented: boolean;
+  readonly viewport: {
+    readonly width: number;
+    readonly height: number;
+    readonly scale: number;
+  } | null;
 }
 
 export function browserGuestCssAnchorName(registrationId: string): string {
@@ -67,6 +73,10 @@ interface GuestRecord {
   readonly registrationId: string;
   readonly wrapper: HTMLElement;
   readonly webview: HTMLElement;
+  viewportRequest: BrowserViewGuestViewportRequested | null;
+  latestViewportRequestId: string | null;
+  viewportAcknowledged: boolean;
+  retainedSize: { readonly width: number; readonly height: number } | null;
 }
 
 interface RunningHost {
@@ -88,6 +98,18 @@ export function startPersistentBrowserGuestHost(
   document.body.appendChild(hostElement);
   const mountSub = bridge.onGuestMountRequested(handleMount);
   const releaseSub = bridge.onGuestReleaseRequested(handleRelease);
+  const viewportSub = bridge.onGuestViewportRequested((request) => {
+    void applyViewportRequest(request)
+      .then((applied) =>
+        bridge.reportGuestViewportResult({
+          requestId: request.requestId,
+          registrationId: request.registrationId,
+          revision: request.revision,
+          applied,
+        }),
+      )
+      .catch(() => undefined);
+  });
   const host: RunningHost = { hostElement };
   running = host;
   return () => {
@@ -96,6 +118,7 @@ export function startPersistentBrowserGuestHost(
     onActivate = null;
     mountSub.dispose();
     releaseSub.dispose();
+    viewportSub.dispose();
     for (const registrationId of [...guests.keys()]) {
       removeGuest(registrationId);
     }
@@ -110,7 +133,10 @@ export function setBrowserGuestTilePlacement(
 ): void {
   placements.set(placement.registrationId, { owner, placement });
   const guest = guests.get(placement.registrationId);
-  if (guest !== undefined) applyGuestPresentation(guest, placement);
+  if (guest !== undefined) {
+    releaseViewportOverride(guest, placement);
+    applyGuestPresentation(guest, placement);
+  }
 }
 
 export function clearBrowserGuestTilePlacement(
@@ -138,6 +164,10 @@ function handleMount(request: BrowserViewGuestMountRequested): void {
     registrationId: request.registrationId,
     wrapper,
     webview,
+    viewportRequest: null,
+    latestViewportRequestId: null,
+    viewportAcknowledged: false,
+    retainedSize: null,
   };
   guests.set(request.registrationId, guest);
   wrapper.addEventListener(
@@ -162,6 +192,54 @@ function handleMount(request: BrowserViewGuestMountRequested): void {
 
 function handleRelease(request: BrowserViewGuestReleaseRequested): void {
   removeGuest(request.registrationId);
+}
+
+async function applyViewportRequest(
+  request: BrowserViewGuestViewportRequested,
+): Promise<boolean> {
+  const guest = guests.get(request.registrationId);
+  if (guest === undefined) return false;
+  guest.viewportRequest = request;
+  guest.latestViewportRequestId = request.requestId;
+  guest.viewportAcknowledged = false;
+  applyGuestPresentation(
+    guest,
+    placements.get(request.registrationId)?.placement ?? null,
+  );
+  await new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  });
+  if (
+    guests.get(request.registrationId) !== guest ||
+    guest.latestViewportRequestId !== request.requestId
+  )
+    return false;
+  guest.viewportAcknowledged = true;
+  const placement = placements.get(request.registrationId)?.placement ?? null;
+  if (placement !== null) {
+    releaseViewportOverride(guest, placement);
+    applyGuestPresentation(guest, placement);
+  }
+  return true;
+}
+
+function releaseViewportOverride(
+  guest: GuestRecord,
+  placement: BrowserGuestTilePlacement,
+): void {
+  const request = guest.viewportRequest;
+  if (request === null || !guest.viewportAcknowledged || !placement.presented)
+    return;
+  const width = placement.viewport?.width ?? guest.wrapper.clientWidth;
+  const height = placement.viewport?.height ?? guest.wrapper.clientHeight;
+  // A revision can be reused by page zoom or restart. Hand presentation back
+  // only when it describes the size main applied, including rollback to Fit.
+  if (
+    Math.abs(width - request.width) < 1 &&
+    Math.abs(height - request.height) < 1
+  ) {
+    guest.viewportRequest = null;
+  }
 }
 
 function removeGuest(registrationId: string): void {
@@ -230,6 +308,10 @@ function applyGuestPresentation(
     guest.wrapper.getAttribute(BROWSER_GUEST_STATE_ATTRIBUTE) === "presented" &&
     !nextPresented
   ) {
+    guest.retainedSize = {
+      width: guest.webview.offsetWidth,
+      height: guest.webview.offsetHeight,
+    };
     relinquishGuestFocus(guest);
   }
   if (placement !== null && placement.presented) {
@@ -239,6 +321,7 @@ function applyGuestPresentation(
       presentedCssText(guest.registrationId),
       placement,
     );
+    applyGuestViewport(guest, placement);
     return;
   }
   // Independently composited <webview> can leak under visibility:hidden, and
@@ -252,6 +335,41 @@ function applyGuestPresentation(
     OFFSCREEN_CSS_TEXT,
     null,
   );
+  applyGuestViewport(guest, null);
+}
+
+function applyGuestViewport(
+  guest: GuestRecord,
+  placement: BrowserGuestTilePlacement | null,
+): void {
+  const request = guest.viewportRequest;
+  const dimensions =
+    request ??
+    placement?.viewport ??
+    (placement === null ? guest.retainedSize : null);
+  if (dimensions === null) {
+    guest.webview.style.width = "100%";
+    guest.webview.style.height = "100%";
+    guest.webview.style.transform = "none";
+    guest.retainedSize = {
+      width: guest.wrapper.clientWidth,
+      height: guest.wrapper.clientHeight,
+    };
+    return;
+  }
+  guest.retainedSize = { width: dimensions.width, height: dimensions.height };
+  guest.webview.style.width = `${dimensions.width}px`;
+  guest.webview.style.height = `${dimensions.height}px`;
+  guest.webview.style.transformOrigin = "top left";
+  let scale = placement?.viewport?.scale ?? 1;
+  if (placement !== null && request !== null) {
+    scale = Math.min(
+      1,
+      guest.wrapper.clientWidth / dimensions.width,
+      guest.wrapper.clientHeight / dimensions.height,
+    );
+  }
+  guest.webview.style.transform = `scale(${scale})`;
 }
 
 function relinquishGuestFocus(guest: GuestRecord): void {
@@ -276,6 +394,7 @@ function presentedCssText(registrationId: string): string {
     "opacity: 1",
     "pointer-events: auto",
     "display: block",
+    "overflow: hidden",
   ].join(";");
 }
 

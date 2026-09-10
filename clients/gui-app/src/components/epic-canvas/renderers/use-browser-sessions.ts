@@ -218,6 +218,9 @@ function unavailableBrowserSessionsState(
     // sees a generation that can only go up.
     connectionGeneration: 0,
     items: [],
+    viewports: {},
+    setViewport: unavailable,
+    reportViewport: () => undefined,
     errorMessage: null,
     retry: () => undefined,
     openTab: unavailable,

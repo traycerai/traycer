@@ -74,6 +74,7 @@ function TileProbe(props: {
   usePublishBrowserGuestTile({
     surfaceRef,
     registrationId: props.registrationId,
+    viewport: null,
     instanceId: props.instanceId,
     viewTabId: props.viewTabId,
     paneId: props.paneId,

@@ -13,6 +13,11 @@ import {
 export function usePublishBrowserGuestTile(input: {
   readonly surfaceRef: RefObject<HTMLElement | null>;
   readonly registrationId: string;
+  readonly viewport: {
+    readonly width: number;
+    readonly height: number;
+    readonly scale: number;
+  } | null;
   readonly instanceId: string;
   readonly viewTabId: string;
   readonly paneId: string;
@@ -28,8 +33,12 @@ export function usePublishBrowserGuestTile(input: {
     viewTabId,
     paneId,
     tileKey,
+    viewport,
   } = input;
   const anchorName = browserGuestCssAnchorName(registrationId);
+  const width = viewport?.width ?? null;
+  const height = viewport?.height ?? null;
+  const scale = viewport?.scale ?? null;
 
   useLayoutEffect(() => {
     const surface = surfaceRef.current;
@@ -42,16 +51,11 @@ export function usePublishBrowserGuestTile(input: {
       viewTabId,
       paneId,
       presented,
+      viewport:
+        width === null || height === null || scale === null
+          ? null
+          : { width, height, scale },
     });
-    return () => {
-      if (
-        surface !== null &&
-        surface.style.getPropertyValue("anchor-name") === anchorName
-      ) {
-        surface.style.removeProperty("anchor-name");
-      }
-      clearBrowserGuestTilePlacement(owner, registrationId);
-    };
   }, [
     anchorName,
     instanceId,
@@ -61,7 +65,21 @@ export function usePublishBrowserGuestTile(input: {
     registrationId,
     surfaceRef,
     viewTabId,
+    width,
+    height,
+    scale,
   ]);
+
+  // Geometry updates keep the guest bound. Only identity loss/unmount releases
+  // its placement; an effect cleanup per resize would briefly park it offscreen.
+  useLayoutEffect(() => {
+    const surface = surfaceRef.current;
+    return () => {
+      if (surface?.style.getPropertyValue("anchor-name") === anchorName)
+        surface.style.removeProperty("anchor-name");
+      clearBrowserGuestTilePlacement(owner, registrationId);
+    };
+  }, [anchorName, owner, registrationId, surfaceRef]);
 
   useLayoutEffect(() => {
     const surface = surfaceRef.current;

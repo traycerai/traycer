@@ -27,6 +27,7 @@ import {
   ANNOTATION_WAIT_FOR_PAINT_EXPRESSION,
   ANNOTATION_WORLD_NAME,
   callGuestHook,
+  sanitizeAttachRequest,
   sanitizeAnnotationBindingPayload,
 } from "./browser-annotation-overlay-script";
 import type { BrowserViewCapturedImage } from "../browser-view-port";
@@ -79,7 +80,7 @@ export class BrowserAnnotationSession {
   private contextId: number | null = null;
   private ended = false;
   private started = false;
-  private capturing = false;
+  private captureInFlight: Promise<boolean> | null = null;
   private markCount = 0;
 
   constructor(options: BrowserAnnotationSessionOptions) {
@@ -97,6 +98,50 @@ export class BrowserAnnotationSession {
 
   zoomLocked(): boolean {
     return this.isActive() && this.markCount > 0;
+  }
+
+  async preserveBeforeViewportChange(): Promise<void> {
+    if (!this.isActive()) return;
+    let timer: NodeJS.Timeout | null = null;
+    try {
+      await Promise.race([
+        this.preserveMarks(),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(
+                new Error(
+                  "Saving the annotation took too long. The viewport was not changed.",
+                ),
+              ),
+            10_000,
+          );
+        }),
+      ]);
+    } finally {
+      if (timer !== null) clearTimeout(timer);
+    }
+  }
+
+  private async preserveMarks(): Promise<void> {
+    const current = this.captureInFlight;
+    if (current !== null) {
+      if (await current) return;
+      throw new Error(
+        "Couldn't save the annotation to a chat draft. Try again before resizing.",
+      );
+    }
+    if (this.markCount === 0) return;
+    const evaluation = await this.evaluateRaw(
+      "globalThis.__traycerAnnotationPrepareAttach?.()",
+      false,
+    );
+    const request = sanitizeAttachRequest(readEvaluateValue(evaluation));
+    if (request === null || !(await this.captureAttach(request))) {
+      throw new Error(
+        "Couldn't save the annotation to a chat draft. Choose a chat and check the marks before resizing.",
+      );
+    }
   }
 
   async start(): Promise<BrowserAnnotationStartResult> {
@@ -292,24 +337,34 @@ export class BrowserAnnotationSession {
       .catch(() => undefined);
   }
 
-  private async captureAttach(
+  private captureAttach(
     request: BrowserAnnotationAttachRequest,
-  ): Promise<void> {
-    if (!this.isActive() || this.capturing) return;
-    this.capturing = true;
+  ): Promise<boolean> {
+    if (!this.isActive()) return Promise.resolve(false);
+    if (this.captureInFlight !== null) return this.captureInFlight;
+    const capture = this.captureAndAttach(request).finally(() => {
+      if (this.captureInFlight === capture) this.captureInFlight = null;
+    });
+    this.captureInFlight = capture;
+    return capture;
+  }
+
+  private async captureAndAttach(
+    request: BrowserAnnotationAttachRequest,
+  ): Promise<boolean> {
     try {
       await this.hideChromeForCapture();
       await this.evaluateRequired(ANNOTATION_WAIT_FOR_PAINT_EXPRESSION, true);
       const viewport = await this.readViewportCssSize();
       const image = await this.webContents.capturePage();
-      if (!this.isActive()) return;
+      if (!this.isActive()) return false;
       const pngBytes =
         viewport === null
           ? null
           : cropAnnotationPng(image, request.unionRect, viewport);
       if (pngBytes === null) {
         if (this.isActive()) await this.captureFailed();
-        return;
+        return false;
       }
       const pageUrl = this.webContents.getURL();
       const { counts, droppedElementCount } = deliveredAnnotationCounts(
@@ -334,12 +389,13 @@ export class BrowserAnnotationSession {
         payload,
         pngBytes,
       });
-      if (!this.isActive()) return;
+      if (!this.isActive()) return false;
       if (!delivered) {
         await this.captureFailed();
-        return;
+        return false;
       }
       await this.resetAfterAttach();
+      return true;
     } catch (err) {
       log.warn("[browser-view] annotation capture failed", {
         error: describeLogError(err),
@@ -348,8 +404,7 @@ export class BrowserAnnotationSession {
       if (this.isActive()) {
         await this.captureFailed();
       }
-    } finally {
-      this.capturing = false;
+      return false;
     }
   }
 

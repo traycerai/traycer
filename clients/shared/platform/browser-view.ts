@@ -7,6 +7,8 @@ import type {
   BrowserScreencastServerFrame,
   BrowserSessionsUxClientFrame,
   BrowserSessionsUxServerFrame,
+  BrowserViewportGeometry,
+  BrowserViewportIntent,
 } from "@traycer/protocol/host/browser/contracts";
 import type { HostResourceScope } from "@traycer/protocol/host/resource-scope";
 import type {
@@ -46,6 +48,30 @@ export interface BrowserViewGuestMountRequested {
 /** Main tells the renderer to drop the DOM guest for this grant or registration. */
 export interface BrowserViewGuestReleaseRequested {
   readonly registrationId: string;
+}
+
+/** Logical guest sizing only; placement remains the renderer's CSS anchor. */
+export interface BrowserViewGuestViewportRequested {
+  readonly requestId: string;
+  readonly registrationId: string;
+  readonly revision: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+export interface BrowserViewGuestViewportResult {
+  readonly requestId: string;
+  readonly registrationId: string;
+  readonly revision: number;
+  readonly applied: boolean;
+}
+
+export interface BrowserViewElectronViewport extends BrowserViewNativeTabCapability {
+  /** Existing sessions stream incarnation; never sent through renderer IPC. */
+  readonly connectionId: string;
+  readonly revision: number;
+  readonly intent: BrowserViewportIntent;
+  readonly geometry: BrowserViewportGeometry;
 }
 
 export interface BrowserViewAttachSurface extends BrowserViewNativeTabCapability {
@@ -909,4 +935,10 @@ export interface BrowserViewBridge {
   onGuestReleaseRequested(
     handler: (request: BrowserViewGuestReleaseRequested) => void,
   ): { dispose: () => void };
+  onGuestViewportRequested(
+    handler: (request: BrowserViewGuestViewportRequested) => void,
+  ): { dispose: () => void };
+  reportGuestViewportResult(
+    input: BrowserViewGuestViewportResult,
+  ): Promise<void>;
 }

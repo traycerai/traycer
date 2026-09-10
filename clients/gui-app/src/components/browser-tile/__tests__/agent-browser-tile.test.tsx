@@ -83,7 +83,6 @@ vi.mock("@/components/epic-canvas/renderers/use-electron-tile-chrome", () => ({
     return {
       controller: CHROME_CONTROLLER,
       navigateToUrl: state.navigateToUrl,
-      viewportPreset: "responsive",
       downloads: [],
       cancelDownload: vi.fn(),
       certificateError: null,
@@ -94,13 +93,13 @@ vi.mock("@/components/epic-canvas/renderers/use-electron-tile-chrome", () => ({
 }));
 
 const CHROME_CONTROLLER: TileController = {
+  viewport: null,
   capabilities: {
     navigate: false,
     back: false,
     forward: false,
     reload: false,
     zoom: false,
-    viewportPreset: false,
     devtools: false,
     find: false,
     siteInfo: false,
@@ -115,7 +114,6 @@ const CHROME_CONTROLLER: TileController = {
   canGoBack: false,
   canGoForward: false,
   zoomPercent: 100,
-  viewportPreset: "responsive",
   disabled: false,
   zoomLocked: false,
   annotation: null,
@@ -128,7 +126,6 @@ const CHROME_CONTROLLER: TileController = {
   onZoomOut: () => undefined,
   onZoomIn: () => undefined,
   onResetZoom: () => undefined,
-  onViewportPresetChange: () => undefined,
   onOpenDevTools: () => undefined,
   onClearSite: () => undefined,
 };
@@ -344,6 +341,9 @@ function liveSessions(): BrowserSessionsState {
     canMaterializeElectron: true,
     connectionGeneration: 0,
     items: [],
+    viewports: {},
+    setViewport: () => Promise.reject(new Error("not used")),
+    reportViewport: () => undefined,
     errorMessage: null,
     retry: () => {},
     openTab: state.openTab,
