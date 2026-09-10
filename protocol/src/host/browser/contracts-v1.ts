@@ -34,6 +34,7 @@ import {
   browserCdpCommandSchema,
   browserCdpResultSchema,
   browserCdpTargetSchema,
+  type BrowserCdpCommand,
 } from "@traycer/protocol/host/browser/cdp-contracts";
 
 const textFrameFields = {
@@ -404,6 +405,40 @@ const cdpRequestFrameFields = {
   registrationId: z.string(),
   target: browserCdpTargetSchema,
 } as const;
+
+/**
+ * The curated CDP command vocabulary exactly as the v1.3.0 release shipped it
+ * - hand-frozen here like every other shape in this file, for the same reason:
+ * the union this file imports is live and additive, and a frozen line's job is
+ * to stop moving.
+ *
+ * This is the list the header's "withheld at emission" is enforced against.
+ * The host's projection down to this line
+ * (`projectBrowserSessionsServerFrameToV10` in
+ * `traycer-host/src/transport/stream/resolvers/browser-stream-v1-line.ts`)
+ * drops a `cdpRequest` whose command is not named here, so the live
+ * vocabulary can keep growing without a released peer ever receiving a `kind`
+ * its `.strict()` union has no arm for.
+ *
+ * It is the smallest honest exception to "nothing in this file may change": a
+ * constant that no schema references, so no frame's shape moves by its
+ * existence. Typed as the live union's `kind` so a rename in `cdp-contracts`
+ * is a compile error here rather than a string that silently matches nothing.
+ */
+export const BROWSER_CDP_COMMANDS_V13: readonly BrowserCdpCommand["kind"][] = [
+  "cdpNavigate",
+  "cdpCaptureScreenshot",
+  "cdpGetFrameTree",
+  "cdpCreateIsolatedWorld",
+  "cdpEvaluate",
+  "cdpCallFunctionOn",
+  "cdpReleaseObject",
+  "cdpDispatchMouseEvent",
+  "cdpInsertText",
+  "cdpDispatchKeyEvent",
+  "cdpSetDeviceMetricsOverride",
+  "cdpDescribeNode",
+];
 
 const browserCdpRequestFrameSchema = z
   .object({

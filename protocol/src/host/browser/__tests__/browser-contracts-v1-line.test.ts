@@ -7,7 +7,9 @@ import {
   browserSessionsServerFrameSchema,
   browserSessionsV20,
 } from "@traycer/protocol/host/browser/contracts";
+import { browserCdpCommandSchema } from "@traycer/protocol/host/browser/cdp-contracts";
 import {
+  BROWSER_CDP_COMMANDS_V13,
   browserScreencastOpenRequestSchemaV10,
   browserScreencastV10,
   browserSessionsClientFrameSchemaV10,
@@ -279,5 +281,36 @@ describe("resources.listLocalServers majors", () => {
     if (!refused.ok) {
       expect(refused.error.code).toBe("DOWNGRADE_UNSUPPORTED");
     }
+  });
+});
+
+/**
+ * `contracts-v1.ts` imports the curated CDP command union live, so the frozen
+ * line's vocabulary is the hand-frozen `BROWSER_CDP_COMMANDS_V13` instead -
+ * the list the host projection withholds newer commands against.
+ */
+describe("the CDP vocabulary frozen at the v1.3.0 cut", () => {
+  const liveKinds = new Set(
+    browserCdpCommandSchema.def.options.map(
+      (option) => option.shape.kind.def.values[0],
+    ),
+  );
+
+  it("names only commands the live union still carries", () => {
+    expect(BROWSER_CDP_COMMANDS_V13.length).toBeGreaterThan(0);
+    for (const kind of BROWSER_CDP_COMMANDS_V13) {
+      expect(liveKinds.has(kind)).toBe(true);
+    }
+  });
+
+  it("excludes the rrweb injection pair the live union added after it", () => {
+    expect(liveKinds.has("cdpAddScriptToEvaluateOnNewDocument")).toBe(true);
+    expect(liveKinds.has("cdpRemoveScriptToEvaluateOnNewDocument")).toBe(true);
+    expect(BROWSER_CDP_COMMANDS_V13).not.toContain(
+      "cdpAddScriptToEvaluateOnNewDocument",
+    );
+    expect(BROWSER_CDP_COMMANDS_V13).not.toContain(
+      "cdpRemoveScriptToEvaluateOnNewDocument",
+    );
   });
 });
