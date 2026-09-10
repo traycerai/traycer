@@ -57,7 +57,10 @@ import {
   normalizeEpicFileStatus,
   type EpicFileStatusOrUnknown,
 } from "@traycer/protocol/persistence/epic/files";
-import { appendEpicFileToNewConversationDraft } from "@/components/chat/quote/append-epic-file-to-draft";
+import {
+  appendEpicFileImageToNewConversationDraft,
+  appendEpicFileToNewConversationDraft,
+} from "@/components/chat/quote/append-epic-file-to-draft";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -69,18 +72,37 @@ import {
 } from "@/hooks/epic/use-epic-files";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { useHostSupportsMethod } from "@/hooks/host/use-host-supports-method";
+import { useMaybeHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useReactiveLocalHostId } from "@/hooks/host/use-reactive-local-host-id";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
 import {
   claimSharingNotice,
   COLLABORATOR_SHARING_COPY,
 } from "@/lib/epic-files/capture-sharing-notice";
-import { epicFileName } from "@/lib/epic-files/file-rows";
+import { readEpicFileImage } from "@/lib/epic-files/read-epic-file-image";
 import { subscribeEpicRecordingEvents } from "@/lib/epic-files/file-events-store";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { useMaybeEpicPermissionRole } from "@/lib/epic-selectors";
 import { cn } from "@/lib/utils";
 import { makeEpicFileTileRef } from "@/stores/epics/canvas/tile-schema/epic-file-tile";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
+
+/**
+ * When the capture happened, in the viewer's own clock and format.
+ *
+ * `Date.now()` rather than the manifest entry's `createdAt`: the entry reaches
+ * the doc on its own schedule (`captureTabScreenshotResponseSchema` says so
+ * outright - "the toast must not have to wait for it"), and this runs in the
+ * success callback of the capture that minted it, so the two values differ by
+ * the round trip. Waiting for the entry to show a timestamp would be a slower
+ * toast for a less useful one.
+ */
+function captureSavedAtCopy(): string {
+  return new Date().toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
 
 /**
  * Everything the capture verbs need to name their subject. `null` at the call
@@ -109,6 +131,9 @@ const START_RECORDING_REFUSAL_COPY: Readonly<
   "already-recording": "This tab is already being recorded.",
   "host-limit": "This host is already running two recordings.",
   "unsupported-runtime": "This tab's browser can't be recorded.",
+  // Not the same answer as the line above, which says "don't try this tab":
+  // the recorder is there, this run just didn't come up.
+  "helper-failed": "The recorder didn't start. Try again.",
 };
 
 /** The badge's upload half, once the run has ended and saved. */
@@ -191,6 +216,20 @@ function BrowserTileCaptureControlsBody(props: {
   const openNewConversation = useNewConversationModalOpenStore(
     (state) => state.open,
   );
+  // The capture lives on the TAB's host, so its bytes are read there too - the
+  // same rule `useFileBytes`'s epic-file leg follows. Named from the TARGET's
+  // own `hostId`, which every other host-addressed thing here already uses
+  // (the tile ref, the conversation's placement), rather than from
+  // `useMaybeTabHostId()`: it is the same host with no `<TabHostProvider>`
+  // required, and a control mounted without one would otherwise resolve `null`
+  // and silently degrade every attach to path-only. TOLERANT of a missing
+  // `<HostRuntimeProvider>` for that leg's own reason - a byte read this
+  // control cannot make must degrade, never throw the tile.
+  const tabHostClient = useMaybeHostClientForHostId(hostId);
+  // A PLACEMENT fact, never an authorization: naming the host this client
+  // shares a machine with lets the host answer `loopback` instead of minting a
+  // signed url. A wrong value costs a round trip, not access.
+  const coLocatedHostId = useReactiveLocalHostId();
 
   // The driver. A `recordingStarted` for this tab always wins - it is the only
   // frame that can begin a run, including one an agent began. A
@@ -253,17 +292,86 @@ function BrowserTileCaptureControlsBody(props: {
     };
   }, [settled, recordingId]);
 
+  /**
+   * Seed the new-conversation draft with the capture, then open the modal.
+   *
+   * The BYTES come first and the modal opens after, deliberately: the modal's
+   * body seeds its composer from the draft store as it mounts and owns the
+   * content from then on, so an attachment written into the store after that
+   * mount would be overwritten by the editor's next update. Waiting is cheap -
+   * a co-located capture is read back over loopback.
+   *
+   * Every failure degrades to the path-only draft rather than blocking the
+   * chat: a capture whose bytes are still uploading, a host that answers
+   * `unavailable`, an image over the composer's own paste cap. The path line is
+   * on the draft either way, so the agent can always read the original off
+   * `files/`.
+   */
+  const attachCaptureToChat = useCallback(
+    async (path: string, sha256: string): Promise<void> => {
+      const image = await readEpicFileImage({
+        client: tabHostClient,
+        epicId,
+        path,
+        sha256,
+        mediaType: "image/png",
+        coLocatedHostId,
+      }).catch(() => null);
+      if (image === null) {
+        appendEpicFileToNewConversationDraft({ epicId, path });
+      } else {
+        appendEpicFileImageToNewConversationDraft({
+          epicId,
+          path,
+          mediaType: image.mediaType,
+          b64content: image.b64content,
+          byteLength: image.byteLength,
+        });
+      }
+      openNewConversation({
+        epicId,
+        tabId: viewTabId,
+        placement: null,
+        parentId: null,
+        // The capture lives on the tab's host and the tile is bound to it for
+        // life, so the chat that references it is created there - not on
+        // whichever host is active app-wide.
+        hostId,
+      });
+    },
+    [
+      coLocatedHostId,
+      epicId,
+      hostId,
+      openNewConversation,
+      tabHostClient,
+      viewTabId,
+    ],
+  );
+
   const onCapture = useCallback(() => {
     captureScreenshot.mutate(
       { epicId, tabId, save: true },
       {
         onSuccess: (response) => {
           if (response.saved === null) return;
-          const path = response.saved.path;
-          toast.success(`Saved ${epicFileName(path)}`, {
-            description: claimSharingNotice(epicId)
-              ? COLLABORATOR_SHARING_COPY
-              : undefined,
+          const { path, sha256 } = response.saved;
+          // Claimed HERE, not in render: the notice is a once-per-epic claim,
+          // and reading it on every paint would spend it on a capture that
+          // never happened.
+          const sharingNotice = claimSharingNotice(epicId)
+            ? COLLABORATOR_SHARING_COPY
+            : null;
+          // The TITLE names what happened and when; the PATH stays in the
+          // description. It used to be `Saved <fileName>`, and the file name a
+          // capture mints ends in the tab's uuid - so the toast read
+          // `Saved 2026-09-10T14-35-51-619Z-9cb544e8-dbdc-46ea-bd23-e4a7d135f802.png`,
+          // which tells a person nothing they can act on. The name itself is
+          // still the Files panel's row label, which is where it belongs.
+          toast.success("Screenshot saved", {
+            description: [captureSavedAtCopy(), path, sharingNotice]
+              .filter((part): part is string => part !== null)
+              .join(" · "),
             action: (
               <div className="flex min-w-0 flex-wrap items-center gap-1">
                 <Button
@@ -271,22 +379,7 @@ function BrowserTileCaptureControlsBody(props: {
                   size="xs"
                   variant="secondary"
                   onClick={() => {
-                    appendEpicFileToNewConversationDraft({
-                      epicId,
-                      path,
-                      image: true,
-                    });
-                    openNewConversation({
-                      epicId,
-                      tabId: viewTabId,
-                      placement: null,
-                      parentId: null,
-                      // The capture lives on the tab's host and the tile is
-                      // bound to it for life, so the chat that references it
-                      // is created there - not on whichever host is active
-                      // app-wide.
-                      hostId,
-                    });
+                    void attachCaptureToChat(path, sha256);
                   }}
                 >
                   Attach to chat
@@ -314,15 +407,7 @@ function BrowserTileCaptureControlsBody(props: {
         },
       },
     );
-  }, [
-    captureScreenshot,
-    epicId,
-    hostId,
-    openNewConversation,
-    openTile,
-    tabId,
-    viewTabId,
-  ]);
+  }, [attachCaptureToChat, captureScreenshot, epicId, hostId, openTile, tabId]);
 
   const onToggleRecording = useCallback(() => {
     if (recordingId !== null && badge !== null && badge.phase !== "ended") {

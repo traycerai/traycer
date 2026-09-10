@@ -1609,9 +1609,11 @@ export interface EpicRawProjectionSources {
   readonly epicHeader: EpicHeader;
   readonly roleClaims: readonly RoleClaim[];
   /**
-   * The `files` sibling map. Empty on the LANE head and structurally so: a lane
-   * connection has no root `Y.Doc`, and the manifest is doc-only - it has no
-   * record-plane equivalent to fold in. Same contract as `docChats` there.
+   * The `files` manifest (D02), whichever head produced it: the `@1` head reads
+   * the sibling `Y.Map`, and the lane head decodes the whole-set row
+   * `epic.state.subscribe@1.1` carries. It is empty on a `@1.0` host, which
+   * sends no manifest at all - the same "this host said nothing" the lane's
+   * absent row means, not a claim that the epic has no files.
    */
   readonly files: FilesSlice;
 }

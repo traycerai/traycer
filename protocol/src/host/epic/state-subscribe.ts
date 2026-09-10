@@ -157,6 +157,10 @@ import {
   storyArtifactSchema,
   ticketArtifactSchema,
 } from "@traycer/protocol/persistence/epic/artifacts";
+import {
+  epicFileEntrySchema,
+  epicFileObjectSchema,
+} from "@traycer/protocol/persistence/epic/files";
 import { roleClaimSchema } from "@traycer/protocol/persistence/epic/role-claims";
 
 /**
@@ -355,6 +359,65 @@ export const epicStateRoleClaimsProjectionSchema = z.object({
 });
 export type EpicStateRoleClaimsProjection = z.infer<
   typeof epicStateRoleClaimsProjectionSchema
+>;
+
+/**
+ * One epic-files manifest entry on the records lane: the path that keys it in
+ * the sibling `files` Y.Map (D02), plus the entry itself.
+ *
+ * The entry reuses `epicFileEntrySchema` verbatim - the same shape the doc
+ * stores and the same shape `@traycerai/common/yjs/epic-files` parses - so the
+ * lane head and the doc head cannot disagree about what a file IS. Per-ENTRY
+ * leniency stays where the manifest already puts it: the PRODUCER parses each
+ * key on its own and drops only the ones it cannot read, so an entry written by
+ * a newer host never blocks the rest of the manifest from reaching a client.
+ */
+export const epicFileWireEntrySchema = z.object({
+  path: z.string(),
+  entry: epicFileEntrySchema.extend({
+    /**
+     * Restated WITHOUT the reader-side cap `.transform`, and only that.
+     *
+     * The persisted schema trims `versions` to `EPIC_FILE_VERSIONS_CAP` in a
+     * `.transform`, which the protocol SURFACE builder cannot render into JSON
+     * Schema ("Transforms cannot be represented in JSON Schema") - so an entry
+     * carrying it could not be described on a wire contract at all. Nothing is
+     * lost: the producer parses every entry through `epicFileEntrySchema`
+     * before it reaches this frame, so the trim has already happened, and the
+     * parsed type is identical on both sides of the substitution.
+     */
+    versions: z.array(epicFileObjectSchema).default([]),
+  }),
+});
+export type EpicFileWireEntry = z.infer<typeof epicFileWireEntrySchema>;
+
+/**
+ * The manifest projection carried on this lane: the whole SET, revisioned as a
+ * set, exactly like {@link epicStateRoleClaimsProjectionSchema}.
+ *
+ * ## Why the lane carries it at all
+ *
+ * The manifest is a sibling `Y.Map` on the epic root doc, and a lane connection
+ * HAS NO ROOT DOC. Everything downstream of the projection - the Files panel,
+ * the `epic-file` tile, the quote affordances - reads one `FilesSlice`, so on
+ * the lane head that slice was structurally empty and the panel rendered as if
+ * the epic had no files at all. This is that population's record-plane form.
+ *
+ * ## Why whole-set replacement rather than a row per path
+ *
+ * Same shape as the claims for the same reason: the host reads the manifest in
+ * one lenient pass (unparsable keys are already dropped there), the set is
+ * small and bounded, and a per-path delta would need a tombstone vocabulary the
+ * manifest already expresses inside the entry (`deletedAt`). Tombstoned entries
+ * TRAVEL - the deleted list is live state a restore affordance reads - so a
+ * per-path removal would carry no fact the entry does not already state.
+ */
+export const epicStateFilesProjectionSchema = z.object({
+  ...epicLaneRowRevisionFields,
+  files: z.array(epicFileWireEntrySchema),
+});
+export type EpicStateFilesProjection = z.infer<
+  typeof epicStateFilesProjectionSchema
 >;
 
 /**
@@ -676,20 +739,43 @@ const epicStateSubscribeDeltaFrameSchemaV10 = z.object({
  * const/type reference (an inferred type would name the refine that builds it).
  * This is the `EnvelopeCheckedFrame` idiom from `chat-records.ts`.
  */
-type EmptinessCheckedFrame =
-  | {
-      readonly kind: "delta";
-      readonly artifactUpserts: readonly unknown[];
-      readonly artifactTombstones: readonly unknown[];
-      readonly commentThreadUpserts: readonly unknown[];
-      readonly commentThreadRemovals: readonly unknown[];
-      readonly epicMeta: unknown;
-      readonly roleClaims: unknown;
-    }
+type EmptinessCheckedDelta = {
+  readonly kind: "delta";
+  readonly artifactUpserts: readonly unknown[];
+  readonly artifactTombstones: readonly unknown[];
+  readonly commentThreadUpserts: readonly unknown[];
+  readonly commentThreadRemovals: readonly unknown[];
+  readonly epicMeta: unknown;
+  readonly roleClaims: unknown;
+};
+
+type EmptinessCheckedLeadFrame =
   | { readonly kind: "snapshot" }
   | { readonly kind: "resumed" }
   | { readonly kind: "trustChanged" }
   | { readonly kind: "pong" };
+
+type EmptinessCheckedFrame = EmptinessCheckedDelta | EmptinessCheckedLeadFrame;
+
+/**
+ * `@1.1`'s supertype: the same delta plus the manifest field. Spelled as its
+ * own union rather than an optional key on the one above, because an optional
+ * `files` would make "this is a `@1.0` delta" and "a `@1.1` producer forgot the
+ * field" the same observation - the exact confusion the required-and-empty rule
+ * on the delta frame exists to refuse.
+ */
+type EmptinessCheckedFrameV11 =
+  | (EmptinessCheckedDelta & {
+      /**
+       * OPTIONAL because the `@1.1` union is the superset a client decodes a
+       * `@1.0` host's frames through too, so the key genuinely may not be
+       * there. The refine below therefore tests both `null` (a `@1.1` commit
+       * that changed no file) and `undefined` (a host that carries no
+       * manifest); neither is a change.
+       */
+      readonly files?: unknown;
+    })
+  | EmptinessCheckedLeadFrame;
 
 /**
  * An envelope must carry at least one change.
@@ -701,19 +787,18 @@ type EmptinessCheckedFrame =
  * commit at N. Refusing the shape outright is the only place that can be caught
  * once rather than in every consumer.
  */
-function refineDeltaCarriesChange(
-  frame: EmptinessCheckedFrame,
-  ctx: z.RefinementCtx,
-): void {
-  if (frame.kind !== "delta") return;
-  const carriesChange =
+function deltaCarriesChange(frame: EmptinessCheckedDelta): boolean {
+  return (
     frame.artifactUpserts.length > 0 ||
     frame.artifactTombstones.length > 0 ||
     frame.commentThreadUpserts.length > 0 ||
     frame.commentThreadRemovals.length > 0 ||
     frame.epicMeta !== null ||
-    frame.roleClaims !== null;
-  if (carriesChange) return;
+    frame.roleClaims !== null
+  );
+}
+
+function addEmptyEnvelopeIssue(ctx: z.RefinementCtx): void {
   ctx.addIssue({
     code: z.ZodIssueCode.custom,
     path: ["kind"],
@@ -722,24 +807,140 @@ function refineDeltaCarriesChange(
   });
 }
 
+function refineDeltaCarriesChange(
+  frame: EmptinessCheckedFrame,
+  ctx: z.RefinementCtx,
+): void {
+  if (frame.kind !== "delta") return;
+  if (deltaCarriesChange(frame)) return;
+  addEmptyEnvelopeIssue(ctx);
+}
+
+/** `@1.1`: a manifest change is a change, so a files-only envelope is legal. */
+function refineDeltaCarriesChangeV11(
+  frame: EmptinessCheckedFrameV11,
+  ctx: z.RefinementCtx,
+): void {
+  if (frame.kind !== "delta") return;
+  if (deltaCarriesChange(frame)) return;
+  // `undefined` as well as `null`: `files` is optional on this union so a
+  // `@1.0` host's frame still parses through it, and an absent manifest is no
+  // more a change than an unchanged one.
+  if (frame.files !== null && frame.files !== undefined) return;
+  addEmptyEnvelopeIssue(ctx);
+}
+
+const epicStateSubscribePongFrameSchemaV10 = z.object({
+  kind: z.literal("pong"),
+  // No epoch stamp: heartbeats are intercepted by the shared connection
+  // handler before a resolver is selected, so there is no resolver to mint
+  // one. Same transport-level shape as every other lane's `pong`.
+  ...epicLaneTextFrameFields,
+});
+
 export const epicStateSubscribeServerFrameSchemaV10 = z
   .discriminatedUnion("kind", [
     epicStateSubscribeSnapshotFrameSchemaV10,
     epicStateSubscribeResumedFrameSchemaV10,
     epicStateSubscribeDeltaFrameSchemaV10,
     epicStateSubscribeTrustChangedFrameSchemaV10,
-    z.object({
-      kind: z.literal("pong"),
-      // No epoch stamp: heartbeats are intercepted by the shared connection
-      // handler before a resolver is selected, so there is no resolver to mint
-      // one. Same transport-level shape as every other lane's `pong`.
-      ...epicLaneTextFrameFields,
-    }),
+    epicStateSubscribePongFrameSchemaV10,
   ])
   .superRefine(refineDeltaCarriesChange);
 export type EpicStateSubscribeServerFrameV10 = z.infer<
   typeof epicStateSubscribeServerFrameSchemaV10
 >;
+
+/**
+ * The first `epic.state.subscribe` minor carrying the epic-files manifest, and
+ * therefore the floor the host must clear before putting it on the wire.
+ *
+ * `@1.0` shipped in cli-v1.3.0 and is frozen there. The manifest was NOT added
+ * to it, for the reason the durability legs on `epic.status.subscribe` proved
+ * the hard way: a `.default([])` protects a NEW client reading an OLD host and
+ * does nothing for the case the release baseline actually gates - an old client
+ * decoding a new host's extra keys on a host->client slot. Exported because the
+ * schema and the emission gate are ONE fact.
+ */
+export const EPIC_STATE_FILES_MINOR = 1;
+
+const epicStateSubscribeSnapshotFrameSchemaV11 =
+  epicStateSubscribeSnapshotFrameSchemaV10.extend({
+    /**
+     * Every manifest entry, tombstones included - see the projection's doc.
+     *
+     * OPTIONAL, like `epic.status.subscribe@1.1`'s legs and for the same
+     * reason: this superset is what a `@1.1` client parses EVERY frame
+     * through, including one from a host that negotiated `@1.0` and sends no
+     * manifest at all. Absent therefore means "this host said nothing about
+     * files", which is not the same claim as `files: []` ("this epic has
+     * none") - and a consumer that conflated them would render an empty Files
+     * panel as authoritative on a host that has no file plane.
+     */
+    files: epicStateFilesProjectionSchema.optional(),
+  });
+
+const epicStateSubscribeDeltaFrameSchemaV11 =
+  epicStateSubscribeDeltaFrameSchemaV10.extend({
+    /**
+     * The complete manifest after this commit, or `null` when the commit did
+     * not touch it. Whole-set replacement, carrying the set's own revision -
+     * the same contract `roleClaims` has one field up.
+     */
+    files: epicStateFilesProjectionSchema.nullable().optional(),
+  });
+
+/**
+ * `@1.1` server frames: `@1.0` plus the manifest on the two frames that state
+ * row content. Composed from `@1.0`'s own members rather than restated, so
+ * `@1.1` differs from `@1.0` in exactly the two variants named here.
+ */
+export const epicStateSubscribeServerFrameSchemaV11 = z
+  .discriminatedUnion("kind", [
+    epicStateSubscribeSnapshotFrameSchemaV11,
+    epicStateSubscribeResumedFrameSchemaV10,
+    epicStateSubscribeDeltaFrameSchemaV11,
+    epicStateSubscribeTrustChangedFrameSchemaV10,
+    epicStateSubscribePongFrameSchemaV10,
+  ])
+  .superRefine(refineDeltaCarriesChangeV11);
+export type EpicStateSubscribeServerFrameV11 = z.infer<
+  typeof epicStateSubscribeServerFrameSchemaV11
+>;
+
+/**
+ * The downgrade bridge for a peer below {@link EPIC_STATE_FILES_MINOR}.
+ *
+ * The host composes `@1.1` frames unconditionally and projects here, per
+ * SUBSCRIBER, on the way out - the same shape `epicStatusFrameForNegotiatedMinor`
+ * takes, and per subscriber for the same reason: one session fans one delta out
+ * to subscribers that negotiated different minors.
+ *
+ * `null` means DO NOT SEND, and only a delta can produce it: a commit that
+ * changed nothing but the manifest projects to an EMPTY `@1.0` envelope, which
+ * that line refuses by construction because an empty envelope consumes a lane
+ * position for a commit that never happened. Dropping it is safe and is not a
+ * gap: the adapter records its cursor from whatever frame arrives, so an `@1.0`
+ * peer that never sees the frame stays exactly as current as it can be about
+ * everything it is able to render.
+ */
+export function epicStateFrameForNegotiatedMinor(
+  frame: EpicStateSubscribeServerFrameV11,
+  negotiatedMinor: number,
+): EpicStateSubscribeServerFrameV10 | null {
+  if (negotiatedMinor >= EPIC_STATE_FILES_MINOR) {
+    // `@1.1` is a superset of `@1.0` in TYPE as well as on the wire, so the
+    // frame passes through unchanged and the return type stays honest.
+    return frame;
+  }
+  if (frame.kind === "snapshot") {
+    const { files: _files, ...projected } = frame;
+    return projected;
+  }
+  if (frame.kind !== "delta") return frame;
+  const { files: _files, ...projected } = frame;
+  return deltaCarriesChange(projected) ? projected : null;
+}
 
 /**
  * `ping` and nothing else.
@@ -768,5 +969,16 @@ export const epicStateSubscribeV10 = defineStreamRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   openRequestSchema: epicStateSubscribeOpenRequestSchemaV10,
   serverFrameSchema: epicStateSubscribeServerFrameSchemaV10,
+  clientFrameSchema: epicStateSubscribeClientFrameSchemaV10,
+});
+
+/** Additive minor: same open request and client frames; the epic-files manifest
+ * joins the `snapshot` and `delta` server frames. `@1.0` shipped in cli-v1.3.0
+ * and is frozen there. */
+export const epicStateSubscribeV11 = defineStreamRpcContract({
+  method: "epic.state.subscribe",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  openRequestSchema: epicStateSubscribeOpenRequestSchemaV10,
+  serverFrameSchema: epicStateSubscribeServerFrameSchemaV11,
   clientFrameSchema: epicStateSubscribeClientFrameSchemaV10,
 });

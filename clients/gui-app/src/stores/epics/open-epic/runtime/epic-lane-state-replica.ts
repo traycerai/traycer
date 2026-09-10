@@ -60,7 +60,12 @@
  * replacement instead of racing two.
  */
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
-import type { EpicMeta } from "@traycer/protocol/host/epic/state-subscribe";
+import type {
+  EpicArtifactRecord,
+  EpicDeletedArtifactRecord,
+  EpicFileWireEntry,
+  EpicMeta,
+} from "@traycer/protocol/host/epic/state-subscribe";
 import type { CommentThreadWire } from "@traycer/protocol/host/epic/unary-schemas";
 import type {
   EpicStateLaneEvent,
@@ -80,18 +85,25 @@ import type {
   CommentThreadsSlice,
   DeletedArtifactProjection,
   DeletedArtifactsSlice,
+  EpicFileRecord,
   EpicHeader,
+  FilesSlice,
 } from "../types";
 import {
   EMPTY_ARRAY,
   EMPTY_CHATS_SLICE,
   EMPTY_COMMENT_THREADS_SLICE,
   EMPTY_FILES_SLICE,
+  EMPTY_FILE_RECORDS,
   EMPTY_PROJECTED_SLICES,
   EMPTY_TERMINAL_AGENTS_SLICE,
 } from "../types";
 import type { EpicRawProjectionSources } from "../projection-helpers";
-import { artifactProjectionsEq, arrayShallowEq } from "../projection-helpers";
+import {
+  artifactProjectionsEq,
+  arrayShallowEq,
+  epicFileRecordsEq,
+} from "../projection-helpers";
 import { createRecordTable, type RecordTable } from "./record-table";
 
 /**
@@ -156,6 +168,13 @@ export interface EpicLaneStateSlices {
   readonly epicHeader: EpicHeader;
   readonly roleClaims: readonly RoleClaim[];
   readonly commentThreads: CommentThreadsSlice;
+  /**
+   * The epic-files manifest, in the same shape the `@1` head reads out of the
+   * sibling `files` Y.Map. Empty until an `epic.state.subscribe@1.1` host has
+   * sent one - a `@1.0` host has no manifest row, and its epic renders with no
+   * files exactly as it did before this population existed.
+   */
+  readonly files: FilesSlice;
 }
 
 /**
@@ -170,6 +189,7 @@ export const EMPTY_LANE_STATE_SLICES: EpicLaneStateSlices = Object.freeze({
   epicHeader: EMPTY_PROJECTED_SLICES.epic,
   roleClaims: Object.freeze([]),
   commentThreads: EMPTY_COMMENT_THREADS_SLICE,
+  files: EMPTY_FILES_SLICE,
 });
 
 export interface EpicLaneStateReplicaSources {
@@ -301,8 +321,47 @@ function laneSlicesEq(a: EpicLaneStateSlices, b: EpicLaneStateSlices): boolean {
       a.roleClaims.map((claim) => claim.claimId),
       b.roleClaims.map((claim) => claim.claimId),
     ) &&
-    commentThreadsEq(a.commentThreads, b.commentThreads)
+    commentThreadsEq(a.commentThreads, b.commentThreads) &&
+    filesSliceEq(a.files, b.files)
   );
+}
+
+function fileRecordsEq(
+  a: readonly EpicFileRecord[],
+  b: readonly EpicFileRecord[],
+): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  return a.every((record, index) => epicFileRecordsEq(record, b[index]));
+}
+
+/**
+ * Field-by-field, through the `@1` head's own comparator.
+ *
+ * The manifest arrives as one whole-set row, so every entry object is FRESH on
+ * every upsert and reference equality is always false - the identity contract
+ * the Files panel relies on has to be earned by comparison, exactly as it is on
+ * the doc head.
+ */
+function filesSliceEq(a: FilesSlice, b: FilesSlice): boolean {
+  if (a === b) return true;
+  return (
+    fileRecordsEq(a.records, b.records) && fileRecordsEq(a.deleted, b.deleted)
+  );
+}
+
+/**
+ * Only ticket and story carry a status; the union is discriminated on `kind`,
+ * exactly as the `@1` head's `projectArtifact` narrows it. One helper for both
+ * the live record and its tombstone - they disagree on most fields and agree on
+ * this pair, and two spellings of the narrowing is where they would drift.
+ */
+function artifactStatusOf(
+  record: EpicArtifactRecord | EpicDeletedArtifactRecord,
+): number | null {
+  return record.kind === "ticket" || record.kind === "story"
+    ? record.status
+    : null;
 }
 
 /**
@@ -322,6 +381,7 @@ function buildLaneSlices(rows: readonly HeldLaneRow[]): EpicLaneStateSlices {
   const threadsByArtifactId: Record<string, CommentThreadWire[]> = {};
   let roleClaims: readonly RoleClaim[] = EMPTY_LANE_STATE_SLICES.roleClaims;
   let epicHeader: EpicHeader = EMPTY_LANE_STATE_SLICES.epicHeader;
+  let files: FilesSlice = EMPTY_LANE_STATE_SLICES.files;
 
   for (const held of rows) {
     const row = held.row;
@@ -347,12 +407,7 @@ function buildLaneSlices(rows: readonly HeldLaneRow[]): EpicLaneStateSlices {
           artifactRoomId: null,
           createdAt: record.createdAt,
           updatedAt: record.updatedAt,
-          // Only ticket and story carry a status; the union is discriminated on
-          // `kind`, exactly as the `@1` head's `projectArtifact` narrows it.
-          status:
-            record.kind === "ticket" || record.kind === "story"
-              ? record.status
-              : null,
+          status: artifactStatusOf(record),
           createdManually: record.createdManually,
         };
         artifactIds.push(record.id);
@@ -365,10 +420,7 @@ function buildLaneSlices(rows: readonly HeldLaneRow[]): EpicLaneStateSlices {
           kind: record.kind,
           title: record.title,
           deletedAt: record.deletedAt,
-          status:
-            record.kind === "ticket" || record.kind === "story"
-              ? record.status
-              : null,
+          status: artifactStatusOf(record),
         };
         deletedIds.push(record.id);
         break;
@@ -388,6 +440,9 @@ function buildLaneSlices(rows: readonly HeldLaneRow[]): EpicLaneStateSlices {
       }
       case "role-claims":
         roleClaims = row.claims;
+        break;
+      case "epic-files":
+        files = laneFilesSlice(row.files);
         break;
       case "epic-meta":
         epicHeader = { title: row.meta.title, updatedAt: row.meta.updatedAt };
@@ -415,10 +470,39 @@ function buildLaneSlices(rows: readonly HeldLaneRow[]): EpicLaneStateSlices {
     },
     epicHeader,
     roleClaims,
+    files,
     commentThreads:
       Object.keys(threadsByArtifactId).length === 0
         ? EMPTY_COMMENT_THREADS_SLICE
         : { byArtifactId: threadsByArtifactId },
+  };
+}
+
+/**
+ * The manifest row split into the two path-sorted lists the `@1` head produces.
+ *
+ * The same split `projectEpicFilesSlice` makes, on entries the PRODUCER already
+ * parsed and ordered: the host reads the `files` Y.Map one key at a time,
+ * dropping what it cannot parse, and sorts by path before the set goes on the
+ * wire - so there is nothing left to re-validate here and nothing to re-sort.
+ * A tombstoned entry (`deletedAt !== null`) goes to `deleted`, which is where a
+ * restore affordance reads it from.
+ */
+function laneFilesSlice(entries: readonly EpicFileWireEntry[]): FilesSlice {
+  const records: EpicFileRecord[] = [];
+  const deleted: EpicFileRecord[] = [];
+  for (const entry of entries) {
+    const record: EpicFileRecord = { path: entry.path, entry: entry.entry };
+    if (entry.entry.deletedAt === null) {
+      records.push(record);
+    } else {
+      deleted.push(record);
+    }
+  }
+  if (records.length === 0 && deleted.length === 0) return EMPTY_FILES_SLICE;
+  return {
+    records: records.length === 0 ? EMPTY_FILE_RECORDS : records,
+    deleted: deleted.length === 0 ? EMPTY_FILE_RECORDS : deleted,
   };
 }
 
@@ -428,8 +512,10 @@ function buildLaneSlices(rows: readonly HeldLaneRow[]): EpicLaneStateSlices {
  * The doc arms are EMPTY here and that is structural rather than a stub: a lane
  * connection has no root `Y.Doc`, so there is no doc-side chat or terminal-agent
  * entry to union in, and the record plane covers both populations on any host
- * that serves the lanes at all. Production and the equivalence test go through
- * this one function so the test cannot prove a mapping the runtime does not use.
+ * that serves the lanes at all. `files` is NOT one of them - the manifest rides
+ * `epic.state.subscribe@1.1` as its own revisioned set, so this head has a real
+ * one to hand over. Production and the equivalence test go through this one
+ * function so the test cannot prove a mapping the runtime does not use.
  */
 export function laneRawProjectionSources(
   slices: EpicLaneStateSlices,
@@ -441,9 +527,7 @@ export function laneRawProjectionSources(
     docTuiAgents: EMPTY_TERMINAL_AGENTS_SLICE,
     epicHeader: slices.epicHeader,
     roleClaims: slices.roleClaims,
-    // No root doc on this head, so no manifest to read. See the field's own
-    // note on `EpicRawProjectionSources`.
-    files: EMPTY_FILES_SLICE,
+    files: slices.files,
   };
 }
 

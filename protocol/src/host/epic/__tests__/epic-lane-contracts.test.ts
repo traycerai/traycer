@@ -14,6 +14,9 @@ import {
   epicStateSubscribeClientFrameSchemaV10,
   epicStateSubscribeOpenRequestSchemaV10,
   epicStateSubscribeServerFrameSchemaV10,
+  epicStateSubscribeServerFrameSchemaV11,
+  EPIC_STATE_FILES_MINOR,
+  epicStateFrameForNegotiatedMinor,
 } from "@traycer/protocol/host/epic/state-subscribe";
 import {
   epicDeletionAttributionSchema,
@@ -88,7 +91,7 @@ describe("registry shape: the epic lane surface installs at the versions the spl
     // which is the correct way for a shipped lane to grow, so pinning a flat
     // `latestMinor: 0` here would forbid it.
     expect(hostStreamRpcRegistry["epic.state.subscribe"][1].latestMinor).toBe(
-      0,
+      EPIC_STATE_FILES_MINOR,
     );
     expect(hostStreamRpcRegistry["artifact.subscribe"][1].latestMinor).toBe(0);
     expect(hostStreamRpcRegistry["epic.status.subscribe"][1].latestMinor).toBe(
@@ -1488,5 +1491,179 @@ describe("lane unaries", () => {
     expect(
       epicRetryMigrationV10.responseSchema.safeParse({ ok: false }).success,
     ).toBe(false);
+  });
+});
+
+/**
+ * `epic.state.subscribe@1.1` - the epic-files manifest.
+ *
+ * `@1.0` shipped in cli-v1.3.0, so the manifest could not be added to it: an
+ * extra key on a host->client slot of a released line is what the released
+ * baseline gates, whatever its optionality (the `epic.status.subscribe`
+ * durability-legs finding). These pin the split from both directions, and the
+ * one case the bridge cannot answer by dropping keys - a delta that carried
+ * NOTHING BUT the manifest, which projects to an envelope `@1.0` refuses.
+ */
+const epicFileEntryFixture = {
+  v: 1,
+  kind: "screenshot",
+  current: {
+    sha256: "ef53b4119305637bdb3dc1cc7cda1f554c2f71f32ac52071a894b7bbb3cb3a34",
+    byteLength: 117789,
+    mediaType: "image/png",
+    createdAt: 1_788_000_000_000,
+    createdBy: "user-1",
+    producer: { type: "user" },
+  },
+  versions: [],
+  status: "available",
+  recordingId: null,
+  derivedFrom: [],
+  deletedAt: null,
+};
+const filesProjectionFixture = {
+  revision: 3,
+  files: [{ path: "files/screenshots/a.png", entry: epicFileEntryFixture }],
+};
+
+function snapshotFrameV11(): unknown {
+  return {
+    kind: "snapshot",
+    authorityEpoch: "epoch-1",
+    position: 0,
+    basis: "cold",
+    reconciledWithCloud: false,
+    epicMeta: epicMetaSnapshotFixture,
+    artifactRecords: [],
+    deletedArtifacts: [],
+    roleClaims: emptyRoleClaimsProjectionFixture,
+    commentThreads: [],
+    files: filesProjectionFixture,
+    hasBinaryPayload: false,
+  };
+}
+
+function deltaFrameV11(files: unknown, roleClaims: unknown): unknown {
+  return {
+    kind: "delta",
+    authorityEpoch: "epoch-1",
+    seq: 4,
+    artifactUpserts: [],
+    artifactTombstones: [],
+    commentThreadUpserts: [],
+    commentThreadRemovals: [],
+    epicMeta: null,
+    roleClaims,
+    files,
+    hasBinaryPayload: false,
+  };
+}
+
+describe("epic.state.subscribe@1.1 carries the epic-files manifest", () => {
+  it("registers @1.1 as the line's top with @1.0 still installed", () => {
+    const line = hostStreamRpcRegistry["epic.state.subscribe"][1];
+    expect(EPIC_STATE_FILES_MINOR).toBeGreaterThan(0);
+    expect(line.latestMinor).toBe(EPIC_STATE_FILES_MINOR);
+    expect(line.versions[EPIC_STATE_FILES_MINOR]).toBeDefined();
+    expect(line.versions[0]).toBeDefined();
+  });
+
+  it("parses the manifest on a snapshot and on a delta", () => {
+    const snapshot =
+      epicStateSubscribeServerFrameSchemaV11.safeParse(snapshotFrameV11());
+    expect(snapshot.success).toBe(true);
+    const delta = epicStateSubscribeServerFrameSchemaV11.safeParse(
+      deltaFrameV11(filesProjectionFixture, null),
+    );
+    expect(delta.success).toBe(true);
+  });
+
+  it("treats a manifest change as a change, so a files-only delta is legal", () => {
+    expect(
+      epicStateSubscribeServerFrameSchemaV11.safeParse(
+        deltaFrameV11(filesProjectionFixture, null),
+      ).success,
+    ).toBe(true);
+    // ... and an envelope with neither is still refused.
+    expect(
+      epicStateSubscribeServerFrameSchemaV11.safeParse(
+        deltaFrameV11(null, null),
+      ).success,
+    ).toBe(false);
+  });
+
+  it("keeps the manifest off the shipped @1.0 union", () => {
+    // Through the schema, not the type: zod STRIPS unknown keys, so a `@1.0`
+    // reader silently discarding the manifest is exactly the behaviour that
+    // makes the baseline finding real.
+    const parsed =
+      epicStateSubscribeServerFrameSchemaV10.parse(snapshotFrameV11());
+    expect(parsed).not.toHaveProperty("files");
+  });
+
+  it("drops the manifest from a frame bound for a pre-files peer", () => {
+    const frame =
+      epicStateSubscribeServerFrameSchemaV11.parse(snapshotFrameV11());
+    const projected = epicStateFrameForNegotiatedMinor(
+      frame,
+      EPIC_STATE_FILES_MINOR - 1,
+    );
+    expect(projected).not.toBeNull();
+    expect(projected).not.toHaveProperty("files");
+    // The rest of the frame is intact, and the projection is a legal `@1.0`.
+    expect(
+      epicStateSubscribeServerFrameSchemaV10.safeParse(projected).success,
+    ).toBe(true);
+  });
+
+  it("passes an @1.1 frame through untouched to a peer that negotiated it", () => {
+    const frame =
+      epicStateSubscribeServerFrameSchemaV11.parse(snapshotFrameV11());
+    expect(
+      epicStateFrameForNegotiatedMinor(frame, EPIC_STATE_FILES_MINOR),
+    ).toBe(frame);
+  });
+
+  it("refuses to send a files-only delta to a pre-files peer", () => {
+    const frame = epicStateSubscribeServerFrameSchemaV11.parse(
+      deltaFrameV11(filesProjectionFixture, null),
+    );
+    // Projecting it would leave an EMPTY `@1.0` envelope, which consumes a
+    // lane position for a commit that peer can observe nothing of.
+    expect(
+      epicStateFrameForNegotiatedMinor(frame, EPIC_STATE_FILES_MINOR - 1),
+    ).toBeNull();
+  });
+
+  it("parses an @1.0 host's frames through the @1.1 union, manifest absent", () => {
+    // The superset is what a `@1.1` client decodes EVERY frame through,
+    // including one from a host that negotiated `@1.0`. Absent is not empty:
+    // `undefined` says the host mentioned no manifest, where `files: []` would
+    // claim the epic has none.
+    const { files: _files, ...withoutFiles } = snapshotFrameV11() as Record<
+      string,
+      unknown
+    >;
+    const parsed =
+      epicStateSubscribeServerFrameSchemaV11.safeParse(withoutFiles);
+    expect(parsed.success).toBe(true);
+    expect(
+      parsed.success && parsed.data.kind === "snapshot"
+        ? parsed.data.files
+        : "unexpected",
+    ).toBeUndefined();
+  });
+
+  it("still sends a delta that changed something else as well", () => {
+    const frame = epicStateSubscribeServerFrameSchemaV11.parse(
+      deltaFrameV11(filesProjectionFixture, emptyRoleClaimsProjectionFixture),
+    );
+    const projected = epicStateFrameForNegotiatedMinor(
+      frame,
+      EPIC_STATE_FILES_MINOR - 1,
+    );
+    expect(
+      epicStateSubscribeServerFrameSchemaV10.safeParse(projected).success,
+    ).toBe(true);
   });
 });

@@ -53,6 +53,40 @@ const displayMediaRequestSchema = z.object({
 });
 const webContentsSchema = z.object({ id: z.number() });
 
+/**
+ * How Electron reports the KIND of a `media` ask, on either handler
+ * (`electron.d.ts`, Electron 42):
+ *
+ * - request handler - `MediaAccessPermissionRequest.mediaTypes?: Array<'video' | 'audio'>`
+ * - check handler - `PermissionCheckHandlerHandlerDetails.mediaType?: 'video' | 'audio' | 'unknown'`
+ *
+ * Both are optional, and the strings are read loosely on purpose: a future
+ * Electron adding a kind must not make the whole shape unparseable.
+ */
+const mediaPermissionDetailsSchema = z.object({
+  mediaType: z.string().optional(),
+  mediaTypes: z.array(z.string()).optional(),
+});
+
+/**
+ * Does this `media` ask include AUDIO?
+ *
+ * A recording has no audio track (D14), so the helper's `media` grant is
+ * video-only and an audio ask is refused rather than answered with video.
+ * Details that say nothing - `{}`, or a shape this build does not recognise -
+ * are not an audio ask: only a registered helper window ever reaches this
+ * question, `getDisplayMedia` is the only thing that document asks for, and
+ * denying on an unread detail shape would break recording outright.
+ */
+export function mediaPermissionAsksForAudio(details: unknown): boolean {
+  const parsed = mediaPermissionDetailsSchema.safeParse(details);
+  if (!parsed.success) return false;
+  return (
+    parsed.data.mediaType === "audio" ||
+    parsed.data.mediaTypes?.includes("audio") === true
+  );
+}
+
 const registrations = new Map<string, RecordingHelperRegistration>();
 
 /**
@@ -75,8 +109,8 @@ export function registerRecordingHelper(
 /**
  * Is this the `WebContents` of a live recording helper window?
  *
- * The `display-capture` permission test, and nothing wider: a guest page that
- * asks for it is still refused, and the static
+ * The `display-capture` + video-only `media` test, and nothing wider: a guest
+ * page that asks for either is still refused, and the static
  * `BROWSER_ALLOWED_PERMISSIONS` set is deliberately not grown, because a
  * member of that set is granted to EVERY guest.
  */

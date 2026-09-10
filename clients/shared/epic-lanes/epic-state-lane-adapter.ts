@@ -70,6 +70,7 @@ import type { EpicLaneCursor } from "@traycer/protocol/host/epic/lane-cursor";
 import {
   ARTIFACT_TOMBSTONE_REMOVE_REASON,
   COMMENT_THREAD_REMOVE_REASON,
+  EPIC_FILES_ROW_ID,
   EPIC_META_ROW_ID,
   ROLE_CLAIMS_ROW_ID,
   artifactRowId,
@@ -262,6 +263,16 @@ export function createEpicStateLaneAdapter(
       revision: frame.epicMeta.revision,
       row: { kind: "epic-meta", meta: frame.epicMeta.meta },
     });
+    // ABSENT on a pre-`@1.1` host, which sends no manifest at all - and absent
+    // is the honest answer there, not an empty one: an empty row would state
+    // "this epic has no files", which such a host has said nothing about.
+    if (frame.files !== undefined) {
+      rows.push({
+        rowId: EPIC_FILES_ROW_ID,
+        revision: frame.files.revision,
+        row: { kind: "epic-files", files: frame.files.files },
+      });
+    }
     return rows;
   }
 
@@ -324,6 +335,17 @@ export function createEpicStateLaneAdapter(
           rowId: ROLE_CLAIMS_ROW_ID,
           revision: roleClaims.revision,
           row: { kind: "role-claims", claims: roleClaims.claims },
+        },
+      });
+    }
+    const files = frame.files;
+    if (files !== undefined && files !== null) {
+      changes.push({
+        kind: "upsert",
+        row: {
+          rowId: EPIC_FILES_ROW_ID,
+          revision: files.revision,
+          row: { kind: "epic-files", files: files.files },
         },
       });
     }

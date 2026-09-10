@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   isRecordingHelperWebContents,
+  mediaPermissionAsksForAudio,
   recordingHelperRegistrationCount,
   registerRecordingHelper,
   resolveRecordingDisplayMediaVideo,
@@ -205,5 +206,34 @@ describe("registerRecordingHelper disposer", () => {
     expect(recordingHelperRegistrationCount()).toBe(1);
     secondDispose();
     expect(recordingHelperRegistrationCount()).toBe(0);
+  });
+});
+
+/**
+ * The detail shapes Electron 42 hands the two permission handlers for a
+ * `media` ask (`electron.d.ts`): `MediaAccessPermissionRequest.mediaTypes?:
+ * Array<'video' | 'audio'>` on the request handler,
+ * `PermissionCheckHandlerHandlerDetails.mediaType?: 'video' | 'audio' |
+ * 'unknown'` on the check handler. Both optional, hence the "says nothing"
+ * cases.
+ */
+describe("mediaPermissionAsksForAudio", () => {
+  it("is true only when the details name audio", () => {
+    expect(mediaPermissionAsksForAudio({ mediaTypes: ["audio"] })).toBe(true);
+    expect(
+      mediaPermissionAsksForAudio({ mediaTypes: ["video", "audio"] }),
+    ).toBe(true);
+    expect(mediaPermissionAsksForAudio({ mediaType: "audio" })).toBe(true);
+  });
+
+  it("is false for a video ask, and for details that say nothing", () => {
+    expect(mediaPermissionAsksForAudio({ mediaTypes: ["video"] })).toBe(false);
+    expect(mediaPermissionAsksForAudio({ mediaType: "video" })).toBe(false);
+    expect(mediaPermissionAsksForAudio({ mediaType: "unknown" })).toBe(false);
+    expect(mediaPermissionAsksForAudio({})).toBe(false);
+    expect(mediaPermissionAsksForAudio({ isMainFrame: true })).toBe(false);
+    expect(mediaPermissionAsksForAudio(null)).toBe(false);
+    expect(mediaPermissionAsksForAudio(undefined)).toBe(false);
+    expect(mediaPermissionAsksForAudio("audio")).toBe(false);
   });
 });

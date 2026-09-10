@@ -1,6 +1,6 @@
 import { BrowserWindow, webContents as electronWebContents } from "electron";
 import type { RecordingEvent } from "@traycer-clients/shared/platform/browser-view";
-import { describeLogError, log } from "../../app/logger";
+import { describeLogError, log, readErrorLikeFields } from "../../app/logger";
 import type { BrowserViewWebContents } from "../browser-view-port";
 import {
   DEFAULT_RECORDING_CAPTURE_SOURCE,
@@ -67,6 +67,17 @@ const HELPER_START_TIMEOUT_MS = 20_000;
  * out.
  */
 const HELPER_START_TIMEOUT_REASON = "helper-start-timeout";
+
+/** Everything else that stopped a helper before it was recording. */
+const HELPER_START_FAILED_REASON = "helper-start-failed";
+
+/**
+ * What may be appended to that reason as a diagnostic. The reason is an open
+ * string that reaches the HOST's INFO log, so the page-side error's NAME goes
+ * in and its message never does: a message is unbounded, the helper URL in it
+ * would be a bearer token, and a `\r\n` in it forges a log line.
+ */
+const HELPER_START_FAILURE_NAME = /^[A-Za-z0-9_.-]{1,64}$/;
 
 /** How long the helper gets to finalize before its window is closed. */
 const HELPER_STOP_TIMEOUT_MS = 5_000;
@@ -286,13 +297,31 @@ export async function startRecordingHelper(
       recording: active.recordingId,
       error: describeLogError(error),
     });
-    endRecording(
-      active.recordingId,
-      error instanceof Error && error.message === HELPER_START_TIMEOUT_REASON
-        ? HELPER_START_TIMEOUT_REASON
-        : "helper-start-failed",
-    );
+    endRecording(active.recordingId, startFailureReason(error));
   });
+}
+
+/**
+ * Why a start failed, for `recordingEnded { reason }`.
+ *
+ * `helper-start-failed:NotAllowedError` rather than a bare
+ * `helper-start-failed`: the page-side name is the whole diagnostic when a
+ * grant is refused, and the desktop's own WARN line is the only other place it
+ * exists. Only an allowlisted name is appended - see
+ * {@link HELPER_START_FAILURE_NAME}.
+ */
+function startFailureReason(error: unknown): string {
+  if (!(error instanceof Error)) return HELPER_START_FAILED_REASON;
+  if (error.message === HELPER_START_TIMEOUT_REASON) {
+    return HELPER_START_TIMEOUT_REASON;
+  }
+  // `toHelperError` renders a page rejection as `<name>: <message>`, so the
+  // name is the head. Our own rebuilt errors are sentences, which the
+  // allowlist refuses - they end up as the bare reason.
+  const [name] = error.message.split(":", 1);
+  return name !== undefined && HELPER_START_FAILURE_NAME.test(name)
+    ? `${HELPER_START_FAILED_REASON}:${name}`
+    : HELPER_START_FAILED_REASON;
 }
 
 /** Tears the helper down. A `recordingId` this process is not running is a no-op. */
@@ -591,6 +620,29 @@ function delay(ms: number): Promise<void> {
   });
 }
 
+/**
+ * An `Error` out of whatever the helper page rejected with.
+ *
+ * `webContents.executeJavaScript` rejects with the page's thrown value
+ * STRUCTURED-CLONED, so a `DOMException` arrives as a plain
+ * `{ name, message }` - and `String()` renders that `[object Object]`, which
+ * is exactly what a real `NotAllowedError: Permission denied` from the
+ * helper's `getDisplayMedia` was logged as. Only the two fields are read; the
+ * helper URL is never added.
+ */
+function toHelperError(value: unknown): Error {
+  if (value instanceof Error) return value;
+  const fields = readErrorLikeFields(value);
+  return new Error(
+    fields === null ? String(value) : `${fields.name}: ${fields.message}`,
+  );
+}
+
+/**
+ * Every rejection this file surfaces goes through here - the start script and
+ * the stop script both - which is why the normalisation lives here rather than
+ * at each call site.
+ */
 function withTimeout<T>(
   work: Promise<T>,
   timeoutMs: number,
@@ -607,7 +659,7 @@ function withTimeout<T>(
       },
       (error: unknown) => {
         clearTimeout(timer);
-        reject(error instanceof Error ? error : new Error(String(error)));
+        reject(toHelperError(error));
       },
     );
   });

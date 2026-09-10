@@ -206,9 +206,37 @@ vi.mock("../recording-capture-source-setting", () => ({
 // initialization").
 const log = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn() }));
 
+interface FakeErrorLikeFields {
+  readonly name: string;
+  readonly message: string;
+}
+
+/**
+ * The two logger exports this module uses, mirroring the real ones closely
+ * enough to be asserted on: `describeLogError` renders `{ name, message }`
+ * (the real one redacts too) and `readErrorLikeFields` is what turns a
+ * structured-cloned page rejection into those fields.
+ */
+function fakeErrorLikeFields(value: unknown): FakeErrorLikeFields | null {
+  if (value instanceof Error) {
+    return { name: value.name, message: value.message };
+  }
+  if (typeof value !== "object" || value === null) return null;
+  const record: Record<string, unknown> = { ...value };
+  const { name, message } = record;
+  if (typeof message !== "string") return null;
+  return { name: typeof name === "string" ? name : "Error", message };
+}
+
 vi.mock("../../../app/logger", () => ({
   log,
-  describeLogError: (error: unknown): string => String(error),
+  describeLogError: (error: unknown): FakeErrorLikeFields =>
+    fakeErrorLikeFields(error) ?? {
+      name: typeof error,
+      message: String(error),
+    },
+  readErrorLikeFields: (value: unknown): FakeErrorLikeFields | null =>
+    fakeErrorLikeFields(value),
 }));
 
 import {
@@ -723,6 +751,81 @@ describe("rejections before a window exists", () => {
     ).rejects.toThrow(/not available for recording/);
 
     expect(createdWindows.length).toBe(winCountBefore);
+  });
+});
+
+describe("a page-side start rejection", () => {
+  /**
+   * `executeJavaScript` rejects with the page's thrown value
+   * STRUCTURED-CLONED, so a DOMException arrives as a plain
+   * `{ name, message }` - which the WARN line used to render `[object
+   * Object]`, hiding the `NotAllowedError` that was the whole diagnostic.
+   */
+  it("is logged as `<name>: <message>`, never [object Object]", async () => {
+    registerElectronGuest(340);
+    const { events, onEvent } = collectEvents();
+    withNextHelperExecuteJavaScript((script) =>
+      script.includes("__traycerRecordingHelper.start(")
+        ? Promise.reject({
+            name: "NotAllowedError",
+            message: "Permission denied",
+          })
+        : Promise.resolve(true),
+    );
+
+    await startRecordingHelper({
+      recordingId: "start-rejected",
+      helperUrl: makeHelperUrl("start-rejected"),
+      guest: guestPort(340),
+      source: "display-media",
+      onEvent,
+    });
+
+    await vi.waitFor(() => {
+      expect(events.some((event) => event.kind === "ended")).toBe(true);
+    });
+    const warned = log.warn.mock.calls.find(
+      (call) => call[0] === "[browser-view] recording helper start failed",
+    );
+    if (warned === undefined) throw new Error("no start-failure WARN line");
+    expect(warned[1]).toMatchObject({
+      recording: "start-rejected",
+      error: { message: "NotAllowedError: Permission denied" },
+    });
+    expect(JSON.stringify(warned)).not.toContain("[object Object]");
+
+    // The name, and only the name, rides along to the host's reason.
+    const ended = events.find((event) => event.kind === "ended");
+    if (ended === undefined || ended.kind !== "ended") {
+      throw new Error("no ended event was recorded");
+    }
+    expect(ended.reason).toBe("helper-start-failed:NotAllowedError");
+  });
+
+  it("keeps the bare reason when the failure is one of ours, not the page's", async () => {
+    registerElectronGuest(341);
+    const helperUrl = makeHelperUrl("load-reject-reason");
+    nextLoadURLRejection = new Error(
+      `ERR_CONNECTION_REFUSED (-102) loading '${helperUrl}'`,
+    );
+    const { events, onEvent } = collectEvents();
+
+    await startRecordingHelper({
+      recordingId: "load-reject-reason",
+      helperUrl,
+      guest: guestPort(341),
+      source: "display-media",
+      onEvent,
+    });
+
+    await vi.waitFor(() => {
+      expect(events.some((event) => event.kind === "ended")).toBe(true);
+    });
+    const ended = events.find((event) => event.kind === "ended");
+    if (ended === undefined || ended.kind !== "ended") {
+      throw new Error("no ended event was recorded");
+    }
+    expect(ended.reason).toBe("helper-start-failed");
   });
 });
 

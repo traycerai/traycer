@@ -25,6 +25,7 @@ import {
 } from "./storage/browser-cookie-change-observer";
 import {
   isRecordingHelperWebContents,
+  mediaPermissionAsksForAudio,
   resolveRecordingDisplayMediaVideo,
 } from "./recording/recording-helper-registry";
 
@@ -169,9 +170,10 @@ interface BrowserSessionPendingCertificateError extends BrowserSessionCertificat
 
 /**
  * Permissions EVERY guest page gets. Membership is a decision about the whole
- * web, so `display-capture` is deliberately not here: a recording helper is
- * admitted to it by REGISTRATION (see {@link isBrowserPermissionAllowed}),
- * one window at a time, never by growing this set.
+ * web, so neither `display-capture` nor `media` is here: a recording helper is
+ * admitted to those by REGISTRATION (see {@link isBrowserPermissionAllowed}),
+ * one window at a time, never by growing this set. `media` in particular stays
+ * out - a guest that could hold it has the camera and the microphone.
  */
 const BROWSER_ALLOWED_PERMISSIONS: ReadonlySet<string> = new Set([
   "clipboard-sanitized-write",
@@ -182,8 +184,23 @@ const BROWSER_ALLOWED_PERMISSIONS: ReadonlySet<string> = new Set([
   "top-level-storage-access",
 ]);
 
-/** The one permission a recording helper window needs and no guest may have. */
+/**
+ * The two permissions a recording helper window needs and no guest may have.
+ *
+ * `display-capture` is the obvious one. `media` is the one this boundary was
+ * missing: Chromium puts a `getDisplayMedia` call through the MEDIA permission
+ * handlers FIRST, and only if they say yes does it reach
+ * `setDisplayMediaRequestHandler` to pick a source. With `media` refused, the
+ * helper's `getDisplayMedia` rejected `NotAllowedError` before main was ever
+ * asked which guest it may have, and every recording ended
+ * `helper-start-failed`.
+ *
+ * The helper's `media` grant is VIDEO ONLY - a recording has no audio track
+ * (D14) - which is why the answer reads the request's details; see
+ * `mediaPermissionAsksForAudio`.
+ */
 const DISPLAY_CAPTURE_PERMISSION = "display-capture";
+const MEDIA_PERMISSION = "media";
 
 const installedPolicySessions = new WeakSet<BrowserViewPolicySession>();
 const browserWebContentsIds = new Set<number>();
@@ -490,8 +507,12 @@ function installBrowserViewSessionPolicy(
   installedPolicySessions.add(target);
 
   target.setPermissionRequestHandler(
-    (webContents, permission, callback, _details) => {
-      const allowed = isBrowserPermissionAllowed(permission, webContents);
+    (webContents, permission, callback, details) => {
+      const allowed = isBrowserPermissionAllowed(
+        permission,
+        webContents,
+        details,
+      );
       if (!allowed) {
         log.info("[browser-view] permission denied", { permission });
       }
@@ -499,8 +520,8 @@ function installBrowserViewSessionPolicy(
     },
   );
   target.setPermissionCheckHandler(
-    (webContents, permission, _requestingOrigin, _details) =>
-      isBrowserPermissionAllowed(permission, webContents),
+    (webContents, permission, _requestingOrigin, details) =>
+      isBrowserPermissionAllowed(permission, webContents, details),
   );
   target.setDevicePermissionHandler(() => false);
   target.setUSBProtectedClassesHandler(() => []);
@@ -517,6 +538,10 @@ function installBrowserViewSessionPolicy(
    *
    * `video` only: a recording has no audio track (D14), so an audio request
    * is answered by omission whatever the page asked for.
+   *
+   * SECOND in the chain, not first: Chromium runs `getDisplayMedia` past the
+   * `media` permission handlers above before it ever asks here which source
+   * the page may have, so a page this handler would deny may never reach it.
    */
   target.setDisplayMediaRequestHandler((request, callback) => {
     const video = resolveRecordingDisplayMediaVideo(request);
@@ -559,23 +584,28 @@ export function gateBrowserViewGuestRequests(
 /**
  * The permission answer for one requester.
  *
- * `display-capture` is scoped to the requesting WebContents rather than to the
- * permission name: a guest page that asks for it is refused exactly as before,
- * and only a live registered recording helper is admitted. The scoping cuts
- * BOTH ways - the helper is refused every permission an ordinary guest gets,
- * because it is a one-job document of ours and not a page anyone browses. The
- * registration is revoked on every terminal path, so neither answer can
- * outlive its recording.
+ * `display-capture` and `media` are scoped to the requesting WebContents
+ * rather than to the permission name: a guest page that asks for either is
+ * refused exactly as before, and only a live registered recording helper is
+ * admitted. The scoping cuts BOTH ways - the helper is refused every
+ * permission an ordinary guest gets, because it is a one-job document of ours
+ * and not a page anyone browses, and its `media` grant is video only. The
+ * registration is revoked on every terminal path, so no answer can outlive its
+ * recording.
  */
 function isBrowserPermissionAllowed(
   permission: string,
   webContents: unknown,
+  details: unknown,
 ): boolean {
   // A recording helper is not a guest and gets the guest answer for nothing:
-  // it is a document of ours with one job, so `display-capture` is the only
-  // permission it may hold and the ordinary allow-set is refused to it too.
+  // it is a document of ours with one job, so the two capture permissions are
+  // the only ones it may hold and the ordinary allow-set is refused to it too.
   if (isRecordingHelperWebContents(webContents)) {
-    return permission === DISPLAY_CAPTURE_PERMISSION;
+    if (permission === DISPLAY_CAPTURE_PERMISSION) return true;
+    return (
+      permission === MEDIA_PERMISSION && !mediaPermissionAsksForAudio(details)
+    );
   }
   return BROWSER_ALLOWED_PERMISSIONS.has(permission);
 }

@@ -23,6 +23,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -141,9 +142,22 @@ vi.mock("@/stores/epics/new-conversation-modal-open-store", () => ({
 }));
 
 const appendEpicFileToNewConversationDraft = vi.hoisted(() => vi.fn());
+const appendEpicFileImageToNewConversationDraft = vi.hoisted(() => vi.fn());
 
 vi.mock("@/components/chat/quote/append-epic-file-to-draft", () => ({
   appendEpicFileToNewConversationDraft,
+  appendEpicFileImageToNewConversationDraft,
+}));
+
+/**
+ * The byte read the "Attach to chat" action makes before it seeds the draft.
+ * Mocked so the two outcomes that matter - bytes in hand, and bytes the host
+ * cannot give (`null`) - are both drivable without a host or a `fetch`.
+ */
+const readEpicFileImage = vi.hoisted(() => vi.fn());
+
+vi.mock("@/lib/epic-files/read-epic-file-image", () => ({
+  readEpicFileImage,
 }));
 
 vi.mock("@/lib/links/open-link", () => ({
@@ -284,6 +298,9 @@ beforeEach(() => {
   openTile.mockClear();
   openModal.mockClear();
   appendEpicFileToNewConversationDraft.mockClear();
+  appendEpicFileImageToNewConversationDraft.mockClear();
+  readEpicFileImage.mockReset();
+  readEpicFileImage.mockResolvedValue(null);
   toastSuccess.mockClear();
   toastWarning.mockClear();
   __resetEpicFileEventsForTests();
@@ -525,11 +542,43 @@ describe("<BrowserTileCaptureControls /> screenshot save toast", () => {
     expect(toastSuccess).not.toHaveBeenCalled();
   });
 
-  it("attaches to chat and opens the tile from the toast actions", () => {
+  /**
+   * The TITLE says what happened, not what the file is called.
+   *
+   * A capture's file name ends in the tab's uuid, so `Saved
+   * 2026-...-9cb544e8-dbdc-46ea-bd23-e4a7d135f802.png` put a machine
+   * identifier in front of a person as the headline. The path is still in the
+   * description, and `epicFileName` is untouched - the Files panel's row still
+   * uses it.
+   */
+  it("titles the toast 'Screenshot saved' and keeps the path in the description", () => {
+    captureState.nextResponse = {
+      saved: { path: "files/screenshots/shot.png", sha256: "b".repeat(64) },
+    };
+    renderToolbar(PRIMARY_TILE_CHROME_CAPABILITIES, TARGET);
+
+    fireEvent.click(screen.getByRole("button", { name: "Capture screenshot" }));
+
+    const toastArgs = toastSuccess.mock.calls[0] as [
+      string,
+      { readonly description: string },
+    ];
+    expect(toastArgs[0]).toBe("Screenshot saved");
+    expect(toastArgs[1].description).toContain("files/screenshots/shot.png");
+    // No uuid in the title, which is the whole point.
+    expect(toastArgs[0]).not.toContain("shot.png");
+  });
+
+  it("attaches the bytes as an ordinary composer image, plus the path", async () => {
     const sha256 = "b".repeat(64);
     captureState.nextResponse = {
       saved: { path: "files/screenshots/shot.png", sha256 },
     };
+    readEpicFileImage.mockResolvedValue({
+      b64content: "aGVsbG8=",
+      mediaType: "image/png",
+      byteLength: 5,
+    });
     renderToolbar(PRIMARY_TILE_CHROME_CAPABILITIES, TARGET);
 
     fireEvent.click(screen.getByRole("button", { name: "Capture screenshot" }));
@@ -539,18 +588,26 @@ describe("<BrowserTileCaptureControls /> screenshot save toast", () => {
       string,
       { readonly action: ReactNode },
     ];
-    expect(toastArgs[0]).toBe("Saved shot.png");
     const action = toastArgs[1].action;
 
     render(action);
     fireEvent.click(screen.getByRole("button", { name: "Attach to chat" }));
-    expect(
-      appendEpicFileToNewConversationDraft,
-    ).toHaveBeenCalledExactlyOnceWith({
-      epicId: TARGET.epicId,
-      path: "files/screenshots/shot.png",
-      image: true,
+
+    // The draft is seeded from the BYTES, so the composer shows a thumbnail
+    // and the agent gets the attachment it would get from any pasted image -
+    // no `![...](files/...)` string the user message would never render.
+    await waitFor(() => {
+      expect(
+        appendEpicFileImageToNewConversationDraft,
+      ).toHaveBeenCalledExactlyOnceWith({
+        epicId: TARGET.epicId,
+        path: "files/screenshots/shot.png",
+        mediaType: "image/png",
+        b64content: "aGVsbG8=",
+        byteLength: 5,
+      });
     });
+    expect(appendEpicFileToNewConversationDraft).not.toHaveBeenCalled();
     expect(openModal).toHaveBeenCalledExactlyOnceWith({
       epicId: TARGET.epicId,
       tabId: TARGET.viewTabId,
@@ -558,6 +615,51 @@ describe("<BrowserTileCaptureControls /> screenshot save toast", () => {
       parentId: null,
       hostId: TARGET.hostId,
     });
+  });
+
+  it("degrades to the path-only draft when the bytes cannot be read", async () => {
+    captureState.nextResponse = {
+      saved: { path: "files/screenshots/shot.png", sha256: "b".repeat(64) },
+    };
+    // `null` is what a tombstoned entry, an upload still in flight, or an
+    // image over the composer's paste cap answers - none of them an error.
+    readEpicFileImage.mockResolvedValue(null);
+    renderToolbar(PRIMARY_TILE_CHROME_CAPABILITIES, TARGET);
+
+    fireEvent.click(screen.getByRole("button", { name: "Capture screenshot" }));
+    const toastArgs = toastSuccess.mock.calls[0] as [
+      string,
+      { readonly action: ReactNode },
+    ];
+    render(toastArgs[1].action);
+    fireEvent.click(screen.getByRole("button", { name: "Attach to chat" }));
+
+    await waitFor(() => {
+      expect(
+        appendEpicFileToNewConversationDraft,
+      ).toHaveBeenCalledExactlyOnceWith({
+        epicId: TARGET.epicId,
+        path: "files/screenshots/shot.png",
+      });
+    });
+    expect(appendEpicFileImageToNewConversationDraft).not.toHaveBeenCalled();
+    // The chat still opens - a byte read that failed must not swallow the
+    // affordance the user clicked.
+    expect(openModal).toHaveBeenCalledOnce();
+  });
+
+  it("opens the epic-file tile from the toast's other action", () => {
+    captureState.nextResponse = {
+      saved: { path: "files/screenshots/shot.png", sha256: "b".repeat(64) },
+    };
+    renderToolbar(PRIMARY_TILE_CHROME_CAPABILITIES, TARGET);
+
+    fireEvent.click(screen.getByRole("button", { name: "Capture screenshot" }));
+    const toastArgs = toastSuccess.mock.calls[0] as [
+      string,
+      { readonly action: ReactNode },
+    ];
+    render(toastArgs[1].action);
 
     fireEvent.click(screen.getByRole("button", { name: "Open" }));
     expect(openTile).toHaveBeenCalledOnce();
@@ -592,10 +694,13 @@ describe("<BrowserTileCaptureControls /> collaborator-sharing notice (D06)", () 
 
     capture();
 
-    expect(toastSuccess).toHaveBeenCalledExactlyOnceWith(
-      "Saved a.png",
-      expect.objectContaining({ description: SHARING_COPY }),
-    );
+    expect(toastSuccess).toHaveBeenCalledOnce();
+    const toastArgs = toastSuccess.mock.calls[0] as [
+      string,
+      { readonly description: string },
+    ];
+    expect(toastArgs[0]).toBe("Screenshot saved");
+    expect(toastArgs[1].description).toContain(SHARING_COPY);
   });
 
   it("does not repeat the notice on a second capture in the same epic", () => {
@@ -613,9 +718,11 @@ describe("<BrowserTileCaptureControls /> collaborator-sharing notice (D06)", () 
     expect(toastSuccess).toHaveBeenCalledTimes(2);
     const secondCallArgs = toastSuccess.mock.calls[1] as [
       string,
-      { readonly description: string | undefined },
+      { readonly description: string },
     ];
-    expect(secondCallArgs[1].description).toBeUndefined();
+    // The path and the time still travel; only the notice is spent.
+    expect(secondCallArgs[1].description).toContain("files/screenshots/b.png");
+    expect(secondCallArgs[1].description).not.toContain(SHARING_COPY);
   });
 
   it("carries the notice again in a different epic", () => {
@@ -638,8 +745,8 @@ describe("<BrowserTileCaptureControls /> collaborator-sharing notice (D06)", () 
     expect(toastSuccess).toHaveBeenCalledTimes(2);
     const secondCallArgs = toastSuccess.mock.calls[1] as [
       string,
-      { readonly description: string | undefined },
+      { readonly description: string },
     ];
-    expect(secondCallArgs[1].description).toBe(SHARING_COPY);
+    expect(secondCallArgs[1].description).toContain(SHARING_COPY);
   });
 });

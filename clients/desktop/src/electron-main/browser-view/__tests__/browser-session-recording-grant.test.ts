@@ -225,6 +225,21 @@ function requestAllowed(
   permission: string,
   webContents: unknown,
 ): boolean {
+  return requestAllowedWithDetails(handler, permission, webContents, {});
+}
+
+/**
+ * The `media` answers depend on the DETAILS Electron hands the handler, which
+ * differ per handler (`electron.d.ts`, Electron 42):
+ * `MediaAccessPermissionRequest.mediaTypes` on the request handler,
+ * `PermissionCheckHandlerHandlerDetails.mediaType` on the check one.
+ */
+function requestAllowedWithDetails(
+  handler: BrowserPermissionRequestHandler,
+  permission: string,
+  webContents: unknown,
+  details: unknown,
+): boolean {
   let allowed: boolean | null = null;
   handler(
     webContents,
@@ -232,7 +247,7 @@ function requestAllowed(
     (value) => {
       allowed = value;
     },
-    {},
+    details,
   );
   if (allowed === null) throw new Error("permission callback never invoked");
   return allowed;
@@ -446,7 +461,6 @@ describe("browser session recording grant boundary", () => {
       "storage-access",
       "top-level-storage-access",
       "geolocation",
-      "media",
       "notifications",
     ]) {
       expect(requestAllowed(requestHandler, permission, { id: 55 })).toBe(
@@ -457,13 +471,155 @@ describe("browser session recording grant boundary", () => {
       ).toBe(false);
     }
 
-    // display-capture is the one exception, and only for the helper.
+    // display-capture and a VIDEO media ask are the two exceptions, and only
+    // for the helper.
     expect(requestAllowed(requestHandler, "display-capture", { id: 55 })).toBe(
       true,
     );
     expect(
       checkHandler({ id: 55 }, "display-capture", "https://example.com", {}),
     ).toBe(true);
+    expect(requestAllowed(requestHandler, "media", { id: 55 })).toBe(true);
+
+    dispose();
+  });
+
+  /**
+   * THE BUG THIS MATRIX EXISTS FOR. Chromium runs a `getDisplayMedia` call
+   * through the MEDIA permission handlers before it ever consults
+   * `setDisplayMediaRequestHandler`, so a helper denied `media` had its
+   * `getDisplayMedia` rejected `NotAllowedError` and every recording ended
+   * `helper-start-failed`.
+   */
+  it("admits a registered helper's video media ask, refuses an audio one, and refuses every guest media ask", async () => {
+    const mod = await import("../browser-session");
+    const registry = await importRegistry();
+    const session = new FakePolicySession();
+    electronState.browserSession = session;
+    mod.ensureBrowserViewSession(PRIMARY);
+    const requestHandler = readRequestHandler(session);
+    const checkHandler = readCheckHandler(session);
+
+    const dispose = registry.registerRecordingHelper({
+      recordingId: "rec-a",
+      helperWebContentsId: 55,
+      helperFrame: () => ({ processId: 1, routingId: 11 }),
+      video: () => ({ guest: "A" }),
+    });
+
+    // Video, on both handlers' detail shapes, and on details that say nothing
+    // (`getDisplayMedia` is the only thing our helper document asks for).
+    for (const details of [
+      {},
+      { mediaTypes: ["video"] },
+      { mediaType: "video" },
+      { mediaType: "unknown" },
+    ]) {
+      expect(
+        requestAllowedWithDetails(requestHandler, "media", { id: 55 }, details),
+      ).toBe(true);
+      expect(
+        checkHandler({ id: 55 }, "media", "https://example.com", details),
+      ).toBe(true);
+    }
+
+    // Audio is refused outright - a recording has no audio track (D14).
+    for (const details of [
+      { mediaTypes: ["audio"] },
+      { mediaTypes: ["video", "audio"] },
+      { mediaType: "audio" },
+    ]) {
+      expect(
+        requestAllowedWithDetails(requestHandler, "media", { id: 55 }, details),
+      ).toBe(false);
+      expect(
+        checkHandler({ id: 55 }, "media", "https://example.com", details),
+      ).toBe(false);
+    }
+
+    // A helper still gets nothing else - the static allow-set included.
+    expect(
+      requestAllowed(requestHandler, "clipboard-sanitized-write", { id: 55 }),
+    ).toBe(false);
+    expect(
+      checkHandler(
+        { id: 55 },
+        "clipboard-sanitized-write",
+        "https://example.com",
+        {},
+      ),
+    ).toBe(false);
+
+    // An ordinary guest is refused media whatever it asks for, and
+    // display-capture too: `media` is not in BROWSER_ALLOWED_PERMISSIONS and
+    // this fix does not put it there.
+    for (const details of [
+      {},
+      { mediaTypes: ["video"] },
+      { mediaType: "video" },
+    ]) {
+      expect(
+        requestAllowedWithDetails(
+          requestHandler,
+          "media",
+          { id: 999 },
+          details,
+        ),
+      ).toBe(false);
+      expect(
+        checkHandler({ id: 999 }, "media", "https://example.com", details),
+      ).toBe(false);
+      expect(
+        requestAllowedWithDetails(requestHandler, "media", null, details),
+      ).toBe(false);
+    }
+    expect(requestAllowed(requestHandler, "display-capture", { id: 999 })).toBe(
+      false,
+    );
+
+    dispose();
+
+    // Revoked: the helper's own media ask goes back to a guest's answer.
+    expect(requestAllowed(requestHandler, "media", { id: 55 })).toBe(false);
+  });
+
+  /**
+   * ORDER. The permission check is what a `getDisplayMedia` hits first; the
+   * display-media request handler is only reached once it has said yes, and it
+   * is the one that names the guest frame.
+   */
+  it("consults the display-media request handler after the permission check, and answers the helper's own guest mainFrame", async () => {
+    const mod = await import("../browser-session");
+    const registry = await importRegistry();
+    const session = new FakePolicySession();
+    electronState.browserSession = session;
+    mod.ensureBrowserViewSession(PRIMARY);
+    const requestHandler = readRequestHandler(session);
+    const displayMediaHandler = readDisplayMediaHandler(session);
+
+    const guestMainFrame = { processId: 9, routingId: 90 };
+    const dispose = registry.registerRecordingHelper({
+      recordingId: "rec-a",
+      helperWebContentsId: 55,
+      helperFrame: () => ({ processId: 1, routingId: 11 }),
+      video: () => guestMainFrame,
+    });
+
+    const order: string[] = [];
+    const mediaAllowed = requestAllowedWithDetails(
+      requestHandler,
+      "media",
+      { id: 55 },
+      { mediaTypes: ["video"] },
+    );
+    order.push(`permission:${String(mediaAllowed)}`);
+    const streams = askDisplayMedia(displayMediaHandler, {
+      frame: { processId: 1, routingId: 11 },
+    });
+    order.push("display-media");
+
+    expect(order).toEqual(["permission:true", "display-media"]);
+    expect(streams).toEqual({ video: guestMainFrame });
 
     dispose();
   });

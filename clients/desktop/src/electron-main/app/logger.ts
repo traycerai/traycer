@@ -127,6 +127,30 @@ export function sanitizeLogValue(value: unknown, depth: number): SafeLogValue {
   return redactLogText(String(value));
 }
 
+export interface ErrorLikeFields {
+  readonly name: string;
+  readonly message: string;
+}
+
+/**
+ * The `name`/`message` of a rejection that is not an `Error`.
+ *
+ * A value that CROSSED A PROCESS is the case this exists for:
+ * `webContents.executeJavaScript` structured-clones a page's `DOMException`
+ * into a plain `{ name, message }`, which is not an `Error`, so `String()`
+ * renders it `[object Object]` and the log line names nothing. `null` for a
+ * value that carries no string `message` - the caller keeps its old rendering.
+ */
+export function readErrorLikeFields(value: unknown): ErrorLikeFields | null {
+  if (value instanceof Error) {
+    return { name: value.name, message: value.message };
+  }
+  if (!isRecord(value)) return null;
+  const { name, message } = value;
+  if (typeof message !== "string") return null;
+  return { name: typeof name === "string" ? name : "Error", message };
+}
+
 export function describeLogError(error: unknown): SafeLogFields {
   if (error instanceof Error) {
     return {
@@ -134,6 +158,14 @@ export function describeLogError(error: unknown): SafeLogFields {
       message: redactLogText(error.message),
       stack:
         typeof error.stack === "string" ? redactLogText(error.stack) : null,
+    };
+  }
+  const errorLike = readErrorLikeFields(error);
+  if (errorLike !== null) {
+    return {
+      name: errorLike.name,
+      message: redactLogText(errorLike.message),
+      stack: null,
     };
   }
   return {

@@ -537,7 +537,10 @@ import {
   epicListTuiAgentsV12,
 } from "@traycer/protocol/host/epic/tui-agent-records";
 import { epicFileEventsV10 } from "@traycer/protocol/host/epic/files";
-import { epicStateSubscribeV10 } from "@traycer/protocol/host/epic/state-subscribe";
+import {
+  epicStateSubscribeV10,
+  epicStateSubscribeV11,
+} from "@traycer/protocol/host/epic/state-subscribe";
 import {
   epicStatusSubscribeV10,
   epicStatusSubscribeV11,
@@ -9891,12 +9894,18 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // be treated as ONE capability by a client (advertising two of three is a host
   // that cannot serve an epic at all). None may ever be added to the unary
   // released floor (`released-floor.ts`), which is fail-closed on the name set.
+  // `@1.0` shipped in cli-v1.3.0 and is frozen there. The epic-files manifest
+  // this branch carries on `snapshot` / `delta` therefore lives at `@1.1`; the
+  // host gates it on the negotiated minor (`EPIC_STATE_FILES_MINOR`).
   "epic.state.subscribe": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicStateSubscribeV10,
+        },
+        1: {
+          contract: epicStateSubscribeV11,
         },
       },
     },

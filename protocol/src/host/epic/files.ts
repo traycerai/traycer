@@ -269,10 +269,10 @@ export type StartTabRecordingRequest = z.infer<
 >;
 
 /**
- * A refused start, as data. Every one of these is a CAP or a placement fact the
- * host checked before doing any work (D21), which makes them answers rather
- * than errors: the user asked for something this tab or this host cannot give
- * right now, and the toolbar renders why instead of a generic failure.
+ * A refused start, as data. Every one of these is a CAP, a placement fact or a
+ * failure the host met while bringing the recorder up, which makes them answers
+ * rather than errors: the user asked for something this tab or this host cannot
+ * give right now, and the toolbar renders why instead of a generic failure.
  *
  * Closed for the same reason as the unavailable reasons above - the client
  * branches on it - so a new cap arrives as an additive minor.
@@ -286,6 +286,19 @@ export const startTabRecordingRefusalSchema = z.enum([
   "host-limit",
   /** The tab's runtime has no capture path (no helper document available). */
   "unsupported-runtime",
+  /**
+   * The capture path exists, but this run could not be brought up on it: the
+   * helper never reported ready, it ended during the handshake, or the tab's
+   * viewport could not be read or applied.
+   *
+   * Distinct from `unsupported-runtime` because the two mean opposite things
+   * to a person: that one says "not on this tab, don't try again", this one
+   * says "it broke, try again". The host keeps WHICH failure it was in its own
+   * WARN (`reason=helper-ended:<reason>` / `helper-not-ready` / `viewport`);
+   * the wire carries only the class, because the detail includes text the
+   * desktop wrote and a refusal enum is not a place to put it.
+   */
+  "helper-failed",
 ]);
 export type StartTabRecordingRefusal = z.infer<
   typeof startTabRecordingRefusalSchema

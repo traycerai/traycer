@@ -63,6 +63,7 @@ import type {
   EpicArtifactRecord,
   EpicCommentThreadRecord,
   EpicDeletedArtifactRecord,
+  EpicFileWireEntry,
   EpicMeta,
 } from "@traycer/protocol/host/epic/state-subscribe";
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
@@ -98,7 +99,21 @@ export type EpicStateRow =
    * the whole reason it is a separate member rather than the same one with
    * missing keys.
    */
-  | { readonly kind: "epic-meta-patch"; readonly meta: Partial<EpicMeta> };
+  | { readonly kind: "epic-meta-patch"; readonly meta: Partial<EpicMeta> }
+  /**
+   * The whole epic-files manifest (D02), tombstones included, revisioned as a
+   * SET for the same reason the claims are: the host reads it in one lenient
+   * pass and a per-path delta would carry no fact the entry's own `deletedAt`
+   * does not already state.
+   *
+   * On the wire since `epic.state.subscribe@1.1`. A host below that minor
+   * sends no such row at all, and the slice it feeds is empty - which is
+   * exactly what a `@1.0` host means.
+   */
+  | {
+      readonly kind: "epic-files";
+      readonly files: readonly EpicFileWireEntry[];
+    };
 
 const ARTIFACT_ROW_PREFIX = "artifact:";
 const ARTIFACT_TOMBSTONE_ROW_PREFIX = "artifact-tombstone:";
@@ -148,6 +163,12 @@ export const ROLE_CLAIMS_ROW_ID = "role-claims";
  * whole record was looking somewhere else.
  */
 export const EPIC_META_ROW_ID = "epic-meta";
+
+/**
+ * The epic-files manifest row's key. A singleton like the two above: the whole
+ * manifest is one row, replaced wholesale and fenced by the set's own revision.
+ */
+export const EPIC_FILES_ROW_ID = "epic-files";
 
 /**
  * The removal reason stamped on an artifact's live row when the lane
