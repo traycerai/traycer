@@ -85,6 +85,7 @@ import {
   type ProviderRailView,
 } from "./provider-rail-filter";
 import { TerminalAgentArgsSection } from "./terminal-agent-args-section";
+import { ProviderAutoJudgeSection } from "./provider-auto-judge-section";
 import { ProviderEnvOverridesSection } from "./provider-env-overrides-section";
 import { ProviderSectionSelect } from "./provider-section-select";
 import { ProviderCliCandidatesSection } from "./provider-cli-candidates-section";
@@ -1361,6 +1362,11 @@ function ProviderTabBody({
             key={state.terminalAgentArgs}
             state={state}
           />
+          {/* Keyed by provider, not by the stored value: this section holds a
+              local echo of the user's choice while the host's read-back is in
+              flight, and that echo belongs to one provider. Switching
+              providers must discard it. */}
+          <ProviderAutoJudgeSection key={state.providerId} state={state} />
         </div>
       );
     case "env":

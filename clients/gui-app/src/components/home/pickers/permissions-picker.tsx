@@ -38,11 +38,28 @@ interface PermissionsPickerProps {
    * default-permission row).
    */
   harnessLabel: string | null;
+  /**
+   * Where focus lands when the menu closes.
+   *
+   * `"composer"` hands it back to the composer editor so the user can keep
+   * typing - the whole reason this control sits in a composer toolbar. A
+   * SETTINGS row must pass `"trigger"`: the composer registry is app-global and
+   * its inactive fallback can name an editor on a canvas behind the settings
+   * surface, so closing this menu there would pull focus (and the tab it lives
+   * in) out from under the panel the user is reading.
+   */
+  closeFocus: "composer" | "trigger";
 }
 
 export function PermissionsPicker(props: PermissionsPickerProps) {
-  const { value, disabled, onChange, supportedPermissionModes, harnessLabel } =
-    props;
+  const {
+    value,
+    disabled,
+    onChange,
+    supportedPermissionModes,
+    harnessLabel,
+    closeFocus,
+  } = props;
   const unsupportedSuffix = harnessLabel ?? "this provider";
   // Display value is the *normalized* one: when the sticky value isn't in the
   // active harness's supported set (rehydration of a saved chat, the one-frame
@@ -87,7 +104,9 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
         // Return focus to the composer editor instead of the trigger pill so
         // the user can keep typing after picking a mode. Without this Radix
         // restores focus to the trigger, leaving the caret out of the textbox.
+        // A `"trigger"` caller keeps Radix's own restore (see `closeFocus`).
         onCloseAutoFocus={(event) => {
+          if (closeFocus !== "composer") return;
           if (focusActiveComposer()) event.preventDefault();
         }}
       >

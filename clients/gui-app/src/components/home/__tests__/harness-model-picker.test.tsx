@@ -982,6 +982,7 @@ interface RenderPickerInput {
    */
   readonly storeModels?: ReadonlyArray<ModelOption>;
   readonly withServiceTier?: boolean;
+  readonly withReasoning?: boolean;
   readonly tuiOnly?: boolean;
   readonly lockedHarnessId?: ProviderId | null;
   readonly disabled?: boolean;
@@ -1055,6 +1056,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
           labelDisplay="responsive"
           store={store}
           withServiceTier={resolvedInput.withServiceTier ?? false}
+          withReasoning={resolvedInput.withReasoning ?? true}
           tuiOnly={resolvedInput.tuiOnly ?? false}
           lockedHarnessId={resolvedInput.lockedHarnessId ?? null}
           disabled={disabled}

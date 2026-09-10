@@ -44,6 +44,7 @@ function ComposerToolbarLeftImpl(props: ComposerToolbarLeftProps) {
         onChange={onPermissionChange}
         supportedPermissionModes={supportedPermissionModes}
         harnessLabel={harnessLabel}
+        closeFocus="composer"
       />
       {showNextTurnPermissionNote ? (
         <output

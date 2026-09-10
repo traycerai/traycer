@@ -18,6 +18,7 @@ import {
   permissionModeSchema,
   permissionModeSchemaPreAuto,
 } from "@traycer/protocol/persistence/epic/foundation";
+import { providerCliStateSchema } from "@traycer/protocol/host/provider-schemas";
 
 /**
  * The auto-mode protocol change, asserted where a compile cannot see it.
@@ -44,6 +45,25 @@ import {
  * refuses by default; the entry claims the growth is emission-gated, and the
  * validator rejects that claim if the growth ever disappears.
  */
+/**
+ * The minimum a live `ProviderCliState` needs; every other field carries a
+ * `.catch(...)` and fills itself. Deliberately does NOT name `autoJudge` - two
+ * of the assertions below are about what happens when it is absent.
+ */
+function providerStateFixture(): Record<string, unknown> {
+  return {
+    providerId: "claude-code",
+    enabled: true,
+    disabledBy: null,
+    selected: { kind: "bundled" },
+    candidates: [],
+    authPending: false,
+    checkedAt: null,
+    apiKey: { supported: false, configured: false, source: null },
+    auth: { status: "unknown", badgeText: null, label: null, detail: null },
+  };
+}
+
 describe("auto-mode protocol change", () => {
   it("constructs both host registries (the annotations parse)", () => {
     // Reached only if the module-level validation above did not throw. The
@@ -137,6 +157,43 @@ describe("auto-mode protocol change", () => {
         profileId: null,
       }).success,
     ).toBe(false);
+  });
+
+  it("publishes the stored judge on the head providers.list line only", () => {
+    // `providers.setAutoJudge` writes; without this read half the Providers >
+    // General switch could not show its own value after a reload.
+    const majorEight = hostRpcRegistry["providers.list"][8];
+    const head = majorEight.versions[majorEight.latestMinor].contract;
+    const frozen = majorEight.versions[0].contract;
+
+    const withJudge = {
+      ...providerStateFixture(),
+      autoJudge: "provider" as const,
+    };
+    const headParsed = head.responseSchema.parse({
+      providers: [withJudge],
+      native: null,
+    });
+    expect(headParsed.providers[0].autoJudge).toBe("provider");
+
+    // 8.0 needs no bridge: a new KEY is STRIPPED by the within-major re-parse,
+    // unlike a new enum member, which would fail the whole response. That is
+    // the entire reason this rides a minor with no emission gating.
+    const frozenParsed = frozen.responseSchema.parse({
+      providers: [withJudge],
+      native: null,
+    });
+    expect(Object.hasOwn(frozenParsed.providers[0], "autoJudge")).toBe(false);
+  });
+
+  it("leaves `autoJudge` absent rather than defaulted", () => {
+    // `.optional()`, not `.default("traycer")`: absent must stay absent so the
+    // field is not required on OUTPUT, which is what keeps it out of every
+    // `ProviderCliState` construction site in the renderer. Readers spell the
+    // fallback themselves.
+    const parsed = providerCliStateSchema.parse(providerStateFixture());
+    expect(Object.hasOwn(parsed, "autoJudge")).toBe(false);
+    expect(parsed.autoJudge ?? "traycer").toBe("traycer");
   });
 
   it("rejects an unknown judge kind", () => {

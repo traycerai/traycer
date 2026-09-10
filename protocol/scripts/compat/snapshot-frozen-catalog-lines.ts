@@ -45,6 +45,7 @@ import {
   providersListRequestSchemaBeforeV70,
   providersListResponseSchema,
   providersListResponseSchemaV70,
+  providersListResponseSchemaV80,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
@@ -140,7 +141,11 @@ const FIXTURES = {
   // so the FIRST attempt to grow the live shape goes red on this row rather
   // than on the release that ships the growth. Same response then applies -
   // freeze the line that stopped being head, open the next one.
-  "providers.list@8.0": dump(providersListResponseSchema),
+  // 8.0 froze when 8.1 opened to publish the per-provider `autoJudge`. Its
+  // dump is unchanged by that freeze.
+  "providers.list@8.0": dump(providersListResponseSchemaV80),
+  // The head line, so growth of the live provider state fails here first.
+  "providers.list@8.1": dump(providersListResponseSchema),
   // The REQUEST lines carry their own freeze history (`native` grew the
   // already-shipped v4.0/v5.0/v6.0 requests before `host-v1.1.10` re-pinned
   // them), and nothing pinned them locally until now - the tag-based gate was

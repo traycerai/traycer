@@ -7,6 +7,7 @@ import { SettingsGroup } from "@/components/settings/settings-group";
 import { VoiceSettingsSection } from "@/components/settings/voice-settings-section";
 import { PreventSleepSettingsSection } from "@/components/settings/prevent-sleep-settings-section";
 import { WorktreeBranchPrefixSection } from "@/components/settings/worktree-branch-prefix-section";
+import { PermissionsPicker } from "@/components/home/pickers/permissions-picker";
 import { BrowserSettingsSection } from "@/components/settings/browser-settings-section";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import { cn } from "@/lib/utils";
@@ -39,6 +40,8 @@ function trackGeneralSetting(setting: AnalyticsSetting): void {
 export function GeneralSettingsPanel() {
   const navigate = useNavigate();
   const restartOnboarding = useOnboardingStore((s) => s.restart);
+  const defaultPermission = useSettingsStore((s) => s.defaultPermission);
+  const setDefaultPermission = useSettingsStore((s) => s.setDefaultPermission);
   const showGlobalResourceMonitor = useSettingsStore(
     (s) => s.showGlobalResourceMonitor,
   );
@@ -83,6 +86,33 @@ export function GeneralSettingsPanel() {
           dataTestId={undefined}
           fill={false}
         >
+          {/* Application scope, deliberately: this is one preference for this
+              app, not per machine, so it belongs here rather than under the
+              sidebar's host picker (SETTINGS.md, "Scope: the organising
+              idea"). The Auto-mode judge it pairs with IS per machine and
+              lives on the host-scoped Agent selection page for the same
+              reason. */}
+          <SettingsRow
+            label="Default permission mode"
+            description="What a new conversation starts under. A machine you have already run agents on reuses the mode it last ran with; this is what a fresh one opens on, and any chat can still change its own."
+            control={
+              <PermissionsPicker
+                value={defaultPermission}
+                disabled={false}
+                onChange={(next) => {
+                  trackGeneralSetting("defaultPermission");
+                  setDefaultPermission(next);
+                }}
+                // No harness scope: the default is install-wide and every
+                // option stays enabled. A provider that does not honour the
+                // chosen mode narrows it in the composer, where a harness is
+                // actually selected.
+                supportedPermissionModes={null}
+                harnessLabel={null}
+                closeFocus="trigger"
+              />
+            }
+          />
           <VoiceSettingsSection />
           <SettingsRow
             label="Quote reply on text selection"

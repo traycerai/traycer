@@ -783,6 +783,7 @@ import {
   // shape.
   providersListRequestSchema,
   providersListResponseSchema,
+  providersListResponseSchemaV80,
   providersListRequestSchemaBeforeV70,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
@@ -1940,7 +1941,46 @@ export const providersListV80 = defineRpcContract({
   method: "providers.list",
   schemaVersion: { major: 8, minor: 0 } as const,
   requestSchema: providersListRequestSchema,
+  // Frozen at the pre-`autoJudge` provider state when 8.1 opened, exactly as
+  // 7.0 froze when 7.1 opened. See `providersListResponseSchemaV80`.
+  responseSchema: providersListResponseSchemaV80,
+});
+
+/**
+ * `providers.list@8.1` - publishes the per-provider auto-mode judge.
+ *
+ * `providers.setAutoJudge` writes the value; nothing read it back, so the
+ * Providers > General switch could not show its own stored state after a
+ * reload. This is the read half, and `providers.list` is its only possible
+ * carrier: the `providers.set*` state ECHOES are pinned to frozen shapes on
+ * purpose (`providerMutationCliStateSchemaV21`'s note - "add them to the live
+ * `providerCliStateBaseShape` and let `providers.list` publish them"), and an
+ * echo cannot answer a question the caller did not just ask anyway.
+ *
+ * A MINOR, with no `responseGrowthProjectionGated`: `autoJudge` is a new KEY,
+ * which a within-major re-parse strips for an 8.0 peer. Only a new ENUM MEMBER
+ * needs the emission-gated annotation, which is why
+ * `agent.gui.listHarnesses@8.1` carries one and this does not.
+ */
+export const providersListV81 = defineRpcContract({
+  method: "providers.list",
+  schemaVersion: { major: 8, minor: 1 } as const,
+  requestSchema: providersListRequestSchema,
   responseSchema: providersListResponseSchema,
+});
+
+export const providersListUpgradeV80ToV81 = defineUpgradePath<
+  typeof providersListV80,
+  typeof providersListV81
+>({
+  from: { major: 8, minor: 0 },
+  to: { major: 8, minor: 1 },
+  upgradeRequest: (request) => request,
+  // Nothing to fill: `autoJudge` is optional on 8.1, and an 8.0 host genuinely
+  // has no judge preference to report. Absent stays absent, and the reader's
+  // `?? "traycer"` supplies the documented default - which is the whole reason
+  // the field is `.optional()` rather than defaulted.
+  upgradeResponse: (response) => response,
 });
 
 export const providersListUpgradeV70ToV80 = defineUpgradePath<
@@ -2309,10 +2349,10 @@ function enabledProviderProfilesOnly(
 }
 
 export const providersListDowngradeV8ToV7 = defineDowngradePath<
-  typeof providersListV80,
+  typeof providersListV81,
   typeof providersListV70
 >({
-  from: { major: 8, minor: 0 },
+  from: { major: 8, minor: 1 },
   to: { major: 7, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -2328,10 +2368,10 @@ export const providersListDowngradeV8ToV7 = defineDowngradePath<
 });
 
 export const providersListDowngradeV8ToV6 = defineDowngradePath<
-  typeof providersListV80,
+  typeof providersListV81,
   typeof providersListV60
 >({
-  from: { major: 8, minor: 0 },
+  from: { major: 8, minor: 1 },
   to: { major: 6, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -2348,10 +2388,10 @@ export const providersListDowngradeV8ToV6 = defineDowngradePath<
 });
 
 export const providersListDowngradeV8ToV5 = defineDowngradePath<
-  typeof providersListV80,
+  typeof providersListV81,
   typeof providersListV50
 >({
-  from: { major: 8, minor: 0 },
+  from: { major: 8, minor: 1 },
   to: { major: 5, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -2368,10 +2408,10 @@ export const providersListDowngradeV8ToV5 = defineDowngradePath<
 });
 
 export const providersListDowngradeV8ToV4 = defineDowngradePath<
-  typeof providersListV80,
+  typeof providersListV81,
   typeof providersListV40
 >({
-  from: { major: 8, minor: 0 },
+  from: { major: 8, minor: 1 },
   to: { major: 4, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -2388,10 +2428,10 @@ export const providersListDowngradeV8ToV4 = defineDowngradePath<
 });
 
 export const providersListDowngradeV8ToV3 = defineDowngradePath<
-  typeof providersListV80,
+  typeof providersListV81,
   typeof providersListV30
 >({
-  from: { major: 8, minor: 0 },
+  from: { major: 8, minor: 1 },
   to: { major: 3, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -2408,10 +2448,10 @@ export const providersListDowngradeV8ToV3 = defineDowngradePath<
 });
 
 export const providersListDowngradeV8ToV2 = defineDowngradePath<
-  typeof providersListV80,
+  typeof providersListV81,
   typeof providersListV20
 >({
-  from: { major: 8, minor: 0 },
+  from: { major: 8, minor: 1 },
   to: { major: 2, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -2428,10 +2468,10 @@ export const providersListDowngradeV8ToV2 = defineDowngradePath<
 });
 
 export const providersListDowngradeV8ToV1 = defineDowngradePath<
-  typeof providersListV80,
+  typeof providersListV81,
   typeof providersListV10
 >({
-  from: { major: 8, minor: 0 },
+  from: { major: 8, minor: 1 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({
     ok: true,
@@ -8192,11 +8232,15 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
       },
     },
     8: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: providersListV80,
           upgradeFromPreviousVersion: providersListUpgradeV70ToV80,
+        },
+        1: {
+          contract: providersListV81,
+          upgradeFromPreviousVersion: providersListUpgradeV80ToV81,
         },
       },
       downgradePathsFromLatest: {

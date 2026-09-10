@@ -141,6 +141,7 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
         <HarnessModelPicker
           store={store}
           withServiceTier
+          withReasoning
           tuiOnly={false}
           lockedHarnessId={null}
           disabled={settingsLocked}

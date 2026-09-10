@@ -20,6 +20,7 @@ import {
   providersListResponseSchema,
   providersListResponseSchemaV60,
   providersListResponseSchemaV70,
+  providersListResponseSchemaV80,
   providersListResponseSchemaV70Preimage,
 } from "@traycer/protocol/host/provider-schemas";
 
@@ -155,8 +156,8 @@ describe("the v7-era schemas are distinct objects from the canonical live ones",
     );
   });
 
-  it("v8.0 is the head and names the canonical response; 7.0 names its freeze", () => {
-    // This assertion has now flipped four times, and the flips ARE the
+  it("the head minor names the canonical response; every line below it is frozen", () => {
+    // This assertion has now flipped five times, and the flips ARE the
     // judgement the freeze rule exists to force. While an unreleased v8.0 sat
     // above v7.0, v7.0 was pinned; collapsing that major made v7.0 the head and
     // it tracked live again; opening a v7.1 for the auth-aware enablement
@@ -170,12 +171,27 @@ describe("the v7-era schemas are distinct objects from the canonical live ones",
     // now, and 7.0 must not drift back onto live just because the line
     // immediately above it went away.
     //
+    // The FIFTH flip opened `8.1` to publish the per-provider `autoJudge`, so
+    // 8.0 is frozen too and the head is no longer minor 0. That is why the head
+    // is now read through `latestMinor` instead of a hard-coded `versions[0]`:
+    // the assertion is about the HEAD naming live, and spelling the head as a
+    // literal made this test fail on a bookkeeping detail every single time the
+    // thing it actually guards behaved correctly.
+    //
     // "A line that has STOPPED being the head still points at live" is the
     // defect being guarded, so both halves are asserted: the head names live,
     // and the line below it does not.
-    const v70 = hostRpcRegistry["providers.list"][7].versions[0].contract;
-    const v80 = hostRpcRegistry["providers.list"][8].versions[0].contract;
-    expect(v80.responseSchema).toBe(providersListResponseSchema);
+    const majorSeven = hostRpcRegistry["providers.list"][7];
+    const majorEight = hostRpcRegistry["providers.list"][8];
+    const v70 = majorSeven.versions[0].contract;
+    const v80 = majorEight.versions[0].contract;
+    const head = majorEight.versions[majorEight.latestMinor].contract;
+
+    // The head names live, whichever minor the head happens to be.
+    expect(head.responseSchema).toBe(providersListResponseSchema);
+    // ...and nothing below it does, on either major.
+    expect(v80.responseSchema).toBe(providersListResponseSchemaV80);
+    expect(v80.responseSchema).not.toBe(providersListResponseSchema);
     expect(v70.responseSchema).toBe(providersListResponseSchemaV70);
     expect(v70.responseSchema).not.toBe(providersListResponseSchema);
     expect(v70.responseSchema).not.toBe(providersListResponseSchemaV70Preimage);
@@ -194,6 +210,7 @@ describe("the v7-era schemas are distinct objects from the canonical live ones",
     // while the response is not.
     expect(v70.requestSchema).toBe(providersListRequestSchema);
     expect(v80.requestSchema).toBe(providersListRequestSchema);
+    expect(head.requestSchema).toBe(providersListRequestSchema);
     expect(v70.requestSchema).not.toBe(providersListRequestSchemaV70);
   });
 

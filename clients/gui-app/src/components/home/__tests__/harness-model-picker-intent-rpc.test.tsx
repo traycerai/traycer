@@ -419,6 +419,7 @@ function renderPickerWithFixture(
             labelDisplay="responsive"
             store={store}
             withServiceTier={false}
+            withReasoning
             tuiOnly={false}
             lockedHarnessId={null}
             disabled={false}

@@ -930,6 +930,86 @@ describe("<SessionImportRunController />", () => {
       );
     });
 
+    // `session-import-wizard.tsx` mounts `useGuiHarnessesQueryForClient` for
+    // the import TARGET host, warming the `agent.gui.listHarnesses` cache slot
+    // this gate reads - specifically so a REMOTE host (one whose
+    // `sessionImport.run` schema version this window has never negotiated, so
+    // `getMethodSchemaVersion` answers `null`) can still prove it understands
+    // `auto` off that cached row instead of the schema-version fact. These two
+    // cases pin the read side of that fix: same gate, same mechanism as the
+    // "host-auto-cached" / "host-auto-unproven" cases above, but for a host
+    // shaped like the wizard's remote import target rather than the ambient
+    // one this controller otherwise runs against.
+    it("opens with permissionMode 'auto' for a remote-shaped host whose cached listHarnesses row advertises it", () => {
+      streamBinding.current = createStreamBinding("host-remote-import-target");
+      useSettingsStore.setState({ defaultPermission: "auto" });
+      const response: ListGuiHarnessesResponse = {
+        harnesses: [
+          {
+            id: "claude",
+            label: "Claude Code",
+            enabled: true,
+            available: true,
+            error: null,
+            modes: ["gui", "tui"],
+            requiresApiKey: false,
+            supportedPermissionModes: [
+              "supervised",
+              "auto_accept_edits",
+              "auto",
+              "full_access",
+            ],
+            nativeAutoJudge: false,
+            availabilityPending: false,
+          },
+        ],
+      };
+      queryDataHarness.value = response;
+      render(<SessionImportRunController />);
+      const handle = getSessionImportStartHandle();
+      if (handle === null) {
+        throw new Error("Expected a session import start handle.");
+      }
+
+      act(() => {
+        handle.start(
+          {
+            selections: [SELECTION],
+            titles: new Map([["claude:s1", "My session"]]),
+          },
+          startTarget(),
+        );
+      });
+
+      expect(requireInstance(1).permissionMode).toBe("auto");
+    });
+
+    it("demotes to 'auto_accept_edits' for a remote-shaped host with an empty listHarnesses cache slot", () => {
+      streamBinding.current = createStreamBinding(
+        "host-remote-import-target-empty",
+      );
+      useSettingsStore.setState({ defaultPermission: "auto" });
+      // No `queryDataHarness.value` seeded - the warm-up query never landed a
+      // row for this host, the same as a host too old to answer it at all.
+      render(<SessionImportRunController />);
+      const handle = getSessionImportStartHandle();
+      if (handle === null) {
+        throw new Error("Expected a session import start handle.");
+      }
+
+      act(() => {
+        handle.start(
+          {
+            selections: [SELECTION],
+            titles: new Map([["claude:s1", "My session"]]),
+          },
+          startTarget(),
+        );
+      });
+
+      expect(requireInstance(1).permissionMode).toBe("auto_accept_edits");
+    });
+
     it("never touches a non-auto default even when the host has proven nothing", () => {
       streamBinding.current = createStreamBinding("host-auto-not-relevant");
       useSettingsStore.setState({ defaultPermission: "full_access" });

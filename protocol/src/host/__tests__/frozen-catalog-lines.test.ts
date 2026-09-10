@@ -28,6 +28,7 @@ import {
   providersListRequestSchemaBeforeV70,
   providersListResponseSchema,
   providersListResponseSchemaV70,
+  providersListResponseSchemaV80,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
   providersListResponseSchemaV30,
@@ -119,7 +120,13 @@ const LIVE_FROZEN_EXPORTS = {
   // list and the snapshot's key set are held equal below, so deleting a row
   // here without deleting the fixture (or the reverse) fails rather than
   // silently narrowing what is guarded.
-  "providers.list@8.0": providersListResponseSchema,
+  // 8.0 froze when 8.1 opened to publish the per-provider `autoJudge`. Same
+  // response as when it was head - it names the frozen schema now and its dump
+  // is unchanged, so this row was NOT regenerated.
+  "providers.list@8.0": providersListResponseSchemaV80,
+  // The head line, holding 8.0's old job: it names the LIVE schema, so the next
+  // attempt to grow the provider state fails here first.
+  "providers.list@8.1": providersListResponseSchema,
   // The fourth method (see the snapshot script for why it is here): its
   // response carries the PERSISTED harness enum, it is off the released floor,
   // and nothing local guarded it until Reasonix grew it and only the tag gate

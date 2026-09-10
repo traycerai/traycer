@@ -11,6 +11,7 @@
  */
 import { z } from "zod";
 import type { TuiHarnessId } from "@traycer/protocol/host/agent/shared";
+import { autoJudgeKindSchema } from "@traycer/protocol/host/auto-mode/contracts";
 import {
   providerIdSchema,
   providerIdSchemaV10,
@@ -1364,6 +1365,22 @@ const providerCliStateBaseShape = {
   // as a terminal agent (the host tokenizes and appends them to the spawned
   // argv). Only meaningful for terminal-agent-capable providers; "" when unset.
   terminalAgentArgs: z.string().catch(""),
+  // Which classifier decides this provider's `auto`-mode approvals. Persisted
+  // beside `terminalAgentArgs` in `provider-overrides.json` and written by
+  // `providers.setAutoJudge`; this is the READ half, without which the
+  // Providers > General switch could not show its own stored value after a
+  // reload.
+  //
+  // `.optional()`, NOT `.default("traycer")` / `.catch(...)` - and the choice
+  // is load-bearing in two directions. On the wire it is the `authStatus`
+  // shape: a host too old to know about auto mode omits the key, and absent
+  // stays distinguishable from a real verdict. In the TYPE it is what keeps
+  // this field off every construction site: a defaulted field is required on
+  // OUTPUT, so it would have forced a fill into every `ProviderCliState`
+  // fixture in the renderer, which is the churn `nativeAutoJudge` caused on
+  // the harness row. Readers spell the fallback themselves
+  // (`state.autoJudge ?? "traycer"`), matching the documented default.
+  autoJudge: autoJudgeKindSchema.optional(),
   // Per-provider environment overrides applied when the host spawns this
   // provider's harness. Sorted by key for stable rendering; `[]` when unset.
   envOverrides: z.array(providerEnvOverrideSchema).catch([]),
@@ -1538,6 +1555,28 @@ export const providerCliStateSchema = z.object({
 export type ProviderCliState = z.infer<typeof providerCliStateSchema>;
 
 /**
+ * Frozen `providers.list@8.0` provider state: the live shape as it stood
+ * before `autoJudge`.
+ *
+ * 8.0 stopped being the head line when 8.1 opened to publish the per-provider
+ * auto-mode judge, and is frozen here exactly as 7.0 was frozen when 7.1
+ * opened. Built by OMITTING the new key from the live shape rather than
+ * hand-copying twenty fields: the freeze is one field wide, and a hand copy of
+ * this particular object is what drifted twice before (see
+ * `providerMutationCliStateSchemaV21`'s note). `.omit()` states the delta
+ * itself, so it cannot fall out of step with the live shape it is a snapshot
+ * of - and a SECOND field added to the live state fails the frozen-catalog
+ * snapshot here rather than silently widening 8.0.
+ *
+ * Do NOT add fields here. Add them to `providerCliStateBaseShape` above, which
+ * only 8.1 (the head line) publishes.
+ */
+export const providerCliStateSchemaV80 = providerCliStateSchema.omit({
+  autoJudge: true,
+});
+export type ProviderCliStateV80 = z.infer<typeof providerCliStateSchemaV80>;
+
+/**
  * Canonical (live) `providers.list` request. Optional `native` list/discover
  * query folds the mcp/plugins/skills list verbs onto this carrier. Callers on
  * any earlier line predate it, so the v6.0 -> v7.0 upgrade fills `native: null`
@@ -1619,6 +1658,24 @@ export const providersListResponseSchema = z.object({
   native: nativeListResultSchema.nullable().default(null),
 });
 export type ProvidersListResponse = z.infer<typeof providersListResponseSchema>;
+
+/**
+ * Frozen `providers.list@8.0` response - the pre-`autoJudge` provider state.
+ *
+ * An 8.0 peer needs no bridge to reach it: `autoJudge` is a new KEY, and a
+ * within-major re-parse through this shape strips an unknown key rather than
+ * rejecting it (unlike a new ENUM MEMBER, which is what forced
+ * `responseGrowthProjectionGated` on `agent.gui.listHarnesses@8.1`). The
+ * cross-major bridges get it free for the same reason: every one of them
+ * re-parses through a frozen `providerCliStateSchemaV*`.
+ */
+export const providersListResponseSchemaV80 = z.object({
+  providers: z.array(providerCliStateSchemaV80),
+  native: nativeListResultSchema.nullable().default(null),
+});
+export type ProvidersListResponseV80 = z.infer<
+  typeof providersListResponseSchemaV80
+>;
 
 // ── Frozen protocol-v2.0 provider state + list response (before Amp) ───────
 // `providers.list` always returns every provider; v2.0 shipped without Amp, so

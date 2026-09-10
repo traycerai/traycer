@@ -8,6 +8,7 @@ export const providersMutationKeys = {
   setApiKey: () => ["providers.setApiKey"] as const,
   clearApiKey: () => ["providers.clearApiKey"] as const,
   setTerminalAgentArgs: () => ["providers.setTerminalAgentArgs"] as const,
+  setAutoJudge: () => ["providers.setAutoJudge"] as const,
   setEnvOverride: () => ["providers.setEnvOverride"] as const,
   deleteEnvOverride: () => ["providers.deleteEnvOverride"] as const,
   startLogin: () => ["providers.startLogin"] as const,

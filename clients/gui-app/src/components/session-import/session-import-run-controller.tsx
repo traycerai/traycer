@@ -89,8 +89,17 @@ function importPermissionModeFor(input: {
  *   - the host's cached `agent.gui.listHarnesses` rows offer `auto` in a
  *     `supportedPermissionModes` array. A host below the catalog's own auto
  *     minor filters `auto` out of every row it serves, so its presence is the
- *     same negotiated fact the composer's clamp already reads - and it is
- *     warm here, since the app-load prefetcher fills this slot.
+ *     same negotiated fact the composer's clamp already reads.
+ *
+ * The second proof is only as good as the cache behind it, and that cache is
+ * filled for the app-wide default host by the app-load prefetcher and for
+ * every OTHER host by the import wizard itself, which mounts a catalog query
+ * for its target host while the user is still picking sessions (see the
+ * warm-up in `session-import-wizard.tsx`). Without that, an import aimed at a
+ * remote host answered `null` to the minor - by transport design - and read an
+ * empty catalog slot, so a user whose default is `auto` was demoted on every
+ * such import. Both proofs are read synchronously here because the mode rides
+ * the stream's OPEN request; nothing on this path can await one.
  *
  * Neither provable is "not proven", not "old host", and it demotes: an `auto`
  * a pre-auto host cannot parse costs the user their whole import, while a

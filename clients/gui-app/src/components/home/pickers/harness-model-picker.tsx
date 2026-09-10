@@ -11,6 +11,8 @@ import {
   type HarnessOption,
   type ModelOption,
   type ProviderId,
+  type ReasoningLevel,
+  type ReasoningLevelOption,
 } from "@/components/home/data/landing-options";
 import { useSurfaceActivity } from "@/components/home/composer/surface-activity-hooks";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
@@ -137,6 +139,14 @@ interface HarnessModelPickerProps {
    */
   withServiceTier: boolean;
   /**
+   * Render the thinking-effort footer. Every composer surface shows it; the
+   * Settings Auto-mode judge picker hides it, because an effort chosen there
+   * would have nowhere to go - the judge selection the host persists is
+   * `(harness, model, profile)` and its request carries no reasoning effort, so
+   * the control would take a choice and silently drop it.
+   */
+  withReasoning: boolean;
+  /**
    * When true, the provider rail and model rows are restricted to TUI-capable
    * harnesses (the terminal-launch surface), hiding GUI-only providers like
    * `traycer`. `false` shows every GUI harness (chat surfaces).
@@ -197,10 +207,52 @@ interface HarnessModelPickerProps {
   profileAdmission: ReadonlyMap<string | null, ProfileRowAdmission> | null;
 }
 
+/**
+ * The effort footer's config, or `null` for a surface with no effort axis.
+ *
+ * `null` under `withReasoning: false` rather than a disabled config: every
+ * consumer already treats null as "this surface has no effort axis" - the
+ * footer disappears, the trigger and tooltip drop their effort label, and the
+ * ⌥-digit leader scope stands down - which is exactly the Settings judge
+ * picker's contract. A disabled-but-present config would still print an effort
+ * on the trigger.
+ *
+ * Lifted to module scope rather than inlined in the `useMemo`: this branch was
+ * the seventeenth in `HarnessModelPickerImpl`, one past the complexity ceiling,
+ * and a decision this self-contained reads better named anyway.
+ */
+/**
+ * Whether ⌥+digit has anything to set: a surface with an effort axis whose
+ * selected model actually exposes levels. A surface with no axis at all
+ * (`withReasoning: false`, so a `null` footer) arms nothing.
+ */
+function reasoningFooterActionable(
+  footer: ReasoningFooterConfig | null,
+): boolean {
+  return footer !== null && footer.options.length > 0 && !footer.disabled;
+}
+
+function buildReasoningFooter(input: {
+  readonly withReasoning: boolean;
+  readonly value: ReasoningLevel;
+  readonly options: ReadonlyArray<ReasoningLevelOption>;
+  readonly selectedModel: ModelOption | null;
+  readonly onChange: (next: ReasoningLevel) => void;
+}): ReasoningFooterConfig | null {
+  if (!input.withReasoning) return null;
+  return {
+    value: input.value,
+    options: input.options,
+    disabled: input.selectedModel !== null && input.options.length === 0,
+    onChange: input.onChange,
+  };
+}
+
 function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   const {
     store,
     withServiceTier,
+    withReasoning,
     tuiOnly,
     lockedHarnessId,
     disabled,
@@ -225,14 +277,16 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     () => findReasoningOptionsForModel(selectedModel),
     [selectedModel],
   );
-  const reasoningFooter = useMemo<ReasoningFooterConfig>(
-    () => ({
-      value: reasoning,
-      options: reasoningOptions,
-      disabled: selectedModel !== null && reasoningOptions.length === 0,
-      onChange: setReasoning,
-    }),
-    [reasoning, reasoningOptions, selectedModel, setReasoning],
+  const reasoningFooter = useMemo<ReasoningFooterConfig | null>(
+    () =>
+      buildReasoningFooter({
+        withReasoning,
+        value: reasoning,
+        options: reasoningOptions,
+        selectedModel,
+        onChange: setReasoning,
+      }),
+    [reasoning, reasoningOptions, selectedModel, setReasoning, withReasoning],
   );
   // Service-tier preference is intentionally NOT normalized here. The store's
   // `serviceTier` is the user's sticky preference; the wire filter lives in
@@ -897,8 +951,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   // ⌥-reasoning is armed whenever the selected model exposes thinking levels.
   // The footer always reflects the selected model (not the browsed rail), so
   // ⌥+digit sets that model's level even while ⌘ browses a different provider.
-  const reasoningActionable =
-    reasoningFooter.options.length > 0 && !reasoningFooter.disabled;
+  const reasoningActionable = reasoningFooterActionable(reasoningFooter);
   usePickerLeaderScope({
     open: visibleOpen,
     railEntries,
