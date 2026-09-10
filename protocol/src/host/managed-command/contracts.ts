@@ -28,14 +28,24 @@ import {
   defineUpgradePath,
 } from "@traycer/protocol/framework/index";
 import {
+  managedCommandConfigureAgentShellRequestSchema,
+  managedCommandConfigureAgentShellResponseSchema,
   managedCommandConfigureRequestSchema,
   managedCommandControlRequestSchema,
   managedCommandControlResponseSchema,
   managedCommandControlResponseSchemaV10,
+  managedCommandCreateRequestSchema,
+  managedCommandCreateResponseSchema,
   managedCommandDeleteRequestSchema,
   managedCommandDeleteResponseSchema,
   managedCommandDeliverHeldRequestSchema,
   managedCommandDeliverHeldResponseSchema,
+  managedCommandListRequestSchema,
+  managedCommandListResponseSchema,
+  managedCommandRestartRequestSchema,
+  managedCommandRestartResponseSchema,
+  managedCommandViewRequestSchema,
+  managedCommandViewResponseSchema,
 } from "@traycer/protocol/host/managed-command/unary-schemas";
 import {
   managedCommandSubscribeOutputV10,
@@ -125,6 +135,51 @@ export const managedCommandDeleteV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: managedCommandDeleteRequestSchema,
   responseSchema: managedCommandDeleteResponseSchema,
+});
+
+export const managedCommandCreateV10 = defineRpcContract({
+  method: "managedCommand.create",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: managedCommandCreateRequestSchema,
+  responseSchema: managedCommandCreateResponseSchema,
+});
+
+export const managedCommandListV10 = defineRpcContract({
+  method: "managedCommand.list",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: managedCommandListRequestSchema,
+  responseSchema: managedCommandListResponseSchema,
+});
+
+export const managedCommandViewV10 = defineRpcContract({
+  method: "managedCommand.view",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: managedCommandViewRequestSchema,
+  responseSchema: managedCommandViewResponseSchema,
+});
+
+/**
+ * The agent's configure, and deliberately NOT `managedCommand.configure`.
+ *
+ * That name belongs to the human switch below, which predates this line on the
+ * released side and is what the GUI calls. This one is the agent editing
+ * settings it authored - a different caller, a different field set, and the
+ * wider `managedCommandAgentViewSchema` in response - so it is a separate
+ * method rather than a widening of that one. Sharing the name would have
+ * forced one response shape on both callers and cost the GUI its pre-image.
+ */
+export const managedCommandConfigureAgentShellV10 = defineRpcContract({
+  method: "managedCommand.configureAgentShell",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: managedCommandConfigureAgentShellRequestSchema,
+  responseSchema: managedCommandConfigureAgentShellResponseSchema,
+});
+
+export const managedCommandRestartV10 = defineRpcContract({
+  method: "managedCommand.restart",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: managedCommandRestartRequestSchema,
+  responseSchema: managedCommandRestartResponseSchema,
 });
 
 /**

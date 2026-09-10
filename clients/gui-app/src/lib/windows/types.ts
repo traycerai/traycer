@@ -71,6 +71,12 @@ export interface DesktopPerWindowLandingDraft {
   readonly settings: DesktopJsonValue | null;
   readonly composerMode: string | null;
   readonly workspace: DesktopJsonValue | null;
+  /**
+   * Tab-strip membership. Older snapshots omit it (`null` = open).
+   * Closed drafts are persisted so reload can keep them out of the strip
+   * without dropping their image-hash roots.
+   */
+  readonly closed: boolean | null;
 }
 
 export interface DesktopPerWindowSnapshot {

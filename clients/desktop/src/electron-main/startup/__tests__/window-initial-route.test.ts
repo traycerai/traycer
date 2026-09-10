@@ -39,6 +39,7 @@ describe("initialRouteForWindowSnapshot", () => {
             settings: null,
             composerMode: null,
             workspace: null,
+            closed: null,
           },
         ],
         activeLandingDraftId: "draft-a",
@@ -61,6 +62,7 @@ describe("initialRouteForWindowSnapshot", () => {
             settings: null,
             composerMode: null,
             workspace: null,
+            closed: null,
           },
         ],
         activeLandingDraftId: "missing-draft",
@@ -81,6 +83,7 @@ describe("initialRouteForWindowSnapshot", () => {
             settings: null,
             composerMode: null,
             workspace: null,
+            closed: null,
           },
           {
             id: "draft-b",
@@ -90,6 +93,7 @@ describe("initialRouteForWindowSnapshot", () => {
             settings: null,
             composerMode: null,
             workspace: null,
+            closed: null,
           },
         ],
         activeLandingDraftId: "draft-b",
@@ -112,11 +116,35 @@ describe("initialRouteForWindowSnapshot", () => {
             settings: null,
             composerMode: null,
             workspace: null,
+            closed: null,
           },
         ],
         activeLandingDraftId: "draft-a",
       }),
     ).toBe("/draft/draft-a");
+  });
+
+  it("does not restore a closed landing draft into the tab strip route", () => {
+    expect(
+      initialRouteForWindowSnapshot({
+        ...EMPTY_SNAPSHOT,
+        epicTabs: [{ id: "tab-a", epicId: "epic-a", name: "Alpha" }],
+        activeTabId: "tab-a",
+        landingDrafts: [
+          {
+            id: "draft-a",
+            content: { type: "doc" },
+            selection: null,
+            lastTouchedAt: 0,
+            settings: null,
+            composerMode: null,
+            workspace: null,
+            closed: true,
+          },
+        ],
+        activeLandingDraftId: "draft-a",
+      }),
+    ).toBe("/epics/epic-a/tab-a");
   });
 
   it("falls back to the root entry only when no active epic tab or draft exists", () => {
@@ -133,6 +161,7 @@ describe("initialRouteForWindowSnapshot", () => {
             settings: null,
             composerMode: null,
             workspace: null,
+            closed: null,
           },
         ],
         activeLandingDraftId: "missing-draft",
@@ -160,6 +189,7 @@ describe("initialRouteForWindowSnapshot", () => {
             settings: null,
             composerMode: null,
             workspace: null,
+            closed: null,
           },
         ],
         activeLandingDraftId: "draft / one",

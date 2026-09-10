@@ -130,6 +130,24 @@ export function useHostClient(): HostClient<HostRpcRegistry> {
 }
 
 /**
+ * {@link useHostClient} for a surface that can legitimately render with NO
+ * host runtime above it - a shell the layout mounts bare, a tile under test.
+ * `null` means "there is no provider", which is a different answer from the
+ * unbound requester `useHostClient()` returns when the provider is present
+ * and no host is usable; a consumer that treats a host as optional wants the
+ * first, and throwing at it makes the surface's mountability a property of
+ * one child's data needs.
+ */
+export function useOptionalHostClient(): HostClient<HostRpcRegistry> | null {
+  const binding = useHostBinding();
+  const effectiveHostId = useEffectiveHostId();
+  return useMemo(
+    () => resolveSubtreeHostClient(binding, effectiveHostId),
+    [binding, effectiveHostId],
+  );
+}
+
+/**
  * {@link useHostClient} for a caller that has no render to hang a hook on -
  * router context, a command action, anything reading the app-wide host once at
  * an event edge.
