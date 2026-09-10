@@ -5143,15 +5143,23 @@ describe("<NotificationsSessionProvider />", () => {
       // this session.
       //
       // The SECOND entry - `openActivityLane` in the main stream effect's dep
-      // array - is NOT what this case measures. A cold review ablated it alone
-      // and the case stayed green, because the auth transition here already
-      // invalidates that effect through `status`. It is retained by reasoning
-      // rather than by this assertion: an `openForCurrentUser` identity that
-      // changes for any OTHER reason while `status` holds still would leave
-      // the effect holding a stale opener, and a dep array that omits a value
-      // its body calls is a defect independent of whether some sibling dep
-      // happens to co-move today. Anyone deleting it needs a case that varies
-      // `openForCurrentUser` without varying `status`; this is not one.
+      // array - is NOT what this case measures, and the boundary is drawn from
+      // what was actually RUN. The executed ablation removed only the opener's
+      // own `useCallback` entry, KEEPING the effect entry, and this case went
+      // red; that is what scopes the claim to the opener.
+      //
+      // Whether the effect entry alone would flip it was NOT measured in
+      // either direction - stating otherwise would be inventing evidence. The
+      // source reading is that it would not, because the effect's deps also
+      // include `openForCurrentUser`, whose identity this transition already
+      // moves; but that is an inference from the dep arrays, not a run.
+      //
+      // It is retained on the ordinary ground that a dep array omitting a
+      // value its body calls is a defect regardless of whether some sibling
+      // dep happens to co-move today: an `openForCurrentUser` identity that
+      // changed for any OTHER reason while `status` held still would leave the
+      // effect holding a stale opener. Anyone deleting it needs a case that
+      // varies `openForCurrentUser` without varying `status`; this is not one.
       expect(streamClient.subscribedMethods).toContain(
         "agent.activity.subscribe",
       );
