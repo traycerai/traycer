@@ -220,8 +220,16 @@ export function noteAgentActivityConnectionStatus(
  * the socket does anything and needs no re-assertion on a reopen - the reopen
  * lane dials into the same slice.
  */
-export function openAgentActivityStream(
-  hostId: string,
+/**
+ * Everything {@link openAgentActivityStream} needs, as one object because the
+ * positional form had reached five parameters. Every field is REQUIRED: the
+ * two nullable ones carry a decision (`null` means "no handler" and "host
+ * chooses the plane"), and an optional field would let a caller omit that
+ * decision and inherit it silently - which is exactly the class of defect the
+ * `hostId` parameter was added to close.
+ */
+export interface OpenAgentActivityStreamInput {
+  readonly hostId: string;
   /**
    * THE reconnect policy for this stream's host (redesign P4.1 /
    * connection-registry §6), acquired from the connection registry by the one
@@ -230,9 +238,9 @@ export function openAgentActivityStream(
    * backoff shape live once, in the engine, and each stream still gets its
    * own independent lane so a sibling stream's refusal cannot pace it.
    */
-  reconnectEngine: HostReconnectEngine,
-  wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>,
-  onAuthError: (() => void) | null,
+  readonly reconnectEngine: HostReconnectEngine;
+  readonly wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>;
+  readonly onAuthError: (() => void) | null;
   /**
    * The plane this session may ask for. `"local-only"` is for a session with
    * no cloud verdict; `null` leaves the choice to the host, which is what the
@@ -243,8 +251,13 @@ export function openAgentActivityStream(
    * The caller closes and reopens the stream on a verdict change, so a cohort
    * move is a new stream rather than a mutation of this one.
    */
-  plane: AgentActivityPlaneSelector | null,
+  readonly plane: AgentActivityPlaneSelector | null;
+}
+
+export function openAgentActivityStream(
+  input: OpenAgentActivityStreamInput,
 ): () => void {
+  const { hostId, reconnectEngine, wsStreamClient, onAuthError, plane } = input;
   // A new stream epoch makes NO health claim until its own session speaks.
   //
   // Neither end of a replacement publishes one otherwise: `IStreamSession`'s

@@ -45,13 +45,26 @@ function LocalStoreRepairDialog(props: {
     hostId,
     "host.rebindLocalStore",
   );
-  // `kind` gates the ACTION only. The text renders for any kind, including one
-  // this build does not recognise, because `message` and `remedy` are strings
-  // the host wrote for a person - but a rebind is the remedy for exactly one
-  // of them, and offering it for some future kind would be worse than
-  // offering nothing.
-  const repairable =
-    rebindSupported && refusal.kind === "local-store-unavailable";
+  // The rebind is offered on host support alone, because `refusal.kind` has
+  // exactly one member today and a comparison against it is dead.
+  //
+  // This previously read `rebindSupported && refusal.kind ===
+  // "local-store-unavailable"`, with a comment reasoning about "a kind this
+  // build does not recognise". No such value can arrive:
+  // `epicCreateRefusalKindSchema` is `z.enum(["local-store-unavailable"])`, so
+  // an unrecognised kind fails the PARSE and never reaches this component -
+  // the schema's own note says adding a kind costs a minor precisely because
+  // every `@1.1` client rejects a new value.
+  //
+  // So the guard is reinstated by the same change that makes it meaningful:
+  // adding a second kind is a minor bump, and whoever spends it has to decide
+  // per kind whether a rebind is the remedy (the schema suggests an
+  // `isKnownEpicCreateRefusalKind` guard for the degrade-to-text shape). Until
+  // then this must not pretend to discriminate a union of one.
+  //
+  // Unchanged either way: the message and remedy TEXT renders for whatever
+  // arrives, since both are strings the host wrote for a person.
+  const repairable = rebindSupported;
   const [repairRefusal, setRepairRefusal] = useState<{
     readonly message: string;
     readonly remedy: string;

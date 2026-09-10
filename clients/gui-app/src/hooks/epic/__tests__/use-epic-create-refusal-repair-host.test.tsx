@@ -222,16 +222,20 @@ describe("a refused epic.create repairs the host it was dispatched to", () => {
     await rendered.result.current.mutateAsync(CREATE_VARIABLES);
 
     expect(toastErrorCalls).toHaveLength(1);
+    // Indexed non-optionally: the length assertion above already establishes
+    // the call, so `call?.` was an optional chain on a value the type says is
+    // present. `action` keeps its chain - that one is `| undefined` on the
+    // captured shape, so the question it asks is real.
     const call = toastErrorCalls[0];
     // Verbatim, both of them: the typed arm exists so the host's sentences
     // reach the screen instead of "Couldn't create epic."
-    expect(call?.message).toBe(REFUSAL.message);
-    expect(call?.description).toBe(REFUSAL.remedy);
-    expect(call?.action?.label).toBe("Repair");
+    expect(call.message).toBe(REFUSAL.message);
+    expect(call.description).toBe(REFUSAL.remedy);
+    expect(call.action?.label).toBe("Repair");
 
     // Nothing is pending until the user asks for the repair.
     expect(useLocalStoreRepairStore.getState().pending).toBeNull();
-    call?.action?.onClick();
+    call.action?.onClick();
 
     const pending = useLocalStoreRepairStore.getState().pending;
     expect(pending?.hostId).toBe(PLACEMENT_HOST_ID);
