@@ -68,6 +68,7 @@ import {
 import { RecordingTransportEvidence } from "../../host-selection/__tests__/recording-transport-evidence";
 import { HOST_RESTARTING_FATAL_CODE } from "@traycer/protocol/framework/index";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
+import { STREAM_CAPABILITY_CLOUD_VERDICT_UPDATE } from "@traycer/protocol/framework/stream-ws-protocol";
 
 /**
  * StubWebSocket - fully scriptable `StreamWebSocketLike` mirror of the
@@ -404,6 +405,109 @@ describe("WsStreamClient", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  describe("cloud verdict wire (lane 5, F1: opening-phase drop, stream carrier)", () => {
+    function makeClientWithVerdict(
+      factory: IStreamWebSocketFactory,
+      authToken: string,
+      verdictRef: { value: boolean },
+    ): WsStreamClient<typeof hostStreamRpcRegistry> {
+      const ctx = makeRequestContext(authToken);
+      return new WsStreamClient({
+        clientIdentity: TEST_CLIENT_IDENTITY,
+        registry: hostStreamRpcRegistry,
+        endpoint: () => mockLocalHostEntry,
+        hostId: mockLocalHostEntry.hostId,
+        bearer: () => ctx.credentials,
+        auth: null,
+        clock: null,
+        hostCredentialMint: null,
+        onHostCredentialState: null,
+        evidence: NO_TRANSPORT_EVIDENCE,
+        webSocketFactory: factory,
+        dialTimeoutMs: 1000,
+        openAckTimeoutMs: 1000,
+        pingIntervalMs: 25_000,
+        pongTimeoutMs: 50_000,
+        initialBackoffMs: 10,
+        maxBackoffMs: 1_000,
+        cloudAuthorized: () => verdictRef.value,
+      });
+    }
+
+    /**
+     * `handleOpenAckFrame`'s doc comment names the exact window this pins: a
+     * verdict change that lands AFTER the open frame is on the wire but
+     * BEFORE openAck arrives has its `notifyCloudVerdictChanged` push dropped
+     * by `pushCloudVerdictUpdate`'s `phase !== "subscribed"` gate (the
+     * session is still `awaitingOpenAck`). The reconciliation in
+     * `handleOpenAckFrame` is what keeps that drop from reaching the host: it
+     * compares the live verdict against `openFrameCloudAuthorized` and pushes
+     * a `cloudVerdictUpdate` frame, BEFORE `subscribe`, if they differ.
+     */
+    it("a verdict demotion landing during the opening phase (after `open`, before `openAck`) reaches the host via a reconciliation frame before `subscribe`, rather than being dropped", async () => {
+      const { factory, sockets } = makeFactory();
+      const verdict = { value: true };
+      const client = makeClientWithVerdict(factory, "token-abc", verdict);
+      client.subscribe("epic.subscribe", { epicId: "epic-1" });
+
+      await flush();
+      const stub = sockets[0].socket;
+      stub.fireOpen();
+
+      const openFrame = parseText(stub.textSent[0]);
+      expect(openFrame.kind).toBe("open");
+      expect(openFrame.cloudAuthorized).toBe(true);
+
+      // The demotion lands in the opening phase: the open frame carrying
+      // `true` is already on the wire, and openAck has not arrived yet.
+      verdict.value = false;
+
+      stub.fireText(
+        streamOpenAck(
+          buildStreamManifest(
+            hostStreamRpcRegistry,
+            SERVES_EVERY_INSTALLED_MAJOR,
+          ),
+          [STREAM_CAPABILITY_CLOUD_VERDICT_UPDATE],
+        ),
+      );
+
+      expect(stub.textSent).toHaveLength(3);
+      const verdictFrame = parseText(stub.textSent[1]);
+      expect(verdictFrame).toEqual({
+        kind: "cloudVerdictUpdate",
+        cloudAuthorized: false,
+      });
+      const subscribeFrame = parseText(stub.textSent[2]);
+      expect(subscribeFrame.kind).toBe("subscribe");
+    });
+
+    it("positive control: an unchanged verdict sends no reconciliation frame - `subscribe` follows `open` directly", async () => {
+      const { factory, sockets } = makeFactory();
+      const verdict = { value: true };
+      const client = makeClientWithVerdict(factory, "token-abc", verdict);
+      client.subscribe("epic.subscribe", { epicId: "epic-1" });
+
+      await flush();
+      const stub = sockets[0].socket;
+      stub.fireOpen();
+      expect(parseText(stub.textSent[0]).cloudAuthorized).toBe(true);
+
+      stub.fireText(
+        streamOpenAck(
+          buildStreamManifest(
+            hostStreamRpcRegistry,
+            SERVES_EVERY_INSTALLED_MAJOR,
+          ),
+          [STREAM_CAPABILITY_CLOUD_VERDICT_UPDATE],
+        ),
+      );
+
+      expect(stub.textSent).toHaveLength(2);
+      expect(parseText(stub.textSent[1]).kind).toBe("subscribe");
+    });
   });
 
   it("walks dial → open → openAck → subscribe and transitions to open status", async () => {
