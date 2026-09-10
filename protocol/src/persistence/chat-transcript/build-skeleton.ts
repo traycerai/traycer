@@ -262,10 +262,10 @@ interface RowBodyFingerprint {
  * own content can forge a boundary. One character per contribution, against a
  * whole encoding per contribution before.
  */
-const CONTRIBUTION_SEPARATOR = " ";
+const CONTRIBUTION_SEPARATOR = "\0";
 
 /** Absorbed where a record was expected and not found. See above. */
-const ABSENT_RECORD_MARKER = " absent";
+const ABSENT_RECORD_MARKER = "\0absent";
 
 /**
  * The row's projection CONTEXT, as a stable string.
