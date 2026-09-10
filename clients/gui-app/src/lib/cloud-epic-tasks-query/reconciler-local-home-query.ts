@@ -105,7 +105,31 @@ export function epicPinReadingListQueryOptions(args: {
         // and this query issues none (`staleTime: Infinity`, one shot). The
         // phase is a request directive, not an obligation to revalidate.
         localFirstPhase: "initial",
-        requestContextPolicy: "require-current",
+        // `"wait"`, not `"require-current"`, and the difference is READINESS
+        // rather than principal strictness. The owning host's session can be in
+        // the registry before that host's client has a request context - the same
+        // window `useCloudEpicTasksQuery` covers with `useReactiveHostReadiness`,
+        // which a per-host fan-out cannot call. Under `"require-current"` that
+        // moment is fatal and permanently so: the dispatch throws, TanStack
+        // exhausts its retries, and with `staleTime: Infinity` and no refetch
+        // trigger a context arriving later never gets read - the tab keeps
+        // `pinnedKnown: false` for the rest of the session.
+        //
+        // `"require-current"`'s own doc names the hazard it exists for: a
+        // cache-owned follow-up "cannot wait across an A -> B transition and then
+        // write B's page under A's infinite-lifetime cache key". That hazard is
+        // structurally excluded here, which is why waiting is safe for THIS
+        // query and not a general licence:
+        //
+        //  - `waitForMatchingRequestContext` resolves only when the context names
+        //    `expectedUserId` - this query's own user, not whoever arrives - so a
+        //    B transition never satisfies the wait at all; and
+        //  - the post-wait `dispatchScopedPageWithCurrentRequestContext`
+        //    re-checks the principal and throws on a mismatch, so even a context
+        //    that changed inside the resolving microtask cannot dispatch.
+        //
+        // The 15s wait is terminal by design, so this cannot hang either.
+        requestContextPolicy: "wait",
       }),
   });
 }
