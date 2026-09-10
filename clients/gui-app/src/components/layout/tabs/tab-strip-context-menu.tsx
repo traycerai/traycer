@@ -144,22 +144,39 @@ function EpicTabMenuItems(props: {
   readonly localOnly: boolean;
   /** See `TaskPinnedState.pinnedKnown`. */
   readonly pinReadingKnown: boolean;
+  /**
+   * The host a pin for THIS row would be dispatched to (`TaskPinnedState.hostId`),
+   * `null` to follow the window. Threaded as a prop rather than read here
+   * because it is a fact about the tab, not about the strip.
+   */
+  readonly pinDispatchHostId: string | null;
   readonly preservedOrphan: boolean;
   readonly onEditTitle: () => void;
   readonly onSetTaskPinned: (pinned: boolean) => void;
 }): React.ReactNode {
-  const { tabId, taskPinned, localOnly, pinReadingKnown, preservedOrphan } =
-    props;
+  const {
+    tabId,
+    taskPinned,
+    localOnly,
+    pinReadingKnown,
+    pinDispatchHostId,
+    preservedOrphan,
+  } = props;
   // Read here rather than threaded as a prop: the two row-intrinsic reasons
   // above are facts about the TAB and belong to its owner, while this is a fact
   // about the session, identical for every tab in the strip.
   const cloudAuthorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
-  // Read here for the same reason as `cloudAuthorized`: it is a fact about the
-  // host serving this window, identical for every tab in the strip, and not
-  // something a tab's owner knows.
-  const localHomePinSupported = useEpicPinLocalHomeSupported();
+  // NOT read for the window, and NOT "identical for every tab in the strip",
+  // which is what this comment used to say. A local-homed row is dispatched to
+  // the host that owns the epic, so the negotiation that decides whether the
+  // control can be offered is that host's - and two tabs in one strip can
+  // answer differently. Asking the window instead offered the item for an epic
+  // whose own host never negotiated `@1.1`, and the dispatch gate then refused
+  // the click in silence.
+  const localHomePinSupported =
+    useEpicPinLocalHomeSupported(pinDispatchHostId);
   const pinUnavailableReason = tabPinUnavailableReason({
     localOnly,
     preservedOrphan,
@@ -277,6 +294,7 @@ export function TabContextMenuContent(
           isTaskPinPending={isTaskPinPending}
           localOnly={localOnly}
           pinReadingKnown={pinReadingKnown}
+          pinDispatchHostId={taskPinnedState?.hostId ?? null}
           preservedOrphan={preservedOrphan}
           onEditTitle={onEditTitle}
           onSetTaskPinned={onSetTaskPinned}

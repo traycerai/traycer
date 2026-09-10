@@ -120,6 +120,10 @@ interface RenameEpicTitleVariables {
 }
 
 interface SetEpicPinnedVariables {
+  // Mirrors production's dispatch-side host. Declared locally here, which is
+  // exactly why the compile cannot flag a drift - the assertions below are the
+  // only thing that can, and only if they name the key.
+  readonly hostId: string | null;
   readonly epicId: string;
   readonly pinned: boolean;
 }
@@ -575,6 +579,7 @@ describe("<EpicsListPanel />", () => {
       epicId: "epic-from-history",
       pinned: false,
       isLocalHome: false,
+      hostId: null,
     });
   });
 
@@ -590,6 +595,7 @@ describe("<EpicsListPanel />", () => {
       epicId: "epic-from-history",
       pinned: true,
       isLocalHome: false,
+      hostId: null,
     });
   });
 
@@ -621,6 +627,7 @@ describe("<EpicsListPanel />", () => {
       epicId: "epic-from-history",
       pinned: true,
       isLocalHome: false,
+      hostId: null,
     });
     // The pin control sits alongside - not inside - the row's absolute <Link>
     // overlay. A regression that nested it inside the link, or dropped the
@@ -823,6 +830,7 @@ describe("<EpicsListPanel />", () => {
       historyItem({
         title: "Local only epic",
         isLocalHome: true,
+        hostId: null,
         isPinned: false,
       }),
     ];
@@ -857,6 +865,7 @@ describe("<EpicsListPanel />", () => {
       historyItem({
         title: "Orphaned epic",
         isLocalHome: false,
+        hostId: null,
         isPreservedOrphan: true,
         isPinned: false,
       }),
@@ -1419,6 +1428,7 @@ describe("<EpicsListPanel />", () => {
         epicId: "epic-local",
         title: "Local-home item",
         isLocalHome: true,
+        hostId: null,
       }),
     ];
     renderPanel("embedded", "/");

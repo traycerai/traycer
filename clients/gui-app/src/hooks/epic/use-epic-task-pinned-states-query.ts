@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import type { UseQueryResult } from "@tanstack/react-query";
+import { useQueries, type UseQueryResult } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import {
   GET_TASK_CONTEXTS_MAX_IDS,
@@ -9,7 +9,16 @@ import {
 import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
-import { useLocalHomedOpenEpicIds } from "@/lib/registries/epic-session-registry";
+import {
+  useLocalHomedOpenEpicHostIds,
+  useLocalHomedOpenEpicIds,
+} from "@/lib/registries/epic-session-registry";
+import { epicPinReadingListQueryOptions } from "@/lib/cloud-epic-tasks-query/reconciler-local-home-query";
+import {
+  CURRENT_EPIC_VERSION,
+  CURRENT_PHASE_VERSION,
+} from "@traycer-clients/shared/epic/epic-version";
+import type { ListTasksResponse } from "@traycer/protocol/host/epic/unary-schemas";
 import {
   authorizesCloudCapability,
   useAuthStore,
@@ -37,6 +46,21 @@ import {
 export type TaskPinnedState = {
   readonly pinned: boolean;
   readonly home: "local" | undefined;
+  /**
+   * The host whose disk holds this epic, when a live session says one does.
+   *
+   * Carried on the READING rather than looked up by the dispatch site, for the
+   * same reason `home` is: the control rendered from this object, and a pin
+   * write has to go to the machine whose `epicHomeVerdict` will answer `local`
+   * - any other host falls through to a cloud write for an epic the cloud has
+   * no row for. Resolving it separately at dispatch is how the gate and the
+   * request come to mean different machines.
+   *
+   * `null` for a cloud-homed row and for a local-homed one whose session has no
+   * serving host: both mean "follow the window", which is correct for a cloud
+   * pin and refused by the admission gate for a local one.
+   */
+  readonly hostId: string | null;
   /**
    * Whether {@link pinned} is a READING from a host that resolved this epic,
    * rather than the `false` {@link overlayLocalHomedPinnedStates} fills in for
@@ -71,12 +95,20 @@ export function useEpicTaskPinnedStates(
   // withdrawn verdict would otherwise still spend cloud capability to paint
   // pin state on the tab strip.
   //
-  // Withholding the batch is safe HERE specifically because the sole consumer
-  // does not read an absent entry as "not pinned": `tabPinUnavailableReason`
-  // answers `unverified-session` on the same verdict and the item announces
-  // itself unavailable. The LOCAL half is unaffected - `localHomedEpicIds`
-  // comes from the live-session registry, not from this query - so a
-  // local-homed tab keeps its `home: "local"` reading through the overlay.
+  // Withholding the batch under an unverified session is still right, but the
+  // reason it is SAFE has changed and the old one is gone. It used to be "the
+  // sole consumer announces `unverified-session` anyway", which stopped being
+  // true the moment `epic.setPinned@1.1` made a local-homed row pinnable: the
+  // menu's local-home arm returns before that check, so an absent entry became
+  // something it does render. That comment outlived its premise for two
+  // commits.
+  //
+  // What holds now: a local-homed row does not NEED this batch. Its pin lives
+  // in the owning host's `local_epic.pinnedByUserId`, and
+  // `epicPinReadingListQueryOptions` below reads it over the local-first list
+  // line the unverified session is already admitted on. A cloud-homed row
+  // still needs the batch, still does not get it here, and is still reported
+  // `pinnedKnown: false` - honest, because for that row nothing answered.
   const cloudAuthorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
@@ -110,10 +142,95 @@ export function useEpicTaskPinnedStates(
     combine: combineTaskPinnedStateResults,
   });
 
-  return useMemo(
-    () => overlayLocalHomedPinnedStates(queried, localHomedEpicIds),
-    [queried, localHomedEpicIds],
+  // One cursorless `epic.listTasks` per host that owns a local-homed open tab.
+  // Usually one host, often zero; the hosts come from the epics' own sessions,
+  // so this never fans out across the whole directory the way the tab
+  // reconciler deliberately does.
+  const localHomedByHost = useLocalHomedOpenEpicHostIds(epicIds);
+  const pinReadingHostIds = useMemo(
+    () =>
+      [...new Set(localHomedByHost.values())].sort((left, right) =>
+        left.localeCompare(right),
+      ),
+    [localHomedByHost],
   );
+  const pinReadingParams = useMemo(
+    () => ({
+      limit: LOCAL_HOME_PIN_READING_LIMIT,
+      filters: { taskType: "epic" as const },
+      extensionPhaseVersion: String(CURRENT_PHASE_VERSION),
+      extensionEpicVersion: String(CURRENT_EPIC_VERSION),
+    }),
+    [],
+  );
+  const localPinReadings = useQueries({
+    queries:
+      userId === null
+        ? []
+        : pinReadingHostIds.map((hostId) => ({
+            ...epicPinReadingListQueryOptions({
+              hostId,
+              userId,
+              params: pinReadingParams,
+            }),
+            // NOT gated on the cloud verdict, and that is the point of using
+            // this line: the local rows are synthesized from the host's own
+            // registry with no cloud read, which is why an unverified session
+            // may have them.
+            enabled: true,
+            staleTime: Infinity,
+          })),
+    combine: combineLocalPinReadings,
+  });
+
+  return useMemo(
+    () =>
+      overlayLocalHomedPinnedStates(
+        queried,
+        localHomedEpicIds,
+        localPinReadings,
+        localHomedByHost,
+      ),
+    [queried, localHomedEpicIds, localPinReadings, localHomedByHost],
+  );
+}
+
+/**
+ * Enough rows to carry every local-homed epic the host has.
+ *
+ * The local rows ride the cursorless page without consuming the cloud `limit`,
+ * so this number bounds the CLOUD half of the page only - the local half is
+ * whole regardless. Kept small for that reason: the cloud rows fetched here are
+ * incidental, and History owns the real paged read.
+ */
+const LOCAL_HOME_PIN_READING_LIMIT = 1;
+
+/**
+ * The durable pin for each row a host reports as `home: "local"`.
+ *
+ * `home` is the discriminator and the only one that is safe. A row with
+ * `home: "cloud"` carries `pinned: false` as "the absence of a claim, not a
+ * claim of unpinned" (the resolver's own words, for mirror and orphan rows), so
+ * reading `pinned` off one of those would reintroduce exactly the false-as-an-
+ * answer defect `pinnedKnown` exists to prevent. A row with `home: "local"`
+ * carries `record.pinnedByUserId === userId` from the durable registry,
+ * compared against the asking account - a real reading.
+ */
+export function combineLocalPinReadings(
+  results: ReadonlyArray<
+    Pick<UseQueryResult<ListTasksResponse, unknown>, "data">
+  >,
+): ReadonlyMap<string, boolean> {
+  const readings = new Map<string, boolean>();
+  for (const result of results) {
+    for (const task of result.data?.tasks ?? []) {
+      if (task.home !== "local") continue;
+      const epicId = task.epic?.light?.id;
+      if (epicId === undefined) continue;
+      readings.set(epicId, task.pinned);
+    }
+  }
+  return readings;
 }
 
 /**
@@ -150,6 +267,8 @@ export function useEpicTaskPinnedStates(
 export function overlayLocalHomedPinnedStates(
   queried: ReadonlyMap<string, TaskPinnedState>,
   localHomedEpicIds: ReadonlySet<string>,
+  localPinReadings: ReadonlyMap<string, boolean>,
+  localHomedHostIds: ReadonlyMap<string, string>,
 ): ReadonlyMap<string, TaskPinnedState> {
   // Identity preserved when there is nothing to overlay, so the common case
   // does not hand consumers a fresh map every render.
@@ -157,14 +276,33 @@ export function overlayLocalHomedPinnedStates(
   const overlaid = new Map(queried);
   for (const epicId of localHomedEpicIds) {
     const resolved = overlaid.get(epicId);
+    const localReading = localPinReadings.get(epicId);
+    // ORDERING, stated because three sources meet here and the precedence is
+    // not symmetric:
+    //
+    // 1. `home` - the SESSION wins, unconditionally. Where an epic is durable
+    //    is a property of the epic, not of whichever host was asked.
+    // 2. `pinned` - the LOCAL REGISTRY wins when it answered, because for a
+    //    local-homed epic it is the only authority: the cloud has no row for
+    //    that epic, so a cloud answer about it would be an absence dressed as
+    //    `false`. This is the reverse of the old rule ("the queried value is
+    //    the cloud's, which is the only thing that can answer it"), which was
+    //    correct while every pin was a cloud pin and stopped being correct when
+    //    the host gained a durable local arm.
+    // 3. Neither answered - the cloud batch because it is withheld or the row
+    //    is not its to resolve, the list because it has not landed yet - and
+    //    `pinnedKnown: false` says so. The menu renders unavailable, which is
+    //    the honest state for "nobody has answered", and resolves itself when
+    //    the list query settles rather than never.
+    const pinned = localReading ?? resolved?.pinned ?? false;
     overlaid.set(epicId, {
-      pinned: resolved?.pinned ?? false,
+      pinned,
       home: "local",
-      // The overlay's whole population is "a live session says this epic is
-      // local-homed". Whether the QUERIED host also resolved it is a separate
-      // fact, and it is exactly the one that says if `pinned` above is a
-      // reading or the fallback beside it.
-      pinnedKnown: resolved !== undefined,
+      // 4. `hostId` - from the SESSION, the only source that still knows which
+      //    machine. Absent when the session has no serving host, which the pin
+      //    gate then refuses rather than sending to the window's host.
+      hostId: localHomedHostIds.get(epicId) ?? null,
+      pinnedKnown: localReading !== undefined || resolved !== undefined,
     });
   }
   return overlaid;
@@ -195,6 +333,11 @@ export function combineTaskPinnedStateResults(
       pinnedStates.set(epicId, {
         pinned: task.pinned ?? false,
         home: localHomedSet?.has(epicId) === true ? "local" : undefined,
+        // The batch cannot name a host: its `localHomedTaskIds` is merged
+        // across every queried host into one flat set, so which host answered
+        // is gone by the time a row is built. The overlay below supplies it
+        // from the session, which is the only source that still has it.
+        hostId: null,
         // The host RESOLVED this epic, so `pinned` is its answer. (`?? false`
         // above is the wire's absent-means-not-pinned, not a stand-in for a
         // missing host - a resolved task that omits the field is a real "not

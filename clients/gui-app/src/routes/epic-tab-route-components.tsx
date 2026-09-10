@@ -181,28 +181,35 @@ function EpicRouteTabSync(props: {
       recordViewed({ epicId, isLocalHome });
     };
 
-    // The bound is a DEADLINE, and `setTimeout` is only the thing that wakes
-    // it. Timers are not a guarantee: a backgrounded tab throttles them to a
-    // minute or more, and a busy main thread delays them arbitrarily. So a
-    // `local` answer arriving after the bound has passed re-runs this effect
-    // and reaches the branch below while the callback that should have closed
-    // the wait is still queued - recording a view the bound had already
-    // decided to drop, with no upper limit on how late. The publish edge is
-    // the only edge that sees the late answer, so it checks the clock too.
+    // An armed deadline that has passed EXPIRES this epic's decision, and an
+    // expired decision is not a decision: the marker is set and nothing is
+    // recorded, whoever is asking and whatever arrived.
     //
-    // Unverified sessions only: a held cloud verdict admits the write whatever
-    // the home turns out to be, so there is no wait for it to outlast, and
-    // expiring it here would drop a write that was never waiting.
+    // Two reasons this is not `decideRecency(false)`, and the first is the one
+    // that made an earlier version of this guard wrong. `decideRecency` RECORDS
+    // whenever `cloudAuthorized` is true, so expiring through it was only
+    // harmless while the guard also tested `!cloudAuthorized` - and that test is
+    // exactly what let the recovered-verdict case through: deadline passes
+    // unverified, the verdict then returns, `!cloudAuthorized` is now false, the
+    // guard does not fire, and the branch below records with the recovery as the
+    // view time. That is the defect the whole latch exists to prevent, reached
+    // by the repair for its sibling. So the expiry is unconditional and it does
+    // not route through the decider.
+    //
+    // Second: `setTimeout` is only what WAKES this decision, never the bound
+    // itself. A backgrounded tab throttles timers to a minute or more, so wall
+    // time passes the deadline while the callback sits queued, and the publish
+    // edge is the only edge that sees the late answer.
+    //
+    // A route that mounted with the verdict already held arms no deadline at
+    // all, so `armedDeadline` is `null` there and the ordinary cloud path never
+    // reaches this.
     const armedDeadline =
       recencyWaitDeadline.current?.epicId === epicId
         ? recencyWaitDeadline.current.at
         : null;
-    if (
-      !cloudAuthorized &&
-      armedDeadline !== null &&
-      Date.now() >= armedDeadline
-    ) {
-      decideRecency(false);
+    if (armedDeadline !== null && Date.now() >= armedDeadline) {
+      recencyDecidedForEpicId.current = epicId;
       return;
     }
 

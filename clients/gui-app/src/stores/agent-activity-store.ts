@@ -562,9 +562,16 @@ function selectPlaneAnswers(
  * - nothing answers at all -> `indeterminate`, which is the pill's story and
  *   not a per-entity one (see the type's doc).
  *
- * A `null` host is `indeterminate` by construction: a surface that cannot name
- * the machine an entity lives on cannot detect exclusion either, so it keeps
- * the reading it already had.
+ * A `null` host cannot detect EXCLUSION - a surface that cannot name the machine
+ * an entity lives on has no entity for a narrow union to have excluded - so it
+ * answers `indeterminate` and keeps the reading it already had.
+ *
+ * With ONE exception, and it is above the null check rather than inside it: a
+ * FLEET-SPANNING union answers `covered` for a null host too, because a union
+ * that reaches everywhere reaches wherever this entity is. The exception is why
+ * this paragraph no longer says "indeterminate by construction" - it was written
+ * when the null arm fell through to the exclusion line, and it described the
+ * intent of that arm rather than the function's whole answer.
  */
 export function selectAgentActivityCoverage(
   byHost: ReadonlyMap<string, HostAgentActivity>,

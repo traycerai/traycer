@@ -9,16 +9,30 @@ import type { HeaderTab } from "@/stores/tabs/types";
 import type { TaskPinnedState } from "@/hooks/epic/use-epic-task-pinned-states-query";
 
 /**
- * `useEpicPinLocalHomeSupported` reads `useHostClient()`, which throws
- * outside a `<HostRuntimeProvider>` - this suite renders the menu with none.
- * Mocked at the module boundary rather than standing up a provider: every
- * other test in this file is about the pin GUARD, not the host negotiation,
- * and a hoisted flag lets each case say what the negotiated manifest would
- * have answered without dragging in a messenger/registry harness.
+ * `useEpicPinLocalHomeSupported` resolves a host client, which throws outside a
+ * `<HostRuntimeProvider>` - this suite renders the menu with none. Mocked at
+ * the module boundary rather than standing up a provider: every other test in
+ * this file is about the pin GUARD, not the host negotiation, and a hoisted
+ * flag lets each case say what the negotiated manifest would have answered
+ * without dragging in a messenger/registry harness.
+ *
+ * The mock RECORDS the host it is asked about, and can answer differently per
+ * host. That is deliberate: the hook takes the dispatch host as an argument
+ * precisely so the gate and the dispatch agree on a machine, and a mock that
+ * ignored the argument would keep answering for every case - including the one
+ * where the window's host and the epic's host disagree, which is the whole
+ * reason the parameter exists.
  */
-const pinSupportState = vi.hoisted(() => ({ supported: false }));
+const pinSupportState = vi.hoisted(() => ({
+  supported: false,
+  supportedByHostId: new Map<string | null, boolean>(),
+  askedHostIds: [] as Array<string | null>,
+}));
 vi.mock("@/hooks/epic/use-epic-pin-local-home-support", () => ({
-  useEpicPinLocalHomeSupported: (): boolean => pinSupportState.supported,
+  useEpicPinLocalHomeSupported: (hostId: string | null): boolean => {
+    pinSupportState.askedHostIds.push(hostId);
+    return pinSupportState.supportedByHostId.get(hostId) ?? pinSupportState.supported;
+  },
 }));
 
 const EPIC_TAB: Extract<HeaderTab, { kind: "epic" }> = {
@@ -75,6 +89,7 @@ function createPausedEpicHandle(epicId: string, retained: boolean) {
 const CLOUD_UNPINNED_KNOWN: TaskPinnedState = {
   pinned: false,
   home: undefined,
+  hostId: null,
   pinnedKnown: true,
 };
 
@@ -108,6 +123,8 @@ describe("TabContextMenuContent preserved-orphan pin guard", () => {
     cleanup();
     __getOpenEpicRegistryForTests().disposeAll();
     vi.restoreAllMocks();
+    pinSupportState.supportedByHostId.clear();
+    pinSupportState.askedHostIds.length = 0;
   });
 
   it("disables Pin from the live session pause state even when task context says cloud and unpinned", async () => {
@@ -179,6 +196,7 @@ describe("TabContextMenuContent local-home pin gate (lane 9 item 5)", () => {
     renderPinMenu(onSetTaskPinned, {
       pinned: false,
       home: "local",
+      hostId: null,
       pinnedKnown: true,
     });
 
@@ -200,6 +218,7 @@ describe("TabContextMenuContent local-home pin gate (lane 9 item 5)", () => {
     renderPinMenu(onSetTaskPinned, {
       pinned: false,
       home: "local",
+      hostId: null,
       pinnedKnown: true,
     });
 
@@ -225,6 +244,7 @@ describe("TabContextMenuContent local-home pin gate (lane 9 item 5)", () => {
     renderPinMenu(onSetTaskPinned, {
       pinned: false,
       home: "local",
+      hostId: null,
       pinnedKnown: false,
     });
 
@@ -236,5 +256,62 @@ describe("TabContextMenuContent local-home pin gate (lane 9 item 5)", () => {
     );
     fireEvent.click(item);
     expect(onSetTaskPinned).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The gate asks the host the pin would be DISPATCHED to - the epic's own, from
+   * the row's reading - and not the window's.
+   *
+   * This is the pairing the hook's docstring claims, and it stopped holding the
+   * moment `useEpicSetPinned` began resolving a per-dispatch host: the gate kept
+   * asking the window. The result was not a type error and neither half's own
+   * tests could see it - the menu offered the item (the window negotiated
+   * `@1.1`) and the dispatch refused the click in silence (the epic's host had
+   * not). An item that looks available and does nothing is worse than one that
+   * says why it is not, which is what this now renders.
+   */
+  it("asks the EPIC's host, not the window's, and stays unavailable when only the window negotiated", async () => {
+    // The window's host would say yes; the epic's host says no.
+    pinSupportState.supported = true;
+    pinSupportState.supportedByHostId.set("host-owning-epic", false);
+    // Cleared HERE, not in an `afterEach`: the assertion below is about what
+    // THIS render asked, and earlier cases in this describe ask about `null`.
+    pinSupportState.askedHostIds.length = 0;
+    const onSetTaskPinned = vi.fn<(pinned: boolean) => void>();
+
+    renderPinMenu(onSetTaskPinned, {
+      pinned: false,
+      home: "local",
+      hostId: "host-owning-epic",
+      pinnedKnown: true,
+    });
+
+    const item = await screen.findByTestId(`tab-pin-history-${EPIC_TAB.id}`);
+    expect(pinSupportState.askedHostIds).toContain("host-owning-epic");
+    expect(pinSupportState.askedHostIds).not.toContain(null);
+    expect(item.getAttribute("data-local-home-pin-unavailable")).toBe("true");
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(item);
+    expect(onSetTaskPinned).not.toHaveBeenCalled();
+  });
+
+  it("offers the item when the EPIC's host negotiated, though the window's did not", async () => {
+    // The mirror image, so the row above cannot pass by the gate simply
+    // answering `false` for everything.
+    pinSupportState.supported = false;
+    pinSupportState.supportedByHostId.set("host-owning-epic", true);
+    const onSetTaskPinned = vi.fn<(pinned: boolean) => void>();
+
+    renderPinMenu(onSetTaskPinned, {
+      pinned: false,
+      home: "local",
+      hostId: "host-owning-epic",
+      pinnedKnown: true,
+    });
+
+    const item = await screen.findByTestId(`tab-pin-history-${EPIC_TAB.id}`);
+    expect(item.getAttribute("aria-disabled")).toBeNull();
+    fireEvent.click(item);
+    expect(onSetTaskPinned).toHaveBeenCalledWith(true);
   });
 });
