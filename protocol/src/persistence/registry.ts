@@ -79,8 +79,11 @@ const epicDowngradeV300ToV200 = defineRecordDowngradePath<
       ok: false as const,
       error: {
         code: "DOWNGRADE_UNSUPPORTED" as const,
+        // Names no harness, for the same reason as the `harness-id` bridge in
+        // `common/registry.ts`: 2.0 froze before Reasonix and every id added
+        // after it (Antigravity, and whatever follows) fails closed here too.
         message:
-          "Epic contains Reasonix harness state that the 2.0 record contract cannot represent",
+          "Epic contains harness state that the 2.0 record contract cannot represent",
       },
     };
   },
@@ -98,13 +101,13 @@ export const roomMetadataRecordV100 = defineRecordContract({
 // schema embeds, so a copied `{ major: 1, minor: 0 }` here would let a future
 // bump register 1.1 while the payload schema and the writers stayed on 1.0.
 
-export const chatHeadRecordV130 = defineRecordContract({
+export const chatHeadRecordV140 = defineRecordContract({
   name: "chat-head",
   schemaVersion: CHAT_SYNC_SCHEMA_VERSION,
   schema: chatHeadRecordSchema,
 });
 
-export const chatShardRecordV130 = defineRecordContract({
+export const chatShardRecordV140 = defineRecordContract({
   name: "chat-shard",
   schemaVersion: CHAT_SYNC_SCHEMA_VERSION,
   schema: chatShardRecordSchema,
@@ -144,18 +147,18 @@ export const persistenceRecordRegistry = defineVersionedRecordRegistry({
   },
   "chat-head": {
     1: {
-      latestMinor: 3,
+      latestMinor: 4,
       versions: {
-        3: { contract: chatHeadRecordV130, upgradeFromPreviousVersion: null },
+        4: { contract: chatHeadRecordV140, upgradeFromPreviousVersion: null },
       },
       downgradePathsFromLatest: {},
     },
   },
   "chat-shard": {
     1: {
-      latestMinor: 3,
+      latestMinor: 4,
       versions: {
-        3: { contract: chatShardRecordV130, upgradeFromPreviousVersion: null },
+        4: { contract: chatShardRecordV140, upgradeFromPreviousVersion: null },
       },
       downgradePathsFromLatest: {},
     },

@@ -60,6 +60,7 @@ describe("MockHostMessenger", () => {
         idempotencyKey: null,
         authority: authority(),
         replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
       },
     );
     expect(result).toEqual({ echoed: "HI" });
@@ -89,6 +90,7 @@ describe("MockHostMessenger", () => {
           idempotencyKey: null,
           authority: authority(),
           replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
         },
       ),
     ).rejects.toSatisfy(
@@ -118,6 +120,7 @@ describe("MockHostMessenger", () => {
           idempotencyKey: null,
           authority: authority(),
           replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
         },
       ),
     ).rejects.toSatisfy(
@@ -156,6 +159,7 @@ describe("MockHostMessenger", () => {
           idempotencyKey: null,
           authority: authority(),
           replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
         },
       ),
     ).rejects.toSatisfy(
@@ -215,6 +219,7 @@ describe("MockHostMessenger", () => {
           idempotencyKey: null,
           authority: authority(),
           replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
         },
       ),
     ).rejects.toSatisfy(
@@ -249,6 +254,7 @@ describe("MockHostMessenger", () => {
         idempotencyKey: null,
         authority: authority(),
         replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
       },
     );
     unsubscribe();
@@ -299,6 +305,7 @@ describe("MockHostMessenger", () => {
           idempotencyKey: null,
           authority: authority(),
           replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
         },
       ),
     ).rejects.toBeInstanceOf(HostRpcError);
@@ -335,6 +342,7 @@ describe("MockHostMessenger", () => {
       { message: "x" },
       {
         replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
         idempotencyKey: null,
         authority: {
           ...authority(),

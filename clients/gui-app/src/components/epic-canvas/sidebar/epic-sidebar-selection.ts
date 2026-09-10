@@ -9,17 +9,19 @@ import {
   type ReactNode,
 } from "react";
 import {
-  useEpicArchivedNodeIds,
-  useEpicTreeIndex,
+  useMaybeEpicArchivedNodeIds,
+  useMaybeEpicTreeIndex,
   type EpicTreeIndex,
 } from "@/lib/epic-selectors";
 import {
   isDefaultSort,
   makeNodeComparator,
-  sortNodeIds,
+  sortNodeIdsWithClock,
   type NodeComparator,
+  type NodeSortClock,
 } from "@/lib/epic-sort";
 import { withMemberToggled } from "@/lib/immutable-set";
+import { useEpicChatSortClock } from "@/components/epic-canvas/sidebar/epic-sidebar-filter";
 import { useChatArchiveSupportState } from "@/hooks/epic/use-chat-archive-support";
 import {
   CHAT_ARCHIVE_VISIBILITY,
@@ -274,13 +276,26 @@ export function sidebarTreeRootIds(args: {
   readonly tree: EpicTreeIndex;
   readonly treeFilter: SidebarTreeFilterFn;
   readonly comparator: NodeComparator | null;
+  /**
+   * The per-node content clock these roots sort by in place of `updatedAt`
+   * (see `NodeSortClock`), or `null` for a caller with none. Required rather
+   * than defaulted: a caller that forgets it silently orders foreign roots by
+   * a metadata stamp no publication moves, which is invisible until someone
+   * compares this list against the rendered panel.
+   */
+  readonly clock: NodeSortClock | null;
 }): readonly string[] {
   const roots = args.tree.rootIds.filter(
     (id) =>
       Object.hasOwn(args.tree.nodeById, id) &&
       args.treeFilter(args.tree.nodeById[id].type),
   );
-  return sortNodeIds(roots, args.tree.nodeById, args.comparator);
+  return sortNodeIdsWithClock(
+    roots,
+    args.tree.nodeById,
+    args.comparator,
+    args.clock,
+  );
 }
 
 const EMPTY_ARCHIVE_HIDDEN_IDS: ReadonlySet<string> = new Set<string>();
@@ -364,14 +379,18 @@ function collectArchivedOnlyHiddenIds(
  * `null` (no handshake yet) keeps hiding, because revealing on unknown would
  * flash archived rows on every cold start and hide them again a moment later.
  * Only a positive `false` reveals.
+ *
+ * Provider-optional for the reason given on {@link useSidebarChatOrder}, its
+ * only caller outside the panel: with no session there are no archived rows and
+ * nothing to hide, so the hidden set is empty.
  */
 export function useSidebarArchiveHiddenIds(
   epicId: string,
 ): ReadonlySet<string> {
   const archiveVisibility = useChatArchiveVisibility(epicId);
   const archiveSupport = useChatArchiveSupportState();
-  const archivedIds = useEpicArchivedNodeIds();
-  const tree = useEpicTreeIndex();
+  const archivedIds = useMaybeEpicArchivedNodeIds();
+  const tree = useMaybeEpicTreeIndex();
   return useMemo(() => {
     if (
       archiveVisibility === CHAT_ARCHIVE_VISIBILITY.All ||
@@ -457,6 +476,13 @@ export function collectVisibleSidebarTreeIds(args: {
   readonly emitFilter: SidebarTreeFilterFn;
   readonly visibleIds: ReadonlySet<string> | null;
   readonly comparator: NodeComparator | null;
+  /**
+   * The per-node clock the panel sorts by in place of `updatedAt` (see
+   * `NodeSortClock`), applied at every child level so this walk lists nested
+   * siblings in the order the rendered panel shows them. `null` for a caller
+   * with no such clock.
+   */
+  readonly clock: NodeSortClock | null;
 }): readonly string[] {
   const results: string[] = [];
   const visit = (nodeId: string): void => {
@@ -476,9 +502,12 @@ export function collectVisibleSidebarTreeIds(args: {
       ids.push(childId);
       return ids;
     }, []);
-    sortNodeIds(visibleChildIds, args.tree.nodeById, args.comparator).forEach(
-      visit,
-    );
+    sortNodeIdsWithClock(
+      visibleChildIds,
+      args.tree.nodeById,
+      args.comparator,
+      args.clock,
+    ).forEach(visit);
   };
   args.rootIds.forEach(visit);
   return results;
@@ -489,9 +518,9 @@ export function collectVisibleSidebarTreeIds(args: {
  * order it lists them in. Not a lookalike of that panel - the same
  * {@link sidebarTreeRootIds} roots, the same {@link useSidebarArchiveHiddenIds}
  * subtree pruning, the same {@link collectVisibleSidebarTreeIds} walk with the
- * same comparator at every level. Any surface that offers "pick one of this
- * Task's chats" reads the order from here, or the two drift the first time
- * either the sort mode or the hiding rules change.
+ * same comparator AND the same publication clock at every level. Any surface
+ * that offers "pick one of this Task's chats" reads the order from here, or the
+ * two drift the first time either the sort mode or the hiding rules change.
  *
  * Two deliberate departures from the rendered panel, both because this is a
  * flat list of destinations rather than a tree of rows:
@@ -507,17 +536,33 @@ export function collectVisibleSidebarTreeIds(args: {
  * Terminal agents are walked through but never emitted: they have no composer,
  * so an agent is not somewhere a message can be sent - while the chats nested
  * UNDER one are, and are exactly what a chat-rooted walk would have missed.
+ *
+ * Reads the tree through the PROVIDER-OPTIONAL selectors, so this resolves to
+ * an empty order outside an open-epic session instead of throwing. The picker
+ * is not a canvas-only surface: a browser tile on the Start Page renders the
+ * same annotation route, and a Start Page browser tab belongs to no epic, so
+ * "no session" is an expected state here rather than a missing provider. An
+ * empty order is the right answer for it - there is no composer to send to.
  */
 export function useSidebarChatOrder(epicId: string): readonly string[] {
-  const tree = useEpicTreeIndex();
+  const tree = useMaybeEpicTreeIndex();
   const sort = useChatSort(epicId);
   const archiveHiddenIds = useSidebarArchiveHiddenIds(epicId);
+  // The same publication clock the rendered panel sorts by - taken from the
+  // panel's context when this picker is opened inside one, and derived from
+  // the same store inputs when it is not (a terminal quote, an artifact
+  // quote, a browser annotation). Applied at BOTH levels, because a foreign
+  // chat can be a root as easily as a child: `sidebarTreeRootIds` orders the
+  // roots and `collectVisibleSidebarTreeIds` orders every level under them,
+  // and clocking only one of the two leaves the list half-corrected.
+  const clock = useEpicChatSortClock();
   return useMemo(() => {
     const comparator = isDefaultSort(sort) ? null : makeNodeComparator(sort);
     const rootIds = sidebarTreeRootIds({
       tree,
       treeFilter: CHATS_TREE_FILTER,
       comparator,
+      clock,
     }).filter((id) => !archiveHiddenIds.has(id));
     return collectVisibleSidebarTreeIds({
       rootIds,
@@ -527,8 +572,9 @@ export function useSidebarChatOrder(epicId: string): readonly string[] {
       emitFilter: CHAT_NODE_FILTER,
       visibleIds: combineSidebarVisibleIds(null, archiveHiddenIds, tree),
       comparator,
+      clock,
     });
-  }, [archiveHiddenIds, sort, tree]);
+  }, [archiveHiddenIds, clock, sort, tree]);
 }
 
 export function rootmostSelectedSidebarIds(args: {

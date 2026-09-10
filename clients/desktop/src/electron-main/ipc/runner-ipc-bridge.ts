@@ -104,6 +104,7 @@ import type {
   ApplyStagedOk,
   ApplyStagedTrigger,
   ConvergeReadyOk,
+  ConvergeReadyVersionPolicy,
   GuardedMutationOutcome,
   HostControllerStatus,
   LifecycleAdmissionBlock,
@@ -215,10 +216,26 @@ export interface IpcDesktopAuthSession {
   get(): VerifiedDesktopAuthSessionSnapshot;
   set(snapshot: DesktopAuthSessionSnapshot): void;
   /**
-   * Adopts a session whose bearer main verified itself. Only the auth IPC,
-   * which runs the verification, calls it.
+   * Begins a deferred (verified) set; the generation it returns fences that
+   * set's commit against any set begun after it. See
+   * `DesktopAuthSession.beginSet`.
    */
-  setVerified(snapshot: DesktopAuthSessionSnapshot): void;
+  beginSet(): number;
+  /**
+   * Adopts a session whose bearer main verified itself. Only the auth IPC,
+   * which runs the verification, calls it, with the generation it took from
+   * `beginSet` before verifying. `false` when a newer set had already
+   * committed and this one was dropped.
+   */
+  setVerified(
+    snapshot: DesktopAuthSessionSnapshot,
+    generation: number,
+  ): boolean;
+  /**
+   * Drops the verification alone, and only while `rejectedToken` is still the
+   * bearer held; see `DesktopAuthSession.revokeVerification`.
+   */
+  revokeVerification(rejectedToken: string): void;
   on(event: "change", listener: IpcAuthSessionChangeListener): void;
   off(event: "change", listener: IpcAuthSessionChangeListener): void;
 }
@@ -400,6 +417,7 @@ export interface IpcHostController {
   convergeReady(
     force: boolean,
     intent: LocalHostMutationIntent,
+    versionPolicy: ConvergeReadyVersionPolicy,
   ): Promise<GuardedMutationOutcome<ConvergeReadyOk>>;
   stageLatest(): Promise<void>;
   applyStaged(
@@ -408,6 +426,14 @@ export interface IpcHostController {
   ): Promise<MutationOutcome<ApplyStagedOk>>;
   activateInstalled(
     force: boolean,
+    // When false, activate the installed bytes WITHOUT promoting a ready newer
+    // stage. The implicit launch reconcile passes false for EVERY launch
+    // activation (a known-ready update is handled by its own apply branch under
+    // the CLI hold guard; a stage that only becomes ready mid-activation must
+    // not be promoted here, or it could revert a held downgrade). Explicit
+    // callers (a GUI "Update"/activate click) pass true and keep the
+    // "ready update supersedes activation debt" behaviour.
+    promoteReadyStage: boolean,
   ): Promise<MutationOutcome<ActivateInstalledOk>>;
   installVersion(
     pin: string,
@@ -1463,7 +1489,7 @@ class NullAuthTokenStore implements IpcAuthTokenStore {
   }
 
   rotate(): Promise<TokenRotateResult> {
-    return Promise.resolve({ outcome: "deleted", pair: null });
+    return Promise.resolve({ outcome: "deleted", pair: null, rejection: null });
   }
 
   delete(): Promise<void> {

@@ -29,6 +29,7 @@ import {
 } from "@traycer-clients/shared/auth/push-token-fetcher";
 import "./index.css";
 import { startNativeKeyboardBridge } from "./native-keyboard-bridge";
+import { AuthSession, MobileAuthSheet } from "../auth-sheet";
 import { MobileRunnerHost } from "../mobile-runner-host";
 import { sentryInitOptions } from "../sentry";
 import { MobileDeviceDescriber } from "../device-describer";
@@ -259,6 +260,14 @@ async function mount(input: {
   // is read synchronously at render time - a capability that resolved later
   // would leave a Download control on screen that the shell cannot honour.
   const directDownloads = await supportsDirectDownload();
+  // The scheme registration ships with the NATIVE shell (Info.plist /
+  // AndroidManifest; the iOS staging release lane re-stamps its own), and
+  // the baked config names that same scheme. Platform still decides whether
+  // ANY scheme exists: the dev web entry registers nothing and must not
+  // name a scheme some other installed app would answer.
+  const returnScheme = Capacitor.isNativePlatform()
+    ? config.returnScheme
+    : null;
   const host = new MobileRunnerHost({
     signInUrl: config.signInUrl,
     authnBaseUrl: config.authnBaseUrl,
@@ -266,12 +275,13 @@ async function mount(input: {
     relayBaseUrl: config.relayBaseUrl,
     pushRegistration,
     openPushSettings: buildOpenPushSettings(),
-    // The scheme registration ships with the NATIVE shell (Info.plist /
-    // AndroidManifest; the iOS staging release lane re-stamps its own), and
-    // the baked config names that same scheme. Platform still decides whether
-    // ANY scheme exists: the dev web entry registers nothing and must not
-    // name a scheme some other installed app would answer.
-    returnScheme: Capacitor.isNativePlatform() ? config.returnScheme : null,
+    returnScheme,
+    // The sign-in sheet intercepts that same scheme's return link, so it
+    // exists exactly where a scheme does.
+    authSheet:
+      returnScheme === null
+        ? null
+        : new MobileAuthSheet(AuthSession, App, returnScheme),
     // The selection authority's fleet rides the same dev-slot source the
     // directory's fetcher uses, so a loopback dev host (never registered in
     // the cloud) is still a derivation candidate. `null` = registry list.

@@ -65,6 +65,7 @@ function seedOpenEpicWithChatTitle(title: string): {
     detachTransport: () => undefined,
     requestFreshSnapshot: () => undefined,
     retryTransport: () => undefined,
+    wakeTransport: () => undefined,
     isClean: () => true,
     hotArtifactRoomIdsForTests: () => [],
     ...INERT_ROOT_STATE_PORT,

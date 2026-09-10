@@ -1,4 +1,4 @@
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { LogOut, Pin, Settings, SquareArrowOutUpRight } from "lucide-react";
 import { SignOutConfirmDialog } from "@/components/auth/sign-out-confirm-dialog";
@@ -7,6 +7,9 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { HistoryRowStatusIcon } from "@/components/epics/epics-list-shared";
+import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
+import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import "@/components/layout/shell/mobile-shell-touch-targets.css";
 import { MobileNavDrawerSurface } from "@/components/layout/shell/mobile-nav-drawer-surface";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
@@ -274,8 +277,30 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
+    cloudPagePending,
   } = useHistoryQuery({ search, nowMs: null });
-  const items = data?.items ?? [];
+  // Memoized so the id list below only changes when the page does, not on
+  // every render's fresh empty array.
+  const items = useMemo(() => data?.items ?? [], [data]);
+
+  // The rows' status indicator reads notification state from context, and the
+  // drawer is mounted by the shell outside the providers the tab strip and the
+  // list panel each put around their own rows - so it provides its own, for
+  // exactly the ids on screen. Same call as the list panel's: epic ids only,
+  // so the app-wide active host is the right one to ask (an Epic is a shared
+  // cloud entity, not a host-owned record). A phase row's `epicId` is a phase
+  // id and names no epic, so it is left out of the question.
+  const indicatorEpicIds = useMemo(
+    () =>
+      items.flatMap((item) => (item.taskType === "epic" ? [item.epicId] : [])),
+    [items],
+  );
+  const notificationIndicators = useNotificationIndicators({
+    hostId: null,
+    epicIds: indicatorEpicIds,
+    chatIds: [],
+    enabled: indicatorEpicIds.length > 0,
+  });
 
   const openItem = (item: HistoryItem) => {
     props.onNavigate();
@@ -335,6 +360,33 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
         ))}
       </div>
     );
+  } else if (cloudPagePending) {
+    body = (
+      <div
+        className="flex flex-col gap-1 px-1"
+        data-testid="mobile-nav-task-list-loading"
+        aria-busy="true"
+        aria-label="Loading tasks"
+      >
+        {[0, 1, 2].map((i) => (
+          <Skeleton key={i} className="h-10 w-full rounded-md" />
+        ))}
+      </div>
+    );
+  } else if (data?.hostRequiresCloudToList === true) {
+    // No listing was requested: no cloud verdict, and a host too old to list
+    // from this device. `items` is empty because nothing was asked, so the
+    // "No tasks yet" arm below would state as fact something this session has
+    // no evidence for. The full explanation lives on History proper; this
+    // drawer is a shortcut list, so it says only what it can stand behind.
+    body = (
+      <p
+        className="px-3 py-2 text-ui-sm text-muted-foreground"
+        data-testid="mobile-nav-task-list-host-requires-cloud"
+      >
+        Tasks can&apos;t be listed until your sign-in is confirmed
+      </p>
+    );
   } else if (items.length === 0) {
     body = (
       <p className="px-3 py-2 text-ui-sm text-muted-foreground">No tasks yet</p>
@@ -353,11 +405,15 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
               openItem(item);
             }}
           >
-            {/* No leading icon on ordinary rows: every row in this list is a
+            {/* No default glyph on ordinary rows: every row in this list is a
                 task, so a repeated glyph carried no information and cost the
-                title ~28px. The pin glyph appears only on pinned rows, where
-                it IS the information - mirrors the list panel's pinned style
-                (primary + filled). */}
+                title ~28px. What does take the leading slot is information:
+                the pin on pinned rows (mirrors the list panel's pinned style,
+                primary + filled), and the task's STATUS - an agent working, or
+                a result waiting to be read - through the same indicator the
+                desktop list and the history page render. A row with neither
+                gives its title the full width. Pinned and running shows both,
+                pin first. */}
             {item.isPinned ? (
               <Pin
                 aria-label="Pinned"
@@ -365,6 +421,12 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
                 className="size-3.5 shrink-0 fill-current text-primary"
               />
             ) : null}
+            <HistoryRowStatusIcon
+              item={item}
+              testIdPrefix="mobile-nav-task"
+              className="text-muted-foreground"
+              defaultIcon={null}
+            />
             <span className="min-w-0 flex-1 truncate text-left font-normal">
               {drawerItemDisplayTitle(item)}
             </span>
@@ -435,7 +497,9 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
           View all
         </button>
       </div>
-      {body}
+      <NotificationIndicatorsProvider indicators={notificationIndicators}>
+        {body}
+      </NotificationIndicatorsProvider>
     </div>
   );
 }

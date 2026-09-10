@@ -49,13 +49,10 @@ export type StreamCloseReason =
  * method at all - the fatal class that is a statement about the host's
  * CAPABILITY rather than about this attempt.
  *
- * It is the only capability evidence a remote session ever produces: the mux
- * resolves an incompatible method as a fatal on the subscribe attempt rather
- * than as a queryable pre-check, so `RemoteStreamClient.getMethodSupport`
- * answers `"unknown"` forever and a consumer that waits for it waits for
- * nothing (see `getMethodSupport`'s own note). The local `StreamSession`
- * reaches the same close through its mirror check, so a caller reading this
- * gets one answer on both transports.
+ * A remote session also exposes manifest-derived capability evidence after its
+ * `openAck`, but this remains the terminal proof for a stream already being
+ * opened. The local `StreamSession` reaches the same close through its mirror
+ * check, so a caller reading this gets one answer on both transports.
  *
  * Deliberately a WHITELIST rather than "any fatal". `CLIENT_CLOSED` (a late
  * subscribe on a torn-down client), `UNAUTHORIZED`, `STREAM_MESSAGE_TOO_LARGE`,

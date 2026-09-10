@@ -11,7 +11,11 @@ import {
   it,
   vi,
 } from "vitest";
-import { createLinuxController, type ProcessRunner } from "../linux";
+import {
+  createLinuxController,
+  setRestartStopGracesForTests,
+  type ProcessRunner,
+} from "../linux";
 import { serviceManifestPath, type ServiceLabel } from "../../label";
 import { ProcessRunError, type RunResult } from "../../process-runner";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
@@ -21,14 +25,64 @@ import { fileExists } from "../../install-binary";
 // child-kill engine the macOS force paths use (`forceStopHostProcess`) -
 // the local purge helper is gone, along with its own pid.json read/verdict
 // gating. Stub the engine exactly the way `macos.test.ts` already stubs
-// this identical seam (a WHOLE-MODULE factory - `linux.ts` imports only
-// `forceStopHostProcess` from this module, so that is the only export this
-// suite needs to supply).
+// this identical seam (a WHOLE-MODULE factory - `linux.ts` imports only the
+// reporting variant, which the factory routes onto the same two-argument
+// mock so every assertion below keeps reading `(environment, operation)`).
 const MOCKS = vi.hoisted(() => ({
   forceStopHostProcess: vi.fn(),
 }));
 vi.mock("../desktop-agent-shutdown", () => ({
   forceStopHostProcess: MOCKS.forceStopHostProcess,
+  forceStopHostProcessReporting: (
+    environment: string,
+    operation: string,
+    _onHostAddressed: (() => void) | null,
+  ) => MOCKS.forceStopHostProcess(environment, operation),
+}));
+
+// CodeRabbit #1773 round 2 (r3951899621). The SAME isolation argument the unit
+// directory gets below, for the other file this suite reads through the real
+// home: `stopForRestart` reads the host's `pid.json` for environment "dev" on
+// every path, force included, BEFORE the mocked engine above is reached.
+// Unmocked, that is the developer's own `~/.traycer/host/dev/pid.json`, and
+// the `stopForRestart` rows had three different verdicts depending on what was
+// sitting in it:
+//
+//   * absent (this box, and CI) - the ladder falls straight through to the
+//     force finisher and the rows pass, quickly. Which is why nobody saw it.
+//   * present, naming a pid that is dead or recycled - PROVEN gone, so
+//     `stopForRestart` returns `{ forcedRecycle: false }` and never reaches
+//     `forceStopHostProcess` at all: every row that asserts a terminal outcome
+//     FAILS. A stale record from a crashed host is the ordinary case.
+//   * present and live - both graces run (32s + 10s against vitest's 5s
+//     default `testTimeout`), so the rows fail by timeout.
+//
+// A mock rather than a redirected HOME because the module boundary is what is
+// under test: these rows are about which engine `stopForRestart` reaches, not
+// about how a path is resolved. Whole-module factory, so it must supply every
+// symbol `linux.ts` imports from here - `readHostPidMetadataEvidence`
+// included, which the restart ladder now reads.
+const PID = vi.hoisted(() => ({
+  evidence: { kind: "absent" } as
+    | { readonly kind: "absent" }
+    | { readonly kind: "unreadable"; readonly cause: string }
+    | { readonly kind: "read"; readonly metadata: { readonly pid: number } },
+  // Whether the identity captured before the signal is PROVABLY gone.
+  gone: false,
+  // How often the identity predicate was consulted. Only a record that READS
+  // has an identity to ask about, so this separates "fell through with nothing
+  // to check" from "checked and could not prove" - two states whose
+  // `forcedRecycle` answer is identical.
+  goneCalls: 0,
+}));
+vi.mock("../../../host/pid-metadata", () => ({
+  readHostPidMetadata: async () =>
+    PID.evidence.kind === "read" ? PID.evidence.metadata : null,
+  readHostPidMetadataEvidence: async () => PID.evidence,
+  publishedHostProcessGone: () => {
+    PID.goneCalls += 1;
+    return PID.gone;
+  },
 }));
 
 /**
@@ -262,6 +316,13 @@ describe("linux service install flow", () => {
 // the identical wait shape.
 describe("linux service stop --force", () => {
   beforeEach(() => {
+    // The state these rows were silently assuming. Declared now, so the suite
+    // says what it depends on instead of inheriting it from whatever is in the
+    // developer's home.
+    PID.evidence = { kind: "absent" };
+    PID.gone = false;
+    PID.goneCalls = 0;
+    setRestartStopGracesForTests(null);
     MOCKS.forceStopHostProcess.mockReset();
     // Default outcome: no-metadata, which is SUCCESS on this finisher (the
     // unit teardown already ran with positive confirmation, and an absent
@@ -769,5 +830,144 @@ describe("linux service stop --force", () => {
       });
       expect(MOCKS.forceStopHostProcess).toHaveBeenCalledWith("dev", "restart");
     });
+
+    it("the failure message describes the RESTART world, not the stop world", async () => {
+      // Only the verb was parameterised when `stopForRestart` started reusing
+      // this failure path; the premise stayed "the systemd unit is stopped".
+      // That is true after `stop --force` and FALSE after `restart --force`:
+      // Q13's ladder is `systemctl kill`, which runs no stop job, so the unit
+      // stays loaded with `Restart=` armed and systemd is very likely starting
+      // a replacement while the operator reads the message.
+      //
+      // This is the sentence someone reads while deciding whether their host
+      // is down, and the old remediation ("remove the stale record ... and
+      // reinstall") invites an uninstall in the middle of a relaunch.
+      MOCKS.forceStopHostProcess.mockResolvedValue({
+        kind: "identity-unverified",
+        pid: 4242,
+      });
+
+      const message = await createLinuxController(settledRunner())
+        .stopForRestart(label, { force: true })
+        .then(
+          () => "",
+          (error: { readonly message: string }) => error.message,
+        );
+
+      expect(message).toContain("remains armed");
+      expect(message).toContain("systemd will relaunch it");
+      // The two claims that were wrong for this path, asserted absent by the
+      // exact strings the `stop` path still uses.
+      expect(message).not.toContain("the systemd unit is stopped");
+      expect(message).not.toContain("host service uninstall");
+    });
+
+    it("...while the plain stop --force keeps the stopped-unit premise and its remediation", async () => {
+      // The twin. The `stop` path really does run `systemctl stop`, so its
+      // premise and its "remove the stale record" advice are both correct and
+      // must not be changed along with the restart path's.
+      MOCKS.forceStopHostProcess.mockResolvedValue({
+        kind: "identity-unverified",
+        pid: 4242,
+      });
+
+      await expect(
+        createLinuxController(settledRunner()).stop(label, { force: true }),
+      ).rejects.toMatchObject({
+        message: expect.stringContaining("the systemd unit is stopped"),
+      });
+    });
+
+    it("a NON-force stopForRestart never escalates to the published host", async () => {
+      // The twin of the row above, and the reason the row above is not enough
+      // on its own.
+      //
+      // Q13 rewrote `stopForRestart` to signal the unit instead of stopping
+      // it, and the rewrite took no `force` parameter at all - so `host
+      // restart --force` silently stopped escalating and stopped reporting a
+      // forced stop that had not taken effect. One assertion that force DOES
+      // escalate would have caught that. It would not catch the opposite
+      // regression: wiring the escalation unconditionally, which would reach
+      // for the published host on every ordinary update restart - and with
+      // the manager left armed, `pid.json` by then may name the REPLACEMENT
+      // systemd has already started, not the instance we signalled.
+      //
+      // So the gate is pinned from both sides. Unprovable-and-not-forced is
+      // `forcedRecycle: true` and nothing more; the relaunch recycles, which
+      // is what actually repairs it.
+      MOCKS.forceStopHostProcess.mockResolvedValue({
+        kind: "hung",
+        pid: 4242,
+      });
+
+      const stopped = await createLinuxController(
+        settledRunner(),
+      ).stopForRestart(label, { force: false });
+
+      expect(stopped).toEqual({ forcedRecycle: true });
+      expect(MOCKS.forceStopHostProcess).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["absent", { kind: "absent" } as const, false, true, false],
+      [
+        "unreadable",
+        { kind: "unreadable", cause: "not valid JSON" } as const,
+        false,
+        true,
+        false,
+      ],
+      [
+        "live",
+        { kind: "read", metadata: { pid: 4242 } } as const,
+        false,
+        true,
+        true,
+      ],
+      [
+        "proven gone",
+        { kind: "read", metadata: { pid: 4242 } } as const,
+        true,
+        false,
+        true,
+      ],
+    ])(
+      "the published record these rows read is the MOCK's, not this machine's: %s",
+      async (_name, evidence, gone, reachesFinisher, consultsIdentity) => {
+        // The row that names the defect is the last one. A `pid.json` naming a
+        // dead or recycled pid - what a crashed host leaves behind, and what
+        // sits in plenty of real home directories - is PROVEN gone, so
+        // `stopForRestart` returns `forcedRecycle: false` and never reaches
+        // the finisher. Every sibling row above asserts a terminal outcome
+        // FROM that finisher, so on such a machine they all failed, for a
+        // reason no diff could explain.
+        //
+        // The observable is deliberately "which engine was reached" rather
+        // than a duration: it is what the sibling rows depend on, and it
+        // cannot be satisfied by accident from either direction.
+        PID.evidence = evidence;
+        PID.gone = gone;
+        // The live row would otherwise poll the real ladder - 32s + 10s
+        // against a 5s default `testTimeout`, which is the OTHER way this
+        // suite failed off this box.
+        setRestartStopGracesForTests({ sigtermMs: 5, sigkillMs: 5 });
+        MOCKS.forceStopHostProcess.mockResolvedValue({ kind: "no-host" });
+
+        const stopped = await createLinuxController(
+          settledRunner(),
+        ).stopForRestart(label, { force: true });
+
+        expect(stopped).toEqual({ forcedRecycle: reachesFinisher });
+        expect(MOCKS.forceStopHostProcess.mock.calls.length > 0).toBe(
+          reachesFinisher,
+        );
+        // The second observable, and the one that separates the two rows whose
+        // `forcedRecycle` answer is the same as the absent state's. Only a
+        // record that READS has an identity to ask about; without the mock
+        // this counter stays 0 for every row, because the real reader answers
+        // `absent` on any machine and the predicate is never reached.
+        expect(PID.goneCalls > 0).toBe(consultsIdentity);
+      },
+    );
   });
 });

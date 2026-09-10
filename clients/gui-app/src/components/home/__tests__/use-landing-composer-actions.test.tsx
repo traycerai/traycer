@@ -4,10 +4,18 @@ import { useHostClient } from "@/lib/host";
 import { epicDisplayTitle } from "@/lib/display-title";
 import { createEpicName } from "@/lib/epic-name";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
+import {
+  selectHasActiveInitialChatHandoffForEpic,
+  useInitialChatHandoffStore,
+} from "@/stores/epics/initial-chat-handoff-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import { useTabsStore } from "@/stores/tabs/store";
 import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
@@ -52,6 +60,7 @@ const landingMocks = vi.hoisted(() => ({
   navigate: vi.fn<(options: CapturedNavigation) => void>(),
   getActiveHostId: vi.fn(() => "host-landing"),
   getRequestContextUserId: vi.fn<() => string | null>(() => "user-landing"),
+  floorsRequested: new Array<unknown>(),
   getActiveHost: vi.fn(() => ({
     hostId: "host-landing",
     label: "Local",
@@ -70,28 +79,28 @@ vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
   useHostClient: () => ({
     request: landingMocks.request,
+    // An UNVERIFIED create dispatches here instead: the floor that decides
+    // whether this host creates locally rides on the request now, answered by
+    // the transport from its own handshake. Delegating to the same `request`
+    // spy is what a host MEETING the floor does, which is the second half of
+    // the case below; the floor is recorded so the admitted dispatch is
+    // distinguishable from an authorized one.
+    requestWithSignalRequiringHostMethodVersion: (
+      method: string,
+      payload: unknown,
+      _signal: AbortSignal | undefined,
+      requiredHostMethodVersion: unknown,
+    ): Promise<unknown> => {
+      landingMocks.floorsRequested.push(requiredHostMethodVersion);
+      return landingMocks.request(method, payload);
+    },
     getActiveHostId: landingMocks.getActiveHostId,
     getActiveHost: landingMocks.getActiveHost,
     getRequestContextUserId: landingMocks.getRequestContextUserId,
   }),
 }));
 
-// `landing-draft-store.ts` (real, unmocked - `createDraft` reads the global
-// workspace snapshot through it) and `use-landing-composer-actions.ts` itself
-// (the imperative "create draft" path) both resolve the per-host
-// workspace-folder / run-settings buckets through this imperative snapshot,
-// not through a hook. Left unmocked it falls back to the real (unbound)
-// implementation, which always reports `null` - so every fixture below would
-// seed a host bucket the code never reads. Pin it to the SAME host id
-// `landingMocks.getActiveHostId()` returns, so the two ways this suite's
-// production code resolves "the active host" agree.
-// `activeHostIdOrNull` is what `ensureSubmissionDraft` reads for the run-
-// settings bucket now: the spine accessor below answers `null` for every host
-// since P4.2/D17 deleted the active slot, so the id has to come from the
-// authority's projection instead. Both are driven by the SAME knob, so a test
-// that moves the host still moves it everywhere this suite reaches.
 vi.mock("@/lib/host/runtime", () => ({
-  activeHostIdOrNull: () => landingMocks.getActiveHostId(),
   getHostBindingSnapshot: () => ({
     hostClient: { getActiveHostId: landingMocks.getActiveHostId },
   }),
@@ -228,9 +237,36 @@ describe("useLandingComposerActions", () => {
     __resetTabNavigationControllerForTesting();
     draftRuntimeRegistry.resetForTesting();
     window.localStorage.clear();
+    // Creation is admitted for a session holding a cloud verdict; the
+    // unverified admission has its own case below.
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-landing", userName: "U", email: "u@example.com" },
+        { userId: "user-landing", username: "U" },
+        [],
+      );
     landingMocks.request.mockReset();
     landingMocks.createTerminalAgent.mockReset();
     landingMocks.navigate.mockReset();
+    // Beside its siblings, for the same reason as the popover's recorder: this
+    // one lives in the SAME object as the mocks reset here and was the single
+    // member skipped, which is how a recorder drifts out of the reset
+    // discipline the rest of the fixture already follows.
+    //
+    // No false pass was measured here, and the assertion this feeds is an
+    // exact-array `toEqual`, which is already empty-refusing and already pins
+    // the count - so unlike the popover's, that assertion needs no change.
+    //
+    // Its untreated hazard was still the mirror image of the popover's, and
+    // runs in the direction execution does: an EARLIER sibling dispatching a
+    // floored create leaves a record this case then reads, so its exact-array
+    // `toEqual` sees two elements and reddens - a false FAILURE pointing at
+    // innocent code, rather than the popover's false pass. (The same residue
+    // the other way is this case contaminating a LATER sibling that grows its
+    // own exact-array assertion.) A later case cannot reach back and change an
+    // assertion that has already run; only what precedes it can.
+    landingMocks.floorsRequested.length = 0;
     landingMocks.request.mockResolvedValue({ roomInfo: null });
     landingMocks.createTerminalAgent.mockResolvedValue(undefined);
     landingMocks.getActiveHostId.mockReset();
@@ -272,6 +308,12 @@ describe("useLandingComposerActions", () => {
       defaultPermission: "supervised",
       defaultReasoning: "high",
     });
+    // Pre-created drafts read the real composer host snapshot. Match the
+    // mocked client's host so they inherit the workspace/settings fixtures.
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      effectiveHostId: TEST_HOST_ID,
+    });
   });
 
   afterEach(() => {
@@ -279,6 +321,8 @@ describe("useLandingComposerActions", () => {
     __resetTabNavigationControllerForTesting();
     draftRuntimeRegistry.resetForTesting();
     cleanup();
+    useAuthStore.getState().setSignedOut();
+    resetNegotiatedManifests();
     useInitialChatHandoffStore.getState().resetForTests();
     useComposerRunSettingsStore.getState().resetForTests();
     useWorkspaceFoldersStore.setState({ byHost: {} });
@@ -295,6 +339,10 @@ describe("useLandingComposerActions", () => {
       openTabOrder: [],
       activeTabId: null,
       mostRecentTabIdByEpicId: {},
+    });
+    useSelectionAuthorityStore.setState({
+      attached: false,
+      effectiveHostId: null,
     });
   });
 
@@ -508,6 +556,68 @@ describe("useLandingComposerActions", () => {
         })
       ],
     ).toBeDefined();
+    queryClient.clear();
+  });
+
+  it("refuses an unverified session's create on a host without the local-first line, and admits it on one with it", async () => {
+    // `epic.create@1.0` cannot say whether this host creates locally or sends
+    // the create to the cloud on the retained credential; the host's
+    // `epic.listTasks` line can, and it is negotiated.
+    setSingleWorkspace();
+    useAuthStore
+      .getState()
+      .setUnverifiedSession(
+        { userId: "user-landing", userName: "U", email: "u@example.com" },
+        { userId: "user-landing", username: "U" },
+      );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
+
+    // No manifest recorded for the host: fails closed.
+    let refusal: { readonly message: string } | null = null;
+    act(() => {
+      refusal = result.current.submit({
+        draftId: null,
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+    expect(refusal).not.toBeNull();
+    expect(landingMocks.request).not.toHaveBeenCalled();
+
+    // The host advertises the local-first line: the same session is admitted.
+    recordNegotiatedHostManifest(TEST_HOST_ID, {
+      "epic.create": { major: 1, minor: 1 },
+    });
+    let admitted: { readonly message: string } | null = { message: "unset" };
+    act(() => {
+      admitted = result.current.submit({
+        draftId: null,
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+    expect(admitted).toBeNull();
+    await waitFor(() => {
+      expect(landingMocks.request).toHaveBeenCalled();
+    });
+    // The admitted create carries the floor, which is what makes it safe to
+    // admit: the composer's own gate reads the negotiated-manifest registry,
+    // and that registry can name a host process already replaced by the time
+    // this create's handshake runs. The floor is what the connection carrying
+    // the create answers for itself.
+    expect(landingMocks.floorsRequested).toEqual([
+      { method: "epic.create", version: { major: 1, minor: 1 } },
+    ]);
     queryClient.clear();
   });
 
@@ -2369,6 +2479,241 @@ describe("useLandingComposerActions", () => {
     queryClient.clear();
   });
 
+  it("retains a staged intent and opens nothing when the create is REFUSED", async () => {
+    // The third member of the retain-for-retry class above, and the one the
+    // other two cannot stand in for: a refusal RESOLVES. `epic.create@1.1`
+    // carries it as an optional key on an ordinary response, so the fulfilled
+    // continuation runs for a create that did not happen - and everything in
+    // it is staged on the assumption that the epic exists.
+    setSingleWorkspace();
+    const stagingKey = {
+      surface: "landing" as const,
+      hostId: TEST_HOST_ID,
+      draftId: null,
+    };
+    const stagedIntent = worktreeIntentFor(WORKSPACE_PATH, "retry-refused");
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(stagingKey, stagedIntent);
+    landingMocks.request.mockImplementation((method) =>
+      method === "epic.create"
+        ? Promise.resolve({
+            roomInfo: null,
+            refusal: {
+              kind: "local-store-unavailable",
+              message: "Traycer can't open this device's local store.",
+              remedy: "Quit the other Traycer on this machine, then rebind.",
+            },
+          })
+        : Promise.resolve({}),
+    );
+    // `gcTime: Infinity` for the same reason as the accepted-create control
+    // below: under the shared `gcTime: 0` the observer-less seed is collected
+    // the moment it is written, so the rollback assertion at the end of this
+    // test would read `undefined` whether or not a rollback happened. It did
+    // exactly that on first run, and only the control caught it.
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
+
+    act(() => {
+      result.current.submit({
+        draftId: null,
+        editor: editorHandleForPrompt("refused create"),
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some(
+          (call) => call[0] === "epic.create",
+        ),
+      ).toBe(true);
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // The retry must see the exact intent the user staged.
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(stagingKey)
+      ],
+    ).toEqual(stagedIntent);
+    // And the optimistic binding seed is ROLLED BACK. This is the third
+    // continuation on the create promise - the one inside `createLandingEpic`
+    // itself, which runs before either call site's - and its rollback lived
+    // only in `.catch`, which a resolving refusal never reaches. Left seeded,
+    // the in-epic chip and the palette's Files/Diff openers would list folders
+    // for an epic id the host never created.
+    expect(
+      queryClient.getQueryData(
+        hostQueryKeys.method(TEST_HOST_ID, "worktree.listBindingsForEpic", {
+          epicId: createdEpicIdFromRequests(),
+        }),
+      ),
+    ).toBeUndefined();
+    // And nothing was opened or navigated to. In this flow the tile open and
+    // the navigation both live INSIDE the fulfilled continuation, so a missing
+    // refusal branch would land the user on an epic route whose
+    // `epic.subscribe` then fails - a second, unrelated-looking error for one
+    // refusal.
+    expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
+    expect(landingMocks.navigate).not.toHaveBeenCalled();
+    // The initial-chat handoff registered at submit time must not outlive
+    // the epic it names: a REFUSED create now settles it to `failed` instead
+    // of leaving it `pending` forever.
+    const refusedEpicId = createdEpicIdFromRequests();
+    const handoffAfterRefusal = Object.values(
+      useInitialChatHandoffStore.getState().handoffs,
+    )[0];
+    expect(handoffAfterRefusal.status).toBe("failed");
+    expect(handoffAfterRefusal.failureReason).toBe("Couldn't create the epic.");
+    expect(
+      selectHasActiveInitialChatHandoffForEpic(
+        useInitialChatHandoffStore.getState(),
+        refusedEpicId,
+      ),
+    ).toBe(false);
+    queryClient.clear();
+  });
+
+  it("keeps the optimistic binding seed when the create is ACCEPTED", async () => {
+    // The positive control for the rollback above, and it is load-bearing:
+    // `toBeUndefined()` passes just as well if the seed is never written - if
+    // the staged folders did not reach `buildOptimisticWorkspaceBindingRows`,
+    // or the key is built differently than this test builds it. This row
+    // proves the key and the seed are real, so the other row's absence is a
+    // rollback rather than a miss.
+    setSingleWorkspace();
+    landingMocks.request.mockImplementation((method) =>
+      method === "epic.create"
+        ? Promise.resolve({ roomInfo: null })
+        : Promise.resolve({}),
+    );
+    // `gcTime: Infinity`, unlike every other case in this file. The seed is a
+    // `setQueryData` with no observer in this harness - no epic route is
+    // mounted to subscribe to it - and under the shared `gcTime: 0` such an
+    // entry is collected the instant it is written. Reading it back would then
+    // answer `undefined` whether or not the rollback ran, which is exactly how
+    // the refusal assertion below first passed while proving nothing.
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
+
+    act(() => {
+      result.current.submit({
+        draftId: null,
+        editor: editorHandleForPrompt("accepted create"),
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some(
+          (call) => call[0] === "epic.create",
+        ),
+      ).toBe(true);
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(
+      queryClient.getQueryData(
+        hostQueryKeys.method(TEST_HOST_ID, "worktree.listBindingsForEpic", {
+          epicId: createdEpicIdFromRequests(),
+        }),
+      ),
+    ).toEqual({
+      rows: [expect.objectContaining({ workspacePath: WORKSPACE_PATH })],
+    });
+    queryClient.clear();
+  });
+
+  it("does not chain the terminal agent onto a REFUSED create", async () => {
+    // The terminal-agent flow is the dangerous half: it navigates and opens
+    // its placeholder tile BEFORE the round-trip, so the refusal cannot undo
+    // the navigation - what it must prevent is the CHAINED
+    // `agent.tui.prepareLaunch` / `epic.createTuiAgent` against an epic that
+    // does not exist, whose own error toast would report the refusal twice in
+    // two unrelated vocabularies. The marker is dropped so the existence
+    // reconciler prunes the orphan tab, exactly as on the rejection arm.
+    landingMocks.request.mockImplementation((method) =>
+      method === "epic.create"
+        ? Promise.resolve({
+            roomInfo: null,
+            refusal: {
+              kind: "local-store-unavailable",
+              message: "Traycer can't open this device's local store.",
+              remedy: "Quit the other Traycer on this machine, then rebind.",
+            },
+          })
+        : Promise.resolve({}),
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
+
+    act(() => {
+      result.current.selectTerminalAgent(
+        {
+          harnessId: "claude",
+          model: null,
+          reasoningEffort: null,
+          terminalAgentArgs: "",
+          profileId: null,
+        },
+        null,
+      );
+    });
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+      ).toBe(true);
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(landingMocks.createTerminalAgent).not.toHaveBeenCalled();
+    const createCall = landingMocks.request.mock.calls.find(
+      (c) => c[0] === "epic.create",
+    );
+    const refusedEpicId = (
+      createCall?.[1] as { readonly epic: { readonly id: string } } | undefined
+    )?.epic.id;
+    // Read from the payload rather than asserted against a literal: the id is
+    // generated, and a `toBe(false)` on an id that was never marked would pass
+    // for the wrong reason.
+    expect(typeof refusedEpicId).toBe("string");
+    expect(wasEpicCreatedThisSession(refusedEpicId ?? "")).toBe(false);
+    queryClient.clear();
+  });
+
   /**
    * `isPending`, the field `landing-composer.tsx`'s `isSubmitting` now reads
    * (`runtimeState.isSubmitting || actions.isPending`). Before that change
@@ -2847,6 +3192,16 @@ function splitItem(
     routeBackingSide: focusedSide,
     leftRatio: 0.5,
   };
+}
+
+function createdEpicIdFromRequests(): string {
+  const call = landingMocks.request.mock.calls.find(
+    (entry) => entry[0] === "epic.create",
+  );
+  const epicId =
+    call === undefined ? null : epicIdFromCreateEpicPayload(call[1]);
+  if (epicId === null) throw new Error("no epic.create request was sent");
+  return epicId;
 }
 
 function worktreeIntentFor(workspacePath: string, branchName: string) {

@@ -45,8 +45,13 @@ import {
 } from "@/lib/comm-graph/comm-graph-cloud-registry";
 import {
   selectCommGraphAuthoritativeSnapshot,
+  type CommGraphCloudAvailability,
   type CommGraphCloudSubscriptionOpener,
 } from "@/lib/comm-graph/comm-graph-cloud-subscription";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 import {
   getCommGraphCloudSubscriptionOpenerOverride,
   getCommGraphSubscriptionOpenerOverride,
@@ -78,6 +83,7 @@ const unsupportedCloudOpener: CommGraphCloudSubscriptionOpener = (request) => {
 export function useCommGraphSnapshot(
   epicId: string,
   hostIds: ReadonlyArray<string>,
+  tabHostId: string | null,
 ): CommGraphSnapshot {
   const hostDirectory = useHostDirectoryList();
   // Stable for this component's lifetime, and reads every host dependency live
@@ -129,8 +135,8 @@ export function useCommGraphSnapshot(
   // Relay dialability depends on the pull-only session cache, so the
   // directory query alone cannot see a session dying or appearing under an
   // `offline`/plan-restricted entry. This subscription re-renders on a readiness
-  // flip, which recomputes the two memos below and pushes the new relay set /
-  // readiness keys into the cloud manager through their effects.
+  // flip, which recomputes the two memos below and reconciles the new relay
+  // set and readiness keys into the cloud manager as one update.
   const directoryHostIdsForReadiness = useMemo(
     () => (hostDirectory.data ?? []).map((entry) => entry.hostId),
     [hostDirectory.data],
@@ -138,22 +144,42 @@ export function useCommGraphSnapshot(
   const hasReadySessionFor = useRemoteSessionsPollReadiness(
     directoryHostIdsForReadiness,
   );
+  // The TAB's host relays the feed, then everyone else in ID order as failover.
+  //
+  // Every dialable host relays the same rows, so the choice decides only which
+  // link the epic's whole cloud feed rides - and the epic tab is already riding
+  // one. Sorting by ID alone handed the feed to whichever host ID sorted first,
+  // which on an account with several hosts is an unrelated machine. Preferring
+  // the LOCAL host was rejected for the same reason in reverse: on mobile there
+  // is no local host at all, and the feed has to work through the remote host
+  // the tab was opened on like any other.
+  //
+  // `tabHostId` is the Epic SESSION's host (`useEpicSessionHostId`), not the
+  // tile's own `hostId` - this tile is the one kind with no host binding, and
+  // its ref carries an inert placeholder. `null` (no session host yet), or a
+  // tab host the directory cannot dial, leaves the plain ID order below; a tab
+  // host that arrives later just reorders, and a reorder never closes a healthy
+  // incumbent (`reconcileRelays`).
   const relayHostIds = useMemo(() => {
-    const directoryHostIds = hostDirectory.data
+    const dialableHostIds = hostDirectory.data
       ?.filter(
         (entry) =>
           dialableHostEndpointFor(entry, hasReadySessionFor(entry.hostId)) !==
           null,
       )
       .map((entry) => entry.hostId);
-    return Array.from(
-      new Set(
-        directoryHostIds === undefined || directoryHostIds.length === 0
-          ? hostIds
-          : directoryHostIds,
-      ),
-    ).sort();
-  }, [hasReadySessionFor, hostDirectory.data, hostIds]);
+    if (dialableHostIds === undefined || dialableHostIds.length === 0) {
+      return Array.from(new Set(hostIds)).sort();
+    }
+    const orderedHostIds = Array.from(new Set(dialableHostIds)).sort();
+    if (tabHostId === null || !orderedHostIds.includes(tabHostId)) {
+      return orderedHostIds;
+    }
+    return [
+      tabHostId,
+      ...orderedHostIds.filter((hostId) => hostId !== tabHostId),
+    ];
+  }, [hasReadySessionFor, hostDirectory.data, hostIds, tabHostId]);
   // The ID set does not change when a host publishes its endpoint late or
   // upgrades in place. Keep that transport identity separately so a retained
   // cloud manager can retry a prior dial/compatibility failure for the same
@@ -206,11 +232,33 @@ export function useCommGraphSnapshot(
     relayHostIdsRef.current = relayHostIds;
   }, [relayHostIds]);
 
+  // ONE effect for both halves of a directory update, and BEFORE the claim
+  // below, so a manager never opens against half-installed state. The two
+  // memos are recomputed by the same render and describe the same directory;
+  // pushing them through separate setters let each one dial on the other
+  // half's stale value.
   useEffect(() => {
-    cloudManager.setRelayReadinessKeys(relayReadinessKeys);
-  }, [cloudManager, relayReadinessKeys]);
+    cloudManager.reconcileRelays({
+      hostIds: relayHostIds,
+      readinessKeys: relayReadinessKeys,
+    });
+  }, [cloudManager, relayHostIds, relayReadinessKeys]);
+
+  // `host.communicationGraph.subscribe` is a Traycer Cloud-sourced feed, read
+  // through whichever host relays it on a bearer the cloud must still vouch
+  // for - and the host connection carries no renderer verdict of its own. So
+  // the cloud claim is held only while the session holds a cloud verdict,
+  // read reactively: a demotion while the tile stays mounted releases the
+  // claim (the manager detaches, closing the relay stream, and retains its
+  // rows for a later re-attach), and re-verification claims it again. The
+  // local `epic.communicationGraph.subscribe` fan-in below is this host's own
+  // event log and keeps serving either way.
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
 
   useEffect(() => {
+    if (!cloudAuthorized) return;
     acquireCommGraphCloudSubscription(
       epicId,
       cloudClaim,
@@ -220,11 +268,7 @@ export function useCommGraphSnapshot(
     return () => {
       releaseCommGraphCloudSubscription(epicId, cloudClaim);
     };
-  }, [cloudClaim, cloudManager, cloudOpener, epicId]);
-
-  useEffect(() => {
-    cloudManager.setRelayHostIds(relayHostIds);
-  }, [cloudManager, relayHostIds]);
+  }, [cloudAuthorized, cloudClaim, cloudManager, cloudOpener, epicId]);
 
   useEffect(() => {
     cloudManager.setOriginHostIds(hostIds);
@@ -235,11 +279,21 @@ export function useCommGraphSnapshot(
     () => cloudManager.getSnapshot(),
     () => EMPTY_COMM_GRAPH_SNAPSHOT,
   );
-  const cloudAvailability = useSyncExternalStore(
+  const retainedCloudAvailability = useSyncExternalStore(
     (listener) => cloudManager.subscribe(listener),
     () => cloudManager.getAvailability(),
     () => "pending" as const,
   );
+  // A detached manager RETAINS its `available` verdict for the next attach.
+  // Without a verdict that retained answer is not this session's to act on:
+  // reading it as authoritative would keep the local fan-in detached and
+  // render a frozen cloud snapshot as if it were live. So the cloud plane
+  // reads as `pending` until the verdict returns, which re-attaches the local
+  // fan-in (its cursor was retained on release) and selects its snapshot -
+  // the same local plane every other unverified surface falls back to.
+  const cloudAvailability: CommGraphCloudAvailability = cloudAuthorized
+    ? retainedCloudAvailability
+    : "pending";
   const cloudHistoryCaughtUp = useSyncExternalStore(
     (listener) => cloudManager.subscribe(listener),
     () => cloudManager.isInitialHistoryCaughtUp(),

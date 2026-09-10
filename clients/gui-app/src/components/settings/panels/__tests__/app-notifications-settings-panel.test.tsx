@@ -50,12 +50,17 @@ describe("<AppNotificationsSettingsPanel />", () => {
   it("owns the app-wide sound setting without host filtering", () => {
     renderPanel({ pushPermission: null, systemSettings: null });
 
+    expect(screen.getByRole("heading", { name: "Sounds" })).toBeTruthy();
     expect(
-      within(screen.getByTestId("notification-chime-section")).getByRole(
-        "heading",
-        { name: "Sound" },
+      screen.getByText(
+        "Which chime plays for each kind of alert, across hosts.",
       ),
     ).toBeTruthy();
+    expect(
+      within(screen.getByTestId("notification-chime-section")).queryByRole(
+        "heading",
+      ),
+    ).toBeNull();
     expect(
       screen.getByRole("combobox", { name: "Needs action sound" }),
     ).toBeTruthy();

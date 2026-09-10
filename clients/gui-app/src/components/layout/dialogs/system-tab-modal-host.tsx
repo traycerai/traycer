@@ -14,6 +14,7 @@ import {
   renderOverlayBody,
 } from "@/stores/tabs/system-overlay-registry";
 import { LEADER_SCOPE_SETTINGS } from "@/lib/keybindings/leader-scope";
+import { useThemeLibraryStore } from "@/stores/settings/theme-library-store";
 
 /**
  * Global host for the system-tab modal (Settings / History). Reads
@@ -32,6 +33,7 @@ export function SystemTabModalHost(): ReactNode {
   const modal = useSystemTabModalController();
   useSystemTabModalRefreshGuard();
   const open = modal.active !== null;
+  const editingTheme = useThemeLibraryStore((state) => state.draft !== null);
 
   // External-store sync - publish the live modal API for framework-free
   // callers (router adapter, keybinding dispatch, palette sources).
@@ -45,13 +47,17 @@ export function SystemTabModalHost(): ReactNode {
   return (
     <DialogPrimitive.Root
       open={open}
+      // The theme editor lives outside this portal so it can inspect the app.
+      // Keep Settings visible while releasing its focus, pointer, and scroll locks.
+      modal={!editingTheme}
       onOpenChange={(next) => {
-        if (!next) modal.close();
+        if (!next && !editingTheme) modal.close();
       }}
     >
       {modal.active === null ? null : (
         <SystemTabModalSurface
           active={modal.active}
+          editingTheme={editingTheme}
           onClose={modal.close}
           onPromote={modal.promoteToTab}
         />
@@ -62,6 +68,7 @@ export function SystemTabModalHost(): ReactNode {
 
 export interface SystemTabModalSurfaceProps {
   readonly active: SystemModalActive;
+  readonly editingTheme: boolean;
   readonly onClose: () => void;
   readonly onPromote: () => void;
 }
@@ -69,7 +76,7 @@ export interface SystemTabModalSurfaceProps {
 export function SystemTabModalSurface(
   props: SystemTabModalSurfaceProps,
 ): ReactNode {
-  const { active, onClose, onPromote } = props;
+  const { active, editingTheme, onClose, onPromote } = props;
   const meta = useMemo(() => overlayMeta(active), [active]);
   const Icon = meta.Icon;
   return (
@@ -95,6 +102,11 @@ export function SystemTabModalSurface(
       onClose={onClose}
       onEscapeKeyDown={(event) => {
         if (overlayConsumesEscape(active)) event.preventDefault();
+      }}
+      onOpenAutoFocus={(event) => {
+        // Radix remounts its content when modality changes. Let the editor's
+        // own autofocus finish instead of taking focus back into Settings.
+        if (editingTheme) event.preventDefault();
       }}
     >
       <SystemTabModalBody active={active} onClose={onClose} />

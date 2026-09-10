@@ -3,7 +3,11 @@ import { cn } from "@/lib/utils";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 
 interface SettingsGroupProps {
-  readonly title: string;
+  /**
+   * Label outside the card. Pass `undefined` when the page heading already
+   * names this group — a second word next to it is a duplicate, not orientation.
+   */
+  readonly title: string | undefined;
   readonly tone: "default" | "danger";
   readonly dataTestId: string | undefined;
   readonly children: ReactNode;
@@ -48,16 +52,18 @@ export function SettingsGroup(props: SettingsGroupProps): ReactNode {
       data-testid={dataTestId}
       className={cn(fill && "flex h-full min-h-0 flex-col")}
     >
-      <h2
-        className={cn(
-          "px-1 font-semibold text-ui-xs text-muted-foreground",
-          compact ? "mb-1" : "mb-1.5",
-          tone === "danger" && "text-destructive/80",
-          fill && "shrink-0",
-        )}
-      >
-        {title}
-      </h2>
+      {title === undefined ? null : (
+        <h2
+          className={cn(
+            "px-1 font-semibold text-ui-xs text-muted-foreground",
+            compact ? "mb-1" : "mb-1.5",
+            tone === "danger" && "text-destructive/80",
+            fill && "shrink-0",
+          )}
+        >
+          {title}
+        </h2>
+      )}
       <div
         data-settings-anchor={anchor}
         className={cn(

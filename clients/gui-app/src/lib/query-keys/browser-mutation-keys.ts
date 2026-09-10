@@ -5,6 +5,22 @@ export const browserMutationKeys = {
    * it keys separately so a refusal never shares a key with a live host's add.
    */
   openTab: (hostId: string | null) => ["browser.openTab", hostId] as const,
+  /**
+   * The serializing scope every open on one device shares.
+   *
+   * A `mutationKey` groups cached state and defaults; it does NOT serialize
+   * the mutation functions that carry it. Two openers reach this device - the
+   * chooser's and the popup queue's - and each re-checks the tab cap against
+   * the device's published count, so run in parallel they both read the count
+   * from BEFORE either opened and the pair can land one tab over the cap.
+   * TanStack's mutation cache runs same-`scope.id` mutations one at a time,
+   * pausing the later one and continuing it when the first settles, which is
+   * what makes the second re-check read a count that includes the first.
+   *
+   * Keyed by device, so opens on two devices still run in parallel.
+   */
+  openTabScope: (hostId: string | null) =>
+    `browser.openTab:${hostId ?? "none"}`,
   closeTab: (hostId: string, sessionId: string, tabId: string) =>
     ["browser.closeTab", hostId, sessionId, tabId] as const,
   /**

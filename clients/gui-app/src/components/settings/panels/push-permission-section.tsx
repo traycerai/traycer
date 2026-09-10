@@ -35,7 +35,7 @@ const READ_FAILED = "Couldn't read this phone's notification setting.";
 
 /**
  * The OS push permission of the phone this renderer runs on. It belongs under
- * Application → Notifications because it never varies with the selected host.
+ * Application → Sounds because it never varies with the selected host.
  *
  * It exists because the OS remembers a refusal forever - the app asks once,
  * and after a "Don't Allow" no amount of relaunching can re-prompt. Without

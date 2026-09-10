@@ -2,6 +2,7 @@ import type {
   ClientCompatibilityRequirement,
   IncompatibilityUpgradeGuidance,
 } from "@traycer/protocol/framework/index";
+import { PACKAGE_MANAGER_UPGRADE_COMMAND } from "@traycer-clients/shared/cli-install/package-manager-upgrade-command";
 import {
   PACKAGE_MANAGER_UPGRADE_HINT,
   type CliInstallSource,
@@ -279,7 +280,7 @@ export function compatRecoveryHint(
     return "the host is out of date - run 'traycer host update' to reinstall the latest host";
   }
   if (client) {
-    return "this CLI is out of date - update it via your install method (e.g. 'traycer cli upgrade', 'brew upgrade traycer', or 'npm update -g @traycerai/cli')";
+    return `this CLI is out of date - update it via your install method (e.g. 'traycer cli upgrade', '${PACKAGE_MANAGER_UPGRADE_COMMAND.homebrew}', or '${PACKAGE_MANAGER_UPGRADE_COMMAND.npm}')`;
   }
   return "try 'traycer host restart'; if it persists, update the host and CLI";
 }

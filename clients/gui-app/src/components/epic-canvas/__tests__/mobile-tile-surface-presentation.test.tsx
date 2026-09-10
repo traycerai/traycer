@@ -59,6 +59,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicLiveArtifactTitleGenerating: () => false,
   useEpicPermissionRole: () => "owner",
   useEpicSnapshotLoaded: () => true,
+  useEpicHostTransportStatus: () => "open",
   useMaybeEpicTuiAgentHarnessId: () => null,
 }));
 
@@ -87,6 +88,7 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
     isPending: false,
     isFetching: false,
   }),
+  useCloudChatHasCloudAuthorization: () => true,
   cloudChatListAuthorizesRecordSweep: () => false,
 }));
 

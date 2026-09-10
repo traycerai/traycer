@@ -240,6 +240,7 @@ function buildDirtyHandle(epicId: string): OpenEpicStoreHandle {
     detachTransport: () => undefined,
     requestFreshSnapshot: () => undefined,
     retryTransport: () => undefined,
+    wakeTransport: () => undefined,
     isClean: () => false,
     hotArtifactRoomIdsForTests: () => [],
     ...INERT_ROOT_STATE_PORT,
@@ -552,7 +553,11 @@ describe("<MenuCommandListener />", () => {
       applyStaged: vi.fn(() =>
         Promise.resolve({
           kind: "ok" as const,
-          value: { appliedVersion: "1.2.3", runningActivated: true },
+          value: {
+            appliedVersion: "1.2.3",
+            runningActivated: true,
+            applied: true,
+          },
         }),
       ),
       activateInstalled: vi.fn(() =>

@@ -186,6 +186,7 @@ function createChatRenderer(originId: string) {
       userId: "user-1",
       onAuthError: null,
       onProviderAuthError: null,
+      wakeTransport: null,
       streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
       streamClientFactory: (_epicId, _chatId, callbacks) => {
         callbackHistory.push(callbacks);

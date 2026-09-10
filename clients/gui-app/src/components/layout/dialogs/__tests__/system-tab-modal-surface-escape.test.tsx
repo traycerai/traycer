@@ -33,6 +33,7 @@ function OpenModal(props: {
       {open ? (
         <SystemTabModalSurface
           active={{ kind: props.kind, section: null }}
+          editingTheme={false}
           onClose={() => setOpen(false)}
           onPromote={() => undefined}
         />

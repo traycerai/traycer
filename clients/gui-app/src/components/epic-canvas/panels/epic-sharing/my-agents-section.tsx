@@ -22,6 +22,10 @@ import {
   deriveChatSharingDefaultOn,
 } from "@/lib/chats/chat-sharing-ux";
 import { cloudRowIsViewersOwn } from "@/lib/chats/unified-chat-list";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 
 const MY_AGENTS_HINT =
   "Collaborators can view and clone your agent chats, but never act in them. Turning this off makes all of your agents on this task private, including future ones. You can override per agent from its row menu.";
@@ -62,7 +66,15 @@ function MyAgentsSharingSectionBody(props: {
   // "future chats only" while the request exposes every existing private
   // chat. A loading, failed, or disabled list therefore keeps the switch
   // inert; `isSuccess` is the only state whose count is evidence.
-  const canArm = cloudChats.isSuccess;
+  // `isSuccess` is also NOT permission: the list's last success is retained
+  // across a demotion to `unverified`, and `epic.setChatSharingDefault` is a
+  // cloud write sent through the session's local-host context, which does
+  // not carry the renderer's verdict. So the switch follows the live verdict
+  // as well, and the confirm re-reads it at dispatch.
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
+  const canArm = cloudChats.isSuccess && cloudAuthorized;
 
   const confirm = sharingDefaultConfirmCopy(pendingDirection, privateCount);
 
@@ -123,6 +135,11 @@ function MyAgentsSharingSectionBody(props: {
         isPending={sharingInFlight}
         onConfirm={() => {
           if (pendingDirection === null || sharingInFlight) return;
+          // The dialog may have been opened before a demotion.
+          if (!authorizesCloudCapability(useAuthStore.getState().status)) {
+            setPendingDirection(null);
+            return;
+          }
           setSharingDefault.mutate(
             {
               taskId: props.epicId,

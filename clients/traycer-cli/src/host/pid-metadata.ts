@@ -1,12 +1,16 @@
 import { readFile, rm } from "node:fs/promises";
 import {
+  compareProcessStartIdentity,
   isProcessStartIdentity,
   type ProcessStartIdentity,
 } from "@traycer/protocol/host/lifecycle";
 import type { Environment } from "../runner/environment";
 import { config } from "../config";
 import { createCliLogger, errorFromUnknown } from "../logger";
+import { isProcessAlive } from "../store/cli-lock";
 import { hostPidMetadataPath } from "../store/paths";
+import { readProcessStartIdentity } from "../store/process-identity";
+import { isReadablePid } from "./pid-value";
 
 // Mirror of the writer contract owned by the host (the external
 // Traycer Host). Read by string path so
@@ -25,6 +29,33 @@ export interface HostPidMetadata {
    * must never be read as a mismatch.
    */
   readonly processStartIdentity: ProcessStartIdentity | null;
+  /**
+   * WHY {@link processStartIdentity} is what it is - three states where that
+   * field has two (cold review C, V1).
+   *
+   * The stamp collapses "the key was absent" and "the key was present and did
+   * not parse" into one `null`. That was harmless while `null` had a single
+   * consequence: both failed closed as `pid-start-stamp-missing`. Q1 gave
+   * `null` a SECOND meaning - "this run may skip the identity comparison" -
+   * and the collapse became load-bearing, because a TAMPERED or torn stamp
+   * would then earn the fallback exactly as a genuinely old host does.
+   *
+   * So the reason is recorded beside the value rather than replacing it. A
+   * three-valued `processStartIdentity` would say this more directly and is
+   * the better shape in the abstract, but that field has ~60 readers across
+   * the CLI, the shared lock and Desktop, none of which need the distinction;
+   * this is additive and every existing reader keeps its two-valued view.
+   *
+   * `unrecognized` is also the state a PLATFORM disagreement produces - the
+   * stamp is platform-tagged, so a token this build does not recognize reads
+   * identically to no token at all - which is the case the fleet's floor
+   * derivation has to be able to see in the field.
+   *
+   * Mirrors {@link decodeLayer0Record}'s three-valued contract in this same
+   * file, and for the same reason: present-and-unexpected must never read as
+   * healthy.
+   */
+  readonly processStartIdentityRead: "present" | "absent" | "unrecognized";
   /**
    * The host's Layer 0 single-writer (I1) verdict, `null` when this pid.json
    * carries none. Absence is "not recorded" - every file written before the
@@ -73,23 +104,90 @@ export type HostLayer0Record =
     }
   | { readonly status: "unrecognized"; readonly raw: string };
 
+/**
+ * The pid.json read with absence kept apart from failure. `readHostPidMetadata`
+ * folds both into `null`, which is right for discovery ("no host to talk to
+ * either way") and wrong for a gate that must fail closed: a torn or
+ * momentarily unreadable record is not evidence that no host is running.
+ */
+export type HostPidMetadataEvidence =
+  | { readonly kind: "absent" }
+  | { readonly kind: "unreadable"; readonly cause: string }
+  | { readonly kind: "read"; readonly metadata: HostPidMetadata };
+
 export async function readHostPidMetadata(
   environment: Environment | undefined,
 ): Promise<HostPidMetadata | null> {
-  const logEnvironment = environment ?? config.environment;
+  const evidence = await readHostPidMetadataEvidence(environment);
+  return evidence.kind === "read" ? evidence.metadata : null;
+}
+
+/**
+ * Whether the process `pid.json` names is PROVABLY not the host that
+ * published it: the pid no longer runs, or it runs another process than the
+ * one whose creation stamp the record carries (a crashed host's pid recycled
+ * onto an unrelated process). The plain liveness check alone answered
+ * "running" for that impostor at every reader - `host status`, doctor's
+ * stale-pid verdict, every platform's `service status`, the restart busy
+ * check, RPC endpoint resolution, the cooperative shutdown and the log
+ * rotation guard - and each then acted on a dead host's endpoint as if it
+ * were live.
+ *
+ * Positive evidence only, the same reading `readActivationState` takes:
+ * a record without a stamp (written before the field), a stamp this
+ * platform cannot read back, and a probe that could not answer all keep the
+ * record - `false` here means "not proven gone", never "proven alive".
+ * `EPERM` is alive (only an existing process refuses a signal). The stamp is
+ * compared only for a live pid with a stamp on record, so an old record
+ * costs exactly the liveness syscall it always did; a stamped one adds the
+ * platform's creation-stamp read (a `ps` / PowerShell spawn on macOS and
+ * Windows), synchronous like the liveness check it extends - every caller is
+ * a one-shot CLI command or a start-path guard, not a polled status loop.
+ */
+export function publishedHostProcessGone(metadata: HostPidMetadata): boolean {
+  if (!isProcessAlive(metadata.pid)) return true;
+  if (!isProcessStartIdentity(metadata.processStartIdentity)) return false;
+  return (
+    compareProcessStartIdentity(
+      metadata.processStartIdentity,
+      readProcessStartIdentity(metadata.pid),
+    ) === "different"
+  );
+}
+
+export async function readHostPidMetadataEvidence(
+  environment: Environment | undefined,
+): Promise<HostPidMetadataEvidence> {
+  return readHostPidMetadataEvidenceAt(
+    hostPidMetadataPath(environment),
+    environment ?? config.environment,
+  );
+}
+
+/**
+ * The same read against an EXPLICIT record path, for the one reader that has
+ * to account for a host home other than its own: the swap quiescence check
+ * walks every dev run slot's record before a swap (`swap-quiescence.ts`).
+ * `logEnvironment` only names the environment in the log lines; it resolves
+ * no path.
+ */
+export async function readHostPidMetadataEvidenceAt(
+  path: string,
+  logEnvironment: Environment,
+): Promise<HostPidMetadataEvidence> {
   const logger = createCliLogger(logEnvironment);
   let raw: string;
   try {
-    raw = await readFile(hostPidMetadataPath(environment), "utf8");
+    raw = await readFile(path, "utf8");
   } catch (err) {
-    if (readErrorCode(err) !== "ENOENT") {
-      logger.debug("Host pid metadata read failed", {
-        environment: logEnvironment,
-        errorName: errorFromUnknown(err).name,
-        errorCode: readErrorCode(err),
-      });
-    }
-    return null;
+    const code = readErrorCode(err);
+    if (code === "ENOENT") return { kind: "absent" };
+    logger.debug("Host pid metadata read failed", {
+      environment: logEnvironment,
+      errorName: errorFromUnknown(err).name,
+      errorCode: code,
+    });
+    return { kind: "unreadable", cause: `read failed (${code ?? "unknown"})` };
   }
   let parsed: unknown;
   try {
@@ -100,17 +198,17 @@ export async function readHostPidMetadata(
       errorName: errorFromUnknown(err).name,
       errorMessage: errorFromUnknown(err).message,
     });
-    return null;
+    return { kind: "unreadable", cause: "not valid JSON" };
   }
   if (parsed === null || typeof parsed !== "object") {
     logger.warn("Host pid metadata rejected non-object payload", {
       environment: logEnvironment,
     });
-    return null;
+    return { kind: "unreadable", cause: "not a JSON object" };
   }
   const obj = parsed as Record<string, unknown>;
   if (
-    typeof obj.pid !== "number" ||
+    !isReadablePid(obj.pid) ||
     typeof obj.hostId !== "string" ||
     typeof obj.version !== "string" ||
     typeof obj.websocketUrl !== "string" ||
@@ -118,13 +216,16 @@ export async function readHostPidMetadata(
   ) {
     logger.warn("Host pid metadata rejected malformed payload", {
       environment: logEnvironment,
-      hasPid: typeof obj.pid === "number",
+      hasPid: isReadablePid(obj.pid),
       hasHostId: typeof obj.hostId === "string",
       hasVersion: typeof obj.version === "string",
       hasWebsocketUrl: typeof obj.websocketUrl === "string",
       hasStartedAt: typeof obj.startedAt === "string",
     });
-    return null;
+    return {
+      kind: "unreadable",
+      cause: "malformed record (required fields missing)",
+    };
   }
   logger.debug("Host pid metadata read completed", {
     environment: logEnvironment,
@@ -133,18 +234,30 @@ export async function readHostPidMetadata(
     version: obj.version,
   });
   return {
-    pid: obj.pid,
-    hostId: obj.hostId,
-    version: obj.version,
-    websocketUrl: obj.websocketUrl,
-    startedAt: obj.startedAt,
-    processStartIdentity: isProcessStartIdentity(obj.processStartIdentity)
-      ? obj.processStartIdentity
-      : null,
-    layer0: decodeLayer0Record(obj.layer0),
-    // Same decoder, same fail-open-on-shape contract. An old record simply
-    // has no such key and decodes to `null`.
-    layer0Slot: decodeLayer0Record(obj.layer0Slot),
+    kind: "read",
+    metadata: {
+      pid: obj.pid,
+      hostId: obj.hostId,
+      version: obj.version,
+      websocketUrl: obj.websocketUrl,
+      startedAt: obj.startedAt,
+      processStartIdentity: isProcessStartIdentity(obj.processStartIdentity)
+        ? obj.processStartIdentity
+        : null,
+      // Derived in the same breath as the value above, deliberately: two
+      // expressions that could disagree about one field is the drift this
+      // field exists to prevent, not to create.
+      processStartIdentityRead: isProcessStartIdentity(obj.processStartIdentity)
+        ? "present"
+        : obj.processStartIdentity === undefined ||
+            obj.processStartIdentity === null
+          ? "absent"
+          : "unrecognized",
+      layer0: decodeLayer0Record(obj.layer0),
+      // Same decoder, same fail-open-on-shape contract. An old record simply
+      // has no such key and decodes to `null`.
+      layer0Slot: decodeLayer0Record(obj.layer0Slot),
+    },
   };
 }
 
@@ -185,8 +298,8 @@ export function decodeLayer0Record(value: unknown): HostLayer0Record | null {
  * Purge the published pid metadata on the host's behalf.
  *
  * The writer contract says the HOST removes pid.json on graceful shutdown -
- * but a Windows stop is a `taskkill /T /F`, which never lets the host's
- * shutdown handler run, so the file survives every deliberate stop there.
+ * but a Windows stop is a forced `TerminateProcess`, which never lets the
+ * host's shutdown handler run, so the file survives every deliberate stop there.
  * That matters because "pid.json present but endpoint dead" is the signal
  * clients read as *the host died unexpectedly* (the desktop's health
  * watchdog auto-respawns on it); a deliberately stopped host must leave no

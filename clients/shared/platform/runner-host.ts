@@ -31,6 +31,7 @@ import type {
 } from "@traycer/protocol/host/maintenance/index";
 import type {
   HostUpdateAttemptContinuation,
+  HostUpdateAttemptError,
   HostUpdateAttemptPhase,
 } from "@traycer/protocol/config/host-update-attempt";
 import type { BrowserViewBridge } from "./browser-view";
@@ -677,7 +678,7 @@ export type PushPermissionState = "prompt" | "granted" | "denied";
 
 /**
  * Read/repair surface for the device's OS push permission, backing the
- * Settings → Notifications "this phone" row. Only reachable where
+ * Settings → Sounds "this phone" row. Only reachable where
  * `IRunnerHost.pushPermission` is non-null.
  */
 export interface IPushPermissionHost {
@@ -1186,11 +1187,47 @@ export interface IDeviceFlowHost {
 }
 
 /**
+ * WHAT a refresh rejection was ABOUT, carried from the wire because the answer
+ * cannot be recovered downstream.
+ *
+ * The distinction decides whether this device keeps serving its own on-disk
+ * data. A dead TOKEN says nothing about who is at the keyboard: the stored
+ * identity still names them, the epics are already on their disk, and holding
+ * that plane grants nothing new.
+ *
+ *   - `credential` — 400/401. A verdict about the token.
+ *   - `account`    — 403/404. A verdict about the account.
+ *
+ * BOTH hold the local plane. The distinction is real and worth carrying, but it
+ * decides the COPY and the recovery policy, not whether local data renders:
+ * gating the renderer on a dead account is unenforceable, since the host serves
+ * local-homed epics with zero `/api/v3/user` calls and the CLI reads the same
+ * files. Refusing to render them deletes nothing and inconveniences only the
+ * legitimate owner. Cloud surfaces stay gated by `authorizesCloudCapability`.
+ *
+ * `revocation` refines a credential rejection WITHOUT changing that verdict: a
+ * user-initiated "sign out everywhere" (the per-user epoch gate) is still a
+ * statement about tokens, so it holds exactly like an expiry. It exists so the
+ * copy can say the true thing, and so an operator reading a log can tell a
+ * routine global sign-out from a fork-suspicious reject. `null` covers absent,
+ * malformed AND unrecognised scopes — see {@link readRefreshRejectionScope} for
+ * why that direction is not a default but a decision.
+ */
+export type AuthRefreshRejection =
+  | { readonly kind: "account" }
+  | {
+      readonly kind: "credential";
+      readonly revocation: "user-epoch" | null;
+    };
+
+/**
  * Outcome of a forced access-token refresh (`POST /api/v3/auth/refresh`),
  * independent of any `/api/v3/user` validation. `refreshed` rotates BOTH the
  * bearer and the refresh token; `rejected` means the refresh credential is dead
- * (revoked / expired) and the session must sign out; `network-error` is
- * transient and leaves the current credential untouched so a retry can follow.
+ * (revoked / expired) and carries {@link AuthRefreshRejection} saying whether
+ * the CLOUD session or the ACCOUNT ended, because the two have different
+ * consequences for local data; `network-error` is transient and leaves the
+ * current credential untouched so a retry can follow.
  */
 export type AuthTokenRefreshResult =
   | {
@@ -1198,7 +1235,7 @@ export type AuthTokenRefreshResult =
       readonly token: string;
       readonly refreshToken: string;
     }
-  | { readonly kind: "rejected" }
+  | { readonly kind: "rejected"; readonly rejection: AuthRefreshRejection }
   | { readonly kind: "network-error" };
 
 /**
@@ -1249,7 +1286,16 @@ export type StoredCredentialsIdentity = StoredCredentials["user"];
  *   - `lock-busy`       → a live holder held the lock; bounded retry, no state lost;
  *   - `spend-pending`   → a sibling process spent this base and is still landing
  *                         the successor; transient exactly like `lock-busy`;
- *   - `refresh-rejected`→ authn rejected the refresh; UI-only sign-out, file KEPT;
+ *   - `refresh-rejected-credential`
+ *                       → authn rejected the refresh with a verdict about the
+ *                         TOKEN (400/401). UI-only; the file is KEPT and the
+ *                         local plane is HELD - see {@link AuthRefreshRejection};
+ *   - `refresh-rejected-account`
+ *                       → authn rejected it with a verdict about the ACCOUNT
+ *                         (403/404). The file is KEPT and the local plane is
+ *                         HELD, same as the credential case - what differs is
+ *                         that the error is TERMINAL, so the copy must not
+ *                         invite a retry with the same account;
  *   - `refresh-network` → transient; the access token in hand stays valid, retry;
  *   - `commit-failed`   → spent + local-commit failed; `pair` is the minted pair
  *                         the caller keeps active while main retries the commit.
@@ -1262,7 +1308,8 @@ export type TokenRotateOutcome =
   | "tombstoned"
   | "lock-busy"
   | "spend-pending"
-  | "refresh-rejected"
+  | "refresh-rejected-credential"
+  | "refresh-rejected-account"
   | "refresh-network"
   | "commit-failed";
 
@@ -1271,8 +1318,17 @@ export interface TokenRotateResult {
   // The credentials the caller should act on: the committed/adopted/minted pair
   // for `applied`/`superseded`/`user-mismatch`/`commit-failed`; `null` for the
   // outcomes that carry no pair (`deleted`/`tombstoned`/`lock-busy`/
-  // `spend-pending`/`refresh-rejected`/`refresh-network`).
+  // `spend-pending`/`refresh-rejected-credential`/`refresh-rejected-account`/
+  // `refresh-network`).
   readonly pair: StoredCredentials | null;
+  /**
+   * WHAT a `refresh-rejected-*` outcome was about - {@link AuthRefreshRejection},
+   * carried through from the mutation layer rather than collapsed into the
+   * outcome string, so the renderer can tell the user's own "sign out
+   * everywhere" (`revocation: "user-epoch"`) from an expiry or a
+   * fork-suspicious reject. `null` for every other outcome.
+   */
+  readonly rejection: AuthRefreshRejection | null;
 }
 
 /**
@@ -1774,6 +1830,22 @@ export type HostActivationState =
   | "unavailable";
 
 /**
+ * What a READER can say about the durable attempt's holder while the host is
+ * down.
+ *
+ * Three values, not a boolean, for the reason the whole liveness layer exists:
+ * "we could not establish it" is not "nothing is running". `live` is positive
+ * proof (an active record whose lock is held by a running process, joined to
+ * that record across a re-read), `interrupted` is the shared derivation's
+ * positive proof of ABSENCE, and `unknown` covers everything else - a record
+ * that is not probed at all, a probe that could not answer, and the
+ * derivation's grace period for a young record with no holder, which is a
+ * window in which a crash has not yet had time to look like one rather than
+ * evidence of life.
+ */
+export type LocalAttemptLiveness = "live" | "interrupted" | "unknown";
+
+/**
  * The durable attempt record's facts, read from disk by desktop main.
  *
  * ## Why FACTS and not a projected view (Ticket 07 §5.2.7 / T6 Q1(b))
@@ -1804,6 +1876,44 @@ export interface LocalAttemptFacts {
   // `HostUpdateAttemptContinuation` already includes `null`.
   readonly continuation: HostUpdateAttemptContinuation;
   readonly updatedAt: string;
+  /**
+   * The record's terminal cause - the executor's own `error` field, `null` on
+   * every record that is not `failed`.
+   *
+   * Carried because the host-down window is exactly when it is needed: a
+   * post-swap failure (`service-start-failed`, a verify timeout) leaves the
+   * host DOWN, so no `host.status` RPC can ever report the reason, and the
+   * durable record is the only place it exists. Projecting the phase without
+   * it gave the banner and the Overview "Last seen: Update failed" with no
+   * cause precisely when nothing else could say one (Codex, traycerai/traycer#1773
+   * round 8). The renderer shows `error.message` beside the retained phase.
+   */
+  readonly error: HostUpdateAttemptError;
+  /**
+   * What Desktop's own PROBE established about the record's holder, flat
+   * beside the record's facts (D13).
+   *
+   * This is the one thing a record read cannot derive from the record: a file
+   * on disk saying `restarting` proves an executor once wrote that, never that
+   * one is still carrying it. So `live` is minted from evidence and nothing
+   * else - see `HostController.readLocalAttemptFacts` for the rule - and both
+   * the other arms are conclusions the renderer must keep OUTSIDE its
+   * lifecycle gate.
+   */
+  readonly liveness: LocalAttemptLiveness;
+  /**
+   * Desktop's clock at the holder probe that produced `liveness`, or `null`
+   * when no probe ran (a parked or terminal record is never probed).
+   *
+   * Carried because a positive proof must be allowed to EXPIRE. The renderer's
+   * controller query keeps its last value indefinitely (`staleTime: Infinity`)
+   * and Desktop stops publishing when a read fails, so `live` with no deadline
+   * would hold a lifecycle gate open forever on a payload nothing is
+   * refreshing. The renderer ages this against its OWN ticking clock - never
+   * against the last `host.status` success, which stops advancing exactly when
+   * the host is down.
+   */
+  readonly livenessObservedAtMs: number | null;
 }
 
 export interface HostControllerStatus {
@@ -1875,6 +1985,12 @@ export interface ConvergeReadyOk {
 export interface ApplyStagedOk {
   readonly appliedVersion: string;
   readonly runningActivated: boolean;
+  /**
+   * `false` when the CLI apply was a no-op (nothing staged, or the installed
+   * host is a deliberately-held instance the implicit launch apply kept);
+   * `appliedVersion` then names the version that stayed installed.
+   */
+  readonly applied: boolean;
 }
 
 export interface ActivateInstalledOk {
@@ -1980,8 +2096,24 @@ export interface CliInstallManifestSnapshot {
   } | null;
 }
 
-/** Which Doctor repair to run; both are controller lifecycle intents. */
-export type DoctorRepairIntent = "converge-ready" | "register-service";
+/**
+ * Which Doctor repair to run; all three are controller lifecycle intents.
+ *
+ *   - `converge-ready` — liveness only: install/register/start the host,
+ *     keeping WHATEVER non-yanked version is installed. It never moves the
+ *     version, so it can never revert a deliberate downgrade.
+ *   - `converge-latest` — the same converge, but version-seeking: it also
+ *     reinstalls a host BELOW this build's pinned host. This is the explicit
+ *     repair behind "Install host" (`host-install` / `host-install-latest`) —
+ *     a host whose protocol is too old for this client, a missing binary, an
+ *     unreadable record — where liveness alone would keep the unusable host
+ *     and report the repair applied.
+ *   - `register-service` — add the OS service registration.
+ */
+export type DoctorRepairIntent =
+  | "converge-ready"
+  | "converge-latest"
+  | "register-service";
 
 /**
  * The recovery console's repairs, which QUEUE rather than refusing.
@@ -2000,6 +2132,7 @@ export type DoctorRepairIntent = "converge-ready" | "register-service";
  */
 export type QueuedDoctorRepair =
   | "converge-ready"
+  | "converge-latest"
   | "register-service"
   | "restart";
 

@@ -31,7 +31,8 @@ export function openPipHeadlessStream(input: {
 }): PipHeadlessStreamHandle {
   const stream = new BrowserScreencastStreamClient({
     wsStreamClient: input.client,
-    epicId: input.epicId,
+    // Epic-scoped like the fleet that opens it - see `pip-epic-sessions`.
+    scope: { kind: "epic", epicId: input.epicId },
     sessionId: input.sessionId,
     tabId: input.tabId,
     maxWidth: input.maxWidth,
@@ -39,6 +40,9 @@ export function openPipHeadlessStream(input: {
     quality: input.quality,
     format: "jpeg",
     role: "pip",
+    // A mirror of a tab some tile is already showing, never the viewer an
+    // open was made for; the tile presents the token.
+    handoffToken: null,
     callbacks: {
       onServerFrame: (frame, jpegBytes) => {
         // Answered before anything else: the host times this reply, so any

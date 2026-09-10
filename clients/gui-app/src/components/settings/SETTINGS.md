@@ -2519,6 +2519,415 @@ aria-live="polite"` carrying the equivalent text for
       Progress after an accepted install comes from `host.status.updateProgress`,
       not from the install response, because the swap is detached and outlives
       it.
+    - **The operation card renders an OPERATION, never a quiet host.** The
+      shared projection (`projectFleetUpdateView`) consults the coarse
+      `updateProgress` marker BEFORE concluding `idle` from
+      `updateOperation: {kind:"none"}`, because the shipped legacy updater
+      (`traycer host update`, every host while the executor cohort is
+      shadow-disabled) writes no attempt record at all - a @1.3 host on that
+      path says "no attempt" and "updating" in the same reply, and reading the
+      attempt alone rendered a live download → swap → restart as "Host is up to
+      date" on the Overview whose own Update now had just started it. The
+      coarse marker projects `updating` (generic sentence, indeterminate bar)
+      or `failed` with the updater's own cause. Both are INFORMATIONAL: the
+      marker is a file with no liveness (a crashed updater leaves a host
+      serving `updating` forever), so `updating` neither holds the lifecycle
+      gate nor earns the fast poll - Restart, Diagnostics and the service
+      verbs stay usable under it, and the 10s `host.status` baseline is what
+      refreshes it. A view `isQuietUpdateView` accepts (`idle`, or
+      `unknown` with no retained phase) renders NO card: "Host is up to date"
+      was a sentence about the catalog from a projection that knows only the
+      attempt record, and it sat directly above the updates region saying
+      "v1.3.0-rc.2 is available." about the same host. The landing banner hides
+      on the same predicate, so the two cannot drift on where quiet begins.
+    - **The two parks the marker cannot carry come from the RECORDS.** A busy
+      host makes the legacy updater stop, and it stops by WITHDRAWING its
+      marker (a refusal on policy is not a failure), leaving either bytes
+      installed under a host still running the old version, or a newer host
+      staged and waiting. `legacy-update-facts.ts` derives both from
+      `host.getInstallationInfo` beside the same `host.status` read - debt by
+      the CLI's own `readActivationState` rule (runtime-stamp equality when
+      the record has a stamp, else comparable-and-unequal SemVer), staged wait
+      as a stage at a different version than the install while `busy` - and
+      the Overview hands them to the projector as
+      `FleetUpdateWireObservation.legacyFacts`. They project the existing
+      `waiting-to-activate` ("Update installed — restart host to finish") and
+      `waiting-for-work` ("Update waits for N sessions to finish")
+      kinds, AFTER the coarse marker and before `idle`, and like every park
+      they hold no lifecycle gate and earn no fast poll.
+      **A CLI-floored `waiting-for-work` park says so instead of naming a
+      count** ("Update waits for Traycer's command-line tools to be updated —
+      see installation help"). Observed on real hardware: an rc-era CLI in the
+      slot, a host sitting `Online · Idle`, and the card reading "Update waits
+      for 0 sessions to finish" while the host's reconciler refused the resume
+      every tick. The floor outranks the count at ANY count, including a
+      positive one - finishing the work resumes nothing while no CLI on that
+      machine can carry the release - and it points at the remedy row's
+      existing `Show installation help` rather than restating it, the same
+      shape as "Update status unavailable — see Diagnostics". The WORK park
+      only: `waiting-to-activate` names a restart into bytes already placed,
+      which no CLI upgrade unblocks. The landing banner passes `false` and
+      keeps the count, because it has no floor lane and so no affordance for
+      the substituted sentence to point at.
+      **THREE conditions, and the first shipped version had none of them
+      right** (it asked only whether the summary walk found a floor):
+      (1) the remedy row is actually RENDERED - the region short-circuits to
+      its degraded notice on `degrade` and the whole region sits behind
+      `usable`, neither of which gates the card, so a floor read while healthy
+      could leave the sentence pointing at a button that had since gone;
+      (2) the floor is the PARK's version, read by the same `readCliFloor` on
+      that version rather than on the walk's candidate - a manifest carrying a
+      floored rc.4 above an installable rc.3 must not make a park on rc.3 claim
+      a floor; (3) this card is offering no working force control for the park.
+      That last one is why the withheld-Force claim is the CALLER's finding and
+      not a property of the floor: it holds for the record-derived staged wait,
+      whose Force the floor gate withholds (a floored stage is not
+      `stagedEntryOfferable`), and NOT for a bound attempt, whose Force
+      dispatches `host.update.continue` against the host's own bound-intent
+      floor - a different floor from the catalog's per-version requirement,
+      answered by the host itself with `cli-failed {cli-too-old}`, and
+      deliberately not folded into this gate. `offersForceRestart` is half of
+      that test because it decides whether the button RENDERS at all: at a zero
+      count it does not, which is the observed case and still substitutes.
+      **A TERMINAL attempt that is not `failed` yields the operation slot to
+      BOTH of these parks** (D-49): `complete` and `superseded` let the
+      records answer first, so "another actor delivered the version and this
+      host is not running it" - which the executor ends as `superseded` with
+      no error - still renders the debt sentence and its Restart, and a stage
+      that is still waiting still renders its own park and its Force. A
+      terminal attempt does not make a stage stop waiting any more than it
+      makes an install stop needing a restart: the records describe what is
+      still owed, the attempt describes what is over. Reaching that is NOT
+      left to the host: whether `projectUpdateOperation` withholds terminal
+      records from `host.status` is a projection detail that can change under
+      us, and a sentence derived from the RECORDS must be reachable whenever
+      the records say a park. `failed` is excluded, because its cause is the
+      one thing a terminal attempt can say that the records cannot say for it.
+      It is a fall-BACK rather than a substitution: with no park the attempt
+      arm still answers, so `superseded` keeps projecting `idle` and
+      `complete` keeps projecting `complete` - the landing banner's completion
+      acknowledgement is rendered off that kind, and its leg passes
+      `legacyFacts: null`, so a blanket substitution would have deleted that
+      surface rather than reordering it. A park outranking a `complete` whose
+      records disagree with the running version is deliberate: that IS
+      "delivered, not running it". The yield sits ABOVE the attempt arm's
+      staleness decay and is not a bypass of it - the park itself decays, so a
+      status read that aged while the installation read stayed healthy renders
+      the park as "last seen", never as live. The card offers
+      **Restart** on the debt FACT rather than on the view kind, so a retained
+      `failed` marker beside real debt keeps its failure text and still shows
+      the way forward, and **Force update…** on a staged wait with a positive
+      count, which confirms through `HostBusyForceDeferDialog` and dispatches
+      `host.update.install {version: staged, force: true}` through the page's
+      one install mutation. The offer and the dispatch share ONE catalog
+      predicate (`stagedEntryOfferable`, the refusal
+      `describeForceUpdateRefusal` derives for the staged version): the
+      catalog must still list it, not withdrawn, with an asset this page can
+      resolve (a host whose record carries no platform is not offered Force
+      against a multi-platform entry - a deliberate narrowing; the CLI's own
+      `host update --force` still works there) and no CLI floor. The
+      store-format floor adds a second gate on both: a staged DOWNGRADE whose
+      row would show "Install anyway" (a blocked, unknown or failed chat-store
+      survey) is still offered, its dialog carries that row's loss sentence as
+      a separate paragraph (`stagedStoreFormatConfirmation`), and confirming
+      dispatches `acceptStoreFormatLoss: true` as the row's Install anyway
+      would; a stage whose restriction has no confirmation (survey pending, or
+      a peer that cannot honour consent) is withheld, and `prepareInstall`
+      re-reads the row's evidence at dispatch either way. A
+      withdrawn stage is neither offered nor dispatched (the CLI would purge
+      the parked stage and then refuse the version) and carries no floor
+      remedy, since no CLI version installs a yanked release; an asset the
+      catalog has since marked unavailable does NOT refuse, because the
+      bytes are already staged and the CLI installs them without resolving
+      the asset again. Under debt the updates sentence reads "v{installed}
+      is installed — restart host to finish." and the catalog is compared
+      against the INSTALLED version, so Update now stays only for something
+      newer than what is already on disk. Because the facts live in records
+      that change under a mounted page, `host.getInstallationInfo` polls at the
+      `host.status` cadence (10s) and an accepted install invalidates it beside
+      `host.status`. The record leg is held to the SAME liveness rule the
+      status leg is projected under (`canonicalReadIsLive`: not errored, not
+      paused, not aged past its staleness while not fetching, and the query
+      itself enabled) - not "has not failed" alone, and not a second
+      staleness rule with its own timestamp arithmetic: a read that is not
+      live yields NO facts, so the two record-derived rows and every offer
+      keyed on them (Restart on the debt fact, the installed-version
+      comparison under debt, Force update… and the confirm it opens) are
+      withdrawn until the next live read, and the projector falls through
+      to the status leg. The withdrawal is scoped to the record leg on
+      purpose: expiring the whole observation would demote a live attempt
+      the status leg is reporting (progress bar, lifecycle gate, fast poll)
+      on one failed `host.getInstallationInfo` poll - likeliest exactly
+      during a swap. An unusable scope, by contrast, demotes through the
+      status leg and keeps the record-derived sentence qualified ("Last
+      seen: …"). An in-flight refetch is live (still looking); a request
+      whose response never arrives ends as an error - each attempt bounded
+      by the transport's 30 s response timeout, one query retry - never as
+      an indefinitely retained payload. And a record leg that is not live is
+      not "gone": the facts as read keep the catalog's comparison baseline
+      (an activation debt read from the record still names the installed
+      version, and the region's sentence says "(last known)" - whenever
+      EITHER leg is not live, since the debt is the record's installed
+      version read against the status read's running version - rather than
+      re-offering that version as available), while every offer and the
+      projector's park take the live facts only. An open Force confirm
+      closes only when a live leg no longer carries its stage (the running version moving re-keys the
+      query, and the `usable` rule closes the confirm there), and an attempt
+      park's Restart is offered only when a live leg vouches that no stage
+      waits (Restart cannot activate a stage). The offers need a live STATUS
+      read as well (`statusLive`: the same `canonicalReadIsLive` over the
+      status read's health, `usable` included). The retained status payload
+      stays in the facts so a park renders qualified ("Last seen: …"), but
+      Restart on the debt fact, Force update… and an attempt park's Force
+      restart are withdrawn while the status read has failed or aged - a
+      Restart pressed off an old `hostVersion` would restart a host that may
+      already have activated; the evidence stays, the dispatch does not. An
+      open restart confirm is closed by the `!usable` rule only when it was
+      armed for the cooperative `host.restart`; one armed for the bridge
+      respawn (`restartViaForceFallback`, captured at open) survives the
+      scope going unusable - the respawn needs no client and is the recovery
+      an unreachable local host needs most - and closes on its own
+      settlement or when this page's host stops being this machine's. The Overview is the only leg that derives: the landing
+      banner keeps its desktop-status debt arm, and the fleet legs pass
+      `legacyFacts: null`, which the projector reads as "not observed".
+    - **An ATTEMPT's park is resumed through a BOUND METHOD, not a version.**
+      `host.update.activate {attemptId, force}` and
+      `host.update.continue {attemptId, force}` name the attempt the record
+      already describes; the operation comes from its continuation, so no
+      version crosses the wire and nothing here consults the release catalog
+      (`describeForceUpdateRefusal` is deliberately not applied: `activate`
+      places no bytes, and `continue` resumes bytes the attempt was authorized
+      to fetch when it was created — a downgrade park re-downloads the same
+      version it was created for, which is the case a staged-version force
+      cannot even express). The same holds for the store-format floor's
+      consent: neither bound request carries `acceptStoreFormatLoss`, because
+      the CLI records the consent an attempt was created under on the
+      attempt's claim (`HostUpdateAttemptClaimBaseline.acceptStoreFormatLoss`,
+      beside `allowDowngrade`) and a resume acts on that recorded authority,
+      so a downgrade dispatched from a row's Install anyway that parks on a
+      busy host finishes through Force update without a second consent — and
+      its dialog names no loss, for the same reason it does not re-ask the
+      downgrade. They are METHODS rather than an intent field
+      precisely so an older host, which has neither, is refused at dispatch by
+      the transport: `useHostSupportsMethod` withholds the control per method
+      and the page keeps today's `host.restart` / `installForce` routes. Each
+      control is gated on its OWN method — two authorizations, and a host may
+      advertise one without the other, and both sit behind the region's own
+      gates beside the two legacy controls (`updates.degrade`, `anyPending`,
+      and a live status read) — see the recheck bullet below. All three
+      update dispatches share
+      `hostMaintenanceMutationKeys.updateInstall()` and one pending flag, so a
+      second dispatch is never offered beside one already in flight.
+      Outcomes (D18): `dispatch-indeterminate` maps `nothing-to-do` →
+      "already up to date", `recovered-complete` / `recovered-failed` → what
+      the last run did, every `refused-attempt-gone` /
+      `refused-unverifiable` / `refused-install-changed` → "the host changed
+      while the update was being prepared", anything else → today's
+      "couldn't confirm" WITH the reason; `cli-failed {cli-too-old}` → "this
+      computer's Traycer CLI is too old to resume the update". All of them
+      release the accepted latch; only the indeterminate arm re-reads.
+    - **The card's controls come from the ATTEMPT when there is one.**
+      `waiting-to-activate` renders **Restart**, which opens the activation
+      dialog and dispatches `activate {force: true}` — locally AND remotely,
+      where the legacy busy verdict could only ever be answered on a
+      Desktop-local host and toasted "declined" elsewhere. `waiting-for-work`
+      renders **Force update…**, which dispatches `continue {force: true}`;
+      `force` is the user's consent to end the live work the dialog counted,
+      and it is what gets the CLI past its own busy gate. **Force update… —
+      and only it — still requires the host to have REPORTED a positive session
+      count** (`offersForceRestart` is unchanged by this cutover): a
+      `waiting-for-work` park with a null or zero count renders no control.
+      Restart has no such condition; it renders whenever the card has an
+      `onRestart`, which is what lets an idle host that has finished installing
+      be restarted. Both fall back to the record-derived controls above on a
+      host without the methods — and the fallback is not a second chance: a
+      bound control withheld by the gates below leaves the card without that
+      control rather than routing the attempt through `host.restart`.
+      `holdsLifecycleGate` is untouched; the withdrawal is the one the two
+      legacy controls take (`statusLive`, `updates.degrade`, `anyPending`),
+      because a control whose confirm the render-time rules would close in
+      the same commit is not a control.
+    - **The activation dialog opens ITSELF, once, for a dispatch this page
+      made.** A per-host slot in the write-latch store records
+      `{attemptId, dispatchedAt, incarnation, seen}` on an `accepted` answer
+      with an attempt id, from any of the three dispatches. `incarnation` is a
+      token minted per `HostOverviewPanel` mount: an install's settle
+      deliberately outlives the mount (that is how the latch settles and the
+      reads are invalidated for a swap the user navigated away from), and the
+      ownership write is the one part of it that must not, because its only
+      consumer is a modal a mount opens. `seen` flips on the first
+      `host.status` frame naming that attempt, which is what stops the cache
+      still serving the PREVIOUS attempt from being read as this dispatch's
+      answer. The dialog then opens on the first `waiting-to-activate` view for
+      that attempt — never for another window's dispatch, never for a park that
+      was already there, never for `waiting-for-work`, never on an unusable
+      scope, never without `host.update.activate` — and exactly once
+      (`autoOpenedFor`): Defer, Escape and a scope change all close it and none
+      re-opens it, because a modal that returned on the next poll would be one
+      a person cannot dismiss for as long as the park lasts. An open offer is
+      closed by the same render-time rules the staged-wait Force confirm
+      takes — the page-wide gate arming for anything but its own dispatch,
+      the region retiring, an unusable scope — plus one of its own: the
+      attempt it names no longer being the one on screen. The auto-open WAITS
+      on the first two rather than firing into them: a shot fired while either
+      holds is closed in the same render pass, before anyone saw it, with
+      `autoOpenedFor` already recorded. Both are transient — the page-wide
+      gate is the accepted dispatch's own latch, and `updates.degrade` is a
+      RECOVERABLE retirement (`check.sticky` is read off the latest answer,
+      `installDiscovered` is cleared by refutation, and the CLI-recovery poll
+      lane re-asks at 5 s so a reinstalled CLI revives the region unprompted).
+      Waiting costs a poll; firing into them costs the shot for the life of
+      the park. Its confirmation is
+      the shared `HostBusyForceDeferDialog` with `purpose="update"` on both
+      legs, because Force here dispatches a bound UPDATE method even when the
+      activation leg's effect is a restart, and with its own heading (an
+      activation park is typically an idle host waiting to be restarted, so
+      "Host is busy" would contradict the sentence under it). The slot clears on
+      a terminal frame for its id, on a frame naming a different id once `seen`
+      is true, 60 s after a dispatch no frame ever named, and on an ACCEPTED
+      `host.service.deregister` for that host — the service the dispatch was
+      made about is being removed, and keeping the slot would let a
+      re-register under the same `hostId` inherit its activation offer. That
+      last one fires on the accepted ANSWER, not beside the pessimistic
+      dispatch-time arm of `deregisterAcceptedAt`: over-locking controls for a
+      bounded moment is safe, discarding ownership is not, and a refused
+      deregister leaves a dispatch that is still good. A scope flip is
+      deliberately NOT one of them: that flip releases the latches, which guard
+      a window of time, while ownership is a fact about who asked.
+    - **A local record can show `restarting`, and the proof EXPIRES.** For the
+      Desktop-local host the Overview reads the same durable-record leg the
+      landing banner does (`useLocalAttemptRecordObservation` →
+      `projectLocalUpdate`, one shared precedence-plus-projection; a remote
+      host keeps the status-only observation). A record observation carries
+      Desktop's own probed `liveness` and the clock at that probe, and phase
+      `restarting` with `liveness: "live"` projects the LIVE `restarting` kind
+      — bar, lifecycle gate — only while
+      `0 - one tick ≤ nowMs - livenessObservedAtMs ≤ 5 s`
+      (`LOCAL_LIVENESS_PROOF_MS`; the slack absorbs the tick's own
+      quantisation, and a real backward clock step is still refused). Every
+      other record read keeps `unknown` + last-known, outside the gate. That
+      deadline is measured against a one-second renderer tick and NOT any
+      query's `dataUpdatedAt`: the host being down is exactly when
+      `host.status` stops advancing, and Desktop's broadcaster keeps its idle
+      loop running through a failing `publish()` — so nothing new lands in a
+      controller query with `staleTime: Infinity` and a deadline measured
+      against either timestamp would never arrive. Expiry therefore lands on
+      the first tick after the deadline rather than at an exact five-second
+      wall, and releases the gate while keeping the last-seen sentence.
+      **The tick is the RECORD leg's clock alone** (`LocalUpdateClock`, two
+      named instants). The WIRE leg keeps the instant its own read was taken
+      at, because `observationFromCanonicalRead` already folded the query's
+      health into `freshUntilMs` — so a healthy read is fresh until health says
+      otherwise, never until the round trip runs long. Feeding the tick to both
+      made one `host.status` slower than the fresh window (2.5 × the poll
+      delay, so 5 s while the accelerator holds the poll at 2 s) demote a live
+      attempt to "Last seen", drop the page-wide gate and disengage the poll
+      accelerator, once per cycle. Precedence between the two legs
+      (`preferLiveOverRecord`): a healthy wire read always wins; once it is
+      stale, the same attempt is ordered by `(generation, sequence)` — so a
+      repeated read of one unchanged record can never outrank a live frame —
+      and a different attempt falls back to the record's own `updatedAt` as a
+      sanity bound, with an unparseable or future stamp losing. No query's read
+      time is an input. This is a THIRD leg beside the status and installation
+      reads, and it keeps their rule rather than restating it: the wire leg's
+      liveness is `canonicalReadIsLive` over the status read's health
+      (`statusLive`), the installation leg's is its own (`installationLive`),
+      and the record leg's is Desktop's probe with the expiry above. The
+      support flip is what decides whether the record leg is CONSULTED —
+      `usable` is not, because the whole point of the leg is the window in
+      which the scope cannot reach the host — while the proof deadline
+      decides whether what it says is live. `activationDebt.live` joins the
+      two READ legs (`installationLive && statusLive`) and is untouched by
+      the record leg, which carries no installation record.
+    - **A CLI requirement has a remedy in the card.** The best target's
+      projected unavailable asset is the executing CLI's verdict, recognized
+      by `HOST_CLIENT_FLOOR_REASON_PREFIX` from the shared
+      `host-version/client-floor-reason` module (the one authored reason a
+      client acts on; it lives in `clients/shared` because both endpoints are
+      OSS clients, and becomes protocol the day a host authors it). A floor
+      that is not a version - the pre-repair projector put the prefix on an
+      unreadable floor too - is not repairable: every route shows
+      installation help, and the recheck below does not run.
+      A stored CLI version that already satisfies the requirement does not
+      clear it: the host can still be executing an older copy. A retained hash
+      on a withdrawn platform build is not evidence of a CLI requirement.
+      `describeCliFloorRemedy` owns the sentence and actions together:
+
+      | Installation and update state                                                                               | Card action                                                                                                                                                                                                                               |
+      | ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+      | Any source, floor that is not a version                                                                     | Show installation help; no command, no recheck                                                                                                                                                                                            |
+      | Local Desktop, feed's latest (or the installed build, when up to date) below or incomparable with the floor | The Desktop floor fallback, decided before the available, downloading, ready and up-to-date rows below (never for a missing floor): a sentence naming the shortfall plus the copy-command route for the bundled CLI and installation help |
+      | Local Desktop, update available                                                                             | Download update, respecting the Desktop block reason                                                                                                                                                                                      |
+      | Local Desktop, downloading                                                                                  | Disabled download progress                                                                                                                                                                                                                |
+      | Local Desktop, ready                                                                                        | Restart to update through the shared install flow, or Finish update for manual guidance; block reason and in-flight state still win                                                                                                       |
+      | Local Desktop, up to date                                                                                   | Hint to restart Desktop to finish updating the host tools                                                                                                                                                                                 |
+      | Local Desktop, check failed or updater unavailable                                                          | The bridge's error message (or a fallback sentence), Check again, and installation help                                                                                                                                                   |
+      | Local Desktop, idle or checking                                                                             | Checking: the checking sentence. Idle: an invitation to check, one guarded automatic bridge check per mount (the authoritative snapshot, only an updater never asked, `automatic` intent) and a Check for updates button                  |
+      | npm, local or remote                                                                                        | Copy `npm install -g @traycerai/cli@<required version>` - the exact floor when the payload names one, RCs included; the table's stable `@latest` only when it names none                                                                  |
+      | Homebrew, winget, Scoop, apt, rpm; stable floor                                                             | Copy that manager's command from `PACKAGE_MANAGER_UPGRADE_COMMAND`                                                                                                                                                                        |
+      | Homebrew, winget, Scoop, apt, rpm; prerelease floor                                                         | Show installation help: those feeds carry stable releases (Homebrew's formula takes a prerelease only by manual dispatch), so the rolling command would report nothing newer                                                              |
+      | Manual, remote Desktop, or local Desktop without a bridge; known POSIX platform                             | Copy the recorded absolute CLI path as one single-quoted shell token plus `cli upgrade`; otherwise copy `traycer cli upgrade`                                                                                                             |
+      | The same sources on Windows with a recorded absolute path                                                   | Copy `& '<path>' cli upgrade` and `& '<path>' host restart` for PowerShell; explicitly run outside Traycer on that machine                                                                                                                |
+      | The same sources on Windows without a usable path, or an unknown platform                                   | Copy `traycer cli upgrade` and `traycer host restart`; explicitly run outside Traycer on that machine                                                                                                                                     |
+      | Installation manifest unreadable                                                                            | Show installation help, opening the Doctor sheet                                                                                                                                                                                          |
+
+      The copy rows explain an older executing copy when the stored version
+      already clears the requirement. No row opens an in-app terminal: the
+      1.2.0 hosts needing this remedy cannot run a supplied command on ordinary
+      terminal creation. Check now stays; the remedy replaces Update now until
+      the host accepts the candidate, and its copy says the page rechecks on
+      its own rather than asking for a click (the recheck below is what
+      restores Update now). Two pinned npm commands can be on screen in one
+      Settings dialog and disagree on purpose: the Desktop sidecar's hint
+      (`host-settings-package-manager-upgrade-hint.tsx`) pins the version
+      Desktop bundles, the answer to "your npm CLI is older than Desktop's";
+      this remedy pins the host's required floor, the answer to "this host
+      refuses the CLI it has". Advanced rows retain their reasons.
+      Sentence precedence preserves the record-derived parks: **failure →
+      activation debt → CLI remedy → checking → unreachable → no manifest →
+      stranded on its release line / up to date → unavailable / available**.
+      A failed catalog read drops the remedy along with the actionable catalog.
+
+    - **Repair rechecks while the Overview is open.** The Overview re-asks
+      `host.update.check` every 30 seconds while it renders a CLI-floor
+      remedy (`useHostOverviewUpdates`, invalidating the shared key the way
+      the active-update accelerator does), and the first answer that clears
+      the floor ends the recheck and restores Update now. Keyed on the
+      rendered remedy, not on the response: which floored row the remedy
+      names is the summary walk's answer (the installed line's matching
+      stable and later RCs, strictly newer than what runs), and the response
+      carries no installed version - a table lane over the response alone
+      kept polling on floored rows of an `installed-rc` catalog that no
+      remedy named, a release on another line included. The recheck stops
+      with the remedy: a retired region (externally managed, unsupported
+      install) shows a notice in its place and is not re-asked; so does a
+      floor that is not a version (`repairable` false - no upgrade can clear
+      it; a help-only remedy over a READABLE floor, such as a prerelease on
+      a manager that publishes none, keeps rechecking, because an install
+      made another way is what it waits for), and the page's own gate
+      (`enabled`) holds it as it holds the region. It is a flat 30 s, hotter
+      than the 5 s → 60 s lane it replaced but bounded by the remedy being on
+      screen; each tick refetches, so Check now briefly reads busy on its
+      own. The table keeps the `cli-unavailable` lane and the two error lanes
+      for this method, nothing data-driven beyond that. The existing
+      10-second installation-info poll refreshes the stored CLI facts beside
+      it. A floored staged version, or one absent from the actionable
+      manifest, offers neither Force update nor Force restart: restarting
+      cannot activate a stage. The Force gate reads the catalog ENTRY's own
+      floor too, apart from the asset's authored reason - staged bytes
+      install whatever the asset's availability says - so an entry whose
+      floor is not a version is refused even when the projector never
+      prefixed the asset. A readable floor stays the asset's verdict: the
+      stored CLI manifest is no substitute for the executing copy's own
+      comparison in either direction. An open
+      Force confirmation rechecks its exact version at click time, settles
+      synchronously on refusal, and shows the reason inline. The card's
+      Restart, Force update… and Force restart sit behind the same
+      capability and page-wide gates as the header's Restart and the region
+      (`restartDegrade`, `updates.degrade`, `anyPending`) - withheld rather
+      than disabled, since the card reports the park and the header's menu
+      item carries the reason - and an open confirm closes when its method
+      is withdrawn or its region retires.
   - **Installation** reads `host.getInstallationInfo`. `unmanaged` is a real
     state, not an error - a host run from a checkout has no install record - and
     it says so rather than claiming nothing is installed.

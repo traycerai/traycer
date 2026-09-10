@@ -7,27 +7,61 @@ import {
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
-import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
+import type {
+  RequestOfMethod,
+  ResponseOfMethod,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import {
+  recordNegotiatedHostManifest,
   recordNegotiatedHostMethods,
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { UsageSettingsPanelForClient } from "@/components/settings/panels/usage-settings-panel";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 type UsageSummaryResponse = ResponseOfMethod<
   HostRpcRegistry,
   "host.usage.summary"
 >;
+type UsageSummaryRequest = RequestOfMethod<
+  HostRpcRegistry,
+  "host.usage.summary"
+>;
+
+/** How many `host.usage.summary` requests reached the mock host. */
+const usageRequests: {
+  count: number;
+  requests: UsageSummaryRequest[];
+} = { count: 0, requests: [] };
+const usageResponseOverride: {
+  current: ((request: UsageSummaryRequest) => UsageSummaryResponse) | null;
+} = { current: null };
+
+beforeEach(() => {
+  // The panel is a cloud surface: it only mounts for a session that holds a
+  // cloud verdict. Every case below presumes one unless it says otherwise.
+  useAuthStore
+    .getState()
+    .setSignedIn(
+      { userId: "user-usage", userName: "U", email: "u@example.com" },
+      { userId: "user-usage", username: "U" },
+      [],
+    );
+});
 
 afterEach(() => {
   cleanup();
   resetNegotiatedManifests();
+  useAuthStore.getState().setSignedOut();
+  usageRequests.count = 0;
+  usageRequests.requests.length = 0;
+  usageResponseOverride.current = null;
 });
 
 const ZERO_PROVENANCE_SPLIT: UsageSummaryResponse["summary"]["totals"]["provenanceSplit"] =
@@ -119,7 +153,12 @@ function renderPanel(usageSummary: UsageSummaryResponse | undefined): {
       registry: hostRpcRegistry,
       requestId: () => "req-1",
       handlers: {
-        "host.usage.summary": () => {
+        "host.usage.summary": (params) => {
+          usageRequests.count += 1;
+          usageRequests.requests.push(params);
+          if (usageResponseOverride.current !== null) {
+            return usageResponseOverride.current(params);
+          }
           if (usageSummary === undefined) {
             throw new Error("host.usage.summary not configured for this test");
           }
@@ -145,6 +184,85 @@ function renderPanel(usageSummary: UsageSummaryResponse | undefined): {
 }
 
 describe("<UsageSettingsPanel />", () => {
+  it("withholds the dashboard - and its request - from a session without a cloud verdict", async () => {
+    // `host.usage.summary` is served by whichever reader the HOST picks, and
+    // the client has no local-only selector to ask for, so an `unverified`
+    // session would read account-wide usage through the retained credential.
+    // The whole panel is withheld, which also covers Retry and window changes.
+    useAuthStore
+      .getState()
+      .setUnverifiedSession(
+        { userId: "user-usage", userName: "U", email: "u@example.com" },
+        { userId: "user-usage", username: "U" },
+      );
+    recordNegotiatedHostMethods(mockLocalHostEntry.hostId, [
+      "host.usage.summary",
+    ]);
+    renderPanel(makeUsageSummaryResponse());
+
+    expect(screen.getByTestId("usage-unverified-notice")).not.toBeNull();
+    expect(screen.queryByTestId("usage-unsupported-notice")).toBeNull();
+    // A settled tick: a request that WAS going to be issued has been by now.
+    await waitFor(() => {
+      expect(screen.getByTestId("usage-unverified-notice")).not.toBeNull();
+    });
+    expect(usageRequests.count).toBe(0);
+  });
+
+  it("admits an unverified session only on usage.summary@2.0 and carries local-only through the window and both activity reads", async () => {
+    useAuthStore
+      .getState()
+      .setUnverifiedSession(
+        { userId: "user-usage", userName: "U", email: "u@example.com" },
+        { userId: "user-usage", username: "U" },
+      );
+    recordNegotiatedHostManifest(mockLocalHostEntry.hostId, {
+      "host.usage.summary": { major: 2, minor: 0 },
+    });
+    // Exercise the fallback activity read as well as the primary window and
+    // year reads. The handler remains persistent for every refetch; only the
+    // year-shaped request gets the classified old-host rejection.
+    usageResponseOverride.current = (request) => {
+      if (request.windowDays === 365) {
+        throw new Error("windowDays must be an integer between 1 and 90");
+      }
+      return makeUsageSummaryResponse();
+    };
+    renderPanel(makeUsageSummaryResponse());
+
+    expect(await screen.findByTestId("usage-cost-figure")).toBeTruthy();
+    expect(await screen.findByTestId("usage-activity-heatmap")).toBeTruthy();
+    expect(screen.queryByTestId("usage-unverified-notice")).toBeNull();
+    await waitFor(() => {
+      expect(usageRequests.requests).toHaveLength(3);
+    });
+    expect(usageRequests.requests.map((request) => request.windowDays)).toEqual(
+      expect.arrayContaining([30, 365, 90]),
+    );
+    expect(
+      usageRequests.requests.every((request) => request.plane === "local-only"),
+    ).toBe(true);
+  });
+
+  it("keeps every verdict-holding usage read byte-identical by omitting the plane selector", async () => {
+    recordNegotiatedHostMethods(mockLocalHostEntry.hostId, [
+      "host.usage.summary",
+    ]);
+    renderPanel(makeUsageSummaryResponse());
+
+    expect(await screen.findByTestId("usage-cost-figure")).toBeTruthy();
+    expect(await screen.findByTestId("usage-activity-heatmap")).toBeTruthy();
+    await waitFor(() => {
+      expect(usageRequests.requests).toHaveLength(2);
+    });
+    expect(usageRequests.requests.map((request) => request.windowDays)).toEqual(
+      expect.arrayContaining([30, 365]),
+    );
+    for (const request of usageRequests.requests) {
+      expect(JSON.stringify(request)).not.toContain('"plane"');
+    }
+  });
+
   it("hides the surface entirely - renders the capability notice, never the panel body - on a host that hasn't negotiated host.usage.summary", () => {
     // No `recordNegotiatedHostMethods` call: the negotiated-manifest registry
     // fails closed to "unknown", which this hook collapses to "unsupported".

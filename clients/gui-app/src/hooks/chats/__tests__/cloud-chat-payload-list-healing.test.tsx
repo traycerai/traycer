@@ -34,14 +34,20 @@ import { useCloudChatPayloadList } from "@/hooks/chats/use-cloud-chat-queries";
  * The publisher commits a chat's head first and uploads its heavy content
  * afterwards, so a reader who opens a chat inside that window is answered
  * truthfully and short. `useCloudChatPayloadList`'s doc comment records the
- * decision NOT to close that window with a client-side poll, and states three
+ * decision NOT to close that window with a client-side poll, and states four
  * facts about what the surface does today instead. Those facts are the whole
  * basis of the decision, and none of them is asserted anywhere else - a poll
  * added by accident (or `staleTime` drifting off zero, which is what makes the
  * reopen refetch) would change the surface's behavior with nothing going red.
+ * The fourth - one refetch per record-head EDGE, and no refetch when the head
+ * is unchanged - is the head-keyed read's own heal, pinned below. The fifth -
+ * a head edge that arrives while the FIRST request is still in flight cancels
+ * that request and issues a fresh one, so the reader converges on the new
+ * answer instead of being stuck behind whatever the stale in-flight request
+ * eventually returns - is pinned below too.
  *
  * The QueryClient here is `createAppQueryClient()` rather than a bare
- * `new QueryClient()` on purpose: two of the three facts are properties of the
+ * `new QueryClient()` on purpose: two of the four facts are properties of the
  * app's own defaults (`refetchOnWindowFocus: false`,
  * `refetchOnReconnect: false`), and a test-local client would quietly assert
  * something the app does not do.
@@ -120,11 +126,76 @@ function createFixture(): Fixture {
   return { client, queryClient, Wrapper, requests };
 }
 
+type DeferredFirstResponseFixture = Fixture & {
+  /** Releases the FIRST request's gated response with the SHORT answer. */
+  readonly resolveFirst: () => void;
+};
+
+/**
+ * Like {@link createFixture}, except the FIRST `epic.listCloudChatPayloads`
+ * answer is held open on a promise the test controls - so a head edge can be
+ * driven while that first request is still in flight, and the stale answer
+ * can be released afterward to prove it does not clobber whatever the fresh
+ * request already converged on. Every later request answers immediately, as
+ * `createFixture`'s does.
+ */
+function createDeferredFirstResponseFixture(): DeferredFirstResponseFixture {
+  const requests = { value: 0 };
+  const queryClient = createAppQueryClient();
+  let releaseFirst: () => void = () => undefined;
+  const firstResponseGate = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: createHostQueryInvalidator(queryClient),
+    findHostById: (hostId) =>
+      hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+    messenger: new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => `req-payload-list-deferred-${String(requests.value)}`,
+      handlers: {
+        "epic.listCloudChatPayloads": () => {
+          requests.value += 1;
+          if (requests.value === 1) {
+            return firstResponseGate.then(() => ({
+              outcome: { status: "ok" as const, refs: [] },
+            }));
+          }
+          return Promise.resolve({
+            outcome: {
+              status: "ok" as const,
+              refs: [{ kind: "plan-content", sha256: PLAN_CONTENT_SHA256 }],
+            },
+          });
+        },
+      },
+    }),
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+  );
+  const client = spine.createRequester(mockLocalHostEntry);
+  const Wrapper = (props: { readonly children: ReactNode }): ReactNode =>
+    createElement(QueryClientProvider, { client: queryClient }, props.children);
+  return {
+    client,
+    queryClient,
+    Wrapper,
+    requests,
+    resolveFirst: releaseFirst,
+  };
+}
+
 describe("useCloudChatPayloadList healing", () => {
   // Viewer-scoped by construction: the hook disables itself without a resolved
   // identity, so every test seeds one and the reset keeps them independent.
   beforeEach(() => {
+    // Identity AND verdict - see `use-cloud-chat-queries.ts`. Without
+    // `status`, the store's `signed-out` default disables every hook in that
+    // module and the request counts this file measures are all zero.
     useAuthStore.setState({
+      status: "signed-in",
       contextMetadata: { userId: "viewer-1", username: "viewer-1" },
     });
   });
@@ -148,6 +219,7 @@ describe("useCloudChatPayloadList healing", () => {
           client: fixture.client,
           identity: IDENTITY,
           enabled: true,
+          recordHeadSha256: null,
         }),
       { wrapper: fixture.Wrapper },
     );
@@ -184,6 +256,7 @@ describe("useCloudChatPayloadList healing", () => {
             client: fixture.client,
             identity: IDENTITY,
             enabled: true,
+            recordHeadSha256: null,
           }),
         { wrapper: fixture.Wrapper },
       );
@@ -221,6 +294,7 @@ describe("useCloudChatPayloadList healing", () => {
           client: fixture.client,
           identity: IDENTITY,
           enabled: true,
+          recordHeadSha256: null,
         }),
       { wrapper: fixture.Wrapper },
     );
@@ -245,6 +319,107 @@ describe("useCloudChatPayloadList healing", () => {
     });
   });
 
+  it("refetches exactly once per head edge, and not otherwise", async () => {
+    // The fourth fact: the record row's head digest changing under a mounted
+    // reader is the one explicit invalidation, distinct from the remount heal
+    // above. A same-value rerender - the common case, since the digest is
+    // read off the store on every render - must not re-trigger it.
+    const fixture = createFixture();
+    const rendered = renderHook(
+      (props: { readonly recordHeadSha256: string | null }) =>
+        useCloudChatPayloadList({
+          client: fixture.client,
+          identity: IDENTITY,
+          enabled: true,
+          recordHeadSha256: props.recordHeadSha256,
+        }),
+      {
+        wrapper: fixture.Wrapper,
+        initialProps: { recordHeadSha256: "a".repeat(64) },
+      },
+    );
+    await waitFor(() => {
+      expect(rendered.result.current.data).toBeDefined();
+    });
+    expect(fixture.requests.value).toBe(1);
+    expect(rendered.result.current.data?.outcome).toEqual({
+      status: "ok",
+      refs: [],
+    });
+
+    // A HEAD EDGE - the digest changed - invalidates the one key and the
+    // mounted observer refetches, converging on the second answer.
+    rendered.rerender({ recordHeadSha256: "b".repeat(64) });
+    await waitFor(() => {
+      expect(fixture.requests.value).toBe(2);
+    });
+    await waitFor(() => {
+      expect(rendered.result.current.data?.outcome).toEqual({
+        status: "ok",
+        refs: [{ kind: "plan-content", sha256: PLAN_CONTENT_SHA256 }],
+      });
+    });
+
+    // The same digest again is not an edge - no further request.
+    rendered.rerender({ recordHeadSha256: "b".repeat(64) });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(fixture.requests.value).toBe(2);
+  });
+
+  it("refetches when the head changes while the FIRST request is still in flight", async () => {
+    // The fifth fact: a head edge is not swallowed just because it lands
+    // before the mount's own first answer settles. The effect's CANCEL is
+    // what makes this different from the case above - without it, TanStack
+    // would dedupe the invalidation onto the request already in flight and
+    // the edge would be lost until the next one (or a reopen).
+    const fixture = createDeferredFirstResponseFixture();
+    const rendered = renderHook(
+      (props: { readonly recordHeadSha256: string | null }) =>
+        useCloudChatPayloadList({
+          client: fixture.client,
+          identity: IDENTITY,
+          enabled: true,
+          recordHeadSha256: props.recordHeadSha256,
+        }),
+      {
+        wrapper: fixture.Wrapper,
+        initialProps: { recordHeadSha256: "a".repeat(64) },
+      },
+    );
+
+    // The mount's own request is out and gated - no answer yet.
+    await waitFor(() => {
+      expect(fixture.requests.value).toBe(1);
+    });
+    expect(rendered.result.current.data).toBeUndefined();
+
+    // A HEAD EDGE arrives mid-flight: cancel-then-invalidate issues a fresh
+    // request rather than joining the one already pending.
+    rendered.rerender({ recordHeadSha256: "b".repeat(64) });
+    await waitFor(() => {
+      expect(fixture.requests.value).toBe(2);
+    });
+
+    // Release the stale first answer AFTER the fresh request is already out.
+    // It must not land on top of - or race - whatever the fresh request
+    // converges on.
+    fixture.resolveFirst();
+
+    await waitFor(() => {
+      expect(rendered.result.current.data?.outcome).toEqual({
+        status: "ok",
+        refs: [{ kind: "plan-content", sha256: PLAN_CONTENT_SHA256 }],
+      });
+    });
+    // Give the released (stale) promise every chance to have been observed.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(rendered.result.current.data?.outcome).toEqual({
+      status: "ok",
+      refs: [{ kind: "plan-content", sha256: PLAN_CONTENT_SHA256 }],
+    });
+    expect(fixture.requests.value).toBe(2);
+  });
+
   it("never asks without an identity or while the caller has it disabled", async () => {
     const fixture = createFixture();
 
@@ -254,6 +429,7 @@ describe("useCloudChatPayloadList healing", () => {
           client: fixture.client,
           identity: null,
           enabled: true,
+          recordHeadSha256: null,
         }),
       { wrapper: fixture.Wrapper },
     );
@@ -263,6 +439,7 @@ describe("useCloudChatPayloadList healing", () => {
           client: fixture.client,
           identity: IDENTITY,
           enabled: false,
+          recordHeadSha256: null,
         }),
       { wrapper: fixture.Wrapper },
     );

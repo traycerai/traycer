@@ -104,8 +104,27 @@ const LIVE_FROZEN_EXPORTS = {
   // not un-freeze it.
   "providers.list@7.0": providersListResponseSchemaV70,
   // The head line now, holding v7.0's old job: it names the LIVE schema, so
-  // the next attempt to grow it fails here first. Same response - freeze the
-  // line that stopped being head, open the next one, do not regenerate.
+  // the next attempt to grow it fails here first.
+  //
+  // What that red means depends on whether the line has SHIPPED, and the two
+  // answers are opposites - read this before reaching for either:
+  //
+  //  - RELEASED (it appears in a non-rc `host-v*`/`cli-v*`/`desktop-v*` tag at
+  //    or above `support-floor.json`): peers in the field already speak it, so
+  //    the response it serves is fixed forever. Freeze the line that stopped
+  //    being head under reserved `VNN` names, open the next one against live,
+  //    and do NOT regenerate. That is what v7.0 above records.
+  //  - UNRELEASED (the case for 8.0 today - `host-v1.2.0` registers
+  //    `providers.list` 1.0 through 7.0 and no 8.0, and RCs are excluded by
+  //    `includeReleaseCandidates: false`): no peer can have negotiated it, so
+  //    there is no contract to break, and additive growth regenerates this
+  //    fixture. `enabled` and `launchCommand` on `providerProfileSchema` both
+  //    did exactly that, and `launchCommand`'s comment says so at the field.
+  //
+  // So the red is a PROMPT to check release status, not a verdict on its own.
+  // Confirm with `git show <newest non-rc tag>:protocol/src/host/registry.ts`
+  // rather than from this file - once 8.0 ships, the first bullet governs and
+  // regenerating it would be the exact mistake the row exists to catch.
   //
   // There is no `providers.list@7.1` row because there is no such line: the
   // enablement pair was its entire delta over 7.0 and both were removed. This

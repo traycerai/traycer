@@ -38,6 +38,12 @@ export interface LiveClaim {
   readonly userAgent: string | null;
   readonly location: string | null;
   readonly matchCode: LiveMatchCode;
+  /**
+   * When the claim expires unanswered (epoch ms) on the SERVER's clock, or
+   * `null` from a server that predates the field — the card then shows no
+   * countdown. The local deadline guard in this hook is independent of it.
+   */
+  readonly claimExpiresAt: number | null;
 }
 
 function liveMatchCodeOf(
@@ -108,6 +114,7 @@ function claimFromStatus(
     userAgent: claimant.userAgent,
     location: claimant.location,
     matchCode: liveMatchCodeOf(claimant),
+    claimExpiresAt: claimant.claimExpiresAt ?? null,
   };
 }
 

@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   acquireUpdateAttemptLock,
   commitAttemptMutation,
+  readUpdateAttemptRecord,
 } from "@traycer-clients/shared/host-update";
 
 // This file drives `verifyHostUpdateAttempt`/`reportFor` (host/update-verify.ts)
@@ -18,11 +19,17 @@ import {
 // THE SEAM WARNING (see the ticket): a mock that looks right can silently
 // fail to intercept the code path production actually calls. The dedicated
 // "SEAM PROOF" test below forces the cohort mock to a distinctive verdict
-// and confirms the OBSERVABLE outcome changes from the real shipped
-// shadow-disabled default (`cohort-disabled`) to something only reachable
-// past the gate (`stale-expectation`) - proving this mock is the exact thing
-// `runLocalAttemptExecutorSegment` calls, not a look-alike at the wrong
-// specifier. Every test here also runs against a REAL temp-dir
+// and confirms the OBSERVABLE outcome changes - proving this mock is the
+// exact thing `runLocalAttemptExecutorSegment` calls, not a look-alike at the
+// wrong specifier.
+//
+// The cutover INVERTED that proof's two arms, and the inversion is
+// load-bearing rather than cosmetic. The shipped default is now `eligible`,
+// so a proof that still mocked `eligible` would answer `stale-expectation` on
+// BOTH arms and pass with the mock disconnected - exactly the silent failure
+// it exists to catch. It therefore forces `shadow` (`cohort-disabled`, only
+// reachable at the gate) against the real default (`stale-expectation`, only
+// reachable past it). Every test here also runs against a REAL temp-dir
 // `hostHomeDir` (never the operator's real `~/.traycer`), confirmed via
 // `currentHome.value` below - never a real installed host, never a
 // subprocess.
@@ -143,6 +150,8 @@ async function seedRestartingActiveRecord(
         expected: null,
         newAttemptId: "attempt-1",
         initialPhase: "restarting",
+        initialContinuation: null,
+        claim: null,
         nowIso: "2026-01-01T00:00:00.000Z",
       },
     },
@@ -233,39 +242,42 @@ function argsFor(targetVersion: string): HostUpdateVerifyArgs {
 }
 
 describe("verifyHostUpdateAttempt / reportFor - the four HostUpdateVerifyReport arms", () => {
-  it("SEAM PROOF: the cohort mock is the exact module runLocalAttemptExecutorSegment calls through - forcing it eligible changes the observable outcome away from the real shipped shadow-disabled default", async () => {
+  it("SEAM PROOF: the cohort mock is the exact module runLocalAttemptExecutorSegment calls through - forcing it SHADOW changes the observable outcome away from the real shipped eligible default", async () => {
     const hostHomeDir = await freshHome();
     currentHome.value = hostHomeDir;
 
-    // Real (unmocked-override) shadow-disabled default: no record exists,
-    // but the cohort gate refuses before that would ever matter.
+    // Real (unmocked-override) default, which the cutover made `eligible`:
+    // the gate admits, and the claim is refused for a reason only reachable
+    // PAST it - `decideAttemptClaim`'s `stale-expectation` for a non-null
+    // `expected` against an absent record.
     const withRealCohort = await verifyHostUpdateAttempt(
       "production",
       argsFor("1.2.3"),
     );
     expect(withRealCohort).toEqual({
       outcome: "indeterminate",
-      reason: "cohort-disabled",
+      reason: "stale-expectation",
     });
 
-    // Force a distinctive verdict this exact test controls. If this mock
-    // were NOT the module `runLocalAttemptExecutorSegment` actually
-    // imports, the outcome would stay `cohort-disabled` above. Instead it
-    // must change to a verdict only reachable past the gate -
-    // `decideAttemptClaim`'s `stale-expectation` refusal for a
-    // non-null `expected` against an absent record.
-    cohortMock.decide.mockReturnValue({ kind: "eligible", platform: "linux" });
+    // Force a distinctive verdict this exact test controls. If this mock were
+    // NOT the module `runLocalAttemptExecutorSegment` actually imports, the
+    // outcome would stay `stale-expectation` above. Instead it must change to
+    // the one verdict only the gate itself can produce.
+    cohortMock.decide.mockReturnValue({ kind: "shadow", reason: "disabled" });
     const withMockedCohort = await verifyHostUpdateAttempt(
       "production",
       argsFor("1.2.3"),
     );
     expect(withMockedCohort).toEqual({
       outcome: "indeterminate",
-      reason: "stale-expectation",
+      reason: "cohort-disabled",
     });
   });
 
-  it("reports indeterminate/cohort-disabled - the real, unmocked production default - without seeding any fixture", async () => {
+  it("reports indeterminate/stale-expectation - the real, unmocked production default now that the cohort ships eligible - without seeding any fixture", async () => {
+    // Kept rather than deleted as a duplicate of the stale-expectation test
+    // below: that one MOCKS the cohort, this one does not, so together they
+    // pin that the shipped policy and the mocked-eligible policy agree.
     const hostHomeDir = await freshHome();
     currentHome.value = hostHomeDir;
     const report = await verifyHostUpdateAttempt(
@@ -274,7 +286,7 @@ describe("verifyHostUpdateAttempt / reportFor - the four HostUpdateVerifyReport 
     );
     expect(report).toEqual({
       outcome: "indeterminate",
-      reason: "cohort-disabled",
+      reason: "stale-expectation",
     });
   });
 
@@ -364,6 +376,21 @@ describe("verifyHostUpdateAttempt / reportFor - the four HostUpdateVerifyReport 
     expect(report).not.toMatchObject({
       generation: argsFor("1.2.3").generation,
     });
+
+    // B2: the ON-DISK half. `verifyHostUpdateAttempt` uses
+    // `recoveredActivation: "park"`, so a resumed activate is re-parked
+    // before the segment releases - it must never be left ACTIVE-and-unheld.
+    // This is what the `recoveredActivation: "execute"` ablation reddens on
+    // the verifier's own route: an execute disposition would leave the
+    // record `preparing`/active instead.
+    const onDisk = await readUpdateAttemptRecord(hostHomeDir);
+    expect(onDisk.kind).toBe("valid");
+    if (onDisk.kind === "valid") {
+      expect(onDisk.value.phase).toBe("waiting-to-activate");
+      expect(onDisk.value.continuation).toBe("activate");
+      expect(onDisk.value.execution).not.toBe("active");
+      expect(onDisk.value.generation).toBe(2);
+    }
   });
 
   it("reports complete when installed AND running evidence both genuinely verify the exact target version", async () => {
@@ -378,6 +405,19 @@ describe("verifyHostUpdateAttempt / reportFor - the four HostUpdateVerifyReport 
       argsFor("1.2.3"),
     );
     expect(report).toEqual({ outcome: "complete" });
+
+    // B1: the ON-DISK half, through the REAL verifier caller. `afterRecovery:
+    // "report"` must leave the terminal record recovery wrote exactly as it
+    // stands, and never create a second attempt over it - the `reselect`
+    // ablation would turn this outcome `indeterminate` (see the SEAM-style
+    // comment above) while still leaving SOME terminal-looking record behind.
+    const onDisk = await readUpdateAttemptRecord(hostHomeDir);
+    expect(onDisk.kind).toBe("valid");
+    if (onDisk.kind === "valid") {
+      expect(onDisk.value.attemptId).toBe("attempt-1");
+      expect(onDisk.value.phase).toBe("complete");
+      expect(onDisk.value.execution).toBe("terminal");
+    }
   });
 
   it("reports failed with the recovery-evidence-contradiction error code when a positively bound running host disagrees with the installed artifact", async () => {
@@ -400,6 +440,16 @@ describe("verifyHostUpdateAttempt / reportFor - the four HostUpdateVerifyReport 
       outcome: "failed",
       reason: "recovery-evidence-contradiction",
     });
+
+    // B1: the ON-DISK half - the terminal `failed` record for attempt-1,
+    // with no new attempt created over it.
+    const onDisk = await readUpdateAttemptRecord(hostHomeDir);
+    expect(onDisk.kind).toBe("valid");
+    if (onDisk.kind === "valid") {
+      expect(onDisk.value.attemptId).toBe("attempt-1");
+      expect(onDisk.value.phase).toBe("failed");
+      expect(onDisk.value.execution).toBe("terminal");
+    }
   });
 
   it("never reports a terminal outcome (complete/failed) for any refusal - indeterminate is the only arm a failed dispatch may produce", async () => {

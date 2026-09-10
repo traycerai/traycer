@@ -262,6 +262,10 @@ export function publishedChatSessionState(
     // The whole point - the transcript is here, so the surface renders it
     // rather than a loading gate.
     snapshotLoaded: true,
+    // No stream, so no attempt ever failed. Same statement as
+    // `connectionStatus: "closed"` above, in the vocabulary of the bounded
+    // loading gate: there is nothing here that is still trying.
+    preSnapshotRetries: null,
     // A published copy is complete and frozen: this stands in for the
     // snapshot that established it, so the transcript is absorbed as
     // baseline history and nothing in it is ever announced as live.
@@ -367,6 +371,7 @@ export function publishedChatSessionState(
     // perfectly well go on reading.
     refreshMissingWorktreePaths: () => undefined,
     retry: () => undefined,
+    wake: () => undefined,
     // A published copy is complete: every ordinal is hydrated by construction,
     // so a viewport report has nothing to request.
     reportVisibleTranscriptRange: () => undefined,
@@ -407,7 +412,55 @@ export function publishedChatSessionState(
 }
 
 /**
- * A handle over a fixed state.
+ * What a LATER publication of the same chat brings: the fields
+ * `applyConversion` may move. Identity (`epicId`, `chatId`, `ownerUserId`)
+ * and `createdAt` are fixed for the handle's life - a read that disagrees
+ * about those is a different chat, refused upstream as `ambiguous-identity`.
+ */
+export interface PublishedChatConversionUpdate {
+  readonly title: string;
+  readonly updatedAt: number;
+  readonly conversion: PublishedChatConversion;
+}
+
+/**
+ * The published copy's handle: the ordinary `ChatSessionStoreHandle` plus
+ * the one way its transcript can change - a newer publication applied IN
+ * PLACE. The surface takes the base type and never sees the extra member;
+ * the tile that owns the handle is the only caller.
+ */
+export interface PublishedChatSessionHandle extends ChatSessionStoreHandle {
+  /**
+   * Replaces `messages`, `events`, `title` and `updatedAt` with a newer
+   * publication's, keeping this store - and therefore every subscription the
+   * rendered surface holds on it - exactly where it is.
+   *
+   * ## Row identity is preserved where the row did not change
+   *
+   * A message or event whose id AND content match the one already held is
+   * carried over as the SAME object, so a memoized row does not re-render for
+   * a turn that merely appended after it. A row whose content changed (the
+   * publisher completed a message it had captured mid-turn) takes the new
+   * object; a row that is new is new. When nothing at all changed - the same
+   * head re-read after a payload-list heal, say - the store is not written.
+   *
+   * ## The baseline epoch answers "is this history or news?"
+   *
+   * `transcriptBaselineEpoch` is what the transcript consumers (announcements,
+   * scroll pinning) read to tell a live arrival from a re-established
+   * baseline. An APPENDED publication - every previously held message id is
+   * still present, in the same position - keeps the epoch, so the new rows
+   * present as live arrivals exactly as they would on a live tile. A
+   * publication that is NOT an extension of what was shown (a message id
+   * present before is absent now, or the first difference is not at the
+   * tail: a fork, a truncation, a suffix delete) bumps it, so the whole
+   * transcript is absorbed as a new baseline rather than announced.
+   */
+  readonly applyConversion: (update: PublishedChatConversionUpdate) => void;
+}
+
+/**
+ * A handle over a state that changes only through `applyConversion`.
  *
  * The lifecycle members are real no-ops rather than throwing stubs: the surface
  * calls `setSurfaceVisibility` on mount and `dispose` on unmount as a matter of
@@ -418,7 +471,7 @@ export function publishedChatSessionState(
  */
 export function createPublishedChatSessionHandle(
   input: PublishedChatSessionInput,
-): ChatSessionStoreHandle {
+): PublishedChatSessionHandle {
   const state = publishedChatSessionState(input);
   const store = createStore<ChatSessionState>()(() => state);
   const boundStore = Object.assign(
@@ -440,5 +493,106 @@ export function createPublishedChatSessionHandle(
     setSurfaceVisibility: () => undefined,
     clearSurfaceVisibility: () => undefined,
     dispose: () => undefined,
+    applyConversion: (update) => {
+      const current = store.getState();
+      const messages = reconcileRows(
+        current.messages,
+        update.conversion.messages,
+        (message) => message.messageId,
+      );
+      const events = reconcileRows(
+        current.events,
+        update.conversion.events,
+        (event) => event.eventId,
+      );
+      const chat = current.chat;
+      const metadataUnchanged =
+        chat !== null &&
+        chat.title === update.title &&
+        chat.updatedAt === update.updatedAt;
+      if (
+        metadataUnchanged &&
+        messages.rows === current.messages &&
+        events.rows === current.events
+      ) {
+        return;
+      }
+      store.setState({
+        messages: messages.rows,
+        events: events.rows,
+        transcriptBaselineEpoch: messages.extends
+          ? current.transcriptBaselineEpoch
+          : current.transcriptBaselineEpoch + 1,
+        chat:
+          chat === null
+            ? null
+            : { ...chat, title: update.title, updatedAt: update.updatedAt },
+      });
+    },
   };
+}
+
+/**
+ * The next row list, with unchanged rows carried over by reference, and
+ * whether it EXTENDS the previous one (same ids in the same positions as a
+ * prefix). Returns the previous array itself when nothing changed at all,
+ * which is what lets the caller skip the write.
+ */
+function reconcileRows<Row>(
+  previous: readonly Row[],
+  next: readonly Row[],
+  idOf: (row: Row) => string,
+): { readonly rows: readonly Row[]; readonly extends: boolean } {
+  const previousById = new Map<string, Row>();
+  for (const row of previous) previousById.set(idOf(row), row);
+  let changed = next.length !== previous.length;
+  let extendsPrevious = next.length >= previous.length;
+  const rows = next.map((row, index) => {
+    const id = idOf(row);
+    if (index < previous.length && idOf(previous[index]) !== id) {
+      extendsPrevious = false;
+    }
+    const held = previousById.get(id);
+    if (held === undefined) {
+      changed = true;
+      return row;
+    }
+    if (held === row || jsonDeepEqual(held, row)) {
+      if (held !== previous[index]) changed = true;
+      return held;
+    }
+    changed = true;
+    return row;
+  });
+  return { rows: changed ? rows : previous, extends: extendsPrevious };
+}
+
+/**
+ * Structural equality over the JSON-shaped records the schemas produce.
+ * Plain objects and arrays only - the parsed rows carry nothing else - and
+ * the walk bails at the first difference rather than serializing both sides.
+ */
+function jsonDeepEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) {
+      return false;
+    }
+    return a.every((item, index) => jsonDeepEqual(item, b[index]));
+  }
+  if (
+    typeof a !== "object" ||
+    typeof b !== "object" ||
+    a === null ||
+    b === null
+  ) {
+    return false;
+  }
+  const left: Record<string, unknown> = { ...a };
+  const right: Record<string, unknown> = { ...b };
+  const leftKeys = Object.keys(left);
+  if (leftKeys.length !== Object.keys(right).length) return false;
+  return leftKeys.every(
+    (key) => Object.hasOwn(right, key) && jsonDeepEqual(left[key], right[key]),
+  );
 }

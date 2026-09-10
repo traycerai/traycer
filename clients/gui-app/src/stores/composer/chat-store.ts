@@ -20,6 +20,7 @@ import type {
   BrowserAnnotationRecord,
 } from "@traycer/protocol/persistence/epic/schemas";
 import type {
+  AgentMessageReceipt,
   AgentMessageSend,
   ArtifactOperationAction,
   BackgroundTaskOutput,
@@ -29,6 +30,7 @@ import type {
   PlanAction,
   PlanContentRef,
   AutonomousResumeTrigger,
+  AutonomousResumeDeliveryPlacement,
   PlanSource,
   PlanStatus,
   PlanStep,
@@ -138,6 +140,12 @@ export interface ToolSegment {
   // written before the host carried this, which the start card reads as "no
   // live status to show" rather than as a deleted shell.
   managedCommand: ToolCallManagedCommand | null;
+  // Where a `traycer_send_message` call landed: the receiver's transcript
+  // message id, stamped on the block at completion. Lets the "Sent message"
+  // card jump to that row in the receiver's scrollback. Null for every other
+  // tool call, for a TUI receiver, and for sends persisted before the host
+  // carried this (the card then just opens the receiver's tile).
+  agentMessageReceipt: AgentMessageReceipt | null;
   isStreaming: boolean;
   // Terminal outcome when the turn ended mid-flight (else null). See SegmentEndState.
   endState: SegmentEndState;
@@ -413,6 +421,7 @@ export type MessageSegment =
   | {
       id: string;
       kind: "autonomous_resume";
+      deliveryPlacement?: AutonomousResumeDeliveryPlacement;
       triggers: ReadonlyArray<AutonomousResumeTrigger>;
     }
   | InterviewSegment
@@ -623,7 +632,19 @@ export interface ChatMessage {
   settings: ChatRunSettings | null;
   createdAt: number;
   /**
-   * Wall-clock start used by the assistant elapsed timer. Defaults to
+   * Wall-clock time this row's event actually happened, which is what the
+   * transcript stamp reads. Defaults to `createdAt`.
+   *
+   * The two differ wherever a row's `createdAt` has been moved to keep the
+   * transcript in order: `createdAt` is the canonical SORT key, so a nested
+   * steer bubble is re-anchored to its turn's start to stay contiguous with
+   * the slices around it. That anchor is not when the person sent the steer,
+   * and rendering it as one would silently report the wrong time.
+   */
+  sentAt?: number;
+  /**
+   * Wall-clock start of the assistant turn: the elapsed timer measures from
+   * it, and the footer's hover card reports it as `Started`. Defaults to
    * `createdAt`; differs when a persisted notification is adopted by a later
    * provider run but must keep its original transcript position.
    */

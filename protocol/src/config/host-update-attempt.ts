@@ -113,6 +113,36 @@ export type HostUpdateAttemptError = {
 } | null;
 
 /**
+ * The `error.code` a failed attempt carries when the freshly started target
+ * host answered the verify leg's authenticated RPC with two consecutive
+ * UNAUTHORIZED/FORBIDDEN frames (Q19).
+ *
+ * `code` is a free `string` above and stays one - the record must be able to
+ * carry a code from a writer this reader predates. This constant is not a
+ * narrowing of that type; it is the one code with a SECOND consumer, and the
+ * two are in different packages:
+ *
+ *  - the CLI stamps it and holds it in `UNCONDITIONALLY_STAMPED_FAILURE_CODES`
+ *    (`clients/traycer-cli/src/host/update-run.ts`);
+ *  - the GUI compares it to decide whether a terminal record says the host
+ *    refused the authenticated check
+ *    (`clients/gui-app/src/lib/host/fleet-update/fleet-update-view.ts`).
+ *
+ * It lives here for the reason the module header gives: this file is
+ * renderer-safe and both sides already resolve their record vocabulary from
+ * it, so a shared definition costs nothing that two literals were not already
+ * costing. The value IS the wire string - a record written by an older CLI
+ * carries these exact bytes - so it may never be "tidied" into a different
+ * spelling, and the row pinning it is not ceremony.
+ *
+ * The two sibling members of that CLI set, `verify-timeout` and
+ * `service-start-failed`, are deliberately NOT here: a sweep of the GUI found
+ * neither compared anywhere in its production source, so exporting them would
+ * add protocol surface with only one consumer apiece.
+ */
+export const HOST_UPDATE_REFUSES_RPC_CODE = "host-refuses-rpc";
+
+/**
  * Durable provenance for a terminal conclusion written by crash recovery.
  *
  * A normal executor reaches `complete` through its verifying segment. Recovery
@@ -141,6 +171,54 @@ export type HostUpdateAttemptRecoveryRunningLeg = {
   readonly kind: "absent" | "verified" | "unbound" | "unreadable";
   readonly version: string | null;
   readonly ownerBound: boolean;
+  /**
+   * The raw runtime identity a host process reported, when the in-memory
+   * evidence was the `foreign` kind - a process whose identity matches no
+   * catalog leg of the install record (a staging build, or the record's
+   * catalog version while the record names a different `runtimeVersion`).
+   *
+   * Additive and OPTIONAL, for the same reason `recovery` itself was: the
+   * summary must stay readable by an observer built before this key existed.
+   * That is also why `foreign` is persisted as `unbound` with the raw identity
+   * as `version` rather than as a fourth kind or a null version - the leg
+   * validation below requires a non-null version on `unbound`, so an older
+   * decoder would read either of those as CORRUPT, which is a fail-closed
+   * verdict on a perfectly good record.
+   */
+  readonly runtimeIdentity?: string;
+};
+
+/**
+ * What the claimant knew about the local installation when it claimed, carried
+ * so a later resume can prove the install it was authorized against is still
+ * the one on disk (tech plan D19).
+ *
+ * `installGeneration` is always the string `encodeInstallGeneration` returns -
+ * never `installId` or any other single field - so a baseline, an advisory
+ * plan and an under-lock re-read compare byte-equal values.
+ *
+ * `allowDowngrade` records the CONSENT the claim was made under. It is copied
+ * forward by every park refresh and never recomputed from arguments or from
+ * version order: version ordering cannot establish an authorization an earlier
+ * actor gave.
+ *
+ * `acceptStoreFormatLoss` is the OTHER consent the claim was made under, on
+ * the same terms: `--accept-store-format-loss` authorizes landing a build that
+ * cannot open a chat store on the machine, and a park's resumption acts on the
+ * authority the park recorded rather than on whatever the resuming actor
+ * passes. The bound `host.update.continue` passes nothing (the host's
+ * dispatcher never carries it), so without this field a downgrade the person
+ * consented to through "Install anyway" parked on a busy host and could not be
+ * finished from the same consent. Absent on a record written before the field
+ * existed, which decodes as `false`: a claim that never recorded the consent
+ * never had it.
+ */
+export type HostUpdateAttemptClaimBaseline = {
+  readonly installedVersion: string;
+  readonly installGeneration: string;
+  readonly stageFingerprint: string | null;
+  readonly allowDowngrade: boolean;
+  readonly acceptStoreFormatLoss: boolean;
 };
 
 export type HostUpdateAttemptRecord = {
@@ -160,7 +238,67 @@ export type HostUpdateAttemptRecord = {
   readonly error: HostUpdateAttemptError;
   /** Omitted for ordinary executor terminal writes and all active records. */
   readonly recovery?: HostUpdateAttemptRecovery;
+  /**
+   * The claim baseline, written at creation and refreshed at every park.
+   *
+   * Additive and optional on the SAME terms as `recovery`, and legal on any
+   * phase (unlike `recovery`, which describes a terminal conclusion): records
+   * written before this key existed have none, and a record with none is
+   * resumable only as an upgrade park (D19).
+   */
+  readonly claim?: HostUpdateAttemptClaimBaseline;
+  /**
+   * How the verify leg proved the host is the one this attempt installed (Q1).
+   *
+   * Additive and optional like `recovery` and `claim`, and terminal-only like
+   * `recovery` - it records a conclusion, and the only moment that conclusion
+   * is settled is the terminal write.
+   *
+   * ## Written POSITIVELY, and that is the whole design
+   *
+   * Every build carrying this key writes it, including the ordinary strong
+   * path (`mode: "identity"`). So absence means exactly one thing - the record
+   * was written before this key existed - and NEVER "verified fully".
+   *
+   * The rejected alternative was "present only when degraded", which reads
+   * more economically and is the same defect this key exists to record: Q1 is
+   * `processStartIdentity === null` being treated as a verdict rather than as
+   * "cannot tell". A field whose absence had to mean "the strong path ran"
+   * would have reproduced that shape one layer up, where a writer that
+   * degrades and forgets to say so is indistinguishable from one that did not.
+   * Here, forgetting is impossible to confuse with succeeding.
+   */
+  readonly verification?: HostUpdateAttemptVerification;
 };
+
+/**
+ * The verification a terminal attempt record reports about its own verify leg.
+ *
+ * A discriminated union rather than a bare string so `floor` and `reason`
+ * exist only where they refer to something. A `floor` sitting beside an
+ * identity verification would be a field with no referent, and a later reader
+ * would mine it for a meaning it never had.
+ */
+export type HostUpdateAttemptVerification =
+  /** `pid.json` carried the #1763 stamp and it named the live process. */
+  | { readonly mode: "identity" }
+  /**
+   * The stamp was absent and the TARGET was below the stamp floor, so the
+   * identity comparison could not be performed and the leg fell back to
+   * version-only health (Q1). Everything except the identity comparison still
+   * held: endpoint validity, `host.status` readiness, version agreement, the
+   * host-home binding and the before/after re-read.
+   */
+  | {
+      readonly mode: "version-only";
+      readonly reason: "pid-start-stamp-missing";
+      /**
+       * The floor the target was compared against, as the run read it - never
+       * a literal. A blank one is corrupt rather than absent: it is the value
+       * the decision turned on, so an empty string is actively misleading.
+       */
+      readonly floor: string;
+    };
 
 // ---- Phase classification ---------------------------------------------------
 
@@ -491,6 +629,24 @@ function parseAttemptFields(
   // Recovery provenance describes an exceptional terminal conclusion. A
   // partial/crashed writer must not be able to leave it attached to a live
   // segment and make that look like a claimed recovery.
+  //
+  // THIS GATE IS THE STATEMENT OF INTENT, NOT THE ENFORCEMENT - today.
+  // `parseRecovery` closes `outcome` over exactly
+  // `complete | failed | superseded`, and the outcome-must-match-phase check
+  // immediately below rejects each of those against every phase but its own
+  // namesake - all three of which are terminal. So no input this schema admits
+  // can be rejected here and survive there: deleting this gate alone changes
+  // nothing observable, and no honest test can pin it (established by
+  // ablation; see the note above `describe("recovery provenance")` in
+  // `__tests__/host-update-attempt.test.ts`).
+  //
+  // Keep it. It becomes load-bearing the moment either fact changes - a fourth
+  // `outcome`, or an outcome that legitimately maps to a non-terminal phase.
+  //
+  // THE UNSAFE EDIT IS THE REVERSE ONE: deleting the outcome-match check below
+  // because this gate appears to cover the case. It does not. That check is
+  // what actually rejects a recovery whose outcome disagrees with the phase it
+  // is attached to, and it is the only thing that does.
   if (recovery !== undefined && executionForPhase(phase) !== "terminal") {
     return null;
   }
@@ -500,6 +656,24 @@ function parseAttemptFields(
       (recovery.outcome === "failed" && phase !== "failed") ||
       (recovery.outcome === "superseded" && phase !== "superseded"))
   ) {
+    return null;
+  }
+
+  // Deliberately NOT phase-gated. The baseline is what the claimant knew when
+  // it claimed, so it is legal on an active record, on a park (where it is
+  // refreshed and where it is actually consumed), and on the terminal record a
+  // park becomes - unlike `recovery`, whose whole meaning is a terminal
+  // conclusion.
+  const claim = parseClaimBaseline(obj.claim);
+  if (claim === "invalid") return null;
+
+  const verification = parseVerification(obj.verification);
+  if (verification === "invalid") return null;
+  // Terminal-only, on `recovery`'s reasoning rather than by analogy: it
+  // reports how the verify leg CONCLUDED, so a partial or crashed writer must
+  // not be able to leave it on a live segment and make a running attempt look
+  // as though it had already been verified - or, worse, verified weakly.
+  if (verification !== undefined && executionForPhase(phase) !== "terminal") {
     return null;
   }
 
@@ -519,7 +693,56 @@ function parseAttemptFields(
     completedAt,
     error,
     ...(recovery === undefined ? {} : { recovery }),
+    ...(claim === undefined ? {} : { claim }),
+    ...(verification === undefined ? {} : { verification }),
   };
+}
+
+/**
+ * Parse the optional verification report (Q1).
+ *
+ * ## The one place this decoder is deliberately NOT like its siblings
+ *
+ * `parseRecovery` and `parseClaimBaseline` are exact: anything that is not
+ * their shape corrupts the record. This one splits that into two cases, and
+ * the split is the forward-compatibility contract for the whole key:
+ *
+ *  - a MALFORMED value corrupts, exactly as they do. A non-object, a missing
+ *    `reason`, a non-string or empty `floor` - none of those can be produced
+ *    by any writer, so they mean the file is damaged;
+ *  - an UNKNOWN but well-formed `mode` DROPS the key and leaves the record
+ *    valid. A newer build recording a verification mode this one has never
+ *    heard of has not damaged anything; it has said something in a vocabulary
+ *    this reader does not have yet.
+ *
+ * Get that backwards and the first `mode` anyone adds makes every record
+ * written by a newer build unreadable to every deployed older one - a
+ * diagnostic bricking the thing it was added to explain. A field that exists
+ * to describe a conclusion must never be able to invalidate it.
+ *
+ * The asymmetry costs one real check: `mode` is validated against the KNOWN
+ * set rather than "is a string", so a genuinely damaged `mode` (a number, an
+ * object) still corrupts.
+ */
+function parseVerification(
+  value: unknown,
+): HostUpdateAttemptVerification | undefined | "invalid" {
+  if (value === undefined) return undefined;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return "invalid";
+  }
+  const raw = value as Record<string, unknown>;
+  if (typeof raw.mode !== "string") return "invalid";
+  if (raw.mode === "identity") return { mode: "identity" };
+  if (raw.mode === "version-only") {
+    if (raw.reason !== "pid-start-stamp-missing") return "invalid";
+    const floor = nonEmptyString(raw.floor);
+    if (floor === null) return "invalid";
+    return { mode: "version-only", reason: "pid-start-stamp-missing", floor };
+  }
+  // Well-formed and unknown: a newer writer's vocabulary. Drop the key, keep
+  // the record.
+  return undefined;
 }
 
 function isTrigger(value: unknown): value is HostUpdateTrigger {
@@ -692,7 +915,70 @@ function parseRecoveryRunningLeg(
     return "invalid";
   }
   if (raw.kind !== "verified" && raw.ownerBound) return "invalid";
-  return { kind: raw.kind, version, ownerBound: raw.ownerBound };
+  // Additive and optional, like `recovery` and `claim`. Present it is a
+  // non-empty string or the record is corrupt; RETAINED only on `unbound`,
+  // the one kind the encoder lowers a `foreign` process identity onto. On
+  // every other kind it is dropped rather than refused: a writer that has no
+  // business emitting it says nothing this reader needs, and reading such a
+  // record as corrupt would fail closed over a field with no meaning there.
+  const runtimeIdentity = raw.runtimeIdentity;
+  if (runtimeIdentity !== undefined && nonEmptyString(runtimeIdentity) === null)
+    return "invalid";
+  return {
+    kind: raw.kind,
+    version,
+    ownerBound: raw.ownerBound,
+    ...(raw.kind === "unbound" && typeof runtimeIdentity === "string"
+      ? { runtimeIdentity }
+      : {}),
+  };
+}
+
+/**
+ * Parse the optional claim baseline (D19).
+ *
+ * The same three-way contract as `parseRecovery`: `undefined` is ABSENT (a
+ * record written before the key existed, or by a caller that had no baseline
+ * to record), and anything else must be exactly this shape or the record is
+ * corrupt. Best-effort parsing is not an option for a value whose whole job is
+ * to authorize a later resume.
+ *
+ * One key inside the shape is itself additive: `acceptStoreFormatLoss` was
+ * added after claims were first written, so a claim WITHOUT it is a claim
+ * that never recorded that consent - `false` - while a claim carrying
+ * anything but a boolean there is corrupt like any other malformed key. That
+ * is not best-effort parsing: absence has exactly one meaning, and it is the
+ * fail-closed one.
+ */
+function parseClaimBaseline(
+  value: unknown,
+): HostUpdateAttemptClaimBaseline | undefined | "invalid" {
+  if (value === undefined) return undefined;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return "invalid";
+  }
+  const raw = value as Record<string, unknown>;
+  const installedVersion = nonEmptyString(raw.installedVersion);
+  const installGeneration = nonEmptyString(raw.installGeneration);
+  const stageFingerprint = nullableNonEmptyString(raw.stageFingerprint);
+  const acceptStoreFormatLoss =
+    raw.acceptStoreFormatLoss === undefined ? false : raw.acceptStoreFormatLoss;
+  if (
+    installedVersion === null ||
+    installGeneration === null ||
+    stageFingerprint === "invalid" ||
+    typeof raw.allowDowngrade !== "boolean" ||
+    typeof acceptStoreFormatLoss !== "boolean"
+  ) {
+    return "invalid";
+  }
+  return {
+    installedVersion,
+    installGeneration,
+    stageFingerprint,
+    allowDowngrade: raw.allowDowngrade,
+    acceptStoreFormatLoss,
+  };
 }
 
 function nullableNonEmptyString(value: unknown): string | null | "invalid" {

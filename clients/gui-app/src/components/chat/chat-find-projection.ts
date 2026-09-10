@@ -269,6 +269,7 @@ function activityGroupChildSearchUnits(
   args: ActivityGroupChildSearchUnitsArgs,
 ): ReadonlyArray<ChatFindUnit> {
   const { segment, groupId, groupChain, tileInstanceId } = args;
+  if (segment.kind === "autonomous_resume") return [];
   if (segment.kind === "reasoning" && args.headerlessReasoning) return [];
   if (segment.kind === "subagent") {
     const renderId = segment.id;
@@ -495,6 +496,8 @@ function activityGroupChildHeaderSearchText(
   segment: ActivityGroupModel["segments"][number],
 ): ReadonlyArray<string> {
   switch (segment.kind) {
+    case "autonomous_resume":
+      return [];
     case "tool":
       return toolSegmentSearchText(segment);
     case "command":
@@ -529,15 +532,15 @@ function approvalHeaderSearchText(
 
 function toolSegmentSearchText(segment: ToolSegment): ReadonlyArray<string> {
   if (segment.agentMessageSend !== null) {
+    // The header's "Sent message" label is screen-reader-only, so it is not
+    // indexed: a find hit on it would highlight nothing. The collapsed
+    // preview is what actually paints.
     return [
       normalizeSearchableText(
-        [
-          "Sent message",
-          formatSingleLine(segment.agentMessageSend.message, {
-            maxLength: CHAT_FIND_PREVIEW_MAX_LENGTH,
-            ellipsis: "…",
-          }),
-        ].join(" "),
+        formatSingleLine(segment.agentMessageSend.message, {
+          maxLength: CHAT_FIND_PREVIEW_MAX_LENGTH,
+          ellipsis: "…",
+        }),
       ),
     ];
   }

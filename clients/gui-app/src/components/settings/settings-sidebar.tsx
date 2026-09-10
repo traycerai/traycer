@@ -92,6 +92,7 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
   // discouraging a click that lands on a working page.
   return (
     <aside
+      data-settings-sidebar
       className={cn(
         "flex shrink-0 flex-col gap-1 overflow-y-auto bg-background p-4",
         props.variant === "rail"

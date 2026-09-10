@@ -96,9 +96,8 @@ describe("settings search", () => {
   it("finds a setting by a word its label does not contain", () => {
     // The keyword list earning its keep. None of these queries appear in the
     // label of the thing they must reach.
-    expect(landingFor("dark mode", DESKTOP)).toBe(
-      "appearance#appearance-theme",
-    );
+    // The theme gallery is bespoke, so "dark mode" lands on the page.
+    expect(landingFor("dark mode", DESKTOP)).toBe("appearance#<top>");
     expect(landingFor("caffeinate", DESKTOP)).toBe(
       "general#general-prevent-sleep",
     );
@@ -114,13 +113,13 @@ describe("settings search", () => {
     expect(labelsFor("rate limit", DESKTOP)).toContain("Profiles & limits");
   });
 
-  it("prefers the specific row over the page that contains it", () => {
-    // "Theme" is a page section, a group, and a row. The row is what someone
-    // typing "theme" means to change.
-    const results = searchSettings("theme", DESKTOP);
+  it("prefers the specific row over the group that contains it", () => {
+    // "Terminal cursor" is a row inside the "Terminal" group. The row is what
+    // someone typing the full name means to change.
+    const results = searchSettings("terminal cursor", DESKTOP);
     expect(results.length).toBeGreaterThan(0);
     expect(results[0].entry.kind).toBe("setting");
-    expect(results[0].entry.anchor).toBe("appearance-theme");
+    expect(results[0].entry.anchor).toBe("appearance-terminal-cursor");
   });
 
   it("still lets a page win on its own name", () => {

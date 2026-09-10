@@ -10,8 +10,8 @@ import {
   type ProcessStartIdentity,
 } from "@traycer/protocol/host/lifecycle";
 import {
-  readProcessStartIdentity,
-  readProcessStartTimeMs,
+  ownProcessStartIdentity,
+  ownProcessStartTimeMs,
   verifyProcessIdentity,
   type ProcessIdentityVerdict,
 } from "./process-identity";
@@ -497,8 +497,8 @@ async function acquireBreakLock(
   const payload: BreakLockPayload = {
     pid: process.pid,
     startedAt: nowIso(),
-    processStartedAtMs: readProcessStartTimeMs(process.pid),
-    processStartIdentity: readProcessStartIdentity(process.pid),
+    processStartedAtMs: ownProcessStartTimeMs(),
+    processStartIdentity: ownProcessStartIdentity(),
     token,
   };
   if ((await createBreakLockFile(breakLockPath, payload)) === "created") {
@@ -634,6 +634,83 @@ export async function readLockHolder(path: string): Promise<LockHolderProbe> {
   if (read.kind === "read-error") return { kind: "read-error" };
   const holder = parseLockMetadata(read.raw);
   return holder === null ? { kind: "unparseable" } : { kind: "held", holder };
+}
+
+/**
+ * The age of a lock file by its mtime, for a READER judging whether an
+ * empty or corrupt lock is still inside {@link EMPTY_LOCK_GRACE_MS} (a holder
+ * mid-creation) or past it (a crashed holder the next acquisition
+ * age-breaks). `null` when the file cannot be stat'd. Negative when the file
+ * is dated in the future - a backward wall-clock step - and such a file is
+ * not age-breakable until its mtime plus the grace window has passed.
+ */
+export async function probeLockFileAgeMs(path: string): Promise<number | null> {
+  return lockFileAgeMs(path);
+}
+
+export { EMPTY_LOCK_GRACE_MS };
+
+/**
+ * What a READER can establish about the break-arbitration sub-lock
+ * (`<lockPath>.break`) that every stale-lock break must first take. A
+ * canonical lock that is provably stale is only RECOVERABLE if that file is
+ * free or recoverable too; a breaker that is alive, or one whose identity
+ * cannot be verified, holds the arbitration and no contender will break the
+ * stale lock behind it (`acquireBreakLock` answers busy and the contender
+ * falls back to its bounded wait).
+ *
+ * `free` covers the absent file, a crashed breaker's file (dead or recycled
+ * pid) and an empty one: `tryRecoverCrashedBreakLock` unlinks those once
+ * past {@link BREAK_LOCK_AGE_GRACE_MS}, which a contender polling inside its
+ * wait reaches on its own. `held` names the breaker when there is one. A file
+ * dated in the future is `held` with no live breaker: it is not recoverable
+ * until its mtime plus the grace window.
+ */
+export type LockBreakArbitrationProbe =
+  | { readonly kind: "free" }
+  | {
+      readonly kind: "held";
+      readonly breaker: {
+        readonly pid: number;
+        readonly startedAt: string;
+      } | null;
+      readonly cause:
+        | "breaker-live"
+        | "breaker-unverifiable"
+        | "dated-in-the-future";
+    }
+  | { readonly kind: "read-error" };
+
+export async function probeLockBreakArbitration(
+  lockPath: string,
+): Promise<LockBreakArbitrationProbe> {
+  const breakLockPath = breakLockPathFor(lockPath);
+  const read = await readLockRaw(breakLockPath);
+  if (read.kind === "absent") return { kind: "free" };
+  if (read.kind === "read-error") return { kind: "read-error" };
+  const payload = parseBreakLockPayload(read.raw);
+  const breaker =
+    payload === null
+      ? null
+      : { pid: payload.pid, startedAt: payload.startedAt };
+  if (payload !== null) {
+    const identity = verifyProcessIdentity({
+      pid: payload.pid,
+      startedAtMs: payload.processStartedAtMs,
+      startIdentity: payload.processStartIdentity,
+    });
+    if (identity === "alive-same") {
+      return { kind: "held", breaker, cause: "breaker-live" };
+    }
+    if (identity === "indeterminate") {
+      return { kind: "held", breaker, cause: "breaker-unverifiable" };
+    }
+  }
+  const ageMs = await lockFileAgeMs(breakLockPath);
+  if (ageMs !== null && ageMs < -BREAK_LOCK_AGE_GRACE_MS) {
+    return { kind: "held", breaker, cause: "dated-in-the-future" };
+  }
+  return { kind: "free" };
 }
 
 /**
@@ -844,12 +921,27 @@ async function tryAcquireOnce(
       // A parent handle can publish a supervised child only for liveness;
       // it must nevertheless never unlink that child's record on an error
       // path. Normal protocol completion first atomically republishes the
-      // parent, then calls release. If the child died and its group/tree is
+      // parent WITH AN EMPTY PUBLICATION, which is what clears these flags,
+      // and only then calls release. If the child died and its group/tree is
       // not positively gone, retaining the lock is the fail-closed outcome.
+      //
+      // The condition is the outstanding publication ITSELF, deliberately not
+      // `current.pid !== meta.pid`. That comparison used to stand in for "the
+      // publication has not been handed back yet", which held only while a
+      // supervising parent never published its OWN pid mid-session. It does
+      // now - the maintenance lease publishes the executing process across an
+      // in-process action so the lock is attributed to whoever is actually
+      // doing the work - and a self-publication would otherwise FORGE the
+      // handback signal: a handback that fails before its rename (ENOSPC on
+      // the liveness temp, say) leaves the parent published with the group
+      // flags still set, and the failure paths that deliberately skip
+      // restoration (the win32 branch, and a POSIX reap error) rely on this
+      // guard to hold the lock. Keyed on the flags, retention survives that;
+      // keyed on the pid, release unlinked a lock whose actuator group was
+      // still alive and let the next contender in beside it.
       if (
-        current.pid !== meta.pid &&
-        (current.supervisedProcessGroupId !== undefined ||
-          current.retainOnPublisherDeath === true)
+        current.supervisedProcessGroupId !== undefined ||
+        current.retainOnPublisherDeath === true
       ) {
         return;
       }
@@ -953,8 +1045,9 @@ function newAcquisitionMetadata(reason: string): LockMetadata {
     startedAt: nowIso(),
     hostname: hostnameSafe(),
     token: randomUUID(),
-    processStartedAtMs: readProcessStartTimeMs(process.pid),
-    processStartIdentity: readProcessStartIdentity(process.pid),
+    // Cached own-process reads: an acquisition must not cost a spawn.
+    processStartedAtMs: ownProcessStartTimeMs(),
+    processStartIdentity: ownProcessStartIdentity(),
   };
 }
 

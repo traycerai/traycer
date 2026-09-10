@@ -22,7 +22,8 @@ import {
   selectWorkspaceFoldersBucket,
   useWorkspaceFoldersStore,
 } from "@/stores/workspace/workspace-folders-store";
-import { activeHostIdOrNull } from "@/lib/host/runtime";
+import { readComposerHostIdSnapshot } from "@/lib/composer/composer-host-snapshot";
+import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
@@ -98,7 +99,8 @@ interface LandingDraftStoreState {
   /**
    * Coordinator-only stable-id source creation (restore/sync, landing
    * null-draft mount key stability) - explicit ids always mint, on every
-   * shell.
+   * shell. A new draft reads the composer's placement once for its workspace
+   * and default settings; non-null settings are an explicit caller override.
    */
   createDraftWithId: (id: string, settings: ChatRunSettings | null) => string;
   /** Remove a draft by id. If it was the active draft, clears `activeDraftId`;
@@ -448,15 +450,23 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
 
       createDraftWithId: (id, settings) => {
         if (get().drafts.some((draft) => draft.id === id)) return id;
+        // Workspace and default settings belong to the same placement host,
+        // including drafts created through the tab strip or a split pane.
+        const hostId = readComposerHostIdSnapshot();
         const next: LandingDraftTab = {
           id,
           content: EMPTY_LANDING_DRAFT_CONTENT,
           selection: null,
           lastTouchedAt: Date.now(),
-          settings: copyChatRunSettings(settings),
+          settings: copyChatRunSettings(
+            settings ??
+              useComposerRunSettingsStore
+                .getState()
+                .getGlobalRunSettings(hostId),
+          ),
           // Seed from the global last-used mode; the draft owns it from here.
           composerMode: useSettingsStore.getState().composerMode,
-          workspace: readCurrentLandingDraftWorkspaceSnapshot(),
+          workspace: readLandingDraftWorkspaceSnapshotForHost(hostId),
         };
         set((state) => ({
           drafts: [...uniqueLandingDrafts(state.drafts), next],
@@ -561,19 +571,9 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
       },
 
       restoreDraftWorkspaceForHost: (id, hostId) => {
-        const bucket = selectWorkspaceFoldersBucket(
-          useWorkspaceFoldersStore.getState(),
-          hostId,
-        );
         set((state) =>
           updateDraftWorkspace(state, id, () =>
-            normalizeLandingDraftWorkspace({
-              folders: [...bucket.folders],
-              folderInfoByPath: copyWorkspaceFolderInfoByPath(
-                bucket.folderInfoByPath,
-              ),
-              primaryPath: bucket.primaryPath,
-            }),
+            readLandingDraftWorkspaceSnapshotForHost(hostId),
           ),
         );
       },
@@ -899,15 +899,12 @@ function normalizeChatRunSettings(
   };
 }
 
-function readCurrentLandingDraftWorkspaceSnapshot(): LandingDraftWorkspaceSnapshot {
-  // A new draft is created on the landing surface, which follows the
-  // app-wide effective host - snapshot THAT host's folder bucket, not another
-  // machine's paths. Through the shared reader: the spine stopped carrying an
-  // identity at P4.2, so asking it here selected the unresolved-host bucket
-  // and silently dropped the real host's folders.
+function readLandingDraftWorkspaceSnapshotForHost(
+  hostId: string | null,
+): LandingDraftWorkspaceSnapshot {
   const bucket = selectWorkspaceFoldersBucket(
     useWorkspaceFoldersStore.getState(),
-    activeHostIdOrNull(),
+    hostId,
   );
   return normalizeLandingDraftWorkspace({
     folders: [...bucket.folders],

@@ -19,8 +19,10 @@ import {
   interviewAnswerSchemaPreSettlement,
   interviewQuestionOptionSchema,
   interviewQuestionSchema,
+  interviewQuestionSchemaPreCustomAnswer,
 } from "@traycer/protocol/persistence/epic/schemas";
 import {
+  agentMessageReceiptSchema,
   agentMessageSendSchema,
   artifactOperationActionSchema,
   backgroundTaskOutputSchema,
@@ -38,6 +40,7 @@ import {
 import { imageResolutionEntrySchema } from "@traycer/protocol/persistence/epic/messages";
 
 export {
+  agentMessageReceiptSchema,
   agentMessageSendSchema,
   backgroundTaskOutputSchema,
   diffSourceSchema,
@@ -337,6 +340,17 @@ export type RuntimeInterviewQuestion = z.infer<
   typeof runtimeInterviewQuestionSchema
 >;
 
+// Wire-freeze alias of the question shape from before `allowsCustomAnswer`.
+// Bound to every `chat.subscribe` line through `@1.6`, matching the answer-side
+// freeze directly above; `@1.7`+ observe the field.
+//
+// The question shape is shared with persistence on purpose (see the comment
+// above), which is exactly why it needs an alias here: a field added for the
+// current line otherwise reaches all ten released server-frame surfaces at
+// once, including `@1.0`.
+export const runtimeInterviewQuestionSchemaPreCustomAnswer =
+  interviewQuestionSchemaPreCustomAnswer;
+
 export const runtimeInterviewAnswerSchema = interviewAnswerSchema;
 export type RuntimeInterviewAnswer = z.infer<
   typeof runtimeInterviewAnswerSchema
@@ -421,6 +435,13 @@ export const toolCallCompletedEventSchema = z.object({
   // re-completion cannot erase what a first one established. See
   // `toolCallManagedCommandSchema`.
   managedCommand: toolCallManagedCommandSchema.nullable().optional(),
+  // Where a `traycer_send_message` call landed in the receiver's transcript.
+  // Carried on COMPLETION for the same reason as `managedCommand`: the host
+  // mints the receipt while serving the call, and the tool result is the only
+  // place it is observable. Optional rather than defaulted for the same reason
+  // too - an omission is "nothing to say", not "no receipt". See
+  // `agentMessageReceiptSchema`.
+  agentMessageReceipt: agentMessageReceiptSchema.nullable().optional(),
   backgroundOutput: backgroundTaskOutputSchema.nullable().optional(),
   // For detached background command/Monitor completion, this is the SDK task's
   // own start time from BackgroundItem, not the short foreground spawn call.
@@ -438,6 +459,23 @@ export const toolCallCompletedEventSchema = z.object({
 export type ToolCallCompletedEvent = z.infer<
   typeof toolCallCompletedEventSchema
 >;
+
+// Wire-freeze copy of `toolCallCompletedEventSchema` as `chat.subscribe@1.6`
+// shipped it in `host-v1.2.0`: image results present, `agentMessageReceipt`
+// absent. Bound to `@1.6`'s `blockDelta` frame via
+// `runtimeEventSchemaPreSettlement`. Hand-frozen, NOT derived from the live
+// shape.
+export const toolCallCompletedEventSchemaPreReceipt = z.object({
+  ...baseRuntimeEventFields,
+  type: z.literal("tool_call.completed"),
+  toolName: z.string(),
+  agentMessageSend: agentMessageSendSchema.nullable().default(null),
+  managedCommand: toolCallManagedCommandSchema.nullable().optional(),
+  backgroundOutput: backgroundTaskOutputSchema.nullable().optional(),
+  backgroundStartedAt: z.number().optional(),
+  backgroundTask: z.boolean().optional(),
+  imageResults: z.array(imageGenerationResultSchema).default([]),
+});
 
 // Wire-freeze copy of `toolCallCompletedEventSchema` from before
 // `imageResults` existed. Bound (via `runtimeEventSchemaPreImage` /
@@ -706,6 +744,26 @@ export const interviewRequestedEventSchema = z.object({
 export type InterviewRequestedEvent = z.infer<
   typeof interviewRequestedEventSchema
 >;
+
+// Wire-freeze copy of `interview.requested` from before `allowsCustomAnswer`,
+// carrying the frozen question shape. Bound to every `chat.subscribe` line
+// through `@1.6` via the frozen `blockDelta` unions below - the questions-side
+// counterpart to `interviewResolvedEventSchemaPreSettlement`, which freezes
+// answers across exactly the same lines.
+//
+// Hand-frozen field-for-field rather than spread from the live event, matching
+// the convention the frozen unions below already state: the freeze must not
+// silently absorb a later field.
+export const interviewRequestedEventSchemaPreCustomAnswer = z.object({
+  ...baseRuntimeEventFields,
+  type: z.literal("interview.requested"),
+  toolName: z.string(),
+  title: z.string().optional(),
+  description: z.string().optional(),
+  questions: z.array(runtimeInterviewQuestionSchemaPreCustomAnswer),
+  input: z.unknown().optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+});
 
 export const interviewResolvedEventSchema = z.object({
   ...baseRuntimeEventFields,
@@ -1209,6 +1267,14 @@ export const reasonixUserMessageAnchorResolvedSchema = z.object({
   reasonixSessionId: z.string().nullable(),
 });
 
+// No second session-id field, unlike its ACP siblings: `agy_acp_server`'s
+// `session/new` id IS the anchor's `sessionId`, so a vendor-named copy of the
+// same string would be a field that can never disagree with the one beside it.
+export const antigravityUserMessageAnchorResolvedSchema = z.object({
+  harnessId: z.literal("antigravity"),
+  sessionId: z.string(),
+});
+
 export const userMessageAnchorResolvedEventSchema = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("user_message.anchor_resolved"),
@@ -1234,6 +1300,7 @@ export const userMessageAnchorResolvedEventSchema = z.object({
     ompUserMessageAnchorResolvedSchema,
     huggingFaceUserMessageAnchorResolvedSchema,
     reasonixUserMessageAnchorResolvedSchema,
+    antigravityUserMessageAnchorResolvedSchema,
   ]),
 });
 export type UserMessageAnchorResolvedEvent = z.infer<
@@ -1241,9 +1308,9 @@ export type UserMessageAnchorResolvedEvent = z.infer<
 >;
 
 // Wire-freeze copy for released `chat.subscribe@1.0–1.6` blockDelta frames.
-// Reasonix first rides the unreleased 1.7 line; keeping its discriminant out of
-// this union prevents a newer host from sending an anchor an installed older
-// client cannot decode.
+// Reasonix and Antigravity both first ride the unreleased 1.7 line; keeping
+// their discriminants out of this union prevents a newer host from sending an
+// anchor an installed older client cannot decode.
 const userMessageAnchorResolvedEventSchemaPreReasonix = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("user_message.anchor_resolved"),
@@ -1517,7 +1584,7 @@ export const runtimeEventSchemaPreImage = z.discriminatedUnion("type", [
   compactionStartedEventSchema,
   compactionCompletedEventSchema,
   compactionErroredEventSchema,
-  interviewRequestedEventSchema,
+  interviewRequestedEventSchemaPreCustomAnswer,
   interviewResolvedEventSchemaPreSettlement,
   interviewErroredEventSchema,
   subAgentStartedEventSchema,
@@ -1568,7 +1635,7 @@ export const runtimeEventSchemaV12PreInReplyTo = z.discriminatedUnion("type", [
   compactionStartedEventSchema,
   compactionCompletedEventSchema,
   compactionErroredEventSchema,
-  interviewRequestedEventSchema,
+  interviewRequestedEventSchemaPreCustomAnswer,
   interviewResolvedEventSchemaPreSettlement,
   interviewErroredEventSchema,
   subAgentStartedEventSchema,
@@ -1603,10 +1670,11 @@ export const runtimeEventSchemaPreInReplyTo = z.discriminatedUnion("type", [
 // it in `host-v1.2.0-rc.1`: every live member (image events included - `1.6`
 // is the minor that added them) with `interview.resolved` swapped for its
 // pre-settlement freeze, so a `1.6` peer's `blockDelta` can never carry answer
-// selection evidence - AND every harness-bearing member swapped for its
-// pre-Reasonix copy, since `1.6` is released with a nineteen-id enum and its
-// decoder rejects any frame naming an id outside it. Explicitly listed rather
-// than derived from the live
+// selection evidence, `tool_call.completed` swapped for its pre-receipt freeze
+// (`host-v1.2.0` shipped `1.6` without `agentMessageReceipt`) - AND every
+// harness-bearing member swapped for its pre-Reasonix copy, since `1.6` is
+// released with a nineteen-id enum and its decoder rejects any frame naming an
+// id outside it. Explicitly listed rather than derived from the live
 // union, for the same reason `runtimeEventSchemaPreImage` is: a future event
 // must not silently join a line that has shipped peers.
 export const runtimeEventSchemaPreSettlement = z.discriminatedUnion("type", [
@@ -1615,7 +1683,7 @@ export const runtimeEventSchemaPreSettlement = z.discriminatedUnion("type", [
   reasoningDeltaEventSchema,
   reasoningCompletedEventSchema,
   toolCallStartedEventSchema,
-  toolCallCompletedEventSchema,
+  toolCallCompletedEventSchemaPreReceipt,
   toolCallErroredEventSchema,
   toolCallProgressEventSchema,
   approvalRequestedEventSchema,
@@ -1627,7 +1695,7 @@ export const runtimeEventSchemaPreSettlement = z.discriminatedUnion("type", [
   compactionStartedEventSchema,
   compactionCompletedEventSchema,
   compactionErroredEventSchema,
-  interviewRequestedEventSchema,
+  interviewRequestedEventSchemaPreCustomAnswer,
   interviewResolvedEventSchemaPreSettlement,
   interviewErroredEventSchema,
   subAgentStartedEventSchema,

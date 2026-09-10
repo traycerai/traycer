@@ -12,7 +12,7 @@ function parsesServer(frame: unknown): boolean {
   return browserScreencastServerFrameSchema.safeParse(frame).success;
 }
 
-describe("browser.screencast@1.0 WebRTC video-plane frames", () => {
+describe("browser.screencast@2.0 WebRTC video-plane frames", () => {
   it("round-trips the host offer + trickle ICE (host is the offerer)", () => {
     expect(
       parsesServer({
@@ -474,7 +474,7 @@ describe("browser.screencast@1.0 WebRTC video-plane frames", () => {
   });
 });
 
-describe("browser.screencast@1.0 viewport-epoch hit-testing", () => {
+describe("browser.screencast@2.0 viewport-epoch hit-testing", () => {
   const POINTER = {
     kind: "pointer",
     hasBinaryPayload: false,

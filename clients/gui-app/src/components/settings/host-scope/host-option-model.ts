@@ -239,53 +239,92 @@ export function hostOptionUpdateBadge(view: FleetUpdateView): string | null {
   return liveBadgeWord(view.kind);
 }
 
+/**
+ * The badge a LIVE view earns, as a table rather than a switch.
+ *
+ * `Record<FleetUpdateViewKind, …>` keeps the exhaustiveness a switch gave —
+ * a new kind is a missing key and a type error — while costing no cyclomatic
+ * budget, which a 16-arm switch no longer had (oxlint caps a function at 16 and
+ * a switch spends one per arm). Same construct as {@link STATUS_WORD} above,
+ * for the same reason.
+ */
+const LIVE_BADGE_WORD: Record<FleetUpdateViewKind, string | null> = {
+  updating: "updating",
+  downloading: "updating",
+  preparing: "updating",
+  applying: "updating",
+  verifying: "updating",
+  "waiting-for-work": "update waiting",
+  "waiting-to-activate": "restart to finish",
+  failed: "update failed",
+  // No badge, deliberately. The host is up to date and serving; a picker row is
+  // a place to find a machine to work on, and the only thing this state would
+  // tell someone scanning that list is that a file will be tidied up on its
+  // own. The Overview card says it where a person is actually looking at that
+  // host. A badge here would also have to be one word like "updated", which is
+  // indistinguishable from `complete` — which draws no badge either.
+  "finalizing-record": null,
+  // Same: the row is not where a refused verification gets explained, and no
+  // single word separates it from an ordinary quiet host. The Overview card
+  // names what happened and points at Diagnostics.
+  "verification-refused": null,
+  unavailable: null,
+  restarting: null,
+  reconnecting: null,
+  complete: null,
+  idle: null,
+  unknown: null,
+};
+
 function liveBadgeWord(kind: FleetUpdateViewKind): string | null {
-  switch (kind) {
-    case "downloading":
-    case "preparing":
-    case "applying":
-    case "verifying":
-      return "updating";
-    case "waiting-for-work":
-      return "update waiting";
-    case "waiting-to-activate":
-      return "restart to finish";
-    case "failed":
-      return "update failed";
-    case "unavailable":
-    case "restarting":
-    case "reconnecting":
-    case "complete":
-    case "idle":
-    case "unknown":
-      return null;
-  }
+  return LIVE_BADGE_WORD[kind];
 }
 
+/**
+ * The badge a RETAINED (host-unreachable) view earns. Table for the same reason
+ * as {@link LIVE_BADGE_WORD}.
+ */
+const RETAINED_BADGE_WORD: Record<FleetUpdateViewKind, string | null> = {
+  // Every mid-update phase collapses to one word. "last seen restart to finish"
+  // and "last seen update waiting" are compounds that read as instructions for
+  // a machine this client cannot currently reach.
+  updating: "updating",
+  downloading: "updating",
+  preparing: "updating",
+  applying: "updating",
+  verifying: "updating",
+  "waiting-for-work": "updating",
+  "waiting-to-activate": "updating",
+  restarting: "updating",
+  reconnecting: "updating",
+  // Terminal and durable: the host still holds this record, so it remains true
+  // after we lose contact rather than becoming merely old.
+  failed: "update failed",
+  // Unreachable, and for a reason that does not depend on where the projector
+  // happens to put either route: `retainedBadgeWord` is only ever called with a
+  // `lastKnownKind`, `lastKnownKind` is only ever produced by `phaseKind`, and
+  // `phaseKind`'s codomain contains neither of these kinds — both are minted by
+  // arms of their own, downstream of it.
+  //
+  // The earlier wording here said `verification-refused` "is decided before the
+  // stale arm can retain it", which is BACKWARDS — the stale arm returns first
+  // and the refusal route is reached only when the read is NOT stale. Worse, it
+  // would have licensed hoisting that route above the stale arm, since the
+  // comment would still have read as true afterwards. Stated as the structural
+  // fact instead, so it cannot be used to justify a change that breaks it.
+  //
+  // Kept because the table is exhaustive, and `null` is the answer either would
+  // want anyway: same reasoning as the live badge.
+  "finalizing-record": null,
+  "verification-refused": null,
+  complete: null,
+  idle: null,
+  unavailable: null,
+  unknown: null,
+};
+
 function retainedBadgeWord(kind: FleetUpdateViewKind): string | null {
-  switch (kind) {
-    // Every mid-update phase collapses to one word. "last seen restart to
-    // finish" and "last seen update waiting" are compounds that read as
-    // instructions for a machine this client cannot currently reach.
-    case "downloading":
-    case "preparing":
-    case "applying":
-    case "verifying":
-    case "waiting-for-work":
-    case "waiting-to-activate":
-    case "restarting":
-    case "reconnecting":
-      return "updating";
-    // Terminal and durable: the host still holds this record, so it remains
-    // true after we lose contact rather than becoming merely old.
-    case "failed":
-      return "update failed";
-    case "complete":
-    case "idle":
-    case "unavailable":
-    case "unknown":
-      return null;
-  }
+  return RETAINED_BADGE_WORD[kind];
 }
 
 /**

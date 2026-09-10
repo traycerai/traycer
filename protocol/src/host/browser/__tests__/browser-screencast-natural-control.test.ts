@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   browserScreencastClientFrameSchema,
   browserScreencastServerFrameSchema,
-  browserScreencastV1,
+  browserScreencastV20,
 } from "@traycer/protocol/host/browser/contracts";
 
 const ARM = {
@@ -14,18 +14,18 @@ const ARM = {
 function parsesClient(frame: unknown): boolean {
   return (
     browserScreencastClientFrameSchema.safeParse(frame).success &&
-    browserScreencastV1.clientFrameSchema.safeParse(frame).success
+    browserScreencastV20.clientFrameSchema.safeParse(frame).success
   );
 }
 
 function parsesServer(frame: unknown): boolean {
   return (
     browserScreencastServerFrameSchema.safeParse(frame).success &&
-    browserScreencastV1.serverFrameSchema.safeParse(frame).success
+    browserScreencastV20.serverFrameSchema.safeParse(frame).success
   );
 }
 
-describe("browser.screencast@1.0 natural-control frames", () => {
+describe("browser.screencast@2.0 natural-control frames", () => {
   it("accepts navigate / goBack / goForward / reload with armEpoch+seq", () => {
     expect(
       parsesClient({

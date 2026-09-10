@@ -43,6 +43,7 @@ describe("PromotableModalFrame", () => {
           onPromote={() => {}}
           onClose={() => {}}
           onEscapeKeyDown={() => {}}
+          onOpenAutoFocus={undefined}
         >
           <div data-testid="modal-body">body</div>
         </PromotableModalFrame>

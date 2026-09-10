@@ -1,5 +1,7 @@
+import { HOST_CLIENT_FLOOR_REASON_PREFIX } from "@traycer-clients/shared/host-version/client-floor-reason";
 import {
   isCanonicalReleaseCandidate,
+  isHiddenFromDefaultCatalog,
   isPreReleaseVersion,
 } from "@traycer-clients/shared/host-version/release-line";
 import type { HostIncludePreReleasesSource } from "@traycer/protocol/host/maintenance/schemas";
@@ -10,6 +12,7 @@ import {
 } from "../registry";
 import {
   evaluateHostClientFloor,
+  hostClientFloorRefusalMessage,
   isHostClientFloorRefusal,
 } from "../registry/client-floor";
 import { resolveCliVersion } from "../cli-version";
@@ -180,6 +183,7 @@ export function buildHostAvailableListing(
   const versions = filterHostAvailableVersions(
     args.manifest.versions,
     args.includePreReleases,
+    args.includePreReleasesSource,
   ).map((entry) =>
     projectClientFloor(
       projectPlatformAsset(entry, args.platformKey),
@@ -299,26 +303,47 @@ function projectClientFloor(
     requiredCliVersion: entry.requiredCliVersion,
   });
   if (!isHostClientFloorRefusal(floor)) return entry;
+  // Only a valid floor can be repaired by upgrading the CLI. Keep malformed
+  // registry data outside the GUI's repairable-reason prefix or it will keep
+  // asking for an upgrade that cannot fix the manifest.
+  const unavailableReason =
+    floor.kind === "floor-unreadable"
+      ? hostClientFloorRefusalMessage(floor, entry.version)
+      : `${HOST_CLIENT_FLOOR_REASON_PREFIX}${floor.requiredCliVersion} or newer (this host's CLI is ${cliVersion}).`;
   return {
     ...entry,
     platforms: {
       [platformKey]: {
         ...asset,
         available: false,
-        unavailableReason: `Needs Traycer CLI ${floor.requiredCliVersion} or newer (this host's CLI is ${cliVersion}).`,
+        unavailableReason,
       },
     },
   };
 }
 
-// `isPreReleaseVersion` is the shared catalog predicate rather than a local
-// one: Desktop's `HostController` predicts this exact filter to decide whether
-// a staged build would still appear in the default listing, and a second copy
-// of the rule here is what would eventually purge one.
+// Both predicates are the SHARED ones rather than local copies: Desktop's
+// `HostController` predicts this exact filter to decide whether a staged build
+// would still appear in the default listing, and a second copy of the rule
+// here is what would eventually purge one.
+//
+// WHICH of the two depends on where the exclusion came from, and that
+// distinction is the whole point. The staging exemption exists so a staging
+// client's UNSTATED default listing is not empty. A user who typed
+// `--no-include-pre-releases` has stated something, and answering it with
+// every `-staging.*` row still present - while the JSON reports
+// `includePreReleases: false` and the human output says pre-releases were
+// excluded - is the output contradicting itself. An explicit exclusion is an
+// instruction, not a default to be improved on.
 function filterHostAvailableVersions(
   versions: readonly HostVersionEntry[],
   includePreReleases: boolean,
+  source: HostIncludePreReleasesSource,
 ): readonly HostVersionEntry[] {
   if (includePreReleases) return versions;
-  return versions.filter((entry) => !isPreReleaseVersion(entry.version));
+  const hidden =
+    source === "explicit-exclude"
+      ? isPreReleaseVersion
+      : isHiddenFromDefaultCatalog;
+  return versions.filter((entry) => !hidden(entry.version));
 }

@@ -125,3 +125,53 @@ export function sortNodeIds(
   if (comparator === null || ids.length < 2) return ids;
   return [...ids].sort((a, b) => comparator(nodeById[a], nodeById[b]));
 }
+
+/**
+ * A per-node override of the `updatedAt` a sort reads, keyed by node id.
+ *
+ * The projection's `updatedAt` is a content clock only for a record the
+ * serving host owns; a record replicated from another host carries a
+ * metadata stamp there, and its real activity clock is its cloud publication
+ * (`chatRowLastActiveAt`). This map carries that better answer for exactly the
+ * nodes that have one, so every level of a tree can sort by the same clock
+ * the row's idle-time chip renders.
+ */
+export type NodeSortClock = ReadonlyMap<string, number>;
+
+/**
+ * `sortNodeIds` with the clock applied. When no id in `ids` has an override
+ * this is exactly `sortNodeIds` - including its identity-preserving default
+ * path, so the projector's order stands and memoized callers do not churn.
+ *
+ * When one does, the default mode can no longer trust the projector's order
+ * (it was computed off the stamps this clock corrects), so the default's own
+ * comparator is materialized - `DEFAULT_SORT_MODE` is what the projector's
+ * `compareNodes` sorts by, so re-applying it over corrected stamps changes
+ * only the rows the clock moved.
+ */
+export function sortNodeIdsWithClock(
+  ids: readonly string[],
+  nodeById: Readonly<Record<string, SortableNode>>,
+  comparator: NodeComparator | null,
+  clock: NodeSortClock | null,
+): readonly string[] {
+  if (
+    clock === null ||
+    ids.length < 2 ||
+    !ids.some((id) => {
+      const at = clock.get(id);
+      return at !== undefined && at !== nodeById[id].updatedAt;
+    })
+  ) {
+    return sortNodeIds(ids, nodeById, comparator);
+  }
+  const compare = comparator ?? makeNodeComparator(DEFAULT_SORT_MODE);
+  const sortable = (id: string): SortableNode => {
+    const node = nodeById[id];
+    const at = clock.get(id);
+    return at === undefined || at === node.updatedAt
+      ? node
+      : { ...node, updatedAt: at };
+  };
+  return [...ids].sort((a, b) => compare(sortable(a), sortable(b)));
+}

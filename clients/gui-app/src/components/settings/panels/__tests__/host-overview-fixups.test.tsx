@@ -263,7 +263,11 @@ describe("<HostSettingsPanel /> Overview updates region — sticky vs transient 
             manifest: updateCheckManifest("1.6.0"),
           }),
         "host.update.install": () =>
-          Promise.resolve({ outcome: "cli-failed" as const }),
+          Promise.resolve({
+            outcome: "cli-failed" as const,
+            reason: null,
+            storeFloor: null,
+          }),
       },
     });
     recordNegotiatedHostMethods("host-a", ALL_OVERVIEW_METHODS);

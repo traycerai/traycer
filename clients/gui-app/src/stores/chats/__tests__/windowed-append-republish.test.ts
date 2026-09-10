@@ -211,6 +211,7 @@ function createHarness(): Harness {
     userId: OWNER_ID,
     onAuthError: null,
     onProviderAuthError: () => {},
+    wakeTransport: null,
     streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
     environment: CHAT_STORE_TEST_ENVIRONMENT,
     streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
@@ -486,6 +487,7 @@ describe("the runtime-disposal card on an already-hydrated windowed row", () => 
               header: null,
               options: [],
               multiSelect: false,
+              allowsCustomAnswer: null,
             },
           ],
           answers: [],
