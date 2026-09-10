@@ -64,6 +64,33 @@ export const STREAM_CAPABILITY_HOST_CREDENTIAL_PROVISION =
   "hostCredentialProvision";
 
 /**
+ * Capability tag a host advertises in `openAck.capabilities` when it accepts the
+ * `cloudVerdictUpdate` control frame - an in-place change to what this session's
+ * credential may BUY, with no reconnect and no bearer rotation. Same contract as
+ * the two tags above: a client MUST NOT send the frame without seeing this tag,
+ * so a newer client against an older host stays silent instead of tripping the
+ * unknown-frame guard.
+ *
+ * Deliberately independent of `credentialUpdate`, and the independence is the
+ * whole reason this is a sibling frame rather than a field on that one. The two
+ * events do not coincide in either direction:
+ *
+ *   - A verdict change with NO rotation. A demotion whose store is merely
+ *     unavailable leaves the bearer untouched, and a regain after a successful
+ *     `validateToken` rotates nothing. Riding the credential frame would make
+ *     both transitions unsendable without fabricating a redundant token push.
+ *   - A rotation with NO verdict change: every ordinary refresh. Overloading the
+ *     frame would make each rotation implicitly re-assert a verdict, so a
+ *     refresh racing a demotion could silently re-authorize a session that had
+ *     just lost its verdict.
+ *
+ * "What the token IS" and "what the token may BUY" are two claims, so they get
+ * two frames - exactly the split `credentialUpdate` and `hostCredentialProvision`
+ * are already documented as being kept apart for.
+ */
+export const STREAM_CAPABILITY_CLOUD_VERDICT_UPDATE = "cloudVerdictUpdate";
+
+/**
  * What the host reports about its own device credential in `openAck`.
  *
  *   - `missing`      - the host holds no credential and can accept a handoff.
@@ -99,6 +126,30 @@ export type ClientStreamOpenFrame = {
    * too and carries its own copy of the same process-constant identity.
    */
   readonly clientIdentity?: ClientHandshakeIdentity;
+  /**
+   * Whether this session may spend a CLOUD CAPABILITY on the account behind
+   * `token` - the client's own admission/authorization split asserted to the
+   * host, so host-side background work inherits it.
+   *
+   * PRESENCE IS THE DECLARATION, and that is what makes the default per-connection
+   * rather than global. A peer that omits the field predates the capability and
+   * has no unauthorized state to be in, so the host reads it as authorized; a peer
+   * that sends it has one, and the host uses the value. Neither global default is
+   * right on its own: fail-closed would refuse every released client, CLI and
+   * extension outright, while fail-open would keep a verdict-speaking client
+   * spending after a demotion whose frame went missing.
+   *
+   * It rides `open` rather than waiting for a control frame precisely so there is
+   * no window in which a capable, demoted client is authorized by default - its
+   * verdict is present in its first frame, before any resolver runs. Subsequent
+   * changes travel on `cloudVerdictUpdate`.
+   *
+   * Additive and optional on the wire, so it needs no capability tag to SEND:
+   * zod objects are non-strict, so an older host strips the key and behaves
+   * exactly as it does today. The tag gates the control frame, which is the half
+   * that would otherwise trip an older host's unknown-frame guard.
+   */
+  readonly cloudAuthorized?: boolean;
 };
 
 /**
@@ -145,6 +196,30 @@ export type ClientStreamHostCredentialProvisionFrame = {
    */
   readonly familyId: string;
   readonly provisionedAt: string;
+};
+
+/**
+ * Pushes a changed cloud verdict onto an already-open stream connection so the
+ * host updates every request context bound to it IN PLACE - no reconnect, and
+ * no bearer rotation.
+ *
+ * Sent only after the host advertised {@link STREAM_CAPABILITY_CLOUD_VERDICT_UPDATE}.
+ * A client that sends this frame necessarily speaks verdicts and so also declared
+ * `cloudAuthorized` on its `open` frame - but the host does NOT condition on
+ * having seen that declaration, and deliberately so. The two ways of being wrong
+ * are not symmetric: honouring a verdict from a peer the host had filed as legacy
+ * costs at most a refused cloud call the peer asked to have refused, while
+ * ignoring one costs a demoted session that keeps spending. Only the second
+ * failure direction spends, so the frame is honoured whenever it arrives.
+ *
+ * Carries the ABSOLUTE verdict rather than an edge. A lost or reordered frame
+ * then converges on the next one instead of leaving the two sides disagreeing
+ * about how many transitions have happened - the same reason `credentialUpdate`
+ * carries the token rather than "rotate now".
+ */
+export type ClientStreamCloudVerdictUpdateFrame = {
+  readonly kind: "cloudVerdictUpdate";
+  readonly cloudAuthorized: boolean;
 };
 
 /**
@@ -205,6 +280,18 @@ export const clientStreamOpenFrameSchema = z.object({
   manifest: connectionManifestSchema,
   // Additive/optional in both directions - same rule as the unary open frame.
   clientIdentity: clientHandshakeIdentitySchema.optional(),
+  // `.optional()` and NOT `.default(true)`. The host has to be able to tell
+  // "this peer says it is authorized" from "this peer does not speak verdicts":
+  // the first may later be withdrawn by a control frame, the second may not, and
+  // a default would erase the distinction at the parse boundary where it is
+  // still recoverable. `undefined` reaching `createRequestContext` is the same
+  // absence, and reads as authorized there.
+  cloudAuthorized: z.boolean().optional(),
+});
+
+export const clientStreamCloudVerdictUpdateFrameSchema = z.object({
+  kind: z.literal("cloudVerdictUpdate"),
+  cloudAuthorized: z.boolean(),
 });
 
 export const clientStreamSubscribeFrameSchema = z.object({

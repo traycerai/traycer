@@ -6,6 +6,7 @@ import {
 import {
   batchDeleteRequestSchema,
   batchDeleteResponseSchema,
+  batchDeleteResponseSchemaPre11,
   batchUpdateEpicRolesRequestSchema,
   batchUpdateEpicRolesResponseSchema,
   createArtifactRequestSchema,
@@ -17,6 +18,7 @@ import {
   createCommentThreadResponseSchema,
   createEpicRequestSchema,
   createEpicResponseSchema,
+  createEpicResponseSchemaPre11,
   createTuiAgentRequestSchema,
   createTuiAgentRequestSchemaV10,
   createTuiAgentResponseSchema,
@@ -95,6 +97,7 @@ import {
   setCommentThreadResolvedResponseSchema,
   setEpicPinnedRequestSchema,
   setEpicPinnedResponseSchema,
+  setEpicPinnedResponseSchemaPre11,
   updateArtifactStatusRequestSchema,
   updateArtifactStatusResponseSchema,
   updateChatProfileRequestSchema,
@@ -159,6 +162,7 @@ import {
 } from "@traycer/protocol/host/epic/chat-records";
 import {
   readChatAttachmentRequestSchema,
+  readChatAttachmentRequestSchemaPre11,
   readChatAttachmentResponseSchema,
 } from "@traycer/protocol/host/epic/chat-attachment";
 import {
@@ -338,7 +342,39 @@ export const epicSetPinnedV10 = defineRpcContract({
   method: "epic.setPinned",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: setEpicPinnedRequestSchema,
+  responseSchema: setEpicPinnedResponseSchemaPre11,
+});
+
+// `epic.setPinned@1.1` states the durability `home` of the epic it just
+// pinned. Request is unchanged from 1.0.
+//
+// The released line is cloud-only by CONSTRUCTION, not by declaration: the
+// host's only arm writes to the cloud, so a local-homed epic 404s. A host that
+// grows a local arm therefore changes what a success MEANS, and a `@1.0`
+// response has no room to say so. The client gating its pin control on this
+// minor is what keeps the two facts - "this host can pin a local-homed epic"
+// and "this response tells me which store took it" - from being negotiated
+// separately and disagreeing.
+export const epicSetPinnedV11 = defineRpcContract({
+  method: "epic.setPinned",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: setEpicPinnedRequestSchema,
   responseSchema: setEpicPinnedResponseSchema,
+});
+
+export const epicSetPinnedUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicSetPinnedV10,
+  typeof epicSetPinnedV11
+>({
+  from: epicSetPinnedV10.schemaVersion,
+  to: epicSetPinnedV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  // `home` stays ABSENT rather than becoming `"cloud"`. A `@1.0` host's
+  // success does happen to be a cloud write today, but synthesizing the marker
+  // here would hand a client the same unearned certainty the minor exists to
+  // remove, and it would survive a host that later serves the pin locally on a
+  // still-`@1.0`-negotiated connection.
+  upgradeResponse: (response) => response,
 });
 
 // Personal cloud recency. Optional/non-floor so older hosts remain compatible;
@@ -470,7 +506,44 @@ export const epicCreateV10 = defineRpcContract({
   method: "epic.create",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: createEpicRequestSchema,
+  responseSchema: createEpicResponseSchemaPre11,
+});
+
+/**
+ * `epic.create@1.1` - the create refusal, carried as data.
+ *
+ * The host's local-store create refusal was THROWN and flattened to an
+ * `RPC_ERROR` string. `LOCAL_STORE_UNAVAILABLE` is not an `RPC_ERROR_CODES`
+ * member, so the client could not recover the remedy from prose and could only
+ * surface the sentence - no Repair action, no branch on the cause. This minor
+ * gives the refusal the same treatment the open path already gives it
+ * (`SnapshotFetchError.localStoreRemedy`) and `host.rebindLocalStore` already
+ * gives its own refusal.
+ *
+ * The response grows by an optional key rather than gaining a `status` union
+ * arm; `createEpicResponseSchema`'s own note has the reasoning, and the short
+ * version is that a shape change on a floor method costs a major whose
+ * downgrade could not represent a refusal anyway.
+ */
+export const epicCreateV11 = defineRpcContract({
+  method: "epic.create",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: createEpicRequestSchema,
   responseSchema: createEpicResponseSchema,
+});
+
+export const epicCreateUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicCreateV10,
+  typeof epicCreateV11
+>({
+  from: epicCreateV10.schemaVersion,
+  to: epicCreateV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  // No synthesized `refusal`. A `@1.0` host that could not create THREW, and
+  // that error is already travelling its own path; manufacturing a refusal
+  // here would invent a `kind` and a `remedy` this host never said, and the
+  // client would offer a Repair action on a guess.
+  upgradeResponse: (response) => response,
 });
 
 // `epic.batchDelete@1.0` - host-side entry point for the CloudData
@@ -482,7 +555,35 @@ export const epicBatchDeleteV10 = defineRpcContract({
   method: "epic.batchDelete",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: batchDeleteRequestSchema,
+  responseSchema: batchDeleteResponseSchemaPre11,
+});
+
+// `@1.1` states the durability `home` each deletion landed in, per id. The
+// request is unchanged. See `unary-schemas.ts` for why the tombstone SCOPE is
+// unanswerable without it, and why a batch needs the marker per row rather
+// than per response.
+export const epicBatchDeleteV11 = defineRpcContract({
+  method: "epic.batchDelete",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: batchDeleteRequestSchema,
   responseSchema: batchDeleteResponseSchema,
+});
+
+export const epicBatchDeleteUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicBatchDeleteV10,
+  typeof epicBatchDeleteV11
+>({
+  from: epicBatchDeleteV10.schemaVersion,
+  to: epicBatchDeleteV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  // `home` stays ABSENT on every upgraded row. The marker licenses an
+  // ACCOUNT-WIDE tombstone, which is the destructive direction, and a `@1.0`
+  // host produced no evidence for it - so absence must keep meaning "scope
+  // this to the host that issued the delete", exactly as a released client
+  // already reads it.
+  upgradeResponse: (response) => ({
+    results: response.results.map((result) => ({ ...result })),
+  }),
 });
 
 export const epicRemoveRepoV10 = defineRpcContract({
@@ -1089,8 +1190,33 @@ export const epicListChatRecordsUpgradeV11ToV12 = defineUpgradePath<
 export const epicReadChatAttachmentV10 = defineRpcContract({
   method: "epic.readChatAttachment",
   schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: readChatAttachmentRequestSchemaPre11,
+  responseSchema: readChatAttachmentResponseSchema,
+});
+
+// `@1.1` adds the `plane: "local-only"` request selector so a caller holding
+// no cloud verdict can ask for the DISK leg alone instead of having to skip
+// the whole read. Response is unchanged: a disk miss is already `missing`,
+// and that is the truthful answer for "not obtainable on the plane you asked
+// about" as much as for "not obtainable at all".
+export const epicReadChatAttachmentV11 = defineRpcContract({
+  method: "epic.readChatAttachment",
+  schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: readChatAttachmentRequestSchema,
   responseSchema: readChatAttachmentResponseSchema,
+});
+
+export const epicReadChatAttachmentUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicReadChatAttachmentV10,
+  typeof epicReadChatAttachmentV11
+>({
+  from: epicReadChatAttachmentV10.schemaVersion,
+  to: epicReadChatAttachmentV11.schemaVersion,
+  // No synthesized `plane`. An upgraded `@1.0` request asked for the released
+  // two-leg chain, and narrowing it here would silently withhold the cloud
+  // leg from a caller entitled to it - a blank image where one used to load.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 // Artifact attachment bytes remain canonical in the root document during the

@@ -7,7 +7,6 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
-import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -25,30 +24,44 @@ export type LocalStoreRebindMutationResult = UseMutationResult<
   RequestOfMethod<HostRpcRegistry, "host.rebindLocalStore">,
   LocalStoreRebindContext
 > & {
-  /** The session host exists, but its directory entry has not arrived yet. */
+  /** The named host exists, but its directory entry has not arrived yet. */
   readonly isHostEntryPending: boolean;
 };
 
 /**
  * The GUI repair route for a fail-closed local store refusal.
  *
- * Scoped to the Epic SESSION's host, not a tile binding. `LOCAL_STORE_UNAVAILABLE`
- * is a snapshot-load failure, so `SnapshotErrorBanner` renders in place of the
- * whole `TileCanvas` body - no tile renderer, and therefore no
- * `<TabHostProvider>`, ever mounts underneath it. Reading `useTabHostClient()`
- * here reached the throwing `useTabHostId()` and crashed the one screen whose
- * entire job is to offer the recovery.
+ * Takes the host to repair as an ARGUMENT rather than reading one. It used to
+ * read `useEpicSessionHostId()`, which was right while the only caller was
+ * `SnapshotErrorBanner` - `LOCAL_STORE_UNAVAILABLE` is a snapshot-load failure,
+ * so that banner renders in place of the whole `TileCanvas` body, no tile
+ * renderer and therefore no `<TabHostProvider>` mounts underneath it, and
+ * reading `useTabHostClient()` there reached the throwing `useTabHostId()` and
+ * crashed the one screen whose entire job is to offer the recovery.
+ *
+ * The session host stops being the answer the moment a caller has no session.
+ * A refused CREATE is exactly that case - the create is what failed, so there
+ * is nothing to be inside - and `use(EpicSessionContext)` returns `null` there.
+ * That resolved no directory entry, so a null client, so an INERT mutation: a
+ * Repair button that spins and does nothing, which is worse than no button.
+ *
+ * So the host travels from whoever knows which machine refused. The banner
+ * passes its session host; a create-refusal surface passes the PLACEMENT host
+ * the create was dispatched on, which is the store that refused and not
+ * necessarily the window's effective host. `null` is honest here and yields a
+ * disabled mutation - callers gate the affordance on
+ * `useHostSupportsMethod(hostId, "host.rebindLocalStore")` anyway.
  */
-export function useLocalStoreRebindMutation(): LocalStoreRebindMutationResult {
-  const sessionHostId = useEpicSessionHostId();
+export function useLocalStoreRebindMutation(
+  hostId: string | null,
+): LocalStoreRebindMutationResult {
   const directory = useHostDirectoryList();
   const entry = useMemo(
     () =>
-      sessionHostId === null
+      hostId === null
         ? null
-        : ((directory.data ?? []).find((e) => e.hostId === sessionHostId) ??
-          null),
-    [directory.data, sessionHostId],
+        : ((directory.data ?? []).find((e) => e.hostId === hostId) ?? null),
+    [directory.data, hostId],
   );
   const client = useHostClientFor(entry);
   const queryClient = useQueryClient();
@@ -67,9 +80,9 @@ export function useLocalStoreRebindMutation(): LocalStoreRebindMutationResult {
       // answered by a store this host no longer uses. The whole host scope is
       // the honest blast radius; a narrower list would silently go stale the
       // next time a resolver starts consulting the local store.
-      // `capturedHostId` rather than a re-read: a host swap between mutate and
-      // settle must not invalidate the incoming host's fresh data.
-      onMutate: () => ({ hostId: sessionHostId }),
+      // CAPTURED here rather than re-read at settle: a host swap between
+      // mutate and settle must not invalidate the incoming host's fresh data.
+      onMutate: () => ({ hostId }),
       onSuccess: (response, _variables, context) => {
         // `not-needed` is a REPAIR BOUNDARY, not a no-op for this window.
         //
@@ -114,7 +127,7 @@ export function useLocalStoreRebindMutation(): LocalStoreRebindMutationResult {
       },
     },
   });
-  const isHostEntryPending = sessionHostId !== null && directory.isPending;
+  const isHostEntryPending = hostId !== null && directory.isPending;
   return useMemo<LocalStoreRebindMutationResult>(
     () => ({ ...mutation, isHostEntryPending }),
     [isHostEntryPending, mutation],

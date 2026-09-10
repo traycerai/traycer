@@ -4,7 +4,10 @@ import type {
   LinkLoginFailureKind,
   LinkLoginSignInResult,
 } from "@/lib/auth/auth-service";
-import { decideDeepLinkRouting } from "@/lib/auth/link-login-deep-link-routing";
+import {
+  decideDeepLinkRouting,
+  linkLoginAlreadySignedInMessage,
+} from "@/lib/auth/link-login-deep-link-routing";
 import { useAuthService } from "@/lib/host";
 import { linkLoginAlreadySignedInToast } from "@/lib/toast/channels";
 import { useRunnerHostOrNull } from "@/providers/use-runner-host";
@@ -98,8 +101,11 @@ export function LinkLoginDeepLinkBridge(): null {
     }
     actedOnDeliveryId.current = delivery.deliveryId;
     if (routing === "already-signed-in") {
+      // The routing is one decision for two statuses; the sentence is not. An
+      // `unverified` session is precisely the one this app could not verify,
+      // so it must not be described as signed in.
       linkLoginAlreadySignedInToast.info(
-        "Already signed in on this phone — nothing to approve.",
+        linkLoginAlreadySignedInMessage(status),
       );
       return;
     }

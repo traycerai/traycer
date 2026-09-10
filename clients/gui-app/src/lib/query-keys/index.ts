@@ -5,6 +5,7 @@ import { uiQueryKeys } from "@/lib/query-keys/ui-query-keys";
 export {
   cloudQueryKeys,
   isCloudEpicTasksQueryKey,
+  isEpicPinReadingQueryKey,
 } from "@/lib/query-keys/cloud-query-keys";
 export {
   hostQueryKeys,
@@ -72,6 +73,7 @@ export const queryKeys = {
   hostUsageSummary: hostQueryKeys.usageSummary,
   hostEpicTaskContexts: hostQueryKeys.epicTaskContexts,
   cloudEpicTasks: cloudQueryKeys.epicTasks,
+  cloudEpicPinReading: cloudQueryKeys.epicPinReading,
   cloudEpicTasksLastKnown: cloudQueryKeys.epicTasksLastKnown,
   cloudEpicTasksLocalFirstRevalidation:
     cloudQueryKeys.epicTasksLocalFirstRevalidation,

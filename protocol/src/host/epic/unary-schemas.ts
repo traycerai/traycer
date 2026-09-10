@@ -328,6 +328,27 @@ export type DeleteEpicRequest = z.infer<typeof deleteEpicRequestSchema>;
 export const deleteEpicResponseSchema = z.object({ success: z.boolean() });
 export type DeleteEpicResponse = z.infer<typeof deleteEpicResponseSchema>;
 
+/**
+ * Durable home for an epic as known by the host local-room registry.
+ * Optional wherever it appears, so released clients and older hosts ignore
+ * absence - and absence is always "this host cannot say", never a default.
+ *
+ * - `local`: unpromoted / mid-promotion; synthesized from the home registry
+ * - `cloud`: the epic's durable copy is the account's
+ *
+ * Support-facing fact: unpromoted (`home: "local"`) epics exist only on this
+ * device's host. Cloud tooling (platform UI, support reports, server
+ * listTasks) cannot see them until promotion flips home to cloud.
+ *
+ * Declared HERE, well above its first use, because three surfaces now carry
+ * it and the earliest (`epic.batchDelete@1.1`'s row) is declared above where
+ * this used to sit - a const referenced before its initializer is a
+ * module-load throw, not a type error. One vocabulary for one fact: do not
+ * spell a second `z.enum(["local","cloud"])` anywhere in this file.
+ */
+export const epicListHomeSchema = z.enum(["local", "cloud"]);
+export type EpicListHome = z.infer<typeof epicListHomeSchema>;
+
 // ─── Batch delete (epic.batchDelete@1.0 wire shape) ──────────────────────────
 // Defined here so hostRpcRegistry["epic.batchDelete"] and
 // cloudDataClient.batchDelete resolve to the same zod instances.
@@ -337,12 +358,49 @@ export const batchDeleteRequestSchema = z.object({
 });
 export type BatchDeleteRequest = z.infer<typeof batchDeleteRequestSchema>;
 
-export const batchDeleteItemResultSchema = z.object({
+// `epic.batchDelete@1.0` row - FROZEN. Its own literal object; the live row
+// below extends it.
+export const batchDeleteItemResultSchemaPre11 = z.object({
   taskId: z.string(),
   success: z.boolean(),
   errorMessage: z.string().optional(),
 });
+export type BatchDeleteItemResultPre11 = z.infer<
+  typeof batchDeleteItemResultSchemaPre11
+>;
+
+/**
+ * Latest row: `@1.1` states the durability `home` each deletion landed in.
+ *
+ * A delete's TOMBSTONE has to be scoped to whatever the deletion was scoped
+ * to, and only the host knows which that was. A cloud-homed epic is deleted
+ * from the account, so every host scope must stop showing it; a local-homed
+ * one exists on one machine, and tombstoning it account-wide would hide a row
+ * that is still there for a sibling host to serve. A `@1.0` response says only
+ * `success`, so the client had no choice but to tombstone in the scope that
+ * ISSUED the delete - correct for local, too narrow for cloud, and the
+ * cloud-homed epic reappears on every other host until its own cache turns
+ * over.
+ *
+ * Optional, per row rather than per response: a batch can mix homes, and the
+ * whole point is to tell them apart. Absence keeps the released reading -
+ * "this host cannot say" - and must not be read as `"cloud"`, because the
+ * account-wide tombstone is the DESTRUCTIVE direction and an old host is
+ * exactly the peer with no evidence to license it.
+ */
+export const batchDeleteItemResultSchema =
+  batchDeleteItemResultSchemaPre11.extend({
+    home: epicListHomeSchema.optional(),
+  });
 export type BatchDeleteItemResult = z.infer<typeof batchDeleteItemResultSchema>;
+
+// `epic.batchDelete@1.0` response - FROZEN over the frozen row above.
+export const batchDeleteResponseSchemaPre11 = z.object({
+  results: z.array(batchDeleteItemResultSchemaPre11),
+});
+export type BatchDeleteResponsePre11 = z.infer<
+  typeof batchDeleteResponseSchemaPre11
+>;
 
 export const batchDeleteResponseSchema = z.object({
   results: z.array(batchDeleteItemResultSchema),
@@ -403,7 +461,12 @@ export const createEpicRequestSchema = z.object({
 });
 export type CreateEpicRequest = z.infer<typeof createEpicRequestSchema>;
 
-export const createEpicResponseSchema = z.object({
+/**
+ * The RELEASED `epic.create@1.0` response. Frozen as its own literal object -
+ * not an alias over the live schema, which would make the freeze move every
+ * time the live line grows.
+ */
+export const createEpicResponseSchemaPre11 = z.object({
   roomInfo: tiptapRoomInfoSchema.nullable(),
   // Full list-shape `TaskLight` for the freshly-created epic so the GUI can
   // ingest it into the cloud-tasks history cache without round-tripping
@@ -420,6 +483,94 @@ export const createEpicResponseSchema = z.object({
   // stream-driven fallback remains armed. Absent / `null` when no chat was
   // folded.
   initialTurnStarted: z.boolean().nullable().optional(),
+});
+export type CreateEpicResponsePre11 = z.infer<
+  typeof createEpicResponseSchemaPre11
+>;
+
+/**
+ * Why a create can be REFUSED rather than failing.
+ *
+ * An enum rather than a free string because the client BRANCHES on it: the
+ * remedy for a local store this host cannot open is a rebind, and offering
+ * that action for some future refusal kind would be worse than offering
+ * nothing.
+ *
+ * WHAT THE PARSER ACTUALLY DOES with a kind it does not know: it REFUSES the
+ * payload. `z.enum` rejects the unknown value, that failure propagates out of
+ * the enclosing `refusal` object, and because a present-but-invalid `refusal`
+ * is not the same as an ABSENT one, the whole `epic.create` response fails to
+ * parse. So a client on this line does NOT fall back to rendering `message`
+ * and `remedy` - it gets a parse error instead of a refusal.
+ *
+ * The additivity that makes this line safe is therefore about the KEY, not
+ * about this enum's future values: a peer below `@1.1` strips `refusal`
+ * entirely, which is the compat this minor was designed for.
+ *
+ * BUT THE STRIP IS ONLY SAFE BECAUSE THE EMITTER GATES. Read on its own,
+ * "an old peer strips `refusal`" sounds like graceful degradation; it is the
+ * opposite. Strip the key from a refusal response and what is left is
+ * `{ roomInfo: null }` - which is not a refusal at all, it is a SUCCESS shape
+ * carrying no room, and a legacy client reads it as one. So the host must
+ * emit `refusal` only when the negotiated minor can carry it
+ * (`ctx.schemaVersion.minor >= EPIC_CREATE_REFUSAL_MINOR` in
+ * `epic-create-resolver.ts`) and THROW for every older peer, which is the
+ * honest error that peer already knows how to show. That gate is load-bearing,
+ * not defensive: removing it converts a refusal into a silent success on
+ * exactly the clients that cannot understand it.
+ *
+ * Adding a refusal KIND is a separate question and costs
+ * its own minor, since every client already on `@1.1` rejects the new value.
+ * If that becomes the wrong trade, the deliberate fix is to parse `kind` as a
+ * bounded string and expose a `isKnownEpicCreateRefusalKind` guard so an
+ * unrecognised kind degrades to text - a shape change, not a comment change.
+ */
+export const epicCreateRefusalKindSchema = z.enum(["local-store-unavailable"]);
+export type EpicCreateRefusalKind = z.infer<typeof epicCreateRefusalKindSchema>;
+
+/**
+ * A create the host declined to attempt, carried as DATA.
+ *
+ * The host already knew all three of these facts and was flattening them into
+ * a thrown `RPC_ERROR` string - `LOCAL_STORE_UNAVAILABLE` is not an
+ * `RPC_ERROR_CODES` member, so the client could not recover the remedy from
+ * the prose and could only show the sentence. The open path has carried the
+ * same fact as data for a while (`SnapshotFetchError.localStoreRemedy`), and
+ * `host.rebindLocalStore` already answers with a `status: "refused"` arm
+ * carrying `message` + `remedy`; this is that shape, one method over.
+ */
+export const epicCreateRefusalSchema = z.object({
+  kind: epicCreateRefusalKindSchema,
+  /** Human-readable statement of what happened. Safe to show verbatim. */
+  message: z.string().min(1),
+  /** What the user can DO about it, e.g. stop the other host and rebind. */
+  remedy: z.string().min(1),
+});
+export type EpicCreateRefusal = z.infer<typeof epicCreateRefusalSchema>;
+
+/**
+ * `epic.create@1.1` - the released `@1.0` body plus an optional `refusal`.
+ *
+ * ADDITIVE, deliberately, rather than the discriminated `status` union
+ * `host.rebindLocalStore` uses. That union is the nicer type, but it is a
+ * response SHAPE change on a method that is on `RELEASED_FLOOR_METHOD_NAMES`,
+ * so it would need a new MAJOR - and a `2 -> 1` downgrade could not represent
+ * a refusal at all, turning a legacy peer's honest error into a confusing
+ * downgrade failure. An optional key keeps the whole thing inside minor
+ * `@1.1`, where a `@1.0` peer's frozen schema simply strips it.
+ *
+ * Stripping is why the HOST gates emission on the negotiated minor instead of
+ * relying on the parse: a stripped refusal would reach a `@1.0` client as
+ * `{ roomInfo: null }`, i.e. a SUCCESSFUL create with no room - the one
+ * reading of this payload that is a lie. Below `@1.1` the host still throws,
+ * so a legacy peer keeps exactly today's error and never sees this key.
+ *
+ * `refusal` present and `roomInfo` non-null is therefore not a state the host
+ * ever emits; the two are mutually exclusive by construction at the emitter,
+ * which is the cost of staying additive.
+ */
+export const createEpicResponseSchema = createEpicResponseSchemaPre11.extend({
+  refusal: epicCreateRefusalSchema.optional(),
 });
 export type CreateEpicResponse = z.infer<typeof createEpicResponseSchema>;
 
@@ -545,21 +696,6 @@ export const listTaskLightSchemaPre14 = listTaskLightSchemaPre13.extend({
   chatHostIds: z.array(z.string()).optional(),
 });
 export type ListTaskLightPre14 = z.infer<typeof listTaskLightSchemaPre14>;
-
-/**
- * Durable home for an epic as known by the host local-room registry.
- * Present only on host-merged `epic.listTasks` rows (never on pure cloud
- * payloads). Optional so released clients and older hosts ignore absence.
- *
- * - `local`: unpromoted / mid-promotion; synthesized from the home registry
- * - `cloud`: reserved for future host-side tagging of cloud-homed rows
- *
- * Support-facing fact: unpromoted (`home: "local"`) epics exist only on this
- * device's host. Cloud tooling (platform UI, support reports, server
- * listTasks) cannot see them until promotion flips home to cloud.
- */
-export const epicListHomeSchema = z.enum(["local", "cloud"]);
-export type EpicListHome = z.infer<typeof epicListHomeSchema>;
 
 // `epic.listTasks@1.4` list row: @1.3's chat-host dimension plus the optional
 // durability home.
@@ -829,17 +965,44 @@ export const listTasksResponseSchema = listTasksResponseSchemaPre16.extend({
 });
 export type ListTasksResponse = z.infer<typeof listTasksResponseSchema>;
 
-// ─── Personal history pinning (epic.setPinned@1.0) ──────────────────────────
+// ─── Personal history pinning (epic.setPinned@1.0, @1.1) ────────────────────
 
+// Unchanged across the line: `@1.1` grows only the RESPONSE.
 export const setEpicPinnedRequestSchema = z.object({
   epicId: z.string(),
   pinned: z.boolean(),
 });
 export type SetEpicPinnedRequest = z.infer<typeof setEpicPinnedRequestSchema>;
 
-export const setEpicPinnedResponseSchema = z.object({
+// `epic.setPinned@1.0` response - FROZEN. Written as its own literal object
+// rather than aliasing the live schema below: an alias over a moving target is
+// not a freeze, and this file has already been bitten by one
+// (see `listTaskLightSchemaPre16`'s note). Adding a key here is editing a
+// released line, and should read that way at the call site.
+export const setEpicPinnedResponseSchemaPre11 = z.object({
   pinned: z.boolean(),
 });
+export type SetEpicPinnedResponsePre11 = z.infer<
+  typeof setEpicPinnedResponseSchemaPre11
+>;
+
+// Latest `epic.setPinned` response: `@1.1` adds the durability `home` of the
+// epic whose pin was just written.
+//
+// The pin is a PERSONAL preference, and where it is stored follows the epic's
+// home: a cloud-homed pin is an account fact that every host sees, while a
+// local-homed pin lives on the one machine that holds the epic. A `@1.0`
+// response cannot state which, so a client had to assume "cloud" - which is
+// why the released pin control refuses a local-homed row outright rather than
+// pinning it into a scope it cannot name.
+//
+// Optional, so an older HOST on this line simply omits it. Absence keeps its
+// released reading, "this host cannot say", and must never be read as
+// `"cloud"`: the whole point of the key is that the assumption was the defect.
+export const setEpicPinnedResponseSchema =
+  setEpicPinnedResponseSchemaPre11.extend({
+    home: epicListHomeSchema.optional(),
+  });
 export type SetEpicPinnedResponse = z.infer<typeof setEpicPinnedResponseSchema>;
 
 // ─── Personal task view recency (epic.recordViewed@1.0) ─────────────────────

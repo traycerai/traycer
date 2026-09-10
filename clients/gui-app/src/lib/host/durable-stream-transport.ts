@@ -86,6 +86,15 @@ export function openDurableStreamTransport(params: {
    */
   readonly subscribeBearerRotation: (onRotation: () => void) => () => void;
   /**
+   * Subscribes to in-place CLOUD-VERDICT changes on the live request context.
+   *
+   * Separate from `subscribeBearerRotation` because the events are separate:
+   * a demotion rotates and withdraws at once, but the promotion back asserts a
+   * verdict on a bearer that never moved, so a transport wired only to rotation
+   * would stay refused by the host until something unrelated forced a redial.
+   */
+  readonly subscribeCloudVerdictChange: (onChange: () => void) => () => void;
+  /**
    * Subscribes to host-directory changes for the bound host, returning a
    * disposer. The callback fires on ANY directory change; this module filters it
    * down to a genuine dialable-endpoint move before re-dialing.
@@ -135,6 +144,11 @@ export function openDurableStreamTransport(params: {
     disposers.push(
       params.subscribeBearerRotation(() => {
         wsStreamClient.notifyBearerRotated();
+      }),
+    );
+    disposers.push(
+      params.subscribeCloudVerdictChange(() => {
+        wsStreamClient.notifyCloudVerdictChanged();
       }),
     );
     disposers.push(
