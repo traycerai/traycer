@@ -51,6 +51,7 @@ import {
   decodeMuxFrame,
   encodeMuxFrame,
   SESSION_CAPABILITY_BODY_COMPRESSION,
+  SESSION_CAPABILITY_CLOUD_VERDICT_UPDATE,
   type EncodeMuxFrameInput,
   type MuxFrame,
   type MuxFrameTypeValue,
@@ -385,6 +386,13 @@ class FakeRelayHost {
    * host already condemned with a FATAL.
    */
   readonly droppedTombstonedFrames: { streamId: number; type: number }[] = [];
+  /**
+   * Every `cloudAuthorized` value from a CLOUD_VERDICT_UPDATE control frame
+   * the client sent, decoded post-reassembly (the raw `clientFrames` log
+   * carries `json: null` for a chunked body - this is the actual payload,
+   * the way `subscribeParams` is for SUBSCRIBE).
+   */
+  readonly cloudVerdictUpdates: boolean[] = [];
   /** Unexpected harness-side failures; asserted empty by the tests. */
   readonly errors: unknown[] = [];
   decideOpen: (bearer: string, openIndex: number) => OpenDecision = () => ({
@@ -680,6 +688,13 @@ class FakeRelayHost {
       this.subscribeParams.push(message.json?.params);
       this.subscribeSchemaVersions.push(message.json?.schemaVersion);
       this.subscribeStreamIds.push(message.streamId);
+      return;
+    }
+    if (message.type === MuxFrameType.CLOUD_VERDICT_UPDATE) {
+      const json = message.json;
+      if (json !== null && typeof json.cloudAuthorized === "boolean") {
+        this.cloudVerdictUpdates.push(json.cloudAuthorized);
+      }
       return;
     }
     if (message.type === MuxFrameType.CREDIT) {
@@ -7969,6 +7984,103 @@ describe("RemoteSession outbound seq continuity across a client-detected inbound
         expect(relay.errors).toEqual([]);
       } finally {
         warnSpy.mockRestore();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+/**
+ * `handleOpenAck`'s doc comment (remote-session.ts:2680-2697) names the
+ * hazard: re-opening a subscription is what makes the host construct and
+ * start a resolver, under whatever verdict the `open` payload asserted. A
+ * verdict that moves during the handshake window (after `open` is on the
+ * wire, before `openAck` arrives) had its own `notifyCloudVerdictChanged`
+ * push dropped by the `phase !== "ready"` gate, so the reconciliation has to
+ * run BEFORE the restore loop, not after it - a correction that rides the
+ * same batch as the restore arrives once every multiplexed stream has
+ * already been told to start.
+ *
+ * The finding is about ORDER, not existence: a pin that only asserts "a
+ * CLOUD_VERDICT_UPDATE frame went out" would stay green even if the order
+ * were flipped back to the wrong cut (`ae907dff6`'s own commit message
+ * describes exactly that wrong cut on this carrier). This pin asserts the
+ * ordering directly.
+ */
+describe("RemoteSession cloud verdict wire (lane 5, F1: opening-phase drop, mux carrier)", () => {
+  it(
+    "a verdict demotion landing during the opening phase reconciles BEFORE the restored subscription's SUBSCRIBE frame",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      relay.openAckCapabilities = [SESSION_CAPABILITY_CLOUD_VERDICT_UPDATE];
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const verdict = { value: true };
+      // Demote from inside `decideOpen`: by the time the relay decides how to
+      // answer, the client's `open` frame (carrying the pre-demotion `true`)
+      // is already on the wire - this is the opening-phase window itself, not
+      // a demotion before or after it.
+      relay.decideOpen = () => {
+        verdict.value = false;
+        return { kind: "ack" };
+      };
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+        cloudAuthorized: () => verdict.value,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      void stream;
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        const types = relay.clientFrames.map((frame) => frame.type);
+        const verdictIndex = types.indexOf(MuxFrameType.CLOUD_VERDICT_UPDATE);
+        const subscribeIndex = types.indexOf(MuxFrameType.SUBSCRIBE);
+        expect(verdictIndex).toBeGreaterThanOrEqual(0);
+        expect(verdictIndex).toBeLessThan(subscribeIndex);
+        expect(relay.cloudVerdictUpdates).toEqual([false]);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "positive control: an unchanged verdict sends no reconciliation frame at all",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      relay.openAckCapabilities = [SESSION_CAPABILITY_CLOUD_VERDICT_UPDATE];
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+        cloudAuthorized: () => true,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      void stream;
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        const types = relay.clientFrames.map((frame) => frame.type);
+        expect(types).not.toContain(MuxFrameType.CLOUD_VERDICT_UPDATE);
+        expect(relay.cloudVerdictUpdates).toEqual([]);
+        expect(relay.errors).toEqual([]);
+      } finally {
         session.close();
       }
     },
