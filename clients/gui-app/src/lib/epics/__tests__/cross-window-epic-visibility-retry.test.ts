@@ -551,3 +551,64 @@ describe("installCrossWindowEpicVisibility - failed-snapshot retry (fixup 2, cla
     expect(isEpicVisibleInAnotherWindow("epic-in-window-b")).toBe(false);
   });
 });
+
+// ── transcript-record-fingerprint-memo Fix 2: the report leg withdraws this
+// window's claim while the document is hidden ───────────────────────────────
+//
+// `reportableEpicIds` (`cross-window-epic-visibility.ts`) is
+// `isDocumentVisible() ? visibleEpicIds() : []`, read fresh inside the retry's
+// own `attempt()` closure - same "read at execution time, never a captured
+// array" discipline as `visibleEpicIds()` above, now composed with document
+// visibility. `document-visibility.ts` is real here (only
+// `surface-host-opened-tab` is mocked in this file), so
+// `document.visibilityState` is stubbed directly and driven through a real
+// `visibilitychange` dispatch - the same path production's
+// `subscribeDocumentVisibility(report)` listens on.
+function setDocumentVisibilityState(state: "visible" | "hidden"): void {
+  Object.defineProperty(document, "visibilityState", {
+    configurable: true,
+    value: state,
+  });
+  document.dispatchEvent(new Event("visibilitychange"));
+}
+
+describe("installCrossWindowEpicVisibility - document visibility gates the report (transcript-record-fingerprint-memo Fix 2)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    surfaceHostState.visibleIds = [];
+    surfaceHostState.listener = null;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    setDocumentVisibilityState("visible");
+  });
+
+  it("reports the empty set while the document is hidden, and the real set again once it is visible - read at report time, not a captured array", async () => {
+    surfaceHostState.visibleIds = ["epic-a", "epic-b"];
+    const { channel, reportCalls } = controllableEpicVisibilityChannel();
+    const uninstall = installCrossWindowEpicVisibility(
+      fakeDesktopWindowsBridge("window-a", channel),
+    );
+    try {
+      // The install-time push, document visible.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(reportCalls.at(-1)).toEqual(["epic-a", "epic-b"]);
+
+      setDocumentVisibilityState("hidden");
+      // Synchronous: `report()` calls `channel.report` inline from inside the
+      // `visibilitychange` listener, no await needed to observe it.
+      expect(reportCalls.at(-1)).toEqual([]);
+
+      // The visible set changes WHILE hidden - proves the empty report was a
+      // live "document hidden" gate, not a snapshot of the old set taken at
+      // the moment of hiding.
+      surfaceHostState.visibleIds = ["epic-a", "epic-b", "epic-c"];
+
+      setDocumentVisibilityState("visible");
+      expect(reportCalls.at(-1)).toEqual(["epic-a", "epic-b", "epic-c"]);
+    } finally {
+      uninstall();
+    }
+  });
+});

@@ -46,6 +46,10 @@ import {
   subscribeEpicSurfaceVisibility,
   visibleEpicIds,
 } from "@/lib/browser-view/tiles/surface-host-opened-tab";
+import {
+  isDocumentVisible,
+  subscribeDocumentVisibility,
+} from "@/lib/dom/document-visibility";
 import { appLogger } from "@/lib/logger";
 
 /**
@@ -212,11 +216,22 @@ export function installCrossWindowEpicVisibility(
   // when one of THEM changes. A window B sitting still on an Epic is exactly
   // the case where nothing ever arrives, so a dropped snapshot leaves window A
   // parking an Epic that is on screen for as long as B holds still.
+  // What this window CLAIMS, which is not the same as what it has placed. A
+  // minimized or fully occluded window still has a front pane per
+  // `visibleEpicIds()` - that set is surface placement inside this renderer and
+  // cannot see the window - so reporting it unconditionally left every other
+  // window believing these Epics were on screen here, and holding off parking
+  // them, for as long as this one stayed hidden. A hidden window claims
+  // nothing.
+  //
+  // Both halves are read HERE, at attempt time, for the same reason the ids
+  // already were: a retry that fires after the window was minimized (or
+  // restored) must send what is true when it sends, not what was true when it
+  // was armed.
+  const reportableEpicIds = (): readonly string[] =>
+    isDocumentVisible() ? visibleEpicIds() : [];
   const reportLeg = createBoundedRetry("report", () =>
-    // Re-read per attempt rather than resending a captured array: by the time a
-    // retry fires, what this window shows may have changed, and the truth at
-    // send time is the only thing worth sending.
-    channel.report(visibleEpicIds()),
+    channel.report(reportableEpicIds()),
   );
   // Behind a call rather than read inline, and not for tidiness: TypeScript
   // narrows both flags to `false` at the first guard and does NOT widen that
@@ -250,6 +265,12 @@ export function installCrossWindowEpicVisibility(
     publish(foreignVisibleEpics(entries, ownWindowId));
   });
   const unsubscribeLocal = subscribeEpicSurfaceVisibility(report);
+  // The window hiding or returning changes what we claim without changing what
+  // we have placed, so `subscribeEpicSurfaceVisibility` never fires for it. Its
+  // edge is the only thing that withdraws the claim on the way out and
+  // republishes it on the way back; without this the empty set would be sent
+  // only if some pane happened to move while hidden.
+  const unsubscribeDocument = subscribeDocumentVisibility(report);
   // The set this window is showing at install time, which no edge will
   // announce: a restored window mounts its surfaces before this runs.
   report();
@@ -266,6 +287,7 @@ export function installCrossWindowEpicVisibility(
     reportLeg.cancel();
     snapshotLeg.cancel();
     unsubscribeLocal();
+    unsubscribeDocument();
     subscription.dispose();
     publish(new Set<string>());
   };

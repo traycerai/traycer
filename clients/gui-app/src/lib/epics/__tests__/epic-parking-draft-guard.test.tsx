@@ -139,6 +139,7 @@ import {
   CommentComposer,
   type CommentComposerHandle,
 } from "@/components/comments/comment-composer";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 
 const setupWorkerFactory = getEpicRuntimeWorkerFactoryOverride();
 let workerFactoryBeforeTest: (() => RuntimeWorkerLike) | null = null;
@@ -597,6 +598,201 @@ describe("renderer parking draft-guard pins", () => {
       );
     });
     expect(isEpicParked(EPIC_ID)).toBe(true);
+  });
+});
+
+// ── transcript-record-fingerprint-memo P1: emptying a SAVED comment must not
+// be treated as "nothing to lose" ───────────────────────────────────────────
+//
+// `CommentComposer` distinguishes a NEW composer (`initialContent === null`)
+// from one editing an EXISTING comment. For a new composer, `hasUserEdits &&
+// !isEmpty` is correct: emptying it back out really does leave nothing to
+// lose. For an edit composer, emptying the doc IS the edit - the deletion
+// exists only in the editor until Submit, and a park that unmounts it remounts
+// holding `initialContent` again, silently restoring the saved comment over
+// the user's in-progress deletion. `isEditingSavedComment` is what makes the
+// veto hold through `isEmpty` for that composer while still releasing a
+// pristine (never-touched) one and a genuinely-abandoned new composer.
+//
+// Mirrors `Harness` above but with ONE composer whose `initialContent` is
+// caller-supplied, so these arms can open an EDIT composer (non-null
+// `initialContent`) as well as the NEW-composer case the existing "cleared to
+// empty" pin above already covers.
+function EditHarness(props: {
+  readonly epicId: string;
+  readonly initialContent: JsonContent | null;
+  readonly refA: Ref<CommentComposerHandle | null>;
+  readonly queryClient: QueryClient;
+}) {
+  const { epicId, initialContent, refA, queryClient } = props;
+  return (
+    <QueryClientProvider client={queryClient}>
+      <EpicSessionProvider epicId={epicId} tabId={epicId}>
+        <EpicSessionGate fallback={null}>
+          <CommentComposer
+            epicId={epicId}
+            hostClient={null}
+            initialContent={initialContent}
+            placeholder="Edit reply"
+            focusOnMount={false}
+            submitLabel="Save"
+            onSubmit={() => undefined}
+            onCancel={null}
+            className={undefined}
+            ref={refA}
+          />
+        </EpicSessionGate>
+      </EpicSessionProvider>
+    </QueryClientProvider>
+  );
+}
+
+const SAVED_COMMENT_CONTENT: JsonContent = {
+  type: "doc",
+  content: [
+    {
+      type: "paragraph",
+      content: [{ type: "text", text: "the saved comment" }],
+    },
+  ],
+};
+
+describe("renderer parking draft-guard pins - editing a saved comment (P1)", () => {
+  beforeEach(() => {
+    workerFactoryBeforeTest = getEpicRuntimeWorkerFactoryOverride();
+    window.localStorage.clear();
+    hostState.id = "host-a";
+    hostState.attached = true;
+    hostBindingRef.value = null;
+    sessionHostRows.byHostId.clear();
+    sessionHostRows.userId = null;
+    sessionHostClients.byHostId.clear();
+    resetHostConnectionRegistryForTest();
+    navigateMock.mockClear();
+    resetCanvasStore();
+    __getOpenEpicRegistryForTests().disposeAll();
+    resetFakeDurableStreamTransports();
+    setDesktopEpicOwnershipBridge(null);
+    resetAuth("signed-in", "alice@example.com");
+    reprobeCallbacks.callbacks.length = 0;
+    __setAgentActivityPlaneAnsweringForTests();
+    installStreamFactory(() => noopStreamFactory());
+  });
+
+  afterEach(() => {
+    cleanup();
+    for (const epicId of [
+      "epic-edit-emptied",
+      "epic-edit-pristine",
+      "epic-new-typed-then-emptied",
+    ]) {
+      useEpicCanvasStore.getState().closeTab(epicId);
+    }
+    __syncEpicParkingOpenTabsForTests();
+    __getOpenEpicRegistryForTests().disposeAll();
+    __setEpicRuntimeWorkerFactoryForTests(workerFactoryBeforeTest);
+    resetCanvasStore();
+    resetAuth("signed-out", null);
+    hostBindingRef.value = null;
+    resetHostConnectionRegistryForTest();
+    setDesktopEpicOwnershipBridge(null);
+    __resetEpicParkingForTests();
+    __resetEpicDraftGuardForTests();
+    __resetAgentActivityStoreForTests();
+    vi.useRealTimers();
+  });
+
+  it("editing a saved comment, deleting all its text does not park the epic and the composer survives", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ delay: null });
+    const EPIC_ID = "epic-edit-emptied";
+    const refA = createRef<CommentComposerHandle | null>();
+    const queryClient = newQueryClient();
+
+    render(
+      <EditHarness
+        epicId={EPIC_ID}
+        initialContent={SAVED_COMMENT_CONTENT}
+        refA={refA}
+        queryClient={queryClient}
+      />,
+    );
+    await openHiddenTabOnceReady(EPIC_ID, "Edit reply");
+
+    const editor = screen.getByLabelText("Edit reply");
+    expect(editor.textContent).toContain("the saved comment");
+    await user.click(editor);
+    await user.keyboard("{Control>}a{/Control}{Backspace}");
+    expect(screen.getByLabelText("Edit reply").textContent).toBe("");
+
+    // Well past the window - the veto must hold, not merely delay it.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(PARK_HIDDEN_EPIC_AFTER_MS + 60_000);
+    });
+
+    expect(isEpicParked(EPIC_ID)).toBe(false);
+    expect(__getOpenEpicRegistryForTests().get(EPIC_ID)).not.toBeNull();
+    // The composer survived in place - if a park had unmounted and remounted
+    // it, this would read back the saved comment's text instead of empty.
+    expect(screen.getByLabelText("Edit reply").textContent).toBe("");
+  });
+
+  it("a NEW comment typed then deleted back to empty still parks (not any touched composer vetoes forever)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ delay: null });
+    const EPIC_ID = "epic-new-typed-then-emptied";
+    const refA = createRef<CommentComposerHandle | null>();
+    const queryClient = newQueryClient();
+
+    render(
+      <EditHarness
+        epicId={EPIC_ID}
+        initialContent={null}
+        refA={refA}
+        queryClient={queryClient}
+      />,
+    );
+    await openHiddenTabOnceReady(EPIC_ID, "Edit reply");
+
+    const editor = screen.getByLabelText("Edit reply");
+    await user.click(editor);
+    await user.type(editor, "draft that gets abandoned");
+    expect(editor.textContent).toContain("draft that gets abandoned");
+    await user.keyboard("{Control>}a{/Control}{Backspace}");
+    expect(screen.getByLabelText("Edit reply").textContent).toBe("");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(PARK_HIDDEN_EPIC_AFTER_MS);
+    });
+
+    expect(isEpicParked(EPIC_ID)).toBe(true);
+    expect(__getOpenEpicRegistryForTests().get(EPIC_ID)).toBeNull();
+  });
+
+  it("a pristine edit composer (opened, never touched) parks like any other idle epic", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const EPIC_ID = "epic-edit-pristine";
+    const refA = createRef<CommentComposerHandle | null>();
+    const queryClient = newQueryClient();
+
+    render(
+      <EditHarness
+        epicId={EPIC_ID}
+        initialContent={SAVED_COMMENT_CONTENT}
+        refA={refA}
+        queryClient={queryClient}
+      />,
+    );
+    await openHiddenTabOnceReady(EPIC_ID, "Edit reply");
+
+    // Never focused, never typed into - `hasUserEdits` stays false, so the
+    // `isEditingSavedComment` half of the gate never even gets consulted.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(PARK_HIDDEN_EPIC_AFTER_MS);
+    });
+
+    expect(isEpicParked(EPIC_ID)).toBe(true);
+    expect(__getOpenEpicRegistryForTests().get(EPIC_ID)).toBeNull();
   });
 });
 

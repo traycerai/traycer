@@ -137,11 +137,23 @@ export function CommentComposer(props: CommentComposerProps) {
   // The park veto (`lib/epics/epic-draft-guard.ts`). This editor is the only
   // place its text exists until Submit fires the host RPC, and every one of
   // this composer's mount points sits inside the subtree a park unmounts - the
-  // sidebar's thread cards, the collab tile's floating draft popover. Both
-  // clauses are load-bearing: without `hasUserEdits` a pristine edit composer
-  // would veto forever, and without `!isEmpty` an editor the user emptied
-  // would too, though there is no longer any text to lose.
-  useEpicDraftGuard(epicId, hasUserEdits && !isEmpty);
+  // sidebar's thread cards, the collab tile's floating draft popover.
+  //
+  // EMPTY IS NOT THE SAME FACT IN THE TWO COMPOSERS, and treating it as one
+  // discarded work. For a NEW comment, emptying really does leave nothing to
+  // lose, so the guard releases. For an EDIT composer, emptying IS the edit:
+  // the deletion exists only here, and a park that unmounts it remounts the
+  // editor holding `initialContent` again - the saved comment the user was in
+  // the middle of clearing or replacing, silently restored over their work.
+  //
+  // So `hasUserEdits` gates both (a pristine edit composer holds nothing), and
+  // only a new composer that has returned to its opening empty state is
+  // released.
+  const isEditingSavedComment = initialContent !== null;
+  useEpicDraftGuard(
+    epicId,
+    hasUserEdits && (isEditingSavedComment || !isEmpty),
+  );
 
   // Stable refs so closures inside `useEditor`'s deps-`[]` capture do not
   // see a stale callback once the parent re-renders with new handlers.

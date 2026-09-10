@@ -110,6 +110,24 @@ export function subscribeEpicSurfaceVisibility(
   };
 }
 
+/**
+ * This set is surface PLACEMENT within this renderer - which pane is in front -
+ * and deliberately NOT "is the Epic on screen".
+ *
+ * Window visibility is intentionally not folded in here, though two consumers
+ * want the conjunction, because a third reads this set for something else
+ * entirely: {@link hostOpenedTabSuppressReason} answers `"pip-epic-hidden"`
+ * from it, and its caller treats any reason as a HANDLED outcome and does not
+ * retry. Fold minimization into this set and an agent that opens a browser tab
+ * while the window is down has that tab silently dropped, where today it is
+ * waiting as a float when the user comes back.
+ *
+ * So the conjunction is composed at the consumers that want it, each reading
+ * `lib/dom/document-visibility.ts` alongside this set:
+ * `lib/epics/epic-parking.ts` (whose hidden-window clock must start when the
+ * window goes down) and `lib/epics/cross-window-epic-visibility.ts` (which must
+ * stop claiming these Epics to other windows while hidden).
+ */
 export function setEpicSurfaceVisibility(
   epicId: string,
   viewTabId: string,

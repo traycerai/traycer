@@ -46,6 +46,9 @@
  * panes, and `lib/epics/cross-window-epic-visibility.ts` for every other
  * window's. Both are keyed by epic and already visible-if-any, so this module
  * is their roll-up plus a clock, not a third source of truth about visibility.
+ * The one thing neither source can see is the WINDOW: a pane in front of a
+ * minimised window is placed, not on screen, so this window's own arm is also
+ * gated on `lib/dom/document-visibility.ts` (see `isEpicVisibleAnywhere`).
  *
  * The cross-window arm is a real channel (main-process state fed by each
  * renderer's own roll-up over IPC), deliberately NOT `ownership.snapshot()`:
@@ -109,6 +112,10 @@ import {
   isEpicSurfaceVisible,
   subscribeEpicSurfaceVisibility,
 } from "@/lib/browser-view/tiles/surface-host-opened-tab";
+import {
+  isDocumentVisible,
+  subscribeDocumentVisibility,
+} from "@/lib/dom/document-visibility";
 import { subscribeEpicDraftGuard } from "@/lib/epics/epic-draft-guard";
 import {
   isEpicVisibleInAnotherWindow,
@@ -171,9 +178,25 @@ function notify(epicId: string): void {
  * Decision C6's visible-if-any, over both windows and panes. Either arm alone
  * is a partial answer: the local registry cannot see another renderer, and the
  * cross-window map deliberately excludes this window's own row.
+ *
+ * The document gate binds THIS WINDOW'S arm only, and the placement of that
+ * `&&` is the whole point. `isEpicSurfaceVisible` answers "which pane is in
+ * front" and cannot see the window, so a minimized app's front pane claims to
+ * be on screen forever and the clock below never starts. But a window that
+ * cannot see itself still cannot speak for ANOTHER one: gating the whole
+ * expression would park an epic a second window has open on screen, which is
+ * exactly what C6's second arm exists to prevent. So: hidden window, no claim
+ * of our own; other windows keep theirs.
+ *
+ * The two halves stay consistent because the same conjunction governs what we
+ * REPORT - `cross-window-epic-visibility.ts` sends the empty set while hidden -
+ * so a hidden window withdraws its claim here and there in one move.
  */
 function isEpicVisibleAnywhere(epicId: string): boolean {
-  return isEpicSurfaceVisible(epicId) || isEpicVisibleInAnotherWindow(epicId);
+  return (
+    (isDocumentVisible() && isEpicSurfaceVisible(epicId)) ||
+    isEpicVisibleInAnotherWindow(epicId)
+  );
 }
 
 function cancelParkWindow(entry: EpicParkingEntry): void {
@@ -484,6 +507,18 @@ export function __resetEpicParkingForTests(): void {
 
 subscribeEpicSurfaceVisibility(epicVisibilityChanged);
 subscribeCrossWindowEpicVisibility(epicVisibilityChanged);
+// The window itself hiding or returning. FAN-OUT over every entry, unlike the
+// two above, because this edge carries no epic: minimizing withdraws this
+// window's claim to all of them at once, and restoring returns it. Routing it
+// through the same per-epic handler is what makes a document-hidden park
+// indistinguishable from a tab-hidden one - same arming, same cancel on the
+// way back (`unpark` clears a pending window before anything else), and the
+// same seeded reopen afterwards, rather than a second path to keep in step.
+subscribeDocumentVisibility(() => {
+  for (const epicId of Array.from(entries.keys())) {
+    epicVisibilityChanged(epicId);
+  }
+});
 // The THIRD input to `canPark` that can settle on its own, and the one with no
 // other route back here. `waitForEligibility` listens to the open-epic
 // registry, whose eligibility key is emitted per SESSION - so an epic with no

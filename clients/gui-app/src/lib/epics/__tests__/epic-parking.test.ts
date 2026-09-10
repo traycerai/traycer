@@ -1315,6 +1315,138 @@ describe("epic-parking - B2: cross-window visibility", () => {
   });
 });
 
+// ── transcript-record-fingerprint-memo Fix 2: window (document) visibility
+// joins the parking signal ───────────────────────────────────────────────────
+//
+// `isEpicVisibleAnywhere` (`lib/epics/epic-parking.ts`) now reads
+// `isDocumentVisible() && isEpicSurfaceVisible(epicId)` for THIS window's arm,
+// ORed with the cross-window arm unchanged. Before this, a minimized window or
+// a backgrounded browser tab left its front pane reporting itself visible
+// forever - `activity.visible` is pane PLACEMENT and cannot see the window -
+// so the park clock never started. These pins drive the real
+// `document.visibilityState` + a real `visibilitychange` dispatch
+// (`lib/dom/document-visibility.ts` is not mocked), exactly the path
+// production takes.
+
+function setDocumentVisibilityState(state: "visible" | "hidden"): void {
+  Object.defineProperty(document, "visibilityState", {
+    configurable: true,
+    value: state,
+  });
+  document.dispatchEvent(new Event("visibilitychange"));
+}
+
+describe("epic-parking - document (window) visibility (transcript-record-fingerprint-memo Fix 2)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    __resetEpicParkingForTests();
+    resetCanvasStore();
+    vi.useRealTimers();
+    setDocumentVisibilityState("visible");
+  });
+
+  it("a pane placed but the document hidden parks after PARK_HIDDEN_EPIC_AFTER_MS", () => {
+    const EPIC = "epic-park-document-hidden";
+    const TAB = "tab-park-document-hidden";
+    setDocumentVisibilityState("hidden");
+    openEpicTab(TAB, EPIC);
+    try {
+      setEpicSurfaceVisibility(EPIC, "view-doc-hidden", true);
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS);
+      expect(isEpicParked(EPIC)).toBe(true);
+    } finally {
+      closeEpicTab(TAB);
+    }
+  });
+
+  it("does not park while both the pane and the document are visible", () => {
+    const EPIC = "epic-no-park-document-visible";
+    const TAB = "tab-no-park-document-visible";
+    openEpicTab(TAB, EPIC);
+    try {
+      setEpicSurfaceVisibility(EPIC, "view-doc-visible", true);
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS);
+      expect(isEpicParked(EPIC)).toBe(false);
+    } finally {
+      closeEpicTab(TAB);
+    }
+  });
+
+  it("hiding the document then showing it again before the mark cancels the park, and the clock restarts cleanly on the next hide", () => {
+    const EPIC = "epic-park-document-cancel-restart";
+    const TAB = "tab-park-document-cancel-restart";
+    openEpicTab(TAB, EPIC);
+    try {
+      setEpicSurfaceVisibility(EPIC, "view-doc-cancel", true);
+
+      setDocumentVisibilityState("hidden");
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS - 1_000);
+      expect(isEpicParked(EPIC)).toBe(false);
+
+      // Visible again before the mark - must cancel the pending window, not
+      // merely pause it.
+      setDocumentVisibilityState("visible");
+      vi.advanceTimersByTime(60_000);
+      expect(isEpicParked(EPIC)).toBe(false);
+
+      // The next hide starts a FRESH window. If the cancel above had not
+      // actually happened (only paused), this would already be past the
+      // original deadline and park on the very next tick instead of needing
+      // the full window again.
+      setDocumentVisibilityState("hidden");
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS - 1_000);
+      expect(isEpicParked(EPIC)).toBe(false);
+      vi.advanceTimersByTime(1_000);
+      expect(isEpicParked(EPIC)).toBe(true);
+    } finally {
+      closeEpicTab(TAB);
+    }
+  });
+});
+
+describe("epic-parking - document hidden but the epic is visible in another window (C6 preservation)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    __resetEpicParkingForTests();
+    __resetCrossWindowEpicVisibilityForTests();
+    resetCanvasStore();
+    vi.useRealTimers();
+    setDocumentVisibilityState("visible");
+  });
+
+  // The failure message states the regression by name: `isEpicVisibleAnywhere`
+  // ORs the cross-window arm with `isDocumentVisible() && isEpicSurfaceVisible`
+  // rather than gating the whole expression on this window's document, exactly
+  // so a hidden window cannot un-surface an epic a SECOND window is showing.
+  it("does not park an epic another window is showing, even though this window's document is hidden (folding documentVisible across the whole OR would park a still-visible-elsewhere epic)", async () => {
+    const EPIC = "epic-doc-hidden-visible-elsewhere";
+    const TAB = "tab-doc-hidden-visible-elsewhere";
+    setDocumentVisibilityState("hidden");
+    const { channel, emit } = fakeEpicVisibilityChannel();
+    const uninstall = installCrossWindowEpicVisibility(
+      fakeDesktopWindowsBridge("window-a", channel),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    openEpicTab(TAB, EPIC);
+    try {
+      // A foreign window reports this epic visible, while THIS window's own
+      // document is hidden and it has placed no pane of its own.
+      emit([{ windowId: "window-b", epicIds: [EPIC] }]);
+      await vi.advanceTimersByTimeAsync(PARK_HIDDEN_EPIC_AFTER_MS);
+      expect(isEpicParked(EPIC)).toBe(false);
+    } finally {
+      closeEpicTab(TAB);
+      uninstall();
+    }
+  });
+});
+
 // ── Codex review pins 1-4: canPark/park now consult the chat plane, and a
 // missing OpenEpicSessionRegistry entry no longer short-circuits to "yes" ──
 //
