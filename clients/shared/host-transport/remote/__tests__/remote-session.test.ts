@@ -2090,6 +2090,95 @@ describe("RemoteStreamClient dynamic subscribe params", () => {
   );
 
   it(
+    "answers repeated capability reads with one identity until the manifest moves",
+    async () => {
+      const relay = new FakeRelayHost();
+      // Host and client on the SAME registry: equal minors, so the verdict
+      // picks the client canonical - the half `selectConnectionManifestForPeer`
+      // rebuilds per call. That is the arm that looped: the reads are
+      // `useSyncExternalStore` snapshots, and a fresh object per read is a
+      // re-render per commit until React throws #185.
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const streamClient = new RemoteStreamClient<
+        VersionedRpcRegistry,
+        typeof cursorStreamRegistry
+      >(session, () => null);
+
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        const version = streamClient.getMethodSchemaVersion("cursor.subscribe");
+        expect(version).toEqual({ major: 1, minor: 0, supportedMajors: [1] });
+        expect(streamClient.getMethodSchemaVersion("cursor.subscribe")).toBe(
+          version,
+        );
+        // Reading the sibling verdict must not disturb the version identity.
+        expect(streamClient.getMethodSupport("cursor.subscribe")).toBe(
+          "supported",
+        );
+        expect(streamClient.getMethodSchemaVersion("cursor.subscribe")).toBe(
+          version,
+        );
+
+        // A drop retracts the manifest and the version with it. The redial's
+        // ack installs a DIFFERENT manifest - one without the method - and
+        // the verdict must follow it: a cache keyed on the method alone would
+        // keep answering the retired manifest's `supported` here.
+        relay.dropCurrentConnection();
+        relay.streamManifest = {};
+        await vi.waitFor(
+          () =>
+            expect(
+              streamClient.getMethodSchemaVersion("cursor.subscribe"),
+            ).toBe(null),
+          WAIT,
+        );
+        await vi.waitFor(
+          () =>
+            expect(streamClient.getMethodSupport("cursor.subscribe")).toBe(
+              "unsupported",
+            ),
+          WAIT,
+        );
+        expect(streamClient.getMethodSchemaVersion("cursor.subscribe")).toBe(
+          null,
+        );
+
+        // And back: the method returns with the next ack, readable again and
+        // once more one identity across reads.
+        relay.dropCurrentConnection();
+        relay.streamManifest = buildStreamManifest(
+          cursorStreamRegistry,
+          SERVES_EVERY_INSTALLED_MAJOR,
+        );
+        await vi.waitFor(
+          () =>
+            expect(
+              streamClient.getMethodSchemaVersion("cursor.subscribe"),
+            ).toEqual({ major: 1, minor: 0, supportedMajors: [1] }),
+          WAIT,
+        );
+        const reacked = streamClient.getMethodSchemaVersion("cursor.subscribe");
+        expect(streamClient.getMethodSchemaVersion("cursor.subscribe")).toBe(
+          reacked,
+        );
+        expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
     "routes a pinned remote incompatibility through the batch client's unsupported fallback seam",
     async () => {
       const relay = new FakeRelayHost();
