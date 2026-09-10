@@ -619,8 +619,8 @@ describe("createSessionConnectivityStore across a system resume", () => {
   // suspended WebView keeps neither its timers nor its person, yet `Date.now()`
   // keeps counting, so on thaw `downSince` reads minutes old and the 15 s
   // deadline - which fires as JS thaws, BEFORE the resume signal is delivered -
-  // escalates an outage nobody has watched for a second. The episode is
-  // re-dated to the resume instead.
+  // escalates an outage nobody has watched for a second. The episode is dated
+  // from the resume, so the deadlines measure the wait since return.
 
   function buildDownStore(resume: ResumeSource) {
     const ready = createReadyControl(true);

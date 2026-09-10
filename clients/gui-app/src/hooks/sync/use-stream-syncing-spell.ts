@@ -46,10 +46,10 @@ interface SpellRecord {
    * timers frozen and, on thaw, fires every one whose deadline passed - so a
    * wait armed before a minutes-long background lands the escalated word on
    * the very first frame after return, before the fresh restore has even
-   * begun. Measured on device: the overdue timer fires 25 ms BEFORE the resume
-   * event reaches any subscriber. That order is why a resume must undo an
-   * escalation rather than only postpone one, and why `performance.now()` is
-   * no help - it advances through the suspension too.
+   * begun. The overdue timer fires BEFORE the resume event reaches any
+   * subscriber. That order is why a resume must undo an escalation rather than
+   * only postpone one, and why `performance.now()` is no help - it advances
+   * through the suspension too.
    */
   readonly waitEpoch: number;
 }

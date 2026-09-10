@@ -39,8 +39,8 @@ function createRunnerHost(): MockRunnerHost {
 
 /**
  * Counts the hook's live `onSystemResumed` subscriptions on `host`. The mock
- * keeps its handler set private, and a leaked subscriber is otherwise silent -
- * React no longer complains about a state write on an unmounted hook.
+ * keeps its handler set private, and a leaked subscriber is otherwise silent:
+ * React does not warn on a state write to an unmounted hook.
  */
 function trackResumeSubscribers(host: MockRunnerHost): {
   readonly live: () => number;
@@ -229,10 +229,10 @@ describe("useStreamSyncingSpell", () => {
   describe("across a system resume", () => {
     // The clock measures how long a PERSON has waited, and a person who left
     // the app was not waiting. WKWebView freezes timers on suspension and, on
-    // thaw, fires any whose deadline passed - measured on device at 25 ms
-    // BEFORE the shell's resume signal reaches a subscriber. So the wait has to
-    // restart at resume, and an escalation the thaw already fired has to be
-    // taken back, not merely prevented.
+    // thaw, fires any whose deadline passed BEFORE the shell's resume signal
+    // reaches a subscriber. So the wait has to restart at resume, and an
+    // escalation the thaw already fired has to be taken back, not merely
+    // prevented.
 
     it("restarts the wait from the resume, not from when the stream dropped", () => {
       vi.useFakeTimers();
@@ -259,7 +259,7 @@ describe("useStreamSyncingSpell", () => {
     });
 
     it("takes back an escalation the thaw fired before the resume signal arrived", () => {
-      // The measured order: the 60 s deadline passes during suspension, the
+      // The order on thaw: the 60 s deadline passes during suspension, the
       // timer fires as JS thaws, and ONLY THEN does `onSystemResumed` run.
       vi.useFakeTimers();
       const host = createRunnerHost();
