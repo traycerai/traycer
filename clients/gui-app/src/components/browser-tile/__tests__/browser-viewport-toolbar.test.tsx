@@ -226,7 +226,10 @@ describe("BrowserViewportToolbar", () => {
     );
 
     const width = dimensionInput("width");
-    fireEvent.focus(width);
+    act(() => {
+      width.focus();
+    });
+    expect(document.activeElement).toBe(width);
     fireEvent.change(width, { target: { value: "500" } });
     const handle = screen.getByRole("separator", {
       name: "Resize viewport width",
@@ -237,6 +240,7 @@ describe("BrowserViewportToolbar", () => {
       clientX: 10,
       clientY: 10,
     });
+    expect(document.activeElement).toBe(handle);
     fireEvent.pointerMove(handle, {
       pointerId: 1,
       clientX: 20,
@@ -248,7 +252,6 @@ describe("BrowserViewportToolbar", () => {
       clientY: 10,
     });
 
-    expect(resize).not.toHaveBeenCalledWith(500, 844);
     expect(resize).not.toHaveBeenCalled();
     act(() => {
       flushFrame?.(0);
