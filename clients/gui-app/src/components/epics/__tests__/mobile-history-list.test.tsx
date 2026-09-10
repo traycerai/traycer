@@ -106,6 +106,10 @@ interface RenameEpicTitleVariables {
 }
 
 interface SetEpicPinnedVariables {
+  // Mirrors production's dispatch-side host. Declared locally here, which is
+  // exactly why the compile cannot flag a drift - the assertions below are the
+  // only thing that can, and only if they name the key.
+  readonly hostId: string | null;
   readonly epicId: string;
   readonly pinned: boolean;
 }
@@ -180,6 +184,16 @@ vi.mock("@/hooks/epic/use-epic-set-pinned-mutation", () => ({
 
 vi.mock("@/hooks/epic/use-epic-activity-status", () => ({
   useEpicActivityStatus: () => "idle",
+}));
+
+/**
+ * `useEpicPinLocalHomeSupported` reads `useHostClient()`, which throws
+ * outside a `<HostRuntimeProvider>` - absent in this file. Fixed at `false`:
+ * every existing case here predates lane 9 item 5 and pins the pre-`@1.1`
+ * reading (`local-home` permanently unavailable).
+ */
+vi.mock("@/hooks/epic/use-epic-pin-local-home-support", () => ({
+  useEpicPinLocalHomeSupported: () => false,
 }));
 
 function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
@@ -648,6 +662,8 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       expect(testState.setPinnedMutate).toHaveBeenCalledWith({
         epicId: "epic-from-history",
         pinned: true,
+        isLocalHome: false,
+        hostId: null,
       });
     });
 
@@ -656,12 +672,13 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
         historyItem({
           title: "Local only epic",
           isLocalHome: true,
+          hostId: null,
         }),
       ];
       renderPanel("embedded", "/");
 
       const pin = await screen.findByRole("button", {
-        name: "Pinning Local only epic needs cloud sync; it is stored on this device",
+        name: "Pinning Local only epic needs cloud sync; it is stored on the connected device",
       });
       expect(pin.getAttribute("aria-disabled")).toBe("true");
 
@@ -680,7 +697,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       renderPanel("embedded", "/");
 
       const pin = await screen.findByRole("button", {
-        name: "Pinning Orphaned epic is unavailable; its cloud copy was deleted and only this device's edits remain",
+        name: "Pinning Orphaned epic is unavailable; its cloud copy was deleted and only the connected device's edits remain",
       });
       expect(pin.getAttribute("aria-disabled")).toBe("true");
 
@@ -771,7 +788,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
         "suppressed-unprovable-filter",
       );
       expect(notice.textContent).toContain(
-        "can't be checked against tasks stored on this device",
+        "can't be checked against tasks stored on the connected device",
       );
       expect(screen.queryByTestId("epics-list-empty")).toBeNull();
       expect(screen.getByTestId("epics-list-filtered-empty")).not.toBeNull();

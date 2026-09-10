@@ -98,6 +98,16 @@ vi.mock("@/lib/host", () => ({
   useHostClient: () => mockHostClient,
   // The SPINE, a separate export since redesign P2.1.
   useHostRuntimeClient: () => mockHostClient,
+  // Reached since `useEpicRecordViewed` took its host as an argument: the
+  // client for a NAMED host is built from the binding, so a mock that stops at
+  // `useHostClient` leaves the resolver calling an undefined export.
+  useHostBinding: () => ({
+    hostId: HOST_ID,
+    hostClient: {
+      ...mockHostClient,
+      createRequesterForHostId: () => mockHostClient,
+    },
+  }),
 }));
 
 function makeWrapper(
@@ -825,7 +835,11 @@ describe("useCloudEpicTasksQuery", () => {
     // initial dispatch—not a caller remembering a reset wrapper—must create a
     // new finite follow-up budget for its new pending local page.
     act(() => {
-      result.current.pin.mutate({ epicId: "pin-local", pinned: true });
+      result.current.pin.mutate({
+        epicId: "pin-local",
+        pinned: true,
+        isLocalHome: false,
+      });
     });
     await waitFor(() => {
       expect(initialCalls).toBe(2);
@@ -897,7 +911,7 @@ describe("useCloudEpicTasksQuery", () => {
     const { result } = renderHook(
       () => ({
         tasks: useCloudEpicTasksQuery(lastViewedRequest, { enabled: true }),
-        recordViewed: useEpicRecordViewed(),
+        recordViewed: useEpicRecordViewed(HOST_ID),
       }),
       { wrapper: makeWrapper(queryClient) },
     );
@@ -910,7 +924,14 @@ describe("useCloudEpicTasksQuery", () => {
     });
 
     act(() => {
-      result.current.recordViewed.mutate({ epicId: "view-local" });
+      // `isLocalHome: true` matches this fixture's own framing - the row is
+      // served from the LOCAL page - and keeps the dispatch admissible
+      // whatever the session verdict is, so this stays a test about cache
+      // invalidation rather than one that also depends on the cloud gate.
+      result.current.recordViewed.mutate({
+        epicId: "view-local",
+        isLocalHome: true,
+      });
     });
     await waitFor(() => {
       expect(initialCalls).toBe(2);

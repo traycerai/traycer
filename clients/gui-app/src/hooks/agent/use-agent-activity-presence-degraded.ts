@@ -104,7 +104,12 @@ export function useAgentActivityPresenceDegraded(): AgentActivityPresenceDegrade
   const reason = useAgentActivityStore((state) =>
     servingHostId === null
       ? null
-      : selectPresenceDegradedReason(state.byHost.get(servingHostId) ?? null),
+      : selectPresenceDegradedReason(
+          state.byHost.get(servingHostId) ?? null,
+          // Whether ANY host has a stream slice at all. See the absent-slice
+          // arm below for why the distinction is the whole of this argument.
+          state.byHost.size > 0,
+        ),
   );
   const [sustained, setSustained] =
     useState<AgentActivityPresenceDegradedReason | null>(null);
@@ -126,15 +131,36 @@ export function useAgentActivityPresenceDegraded(): AgentActivityPresenceDegrade
 }
 
 function selectPresenceDegradedReason(
-  // An absent slice is a host whose stream has never spoken - the same
-  // reading as a non-`open` one, and the state a freshly opened epoch sits in
-  // until its own session reports.
   host: {
     readonly connectionStatus: StreamConnectionStatus;
     readonly cloudSyncStatus: AgentActivityCloudSyncStatus | null;
   } | null,
+  /**
+   * Whether the store holds a slice for ANY host - i.e. whether an activity
+   * stream has been opened at all in this app.
+   */
+  someHostHasAStream: boolean,
 ): AgentActivityPresenceDegradedReason | null {
-  if (host === null || host.connectionStatus !== "open") return "stream-down";
+  if (host === null) {
+    // AN ABSENT SLICE IS TWO DIFFERENT FACTS, and reading both as `stream-down`
+    // was this hook asserting a down stream that was not down.
+    //
+    // A slice is CREATED the instant `openAgentActivityStream` runs - it opens
+    // with `connecting` before the socket does anything - so absence never
+    // means "this host's stream is unhealthy". It means no stream was opened
+    // FOR this host, and the two reasons that can be true are:
+    //
+    //  - some OTHER host's slice exists, so a stream IS running and this host
+    //    is simply not the one it was opened against. Nothing here is degraded
+    //    and this hook has NO CLAIM to make: the Epic's activity arrives on
+    //    whatever stream is serving, and its health is that slice's story.
+    //  - no slice exists anywhere: nothing has opened a stream, pre-boot or
+    //    otherwise. `stream-down` is the honest reading then - live agent
+    //    activity really is unavailable - and the grace above covers the
+    //    cold-start window where it is merely early.
+    return someHostHasAStream ? null : "stream-down";
+  }
+  if (host.connectionStatus !== "open") return "stream-down";
   if (
     host.cloudSyncStatus === "reconnecting" ||
     host.cloudSyncStatus === "disconnected"

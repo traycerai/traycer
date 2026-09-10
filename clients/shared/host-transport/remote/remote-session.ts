@@ -95,6 +95,7 @@ import {
   SESSION_CONTROL_STREAM_ID,
   SESSION_CAPABILITY_BODY_COMPRESSION,
   SESSION_CAPABILITY_CREDENTIAL_UPDATE,
+  SESSION_CAPABILITY_CLOUD_VERDICT_UPDATE,
   SESSION_CAPABILITY_FINE_CREDITS,
   creditPayloadSchema,
   decodeMuxFrame,
@@ -290,6 +291,23 @@ export interface RemoteSessionOptions<
   /** Reads the user bearer for the in-channel `open{bearer}` frame (A2). */
   readonly bearer: BearerSourceProvider;
   /**
+   * Reads whether the session behind `bearer` may spend a CLOUD CAPABILITY,
+   * asserted to the host on every session `open` and updated in place through
+   * {@link MuxFrameType.CLOUD_VERDICT_UPDATE}.
+   *
+   * A LIVE READ rather than a captured boolean: this session outlives any one
+   * verdict and re-handshakes across relay drops, so each `open` must carry the
+   * verdict as it stands at that moment.
+   *
+   * Distinct from `CreateRemoteTransportOptions.cloudAuthorized`, which gates
+   * the attach-grant MINT - the permission to reach the relay at all. This one
+   * reports the same fact to the HOST at the other end, so its background work
+   * inherits the verdict instead of defaulting to authorized. Omitted by a
+   * caller with no admission/authorization split to report, which leaves the
+   * open-frame field absent and suppresses the control frame entirely.
+   */
+  readonly cloudAuthorized?: () => boolean;
+  /**
    * Auth recovery hook invoked when the host FATALs the session with
    * `UNAUTHORIZED` - the in-channel `open{bearer}` was rejected (the
    * overnight-wake case: the bearer expired while the renderer slept). The
@@ -422,6 +440,12 @@ export interface IRemoteSession<
     paramsProvider: () => ParamsOf<StreamRegistry, Method>,
   ): IStreamSession;
   notifyBearerRotated(): void;
+  /**
+   * Pushes the session's current cloud verdict in place, if the host advertised
+   * the capability. Independent of {@link notifyBearerRotated}: a verdict can
+   * change with no rotation, and every rotation leaves the verdict alone.
+   */
+  notifyCloudVerdictChanged(): void;
   /**
    * Tells the session that something outside it has evidence its connection
    * should be re-established sooner than the backoff schedule intends.
@@ -598,6 +622,7 @@ interface ActiveConnection {
    */
   hostRpcMerged: ConnectionManifest | null;
   credentialUpdateSupported: boolean;
+  cloudVerdictUpdateSupported: boolean;
   idempotencyKeySupported: boolean;
   /**
    * Whether the HOST advertised that it can inflate compressed frames, i.e.
@@ -811,6 +836,18 @@ export class RemoteSession<
    * the very one the host just rejected (no progress).
    */
   private openFrameBearer: string | null = null;
+  /**
+   * The verdict this session's `open` payload actually carried, or `undefined`
+   * when it carried none.
+   *
+   * The verdict twin of {@link openFrameBearer}. A change landing DURING the
+   * handshake - after `open` went out, before `ready` - is dropped by the phase
+   * gate on {@link notifyCloudVerdictChanged}, and the payload already sent
+   * carries the stale value. For a true -> false transition that leaves the
+   * host authorizing a session the client has already demoted, for the life of
+   * the session, with every multiplexed stream inheriting it.
+   */
+  private openFrameCloudAuthorized: boolean | undefined = undefined;
   /**
    * Bounds the rare "valid-but-rejected" loop: authn keeps accepting the
    * bearer (revalidation returns "rotated") yet the host keeps FATAL-ing the
@@ -1549,6 +1586,47 @@ export class RemoteSession<
     });
   }
 
+  /**
+   * Pushes the session's current cloud verdict in place if the host advertised
+   * the capability - see {@link IRemoteSession.notifyCloudVerdictChanged}.
+   *
+   * THE TAG CHECK IS NOT OPTIONAL HERE. `decodeMuxFrame` rejects an
+   * unrecognized frame type and the host force-closes on a decode failure, so
+   * sending this to a host that did not advertise it would take down every
+   * logical stream multiplexed inside the session - a strictly worse outcome
+   * than the stale verdict it was trying to fix.
+   *
+   * A session that is not `ready` sends nothing HERE, and whether it needs
+   * anything depends on where in the handshake it is. Before `open` goes out
+   * the drop is harmless - that payload reads the verdict afresh. After it goes
+   * out it is not: the payload already carries the pre-change value, so a
+   * true -> false transition would strand the host authorizing a demoted
+   * session, with every stream multiplexed inside it inheriting that.
+   * `handleOpenAck` closes the window against
+   * {@link openFrameCloudAuthorized}.
+   */
+  notifyCloudVerdictChanged(): void {
+    const connection = this.connection;
+    if (
+      this.phase !== "ready" ||
+      connection === null ||
+      !connection.cloudVerdictUpdateSupported
+    ) {
+      return;
+    }
+    const read = this.options.cloudAuthorized;
+    if (read === undefined) {
+      return;
+    }
+    this.enqueueMessage(connection, {
+      type: MuxFrameType.CLOUD_VERDICT_UPDATE,
+      streamId: SESSION_CONTROL_STREAM_ID,
+      qos: QosClass.INTERACTIVE,
+      json: { cloudAuthorized: read() },
+      binary: null,
+    });
+  }
+
   /** See {@link IRemoteSession.wake}. */
   wake(reason: string, probe: WakeProbeTuning | null): void {
     if (this.phase === "closed" || this.phase === "idle") {
@@ -1953,6 +2031,7 @@ export class RemoteSession<
       hostManifest: null,
       hostRpcMerged: null,
       credentialUpdateSupported: false,
+      cloudVerdictUpdateSupported: false,
       idempotencyKeySupported: false,
       bodyCompressionSupported: false,
       hostAttached: true,
@@ -2236,6 +2315,12 @@ export class RemoteSession<
       SESSION_OPEN_ACK_TIMEOUT_MS,
       "open-ack-timeout",
     );
+    // Read ONCE and recorded: two reads of a live source can straddle a
+    // transition, which would make the reconciliation at `openAck` compare the
+    // payload against a verdict it never carried - and then skip a genuinely
+    // needed push because the two reads happened to agree.
+    const sentCloudAuthorized = this.options.cloudAuthorized?.();
+    this.openFrameCloudAuthorized = sentCloudAuthorized;
     const open: SessionOpenPayload = {
       muxVersion: CURRENT_MUX_VERSION,
       bearer,
@@ -2254,6 +2339,11 @@ export class RemoteSession<
         CLIENT_CAPABILITY_EPIC_WRITE_PATH_V1,
       ],
       clientIdentity: this.clientIdentity,
+      // Read HERE, per handshake, not captured at construction: this session
+      // re-opens across relay drops and wake redials, and each of those must
+      // assert the verdict it holds now. A capture would let a session that
+      // dropped while unverified come back authorized.
+      cloudAuthorized: sentCloudAuthorized,
     };
     this.enqueueMessage(connection, {
       type: MuxFrameType.OPEN,
@@ -2563,6 +2653,9 @@ export class RemoteSession<
     connection.credentialUpdateSupported = parsed.data.capabilities.includes(
       SESSION_CAPABILITY_CREDENTIAL_UPDATE,
     );
+    connection.cloudVerdictUpdateSupported = parsed.data.capabilities.includes(
+      SESSION_CAPABILITY_CLOUD_VERDICT_UPDATE,
+    );
     connection.idempotencyKeySupported = parsed.data.capabilities.includes(
       UNARY_CAPABILITY_IDEMPOTENCY_KEY,
     );
@@ -2590,6 +2683,31 @@ export class RemoteSession<
     this.noProgressUnauthorizedReconnects = 0;
     this.restoredStreamIds.clear();
 
+    // RECONCILE THE VERDICT BEFORE THE SUBSCRIPTIONS ARE RE-OPENED.
+    //
+    // An earlier cut put this after the loop below and argued the correction
+    // should "ride the same connection the streams were just restored on".
+    // That is backwards: re-opening a subscription is what makes the host
+    // construct and start a resolver, and it does so under the verdict the
+    // `open` payload asserted. A correction sent afterwards arrives after the
+    // work it was supposed to govern has begun - and on this carrier that is
+    // every multiplexed stream at once, not one.
+    //
+    // `phase` became `ready` immediately above, which is the gate
+    // `notifyCloudVerdictChanged` checks, so the push goes out from here.
+    // A verdict that moved during the handshake had its own notification
+    // dropped by that same gate while the payload already sent carried the
+    // pre-change value.
+    if (
+      connection.cloudVerdictUpdateSupported &&
+      this.options.cloudAuthorized !== undefined
+    ) {
+      const current = this.options.cloudAuthorized();
+      if (current !== this.openFrameCloudAuthorized) {
+        this.openFrameCloudAuthorized = current;
+        this.notifyCloudVerdictChanged();
+      }
+    }
     for (const stream of this.subscriptions.values()) {
       this.openSubscription(connection, stream);
     }
@@ -4578,6 +4696,7 @@ export class RemoteSession<
       this.notifyMethodSupportListeners();
     }
     this.openFrameBearer = null;
+    this.openFrameCloudAuthorized = undefined;
     this.clearPhaseTimer();
     this.clearReauthTimer();
     this.clearStandingTimer();

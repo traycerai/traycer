@@ -140,6 +140,7 @@ describe("<NotificationIndicatorIcon />", () => {
       <NotificationIndicatorIcon
         state={DEFAULT_STATE}
         running={false}
+        activityCoverage="indeterminate"
         subjectId="subject-1"
         testIdPrefix="indicator"
         className={undefined}
@@ -257,6 +258,7 @@ describe("<NotificationIndicatorIcon />", () => {
           unreadDone: false,
         }}
         running={false}
+        activityCoverage="indeterminate"
         subjectId="subject-1"
         testIdPrefix="indicator"
         className={undefined}
@@ -358,6 +360,7 @@ function renderIconContent(
     <NotificationIndicatorIcon
       state={state}
       running={running}
+      activityCoverage="indeterminate"
       subjectId="subject-1"
       testIdPrefix="indicator"
       className={undefined}

@@ -2458,6 +2458,224 @@ describe("useLandingComposerActions", () => {
     queryClient.clear();
   });
 
+  it("retains a staged intent and opens nothing when the create is REFUSED", async () => {
+    // The third member of the retain-for-retry class above, and the one the
+    // other two cannot stand in for: a refusal RESOLVES. `epic.create@1.1`
+    // carries it as an optional key on an ordinary response, so the fulfilled
+    // continuation runs for a create that did not happen - and everything in
+    // it is staged on the assumption that the epic exists.
+    setSingleWorkspace();
+    const stagingKey = {
+      surface: "landing" as const,
+      hostId: TEST_HOST_ID,
+      draftId: null,
+    };
+    const stagedIntent = worktreeIntentFor(WORKSPACE_PATH, "retry-refused");
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(stagingKey, stagedIntent);
+    landingMocks.request.mockImplementation((method) =>
+      method === "epic.create"
+        ? Promise.resolve({
+            roomInfo: null,
+            refusal: {
+              kind: "local-store-unavailable",
+              message: "Traycer can't open this device's local store.",
+              remedy: "Quit the other Traycer on this machine, then rebind.",
+            },
+          })
+        : Promise.resolve({}),
+    );
+    // `gcTime: Infinity` for the same reason as the accepted-create control
+    // below: under the shared `gcTime: 0` the observer-less seed is collected
+    // the moment it is written, so the rollback assertion at the end of this
+    // test would read `undefined` whether or not a rollback happened. It did
+    // exactly that on first run, and only the control caught it.
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
+
+    act(() => {
+      result.current.submit({
+        draftId: null,
+        editor: editorHandleForPrompt("refused create"),
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some(
+          (call) => call[0] === "epic.create",
+        ),
+      ).toBe(true);
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // The retry must see the exact intent the user staged.
+    expect(
+      useWorktreeIntentStagingStore.getState().intentByKey[
+        worktreeStagingKeyString(stagingKey)
+      ],
+    ).toEqual(stagedIntent);
+    // And the optimistic binding seed is ROLLED BACK. This is the third
+    // continuation on the create promise - the one inside `createLandingEpic`
+    // itself, which runs before either call site's - and its rollback lived
+    // only in `.catch`, which a resolving refusal never reaches. Left seeded,
+    // the in-epic chip and the palette's Files/Diff openers would list folders
+    // for an epic id the host never created.
+    expect(
+      queryClient.getQueryData(
+        hostQueryKeys.method(TEST_HOST_ID, "worktree.listBindingsForEpic", {
+          epicId: createdEpicIdFromRequests(),
+        }),
+      ),
+    ).toBeUndefined();
+    // And nothing was opened or navigated to. In this flow the tile open and
+    // the navigation both live INSIDE the fulfilled continuation, so a missing
+    // refusal branch would land the user on an epic route whose
+    // `epic.subscribe` then fails - a second, unrelated-looking error for one
+    // refusal.
+    expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
+    expect(landingMocks.navigate).not.toHaveBeenCalled();
+    queryClient.clear();
+  });
+
+  it("keeps the optimistic binding seed when the create is ACCEPTED", async () => {
+    // The positive control for the rollback above, and it is load-bearing:
+    // `toBeUndefined()` passes just as well if the seed is never written - if
+    // the staged folders did not reach `buildOptimisticWorkspaceBindingRows`,
+    // or the key is built differently than this test builds it. This row
+    // proves the key and the seed are real, so the other row's absence is a
+    // rollback rather than a miss.
+    setSingleWorkspace();
+    landingMocks.request.mockImplementation((method) =>
+      method === "epic.create"
+        ? Promise.resolve({ roomInfo: null })
+        : Promise.resolve({}),
+    );
+    // `gcTime: Infinity`, unlike every other case in this file. The seed is a
+    // `setQueryData` with no observer in this harness - no epic route is
+    // mounted to subscribe to it - and under the shared `gcTime: 0` such an
+    // entry is collected the instant it is written. Reading it back would then
+    // answer `undefined` whether or not the rollback ran, which is exactly how
+    // the refusal assertion below first passed while proving nothing.
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: Infinity } },
+    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
+
+    act(() => {
+      result.current.submit({
+        draftId: null,
+        editor: editorHandleForPrompt("accepted create"),
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some(
+          (call) => call[0] === "epic.create",
+        ),
+      ).toBe(true);
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(
+      queryClient.getQueryData(
+        hostQueryKeys.method(TEST_HOST_ID, "worktree.listBindingsForEpic", {
+          epicId: createdEpicIdFromRequests(),
+        }),
+      ),
+    ).toEqual({ rows: [expect.objectContaining({ workspacePath: WORKSPACE_PATH })] });
+    queryClient.clear();
+  });
+
+  it("does not chain the terminal agent onto a REFUSED create", async () => {
+    // The terminal-agent flow is the dangerous half: it navigates and opens
+    // its placeholder tile BEFORE the round-trip, so the refusal cannot undo
+    // the navigation - what it must prevent is the CHAINED
+    // `agent.tui.prepareLaunch` / `epic.createTuiAgent` against an epic that
+    // does not exist, whose own error toast would report the refusal twice in
+    // two unrelated vocabularies. The marker is dropped so the existence
+    // reconciler prunes the orphan tab, exactly as on the rejection arm.
+    landingMocks.request.mockImplementation((method) =>
+      method === "epic.create"
+        ? Promise.resolve({
+            roomInfo: null,
+            refusal: {
+              kind: "local-store-unavailable",
+              message: "Traycer can't open this device's local store.",
+              remedy: "Quit the other Traycer on this machine, then rebind.",
+            },
+          })
+        : Promise.resolve({}),
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
+
+    act(() => {
+      result.current.selectTerminalAgent(
+        {
+          harnessId: "claude",
+          model: null,
+          reasoningEffort: null,
+          terminalAgentArgs: "",
+          profileId: null,
+        },
+        null,
+      );
+    });
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+      ).toBe(true);
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(landingMocks.createTerminalAgent).not.toHaveBeenCalled();
+    const createCall = landingMocks.request.mock.calls.find(
+      (c) => c[0] === "epic.create",
+    );
+    const refusedEpicId = (
+      createCall?.[1] as { readonly epic: { readonly id: string } } | undefined
+    )?.epic.id;
+    // Read from the payload rather than asserted against a literal: the id is
+    // generated, and a `toBe(false)` on an id that was never marked would pass
+    // for the wrong reason.
+    expect(typeof refusedEpicId).toBe("string");
+    expect(wasEpicCreatedThisSession(refusedEpicId ?? "")).toBe(false);
+    queryClient.clear();
+  });
+
   /**
    * `isPending`, the field `landing-composer.tsx`'s `isSubmitting` now reads
    * (`runtimeState.isSubmitting || actions.isPending`). Before that change
@@ -2936,6 +3154,18 @@ function splitItem(
     routeBackingSide: focusedSide,
     leftRatio: 0.5,
   };
+}
+
+function createdEpicIdFromRequests(): string {
+  const call = landingMocks.request.mock.calls.find(
+    (entry) => entry[0] === "epic.create",
+  );
+  const payload = call?.[1] as
+    | { readonly epic: { readonly id: string } }
+    | undefined;
+  const epicId = payload?.epic.id;
+  if (epicId === undefined) throw new Error("no epic.create request was sent");
+  return epicId;
 }
 
 function worktreeIntentFor(workspacePath: string, branchName: string) {

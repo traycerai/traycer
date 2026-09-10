@@ -90,6 +90,7 @@ function createWsStreamClient(
     isReady: () => true,
     getClosedReason: () => closedReason,
     notifyBearerRotated: () => undefined,
+    notifyCloudVerdictChanged: () => undefined,
     reconnectAll: () => undefined,
     // "unsupported" on every lane method pins the adapter-selection verdict to
     // "legacy" - see `readEpicAdapterVerdict` / `EPIC_LANE_METHODS`. It matters

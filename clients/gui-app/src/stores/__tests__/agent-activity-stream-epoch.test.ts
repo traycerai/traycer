@@ -119,6 +119,7 @@ class StubHostStreamClient implements IHostStreamClient<HostStreamRpcRegistry> {
   }
 
   notifyBearerRotated(): void {}
+  notifyCloudVerdictChanged(): void {}
 
   reconnectAll(_reason: string, _options: ReconnectAllOptions): void {}
 

@@ -18,6 +18,7 @@ import {
   EMPTY_EPIC_AGENT_ACTIVITY,
   mergeEpicAgentActivity,
   reconcileAgentActivityByEpic,
+  type AgentActivityCoverage,
   type EpicAgentActivity,
 } from "@/lib/agent-activity";
 import {
@@ -495,10 +496,7 @@ function hostActivityAnswers(host: HostAgentActivity): boolean {
  * says the stream closed.
  */
 export function agentActivityPlaneAnswers(): boolean {
-  for (const host of useAgentActivityStore.getState().byHost.values()) {
-    if (hostActivityAnswers(host)) return true;
-  }
-  return false;
+  return selectPlaneAnswers(useAgentActivityStore.getState().byHost);
 }
 
 /**
@@ -528,12 +526,85 @@ export function agentActivityPlaneAnswers(): boolean {
  * read as blind.
  */
 export function agentActivityPlaneSpansFleet(): boolean {
-  for (const host of useAgentActivityStore.getState().byHost.values()) {
+  return selectPlaneSpansFleet(useAgentActivityStore.getState().byHost);
+}
+
+function selectPlaneSpansFleet(
+  byHost: ReadonlyMap<string, HostAgentActivity>,
+): boolean {
+  for (const host of byHost.values()) {
     if (hostActivityAnswers(host) && host.cloudSyncStatus === "connected") {
       return true;
     }
   }
   return false;
+}
+
+function selectPlaneAnswers(
+  byHost: ReadonlyMap<string, HostAgentActivity>,
+): boolean {
+  for (const host of byHost.values()) {
+    if (hostActivityAnswers(host)) return true;
+  }
+  return false;
+}
+
+/**
+ * {@link AgentActivityCoverage} for ONE host, from a `byHost` snapshot.
+ *
+ * The three arms are exactly {@link agentActivityPlaneCoversHost}'s question
+ * split into the two ways it can answer "no", because those two are what the
+ * predicate's boolean throws away and what a rendering surface needs:
+ *
+ * - the plane covers this host -> `covered`;
+ * - the plane ANSWERS but not for this host -> `unserved`, the arm that must
+ *   render unknown rather than idle;
+ * - nothing answers at all -> `indeterminate`, which is the pill's story and
+ *   not a per-entity one (see the type's doc).
+ *
+ * A `null` host cannot detect EXCLUSION - a surface that cannot name the machine
+ * an entity lives on has no entity for a narrow union to have excluded - so it
+ * answers `indeterminate` and keeps the reading it already had.
+ *
+ * With ONE exception, and it is above the null check rather than inside it: a
+ * FLEET-SPANNING union answers `covered` for a null host too, because a union
+ * that reaches everywhere reaches wherever this entity is. The exception is why
+ * this paragraph no longer says "indeterminate by construction" - it was written
+ * when the null arm fell through to the exclusion line, and it described the
+ * intent of that arm rather than the function's whole answer.
+ */
+export function selectAgentActivityCoverage(
+  byHost: ReadonlyMap<string, HostAgentActivity>,
+  hostId: string | null,
+): AgentActivityCoverage {
+  if (selectPlaneSpansFleet(byHost)) return "covered";
+  // `unserved` is the claim "the plane answers, and NOT about this entity" -
+  // exclusion. Without a host there is no entity to be excluded, so a narrow
+  // union that answers for some other machine said nothing either way and the
+  // honest arm is `indeterminate`. This used to fall through to the line
+  // below, which read a local union's answer as evidence of exclusion and
+  // rendered unknown where the doc above promises the surface keeps the
+  // reading it already had - and where three static call sites
+  // (`chat-progress-icon`, `tab-strip-item`, `epics-list-shared`) already pass
+  // `indeterminate` by hand for this same no-host case.
+  if (hostId === null) return "indeterminate";
+  const host = byHost.get(hostId);
+  if (host !== undefined && hostActivityAnswers(host)) return "covered";
+  return selectPlaneAnswers(byHost) ? "unserved" : "indeterminate";
+}
+
+/**
+ * Reactive {@link selectAgentActivityCoverage}. Returns a primitive, so
+ * Zustand's `Object.is` comparison re-renders a consumer only when the answer
+ * itself flips - never on the unrelated `byHost` replacements every frame and
+ * every status change produce.
+ */
+export function useAgentActivityCoverage(
+  hostId: string | null,
+): AgentActivityCoverage {
+  return useAgentActivityStore((state) =>
+    selectAgentActivityCoverage(state.byHost, hostId),
+  );
 }
 
 /**
@@ -549,9 +620,12 @@ export function agentActivityPlaneSpansFleet(): boolean {
  * host-agnostic "does this reach everywhere", not "does this reach HERE").
  */
 export function agentActivityPlaneCoversHost(hostId: string): boolean {
-  if (agentActivityPlaneSpansFleet()) return true;
-  const host = useAgentActivityStore.getState().byHost.get(hostId);
-  return host !== undefined && hostActivityAnswers(host);
+  return (
+    selectAgentActivityCoverage(
+      useAgentActivityStore.getState().byHost,
+      hostId,
+    ) === "covered"
+  );
 }
 
 /**

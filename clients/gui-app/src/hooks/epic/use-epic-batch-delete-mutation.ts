@@ -9,6 +9,7 @@ import type {
   HostRpcError,
   ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { BatchDeleteItemResult } from "@traycer/protocol/host/epic/unary-schemas";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { hostQueryKeys, epicMutationKeys } from "@/lib/query-keys";
@@ -178,7 +179,7 @@ export function useEpicBatchDelete(): UseMutationResult<
           }
         }
         const epicToast = epicDeleteToastParts({
-          failureCount: failures.length,
+          failures,
           successes,
           total: data.results.length,
           deletedIds,
@@ -190,7 +191,11 @@ export function useEpicBatchDelete(): UseMutationResult<
           successes,
         );
         if (ctx.hostId === null || eligibleWorktreePaths.length === 0) {
-          emitEpicDeleteToast(epicToast.level, epicToast.message, null);
+          emitEpicDeleteToast(
+            epicToast.level,
+            epicToast.message,
+            epicToast.detail,
+          );
         } else {
           // The Task(s) are already deleted; stream the approved worktree
           // removals and report a single combined summary once they settle.
@@ -302,28 +307,47 @@ function normalizeEpicTitle(title: string): string | null {
 
 type EpicDeleteToastLevel = "success" | "warning" | "error";
 
-interface EpicDeleteToastParts {
+export interface EpicDeleteToastParts {
   readonly level: EpicDeleteToastLevel;
   readonly message: string;
+  /**
+   * The host's own reason for the failed rows, or `null` when it sent none.
+   *
+   * Counting the failures and dropping `errorMessage` was the gap: a batch the
+   * host REFUSED - because its local store would not open, or because it could
+   * not rule out local state it cannot currently read - is the case where the
+   * reason is the whole message, and it rendered as a bare "Couldn't delete
+   * epic." with nothing to act on. The refusal detail is `${message} ${remedy}`
+   * built by `planLocalDeletes`, so the remedy is already in here.
+   */
+  readonly detail: string | null;
 }
 
 // The Task-deletion half of the summary toast, factored so the same message can
 // be emitted immediately (no cleanup) or combined with the worktree tally once
 // the streamed cleanup settles.
-function epicDeleteToastParts(args: {
-  readonly failureCount: number;
+//
+// Exported for the same reason its four neighbours are: it is a pure function
+// of the response, and the only other way to reach it is to drive the whole
+// mutation - host client, router, stream transport - which would put a mock
+// scaffold between the assertion and the copy it is asserting.
+export function epicDeleteToastParts(args: {
+  readonly failures: ReadonlyArray<BatchDeleteItemResult>;
   readonly successes: number;
   readonly total: number;
   readonly deletedIds: ReadonlyArray<string>;
   readonly epicTitlesById: Readonly<Record<string, string>>;
 }): EpicDeleteToastParts {
-  const { failureCount, successes, total, deletedIds, epicTitlesById } = args;
+  const { failures, successes, total, deletedIds, epicTitlesById } = args;
+  const failureCount = failures.length;
   if (failureCount === 0) {
     return {
       level: "success",
       message: deletedEpicSuccessToastMessage(deletedIds, epicTitlesById),
+      detail: null,
     };
   }
+  const detail = epicDeleteFailureDetail(failures);
   if (successes === 0) {
     return {
       level: "error",
@@ -331,13 +355,55 @@ function epicDeleteToastParts(args: {
         failureCount === 1
           ? "Couldn't delete epic."
           : `Couldn't delete ${failureCount} epics.`,
+      detail,
     };
   }
   return {
     level: "warning",
     message: `Deleted ${successes} of ${total}; ${failureCount} failed.`,
+    detail,
   };
 }
+
+/**
+ * The distinct reasons behind the failed rows, joined for the toast's
+ * description.
+ *
+ * DEDUPED, and that is not cosmetic: a whole-batch refusal
+ * (`refuseWholeBatch`) writes the SAME sentence onto every id, so a five-epic
+ * delete would otherwise print one reason five times. Distinct reasons are
+ * joined instead of only the first being shown, because a mixed batch's rows
+ * can fail for genuinely different reasons and picking one would report the
+ * others as unexplained.
+ *
+ * Kept out of the report-issue contexts by its callers, exactly as
+ * `worktreeCleanupFailureDetail` is: these sentences are host-authored operator
+ * copy and can name an absolute path on the user's disk. Capped for the same
+ * reason and against the DISTINCT count, which is the number a reader actually
+ * sees - the local-store refusals collapse to one however many rows they
+ * refused, so the cap only bites on a genuinely heterogeneous batch.
+ */
+function epicDeleteFailureDetail(
+  failures: ReadonlyArray<BatchDeleteItemResult>,
+): string | null {
+  const reasons = new Set<string>();
+  for (const failure of failures) {
+    const reason = failure.errorMessage?.trim() ?? "";
+    if (reason.length > 0) reasons.add(reason);
+  }
+  if (reasons.size === 0 || reasons.size > MAX_LISTED_DELETE_REASONS) {
+    return null;
+  }
+  return [...reasons].join(" · ");
+}
+
+/**
+ * Beyond this many DISTINCT reasons the toast shows its count line only - the
+ * same judgment `worktreeCleanupFailureDetail` makes, and deliberately a
+ * smaller number: these are whole host sentences with a remedy in them, not
+ * `<path>: <reason>` fragments, so two already fills a toast.
+ */
+const MAX_LISTED_DELETE_REASONS = 2;
 
 /**
  * `detail` is the toast's on-screen description - the per-path worktree
@@ -421,13 +487,21 @@ export function worktreeCleanupSummary(
   return parts.join(", ");
 }
 
-function emitTaskDeleteSummaryToast(
+/**
+ * The combined toast, once the streamed worktree cleanup settles.
+ *
+ * Exported alongside `epicDeleteToastParts` so the JOIN can be pinned where it
+ * happens. Testing `joinToastDetails` directly would prove the function and not
+ * its use - which half goes first, and whether both are passed at all, are
+ * facts about this caller.
+ */
+export function emitTaskDeleteSummaryToast(
   epicToast: EpicDeleteToastParts,
   outcome: WorktreeCleanupOutcome,
 ): void {
   const summary = worktreeCleanupSummary(outcome);
   if (summary === null) {
-    emitEpicDeleteToast(epicToast.level, epicToast.message, null);
+    emitEpicDeleteToast(epicToast.level, epicToast.message, epicToast.detail);
     return;
   }
   // A worktree that couldn't be removed - or whose removal we never saw
@@ -437,11 +511,25 @@ function emitTaskDeleteSummaryToast(
     outcome.failed.length > 0 || outcome.uncertain.length > 0
       ? "warning"
       : epicToast.level;
-  emitEpicDeleteToast(
-    level,
-    `${epicToast.message} · ${summary}`,
+  // BOTH halves, in the order the toast's own message names them. The two can
+  // co-occur - a batch where some rows were refused and an approved worktree
+  // removal then failed - and dropping either leaves the toast counting a
+  // failure it does not explain.
+  const detail = joinToastDetails(
+    epicToast.detail,
     worktreeCleanupFailureDetail(outcome.failed),
   );
+  emitEpicDeleteToast(level, `${epicToast.message} · ${summary}`, detail);
+}
+
+function joinToastDetails(
+  first: string | null,
+  second: string | null,
+): string | null {
+  const parts = [first, second].filter(
+    (part): part is string => part !== null && part.length > 0,
+  );
+  return parts.length === 0 ? null : parts.join(" · ");
 }
 
 // Refresh the host-wide worktree list plus the shared binding-backed caches

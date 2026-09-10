@@ -250,6 +250,12 @@ export function createRemoteHostTransport<
         hostStaticPublicKey,
         grantProvider,
         bearer: options.bearer,
+        // The SAME read the grant provider above uses, now also reported to the
+        // host at the far end. The mint gate decides whether this client may
+        // reach the relay; this tells the host what the session it reaches may
+        // spend, which is a different question with a different consumer - the
+        // host's own background workers, which no client-side gate can reach.
+        cloudAuthorized: options.cloudAuthorized,
         auth: options.auth,
         clock: options.clock,
         rpcRegistry: options.rpcRegistry,
