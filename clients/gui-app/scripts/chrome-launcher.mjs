@@ -74,8 +74,16 @@ export async function findChrome(purpose) {
  *
  * `profilePrefix` is the `mkdtemp` prefix for this driver's profile
  * directories, so a stray temp dir names the driver that leaked it.
+ *
+ * `extraArgs` are appended to the fixed flags, for a driver whose premise
+ * depends on something the runner would otherwise decide - the input
+ * devices Chrome reports, for one. Pass `[]` for none.
  */
-export async function launchChromeWithDevTools(chromePath, profilePrefix) {
+export async function launchChromeWithDevTools(
+  chromePath,
+  profilePrefix,
+  extraArgs,
+) {
   const chromeEnv = { ...process.env };
   delete chromeEnv.DBUS_SESSION_BUS_ADDRESS;
   const attempts = 3;
@@ -97,6 +105,7 @@ export async function launchChromeWithDevTools(chromePath, profilePrefix) {
         "--no-sandbox",
         "--remote-debugging-port=0",
         `--user-data-dir=${profilePath}`,
+        ...extraArgs,
         "about:blank",
       ],
       { env: chromeEnv, stdio: ["ignore", "ignore", "pipe"], detached: true },

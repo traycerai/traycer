@@ -14,6 +14,7 @@ import {
   ShieldCheck,
   Settings as SettingsIcon,
   TerminalSquare,
+  Volume2,
   Waypoints,
 } from "lucide-react";
 import { isMobileApp } from "@/lib/mobile-app";
@@ -127,7 +128,7 @@ export interface SettingsSection {
  * slot. Fallback was added into the digit-less tail and so moved no existing
  * shortcut - it sits between Agent selection and Shell, both already there.
  *
- * Worktrees is the one that lost a digit to the app-scoped Notifications
+ * Worktrees is the one that lost a digit to the app-scoped Sounds
  * entry below. That follows from keeping Application entries together at the
  * start: giving Worktrees its digit back would require shortcut order to
  * diverge from both sidebar reading order and command-palette row order.
@@ -135,6 +136,16 @@ export interface SettingsSection {
  * Section `id`s are a compatibility surface — routes (`/settings/<id>`), the
  * settings-modal panel table, the command palette and remembered tab paths key
  * off them — so ids never change even when labels do.
+ *
+ * The rail label names WHAT the page controls; the group heading names WHOSE
+ * it is. Two pages that control the same thing at two scopes share word and
+ * icon (Diagnostics). Two pages that control different things get different
+ * words and icons (Sounds vs Notifications). Surfaces with no scope carrier
+ * qualify the label themselves — report-issue route labels already do
+ * ("App diagnostics" / "Host diagnostics"). The mobile header still shows
+ * the bare section label; that case is unresolved, not an example of the rule.
+ * Putting the group word into a row the heading already scopes is the
+ * inconsistent move, not the consistent one.
  */
 export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   {
@@ -158,13 +169,13 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     icon: PanelsTopLeft,
     group: "app",
   },
-  // Application and Host intentionally both have a Notifications page. The
-  // group heading states the scope: this one owns renderer sound and the
-  // phone's OS permission; the host one owns filtering and automation.
+  // Different controls than Host → Notifications, so a different word and
+  // icon (see the rail-table rule above). The section `id` stays
+  // `app-notifications`.
   {
     id: "app-notifications",
-    label: "Notifications",
-    icon: Bell,
+    label: "Sounds",
+    icon: Volume2,
     group: "app",
   },
   {
@@ -173,12 +184,10 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     icon: Keyboard,
     group: "app",
   },
-  // Application, not Host, and it is the same word as the host section on
-  // purpose: both pages ARE diagnostics, and the group heading above each is
-  // what says whose. The split exists because this half never varied by host —
-  // the app's log verbosity, its log file and its heap describe one window —
-  // so under the picker it was drawn once per host in the account, offering the
-  // same single setting from N places.
+  // Same kind of page as Host → Diagnostics, partitioned by scope, so the
+  // same word and icon. The split exists because this half never varied by
+  // host — the app's log verbosity, its log file and its heap describe one
+  // window — so under the picker it was drawn once per host in the account.
   {
     id: "app-diagnostics",
     label: "Diagnostics",
@@ -237,6 +246,8 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     icon: GitBranch,
     group: "host",
   },
+  // Event policy and automation for the selected host. Different controls
+  // than Application → Sounds, so it keeps the generic word and the bell.
   {
     id: "notifications",
     label: "Notifications",
@@ -272,9 +283,9 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     icon: TerminalSquare,
     group: "host",
   },
-  // The host half: `cli`/`host` log verbosity and that machine's own log
-  // files. Everything left here answers differently per host, which is what
-  // earns it a place under the picker.
+  // Same kind of page as Application → Diagnostics, partitioned by scope, so
+  // the same word and icon. Everything left here answers differently per host,
+  // which is what earns it a place under the picker.
   {
     id: "diagnostics",
     label: "Diagnostics",

@@ -74,6 +74,7 @@ try {
   const launched = await launchChromeWithDevTools(
     chromePath,
     "traycer-boot-press-",
+    [],
   );
   chrome = launched.chrome;
   chromeProfilePath = launched.profilePath;

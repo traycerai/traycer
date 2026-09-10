@@ -240,6 +240,17 @@ describe("<SettingsSidebar /> leader hints", () => {
     expect(labels).not.toContain("Agents");
   });
 
+  it("labels application sounds apart from host notification events", () => {
+    const app = SETTINGS_SECTIONS.find(
+      (section) => section.id === "app-notifications",
+    );
+    const host = SETTINGS_SECTIONS.find(
+      (section) => section.id === "notifications",
+    );
+    expect(app?.label).toBe("Sounds");
+    expect(host?.label).toBe("Notifications");
+  });
+
   it("delays sub-leader digit badges in settings navigation", async () => {
     const router = buildRouter("/settings/general");
     render(
