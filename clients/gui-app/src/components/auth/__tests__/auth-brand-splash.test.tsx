@@ -5,14 +5,16 @@ import { AUTH_SPLASH_MS } from "@/hooks/auth/use-auth-splash-cover";
 import { AuthLandingPage } from "@/components/auth/auth-landing-page";
 
 /**
- * These drive the real `AuthLandingPage`, and they run COMPILED - both
- * `auth-brand-splash` and `auth-landing-page` are listed in
- * `REACT_COMPILER_REGRESSION_FILES` (vitest.config.ts). That is what makes them
- * meaningful: the compiler can cache a value derived from other state past the
- * timer meant to retire it, so a surface that retires itself on a timeout has
- * to be tested as the compiler emits it, through the component that owns the
- * state. Uncompiled, or against the presentation component alone, these would
- * pass on code that cannot ship.
+ * These drive the real `AuthLandingPage`, and they run COMPILED.
+ *
+ * The file that has to be in `REACT_COMPILER_REGRESSION_FILES`
+ * (vitest.config.ts) is `use-auth-splash-cover` - the one holding the state and
+ * the timeout. `auth-brand-splash` and `auth-landing-page` are listed beside it
+ * because they read that state, but the hook is where the guarantee lives: the
+ * compiler caches a value on the inputs it is derived from, so a surface that
+ * retires itself on a timer has to be tested as the compiler emits it. If the
+ * state is ever extracted again, the regex entry moves with it, or these tests
+ * quietly start passing on code that cannot ship.
  */
 // The only child of the page that needs the host runtime. Stubbed so these can
 // drive the REAL `AuthLandingPage` - the component that owns the splash boolean
