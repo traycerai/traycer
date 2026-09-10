@@ -14,8 +14,11 @@
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
+	<!-- Not $(PRODUCT_NAME), which is the Xcode target "App": this is the
+	     name the sign-in sheet's consent alert shows ("Traycer" Wants to Use
+	     ...), where CFBundleDisplayName is not consulted. -->
 	<key>CFBundleName</key>
-	<string>$(PRODUCT_NAME)</string>
+	<string>Traycer</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleURLTypes</key>
