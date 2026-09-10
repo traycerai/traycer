@@ -176,6 +176,7 @@ describe("<OpeningBehaviorPanel /> agent-opened tabs", () => {
         content: "tab",
         conversation: "tab",
         browser: "split",
+        sideChat: "split",
       },
     });
     render(<OpeningBehaviorPanel />);
@@ -183,6 +184,37 @@ describe("<OpeningBehaviorPanel /> agent-opened tabs", () => {
     expect(
       screen.getByRole("combobox", { name: "Agent-opened tabs" }),
     ).not.toBeNull();
+  });
+});
+
+describe("<OpeningBehaviorPanel /> side chats", () => {
+  it("renders under per-category, alongside the other per-type rows", () => {
+    render(<OpeningBehaviorPanel />);
+
+    expect(screen.getByRole("combobox", { name: "Side chats" })).not.toBeNull();
+  });
+
+  it("is absent when the default is flat rather than per-category", () => {
+    useSettingsStore.setState({
+      tilePlacement: {
+        default: "tab",
+        content: "tab",
+        conversation: "tab",
+        browser: "split",
+        sideChat: "split",
+      },
+    });
+    render(<OpeningBehaviorPanel />);
+
+    expect(screen.queryByRole("combobox", { name: "Side chats" })).toBeNull();
+  });
+
+  it("writes the side-chat placement", () => {
+    render(<OpeningBehaviorPanel />);
+
+    choose("Side chats", "As a tab of the source chat");
+
+    expect(useSettingsStore.getState().tilePlacement.sideChat).toBe("tab");
   });
 });
 

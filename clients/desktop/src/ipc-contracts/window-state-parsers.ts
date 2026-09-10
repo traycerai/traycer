@@ -131,6 +131,7 @@ export function parseLandingDraft(
     composerMode:
       typeof obj.composerMode === "string" ? obj.composerMode : null,
     workspace: parseJsonValue(obj.workspace) ?? null,
+    closed: typeof obj.closed === "boolean" ? obj.closed : null,
   };
 }
 

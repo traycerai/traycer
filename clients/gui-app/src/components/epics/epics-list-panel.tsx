@@ -100,6 +100,7 @@ import { useHistoryOpenItem } from "@/components/epics/use-history-open-item";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useChatHostFilterSupport } from "@/hooks/home/use-chat-host-filter-support";
 import { EpicsSortMenu } from "@/components/epics/epics-sort-menu";
+import { HistoryDraftsList } from "@/components/epics/history-drafts-list";
 import {
   ROW_TARGET_SELECTOR,
   useHistoryListKeyboardNav,
@@ -125,9 +126,9 @@ import {
   authorizesCloudCapability,
   useAuthStore,
 } from "@/stores/auth/auth-store";
-import type {
-  HistorySearchPatch,
-  HistorySearchState,
+import {
+  type HistorySearchPatch,
+  type HistorySearchState,
 } from "@/lib/history-search";
 import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
 import { WorktreePrPills } from "@/components/worktree/worktree-pr-metadata";
@@ -703,6 +704,8 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
             isFetching={isFetching}
             focusOnMount={props.autoFocusSearch}
             placement="page"
+            placeholder="Search by title, repo, branch, or PR"
+            ariaLabel="Search tasks"
           />
         ) : null}
         <PanelChromeBar
@@ -718,6 +721,8 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
                 isFetching={isFetching}
                 focusOnMount={props.autoFocusSearch}
                 placement="toolbar"
+                placeholder="Search by title, repo, branch, or PR"
+                ariaLabel="Search tasks"
               />
             ) : null
           }
@@ -767,40 +772,45 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
           refresh={{ isFetching, hostId, onRefetch: refetch }}
         />
         <NotificationIndicatorsProvider indicators={notificationIndicators}>
-          <HistoryListBody
-            variant={variant}
-            error={error}
-            isPending={isPending}
-            isFetching={isFetching}
-            hasActiveFilters={hasActiveFilters}
-            chatHostFilterUnsupported={chatHostFilterUnsupported}
-            hostRequiresCloudToList={hostRequiresCloudToList}
-            items={items}
-            onRetry={handleRetry}
-            selectionMode={selectionMode}
-            selectionEnabled={selectionEnabled}
-            selectedIds={selectedIds}
-            onToggleSelection={toggleSelection}
-            onRequestDelete={requestDelete}
-            onRequestSweep={requestSweep}
-            onSetPinned={handleSetPinned}
-            pendingSetPinnedEpicIds={pendingSetPinnedEpicIds}
-            hasNextPage={hasNextPage}
-            isFetchingNextPage={isFetchingNextPage}
-            onLoadMore={fetchNextPage}
-            onSelectEpic={onSelectEpic}
-            onOpenItem={onOpenItem}
-            onOpenInNewWindow={openInNewWindowFlow.requestOpen}
-            openInNewWindowAvailable={openInNewWindowFlow.isAvailable}
-            worktreesByEpicId={worktreesByEpicId}
-            surfaceHostId={hostId}
-            openEpicIds={openEpicIdSet}
-            completeness={view.completeness}
-            cloudPagePending={cloudPagePending}
-            rowsScopeRef={rowsScopeRef}
-            onRowKeyDown={keyboardNav.onRowKeyDown}
-            onRefresh={refreshHistory}
-          />
+          <>
+            {variant === "picker" ? null : (
+              <HistoryDraftsList hostId={hostId} onBeforeOpen={onSelectEpic} />
+            )}
+            <HistoryListBody
+              variant={variant}
+              error={error}
+              isPending={isPending}
+              isFetching={isFetching}
+              hasActiveFilters={hasActiveFilters}
+              chatHostFilterUnsupported={chatHostFilterUnsupported}
+              hostRequiresCloudToList={hostRequiresCloudToList}
+              items={items}
+              onRetry={handleRetry}
+              selectionMode={selectionMode}
+              selectionEnabled={selectionEnabled}
+              selectedIds={selectedIds}
+              onToggleSelection={toggleSelection}
+              onRequestDelete={requestDelete}
+              onRequestSweep={requestSweep}
+              onSetPinned={handleSetPinned}
+              pendingSetPinnedEpicIds={pendingSetPinnedEpicIds}
+              hasNextPage={hasNextPage}
+              isFetchingNextPage={isFetchingNextPage}
+              onLoadMore={fetchNextPage}
+              onSelectEpic={onSelectEpic}
+              onOpenItem={onOpenItem}
+              onOpenInNewWindow={openInNewWindowFlow.requestOpen}
+              openInNewWindowAvailable={openInNewWindowFlow.isAvailable}
+              worktreesByEpicId={worktreesByEpicId}
+              surfaceHostId={hostId}
+              openEpicIds={openEpicIdSet}
+              completeness={view.completeness}
+              cloudPagePending={cloudPagePending}
+              rowsScopeRef={rowsScopeRef}
+              onRowKeyDown={keyboardNav.onRowKeyDown}
+              onRefresh={refreshHistory}
+            />
+          </>
         </NotificationIndicatorsProvider>
       </section>
       <DeleteTasksDialog
@@ -884,6 +894,8 @@ interface PanelSearchInputProps {
   readonly isFetching: boolean;
   readonly focusOnMount: boolean;
   readonly placement: "page" | "toolbar";
+  readonly placeholder: string;
+  readonly ariaLabel: string;
 }
 
 function PanelSearchInput(props: PanelSearchInputProps): ReactNode {
@@ -929,8 +941,8 @@ function PanelSearchInput(props: PanelSearchInputProps): ReactNode {
             props.onChange(event.target.value);
           }}
           onKeyDown={props.onKeyDown}
-          placeholder="Search by title, repo, branch, or PR"
-          aria-label="Search tasks"
+          placeholder={props.placeholder}
+          aria-label={props.ariaLabel}
         />
         {props.value.length > 0 ? (
           <InputGroupAddon align="inline-end">

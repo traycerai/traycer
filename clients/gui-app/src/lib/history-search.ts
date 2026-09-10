@@ -220,6 +220,7 @@ export type HistorySearchParamKey =
   | "historyChatHosts"
   | "historyChatHostMode"
   | "historyOwnership"
+  | "historyDrafts"
   | "historySort";
 
 export type HistorySearchParamsCleared<TPrev> = Omit<
@@ -241,6 +242,7 @@ export function clearHistorySearchParams<
     historyChatHosts: _historyChatHosts,
     historyChatHostMode: _historyChatHostMode,
     historyOwnership: _historyOwnership,
+    historyDrafts: _historyDrafts,
     historySort: _historySort,
     ...rest
   } = prev;

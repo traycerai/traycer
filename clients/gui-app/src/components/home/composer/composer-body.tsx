@@ -42,6 +42,7 @@ export interface ComposerBodyProps {
   } | null;
   readonly canSubmit: boolean;
   readonly isSubmitting: boolean;
+  readonly editorReadOnly: boolean;
   readonly attachmentPending: boolean;
   readonly workspaceDisabledHint: string | null;
   readonly header: ReactNode;
@@ -114,6 +115,7 @@ export function ComposerBody({
   initialSelection,
   canSubmit,
   isSubmitting,
+  editorReadOnly,
   attachmentPending,
   workspaceDisabledHint,
   header,
@@ -186,7 +188,7 @@ export function ComposerBody({
                 hasPastedImageBytes={hasPastedImageBytes}
                 ingestPastedComposerImages={ingestPastedComposerImages}
                 isActive={chatEditorIsActive}
-                disabled={isSubmitting}
+                disabled={isSubmitting || editorReadOnly}
                 placeholder={COMPOSER_PLACEHOLDER}
                 editorClassName={editorClassName}
                 stabilizeImageAttachmentCaret
@@ -207,7 +209,11 @@ export function ComposerBody({
                 <TerminalLaunchPanel
                   store={toolbarStore}
                   pending={isSubmitting}
-                  disabledHint={workspaceDisabledHint}
+                  disabledHint={
+                    editorReadOnly
+                      ? "Take over this draft to start a terminal agent"
+                      : workspaceDisabledHint
+                  }
                   hostId={hostId}
                   terminalLoginSurface={terminalLoginSurface}
                   onStart={onStartTerminal}

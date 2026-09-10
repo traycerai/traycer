@@ -2,13 +2,11 @@ import { lazy } from "react";
 import { LayersPlus } from "lucide-react";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import type { LandingDraftTab } from "@/stores/home/landing-draft-store";
-import { extractPlainTextFromComposerJSONContent } from "@/lib/composer/tiptap-json-content";
+import { landingDraftDisplayTitle } from "@/lib/composer/landing-draft-title";
 import { draftRoute, draftPathname } from "@/lib/routes";
 import { draftTabIntent } from "@/lib/tab-navigation/intents";
 import type { TabKindModule } from "@/stores/tabs/types";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
-
-const DRAFT_LABEL_FALLBACK = "Start Page";
 
 const landingDraftSurface = lazy(() =>
   import("@/components/home/landing-draft-surface").then((module) => ({
@@ -37,7 +35,7 @@ export const draftTabModule: TabKindModule<"draft", LandingDraftTab> = {
     kind: "draft",
     id: source.id,
     route: draftPathname(source.id),
-    name: draftTabName(source.content),
+    name: landingDraftDisplayTitle(source.content),
     icon: LayersPlus,
     canDuplicate: false,
     canOpenInNewWindow: true,
@@ -82,10 +80,4 @@ function renderDraftSurface(draftId: string) {
       <LandingDraftSurface />
     </DraftSurfaceProvider>
   );
-}
-
-function draftTabName(content: LandingDraftTab["content"]): string {
-  const text = extractPlainTextFromComposerJSONContent(content).trim();
-  if (text.length === 0) return DRAFT_LABEL_FALLBACK;
-  return text.split("\n")[0].trim() || DRAFT_LABEL_FALLBACK;
 }

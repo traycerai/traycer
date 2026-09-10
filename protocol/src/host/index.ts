@@ -5,9 +5,11 @@ export * from "./chat-fork";
 export * from "./comments";
 export * from "./config";
 export * from "./diagnostics";
+export * from "./drafts";
 export * from "./editor";
 export * from "./epic";
 export * from "./git-asset-stream";
+export * from "./host-agent-capabilities";
 export * from "./git-contracts";
 export * from "./git-constants";
 export * from "./git-schemas";
@@ -34,6 +36,7 @@ export * from "./terminal";
 export * from "./usage-analytics";
 export * from "./version-order";
 export * from "./workspace";
+export * from "./worktree-auto-cleanup-schemas";
 export * from "./worktree-changed-stream";
 export * from "./providers-changed-stream";
 
@@ -60,12 +63,18 @@ export {
   worktreeListAllForHostV14,
   worktreeListAllForHostV15,
   worktreeListAllForHostV16,
+  worktreeListAllForHostV17,
+  worktreeGetAutoCleanupPolicyV10,
+  worktreeSetAutoCleanupPolicyV10,
+  worktreeListAutoCleanupRunsV10,
+  worktreeGetAutoCleanupRunV10,
   worktreeListAllForHostUpgradeV10ToV11,
   worktreeListAllForHostUpgradeV11ToV12,
   worktreeListAllForHostUpgradeV12ToV13,
   worktreeListAllForHostUpgradeV13ToV14,
   worktreeListAllForHostUpgradeV14ToV15,
   worktreeListAllForHostUpgradeV15ToV16,
+  worktreeListAllForHostUpgradeV16ToV17,
   worktreeImportV10,
   worktreeListBranchesV10,
   worktreeListBindingsForEpicV10,
@@ -155,6 +164,8 @@ export {
   worktreeListAllForHostResponseSchemaV15,
   worktreeListAllForHostRequestSchemaV16,
   worktreeListAllForHostResponseSchemaV16,
+  worktreeListAllForHostRequestSchemaV17,
+  worktreeListAllForHostResponseSchemaV17,
   worktreeImportEntrySchema,
   worktreeImportRequestSchema,
   worktreeImportResponseSchema,
@@ -256,6 +267,8 @@ export {
   type WorktreeListAllForHostResponseV15,
   type WorktreeListAllForHostRequestV16,
   type WorktreeListAllForHostResponseV16,
+  type WorktreeListAllForHostRequestV17,
+  type WorktreeListAllForHostResponseV17,
   type WorktreeImportEntry,
   type WorktreeImportRequest,
   type WorktreeImportResponse,

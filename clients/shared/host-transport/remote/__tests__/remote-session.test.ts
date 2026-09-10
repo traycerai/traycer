@@ -356,6 +356,7 @@ class FakeRelayHost {
     schemaVersion: unknown;
     params: unknown;
     idempotencyKey: string | null;
+    callerAgentId: string | null;
     streamId: number;
   }[] = [];
   /** Answers the next REQUEST with this result payload. */
@@ -715,6 +716,8 @@ class FakeRelayHost {
         params: json.params,
         idempotencyKey:
           typeof json.idempotencyKey === "string" ? json.idempotencyKey : null,
+        callerAgentId:
+          typeof json.callerAgentId === "string" ? json.callerAgentId : null,
         streamId: message.streamId,
       });
       if (this.skipUnaryAutoRespond) {
@@ -1964,7 +1967,16 @@ describe("RemoteSession host_detached readiness evidence", () => {
         expect(session.isClosed()).toBe(false);
 
         const error: unknown = await session
-          .sendUnary("host.status", {}, null, null, undefined, false, null)
+          .sendUnary(
+            "host.status",
+            {},
+            null,
+            null,
+            null,
+            undefined,
+            false,
+            null,
+          )
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -2477,6 +2489,30 @@ describe("RemoteSession dial-failure logging", () => {
   }
 
   it(
+    "preserves the legacy missing-bearer cause when client auth is unavailable",
+    async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("", "user-1");
+      const session = buildSession(relay, lease, null);
+      try {
+        session.start();
+        await vi.waitFor(
+          () =>
+            expect(sessionLines(warnSpy.mock.calls)).toContainEqual(
+              expect.stringContaining("missing-bearer"),
+            ),
+          WAIT,
+        );
+      } finally {
+        session.close();
+        warnSpy.mockRestore();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
     "logs a grant-mint failure once, with its detail, and suppresses identical retries",
     async () => {
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -2636,7 +2672,7 @@ describe("RemoteSession dial-failure logging", () => {
     expect(session.isClosed()).toBe(true);
 
     const error: unknown = await session
-      .sendUnary("host.status", {}, null, null, undefined, false, null)
+      .sendUnary("host.status", {}, null, null, null, undefined, false, null)
       .then(
         () => null,
         (reason: unknown) => reason,
@@ -2690,6 +2726,7 @@ describe("RemoteSession dial-failure logging", () => {
         const resultPromise = session.sendUnary(
           "host.status",
           {},
+          null,
           null,
           null,
           undefined,
@@ -2747,7 +2784,16 @@ describe("RemoteSession dial-failure logging", () => {
       try {
         session.start();
         const error: unknown = await session
-          .sendUnary("host.status", {}, null, null, undefined, false, null)
+          .sendUnary(
+            "host.status",
+            {},
+            null,
+            null,
+            null,
+            undefined,
+            false,
+            null,
+          )
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -2779,7 +2825,16 @@ describe("RemoteSession dial-failure logging", () => {
       try {
         session.start();
         const error: unknown = await session
-          .sendUnary("host.status", {}, null, null, undefined, false, null)
+          .sendUnary(
+            "host.status",
+            {},
+            null,
+            null,
+            null,
+            undefined,
+            false,
+            null,
+          )
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -2816,6 +2871,7 @@ describe("RemoteSession dial-failure logging", () => {
           {},
           null,
           controller.signal,
+          null,
           undefined,
           false,
           null,
@@ -2865,6 +2921,7 @@ describe("RemoteSession dial-failure logging", () => {
             {},
             null,
             controller.signal,
+            null,
             undefined,
             false,
             null,
@@ -2946,7 +3003,7 @@ describe("RemoteSession negotiated-manifest publication", () => {
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
 
         const error: unknown = await session
-          .sendUnary("host.status", {}, null, null, undefined, false, {
+          .sendUnary("host.status", {}, null, null, null, undefined, false, {
             method: "epic.listTasks",
             version: { major: 1, minor: 6 },
           })
@@ -2983,7 +3040,7 @@ describe("RemoteSession negotiated-manifest publication", () => {
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
 
         const error: unknown = await session
-          .sendUnary("host.status", {}, null, null, undefined, false, {
+          .sendUnary("host.status", {}, null, null, null, undefined, false, {
             method: "epic.listTasks",
             version: { major: 1, minor: 6 },
           })
@@ -3119,6 +3176,7 @@ describe("RemoteSession absent optional method", () => {
             {},
             null,
             null,
+            null,
             undefined,
             false,
             null,
@@ -3240,6 +3298,7 @@ describe("RemoteSession fallback degrade version anchoring", () => {
         const result: unknown = await session.sendUnary(
           "host.syntheticSkewFallback",
           { label: "x" },
+          null,
           null,
           null,
           undefined,
@@ -3784,6 +3843,7 @@ describe("RemoteSession wake", () => {
         {},
         null,
         null,
+        null,
         undefined,
         false,
         null,
@@ -3827,6 +3887,7 @@ describe("RemoteSession wake", () => {
         session.sendUnary(
           "host.status",
           {},
+          null,
           null,
           null,
           undefined,
@@ -3876,6 +3937,7 @@ describe("RemoteSession wake", () => {
         {},
         null,
         controller.signal,
+        null,
         undefined,
         false,
         null,
@@ -4640,6 +4702,40 @@ describe("RemoteSession unary idempotency negotiation", () => {
       },
     });
 
+  it("puts caller attribution on the wire when a callerAgentId is supplied", async () => {
+    // Every other unary in this file passes `null`, so a transport that
+    // silently dropped the field would stay green. This is the one assertion
+    // that the REQUEST envelope actually carries the agent id the host-side
+    // dialer attributes the call to.
+    const relay = new FakeRelayHost();
+    relay.floorRpcManifest = { "host.status": { major: 1, minor: 0 } };
+    const lease = new MutableBearerLease("token", "user-1");
+    const session = new RemoteSession({
+      ...buildSessionOptions(relay, lease, null),
+      rpcRegistry: statusRegistry,
+    });
+    try {
+      session.start();
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+
+      await session.sendUnary(
+        "host.status",
+        {},
+        null,
+        null,
+        "agent-7c2c45ad",
+        undefined,
+        false,
+        null,
+      );
+
+      expect(relay.unaryRequests).toHaveLength(1);
+      expect(relay.unaryRequests[0]?.callerAgentId).toBe("agent-7c2c45ad");
+    } finally {
+      session.close();
+    }
+  });
+
   it.each([
     ["legacy openAck", [] as string[], null, HostTransportFailureError],
     [
@@ -4668,6 +4764,7 @@ describe("RemoteSession unary idempotency negotiation", () => {
           "host.status",
           {},
           "requested-key",
+          null,
           null,
           10_000,
           false,
@@ -4721,6 +4818,7 @@ describe("RemoteSession unary idempotency negotiation", () => {
             "host.status",
             {},
             "requested-key",
+            null,
             null,
             10_000,
             true,
@@ -5303,7 +5401,16 @@ describe("RemoteSession ready boundary at the host's open-ack", () => {
         // dispatch. Anything that RESOLVED here would mean the session had
         // dispatched work at a host that cannot receive it.
         const parked: unknown = session
-          .sendUnary("host.status", {}, null, null, undefined, false, null)
+          .sendUnary(
+            "host.status",
+            {},
+            null,
+            null,
+            null,
+            undefined,
+            false,
+            null,
+          )
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -6076,7 +6183,16 @@ describe("RemoteSession WORKTREE_BUSY holder preservation", () => {
         session.start();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
         const error: unknown = await session
-          .sendUnary("host.status", {}, null, null, undefined, false, null)
+          .sendUnary(
+            "host.status",
+            {},
+            null,
+            null,
+            null,
+            undefined,
+            false,
+            null,
+          )
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -6109,7 +6225,16 @@ describe("RemoteSession WORKTREE_BUSY holder preservation", () => {
         session.start();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
         const error: unknown = await session
-          .sendUnary("host.status", {}, null, null, undefined, false, null)
+          .sendUnary(
+            "host.status",
+            {},
+            null,
+            null,
+            null,
+            undefined,
+            false,
+            null,
+          )
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -6142,7 +6267,16 @@ describe("RemoteSession WORKTREE_BUSY holder preservation", () => {
         session.start();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
         const error: unknown = await session
-          .sendUnary("host.status", {}, null, null, undefined, false, null)
+          .sendUnary(
+            "host.status",
+            {},
+            null,
+            null,
+            null,
+            undefined,
+            false,
+            null,
+          )
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -6180,7 +6314,16 @@ describe("RemoteSession WORKTREE_BUSY holder preservation", () => {
         session.start();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
         const error: unknown = await session
-          .sendUnary("host.status", {}, null, null, undefined, false, null)
+          .sendUnary(
+            "host.status",
+            {},
+            null,
+            null,
+            null,
+            undefined,
+            false,
+            null,
+          )
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -6255,6 +6398,7 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
           {},
           null,
           null,
+          null,
           60,
           false,
           null,
@@ -6265,6 +6409,7 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
         const defaulted = session.sendUnary(
           "host.status",
           {},
+          null,
           null,
           null,
           undefined,
@@ -6325,6 +6470,7 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
         const pending = session.sendUnary(
           "host.status",
           {},
+          null,
           null,
           null,
           undefined,
@@ -7952,6 +8098,7 @@ describe("RemoteSession outbound seq continuity across a stream's CLOSE (host H1
         const pending = session.sendUnary(
           "host.status",
           {},
+          null,
           null,
           null,
           60,
