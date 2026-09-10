@@ -111,12 +111,20 @@ describe("brand dark ground", () => {
 
     const hex = BRAND_DARK_GROUND_HEX.replace("#", "");
     const rgb = Buffer.from(hex, "hex");
+    const width = png.readUInt32BE(16);
+    const height = png.readUInt32BE(20);
     const start = png.indexOf(Buffer.from("IDAT", "ascii")) + 4;
     const length = png.readUInt32BE(start - 8);
     const raw = inflateSync(png.subarray(start, start + length));
-    // Row layout is a filter byte then RGB triples; filter 0 means the bytes
-    // are the pixels themselves.
-    expect(raw[0]).toBe(0);
-    expect(raw.subarray(1, 4)).toEqual(rgb);
+
+    // EVERY pixel, not a corner. A sampled check passes on artwork that is
+    // merely dark at the edges, which is exactly the shape of the asset this
+    // replaced - a mark on a field. Comparing the whole decoded buffer to a
+    // synthesised one is both stricter and cheaper than walking it.
+    const row = Buffer.concat([Buffer.from([0]), Buffer.alloc(width * 3)]);
+    for (let x = 0; x < width; x += 1) rgb.copy(row, 1 + x * 3);
+    expect(raw).toEqual(
+      Buffer.concat(Array.from({ length: height }, () => row)),
+    );
   });
 });

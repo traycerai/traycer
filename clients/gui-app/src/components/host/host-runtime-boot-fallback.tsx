@@ -38,6 +38,14 @@ export function HostRuntimeBootFallback(props: {
   if (isMobileApp()) {
     return (
       <div
+        // `#root` reserves the top and both horizontal insets app-wide as its
+        // own PADDING, so a surface inside it can never paint those strips -
+        // they keep showing the app background while this fills the content
+        // box, and a launch would open on a dark card inside a lighter frame.
+        // The marker lets `index.css` paint `#root` itself for exactly this
+        // phase; a second `fixed inset-0` full-bleed surface is not available,
+        // because the contract test asserts that marker appears exactly once.
+        data-boot-ground=""
         className={cn(
           "flex min-h-safe-svh w-full flex-col",
           BRAND_DARK_GROUND_CLASS,

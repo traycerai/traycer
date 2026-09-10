@@ -27,7 +27,7 @@ const MAX_TEST_WORKERS = Math.min(
 // the UNCOMPILED hook while production mobile compiles everything. A test that
 // does not run the compiled component cannot see this class of bug at all.
 const REACT_COMPILER_REGRESSION_FILES =
-  /[/\\](?:composer-prompt-editor|use-(?:chat|landing|new-conversation)-prompt-stash-adapters|use-workspace-file-list-subscription|shared-stream-subscription|use-pr-(?:list|detail)-subscription|auth-brand-splash|auth-landing-page)\.(?:ts|tsx)$/;
+  /[/\\](?:composer-prompt-editor|use-(?:chat|landing|new-conversation)-prompt-stash-adapters|use-workspace-file-list-subscription|shared-stream-subscription|use-pr-(?:list|detail)-subscription|auth-brand-splash|auth-landing-page|use-auth-splash-cover)\.(?:ts|tsx)$/;
 
 export default defineConfig({
   // Run the affected composer boundary through the packaged desktop
