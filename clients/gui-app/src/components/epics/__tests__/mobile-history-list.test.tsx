@@ -758,7 +758,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       expect(listBody?.textContent ?? "").not.toMatch(/device/i);
     });
 
-    it("explains an empty filtered result when the local filter is unprovable", async () => {
+    it("does not call a filtered result empty when the listing was unavailable", async () => {
       testState.items = [];
       testState.completeness = {
         cloudPage: "unavailable",
@@ -772,9 +772,10 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       renderPanel("embedded", "/");
 
       expect(
-        await screen.findByTestId("epics-list-filtered-empty"),
+        await screen.findByTestId("epics-list-unavailable"),
       ).not.toBeNull();
       expect(screen.queryByTestId("epics-list-empty")).toBeNull();
+      expect(screen.queryByTestId("epics-list-filtered-empty")).toBeNull();
     });
 
     it("shows the explicit cloud-pending state when local storage is empty", async () => {

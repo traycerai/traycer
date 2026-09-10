@@ -286,6 +286,15 @@ function MobileHistoryListBody(props: MobileHistoryListBodyProps): ReactNode {
   if (props.items.length === 0 && props.hasActiveFilters && props.isFetching) {
     return <EpicsListFilteringLoading />;
   }
+  // A filtered result with no settled page is not "No tasks match": the filter
+  // was never evaluated over the account. Same neutral state as the unfiltered
+  // arm above.
+  if (
+    props.items.length === 0 &&
+    props.completeness?.cloudPage === "unavailable"
+  ) {
+    return <EpicsListUnavailable onRetry={props.onRetry} />;
+  }
   return (
     <>
       {props.items.length > 0 ? (

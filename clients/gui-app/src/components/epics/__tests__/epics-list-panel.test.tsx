@@ -539,6 +539,43 @@ describe("<EpicsListPanel />", () => {
     expect(testState.refetch).toHaveBeenCalled();
   });
 
+  it("does not call a filtered result empty when the listing was unavailable", async () => {
+    testState.items = [];
+    testState.completeness = {
+      cloudPage: "unavailable",
+      facets: "partial",
+      localRows: "suppressed-unprovable-filter",
+      sort: "server",
+    };
+    useHistorySearchStore.setState({
+      search: { ...DEFAULT_HISTORY_SEARCH, query: "missing" },
+    });
+    renderPanel("embedded", "/");
+
+    expect(await screen.findByTestId("epics-list-unavailable")).not.toBeNull();
+    expect(screen.queryByTestId("epics-list-filtered-empty")).toBeNull();
+    expect(screen.queryByTestId("epics-list-empty")).toBeNull();
+  });
+
+  it("shows the filtered empty state when the cloud page has settled", async () => {
+    testState.items = [];
+    testState.completeness = {
+      cloudPage: "settled",
+      facets: "server",
+      localRows: "none",
+      sort: "server",
+    };
+    useHistorySearchStore.setState({
+      search: { ...DEFAULT_HISTORY_SEARCH, query: "missing" },
+    });
+    renderPanel("embedded", "/");
+
+    expect(
+      await screen.findByTestId("epics-list-filtered-empty"),
+    ).not.toBeNull();
+    expect(screen.queryByTestId("epics-list-unavailable")).toBeNull();
+  });
+
   it("shows the explicit cloud-pending state instead of an empty list", async () => {
     testState.items = [];
     testState.cloudPagePending = true;

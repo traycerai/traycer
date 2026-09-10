@@ -1405,6 +1405,12 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
     if (isFetching) {
       return <EpicsListFilteringLoading />;
     }
+    // A filtered result with no settled page is not "No tasks match": the
+    // filter was never evaluated over the account. Same neutral state as the
+    // unfiltered arm - a failed load with a retry, and nothing about where.
+    if (completeness?.cloudPage === "unavailable") {
+      return <EpicsListUnavailable onRetry={onRetry} />;
+    }
   }
   const rowProps = {
     selectionMode,
