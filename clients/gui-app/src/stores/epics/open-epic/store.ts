@@ -755,15 +755,24 @@ export interface OpenEpicState {
   /**
    * Which STORE GENERATION the two ingest counters above belong to. The
    * counters are per-store and restart at zero when an epic session is
-   * rebuilt after eviction, while the TanStack cache can retain a list
-   * answer whose `issuedAtSeq` was captured against the PREVIOUS store - a
-   * fence from another generation is numerically meaningless here, and
-   * replayed as-is its (typically larger) value lets the omission pass
-   * retract rows the old counter never covered. The record hooks capture
-   * this WITH the fence and hand back `null` instead when the applying
-   * store is not the one the fence was read from - the same conservative
-   * "no session to read at dispatch" path, which holds omitted rows one
-   * extra pass. Module-monotonic; never reused across generations.
+   * rebuilt after eviction, while the TanStack cache outlives the store - and
+   * a fence from another generation is numerically meaningless here, since
+   * replayed as-is its (typically larger) value lets the omission pass retract
+   * rows the old counter never covered.
+   *
+   * So the record hooks put THIS VALUE IN THEIR CACHE KEY
+   * (`use-epic-chat-records.ts` / `use-epic-tui-agent-records.ts`). A cached
+   * answer therefore belongs to exactly one session: a rebuilt store is a
+   * different cache entry, its first read is a real request, and no fence can
+   * cross a generation in the first place. That also makes renderer parking
+   * (plan C, C1) honest - a park releases the session, and the show that
+   * follows re-reads instead of replaying the pre-park answer.
+   *
+   * The hooks used to carry this alongside the fence and compare the two at
+   * apply. That check is gone: with the generation in the key it could not
+   * fire, and a guard that cannot fire is not a second mechanism, only a claim
+   * a later reader would trust. Module-monotonic; never reused across
+   * generations.
    */
   ingestFenceIdentity: number;
   /**

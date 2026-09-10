@@ -4761,7 +4761,10 @@ describe("createChatSessionStore", () => {
     // Once the pane has actually shown it, it is ordinary history again and
     // ages out like anything else - the exemption is a delivery guarantee,
     // not a permanent pin.
-    harness.handle.store.getState().markNoticeDelivered(frame.clientActionId);
+    const shown = restoredNotice();
+    if (shown === undefined)
+      throw new Error("Expected the SEND_RESTORED notice");
+    harness.handle.store.getState().markNoticeDelivered(shown);
     flood(1000);
     expect(restoredNotice()).toBeUndefined();
   });
@@ -4845,7 +4848,7 @@ describe("createChatSessionStore", () => {
     expect(spoken.message).toContain("model");
 
     // The pane was active, so the toast layer showed it and said so.
-    harness.handle.store.getState().markNoticeDelivered(rejected);
+    harness.handle.store.getState().markNoticeDelivered(spoken);
     harness.handle.store.getState().ackFailedSendRestoration(rejected);
 
     expect(
@@ -7398,6 +7401,101 @@ describe("createChatSessionStore", () => {
     ).toEqual([]);
   });
 
+  it("retires an accepted queue cancellation on a reconnect snapshot whose queue no longer holds the row", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const queuedItem = {
+      kind: "managed-command" as const,
+      queueItemId: "queue-command-snapshot",
+      commandId: "command-snapshot",
+      description: "bun test --watch",
+      monitoring: true,
+      delivery: "next_turn" as const,
+      targetTurnId: null,
+      status: "pending" as const,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "running", items: [queuedItem] },
+      pendingFileEditApprovals: [],
+    });
+
+    const cancelActionId = harness.handle.store
+      .getState()
+      .queueCancel(queuedItem.queueItemId);
+    if (cancelActionId === null)
+      throw new Error("Expected queue cancel action");
+    acceptLastAction(harness);
+    expect(
+      harness.handle.store.getState().acceptedActions[cancelActionId],
+    ).toMatchObject({ action: "queueCancel" });
+
+    // A reconnect snapshot - not `queueChanged` - is the door this pin
+    // guards: `withoutResolvedAcceptedQueueCancellations` used to run only on
+    // the `queueChanged` frame, so a cancellation accepted just before a
+    // reconnect kept its record through every later snapshot.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    expect(
+      harness.handle.store.getState().acceptedActions[cancelActionId],
+    ).toBeUndefined();
+  });
+
+  it("keeps an accepted queue cancellation whose row the reconnect snapshot's queue still holds", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const queuedItem = {
+      kind: "managed-command" as const,
+      queueItemId: "queue-command-snapshot-keep",
+      commandId: "command-snapshot-keep",
+      description: "bun test --watch",
+      monitoring: true,
+      delivery: "next_turn" as const,
+      targetTurnId: null,
+      status: "pending" as const,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "running", items: [queuedItem] },
+      pendingFileEditApprovals: [],
+    });
+
+    const cancelActionId = harness.handle.store
+      .getState()
+      .queueCancel(queuedItem.queueItemId);
+    if (cancelActionId === null)
+      throw new Error("Expected queue cancel action");
+    acceptLastAction(harness);
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "running", items: [queuedItem] },
+      pendingFileEditApprovals: [],
+    });
+
+    expect(
+      harness.handle.store.getState().acceptedActions[cancelActionId],
+    ).toMatchObject({ action: "queueCancel" });
+  });
+
   it("retains accepted send records when pruning accepted action records by cap", () => {
     const harness = createHarness();
     emitSnapshot(harness.callbacks(), "owner");
@@ -7422,8 +7520,15 @@ describe("createChatSessionStore", () => {
     );
 
     const acceptedActions = harness.handle.store.getState().acceptedActions;
+    // The unconfirmed send is LIFECYCLE-LOCKED, not merely sorted to the front
+    // of the retained window, so it sits OUTSIDE the cap rather than inside it:
+    // the cap still admits exactly `MAX_ACCEPTED_CHAT_ACTION_RECORDS` prunable
+    // records and the send is one more. It used to be ranked highest among
+    // prunable records instead, which survives this fixture and does not
+    // survive the real one - enough unrelated traffic evicts it and the prompt
+    // it is the last copy of goes with it.
     expect(Object.keys(acceptedActions)).toHaveLength(
-      MAX_ACCEPTED_CHAT_ACTION_RECORDS,
+      MAX_ACCEPTED_CHAT_ACTION_RECORDS + 1,
     );
     expect(acceptedActions[sent.clientActionId]).toMatchObject({
       action: "send",
@@ -7433,7 +7538,7 @@ describe("createChatSessionStore", () => {
       nonSendActionIds.filter((actionId) =>
         Object.hasOwn(acceptedActions, actionId),
       ),
-    ).toHaveLength(MAX_ACCEPTED_CHAT_ACTION_RECORDS - 1);
+    ).toHaveLength(MAX_ACCEPTED_CHAT_ACTION_RECORDS);
   });
 
   it("clears a pending send when reconnect snapshot contains the queued prompt", () => {

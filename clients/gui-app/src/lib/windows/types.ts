@@ -34,6 +34,17 @@ export type DesktopOwnershipClaimResult =
   | { readonly ok: true }
   | { readonly ok: false; readonly currentOwner: string };
 
+/**
+ * One window's currently VISIBLE Epics. Distinct from
+ * {@link DesktopOwnershipEntry}, which is per tab and counts hidden tabs too -
+ * see the desktop-side `EpicVisibilityEntry` for why reading ownership as
+ * visibility would disable parking for every multi-window case.
+ */
+export interface DesktopEpicVisibilityEntry {
+  readonly windowId: string;
+  readonly epicIds: readonly string[];
+}
+
 export interface DesktopPerWindowEpicViewTab {
   readonly id: string;
   readonly epicId: string;
@@ -765,6 +776,47 @@ export interface DesktopWindowsBridge {
     claim(tabId: string, epicId: string): Promise<DesktopOwnershipClaimResult>;
     release(tabId: string): Promise<void>;
     onChange(handler: (entries: readonly DesktopOwnershipEntry[]) => void): {
+      dispose(): void;
+    };
+  };
+  /**
+   * Which Epics each window currently SHOWS - renderer parking's cross-window
+   * answer (plan C, decision C6). Each window reports its own roll-up; main
+   * fans the whole per-window map back so a window can ask about the others.
+   *
+   * Optional + capability-probed, like `perWindowState.clear`: a preload built
+   * before this channel existed has no `epicVisibility`, and requiring it in
+   * `isDesktopWindowsBridge` would fail the WHOLE bridge on a renderer/preload
+   * skew - costing canvas persistence to fix a parking heuristic. Absent, the
+   * decider degrades to this window's own panes, which is exactly the browser
+   * behaviour (where there is no second window) and the pre-channel desktop
+   * behaviour. Probed at the install site
+   * (`lib/epics/cross-window-epic-visibility.ts`).
+   */
+  epicVisibility?: {
+    snapshot(): Promise<readonly DesktopEpicVisibilityEntry[]>;
+    report(epicIds: readonly string[]): Promise<void>;
+    onChange(
+      handler: (entries: readonly DesktopEpicVisibilityEntry[]) => void,
+    ): {
+      dispose(): void;
+    };
+  };
+  /**
+   * Whether THIS window is on screen (shown and not minimised) as main sees
+   * it. Renderer parking's window-level input: the Page Visibility API is
+   * inert in the desktop app because every window runs with
+   * `backgroundThrottling: false`, so minimising changes nothing the renderer
+   * can observe on its own.
+   *
+   * Optional + capability-probed like `epicVisibility`, for the same skew
+   * reason. Absent, the renderer keeps answering "visible" and parking waits
+   * for a tab hide, which is the pre-channel behaviour. Probed at the install
+   * site (`lib/epics/desktop-window-visibility.ts`).
+   */
+  windowVisibility?: {
+    snapshot(): Promise<boolean>;
+    onChange(handler: (onScreen: boolean) => void): {
       dispose(): void;
     };
   };

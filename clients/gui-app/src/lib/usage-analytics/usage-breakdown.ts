@@ -32,7 +32,7 @@ export function weakestProvenance(
 }
 
 function breakdownKey(harnessId: string, model: string): string {
-  return `${harnessId}\u0000${model}`;
+  return `${harnessId}\0${model}`;
 }
 
 /**
