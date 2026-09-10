@@ -77,21 +77,16 @@ import {
 } from "@/components/layout/tabs/tab-chrome-tokens";
 import { mergeRefs } from "@/lib/merge-refs";
 import { TabContextMenuContent } from "@/components/layout/tabs/tab-strip-context-menu";
-import {
-  useTabRepositorySettings,
-  type TabRepositorySettings,
-} from "@/components/layout/tabs/tab-repository-settings";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type { TabSplitCommandId } from "@/stores/tabs/tab-split-commands";
 import { tabResolveIntent } from "@/stores/tabs/registry";
 import type { HeaderTabKind } from "@/stores/tabs/registry";
-import { tabRepositoryIdentity, type HeaderTab } from "@/stores/tabs/types";
+import { tabAppearance, type HeaderTab } from "@/stores/tabs/types";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
 import { useEpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
 import { TabLeadingIcon } from "./tab-leading-icon";
-import { repositoryTabFill } from "./repository-identity-presentation";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 const NO_DRAG_CLASS = "[-webkit-app-region:no-drag]";
@@ -185,17 +180,6 @@ function canEditEpicTabTitle(input: {
   );
 }
 
-function repositorySettingsMenuProp(
-  repositorySettings: TabRepositorySettings,
-  permissionRole: PermissionRole | null,
-): { readonly onSelect: () => void; readonly disabled: boolean } | null {
-  if (repositorySettings.onOpen === null) return null;
-  return {
-    onSelect: repositorySettings.onOpen,
-    disabled: !isEditableRole(permissionRole),
-  };
-}
-
 export const TabItem = memo(function TabItem(props: TabItemProps) {
   const {
     tab,
@@ -219,8 +203,8 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
     onSetTaskPinned,
   } = props;
   const tabEpicId = tab.kind === "epic" ? tab.epicId : null;
-  const repositoryIdentity = tabRepositoryIdentity(tab);
-  const repositoryColor = repositoryIdentity?.color ?? null;
+  const appearance = tabAppearance(tab);
+  const tabColor = appearance?.color ?? null;
   // Read once here rather than inside `TabLeadingIcon`, so the SAME resolved
   // value can also ride the drag payload below - the strip item is the drag
   // source, and at the moment a drag starts it already holds everything the
@@ -246,7 +230,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
   } = indicatorState;
   const dragGhost = useMemo<HeaderTabDragGhost>(
     () => ({
-      repositoryIdentity,
+      appearance,
       indicatorState: {
         unreadFailure,
         unreadNonTerminalFailure,
@@ -258,7 +242,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
       },
     }),
     [
-      repositoryIdentity,
+      appearance,
       unreadFailure,
       unreadNonTerminalFailure,
       unreadTerminalFailure,
@@ -297,7 +281,6 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
     useRegisteredEpicTitleGenerating(registeredEpicId);
   const activityStatus = useEpicActivityStatus(registeredEpicId);
   const permissionRole = useRegisteredEpicPermissionRole(registeredEpicId);
-  const repositorySettings = useTabRepositorySettings(tab);
   const localHome = useRegisteredEpicLocalHome(registeredEpicId);
   const cloudAuthorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
@@ -542,15 +525,15 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
             side="left"
           />
           {chrome === "own" ? (
-            <TabChrome isActive={isActive} color={repositoryColor} />
+            <TabChrome isActive={isActive} color={tabColor} />
           ) : (
-            <SplitMemberChrome focused={isActive} color={repositoryColor} />
+            <SplitMemberChrome focused={isActive} color={tabColor} />
           )}
           <StripPairPreview tabKind={tab.kind} tabId={tab.id} />
           <span className="relative z-20 flex min-w-0 flex-1 items-center justify-center gap-1.5 outline-none">
             <TabLeadingIcon
               icon={tab.icon}
-              identity={repositoryIdentity}
+              identity={appearance}
               titleGenerationPending={titleGenerationPending}
               activityStatus={activityStatus}
               indicatorState={indicatorState}
@@ -601,10 +584,6 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
         canCloseOtherTabs={canCloseOtherTabs}
         canOpenInNewWindow={canOpenInNewWindow}
         canEditTitle={canEditTitle}
-        repositorySettings={repositorySettingsMenuProp(
-          repositorySettings,
-          permissionRole,
-        )}
         taskPinnedState={taskPinnedState}
         isTaskPinPending={isTaskPinPending}
         onCloseOtherTabs={onCloseOtherTabs}
@@ -614,7 +593,6 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
         onEditTitle={rename.startEditing}
         onSetTaskPinned={handleSetTaskPinned}
       />
-      {repositorySettings.dialog}
     </ContextMenu>
   );
   if (!includeMotionFrame) return control;
@@ -888,8 +866,8 @@ export function TabChrome(props: {
         {props.color !== null ? (
           <span
             aria-hidden
-            className="pointer-events-none absolute inset-x-2 inset-y-1 rounded-md"
-            style={{ backgroundColor: repositoryTabFill(props.color) }}
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5"
+            style={{ backgroundColor: props.color }}
           />
         ) : null}
         <span
@@ -902,8 +880,8 @@ export function TabChrome(props: {
 
   return (
     <TabChromeBackground
-      fill={repositoryTabFill(props.color)}
-      borderColor="var(--color-border)"
+      fill="var(--color-background)"
+      borderColor={props.color ?? "var(--color-border)"}
       coversBaseline
       className="transition-opacity duration-300 ease-spring"
     />
@@ -949,27 +927,18 @@ export function SplitMemberChrome(props: {
   if (props.focused) {
     return (
       <TabChromeBackground
-        fill={repositoryTabFill(props.color)}
-        borderColor="var(--color-primary)"
+        fill="var(--color-background)"
+        borderColor={props.color ?? "var(--color-primary)"}
         coversBaseline
       />
     );
   }
 
   return (
-    <>
-      {props.color !== null ? (
-        <span
-          aria-hidden
-          className="pointer-events-none absolute inset-x-px inset-y-1 rounded-sm"
-          style={{ backgroundColor: repositoryTabFill(props.color) }}
-        />
-      ) : null}
-      <span
-        aria-hidden
-        className="pointer-events-none absolute inset-x-px inset-y-1 rounded-sm transition-colors duration-200 ease-out group-hover/tab:bg-accent/20"
-      />
-    </>
+    <span
+      aria-hidden
+      className="pointer-events-none absolute inset-x-px inset-y-1 rounded-sm transition-colors duration-200 ease-out group-hover/tab:bg-accent/20"
+    />
   );
 }
 

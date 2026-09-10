@@ -2,17 +2,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { NotificationIndicatorIcon } from "@/components/notifications/notification-indicator-icon";
 import type { NotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
 import type { EpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
-import type { HeaderTabRepositoryIdentity, TabIcon } from "@/stores/tabs/types";
-import { RepositoryIdentityIcon } from "./repository-identity";
-
-function hasResolvedIcon(
-  identity: HeaderTabRepositoryIdentity,
-): identity is HeaderTabRepositoryIdentity & {
-  readonly icon: NonNullable<HeaderTabRepositoryIdentity["icon"]>;
-} {
-  return identity.icon !== null;
-}
-
+import type { HeaderTabAppearance, TabIcon } from "@/stores/tabs/types";
 /**
  * Takes `indicatorState` as a resolved prop rather than reading
  * `NotificationIndicatorsContext` itself - both callers (the strip's
@@ -23,7 +13,7 @@ function hasResolvedIcon(
  */
 export function TabLeadingIcon(props: {
   readonly icon: TabIcon | null;
-  readonly identity: HeaderTabRepositoryIdentity | null;
+  readonly identity: HeaderTabAppearance | null;
   readonly titleGenerationPending: boolean;
   readonly activityStatus: EpicActivityStatus;
   readonly indicatorState: NotificationIndicatorState;
@@ -69,15 +59,14 @@ export function TabLeadingIcon(props: {
           agentSurface="gui"
         />
       </span>
-      {identity !== null && hasResolvedIcon(identity) ? (
+      {identity !== null && identity.icon !== null ? (
         <span
-          data-slot="tab-repository-icon"
+          data-slot="tab-custom-icon"
           className="inline-flex size-5 shrink-0 items-center justify-center"
         >
-          <RepositoryIdentityIcon
-            identity={identity}
-            fallbackIcon={props.icon}
-          />
+          <span aria-hidden="true" className="text-lg leading-none">
+            {identity.icon}
+          </span>
         </span>
       ) : null}
     </span>

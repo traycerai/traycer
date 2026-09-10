@@ -816,13 +816,6 @@ export const HOST_METHOD_POLL_TABLE = {
   "workspace.listDirectory": { ...LATEST_SCHEDULING, poll: null },
   "workspace.browseFolders": { ...LATEST_SCHEDULING, poll: null },
   "workspace.readFile": { ...LATEST_SCHEDULING, poll: null },
-  "workspace.getAppearance": { ...LATEST_SCHEDULING, poll: null },
-  // Appearance saves persist configuration and an asset file to disk.
-  "workspace.setAppearance": {
-    mode: "fifo",
-    joinResponseTimeoutMs: null,
-    poll: null,
-  },
   // Saving a file writes to disk and each attempt carries the revision
   // acknowledged by the previous save, so writes must not be coalesced.
   "workspace.writeFile": {

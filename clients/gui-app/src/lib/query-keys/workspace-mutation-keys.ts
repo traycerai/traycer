@@ -1,5 +1,4 @@
 export const workspaceMutationKeys = {
-  setAppearance: () => ["workspace.setAppearance"] as const,
   prepareFolders: () => ["workspace.prepareFolders"] as const,
   addBindingFolder: () => ["workspaceBinding.addFolder"] as const,
   removeBindingEntry: () => ["workspaceBinding.removeEntry"] as const,

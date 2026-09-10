@@ -100,59 +100,6 @@ const hostClient: MockHostClient = {
   onChange: () => () => undefined,
 };
 
-// The folder row's repository icon (and the Repository settings dialog) read
-// committed appearance over the host. Stub those reads so this picker suite
-// keeps needing no host runtime.
-vi.mock("@/hooks/appearance/use-workspace-appearance", () => {
-  const stub = () => ({
-    appearance: null,
-    scope: null,
-    canEdit: false,
-    readSupport: true,
-    writeSupport: true,
-    assetRefreshKey: 0,
-  });
-  return {
-    useWorkspaceAppearance: stub,
-    useDraftAppearance: stub,
-    useEpicAppearanceSource: () => ({ hostId: null, workspacePath: null }),
-    useWorkspaceSetAppearance: () => ({
-      mutateAsync: () => Promise.resolve({}),
-    }),
-  };
-});
-vi.mock("@/hooks/appearance/use-appearance-assets", () => ({
-  useAppearanceAsset: () => ({
-    url: null,
-    status: "empty",
-    reason: null,
-    reportDecodeFailure: () => {},
-  }),
-}));
-
-vi.mock("@/components/ui/select", () => ({
-  Select: (props: { readonly children: ReactNode }) => (
-    <div>{props.children}</div>
-  ),
-  SelectTrigger: (props: { readonly children: ReactNode }) => (
-    <button type="button">{props.children}</button>
-  ),
-  SelectValue: () => <span />,
-  SelectContent: (props: { readonly children: ReactNode }) => (
-    <div>{props.children}</div>
-  ),
-  SelectItem: (props: { readonly children: ReactNode }) => (
-    <div>{props.children}</div>
-  ),
-}));
-
-vi.mock("@/lib/host", () => ({
-  useHostBinding: () => ({ directory: { selectById: mocks.selectHost } }),
-  useHostClient: () => hostClient,
-  // The SPINE, a separate export since redesign P2.1.
-  useHostRuntimeClient: () => hostClient,
-}));
-
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-test",
 }));

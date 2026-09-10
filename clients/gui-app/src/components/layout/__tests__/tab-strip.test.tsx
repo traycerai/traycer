@@ -1,6 +1,10 @@
 import type { TaskPinnedState } from "@/hooks/epic/use-epic-task-pinned-states-query";
 import { INERT_ROOT_STATE_PORT } from "@/stores/epics/open-epic/test-support/root-state-port-fixture";
 import { TabStrip } from "@/components/layout/tabs/tab-strip";
+import {
+  SplitMemberChrome,
+  TabChrome,
+} from "@/components/layout/tabs/tab-strip-item";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { paneTabRefs } from "@/stores/epics/canvas/actions";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
@@ -682,6 +686,47 @@ describe("<TabStrip />", () => {
     expect(screen.getByTestId("tab-new")).toBeDefined();
   });
 
+  it("uses the project color for the active outline while keeping the neutral fill", () => {
+    render(<TabChrome isActive color="#12ab34" />);
+
+    const center = screen.getByTestId("tab-chrome-center");
+    expect(center.style.backgroundColor).toBe("var(--color-background)");
+    expect(center.style.borderTopColor).toBe("rgb(18, 171, 52)");
+  });
+
+  it("keeps the project color on an inactive tab", () => {
+    const { container } = render(
+      <TabChrome isActive={false} color="#12ab34" />,
+    );
+
+    expect(
+      container.querySelector("span[style]")?.getAttribute("style"),
+    ).toContain("background-color: rgb(18, 171, 52);");
+  });
+
+  it("uses the manual color for a focused split member and retains the primary fallback", () => {
+    const { rerender, container } = render(
+      <SplitMemberChrome focused color="#12ab34" />,
+    );
+    expect(screen.getByTestId("tab-chrome-center").style.borderTopColor).toBe(
+      "rgb(18, 171, 52)",
+    );
+
+    rerender(<SplitMemberChrome focused color={null} />);
+    expect(screen.getByTestId("tab-chrome-center").style.borderTopColor).toBe(
+      "var(--color-primary)",
+    );
+
+    rerender(<SplitMemberChrome focused={false} color="#12ab34" />);
+    expect(screen.queryByTestId("tab-chrome-center")).toBeNull();
+    expect(screen.queryByTestId("tab-baseline-cover")).toBeNull();
+    expect(screen.queryByTestId("tab-cap-left")).toBeNull();
+    expect(screen.queryByTestId("tab-cap-right")).toBeNull();
+    expect(container.querySelector("span")?.className).toContain(
+      "group-hover/tab:bg-accent/20",
+    );
+  });
+
   it("shows the pair highlight on the approach half during a merge", async () => {
     openEpicFixture(EPIC_A);
     openEpicFixture(EPIC_B);
@@ -958,10 +1003,10 @@ describe("<TabStrip />", () => {
     expect(screen.getByTestId("split-tab-divider-split-a")).toBeDefined();
     expect(
       screen.getByTestId("split-tab-group-underline-left-split-a").className,
-    ).toContain("bg-primary");
+    ).toContain("bg-current");
     expect(
       screen.getByTestId("split-tab-group-underline-right-split-a").className,
-    ).toContain("bg-primary");
+    ).toContain("bg-current");
 
     const plainC = screen.getByTestId(`tab-epic-${EPIC_C.id}`);
     const plainD = screen.getByTestId(`tab-epic-${tabD.id}`);
@@ -1062,10 +1107,10 @@ describe("<TabStrip />", () => {
     const rightTab = screen.getByTestId("tab-epic-e-b");
     const leftPane = indicator.querySelector('[data-split-pane="left"]');
     const rightPane = indicator.querySelector('[data-split-pane="right"]');
-    expect(controlUnderline.className).toContain("bg-primary");
+    expect(controlUnderline.className).toContain("bg-current");
     expect(screen.queryByTestId("split-tab-divider-split-a")).toBeNull();
-    expect(leftUnderline.className).not.toContain("bg-primary");
-    expect(rightUnderline.className).toContain("bg-primary");
+    expect(leftUnderline.className).not.toContain("bg-current");
+    expect(rightUnderline.className).toContain("bg-current");
     expect(
       within(leftTab).getByTestId("tab-chrome-center").style.borderTopColor,
     ).toBe("var(--color-primary)");
@@ -1098,8 +1143,8 @@ describe("<TabStrip />", () => {
     expect(rightPane?.getAttribute("width")).toBe("8");
     expect(leftPane?.getAttribute("fill")).toBe("none");
     expect(rightPane?.getAttribute("fill")).toBe("currentColor");
-    expect(leftUnderline.className).toContain("bg-primary");
-    expect(rightUnderline.className).not.toContain("bg-primary");
+    expect(leftUnderline.className).toContain("bg-current");
+    expect(rightUnderline.className).not.toContain("bg-current");
     expect(leftTab.className).toContain("px-1.5");
     expect(rightTab.className).toContain("px-5");
     expect(within(leftTab).queryByTestId("tab-chrome-center")).toBeNull();

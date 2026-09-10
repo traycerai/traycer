@@ -80,42 +80,6 @@ const RECENT_FOLDER: PreparedWorkspaceFolder = {
   repoUrl: null,
 };
 
-// The folder row's repository icon (and the Repository settings dialog) read
-// committed appearance over the host. Stub those reads so this picker suite
-// keeps needing no host runtime.
-vi.mock("@/hooks/appearance/use-workspace-appearance", () => {
-  const stub = () => ({
-    appearance: null,
-    scope: null,
-    canEdit: false,
-    readSupport: true,
-    writeSupport: true,
-    assetRefreshKey: 0,
-  });
-  return {
-    useWorkspaceAppearance: stub,
-    useDraftAppearance: stub,
-    useEpicAppearanceSource: () => ({ hostId: null, workspacePath: null }),
-    useWorkspaceSetAppearance: () => ({
-      mutateAsync: () => Promise.resolve({}),
-    }),
-  };
-});
-vi.mock("@/hooks/appearance/use-appearance-assets", () => ({
-  useAppearanceAsset: () => ({
-    url: null,
-    status: "empty",
-    reason: null,
-    reportDecodeFailure: () => {},
-  }),
-}));
-
-vi.mock("@/lib/host", () => ({
-  useHostBinding: () => null,
-  useHostClient: () => FAKE_CLIENT,
-  // Spine and app-wide client are separate exports since redesign P2.1.
-  useHostRuntimeClient: () => FAKE_CLIENT,
-}));
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-test",
 }));

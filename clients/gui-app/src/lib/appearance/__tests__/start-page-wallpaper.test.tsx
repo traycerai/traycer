@@ -5,13 +5,11 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
 const cacheMocks = vi.hoisted(() => ({
   read: vi.fn(),
   remove: vi.fn(),
-  pin: vi.fn(),
 }));
 
 vi.mock("@/lib/appearance/appearance-cache", () => ({
   readAppearanceBlob: cacheMocks.read,
   removeAppearanceBlob: cacheMocks.remove,
-  pinGlobalAppearanceBlob: cacheMocks.pin,
   writeAppearanceBlob: vi.fn(),
 }));
 
@@ -21,7 +19,6 @@ describe("useStartPageWallpaperImage", () => {
   beforeEach(() => {
     cacheMocks.read.mockReset();
     cacheMocks.remove.mockResolvedValue(undefined);
-    cacheMocks.pin.mockResolvedValue(undefined);
     useSettingsStore.setState({ startPageWallpaper: null });
     vi.spyOn(URL, "createObjectURL").mockImplementation(
       (_blob: Blob | MediaSource) => "blob:wallpaper",

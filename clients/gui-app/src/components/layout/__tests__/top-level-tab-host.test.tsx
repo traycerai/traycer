@@ -856,7 +856,7 @@ describe("activateHostedTopLevelSurface (design-review F3: hosted pointer/focus 
       canClose: true,
       canDuplicate: true,
       canOpenInNewWindow: true,
-      repositoryIdentity: null,
+      appearance: null,
     };
     const tabB: HeaderTab = { ...tabA, id: "epic-b", epicId: "epic-b" };
     const tabsByRefKey = new Map([
@@ -895,7 +895,7 @@ describe("activateHostedTopLevelSurface (design-review F3: hosted pointer/focus 
       canClose: true,
       canDuplicate: true,
       canOpenInNewWindow: true,
-      repositoryIdentity: null,
+      appearance: null,
     };
     const tabsByRefKey = new Map([[tabRefKey(tabA), tabA]]);
     const activeItem: StripItem = {
@@ -929,7 +929,7 @@ describe("activateHostedTopLevelSurface (design-review F3: hosted pointer/focus 
       canClose: true,
       canDuplicate: true,
       canOpenInNewWindow: true,
-      repositoryIdentity: null,
+      appearance: null,
     };
     const tabsByRefKey = new Map([[tabRefKey(tabA), tabA]]);
     const activeItem: StripItem | null = null;

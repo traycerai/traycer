@@ -55,7 +55,7 @@ function epicTab(id: string, epicId: string): HeaderTab {
     canClose: true,
     canDuplicate: true,
     canOpenInNewWindow: true,
-    repositoryIdentity: null,
+    appearance: null,
   };
 }
 
@@ -81,7 +81,7 @@ function draftTab(id: string): HeaderTab {
     icon: null,
     canDuplicate: false,
     canOpenInNewWindow: false,
-    repositoryIdentity: null,
+    appearance: null,
   };
 }
 

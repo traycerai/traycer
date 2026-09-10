@@ -1,9 +1,3 @@
-import {
-  workspaceGetAppearanceRequestSchema,
-  workspaceGetAppearanceResponseSchema,
-  workspaceSetAppearanceRequestSchema,
-  workspaceSetAppearanceResponseSchema,
-} from "./appearance-schemas";
 import { defineRpcContract } from "@traycer/protocol/framework/index";
 import {
   prepareWorkspaceFoldersRequestSchema,
@@ -201,17 +195,4 @@ export const workspaceSearchTextV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: workspaceSearchTextRequestSchema,
   responseSchema: workspaceSearchTextResponseSchema,
-});
-
-export const workspaceGetAppearanceV10 = defineRpcContract({
-  method: "workspace.getAppearance",
-  schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: workspaceGetAppearanceRequestSchema,
-  responseSchema: workspaceGetAppearanceResponseSchema,
-});
-export const workspaceSetAppearanceV10 = defineRpcContract({
-  method: "workspace.setAppearance",
-  schemaVersion: { major: 1, minor: 0 } as const,
-  requestSchema: workspaceSetAppearanceRequestSchema,
-  responseSchema: workspaceSetAppearanceResponseSchema,
 });

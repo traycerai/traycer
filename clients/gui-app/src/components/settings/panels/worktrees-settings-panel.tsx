@@ -3255,7 +3255,6 @@ function WorktreeScriptReviewDialog(props: {
       repositoryDefaultsSlot={null}
       // Reviewing one worktree's scripts before deletion - no repository to
       // identify here.
-      identity={null}
       inUseNote={
         target.inUse ? "This worktree is in use by an active agent." : null
       }

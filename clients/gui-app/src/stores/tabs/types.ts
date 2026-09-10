@@ -5,8 +5,6 @@ import type { TAB_KINDS } from "@/stores/tabs/registry";
 import type { DesktopWindowsBridge } from "@/lib/windows/types";
 import type { DraftNewWindowFlow } from "@/components/layout/hooks/use-draft-open-in-new-window";
 import type { EpicNewWindowFlow } from "@/components/layout/hooks/use-epic-open-in-new-window";
-import type { WorkspaceAppearance } from "@traycer/protocol/host/workspace/appearance-schemas";
-import type { AppearanceScope } from "@/lib/appearance/appearance-cache";
 
 /**
  * Type-only re-import so this file uses the SAME source-of-truth for kind
@@ -36,12 +34,9 @@ export interface SystemTab {
 
 export type TabIcon = ComponentType<{ className: string | undefined }>;
 
-export interface HeaderTabRepositoryIdentity {
+export interface HeaderTabAppearance {
   readonly color: string | null;
-  readonly icon: NonNullable<WorkspaceAppearance["icon"]> | null;
-  readonly scope: AppearanceScope | null;
-  readonly assetRefreshKey: number;
-  readonly iconRejected: boolean;
+  readonly icon: string | null;
 }
 
 /**
@@ -53,7 +48,7 @@ export interface HeaderTabRepositoryIdentity {
  * per-concern dispatch fns (`tabRequestClose`, `tabDuplicate`,
  * `tabResolveIntent`, `tabRouteOptions`, `tabActivate`) in the registry.
  */
-export type HeaderTab =
+export type HeaderTab = { readonly appearance?: HeaderTabAppearance | null } & (
   | {
       readonly kind: "epic";
       readonly id: string;
@@ -82,15 +77,6 @@ export type HeaderTab =
       readonly canClose: boolean;
       readonly canDuplicate: boolean;
       readonly canOpenInNewWindow: boolean;
-      /**
-       * Repository colour/icon projected onto this tab by
-       * `useHeaderTabAppearance`. `null` until that hook has resolved one (or
-       * for a repo with no configured identity) - never `undefined`: only
-       * `epic` and `draft` tabs are ever bound to a repository, so the field
-       * lives on exactly these two variants instead of every kind carrying an
-       * optional it can never fill.
-       */
-      readonly repositoryIdentity: HeaderTabRepositoryIdentity | null;
     }
   | {
       readonly kind: "draft";
@@ -100,7 +86,6 @@ export type HeaderTab =
       readonly icon: TabIcon | null;
       readonly canDuplicate: boolean;
       readonly canOpenInNewWindow: boolean;
-      readonly repositoryIdentity: HeaderTabRepositoryIdentity | null;
     }
   | {
       readonly kind: "history";
@@ -121,19 +106,11 @@ export type HeaderTab =
       readonly canDuplicate: boolean;
       readonly canOpenInNewWindow: boolean;
       readonly lastPath: string | null;
-    };
+    }
+);
 
-/**
- * Repository identity for a tab, or `null` for a kind that never carries one
- * (`history`, `settings`). A narrow helper rather than an optional field on
- * every variant - only `epic` and `draft` are ever bound to a repository.
- */
-export function tabRepositoryIdentity(
-  tab: HeaderTab,
-): HeaderTabRepositoryIdentity | null {
-  return tab.kind === "epic" || tab.kind === "draft"
-    ? tab.repositoryIdentity
-    : null;
+export function tabAppearance(tab: HeaderTab): HeaderTabAppearance | null {
+  return tab.appearance ?? null;
 }
 
 export interface TabContextMenuCtx {

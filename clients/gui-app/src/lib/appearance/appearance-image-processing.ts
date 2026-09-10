@@ -1,5 +1,3 @@
-import { MAX_APPEARANCE_ICON_BYTES } from "@traycer/protocol/host/workspace/appearance-schemas";
-import { MAX_APPEARANCE_ICON_EDGE } from "@traycer/protocol/host/workspace/appearance-asset-policy";
 import { imageSize } from "image-size";
 import {
   canonicalImageMimeType,
@@ -223,14 +221,11 @@ async function renderCandidate(
 }
 
 /**
- * Re-encodes a chosen image down to `maxEdge` and `maxBytes`, backing the scale
- * off twice before giving up. One normalizer, two budgets: a committed repo
- * logo (small, travels over RPC) and the local start-page wallpaper (large,
- * never leaves this machine).
+ * Re-encodes the local wallpaper to 2560 px / 4 MiB, backing the scale
+ * off twice before giving up.
  */
-async function normalizeAppearanceImage(
+export async function processStartPageWallpaperImage(
   blob: Blob,
-  limits: { readonly maxEdge: number; readonly maxBytes: number },
   signal: AbortSignal,
 ): Promise<ProcessedAppearanceImage> {
   signal.throwIfAborted();
@@ -245,11 +240,15 @@ async function normalizeAppearanceImage(
     validateDimensions(image);
     const scale = Math.min(
       1,
-      limits.maxEdge / Math.max(image.width, image.height),
+      APPEARANCE_WALLPAPER_MAX_EDGE / Math.max(image.width, image.height),
     );
     for (const multiplier of [1, 0.75, 0.5]) {
       const result = await renderCandidate(
-        { image, scale: scale * multiplier, maxBytes: limits.maxBytes },
+        {
+          image,
+          scale: scale * multiplier,
+          maxBytes: MAX_START_PAGE_WALLPAPER_BYTES,
+        },
         signal,
       );
       if (result !== null) return result;
@@ -260,34 +259,4 @@ async function normalizeAppearanceImage(
   } finally {
     image.close();
   }
-}
-
-/** Normalizes a chosen logo to the committed icon budget (256 px, 256 KiB). */
-export function processAppearanceImage(
-  blob: Blob,
-  signal: AbortSignal,
-): Promise<ProcessedAppearanceImage> {
-  return normalizeAppearanceImage(
-    blob,
-    {
-      maxEdge: MAX_APPEARANCE_ICON_EDGE,
-      maxBytes: MAX_APPEARANCE_ICON_BYTES,
-    },
-    signal,
-  );
-}
-
-/** Normalizes a chosen start-page wallpaper to 2560 px / 4 MiB. */
-export function processStartPageWallpaperImage(
-  blob: Blob,
-  signal: AbortSignal,
-): Promise<ProcessedAppearanceImage> {
-  return normalizeAppearanceImage(
-    blob,
-    {
-      maxEdge: APPEARANCE_WALLPAPER_MAX_EDGE,
-      maxBytes: MAX_START_PAGE_WALLPAPER_BYTES,
-    },
-    signal,
-  );
 }

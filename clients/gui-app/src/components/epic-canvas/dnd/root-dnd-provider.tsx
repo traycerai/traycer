@@ -874,6 +874,7 @@ function commitHeaderStripPair(
       left: side === "left" ? sourceRef : target.targetRef,
       right: side === "left" ? target.targetRef : sourceRef,
       focusedRef: sourceRef,
+      targetRef: target.targetRef,
       splitId: `split:${uuidv4()}`,
       leftRatio: 0.5,
     },

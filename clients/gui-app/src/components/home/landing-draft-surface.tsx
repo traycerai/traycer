@@ -169,9 +169,7 @@ export function LandingDraftSurface() {
           layout.rows,
         )}
       >
-        {activity.visible ? (
-          <LandingAppearanceWallpaper draftId={draftId} />
-        ) : null}
+        {activity.visible ? <LandingAppearanceWallpaper /> : null}
         <div className="mx-auto w-full max-w-3xl px-6 pt-3 max-md:px-4">
           <HostUpdateBanner className={undefined} />
         </div>

@@ -7,7 +7,6 @@ import {
 import { displayTitle } from "@/lib/display-title";
 import type { HeaderTab } from "@/stores/tabs/types";
 import { EMPTY_NOTIFICATION_INDICATOR_STATE } from "@/stores/notifications/notification-indicator-state";
-import { repositoryTabFill } from "./repository-identity-presentation";
 import { TabLeadingIcon } from "./tab-leading-icon";
 import { useEpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
 import { useRegisteredEpicTitleGenerating } from "@/lib/epic-selectors";
@@ -23,11 +22,11 @@ interface HeaderTabDragOverlayProps {
   /**
    * The UNRESOLVED base tab (name/icon/route/id) - `useHeaderTabForRef`'s
    * projection, resolved via the strip's ordinary source-store subscription.
-   * Carries no `repositoryIdentity` of its own; that comes from `ghost`.
+   * Carries no `appearance` of its own; that comes from `ghost`.
    */
   readonly tab: HeaderTab;
   /**
-   * Render-ready enrichment (`repositoryIdentity`, `indicatorState`)
+   * Render-ready enrichment (`appearance`, `indicatorState`)
    * resolved ONCE at drag start from the strip item's own drag payload - see
    * `HeaderTabDragGhost` in `dnd-store.ts` for why this exists and what it
    * deliberately does not keep live. `null` only when no header-tab drag is
@@ -38,21 +37,13 @@ interface HeaderTabDragOverlayProps {
   readonly width: number | null;
 }
 
-/**
- * The drag ghost of a header tab, rendered a few pixels from the tab it
- * mirrors. `repositoryIdentity` and the notification badge state ride
- * `props.ghost` - resolved once by the strip item at drag start, not
- * re-derived here - so mounting this overlay opens no `workspace.getAppearance`
- * host RPC and no notifications query. Activity status and title-generation
- * stay LIVE, via their own free `useSyncExternalStore` hooks, since neither
- * costs a round trip and both can genuinely change mid-drag.
- */
+/** Captured appearance and notifications with live activity status. */
 export function HeaderTabDragOverlay(props: HeaderTabDragOverlayProps) {
   const tab = props.tab;
   const epicId = tab.kind === "epic" ? tab.epicId : null;
   const activityStatus = useEpicActivityStatus(epicId);
   const titleGenerationPending = useRegisteredEpicTitleGenerating(epicId);
-  const repositoryIdentity = props.ghost?.repositoryIdentity ?? null;
+  const appearance = props.ghost?.appearance ?? null;
   const indicatorState =
     props.ghost?.indicatorState ?? EMPTY_NOTIFICATION_INDICATOR_STATE;
   // While a merge target is highlighted the overlay ghosts: the highlight sits
@@ -79,13 +70,14 @@ export function HeaderTabDragOverlay(props: HeaderTabDragOverlayProps) {
       transition={HEADER_TAB_OVERLAY_TRANSITION}
       style={{
         width: props.width ?? undefined,
-        backgroundColor: repositoryTabFill(repositoryIdentity?.color),
+        backgroundColor: "var(--color-background)",
+        borderColor: appearance?.color ?? undefined,
       }}
       className="pointer-events-none flex h-10 cursor-grabbing select-none items-center gap-2 rounded-t-md border border-b-0 border-border/80 bg-background px-[clamp(0.75rem,10%,1.5rem)] text-ui-sm font-medium text-foreground shadow-lg"
     >
       <TabLeadingIcon
         icon={tab.icon}
-        identity={repositoryIdentity}
+        identity={appearance}
         titleGenerationPending={titleGenerationPending}
         activityStatus={activityStatus}
         indicatorState={indicatorState}

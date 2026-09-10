@@ -1,3 +1,4 @@
+import { SidebarArtwork } from "@/components/layout/sidebar-artwork";
 import { Fragment, useMemo, type ReactNode } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { ChevronRight } from "lucide-react";
@@ -87,6 +88,7 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
           : "w-full",
       )}
     >
+      <SidebarArtwork />
       {SETTINGS_SECTION_GROUPS.map((group, groupIndex) => (
         <Fragment key={group.id}>
           {groupIndex === 0 ? null : <SettingsSidebarGroupRule />}

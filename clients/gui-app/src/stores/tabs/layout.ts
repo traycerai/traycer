@@ -1,3 +1,9 @@
+import {
+  repairTabGroups,
+  inheritTabColorAndGroup,
+  type TabCustomizations,
+  type TabGroups,
+} from "./tab-groups";
 import type { HeaderTabKind } from "@/stores/tabs/registry";
 import type { SystemTab, TabRef } from "@/stores/tabs/types";
 
@@ -40,6 +46,8 @@ export interface PersistedTabStripLayout {
    * written before activation history was added remain valid inputs.
    */
   readonly activationHistory?: ReadonlyArray<TabRef>;
+  readonly customizations?: TabCustomizations;
+  readonly groups?: TabGroups;
 }
 
 export interface SystemTabs {
@@ -48,6 +56,8 @@ export interface SystemTabs {
 }
 
 export interface PairLayoutArgs {
+  /** Destination whose color and group the incoming tab inherits; defaults to left. */
+  readonly targetRef?: TabRef;
   readonly left: TabRef;
   readonly right: TabRef;
   readonly splitId: string;
@@ -176,6 +186,12 @@ export function pairLayoutRefs(
   const leftIndex = findFlatItemIndex(layout.items, args.left);
   const rightIndex = findFlatItemIndex(layout.items, args.right);
   if (leftIndex === -1 || rightIndex === -1) return layout;
+  const targetRef = args.targetRef ?? args.left;
+  const coloredLayout = inheritTabColorAndGroup(
+    layout,
+    targetRef,
+    refsEqual(targetRef, args.left) ? args.right : args.left,
+  );
   const split: SplitStripItem = {
     kind: "split",
     id: availableSplitItemId(layout, args.splitId),
@@ -191,7 +207,7 @@ export function pairLayoutRefs(
       item !== layout.items[leftIndex] && item !== layout.items[rightIndex],
   );
   return {
-    ...layout,
+    ...coloredLayout,
     items: [
       ...retained.slice(0, insertionIndex),
       split,
@@ -247,7 +263,12 @@ export function replaceFillableSide(
     routeBackingSide:
       item.focusedSide === args.side ? args.side : item.routeBackingSide,
   };
-  return replaceItem(layout, nextItem);
+  const partner = args.side === "left" ? item.right : item.left;
+  const coloredLayout =
+    partner.kind === "tab"
+      ? inheritTabColorAndGroup(layout, partner.ref, args.ref)
+      : layout;
+  return replaceItem(coloredLayout, nextItem);
 }
 
 export function focusLayoutRef(
@@ -426,10 +447,18 @@ function recordTabActivation(
   layout: PersistedTabStripLayout,
   ref: TabRef,
 ): PersistedTabStripLayout {
+  const groupId = layout.customizations?.[tabRefKey(ref)]?.groupId ?? null;
+  const group = groupId === null ? undefined : layout.groups?.[groupId];
+  const groups =
+    groupId !== null && group?.collapsed === true
+      ? { ...layout.groups, [groupId]: { ...group, collapsed: false } }
+      : layout.groups;
   const history = tabActivationHistory(layout);
-  if (refsEqual(history[0] ?? null, ref)) return layout;
+  if (refsEqual(history[0] ?? null, ref))
+    return groups === layout.groups ? layout : { ...layout, groups };
   return {
     ...layout,
+    groups,
     activationHistory: [
       ref,
       ...history.filter((entry) => !refsEqual(entry, ref)),
@@ -442,12 +471,20 @@ function remapTabActivation(
   previous: TabRef,
   next: TabRef,
 ): PersistedTabStripLayout {
+  const previousKey = tabRefKey(previous);
+  const customizations = { ...layout.customizations };
+  const customization = layout.customizations?.[previousKey];
+  if (customization !== undefined) {
+    customizations[tabRefKey(next)] = customization;
+    delete customizations[previousKey];
+  }
   const remapped = tabActivationHistory(layout).map((entry) =>
     refsEqual(entry, previous) ? next : entry,
   );
   const seen = new Set<string>();
   return {
     ...layout,
+    customizations,
     activationHistory: remapped.filter((entry) => {
       const key = tabRefKey(entry);
       if (seen.has(key)) return false;
@@ -551,6 +588,8 @@ export function repairLayout(
     activeItemId,
     systemTabs,
     activationHistory,
+    customizations: layout.customizations,
+    groups: layout.groups,
   };
   const missingSystemRefs = flattenLayoutRefs(withSystemRefs).filter(
     (ref) =>
@@ -561,13 +600,13 @@ export function repairLayout(
     removeLayoutRef,
     withSystemRefs,
   );
-  return {
+  return repairTabGroups({
     ...withoutMissingSystemRefs,
     activeItemId:
       withoutMissingSystemRefs.items.length === 0
         ? null
         : withoutMissingSystemRefs.activeItemId,
-  };
+  });
 }
 
 function activeRefForItem(

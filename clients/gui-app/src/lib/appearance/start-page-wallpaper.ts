@@ -5,7 +5,6 @@ import {
 } from "@/stores/settings/settings-store";
 import { processStartPageWallpaperImage } from "./appearance-image-processing";
 import {
-  pinGlobalAppearanceBlob,
   readAppearanceBlob,
   removeAppearanceBlob,
   writeAppearanceBlob,
@@ -14,8 +13,7 @@ import {
 /**
  * The personal start-page wallpaper. Exactly one image exists per
  * installation, so it needs no content-addressed name: a fixed key in the
- * global (account-independent) scope of the appearance blob store, pinned so
- * cache eviction can never take the one image the user chose.
+ * global (account-independent) scope of the wallpaper blob store.
  *
  * The bytes live in the appearance blob store; every other fact about the
  * wallpaper - style, intensity, tint, and the chosen file's name - lives on
@@ -61,15 +59,10 @@ export async function chooseStartPageWallpaper(
   const processed = await processStartPageWallpaperImage(file, signal);
   signal.throwIfAborted();
   try {
-    await writeAppearanceBlob(null, START_PAGE_WALLPAPER_KEY, processed.blob);
-    await pinGlobalAppearanceBlob(START_PAGE_WALLPAPER_KEY);
+    await writeAppearanceBlob(START_PAGE_WALLPAPER_KEY, processed.blob);
   } catch (error) {
-    // The blob write may have already committed even though pinning
-    // failed - roll it back so a reader never sees bytes with no matching
-    // settings row.
-    await removeAppearanceBlob(null, START_PAGE_WALLPAPER_KEY).catch(
-      () => undefined,
-    );
+    // Keep bytes and settings consistent when storage fails.
+    await removeAppearanceBlob(START_PAGE_WALLPAPER_KEY).catch(() => undefined);
     invalidateStartPageWallpaper();
     throw error;
   }
@@ -94,8 +87,7 @@ export async function chooseStartPageWallpaper(
 export async function removeStartPageWallpaper(): Promise<void> {
   useSettingsStore.getState().setStartPageWallpaper(null);
   try {
-    await removeAppearanceBlob(null, START_PAGE_WALLPAPER_KEY);
-    await pinGlobalAppearanceBlob(null);
+    await removeAppearanceBlob(START_PAGE_WALLPAPER_KEY);
   } finally {
     invalidateStartPageWallpaper();
   }
@@ -119,7 +111,7 @@ export function useStartPageWallpaperImage(): StartPageWallpaperImage {
   useEffect(() => {
     let objectUrl: string | null = null;
     let cancelled = false;
-    void readAppearanceBlob(null, START_PAGE_WALLPAPER_KEY)
+    void readAppearanceBlob(START_PAGE_WALLPAPER_KEY)
       .catch(() => null)
       .then((blob) => {
         if (cancelled) return;

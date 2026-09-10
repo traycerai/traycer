@@ -64,7 +64,7 @@ export const epicTabModule: TabKindModule<"epic", EpicTabBuildSource> = {
       canClose: !closeLocked,
       canDuplicate: !structurallyLocked,
       canOpenInNewWindow: !structurallyLocked,
-      repositoryIdentity: null,
+      appearance: null,
     };
   },
   descriptor: {

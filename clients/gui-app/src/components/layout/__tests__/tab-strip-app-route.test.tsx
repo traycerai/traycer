@@ -73,13 +73,7 @@ vi.mock("@/hooks/chats/use-chat-fork-queries", () => ({
   useChatForkEventQuery: () => ({ data: undefined }),
 }));
 
-// No host transport in this route fixture - the header strip resolves
-// appearance (color/icon) for epic and draft tabs via
-// `useEpicAppearanceSource`/`useLandingDraftAppearanceSource`, both of which
-// bottom out in `useHostClientForHostId`, which unconditionally calls the
-// app-wide `useHostClient()` and throws outside a `<HostRuntimeProvider>`
-// this route harness does not mount. Matches the same mock in
-// `tab-strip.test.tsx`; appearance queries stay disabled here too.
+// This navigation fixture has no live host transport.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));

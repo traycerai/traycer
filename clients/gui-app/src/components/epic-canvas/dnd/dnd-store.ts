@@ -22,7 +22,7 @@ import {
   type EpicCanvasLeftPanelRailDragData,
 } from "@/components/epic-canvas/dnd/dnd";
 import type { HeaderTabDragData } from "@/components/layout/tabs/header-tab-dnd";
-import type { HeaderTabRepositoryIdentity, TabRef } from "@/stores/tabs/types";
+import type { HeaderTabAppearance, TabRef } from "@/stores/tabs/types";
 import type {
   DropPosition,
   EpicCanvasTileRef,
@@ -33,33 +33,13 @@ import {
   type NotificationIndicatorState,
 } from "@/stores/notifications/notification-indicator-state";
 
-/**
- * Render-ready values the drag ghost (`HeaderTabDragOverlay`) needs but
- * cannot re-derive at drag start without a `workspace.getAppearance` host
- * RPC and a notifications query - `repositoryIdentity` and `indicatorState`
- * are already resolved a few pixels away, in the strip item that IS the drag
- * source, at the moment the gesture begins. Captured ONCE there (see
- * `tab-strip-item.tsx`'s `useHeaderTabDnd`, which attaches this to the
- * dnd-kit drag payload) and read back here at drag start - the same
- * resolve-once-at-drag-start treatment `activeOverlayTile` already gets for
- * canvas tiles.
- *
- * Both fields CAN change while a gesture is still in flight (a repository
- * colour edit, a newly-arrived approval) and this snapshot will not reflect
- * that - deliberately: a header-tab drag is a short gesture, and re-deriving
- * either value live would reopen exactly the round trip this exists to
- * avoid. Activity status and title-generation are NOT carried here because
- * they cost nothing to keep live - `HeaderTabDragOverlay` still reads them
- * through their own free `useSyncExternalStore` hooks every frame.
- */
+/** Presentation captured at drag start so the overlay matches its source tab. */
 export interface HeaderTabDragGhost {
-  readonly repositoryIdentity: HeaderTabRepositoryIdentity | null;
+  readonly appearance: HeaderTabAppearance | null;
   readonly indicatorState: NotificationIndicatorState;
 }
 
-function isHeaderTabRepositoryIdentity(
-  value: unknown,
-): value is HeaderTabRepositoryIdentity {
+function isHeaderTabAppearance(value: unknown): value is HeaderTabAppearance {
   if (!isRecord(value)) return false;
   return (
     (value.color === null || typeof value.color === "string") &&
@@ -102,11 +82,9 @@ export function readHeaderTabDragGhost(
   value: unknown,
 ): HeaderTabDragGhost | null {
   if (!isRecord(value) || !isRecord(value.ghost)) return null;
-  const { repositoryIdentity, indicatorState } = value.ghost;
+  const { appearance, indicatorState } = value.ghost;
   return {
-    repositoryIdentity: isHeaderTabRepositoryIdentity(repositoryIdentity)
-      ? repositoryIdentity
-      : null,
+    appearance: isHeaderTabAppearance(appearance) ? appearance : null,
     indicatorState: isNotificationIndicatorState(indicatorState)
       ? indicatorState
       : EMPTY_NOTIFICATION_INDICATOR_STATE,

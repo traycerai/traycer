@@ -65,61 +65,6 @@ const mocks = vi.hoisted(() => ({
   // tests can pin that the SOURCE branch (new) / checkout branch is read - not
   // just that the query fired.
   lastReadScriptsRef: { current: "" },
-  // Repository identity: the committed read the section seeds from, and the
-  // write the dialog's single Save is expected to make.
-  setAppearanceMutate: vi.fn<(variables: unknown) => void>(),
-  appearanceCanEdit: { current: true },
-  appearanceStatus: {
-    current: "present",
-  },
-  appearanceColor: { current: null as string | null },
-  appearanceIcon: {
-    current: null as { kind: "image"; path: string } | null,
-  },
-  appearanceAssetUrl: { current: null as string | null },
-}));
-
-const SOURCE_ROOT = "/tmp/a-source";
-
-vi.mock("@/hooks/appearance/use-workspace-appearance", () => ({
-  useWorkspaceAppearance: () => ({
-    appearance: {
-      workspacePath: "/tmp/a",
-      // The identity write must land on the canonical SOURCE root, never on
-      // the workspace path the dialog was opened for.
-      canonicalSourceRoot: SOURCE_ROOT,
-      status: mocks.appearanceStatus.current,
-      appearance: {
-        version: 1 as const,
-        ...(mocks.appearanceColor.current === null
-          ? {}
-          : { color: mocks.appearanceColor.current }),
-        ...(mocks.appearanceIcon.current === null
-          ? {}
-          : { icon: mocks.appearanceIcon.current }),
-      },
-      issues: [],
-    },
-    scope: null,
-    canEdit: mocks.appearanceCanEdit.current,
-    readSupport: true,
-    writeSupport: true,
-    assetRefreshKey: 0,
-  }),
-  useWorkspaceSetAppearance: () => ({
-    mutateAsync: (variables: unknown) => {
-      mocks.setAppearanceMutate(variables);
-      return Promise.resolve({});
-    },
-  }),
-}));
-vi.mock("@/hooks/appearance/use-appearance-assets", () => ({
-  useAppearanceAsset: () => ({
-    url: mocks.appearanceAssetUrl.current,
-    status: mocks.appearanceAssetUrl.current === null ? "empty" : "ready",
-    reason: null,
-    reportDecodeFailure: () => {},
-  }),
 }));
 
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
@@ -335,15 +280,8 @@ function liveWorktreeBinding(): WorktreeBinding {
   };
 }
 
-type StagingWorktreeScriptsContext = Extract<
-  WorktreeScriptsContext,
-  { readonly kind: "staging" }
->;
-
-const PRE_CREATE_CONTEXT: StagingWorktreeScriptsContext = {
-  kind: "staging",
+const PRE_CREATE_CONTEXT: WorktreeScriptsContext = {
   epicId: "",
-  hostId: "host-a",
   ownerId: null,
   ownerKind: null,
   binding: null,
@@ -353,9 +291,7 @@ const PRE_CREATE_CONTEXT: StagingWorktreeScriptsContext = {
 };
 
 const IN_EPIC_CONTEXT: WorktreeScriptsContext = {
-  kind: "staging",
   epicId: "epic-1",
-  hostId: "host-a",
   ownerId: "chat-1",
   ownerKind: "chat",
   binding: liveWorktreeBinding(),
@@ -404,7 +340,7 @@ function setupDefaultField(): HTMLTextAreaElement {
 
 function saveScriptsButton(): HTMLElement {
   // One footer action for the whole dialog (independent of Branch naming's
-  // Apply): it persists identity and scripts together.
+  // Apply): it persists scripts and branch-prefix changes together.
   return screen.getByRole("button", { name: "Save" });
 }
 
@@ -428,163 +364,9 @@ describe("<WorktreeScriptsDialog />", () => {
       isError: false,
     });
     mocks.lastReadScriptsRef.current = "";
-    mocks.setAppearanceMutate.mockReset();
-    mocks.appearanceCanEdit.current = true;
-    mocks.appearanceStatus.current = "present";
-    mocks.appearanceColor.current = null;
-    mocks.appearanceIcon.current = null;
-    mocks.appearanceAssetUrl.current = null;
   });
   afterEach(() => {
     cleanup();
-  });
-
-  it("saves a swatch + emoji identity to the canonical source root, leaving scripts alone", async () => {
-    renderDialog(PRE_CREATE_CONTEXT, summaryWith(null));
-
-    fireEvent.click(screen.getByRole("button", { name: "Color #7c6cf0" }));
-    fireEvent.click(screen.getByRole("button", { name: "Use emoji" }));
-    fireEvent.change(screen.getByLabelText("Emoji"), {
-      target: { value: "🧭" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Use emoji" }));
-    await act(async () => {
-      fireEvent.click(saveScriptsButton());
-      await Promise.resolve();
-    });
-
-    expect(mocks.setAppearanceMutate).toHaveBeenCalledTimes(1);
-    expect(mocks.setAppearanceMutate.mock.calls[0][0]).toEqual({
-      epicId: "",
-      // The SOURCE root, not the workspace the dialog was opened for.
-      workspacePath: SOURCE_ROOT,
-      patch: { color: "#7c6cf0", icon: { kind: "emoji", value: "🧭" } },
-      upload: null,
-    });
-    // Untouched scripts must not be rewritten just because identity moved.
-    expect(mocks.setRepoScriptsMutate).not.toHaveBeenCalled();
-  });
-
-  it("saves a custom tab color and leaves preset swatches unselected", async () => {
-    renderDialog(PRE_CREATE_CONTEXT, summaryWith(null));
-
-    const customColor = screen.getByLabelText("Custom tab color");
-    fireEvent.change(customColor, { target: { value: "#123abc" } });
-
-    expect(customColor).toHaveProperty("value", "#123abc");
-    expect(
-      screen
-        .getByRole("button", { name: "No color" })
-        .getAttribute("aria-pressed"),
-    ).toBe("false");
-    expect(
-      screen
-        .getByRole("button", { name: "Color #7c6cf0" })
-        .getAttribute("aria-pressed"),
-    ).toBe("false");
-
-    await act(async () => {
-      fireEvent.click(saveScriptsButton());
-      await Promise.resolve();
-    });
-
-    expect(mocks.setAppearanceMutate).toHaveBeenCalledWith({
-      epicId: "",
-      workspacePath: SOURCE_ROOT,
-      patch: { color: "#123abc" },
-      upload: null,
-    });
-  });
-
-  it("hydrates a saved nonpreset tab color without selecting a preset", () => {
-    mocks.appearanceColor.current = "#123abc";
-    renderDialog(PRE_CREATE_CONTEXT, summaryWith(null));
-
-    expect(screen.getByLabelText("Custom tab color")).toHaveProperty(
-      "value",
-      "#123abc",
-    );
-    expect(
-      screen
-        .getByRole("button", { name: "No color" })
-        .getAttribute("aria-pressed"),
-    ).toBe("false");
-    expect(
-      screen
-        .getByRole("button", { name: "Color #7c6cf0" })
-        .getAttribute("aria-pressed"),
-    ).toBe("false");
-  });
-
-  it("keeps an existing image through emoji editing and a cancelled replacement", () => {
-    mocks.appearanceIcon.current = {
-      kind: "image",
-      path: ".traycer/repository-logo.png",
-    };
-    mocks.appearanceAssetUrl.current = "blob:existing-logo";
-    renderDialog(PRE_CREATE_CONTEXT, summaryWith(null));
-
-    expect(screen.getByText("Uploaded image")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Replace image" })).toBeTruthy();
-    expect(screen.queryByLabelText("Emoji")).toBeNull();
-
-    const fileInput = document.querySelector('input[type="file"]');
-    if (!(fileInput instanceof HTMLInputElement))
-      throw new Error("expected repository icon file input");
-    fireEvent.change(fileInput, { target: { files: [] } });
-    expect(screen.getByText("Uploaded image")).toBeTruthy();
-
-    const tileBeforeChooser =
-      screen.getByTestId("repo-identity-tile").innerHTML;
-    fireEvent.click(screen.getByRole("button", { name: "Use emoji" }));
-    const emoji = screen.getByLabelText("Emoji");
-    fireEvent.change(emoji, { target: { value: "not an emoji" } });
-    expect(screen.getByRole("alert").textContent).toBe("Enter one emoji.");
-    expect(
-      screen.getByRole<HTMLButtonElement>("button", { name: "Use emoji" })
-        .disabled,
-    ).toBe(true);
-    expect(screen.getByTestId("repo-identity-tile").innerHTML).toBe(
-      tileBeforeChooser,
-    );
-    expect(mocks.setAppearanceMutate).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(screen.queryByLabelText("Emoji")).toBeNull();
-    expect(screen.getByText("Uploaded image")).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: "Use emoji" }));
-    const cancelledEmoji = screen.getByLabelText("Emoji");
-    fireEvent.change(cancelledEmoji, { target: { value: "🧭" } });
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(screen.queryByLabelText("Emoji")).toBeNull();
-    expect(screen.getByText("Uploaded image")).toBeTruthy();
-    expect(mocks.setAppearanceMutate).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole("button", { name: "Use emoji" }));
-    const appliedEmoji = screen.getByLabelText("Emoji");
-    fireEvent.change(appliedEmoji, { target: { value: "🧭" } });
-    fireEvent.click(screen.getByRole("button", { name: "Use emoji" }));
-    expect(screen.queryByText("Uploaded image")).toBeNull();
-    expect(screen.getByRole("button", { name: "Upload image" })).toBeTruthy();
-    expect(mocks.setAppearanceMutate).not.toHaveBeenCalled();
-  });
-
-  it("disables the identity controls when the repo has no editable appearance", () => {
-    mocks.appearanceCanEdit.current = false;
-    mocks.appearanceStatus.current = "non-git";
-    renderDialog(PRE_CREATE_CONTEXT, summaryWith(null));
-
-    expect(
-      screen
-        .getByRole("button", { name: "Color #7c6cf0" })
-        .hasAttribute("disabled"),
-    ).toBe(true);
-    expect(
-      screen.getByText(
-        "This folder isn't a Git repository, so it has no shared identity.",
-      ),
-    ).toBeTruthy();
   });
 
   it("stages onto the worktree intent (no setRepoScripts) for a staged new worktree", () => {
@@ -796,7 +578,7 @@ describe("<WorktreeScriptsDialog />", () => {
     expect(setupDefaultField().value).toBe("echo wt-own");
   });
 
-  it("renders identity first, then scripts, then Branch naming, and titles the dialog Repository settings", () => {
+  it("renders scripts, then Branch naming, and titles the dialog Repository settings", () => {
     renderDialog(PRE_CREATE_CONTEXT, summaryWith(null));
     expect(
       screen.getByRole("heading", { name: "Repository settings" }),
@@ -804,14 +586,8 @@ describe("<WorktreeScriptsDialog />", () => {
     expect(
       screen.getByText(/Identity, lifecycle scripts, and branch prefix for a/),
     ).toBeTruthy();
-    const identity = screen.getByTestId("repo-identity-fields");
-    expect(
-      identity.compareDocumentPosition(screen.getByText("Branch prefix")) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
     expect(screen.getByTestId("repo-branch-prefix-section")).toBeTruthy();
     expect(screen.getByText("Branch prefix")).toBeTruthy();
-    // Scripts section eyebrow only when Branch naming is present.
     expect(screen.getByText("Setup & teardown scripts")).toBeTruthy();
     // Information hierarchy: setup/teardown before branch naming.
     const scriptsEyebrow = screen.getByText("Setup & teardown scripts");

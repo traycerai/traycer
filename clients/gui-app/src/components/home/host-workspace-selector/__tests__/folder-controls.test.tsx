@@ -26,36 +26,6 @@ import {
 } from "../../../../../__tests__/contrast";
 
 // The host-wide uncommitted query (used only for the import-row annotation).
-// The folder row's repository icon (and the Repository settings dialog) read
-// committed appearance over the host. Stub those reads so this picker suite
-// keeps needing no host runtime.
-vi.mock("@/hooks/appearance/use-workspace-appearance", () => {
-  const stub = () => ({
-    appearance: null,
-    scope: null,
-    canEdit: false,
-    readSupport: true,
-    writeSupport: true,
-    assetRefreshKey: 0,
-  });
-  return {
-    useWorkspaceAppearance: stub,
-    useDraftAppearance: stub,
-    useEpicAppearanceSource: () => ({ hostId: null, workspacePath: null }),
-    useWorkspaceSetAppearance: () => ({
-      mutateAsync: () => Promise.resolve({}),
-    }),
-  };
-});
-vi.mock("@/hooks/appearance/use-appearance-assets", () => ({
-  useAppearanceAsset: () => ({
-    url: null,
-    status: "empty",
-    reason: null,
-    reportDecodeFailure: () => {},
-  }),
-}));
-
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostQuery: () => ({ data: undefined, isLoading: false }),
 }));

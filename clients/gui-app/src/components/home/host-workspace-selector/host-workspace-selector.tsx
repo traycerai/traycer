@@ -1212,9 +1212,7 @@ function HomeWorkspaceRows(props: {
   );
   const scriptsContext = useMemo<WorktreeScriptsContext>(
     () => ({
-      kind: "staging",
       epicId: "",
-      hostId: props.activeHostId,
       ownerId: null,
       ownerKind: null,
       binding: null,
@@ -1222,12 +1220,7 @@ function HomeWorkspaceRows(props: {
       hostClient: activeHostClient,
       regenerateBranchNameForWorkspace,
     }),
-    [
-      stagingKey,
-      props.activeHostId,
-      activeHostClient,
-      regenerateBranchNameForWorkspace,
-    ],
+    [stagingKey, activeHostClient, regenerateBranchNameForWorkspace],
   );
 
   return (
@@ -3192,9 +3185,7 @@ function InEpicSurface(props: InEpicSurfaceProps) {
   );
   const scriptsContext = useMemo<WorktreeScriptsContext>(
     () => ({
-      kind: "staging",
       epicId: surface.epicId,
-      hostId: props.activeHostId,
       ownerId: surface.ownerId,
       ownerKind,
       binding: surface.binding,
@@ -3204,7 +3195,6 @@ function InEpicSurface(props: InEpicSurfaceProps) {
     }),
     [
       surface.epicId,
-      props.activeHostId,
       surface.ownerId,
       surface.binding,
       ownerKind,

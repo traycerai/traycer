@@ -1,7 +1,7 @@
 /**
  * `HeaderTabDragOverlay` renders in a `<DragOverlay>` sibling of the strip's
  * own subtree (see `root-dnd-provider.tsx`), so it cannot read
- * `repositoryIdentity` or the notification badge off a live query/context -
+ * `appearance` or the notification badge off a live query/context -
  * both ride `props.ghost`, resolved ONCE by the strip item at drag start
  * (`HeaderTabDragGhost` in `dnd-store.ts`). Fakes only the free
  * `useSyncExternalStore` hooks (activity, title-generation); proves the
@@ -41,7 +41,7 @@ function epicTab(): Extract<HeaderTab, { kind: "epic" }> {
     canOpenInNewWindow: true,
     // The base/unresolved tab never carries an identity - `ghost` is the
     // only source `HeaderTabDragOverlay` reads it from.
-    repositoryIdentity: null,
+    appearance: null,
   };
 }
 
@@ -59,7 +59,7 @@ function idleIndicatorState(): NotificationIndicatorState {
 
 function ghostWith(overrides: Partial<HeaderTabDragGhost>): HeaderTabDragGhost {
   return {
-    repositoryIdentity: null,
+    appearance: null,
     indicatorState: idleIndicatorState(),
     ...overrides,
   };
@@ -74,12 +74,9 @@ describe("HeaderTabDragOverlay: ghost-carried identity + indicator state", () =>
   it("threads the ghost's identity color into the chip fill without any appearance/notification hook", () => {
     const tab = epicTab();
     const ghost = ghostWith({
-      repositoryIdentity: {
+      appearance: {
         color: "#654321",
-        icon: { kind: "emoji", value: "\u{1f680}" },
-        scope: null,
-        assetRefreshKey: 1,
-        iconRejected: false,
+        icon: "🚀",
       },
     });
     mocks.useEpicActivityStatus.mockReturnValue("turn");
@@ -97,12 +94,9 @@ describe("HeaderTabDragOverlay: ghost-carried identity + indicator state", () =>
   it("still renders the identity icon when the epic has no live activity", () => {
     const tab = epicTab();
     const ghost = ghostWith({
-      repositoryIdentity: {
+      appearance: {
         color: "#0a0a0a",
-        icon: { kind: "emoji", value: "\u{1f680}" },
-        scope: null,
-        assetRefreshKey: 1,
-        iconRejected: false,
+        icon: "🚀",
       },
     });
     mocks.useEpicActivityStatus.mockReturnValue("idle");
@@ -117,12 +111,9 @@ describe("HeaderTabDragOverlay: ghost-carried identity + indicator state", () =>
   it("surfaces the ghost's notification badge alongside the identity tint", () => {
     const tab = epicTab();
     const ghost = ghostWith({
-      repositoryIdentity: {
+      appearance: {
         color: "#334455",
-        icon: { kind: "emoji", value: "\u{1f680}" },
-        scope: null,
-        assetRefreshKey: 1,
-        iconRejected: false,
+        icon: "🚀",
       },
       indicatorState: { ...idleIndicatorState(), pendingApproval: true },
     });

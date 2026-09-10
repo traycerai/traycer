@@ -193,9 +193,9 @@ function HeaderTabOverlayChip(props: {
     id: props.tab.tabId,
   });
   // Resolved ONCE at drag start from the strip item's own drag payload - see
-  // `HeaderTabDragGhost` in `dnd-store.ts`. Carries `repositoryIdentity` and
+  // `HeaderTabDragGhost` in `dnd-store.ts`. Carries `appearance` and
   // the notification badge state so `HeaderTabDragOverlay` never re-opens a
-  // `workspace.getAppearance` RPC or a notifications query to redraw a tab
+  // additional query to redraw a tab
   // that is already resolved and painted in the strip.
   const ghost = useActiveHeaderTabGhost();
   if (tab === null) return null;

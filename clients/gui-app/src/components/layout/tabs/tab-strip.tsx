@@ -1,5 +1,8 @@
+import { TabGroupChip } from "./tab-group-chip";
+import { stripItemGroupId } from "@/stores/tabs/tab-groups";
 import {
   memo,
+  Fragment,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -82,6 +85,8 @@ export function TabStrip() {
 function TabStripBody() {
   const headerItemIds = useHeaderStripItemIds();
   const layoutItems = useTabsStore((state) => state.items);
+  const groups = useTabsStore((state) => state.groups);
+  const customizations = useTabsStore((state) => state.customizations);
   const allTabs = useHeaderTabs();
   const navigate = useNavigate();
   const openInNewWindowFlow = useTabOpenInNewWindowFlow();
@@ -375,34 +380,62 @@ function TabStripBody() {
                 onWheel={handleWheel}
                 className="no-scrollbar flex min-w-0 max-w-full flex-[0_1_auto] touch-pan-x items-end overflow-x-auto overscroll-x-contain"
               >
-                {headerItemIds.map((itemId, index) => (
-                  <HeaderStripItemRenderer
-                    key={itemId}
-                    itemId={itemId}
-                    stripIndex={index}
-                    offsetX={headerOffsets.get(itemId) ?? 0}
-                    memberOffset={memberOffsetBefore(layoutItems, index)}
-                    isActive={itemId === activeItemId}
-                    isNextActive={headerItemIds[index + 1] === activeItemId}
-                    nextIsSplit={layoutItems[index + 1]?.kind === "split"}
-                    isLastItem={index === headerItemIds.length - 1}
-                    showDropIndicatorBefore={dropIndicatorIndex === index}
-                    showDropIndicatorAfter={
-                      dropIndicatorIndex === index + 1 &&
-                      index === headerItemIds.length - 1
-                    }
-                    onClose={closeTabFlow.requestCloseTab}
-                    onCloseOtherTabs={closeTabFlow.closeOtherTabs}
-                    onDuplicateTab={handleDuplicateTab}
-                    canCloseOtherTabs={canCloseOtherTabs}
-                    onOpenInNewWindow={openInNewWindowFlow.requestOpen}
-                    canOpenInNewWindow={openInNewWindowFlow.isAvailable}
-                    onSplitCommand={handleSplitCommand}
-                    taskPinnedStates={taskPinnedStates}
-                    pendingSetPinnedEpicIds={pendingSetPinnedEpicIds}
-                    onSetTaskPinned={handleSetTaskPinned}
-                  />
-                ))}
+                {headerItemIds.map((itemId, index) => {
+                  const layoutItem = layoutItems.at(index);
+                  const groupId =
+                    layoutItem === undefined
+                      ? null
+                      : stripItemGroupId(layoutItem, customizations);
+                  const group =
+                    groupId === null ? undefined : groups?.[groupId];
+                  const previousItem =
+                    index === 0 ? undefined : layoutItems.at(index - 1);
+                  const firstInGroup =
+                    groupId !== null &&
+                    (previousItem === undefined ||
+                      stripItemGroupId(previousItem, customizations) !==
+                        groupId);
+                  return (
+                    <Fragment key={itemId}>
+                      {firstInGroup && group !== undefined ? (
+                        <TabGroupChip
+                          groupId={groupId}
+                          group={group}
+                          onClose={closeTabFlow.closeGroup}
+                        />
+                      ) : null}
+                      {group?.collapsed !== true ? (
+                        <HeaderStripItemRenderer
+                          itemId={itemId}
+                          stripIndex={index}
+                          offsetX={headerOffsets.get(itemId) ?? 0}
+                          memberOffset={memberOffsetBefore(layoutItems, index)}
+                          isActive={itemId === activeItemId}
+                          isNextActive={
+                            headerItemIds[index + 1] === activeItemId
+                          }
+                          nextIsSplit={layoutItems[index + 1]?.kind === "split"}
+                          isLastItem={index === headerItemIds.length - 1}
+                          showDropIndicatorBefore={dropIndicatorIndex === index}
+                          showDropIndicatorAfter={
+                            dropIndicatorIndex === index + 1 &&
+                            index === headerItemIds.length - 1
+                          }
+                          onClose={closeTabFlow.requestCloseTab}
+                          onCloseOtherTabs={closeTabFlow.closeOtherTabs}
+                          onDuplicateTab={handleDuplicateTab}
+                          canCloseOtherTabs={canCloseOtherTabs}
+                          onOpenInNewWindow={openInNewWindowFlow.requestOpen}
+                          canOpenInNewWindow={openInNewWindowFlow.isAvailable}
+                          onSplitCommand={handleSplitCommand}
+                          taskPinnedStates={taskPinnedStates}
+                          pendingSetPinnedEpicIds={pendingSetPinnedEpicIds}
+                          onSetTaskPinned={handleSetTaskPinned}
+                        />
+                      ) : null}
+                    </Fragment>
+                  );
+                })}
               </div>
             </LayoutGroup>
             <TabStripNewButton onNewTab={handleNewTab} />

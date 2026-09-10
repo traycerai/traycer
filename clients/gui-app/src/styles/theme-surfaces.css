@@ -7,49 +7,33 @@
   color: var(--sidebar-foreground);
 }
 
-/*
- * One glass layer per floating surface. Custom Floating UI/Tiptap surfaces
- * join the same contract as the Radix wrappers through their stable markers.
- *
- * `.glass-with-insets::before` joins this list too: it is the SECOND glass
- * layer a `glass-with-insets` surface needs, painted as a pseudo-element sat
- * behind the surface's own content (see the `isolation: isolate` +
- * `z-index: -1` rule below) instead of on the surface's own background. A
- * surface using `glass-with-insets` already turned off ITS OWN
- * `background-color`/`backdrop-filter` so nested overlays and sticky insets
- * can sample the real page backdrop through it; `isolation: isolate` gives
- * that surface its own stacking context so the `::before` layer composites
- * UNDER the surface's content but ABOVE whatever is behind the surface in the
- * page, and `z-index: -1` is what places it there within that isolated
- * context - without the isolation, a plain negative z-index would escape the
- * surface's own stacking context and paint behind unrelated page content
- * instead.
- */
-[data-slot="dialog-content"],
-[data-slot="alert-dialog-content"],
-[data-slot="popover-content"],
-[data-slot="dropdown-menu-content"],
-[data-slot="dropdown-menu-sub-content"],
-[data-slot="context-menu-content"],
-[data-slot="context-menu-sub-content"],
-[data-slot="select-content"],
-[data-slot="hover-card-content"],
-[data-slot="sheet-content"],
-[data-slot="drawer-content"],
-[data-slot="composer-menu"],
-[data-slot="mention-preview-panel"],
-[data-slot="artifact-link-popover"],
-[data-slot="floating-draft-popover"],
-[data-slot="thread-hover-popover"],
-[data-slot="mention-suggestion"],
-[data-slot="quote-selection-popover"],
-[data-slot="office-legend-popover"],
-[data-profile-usage-sidecar],
-[data-minimap-list-card],
-.tc-editor-bubble-menu,
-.tc-node-block-toolbar,
-.glass-with-insets::before {
-  /* An embedded command list must not paint another, opaque panel over glass. */
+/* One tint per surface; embedded command lists inherit transparency. */
+:is(
+  [data-slot="dialog-content"],
+  [data-slot="alert-dialog-content"],
+  [data-slot="popover-content"],
+  [data-slot="dropdown-menu-content"],
+  [data-slot="dropdown-menu-sub-content"],
+  [data-slot="context-menu-content"],
+  [data-slot="context-menu-sub-content"],
+  [data-slot="select-content"],
+  [data-slot="hover-card-content"],
+  [data-slot="sheet-content"],
+  [data-slot="drawer-content"],
+  [data-slot="composer-menu"],
+  [data-slot="mention-preview-panel"],
+  [data-slot="artifact-link-popover"],
+  [data-slot="floating-draft-popover"],
+  [data-slot="thread-hover-popover"],
+  [data-slot="mention-suggestion"],
+  [data-slot="quote-selection-popover"],
+  [data-slot="office-legend-popover"],
+  [data-profile-usage-sidecar],
+  [data-minimap-list-card],
+  .tc-editor-bubble-menu,
+  .tc-node-block-toolbar,
+  .glass-with-insets::before
+) {
   --command-surface-background: transparent;
   background-color: color-mix(
     in srgb,
@@ -57,6 +41,51 @@
     transparent
   );
   backdrop-filter: blur(16px);
+}
+/* Radix's transformed wrapper anchors the glass outside the content's scroll area. */
+[data-radix-popper-content-wrapper]
+  > :is(
+    [data-slot="popover-content"],
+    [data-slot="dropdown-menu-content"],
+    [data-slot="dropdown-menu-sub-content"],
+    [data-slot="context-menu-content"],
+    [data-slot="context-menu-sub-content"],
+    [data-slot="select-content"],
+    [data-slot="hover-card-content"]
+  ) {
+  isolation: isolate;
+  background-color: transparent;
+  backdrop-filter: none;
+
+  &::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    pointer-events: none;
+    background-color: color-mix(
+      in srgb,
+      var(--popover) calc(var(--glass-opacity, 1) * 100%),
+      transparent
+    );
+    backdrop-filter: blur(16px);
+  }
+}
+/* A retained opacity animation creates a backdrop root even after it ends. */
+:is(
+  [data-slot="dialog-content"],
+  [data-slot="popover-content"],
+  [data-slot="dropdown-menu-content"],
+  [data-slot="dropdown-menu-sub-content"],
+  [data-slot="context-menu-content"],
+  [data-slot="context-menu-sub-content"],
+  [data-slot="select-content"],
+  [data-slot="hover-card-content"],
+  [data-slot="sheet-content"],
+  [data-slot="drawer-content"]
+)[data-state="open"] {
+  animation-fill-mode: backwards;
 }
 .glass-inset {
   background-color: var(--popover);
@@ -67,7 +96,7 @@
   background-color: transparent;
   backdrop-filter: blur(16px);
 }
-/* Keep outer blur off content so nested overlays and sticky insets can sample the backdrop. */
+/* Keep the dialog background separate from sticky insets and nested portals. */
 :is(
   [data-slot="popover-content"],
   [data-slot="dialog-content"]
@@ -76,10 +105,8 @@
   background-color: transparent;
   backdrop-filter: none;
 }
-[data-slot="popover-content"].glass-with-insets {
-  position: relative;
-}
-.glass-with-insets::before {
+/* Popovers use the fixed background anchored by their Radix wrapper above. */
+[data-slot="dialog-content"].glass-with-insets::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -182,4 +209,33 @@ code,
     url("../assets/brand/gradient-bg.jpg");
   background-size: cover;
   background-position: center;
+}
+
+/* The column paints one continuous image behind its rail and panel body. */
+:root[data-theme-sidebar-artwork]
+  [data-epic-sidebar-panel]
+  :is(
+    [data-slot="sidebar"],
+    [data-slot="sidebar-inner"],
+    [data-epic-sidebar-rail]
+  ) {
+  background-color: transparent;
+  background-image: none;
+}
+
+:is([data-epic-sidebar-panel], [data-settings-sidebar]) {
+  position: relative;
+  isolation: isolate;
+}
+
+:root[data-theme-sidebar-artwork]
+  :is([data-epic-sidebar-panel], [data-settings-sidebar]):has(
+    > .sidebar-artwork .appearance-wallpaper
+  ) {
+  background-image: none;
+}
+
+/* Keep navigation labels legible over the shared wallpaper treatment. */
+.sidebar-artwork {
+  opacity: 0.35;
 }

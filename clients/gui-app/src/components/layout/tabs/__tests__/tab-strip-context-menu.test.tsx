@@ -48,7 +48,7 @@ const EPIC_TAB: Extract<HeaderTab, { kind: "epic" }> = {
   canClose: true,
   canDuplicate: false,
   canOpenInNewWindow: false,
-  repositoryIdentity: null,
+  appearance: null,
 };
 
 const noopStreamClientFactory: EpicStreamClientFactory = () => ({
@@ -109,7 +109,6 @@ function renderPinMenu(
         canOpenInNewWindow={false}
         canEditTitle={false}
         taskPinnedState={taskPinnedState}
-        repositorySettings={null}
         isTaskPinPending={false}
         onCloseOtherTabs={() => undefined}
         onDuplicateTab={() => undefined}

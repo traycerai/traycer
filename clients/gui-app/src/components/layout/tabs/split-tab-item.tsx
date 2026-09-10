@@ -212,6 +212,7 @@ export const SplitTabItem = memo(function SplitTabItem(
         />
       </div>
       <SplitGroupUnderline
+        color={quickActionsTab?.appearance?.color ?? null}
         splitId={props.item.id}
         selectedSide={props.isActive ? props.item.focusedSide : null}
       />
@@ -226,6 +227,7 @@ export const SplitTabItem = memo(function SplitTabItem(
 });
 
 function SplitGroupUnderline(props: {
+  readonly color: string | null;
   readonly splitId: string;
   readonly selectedSide: "left" | "right" | null;
 }): ReactNode {
@@ -233,38 +235,39 @@ function SplitGroupUnderline(props: {
     <span
       aria-hidden="true"
       data-testid={`split-tab-group-underline-${props.splitId}`}
+      style={{ color: props.color ?? "var(--color-primary)" }}
       className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex h-px pr-[clamp(0.75rem,5%,1.5rem)] pl-2"
     >
       <span
         data-testid={`split-tab-group-underline-control-${props.splitId}`}
         className={cn(
-          "relative w-11 shrink-0 rounded-l-full bg-primary",
+          "relative w-11 shrink-0 rounded-l-full bg-current",
           props.selectedSide === "left" &&
-            "after:absolute after:inset-y-0 after:-right-0.5 after:w-0.5 after:bg-primary",
+            "after:absolute after:inset-y-0 after:-right-0.5 after:w-0.5 after:bg-current",
         )}
       />
       <span
         data-testid={`split-tab-group-underline-left-${props.splitId}`}
         className={cn(
           "relative min-w-0 flex-1 rounded-l-full",
-          props.selectedSide !== "left" && "bg-primary",
+          props.selectedSide !== "left" && "bg-current",
           props.selectedSide === "right" &&
-            "after:absolute after:inset-y-0 after:-right-0.5 after:w-0.5 after:bg-primary",
+            "after:absolute after:inset-y-0 after:-right-0.5 after:w-0.5 after:bg-current",
         )}
       />
       <span
         className={cn(
           "shrink-0",
-          props.selectedSide === null ? "w-px bg-primary" : "w-0",
+          props.selectedSide === null ? "w-px bg-current" : "w-0",
         )}
       />
       <span
         data-testid={`split-tab-group-underline-right-${props.splitId}`}
         className={cn(
           "relative min-w-0 flex-1 rounded-r-full",
-          props.selectedSide !== "right" && "bg-primary",
+          props.selectedSide !== "right" && "bg-current",
           props.selectedSide === "left" &&
-            "before:absolute before:inset-y-0 before:-left-0.5 before:w-0.5 before:bg-primary",
+            "before:absolute before:inset-y-0 before:-left-0.5 before:w-0.5 before:bg-current",
         )}
       />
     </span>

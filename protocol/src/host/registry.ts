@@ -540,8 +540,6 @@ import {
   epicRetryMigrationV10,
 } from "@traycer/protocol/host/epic/lane-unaries";
 import {
-  workspaceGetAppearanceV10,
-  workspaceSetAppearanceV10,
   workspaceBrowseFoldersV10,
   workspaceBrowseFoldersV11,
   workspaceMentionFilesV10,
@@ -9437,32 +9435,6 @@ const HOST_RPC_PROVIDERS_REGISTRY_DEFINITION = {
 } as const;
 
 const HOST_RPC_EDITING_REGISTRY_DEFINITION = {
-  "workspace.getAppearance": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: workspaceGetAppearanceV10,
-          upgradeFromPreviousVersion: null,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
-  "workspace.setAppearance": {
-    degrade: { kind: "unsupported" },
-    1: {
-      latestMinor: 0,
-      versions: {
-        0: {
-          contract: workspaceSetAppearanceV10,
-          upgradeFromPreviousVersion: null,
-        },
-      },
-      downgradePathsFromLatest: {},
-    },
-  },
   // Additive, post-v1.0.0 optional method. Older hosts render the same file
   // surfaces read-only; newer hosts provide conflict-safe in-place saves.
   "workspace.writeFile": {
