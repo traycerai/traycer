@@ -4,16 +4,11 @@ import type { HistoryItem } from "@/components/home/data/home-page.data";
 import type { ListTasksCompleteness } from "@traycer/protocol/host/epic/unary-schemas";
 import {
   EpicsListChatHostFilterUnsupported,
-  EpicsListCloudPagePending,
-  EpicsListCloudPageUnavailable,
-  EpicsListEmpty,
   EpicsListError,
-  EpicsListFilteredEmpty,
-  EpicsListFilteringLoading,
   EpicsListHostRequiresCloudToList,
   EpicsListLoading,
+  EpicsListNoRows,
   EpicsListShowMore,
-  HistoryCompletenessNotice,
 } from "@/components/epics/epics-list-shared";
 import { MobileHistoryRow } from "@/components/epics/mobile/mobile-history-row";
 import {
@@ -270,74 +265,41 @@ function MobileHistoryListBody(props: MobileHistoryListBodyProps): ReactNode {
   if (props.chatHostFilterUnsupported) {
     return <EpicsListChatHostFilterUnsupported />;
   }
-  // The first page is a usable local snapshot while the cloud leg resolves.
-  // Empty local storage cannot answer whether the account has tasks yet.
-  if (props.items.length === 0 && props.cloudPagePending) {
+  // Every "there are no rows" reading, decided once for both responsive bodies
+  // in `EpicsListNoRows` - the same rules as the desktop panel by construction.
+  if (props.items.length === 0) {
     return (
-      <>
-        <HistoryCompletenessNotice
-          completeness={props.completeness}
-          cloudPagePending={props.cloudPagePending}
-        />
-        <EpicsListCloudPagePending />
-      </>
-    );
-  }
-  if (props.items.length === 0 && !props.hasActiveFilters) {
-    // Same rule as the desktop panel: no cloud page means no claim of an
-    // empty account.
-    return (
-      <>
-        <HistoryCompletenessNotice
-          completeness={props.completeness}
-          cloudPagePending={props.cloudPagePending}
-        />
-        {props.completeness?.cloudPage === "unavailable" ? (
-          <EpicsListCloudPageUnavailable />
-        ) : (
-          <EpicsListEmpty />
-        )}
-      </>
-    );
-  }
-  if (props.items.length === 0 && props.hasActiveFilters && props.isFetching) {
-    return (
-      <>
-        <HistoryCompletenessNotice
-          completeness={props.completeness}
-          cloudPagePending={props.cloudPagePending}
-        />
-        <EpicsListFilteringLoading />
-      </>
+      <EpicsListNoRows
+        cloudPagePending={props.cloudPagePending}
+        cloudPageUnavailable={props.completeness?.cloudPage === "unavailable"}
+        hasActiveFilters={props.hasActiveFilters}
+        isFetching={props.isFetching}
+        onRetry={props.onRetry}
+        hasNextPage={props.hasNextPage}
+        isFetchingNextPage={props.isFetchingNextPage}
+        onLoadMore={props.onLoadMore}
+      />
     );
   }
   return (
     <>
-      <HistoryCompletenessNotice
-        completeness={props.completeness}
-        cloudPagePending={props.cloudPagePending}
-      />
-      {props.items.length > 0 ? (
-        <ul className="flex flex-col gap-2" data-testid="epics-list-rows">
-          {props.items.map((item) => (
-            <MobileHistoryRow
-              key={item.id}
-              item={item}
-              selectionMode={props.selectionMode}
-              isSelected={props.selectedIds.has(item.epicId)}
-              isTrayOpen={props.openTrayEpicId === item.epicId}
-              isPinPending={props.pendingSetPinnedEpicIds.has(item.epicId)}
-              onTrayOpenChange={props.onTrayOpenChange}
-              onToggleSelection={props.onToggleSelection}
-              onRequestDelete={props.onRequestDelete}
-              onSetPinned={props.onSetPinned}
-              onOpen={props.onOpenItem}
-            />
-          ))}
-        </ul>
-      ) : (
-        <EpicsListFilteredEmpty />
-      )}
+      <ul className="flex flex-col gap-2" data-testid="epics-list-rows">
+        {props.items.map((item) => (
+          <MobileHistoryRow
+            key={item.id}
+            item={item}
+            selectionMode={props.selectionMode}
+            isSelected={props.selectedIds.has(item.epicId)}
+            isTrayOpen={props.openTrayEpicId === item.epicId}
+            isPinPending={props.pendingSetPinnedEpicIds.has(item.epicId)}
+            onTrayOpenChange={props.onTrayOpenChange}
+            onToggleSelection={props.onToggleSelection}
+            onRequestDelete={props.onRequestDelete}
+            onSetPinned={props.onSetPinned}
+            onOpen={props.onOpenItem}
+          />
+        ))}
+      </ul>
       <EpicsListShowMore
         hasNextPage={props.hasNextPage}
         isFetchingNextPage={props.isFetchingNextPage}
