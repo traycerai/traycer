@@ -3482,8 +3482,12 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
       expect(isEpicParked(EPIC)).toBe(false);
       expect(chatRegistry.peek(EPIC, CHAT_ID, HOST_ID)).not.toBeNull();
 
-      // The pane comes back: the toaster's mount-time replay shows the
-      // last-copy notice, marks THAT delivered, and the park follows.
+      // The epic comes back on screen and the pane focuses: the toaster's
+      // mount-time replay shows the last-copy notice and marks THAT
+      // delivered. Visible, so the release is observed on a LIVE chat -
+      // refocusing with the surface still hidden would park inside the act
+      // and the rest of this arm would run against a disposed handle.
+      setEpicSurfaceVisibility(EPIC, "view-pin9c", true);
       reactAct(() => {
         rendered.rerender(tree(true));
       });
@@ -3492,10 +3496,17 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
           .getState()
           .deliveredLastCopyActionIds.has(clientActionId),
       ).toBe(true);
+      expect(isEpicParked(EPIC)).toBe(false);
+      expect(chatRegistry.peek(EPIC, CHAT_ID, HOST_ID)).not.toBeNull();
+
+      // Hidden again, both signals: a fresh deadline, and nothing holds.
       reactAct(() => {
         rendered.rerender(tree(false));
       });
-      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS);
+      setEpicSurfaceVisibility(EPIC, "view-pin9c", false);
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS - 1);
+      expect(isEpicParked(EPIC)).toBe(false);
+      vi.advanceTimersByTime(1);
       expect(isEpicParked(EPIC)).toBe(true);
       expect(chatRegistry.peek(EPIC, CHAT_ID, HOST_ID)).toBeNull();
     } finally {
