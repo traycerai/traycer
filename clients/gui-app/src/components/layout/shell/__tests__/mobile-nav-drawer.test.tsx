@@ -874,6 +874,69 @@ describe("MobileNavDrawer", () => {
       expect(status?.getAttribute("role")).toBe("status");
     });
 
+    it("shows the local-only provenance text label for a local-home row", async () => {
+      testState.items = [
+        {
+          ...historyItem({
+            id: "a",
+            title: "local only",
+            updatedAtMs: NOW_MS - DAY_MS,
+          }),
+          isLocalHome: true,
+        },
+      ];
+      renderDrawer();
+      const rows = await screen.findAllByTestId("mobile-nav-task-row");
+
+      const label = rows[0]?.querySelector(
+        '[data-testid="mobile-nav-task-provenance-label-local-only"]',
+      );
+      expect(label?.textContent).toBe("Not synced");
+    });
+
+    it("shows the preserved-orphan provenance text label for a deleted-with-edits-kept row", async () => {
+      testState.items = [
+        {
+          ...historyItem({
+            id: "a",
+            title: "orphaned",
+            updatedAtMs: NOW_MS - DAY_MS,
+          }),
+          isPreservedOrphan: true,
+        },
+      ];
+      renderDrawer();
+      const rows = await screen.findAllByTestId("mobile-nav-task-row");
+
+      const label = rows[0]?.querySelector(
+        '[data-testid="mobile-nav-task-provenance-label-preserved-orphan"]',
+      );
+      expect(label?.textContent).toBe("Deleted, edits kept");
+    });
+
+    it("shows neither provenance text label for an ordinary row carrying no marker", async () => {
+      testState.items = [
+        historyItem({
+          id: "a",
+          title: "ordinary",
+          updatedAtMs: NOW_MS - DAY_MS,
+        }),
+      ];
+      renderDrawer();
+      const rows = await screen.findAllByTestId("mobile-nav-task-row");
+
+      expect(
+        rows[0]?.querySelector(
+          '[data-testid="mobile-nav-task-provenance-label-local-only"]',
+        ),
+      ).toBeNull();
+      expect(
+        rows[0]?.querySelector(
+          '[data-testid="mobile-nav-task-provenance-label-preserved-orphan"]',
+        ),
+      ).toBeNull();
+    });
+
     it("shows the indicator for a task with an unread result, through its own provider", async () => {
       // No live activity, only notification state: this is the case that
       // needs the drawer to supply indicators itself, since the shell mounts

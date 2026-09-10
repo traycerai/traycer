@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
 import {
   historyRowProvenance,
+  historyRowProvenanceLabel,
   historyRowProvenanceTitle,
 } from "@/components/epics/history-row-provenance";
 
@@ -90,12 +91,36 @@ describe("historyRowProvenanceTitle", () => {
     );
   });
 
-  it("tells an unauthorized local-only viewer it syncs once the sign-in is confirmed", () => {
+  it("tells an unauthorized local-only viewer it can't sync until the sign-in is confirmed", () => {
     expect(historyRowProvenanceTitle("local-only", false)).toMatch(
-      /once your sign-in is confirmed/i,
+      /can't sync for now/i,
+    );
+    expect(historyRowProvenanceTitle("local-only", false)).not.toMatch(
+      /will sync/i,
     );
     expect(historyRowProvenanceTitle("local-only", false)).not.toMatch(
       /sign in again/i,
+    );
+  });
+});
+
+describe("historyRowProvenanceLabel", () => {
+  it("labels a preserved orphan as deleted with edits kept", () => {
+    expect(historyRowProvenanceLabel("preserved-orphan")).toBe(
+      "Deleted, edits kept",
+    );
+  });
+
+  it("labels a local-only row as not synced", () => {
+    expect(historyRowProvenanceLabel("local-only")).toBe("Not synced");
+  });
+
+  it("never names the cloud, the device, or the word local in either label", () => {
+    expect(historyRowProvenanceLabel("preserved-orphan")).not.toMatch(
+      /cloud|device|local/i,
+    );
+    expect(historyRowProvenanceLabel("local-only")).not.toMatch(
+      /cloud|device|local/i,
     );
   });
 });

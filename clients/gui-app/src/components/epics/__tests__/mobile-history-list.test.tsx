@@ -1349,6 +1349,54 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
         ),
       ).not.toBeNull();
     });
+
+    it("renders the local-only provenance label as text after the timestamp for a local-home row", async () => {
+      testState.items = [
+        historyItem({
+          title: "Local only epic",
+          isLocalHome: true,
+        }),
+      ];
+      renderPanel("embedded", "/");
+
+      const label = await screen.findByTestId(
+        "epics-list-row-provenance-label-local-only",
+      );
+      expect(label.textContent).toBe("Not synced");
+
+      const card = await screen.findByTestId("epics-list-row-card");
+      expect(card.textContent).toMatch(/updated .* · Not synced/);
+    });
+
+    it("renders the preserved-orphan provenance label with a destructive tint", async () => {
+      testState.items = [
+        historyItem({
+          title: "Orphaned epic",
+          isPreservedOrphan: true,
+        }),
+      ];
+      renderPanel("embedded", "/");
+
+      const label = await screen.findByTestId(
+        "epics-list-row-provenance-label-preserved-orphan",
+      );
+      expect(label.textContent).toBe("Deleted, edits kept");
+      expect(label.className).toMatch(/text-destructive/);
+    });
+
+    it("renders neither provenance label for an ordinary row carrying no marker", async () => {
+      renderPanel("embedded", "/");
+
+      await screen.findByTestId("epics-list-row-card");
+      expect(
+        screen.queryByTestId("epics-list-row-provenance-label-local-only"),
+      ).toBeNull();
+      expect(
+        screen.queryByTestId(
+          "epics-list-row-provenance-label-preserved-orphan",
+        ),
+      ).toBeNull();
+    });
   });
 
   describe("desktop untouched", () => {

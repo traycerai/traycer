@@ -45,6 +45,23 @@ export function historyRowProvenance(
 }
 
 /**
+ * The short visible label the touch surfaces print beside the dot.
+ *
+ * A hover tooltip is the desktop's affordance; on a phone the history row is
+ * inert to pointers (the activation overlay is the only thing a touch lands
+ * on) and the nav drawer's row opens the task on tap, so the dot's sentence
+ * would be unreachable there. The label says the condition in two or three
+ * words; the full sentence stays the dot's accessible name.
+ */
+export function historyRowProvenanceLabel(
+  provenance: HistoryRowProvenance,
+): string {
+  return provenance === "preserved-orphan"
+    ? "Deleted, edits kept"
+    : "Not synced";
+}
+
+/**
  * The glyph's tooltip and accessible name. States the condition and the
  * remedy, nothing about which side of the sync each fact came from.
  */
@@ -56,7 +73,11 @@ export function historyRowProvenanceTitle(
     return "This task was deleted. Its unsynced edits are kept — open it and export what you need.";
   }
   if (!cloudAuthorized) {
-    return "Not synced yet. It will sync once your sign-in is confirmed.";
+    // States the condition and stops: whether the task WILL sync once the
+    // sign-in is confirmed depends on the plan, which this function does not
+    // hold - the signed-in sentence below admits the no-sync plan, and this
+    // one must not promise what that one hedges.
+    return "Not synced yet. Your sign-in couldn't be confirmed, so it can't sync for now.";
   }
   return "Not synced yet. Open this task to sync it; if your plan doesn't include sync, it stays here.";
 }

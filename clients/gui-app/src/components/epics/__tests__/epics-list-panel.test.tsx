@@ -956,7 +956,7 @@ describe("<EpicsListPanel />", () => {
     expect(glyphSlot.id).toBe(link.getAttribute("aria-describedby"));
   });
 
-  it("shows the local-only provenance glyph telling an unverified viewer it syncs once the sign-in is confirmed", async () => {
+  it("shows the local-only provenance glyph telling an unverified viewer it can't sync until the sign-in is confirmed", async () => {
     testState.items = [
       historyItem({
         title: "Local only epic",
@@ -969,9 +969,8 @@ describe("<EpicsListPanel />", () => {
     const glyph = await screen.findByTestId(
       "epics-list-row-provenance-local-only-epic-from-history",
     );
-    expect(glyph.getAttribute("aria-label")).toMatch(
-      /once your sign-in is confirmed/i,
-    );
+    expect(glyph.getAttribute("aria-label")).toMatch(/can't sync for now/i);
+    expect(glyph.getAttribute("aria-label")).not.toMatch(/will sync/i);
     expect(glyph.getAttribute("aria-label")).not.toMatch(/sign in again/i);
   });
 
@@ -1128,7 +1127,7 @@ describe("<EpicsListPanel />", () => {
 
     // First slot: the leading glyph, which always renders something and so
     // never engages `empty:hidden`.
-    const leadingSlot = slots[0];
+    const leadingSlot = Array.from(slots).at(0);
     if (leadingSlot === undefined) throw new Error("expected a leading slot");
     expect(leadingSlot.childElementCount).toBeGreaterThan(0);
 
@@ -1136,7 +1135,7 @@ describe("<EpicsListPanel />", () => {
     // ordinary (never-imported) row. `empty:hidden` is jsdom-invisible as
     // computed style, so the class plus emptiness together are what prove the
     // fix's mechanism is actually wired to this slot.
-    const importedSlot = slots[1];
+    const importedSlot = Array.from(slots).at(1);
     if (importedSlot === undefined) throw new Error("expected a second slot");
     expect(importedSlot.childElementCount).toBe(0);
     expect(importedSlot.textContent).toBe("");
@@ -1164,7 +1163,7 @@ describe("<EpicsListPanel />", () => {
     );
     expect(slots.length).toBe(2);
 
-    const importedSlot = slots[1];
+    const importedSlot = Array.from(slots).at(1);
     if (importedSlot === undefined) throw new Error("expected a second slot");
     expect(importedSlot.childElementCount).toBe(1);
     expect(
@@ -1214,7 +1213,7 @@ describe("<EpicsListPanel />", () => {
       '[data-testid="epics-list-row-status-slot"]',
     );
     expect(slots.length).toBe(2);
-    const importedUnseenSlot = slots[1];
+    const importedUnseenSlot = Array.from(slots).at(1);
     if (importedUnseenSlot === undefined) {
       throw new Error("expected a second slot");
     }

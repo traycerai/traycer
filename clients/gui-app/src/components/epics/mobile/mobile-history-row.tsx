@@ -14,6 +14,11 @@ import {
 } from "@/components/home/data/home-page.data";
 import { HistoryRowLeadingIcon } from "@/components/epics/epics-list-shared";
 import {
+  historyRowProvenance,
+  historyRowProvenanceLabel,
+  type HistoryRowProvenance,
+} from "@/components/epics/history-row-provenance";
+import {
   historyPinControlLabel,
   historyPinUnavailableReason,
   historyPinUnavailableTooltip,
@@ -322,6 +327,7 @@ export const MobileHistoryRow = memo(function MobileHistoryRow(
             displayTitle={displayTitle}
             updatedLabel={item.updatedLabel}
             isPinned={item.isPinned}
+            provenance={historyRowProvenance(item)}
             isRenaming={isRenaming}
             renameInputProps={renameInputProps}
           />
@@ -364,11 +370,16 @@ function mobileRowCardClassName(args: {
  * The row's label: its title over when it was last touched, or the field that
  * renames it. Inert to pointers - the activation overlay above is the only
  * thing a touch lands on - except while renaming, when the field is the point.
+ *
+ * A row with provenance prints its short label after the timestamp: there
+ * is no hover on this surface, so the leading dot's sentence would otherwise
+ * be reachable only by a screen reader.
  */
 function RowTitleBlock(props: {
   readonly displayTitle: string;
   readonly updatedLabel: string;
   readonly isPinned: boolean;
+  readonly provenance: HistoryRowProvenance | null;
   readonly isRenaming: boolean;
   readonly renameInputProps: InlineRenameInputProps;
 }): ReactNode {
@@ -402,6 +413,19 @@ function RowTitleBlock(props: {
       </span>
       <span className="truncate text-ui-xs text-muted-foreground">
         updated {props.updatedLabel}
+        {props.provenance === null ? null : (
+          <>
+            {" · "}
+            <span
+              data-testid={`epics-list-row-provenance-label-${props.provenance}`}
+              className={cn(
+                props.provenance === "preserved-orphan" && "text-destructive",
+              )}
+            >
+              {historyRowProvenanceLabel(props.provenance)}
+            </span>
+          </>
+        )}
       </span>
     </span>
   );
