@@ -529,7 +529,17 @@ function readEpicLocalHomeReading(epicId: string): EpicLocalHomeReading {
 function projectEpicLocalHomeReading(
   canonicalEpicIds: ReadonlyArray<string>,
 ): LiveSessionSnapshotCache<EpicLocalHomeReading> {
-  const [epicId] = canonicalEpicIds;
+  // `.at(0)` and NOT `const [epicId] = canonicalEpicIds`. Without
+  // `noUncheckedIndexedAccess` a destructured element is typed `string`, so the
+  // guard below reads as dead to the type checker - which is what
+  // `no-unnecessary-condition` reported - while being part of this projector's
+  // actual contract: `useEpicReadLiveSessionSnapshot` passes `[]` whenever the
+  // id signature is empty, which covers an empty input array and a single
+  // empty-string id. `.at` returns `string | undefined`, so the type agrees with
+  // what the caller can hand over; the alternative the rule invites - deleting
+  // the guard - would index an empty array and call the registry with
+  // `undefined`.
+  const epicId = canonicalEpicIds.at(0);
   const reading: EpicLocalHomeReading =
     epicId === undefined ? "unstated" : readEpicLocalHomeReading(epicId);
   return { signature: reading, snapshot: reading };
@@ -540,7 +550,9 @@ const UNSTATED_LOCAL_HOME_READING: EpicLocalHomeReading = "unstated";
 function projectEpicSessionHostId(
   canonicalEpicIds: ReadonlyArray<string>,
 ): LiveSessionSnapshotCache<string | null> {
-  const [epicId] = canonicalEpicIds;
+  // `.at(0)` for the reason given in `projectEpicLocalHomeReading` above: the
+  // guard is real, and only the destructured binding's type said otherwise.
+  const epicId = canonicalEpicIds.at(0);
   const handle = epicId === undefined ? null : registry.peek(epicId);
   const hostId = handle === null ? null : getEpicSessionHandleHostId(handle);
   // `\u0000none` as the ESCAPE, not a raw NUL byte. A literal NUL in source

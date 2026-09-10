@@ -11,23 +11,31 @@ const SIGN_IN_LANE_CLASS =
 
 /**
  * The sentence for a session the STATUS would have admitted and the SHELL
- * could not.
+ * could not - one per refusal reason, keyed by the reason.
  *
- * Three things it has to do, and the order is the reading order: name what is
- * wrong with the session (the sign-in is unconfirmed, not rejected), say why
- * that is fatal HERE and not on a laptop (nothing on this device to fall back
+ * Three things each sentence has to do, and the order is the reading order: name
+ * what is wrong with the session (the sign-in is unconfirmed, not rejected), say
+ * why that is fatal HERE and not on a laptop (nothing on this device to fall back
  * to), and leave the user with the one action that helps. It deliberately does
  * NOT claim the account is signed out - it is not - nor that the network is
  * down, which may be perfectly false.
+ *
+ * A `Record` over the union rather than a `switch`, and for the same purpose the
+ * switch had: `Record<ShellAdmissionRefusal, string>` is exhaustive BY TYPE, so
+ * adding a refusal reason fails to compile here until someone writes its
+ * sentence - which is the whole reason the reason is a union rather than a
+ * boolean. The switch expressed that too, but while the union has exactly one
+ * member its single `case` compares two identical literal types, which
+ * `no-unnecessary-condition` reports; a mapped type has no comparison in it to be
+ * unnecessary, and keeps the guarantee at one member or ten.
  */
+const REFUSAL_MESSAGES: Record<ShellAdmissionRefusal, string> = {
+  "unverified-relay-only":
+    "Your sign-in couldn't be confirmed, and this device has no Traycer host of its own — everything here is served from another device over the network. Sign in again to reconnect.",
+};
+
 function refusalMessage(refusal: ShellAdmissionRefusal): string {
-  // A switch rather than a return, with one arm: it is exhaustive over the
-  // union, so adding a refusal reason fails to compile here until someone
-  // writes its sentence - which is the whole reason the reason is a union.
-  switch (refusal) {
-    case "unverified-relay-only":
-      return "Your sign-in couldn't be confirmed, and this device has no Traycer host of its own — everything here is served from another device over the network. Sign in again to reconnect.";
-  }
+  return REFUSAL_MESSAGES[refusal];
 }
 
 export function AuthLandingPage(props: {

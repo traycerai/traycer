@@ -359,8 +359,14 @@ describe("the pin write and its Undo reach the real reading", () => {
 
     // The unpin. Before the cache enrolment this left the rendered pin at `true`
     // after a SUCCESSFUL write, offering Unpin again indefinitely.
-    await act(async () => {
+    // Not `act(async () => …)`: the body awaits nothing, which `require-await`
+    // reports. Returning a promise keeps act's ASYNC path, which is the part that
+    // matters here - it flushes the mutation's own microtasks (optimistic patch,
+    // `onSuccess`, invalidation) inside the act scope. A bare sync callback would
+    // leave those to land outside it.
+    await act(() => {
       result.current.pin.mutate(variables);
+      return Promise.resolve();
     });
     await waitFor(() => {
       expect(result.current.readings.get(EPIC_LOCAL)?.pinned).toBe(false);
@@ -368,8 +374,9 @@ describe("the pin write and its Undo reach the real reading", () => {
 
     // ...and Undo, which is the same dispatch with the bit inverted, carrying
     // the host in its own variables because the row may be gone by then.
-    await act(async () => {
+    await act(() => {
       result.current.pin.mutate({ ...variables, pinned: true });
+      return Promise.resolve();
     });
     await waitFor(() => {
       expect(result.current.readings.get(EPIC_LOCAL)?.pinned).toBe(true);
@@ -530,8 +537,9 @@ describe("the pin reading follows the local-homed population (R8)", () => {
     expect(result.current.get(EPIC_LOCAL)?.pinnedKnown).toBe(false);
     expect(result.current.get(EPIC_DISCOVERED)?.pinnedKnown).toBe(false);
     // The window is bounded by that one read, not by anything the user has to do.
-    await act(async () => {
+    await act(() => {
       releaseDispatches(OWNER_HOST_ID);
+      return Promise.resolve();
     });
     await waitFor(() => {
       expect(result.current.get(EPIC_DISCOVERED)?.pinnedKnown).toBe(true);
