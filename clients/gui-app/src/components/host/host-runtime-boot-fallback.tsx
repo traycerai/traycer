@@ -2,10 +2,7 @@ import type { ReactNode } from "react";
 import { HostBootSurface } from "@/components/host/host-boot-surface";
 import { APP_HEADER_HEIGHT_CLASS } from "@/components/layout/header/app-header-height";
 import { cn } from "@/lib/utils";
-import {
-  launchMarkOwnsWindow,
-  useLaunchMark,
-} from "@/hooks/launch/use-launch-mark";
+import { isMobileApp } from "@/lib/mobile-app";
 
 /**
  * THE FIRST of a launch's three boot surfaces: what `HostRuntimeProvider`
@@ -27,15 +24,25 @@ export function HostRuntimeBootFallback(props: {
   readonly onConfigureShell: () => void;
   readonly onOpenSettings: () => void;
 }): ReactNode {
-  // While the launch mark still owns the window this surface stays EMPTY rather
-  // than rendering behind it. Covering the card would have hidden it visually,
-  // but the card would still be in the tree - and its heading is host copy
-  // ("Starting Traycer…") describing a wait that, before auth answers, contains
-  // no host work at all. That sentence was the surface a signed-out user
-  // reported seeing before the animation. It comes back the moment the mark
-  // gives up the window, which on a stalled launch is the whole point: the
-  // heading, the progress bar and `Open settings` all return together.
-  const launchMarkCovers = launchMarkOwnsWindow(useLaunchMark());
+  // On the installed mobile app this window is a KEYCHAIN READ, not a host
+  // start: there is no bundled local host to install or boot (`onLocalHostChange`
+  // emits `null` and never transitions), and the bootstrap-log disclosure
+  // self-hides for want of a CLI. So the card's "Starting Traycer…" describes
+  // work that is not happening, which is the sentence a signed-out user
+  // reported seeing on launch. A plain dark surface says nothing instead, on
+  // the same ground as the native launch image so the handoff is invisible.
+  //
+  // Desktop is untouched: there the same window really is a host starting, and
+  // the card's heading, progress bar and `Open settings` escape hatch all mean
+  // what they say.
+  if (isMobileApp()) {
+    return (
+      <div
+        className="flex min-h-safe-svh w-full flex-col bg-zinc-950"
+        data-testid="host-runtime-boot-fallback"
+      />
+    );
+  }
 
   return (
     <div
@@ -44,13 +51,11 @@ export function HostRuntimeBootFallback(props: {
     >
       <div aria-hidden className={cn("shrink-0", APP_HEADER_HEIGHT_CLASS)} />
       <div className="flex flex-1 items-center justify-center p-6">
-        {launchMarkCovers ? null : (
-          <HostBootSurface
-            testId={null}
-            onConfigureShell={props.onConfigureShell}
-            onOpenSettings={props.onOpenSettings}
-          />
-        )}
+        <HostBootSurface
+          testId={null}
+          onConfigureShell={props.onConfigureShell}
+          onOpenSettings={props.onOpenSettings}
+        />
       </div>
     </div>
   );

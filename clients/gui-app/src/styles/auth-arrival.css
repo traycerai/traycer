@@ -40,21 +40,93 @@
   }
 }
 
-@keyframes launch-mark-settle {
+/* One animation for the whole splash: hold, then fade over the last 240ms of
+   2500ms (90.4%). `pointer-events` is not interpolable, so it switches
+   discretely AT that frame - which is exactly the behaviour wanted. The layer
+   swallows taps while it is opaque, because a tap there would hit a sign-in
+   control the user cannot see, and stops the instant the page beneath starts
+   becoming visible. Doing it here rather than in React is what keeps the
+   component down to one boolean. */
+@keyframes auth-splash-play {
+  0% {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  93.15% {
+    opacity: 1;
+    pointer-events: none;
+  }
+  100% {
+    opacity: 0;
+    pointer-events: none;
+  }
+}
+
+/* Variant A - draw. The mark's paths are FILLED shapes, so drawing them means
+   borrowing them as outlines first: no fill, a stroke that runs its own length,
+   then the fill arrives under the finished outline. `stroke-dasharray` is a
+   generous over-estimate of the longest path rather than a measured length -
+   an over-estimate simply starts the reveal a little later, where an
+   under-estimate would leave a segment permanently drawn. */
+@keyframes auth-mark-draw {
   from {
-    transform: scale(1.025);
+    stroke-dashoffset: 1200;
   }
   to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes auth-mark-ink {
+  from {
+    fill-opacity: 0;
+  }
+  to {
+    fill-opacity: 1;
+  }
+}
+
+/* Variant C - scale and glow. The glow is a drop-shadow on the mark itself, so
+   it never paints a box; it swells as the mark lands and then dissipates. */
+@keyframes auth-mark-swell {
+  0% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  55% {
+    opacity: 1;
+  }
+  70% {
+    transform: scale(1.03);
+  }
+  100% {
+    opacity: 1;
     transform: scale(1);
   }
 }
 
-@keyframes launch-mark-leave {
-  from {
-    opacity: 1;
+@keyframes auth-mark-glow {
+  0% {
+    filter: drop-shadow(0 0 0 rgb(255 255 255 / 0));
   }
-  to {
-    opacity: 0;
+  60% {
+    filter: drop-shadow(0 0 2.5rem rgb(255 255 255 / 0.34));
+  }
+  100% {
+    filter: drop-shadow(0 0 0 rgb(255 255 255 / 0));
+  }
+}
+
+/* Variant B - assemble. The four pieces travel in from their own offsets and
+   the whole mark settles once. Longer than the original 560ms per piece so the
+   motion fills the surface's life instead of finishing in the first second and
+   leaving it frozen. */
+@keyframes auth-mark-settle {
+  0% {
+    transform: scale(1.04);
+  }
+  100% {
+    transform: scale(1);
   }
 }
 
@@ -108,16 +180,82 @@
     animation: brand-copy-arrive 600ms 120ms cubic-bezier(0.22, 1, 0.36, 1) both;
   }
 
-  /* One slow settle across the whole hold, not a loop: the mark finishes
-     assembling well before the splash ends, and a screen that then freezes
-     completely reads as a stall rather than as a pause. Finite, single-shot,
-     and it lands exactly where the static mark would have been. */
-  .launch-mark-settle {
-    animation: launch-mark-settle 2260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  .auth-splash {
+    animation: auth-splash-play 3500ms linear both;
   }
 
-  .launch-mark-exit {
-    animation: launch-mark-leave 240ms ease-out both;
+  /* Each variant OWNS the mark's motion, so the shared per-piece assembly that
+     `BrandEntrance` applies elsewhere is cleared first. Without this the
+     draw and swell variants would run on top of pieces that were still
+     travelling from the shared keyframes. */
+  .auth-splash .brand-entrance-mark g > path {
+    animation: none;
+  }
+
+  .auth-splash--draw .brand-entrance-mark g > path {
+    fill-opacity: 0;
+    stroke: #fff;
+    stroke-width: 3;
+    stroke-dasharray: 1200;
+    animation:
+      auth-mark-draw 2400ms cubic-bezier(0.65, 0, 0.35, 1) both,
+      auth-mark-ink 700ms 2350ms ease-out both;
+  }
+
+  .auth-splash--draw .brand-entrance-mark g > path:nth-child(2) {
+    animation-delay: 260ms, 2350ms;
+  }
+
+  .auth-splash--draw .brand-entrance-mark g > path:nth-child(3) {
+    animation-delay: 130ms, 2350ms;
+  }
+
+  .auth-splash--draw .brand-entrance-mark g > path:nth-child(4) {
+    animation-delay: 390ms, 2350ms;
+  }
+
+  .auth-splash--assemble .brand-entrance-mark g > path {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: brand-mark-arrive 1600ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .auth-splash--assemble .brand-entrance-mark g > path:nth-child(1) {
+    --mark-arrival-x: -55%;
+    --mark-arrival-y: 55%;
+
+    animation-delay: 620ms;
+  }
+
+  .auth-splash--assemble .brand-entrance-mark g > path:nth-child(2) {
+    --mark-arrival-x: 30%;
+    --mark-arrival-y: -30%;
+
+    animation-delay: 420ms;
+  }
+
+  .auth-splash--assemble .brand-entrance-mark g > path:nth-child(3) {
+    --mark-arrival-x: -18%;
+    --mark-arrival-y: -18%;
+
+    animation-delay: 200ms;
+  }
+
+  .auth-splash--assemble .brand-entrance-mark g > path:nth-child(4) {
+    --mark-arrival-x: -30%;
+    --mark-arrival-y: 30%;
+
+    animation-delay: 820ms;
+  }
+
+  .auth-splash--assemble .brand-entrance-mark {
+    animation: auth-mark-settle 3200ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .auth-splash--scale .brand-entrance-mark {
+    animation:
+      auth-mark-swell 2600ms cubic-bezier(0.22, 1, 0.36, 1) both,
+      auth-mark-glow 3200ms ease-in-out both;
   }
 
   .auth-arrival-actions {

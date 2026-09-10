@@ -1,5 +1,4 @@
 import { ThemeEditorHost } from "@/components/settings/themes/theme-editor-host";
-import { LaunchMarkSurface } from "@/components/launch/launch-mark-surface";
 import { ChatUsageDialog } from "@/components/chat/chat-usage-dialog";
 import { PersistentBrowserGuestHost } from "@/components/epic-canvas/browser-guest/persistent-browser-guest-host";
 import { AppUpdateToastController } from "@/components/layout/bridges/app-update-toast-controller";
@@ -213,14 +212,6 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
                   <ReportIssueDialogHost />
                   <Toaster />
                   <ThemeEditorHost />
-                  {/* ABOVE `HostRuntimeProvider`, deliberately: the provider
-                      replaces its fallback with its children when the binding
-                      lands, and the router replaces the page after that. A mark
-                      rendered inside either one is a new element on each side of
-                      the swap. From here it is the same element for the whole
-                      launch, which is what makes boot -> sign-in read as one
-                      surface settling rather than three surfaces taking turns. */}
-                  <LaunchMarkSurface />
                   <HostRuntimeProvider
                     registry={props.registry}
                     messengerFactory={props.messengerFactory ?? null}

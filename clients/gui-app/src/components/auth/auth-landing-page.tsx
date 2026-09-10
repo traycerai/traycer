@@ -1,3 +1,7 @@
+import {
+  AUTH_SPLASH_DEFAULT_VARIANT,
+  AuthBrandSplash,
+} from "@/components/auth/auth-brand-splash";
 import { BrandEntrance } from "@/components/auth/brand-entrance";
 import { PhotoBloom } from "@/components/auth/cinematic-backdrop";
 import { SignInButton } from "@/components/layout/header/sign-in-button";
@@ -97,6 +101,15 @@ export function AuthLandingPage(props: {
 
       {/* Pinned to the corner the home indicator shares, and in landscape the
           corner a right-side sensor housing shares too. */}
+      {/* Last child, so it stacks over the page without needing a higher
+          z-index than the surface it covers. Only the ordinary signed-out
+          arrival gets it: a refused shell is on this page to READ something,
+          and an animation in front of that sentence delays the one thing the
+          screen exists to say. */}
+      {props.refusal === null ? (
+        <AuthBrandSplash variant={AUTH_SPLASH_DEFAULT_VARIANT} />
+      ) : null}
+
       <footer className="pointer-events-none absolute right-0 bottom-0 z-10 flex items-center justify-end px-[clamp(1.25rem,4vw,4rem)] pr-[max(clamp(1.25rem,4vw,4rem),var(--safe-area-inset-right))] pb-[max(clamp(1rem,3vh,2rem),var(--safe-area-inset-bottom))] font-mono text-overline text-white/[0.42]">
         <span>{getClientAppVersionLabel()}</span>
       </footer>
