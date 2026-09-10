@@ -5133,15 +5133,210 @@ describe("<NotificationsSessionProvider />", () => {
           "host.notifications.feed.subscribe",
         );
       });
-      // The actual regression: with either dependency array missing
-      // `openActivityLane`, the reopen above runs through a STALE
+      // The actual regression, and it is scoped to ONE of the two dependency
+      // entries: with `openActivityLane` missing from **`openForCurrentUser`'s
+      // own `useCallback` deps**, the reopen above runs through a STALE
       // `openForCurrentUser` closure that still calls the `openActivityLane`
       // captured while `status` was "signing-in" - which refuses on
       // `!admitsLocalPlane("signing-in")` even though the account is signed
       // in again right now - so agent activity silently never comes back for
       // this session.
+      //
+      // The SECOND entry - `openActivityLane` in the main stream effect's dep
+      // array - is NOT what this case measures. A cold review ablated it alone
+      // and the case stayed green, because the auth transition here already
+      // invalidates that effect through `status`. It is retained by reasoning
+      // rather than by this assertion: an `openForCurrentUser` identity that
+      // changes for any OTHER reason while `status` holds still would leave
+      // the effect holding a stale opener, and a dep array that omits a value
+      // its body calls is a defect independent of whether some sibling dep
+      // happens to co-move today. Anyone deleting it needs a case that varies
+      // `openForCurrentUser` without varying `status`; this is not one.
       expect(streamClient.subscribedMethods).toContain(
         "agent.activity.subscribe",
+      );
+    });
+  });
+
+  describe("agent activity after a pinned-version refusal (capability regain)", () => {
+    it("reopens agent.activity.subscribe once the negotiated version recovers, on the SAME client, host and unverified principal", async () => {
+      // The R2 dispatch class's last member, on the one surface where the
+      // selector is pinned at the DISPATCH edge rather than merely read at
+      // render: a local-only activity lane subscribes through
+      // `subscribeAtVersion(..., @1.2, ...)`, and the host PROCESS behind a
+      // stable host id can be replaced between the render that read the
+      // capability and the frame that carries the pin. The replacement build
+      // refuses the pin `INCOMPATIBLE`, and that close is deliberately NOT
+      // retried on a timer (`isReopenableHostStreamClose` excludes it - a
+      // version skew does not heal on a clock).
+      //
+      // What it heals on is the capability coming back, and nothing acted on
+      // that: `activityDisposerRef.current` stayed non-null, so
+      // `openActivityLane`'s own idempotence guard refused every later reopen
+      // and agent activity was gone for the life of the session even once the
+      // host was serving `@1.2` again.
+      //
+      // Unverified throughout, because only a session with NO cloud verdict
+      // pins a version at all - a verdict holder subscribes plain and leaves
+      // the plane to the host, so this defect is unreachable from that cohort.
+      const queryClient = new QueryClient();
+      const streamClient = new MockWsStreamClient();
+      hostState.id = mockLocalHostEntry.hostId;
+      streamState.client = streamClient;
+      // Every stream-method version read goes through THIS client, so a
+      // capability move below is a pure re-render and never a client swap -
+      // which would clear the ref incidentally and make the case pass for a
+      // reason that is not the fix.
+      streamState.useClientSupport = true;
+
+      let activityVersion: SchemaVersion | null = { major: 1, minor: 2 };
+      // Feed mode is forced LOCAL by making the cloud feed method unsupported,
+      // rather than left to follow from unverified auth: `useNotificationFeedModeFor`
+      // reads stream CAPABILITIES independently of verdict status, and this
+      // file already covers an unverified session in mixed mode.
+      vi.spyOn(streamClient, "getMethodSupport").mockImplementation(
+        (method: string) => {
+          if (method === "host.notifications.cloudFeed.subscribe") {
+            return "unsupported";
+          }
+          if (method === "agent.activity.subscribe") {
+            return activityVersion === null ? "unsupported" : "supported";
+          }
+          return "supported";
+        },
+      );
+      vi.spyOn(streamClient, "getMethodSchemaVersion").mockImplementation(
+        (method: string) =>
+          method === "agent.activity.subscribe"
+            ? activityVersion
+            : { major: 1, minor: 2 },
+      );
+      // Same pin as the retained-principal case above and for the same
+      // reason: this file's `useHostClientFor` mock builds a fresh requester
+      // on every render, and that identity churn rebuilds callbacks for
+      // reasons unrelated to the capability this case is moving.
+      const spineClient = hostState.client;
+      if (spineClient === null) {
+        throw new Error("expected a bound host client for this case");
+      }
+      const stableServingHostClient =
+        spineClient.createRequester(mockLocalHostEntry);
+      vi.spyOn(spineClient, "createRequester").mockReturnValue(
+        stableServingHostClient,
+      );
+
+      const view = render(
+        <QueryClientProvider client={queryClient}>
+          <NotificationsSessionProvider>
+            <div />
+          </NotificationsSessionProvider>
+        </QueryClientProvider>,
+      );
+
+      act(() => {
+        resetAuthUnverified("alice@example.com", "alice@example.com");
+      });
+
+      await waitFor(() => {
+        expect(streamClient.subscribedMethods).toContain(
+          "agent.activity.subscribe",
+        );
+      });
+      // Premise sanity: the local-only admission pinned exactly the minor
+      // `AGENT_ACTIVITY_LOCAL_ONLY_MINOR` names.
+      const activitySessionIndex = streamClient.subscribedMethods.indexOf(
+        "agent.activity.subscribe",
+      );
+      expect(streamClient.subscribedVersions[activitySessionIndex]).toEqual({
+        major: 1,
+        minor: 2,
+      });
+
+      // CONTROL: the host notification lane is a separate session on the same
+      // client, and nothing this case does may touch it. Captured now so its
+      // identity and close count can be compared at every step.
+      const hostFeedSession = streamClient.sessionFor(
+        "host.notifications.feed.subscribe",
+      );
+      expect(hostFeedSession.closeCount).toBe(0);
+      const activitySession = streamClient.sessionFor(
+        "agent.activity.subscribe",
+      );
+
+      // The refusal. The mock's `subscribeAtVersion` records rather than
+      // running the real compatibility check, so the terminal close is
+      // emitted directly - the same modelling the recoverable-close case in
+      // this file already uses - together with the manifest read the real
+      // `onManifest` "unsupported" report would have produced.
+      act(() => {
+        activityVersion = null;
+        activitySession.emitClosed(fatalClose("INCOMPATIBLE"));
+        view.rerender(
+          <QueryClientProvider client={queryClient}>
+            <NotificationsSessionProvider>
+              <div />
+            </NotificationsSessionProvider>
+          </QueryClientProvider>,
+        );
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      // No timer retry for INCOMPATIBLE - a precondition for the regain step,
+      // not new coverage (the recoverable-close case already owns it).
+      expect(
+        streamClient.subscribedMethods.filter(
+          (method) => method === "agent.activity.subscribe",
+        ),
+      ).toHaveLength(1);
+      expect(hostFeedSession.closeCount).toBe(0);
+      expect(streamClient.sessionFor("host.notifications.feed.subscribe")).toBe(
+        hostFeedSession,
+      );
+
+      // Capability regain: the host renegotiates back to a compatible minor.
+      // Same client, same host, same principal - nothing else moves.
+      act(() => {
+        activityVersion = { major: 1, minor: 2 };
+        view.rerender(
+          <QueryClientProvider client={queryClient}>
+            <NotificationsSessionProvider>
+              <div />
+            </NotificationsSessionProvider>
+          </QueryClientProvider>,
+        );
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      // The controls are read HERE, before the positive wait: `waitFor`
+      // THROWS on timeout, so anything placed only after it never executes in
+      // a reddened run - and the "we did not disturb the sibling feed" half
+      // has to hold in both directions to mean anything.
+      expect(hostFeedSession.closeCount).toBe(0);
+      expect(streamClient.sessionFor("host.notifications.feed.subscribe")).toBe(
+        hostFeedSession,
+      );
+
+      // THE assertion under test.
+      await waitFor(() => {
+        expect(
+          streamClient.subscribedMethods.filter(
+            (method) => method === "agent.activity.subscribe",
+          ),
+        ).toHaveLength(2);
+      });
+      // The reopened lane is still the pinned local-only one - a recovery
+      // that quietly widened the subscription back to the host's choice would
+      // satisfy the count above and be a different bug.
+      expect(streamClient.subscribedVersions.at(-1)).toEqual({
+        major: 1,
+        minor: 2,
+      });
+      expect(hostFeedSession.closeCount).toBe(0);
+      expect(streamClient.sessionFor("host.notifications.feed.subscribe")).toBe(
+        hostFeedSession,
       );
     });
   });
