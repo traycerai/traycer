@@ -50,6 +50,27 @@ export const MOBILE_RETENTION_PROFILE: RetentionProfile = Object.freeze({
   maxLingeringPlainTerminals: 3,
 });
 
+/**
+ * How long an epic must have had NO visible pane in ANY window before its tabs
+ * are parked - every host subscription they cause released, the tabs themselves
+ * left open (plan C, decisions C1/C3/C6).
+ *
+ * A TIME cap beside the four count caps above, and it belongs with them: the
+ * counts bound how much stays resident while the user is elsewhere, this bounds
+ * how LONG the thing they are looking away from keeps paying for itself. The
+ * counts only reclaim under pressure - five live epics is five live epics
+ * whether or not anyone has looked at four of them in an hour - so nothing
+ * above this line can free a hidden epic on a machine that never reaches a cap.
+ *
+ * NOT per-profile, unlike the counts. The window is a statement about attention
+ * ("no pane of this epic has been on screen for five minutes"), which does not
+ * change with the size of the device's memory; what a smaller profile changes
+ * is how many epics may be resident at once, and it already says so above.
+ *
+ * Exported for tests, which pin both arms of the threshold.
+ */
+export const PARK_HIDDEN_EPIC_AFTER_MS = 5 * 60_000;
+
 let activeProfile: RetentionProfile = DESKTOP_RETENTION_PROFILE;
 
 /**

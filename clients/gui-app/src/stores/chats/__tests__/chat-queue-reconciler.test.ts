@@ -6,17 +6,21 @@ import type {
   ChatQueuedPromptItem,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
+  consumeSettledRestoreCompletion,
   pruneAcceptedActions,
   reconcileQueueChange,
   reconcileSnapshotChange,
   reconcileTurnSettled,
+  settleRestoreAttemptsByEvidence,
   sweepStalePendingActions,
   turnSettledFromStatus,
   unrecoverableSendNotice,
+  withoutSettledRestoreCompletionsBefore,
   NO_WORKTREE_SWEEP,
   type ReconcileQueueInput,
   type ReconcileSnapshotInput,
   type ReconcileTurnSettledInput,
+  type SettledRestoreCompletion,
 } from "@/stores/chats/chat-queue-reconciler";
 import { recoveryTextFromContent } from "@/lib/composer/content-recovery";
 import type {
@@ -57,6 +61,8 @@ function createPendingAction(
     clientActionId,
     action,
     queueItemId: null,
+    checkpointId: null,
+    revertArtifacts: null,
     interviewBlockId: null,
     interviewDeliveryRetry: null,
     messageId,
@@ -82,6 +88,8 @@ function createAcceptedAction(
     clientActionId,
     action: interviewBlockId === null ? "send" : "interviewAnswer",
     queueItemId: null,
+    checkpointId: null,
+    revertArtifacts: null,
     interviewBlockId,
     interviewDeliveryRetry: null,
     messageId: null,
@@ -95,6 +103,38 @@ function createAcceptedAction(
     displayWorktreeIntent: null,
     connectionEpoch: 0,
     confirmedByHost: false,
+  };
+}
+
+/** A `send` accepted record, with the recovery fields pin 1/pin 2 pivot on. */
+function createSendAcceptedAction(options: {
+  readonly clientActionId: string;
+  readonly acceptedAt: number;
+  readonly restore: { readonly content: JsonContent } | null;
+  readonly confirmedByHost: boolean;
+}): AcceptedChatAction {
+  return {
+    clientActionId: options.clientActionId,
+    action: "send",
+    queueItemId: null,
+    checkpointId: null,
+    revertArtifacts: null,
+    interviewBlockId: null,
+    interviewDeliveryRetry: null,
+    messageId: null,
+    acceptedAt: options.acceptedAt,
+    restore:
+      options.restore === null
+        ? null
+        : { content: options.restore.content, browserAnnotations: [] },
+    sender: SENDER,
+    settings: SETTINGS,
+    accountContext: null,
+    deliveryPolicy: null,
+    restoreWorktreeIntent: null,
+    displayWorktreeIntent: null,
+    connectionEpoch: 0,
+    confirmedByHost: options.confirmedByHost,
   };
 }
 
@@ -209,6 +249,8 @@ describe("chat-queue-reconciler", () => {
         clientActionId: "action-2",
         action: "send",
         queueItemId: null,
+        checkpointId: null,
+        revertArtifacts: null,
         interviewBlockId: null,
         interviewDeliveryRetry: null,
         messageId: "msg-2",
@@ -279,6 +321,8 @@ describe("chat-queue-reconciler", () => {
         clientActionId: "action-2",
         action: "send",
         queueItemId: null,
+        checkpointId: null,
+        revertArtifacts: null,
         interviewBlockId: null,
         interviewDeliveryRetry: null,
         messageId: "msg-2",
@@ -632,6 +676,8 @@ describe("chat-queue-reconciler", () => {
         clientActionId: "action-2",
         action: "send",
         queueItemId: null,
+        checkpointId: null,
+        revertArtifacts: null,
         interviewBlockId: null,
         interviewDeliveryRetry: null,
         messageId: "msg-2",
@@ -739,6 +785,8 @@ describe("chat-queue-reconciler", () => {
         clientActionId: "action-1",
         action: "send",
         queueItemId: null,
+        checkpointId: null,
+        revertArtifacts: null,
         interviewBlockId: null,
         interviewDeliveryRetry: null,
         messageId: "msg-1",
@@ -977,6 +1025,116 @@ describe("chat-queue-reconciler", () => {
 
       expect(result).toHaveProperty("interview-action");
       expect(Object.keys(result).length).toBeLessThanOrEqual(65);
+    });
+
+    it("retains an accepted send whose content is unrecovered past the 5-minute retention window", () => {
+      const acceptedActions = {
+        "action-1": createSendAcceptedAction({
+          clientActionId: "action-1",
+          acceptedAt: 0,
+          restore: { content: CONTENT },
+          confirmedByHost: false,
+        }),
+      };
+
+      const result = pruneAcceptedActions(acceptedActions, 350_000);
+
+      // `restore !== null && !confirmedByHost` means this record is the ONLY
+      // holder of the prompt's text - `pendingActions` released it at the
+      // ack, and nothing else has received it yet. The retention window must
+      // not destroy it.
+      expect(result).toHaveProperty("action-1");
+    });
+
+    it("prunes a confirmed send, and separately a send with no restore content, past the retention window", () => {
+      const confirmed = {
+        "confirmed-send": createSendAcceptedAction({
+          clientActionId: "confirmed-send",
+          acceptedAt: 0,
+          restore: { content: CONTENT },
+          confirmedByHost: true,
+        }),
+      };
+      const noRestore = {
+        "no-restore-send": createSendAcceptedAction({
+          clientActionId: "no-restore-send",
+          acceptedAt: 0,
+          restore: null,
+          confirmedByHost: false,
+        }),
+      };
+
+      // The lock is scoped to UNRECOVERED content, not to "sends are
+      // immortal" - a confirmed send (the transcript already holds it) and a
+      // send whose restore was already consumed both prune normally.
+      expect(pruneAcceptedActions(confirmed, 350_000)).not.toHaveProperty(
+        "confirmed-send",
+      );
+      expect(pruneAcceptedActions(noRestore, 350_000)).not.toHaveProperty(
+        "no-restore-send",
+      );
+    });
+
+    it("retains an accepted send whose content is unrecovered beyond the record cap", () => {
+      const acceptedActions: Record<string, AcceptedChatAction> = {
+        "unrecovered-send": createSendAcceptedAction({
+          clientActionId: "unrecovered-send",
+          acceptedAt: 0,
+          restore: { content: CONTENT },
+          confirmedByHost: false,
+        }),
+      };
+      // Fill past the 64-record cap with unrelated, prunable traffic.
+      for (let i = 0; i < 70; i += 1) {
+        const id = `action-${i}`;
+        acceptedActions[id] = createAcceptedAction(id, i, null);
+      }
+
+      const result = pruneAcceptedActions(acceptedActions, 5000);
+
+      expect(result).toHaveProperty("unrecovered-send");
+      expect(Object.keys(result).length).toBeLessThanOrEqual(65);
+    });
+
+    it("prunes a confirmed send, and separately a send with no restore content, under cap pressure", () => {
+      const buildWithCapPressure = (
+        target: AcceptedChatAction,
+      ): Record<string, AcceptedChatAction> => {
+        const acceptedActions: Record<string, AcceptedChatAction> = {
+          [target.clientActionId]: target,
+        };
+        for (let i = 0; i < 70; i += 1) {
+          const id = `action-${i}`;
+          acceptedActions[id] = createAcceptedAction(id, i, null);
+        }
+        return acceptedActions;
+      };
+
+      const confirmedResult = pruneAcceptedActions(
+        buildWithCapPressure(
+          createSendAcceptedAction({
+            clientActionId: "confirmed-send",
+            acceptedAt: 0,
+            restore: { content: CONTENT },
+            confirmedByHost: true,
+          }),
+        ),
+        5000,
+      );
+      const noRestoreResult = pruneAcceptedActions(
+        buildWithCapPressure(
+          createSendAcceptedAction({
+            clientActionId: "no-restore-send",
+            acceptedAt: 0,
+            restore: null,
+            confirmedByHost: false,
+          }),
+        ),
+        5000,
+      );
+
+      expect(confirmedResult).not.toHaveProperty("confirmed-send");
+      expect(noRestoreResult).not.toHaveProperty("no-restore-send");
     });
   });
 
@@ -1491,6 +1649,105 @@ describe("chat-queue-reconciler", () => {
 
       expect(message).not.toContain("Copy the message below");
       expect(message).toBe(`${PREAMBLE} It had no recoverable content.`);
+    });
+  });
+
+  // The completion ledger (Codex on ad9f99fb8): a `restoreCompleted` frame
+  // carries no action id, so when the durable outcome for an attempt reached
+  // the client first and retired its record exactly, the frame must not
+  // retire "the earliest record for the checkpoint" - that is a later
+  // attempt's. The store-level ordering is pinned in epic-parking (pin 8l);
+  // these pin the ledger's own rules.
+  describe("restore completion ledger", () => {
+    const restoreRecord = (
+      clientActionId: string,
+      acceptedAt: number,
+      checkpointId: string,
+    ): AcceptedChatAction => ({
+      ...createAcceptedAction(clientActionId, acceptedAt, null),
+      action: "restoreCheckpoint",
+      checkpointId,
+      revertArtifacts: false,
+    });
+    const MANIFEST = { checkpointId: "cp", restoredAt: 300, results: [] };
+
+    it("leaves one entry per record an outcome retired, stamped with the connection - none for a refusal, none for an outcome naming no record", () => {
+      const settled = settleRestoreAttemptsByEvidence(
+        {
+          acceptedActions: {
+            a1: restoreRecord("a1", 0, "cp"),
+            a2: restoreRecord("a2", 1, "cp"),
+          },
+          restore: null,
+          settledRestoreCompletions: [],
+        },
+        [
+          { clientActionId: "a1", kind: "outcome", outcome: MANIFEST },
+          { clientActionId: "a2", kind: "refusal" },
+          { clientActionId: "a3", kind: "outcome", outcome: MANIFEST },
+        ],
+        4,
+      );
+      expect(Object.keys(settled.acceptedActions)).toEqual([]);
+      expect(settled.settledRestoreCompletions).toEqual([
+        { checkpointId: "cp", finishedAt: 300, connectionEpoch: 4 },
+      ]);
+    });
+
+    it("takes the checkpoint from the record when the outcome's manifest did not parse, with the finish time unknown", () => {
+      const settled = settleRestoreAttemptsByEvidence(
+        {
+          acceptedActions: { a1: restoreRecord("a1", 0, "cp") },
+          restore: null,
+          settledRestoreCompletions: [],
+        },
+        [{ clientActionId: "a1", kind: "outcome", outcome: null }],
+        2,
+      );
+      expect(settled.settledRestoreCompletions).toEqual([
+        { checkpointId: "cp", finishedAt: null, connectionEpoch: 2 },
+      ]);
+    });
+
+    it("answers a completion frame with the earliest matching entry for its checkpoint and consumes exactly that one", () => {
+      const entries: SettledRestoreCompletion[] = [
+        { checkpointId: "cp", finishedAt: 300, connectionEpoch: 1 },
+        { checkpointId: "cp", finishedAt: 400, connectionEpoch: 1 },
+        { checkpointId: "other", finishedAt: 300, connectionEpoch: 1 },
+      ];
+      const first = consumeSettledRestoreCompletion(entries, "cp", 300);
+      expect(first.consumed).toBe(true);
+      expect(first.entries).toEqual([entries[1], entries[2]]);
+      // The same frame again (a second attempt's, say) finds nothing at 300.
+      const again = consumeSettledRestoreCompletion(first.entries, "cp", 300);
+      expect(again.consumed).toBe(false);
+      expect(again.entries).toBe(first.entries);
+      // A frame whose finish time no entry carries is not the evidence's.
+      const other = consumeSettledRestoreCompletion(first.entries, "cp", 999);
+      expect(other.consumed).toBe(false);
+      // An entry with the finish time unknown answers the next frame for
+      // its checkpoint whatever its time.
+      const unknown = consumeSettledRestoreCompletion(
+        [{ checkpointId: "cp", finishedAt: null, connectionEpoch: 1 }],
+        "cp",
+        999,
+      );
+      expect(unknown.consumed).toBe(true);
+      expect(unknown.entries).toEqual([]);
+    });
+
+    it("drops entries from an older connection, whose frame died with it, and keeps the current connection's by identity", () => {
+      const mixed: SettledRestoreCompletion[] = [
+        { checkpointId: "cp", finishedAt: 300, connectionEpoch: 1 },
+        { checkpointId: "cp", finishedAt: 400, connectionEpoch: 2 },
+      ];
+      expect(withoutSettledRestoreCompletionsBefore(mixed, 2)).toEqual([
+        mixed[1],
+      ]);
+      const current: SettledRestoreCompletion[] = [
+        { checkpointId: "cp", finishedAt: 400, connectionEpoch: 2 },
+      ];
+      expect(withoutSettledRestoreCompletionsBefore(current, 2)).toBe(current);
     });
   });
 });
