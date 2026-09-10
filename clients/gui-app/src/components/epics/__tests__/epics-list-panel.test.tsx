@@ -35,6 +35,7 @@ import {
   type EpicsListPanelVariant,
 } from "@/components/epics/epics-list-panel";
 import { EpicsListHostRequiresCloudToList } from "@/components/epics/epics-list-shared";
+import { historyRowProvenanceLabel } from "@/components/epics/history-row-provenance";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
 import type { HistoryFacets } from "@/hooks/home/use-history-query";
@@ -1005,6 +1006,71 @@ describe("<EpicsListPanel />", () => {
         "epics-list-row-provenance-local-only-epic-from-history",
       ),
     ).toBeNull();
+  });
+
+  it("prints the phone's provenance label on the desktop row for coarse pointers only", async () => {
+    testState.items = [
+      historyItem({
+        id: "history-local",
+        epicId: "local-epic",
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+      historyItem({
+        id: "history-orphan",
+        epicId: "orphan-epic",
+        title: "Orphaned epic",
+        isPreservedOrphan: true,
+      }),
+      historyItem({
+        id: "history-ordinary",
+        epicId: "ordinary-epic",
+        title: "Ordinary epic",
+      }),
+    ];
+    renderPanel("embedded", "/");
+
+    await screen.findByRole("link", { name: "Open task Ordinary epic" });
+
+    const localLabel = screen.getByTestId(
+      "epics-list-row-coarse-provenance-label-local-only",
+    );
+    expect(localLabel.textContent.trim()).toBe(
+      `· ${historyRowProvenanceLabel("local-only")}`,
+    );
+    expect(localLabel.classList.contains("hidden")).toBe(true);
+    expect(localLabel.classList.contains("pointer-coarse:inline")).toBe(true);
+    expect(localLabel.classList.contains("text-destructive")).toBe(false);
+
+    const orphanLabel = screen.getByTestId(
+      "epics-list-row-coarse-provenance-label-preserved-orphan",
+    );
+    expect(orphanLabel.textContent.trim()).toBe(
+      `· ${historyRowProvenanceLabel("preserved-orphan")}`,
+    );
+    expect(orphanLabel.classList.contains("text-destructive")).toBe(true);
+    expect(orphanLabel.classList.contains("hidden")).toBe(true);
+    expect(orphanLabel.classList.contains("pointer-coarse:inline")).toBe(true);
+
+    expect(
+      screen.getAllByTestId(/^epics-list-row-coarse-provenance-label-/).length,
+    ).toBe(2);
+
+    const localRow = localLabel.closest("li");
+    if (localRow === null) {
+      throw new Error(
+        "expected the local-only label to sit inside its row's <li>",
+      );
+    }
+    expect(localRow.textContent).toContain("Local only epic");
+
+    const orphanRow = orphanLabel.closest("li");
+    if (orphanRow === null) {
+      throw new Error(
+        "expected the preserved-orphan label to sit inside its row's <li>",
+      );
+    }
+    expect(orphanRow.textContent).toContain("Orphaned epic");
   });
 
   it("shows the running activity indicator instead of the provenance glyph on a local-home row an agent is working on", async () => {

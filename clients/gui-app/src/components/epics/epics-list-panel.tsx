@@ -107,6 +107,11 @@ import {
 } from "@/components/epics/use-history-list-keyboard-nav";
 import { StatusGlyphFocusContext } from "@/components/notifications/status-glyph-focus";
 import { onMiddleClick } from "@/lib/dom/on-middle-click";
+import {
+  historyRowProvenance,
+  historyRowProvenanceLabel,
+  type HistoryRowProvenance,
+} from "@/components/epics/history-row-provenance";
 import { ImportedUnseenDot } from "@/components/session-import/imported-unseen-dot";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import {
@@ -1522,11 +1527,24 @@ interface EpicsListRowProps {
   readonly onRowKeyDown: (event: React.KeyboardEvent<HTMLElement>) => void;
 }
 
+/**
+ * The row's trailing line: "updated …", the PR pills, and - for a coarse
+ * pointer only - the provenance label the phone row always shows.
+ *
+ * The responsive switch to the phone list is WIDTH-only
+ * (`use-mobile-viewport.ts`), so a landscape tablet or a touch-only laptop at
+ * md+ gets this desktop row, where the status glyph's sentence is a hover
+ * tooltip and a tap on the glyph forwards to the row target and opens the
+ * task. `pointer-coarse:` is the input-modality half the width switch lacks:
+ * such a person sees "Not synced" / "Deleted, edits kept" beside the
+ * timestamp, exactly as on the phone, and a fine pointer keeps the tooltip.
+ */
 function HistoryRowTrailingMetadata(props: {
   readonly epicId: string;
   readonly selectionMode: boolean;
   readonly updatedLabel: string;
   readonly worktrees: readonly WorktreeHostEntryV12[];
+  readonly provenance: HistoryRowProvenance | null;
 }): ReactNode {
   const hasPrPills =
     !props.selectionMode && worktreePrReferences(props.worktrees).length > 0;
@@ -1545,6 +1563,18 @@ function HistoryRowTrailingMetadata(props: {
         )}
       >
         updated {props.updatedLabel}
+        {props.provenance === null ? null : (
+          <span
+            data-testid={`epics-list-row-coarse-provenance-label-${props.provenance}`}
+            className={cn(
+              "hidden pointer-coarse:inline",
+              props.provenance === "preserved-orphan" && "text-destructive",
+            )}
+          >
+            {" · "}
+            {historyRowProvenanceLabel(props.provenance)}
+          </span>
+        )}
       </span>
       {hasPrPills ? (
         <WorktreePrPills
@@ -1945,6 +1975,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
           selectionMode={selectionMode}
           updatedLabel={item.updatedLabel}
           worktrees={worktrees}
+          provenance={historyRowProvenance(item)}
         />
       </div>
       <HistoryRowSweepControl sweep={rowSweep} displayTitle={displayTitle} />
