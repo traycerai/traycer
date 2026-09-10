@@ -840,18 +840,21 @@ function indicatorFor(
         containerClassName:
           "rounded-md bg-destructive/10 px-2 py-0.5 text-destructive",
         dotClassName: "bg-destructive",
-        // Prospective in all three strings, on purpose: this state is reached
-        // on protection alone (`epic-sync-pill-state.ts` consults no dirty
-        // bit for it), so a freshly opened task with nothing typed is in it,
-        // and "changes not saved" / "recent changes are only in this window"
-        // would be a data-loss alarm about edits that do not exist.
-        label: "Offline — not backed up",
+        // Prospective AND scoped to new edits in all three strings, on
+        // purpose. Prospective: this state is reached on protection alone
+        // (`epic-sync-pill-state.ts` consults no dirty bit for it), so a
+        // freshly opened task with nothing typed is in it, and "changes not
+        // saved" would be a data-loss alarm about edits that do not exist.
+        // Scoped: `cloudDownState` returns it for a cloud-durable task whose
+        // SESSION is unprotected, so an unqualified "not backed up" would
+        // claim the task's durable copy does not exist either.
+        label: "Offline — new edits not backed up",
         showAgentSpinner: false,
         pulse: null,
         tooltip:
-          "Offline and not backed up: anything you edit now exists only in this window. Reconnect, or copy anything you cannot lose.",
+          "Offline. Anything you edit now is not backed up and exists only in this window. Reconnect, or copy anything you cannot lose.",
         ariaLabel:
-          "Offline and not backed up. Anything you edit now exists only in this window and is lost if it closes.",
+          "Offline. Anything you edit now is not backed up and exists only in this window; it is lost if the window closes.",
       };
     // The stream is up but this cycle has not supplied enough evidence for a
     // cloud/durability claim. Keep the copy factual and intentionally avoid

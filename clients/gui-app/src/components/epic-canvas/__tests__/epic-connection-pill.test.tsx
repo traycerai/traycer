@@ -722,17 +722,19 @@ describe("<EpicConnectionPill />", () => {
     renderPill("unprotected");
     vi.useRealTimers();
 
-    expect(screen.getByText("Offline — not backed up")).not.toBeNull();
+    expect(
+      screen.getByText("Offline — new edits not backed up"),
+    ).not.toBeNull();
 
     const unprotectedLabel = screen
       .getByTestId("epic-connection-pill")
       .getAttribute("aria-label");
     expect(unprotectedLabel).toBe(
-      "Offline and not backed up. Anything you edit now exists only in this window and is lost if it closes.",
+      "Offline. Anything you edit now is not backed up and exists only in this window; it is lost if the window closes.",
     );
 
     const unprotectedTooltip =
-      "Offline and not backed up: anything you edit now exists only in this window. Reconnect, or copy anything you cannot lose.";
+      "Offline. Anything you edit now is not backed up and exists only in this window. Reconnect, or copy anything you cannot lose.";
     await expectTooltip(unprotectedTooltip);
 
     expect(unprotectedLabel).not.toContain("Recent changes");
@@ -741,9 +743,11 @@ describe("<EpicConnectionPill />", () => {
     expect(unprotectedTooltip).not.toContain("Recent changes");
     expect(unprotectedTooltip).not.toContain("changes not saved");
     expect(unprotectedTooltip).not.toContain("changes are");
-    expect("Offline — not backed up").not.toContain("Recent changes");
-    expect("Offline — not backed up").not.toContain("changes not saved");
-    expect("Offline — not backed up").not.toContain("changes are");
+    expect("Offline — new edits not backed up").not.toContain("Recent changes");
+    expect("Offline — new edits not backed up").not.toContain(
+      "changes not saved",
+    );
+    expect("Offline — new edits not backed up").not.toContain("changes are");
   });
 
   it("preserves keyboard focus when a quiet save becomes an offline warning", () => {
