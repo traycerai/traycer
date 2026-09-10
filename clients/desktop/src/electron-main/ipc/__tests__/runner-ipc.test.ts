@@ -42,6 +42,14 @@ import {
 } from "../../auth/__tests__/jws-fixture";
 
 const featureSettings = vi.hoisted(() => ({ agentRoles: false }));
+/**
+ * `app`-level event listeners, recorded rather than discarded so a test can
+ * drive them. `epic-visibility-ipc.ts` registers a `render-process-gone`
+ * listener here to clear a crashed window's visible-Epic row.
+ */
+const appEventState = vi.hoisted(() => ({
+  listeners: new Map<string, Set<(...args: unknown[]) => void>>(),
+}));
 const readFeatureSettingsMock = vi.hoisted(() =>
   vi.fn(async () => ({ agentRoles: featureSettings.agentRoles })),
 );
@@ -104,8 +112,14 @@ vi.mock("electron", () => ({
     // The selection-authority binding listens for `render-process-gone` here
     // (a crashed renderer must be reported as a detach, or its announced
     // sessions would suppress the death counter forever).
-    on: (_event: string, _listener: unknown): void => undefined,
-    off: (_event: string, _listener: unknown): void => undefined,
+    on: (event: string, listener: (...args: unknown[]) => void): void => {
+      const existing = appEventState.listeners.get(event) ?? new Set();
+      existing.add(listener);
+      appEventState.listeners.set(event, existing);
+    },
+    off: (event: string, listener: (...args: unknown[]) => void): void => {
+      appEventState.listeners.get(event)?.delete(listener);
+    },
   },
   safeStorage: {
     isEncryptionAvailable: (): boolean => false,
@@ -1164,12 +1178,8 @@ describe("RunnerIpcBridge", () => {
       throw new Error("epic visibility handlers missing");
     }
 
-    // Non-strings are dropped rather than failing the invoke: a refused report
-    // leaves the sender's PREVIOUS set standing, which claims a pane is visible
-    // that may not be - the direction that suppresses parking.
-    await Promise.resolve(
-      reportHandler(sender(101), ["epic-a", 7, "", null, "epic-b"]),
-    );
+    // A well-formed report is accepted and fanned to every window.
+    await Promise.resolve(reportHandler(sender(101), ["epic-a", "epic-b"]));
     expect(await Promise.resolve(snapshotHandler(sender(101)))).toEqual([
       { windowId: "window-a", epicIds: ["epic-a", "epic-b"] },
     ]);
@@ -1194,6 +1204,300 @@ describe("RunnerIpcBridge", () => {
     expect(await Promise.resolve(snapshotHandler(sender(202)))).toEqual([
       { windowId: "window-b", epicIds: ["epic-a"] },
     ]);
+    bridge.dispose();
+  });
+
+  it("rejects a malformed epic-visibility report and leaves the sender's previous row standing (fixup 2, item 1)", async () => {
+    // `parseEpicIds` used to be a filter that dropped bad entries and stored
+    // the rest. It is now a zod schema whose `.parse` throws, so a malformed
+    // report rejects the whole invoke instead of quietly becoming an
+    // under-report - an empty/partial row reads as "this window shows less
+    // than it does" and would let another window park an epic still on
+    // screen here.
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const windowA = buildWindow();
+    registry.add("window-a", 101, windowA);
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+
+    const reportHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.epicVisibilityReport,
+    );
+    const snapshotHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.epicVisibilitySnapshot,
+    );
+    if (reportHandler === undefined || snapshotHandler === undefined) {
+      throw new Error("epic visibility handlers missing");
+    }
+
+    // Establish a well-formed previous row for window-a.
+    await Promise.resolve(reportHandler(sender(101), ["epic-a", "epic-b"]));
+    expect(await Promise.resolve(snapshotHandler(sender(101)))).toEqual([
+      { windowId: "window-a", epicIds: ["epic-a", "epic-b"] },
+    ]);
+
+    const malformedReports: readonly unknown[] = [
+      // Not an array at all.
+      "epic-a",
+      // Array containing a non-string.
+      ["epic-a", 7],
+      // An id one character over the 128-char bound.
+      ["a".repeat(129)],
+      // 257 ids - one over the 256-id count cap.
+      Array.from({ length: 257 }, (_, i) => `epic-${i}`),
+    ];
+
+    for (const malformed of malformedReports) {
+      // The negative arm: the invoke rejects (the zod `.parse` throws
+      // synchronously inside the handler, which `handleInvoke` rethrows
+      // synchronously to the caller).
+      expect(() => reportHandler(sender(101), malformed)).toThrow();
+      // The arm that matters: window-a's PREVIOUS row still stands. The old
+      // filter-and-keep behaviour would have replaced it with the surviving
+      // (possibly empty) subset, which deletes the row and reads as hidden.
+      expect(await Promise.resolve(snapshotHandler(sender(101)))).toEqual([
+        { windowId: "window-a", epicIds: ["epic-a", "epic-b"] },
+      ]);
+    }
+
+    bridge.dispose();
+  });
+
+  it("accepts an epic-visibility report at the exact count and id-length boundaries (fixup 2, item 1)", async () => {
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const windowA = buildWindow();
+    registry.add("window-a", 101, windowA);
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+
+    const reportHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.epicVisibilityReport,
+    );
+    const snapshotHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.epicVisibilitySnapshot,
+    );
+    if (reportHandler === undefined || snapshotHandler === undefined) {
+      throw new Error("epic visibility handlers missing");
+    }
+
+    // Exactly 256 ids, and an id of exactly 128 chars, are both accepted.
+    const boundaryIds = [
+      "a".repeat(128),
+      ...Array.from({ length: 255 }, (_, i) => `epic-${i}`),
+    ];
+    expect(boundaryIds).toHaveLength(256);
+
+    await expect(
+      reportHandler(sender(101), boundaryIds),
+    ).resolves.toBeUndefined();
+    expect(await Promise.resolve(snapshotHandler(sender(101)))).toEqual([
+      { windowId: "window-a", epicIds: boundaryIds },
+    ]);
+
+    bridge.dispose();
+  });
+
+  it("markRendererUnavailable clears the window's epic-visibility row and fans the reduced map out (fixup 2, item 3)", async () => {
+    // A renderer that crashes while its BrowserWindow stays registered would
+    // otherwise leave its last visible report standing forever - `retainWindows`
+    // prunes by window REGISTRATION, which this window still has, so nothing
+    // else clears the row. `markRendererUnavailable` now reports an empty set
+    // for the window, which deletes the row the same way a window that
+    // genuinely stopped showing anything does.
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const windowA = buildWindow();
+    const windowB = buildWindow();
+    registry.add("window-a", 101, windowA);
+    registry.add("window-b", 202, windowB);
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+
+    const reportHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.epicVisibilityReport,
+    );
+    const snapshotHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.epicVisibilitySnapshot,
+    );
+    if (reportHandler === undefined || snapshotHandler === undefined) {
+      throw new Error("epic visibility handlers missing");
+    }
+
+    await Promise.resolve(reportHandler(sender(101), ["epic-a"]));
+    await Promise.resolve(reportHandler(sender(202), ["epic-b"]));
+    expect(await Promise.resolve(snapshotHandler(sender(101)))).toEqual([
+      { windowId: "window-a", epicIds: ["epic-a"] },
+      { windowId: "window-b", epicIds: ["epic-b"] },
+    ]);
+    windowA.sentMessages.length = 0;
+    windowB.sentMessages.length = 0;
+
+    bridge.markRendererUnavailable("window-a");
+
+    // window-a's row is gone from the snapshot.
+    expect(await Promise.resolve(snapshotHandler(sender(202)))).toEqual([
+      { windowId: "window-b", epicIds: ["epic-b"] },
+    ]);
+    // The other window actually depends on the fan-out, not just the snapshot
+    // read: it must receive the reduced map so its own parking decision can
+    // react.
+    expect(windowB.sentMessages).toContainEqual({
+      channel: RunnerHostEvent.epicVisibilityChange,
+      payload: [{ windowId: "window-b", epicIds: ["epic-b"] }],
+    });
+
+    bridge.dispose();
+  });
+
+  it("an app-level render-process-gone clears the crashed window's epic-visibility row (fixup 2, class sweep on item 3)", async () => {
+    // `markRendererUnavailable` alone does NOT cover this. It is reached
+    // through the browser-view attachment's own `render-process-gone`
+    // listener, and that listener is attached lazily the first time a browser
+    // tile attaches to a window, and detached when the last one goes. A window
+    // that never opened a browser tile therefore has no such listener at all,
+    // so a renderer crashing there - the exact scenario the finding
+    // describes - would leave its row standing until the window closed,
+    // blocking every other window from parking those epics for that long.
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const windowA = buildWindow();
+    const windowB = buildWindow();
+    registry.add("window-a", 101, windowA);
+    registry.add("window-b", 202, windowB);
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+
+    const reportHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.epicVisibilityReport,
+    );
+    const snapshotHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.epicVisibilitySnapshot,
+    );
+    if (reportHandler === undefined || snapshotHandler === undefined) {
+      throw new Error("epic visibility handlers missing");
+    }
+    await Promise.resolve(reportHandler(sender(101), ["epic-a"]));
+    await Promise.resolve(reportHandler(sender(202), ["epic-b"]));
+    windowA.sentMessages.length = 0;
+    windowB.sentMessages.length = 0;
+
+    const goneListeners = appEventState.listeners.get("render-process-gone");
+    if (goneListeners === undefined || goneListeners.size === 0) {
+      throw new Error("no app-level render-process-gone listener registered");
+    }
+    for (const listener of goneListeners) {
+      listener({}, { id: 101 });
+    }
+
+    expect(await Promise.resolve(snapshotHandler(sender(202)))).toEqual([
+      { windowId: "window-b", epicIds: ["epic-b"] },
+    ]);
+    expect(windowB.sentMessages).toContainEqual({
+      channel: RunnerHostEvent.epicVisibilityChange,
+      payload: [{ windowId: "window-b", epicIds: ["epic-b"] }],
+    });
+
+    // A crash from webContents this bridge does not know about is ignored
+    // rather than mistaken for some window: `getRecordByWebContentsId` answers
+    // undefined and nothing is cleared.
+    windowB.sentMessages.length = 0;
+    for (const listener of goneListeners) {
+      listener({}, { id: 999 });
+    }
+    expect(windowB.sentMessages).toHaveLength(0);
+
+    bridge.dispose();
+  });
+
+  it("markRendererUnavailable emits no epic-visibility fan-out for a window with no row (fixup 2, item 3)", async () => {
+    // `EpicWindowVisibility.report` already returns early on an empty report
+    // for a window it holds no row for (current === undefined path); pin that
+    // this stays true when the empty report is driven through
+    // `markRendererUnavailable`, so a renderer that crashes with nothing
+    // reported does not cause a spurious fan-out to every other window.
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const windowA = buildWindow();
+    const windowB = buildWindow();
+    registry.add("window-a", 101, windowA);
+    registry.add("window-b", 202, windowB);
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+    windowA.sentMessages.length = 0;
+    windowB.sentMessages.length = 0;
+
+    bridge.markRendererUnavailable("window-a");
+
+    expect(windowA.sentMessages).toEqual([]);
+    expect(windowB.sentMessages).toEqual([]);
+
     bridge.dispose();
   });
 

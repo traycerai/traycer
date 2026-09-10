@@ -894,6 +894,13 @@ export class RunnerIpcBridge {
 
   markRendererUnavailable(windowId: string): void {
     this.appLifecycleReadyWindowIds.delete(windowId);
+    // A renderer that died stops reporting, and `retainWindows` cannot help:
+    // it prunes by window REGISTRATION, which this window still has. Left
+    // alone, this window's last visible-Epic report would stand forever and
+    // block every OTHER window from ever parking those Epics. An empty report
+    // is how a row is removed, so this is the same path a window that stopped
+    // showing anything takes.
+    this.epicVisibility.report(windowId, []);
     this.rejectQuitDecisionWaitersForWindow(
       windowId,
       new Error("Renderer reset before resolving quit interception"),
