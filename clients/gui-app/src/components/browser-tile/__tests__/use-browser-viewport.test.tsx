@@ -11,6 +11,7 @@ import {
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BrowserViewportState } from "@traycer/protocol/host/browser/viewport";
+import { BrowserViewportToolbar } from "../browser-viewport-toolbar";
 import {
   BrowserSessionsContext,
   type BrowserSessionsState,
@@ -57,6 +58,14 @@ function readOnlyViewportState(): BrowserViewportState {
   return {
     ...viewportState(),
     applied: { width: 390, height: 312, dpr: 1 },
+  };
+}
+
+function fixedViewportState(): BrowserViewportState {
+  return {
+    ...viewportState(),
+    intent: { mode: "fixed", width: 390, height: 844 },
+    applied: { width: 390, height: 844, dpr: 1 },
   };
 }
 
@@ -214,6 +223,111 @@ function renderReadOnlyProbe(
         <ReadOnlyViewportProbe />
       </BrowserSessionsContext.Provider>
     </QueryClientProvider>,
+  );
+}
+
+function PreviewScaleProbe(): ReactElement {
+  const { areaRef, controller, guestViewport, paintedSize, scrollRef } =
+    useBrowserViewport({
+      hostId: "host-1",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      instanceId: "instance-1",
+      visible: true,
+      disabled: false,
+      pageZoom: 1,
+      native: false,
+    });
+  if (controller === null) {
+    return <output data-testid="missing">missing</output>;
+  }
+  return (
+    <div data-testid="measurement-area" ref={areaRef}>
+      <div data-testid="scroll-area" ref={scrollRef}>
+        <button type="button" onClick={() => controller.setPreviewScale(1.5)}>
+          Set 150% preview scale
+        </button>
+        <button
+          type="button"
+          onClick={() => void controller.reset().catch(() => undefined)}
+        >
+          Reset preview scale
+        </button>
+        <output data-testid="preview-scale-setting">
+          {controller.previewScaleSetting === null
+            ? "auto"
+            : String(controller.previewScaleSetting)}
+        </output>
+        <output data-testid="resize-scale">{controller.resizeScale}</output>
+        <output data-testid="resize-from-center">
+          {String(controller.resizeFromCenter())}
+        </output>
+        <output data-testid="guest-size">
+          {guestViewport === null
+            ? "none"
+            : `${guestViewport.width}x${guestViewport.height}`}
+        </output>
+        <output data-testid="guest-auto-fit">
+          {guestViewport === null ? "none" : String(guestViewport.autoFit)}
+        </output>
+        <output data-testid="painted-size">
+          {paintedSize === null
+            ? "none"
+            : `${paintedSize.width}x${paintedSize.height}`}
+        </output>
+      </div>
+    </div>
+  );
+}
+
+function renderPreviewScaleProbe(
+  setViewport: BrowserSessionsState["setViewport"],
+): void {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <BrowserSessionsContext.Provider
+        value={sessionsState(
+          setViewport,
+          fixedViewportState(),
+          () => undefined,
+        )}
+      >
+        <PreviewScaleProbe />
+      </BrowserSessionsContext.Provider>
+    </QueryClientProvider>,
+  );
+}
+
+function InteractionProbe(): ReactElement {
+  const { areaRef, controller, onInteraction, scrollRef } = useBrowserViewport({
+    hostId: "host-1",
+    sessionId: "session-1",
+    tabId: "tab-1",
+    instanceId: "instance-1",
+    visible: true,
+    disabled: false,
+    pageZoom: 1,
+    native: false,
+  });
+  if (controller === null) {
+    return <output data-testid="missing">missing</output>;
+  }
+  return (
+    <div
+      data-testid="viewport-scroll"
+      ref={scrollRef}
+      onFocusCapture={onInteraction}
+      onPointerDownCapture={onInteraction}
+    >
+      <div data-testid="measurement-area" ref={areaRef} />
+      <BrowserViewportToolbar controller={controller} />
+    </div>
   );
 }
 
@@ -393,5 +507,121 @@ describe("useBrowserViewport", () => {
     });
     expect(setViewport).not.toHaveBeenCalled();
     expect(reportViewport).not.toHaveBeenCalled();
+  });
+
+  it("changes preview scale locally and reset returns to auto fit", async () => {
+    const setViewport = vi.fn<BrowserSessionsState["setViewport"]>(() =>
+      Promise.resolve(),
+    );
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(
+      function (this: HTMLElement): number {
+        return this.dataset.testid === "scroll-area" ? 590 : 640;
+      },
+    );
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(480);
+
+    renderPreviewScaleProbe(setViewport);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("guest-size").textContent).toBe("390x844");
+      expect(screen.getByTestId("preview-scale-setting").textContent).toBe(
+        "auto",
+      );
+    });
+    expect(setViewport).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Set 150% preview scale" }),
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId("preview-scale-setting").textContent).toBe(
+        "1.5",
+      );
+      expect(screen.getByTestId("resize-scale").textContent).toBe("1.5");
+      expect(screen.getByTestId("resize-from-center").textContent).toBe(
+        "false",
+      );
+      expect(screen.getByTestId("guest-size").textContent).toBe("390x844");
+      expect(screen.getByTestId("guest-auto-fit").textContent).toBe("false");
+      expect(screen.getByTestId("painted-size").textContent).toBe("585x1266");
+    });
+    expect(setViewport).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Reset preview scale" }),
+    );
+    await waitFor(() => {
+      expect(setViewport).toHaveBeenCalledWith("session-1", "tab-1", {
+        mode: "fit",
+      });
+      expect(screen.getByTestId("preview-scale-setting").textContent).toBe(
+        "auto",
+      );
+      expect(screen.getByTestId("resize-from-center").textContent).toBe("true");
+      expect(screen.getByTestId("guest-auto-fit").textContent).toBe("true");
+    });
+  });
+
+  it("does not claim while inspecting toolbar controls but claims a committed resize", async () => {
+    const setViewport = vi.fn<BrowserSessionsState["setViewport"]>(() =>
+      Promise.resolve(),
+    );
+    const reportViewport = vi.fn<BrowserSessionsState["reportViewport"]>();
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(640);
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(480);
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <BrowserSessionsContext.Provider
+          value={sessionsState(
+            setViewport,
+            fixedViewportState(),
+            reportViewport,
+          )}
+        >
+          <InteractionProbe />
+        </BrowserSessionsContext.Provider>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(reportViewport).toHaveBeenCalledWith(
+        expect.objectContaining({ claim: false }),
+      );
+    });
+    const scroll = screen.getByTestId("viewport-scroll");
+    fireEvent.focus(scroll);
+    fireEvent.pointerDown(scroll, { button: 0 });
+    const scaleTrigger = screen.getByRole("button", { name: "Preview scale" });
+    fireEvent.focus(scaleTrigger);
+    fireEvent.pointerDown(scaleTrigger, { button: 0 });
+    await waitFor(() => {
+      expect(screen.getByRole("menuitemradio", { name: "200%" })).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "200%" }));
+
+    expect(
+      reportViewport.mock.calls.filter(([input]) => input.claim),
+    ).toHaveLength(0);
+
+    const width = screen.getByRole("spinbutton", { name: "Viewport width" });
+    fireEvent.focus(width);
+    fireEvent.change(width, { target: { value: "500" } });
+    fireEvent.keyDown(width, { key: "Enter" });
+    await waitFor(() => {
+      expect(setViewport).toHaveBeenCalledWith("session-1", "tab-1", {
+        mode: "fixed",
+        width: 500,
+        height: 844,
+      });
+    });
+    expect(
+      reportViewport.mock.calls.filter(([input]) => input.claim),
+    ).toHaveLength(1);
   });
 });

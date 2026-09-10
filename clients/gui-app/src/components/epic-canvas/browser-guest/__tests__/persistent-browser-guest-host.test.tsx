@@ -46,6 +46,7 @@ function TileProbe() {
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   usePublishBrowserGuestTile({
     surfaceRef,
+    stageRef: null,
     registrationId: REGISTRATION_A,
     viewport: null,
     instanceId: "tile-1",
@@ -127,8 +128,13 @@ describe("PersistentBrowserGuestHost", () => {
     );
     const remounted = queryWrapper(REGISTRATION_A);
     if (remounted === null) throw new Error("expected remounted guest");
+    const remountedClipper = remounted.parentElement;
+    if (remountedClipper === null) {
+      throw new Error("expected remounted guest clipper");
+    }
     expect(remounted).not.toBe(firstGuest);
-    expect(remounted.parentNode).toBe(replacementHost);
+    expect(remountedClipper.parentNode).toBe(replacementHost);
+    expect(remounted.parentNode).toBe(remountedClipper);
     expect(wrapperState(REGISTRATION_A)).toBe("presented");
 
     view.unmount();

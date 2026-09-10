@@ -42,11 +42,22 @@ export interface BrowserGuestTilePlacement {
     readonly width: number;
     readonly height: number;
     readonly scale: number;
+    readonly autoFit: boolean;
   } | null;
 }
 
 export function browserGuestCssAnchorName(registrationId: string): string {
   return `--traycer-bv-${registrationId}`;
+}
+
+export function browserGuestCssClipAnchorName(registrationId: string): string {
+  return `--traycer-bv-clip-${registrationId}`;
+}
+
+export function browserGuestCssClipSizeAnchorName(
+  registrationId: string,
+): string {
+  return `--traycer-bv-clip-size-${registrationId}`;
 }
 
 const BLANK_GUEST_SRC = "about:blank";
@@ -71,6 +82,7 @@ interface PlacementRecord {
 
 interface GuestRecord {
   readonly registrationId: string;
+  readonly clipper: HTMLElement;
   readonly wrapper: HTMLElement;
   readonly webview: HTMLElement;
   viewportRequest: BrowserViewGuestViewportRequested | null;
@@ -159,9 +171,12 @@ function handleMount(request: BrowserViewGuestMountRequested): void {
   );
   const webview = createGuestWebview(request.registrationId, request.partition);
   wrapper.appendChild(webview);
-  running.hostElement.appendChild(wrapper);
+  const clipper = createGuestClipper(request.registrationId);
+  clipper.appendChild(wrapper);
+  running.hostElement.appendChild(clipper);
   const guest: GuestRecord = {
     registrationId: request.registrationId,
+    clipper,
     wrapper,
     webview,
     viewportRequest: null,
@@ -247,7 +262,7 @@ function removeGuest(registrationId: string): void {
   if (guest === undefined) return;
   guests.delete(registrationId);
   relinquishGuestFocus(guest);
-  guest.wrapper.remove();
+  guest.clipper.remove();
 }
 
 function handleGuestPointerDown(guest: GuestRecord, event: Event): void {
@@ -299,11 +314,31 @@ function createGuestWebview(
   return webview;
 }
 
+function createGuestClipper(registrationId: string): HTMLElement {
+  const clipper = document.createElement("div");
+  const anchorName = browserGuestCssClipAnchorName(registrationId);
+  const sizeAnchorName = browserGuestCssClipSizeAnchorName(registrationId);
+  // clip-path clips fixed descendants without changing their containing block.
+  // Paint containment or a transform would break the external surface anchor.
+  clipper.style.cssText = [
+    "position: fixed",
+    `position-anchor: ${anchorName}`,
+    `top: anchor(${anchorName} top, 0px)`,
+    `left: anchor(${anchorName} left, 0px)`,
+    `width: anchor-size(${sizeAnchorName} width, anchor-size(${anchorName} width, 100%))`,
+    `height: anchor-size(${sizeAnchorName} height, anchor-size(${anchorName} height, 100%))`,
+    "pointer-events: none",
+  ].join(";");
+  return clipper;
+}
+
 function applyGuestPresentation(
   guest: GuestRecord,
   placement: BrowserGuestTilePlacement | null,
 ): void {
   const nextPresented = placement !== null && placement.presented;
+  // Retained guests remain paintable for capture even outside the stage.
+  guest.clipper.style.clipPath = nextPresented ? "inset(0)" : "none";
   if (
     guest.wrapper.getAttribute(BROWSER_GUEST_STATE_ATTRIBUTE) === "presented" &&
     !nextPresented
@@ -362,7 +397,11 @@ function applyGuestViewport(
   guest.webview.style.height = `${dimensions.height}px`;
   guest.webview.style.transformOrigin = "top left";
   let scale = placement?.viewport?.scale ?? 1;
-  if (placement !== null && request !== null) {
+  if (
+    placement !== null &&
+    request !== null &&
+    placement.viewport?.autoFit !== false
+  ) {
     scale = Math.min(
       1,
       guest.wrapper.clientWidth / dimensions.width,

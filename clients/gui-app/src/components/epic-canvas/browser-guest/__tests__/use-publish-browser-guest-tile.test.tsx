@@ -3,6 +3,8 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { usePublishBrowserGuestTile } from "@/components/epic-canvas/browser-guest/use-publish-browser-guest-tile";
 import {
+  browserGuestCssClipAnchorName,
+  browserGuestCssClipSizeAnchorName,
   startPersistentBrowserGuestHost,
   type BrowserGuestActivate,
 } from "@/lib/browser-view/guest/persistent-browser-guest-host";
@@ -37,6 +39,10 @@ const PARTITION_A = "persist:guest-a";
 const PARTITION_B = "persist:guest-b";
 const ANCHOR_A = `--traycer-bv-${REGISTRATION_A}`;
 const ANCHOR_B = `--traycer-bv-${REGISTRATION_B}`;
+const CLIP_ANCHOR_A = browserGuestCssClipAnchorName(REGISTRATION_A);
+const CLIP_ANCHOR_B = browserGuestCssClipAnchorName(REGISTRATION_B);
+const CLIP_SIZE_ANCHOR_A = browserGuestCssClipSizeAnchorName(REGISTRATION_A);
+const CLIP_SIZE_ANCHOR_B = browserGuestCssClipSizeAnchorName(REGISTRATION_B);
 
 function mountRequest(
   registrationId: string,
@@ -73,6 +79,7 @@ function TileProbe(props: {
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   usePublishBrowserGuestTile({
     surfaceRef,
+    stageRef: null,
     registrationId: props.registrationId,
     viewport: null,
     instanceId: props.instanceId,
@@ -89,6 +96,27 @@ function TileProbe(props: {
   );
 }
 
+function StageTileProbe(props: { readonly registrationId: string }) {
+  const surfaceRef = useRef<HTMLDivElement | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  usePublishBrowserGuestTile({
+    surfaceRef,
+    stageRef,
+    registrationId: props.registrationId,
+    viewport: null,
+    instanceId: "tile-1",
+    viewTabId: "view-1",
+    paneId: "pane-1",
+    presented: true,
+    tileKey: null,
+  });
+  return (
+    <div ref={stageRef} data-testid="tile-stage">
+      <div ref={surfaceRef} />
+    </div>
+  );
+}
+
 afterEach(() => {
   // Probe unmount clears that owner's placement. Host stop must not be
   // what wipes the map.
@@ -98,6 +126,25 @@ afterEach(() => {
 });
 
 describe("usePublishBrowserGuestTile", () => {
+  it("moves the stage clip anchor with registration changes and clears it on unmount", () => {
+    const view = render(<StageTileProbe registrationId={REGISTRATION_A} />);
+    const stage = screen.getByTestId("tile-stage");
+    expect(stage.style.getPropertyValue("anchor-name")).toBe(CLIP_ANCHOR_A);
+    expect(stage.style.getPropertyValue("--browser-clip-size-anchor")).toBe(
+      CLIP_SIZE_ANCHOR_A,
+    );
+
+    view.rerender(<StageTileProbe registrationId={REGISTRATION_B} />);
+    expect(stage.style.getPropertyValue("anchor-name")).toBe(CLIP_ANCHOR_B);
+    expect(stage.style.getPropertyValue("--browser-clip-size-anchor")).toBe(
+      CLIP_SIZE_ANCHOR_B,
+    );
+
+    view.unmount();
+    expect(stage.style.getPropertyValue("anchor-name")).toBe("");
+    expect(stage.style.getPropertyValue("--browser-clip-size-anchor")).toBe("");
+  });
+
   it("keeps the registration-id anchor-name on the tile surface across pane and presentation changes", () => {
     const bridge = new FakeBrowserViewBridge();
     startHost(bridge);

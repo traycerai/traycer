@@ -116,6 +116,7 @@ function queryWrapper(registrationId: string): HTMLElement | null {
 
 function guestNodes(registrationId: string): {
   readonly host: HTMLElement;
+  readonly clipper: HTMLElement;
   readonly wrapper: HTMLElement;
   readonly webview: HTMLElement;
 } {
@@ -125,11 +126,15 @@ function guestNodes(registrationId: string): {
   if (wrapper === null) {
     throw new Error(`expected guest wrapper ${registrationId}`);
   }
+  const clipper = wrapper.parentElement;
+  if (clipper === null) {
+    throw new Error(`expected guest clipper ${registrationId}`);
+  }
   const webview = wrapper.querySelector("webview");
   if (!(webview instanceof HTMLElement)) {
     throw new Error(`expected webview for ${registrationId}`);
   }
-  return { host, wrapper, webview };
+  return { host, clipper, wrapper, webview };
 }
 
 function dispatchPointerDown(target: HTMLElement): void {
@@ -191,7 +196,7 @@ describe("persistent browser guest host", () => {
         viewTabId: "view-1",
         paneId: "pane-1",
         presented: true,
-        viewport: { width: 640, height: 480, scale: 0.5 },
+        viewport: { width: 640, height: 480, scale: 0.5, autoFit: true },
       });
       const first = guestNodes(REGISTRATION_A);
 
@@ -217,7 +222,7 @@ describe("persistent browser guest host", () => {
         viewTabId: "view-1",
         paneId: "pane-1",
         presented: true,
-        viewport: { width: 800, height: 600, scale: 0.5 },
+        viewport: { width: 800, height: 600, scale: 0.5, autoFit: true },
       });
       expect(guestNodes(REGISTRATION_A).wrapper).toBe(first.wrapper);
       expect(guestNodes(REGISTRATION_A).webview).toBe(first.webview);
@@ -245,12 +250,70 @@ describe("persistent browser guest host", () => {
         viewTabId: "view-1",
         paneId: "pane-1",
         presented: true,
-        viewport: { width: 1280, height: 800, scale: 1 },
+        viewport: { width: 1280, height: 800, scale: 1, autoFit: true },
       });
       expect(guestNodes(REGISTRATION_A).webview).toBe(first.webview);
       expect(first.webview.style.width).toBe("1280px");
       expect(first.webview.style.height).toBe("800px");
       expect(first.webview.style.transform).toBe("scale(1)");
+    });
+
+    it("keeps a manual oversized scale while a native viewport request is pending", async () => {
+      const bridge = new FakeBrowserViewBridge();
+      startHost(bridge, NOOP_ACTIVATE);
+      bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+      const owner = Symbol("tile");
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented: true,
+        viewport: { width: 640, height: 480, scale: 2, autoFit: false },
+      });
+      const manual = guestNodes(REGISTRATION_A);
+      bridge.emitGuestViewportRequested({
+        requestId: "viewport-manual",
+        registrationId: REGISTRATION_A,
+        revision: 1,
+        width: 800,
+        height: 600,
+      });
+      expect(manual.webview.style.transform).toBe("scale(2)");
+
+      await waitForViewportRequest();
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented: true,
+        viewport: { width: 800, height: 600, scale: 2, autoFit: false },
+      });
+      Object.defineProperty(manual.wrapper, "clientWidth", {
+        configurable: true,
+        value: 640,
+      });
+      Object.defineProperty(manual.wrapper, "clientHeight", {
+        configurable: true,
+        value: 480,
+      });
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented: true,
+        viewport: { width: 800, height: 600, scale: 2, autoFit: true },
+      });
+      bridge.emitGuestViewportRequested({
+        requestId: "viewport-auto-fit",
+        registrationId: REGISTRATION_A,
+        revision: 2,
+        width: 800,
+        height: 600,
+      });
+      expect(manual.webview.style.transform).toBe("scale(0.8)");
     });
 
     it("keeps the same wrapper parent, webview node, and partition across placement and pane changes", () => {
@@ -260,7 +323,8 @@ describe("persistent browser guest host", () => {
       bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
 
       const created = guestNodes(REGISTRATION_A);
-      expect(created.wrapper.parentNode).toBe(created.host);
+      expect(created.clipper.parentNode).toBe(created.host);
+      expect(created.wrapper.parentNode).toBe(created.clipper);
       expect(created.webview.parentNode).toBe(created.wrapper);
       expect(created.webview.tagName).toBe("WEBVIEW");
       expect(created.webview.getAttribute("src")).toBe(
@@ -282,9 +346,11 @@ describe("persistent browser guest host", () => {
         viewport: null,
       });
       const presented = guestNodes(REGISTRATION_A);
+      expect(presented.clipper).toBe(created.clipper);
+      expect(presented.clipper.parentNode).toBe(created.host);
       expect(presented.wrapper).toBe(created.wrapper);
       expect(presented.webview).toBe(created.webview);
-      expect(presented.wrapper.parentNode).toBe(created.host);
+      expect(presented.wrapper.parentNode).toBe(presented.clipper);
       expect(presented.webview.parentNode).toBe(created.wrapper);
       expect(presented.wrapper.style.getPropertyValue("position-anchor")).toBe(
         ANCHOR_A,
@@ -299,9 +365,11 @@ describe("persistent browser guest host", () => {
         viewport: null,
       });
       const moved = guestNodes(REGISTRATION_A);
+      expect(moved.clipper).toBe(created.clipper);
+      expect(moved.clipper.parentNode).toBe(created.host);
       expect(moved.wrapper).toBe(created.wrapper);
       expect(moved.webview).toBe(created.webview);
-      expect(moved.wrapper.parentNode).toBe(created.host);
+      expect(moved.wrapper.parentNode).toBe(moved.clipper);
       expect(moved.webview.parentNode).toBe(created.wrapper);
       expect(moved.webview.getAttribute("partition")).toBe(PARTITION_A);
       expect(moved.wrapper.style.getPropertyValue("position-anchor")).toBe(
@@ -326,9 +394,11 @@ describe("persistent browser guest host", () => {
         viewport: null,
       });
       const retained = guestNodes(REGISTRATION_A);
+      expect(retained.clipper).toBe(created.clipper);
+      expect(retained.clipper.parentNode).toBe(created.host);
       expect(retained.wrapper).toBe(created.wrapper);
       expect(retained.webview).toBe(created.webview);
-      expect(retained.wrapper.parentNode).toBe(created.host);
+      expect(retained.wrapper.parentNode).toBe(retained.clipper);
     });
 
     it("applies a placement that arrived before the matching mount without recreating later", () => {

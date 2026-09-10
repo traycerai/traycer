@@ -41,9 +41,12 @@ function makeController(
     error: null,
     dismissError: vi.fn(),
     previewScale: 1,
+    previewScaleSetting: null,
+    setPreviewScale: vi.fn(),
     ratioLocked: false,
     ratio: null,
     resizeScale: 1,
+    resizeFromCenter: () => true,
     setRatio: vi.fn(),
     fitOwnedHere: true,
     open: vi.fn(),
@@ -457,5 +460,141 @@ describe("BrowserViewportToolbar", () => {
 
     expect(resize).toHaveBeenCalledOnce();
     expect(resize).toHaveBeenCalledWith(391, 844);
+  });
+
+  it("resizes from the left and from an unlocked lower corner", () => {
+    let flushFrame: ((time: number) => void) | null = null;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      flushFrame = callback;
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(
+      () => undefined,
+    );
+    const resize = vi.fn<BrowserViewportController["resize"]>(() =>
+      Promise.resolve(),
+    );
+    const controller = makeController({ resize });
+    render(<BrowserViewportHandles controller={controller} />);
+
+    const left = screen.getByRole("separator", {
+      name: "Resize viewport width from left",
+    });
+    fireEvent.pointerDown(left, {
+      button: 0,
+      pointerId: 1,
+      clientX: 10,
+      clientY: 10,
+    });
+    fireEvent.pointerMove(left, {
+      pointerId: 1,
+      clientX: 0,
+      clientY: 10,
+    });
+    act(() => {
+      flushFrame?.(0);
+    });
+    expect(resize).toHaveBeenCalledWith(410, 844);
+
+    const corner = screen.getByRole("button", {
+      name: "Resize viewport from bottom left",
+    });
+    fireEvent.pointerDown(corner, {
+      button: 0,
+      pointerId: 2,
+      clientX: 10,
+      clientY: 10,
+    });
+    fireEvent.pointerMove(corner, {
+      pointerId: 2,
+      clientX: 0,
+      clientY: 20,
+    });
+    act(() => {
+      flushFrame?.(0);
+    });
+    expect(resize).toHaveBeenCalledWith(410, 854);
+  });
+
+  it("uses the dominant axis to preserve ratio from a locked corner", () => {
+    let flushFrame: ((time: number) => void) | null = null;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      flushFrame = callback;
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(
+      () => undefined,
+    );
+    const resize = vi.fn<BrowserViewportController["resize"]>(() =>
+      Promise.resolve(),
+    );
+    const controller = makeController({
+      resize,
+      ratioLocked: true,
+      ratio: 390 / 844,
+    });
+    render(<BrowserViewportHandles controller={controller} />);
+
+    const corner = screen.getByRole("button", {
+      name: "Resize viewport from bottom right",
+    });
+    fireEvent.pointerDown(corner, {
+      button: 0,
+      pointerId: 1,
+      clientX: 10,
+      clientY: 10,
+    });
+    fireEvent.pointerMove(corner, {
+      pointerId: 1,
+      clientX: 20,
+      clientY: 20,
+    });
+    act(() => {
+      flushFrame?.(0);
+    });
+
+    expect(resize).toHaveBeenCalledOnce();
+    expect(resize).toHaveBeenCalledWith(410, 887);
+  });
+
+  it("halves horizontal drag deltas for an oversized preview", () => {
+    let flushFrame: ((time: number) => void) | null = null;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      flushFrame = callback;
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(
+      () => undefined,
+    );
+    const resize = vi.fn<BrowserViewportController["resize"]>(() =>
+      Promise.resolve(),
+    );
+    const controller = makeController({
+      resize,
+      resizeScale: 2,
+      resizeFromCenter: () => false,
+    });
+    render(<BrowserViewportHandles controller={controller} />);
+
+    const handle = screen.getByRole("separator", {
+      name: "Resize viewport width",
+    });
+    fireEvent.pointerDown(handle, {
+      button: 0,
+      pointerId: 1,
+      clientX: 10,
+      clientY: 10,
+    });
+    fireEvent.pointerMove(handle, {
+      pointerId: 1,
+      clientX: 30,
+      clientY: 10,
+    });
+    act(() => {
+      flushFrame?.(0);
+    });
+
+    expect(resize).toHaveBeenCalledOnce();
+    expect(resize).toHaveBeenCalledWith(400, 844);
   });
 });

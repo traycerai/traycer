@@ -1,6 +1,6 @@
 import { useBrowserViewport } from "./use-browser-viewport";
 import { BrowserViewportToolbar } from "./browser-viewport-toolbar";
-import { BrowserViewportHandles } from "./browser-viewport-handles";
+import { BrowserViewportFrame } from "./browser-viewport-frame";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import type {
@@ -160,7 +160,6 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     pageZoom: zoomPercent / 100,
     native: true,
   });
-  const { areaRef } = viewport;
   const claimViewport = viewport.claim;
   const [surfaceAttachment, setSurfaceAttachment] =
     useState<SurfaceAttachmentState | null>(null);
@@ -208,6 +207,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
   );
   usePublishBrowserGuestTile({
     surfaceRef,
+    stageRef: viewport.scrollRef,
     viewport: viewport.guestViewport,
     registrationId,
     instanceId: props.node.instanceId,
@@ -497,8 +497,8 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
   return (
     <div
       className="flex h-full w-full flex-col bg-canvas text-foreground"
-      onPointerDownCapture={claimViewport}
-      onFocusCapture={claimViewport}
+      onPointerDownCapture={viewport.onInteraction}
+      onFocusCapture={viewport.onInteraction}
       data-testid={`agent-browser-tile-${props.node.instanceId}`}
     >
       <BrowserTileFindAdapterBridge
@@ -514,65 +514,52 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
         }}
       />
       <BrowserViewportToolbar controller={viewport.controller} />
-      <div
-        ref={areaRef}
-        className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden"
-      >
+      <BrowserViewportFrame viewport={viewport} surfaceRef={surfaceRef}>
+        <ElectronTabSurfaceBaseLayer
+          showStartPage={showStartPage}
+          visible={visible}
+          scope={browserTileScope(placement)}
+          hostId={hostId}
+          onNavigate={navigateToUrl}
+        />
         <div
-          ref={surfaceRef}
+          hidden={showStartPage}
+          // Transparent is not hidden: without this a presented, live guest
+          // still exposes the loader's role and "Reconnecting" text to
+          // assistive tech. Hide it from AT whenever it is not the shown layer.
+          aria-hidden={!overlay.visible}
           className={cn(
-            "relative min-h-0 bg-background",
-            viewport.paintedSize === null && "h-full w-full",
+            "absolute inset-0 z-20 flex min-h-0 flex-col items-center justify-center gap-3 px-4 text-center",
+            overlay.visible ? "opacity-100" : "opacity-0",
+            // Pointer events are gated on the guest not yet being interactive,
+            // NOT on the same flag that hides the overlay: a presented, live
+            // guest must never be click-blocked by a stale loader. A terminal
+            // surface keeps them so its Retry stays clickable.
+            overlay.blocking ? "pointer-events-auto" : "pointer-events-none",
           )}
-          style={viewport.paintedSize ?? undefined}
+          role={overlay.surface === "loading" ? "status" : "alert"}
+          aria-live={overlay.surface === "loading" ? "polite" : "assertive"}
+          aria-busy={
+            overlay.visible ? overlay.surface === "loading" : undefined
+          }
         >
-          <BrowserViewportHandles controller={viewport.controller} />
-          <ElectronTabSurfaceBaseLayer
-            showStartPage={showStartPage}
-            visible={visible}
-            scope={browserTileScope(placement)}
+          <ElectronTabSurfaceStatus
+            surface={overlay.surface}
+            reason={effectiveStatusReason}
             hostId={hostId}
-            onNavigate={navigateToUrl}
-          />
-          <div
-            hidden={showStartPage}
-            // Transparent is not hidden: without this a presented, live guest
-            // still exposes the loader's role and "Reconnecting" text to
-            // assistive tech. Hide it from AT whenever it is not the shown layer.
-            aria-hidden={!overlay.visible}
-            className={cn(
-              "absolute inset-0 z-20 flex min-h-0 flex-col items-center justify-center gap-3 px-4 text-center",
-              overlay.visible ? "opacity-100" : "opacity-0",
-              // Pointer events are gated on the guest not yet being interactive,
-              // NOT on the same flag that hides the overlay: a presented, live
-              // guest must never be click-blocked by a stale loader. A terminal
-              // surface keeps them so its Retry stays clickable.
-              overlay.blocking ? "pointer-events-auto" : "pointer-events-none",
-            )}
-            role={overlay.surface === "loading" ? "status" : "alert"}
-            aria-live={overlay.surface === "loading" ? "polite" : "assertive"}
-            aria-busy={
-              overlay.visible ? overlay.surface === "loading" : undefined
-            }
-          >
-            <ElectronTabSurfaceStatus
-              surface={overlay.surface}
-              reason={effectiveStatusReason}
-              hostId={hostId}
-              onRetry={retryNavigation}
-            />
-          </div>
-          <BrowserTileDownloadStrip
-            downloads={downloads}
-            onCancel={cancelDownload}
-          />
-          <BrowserTileCertificateInterstitial
-            certificateError={certificateError}
-            proceeding={certificateProceeding}
-            onProceed={proceedCertificate}
+            onRetry={retryNavigation}
           />
         </div>
-      </div>
+        <BrowserTileDownloadStrip
+          downloads={downloads}
+          onCancel={cancelDownload}
+        />
+        <BrowserTileCertificateInterstitial
+          certificateError={certificateError}
+          proceeding={certificateProceeding}
+          onProceed={proceedCertificate}
+        />
+      </BrowserViewportFrame>
     </div>
   );
 }

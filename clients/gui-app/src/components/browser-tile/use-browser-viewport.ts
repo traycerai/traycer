@@ -5,6 +5,7 @@ import {
   useState,
   useSyncExternalStore,
   type RefObject,
+  type SyntheticEvent,
 } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { toHostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -36,9 +37,12 @@ export interface BrowserViewportController {
   readonly error: string | null;
   readonly dismissError: () => void;
   readonly previewScale: number;
+  readonly previewScaleSetting: number | null;
+  readonly setPreviewScale: (scale: number | null) => void;
   readonly ratioLocked: boolean;
   readonly ratio: number | null;
   readonly resizeScale: number;
+  readonly resizeFromCenter: () => boolean;
   readonly setRatio: (ratio: number) => void;
   readonly fitOwnedHere: boolean;
   readonly open: () => void;
@@ -52,16 +56,19 @@ export interface BrowserViewportController {
 export interface BrowserViewportPresentation {
   readonly controller: BrowserViewportController | null;
   readonly areaRef: RefObject<HTMLDivElement | null>;
+  readonly scrollRef: RefObject<HTMLDivElement | null>;
   readonly guestViewport: {
     readonly width: number;
     readonly height: number;
     readonly scale: number;
+    readonly autoFit: boolean;
   } | null;
   readonly paintedSize: {
     readonly width: number;
     readonly height: number;
   } | null;
   readonly claim: () => void;
+  readonly onInteraction: (event: SyntheticEvent) => void;
 }
 
 /** The host owns layout; this hook owns only this surface's presentation. */
@@ -88,6 +95,7 @@ export function useBrowserViewport(input: {
   // Native binding recovery remounts the surface; placement and window survive.
   const viewerId = JSON.stringify([windowId, input.instanceId]);
   const [opened, setOpened] = useState(false);
+  const [previewScaleSetting, setPreviewScale] = useState<number | null>(null);
   const [ratio, setRatio] = useState<number | null>(null);
   const [area, setArea] = useState({ width: 0, height: 0 });
   const [failure, setFailure] = useState<{
@@ -96,6 +104,7 @@ export function useBrowserViewport(input: {
     connectionGeneration: number;
   } | null>(null);
   const areaRef = useRef<HTMLDivElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const geometryRef = useRef<BrowserViewportGeometry | null>(null);
   const actionRevision = useRef(0);
@@ -235,6 +244,7 @@ export function useBrowserViewport(input: {
     claim();
     await mutation.mutateAsync({ mode: "fit" });
     if (actionRevision.current !== revision) return;
+    setPreviewScale(null);
     setOpened(false);
     triggerRef.current?.focus();
   };
@@ -250,10 +260,23 @@ export function useBrowserViewport(input: {
       })
       .catch(() => undefined);
   };
+  const onInteraction = (event: SyntheticEvent): void => {
+    // Toolbar mutations claim when applied. Inspecting presets or changing
+    // preview scale must not reflow another viewer's Fit.
+    if (
+      event.target === scrollRef.current ||
+      (event.target instanceof Element &&
+        event.target.closest("[data-viewport-controls]") !== null)
+    )
+      return;
+    claim();
+  };
   if (state === null)
     return {
       areaRef,
+      scrollRef,
       claim,
+      onInteraction,
       guestViewport: null,
       paintedSize: null,
       controller: null,
@@ -266,10 +289,13 @@ export function useBrowserViewport(input: {
       native: input.native,
       viewerId,
       expanded,
+      previewScaleSetting,
     });
   return {
     areaRef,
+    scrollRef,
     claim,
+    onInteraction,
     guestViewport,
     paintedSize,
     controller: {
@@ -287,9 +313,15 @@ export function useBrowserViewport(input: {
           : null,
       dismissError: () => setFailure(null),
       previewScale: scale,
+      previewScaleSetting,
+      setPreviewScale,
       ratioLocked: ratio !== null,
       ratio,
       resizeScale: scale * input.pageZoom,
+      resizeFromCenter: () =>
+        paintedSize === null ||
+        paintedSize.width <=
+          (scrollRef.current?.clientWidth ?? area.width + 48) - 48,
       setRatio: (nextRatio) => {
         if (ratio !== null) setRatio(nextRatio);
       },
@@ -314,6 +346,7 @@ function viewportLayout(input: {
   readonly native: boolean;
   readonly viewerId: string;
   readonly expanded: boolean;
+  readonly previewScaleSetting: number | null;
 }): {
   readonly size: BrowserViewportController["size"];
   readonly scale: number;
@@ -332,13 +365,14 @@ function viewportLayout(input: {
           height: size.height * input.pageZoom,
         };
   const scale =
-    intrinsic === null || area.width === 0 || area.height === 0
+    input.previewScaleSetting ??
+    (intrinsic === null || area.width === 0 || area.height === 0
       ? 1
       : Math.min(
           1,
           area.width / intrinsic.width,
           area.height / intrinsic.height,
-        );
+        ));
   const fitOwnedHere =
     state.fitOwnerId === null || state.fitOwnerId === input.viewerId;
   const layout = {
@@ -348,13 +382,22 @@ function viewportLayout(input: {
     guestViewport: null,
     paintedSize: null,
   };
-  if (input.native && state.intent.mode === "fit" && fitOwnedHere) {
+  if (
+    input.native &&
+    state.intent.mode === "fit" &&
+    fitOwnedHere &&
+    input.previewScaleSetting === null
+  ) {
     return { ...layout, paintedSize: input.expanded ? area : null };
   }
   if (intrinsic === null) return layout;
   return {
     ...layout,
-    guestViewport: { ...intrinsic, scale },
+    guestViewport: {
+      ...intrinsic,
+      scale,
+      autoFit: input.previewScaleSetting === null,
+    },
     paintedSize: {
       width: intrinsic.width * scale,
       height: intrinsic.height * scale,

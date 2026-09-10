@@ -1,5 +1,12 @@
 import { useRef, useState, type KeyboardEvent } from "react";
-import { Ellipsis, Link2, RotateCw, Unlink2, X } from "lucide-react";
+import {
+  ChevronDown,
+  Ellipsis,
+  Link2,
+  RotateCw,
+  Unlink2,
+  X,
+} from "lucide-react";
 import {
   BROWSER_VIEWPORT_MAX_EDGE,
   BROWSER_VIEWPORT_MIN_EDGE,
@@ -11,6 +18,13 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -128,10 +142,12 @@ export function BrowserViewportToolbar({
   return (
     <div
       className="@container/viewport shrink-0 border-b border-border bg-canvas"
-      onPointerDownCapture={controller.claim}
-      onFocusCapture={controller.claim}
+      data-viewport-controls
     >
-      <div className="flex min-w-0 flex-wrap items-center gap-1 px-2 py-1 text-ui-xs">
+      <div className="flex min-w-0 items-center gap-1.5 px-2 py-1.5 text-ui-xs">
+        <span className="hidden shrink-0 text-muted-foreground @[48rem]/viewport:inline">
+          Dimensions:
+        </span>
         <ViewportPresetMenu
           controller={controller}
           onSelect={(width, height) => action(() => selectSize(width, height))}
@@ -158,7 +174,7 @@ export function BrowserViewportToolbar({
               aria-invalid={message !== null}
               value={values[axis]}
               disabled={controller.disabled}
-              className="h-7 w-[7ch] min-w-0 px-1 text-center text-ui-xs tabular-nums"
+              className="h-7 w-[7ch] min-w-0 rounded-md border-transparent bg-foreground/5 px-1 text-center text-ui-xs tabular-nums shadow-none hover:bg-foreground/8 focus-visible:border-ring"
               onFocus={() => {
                 inputFocused.current = true;
                 cancelled.current = false;
@@ -189,7 +205,7 @@ export function BrowserViewportToolbar({
             />
           </span>
         ))}
-        <span className="hidden items-center @[28rem]/viewport:flex">
+        <span className="ml-1 hidden shrink-0 items-center gap-0.5 @[36rem]/viewport:flex">
           <TooltipWrapper
             side="bottom"
             sideOffset={undefined}
@@ -240,20 +256,26 @@ export function BrowserViewportToolbar({
             </Button>
           </TooltipWrapper>
         </span>
-        <TooltipWrapper
-          side="bottom"
-          sideOffset={undefined}
-          align={undefined}
-          label={
-            controller.state.intent.mode === "fit" && !controller.fitOwnedHere
-              ? "Following the pane last used in another window"
-              : "Preview scale; browser page zoom is separate"
-          }
-        >
-          <span className="ml-auto hidden whitespace-nowrap text-muted-foreground tabular-nums @[22rem]/viewport:inline">
-            Preview {Math.round(controller.previewScale * 100)}%
-          </span>
-        </TooltipWrapper>
+        <div className="hidden shrink-0 @[36rem]/viewport:block">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                data-viewport-action
+                aria-label="Preview scale"
+                className="gap-1 text-muted-foreground tabular-nums"
+              >
+                {Math.round(controller.previewScale * 100)}%
+                <ChevronDown className="size-3" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent data-viewport-controls className="w-max">
+              <ViewportScaleOptions controller={controller} />
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+        <span className="flex-1" />
         <ViewportAgentIndicator controller={controller} />
         {controller.pending ? (
           <AgentSpinningDots
@@ -325,57 +347,71 @@ function ViewportPresetMenu({
           variant="ghost"
           size="sm"
           data-viewport-action
-          disabled={controller.disabled}
           aria-label="Viewport dimensions"
-          className="min-w-0 shrink @[28rem]/viewport:max-w-44"
+          className="min-w-0 shrink gap-2 px-1.5 @[26rem]/viewport:w-[22ch] @[26rem]/viewport:justify-between @[26rem]/viewport:bg-foreground/5 @[26rem]/viewport:px-2"
         >
-          <span className="hidden truncate @[28rem]/viewport:inline">
+          <span className="hidden truncate @[26rem]/viewport:inline">
             {controller.state.intent.mode === "fit"
               ? "Fit to pane"
-              : (preset?.[0] ?? "Custom")}
+              : (preset?.[0] ?? "Responsive")}
           </span>
-          <Ellipsis className="size-4 @[28rem]/viewport:hidden" />
+          <ChevronDown className="hidden size-3 shrink-0 text-muted-foreground @[26rem]/viewport:block" />
+          <Ellipsis className="size-4 @[26rem]/viewport:hidden" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
+        data-viewport-controls
         align="start"
-        className="max-h-[min(65vh,32rem)] max-w-safe-dvw overflow-y-auto"
+        className="w-max"
       >
-        <div className="px-2 py-1 text-ui-xs text-muted-foreground">
-          Viewport dimensions · no device emulation
+        <DropdownMenuLabel>Viewport dimensions</DropdownMenuLabel>
+        <DropdownMenuItem disabled={controller.disabled} onSelect={onReset}>
+          Fit to pane
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <div>
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>Preview scale</DropdownMenuSubTrigger>
+            <DropdownMenuSubContent data-viewport-controls className="w-max">
+              <ViewportScaleOptions controller={controller} />
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+          <DropdownMenuItem
+            onSelect={() => controller.setRatioLocked(!controller.ratioLocked)}
+          >
+            {controller.ratioLocked ? <Link2 /> : <Unlink2 />}
+            {controller.ratioLocked ? "Unlock" : "Lock"} aspect ratio
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            disabled={controller.disabled || size === null}
+            onSelect={onRotate}
+          >
+            <RotateCw /> Rotate viewport
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
         </div>
-        {controller.state.source === "agent" ? (
-          <div className="px-2 py-1 text-ui-xs text-muted-foreground">
-            Resized by agent
-          </div>
-        ) : null}
-        <div className="px-2 py-1 text-ui-xs text-muted-foreground">
-          Preview {Math.round(controller.previewScale * 100)}%
-          {controller.state.intent.mode === "fit" && !controller.fitOwnedHere
-            ? " · following another window"
-            : ""}
-        </div>
-        <DropdownMenuItem onSelect={onReset}>Fit to pane</DropdownMenuItem>
         {PRESETS.map(([name, width, height]) => (
           <DropdownMenuItem
             key={name}
+            disabled={controller.disabled}
             onSelect={() => onSelect(width, height)}
-            className="flex justify-between gap-5"
+            className="flex justify-between gap-6"
           >
-            <span>{name}</span>
-            <span className="text-muted-foreground tabular-nums">
+            <span className="truncate">{name}</span>
+            <span className="shrink-0 whitespace-nowrap text-muted-foreground tabular-nums">
               {width} × {height}
             </span>
           </DropdownMenuItem>
         ))}
-        <DropdownMenuItem
-          onSelect={() => controller.setRatioLocked(!controller.ratioLocked)}
-        >
-          {controller.ratioLocked ? "Unlock" : "Lock"} aspect ratio
-        </DropdownMenuItem>
-        <DropdownMenuItem disabled={size === null} onSelect={onRotate}>
-          Rotate viewport
-        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <p className="px-2 py-1 text-ui-xs text-muted-foreground">
+          Sizes only · device behavior unchanged
+        </p>
+        {controller.state.intent.mode === "fit" && !controller.fitOwnedHere ? (
+          <p className="px-2 py-1 text-ui-xs text-muted-foreground">
+            Following another window’s pane
+          </p>
+        ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -404,6 +440,39 @@ function ViewportAgentIndicator({
         Agent changed viewport to {controller.size.width} by{" "}
         {controller.size.height}.
       </span>
+    </>
+  );
+}
+
+function ViewportScaleOptions({
+  controller,
+}: {
+  readonly controller: BrowserViewportController;
+}) {
+  return (
+    <>
+      <DropdownMenuLabel>Preview scale</DropdownMenuLabel>
+      <DropdownMenuRadioGroup
+        value={
+          controller.previewScaleSetting === null
+            ? "fit"
+            : String(controller.previewScaleSetting)
+        }
+        onValueChange={(value) =>
+          controller.setPreviewScale(value === "fit" ? null : Number(value))
+        }
+      >
+        <DropdownMenuRadioItem value="fit">Auto fit</DropdownMenuRadioItem>
+        {[0.5, 0.75, 0.9, 1, 1.25, 1.5, 2].map((scale) => (
+          <DropdownMenuRadioItem key={scale} value={String(scale)}>
+            {Math.round(scale * 100)}%
+          </DropdownMenuRadioItem>
+        ))}
+      </DropdownMenuRadioGroup>
+      <DropdownMenuSeparator />
+      <p className="px-2 py-1 text-ui-xs text-muted-foreground">
+        Page zoom is unchanged
+      </p>
     </>
   );
 }
