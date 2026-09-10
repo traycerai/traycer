@@ -80,16 +80,11 @@ import {
 import { EpicsFilterPopover } from "@/components/epics/epics-filter-popover";
 import {
   EpicsListChatHostFilterUnsupported,
-  EpicsListCloudPagePending,
-  EpicsListCloudPageUnavailable,
-  EpicsListEmpty,
   EpicsListError,
-  EpicsListFilteredEmpty,
-  EpicsListFilteringLoading,
   EpicsListHostRequiresCloudToList,
   EpicsListLoading,
+  EpicsListNoRows,
   EpicsListShowMore,
-  HistoryCompletenessNotice,
   HistoryRowLeadingIcon,
 } from "@/components/epics/epics-list-shared";
 import {
@@ -312,10 +307,10 @@ function historyPanelView(
     availableWorkspaces: data.availableWorkspaces,
     facets: data.facets,
     // `?? null` rather than a straight read: `completeness` is declared
-    // non-optional but arrives absent from partial fixtures, and the notice
+    // non-optional but arrives absent from partial fixtures, and the body
     // below dereferences it. The previous `data?.completeness ?? null` carried
     // that same coercion, so dropping it turned an omitted field into a render
-    // crash rather than a missing notice.
+    // crash.
     completeness: data.completeness ?? null,
   };
 }
@@ -1393,58 +1388,21 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
   if (chatHostFilterUnsupported) {
     return <EpicsListChatHostFilterUnsupported />;
   }
-  // Every "there are no rows" reading, grouped under the one test they share.
-  // Ordering inside is load-bearing and unchanged; nesting only stops each arm
-  // from re-asking `items.length === 0`, and lets the last arm drop its
-  // `hasActiveFilters` re-test - the arm above it returns whenever that is
-  // false, so reaching the last one already means it is true.
+  // Every "there are no rows" reading, decided once for both responsive bodies
+  // in `EpicsListNoRows` - the ordering there is load-bearing.
   if (items.length === 0) {
-    // A pending local-first page is a renderable device snapshot, not a settled
-    // account result. Keep the distinct state ahead of every empty branch so an
-    // empty mirror never becomes the definitive "No tasks yet" claim.
-    if (cloudPagePending) {
-      return (
-        <>
-          <HistoryCompletenessNotice
-            completeness={completeness}
-            cloudPagePending={cloudPagePending}
-          />
-          <EpicsListCloudPagePending />
-        </>
-      );
-    }
-    if (!hasActiveFilters) {
-      // The notice renders HERE too, and this is the case it matters most for:
-      // an empty History with no explanation is the strongest possible claim of
-      // completeness, and it is the one a suppressed local projection or an
-      // unreachable cloud page produces. With NO cloud page the body must not
-      // make that claim either: zero local rows is not evidence of an empty
-      // account.
-      return (
-        <>
-          <HistoryCompletenessNotice
-            completeness={completeness}
-            cloudPagePending={cloudPagePending}
-          />
-          {completeness?.cloudPage === "unavailable" ? (
-            <EpicsListCloudPageUnavailable />
-          ) : (
-            <EpicsListEmpty />
-          )}
-        </>
-      );
-    }
-    if (isFetching) {
-      return (
-        <>
-          <HistoryCompletenessNotice
-            completeness={completeness}
-            cloudPagePending={cloudPagePending}
-          />
-          <EpicsListFilteringLoading />
-        </>
-      );
-    }
+    return (
+      <EpicsListNoRows
+        cloudPagePending={cloudPagePending}
+        cloudPageUnavailable={completeness?.cloudPage === "unavailable"}
+        hasActiveFilters={hasActiveFilters}
+        isFetching={isFetching}
+        onRetry={onRetry}
+        hasNextPage={hasNextPage}
+        isFetchingNextPage={isFetchingNextPage}
+        onLoadMore={onLoadMore}
+      />
+    );
   }
   const rowProps = {
     selectionMode,
@@ -1464,10 +1422,6 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
   };
   return (
     <>
-      <HistoryCompletenessNotice
-        completeness={completeness}
-        cloudPagePending={cloudPagePending}
-      />
       {preservedItems.length > 0 ? (
         <section
           className="mb-3 flex flex-col gap-2"
@@ -1522,14 +1476,11 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
         </ul>
       ) : null}
       {/*
-        Only when there is genuinely nothing to show. A page whose only rows
-        are preserved orphans is not an empty filter result, and telling the
-        person "no tasks match" over a section they can see would be the same
-        untruth from the other direction.
+        No "no tasks match" here: zero rows returned above through
+        `EpicsListNoRows`, and a page whose only rows are preserved orphans is
+        not an empty filter result - telling the person "no tasks match" over a
+        section they can see would be the same untruth from the other direction.
       */}
-      {ordinaryItems.length === 0 && preservedItems.length === 0 ? (
-        <EpicsListFilteredEmpty />
-      ) : null}
       <EpicsListShowMore
         hasNextPage={hasNextPage}
         isFetchingNextPage={isFetchingNextPage}

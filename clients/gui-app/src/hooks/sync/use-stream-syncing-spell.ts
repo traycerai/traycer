@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import { LINK_DOWN_ESCALATION_MS } from "@/lib/link-down-escalation";
+import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import {
   isStreamSyncing,
   type StreamSyncingSpell,
@@ -34,6 +35,23 @@ interface StreamSyncingSpellInput {
 interface SpellRecord {
   readonly identity: string;
   readonly escalated: boolean;
+  /**
+   * Which stretch of FOREGROUND waiting the clock is timing: the wait since
+   * the person was last present, not foreground time accumulated across
+   * absences. Bumped by the shell's resume signal, which re-arms the deadline
+   * for a full interval and takes back any escalation already reached.
+   *
+   * The clock measures how long a person has watched the indicator, and a
+   * person who left the app was not watching. A suspended WebView keeps its
+   * timers frozen and, on thaw, fires every one whose deadline passed - so a
+   * wait armed before a minutes-long background lands the escalated word on
+   * the very first frame after return, before the fresh restore has even
+   * begun. The overdue timer fires BEFORE the resume event reaches any
+   * subscriber. That order is why a resume must undo an escalation rather than
+   * only postpone one, and why `performance.now()` is no help - it advances
+   * through the suspension too.
+   */
+  readonly waitEpoch: number;
 }
 
 /**
@@ -50,27 +68,45 @@ interface SpellRecord {
  * Render-phase transitions rather than effects, matching `useLinkDownTooLong`:
  * the moment the stream is back, or the subject changes, the escalated verdict
  * must not paint even one frame.
+ *
+ * The wait counts foreground time only: the shell's resume signal restarts it
+ * (see {@link SpellRecord.waitEpoch}). Gated on the SIGNAL, not on a measured
+ * dwell - desktop's power monitor reports none and sends `null`, and a laptop
+ * that slept mid-outage was not being watched either.
  */
 export function useStreamSyncingSpell(
   input: StreamSyncingSpellInput,
 ): StreamSyncingSpell {
   const { status, hasContent, identity } = input;
   const syncing = isStreamSyncing(status, hasContent);
+  const runnerHost = useRunnerHostOrNull();
   const [record, setRecord] = useState<SpellRecord>({
     identity,
     escalated: false,
+    waitEpoch: 0,
   });
 
   if (record.identity !== identity) {
-    setRecord({ identity, escalated: false });
+    setRecord({ identity, escalated: false, waitEpoch: 0 });
   } else if (!syncing && record.escalated) {
-    setRecord({ identity, escalated: false });
+    setRecord({ identity, escalated: false, waitEpoch: record.waitEpoch });
   }
+
+  const { waitEpoch } = record;
 
   useEffect(() => {
     if (!syncing) return undefined;
     const timer = setTimeout(() => {
-      setRecord({ identity, escalated: true });
+      setRecord((current) =>
+        // Checked against the epoch this timer was armed for, not merely
+        // cleared by the effect's cleanup: the resume handler's state update
+        // is committed by React's scheduler on a LATER task, and a deadline
+        // that expires in between fires against the record that already
+        // carries the new epoch. Its verdict belongs to the wait that ended.
+        current.waitEpoch === waitEpoch
+          ? { ...current, escalated: true }
+          : current,
+      );
     }, LINK_DOWN_ESCALATION_MS);
     return () => {
       clearTimeout(timer);
@@ -78,8 +114,23 @@ export function useStreamSyncingSpell(
     // Keyed on the SPELL - is one running, and about what - never on the raw
     // status: `connecting` and `reconnecting` are one outage seen twice, and
     // re-running on that flip would restart the clock on a link that flaps and
-    // so never let it escalate at all.
-  }, [syncing, identity]);
+    // so never let it escalate at all. `waitEpoch` is the one deliberate
+    // restart: a system resume.
+  }, [syncing, identity, waitEpoch]);
+
+  useEffect(() => {
+    if (!syncing || runnerHost === null) return undefined;
+    const subscription = runnerHost.onSystemResumed(() => {
+      setRecord((current) => ({
+        ...current,
+        escalated: false,
+        waitEpoch: current.waitEpoch + 1,
+      }));
+    });
+    return () => {
+      subscription.dispose();
+    };
+  }, [syncing, identity, runnerHost]);
 
   return {
     syncing,
