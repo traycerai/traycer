@@ -95,6 +95,34 @@ describe("the sign-in splash", () => {
     expect(contentSection()?.hasAttribute("inert")).toBe(false);
   });
 
+  it("tells assistive technology what is happening while it covers", () => {
+    vi.useFakeTimers();
+    stubReducedMotion(false);
+
+    render(<AuthLandingPage refusal={null} />);
+
+    // The controls underneath are `inert`, so if the layer were `aria-hidden`
+    // as well there would be nothing at all in the accessibility tree for the
+    // length of the splash. The mark stays hidden - a described animation
+    // helps nobody - and the layer carries the sentence instead.
+    const status = screen.getByRole("status");
+    expect(status.textContent).toBe("Loading sign-in");
+    expect(status.getAttribute("aria-hidden")).toBeNull();
+    expect(
+      status
+        .querySelector('[data-testid="brand-entrance"]')
+        ?.closest("[aria-hidden]"),
+    ).not.toBeNull();
+
+    act(() => {
+      vi.advanceTimersByTime(AUTH_SPLASH_MS);
+    });
+
+    // And it goes away with the layer, rather than lingering as a live region
+    // announcing a page that has already arrived.
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
   it("never covers a refused shell, which is there to be read", () => {
     vi.useFakeTimers();
     stubReducedMotion(false);

@@ -14,6 +14,13 @@ import "@/styles/auth-arrival.css";
  * cannot see - and stops swallowing them the instant the page beneath becomes
  * visible. Keyboard reach is the page's half of that, through `inert`.
  *
+ * A STATUS, not a hidden decoration. The controls underneath are `inert` while
+ * this covers them, so marking the whole layer `aria-hidden` too would leave
+ * assistive technology with nothing at all for the length of the splash - a
+ * blank surface with no explanation. The mark itself stays hidden, because a
+ * described animation helps nobody; the layer carries the one sentence a
+ * non-visual reader needs, and drops it when the sign-in page arrives.
+ *
  * NOT a second full-bleed surface. It is `absolute inset-0` inside the sign-in
  * page's `<main>`, which already sits in the app's one sanctioned `fixed
  * inset-0` shell, and it takes the safe-area insets like every other content
@@ -26,13 +33,17 @@ export function AuthBrandSplash(): ReactNode {
   return (
     <div
       data-testid="auth-brand-splash"
-      aria-hidden="true"
+      role="status"
+      aria-live="polite"
       className={cn(
         "auth-splash absolute inset-0 z-20 flex items-center justify-center pt-safe-top pr-safe-right pb-safe-bottom pl-safe-left",
         BRAND_DARK_GROUND_CLASS,
       )}
     >
-      <BrandEntrance size="hero">{null}</BrandEntrance>
+      <span className="sr-only">Loading sign-in</span>
+      <div aria-hidden="true">
+        <BrandEntrance size="hero">{null}</BrandEntrance>
+      </div>
     </div>
   );
 }
