@@ -11,18 +11,23 @@ import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import type { AccountContext } from "@traycer/protocol/common/schemas";
 import type { ChatEvent } from "@traycer/protocol/persistence/epic/chat-events";
 import {
+  restoreResultManifestSchema,
+  type RestoreResultManifest,
+} from "@traycer/protocol/persistence/epic/checkpoint-manifests";
+import {
   classifyContentRecovery,
   recoveryTextFromContent,
 } from "@/lib/composer/content-recovery";
 import type {
   AcceptedChatAction,
+  ChatRestoreSlot,
   FailedSendRestorationState,
   PendingChatAction,
   PendingUserMessage,
   StagedWorktreeIntentSource,
 } from "@/stores/chats/chat-session-store";
 import { buildAttachmentsFromJSONContent } from "@/lib/composer/tiptap-json-content";
-import { queueItemCanPauseFromQueueHeader } from "@/components/chat/queued-message-utils";
+import { queueItemCanPauseFromQueueHeader } from "@/lib/chat/queue-item-predicates";
 
 /**
  * Notice code for a send whose text the CLIENT is the last holder of - the
@@ -1783,6 +1788,7 @@ export function addAcceptedAction(
         action: pending.action,
         queueItemId: pending.queueItemId,
         checkpointId: pending.checkpointId,
+        revertArtifacts: pending.revertArtifacts,
         interviewBlockId: pending.interviewBlockId,
         interviewDeliveryRetry: pending.interviewDeliveryRetry,
         messageId: pending.messageId,
@@ -1964,7 +1970,7 @@ export function withoutSettledAcceptedQueueStatusActions(
  * across a reconnect had no hold left and the epic parked over it (Codex on
  * b63aa85d7). The record is the bookkeeping now and the slot is only the
  * spinner. The durable `checkpoint.restored` event is the other door
- * ({@link restoredClientActionIds}), exact by client action id, for a
+ * ({@link settleRestoreAttemptsByEvidence}), exact by client action id, for a
  * completion frame that died with the dropped stream.
  */
 export function withoutEarliestAcceptedRestoreActionFor(
@@ -1991,43 +1997,152 @@ export function withoutEarliestAcceptedRestoreActionFor(
 }
 
 /**
- * The client action ids whose restore the host has durably finished: every
- * `checkpoint.restored` outcome event in `events`. The host writes that event
- * BEFORE it broadcasts `restoreCompleted`, so a completion frame lost with a
- * dropped stream still has this record of it in the next snapshot's events
- * (and in the live `eventAppended` for the same event). Read on both, so a
- * `restoreCheckpoint` record whose frame never came is retired by the
- * evidence rather than by a clock.
+ * Evidence that a restore attempt is over, naming its action: the durable
+ * `checkpoint.restored` outcome (with the result it recorded), or a refusal
+ * or failure notice for the action (`outcome: null`).
  */
-export function restoredClientActionIds(
-  events: ReadonlyArray<ChatEvent>,
-): ReadonlySet<string> {
-  const ids = new Set<string>();
-  for (const event of events) {
-    if (event.type === "checkpoint.restored" && event.clientActionId !== null) {
-      ids.add(event.clientActionId);
-    }
-  }
-  return ids;
+export interface RestoreAttemptEvidence {
+  readonly clientActionId: string;
+  readonly outcome: RestoreResultManifest | null;
 }
 
 /**
- * Retire the accepted `restoreCheckpoint` records the given evidence names by
- * client action id: durable outcomes ({@link restoredClientActionIds}) or an
- * error notice for the action. Exact, unlike the completion frame's
- * earliest-first retirement, because these carry the id.
+ * The restore outcomes in `events`: every `checkpoint.restored` event, which
+ * the host writes BEFORE it broadcasts `restoreCompleted`, so a completion
+ * frame lost with a dropped stream still has this record of it in the next
+ * legacy snapshot's events and in the live `eventAppended` for the same
+ * event. An outcome whose metadata does not parse still names its action -
+ * the record retires, the spinner is cleared rather than completed.
  */
-export function withoutAcceptedRestoreActionsNamed(
+export function restoreOutcomesFrom(
+  events: ReadonlyArray<ChatEvent>,
+): ReadonlyArray<RestoreAttemptEvidence> {
+  const evidence: RestoreAttemptEvidence[] = [];
+  for (const event of events) {
+    if (event.type !== "checkpoint.restored" || event.clientActionId === null) {
+      continue;
+    }
+    const parsed = restoreResultManifestSchema.safeParse(event.metadata);
+    evidence.push({
+      clientActionId: event.clientActionId,
+      outcome: parsed.success ? parsed.data : null,
+    });
+  }
+  return evidence;
+}
+
+/** What settling restore attempts by evidence leaves behind. */
+export interface SettledRestoreAttempts {
+  readonly acceptedActions: Readonly<Record<string, AcceptedChatAction>>;
+  readonly restore: ChatRestoreSlot | null;
+}
+
+/**
+ * Retire the accepted `restoreCheckpoint` records the evidence names, and
+ * settle the progress slot that belonged to a retired attempt.
+ *
+ * Exact by client action id, unlike the completion frame's earliest-first
+ * retirement. The slot is settled only through a record: it carries no
+ * action id itself, so an outcome for a checkpoint the slot names is taken
+ * as the slot's own attempt only when it retires a record for that checkpoint
+ * - an old outcome for the same checkpoint (an earlier attempt, already
+ * retired) names no record and leaves a newer attempt's spinner alone. The
+ * attempts of one checkpoint run serially, so a live slot for the checkpoint
+ * is the retiring attempt's, never a later one's. With an outcome the slot
+ * becomes `completed` from the recorded result, exactly as the frame would
+ * have set it; a refusal or failure clears it.
+ *
+ * Both halves move together because both are parking holds
+ * (`hasUnsettledChatWork` reads the record AND the in-flight slot): the
+ * record retired by a live outcome event while the spinner stayed in flight
+ * held the epic until a reconnect happened to sweep it (Codex on ac6c4eca1).
+ */
+export function settleRestoreAttemptsByEvidence(
   acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
-  clientActionIds: ReadonlySet<string>,
-): Readonly<Record<string, AcceptedChatAction>> {
-  if (clientActionIds.size === 0) return acceptedActions;
-  return withoutAcceptedActions(
-    acceptedActions,
-    (action) =>
-      action.action === "restoreCheckpoint" &&
-      clientActionIds.has(action.clientActionId),
+  restore: ChatRestoreSlot | null,
+  evidence: ReadonlyArray<RestoreAttemptEvidence>,
+): SettledRestoreAttempts {
+  if (evidence.length === 0) return { acceptedActions, restore };
+  const byAction = new Map(
+    evidence.map((item) => [item.clientActionId, item] as const),
   );
+  let nextRestore = restore;
+  const nextAccepted = withoutAcceptedActions(acceptedActions, (action) => {
+    if (action.action !== "restoreCheckpoint") return false;
+    const item = byAction.get(action.clientActionId);
+    if (item === undefined) return false;
+    if (
+      nextRestore !== null &&
+      nextRestore.kind !== "completed" &&
+      nextRestore.checkpointId === action.checkpointId
+    ) {
+      nextRestore =
+        item.outcome === null
+          ? null
+          : {
+              kind: "completed",
+              checkpointId: item.outcome.checkpointId,
+              finishedAt: item.outcome.restoredAt,
+              results: item.outcome.results,
+            };
+    }
+    return true;
+  });
+  return { acceptedActions: nextAccepted, restore: nextRestore };
+}
+
+/**
+ * The accepted `restoreCheckpoint` records dispatched on a connection older
+ * than `connectionEpoch` - the ones a reconnect has to RETRANSMIT.
+ *
+ * Their completion evidence was promised on the old connection: the
+ * `restoreCompleted` frame and the live `checkpoint.restored` event both
+ * died with it, and the windowed line's snapshot cannot carry the outcome
+ * (its tail is hydrated transcript rows; a restore outcome is not one). What
+ * survives is the host's journal, and the host answers a RETRIED client
+ * action id from it: an attempt that completed is acked and its completion
+ * re-broadcast from the recorded outcome; one that never finished is run
+ * again (the same bytes twice) and completes; one it will not run is
+ * rejected, which names the action too. Every branch produces the evidence
+ * the record is waiting for, so the retransmit is the bounded recovery path
+ * - once per reconnect per record, which is what re-stamping the epoch
+ * ({@link withRetransmittedRestoreActions}) enforces.
+ */
+export function retransmittableRestoreActions(
+  acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
+  connectionEpoch: number,
+): ReadonlyArray<AcceptedChatAction> {
+  return Object.values(acceptedActions)
+    .filter(
+      (action) =>
+        action.action === "restoreCheckpoint" &&
+        action.checkpointId !== null &&
+        action.revertArtifacts !== null &&
+        action.connectionEpoch < connectionEpoch,
+    )
+    .toSorted(
+      (a, b) =>
+        a.acceptedAt - b.acceptedAt ||
+        a.clientActionId.localeCompare(b.clientActionId),
+    );
+}
+
+/** The records {@link retransmittableRestoreActions} named, re-stamped as dispatched on `connectionEpoch`. */
+export function withRetransmittedRestoreActions(
+  acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
+  retransmitted: ReadonlyArray<AcceptedChatAction>,
+  connectionEpoch: number,
+): Readonly<Record<string, AcceptedChatAction>> {
+  if (retransmitted.length === 0) return acceptedActions;
+  const next: Record<string, AcceptedChatAction> = { ...acceptedActions };
+  for (const action of retransmitted) {
+    if (!Object.hasOwn(next, action.clientActionId)) continue;
+    next[action.clientActionId] = {
+      ...next[action.clientActionId],
+      connectionEpoch,
+    };
+  }
+  return next;
 }
 
 function withoutAcceptedActions(
@@ -2149,7 +2264,11 @@ export interface AcceptedActionSettlementContext {
  * record is added at the ack and retired one per `restoreCompleted` by the
  * frame door ({@link withoutEarliestAcceptedRestoreActionFor}), or exactly by
  * its id when the durable `checkpoint.restored` event or an error notice
- * names it ({@link withoutAcceptedRestoreActionsNamed}). Existence IS the
+ * names it ({@link settleRestoreAttemptsByEvidence}, which settles the
+ * spinner of the retired attempt in the same step). Across a reconnect the
+ * record is RETRANSMITTED ({@link retransmittableRestoreActions}) so the
+ * host re-answers it from its journal, the evidence a windowed snapshot
+ * cannot carry. Existence IS the
  * hold, from the ack to the completion evidence, and the record is
  * lifecycle-locked for that span ({@link pruneAcceptedActions}) because
  * age is not completion. The slot stays a spinner `hasUnsettledChatWork`

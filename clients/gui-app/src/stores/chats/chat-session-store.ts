@@ -6,9 +6,11 @@ import {
   pruneAcceptedActions,
   withoutResolvedAcceptedQueueCancellations,
   withoutSettledAcceptedQueueStatusActions,
-  restoredClientActionIds,
-  withoutAcceptedRestoreActionsNamed,
+  restoreOutcomesFrom,
+  retransmittableRestoreActions,
+  settleRestoreAttemptsByEvidence,
   withoutEarliestAcceptedRestoreActionFor,
+  withRetransmittedRestoreActions,
   reconcileQueueChange,
   reconcileSnapshotChange,
   reconcileTurnSettled,
@@ -360,10 +362,16 @@ export interface PendingChatAction {
   readonly queueItemId: string | null;
   /**
    * Checkpoint targeted by a `restoreCheckpoint`; `null` for every other
-   * action. Lets the parking verdict tell THIS restore's slot from an earlier
-   * checkpoint's completed one, which persists for toast consumers.
+   * action. With `revertArtifacts` it is the whole restore frame, so the
+   * accepted record can RETRANSMIT the action after a reconnect: the host
+   * answers a retried client action id from its durable outcome (or runs the
+   * restore again when it never finished), which is the only completion
+   * evidence a windowed reconnect can recover - its snapshot carries hydrated
+   * transcript rows, and the restore outcome is not one.
    */
   readonly checkpointId: string | null;
+  /** See {@link PendingChatAction.checkpointId}; `null` for every other action. */
+  readonly revertArtifacts: boolean | null;
   // For `interviewAnswer` / `interviewError`, the interview block this action
   // targets; `null` for every other action. Lets the UI gate exactly the card
   // whose answer/skip is in flight (or accepted-but-unresolved) rather than all
@@ -505,6 +513,8 @@ export interface AcceptedChatAction {
   readonly queueItemId: string | null;
   /** See {@link PendingChatAction.checkpointId}. */
   readonly checkpointId: string | null;
+  /** See {@link PendingChatAction.checkpointId}. */
+  readonly revertArtifacts: boolean | null;
   // Carried over from the originating `PendingChatAction` so an accepted-but-
   // unresolved interview answer/skip keeps gating its card. `null` for every
   // non-interview action.
@@ -2517,6 +2527,9 @@ export function createChatSessionStoreWithNotificationDependencies(
       );
       let restoredWorktreeIntentForSnapshot: StagedWorktreeIntentSource | null =
         null;
+      // Filled by the updater, sent after it: the frames go out only once the
+      // records are re-stamped, so a re-entrant snapshot cannot send them twice.
+      let retransmitRestoreActions: ReadonlyArray<AcceptedChatAction> = [];
       set((state) => {
         const previousTurnId = snapshotPreviousTurnId(
           state.activeTurn,
@@ -2604,6 +2617,36 @@ export function createChatSessionStoreWithNotificationDependencies(
           state.liveAssistantMessage,
           null,
         );
+        // Restore attempts, in three steps. (1) Evidence: on the legacy line
+        // the snapshot's events carry the durable `checkpoint.restored`
+        // outcome for a completion frame that was lost, and it retires the
+        // record and completes the spinner from the recorded result; the
+        // windowed line's tail is hydrated rows and never carries it, which
+        // is what step 3 is for. (2) The spinner, AFTER the evidence so a
+        // completion the evidence proved is kept for the toast consumers: an
+        // in-flight slot still stamped on an older connection is swept - its
+        // frames died with that connection. (3) Retransmit: every surviving
+        // record dispatched on an older connection is re-sent after this
+        // pass (`retransmitRestoreActions`) so the host re-answers it from
+        // its journal, and re-stamped here so a record is retried once per
+        // reconnect, not once per snapshot.
+        const settledRestores = settleRestoreAttemptsByEvidence(
+          state.acceptedActions,
+          state.restore,
+          restoreOutcomesFrom(frame.snapshot.chat.events),
+        );
+        const restoreSettlement = {
+          acceptedActions: settledRestores.acceptedActions,
+          restore: sweepStaleRestoreSlot(
+            settledRestores.restore,
+            connectionEpoch,
+          ),
+        };
+        const restoreRetransmits = retransmittableRestoreActions(
+          restoreSettlement.acceptedActions,
+          connectionEpoch,
+        );
+        retransmitRestoreActions = restoreRetransmits;
         // The resolved-cancellation retirement runs on BOTH doors now. It used
         // to be on `queueChanged` only, so a `queueCancel` accepted just before
         // a reconnect kept its record through every later snapshot: the cap and
@@ -2616,23 +2659,22 @@ export function createChatSessionStoreWithNotificationDependencies(
             withoutSupersededInterviewDeliveryRetryActions(
               pruneAcceptedActions(
                 {
-                  ...withoutAcceptedRestoreActionsNamed(
-                    withoutSettledAcceptedActions(
-                      state.acceptedActions,
-                      // BOTH passes retire records: the snapshot pass for sends
-                      // it settled itself, the settled pass for rows it
-                      // recovered.
-                      new Set([
-                        ...pending.settledAcceptedActionIds,
-                        ...settled.settledAcceptedActionIds,
-                      ]),
+                  ...withoutSettledAcceptedActions(
+                    // Restore attempts settled by the snapshot's evidence,
+                    // and the survivors re-stamped for retransmission - see
+                    // `restoreSettlement` above.
+                    withRetransmittedRestoreActions(
+                      restoreSettlement.acceptedActions,
+                      restoreRetransmits,
+                      connectionEpoch,
                     ),
-                    // A restore whose `restoreCompleted` died with the dropped
-                    // stream: the snapshot's events carry its durable outcome,
-                    // which is the evidence that retires the record. A restore
-                    // still running has no outcome yet and keeps its hold -
-                    // the slot below is swept, the record is not.
-                    restoredClientActionIds(frame.snapshot.chat.events),
+                    // BOTH passes retire records: the snapshot pass for sends
+                    // it settled itself, the settled pass for rows it
+                    // recovered.
+                    new Set([
+                      ...pending.settledAcceptedActionIds,
+                      ...settled.settledAcceptedActionIds,
+                    ]),
                   ),
                   // Confirmation stamps first, then this pass's own additions -
                   // an id cannot be in both, but ordering the merge makes that
@@ -2728,7 +2770,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             [...pending.appendedErrorNotices, ...settled.appendedErrorNotices],
             state.deliveredNoticeActionIds,
           ),
-          restore: sweepStaleRestoreSlot(state.restore, connectionEpoch),
+          restore: restoreSettlement.restore,
           snapshotLoaded: true,
           // The load this session was waiting on has arrived, so whatever it
           // took to get here is no longer evidence of anything - the next
@@ -2761,6 +2803,28 @@ export function createChatSessionStoreWithNotificationDependencies(
           ...extra,
         };
       });
+      // The retransmit itself, after the records are re-stamped. The same
+      // frame the action first went out as - same client action id, so the
+      // host's journal recognises the command - through the client's raw send
+      // rather than `sendAction`: this is not a new pending action, and the
+      // accepted ack it earns is a no-op on a record that already exists.
+      // The client is non-null here: a snapshot only arrives through it.
+      if (retransmitRestoreActions.length > 0 && streamClient !== null) {
+        for (const action of retransmitRestoreActions) {
+          if (action.checkpointId === null || action.revertArtifacts === null) {
+            continue;
+          }
+          streamClient.sendAction({
+            kind: "restoreCheckpoint",
+            hasBinaryPayload: false,
+            epicId: options.epicId,
+            chatId: options.chatId,
+            clientActionId: action.clientActionId,
+            checkpointId: action.checkpointId,
+            revertArtifacts: action.revertArtifacts,
+          });
+        }
+      }
       // A prompt handed back to the composer takes its staged worktree with
       // it, or the resubmit silently runs against the chat's previous
       // binding.
@@ -5306,6 +5370,15 @@ export function createChatSessionStoreWithNotificationDependencies(
               state.queue,
               frame.clientActionId,
             ),
+            // A rejection naming an ACCEPTED restore is the host refusing its
+            // retransmit (`retransmittableRestoreActions`): no restore under
+            // this action id is running or will run, so the record and its
+            // spinner settle here - the fourth evidence door.
+            ...settleRestoreAttemptsByEvidence(
+              state.acceptedActions,
+              state.restore,
+              [{ clientActionId: frame.clientActionId, outcome: null }],
+            ),
             // Single slot, first writer wins until `ackFailedSendRestoration`
             // clears it - the same rule `reconcileSnapshotChange` and the
             // settled-turn pass already follow. Two rejections landing before
@@ -5954,12 +6027,13 @@ export function createChatSessionStoreWithNotificationDependencies(
         // `restoreCompleted` frame that never arrives. Before the transcript
         // arms below, which differ by line; the record is line-independent.
         if (frame.event.type === "checkpoint.restored") {
-          set((state) => ({
-            acceptedActions: withoutAcceptedRestoreActionsNamed(
+          set((state) =>
+            settleRestoreAttemptsByEvidence(
               state.acceptedActions,
-              restoredClientActionIds([frame.event]),
+              state.restore,
+              restoreOutcomesFrom([frame.event]),
             ),
-          }));
+          );
         }
         if (windowedLine) {
           takeLiveRecords({ messages: [], events: [frame.event] });
@@ -6066,14 +6140,20 @@ export function createChatSessionStoreWithNotificationDependencies(
           ),
           // A notice naming an accepted restore is the host saying that
           // attempt is over without a completion - the third retirement
-          // door, so a failed restore does not hold the epic resident.
-          acceptedActions:
-            frame.notice.clientActionId === null
-              ? state.acceptedActions
-              : withoutAcceptedRestoreActionsNamed(
-                  state.acceptedActions,
-                  new Set([frame.notice.clientActionId]),
-                ),
+          // door, so a failed restore does not hold the epic resident. Its
+          // spinner goes with it.
+          ...(frame.notice.clientActionId === null
+            ? {}
+            : settleRestoreAttemptsByEvidence(
+                state.acceptedActions,
+                state.restore,
+                [
+                  {
+                    clientActionId: frame.notice.clientActionId,
+                    outcome: null,
+                  },
+                ],
+              )),
         }));
       },
       onConnectionStatus: (status, reason) => {
@@ -6486,6 +6566,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             action: "send",
             queueItemId: null,
             checkpointId: null,
+            revertArtifacts: null,
             interviewBlockId: null,
             interviewDeliveryRetry: null,
             messageId,
@@ -6613,6 +6694,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             action: "send",
             queueItemId: null,
             checkpointId: null,
+            revertArtifacts: null,
             interviewBlockId: null,
             interviewDeliveryRetry: null,
             messageId: input.messageId,
@@ -6722,6 +6804,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             action: "editUserMessage",
             queueItemId: null,
             checkpointId: null,
+            revertArtifacts: null,
             interviewBlockId: null,
             interviewDeliveryRetry: null,
             messageId,
@@ -6798,6 +6881,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             action: "stop",
             queueItemId: null,
             checkpointId: null,
+            revertArtifacts: null,
             interviewBlockId: null,
             interviewDeliveryRetry: null,
             messageId: null,
@@ -7200,6 +7284,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           pending: {
             ...basicPending(clientActionId, "restoreCheckpoint"),
             checkpointId,
+            revertArtifacts,
           },
           pendingUserMessage: null,
         });
@@ -7560,6 +7645,7 @@ function basicPending(
     action,
     queueItemId: null,
     checkpointId: null,
+    revertArtifacts: null,
     interviewBlockId: null,
     interviewDeliveryRetry: null,
     messageId: null,

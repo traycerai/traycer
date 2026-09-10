@@ -104,6 +104,7 @@ describe("nextHandoffTransition", () => {
           action: "send",
           queueItemId: null,
           checkpointId: null,
+          revertArtifacts: null,
           interviewBlockId: null,
           interviewDeliveryRetry: null,
           clientActionId: "action-1",
