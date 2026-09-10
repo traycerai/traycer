@@ -20,26 +20,6 @@
   }
 }
 
-@keyframes auth-actions-arrive {
-  from {
-    opacity: 0.55;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-@keyframes auth-backdrop-arrive {
-  from {
-    opacity: 0.55;
-    transform: scale(1.035);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
 /* One animation for the whole splash: hold, then fade over the last 240ms of
    2500ms (90.4%). `pointer-events` is not interpolable, so it switches
    discretely AT that frame - which is exactly the behaviour wanted. The layer
@@ -47,13 +27,25 @@
    control the user cannot see, and stops the instant the page beneath starts
    becoming visible. Doing it here rather than in React is what keeps the
    component down to one boolean. */
-/* 89.29% of 2240ms is 2000ms - the frame the last piece lands on. The fade
-   starts there rather than after a beat, so the surface is never still.
-   `pointer-events` is not interpolable and switches discretely at that same
-   frame, which is what lets the sign-in page take a tap the moment it starts
-   becoming visible. */
+/* 89.29% of 2240ms is 2000ms - the frame the last piece lands on, where the
+   fade starts, so the surface is never still.
+
+   THE 89.28% KEYFRAME IS LOAD-BEARING. `pointer-events` is not interpolable,
+   and a discrete property does not hold its value until the next keyframe: it
+   flips at the MIDPOINT of the interval between them. Declared only at 0% and
+   89.29%, the flip to `none` would land at ~44.6% - about 1000ms - so the
+   layer would stop swallowing taps while it is still fully opaque, and a tap
+   on the invisible sign-in controls underneath would fire.
+
+   Repeating `auto` at 89.28% shrinks that interval to 0.01% of the span, which
+   puts the midpoint within a fraction of a millisecond of the fade's first
+   frame. The layer blocks input for exactly as long as it hides the page. */
 @keyframes auth-splash-play {
   0% {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  89.28% {
     opacity: 1;
     pointer-events: auto;
   }
@@ -81,20 +73,7 @@
   }
 }
 
-@keyframes app-ready-arrive {
-  from {
-    opacity: 0.9;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
 @media (prefers-reduced-motion: no-preference) {
-  .app-ready-arrival {
-    animation: app-ready-arrive 8ms ease-out;
-  }
-
   .brand-entrance-mark g > path {
     transform-box: fill-box;
     transform-origin: center;
@@ -175,13 +154,5 @@
 
   .auth-splash .brand-entrance-mark {
     animation: auth-mark-settle 2000ms cubic-bezier(0.22, 1, 0.36, 1) both;
-  }
-
-  .auth-arrival-actions {
-    animation: auth-actions-arrive 440ms 220ms ease-out both;
-  }
-
-  .auth-arrival-backdrop {
-    animation: auth-backdrop-arrive 900ms cubic-bezier(0.22, 1, 0.36, 1) both;
   }
 }

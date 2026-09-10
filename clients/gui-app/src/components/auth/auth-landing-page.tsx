@@ -1,7 +1,6 @@
 import { AuthBrandSplash } from "@/components/auth/auth-brand-splash";
-import { BrandEntrance } from "@/components/auth/brand-entrance";
 import { BRAND_DARK_GROUND_CLASS } from "@/components/auth/brand-surface";
-import { PhotoBloom } from "@/components/auth/cinematic-backdrop";
+import { BrandMark, PhotoBloom } from "@/components/auth/cinematic-backdrop";
 import { SignInButton } from "@/components/layout/header/sign-in-button";
 import { getClientAppVersionLabel } from "@/lib/app-version";
 import type { ShellAdmissionRefusal } from "@/hooks/auth/use-shell-local-plane-admission";
@@ -58,9 +57,7 @@ export function AuthLandingPage(props: {
         BRAND_DARK_GROUND_CLASS,
       )}
     >
-      <div className="auth-arrival-backdrop pointer-events-none absolute inset-0">
-        <PhotoBloom />
-      </div>
+      <PhotoBloom />
 
       {/* The content layer of a full-bleed surface: the backdrop above is
           meant to run under the status bar and the sensor housing, and this is
@@ -72,11 +69,10 @@ export function AuthLandingPage(props: {
           housing. */}
       <section className="relative z-10 mx-auto flex w-full flex-col items-center justify-center pt-[max(clamp(4rem,12vh,8rem),var(--safe-area-inset-top))] pr-[max(clamp(1.5rem,5vw,4.5rem),var(--safe-area-inset-right))] pb-[clamp(5rem,12vh,8rem)] pl-[max(clamp(1.5rem,5vw,4.5rem),var(--safe-area-inset-left))] text-center font-heading">
         <div className="flex w-full max-w-[min(88vw,31rem)] flex-col items-center gap-[clamp(1.2rem,2.8vh,2rem)]">
-          <BrandEntrance size="hero">
-            <h1 className="brand-entrance-copy mb-2 text-[clamp(2rem,5vw,2.75rem)] font-semibold leading-[clamp(2.25rem,5.5vw,3rem)] tracking-tight">
-              Welcome to Traycer
-            </h1>
-          </BrandEntrance>
+          <BrandMark className="h-auto w-[clamp(3.75rem,8vw,5.4rem)] drop-shadow-[0_1.5rem_2.5rem_rgba(0,0,0,0.42)]" />
+          <h1 className="mb-2 text-[clamp(2rem,5vw,2.75rem)] font-semibold leading-[clamp(2.25rem,5.5vw,3rem)] tracking-tight">
+            Welcome to Traycer
+          </h1>
           {/* Above the button, not below it: this is the reason the button is
               being shown at all, and a reader who has already pressed it has
               no use for the explanation. Sized as body copy on the artwork's
@@ -90,13 +86,7 @@ export function AuthLandingPage(props: {
               {refusalMessage(props.refusal)}
             </p>
           )}
-          <div
-            className={cn(
-              "auth-arrival-actions",
-              SIGN_IN_COLOR_VARS,
-              SIGN_IN_LANE_CLASS,
-            )}
-          >
+          <div className={cn(SIGN_IN_COLOR_VARS, SIGN_IN_LANE_CLASS)}>
             <SignInButton layout="hero" />
           </div>
         </div>

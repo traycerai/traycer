@@ -74,7 +74,7 @@ export function AppShell(props: AppShellProps) {
   return (
     <PrimaryFocusCoordinatorProvider>
       <DiffWorkerPoolProvider>
-        <div className="app-ready-arrival min-h-safe-dvh bg-canvas text-canvas-foreground">
+        <div className="min-h-safe-dvh bg-canvas text-canvas-foreground">
           <RootDndProvider>
             {/* The screen, as a history swipe understands one: the header and
               the content viewport travel together, because a transition that
