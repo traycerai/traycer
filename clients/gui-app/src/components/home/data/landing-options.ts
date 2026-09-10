@@ -100,8 +100,14 @@ const FULL_ACCESS_PERMISSION_OPTION: PermissionOption = {
 // Order is load-bearing twice over: the picker renders in this order, and
 // `findSafestSupportedPermissionMode` walks it to pick a clamp target. `auto`
 // sits above `auto_accept_edits` because it does everything that mode does and
-// additionally lets a judge approve commands - so clamping DOWN to
-// `auto_accept_edits` is the safe move, which is what this position produces.
+// additionally lets a judge approve commands.
+//
+// That POSITION is not what makes `auto` clamp to `auto_accept_edits`, and
+// reading it that way is the trap: the safest-supported walk starts at the top
+// of this list, so on a host serving the pre-auto trio it lands on
+// `supervised`, three rows below where the user was. `PERMISSION_FALLBACK_MODE`
+// is what names the target; the order here only has to keep `auto` ABOVE
+// `auto_accept_edits` so the two agree about which way is down.
 export const PERMISSION_OPTIONS: ReadonlyArray<PermissionOption> = [
   SUPERVISED_PERMISSION_OPTION,
   AUTO_ACCEPT_EDITS_PERMISSION_OPTION,
@@ -128,6 +134,42 @@ export function isPermissionMode(value: string): value is PermissionMode {
   return PERMISSION_OPTIONS.some((option) => option.id === value);
 }
 
+// The mode a peer that cannot honor a given one should be handed INSTEAD,
+// consulted before the generic safest-supported rule below. Exhaustive over
+// `PermissionMode` on purpose: widening the union again is then a compile
+// error here rather than a silent inheritance of the safest-mode default.
+//
+// Only `auto` names one, and the reason is that `auto` is the sole mode whose
+// unsupported case is a MISSING CAPABILITY rather than a policy the peer
+// declines. A host that predates `auto` filters it out of every
+// `supportedPermissionModes` row it serves, so what the user asked for
+// ("auto-accept edits, and let a judge decide the rest") is still half
+// available there: the edits half. Walking to the safest supported mode would
+// answer that request with `supervised` - stricter than the user's own
+// `auto_accept_edits` default and stricter than the chat ran a moment ago on
+// another host - so `auto` names its own target instead.
+const PERMISSION_FALLBACK_MODE: Readonly<
+  Record<PermissionMode, PermissionMode | null>
+> = {
+  supervised: null,
+  auto_accept_edits: null,
+  auto: "auto_accept_edits",
+  full_access: null,
+};
+
+/**
+ * The mode `value` degrades to on a peer that does not know it, with no
+ * supported-set to consult - the whole-peer twin of the per-harness clamp in
+ * {@link normalizePermissionMode}, sharing its table so the two can never
+ * disagree about where `auto` lands.
+ *
+ * A mode with no declared fallback answers itself: this only ever demotes, and
+ * only where a demotion target has been written down.
+ */
+export function fallbackPermissionMode(value: PermissionMode): PermissionMode {
+  return PERMISSION_FALLBACK_MODE[value] ?? value;
+}
+
 // Clamp the composer's sticky permission to a value the active harness
 // actually honors.
 //
@@ -138,9 +180,11 @@ export function isPermissionMode(value: string): value is PermissionMode {
 //   we keep the sticky value rather than escalating. The host-side gate in
 //   `HarnessRuntime.assertPermissionModeSupported` short-circuits on empty
 //   too, so neither side silently elevates.
-// - Otherwise: keep the current value if supported; else fall back to the
+// - Otherwise: keep the current value if supported; else take the value's own
+//   declared fallback when the peer honors THAT (`PERMISSION_FALLBACK_MODE` -
+//   in practice `auto` → `auto_accept_edits`); else fall back to the
 //   *most-restrictive* supported mode (per `PERMISSION_OPTIONS` order,
-//   supervised → auto_accept_edits → full_access). NEVER trust
+//   supervised → auto_accept_edits → auto → full_access). NEVER trust
 //   `supportedPermissionModes[0]` - adapters may declare modes in any order,
 //   and picking the head silently elevates Cursor (`["full_access"]`) past
 //   any sticky preference the user previously held.
@@ -151,6 +195,13 @@ export function normalizePermissionMode(
   if (supportedPermissionModes === null) return value;
   if (supportedPermissionModes.length === 0) return value;
   if (supportedPermissionModes.includes(value)) return value;
+  const declaredFallback = PERMISSION_FALLBACK_MODE[value];
+  if (
+    declaredFallback !== null &&
+    supportedPermissionModes.includes(declaredFallback)
+  ) {
+    return declaredFallback;
+  }
   return findSafestSupportedPermissionMode(supportedPermissionModes) ?? value;
 }
 

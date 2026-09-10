@@ -54,6 +54,41 @@ describe("<ComposerToolbarLeft />", () => {
 
     expect(onPermissionChange).not.toHaveBeenCalled();
   });
+
+  it("renders the Auto option and disables it with the unsupported copy on a host whose row lacks it", () => {
+    render(
+      <TooltipProvider>
+        <ComposerToolbarLeft
+          onAttachImages={vi.fn<(files: ReadonlyArray<File>) => void>()}
+          permission="supervised"
+          onPermissionChange={vi.fn<(next: PermissionMode) => void>()}
+          supportedPermissionModes={[
+            "supervised",
+            "auto_accept_edits",
+            "full_access",
+          ]}
+          harnessLabel="Cursor"
+          showNextTurnPermissionNote={false}
+          settingsLocked={false}
+        />
+      </TooltipProvider>,
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Supervised" }), {
+      button: 0,
+      ctrlKey: false,
+      pointerType: "mouse",
+    });
+
+    // Auto is the only mode this row omits, so the "Not supported by" copy
+    // appears exactly once - scoped through it rather than an accessible-name
+    // match, since "Auto" is a substring of "Auto-accept edits" too.
+    const unsupportedCopy = screen.getByText("Not supported by Cursor.");
+    const auto = unsupportedCopy.closest('[role="menuitemradio"]');
+    if (auto === null) throw new Error("expected the Auto menu item");
+    expect(auto.getAttribute("aria-disabled")).toBe("true");
+    expect(auto.textContent).toContain("Auto");
+  });
 });
 
 function renderToolbar(

@@ -90,4 +90,25 @@ describe("ComposerOptionsSheet", () => {
         .hasAttribute("disabled"),
     ).toBe(true);
   });
+
+  it("renders the Auto option and disables it with the unsupported copy on a host whose row lacks it", async () => {
+    const props = {
+      ...defaults(),
+      supportedPermissionModes: [
+        "supervised",
+        "auto_accept_edits",
+        "full_access",
+      ] as ReadonlyArray<PermissionMode>,
+    };
+    renderSheet(props);
+    // Auto is the only mode this row omits, so its "Not supported by" copy
+    // is the unique text to scope through - an accessible-name query would
+    // be ambiguous, since it concatenates label + description and "Auto" is
+    // a substring of "Auto-accept edits" too.
+    const auto = screen.getByTestId("composer-options-permission-auto");
+    expect(auto.hasAttribute("disabled")).toBe(true);
+    expect(auto.textContent).toContain("Not supported by Cursor.");
+    await userEvent.click(auto);
+    expect(props.onPermissionChange).not.toHaveBeenCalled();
+  });
 });

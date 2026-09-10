@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useReducer, useRef } from "react";
 import type { PermissionMode } from "@traycer/protocol/persistence/epic/schemas";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { sessionImportRunV11 } from "@traycer/protocol/host/session-import/run";
+import type { ListGuiHarnessesResponse } from "@traycer/protocol/host/index";
+import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import type { IStreamClient } from "@traycer-clients/shared/host-transport/i-stream-client";
 import {
   SessionImportRunClient,
   type SessionImportRunCallbacks,
@@ -8,6 +12,8 @@ import {
   type SessionImportRunProgressPayload,
   type SessionImportRunStartedPayload,
 } from "@traycer-clients/shared/host-transport/session-import-run-client";
+import { fallbackPermissionMode } from "@/components/home/data/landing-options";
+import type { HostRpcRegistry } from "@/lib/host";
 import { useStreamRuntimeBinding } from "@/lib/host/stream-runtime-context";
 import { hostQueryKeys, sessionImportQueryKeys } from "@/lib/query-keys";
 import {
@@ -36,6 +42,88 @@ function newChatPermissionModeFor(hostId: string): PermissionMode {
   return (
     useComposerRunSettingsStore.getState().getGlobalRunSettings(hostId)
       ?.permissionMode ?? useSettingsStore.getState().defaultPermission
+  );
+}
+
+/**
+ * The mode the run is actually opened under: the new-chat default above,
+ * demoted (`auto` → `auto_accept_edits`) unless this host has SHOWN it knows
+ * `auto`.
+ *
+ * `permissionMode` rides in the `sessionImport.run` OPEN request, and that
+ * request's schema is shared by `1.0` and `1.1` byte for byte - the slot binds
+ * the live enum, so `auto` became expressible on `1.0` the moment the enum
+ * widened. A `1.0` host therefore accepts the frame and rejects the VALUE, as
+ * a validation error, after the user has picked their sessions. That failure
+ * is the whole reason `sessionImportRunV11` exists, so the client owes the
+ * check rather than the wire.
+ *
+ * Demotion is one-way and never elevates: `auto` is `auto_accept_edits` plus a
+ * judge, so dropping the judge is the honest half-measure, while
+ * `normalizePermissionMode`'s safest-supported walk would land on `supervised`
+ * and make an import stricter than the user's own default. Every other mode
+ * predates the split and passes through untouched.
+ */
+function importPermissionModeFor(input: {
+  readonly queryClient: QueryClient;
+  readonly hostId: string;
+  readonly wsStreamClient: IStreamClient<HostStreamRpcRegistry>;
+}): PermissionMode {
+  const mode = newChatPermissionModeFor(input.hostId);
+  if (mode !== "auto") return mode;
+  return hostUnderstandsAutoPermissionMode(input)
+    ? mode
+    : fallbackPermissionMode(mode);
+}
+
+/**
+ * Whether this host has PROVEN it understands `auto`. Two independent facts
+ * can prove it and either is enough, because neither is readable at every
+ * moment this question is asked:
+ *
+ *   - the negotiated `sessionImport.run` line is at or above the minor `auto`
+ *     shipped on. Authoritative - it is this very method's handshake - but
+ *     `getMethodSchemaVersion` reconciles from LIVE sessions of that method,
+ *     and the first run of a window is asked before one exists (a remote
+ *     transport answers `null` always, by design);
+ *   - the host's cached `agent.gui.listHarnesses` rows offer `auto` in a
+ *     `supportedPermissionModes` array. A host below the catalog's own auto
+ *     minor filters `auto` out of every row it serves, so its presence is the
+ *     same negotiated fact the composer's clamp already reads - and it is
+ *     warm here, since the app-load prefetcher fills this slot.
+ *
+ * Neither provable is "not proven", not "old host", and it demotes: an `auto`
+ * a pre-auto host cannot parse costs the user their whole import, while a
+ * demotion costs them the judge on one they can re-run. The minor is compared
+ * against the exported contract, never a literal, so a rebase that renumbers
+ * it moves this with it.
+ */
+function hostUnderstandsAutoPermissionMode(input: {
+  readonly queryClient: QueryClient;
+  readonly hostId: string;
+  readonly wsStreamClient: IStreamClient<HostStreamRpcRegistry>;
+}): boolean {
+  const negotiated =
+    input.wsStreamClient.getMethodSchemaVersion("sessionImport.run");
+  const required = sessionImportRunV11.schemaVersion;
+  if (
+    negotiated !== null &&
+    negotiated.major === required.major &&
+    negotiated.minor >= required.minor
+  ) {
+    return true;
+  }
+  const harnesses = input.queryClient.getQueryData<ListGuiHarnessesResponse>(
+    hostQueryKeys.method<HostRpcRegistry, "agent.gui.listHarnesses">(
+      input.hostId,
+      "agent.gui.listHarnesses",
+      {},
+    ),
+  );
+  return (
+    harnesses?.harnesses.some((harness) =>
+      harness.supportedPermissionModes.includes("auto"),
+    ) ?? false
   );
 }
 
@@ -164,7 +252,11 @@ export function SessionImportRunController(): null {
       const client = new SessionImportRunClient({
         wsStreamClient: input.target.binding.wsStreamClient,
         selections: input.selections,
-        permissionMode: newChatPermissionModeFor(input.target.hostId),
+        permissionMode: importPermissionModeFor({
+          queryClient,
+          hostId: input.target.hostId,
+          wsStreamClient: input.target.binding.wsStreamClient,
+        }),
         callbacks: input.callbacks,
       });
       runsRef.current.set(input.target.hostId, {
@@ -174,7 +266,7 @@ export function SessionImportRunController(): null {
       });
       return client;
     },
-    [],
+    [queryClient],
   );
 
   const start = useCallback(
