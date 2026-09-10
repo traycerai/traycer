@@ -1136,6 +1136,64 @@ describe("<EpicsListPanel />", () => {
     });
   });
 
+  it("dismisses a held-open status tooltip on Escape and keeps it closed until focus returns", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    renderPanel("embedded", "/");
+
+    const glyph = await screen.findByTestId(
+      "epics-list-row-provenance-local-only-epic-from-history",
+    );
+    const expectedTooltip = glyph.getAttribute("aria-label");
+    expect(expectedTooltip).not.toBeNull();
+
+    const link = await screen.findByRole("link", {
+      name: "Open task Local only epic",
+    });
+
+    expect(screen.queryByRole("tooltip")).toBeNull();
+
+    act(() => {
+      link.focus();
+    });
+
+    const tooltips = await screen.findAllByRole("tooltip");
+    expect(
+      tooltips.some((tooltip) => tooltip.textContent === expectedTooltip),
+    ).toBe(true);
+
+    // Radix's Escape dismissal listens on the document.
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
+
+    // A second Escape, with nothing else changing, is a no-op - the tooltip
+    // stays closed for the rest of this focus session.
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("tooltip")).toBeNull();
+
+    // Blur then focus again is a NEW focus session, so the hold reopens.
+    act(() => {
+      link.blur();
+    });
+    act(() => {
+      link.focus();
+    });
+
+    const reopenedTooltips = await screen.findAllByRole("tooltip");
+    expect(
+      reopenedTooltips.some(
+        (tooltip) => tooltip.textContent === expectedTooltip,
+      ),
+    ).toBe(true);
+  });
+
   it("suppresses the provenance glyph's tooltip when the overlay link is focused after a pointer press on the row, and restores it once the press is forgotten on pointer-up", async () => {
     testState.items = [
       historyItem({
@@ -1248,6 +1306,103 @@ describe("<EpicsListPanel />", () => {
     expect(
       screen.getByTestId("epics-list-delete-selected").matches(":disabled"),
     ).toBe(false);
+  });
+
+  it("forwards a middle-click on the status slot to the row as a background open", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    const router = renderPanel("embedded", "/");
+
+    const glyph = await screen.findByTestId(
+      "epics-list-row-provenance-local-only-epic-from-history",
+    );
+    const slot = glyph.closest('[data-testid="epics-list-row-status-slot"]');
+    expect(slot).not.toBeNull();
+    if (slot === null) throw new Error("expected a status-slot ancestor");
+
+    fireEvent(
+      slot,
+      new MouseEvent("auxclick", {
+        bubbles: true,
+        cancelable: true,
+        button: 1,
+      }),
+    );
+
+    await waitFor(() => {
+      const tabId = useEpicCanvasStore
+        .getState()
+        .resolveTabIdForEpic("epic-from-history");
+      expect(tabId).not.toBeNull();
+    });
+    // Background, not foreground: the route never left the history list.
+    expect(router.state.location.pathname).toBe("/");
+  });
+
+  it("ignores a right-button auxclick on the status slot", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    const router = renderPanel("embedded", "/");
+
+    const glyph = await screen.findByTestId(
+      "epics-list-row-provenance-local-only-epic-from-history",
+    );
+    const slot = glyph.closest('[data-testid="epics-list-row-status-slot"]');
+    expect(slot).not.toBeNull();
+    if (slot === null) throw new Error("expected a status-slot ancestor");
+
+    fireEvent(
+      slot,
+      new MouseEvent("auxclick", {
+        bubbles: true,
+        cancelable: true,
+        button: 2,
+      }),
+    );
+
+    expect(
+      useEpicCanvasStore.getState().resolveTabIdForEpic("epic-from-history"),
+    ).toBeNull();
+    expect(router.state.location.pathname).toBe("/");
+  });
+
+  it("opens the row in the background on a middle-click of the overlay link itself", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    const router = renderPanel("embedded", "/");
+
+    const link = await screen.findByRole("link", {
+      name: "Open task Local only epic",
+    });
+
+    fireEvent(
+      link,
+      new MouseEvent("auxclick", {
+        bubbles: true,
+        cancelable: true,
+        button: 1,
+      }),
+    );
+
+    await waitFor(() => {
+      const tabId = useEpicCanvasStore
+        .getState()
+        .resolveTabIdForEpic("epic-from-history");
+      expect(tabId).not.toBeNull();
+    });
+    expect(router.state.location.pathname).toBe("/");
   });
 
   it("hides the imported-unseen status slot when there is nothing to show, so the title keeps no stray gap", async () => {

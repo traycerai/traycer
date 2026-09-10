@@ -106,6 +106,7 @@ import {
   useHistoryListKeyboardNav,
 } from "@/components/epics/use-history-list-keyboard-nav";
 import { StatusGlyphFocusContext } from "@/components/notifications/status-glyph-focus";
+import { onMiddleClick } from "@/lib/dom/on-middle-click";
 import { ImportedUnseenDot } from "@/components/session-import/imported-unseen-dot";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import {
@@ -1719,8 +1720,11 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
   // keyboard - because jsdom matches nothing for `:focus-visible` and the
   // behaviour would otherwise be untestable.
   const pointerPressRef = useRef(false);
-  const [rowTargetKeyboardFocused, setRowTargetKeyboardFocused] =
-    useState(false);
+  // A fresh id per keyboard-focus session, `null` while there is none: the
+  // glyph remembers an Escape against the id, so the hold stays dismissed
+  // until focus leaves and returns (`StatusGlyphFocusContext`).
+  const focusSessionRef = useRef(0);
+  const [rowFocusSession, setRowFocusSession] = useState<number | null>(null);
   // The press is forgotten on release ANYWHERE, not only over the row: a
   // press that starts here and ends outside fires no row handler, and a ref
   // left `true` would classify the next keyboard focus as a click. The focus
@@ -1746,14 +1750,15 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     // A target that carries its own tooltip (the selection-mode toggle of a
     // row that cannot be selected) explains itself on focus, and a second
     // held-open tooltip beside it would overlap it.
-    setRowTargetKeyboardFocused(
+    const keyboardFocused =
       !byPointer &&
-        event.target.matches(ROW_TARGET_SELECTOR) &&
-        !event.target.hasAttribute(ROW_TARGET_OWN_TOOLTIP_ATTRIBUTE),
-    );
+      event.target.matches(ROW_TARGET_SELECTOR) &&
+      !event.target.hasAttribute(ROW_TARGET_OWN_TOOLTIP_ATTRIBUTE);
+    focusSessionRef.current += 1;
+    setRowFocusSession(keyboardFocused ? focusSessionRef.current : null);
   }, []);
   const onRowBlur = useCallback(() => {
-    setRowTargetKeyboardFocused(false);
+    setRowFocusSession(null);
   }, []);
   const openEpicRow = (event: React.MouseEvent<HTMLAnchorElement>) => {
     event.preventDefault();
@@ -1762,6 +1767,21 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
       return;
     }
     openEpic();
+  };
+  // A middle button arrives as `auxclick`, never `click` (`on-middle-click.ts`),
+  // and the app's convention for it is a background open (`tile-open/intent.ts`
+  // maps `button === 1` to `background`). Without this the anchor's own
+  // default ran instead - a window open the desktop shell denies. A phase has
+  // no background open (see `backgroundMenuItem`) and opens in place.
+  const openEpicRowInBackground = (
+    event: React.MouseEvent<HTMLAnchorElement>,
+  ) => {
+    event.preventDefault();
+    if (isPhase) {
+      openEpic();
+      return;
+    }
+    openInBackground();
   };
   const blockUnavailableDeleteAction = useCallback(
     (event: React.MouseEvent<HTMLElement>) => {
@@ -1850,6 +1870,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
         focusTileInstanceId: undefined,
       }}
       onClick={openEpicRow}
+      onAuxClick={onMiddleClick(openEpicRowInBackground)}
       onKeyDown={onRowKeyDown}
       aria-label={`Open task ${displayTitle}`}
       data-history-row-target=""
@@ -1890,7 +1911,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
         <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden max-md:basis-full">
           <HistoryRowStatusSlot
             id={statusDescriptionId}
-            holdsTooltipOnRowFocus={rowTargetKeyboardFocused}
+            rowFocusSession={rowFocusSession}
           >
             <HistoryRowLeadingIcon item={item} />
           </HistoryRowStatusSlot>
@@ -1909,7 +1930,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
               </span>
               <HistoryRowStatusSlot
                 id={importedDescriptionId}
-                holdsTooltipOnRowFocus={false}
+                rowFocusSession={null}
               >
                 <ImportedUnseenDot epicId={item.epicId} />
               </HistoryRowStatusSlot>
@@ -2290,9 +2311,11 @@ function HistorySweepMenuItem(props: {
  * the row's click surface. So the click is handed on to the row's activation
  * target with its modifiers intact, which is what keeps ctrl/cmd-click on the
  * spinner toggling selection exactly as it did through the overlay. Dispatched
- * as a real DOM click rather than calling the row's handler directly so this
- * slot needs to know nothing about what activation means - the overlay link
- * and the selection-mode toggle both carry `data-history-row-target`.
+ * as a real DOM event of the same type (`click`, or `auxclick` for a middle
+ * button, which the row link turns into a background open) rather than
+ * calling the row's handler directly, so this slot needs to know nothing
+ * about what activation means - the overlay link and the selection-mode
+ * toggle both carry `data-history-row-target`.
  *
  * The marks stay non-focusable - a tab stop on every row for a
  * non-interactive mark would cost keyboard users a keypress per row - and
@@ -2308,8 +2331,9 @@ function HistorySweepMenuItem(props: {
  * That description is heard, not seen. For a sighted keyboard user the row
  * also holds ONE tooltip open (`StatusGlyphFocusContext`, see the row's
  * `onRowFocus`): while either activation target has keyboard focus, the mark
- * in the slot with `holdsTooltipOnRowFocus` shows its sentence over the glyph
- * without the glyph becoming a tab stop. One slot per row, on purpose - Radix
+ * in the slot given the row's `rowFocusSession` shows its sentence over the
+ * glyph without the glyph becoming a tab stop, until Escape dismisses it for
+ * that focus session. One slot per row, on purpose - Radix
  * keeps hover tooltips to one at a time, and a controlled open defeats that,
  * so two held-open marks would be two overlapping portals. The leading slot
  * is the one; the imported-unseen slot is heard through `aria-describedby`
@@ -2317,11 +2341,19 @@ function HistorySweepMenuItem(props: {
  */
 function HistoryRowStatusSlot(props: {
   readonly id: string;
-  readonly holdsTooltipOnRowFocus: boolean;
+  /**
+   * The row's keyboard-focus session, for the one slot per row that holds
+   * its tooltip open on it; `null` for a slot that never does.
+   */
+  readonly rowFocusSession: number | null;
   readonly children: ReactNode;
 }): ReactNode {
   const forwardClickToRow = useCallback(
     (event: React.MouseEvent<HTMLSpanElement>) => {
+      // `auxclick` is forwarded for the middle button only: the right button
+      // belongs to the context menu, which opens on `contextmenu` and needs
+      // no forwarding.
+      if (event.type === "auxclick" && event.button !== 1) return;
       const target = event.currentTarget
         .closest("li")
         ?.querySelector<HTMLElement>(ROW_TARGET_SELECTOR);
@@ -2329,7 +2361,7 @@ function HistoryRowStatusSlot(props: {
       event.preventDefault();
       event.stopPropagation();
       target.dispatchEvent(
-        new MouseEvent("click", {
+        new MouseEvent(event.type, {
           bubbles: true,
           cancelable: true,
           button: event.button,
@@ -2353,13 +2385,14 @@ function HistoryRowStatusSlot(props: {
     // or the parent's `gap` puts a stray space between the title and the next
     // control. Decided by the DOM rather than by re-reading each mark's
     // condition here, so a new mark cannot get the gap wrong.
-    <StatusGlyphFocusContext.Provider value={props.holdsTooltipOnRowFocus}>
+    <StatusGlyphFocusContext.Provider value={props.rowFocusSession}>
       <span
         id={props.id}
         role="presentation"
         className="pointer-events-auto inline-flex shrink-0 items-center empty:hidden"
         data-testid="epics-list-row-status-slot"
         onClick={forwardClickToRow}
+        onAuxClick={forwardClickToRow}
       >
         {props.children}
       </span>
