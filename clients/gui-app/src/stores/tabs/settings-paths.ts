@@ -12,7 +12,8 @@
  * input this guards. The cost of hand-maintaining it is that a new section can
  * be forgotten here and silently stop being recognised as a settings route -
  * `devices` was, from the day it was added until `app-diagnostics` arrived and
- * the omission was noticed next to it.
+ * the omission was noticed next to it; `link-phone` was, until the two copies
+ * of this set were folded into one and compared against the section table.
  */
 export const SETTINGS_PATHS = new Set([
   "agents",
@@ -24,6 +25,7 @@ export const SETTINGS_PATHS = new Set([
   "host",
   "keybindings",
   "layout",
+  "link-phone",
   "notifications",
   "opening-behavior",
   "providers",
