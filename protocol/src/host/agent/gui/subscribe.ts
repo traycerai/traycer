@@ -3893,13 +3893,17 @@ export const chatSubscribeV19 = defineStreamRpcContract({
 // the live windowed frames and `chatSubscribeFullSnapshotSchemaVersion` stays
 // at `1.7`, exactly as its own doc says it must.
 //
-// What this line adds, all of it host-gated so a lower peer never observes it:
+// What this line adds. Everything in the list below is host-gated so a lower
+// peer never observes it; the lease `token` is not, and the paragraph after
+// the list states what holds it back instead:
 //
 //   - the `fallback-wait` background item (a chat parked on a rate-limit
 //     reset), which the host degrades OUT of a `≤1.9` peer's
 //     `backgroundItems` rather than sending;
-//   - the `fallback.holdForChoice` / `fallback.releaseChoice` stream actions
-//     and the lease `token` they ack with;
+//   - the `fallback.holdForChoice` / `fallback.releaseChoice` stream actions,
+//     which a `≤1.9` peer cannot dispatch: the host parses each client frame
+//     against the union that peer negotiated, where neither exists, and drops
+//     it as malformed before any session sees it;
 //   - every provider-fallback attribution notice kind (`fallback_applied`,
 //     `fallback_returned`, `fallback_return_blocked`, `fallback_wait_resumed`,
 //     `fallback_settled`), which `chat-frame-projection.ts` strips for any peer
@@ -3911,6 +3915,14 @@ export const chatSubscribeV19 = defineStreamRpcContract({
 //     `lastFallbackOutcome` DTOs on both snapshot shapes and on
 //     `turnStateChanged`, stripped as whole KEYS by the same projection - both
 //     funnels, since the windowed snapshot has its own producer.
+//
+// The grace-hold lease `token` on `actionAck` is NOT stripped: the host puts
+// the key on every ack at every minor. A non-null token is minted only by an
+// accepted `fallback.holdForChoice`, and that ack - first emission or replay
+// to a re-sender - goes only to a connection that sent that frame, which the
+// drop above confines to `1.10` and later. Every other ack carries
+// `token: null`, and a `≤1.9` decoder drops the key as an unknown member (the
+// frozen `actionAck` is built with `lease: {}` and is not strict).
 //
 // The typed `failure` payload on `error` / `turn.interrupted` and the
 // persisted `error` block is held back by every frozen line's SCHEMA
