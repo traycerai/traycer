@@ -1443,6 +1443,7 @@ describe("<TabStrip />", () => {
     pinTestState.pinnedByEpicId.set(EPIC_A.id, {
       pinned: false,
       home: undefined,
+      hostId: null,
       pinnedKnown: true,
     });
     openEpicFixture(EPIC_A);
@@ -1459,6 +1460,9 @@ describe("<TabStrip />", () => {
       epicId: EPIC_A.id,
       pinned: true,
       isLocalHome: false,
+      // A cloud-homed reading carries no host, so the mutation dispatches on
+      // the following client exactly as it did before the host rode along.
+      hostId: null,
     });
     expect(typeof firstCall[1]?.onSuccess).toBe("function");
     expect(toastTestState.messages).toEqual([
@@ -1473,6 +1477,7 @@ describe("<TabStrip />", () => {
       epicId: EPIC_A.id,
       pinned: false,
       isLocalHome: false,
+      hostId: null,
     });
   });
 
@@ -1480,6 +1485,7 @@ describe("<TabStrip />", () => {
     pinTestState.pinnedByEpicId.set(EPIC_A.id, {
       pinned: true,
       home: undefined,
+      hostId: null,
       pinnedKnown: true,
     });
     openEpicFixture(EPIC_A);
@@ -1501,6 +1507,7 @@ describe("<TabStrip />", () => {
     pinTestState.pinnedByEpicId.set(EPIC_A.id, {
       pinned: false,
       home: "local",
+      hostId: null,
       pinnedKnown: true,
     });
     openEpicFixture(EPIC_A);
@@ -1552,6 +1559,7 @@ describe("<TabStrip />", () => {
       pinTestState.pinnedByEpicId.set(EPIC_A.id, {
         pinned: false,
         home: "local",
+        hostId: null,
         pinnedKnown: true,
       });
       openEpicFixture(EPIC_A);
@@ -1569,6 +1577,7 @@ describe("<TabStrip />", () => {
         epicId: EPIC_A.id,
         pinned: true,
         isLocalHome: true,
+        hostId: null,
       });
 
       toastTestState.undo?.();
@@ -1577,13 +1586,89 @@ describe("<TabStrip />", () => {
         epicId: EPIC_A.id,
         pinned: false,
         isLocalHome: true,
+        hostId: null,
       });
+    });
+
+    /**
+     * The host half of the same dispatch: a local-homed reading names the host
+     * whose `epic.listTasks` page produced it, and THAT host - not the
+     * window's effective host - is where the pin write is sent. The Undo
+     * action is the case that forces the host into the VARIABLES rather than
+     * being read at dispatch time: the toast outlives the row, so by the time
+     * Undo fires there may be no reading left to re-read a host from.
+     */
+    it("sends the reading's own host into the dispatch and the Undo closure", async () => {
+      // The gate asks the DISPATCH host's negotiation, so the owning host is
+      // the one that has to have negotiated `@1.1` - see the refusal case
+      // below, where only the window's host has.
+      recordNegotiatedHostManifest("host-owning-epic-a", {
+        "epic.setPinned": { major: 1, minor: 1 },
+      });
+      pinTestState.pinnedByEpicId.set(EPIC_A.id, {
+        pinned: false,
+        home: "local",
+        hostId: "host-owning-epic-a",
+        pinnedKnown: true,
+      });
+      openEpicFixture(EPIC_A);
+      registerEpicHeader(EPIC_A, "owner");
+      const router = buildRouter("/epics/e-a/e-a");
+      render(<RouterProvider router={router} />);
+
+      fireEvent.contextMenu(await screen.findByTestId("tab-epic-e-a"));
+      fireEvent.click(await screen.findByTestId(`tab-pin-history-${EPIC_A.id}`));
+
+      expect(pinTestState.mutate.mock.calls[0]?.[0]).toEqual({
+        epicId: EPIC_A.id,
+        pinned: true,
+        isLocalHome: true,
+        hostId: "host-owning-epic-a",
+      });
+
+      // Drop the reading, then Undo: the host must come from the closure.
+      pinTestState.pinnedByEpicId.delete(EPIC_A.id);
+      toastTestState.undo?.();
+
+      expect(pinTestState.mutate).toHaveBeenNthCalledWith(2, {
+        epicId: EPIC_A.id,
+        pinned: false,
+        isLocalHome: true,
+        hostId: "host-owning-epic-a",
+      });
+    });
+
+    /**
+     * The falsifier for the host moving: the WINDOW's host has negotiated
+     * `@1.1` (the `beforeEach` records it) and the epic's own host has not, so
+     * a gate reading the window's host admits the write and a gate reading the
+     * dispatch host refuses it. Refusing is correct - the write is going to a
+     * host that never promised to serve it off local disk.
+     */
+    it("refuses when the epic's host has not negotiated, though the window's has", async () => {
+      pinTestState.pinnedByEpicId.set(EPIC_A.id, {
+        pinned: false,
+        home: "local",
+        hostId: "host-without-the-minor",
+        pinnedKnown: true,
+      });
+      openEpicFixture(EPIC_A);
+      registerEpicHeader(EPIC_A, "owner");
+      const router = buildRouter("/epics/e-a/e-a");
+      render(<RouterProvider router={router} />);
+
+      fireEvent.contextMenu(await screen.findByTestId("tab-epic-e-a"));
+      fireEvent.click(await screen.findByTestId(`tab-pin-history-${EPIC_A.id}`));
+
+      expect(pinTestState.mutate).not.toHaveBeenCalled();
+      expect(toastTestState.messages).toEqual([]);
     });
 
     it("does neither for a cloud-homed tab - no mutate, no toast", async () => {
       pinTestState.pinnedByEpicId.set(EPIC_A.id, {
         pinned: false,
         home: undefined,
+        hostId: null,
         pinnedKnown: true,
       });
       openEpicFixture(EPIC_A);
@@ -1611,6 +1696,7 @@ describe("<TabStrip />", () => {
       pinTestState.pinnedByEpicId.set(EPIC_A.id, {
         pinned: false,
         home: "local",
+        hostId: null,
         pinnedKnown: true,
       });
       openEpicFixture(EPIC_A);

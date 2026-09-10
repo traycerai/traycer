@@ -524,13 +524,45 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
     });
   }
 
+  /** Every version a subscribe PINNED, in order; `null` for a plain one. */
+  readonly subscribedVersions: Array<SchemaVersion | null> = [];
+
   override subscribe<Method extends keyof HostStreamRpcRegistry & string>(
     method: Method,
     params: ParamsOf<HostStreamRpcRegistry, Method>,
   ): IStreamSession {
+    return this.record(method, params, null);
+  }
+
+  /**
+   * MUST be overridden, not inherited.
+   *
+   * This mock subclasses the REAL `WsStreamClient`, so an un-overridden
+   * `subscribeAtVersion` runs the real implementation and dies on the
+   * `webSocketFactory` guard above. The failure then presents as the stream
+   * simply never being subscribed - which is indistinguishable from the
+   * feature being off, and is exactly how a selector-pinning production change
+   * reads as "activity never opens" in five unrelated-looking cases.
+   */
+  override subscribeAtVersion<
+    Method extends keyof HostStreamRpcRegistry & string,
+  >(
+    method: Method,
+    schemaVersion: SchemaVersion,
+    params: ParamsOf<HostStreamRpcRegistry, Method>,
+  ): IStreamSession {
+    return this.record(method, params, schemaVersion);
+  }
+
+  private record<Method extends keyof HostStreamRpcRegistry & string>(
+    method: Method,
+    params: ParamsOf<HostStreamRpcRegistry, Method>,
+    schemaVersion: SchemaVersion | null,
+  ): IStreamSession {
     const session = new MockStreamSession();
     session.openParams = params;
     this.subscribedMethods.push(method);
+    this.subscribedVersions.push(schemaVersion);
     this.openedSessions.push(session);
     const sessions = this.sessionsByMethod.get(method) ?? [];
     sessions.push(session);
@@ -924,10 +956,16 @@ const NOTIFICATION_HOST_IDS_UNDER_TEST = [
 /**
  * Every UNARY floor mixed mode admits on, staged together.
  *
- * All three, not just the two the mark-read path uses:
- * `useNotificationFeedModeFor` admits on the whole set, so omitting one drops
+ * The WHOLE set, not the subset any one path happens to use:
+ * `useNotificationFeedModeFor` admits on all of them, so omitting one drops
  * these cases into local mode and the failure surfaces as unrelated cloud
  * assertions rather than as a version problem.
+ *
+ * This list grows with the floor. `clearAll@1.1` is the fourth and was added
+ * a release after the first three - a new floor reads `null` here, which
+ * fails closed, so the tell is a suite that quietly stops testing mixed mode
+ * rather than one that reports a missing minor. Add the entry in the same
+ * change as the floor.
  */
 function stageNotificationPartitionFloors(): void {
   for (const hostId of NOTIFICATION_HOST_IDS_UNDER_TEST) {
@@ -935,6 +973,7 @@ function stageNotificationPartitionFloors(): void {
       "host.notifications.list": { major: 2, minor: 2 },
       "host.notifications.markAllRead": { major: 1, minor: 1 },
       "host.notifications.indicatorState": { major: 1, minor: 1 },
+      "host.notifications.clearAll": { major: 1, minor: 1 },
     });
   }
 }
@@ -5014,6 +5053,96 @@ describe("<NotificationsSessionProvider />", () => {
       // second pass through `settleCloudVerdictEdge` must return before ever
       // reaching `resetCloudRelaySession()` again.
       expect(resetSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("retained-principal signing-in interruption (openActivityLane dependency binding)", () => {
+    it("reopens agent activity after a same-account signing-in interruption that leaves every other input to openForCurrentUser unchanged", async () => {
+      // The RETAINED PRINCIPAL: signed in, then interrupted by a device-flow
+      // re-auth for the SAME account, established BEFORE mount.
+      // `useAuthStore.setSigningIn` (auth-store.ts) merges into the store
+      // rather than replacing it, so `profile` / `contextMetadata` - and
+      // therefore `userId` - survive the flip untouched.
+      //
+      // This is deliberately the transition that changes NONE of
+      // `openForCurrentUser`'s other captured inputs across the interruption:
+      // the host (`hostState.id`), the stream client (`streamState.client`,
+      // one `MockWsStreamClient` instance for the whole test - never
+      // reassigned), and every unary/stream negotiation
+      // (`stageNotificationPartitionFloors()` in `beforeEach` already staged
+      // this host's floors and nothing here disturbs them) all stay put. The
+      // only thing that moves is `status`, which sits in `openActivityLane`'s
+      // OWN dependency list but must also be threaded through
+      // `openForCurrentUser`'s - a caller that reads status only through the
+      // lane opener, never directly.
+      const queryClient = new QueryClient();
+      const streamClient = new MockWsStreamClient();
+      hostState.id = mockLocalHostEntry.hostId;
+      streamState.client = streamClient;
+      streamState.cloudFeedSupport = "supported";
+      // `@/hooks/host/use-host-client-for`'s mock (top of this file) calls
+      // `hostState.client.createRequester(target)` fresh on EVERY render,
+      // unlike the real `useHostClientFor`, which memoizes. That per-render
+      // identity change flows into `onFeedFrame`'s own deps
+      // (`servingHostClient`), so `onFeedFrame` - and, through it,
+      // `openForCurrentUser` - would be rebuilt on every render regardless of
+      // `openActivityLane`, masking exactly the staleness this case exists to
+      // catch. Pin `createRequester` to one stable instance so nothing but
+      // the auth transition below can invalidate `openForCurrentUser`.
+      // Narrowed into a local before use: `hostState.client` is nullable, and
+      // `vi.spyOn` on a possibly-null target is a type error rather than a
+      // runtime one - invisible to the runner, caught by the compile.
+      const spineClient = hostState.client;
+      if (spineClient === null) {
+        throw new Error("expected a bound host client for this case");
+      }
+      const stableServingHostClient =
+        spineClient.createRequester(mockLocalHostEntry);
+      vi.spyOn(spineClient, "createRequester").mockReturnValue(
+        stableServingHostClient,
+      );
+
+      act(() => {
+        resetAuth("signed-in", "alice@example.com", "alice@example.com");
+        useAuthStore.getState().setSigningIn("device");
+      });
+
+      render(
+        <QueryClientProvider client={queryClient}>
+          <NotificationsSessionProvider>
+            <div />
+          </NotificationsSessionProvider>
+        </QueryClientProvider>,
+      );
+
+      // Suspended for signing-in: `admitsLocalPlane` is false for that status,
+      // so the mount pass tears down (a no-op - nothing was open yet) and
+      // opens nothing at all.
+      expect(streamClient.subscribedMethods).toEqual([]);
+
+      act(() => {
+        resetAuth("signed-in", "alice@example.com", "alice@example.com");
+      });
+
+      // Positive premise first: the ordinary lanes reopen regardless of the
+      // bug under test - the host feed is not gated on `openActivityLane` at
+      // all, so a suite that only checked this would pass whether or not the
+      // fix is present.
+      await waitFor(() => {
+        expect(streamClient.subscribedMethods).toContain(
+          "host.notifications.feed.subscribe",
+        );
+      });
+      // The actual regression: with either dependency array missing
+      // `openActivityLane`, the reopen above runs through a STALE
+      // `openForCurrentUser` closure that still calls the `openActivityLane`
+      // captured while `status` was "signing-in" - which refuses on
+      // `!admitsLocalPlane("signing-in")` even though the account is signed
+      // in again right now - so agent activity silently never comes back for
+      // this session.
+      expect(streamClient.subscribedMethods).toContain(
+        "agent.activity.subscribe",
+      );
     });
   });
 });

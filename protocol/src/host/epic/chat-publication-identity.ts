@@ -37,7 +37,12 @@ import { z } from "zod";
  *
  * ## Degradation
  *
- * Optional and unreleased. A host without it answers `E_HOST_UNSUPPORTED`, and
+ * OPTIONAL, and released - the two are independent, which is the reading this
+ * line used to blur by saying "optional and unreleased". It sits in
+ * `released-baseline-surface.json` under `optionalUnary` at canonical `@1.0`,
+ * so `@1.0` is frozen; what "optional" buys is that a host may not implement
+ * it at all, not that its shape is still free to move.
+ * A host without it answers `E_HOST_UNSUPPORTED`, and
  * the client's contract is to fall back to folding on `chatId` equality - the
  * behaviour it had before this method existed. That is wrong only for a chat
  * that has actually forked, which is the case this method exists to fix, and

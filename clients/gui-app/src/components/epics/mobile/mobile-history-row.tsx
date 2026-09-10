@@ -115,7 +115,10 @@ export const MobileHistoryRow = memo(function MobileHistoryRow(
   // rule or the class survives at whichever of them was left out.
   const canDelete = canDeleteHistoryItem(item, cloudAuthorized);
   const canRename = canEditHistoryItemTitle(item, cloudAuthorized);
-  const localHomePinSupported = useEpicPinLocalHomeSupported();
+  // `null` for the same reason as the desktop row, and it dispatches through
+  // that row's handler: History's local-home readings come from the window's
+  // own host, so gate and dispatch name the same machine.
+  const localHomePinSupported = useEpicPinLocalHomeSupported(null);
   const pinUnavailableReason = historyPinUnavailableReason(
     item,
     cloudAuthorized,

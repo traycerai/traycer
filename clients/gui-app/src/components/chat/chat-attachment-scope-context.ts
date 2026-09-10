@@ -1,22 +1,37 @@
 import { createContext, use } from "react";
 
+import type { RequiredHostMethodVersion } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   ReadChatAttachmentRequest,
   ReadChatAttachmentResponse,
 } from "@traycer/protocol/host/epic/chat-attachment";
 
 /**
- * Exactly the slice of the host client a chat attachment read needs: this ONE
- * signal-bound method. Narrower than `HostClient` on purpose - the provider
- * hands its real client straight in (a generic `requestWithSignal` instantiates
- * to this), and a test can supply the one method instead of faking a whole
- * client class through an `as unknown` cast.
+ * Exactly the slice of the host client a chat attachment read needs: the two
+ * signal-bound dispatches. Narrower than `HostClient` on purpose - the provider
+ * hands its real client straight in (the generic methods instantiate to these),
+ * and a test can supply just these instead of faking a whole client class
+ * through an `as unknown` cast.
+ *
+ * BOTH are required, and the second is not optional convenience. A read that
+ * SELECTS the local-only plane must carry a version floor to the wire, because
+ * `plane` is an optional field an older peer strips - so a client that could
+ * only offer the plain dispatch would silently restore the cloud fallback the
+ * selector exists to refuse. Declaring one and calling the other is how that
+ * became a type error rather than a runtime surprise; found by the test agent
+ * for this change, because vitest does not type-check.
  */
 export interface ChatAttachmentReadClient {
   requestWithSignal(
     method: "epic.readChatAttachment",
     params: ReadChatAttachmentRequest,
     signal: AbortSignal | undefined,
+  ): Promise<ReadChatAttachmentResponse>;
+  requestWithSignalRequiringHostMethodVersion(
+    method: "epic.readChatAttachment",
+    params: ReadChatAttachmentRequest,
+    signal: AbortSignal | undefined,
+    requiredHostMethodVersion: RequiredHostMethodVersion,
   ): Promise<ReadChatAttachmentResponse>;
 }
 

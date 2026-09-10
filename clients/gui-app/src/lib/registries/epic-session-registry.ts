@@ -430,6 +430,52 @@ export function useLocalHomedOpenEpicIds(
   );
 }
 
+function projectLocalHomedEpicHostIds(
+  canonicalEpicIds: ReadonlyArray<string>,
+): LiveSessionSnapshotCache<ReadonlyMap<string, string>> {
+  const pairs: Array<readonly [string, string]> = [];
+  for (const epicId of canonicalEpicIds) {
+    if (!isLocalHomedLiveEpic(epicId)) continue;
+    const handle = registry.peek(epicId);
+    const hostId = handle === null ? null : getEpicSessionHandleHostId(handle);
+    // A local-homed epic whose session has no serving host is skipped rather
+    // than paired with a placeholder: the map's whole purpose is to name a host
+    // that can be ASKED, and an entry nobody can query would turn into a
+    // request against `null`.
+    if (hostId !== null) pairs.push([epicId, hostId]);
+  }
+  return {
+    signature: JSON.stringify(pairs),
+    snapshot: new Map(pairs),
+  };
+}
+
+const EMPTY_LOCAL_HOMED_EPIC_HOST_IDS: ReadonlyMap<string, string> = new Map();
+
+/**
+ * Which of `epicIds` a live session reports as local-homed, paired with the
+ * host whose durable registry holds it.
+ *
+ * {@link useLocalHomedOpenEpicIds} answers the same population as a bare set,
+ * which is all a render gate needs. This one exists because a PIN READING has
+ * to be fetched, and only the owning host can serve it: the pin for a
+ * local-homed epic lives in that host's `local_epic.pinnedByUserId`, not in the
+ * cloud, so "which epics" is not enough - the caller needs "and from where".
+ *
+ * Returned as a Map rather than two parallel reads so the id and its host
+ * cannot be assembled from different snapshots. A session that re-points to
+ * another host moves both halves in one emission.
+ */
+export function useLocalHomedOpenEpicHostIds(
+  epicIds: ReadonlyArray<string>,
+): ReadonlyMap<string, string> {
+  return useEpicReadLiveSessionSnapshot(
+    epicIds,
+    projectLocalHomedEpicHostIds,
+    () => EMPTY_LOCAL_HOMED_EPIC_HOST_IDS,
+  );
+}
+
 /**
  * What a live session can say RIGHT NOW about where one epic is durable.
  *
@@ -497,7 +543,15 @@ function projectEpicSessionHostId(
   const [epicId] = canonicalEpicIds;
   const handle = epicId === undefined ? null : registry.peek(epicId);
   const hostId = handle === null ? null : getEpicSessionHandleHostId(handle);
-  return { signature: hostId ?? " none", snapshot: hostId };
+  // `\u0000none` as the ESCAPE, not a raw NUL byte. A literal NUL in source
+  // makes ripgrep treat the whole file as binary and skip it on a directory
+  // walk - so every later sweep of gui-app would silently miss this file,
+  // which is how a one-character slip becomes an invisible hole in every
+  // class sweep. The sentinel itself is deliberate: a host id can be any
+  // opaque string including "none", and `\u0000` cannot occur in one, so this
+  // distinguishes "no session host" from a host named `none`. Same convention
+  // as the epic-id signature separator above.
+  return { signature: hostId ?? "\u0000none", snapshot: hostId };
 }
 
 /**

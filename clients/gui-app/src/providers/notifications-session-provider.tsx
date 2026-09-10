@@ -1181,6 +1181,18 @@ function NotificationsSessionBody(
       onPresenceChanged,
       onHostStreamOpened,
       activityServesLocalOnly,
+      // CALLED at the activity-lane open above, so it belongs here. Omitting
+      // it did not merely risk staleness in the abstract: this callback then
+      // captures whichever `openActivityLane` existed when the OTHER deps last
+      // changed, and a retained-principal transition (`signing-in` back to
+      // `signed-in` for the same account) changes none of them - so the host
+      // feed reopens while the captured lane opener still holds the
+      // `signing-in` reading and agent activity never comes back.
+      //
+      // `activityServesLocalOnly` above is NOT a substitute. It is one input to
+      // that opener, and listing an input while omitting the function is
+      // precisely the pattern that looks correct and refreshes nothing.
+      openActivityLane,
     ],
   );
 
@@ -1377,6 +1389,13 @@ function NotificationsSessionBody(
     markHostReplicaDisconnected,
     openForCurrentUser,
     notificationFeedMode,
+    // The second omission of the same shape, and the sharper one: this effect
+    // calls the lane opener precisely BECAUSE the activity admission settles
+    // later than every other input here (see the note above the call). Leaving
+    // it out of the deps meant the pass that was supposed to notice the
+    // admission arriving could run a closure captured before it did - the
+    // effect existing for a late signal while holding an early reading of it.
+    openActivityLane,
   ]);
 
   useEffect(() => {

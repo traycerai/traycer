@@ -45,3 +45,50 @@ export function epicTabLocalHomeListQueryOptions(
       }),
   });
 }
+
+/**
+ * The same local-first list boundary, read for a PIN READING rather than for the
+ * reconciler's exemption.
+ *
+ * Why the list and not `epic.getTaskContexts`: the context batch is gated on the
+ * cloud verdict (it can reach the account's servers), so under an unverified
+ * session it answers nothing - and an unverified session with a local-homed epic
+ * is exactly the population whose pin this has to report. `epic.listTasks` is
+ * the local-first line the same session is already admitted on.
+ *
+ * Why the FIRST page is sufficient, and not a guess: a `@1.6` host injects its
+ * synthesized local rows on the **cursorless page only**, exempt from cursor
+ * paging and from the cloud `limit`, deduped by epic id
+ * (`epic-list-tasks-resolver.ts`). So one cursorless request per host returns
+ * every local-homed row that host has, whatever the account's history size.
+ *
+ * Separate from {@link epicTabLocalHomeListQueryOptions} in key and in purpose.
+ * The reconciler's entry is keyed to one destructive run and must fail closed
+ * against a later principal; this one is an ordinary reactive read whose
+ * staleness costs a stale pin glyph. Sharing its cache entry would tie a
+ * tab-strip render to a reconciliation run's lifetime.
+ */
+export function epicPinReadingListQueryOptions(args: {
+  readonly hostId: string;
+  readonly userId: string;
+  readonly params: ListCloudTasksRequest;
+}) {
+  return queryOptions<ListTasksResponse>({
+    queryKey: [
+      ...queryKeys.hostMethod<HostRpcRegistry, typeof LOCAL_HOME_LIST_METHOD>(
+        args.hostId,
+        LOCAL_HOME_LIST_METHOD,
+        args.params,
+      ),
+      args.userId,
+      "pin-reading",
+    ],
+    queryFn: ({ signal }) =>
+      fetchCloudEpicTasksFirstPageByHostId(args.hostId, args.userId, {
+        request: args.params,
+        abortSignal: signal,
+        localFirstPhase: undefined,
+        requestContextPolicy: "require-current",
+      }),
+  });
+}

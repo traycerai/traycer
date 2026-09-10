@@ -375,6 +375,57 @@ describe("EpicRouteTabSync recency bounded wait (7d521991d)", () => {
     expect(recordViewed).not.toHaveBeenCalled();
   });
 
+  it("expires an overdue deadline even when the VERDICT recovers", async () => {
+    // The reviewer's case, and the one my first repair missed. The guard tested
+    // `!cloudAuthorized`, so a deadline that passed while unverified stopped
+    // being expired the moment the verdict came back: the guard fell through and
+    // the cloud branch recorded, stamping the RECOVERY time as the view time.
+    // That is the defect the latch was built for, reached through the fix for
+    // its sibling. An overdue deadline is expired, never decided.
+    seedUnverifiedAuth();
+
+    await act(async () => {
+      renderRoute();
+    });
+    expect(recordViewed).not.toHaveBeenCalled();
+
+    act(() => {
+      vi.setSystemTime(Date.now() + RECENCY_HOME_ANSWER_WAIT_MS + 60_000);
+    });
+    act(() => {
+      seedSignedInAuth();
+    });
+
+    expect(recordViewed).not.toHaveBeenCalled();
+    await act(async () => {
+      vi.runOnlyPendingTimers();
+    });
+    expect(recordViewed).not.toHaveBeenCalled();
+  });
+
+  it("expires an overdue deadline when the verdict recovers WITH a local answer", async () => {
+    // The second arrangement, because the two arrive through different
+    // branches: a recovered verdict alone lands on `cloudAuthorized`, while a
+    // verdict plus a local home also satisfies `homeReading === "local"`. Either
+    // would have recorded past the bound, and `isLocalHome: true` would have
+    // made it look like the legitimate carve-out rather than a late write.
+    seedUnverifiedAuth();
+
+    await act(async () => {
+      renderRoute();
+    });
+
+    act(() => {
+      vi.setSystemTime(Date.now() + RECENCY_HOME_ANSWER_WAIT_MS + 60_000);
+    });
+    act(() => {
+      homeReadingStore.set("local");
+      seedSignedInAuth();
+    });
+
+    expect(recordViewed).not.toHaveBeenCalled();
+  });
+
   it("still records a `local` answer that arrives INSIDE the bound with the clock moved", async () => {
     // The control for the row above, and it is doing real work: if the publish
     // edge compared the clock wrongly - a flipped inequality, or a bound of

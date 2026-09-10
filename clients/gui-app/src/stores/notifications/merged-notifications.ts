@@ -1,7 +1,10 @@
 import { useCallback, useMemo } from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostRpcError,
+  type RequiredHostMethodVersion,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
   authorizesCloudCapability,
@@ -64,6 +67,10 @@ import {
 } from "@/stores/notifications/cloud-notifications-store";
 import { requestCloudEntityRead } from "@/lib/notifications/cloud-entity-read-driver";
 import {
+  NOTIFICATIONS_PARTITIONED_CLEAR_ALL_MINOR,
+  NOTIFICATIONS_PARTITIONED_LIST_MAJOR,
+  NOTIFICATIONS_PARTITIONED_LIST_MINOR,
+  NOTIFICATIONS_PARTITIONED_MARK_ALL_READ_MINOR,
   useNotificationFeedMode,
   useNotificationFeedModeSettling,
 } from "@/lib/notifications/notification-feed-mode";
@@ -752,6 +759,39 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
   // See `HeldNotificationFeedModeResult.settling`: partition-dependent unary
   // calls wait while a held `cloud` host is re-negotiating.
   const feedModeSettling = useNotificationFeedModeSettling();
+  /**
+   * ONE reading of "does this call name the local partition?", spent by every
+   * request below that attaches `home` AND by the dispatch floors that some of
+   * them claim for it.
+   *
+   * Hoisted here rather than repeated per call because a floor derived from a
+   * second copy of this condition is a floor that can disagree with the frame
+   * it is supposed to be about - which is the whole defect the floors exist to
+   * close, reintroduced one layer up.
+   */
+  const sendsHomeSelector = feedMode === "cloud";
+  /**
+   * The `list` floor, written ONCE for the three pagination mutations below.
+   *
+   * They are byte-identical in this respect, and three copies of a floor is
+   * three chances to add a fourth pager without one. `list` is the member this
+   * class nearly lost: its `@2.2 -> @1.0` downgrade refuses a request carrying
+   * `home`, which reads like protection until you notice a downgrade bridges
+   * MAJORS. A rollback to `@2.1` or `@2.0` never reaches it - the transport
+   * projects the params through the older MINOR's plain `z.object`, which
+   * strips `home` and succeeds - so the peer merges whole-origin rows into the
+   * cloud lane and answers 200.
+   */
+  const partitionedListFloor = (): RequiredHostMethodVersion | null =>
+    sendsHomeSelector
+      ? {
+          method: "host.notifications.list",
+          version: {
+            major: NOTIFICATIONS_PARTITIONED_LIST_MAJOR,
+            minor: NOTIFICATIONS_PARTITIONED_LIST_MINOR,
+          },
+        }
+      : null;
   // Bound to the host that OWNS the notification streams, not the app-wide
   // active host. Every mutation below addresses a row that came from that
   // host's origin store (or its relayed cloud lane), so routing them anywhere
@@ -977,8 +1017,31 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
     method: "host.notifications.markAllRead",
     mapVariables: (variables) => ({
       beforeUpdatedAt: variables.beforeUpdatedAt,
-      ...(feedMode === "cloud" ? { home: "local" as const } : {}),
+      ...(sendsHomeSelector ? { home: "local" as const } : {}),
     }),
+    // Same class as `clearHostAll` below, and for the same structural reason:
+    // `markAllRead` has an EMPTY `downgradePathsFromLatest`, so a peer that
+    // came back below `@1.1` parses this against its frozen `@1.0` schema and
+    // STRIPS `home` rather than refusing it - marking cloud-home rows read
+    // that this session was never shown. The settling hold closes the window
+    // the renderer can observe; only a dispatch-bound floor closes the one
+    // between a settled render and the frame being written.
+    //
+    // Its sibling `list` carries the same floor, three pagers down. It was
+    // briefly excluded here on the grounds that `@2.2` REFUSES a downgrade
+    // carrying `home`, which is true and irrelevant: a downgrade path bridges
+    // MAJORS, and a rollback to `@2.1` never reaches one. Left as written,
+    // that sentence would have contradicted the floors two functions away.
+    requiredHostMethodVersion: () =>
+      sendsHomeSelector
+        ? {
+            method: "host.notifications.markAllRead",
+            version: {
+              major: 1,
+              minor: NOTIFICATIONS_PARTITIONED_MARK_ALL_READ_MINOR,
+            },
+          }
+        : null,
     options: {
       mutationKey: notificationsMutationKeys.markAllRead(),
       onMutate: () => captureHostNotificationMutationContext(client),
@@ -1018,8 +1081,32 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
     // instead of silently taking the whole origin.
     mapVariables: (variables) => ({
       beforeUpdatedAt: variables.beforeUpdatedAt,
-      ...(feedMode === "cloud" ? { home: "local" as const } : {}),
+      ...(sendsHomeSelector ? { home: "local" as const } : {}),
     }),
+    // The floor is owed exactly when the frame CARRIES the selector, so it
+    // reads the same predicate `mapVariables` does rather than re-deriving
+    // the condition - two copies of "are we sending `home`?" is how a frame
+    // ends up carrying a selector no floor was claimed for.
+    //
+    // Why a dispatch floor when the action already holds through settling:
+    // the render guard closes the interval the renderer can OBSERVE. A host
+    // process can still be replaced between a settled render and the frame
+    // being written, which is the gap `use-host-query.ts` documents for
+    // `epic.create`. On an `@1.0` peer `home` is an OPTIONAL field, so the
+    // replacement STRIPS it and answers 200 - a whole-origin delete wearing
+    // the shape of a partitioned one, and the least recoverable of the four
+    // selectors to get wrong. Refusing before send is the only place that
+    // answer can still be prevented.
+    requiredHostMethodVersion: () =>
+      sendsHomeSelector
+        ? {
+            method: "host.notifications.clearAll",
+            version: {
+              major: 1,
+              minor: NOTIFICATIONS_PARTITIONED_CLEAR_ALL_MINOR,
+            },
+          }
+        : null,
     options: {
       mutationKey: notificationsMutationKeys.clearAll(),
       onMutate: () => captureHostNotificationMutationContext(client),
@@ -1051,8 +1138,9 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       filter: "recent",
       limit: HOST_PAGE_LIMIT,
       cursor: variables.cursor,
-      ...(feedMode === "cloud" ? { home: "local" as const } : {}),
+      ...(sendsHomeSelector ? { home: "local" as const } : {}),
     }),
+    requiredHostMethodVersion: partitionedListFloor,
     options: {
       mutationKey: notificationsMutationKeys.loadMore(),
       onMutate: () => beginHostNotificationMutation(client, "recent"),
@@ -1097,8 +1185,9 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       filter: "attention",
       limit: HOST_PAGE_LIMIT,
       cursor: variables.cursor,
-      ...(feedMode === "cloud" ? { home: "local" as const } : {}),
+      ...(sendsHomeSelector ? { home: "local" as const } : {}),
     }),
+    requiredHostMethodVersion: partitionedListFloor,
     options: {
       mutationKey: notificationsMutationKeys.loadMoreAttention(),
       onMutate: () => beginHostNotificationMutation(client, "attention"),
@@ -1149,8 +1238,9 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       filter: "unreadRecent",
       limit: HOST_PAGE_LIMIT,
       cursor: variables.cursor ?? undefined,
-      ...(feedMode === "cloud" ? { home: "local" as const } : {}),
+      ...(sendsHomeSelector ? { home: "local" as const } : {}),
     }),
+    requiredHostMethodVersion: partitionedListFloor,
     options: {
       mutationKey: notificationsMutationKeys.loadMoreUnreadRecent(),
       onMutate: () => beginHostNotificationMutation(client, "unreadRecent"),
