@@ -34,12 +34,13 @@
 
             <!--
                 The device-approval page fires traycer://auth/callback after
-                the user approves the sign-in. Its ONLY job is to bring this
-                (singleTask) activity back to the foreground - the WebView's
-                visibilitychange resume edge is the payload-free return signal
-                (see mobile-runner-host.ts onAuthCallback), and the token
-                always arrives through the device-flow poll. BROWSABLE is what
-                lets the browser navigate to the scheme; the iOS half is
+                the user approves the sign-in. It carries no payload - the
+                token always arrives through the device-flow poll. Bringing
+                this (singleTask) activity forward finishes the sign-in
+                Custom Tab above it (AuthSessionPlugin.java), and the App
+                plugin's appUrlOpen for this URL is the return signal that
+                nudges the poll (src/auth-sheet.ts). BROWSABLE is what lets
+                the browser navigate to the scheme; the iOS half is
                 CFBundleURLTypes in ios/App/App/Info.plist.
             -->
             <intent-filter>
