@@ -164,7 +164,14 @@ export function useEpicSetPinned() {
         // `@1.1` and then admitted a write that went to it for an epic it did
         // not own.
         const dispatchClient = clientForVariables(variables);
-        const hostId = dispatchClient?.getActiveHostId() ?? null;
+        // The NAMED host first, for the same reason `useEpicRecordViewed`
+        // gives: an id-pinned requester answers `null` while its row is
+        // unresolved, `useHostMutation` awaits this callback before it
+        // dispatches, and a row landing in that gap would let the request go
+        // out under a context with no host - skipping the optimistic patch
+        // and the invalidation for a pin that happened.
+        const hostId =
+          variables.hostId ?? dispatchClient?.getActiveHostId() ?? null;
         // Before the optimistic patch: a refused dispatch reaches `onError`
         // with no context, and the inverse patch must have nothing to undo.
         if (!epicPinDispatchAdmitted(variables, hostId)) {

@@ -746,6 +746,16 @@ function NotificationsSessionBody(
       const streamHostId = servingHostId;
       if (lease === null || servingStreamClient === null) return;
       if (streamHostId === null) return;
+      // The lease and the serving host are read from two places that move on
+      // different edges. The verdict-loss caller runs at the TOP of the main
+      // effect, before that effect's host-switch teardown releases the lease -
+      // so on a pass where the serving host changed AND the verdict was lost,
+      // the lease still belongs to the departed host. Opening on it would
+      // drive the new host's stream with the old host's reconnect engine and
+      // retire the wrong host's epoch health on close. Refusing here is safe:
+      // the teardown below the caller runs on this same pass and the session
+      // opener reopens the lane against a lease acquired for the new host.
+      if (lease.hostId !== streamHostId) return;
       activityDisposerRef.current = openAgentActivityStream({
         hostId: streamHostId,
         reconnectEngine: lease.reconnect,

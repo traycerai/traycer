@@ -1965,15 +1965,33 @@ class StreamSession<
     if (read === undefined) {
       return;
     }
+    this.pushCloudVerdictValue(read());
+  }
+
+  /**
+   * The gated push for a verdict the caller has ALREADY read. Same phase and
+   * socket gates as {@link pushCloudVerdictUpdate}; split so the handshake's
+   * post-subscribe reconciliation sends the exact value it compared instead of
+   * reading the verdict a second time.
+   */
+  private pushCloudVerdictValue(cloudAuthorized: boolean): void {
+    if (this.disposed) {
+      return;
+    }
+    if (this.phase !== "subscribed" || !this.supportsCloudVerdictUpdate) {
+      return;
+    }
     const socket = this.activeSocket;
     if (socket === null) {
       return;
     }
-    this.sendCloudVerdictFrame(socket, read());
+    this.sendCloudVerdictFrame(socket, cloudAuthorized);
   }
 
   /**
-   * Writes the verdict frame on `socket`, with no phase gate.
+   * Writes the verdict frame on `socket`, with no phase gate. Returns whether
+   * the frame went out; on `false` the socket has already been torn down and
+   * the reconnect scheduled, so a caller mid-handshake must stop there.
    *
    * Split out for the handshake, which has to correct a stale open-frame
    * verdict BEFORE the subscribe frame goes out - and at that moment the phase
@@ -1984,14 +2002,16 @@ class StreamSession<
   private sendCloudVerdictFrame(
     socket: StreamWebSocketLike,
     cloudAuthorized: boolean,
-  ): void {
+  ): boolean {
     const frame: ClientStreamCloudVerdictUpdateFrame = {
       kind: "cloudVerdictUpdate",
       cloudAuthorized,
     };
     if (!this.sendControlText(socket, frame)) {
       this.onSendFailure(socket);
+      return false;
     }
+    return true;
   }
 
   /**
@@ -2521,7 +2541,14 @@ class StreamSession<
     if (this.supportsCloudVerdictUpdate) {
       const current = this.config.cloudAuthorized?.();
       if (current !== undefined && current !== this.openFrameCloudAuthorized) {
-        this.sendCloudVerdictFrame(socket, current);
+        // A failed write has already torn the socket down and scheduled the
+        // reconnect (`onSendFailure`); the subscribe frame below would go to
+        // a dead socket and the session must not be marked `subscribed` on
+        // it. The next open frame carries the live verdict, so
+        // `openFrameCloudAuthorized` is deliberately left as it was.
+        if (!this.sendCloudVerdictFrame(socket, current)) {
+          return;
+        }
         this.openFrameCloudAuthorized = current;
       }
     }
@@ -2592,7 +2619,10 @@ class StreamSession<
       const current = this.config.cloudAuthorized?.();
       if (current !== undefined && current !== this.openFrameCloudAuthorized) {
         this.openFrameCloudAuthorized = current;
-        this.pushCloudVerdictUpdate();
+        // The value COMPARED is the value SENT. Nothing between the read and
+        // the write is re-entrant today; pushing the read value rather than
+        // re-reading keeps that true if something ever is.
+        this.pushCloudVerdictValue(current);
       }
     }
     // Reported last, once the connection can actually carry a provision frame:

@@ -10,7 +10,10 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
+import {
+  selectHasActiveInitialChatHandoffForEpic,
+  useInitialChatHandoffStore,
+} from "@/stores/epics/initial-chat-handoff-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
@@ -2565,6 +2568,21 @@ describe("useLandingComposerActions", () => {
     // refusal.
     expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
     expect(landingMocks.navigate).not.toHaveBeenCalled();
+    // The initial-chat handoff registered at submit time must not outlive
+    // the epic it names: a REFUSED create now settles it to `failed` instead
+    // of leaving it `pending` forever.
+    const refusedEpicId = createdEpicIdFromRequests();
+    const handoffAfterRefusal = Object.values(
+      useInitialChatHandoffStore.getState().handoffs,
+    )[0];
+    expect(handoffAfterRefusal.status).toBe("failed");
+    expect(handoffAfterRefusal.failureReason).toBe("Couldn't create the epic.");
+    expect(
+      selectHasActiveInitialChatHandoffForEpic(
+        useInitialChatHandoffStore.getState(),
+        refusedEpicId,
+      ),
+    ).toBe(false);
     queryClient.clear();
   });
 

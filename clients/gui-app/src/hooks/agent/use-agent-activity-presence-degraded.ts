@@ -106,9 +106,10 @@ export function useAgentActivityPresenceDegraded(): AgentActivityPresenceDegrade
       ? null
       : selectPresenceDegradedReason(
           state.byHost.get(servingHostId) ?? null,
-          // Whether ANY host has a stream slice at all. See the absent-slice
-          // arm below for why the distinction is the whole of this argument.
-          state.byHost.size > 0,
+          // The stream slice(s) opened against OTHER hosts. See the
+          // absent-slice arm below for why the answer for a missing serving
+          // slice is read off these.
+          alternateStreamSlices(state.byHost, servingHostId),
         ),
   );
   const [sustained, setSustained] =
@@ -130,16 +131,31 @@ export function useAgentActivityPresenceDegraded(): AgentActivityPresenceDegrade
   return reason !== null && sustained === reason ? reason : null;
 }
 
+interface PresenceStreamSlice {
+  readonly connectionStatus: StreamConnectionStatus;
+  readonly cloudSyncStatus: AgentActivityCloudSyncStatus | null;
+}
+
+/**
+ * Every slice the store holds for a host OTHER than the serving one, in map
+ * order. Exactly one is populated today (see the single-stream note in the
+ * hook); the array shape is so that day's second stream is a visible case
+ * below rather than a silent one.
+ */
+function alternateStreamSlices(
+  byHost: ReadonlyMap<string, PresenceStreamSlice>,
+  servingHostId: string,
+): ReadonlyArray<PresenceStreamSlice> {
+  const slices: PresenceStreamSlice[] = [];
+  for (const [hostId, slice] of byHost) {
+    if (hostId !== servingHostId) slices.push(slice);
+  }
+  return slices;
+}
+
 function selectPresenceDegradedReason(
-  host: {
-    readonly connectionStatus: StreamConnectionStatus;
-    readonly cloudSyncStatus: AgentActivityCloudSyncStatus | null;
-  } | null,
-  /**
-   * Whether the store holds a slice for ANY host - i.e. whether an activity
-   * stream has been opened at all in this app.
-   */
-  someHostHasAStream: boolean,
+  host: PresenceStreamSlice | null,
+  alternates: ReadonlyArray<PresenceStreamSlice>,
 ): AgentActivityPresenceDegradedReason | null {
   if (host === null) {
     // AN ABSENT SLICE IS TWO DIFFERENT FACTS, and reading both as `stream-down`
@@ -151,19 +167,34 @@ function selectPresenceDegradedReason(
     // FOR this host, and the two reasons that can be true are:
     //
     //  - some OTHER host's slice exists, so a stream IS running and this host
-    //    is simply not the one it was opened against. Nothing here is degraded
-    //    and this hook has NO CLAIM to make: the Epic's activity arrives on
-    //    whatever stream is serving, and its health is that slice's story.
+    //    is simply not the one it was opened against. The Epic's activity
+    //    arrives on whatever stream is serving, so its health is THAT slice's
+    //    story - read off it, not assumed. Reading it as "no claim" hid a
+    //    `closed` or `disconnected` alternate slice behind a healthy pill:
+    //    the one stream in the app was down and this said nothing.
     //  - no slice exists anywhere: nothing has opened a stream, pre-boot or
     //    otherwise. `stream-down` is the honest reading then - live agent
     //    activity really is unavailable - and the grace above covers the
     //    cold-start window where it is merely early.
-    return someHostHasAStream ? null : "stream-down";
+    //
+    // Several alternate slices would mean a second stream exists, and which
+    // one carries this Epic is exactly the caller-supplied identity the
+    // single-stream note says that day needs; until it arrives there is no
+    // single slice to read and no claim to make.
+    const alternate = alternates.length === 1 ? alternates[0] : undefined;
+    if (alternate !== undefined) return sliceDegradedReason(alternate);
+    return alternates.length === 0 ? "stream-down" : null;
   }
-  if (host.connectionStatus !== "open") return "stream-down";
+  return sliceDegradedReason(host);
+}
+
+function sliceDegradedReason(
+  slice: PresenceStreamSlice,
+): AgentActivityPresenceDegradedReason | null {
+  if (slice.connectionStatus !== "open") return "stream-down";
   if (
-    host.cloudSyncStatus === "reconnecting" ||
-    host.cloudSyncStatus === "disconnected"
+    slice.cloudSyncStatus === "reconnecting" ||
+    slice.cloudSyncStatus === "disconnected"
   ) {
     return "cloud-down";
   }

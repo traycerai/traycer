@@ -527,13 +527,20 @@ export function useLandingComposerActions(
           // gates on refusal, so those racing opens WILL fail; that is correct
           // and must not be narrated twice.
           //
-          // Torn down exactly like the retired case, which is the same
-          // situation from the other side: local state was staged for an epic
-          // that will not exist. The draft and the staged worktree intent
-          // survive on purpose, so a repaired store makes resubmitting work.
-          // `useEpicCreateForClient.onSuccess` owns the user-facing message.
+          // Settled exactly like the rejection arm below, which is the same
+          // fact from the other side: local state was staged for an epic that
+          // will not exist, and that includes the handoff registered above -
+          // left `pending` it would outlive the epic it names. The draft and
+          // the staged worktree intent survive on purpose, so a repaired store
+          // makes resubmitting work. `useEpicCreateForClient.onSuccess` owns
+          // the user-facing message.
           if (response.refusal !== undefined) {
-            discardRetiredLandingEpic({ epicId, chatId });
+            settleUnlandedLandingEpic({
+              epicId,
+              chatId,
+              hostId: activeHostId,
+              userId,
+            });
             draftRuntimeRegistry.complete(attempt);
             return;
           }
@@ -602,17 +609,14 @@ export function useLandingComposerActions(
             return;
           }
           // The epic never landed on the host: drop the create marker so its
-          // orphaned tab is no longer exempt from existence reconciliation.
-          unmarkEpicCreatedThisSession(epicId);
-          useComposerRunSettingsStore.getState().clearEpicRunSettings([epicId]);
-          useEpicCanvasStore.getState().clearEpicTitlePending(epicId);
-          useEpicCanvasStore.getState().clearChatTitlePending(chatId);
-          useInitialChatHandoffStore
-            .getState()
-            .markFailed(
-              { hostId: activeHostId, userId, epicId },
-              "Couldn't create the epic.",
-            );
+          // orphaned tab is no longer exempt from existence reconciliation,
+          // and settle the handoff.
+          settleUnlandedLandingEpic({
+            epicId,
+            chatId,
+            hostId: activeHostId,
+            userId,
+          });
           draftRuntimeRegistry.complete(attempt);
         });
     },
@@ -1124,6 +1128,35 @@ function discardRetiredLandingEpic(input: {
   useComposerRunSettingsStore.getState().clearEpicRunSettings([input.epicId]);
   useEpicCanvasStore.getState().clearEpicTitlePending(input.epicId);
   useEpicCanvasStore.getState().clearChatTitlePending(input.chatId);
+}
+
+/**
+ * The epic never landed on the host - a REJECTED or a REFUSED create - for an
+ * attempt that is still current.
+ *
+ * Everything {@link discardRetiredLandingEpic} drops, plus the one settlement
+ * the retired arm must not perform: the initial-chat handoff registered before
+ * the request moves to `failed`. That entry is persisted and, while `pending`,
+ * `selectHasActiveInitialChatHandoffForEpic` counts it as a reason to keep the
+ * epic's tab from reconciliation - so left alone it outlives the epic it names.
+ * The retired arm skips this because the identity bridge already tore the
+ * entry down and `markFailed` would re-insert one under the departed identity;
+ * a refusal has no such bridge, which is why it takes THIS exit and not that
+ * one. One function for both arms so the two cannot drift again.
+ */
+function settleUnlandedLandingEpic(input: {
+  readonly epicId: string;
+  readonly chatId: string;
+  readonly hostId: string;
+  readonly userId: string | null;
+}): void {
+  discardRetiredLandingEpic(input);
+  useInitialChatHandoffStore
+    .getState()
+    .markFailed(
+      { hostId: input.hostId, userId: input.userId, epicId: input.epicId },
+      "Couldn't create the epic.",
+    );
 }
 
 interface LandingWorkspaceContext {

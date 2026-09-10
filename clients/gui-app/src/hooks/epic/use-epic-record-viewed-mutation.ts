@@ -110,7 +110,15 @@ export function useEpicRecordViewed(hostId: string | null) {
           throw new Error(EPIC_RECORD_VIEWED_UNAUTHORIZED_MESSAGE);
         }
         return {
-          hostId: client?.getActiveHostId() ?? null,
+          // The NAMED host first. An id-pinned requester reports
+          // `getActiveHostId() === null` while its row is unresolved, and
+          // `useHostMutation` awaits this callback before it dispatches - so a
+          // row that lands in that gap lets the request succeed against a
+          // context whose `hostId` is `null`, and `onSuccess` then skips the
+          // recency invalidation for a write that happened. The caller's id is
+          // the host the request is addressed to whether or not the row has
+          // arrived; the client's own reading is only for the following case.
+          hostId: hostId ?? client?.getActiveHostId() ?? null,
           userId: client?.getRequestContextUserId() ?? null,
         };
       },

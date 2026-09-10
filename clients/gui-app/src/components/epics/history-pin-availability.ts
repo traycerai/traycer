@@ -107,8 +107,12 @@ export function historyPinControlLabel(input: {
   if (input.unavailableReason === "preserved-orphan") {
     return `Pinning ${input.displayTitle} is unavailable; its cloud copy was deleted and only the connected device's edits remain`;
   }
+  // The remedy is a HOST UPDATE, not sign-in or sync: `local-home` means the
+  // serving host has not negotiated `epic.setPinned@1.1` (see
+  // `historyPinUnavailableReason`), and copy that sent the user to the cloud
+  // named a fix that changes nothing.
   if (input.unavailableReason === "local-home") {
-    return `Pinning ${input.displayTitle} needs cloud sync; it is stored on the connected device`;
+    return `Pinning ${input.displayTitle} needs a newer host on the connected device; it is stored there`;
   }
   if (input.unavailableReason === "phase") {
     return `Pinning ${input.displayTitle} is unavailable for phases`;
@@ -128,7 +132,7 @@ export function historyPinUnavailableTooltip(
     return "This epic's cloud copy was deleted. Only the connected device's edits remain, so it can't be pinned.";
   }
   if (reason === "local-home") {
-    return "This epic is stored on the connected device. Pinning needs cloud sync.";
+    return "This epic is stored on the connected device. Pinning it needs a newer host version there; update that device's Traycer host.";
   }
   if (reason === "unverified-session") {
     return "Your sign-in couldn't be confirmed, so cloud changes are paused. Pinning will work again once your sign-in is confirmed.";

@@ -677,7 +677,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       renderPanel("embedded", "/");
 
       const pin = await screen.findByRole("button", {
-        name: "Pinning Local only epic needs cloud sync; it is stored on the connected device",
+        name: "Pinning Local only epic needs a newer host on the connected device; it is stored there",
       });
       expect(pin.getAttribute("aria-disabled")).toBe("true");
 

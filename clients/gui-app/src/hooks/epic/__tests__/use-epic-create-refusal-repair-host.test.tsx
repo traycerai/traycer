@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, renderHook } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+} from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import {
@@ -15,6 +22,10 @@ import type {
   CreateEpicResponse,
   EpicCreateRefusal,
 } from "@traycer/protocol/host/epic/unary-schemas";
+import type {
+  RebindLocalStoreRequest,
+  RebindLocalStoreResponse,
+} from "@traycer/protocol/host/local-store/schemas";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { useEpicCreateForClient } from "@/hooks/epic/use-epic-create-mutation";
 import { LocalStoreRepairDialogHost } from "@/components/local-store/local-store-repair-dialog-host";
@@ -129,11 +140,30 @@ vi.mock("sonner", () => ({
 const rebindHostIds: (string | null)[] = [];
 const supportsMethodArgs: { hostId: string | null; method: string }[] = [];
 
+interface RebindMutateCallbacks {
+  readonly onSuccess: (response: RebindLocalStoreResponse) => void;
+}
+/**
+ * Every `mutate(...)` call the dialog made, so a test can invoke the
+ * confirm's own `onSuccess` directly - a real mutation never resolves in
+ * this fixture (no host round-trip is wired), so this is the only way to
+ * drive the dialog's refused-rebind branch.
+ */
+const recordedMutateCalls: {
+  readonly hostId: string | null;
+  readonly callbacks: RebindMutateCallbacks;
+}[] = [];
+
 vi.mock("@/hooks/local-store/use-local-store-rebind-mutation", () => ({
   useLocalStoreRebindMutation: (hostId: string | null) => {
     rebindHostIds.push(hostId);
     return {
-      mutate: () => undefined,
+      mutate: (
+        _variables: RebindLocalStoreRequest,
+        callbacks: RebindMutateCallbacks,
+      ) => {
+        recordedMutateCalls.push({ hostId, callbacks });
+      },
       isPending: false,
       isHostEntryPending: false,
     };
@@ -181,6 +211,7 @@ beforeEach(() => {
   toastErrorCalls.length = 0;
   rebindHostIds.length = 0;
   supportsMethodArgs.length = 0;
+  recordedMutateCalls.length = 0;
   useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
   // The window points at the OTHER host. This is the whole fixture: without it
   // every assertion below passes against a re-derived host id too.
@@ -278,5 +309,65 @@ describe("a refused epic.create repairs the host it was dispatched to", () => {
 
     expect(toastErrorCalls).toHaveLength(0);
     expect(useLocalStoreRepairStore.getState().pending).toBeNull();
+  });
+});
+
+describe("a second refusal for the same host while the dialog is mounted", () => {
+  const REFUSAL_A: EpicCreateRefusal = {
+    kind: "local-store-unavailable",
+    message: "Message A.",
+    remedy: "Remedy A.",
+  };
+  const REFUSAL_B: EpicCreateRefusal = {
+    kind: "local-store-unavailable",
+    message: "Message B.",
+    remedy: "Remedy B.",
+  };
+  const REBIND_REFUSAL: RebindLocalStoreResponse = {
+    status: "refused",
+    message: "Rebind message.",
+    remedy: "Rebind remedy.",
+  };
+
+  it("renders the NEW refusal's message and remedy, clearing a rebind refusal from a prior request", () => {
+    // `LocalStoreRepairDialogHost` keys its mounted dialog by HOST ONLY
+    // (`key={pending.hostId}`), so a second refusal on the SAME host arrives
+    // as a prop change on a still-mounted dialog, not a remount - the exact
+    // case a naive `useState` initializer misses.
+    openLocalStoreRepair({ hostId: PLACEMENT_HOST_ID, refusal: REFUSAL_A });
+    render(createElement(LocalStoreRepairDialogHost));
+
+    expect(screen.getByRole("dialog").textContent).toContain(
+      `${REFUSAL_A.message} ${REFUSAL_A.remedy}`,
+    );
+
+    // Trigger the rebind confirm, and have it come back refused - this is
+    // what leaves a `repairRefusal` behind for the NEXT request to inherit
+    // if the reset is missing.
+    fireEvent.click(screen.getByRole("button", { name: "Rebind local store" }));
+    expect(recordedMutateCalls).toHaveLength(1);
+    expect(recordedMutateCalls[0].hostId).toBe(PLACEMENT_HOST_ID);
+    act(() => {
+      recordedMutateCalls[0].callbacks.onSuccess(REBIND_REFUSAL);
+    });
+
+    // The dialog now shows the REBIND's own words in place of the create's.
+    expect(screen.getByRole("dialog").textContent).toContain(
+      `${REBIND_REFUSAL.message} ${REBIND_REFUSAL.remedy}`,
+    );
+
+    // A second refusal for the SAME host arrives while mounted.
+    act(() => {
+      openLocalStoreRepair({ hostId: PLACEMENT_HOST_ID, refusal: REFUSAL_B });
+    });
+
+    const description = screen.getByRole("dialog").textContent;
+    // Before the fix, `repairRefusal` from the rebind above survived this
+    // prop change and kept rendering the rebind's remedy over request B's
+    // own words.
+    expect(description).toContain(REFUSAL_B.message);
+    expect(description).toContain(REFUSAL_B.remedy);
+    expect(description).not.toContain(REBIND_REFUSAL.remedy);
+    expect(description).not.toContain(REFUSAL_A.message);
   });
 });

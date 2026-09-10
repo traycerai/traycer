@@ -33,6 +33,7 @@ import {
   type StreamMethodSupport,
 } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { stageNotificationPartitionFloors as stageSharedNotificationPartitionFloors } from "./notification-partition-floors";
 import {
   NOTIFICATION_EVENT_TYPES,
   type NotificationEntry,
@@ -64,10 +65,7 @@ import type { HostStreamClientBinding } from "@/hooks/host/use-host-stream-clien
 import type { NotificationShow } from "@/hooks/notifications/use-notifications";
 import type { NotificationShowOutcome } from "@traycer-clients/shared/platform/runner-host";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
-import {
-  recordNegotiatedHostManifest,
-  resetNegotiatedManifests,
-} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 
 interface HostState {
   id: string | null;
@@ -956,28 +954,11 @@ const NOTIFICATION_HOST_IDS_UNDER_TEST = [
 ] as const;
 
 /**
- * Every UNARY floor mixed mode admits on, staged together.
- *
- * The WHOLE set, not the subset any one path happens to use:
- * `useNotificationFeedModeFor` admits on all of them, so omitting one drops
- * these cases into local mode and the failure surfaces as unrelated cloud
- * assertions rather than as a version problem.
- *
- * This list grows with the floor. `clearAll@1.1` is the fourth and was added
- * a release after the first three - a new floor reads `null` here, which
- * fails closed, so the tell is a suite that quietly stops testing mixed mode
- * rather than one that reports a missing minor. Add the entry in the same
- * change as the floor.
+ * The shared floor fixture, staged for every host this suite drives. See
+ * `notification-partition-floors.ts` for why the set is whole and shared.
  */
 function stageNotificationPartitionFloors(): void {
-  for (const hostId of NOTIFICATION_HOST_IDS_UNDER_TEST) {
-    recordNegotiatedHostManifest(hostId, {
-      "host.notifications.list": { major: 2, minor: 2 },
-      "host.notifications.markAllRead": { major: 1, minor: 1 },
-      "host.notifications.indicatorState": { major: 1, minor: 1 },
-      "host.notifications.clearAll": { major: 1, minor: 1 },
-    });
-  }
+  stageSharedNotificationPartitionFloors(NOTIFICATION_HOST_IDS_UNDER_TEST);
 }
 
 describe("<NotificationsSessionProvider />", () => {
@@ -4644,6 +4625,106 @@ describe("<NotificationsSessionProvider />", () => {
         ]);
       });
       expect(firstClient.subscribedMethods.length).toBe(subscribedBeforeSwitch);
+    });
+  });
+
+  describe("verdict loss and a serving-host switch landing in the same effect pass", () => {
+    it("refuses to open the activity lane on the departed host's lease, opening it only against the NEW host's lease", async () => {
+      const queryClient = new QueryClient();
+      const firstClient = new MockWsStreamClient();
+      hostState.id = null;
+      streamState.client = firstClient;
+      servingHostFallbackState.hasLocalHost = false;
+      servingHostFallbackState.boundHostId = "host-b";
+
+      const view = render(
+        <QueryClientProvider client={queryClient}>
+          <NotificationsSessionProvider>
+            <div />
+          </NotificationsSessionProvider>
+        </QueryClientProvider>,
+      );
+
+      act(() => {
+        resetAuth("signed-in", "alice@example.com", "alice@example.com");
+      });
+
+      await waitFor(() => {
+        expect(firstClient.subscribedMethods).toEqual([
+          "agent.activity.subscribe",
+          "notifications.subscribe",
+          "host.notifications.feed.subscribe",
+        ]);
+      });
+      // The verdict holder's lane is opened with the plane left to the host.
+      expect(
+        firstClient.sessionFor("agent.activity.subscribe").openParams,
+      ).toEqual({});
+
+      const secondClient = new MockWsStreamClient();
+      act(() => {
+        // Copy of "closes only the cloud-authorized lanes on a signed-in to
+        // unverified demotion..." above: a CONTINUOUS identity (same
+        // account, same userId) loses its cloud verdict.
+        useAuthStore.setState({
+          status: "unverified",
+          profile: {
+            userId: "alice@example.com",
+            userName: "alice@example.com",
+            email: "alice@example.com",
+          },
+          contextMetadata: {
+            userId: "alice@example.com",
+            username: "alice@example.com",
+          },
+          subscriptionStatus: null,
+        });
+        // In the SAME pass, the bound (serving) host moves to a different
+        // machine - the relay-only counterpart of a local host respawning
+        // under a new directory entry.
+        servingHostFallbackState.boundHostId = "host-c";
+        streamState.client = secondClient;
+        view.rerender(
+          <QueryClientProvider client={queryClient}>
+            <NotificationsSessionProvider>
+              <div />
+            </NotificationsSessionProvider>
+          </QueryClientProvider>,
+        );
+      });
+
+      // The old host's activity lane closes.
+      await waitFor(() => {
+        expect(
+          firstClient.sessionFor("agent.activity.subscribe").closeCount,
+        ).toBe(1);
+      });
+
+      // Pre-fix, the verdict-loss caller (`settleCloudVerdictEdge`, which
+      // runs at the TOP of the main effect) called `openActivityLane(false)`
+      // against the STALE host-b lease while `servingHostId` /
+      // `servingStreamClient` had already moved to host-c in this same
+      // render - opening a session on host-c's OWN client (`secondClient`)
+      // but driven by host-b's reconnect engine. The host-switch teardown a
+      // few lines later in the SAME pass then closed that wrongly-leased
+      // session, and `openForCurrentUser` opened a SECOND, correctly-leased
+      // one. That first, wrong subscribe on `secondClient` must not happen
+      // post-fix - exactly one subscribe, never two.
+      await waitFor(() => {
+        expect(
+          secondClient.subscribedMethods.filter(
+            (method) => method === "agent.activity.subscribe",
+          ),
+        ).toHaveLength(1);
+      });
+      const activityOnHostC = secondClient.sessionFor(
+        "agent.activity.subscribe",
+      );
+      // The one session that opened is the live one - never closed.
+      expect(activityOnHostC.closeCount).toBe(0);
+      // Opened under the unverified cohort's admission (local-only) - the
+      // plane the CORRECT reopen (against host-c's own lease) asks for.
+      expect(activityOnHostC.openParams).toEqual({ plane: "local-only" });
     });
   });
 

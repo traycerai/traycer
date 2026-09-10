@@ -69,6 +69,18 @@ function LocalStoreRepairDialog(props: {
     readonly message: string;
     readonly remedy: string;
   } | null>(null);
+  // `openLocalStoreRepair` is last-write-wins and the host above keys this
+  // dialog by HOST only, so a second refusal on the same machine arrives as a
+  // prop change on a MOUNTED dialog, not a remount. A rebind refusal held here
+  // was about the previous request's store; carried over, the newer create
+  // would render the older remedy. Reset in render - React's documented shape
+  // for state derived from a prop change - rather than in an effect, which
+  // would paint one frame of the stale text first.
+  const [refusalFor, setRefusalFor] = useState(props.request);
+  if (refusalFor !== props.request) {
+    setRefusalFor(props.request);
+    setRepairRefusal(null);
+  }
   const shownRemedy = repairRefusal?.remedy ?? refusal.remedy;
   return (
     <ConfirmDestructiveDialog

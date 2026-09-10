@@ -836,7 +836,7 @@ describe("<EpicsListPanel />", () => {
     renderPanel("embedded", "/");
 
     const pin = await screen.findByRole("button", {
-      name: "Pinning Local only epic needs cloud sync; it is stored on the connected device",
+      name: "Pinning Local only epic needs a newer host on the connected device; it is stored there",
     });
     // `aria-disabled`, not the native attribute: a natively disabled button is
     // unfocusable and swallows pointer events, so the tooltip below - the only
@@ -851,7 +851,7 @@ describe("<EpicsListPanel />", () => {
     // account never gets and a stale row has already had - see
     // `HistoryPinControl`.
     expect(tooltipTextNear(pin)).toBe(
-      "This epic is stored on the connected device. Pinning needs cloud sync.",
+      "This epic is stored on the connected device. Pinning it needs a newer host version there; update that device's Traycer host.",
     );
   });
 

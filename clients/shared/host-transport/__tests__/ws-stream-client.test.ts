@@ -540,6 +540,51 @@ describe("WsStreamClient", () => {
       expect(stub.textSent).toHaveLength(2);
       expect(parseText(stub.textSent[1]).kind).toBe("subscribe");
     });
+
+    it("closes the socket and never sends `subscribe` when the pre-subscribe verdict reconciliation frame fails to send", async () => {
+      const { factory, sockets } = makeFactory();
+      const verdict = { value: true };
+      const client = makeClientWithVerdict(factory, "token-abc", verdict);
+      const session = client.subscribe("epic.subscribe", { epicId: "epic-1" });
+      const statuses: StreamConnectionStatus[] = [];
+      session.onStatusChange((status) => {
+        statuses.push(status);
+      });
+
+      await flush();
+      const stub = sockets[0].socket;
+      stub.fireOpen();
+      expect(parseText(stub.textSent[0]).cloudAuthorized).toBe(true);
+
+      // Same opening-phase demotion as the case above, but the wire fails on
+      // exactly the reconciliation frame it triggers.
+      verdict.value = false;
+      stub.failNextSend = true;
+
+      stub.fireText(
+        streamOpenAck(
+          buildStreamManifest(
+            hostStreamRpcRegistry,
+            SERVES_EVERY_INSTALLED_MAJOR,
+          ),
+          [STREAM_CAPABILITY_CLOUD_VERDICT_UPDATE],
+        ),
+      );
+
+      // Pre-fix, `sendCloudVerdictFrame` returned `void` and
+      // `handleOpenAckFrame` fell through to write `subscribe` on the now-dead
+      // socket. Post-fix it returns `false` and `handleOpenAckFrame` returns
+      // immediately - no `subscribe` frame, ever, on this socket.
+      expect(stub.textSent).toHaveLength(1);
+      expect(
+        stub.textSent.some((raw) => parseText(raw).kind === "subscribe"),
+      ).toBe(false);
+      expect(stub.closed).toEqual({ code: 4005, reason: "send-failed" });
+      expect(statuses).not.toContain("open");
+      expect(statuses).toContain("reconnecting");
+
+      session.close();
+    });
   });
 
   it("walks dial → open → openAck → subscribe and transitions to open status", async () => {
