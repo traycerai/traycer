@@ -88,9 +88,40 @@ const hostRequestMock = vi.hoisted(() => vi.fn());
  */
 interface StubHostClient {
   readonly request: typeof hostRequestMock;
+  /**
+   * The SECOND dispatch signature, and it has to exist here even though every
+   * assertion in this file reads `hostRequestMock`. A call carrying a version
+   * floor does not go through `request` at all - `use-host-query.ts` routes it
+   * to this method instead - so a stub that omits it drops the frame silently:
+   * the mutation rejects with "not a function", `onError` turns that into a
+   * toast, and the call simply never appears. That reads exactly like a
+   * request the subject decided not to send, which is how the mixed-feed
+   * `clearAll` case failed while the production floor was correct.
+   */
+  readonly requestWithSignalRequiringHostMethodVersion: (
+    method: string,
+    params: unknown,
+    signal: AbortSignal | undefined,
+    requirement: {
+      readonly method: string;
+      readonly version: { readonly major: number; readonly minor: number };
+    },
+  ) => Promise<unknown>;
   readonly getActiveHostId: () => string | null;
   readonly createRequesterForHostId: (hostId: string | null) => StubHostClient;
 }
+
+/** Floors this fixture's host was asked for, so a dropped one is visible
+ * rather than merely absent. */
+const floorsRequested = vi.hoisted(
+  () =>
+    ({ calls: [] }) as {
+      calls: Array<{
+        readonly method: string;
+        readonly version: { readonly major: number; readonly minor: number };
+      }>;
+    },
+);
 
 const hostBindingState = vi.hoisted(() => ({
   current: null as {
@@ -156,10 +187,20 @@ vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
   };
 });
 
-vi.mock("@/lib/notifications/notification-feed-mode", () => ({
-  useNotificationFeedMode: () => notificationFeedMode.value,
-  useNotificationFeedModeSettling: () => false,
-}));
+vi.mock("@/lib/notifications/notification-feed-mode", async (importActual) => {
+  // Spread the real module: production reads the PARTITIONED_* floor constants
+  // from here, and a factory that returns only the two hooks makes every one of
+  // them a missing export - which surfaces as a failed RPC, not as a mock error.
+  const actual =
+    await importActual<
+      typeof import("@/lib/notifications/notification-feed-mode")
+    >();
+  return {
+    ...actual,
+    useNotificationFeedMode: () => notificationFeedMode.value,
+    useNotificationFeedModeSettling: () => false,
+  };
+});
 
 /**
  * Controllable ready-session evidence, the same seam
@@ -593,6 +634,15 @@ function resetPopoverFilters(): void {
 function bindHostClient(): void {
   const hostClient: StubHostClient = {
     request: hostRequestMock,
+    requestWithSignalRequiringHostMethodVersion: (
+      method,
+      params,
+      _signal,
+      requirement,
+    ) => {
+      floorsRequested.calls.push(requirement);
+      return hostRequestMock(method, params);
+    },
     getActiveHostId: () => mockLocalHostEntry.hostId,
     createRequesterForHostId: () => hostClient,
   };
@@ -620,6 +670,15 @@ function simulateHostDisconnect(): void {
   // no host, which is exactly what an unresolved id-pinned requester reports.
   const hostClient: StubHostClient = {
     request: hostRequestMock,
+    requestWithSignalRequiringHostMethodVersion: (
+      method,
+      params,
+      _signal,
+      requirement,
+    ) => {
+      floorsRequested.calls.push(requirement);
+      return hostRequestMock(method, params);
+    },
     getActiveHostId: () => null,
     createRequesterForHostId: () => hostClient,
   };
@@ -1265,6 +1324,21 @@ describe("NotificationsPopover", () => {
           .beforeUpdatedAt,
       ).toBeTypeOf("number");
     });
+    // The partitioned clear must also CLAIM its floor. In mixed mode the frame
+    // carries `home: local`, and an `@1.0` peer would strip that and answer a
+    // whole-origin delete - so the floor riding is part of this case's claim,
+    // not incidental. Asserting it here is also what keeps the fixture's
+    // recorder live rather than a stub nothing reads.
+    // Asserted as "every clearAll dispatch carried the floor", not "exactly
+    // one did": this path dispatches clearAll more than once, and pinning the
+    // COUNT would be pinning that incidental fact rather than the claim.
+    const clearAllFloors = floorsRequested.calls.filter(
+      (call) => call.method === "host.notifications.clearAll",
+    );
+    expect(clearAllFloors.length).toBeGreaterThan(0);
+    expect([...new Set(clearAllFloors.map((call) => call.version.minor))]).toEqual([
+      1,
+    ]);
     expect(useAppLocalNotificationsStore.getState().orderedIds).toHaveLength(0);
   });
 

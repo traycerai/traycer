@@ -50,10 +50,20 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
     hostId === null ? null : (clientsByHostId.value.get(hostId) ?? null),
 }));
 
-vi.mock("@/lib/notifications/notification-feed-mode", () => ({
-  useNotificationFeedMode: () => feedMode.value,
-  useNotificationFeedModeSettling: () => false,
-}));
+vi.mock("@/lib/notifications/notification-feed-mode", async (importActual) => {
+  // Spread the real module: production reads the PARTITIONED_* floor constants
+  // from here, and a factory that returns only the two hooks makes every one of
+  // them a missing export - which surfaces as a failed RPC, not as a mock error.
+  const actual =
+    await importActual<
+      typeof import("@/lib/notifications/notification-feed-mode")
+    >();
+  return {
+    ...actual,
+    useNotificationFeedMode: () => feedMode.value,
+    useNotificationFeedModeSettling: () => false,
+  };
+});
 
 vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
