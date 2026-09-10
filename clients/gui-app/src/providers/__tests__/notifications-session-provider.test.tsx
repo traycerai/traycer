@@ -5156,10 +5156,7 @@ describe("<NotificationsSessionProvider />", () => {
       //
       // It is retained on the ordinary ground that a dep array omitting a
       // value its body calls is a defect regardless of whether some sibling
-      // dep happens to co-move today: an `openForCurrentUser` identity that
-      // changed for any OTHER reason while `status` held still would leave the
-      // effect holding a stale opener. Anyone deleting it needs a case that
-      // varies `openForCurrentUser` without varying `status`; this is not one.
+      // dep happens to co-move today.
       expect(streamClient.subscribedMethods).toContain(
         "agent.activity.subscribe",
       );
