@@ -2,6 +2,7 @@ import { useCallback, useMemo, useSyncExternalStore } from "react";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
+import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import { isMobileApp } from "@/lib/mobile-app";
 
 /**
@@ -143,11 +144,28 @@ const wallClockNow = (): number => Date.now();
  * first observed, not inferred from poll ticks. The poll decides WHEN a drop is
  * noticed; the timers decide when it is announced and when it escalates, so
  * neither boundary inherits the poll's resolution.
+ *
+ * Both deadlines count only the waiting since the person was last present - a
+ * FOREGROUND wait, restarted by each return. The store dates an episode from
+ * `now()`, and `now()` keeps counting while a suspended WebView does not: on
+ * thaw a three-minute background reads as a three-minute outage, and the
+ * escalate deadline - a frozen timer that fires the moment JS resumes, before
+ * the shell's resume signal is delivered - stamps the outage prolonged before
+ * anyone has watched it for a second. `subscribeResume` is the shell's own
+ * "the person is back" edge; on it the episode is re-dated to the resume and
+ * any escalation taken back, so the deadlines describe waiting rather than
+ * absence. Gated on the signal, not on a measured dwell: desktop reports none.
  */
 export function createSessionConnectivityStore(args: {
   readonly streamClient: IHostStreamClient<HostStreamRpcRegistry> | null;
   readonly isReady: () => boolean;
   readonly now: () => number;
+  /**
+   * The shell's resume edge (`IRunnerHost.onSystemResumed`), as a subscription
+   * returning its disposer. Injected rather than read here so the store stays
+   * a pure function of its inputs and a test can pull the edge by hand.
+   */
+  readonly subscribeResume: (listener: () => void) => () => void;
   readonly pollMs: number;
   readonly announceAfterMs: number;
   readonly escalateAfterMs: number;
@@ -156,6 +174,7 @@ export function createSessionConnectivityStore(args: {
     streamClient,
     isReady,
     now,
+    subscribeResume,
     pollMs,
     announceAfterMs,
     escalateAfterMs,
@@ -225,12 +244,30 @@ export function createSessionConnectivityStore(args: {
     }
     const stopRecovered = streamClient.subscribeAvailabilityRecovered(notify);
     const stopClosed = streamClient.onClosed(notify);
+    const stopResume = subscribeResume(restartEpisodeWait);
     const poll = window.setInterval(notify, pollMs);
     detachSignals = () => {
       stopRecovered();
       stopClosed();
+      stopResume();
       window.clearInterval(poll);
     };
+  };
+
+  /**
+   * The person is back. Whatever the episode had accrued while they were away
+   * is not waiting, so it starts over from this instant: re-dated, deadlines
+   * re-armed for their full length, and an escalation the thaw may already have
+   * fired taken back. A ready session has no episode to restart.
+   */
+  const restartEpisodeWait = (): void => {
+    if (downSince === null) {
+      return;
+    }
+    downSince = now();
+    escalated = false;
+    armEpisodeTimers();
+    notify();
   };
 
   const refresh = (): void => {
@@ -315,17 +352,29 @@ export function createSessionConnectivityStore(args: {
 export function useHostSessionConnectivity(): HostSessionConnectivity {
   const activeClient = useWsStreamClient();
   const streamClient = isMobileApp() ? activeClient : null;
+  const runnerHost = useRunnerHostOrNull();
   const store = useMemo(
     () =>
       createSessionConnectivityStore({
         streamClient,
         isReady: () => streamClient !== null && streamClient.isReady(),
         now: wallClockNow,
+        subscribeResume: (listener) => {
+          if (runnerHost === null) {
+            return () => undefined;
+          }
+          const subscription = runnerHost.onSystemResumed(() => {
+            listener();
+          });
+          return () => {
+            subscription.dispose();
+          };
+        },
         pollMs: SESSION_CONNECTIVITY_POLL_MS,
         announceAfterMs: SESSION_CONNECTIVITY_ANNOUNCE_AFTER_MS,
         escalateAfterMs: SESSION_CONNECTIVITY_ESCALATE_AFTER_MS,
       }),
-    [streamClient],
+    [streamClient, runnerHost],
   );
   return useSyncExternalStore(
     store.subscribe,
