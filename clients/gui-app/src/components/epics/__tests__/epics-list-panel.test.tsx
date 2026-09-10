@@ -879,8 +879,14 @@ describe("<EpicsListPanel />", () => {
     const heading = section.querySelector("h2");
     expect(heading).not.toBeNull();
     expect(heading?.textContent).toBe("Deleted — unsynced edits kept");
-    expect(section.textContent ?? "").not.toMatch(/cloud/i);
-    expect(section.textContent ?? "").not.toMatch(/device/i);
+    expect(section.textContent).not.toMatch(/cloud/i);
+    expect(section.textContent).not.toMatch(/device/i);
+
+    const provenanceGlyph = await screen.findByTestId(
+      "epics-list-row-provenance-preserved-orphan-epic-from-history",
+    );
+    expect(provenanceGlyph.getAttribute("aria-label")).not.toMatch(/cloud/i);
+    expect(provenanceGlyph.getAttribute("aria-label")).not.toMatch(/device/i);
 
     const pin = await screen.findByRole("button", {
       name: /Pinning Orphaned epic/,
@@ -894,13 +900,99 @@ describe("<EpicsListPanel />", () => {
     expect(tooltip ?? "").not.toMatch(/device/i);
   });
 
+  it("shows the preserved-orphan provenance glyph with its deleted/export tooltip", async () => {
+    testState.items = [
+      historyItem({
+        title: "Orphaned epic",
+        isPreservedOrphan: true,
+      }),
+    ];
+    renderPanel("embedded", "/");
+
+    const glyph = await screen.findByTestId(
+      "epics-list-row-provenance-preserved-orphan-epic-from-history",
+    );
+    expect(glyph.getAttribute("role")).toBe("status");
+    expect(glyph.getAttribute("aria-label")).toMatch(/deleted/i);
+    expect(glyph.getAttribute("aria-label")).toMatch(/export/i);
+    expect(glyph.getAttribute("aria-label")).not.toMatch(/cloud|device/i);
+  });
+
+  it("shows the local-only provenance glyph telling a signed-in viewer to open the task to sync", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    renderPanel("embedded", "/");
+
+    const glyph = await screen.findByTestId(
+      "epics-list-row-provenance-local-only-epic-from-history",
+    );
+    expect(glyph.getAttribute("aria-label")).toMatch(/open this task to sync/i);
+  });
+
+  it("shows the local-only provenance glyph telling an unverified viewer to sign in again", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    useAuthStore.setState({ status: "unverified" });
+    renderPanel("embedded", "/");
+
+    const glyph = await screen.findByTestId(
+      "epics-list-row-provenance-local-only-epic-from-history",
+    );
+    expect(glyph.getAttribute("aria-label")).toMatch(/sign in again/i);
+  });
+
+  it("shows no provenance glyph for an ordinary row carrying neither marker", async () => {
+    renderPanel("embedded", "/");
+
+    await screen.findByRole("link", { name: "Open task Open from landing" });
+
+    expect(
+      screen.queryByTestId(
+        "epics-list-row-provenance-preserved-orphan-epic-from-history",
+      ),
+    ).toBeNull();
+    expect(
+      screen.queryByTestId(
+        "epics-list-row-provenance-local-only-epic-from-history",
+      ),
+    ).toBeNull();
+  });
+
+  it("shows the running activity indicator instead of the provenance glyph on a local-home row an agent is working on", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    testState.activityByEpicId.set("epic-from-history", "turn");
+    renderPanel("embedded", "/");
+
+    expect(
+      await screen.findByTestId("epics-list-row-activity-epic-from-history"),
+    ).toBeDefined();
+    expect(
+      screen.queryByTestId(
+        "epics-list-row-provenance-local-only-epic-from-history",
+      ),
+    ).toBeNull();
+  });
+
   it("never names the cloud or the device when the host requires cloud access to list", () => {
     render(<EpicsListHostRequiresCloudToList />);
 
     const node = screen.getByTestId("epics-list-host-requires-cloud-to-list");
     expect(node.textContent).toContain("Couldn't load your tasks");
-    expect(node.textContent ?? "").not.toMatch(/cloud/i);
-    expect(node.textContent ?? "").not.toMatch(/device/i);
+    expect(node.textContent).not.toMatch(/cloud/i);
+    expect(node.textContent).not.toMatch(/device/i);
   });
 
   // The Sweep control keeps its slot in every task row rather than appearing

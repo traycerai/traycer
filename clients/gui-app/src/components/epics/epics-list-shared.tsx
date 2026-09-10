@@ -28,18 +28,33 @@ import {
   useAuthStore,
 } from "@/stores/auth/auth-store";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
+import {
+  historyRowProvenance,
+  historyRowProvenanceTitle,
+  type HistoryRowProvenance,
+} from "@/components/epics/history-row-provenance";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { cn } from "@/lib/utils";
 
 /**
  * A task row's status: the epic's notification indicator when it has one, its
- * running state when an agent is working, and `defaultIcon` otherwise. Every
- * surface that lists tasks reads the same two sources through this one
- * component, so a task that is running or wants attention looks the same in
- * the desktop list, the phone's history and the phone's nav drawer. Phases
- * have no live agent activity and are never looked up for it.
+ * running state when an agent is working, its provenance when that has a
+ * consequence, and `defaultIcon` otherwise. Every surface that lists tasks
+ * reads the same sources through this one component, so a task that is
+ * running, wants attention, was deleted with edits kept, or is not synced yet
+ * looks the same in the desktop list, the phone's history and the phone's nav
+ * drawer. Phases have no live agent activity and are never looked up for it.
  *
- * `defaultIcon` is what an idle, unread-free row shows: a glyph where the
- * surface wants every row to carry one, or `null` where a row without status
- * should carry nothing at all.
+ * Provenance takes the `defaultIcon` slot, below every notification tone and
+ * the running state, on purpose: those are things happening NOW that the
+ * person may need to act on this minute, while "deleted, edits kept" and "not
+ * synced yet" are standing conditions the row keeps until they act on them.
+ * A row that is both running and unsynced shows the spinner; the provenance
+ * glyph returns when the agent goes idle.
+ *
+ * `defaultIcon` is what an idle, unread-free, ordinary row shows: a glyph
+ * where the surface wants every row to carry one, or `null` where a row
+ * without status should carry nothing at all.
  */
 export function HistoryRowStatusIcon(props: {
   readonly item: HistoryItem;
@@ -54,6 +69,7 @@ export function HistoryRowStatusIcon(props: {
     { epicId: props.item.epicId },
     null,
   );
+  const provenance = historyRowProvenance(props.item);
   return (
     <NotificationIndicatorIcon
       state={indicatorState}
@@ -67,10 +83,76 @@ export function HistoryRowStatusIcon(props: {
       className={props.className}
       style={undefined}
       runningTitle="Task activity in progress"
-      defaultIcon={props.defaultIcon}
+      defaultIcon={
+        provenance === null ? (
+          props.defaultIcon
+        ) : (
+          <HistoryRowProvenanceGlyph
+            provenance={provenance}
+            epicId={props.item.epicId}
+            testIdPrefix={props.testIdPrefix}
+            className={props.className}
+          />
+        )
+      }
       statusPresentation="message"
       agentSurface="gui"
     />
+  );
+}
+
+/**
+ * The provenance dot: a hollow ring for a task that is not synced yet, a
+ * filled destructive dot for one that was deleted with its edits kept. The
+ * same `role="status"` + accessible-name + tooltip leaf the notification
+ * glyphs render, so a screen reader and a hover read the same sentence.
+ *
+ * Colour carries the severity, not the shape alone: the hollow ring stays in
+ * the row's muted text colour because on a plan without sync EVERY row wears
+ * it, and a warning tint on all of them would be noise the person cannot
+ * act on.
+ */
+function HistoryRowProvenanceGlyph(props: {
+  readonly provenance: HistoryRowProvenance;
+  readonly epicId: string;
+  readonly testIdPrefix: string;
+  readonly className: string | undefined;
+}): ReactNode {
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
+  const title = historyRowProvenanceTitle(props.provenance, cloudAuthorized);
+  return (
+    <TooltipWrapper
+      label={title}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <span
+        role="status"
+        aria-label={title}
+        data-testid={`${props.testIdPrefix}-provenance-${props.provenance}-${props.epicId}`}
+        data-provenance={props.provenance}
+        // After `props.className` so the destructive tint displaces the
+        // surface's muted colour AND its hover colour - a deleted task's dot
+        // does not turn neutral because the pointer is over the row.
+        className={cn(
+          "inline-flex size-3.5 shrink-0 items-center justify-center",
+          props.className,
+          props.provenance === "preserved-orphan" &&
+            "text-destructive group-hover/list-row:text-destructive",
+        )}
+      >
+        <span
+          aria-hidden
+          className={cn(
+            "size-2 rounded-full border-[1.5px] border-current",
+            props.provenance === "preserved-orphan" && "bg-current",
+          )}
+        />
+      </span>
+    </TooltipWrapper>
   );
 }
 

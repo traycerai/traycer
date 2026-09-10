@@ -670,7 +670,7 @@ describe("deriveEpicSyncPillState", () => {
   // The pill and the durability badge are mounted inches apart by the epic
   // shell, and the pill ignored durability entirely. A local-homed epic's
   // `LocalRoomConnection` reports connected + clean, so the settled free-tier
-  // session rendered "All changes synced" beside "Stored locally", about an
+  // session rendered "All changes synced" beside "Not synced yet", about an
   // epic no cloud has ever seen. Every case below returns `synced` on the
   // pre-fix derivation.
   describe("the synced claim needs a cloud durability fact behind it", () => {
@@ -698,9 +698,9 @@ describe("deriveEpicSyncPillState", () => {
       // `durability`, and through `@1.5` its cloud answer is the ABSENT key.
       // The legacy calm was licensed by the missing protection leg alone, so
       // a clean, connected local room rendered "All changes synced" beside
-      // the durability badge's "Stored locally". A stated value blocks the
+      // the durability badge's "Not synced yet". A stated value blocks the
       // claim; and with no protection leg to say `armed`, the pill claims
-      // nothing rather than "saved on this device".
+      // nothing rather than "saved and not synced".
       for (const durability of [
         "local",
         "promoting",
@@ -752,7 +752,7 @@ describe("deriveEpicSyncPillState", () => {
     });
 
     it("does not claim saved-on-device while protection is UNAVAILABLE", () => {
-      // "Stored locally" is a durability claim, and the local-room connection
+      // "Not synced yet" is a durability claim, and the local-room connection
       // satisfying `cloudSyncStatus: "connected"` says nothing about it: an
       // unavailable session's edits live only in the document and are lost on
       // process exit, graceful quit included. The pill must not encourage

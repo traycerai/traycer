@@ -1317,6 +1317,39 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     });
   });
 
+  describe("row provenance", () => {
+    it("renders the preserved-orphan provenance glyph with an export-oriented label", async () => {
+      testState.items = [
+        historyItem({
+          title: "Orphaned epic",
+          isPreservedOrphan: true,
+        }),
+      ];
+      renderPanel("embedded", "/");
+
+      const glyph = await screen.findByTestId(
+        "epics-list-row-provenance-preserved-orphan-epic-from-history",
+      );
+      expect(glyph.getAttribute("aria-label")).toMatch(/export/i);
+    });
+
+    it("renders the local-only provenance glyph for a local-home row", async () => {
+      testState.items = [
+        historyItem({
+          title: "Local only epic",
+          isLocalHome: true,
+        }),
+      ];
+      renderPanel("embedded", "/");
+
+      expect(
+        await screen.findByTestId(
+          "epics-list-row-provenance-local-only-epic-from-history",
+        ),
+      ).not.toBeNull();
+    });
+  });
+
   describe("desktop untouched", () => {
     it("keeps the desktop row chrome at a desktop viewport width", async () => {
       setViewportWidth(DESKTOP_VIEWPORT_WIDTH);

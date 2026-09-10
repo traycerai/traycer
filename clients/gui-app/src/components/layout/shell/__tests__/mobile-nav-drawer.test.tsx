@@ -853,6 +853,27 @@ describe("MobileNavDrawer", () => {
       ).toBeTruthy();
     });
 
+    it("shows the local-only provenance status for a local-home row", async () => {
+      testState.items = [
+        {
+          ...historyItem({
+            id: "a",
+            title: "local only",
+            updatedAtMs: NOW_MS - DAY_MS,
+          }),
+          isLocalHome: true,
+        },
+      ];
+      renderDrawer();
+      const rows = await screen.findAllByTestId("mobile-nav-task-row");
+
+      const status = rows[0]?.querySelector(
+        '[data-testid="mobile-nav-task-provenance-local-only-a"]',
+      );
+      expect(status).not.toBeNull();
+      expect(status?.getAttribute("role")).toBe("status");
+    });
+
     it("shows the indicator for a task with an unread result, through its own provider", async () => {
       // No live activity, only notification state: this is the case that
       // needs the drawer to supply indicators itself, since the shell mounts
