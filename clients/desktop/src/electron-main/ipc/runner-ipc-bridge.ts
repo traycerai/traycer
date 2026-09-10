@@ -75,6 +75,10 @@ import { registerTrayIpc } from "./tray-ipc";
 import { registerWindowsIpc } from "./windows-ipc";
 import { registerOwnershipIpc } from "./ownership-ipc";
 import { registerEpicVisibilityIpc } from "./epic-visibility-ipc";
+import {
+  registerWindowVisibilityIpc,
+  windowOnScreen,
+} from "./window-visibility-ipc";
 import { EpicWindowVisibility } from "../windows/epic-window-visibility";
 import { registerPerWindowStateIpc } from "./per-window-state-ipc";
 import { registerHostIpc } from "./host-ipc";
@@ -127,6 +131,12 @@ export interface IpcManagedWindow {
   isDestroyed(): boolean;
   isFocused(): boolean;
   isVisible(): boolean;
+  /**
+   * Optional because a double may not model it; a real `BrowserWindow` always
+   * has it. `window-visibility-ipc.ts` treats an absent method as "not
+   * minimised", which fails toward NOT parking.
+   */
+  isMinimized?(): boolean;
   show(): void;
   focus(): void;
   readonly webContents: {
@@ -594,6 +604,7 @@ export class RunnerIpcBridge {
     registerWindowsIpc(this);
     registerOwnershipIpc(this);
     registerEpicVisibilityIpc(this);
+    registerWindowVisibilityIpc(this);
     registerPerWindowStateIpc(this);
     registerSupportIpc(this);
     registerHostIpc(this);
@@ -1236,6 +1247,18 @@ export class RunnerIpcBridge {
       RunnerHostEvent.epicVisibilityChange,
       this.epicVisibility.snapshot(),
     );
+    // This window's OWN on-screen state (minimised / hidden, as main sees it).
+    // The Page Visibility API never reports hidden in this app because every
+    // window runs with `backgroundThrottling: false`, so the renderer has no
+    // other way to learn it.
+    const ownRecord = this.windowRegistry.getRecordById(windowId);
+    if (ownRecord !== null) {
+      this.safeSendToWindow(
+        windowId,
+        RunnerHostEvent.windowVisibilityChange,
+        windowOnScreen(ownRecord.window),
+      );
+    }
     this.safeSendToWindow(
       windowId,
       RunnerHostEvent.perWindowStateChange,

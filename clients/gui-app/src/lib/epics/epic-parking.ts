@@ -191,6 +191,12 @@ function notify(epicId: string): void {
  * The two halves stay consistent because the same conjunction governs what we
  * REPORT - `cross-window-epic-visibility.ts` sends the empty set while hidden -
  * so a hidden window withdraws its claim here and there in one move.
+ *
+ * "Hidden" here is what `lib/dom/document-visibility.ts` answers: the Page
+ * Visibility API in a browser, and on the desktop the shell's own
+ * minimised/hidden answer pushed in through `desktop-window-visibility.ts`,
+ * because `backgroundThrottling: false` keeps the Page Visibility API at
+ * "visible" there. Neither detects occlusion.
  */
 function isEpicVisibleAnywhere(epicId: string): boolean {
   return (

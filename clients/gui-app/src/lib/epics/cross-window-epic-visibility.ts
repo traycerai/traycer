@@ -217,7 +217,7 @@ export function installCrossWindowEpicVisibility(
   // the case where nothing ever arrives, so a dropped snapshot leaves window A
   // parking an Epic that is on screen for as long as B holds still.
   // What this window CLAIMS, which is not the same as what it has placed. A
-  // minimized or fully occluded window still has a front pane per
+  // minimized or hidden window still has a front pane per
   // `visibleEpicIds()` - that set is surface placement inside this renderer and
   // cannot see the window - so reporting it unconditionally left every other
   // window believing these Epics were on screen here, and holding off parking

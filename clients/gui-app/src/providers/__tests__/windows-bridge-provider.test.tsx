@@ -38,6 +38,10 @@ import {
 } from "@/lib/epics/epic-parking";
 import { __syncEpicParkingOpenTabsForTests } from "@/lib/epics/epic-parking-open-tabs";
 import { __resetCrossWindowEpicVisibilityForTests } from "@/lib/epics/cross-window-epic-visibility";
+import {
+  isDocumentVisible,
+  setDesktopWindowOnScreen,
+} from "@/lib/dom/document-visibility";
 import { setEpicSurfaceVisibility } from "@/lib/browser-view/tiles/surface-host-opened-tab";
 import { PARK_HIDDEN_EPIC_AFTER_MS } from "@/stores/replica-memory/retention-profile";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -1036,6 +1040,209 @@ describe("<WindowsBridgeProvider /> - renderer parking's cross-window channel", 
       await vi.advanceTimersByTimeAsync(PARK_HIDDEN_EPIC_AFTER_MS);
     });
     expect(isEpicParked(EPIC)).toBe(true);
+  });
+});
+
+// ── Renderer parking's WINDOW-level input (fixup 5) ──────────────────────────
+//
+// The Page Visibility API is inert in the desktop app: every window runs with
+// `backgroundThrottling: false`, which keeps `document.visibilityState` at
+// "visible" through minimise and hide. So main pushes "is this window on
+// screen" over `windows.windowVisibility`, and the provider is the one place
+// that installs it. These pins render the REAL provider and drive the fake
+// channel the way main does - a snapshot at install and `onChange` edges - and
+// observe the two things the signal exists for: the park clock and the
+// cross-window claim. Manually overwriting `document.visibilityState` (the
+// other parking pins) cannot see this configuration mismatch, which is how the
+// first cut of fixup 5 shipped inert on the desktop.
+
+interface FakeWindowVisibilityChannel {
+  readonly channel: NonNullable<DesktopWindowsBridge["windowVisibility"]>;
+  readonly disposals: { count: number };
+  emit(onScreen: boolean): void;
+}
+
+function createWindowVisibilityChannel(
+  snapshotOnScreen: boolean,
+): FakeWindowVisibilityChannel {
+  let handler: ((onScreen: boolean) => void) | null = null;
+  const disposals = { count: 0 };
+  return {
+    disposals,
+    channel: {
+      snapshot: () => Promise.resolve(snapshotOnScreen),
+      onChange: (nextHandler) => {
+        handler = nextHandler;
+        return {
+          dispose: () => {
+            disposals.count += 1;
+            // Deliberately keeps `handler`: a late `emit` after dispose must
+            // reach the installer, so the teardown pin exercises ITS guard
+            // rather than this fake's.
+          },
+        };
+      },
+    },
+    emit: (onScreen) => handler?.(onScreen),
+  };
+}
+
+describe("<WindowsBridgeProvider /> - renderer parking's window visibility input", () => {
+  const OWN_WINDOW_ID = "window-1";
+
+  beforeEach(() => {
+    resetStores();
+    __resetEpicParkingForTests();
+    __resetCrossWindowEpicVisibilityForTests();
+    setDesktopWindowOnScreen(true);
+  });
+
+  afterEach(() => {
+    cleanup();
+    __resetEpicParkingForTests();
+    __resetCrossWindowEpicVisibilityForTests();
+    setDesktopWindowOnScreen(true);
+    resetStores();
+    window.localStorage.clear();
+    vi.useRealTimers();
+  });
+
+  it("a window minimised at install parks its on-screen epic and withdraws its cross-window claim; restore reverses both", async () => {
+    const EPIC = "epic-provider-window-minimised";
+    const VIEW = "view-provider-window-minimised";
+    const fake = createDesktopWindowsBridge();
+    const visibility = createEpicVisibilityChannel([]);
+    // Main says this window is NOT on screen at install - the case the
+    // snapshot leg exists for (main's replay fired before this effect
+    // subscribed).
+    const windowVisibility = createWindowVisibilityChannel(false);
+    vi.useFakeTimers();
+    // A pane placed and in front, as far as the tab host knows. Without the
+    // window-level input this is "visible" forever.
+    setEpicSurfaceVisibility(EPIC, VIEW, true);
+
+    try {
+      render(
+        <RunnerHostProvider
+          runnerHost={createRunnerHostWithWindows({
+            ...bridgeWithEpicVisibility(fake, visibility),
+            windowVisibility: windowVisibility.channel,
+          })}
+        >
+          <WindowsBridgeProvider>
+            <BridgeProbe onBridge={() => undefined} />
+          </WindowsBridgeProvider>
+        </RunnerHostProvider>,
+      );
+      // Before the snapshot resolves the document counts as visible, so the
+      // install-time report carries the epic. The snapshot then flips the
+      // gate, and the report leg re-runs on that edge with the empty set.
+      expect(visibility.reports.at(-1)).toContain(EPIC);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(isDocumentVisible()).toBe(false);
+      expect(visibility.reports.at(-1)).toEqual([]);
+
+      act(() => {
+        openEpicTabForParking("tab-provider-window-minimised", EPIC);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(PARK_HIDDEN_EPIC_AFTER_MS);
+      });
+      expect(fake.bridge.windowId).toBe(OWN_WINDOW_ID);
+      expect(isEpicParked(EPIC)).toBe(true);
+
+      // Restore: main pushes `true`; the epic is unparked at once and the
+      // claim goes back out.
+      act(() => {
+        windowVisibility.emit(true);
+      });
+      expect(isDocumentVisible()).toBe(true);
+      expect(isEpicParked(EPIC)).toBe(false);
+      expect(visibility.reports.at(-1)).toContain(EPIC);
+
+      // Minimise again: a fresh window, not an instant park.
+      act(() => {
+        windowVisibility.emit(false);
+      });
+      expect(isEpicParked(EPIC)).toBe(false);
+      expect(visibility.reports.at(-1)).toEqual([]);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(PARK_HIDDEN_EPIC_AFTER_MS);
+      });
+      expect(isEpicParked(EPIC)).toBe(true);
+    } finally {
+      setEpicSurfaceVisibility(EPIC, VIEW, false);
+    }
+  });
+
+  it("without the channel (an older preload) the window counts as on screen and a placed pane never parks", async () => {
+    const EPIC = "epic-provider-window-no-channel";
+    const VIEW = "view-provider-window-no-channel";
+    const fake = createDesktopWindowsBridge();
+    const visibility = createEpicVisibilityChannel([]);
+    vi.useFakeTimers();
+    setEpicSurfaceVisibility(EPIC, VIEW, true);
+    try {
+      render(
+        <RunnerHostProvider
+          runnerHost={createRunnerHostWithWindows(
+            bridgeWithEpicVisibility(fake, visibility),
+          )}
+        >
+          <WindowsBridgeProvider>
+            <BridgeProbe onBridge={() => undefined} />
+          </WindowsBridgeProvider>
+        </RunnerHostProvider>,
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      act(() => {
+        openEpicTabForParking("tab-provider-window-no-channel", EPIC);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(PARK_HIDDEN_EPIC_AFTER_MS);
+      });
+      expect(isDocumentVisible()).toBe(true);
+      expect(isEpicParked(EPIC)).toBe(false);
+    } finally {
+      setEpicSurfaceVisibility(EPIC, VIEW, false);
+    }
+  });
+
+  it("tears the channel down and forgets a stale 'hidden' when the provider unmounts", async () => {
+    const fake = createDesktopWindowsBridge();
+    const visibility = createEpicVisibilityChannel([]);
+    const windowVisibility = createWindowVisibilityChannel(false);
+    vi.useFakeTimers();
+    const view = render(
+      <RunnerHostProvider
+        runnerHost={createRunnerHostWithWindows({
+          ...bridgeWithEpicVisibility(fake, visibility),
+          windowVisibility: windowVisibility.channel,
+        })}
+      >
+        <WindowsBridgeProvider>
+          <BridgeProbe onBridge={() => undefined} />
+        </WindowsBridgeProvider>
+      </RunnerHostProvider>,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(isDocumentVisible()).toBe(false);
+    expect(windowVisibility.disposals.count).toBe(0);
+
+    act(() => {
+      view.unmount();
+    });
+
+    expect(windowVisibility.disposals.count).toBe(1);
+    // A late edge from the retired channel must not land either.
+    windowVisibility.emit(false);
+    expect(isDocumentVisible()).toBe(true);
   });
 });
 

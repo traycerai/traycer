@@ -22,6 +22,10 @@ import {
   type EpicVisibilityBridgeSurface,
 } from "./epic-visibility-bridge";
 import {
+  buildWindowVisibilityBridge,
+  type WindowVisibilityBridgeSurface,
+} from "./window-visibility-bridge";
+import {
   buildPerWindowStateBridge,
   type PerWindowStateBridgeSurface,
 } from "./per-window-state-bridge";
@@ -44,6 +48,7 @@ export interface WindowsBridgeSurface {
     ): Promise<OpenDraftInNewWindowResult>;
     ownership: OwnershipBridgeSurface;
     epicVisibility: EpicVisibilityBridgeSurface;
+    windowVisibility: WindowVisibilityBridgeSurface;
     perWindowState: PerWindowStateBridgeSurface;
     authSession: AuthSessionBridgeSurface;
   };
@@ -91,6 +96,7 @@ export function buildWindowsBridge(windowId: string): WindowsBridgeSurface {
         ) as Promise<OpenDraftInNewWindowResult>,
       ownership: buildOwnershipBridge(),
       epicVisibility: buildEpicVisibilityBridge(),
+      windowVisibility: buildWindowVisibilityBridge(),
       perWindowState: buildPerWindowStateBridge(),
       authSession: buildAuthSessionBridge(),
     },

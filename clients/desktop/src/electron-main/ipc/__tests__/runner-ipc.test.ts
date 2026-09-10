@@ -379,13 +379,26 @@ class FakeWindowRegistry implements IpcWindowRegistry {
     return this.mruWindowId;
   }
 
-  on(_event: "change", listener: () => void): void {
-    this.listeners.add(listener);
+  on(event: "change" | "geometry", listener: () => void): void {
+    (event === "geometry" ? this.geometryListeners : this.listeners).add(
+      listener,
+    );
   }
 
-  off(_event: "change", listener: () => void): void {
-    this.listeners.delete(listener);
+  off(event: "change" | "geometry", listener: () => void): void {
+    (event === "geometry" ? this.geometryListeners : this.listeners).delete(
+      listener,
+    );
   }
+
+  /** What the real registry emits on a window's minimize/restore. */
+  emitGeometry(): void {
+    for (const listener of this.geometryListeners) {
+      listener();
+    }
+  }
+
+  private readonly geometryListeners = new Set<() => void>();
 
   private emitChange(): void {
     for (const listener of this.listeners) {
@@ -634,6 +647,7 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.ownershipRelease,
           RunnerHostInvoke.epicVisibilitySnapshot,
           RunnerHostInvoke.epicVisibilityReport,
+          RunnerHostInvoke.windowVisibilitySnapshot,
           RunnerHostInvoke.perWindowStateGet,
           RunnerHostInvoke.perWindowStateCapabilities,
           RunnerHostInvoke.perWindowStateUpdate,
@@ -1273,6 +1287,90 @@ describe("RunnerIpcBridge", () => {
         { windowId: "window-a", epicIds: ["epic-a", "epic-b"] },
       ]);
     }
+
+    bridge.dispose();
+  });
+
+  it("tells each window about its OWN on-screen state on minimize/restore and hide/show, and answers the snapshot per sender", async () => {
+    // Renderer parking's window-level input (fixup 5). The renderer cannot
+    // observe minimise itself: every GUI window runs with
+    // `backgroundThrottling: false`, which keeps `document.visibilityState`
+    // at "visible" through minimise and hide. So main derives "on screen"
+    // from the BrowserWindow and pushes it to THAT window only - a minimised
+    // window A must not make window B think it is hidden.
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const windowA = buildWindow();
+    const windowB = buildWindow();
+    let aMinimised = false;
+    let aVisible = true;
+    const windowAOnScreen: IpcManagedWindow = {
+      ...windowA,
+      isVisible: () => aVisible,
+      isMinimized: () => aMinimised,
+    };
+    registry.add("window-a", 101, windowAOnScreen);
+    registry.add("window-b", 202, windowB);
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+    const snapshotHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.windowVisibilitySnapshot,
+    );
+    if (snapshotHandler === undefined) {
+      throw new Error("window visibility snapshot handler missing");
+    }
+    const ownVisibilityEvents = (target: CapturingWindow): unknown[] =>
+      target.sentMessages
+        .filter((m) => m.channel === RunnerHostEvent.windowVisibilityChange)
+        .map((m) => m.payload);
+    windowA.sentMessages.length = 0;
+    windowB.sentMessages.length = 0;
+
+    // Per SENDER: the same invoke answers differently for each window.
+    aMinimised = true;
+    expect(await Promise.resolve(snapshotHandler(sender(101)))).toBe(false);
+    expect(await Promise.resolve(snapshotHandler(sender(202)))).toBe(true);
+    aMinimised = false;
+
+    // Minimise A: the registry's `geometry` event carries no window id, so
+    // main re-derives every window and sends only the ones that MOVED. A
+    // gets `false`; B, unchanged, hears nothing about A.
+    aMinimised = true;
+    registry.emitGeometry();
+    expect(ownVisibilityEvents(windowA)).toEqual([false]);
+    expect(ownVisibilityEvents(windowB)).toEqual([]);
+
+    // A second geometry event with nothing moved (a maximize, say) is not an
+    // event in the renderer.
+    registry.emitGeometry();
+    expect(ownVisibilityEvents(windowA)).toEqual([false]);
+
+    // Restore.
+    aMinimised = false;
+    registry.emitGeometry();
+    expect(ownVisibilityEvents(windowA)).toEqual([false, true]);
+
+    // Hide/show travel on the registry's `change` event instead; same answer.
+    aVisible = false;
+    registry.add("window-c", 303, buildWindow()); // any `change` emission
+    expect(ownVisibilityEvents(windowA)).toEqual([false, true, false]);
+    expect(ownVisibilityEvents(windowB)).toEqual([]);
+    // (The handler's "unattributable sender answers visible" arm is not
+    // reachable here: `handleInvoke` rejects an unregistered sender as
+    // untrusted before any handler runs.)
 
     bridge.dispose();
   });
@@ -4054,6 +4152,9 @@ describe("RunnerIpcBridge", () => {
       // has to learn what the OTHERS are showing, and the cross-window
       // visibility fan-out only carries changes (plan C, decision C6).
       { channel: RunnerHostEvent.epicVisibilityChange, payload: [] },
+      // This window's OWN on-screen answer, replayed because the renderer's
+      // Page Visibility API is inert under `backgroundThrottling: false`.
+      { channel: RunnerHostEvent.windowVisibilityChange, payload: true },
       {
         channel: RunnerHostEvent.perWindowStateChange,
         payload: {

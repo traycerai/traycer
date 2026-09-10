@@ -19,6 +19,7 @@ import {
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { setDesktopEpicOwnershipBridge } from "@/lib/windows/desktop-epic-ownership";
 import { installCrossWindowEpicVisibility } from "@/lib/epics/cross-window-epic-visibility";
+import { installDesktopWindowVisibility } from "@/lib/epics/desktop-window-visibility";
 import {
   createDebouncedDesktopPerWindowProjectionBridge,
   DESKTOP_PER_WINDOW_PROJECTION_DEBOUNCE_MS,
@@ -232,6 +233,11 @@ function installDesktopWindowsBridge(
   // story, and torn down in this effect's cleanup rather than in
   // `clearDesktopWindowsBridge` - that helper also runs on the NO-bridge path,
   // where nothing was installed to undo.
+  //
+  // The window-level input FIRST: the cross-window install reports this
+  // window's claim synchronously, and that report reads the document gate.
+  const uninstallDesktopWindowVisibility =
+    installDesktopWindowVisibility(bridge);
   const uninstallCrossWindowVisibility =
     installCrossWindowEpicVisibility(bridge);
   setActiveDesktopPerWindowProjectionBridge(projectionBridge);
@@ -318,6 +324,7 @@ function installDesktopWindowsBridge(
   return () => {
     lifecycle.cancelled = true;
     uninstallCrossWindowVisibility();
+    uninstallDesktopWindowVisibility();
     perWindowSubscription.dispose();
     if (typeof window !== "undefined") {
       window.removeEventListener("pagehide", flushProjection);

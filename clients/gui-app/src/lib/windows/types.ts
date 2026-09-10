@@ -796,6 +796,24 @@ export interface DesktopWindowsBridge {
       dispose(): void;
     };
   };
+  /**
+   * Whether THIS window is on screen (shown and not minimised) as main sees
+   * it. Renderer parking's window-level input: the Page Visibility API is
+   * inert in the desktop app because every window runs with
+   * `backgroundThrottling: false`, so minimising changes nothing the renderer
+   * can observe on its own.
+   *
+   * Optional + capability-probed like `epicVisibility`, for the same skew
+   * reason. Absent, the renderer keeps answering "visible" and parking waits
+   * for a tab hide, which is the pre-channel behaviour. Probed at the install
+   * site (`lib/epics/desktop-window-visibility.ts`).
+   */
+  windowVisibility?: {
+    snapshot(): Promise<boolean>;
+    onChange(handler: (onScreen: boolean) => void): {
+      dispose(): void;
+    };
+  };
   perWindowState: {
     get(): Promise<DesktopPerWindowSnapshot>;
     capabilities?(): Promise<DesktopPerWindowStateCapabilities>;
