@@ -107,19 +107,15 @@ function pinActionLabel(
   taskPinned: boolean | null,
 ): string {
   // Three different unavailabilities, and one label cannot honestly cover any
-  // two of them: "stored on the connected device" is a fact about where the
-  // epic LIVES, and stating it for a cloud-backed row whose session merely lost
-  // its verdict - or whose cloud copy was deleted - is a false statement about
-  // that.
-  //
-  // "the connected device" rather than "this device": the epic lives on the
-  // HOST serving it, which on a phone or a relay-only shell is not the machine
-  // rendering this menu. See `history-pin-availability.ts` for the rule.
+  // two of them: each names its own remedy (a host update, nothing, a
+  // sign-in), and stating one for a row in another state sends the person to
+  // fix the wrong thing. None of them says WHERE the task lives - see
+  // `history-pin-availability.ts` for that rule.
   if (unavailableReason === "local-home") {
-    return "Pin Task in History \u2014 stored on the connected device";
+    return "Pin Task in History \u2014 needs a newer host";
   }
   if (unavailableReason === "preserved-orphan") {
-    return "Pin Task in History \u2014 cloud copy deleted";
+    return "Pin Task in History \u2014 task deleted";
   }
   if (unavailableReason === "unverified-session") {
     return "Pin Task in History \u2014 sign-in not confirmed";

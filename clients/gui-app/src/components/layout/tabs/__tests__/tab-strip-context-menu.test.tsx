@@ -146,13 +146,12 @@ describe("TabContextMenuContent preserved-orphan pin guard", () => {
     expect(item.getAttribute("data-disabled")).toBeNull();
     // Lane 9 item 5 split the collapsed "row" reason into `local-home` and
     // `preserved-orphan`, and this row is the latter (a cloud-deleted epic
-    // with locally-preserved edits) - "stored on the connected device" is
-    // the `local-home` sentence, and pinning it here was pinning the
+    // with locally-preserved edits) - "needs a newer host" is the
+    // `local-home` sentence, and pinning it here was pinning the
     // pre-split conflation. Updated to the surviving preserved-orphan
-    // sentence, "cloud copy deleted".
-    expect(item.textContent).toContain(
-      "Pin Task in History — cloud copy deleted",
-    );
+    // sentence, "task deleted".
+    expect(item.textContent).toContain("Pin Task in History — task deleted");
+    expect(item.textContent).not.toMatch(/cloud|device/i);
     fireEvent.click(item);
     expect(onSetTaskPinned).not.toHaveBeenCalled();
   });
@@ -209,8 +208,9 @@ describe("TabContextMenuContent local-home pin gate (lane 9 item 5)", () => {
     ).toBeNull();
     expect(item.getAttribute("aria-disabled")).toBe("true");
     expect(item.textContent).toContain(
-      "Pin Task in History — stored on the connected device",
+      "Pin Task in History — needs a newer host",
     );
+    expect(item.textContent).not.toMatch(/cloud|device/i);
     fireEvent.click(item);
     expect(onSetTaskPinned).not.toHaveBeenCalled();
   });
@@ -234,7 +234,7 @@ describe("TabContextMenuContent local-home pin gate (lane 9 item 5)", () => {
     ).toBeNull();
     expect(item.getAttribute("aria-disabled")).toBeNull();
     expect(item.textContent).toContain("Pin Task in History");
-    expect(item.textContent).not.toContain("stored on the connected device");
+    expect(item.textContent).not.toContain("needs a newer host");
     fireEvent.click(item);
     expect(onSetTaskPinned).toHaveBeenCalledWith(true);
   });
@@ -258,8 +258,9 @@ describe("TabContextMenuContent local-home pin gate (lane 9 item 5)", () => {
     expect(item.getAttribute("data-local-home-pin-unavailable")).toBe("true");
     expect(item.getAttribute("aria-disabled")).toBe("true");
     expect(item.textContent).toContain(
-      "Pin Task in History — stored on the connected device",
+      "Pin Task in History — needs a newer host",
     );
+    expect(item.textContent).not.toMatch(/cloud|device/i);
     fireEvent.click(item);
     expect(onSetTaskPinned).not.toHaveBeenCalled();
   });

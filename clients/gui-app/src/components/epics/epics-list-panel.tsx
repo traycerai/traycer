@@ -139,14 +139,14 @@ const VIEWER_DELETE_TOOLTIP = "Viewers cannot select task for deletion.";
 const NO_DELETE_PERMISSION_TOOLTIP =
   "You don't have permission to delete this task.";
 const PRESERVED_ORPHAN_DELETE_TOOLTIP =
-  "This epic's cloud copy was already deleted. Only this device's edits remain, so there is nothing left to delete.";
+  "This task was already deleted. Only its unsynced edits remain, so there is nothing left to delete.";
 // States the CONDITION rather than predicting a reconnect, for the same reason
 // the pin tooltip does: the session may be unverified because authn refused the
 // credential, which no amount of waiting fixes - only signing in again does.
-// "Once your sign-in is confirmed" covers both the transient recovery and
-// the re-sign-in without promising either.
+// "Once it is" covers both the transient recovery and the re-sign-in without
+// promising either.
 const UNVERIFIED_SESSION_DELETE_TOOLTIP =
-  "Your sign-in couldn't be confirmed, so cloud changes are paused. Deleting this task will work again once your sign-in is confirmed.";
+  "Your sign-in couldn't be confirmed. Deleting this task will work again once it is.";
 const HISTORY_REFRESH_TIMEOUT_MS = 10_000;
 
 export type EpicsListPanelVariant = "page" | "embedded" | "picker";
@@ -1347,10 +1347,11 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
   } = props;
 
   // Partitioned, not sorted into place. A preserved orphan is not a task with
-  // an unusual status - the server has deleted it and only this device's
+  // an unusual status - the server has deleted it and only the serving host's
   // never-uploaded edits remain - so mixing it into the ordinary list under
   // whatever sort happens to be active is how it stayed effectively invisible
-  // even once it was listable.
+  // even once it was listable. The heading says the task was deleted and its
+  // edits kept; it does not say which side deleted it or which side kept them.
   const preservedItems = items.filter(
     (item) => item.isPreservedOrphan === true,
   );
@@ -1416,7 +1417,7 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
           data-testid="epics-list-preserved-section"
         >
           <h2 className="text-ui-xs font-medium text-destructive">
-            Deleted in cloud &mdash; local edits kept on this device
+            Deleted &mdash; unsynced edits kept
           </h2>
           <ul className="flex flex-col gap-2">
             {preservedItems.map((item) => (

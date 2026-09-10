@@ -33,6 +33,7 @@ import {
   EpicsListPanel,
   type EpicsListPanelVariant,
 } from "@/components/epics/epics-list-panel";
+import { EpicsListHostRequiresCloudToList } from "@/components/epics/epics-list-shared";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
 import type { HistoryFacets } from "@/hooks/home/use-history-query";
@@ -770,7 +771,7 @@ describe("<EpicsListPanel />", () => {
     renderPanel("embedded", "/");
 
     const section = await screen.findByTestId("epics-list-preserved-section");
-    expect(section.textContent).toContain("Deleted in cloud");
+    expect(section.textContent).toContain("Deleted — unsynced edits kept");
     expect(section.textContent).toContain("Preserved orphan");
     // Arrangement fidelity: the ordinary list still rendered, and the orphan
     // is not in it - so this is a partition, not "everything moved".
@@ -818,7 +819,7 @@ describe("<EpicsListPanel />", () => {
     renderPanel("embedded", "/");
 
     const pin = await screen.findByRole("button", {
-      name: "Pinning Local only epic needs a newer host on the connected device; it is stored there",
+      name: "Pinning Local only epic needs a newer Traycer host",
     });
     // `aria-disabled`, not the native attribute: a natively disabled button is
     // unfocusable and swallows pointer events, so the tooltip below - the only
@@ -833,7 +834,7 @@ describe("<EpicsListPanel />", () => {
     // account never gets and a stale row has already had - see
     // `HistoryPinControl`.
     expect(tooltipTextNear(pin)).toBe(
-      "This epic is stored on the connected device. Pinning it needs a newer host version there; update that device's Traycer host.",
+      "Pinning this task needs a newer Traycer host version. Update the host that serves it.",
     );
   });
 
@@ -853,14 +854,53 @@ describe("<EpicsListPanel />", () => {
     renderPanel("embedded", "/");
 
     const pin = await screen.findByRole("button", {
-      name: "Pinning Orphaned epic is unavailable; its cloud copy was deleted and only the connected device's edits remain",
+      name: "Pinning Orphaned epic is unavailable; the task was deleted and only its unsynced edits remain",
     });
     expect(pin.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(pin);
     expect(testState.setPinnedMutate).not.toHaveBeenCalled();
     expect(tooltipTextNear(pin)).toBe(
-      "This epic's cloud copy was deleted. Only the connected device's edits remain, so it can't be pinned.",
+      "This task was deleted. Its unsynced edits are kept, but it can't be pinned.",
     );
+  });
+
+  it("never names the cloud or the device on the preserved-orphan section or its pin control", async () => {
+    testState.items = [
+      historyItem({
+        title: "Orphaned epic",
+        isLocalHome: false,
+        isPreservedOrphan: true,
+        isPinned: false,
+      }),
+    ];
+    renderPanel("embedded", "/");
+
+    const section = await screen.findByTestId("epics-list-preserved-section");
+    const heading = section.querySelector("h2");
+    expect(heading).not.toBeNull();
+    expect(heading?.textContent).toBe("Deleted — unsynced edits kept");
+    expect(section.textContent ?? "").not.toMatch(/cloud/i);
+    expect(section.textContent ?? "").not.toMatch(/device/i);
+
+    const pin = await screen.findByRole("button", {
+      name: /Pinning Orphaned epic/,
+    });
+    const pinAccessibleName = pin.getAttribute("aria-label") ?? "";
+    expect(pinAccessibleName).not.toMatch(/cloud/i);
+    expect(pinAccessibleName).not.toMatch(/device/i);
+    const tooltip = tooltipTextNear(pin);
+    expect(tooltip).not.toBeNull();
+    expect(tooltip ?? "").not.toMatch(/cloud/i);
+    expect(tooltip ?? "").not.toMatch(/device/i);
+  });
+
+  it("never names the cloud or the device when the host requires cloud access to list", () => {
+    render(<EpicsListHostRequiresCloudToList />);
+
+    const node = screen.getByTestId("epics-list-host-requires-cloud-to-list");
+    expect(node.textContent).toContain("Couldn't load your tasks");
+    expect(node.textContent ?? "").not.toMatch(/cloud/i);
+    expect(node.textContent ?? "").not.toMatch(/device/i);
   });
 
   // The Sweep control keeps its slot in every task row rather than appearing

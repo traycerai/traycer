@@ -677,7 +677,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       renderPanel("embedded", "/");
 
       const pin = await screen.findByRole("button", {
-        name: "Pinning Local only epic needs a newer host on the connected device; it is stored there",
+        name: "Pinning Local only epic needs a newer Traycer host",
       });
       expect(pin.getAttribute("aria-disabled")).toBe("true");
 
@@ -696,7 +696,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       renderPanel("embedded", "/");
 
       const pin = await screen.findByRole("button", {
-        name: "Pinning Orphaned epic is unavailable; its cloud copy was deleted and only the connected device's edits remain",
+        name: "Pinning Orphaned epic is unavailable; the task was deleted and only its unsynced edits remain",
       });
       expect(pin.getAttribute("aria-disabled")).toBe("true");
 

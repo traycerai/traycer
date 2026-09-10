@@ -155,15 +155,16 @@ export function EpicsListChatHostFilterUnsupported(): ReactNode {
  * the negotiated host predates the local-first `epic.listTasks` leg, so the
  * only listing it can produce is one that spends the account's credential.
  *
- * The copy names the HOST's missing capability, and every other phrasing this
- * state could take is a false statement, which is why the wording is fenced
- * here rather than left to a call site:
+ * The copy names the two remedies and nothing else, and every other phrasing
+ * this state could take is a false statement, which is why the wording is
+ * fenced here rather than left to a call site:
  *
  *  - a spinner claims something is in flight; nothing is, and nothing will be;
  *  - "No tasks yet" claims the account is empty, which is unknown;
- *  - "Showing what the connected device holds" claims the device is empty, and
- *    on this exact host it is not - the epics are there, the host simply has no
- *    way to list them without the cloud.
+ *  - anything about what the host holds versus what the cloud holds narrates
+ *    a split the person never asked about - they know their tasks, not where
+ *    each copy lives - and on this exact host it would also be wrong: the
+ *    epics are there, the host simply cannot list them without a sign-in.
  *
  * It also does not say the cloud is unreachable. The cloud may be perfectly
  * fine; this client is declining to spend it on an unverified session.
@@ -175,12 +176,11 @@ export function EpicsListHostRequiresCloudToList(): ReactNode {
       data-testid="epics-list-host-requires-cloud-to-list"
     >
       <p className="font-medium text-foreground">
-        This host needs cloud access to list Epics
+        Couldn&apos;t load your tasks
       </p>
       <p className="max-w-full">
-        It&apos;s running a version that can&apos;t list Epics from the
-        connected device alone, and your sign-in couldn&apos;t be confirmed.
-        Update the host, or sign in again, to see them.
+        Your sign-in couldn&apos;t be confirmed, and this host version needs it
+        to list tasks. Sign in again, or update the host, to see them.
       </p>
     </div>
   );
@@ -403,7 +403,7 @@ function errorHeadline(error: Error): string {
       return "You don't have permission to view these epics.";
     }
   }
-  return "Couldn't reach Traycer Cloud";
+  return "Couldn't load your tasks";
 }
 
 function formatError(error: Error): string {
