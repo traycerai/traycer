@@ -31,7 +31,11 @@
  * start call's own `{ ok: true, recordingId }`, so the badge appears on the
  * click rather than a round trip later. It is superseded by the
  * `recordingStarted` frame for the same id and is not a second source of
- * truth: it can only ever precede the driver, never contradict it.
+ * truth: it can only ever precede the driver, never contradict it. That is a
+ * property of the WRITE, not of the arrival order - the RPC and the
+ * file-events stream are different sockets, so the frame routinely lands
+ * first, and the optimistic write yields to any badge already carrying the
+ * same recording id.
  *
  * ## Gating
  *
@@ -426,12 +430,24 @@ function BrowserTileCaptureControlsBody(props: {
             });
             return;
           }
-          // Optimistic, and superseded by this run's own `recordingStarted`
-          // frame. If that frame never comes (no file-events stream on this
-          // host) the badge stays on `starting` - which is honest, and the
-          // stop button still addresses the run by the id the host just
-          // minted.
-          setBadge({ phase: "starting", recordingId: response.recordingId });
+          // Optimistic, and NON-DESTRUCTIVE. This RPC and the file-events
+          // stream are different sockets with no ordering between them, so by
+          // the time this resolves the driver may already have said
+          // `recording` - or, for a very short run, `ended` - for this very
+          // id. Writing `starting` over that would demote the badge for the
+          // rest of the run, which is precisely the "never contradict the
+          // driver" rule this module's header states. A badge carrying a
+          // DIFFERENT id is a previous run lingering out its settled timer,
+          // and the new run supersedes it.
+          //
+          // If the frame never comes (no file-events stream on this host) the
+          // badge stays on `starting` - which is honest, and the stop button
+          // still addresses the run by the id the host just minted.
+          setBadge((current) =>
+            current !== null && current.recordingId === response.recordingId
+              ? current
+              : { phase: "starting", recordingId: response.recordingId },
+          );
         },
       },
     );
@@ -543,7 +559,14 @@ function BrowserTileRecordingBadge(props: {
   readonly uploadStatus: EpicFileStatusOrUnknown | null;
 }) {
   const badge = props.badge;
-  const live = badge.phase === "recording";
+  // Both pre-`ended` phases are a run in progress, so both are lit. `starting`
+  // pulses for the same reason the optimistic write above is non-destructive:
+  // the start RPC and the `recordingStarted` frame race, and a badge that
+  // stayed grey until the frame landed would read as "nothing is happening"
+  // for the length of a round trip - or for the whole run on a host with no
+  // file-events stream. The elapsed clock still waits for `recording`: it is
+  // the driver that says when the run actually began.
+  const live = badge.phase !== "ended";
   return (
     <div
       className={cn(
@@ -564,7 +587,7 @@ function BrowserTileRecordingBadge(props: {
       <span role="status" aria-live="polite" className="min-w-0 truncate">
         {recordingBadgeLabel(badge, props.uploadStatus)}
       </span>
-      {live ? (
+      {badge.phase === "recording" ? (
         <RecordingElapsed key={badge.startedAt} startedAt={badge.startedAt} />
       ) : null}
     </div>

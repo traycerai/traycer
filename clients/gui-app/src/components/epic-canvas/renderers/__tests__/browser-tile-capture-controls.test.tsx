@@ -83,6 +83,12 @@ interface StartRecordingMutateOptions {
   readonly onSuccess: (response: StartTabRecordingResponse) => void;
 }
 
+/**
+ * `defer` parks `onSuccess` instead of calling it, so a test can land the
+ * `epic.fileEvents` frames FIRST and flush the RPC's callback afterwards -
+ * the real arrival order whenever the stream beats the round trip, which it
+ * routinely does because they are different sockets.
+ */
 const startRecordingState = vi.hoisted(() => ({
   isPending: false,
   nextResponse: {
@@ -90,11 +96,17 @@ const startRecordingState = vi.hoisted(() => ({
     recordingId: "r1",
   } as StartTabRecordingResponse,
   calls: [] as StartTabRecordingRequest[],
+  defer: false,
+  deferred: null as ((response: StartTabRecordingResponse) => void) | null,
   mutate: (
     variables: StartTabRecordingRequest,
     options: StartRecordingMutateOptions,
   ) => {
     startRecordingState.calls.push(variables);
+    if (startRecordingState.defer) {
+      startRecordingState.deferred = options.onSuccess;
+      return;
+    }
     options.onSuccess(startRecordingState.nextResponse);
   },
 }));
@@ -258,6 +270,60 @@ function renderToolbar(
   );
 }
 
+/** Deliver the parked `onSuccess` of a `defer`red start call. */
+function flushStartRecording(): void {
+  const onSuccess = startRecordingState.deferred;
+  if (onSuccess === null) {
+    throw new Error("no deferred start-recording onSuccess to flush");
+  }
+  startRecordingState.deferred = null;
+  act(() => {
+    onSuccess(startRecordingState.nextResponse);
+  });
+}
+
+function badgeText(): string {
+  return screen.getByTestId("browser-tile-recording-badge").textContent;
+}
+
+/** The pulsing dot's classes - the badge's only "this run is live" channel. */
+function badgeIndicatorClassName(): string {
+  const indicator = screen
+    .getByTestId("browser-tile-recording-badge")
+    .querySelector("span[aria-hidden]");
+  return indicator === null ? "" : indicator.className;
+}
+
+function startRecordingClick(): void {
+  fireEvent.click(screen.getByRole("button", { name: "Record tab" }));
+}
+
+function landRecordingStarted(recordingId: string): void {
+  act(() => {
+    recordEpicFileEvent(TARGET.epicId, {
+      kind: "recordingStarted",
+      recordingId,
+      tabId: TARGET.tabId,
+      hasBinaryPayload: false,
+    });
+  });
+}
+
+function landRecordingEnded(
+  recordingId: string,
+  outcome: "saved" | "failed" | "discarded",
+): void {
+  act(() => {
+    recordEpicFileEvent(TARGET.epicId, {
+      kind: "recordingEnded",
+      recordingId,
+      tabId: TARGET.tabId,
+      outcome,
+      hasBinaryPayload: false,
+    });
+  });
+}
+
 function makeRecordingClipRecord(
   status: string,
   recordingId: string,
@@ -292,6 +358,8 @@ beforeEach(() => {
   startRecordingState.isPending = false;
   startRecordingState.nextResponse = { ok: true, recordingId: "r1" };
   startRecordingState.calls = [];
+  startRecordingState.defer = false;
+  startRecordingState.deferred = null;
   stopRecordingState.isPending = false;
   stopRecordingState.calls = [];
   recordingClipState.value = null;
@@ -748,5 +816,88 @@ describe("<BrowserTileCaptureControls /> collaborator-sharing notice (D06)", () 
       { readonly description: string },
     ];
     expect(secondCallArgs[1].description).toContain(SHARING_COPY);
+  });
+});
+
+// ── 8. The start RPC resolving after the driver has spoken ────────────────
+
+/**
+ * `epic.startTabRecording` and the `epic.fileEvents` stream are different
+ * sockets with no ordering between them, so the driver's frames regularly
+ * arrive BEFORE the RPC that caused them resolves. The optimistic `starting`
+ * write must yield in that case - it is allowed to precede the driver, never
+ * to contradict it.
+ */
+describe("<BrowserTileCaptureControls /> late start-RPC resolution", () => {
+  it("keeps the recording phase and its clock when onSuccess lands after recordingStarted", () => {
+    startRecordingState.defer = true;
+    renderToolbar(PRIMARY_TILE_CHROME_CAPABILITIES, TARGET);
+
+    startRecordingClick();
+    landRecordingStarted("r1");
+    expect(badgeText()).toContain("Recording");
+
+    flushStartRecording();
+
+    expect(badgeText()).not.toContain("Starting");
+    expect(badgeText()).toContain("Recording");
+    expect(badgeText()).toContain("0:00");
+    expect(
+      screen.getByRole("button", { name: "Stop recording" }),
+    ).not.toBeNull();
+  });
+
+  it("keeps the ended phase when a short run settles before onSuccess lands", () => {
+    startRecordingState.defer = true;
+    renderToolbar(PRIMARY_TILE_CHROME_CAPABILITIES, TARGET);
+
+    startRecordingClick();
+    landRecordingStarted("r1");
+    recordingClipState.value = makeRecordingClipRecord("pending", "r1");
+    landRecordingEnded("r1", "saved");
+    expect(badgeText()).toContain("Uploading");
+
+    flushStartRecording();
+
+    expect(badgeText()).toContain("Uploading");
+    expect(badgeText()).not.toContain("Starting");
+    // Back to the idle affordance - a settled run is not in flight.
+    expect(screen.getByRole("button", { name: "Record tab" })).not.toBeNull();
+  });
+
+  it("replaces a previous run's lingering settled badge with the new run's starting phase", () => {
+    renderToolbar(PRIMARY_TILE_CHROME_CAPABILITIES, TARGET);
+
+    startRecordingClick();
+    landRecordingStarted("r1");
+    landRecordingEnded("r1", "discarded");
+    expect(badgeText()).toContain("Nothing recorded");
+
+    // The settled badge is still on screen, lingering, when the next run
+    // starts - a badge for an id that is not this run's must not survive it.
+    startRecordingState.nextResponse = { ok: true, recordingId: "r2" };
+    startRecordingClick();
+
+    expect(badgeText()).toContain("Starting recording");
+    expect(badgeText()).not.toContain("Nothing recorded");
+  });
+
+  it("lights the pulsing indicator for starting, and drops it once the run settles", () => {
+    renderToolbar(PRIMARY_TILE_CHROME_CAPABILITIES, TARGET);
+
+    startRecordingClick();
+    expect(badgeText()).toContain("Starting recording");
+    expect(badgeIndicatorClassName()).toContain("motion-safe:animate-pulse");
+    expect(badgeIndicatorClassName()).toContain("bg-destructive");
+    // The clock belongs to the driver's start instant, which `starting` has
+    // not been told yet.
+    expect(badgeText()).not.toContain("0:00");
+
+    landRecordingStarted("r1");
+    expect(badgeIndicatorClassName()).toContain("motion-safe:animate-pulse");
+    expect(badgeText()).toContain("0:00");
+
+    landRecordingEnded("r1", "discarded");
+    expect(badgeIndicatorClassName()).not.toContain("animate-pulse");
   });
 });
