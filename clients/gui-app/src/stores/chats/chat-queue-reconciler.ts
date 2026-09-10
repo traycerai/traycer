@@ -1972,6 +1972,12 @@ export function withoutSettledAcceptedQueueStatusActions(
  * spinner. The durable `checkpoint.restored` event is the other door
  * ({@link settleRestoreAttemptsByEvidence}), exact by client action id, for a
  * completion frame that died with the dropped stream.
+ *
+ * NOT for a frame the event door already answered: when the outcome reached
+ * the client ahead of its frame, the record is gone and the earliest record
+ * left for the checkpoint is a LATER attempt's. The caller asks the ledger
+ * first ({@link consumeSettledRestoreCompletion}) and only retires here when
+ * the frame is a completion no evidence has settled.
  */
 export function withoutEarliestAcceptedRestoreActionFor(
   acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
@@ -1997,14 +2003,29 @@ export function withoutEarliestAcceptedRestoreActionFor(
 }
 
 /**
- * Evidence that a restore attempt is over, naming its action: the durable
- * `checkpoint.restored` outcome (with the result it recorded), or a refusal
- * or failure notice for the action (`outcome: null`).
+ * Evidence that a restore attempt is over, naming its action.
+ *
+ * `outcome`: the durable `checkpoint.restored` event - the attempt ran and a
+ * `restoreCompleted` frame for it exists (broadcast after the event, so it
+ * may still be on its way). `outcome` is the manifest it recorded, `null`
+ * when the metadata did not parse: the record still retires, the spinner is
+ * cleared rather than completed, and the frame is still owed.
+ *
+ * `refusal`: an error notice or a rejected ack for the action - the attempt
+ * is over WITHOUT a completion; no frame follows. The two kinds part at the
+ * completion ledger ({@link SettledRestoreCompletion}): only an `outcome`
+ * leaves an entry, because only an outcome has a frame to answer for.
  */
-export interface RestoreAttemptEvidence {
-  readonly clientActionId: string;
-  readonly outcome: RestoreResultManifest | null;
-}
+export type RestoreAttemptEvidence =
+  | {
+      readonly clientActionId: string;
+      readonly kind: "outcome";
+      readonly outcome: RestoreResultManifest | null;
+    }
+  | {
+      readonly clientActionId: string;
+      readonly kind: "refusal";
+    };
 
 /**
  * The restore outcomes in `events`: every `checkpoint.restored` event, which
@@ -2025,16 +2046,49 @@ export function restoreOutcomesFrom(
     const parsed = restoreResultManifestSchema.safeParse(event.metadata);
     evidence.push({
       clientActionId: event.clientActionId,
+      kind: "outcome",
       outcome: parsed.success ? parsed.data : null,
     });
   }
   return evidence;
 }
 
-/** What settling restore attempts by evidence leaves behind. */
+/**
+ * A restore attempt whose record the durable outcome retired BEFORE its
+ * `restoreCompleted` frame arrived - the frame this entry now answers for.
+ *
+ * The host broadcasts the frame first and the outcome event second, so on
+ * the live line the frame door ({@link withoutEarliestAcceptedRestoreActionFor})
+ * retires the record and the event names nothing. The reverse order is
+ * reachable all the same: the outcome is journaled across an await, and a
+ * legacy snapshot serialized in that gap carries it ahead of the frame. The
+ * frame carries no action id, so when it then arrives it would retire the
+ * EARLIEST record for its checkpoint - a second attempt accepted back to
+ * back, whose own restore has not run yet (Codex on ad9f99fb8). This entry
+ * is how the frame door tells "already settled by the event" from "one more
+ * attempt finished": one entry per retired record, consumed by the next
+ * completion frame for the checkpoint on the same connection.
+ *
+ * `finishedAt` is the recorded `restoredAt`, which the frame repeats as its
+ * own `finishedAt`, so a matched frame is the same completion and not merely
+ * the same checkpoint; `null` when the recorded manifest did not parse and
+ * only the checkpoint is known. Stamped with the connection the evidence
+ * arrived on: the frame it waits for can only come on that connection (the
+ * gap above is a same-connection gap), so a reconnect drops it
+ * ({@link withoutSettledRestoreCompletionsBefore}) rather than letting it
+ * swallow a later attempt's frame.
+ */
+export interface SettledRestoreCompletion {
+  readonly checkpointId: string;
+  readonly finishedAt: number | null;
+  readonly connectionEpoch: number;
+}
+
+/** The restore-attempt bookkeeping that evidence settles, as one unit. */
 export interface SettledRestoreAttempts {
   readonly acceptedActions: Readonly<Record<string, AcceptedChatAction>>;
   readonly restore: ChatRestoreSlot | null;
+  readonly settledRestoreCompletions: ReadonlyArray<SettledRestoreCompletion>;
 }
 
 /**
@@ -2056,39 +2110,116 @@ export interface SettledRestoreAttempts {
  * (`hasUnsettledChatWork` reads the record AND the in-flight slot): the
  * record retired by a live outcome event while the spinner stayed in flight
  * held the epic until a reconnect happened to sweep it (Codex on ac6c4eca1).
+ *
+ * A record retired by an OUTCOME (not a refusal - a refused attempt sends no
+ * completion frame) also leaves a {@link SettledRestoreCompletion} for the
+ * frame that may still follow it on `connectionEpoch`. Returned as the whole
+ * next ledger so a caller can spread the result into the store state.
  */
 export function settleRestoreAttemptsByEvidence(
-  acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
-  restore: ChatRestoreSlot | null,
+  current: SettledRestoreAttempts,
   evidence: ReadonlyArray<RestoreAttemptEvidence>,
+  connectionEpoch: number,
 ): SettledRestoreAttempts {
-  if (evidence.length === 0) return { acceptedActions, restore };
+  if (evidence.length === 0) return current;
   const byAction = new Map(
     evidence.map((item) => [item.clientActionId, item] as const),
   );
-  let nextRestore = restore;
-  const nextAccepted = withoutAcceptedActions(acceptedActions, (action) => {
-    if (action.action !== "restoreCheckpoint") return false;
-    const item = byAction.get(action.clientActionId);
-    if (item === undefined) return false;
-    if (
-      nextRestore !== null &&
-      nextRestore.kind !== "completed" &&
-      nextRestore.checkpointId === action.checkpointId
-    ) {
-      nextRestore =
-        item.outcome === null
-          ? null
-          : {
-              kind: "completed",
-              checkpointId: item.outcome.checkpointId,
-              finishedAt: item.outcome.restoredAt,
-              results: item.outcome.results,
-            };
-    }
-    return true;
-  });
-  return { acceptedActions: nextAccepted, restore: nextRestore };
+  let nextRestore = current.restore;
+  const settled: SettledRestoreCompletion[] = [];
+  const nextAccepted = withoutAcceptedActions(
+    current.acceptedActions,
+    (action) => {
+      if (action.action !== "restoreCheckpoint") return false;
+      const item = byAction.get(action.clientActionId);
+      if (item === undefined) return false;
+      const outcome = item.kind === "outcome" ? item.outcome : null;
+      if (
+        nextRestore !== null &&
+        nextRestore.kind !== "completed" &&
+        nextRestore.checkpointId === action.checkpointId
+      ) {
+        nextRestore =
+          outcome === null
+            ? null
+            : {
+                kind: "completed",
+                checkpointId: outcome.checkpointId,
+                finishedAt: outcome.restoredAt,
+                results: outcome.results,
+              };
+      }
+      if (item.kind === "outcome") {
+        // A frame follows an outcome, parsed or not; the checkpoint is known
+        // from the record when the manifest is not.
+        const checkpointId = outcome?.checkpointId ?? action.checkpointId;
+        if (checkpointId !== null) {
+          settled.push({
+            checkpointId,
+            finishedAt: outcome?.restoredAt ?? null,
+            connectionEpoch,
+          });
+        }
+      }
+      return true;
+    },
+  );
+  return {
+    acceptedActions: nextAccepted,
+    restore: nextRestore,
+    settledRestoreCompletions:
+      settled.length === 0
+        ? current.settledRestoreCompletions
+        : [...current.settledRestoreCompletions, ...settled],
+  };
+}
+
+/**
+ * The ledger entries whose frame can still arrive: those stamped with
+ * `connectionEpoch`. An entry from an older connection waited for a frame
+ * that died with it; kept, it would answer for the NEXT attempt's frame on
+ * the new connection and leave that attempt's record holding forever.
+ */
+export function withoutSettledRestoreCompletionsBefore(
+  entries: ReadonlyArray<SettledRestoreCompletion>,
+  connectionEpoch: number,
+): ReadonlyArray<SettledRestoreCompletion> {
+  const kept = entries.filter(
+    (entry) => entry.connectionEpoch === connectionEpoch,
+  );
+  return kept.length === entries.length ? entries : kept;
+}
+
+/** What answering a completion frame from the ledger leaves behind. */
+export interface ConsumedSettledRestoreCompletion {
+  readonly entries: ReadonlyArray<SettledRestoreCompletion>;
+  /** `true` when the frame was the evidence's own completion, already retired. */
+  readonly consumed: boolean;
+}
+
+/**
+ * Answer a `restoreCompleted` frame from the ledger: consume the earliest
+ * entry for its checkpoint whose `finishedAt` is the frame's (or unknown).
+ * One entry per frame, because one frame is one attempt finishing - an
+ * entry left in place would answer for the next attempt's frame too. No
+ * entry means the frame is a completion the evidence has not retired, and
+ * the frame door retires a record itself.
+ */
+export function consumeSettledRestoreCompletion(
+  entries: ReadonlyArray<SettledRestoreCompletion>,
+  checkpointId: string,
+  finishedAt: number,
+): ConsumedSettledRestoreCompletion {
+  const index = entries.findIndex(
+    (entry) =>
+      entry.checkpointId === checkpointId &&
+      (entry.finishedAt === null || entry.finishedAt === finishedAt),
+  );
+  if (index === -1) return { entries, consumed: false };
+  return {
+    entries: entries.filter((_entry, at) => at !== index),
+    consumed: true,
+  };
 }
 
 /**
@@ -2110,10 +2241,18 @@ export function settleObservedRestoreSlot(
   evidence: ReadonlyArray<RestoreAttemptEvidence>,
 ): ChatRestoreSlot | null {
   if (restore === null || restore.kind === "completed") return restore;
-  const outcome = evidence.find(
-    (item) => item.outcome?.checkpointId === restore.checkpointId,
-  )?.outcome;
-  if (outcome === undefined || outcome === null) return restore;
+  let outcome: RestoreResultManifest | null = null;
+  for (const item of evidence) {
+    if (
+      item.kind === "outcome" &&
+      item.outcome !== null &&
+      item.outcome.checkpointId === restore.checkpointId
+    ) {
+      outcome = item.outcome;
+      break;
+    }
+  }
+  if (outcome === null) return restore;
   return {
     kind: "completed",
     checkpointId: outcome.checkpointId,

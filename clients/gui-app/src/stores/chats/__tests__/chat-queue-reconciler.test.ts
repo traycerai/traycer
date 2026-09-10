@@ -6,17 +6,21 @@ import type {
   ChatQueuedPromptItem,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
+  consumeSettledRestoreCompletion,
   pruneAcceptedActions,
   reconcileQueueChange,
   reconcileSnapshotChange,
   reconcileTurnSettled,
+  settleRestoreAttemptsByEvidence,
   sweepStalePendingActions,
   turnSettledFromStatus,
   unrecoverableSendNotice,
+  withoutSettledRestoreCompletionsBefore,
   NO_WORKTREE_SWEEP,
   type ReconcileQueueInput,
   type ReconcileSnapshotInput,
   type ReconcileTurnSettledInput,
+  type SettledRestoreCompletion,
 } from "@/stores/chats/chat-queue-reconciler";
 import { recoveryTextFromContent } from "@/lib/composer/content-recovery";
 import type {
@@ -1645,6 +1649,105 @@ describe("chat-queue-reconciler", () => {
 
       expect(message).not.toContain("Copy the message below");
       expect(message).toBe(`${PREAMBLE} It had no recoverable content.`);
+    });
+  });
+
+  // The completion ledger (Codex on ad9f99fb8): a `restoreCompleted` frame
+  // carries no action id, so when the durable outcome for an attempt reached
+  // the client first and retired its record exactly, the frame must not
+  // retire "the earliest record for the checkpoint" - that is a later
+  // attempt's. The store-level ordering is pinned in epic-parking (pin 8l);
+  // these pin the ledger's own rules.
+  describe("restore completion ledger", () => {
+    const restoreRecord = (
+      clientActionId: string,
+      acceptedAt: number,
+      checkpointId: string,
+    ): AcceptedChatAction => ({
+      ...createAcceptedAction(clientActionId, acceptedAt, null),
+      action: "restoreCheckpoint",
+      checkpointId,
+      revertArtifacts: false,
+    });
+    const MANIFEST = { checkpointId: "cp", restoredAt: 300, results: [] };
+
+    it("leaves one entry per record an outcome retired, stamped with the connection - none for a refusal, none for an outcome naming no record", () => {
+      const settled = settleRestoreAttemptsByEvidence(
+        {
+          acceptedActions: {
+            a1: restoreRecord("a1", 0, "cp"),
+            a2: restoreRecord("a2", 1, "cp"),
+          },
+          restore: null,
+          settledRestoreCompletions: [],
+        },
+        [
+          { clientActionId: "a1", kind: "outcome", outcome: MANIFEST },
+          { clientActionId: "a2", kind: "refusal" },
+          { clientActionId: "a3", kind: "outcome", outcome: MANIFEST },
+        ],
+        4,
+      );
+      expect(Object.keys(settled.acceptedActions)).toEqual([]);
+      expect(settled.settledRestoreCompletions).toEqual([
+        { checkpointId: "cp", finishedAt: 300, connectionEpoch: 4 },
+      ]);
+    });
+
+    it("takes the checkpoint from the record when the outcome's manifest did not parse, with the finish time unknown", () => {
+      const settled = settleRestoreAttemptsByEvidence(
+        {
+          acceptedActions: { a1: restoreRecord("a1", 0, "cp") },
+          restore: null,
+          settledRestoreCompletions: [],
+        },
+        [{ clientActionId: "a1", kind: "outcome", outcome: null }],
+        2,
+      );
+      expect(settled.settledRestoreCompletions).toEqual([
+        { checkpointId: "cp", finishedAt: null, connectionEpoch: 2 },
+      ]);
+    });
+
+    it("answers a completion frame with the earliest matching entry for its checkpoint and consumes exactly that one", () => {
+      const entries: SettledRestoreCompletion[] = [
+        { checkpointId: "cp", finishedAt: 300, connectionEpoch: 1 },
+        { checkpointId: "cp", finishedAt: 400, connectionEpoch: 1 },
+        { checkpointId: "other", finishedAt: 300, connectionEpoch: 1 },
+      ];
+      const first = consumeSettledRestoreCompletion(entries, "cp", 300);
+      expect(first.consumed).toBe(true);
+      expect(first.entries).toEqual([entries[1], entries[2]]);
+      // The same frame again (a second attempt's, say) finds nothing at 300.
+      const again = consumeSettledRestoreCompletion(first.entries, "cp", 300);
+      expect(again.consumed).toBe(false);
+      expect(again.entries).toBe(first.entries);
+      // A frame whose finish time no entry carries is not the evidence's.
+      const other = consumeSettledRestoreCompletion(first.entries, "cp", 999);
+      expect(other.consumed).toBe(false);
+      // An entry with the finish time unknown answers the next frame for
+      // its checkpoint whatever its time.
+      const unknown = consumeSettledRestoreCompletion(
+        [{ checkpointId: "cp", finishedAt: null, connectionEpoch: 1 }],
+        "cp",
+        999,
+      );
+      expect(unknown.consumed).toBe(true);
+      expect(unknown.entries).toEqual([]);
+    });
+
+    it("drops entries from an older connection, whose frame died with it, and keeps the current connection's by identity", () => {
+      const mixed: SettledRestoreCompletion[] = [
+        { checkpointId: "cp", finishedAt: 300, connectionEpoch: 1 },
+        { checkpointId: "cp", finishedAt: 400, connectionEpoch: 2 },
+      ];
+      expect(withoutSettledRestoreCompletionsBefore(mixed, 2)).toEqual([
+        mixed[1],
+      ]);
+      const current: SettledRestoreCompletion[] = [
+        { checkpointId: "cp", finishedAt: 400, connectionEpoch: 2 },
+      ];
+      expect(withoutSettledRestoreCompletionsBefore(current, 2)).toBe(current);
     });
   });
 });

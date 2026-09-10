@@ -10,6 +10,9 @@ import {
   retransmittableRestoreActions,
   settleObservedRestoreSlot,
   settleRestoreAttemptsByEvidence,
+  type SettledRestoreCompletion,
+  consumeSettledRestoreCompletion,
+  withoutSettledRestoreCompletionsBefore,
   withoutEarliestAcceptedRestoreActionFor,
   withRetransmittedRestoreActions,
   reconcileQueueChange,
@@ -1002,6 +1005,14 @@ export interface ChatSessionState {
     readonly turnId: string | null;
   } | null;
   readonly restore: ChatRestoreSlot | null;
+  /**
+   * Restore attempts whose record the durable outcome retired ahead of their
+   * `restoreCompleted` frame - the frames still owed on this connection.
+   * `onRestoreCompleted` answers a frame from here before it retires a
+   * record, so a completion the event already settled does not retire a
+   * later attempt's record. See {@link SettledRestoreCompletion}.
+   */
+  readonly settledRestoreCompletions: ReadonlyArray<SettledRestoreCompletion>;
   readonly pendingActions: Readonly<Record<string, PendingChatAction>>;
   readonly acceptedActions: Readonly<Record<string, AcceptedChatAction>>;
   readonly pendingUserMessages: ReadonlyArray<PendingUserMessage>;
@@ -1017,6 +1028,26 @@ export interface ChatSessionState {
    * grows for the life of a chat.
    */
   readonly deliveredNoticeActionIds: ReadonlySet<string>;
+  /**
+   * Actions whose LAST-COPY notice (`noticeCarriesOnlyCopy`) the toast layer
+   * has shown - the parking hold's release, and only that.
+   *
+   * A separate axis from {@link deliveredNoticeActionIds} on both counts
+   * that matter to a hold. Key: that set answers "did ANY speaker for this
+   * action reach the user", and a rejection's own `ACTION_REJECTED` toast
+   * shown while the pane was focused answers yes for an action whose
+   * `SEND_NOT_RECORDED` notice was stated a moment later, after focus left -
+   * so the draft it carries was never seen and the hold read it as released
+   * (Codex on 4df091443). Lifetime: that set is a FIFO, and a flood of
+   * ordinary notices forgets a draft that WAS shown while its record stays
+   * in the ring (last-copy records are never evicted), which turns a shown
+   * draft into a permanent veto no refocus can repair - the toaster's own
+   * retained tracker suppresses the repeat that would re-mark it. This set
+   * is deliberately UNBOUNDED, the same lifetime as the records it answers
+   * for and the toaster's `retainedClientActionIds`: one entry per settled
+   * send, deduped on insert, and a session loses drafts in ones.
+   */
+  readonly deliveredLastCopyActionIds: ReadonlySet<string>;
   /**
    * Block ids this session has already OPENED a subagent/workflow card for.
    *
@@ -1228,10 +1259,16 @@ export interface ChatSessionState {
   ackAcceptedAction: (clientActionId: string) => void;
   ackFailedSendRestoration: (clientActionId: string) => void;
   /**
-   * Record that a notice reached the screen. Called by the toast layer, which
-   * is the only thing that knows - see {@link ChatSessionState.deliveredNoticeActionIds}.
+   * Record that THIS notice reached the screen. Called by the toast layer,
+   * which is the only thing that knows - see
+   * {@link ChatSessionState.deliveredNoticeActionIds}. Takes the notice, not
+   * its action id, because the store keeps two delivery axes and the
+   * notice's code decides which it writes: every notice marks its action
+   * delivered (any speaker), and a last-copy notice also marks
+   * {@link ChatSessionState.deliveredLastCopyActionIds}, the parking hold's
+   * release. A notice without an action id has nothing to mark.
    */
-  markNoticeDelivered: (clientActionId: string) => void;
+  markNoticeDelivered: (notice: ChatErrorNotice) => void;
   /**
    * Settle the restoration slot by STATING its prompt instead of handing it to
    * the composer - see {@link displacedRestorationNotice}. Used when the
@@ -2631,10 +2668,20 @@ export function createChatSessionStoreWithNotificationDependencies(
         // pass (`retransmitRestoreActions`) so the host re-answers it from
         // its journal, and re-stamped here so a record is retried once per
         // reconnect, not once per snapshot.
+        // The completion ledger is scoped to a connection: an entry from an
+        // older one waited for a frame that died with it, so it goes before
+        // this snapshot's evidence can add entries for the current one.
         const settledRestores = settleRestoreAttemptsByEvidence(
-          state.acceptedActions,
-          state.restore,
+          {
+            acceptedActions: state.acceptedActions,
+            restore: state.restore,
+            settledRestoreCompletions: withoutSettledRestoreCompletionsBefore(
+              state.settledRestoreCompletions,
+              connectionEpoch,
+            ),
+          },
           restoreOutcomesFrom(frame.snapshot.chat.events),
+          connectionEpoch,
         );
         const restoreSettlement = {
           acceptedActions: settledRestores.acceptedActions,
@@ -2642,6 +2689,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             settledRestores.restore,
             connectionEpoch,
           ),
+          settledRestoreCompletions: settledRestores.settledRestoreCompletions,
         };
         const restoreRetransmits = retransmittableRestoreActions(
           restoreSettlement.acceptedActions,
@@ -2772,6 +2820,8 @@ export function createChatSessionStoreWithNotificationDependencies(
             state.deliveredNoticeActionIds,
           ),
           restore: restoreSettlement.restore,
+          settledRestoreCompletions:
+            restoreSettlement.settledRestoreCompletions,
           snapshotLoaded: true,
           // The load this session was waiting on has arrived, so whatever it
           // took to get here is no longer evidence of anything - the next
@@ -5376,9 +5426,9 @@ export function createChatSessionStoreWithNotificationDependencies(
             // this action id is running or will run, so the record and its
             // spinner settle here - the fourth evidence door.
             ...settleRestoreAttemptsByEvidence(
-              state.acceptedActions,
-              state.restore,
-              [{ clientActionId: frame.clientActionId, outcome: null }],
+              state,
+              [{ clientActionId: frame.clientActionId, kind: "refusal" }],
+              connectionEpoch,
             ),
             // Single slot, first writer wins until `ackFailedSendRestoration`
             // clears it - the same rule `reconcileSnapshotChange` and the
@@ -6031,12 +6081,13 @@ export function createChatSessionStoreWithNotificationDependencies(
           set((state) => {
             const evidence = restoreOutcomesFrom([frame.event]);
             const settled = settleRestoreAttemptsByEvidence(
-              state.acceptedActions,
-              state.restore,
+              state,
               evidence,
+              connectionEpoch,
             );
             return {
               acceptedActions: settled.acceptedActions,
+              settledRestoreCompletions: settled.settledRestoreCompletions,
               // Also for a spinner this window did not originate (no record
               // to match through): a live outcome is in order, so it is the
               // slot's own attempt.
@@ -6118,24 +6169,37 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
         }
-        set((state) => ({
-          restore: {
-            kind: "completed",
-            checkpointId: frame.checkpointId,
-            finishedAt: frame.finishedAt,
-            results: [...frame.results],
-          },
-          // One attempt finished: retire ONE record for this checkpoint, the
-          // earliest accepted, which is the attempt the host reached first.
-          // A second attempt accepted behind it keeps its own record until
-          // its own completion. The frame carries no client action id; the
-          // durable `checkpoint.restored` event that precedes it does, and
-          // `onEventAppended` / the snapshot pass retire by that too.
-          acceptedActions: withoutEarliestAcceptedRestoreActionFor(
-            state.acceptedActions,
+        set((state) => {
+          // One attempt finished. The frame carries no client action id, so
+          // the ledger answers first: a completion whose durable outcome
+          // reached this client ahead of the frame (a snapshot serialized in
+          // the host's journal-then-broadcast gap) has already retired its
+          // record exactly, and retiring "the earliest for this checkpoint"
+          // here would take a second attempt's record instead (Codex on
+          // ad9f99fb8). Otherwise retire ONE record, the earliest accepted,
+          // which is the attempt the host reached first; a second attempt
+          // accepted behind it keeps its own record until its own completion.
+          const answered = consumeSettledRestoreCompletion(
+            state.settledRestoreCompletions,
             frame.checkpointId,
-          ),
-        }));
+            frame.finishedAt,
+          );
+          return {
+            restore: {
+              kind: "completed",
+              checkpointId: frame.checkpointId,
+              finishedAt: frame.finishedAt,
+              results: [...frame.results],
+            },
+            settledRestoreCompletions: answered.entries,
+            acceptedActions: answered.consumed
+              ? state.acceptedActions
+              : withoutEarliestAcceptedRestoreActionFor(
+                  state.acceptedActions,
+                  frame.checkpointId,
+                ),
+          };
+        });
       },
       onErrorNotice: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
@@ -6154,14 +6218,14 @@ export function createChatSessionStoreWithNotificationDependencies(
           ...(frame.notice.clientActionId === null
             ? {}
             : settleRestoreAttemptsByEvidence(
-                state.acceptedActions,
-                state.restore,
+                state,
                 [
                   {
                     clientActionId: frame.notice.clientActionId,
-                    outcome: null,
+                    kind: "refusal",
                   },
                 ],
+                connectionEpoch,
               )),
         }));
       },
@@ -6427,11 +6491,13 @@ export function createChatSessionStoreWithNotificationDependencies(
       pendingBackgroundStopAll: null,
       pendingBackgroundSessionStop: null,
       restore: null,
+      settledRestoreCompletions: [],
       pendingActions: {},
       acceptedActions: {},
       pendingUserMessages: [],
       errorNotices: [],
       deliveredNoticeActionIds: new Set<string>(),
+      deliveredLastCopyActionIds: new Set<string>(),
       openedSubagentCardBlockIds: new Set<string>(),
       failedSendRestoration: null,
       currentComposerSettings: null,
@@ -7397,16 +7463,41 @@ export function createChatSessionStoreWithNotificationDependencies(
           return { acceptedActions: next };
         });
       },
-      markNoticeDelivered: (clientActionId) => {
+      markNoticeDelivered: (notice) => {
+        const clientActionId = notice.clientActionId;
+        if (clientActionId === null) return;
         set((state) => {
-          if (state.deliveredNoticeActionIds.has(clientActionId)) return {};
-          const next = new Set(state.deliveredNoticeActionIds);
-          addWithFifoEviction(
-            next,
-            clientActionId,
-            MAX_DELIVERED_CLIENT_ACTION_IDS,
-          );
-          return { deliveredNoticeActionIds: next };
+          let deliveredNoticeActionIds = state.deliveredNoticeActionIds;
+          if (!deliveredNoticeActionIds.has(clientActionId)) {
+            const next = new Set(deliveredNoticeActionIds);
+            addWithFifoEviction(
+              next,
+              clientActionId,
+              MAX_DELIVERED_CLIENT_ACTION_IDS,
+            );
+            deliveredNoticeActionIds = next;
+          }
+          // The hold's release: unbounded, see the field. A store write even
+          // when the action-wide set already had the id, because that set
+          // may have been written by another speaker for the action, and
+          // this write is what the parking watcher re-evaluates on.
+          let deliveredLastCopyActionIds = state.deliveredLastCopyActionIds;
+          if (
+            noticeCarriesOnlyCopy(notice) &&
+            !deliveredLastCopyActionIds.has(clientActionId)
+          ) {
+            deliveredLastCopyActionIds = new Set([
+              ...deliveredLastCopyActionIds,
+              clientActionId,
+            ]);
+          }
+          if (
+            deliveredNoticeActionIds === state.deliveredNoticeActionIds &&
+            deliveredLastCopyActionIds === state.deliveredLastCopyActionIds
+          ) {
+            return {};
+          }
+          return { deliveredNoticeActionIds, deliveredLastCopyActionIds };
         });
       },
       stateFailedSendRestoration: (clientActionId) => {

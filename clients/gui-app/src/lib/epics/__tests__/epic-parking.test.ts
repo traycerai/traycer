@@ -40,6 +40,7 @@ import {
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import type {
+  ChatErrorNotice,
   ChatQueuedManagedCommandItem,
   ChatQueuedPromptItem,
   ChatQueueState,
@@ -72,6 +73,53 @@ import type {
   DesktopEpicVisibilityEntry,
   DesktopWindowsBridge,
 } from "@/lib/windows/types";
+import { createElement } from "react";
+import {
+  act as reactAct,
+  cleanup as reactCleanup,
+  render as reactRender,
+} from "@testing-library/react";
+import { ChatTileErrorNoticeToasts } from "@/components/epic-canvas/renderers/chat-tile-error-notice-toasts";
+import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
+import { useInitialChatHandoffDriver } from "@/hooks/chats/use-initial-chat-handoff-driver";
+import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
+
+// Pins 9c/9d drive the REAL toast layer, which speaks through sonner; the
+// toasts themselves are not under test, their delivery bookkeeping is.
+vi.mock("sonner", () => ({
+  toast: Object.assign(
+    vi.fn(() => "toast"),
+    {
+      warning: vi.fn(() => "warning-toast"),
+      error: vi.fn(() => "error-toast"),
+      success: vi.fn(),
+      dismiss: vi.fn(),
+    },
+  ),
+}));
+
+/**
+ * The real handoff driver and the real toast layer over one chat handle -
+ * the two consumers that decide, in production, whether a rejected send's
+ * prompt goes to the composer or gets STATED in a last-copy notice, and
+ * whether that notice reached the screen.
+ */
+function HandoffAndToasts(props: {
+  readonly handle: ChatSessionStoreHandle;
+  readonly scope: {
+    readonly hostId: string;
+    readonly userId: string;
+    readonly epicId: string;
+  };
+}) {
+  useInitialChatHandoffDriver({
+    handle: props.handle,
+    nodeId: props.handle.store.getState().chatId,
+    scope: props.scope,
+    profileUserId: "user-1",
+  });
+  return createElement(ChatTileErrorNoticeToasts, { handle: props.handle });
+}
 
 // ── Shared test helpers ─────────────────────────────────────────────────────
 //
@@ -2686,6 +2734,111 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
     }
   });
 
+  // Pin 8l (Codex on ad9f99fb8): the host broadcasts `restoreCompleted`
+  // before the durable `checkpoint.restored` event, but the outcome is
+  // journaled across an await, and a legacy snapshot serialized in that gap
+  // carries it AHEAD of the frame. The event door retires the first
+  // attempt's record exactly; the frame then arrives carrying no action id,
+  // and "retire the earliest record for this checkpoint" took the SECOND
+  // attempt's record - a completed slot and no accepted record let the park
+  // dispose the session before the second restore had run. The frame is
+  // answered from the completion ledger instead, and the second attempt's
+  // record holds until its own completion.
+  it("does not retire a second attempt's record when the first attempt's completion frame follows its outcome event (pin 8l)", () => {
+    const EPIC = "epic-park-chat-restore-event-before-frame-pin8l";
+    const TAB = "tab-park-chat-restore-event-before-frame-pin8l";
+    const CHAT_ID = "chat-restore-event-before-frame-pin8l";
+    const HOST_ID = "host-restore-event-before-frame-pin8l";
+    const CHECKPOINT = "checkpoint-pin8l";
+    const chatRegistry = __getChatSessionRegistryForTests();
+    const epicHandle = buildParkableEpicHandle(EPIC, false);
+    __getOpenEpicRegistryForTests().acquireMounted(
+      EPIC,
+      () => epicHandle.handle,
+    );
+    const chat = buildTestChatHandleWithFrames(EPIC, CHAT_ID, HOST_ID);
+    chatRegistry.acquire(
+      { epicId: EPIC, chatId: CHAT_ID, hostId: HOST_ID, scopeKey: "pin8l" },
+      () => chat.handle,
+    );
+    emitOwnerChatSnapshot(chat.callbacks, EPIC, CHAT_ID, HOST_ID);
+
+    const first = chat.handle.store
+      .getState()
+      .restoreCheckpoint(CHECKPOINT, false);
+    if (first === null) throw new Error("Expected the first restore");
+    const acceptedFirst = acceptLastChatAction({
+      frames: chat.sent,
+      callbacks: chat.callbacks,
+      epicId: EPIC,
+      chatId: CHAT_ID,
+    });
+    vi.advanceTimersByTime(1);
+    const second = chat.handle.store
+      .getState()
+      .restoreCheckpoint(CHECKPOINT, false);
+    if (second === null) throw new Error("Expected the second restore");
+    const acceptedSecond = acceptLastChatAction({
+      frames: chat.sent,
+      callbacks: chat.callbacks,
+      epicId: EPIC,
+      chatId: CHAT_ID,
+    });
+    expect([acceptedFirst, acceptedSecond]).toEqual([first, second]);
+
+    openEpicTab(TAB, EPIC);
+    try {
+      setEpicSurfaceVisibility(EPIC, "view-pin8l", false);
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS);
+      expect(isEpicParked(EPIC)).toBe(false);
+
+      startChatRestore(chat.callbacks, EPIC, CHAT_ID, CHECKPOINT);
+      // The first attempt's outcome reaches the client FIRST, on the same
+      // connection: it retires the first record exactly and completes the
+      // spinner from the recorded result.
+      emitOwnerChatSnapshotWithQueue({
+        callbacks: chat.callbacks,
+        epicId: EPIC,
+        chatId: CHAT_ID,
+        hostId: HOST_ID,
+        queue: { status: "idle", items: [] },
+        events: [restoredEventFixture(acceptedFirst, CHECKPOINT)],
+      });
+      expect(
+        chat.handle.store.getState().acceptedActions[acceptedFirst],
+      ).toBeUndefined();
+      expect(
+        chat.handle.store.getState().acceptedActions[acceptedSecond],
+      ).toBeDefined();
+      expect(chat.handle.store.getState().restore?.kind).toBe("completed");
+      expect(isEpicParked(EPIC)).toBe(false);
+
+      // Then the first attempt's own frame: already answered by the event,
+      // so the second attempt's record is untouched and the epic stays.
+      completeChatRestore(chat.callbacks, EPIC, CHAT_ID, CHECKPOINT);
+      expect(
+        chat.handle.store.getState().acceptedActions[acceptedSecond],
+      ).toBeDefined();
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS);
+      expect(isEpicParked(EPIC)).toBe(false);
+      expect(epicHandle.disposed).toBe(false);
+
+      // The second attempt runs and completes in the ordinary order: the
+      // frame retires ITS record (the ledger has nothing left to answer
+      // with), and the park follows.
+      startChatRestore(chat.callbacks, EPIC, CHAT_ID, CHECKPOINT);
+      expect(isEpicParked(EPIC)).toBe(false);
+      completeChatRestore(chat.callbacks, EPIC, CHAT_ID, CHECKPOINT);
+      expect(
+        chat.handle.store.getState().acceptedActions[acceptedSecond],
+      ).toBeUndefined();
+      expect(isEpicParked(EPIC)).toBe(true);
+      expect(epicHandle.disposed).toBe(true);
+    } finally {
+      closeEpicTab(TAB);
+    }
+  });
+
   // Pin 8g (Codex on b63aa85d7): a restore still RUNNING across a transport
   // reconnect. The in-flight slot is frame-driven and the post-reconnect
   // snapshot sweeps it (`sweepStaleRestoreSlot`), and with the record retired
@@ -3225,6 +3378,257 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
     }
   });
 
+  // Pin 9c (Codex on 4df091443, reproduced through the real toaster and
+  // handoff driver): the hold's release read `deliveredNoticeActionIds`,
+  // which answers "did ANY speaker for this action reach the user". A
+  // rejection's own `ACTION_REJECTED` toast, shown while the pane was
+  // focused, answers yes - and if focus leaves in the same UI batch, before
+  // the handoff driver's passive effect runs, the driver then STATES the
+  // prompt in a `SEND_NOT_RECORDED` notice the (now inactive) toaster never
+  // shows. The action was "delivered", the draft was never seen, and the
+  // park disposed it. The hold now reads the LAST-COPY notice's own
+  // delivery.
+  it("holds on a last-copy notice stated after the rejection's own toast was shown and focus left in the same batch (pin 9c)", () => {
+    const EPIC = "epic-park-last-copy-after-rejection-toast-pin9c";
+    const TAB = "tab-park-last-copy-after-rejection-toast-pin9c";
+    const CHAT_ID = "chat-park-last-copy-after-rejection-toast-pin9c";
+    const HOST_ID = "host-park-last-copy-after-rejection-toast-pin9c";
+    const chatRegistry = __getChatSessionRegistryForTests();
+    const chat = buildTestChatHandleWithFrames(EPIC, CHAT_ID, HOST_ID);
+    chatRegistry.acquire(
+      { epicId: EPIC, chatId: CHAT_ID, hostId: HOST_ID, scopeKey: "pin9c" },
+      () => chat.handle,
+    );
+    emitOwnerChatSnapshot(chat.callbacks, EPIC, CHAT_ID, HOST_ID);
+    const scope = { hostId: HOST_ID, userId: "user-1", epicId: EPIC };
+    // The composer holds a NEWER draft, so the rejected prompt is stated,
+    // not handed back.
+    useComposerDraftStore.getState().replaceDraft(
+      CHAT_ID,
+      {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            content: [{ type: "text", text: "A newer unsent message" }],
+          },
+        ],
+      },
+      null,
+    );
+    const tree = (visible: boolean) =>
+      createElement(
+        PaneVisibilityContext.Provider,
+        { value: visible },
+        createElement(HandoffAndToasts, { handle: chat.handle, scope }),
+      );
+    const rendered = reactRender(tree(true));
+    let clientActionId = "";
+    try {
+      reactAct(() => {
+        sendChatTestMessage(chat.handle);
+      });
+      reactAct(() => {
+        clientActionId = rejectLastChatAction({
+          frames: chat.sent,
+          callbacks: chat.callbacks,
+          epicId: EPIC,
+          chatId: CHAT_ID,
+          reason: "Message was not accepted.",
+        });
+        // The synchronous toast subscription showed the rejection's own
+        // notice and marked the ACTION delivered.
+        expect(
+          chat.handle.store
+            .getState()
+            .deliveredNoticeActionIds.has(clientActionId),
+        ).toBe(true);
+        // Focus leaves in the same UI batch, before the handoff driver's
+        // passive effect consumes the rejected send.
+        rendered.rerender(tree(false));
+      });
+      expect(chat.handle.store.getState().failedSendRestoration).toBeNull();
+      expect(
+        chat.handle.store
+          .getState()
+          .errorNotices.some(
+            (notice) =>
+              notice.code === "SEND_NOT_RECORDED" &&
+              notice.message.includes("Hello"),
+          ),
+      ).toBe(true);
+      // The draft's notice itself was never shown: not by the toaster's
+      // retained tracker, not by the store's last-copy axis - while the
+      // action-wide axis says delivered, which is what misled the hold.
+      expect(
+        chat.handle.deliveredNotices.retainedClientActionIds.has(
+          clientActionId,
+        ),
+      ).toBe(false);
+      expect(
+        chat.handle.store
+          .getState()
+          .deliveredLastCopyActionIds.has(clientActionId),
+      ).toBe(false);
+      expect(
+        chat.handle.store
+          .getState()
+          .deliveredNoticeActionIds.has(clientActionId),
+      ).toBe(true);
+
+      openEpicTab(TAB, EPIC);
+      setEpicSurfaceVisibility(EPIC, "view-pin9c", false);
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS);
+      expect(isEpicParked(EPIC)).toBe(false);
+      expect(chatRegistry.peek(EPIC, CHAT_ID, HOST_ID)).not.toBeNull();
+
+      // The pane comes back: the toaster's mount-time replay shows the
+      // last-copy notice, marks THAT delivered, and the park follows.
+      reactAct(() => {
+        rendered.rerender(tree(true));
+      });
+      expect(
+        chat.handle.store
+          .getState()
+          .deliveredLastCopyActionIds.has(clientActionId),
+      ).toBe(true);
+      reactAct(() => {
+        rendered.rerender(tree(false));
+      });
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS);
+      expect(isEpicParked(EPIC)).toBe(true);
+      expect(chatRegistry.peek(EPIC, CHAT_ID, HOST_ID)).toBeNull();
+    } finally {
+      reactCleanup();
+      closeEpicTab(TAB);
+      useComposerDraftStore.setState(
+        useComposerDraftStore.getInitialState(),
+        true,
+      );
+    }
+  });
+
+  // Pin 9d (Codex on 4df091443, reproduced through the real toaster): the
+  // action-wide delivery set is a 128-entry FIFO, and the last-copy record
+  // it was guarding is never evicted from the ring. A flood of ordinary
+  // notices after the draft WAS shown forgot the delivery while the record
+  // stayed, and the hold became permanent: a refocus cannot repair it,
+  // because the toaster's own retained tracker suppresses the repeat that
+  // would re-mark it. The last-copy axis is unbounded, the same lifetime as
+  // the record.
+  it("parks after a shown last-copy notice however much ordinary notice traffic follows, and a refocus cannot un-deliver it (pin 9d)", () => {
+    const EPIC = "epic-park-last-copy-delivery-outlives-fifo-pin9d";
+    const TAB = "tab-park-last-copy-delivery-outlives-fifo-pin9d";
+    const CHAT_ID = "chat-park-last-copy-delivery-outlives-fifo-pin9d";
+    const HOST_ID = "host-park-last-copy-delivery-outlives-fifo-pin9d";
+    const RETAINED = "retained-send-pin9d";
+    const chatRegistry = __getChatSessionRegistryForTests();
+    const chat = buildTestChatHandleWithFrames(EPIC, CHAT_ID, HOST_ID);
+    chatRegistry.acquire(
+      { epicId: EPIC, chatId: CHAT_ID, hostId: HOST_ID, scopeKey: "pin9d" },
+      () => chat.handle,
+    );
+    emitOwnerChatSnapshot(chat.callbacks, EPIC, CHAT_ID, HOST_ID);
+    const tree = (visible: boolean) =>
+      createElement(
+        PaneVisibilityContext.Provider,
+        { value: visible },
+        createElement(ChatTileErrorNoticeToasts, { handle: chat.handle }),
+      );
+    const rendered = reactRender(tree(true));
+    const emitOrdinary = (clientActionId: string): void => {
+      chat.callbacks().onErrorNotice({
+        kind: "errorNotice",
+        hasBinaryPayload: false,
+        epicId: EPIC,
+        chatId: CHAT_ID,
+        notice: {
+          code: "APPROVAL_NOT_PENDING",
+          message: "No longer pending",
+          severity: "warning",
+          clientActionId,
+        },
+      });
+    };
+    try {
+      openEpicTab(TAB, EPIC);
+      setEpicSurfaceVisibility(EPIC, "view-pin9d", true);
+      reactAct(() => {
+        chat.callbacks().onErrorNotice({
+          kind: "errorNotice",
+          hasBinaryPayload: false,
+          epicId: EPIC,
+          chatId: CHAT_ID,
+          notice: {
+            code: "SEND_NOT_RECORDED",
+            message: "The user's last copy",
+            severity: "warning",
+            clientActionId: RETAINED,
+          },
+        });
+      });
+      // Shown while visible: both axes say so.
+      expect(
+        chat.handle.store.getState().deliveredNoticeActionIds.has(RETAINED),
+      ).toBe(true);
+      expect(
+        chat.handle.store.getState().deliveredLastCopyActionIds.has(RETAINED),
+      ).toBe(true);
+      expect(
+        chat.handle.deliveredNotices.retainedClientActionIds.has(RETAINED),
+      ).toBe(true);
+
+      reactAct(() => {
+        for (let index = 0; index < 200; index += 1) {
+          emitOrdinary(`ordinary-pin9d-${index}`);
+        }
+      });
+      // The record stays; the action-wide FIFO forgot it; the last-copy axis
+      // did not.
+      expect(
+        chat.handle.store
+          .getState()
+          .errorNotices.some((notice) => notice.code === "SEND_NOT_RECORDED"),
+      ).toBe(true);
+      expect(
+        chat.handle.store.getState().deliveredNoticeActionIds.has(RETAINED),
+      ).toBe(false);
+      expect(
+        chat.handle.store.getState().deliveredLastCopyActionIds.has(RETAINED),
+      ).toBe(true);
+
+      // A refocus and another notice re-walk the ring; the retained tracker
+      // suppresses a repeat of the draft toast, so nothing re-marks the
+      // action-wide axis - and nothing needs to.
+      reactAct(() => {
+        rendered.rerender(tree(false));
+      });
+      reactAct(() => {
+        rendered.rerender(tree(true));
+      });
+      reactAct(() => {
+        emitOrdinary("ordinary-pin9d-after-refocus");
+      });
+      expect(
+        chat.handle.store.getState().deliveredNoticeActionIds.has(RETAINED),
+      ).toBe(false);
+      expect(
+        chat.handle.store.getState().deliveredLastCopyActionIds.has(RETAINED),
+      ).toBe(true);
+
+      reactAct(() => {
+        rendered.rerender(tree(false));
+      });
+      setEpicSurfaceVisibility(EPIC, "view-pin9d", false);
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS);
+      expect(isEpicParked(EPIC)).toBe(true);
+      expect(chatRegistry.peek(EPIC, CHAT_ID, HOST_ID)).toBeNull();
+    } finally {
+      reactCleanup();
+      closeEpicTab(TAB);
+    }
+  });
+
   // Pin 9b (Codex on ac6c4eca1): the restoration slot is not the only home a
   // failed send's text ends up in. When the composer already holds a newer
   // draft, `stateFailedSendRestoration` clears the slot and STATES the
@@ -3267,8 +3671,20 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
         .map((entry) => entry.code),
     ).toEqual(["ACTION_REJECTED", "SEND_NOT_RECORDED"]);
     expect(
-      chat.handle.store.getState().deliveredNoticeActionIds.has(clientActionId),
+      chat.handle.store
+        .getState()
+        .deliveredLastCopyActionIds.has(clientActionId),
     ).toBe(false);
+    const noticeFor = (code: string): ChatErrorNotice => {
+      const notice = chat.handle.store
+        .getState()
+        .errorNotices.find(
+          (entry) =>
+            entry.code === code && entry.clientActionId === clientActionId,
+        );
+      if (notice === undefined) throw new Error(`Expected a ${code} notice`);
+      return notice;
+    };
 
     openEpicTab(TAB, EPIC);
     try {
@@ -3278,8 +3694,25 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
       expect(isEpicParked(EPIC)).toBe(false);
       expect(chatRegistry.peek(EPIC, CHAT_ID, HOST_ID)).not.toBeNull();
 
-      // A pane showed it: the toast layer marks it delivered.
-      chat.handle.store.getState().markNoticeDelivered(clientActionId);
+      // The rejection's OWN toast reaching the user is a different speaker
+      // for the same action - it says nothing about the draft, so the hold
+      // stays (Codex on 4df091443).
+      chat.handle.store
+        .getState()
+        .markNoticeDelivered(noticeFor("ACTION_REJECTED"));
+      expect(
+        chat.handle.store
+          .getState()
+          .deliveredNoticeActionIds.has(clientActionId),
+      ).toBe(true);
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS);
+      expect(isEpicParked(EPIC)).toBe(false);
+      expect(chatRegistry.peek(EPIC, CHAT_ID, HOST_ID)).not.toBeNull();
+
+      // A pane showed the draft itself: the toast layer marks THAT delivered.
+      chat.handle.store
+        .getState()
+        .markNoticeDelivered(noticeFor("SEND_NOT_RECORDED"));
       expect(isEpicParked(EPIC)).toBe(true);
       expect(chatRegistry.peek(EPIC, CHAT_ID, HOST_ID)).toBeNull();
     } finally {

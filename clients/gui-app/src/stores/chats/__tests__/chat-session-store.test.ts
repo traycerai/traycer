@@ -4761,7 +4761,10 @@ describe("createChatSessionStore", () => {
     // Once the pane has actually shown it, it is ordinary history again and
     // ages out like anything else - the exemption is a delivery guarantee,
     // not a permanent pin.
-    harness.handle.store.getState().markNoticeDelivered(frame.clientActionId);
+    const shown = restoredNotice();
+    if (shown === undefined)
+      throw new Error("Expected the SEND_RESTORED notice");
+    harness.handle.store.getState().markNoticeDelivered(shown);
     flood(1000);
     expect(restoredNotice()).toBeUndefined();
   });
@@ -4845,7 +4848,7 @@ describe("createChatSessionStore", () => {
     expect(spoken.message).toContain("model");
 
     // The pane was active, so the toast layer showed it and said so.
-    harness.handle.store.getState().markNoticeDelivered(rejected);
+    harness.handle.store.getState().markNoticeDelivered(spoken);
     harness.handle.store.getState().ackFailedSendRestoration(rejected);
 
     expect(

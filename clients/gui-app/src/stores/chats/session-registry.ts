@@ -410,13 +410,17 @@ function hasUnsettledChatWork(handle: ChatSessionStoreHandle): boolean {
   // then; a hidden chat never focuses, so the slot is empty, no action is
   // accepted, and parking would dispose the session with the notice in it
   // (Codex on ac6c4eca1). Held until delivered - the same promise the slot
-  // makes, kept for the text's other home.
+  // makes, kept for the text's other home. "Delivered" is the LAST-COPY
+  // notice's own delivery, not the action's: the action-wide set answers
+  // yes for a rejection toast shown before the draft was ever stated, and it
+  // is a FIFO that forgets a shown draft while its record stays in the ring
+  // (Codex on 4df091443) - see `deliveredLastCopyActionIds`.
   if (
     state.errorNotices.some(
       (notice) =>
         noticeCarriesOnlyCopy(notice) &&
         notice.clientActionId !== null &&
-        !state.deliveredNoticeActionIds.has(notice.clientActionId),
+        !state.deliveredLastCopyActionIds.has(notice.clientActionId),
     )
   ) {
     return true;
