@@ -1018,6 +1018,43 @@ describe("<EpicsListPanel />", () => {
     ).toBeNull();
   });
 
+  it("opens the running-activity glyph's tooltip when the row's overlay link gets keyboard focus", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    testState.activityByEpicId.set("epic-from-history", "turn");
+    renderPanel("embedded", "/");
+
+    await screen.findByTestId("epics-list-row-activity-epic-from-history");
+    const link = await screen.findByRole("link", {
+      name: "Open task Local only epic",
+    });
+
+    expect(screen.queryByRole("tooltip")).toBeNull();
+
+    act(() => {
+      link.focus();
+    });
+
+    const tooltips = await screen.findAllByRole("tooltip");
+    expect(
+      tooltips.some(
+        (tooltip) => tooltip.textContent === "Task activity in progress",
+      ),
+    ).toBe(true);
+
+    act(() => {
+      link.blur();
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
+  });
+
   it("keeps the status glyph's tooltip reachable above the row's pointer-events-none content layer", async () => {
     testState.items = [
       historyItem({
@@ -1042,6 +1079,92 @@ describe("<EpicsListPanel />", () => {
     expect(contentLayer).not.toBeNull();
 
     expect(tooltipTextNear(glyph)).toMatch(/not synced yet/i);
+  });
+
+  it("opens the provenance glyph's tooltip when the row's overlay link gets keyboard focus, and closes it on blur", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    renderPanel("embedded", "/");
+
+    const glyph = await screen.findByTestId(
+      "epics-list-row-provenance-local-only-epic-from-history",
+    );
+    const expectedTooltip = glyph.getAttribute("aria-label");
+    expect(expectedTooltip).not.toBeNull();
+
+    const link = await screen.findByRole("link", {
+      name: "Open task Local only epic",
+    });
+
+    expect(screen.queryByRole("tooltip")).toBeNull();
+
+    act(() => {
+      link.focus();
+    });
+
+    const tooltips = await screen.findAllByRole("tooltip");
+    expect(
+      tooltips.some((tooltip) => tooltip.textContent === expectedTooltip),
+    ).toBe(true);
+
+    act(() => {
+      link.blur();
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
+  });
+
+  it("suppresses the provenance glyph's tooltip when the overlay link is focused after a pointer press on the row, and restores it once the press is forgotten on pointer-up", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    renderPanel("embedded", "/");
+
+    const glyph = await screen.findByTestId(
+      "epics-list-row-provenance-local-only-epic-from-history",
+    );
+    const expectedTooltip = glyph.getAttribute("aria-label");
+    expect(expectedTooltip).not.toBeNull();
+
+    const card = await screen.findByTestId("epics-list-row-card");
+    const link = await screen.findByRole("link", {
+      name: "Open task Local only epic",
+    });
+
+    // A focus arriving during a pointer press is pointer focus, not keyboard
+    // focus - the tooltip must stay closed.
+    fireEvent.pointerDown(card);
+    act(() => {
+      link.focus();
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
+
+    // Pointer-up forgets the press, so the next focus on the same target is
+    // read as keyboard focus again.
+    fireEvent.pointerUp(card);
+    act(() => {
+      link.blur();
+    });
+    act(() => {
+      link.focus();
+    });
+
+    const tooltips = await screen.findAllByRole("tooltip");
+    expect(
+      tooltips.some((tooltip) => tooltip.textContent === expectedTooltip),
+    ).toBe(true);
   });
 
   it("forwards a plain click on the status glyph to the row, so the glyph stays part of the row's click surface", async () => {
@@ -1261,6 +1384,49 @@ describe("<EpicsListPanel />", () => {
       );
     }
     expect(glyph.getAttribute("aria-label")).toMatch(/not synced yet/i);
+  });
+
+  it("opens the provenance glyph's tooltip when the selection-mode toggle gets keyboard focus", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    renderPanel("embedded", "/");
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Select history items" }),
+    );
+
+    const glyph = await screen.findByTestId(
+      "epics-list-row-provenance-local-only-epic-from-history",
+    );
+    const expectedTooltip = glyph.getAttribute("aria-label");
+    expect(expectedTooltip).not.toBeNull();
+
+    const toggle = await screen.findByRole("button", {
+      name: "Toggle selection for Local only epic",
+    });
+
+    expect(screen.queryByRole("tooltip")).toBeNull();
+
+    act(() => {
+      toggle.focus();
+    });
+
+    const tooltips = await screen.findAllByRole("tooltip");
+    expect(
+      tooltips.some((tooltip) => tooltip.textContent === expectedTooltip),
+    ).toBe(true);
+
+    act(() => {
+      toggle.blur();
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
   });
 
   it("never names the cloud or the device when the host requires cloud access to list", () => {

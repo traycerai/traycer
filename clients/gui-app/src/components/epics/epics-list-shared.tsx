@@ -34,6 +34,7 @@ import {
   type HistoryRowProvenance,
 } from "@/components/epics/history-row-provenance";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { useStatusGlyphTooltipOpen } from "@/components/notifications/status-glyph-focus";
 import { cn } from "@/lib/utils";
 
 /**
@@ -122,12 +123,19 @@ function HistoryRowProvenanceGlyph(props: {
     authorizesCloudCapability(state.status),
   );
   const title = historyRowProvenanceTitle(props.provenance, cloudAuthorized);
+  // The desktop row's activation target is an overlay link, and this span is
+  // deliberately not a second tab stop - so keyboard focus on the row holds
+  // the tooltip open (`StatusGlyphFocusContext`), or a sighted keyboard user
+  // would reach the row and see a dot that nothing on screen explains.
+  const tooltipOpen = useStatusGlyphTooltipOpen();
   return (
     <TooltipWrapper
       label={title}
       side="top"
       sideOffset={undefined}
       align={undefined}
+      open={tooltipOpen.open}
+      onOpenChange={tooltipOpen.onOpenChange}
     >
       <span
         role="status"

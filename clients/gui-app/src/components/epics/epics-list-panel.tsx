@@ -1,5 +1,6 @@
 import {
   memo,
+  type FocusEvent,
   type ReactNode,
   type RefObject,
   useCallback,
@@ -103,6 +104,7 @@ import {
   ROW_TARGET_SELECTOR,
   useHistoryListKeyboardNav,
 } from "@/components/epics/use-history-list-keyboard-nav";
+import { StatusGlyphFocusContext } from "@/components/notifications/status-glyph-focus";
 import { ImportedUnseenDot } from "@/components/session-import/imported-unseen-dot";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import {
@@ -1685,6 +1687,31 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
   // Names the leading status slot so both row targets can be described by
   // whatever status mark is showing - see `HistoryRowStatusSlot`.
   const statusDescriptionId = useId();
+  // Keyboard focus on the row's activation target holds every status glyph's
+  // tooltip open (`StatusGlyphFocusContext`): the target is an overlay, the
+  // glyphs are deliberately not tab stops, and `aria-describedby` puts the
+  // sentence in the accessibility tree and nowhere on screen. "Keyboard" is
+  // the decision `:focus-visible` makes, taken here by the same rule - a focus
+  // that arrives during a pointer press is pointer focus, any other is
+  // keyboard - because jsdom matches nothing for `:focus-visible` and the
+  // behaviour would otherwise be untestable.
+  const pointerPressRef = useRef(false);
+  const [rowTargetKeyboardFocused, setRowTargetKeyboardFocused] =
+    useState(false);
+  const rememberPointerPress = useCallback(() => {
+    pointerPressRef.current = true;
+  }, []);
+  const forgetPointerPress = useCallback(() => {
+    pointerPressRef.current = false;
+  }, []);
+  const onRowFocus = useCallback((event: FocusEvent<HTMLDivElement>) => {
+    setRowTargetKeyboardFocused(
+      !pointerPressRef.current && event.target.matches(ROW_TARGET_SELECTOR),
+    );
+  }, []);
+  const onRowBlur = useCallback(() => {
+    setRowTargetKeyboardFocused(false);
+  }, []);
   const openEpicRow = (event: React.MouseEvent<HTMLAnchorElement>) => {
     event.preventDefault();
     if (event.ctrlKey || event.metaKey) {
@@ -1799,6 +1826,11 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     <div
       data-testid="epics-list-row-card"
       data-selection-disabled={selectionDisabled ? "true" : undefined}
+      onPointerDown={rememberPointerPress}
+      onPointerUp={forgetPointerPress}
+      onPointerCancel={forgetPointerPress}
+      onFocus={onRowFocus}
+      onBlur={onRowBlur}
       className={historyRowCardClassName({
         selectionDisabled,
         selectedForDelete: historySelectedForDelete({
@@ -1813,40 +1845,42 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
           line (`basis-full` beats flex-1's 0% basis inside the media query)
           and the metadata drops underneath - otherwise the shrink-0
           "updated ..." label squeezes the title to nothing at phone width. */}
-      <div className={historyRowContentClassName(rowSweep.isVisible)}>
-        <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden max-md:basis-full">
-          <HistoryRowStatusSlot id={statusDescriptionId}>
-            <HistoryRowLeadingIcon item={item} />
-          </HistoryRowStatusSlot>
-          {isRenaming ? (
-            <input
-              {...renameInputProps}
-              type="text"
-              aria-label={`Rename ${displayTitle}`}
-              data-testid="epics-list-row-title-input"
-              className="pointer-events-auto w-full min-w-0 flex-1 rounded border border-input bg-background/90 px-1.5 py-0.5 font-medium text-foreground outline-none focus:border-ring/70 focus-visible:ring-0"
-            />
-          ) : (
-            <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
-              <span className="truncate font-medium text-foreground">
-                {displayTitle}
+      <StatusGlyphFocusContext.Provider value={rowTargetKeyboardFocused}>
+        <div className={historyRowContentClassName(rowSweep.isVisible)}>
+          <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden max-md:basis-full">
+            <HistoryRowStatusSlot id={statusDescriptionId}>
+              <HistoryRowLeadingIcon item={item} />
+            </HistoryRowStatusSlot>
+            {isRenaming ? (
+              <input
+                {...renameInputProps}
+                type="text"
+                aria-label={`Rename ${displayTitle}`}
+                data-testid="epics-list-row-title-input"
+                className="pointer-events-auto w-full min-w-0 flex-1 rounded border border-input bg-background/90 px-1.5 py-0.5 font-medium text-foreground outline-none focus:border-ring/70 focus-visible:ring-0"
+              />
+            ) : (
+              <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+                <span className="truncate font-medium text-foreground">
+                  {displayTitle}
+                </span>
+                <HistoryRowStatusSlot id={null}>
+                  <ImportedUnseenDot epicId={item.epicId} />
+                </HistoryRowStatusSlot>
+                <HistoryOpenBadge epicId={item.epicId} isOpen={isOpen} />
+                {pinControl}
+                {titleEditControl}
               </span>
-              <HistoryRowStatusSlot id={null}>
-                <ImportedUnseenDot epicId={item.epicId} />
-              </HistoryRowStatusSlot>
-              <HistoryOpenBadge epicId={item.epicId} isOpen={isOpen} />
-              {pinControl}
-              {titleEditControl}
-            </span>
-          )}
-        </span>
-        <HistoryRowTrailingMetadata
-          epicId={item.epicId}
-          selectionMode={selectionMode}
-          updatedLabel={item.updatedLabel}
-          worktrees={worktrees}
-        />
-      </div>
+            )}
+          </span>
+          <HistoryRowTrailingMetadata
+            epicId={item.epicId}
+            selectionMode={selectionMode}
+            updatedLabel={item.updatedLabel}
+            worktrees={worktrees}
+          />
+        </div>
+      </StatusGlyphFocusContext.Provider>
       <HistoryRowSweepControl sweep={rowSweep} displayTitle={displayTitle} />
       {deleteControl}
     </div>
@@ -2224,6 +2258,12 @@ function HistorySweepMenuItem(props: {
  * showing - the running spinner's title, an attention tone's, or the
  * provenance dot's - and empty for the plain layers glyph, which is
  * `aria-hidden`. `id` is `null` for the slot that has no target describing it.
+ *
+ * That description is heard, not seen. For a sighted keyboard user the row
+ * also provides `StatusGlyphFocusContext` (see the row's `onRowFocus`): while
+ * either activation target has keyboard focus, every status mark under this
+ * slot holds its tooltip open, so the sentence appears over the glyph without
+ * the glyph becoming a tab stop.
  */
 function HistoryRowStatusSlot(props: {
   readonly id: string | null;
