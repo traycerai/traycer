@@ -31,6 +31,13 @@ import {
   subscribeTabStructuralLocks,
 } from "@/stores/tabs/tab-structural-lock";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
+// Side-effect import: installs renderer parking's open-tab mirror (plan C, C1
+// fixup 1). Anchored HERE because this component is the retention pool - it is
+// what unmounts a hidden tab's surface past `retainedTopLevelSurfaces`, leaving
+// a still-open tab whose session goes warm with `epic.subscribe` held. Parking
+// is keyed on the open tab precisely so that tab is still reachable, and the
+// mirror has to be live whether or not any surface is currently mounted.
+import "@/lib/epics/epic-parking-open-tabs";
 import type { HeaderTab } from "@/stores/tabs/types";
 import { SplitDivider } from "@/components/layout/tabs/split-divider";
 import { SplitSlotChooser } from "@/components/layout/tabs/split-slot-chooser";

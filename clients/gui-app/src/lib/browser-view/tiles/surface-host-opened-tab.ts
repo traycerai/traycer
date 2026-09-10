@@ -87,11 +87,53 @@ function effectiveBrowserPlacement(input: {
  */
 const visibleEpicSurfaces = new Map<string, Set<string>>();
 
+/**
+ * Watchers of the PER-EPIC roll-up, notified only when
+ * {@link isEpicSurfaceVisible} actually changes answer for that epic.
+ *
+ * Per-epic rather than per-view because that is the only question a second
+ * reader has ever needed: renderer parking (plan C, decision C6) debounces
+ * "no visible pane in ANY window" into a park signal, and a view-level edge -
+ * a duplicated header view of one Epic hiding while its twin stays on screen -
+ * is not a change in that answer. Notifying on it would re-arm the debounce
+ * every time a split pane flipped, which is the opposite of what the window
+ * measures.
+ */
+const epicSurfaceVisibilityListeners = new Set<(epicId: string) => void>();
+
+export function subscribeEpicSurfaceVisibility(
+  listener: (epicId: string) => void,
+): () => void {
+  epicSurfaceVisibilityListeners.add(listener);
+  return () => {
+    epicSurfaceVisibilityListeners.delete(listener);
+  };
+}
+
+/**
+ * This set is surface PLACEMENT within this renderer - which pane is in front -
+ * and deliberately NOT "is the Epic on screen".
+ *
+ * Window visibility is intentionally not folded in here, though two consumers
+ * want the conjunction, because a third reads this set for something else
+ * entirely: {@link hostOpenedTabSuppressReason} answers `"pip-epic-hidden"`
+ * from it, and its caller treats any reason as a HANDLED outcome and does not
+ * retry. Fold minimization into this set and an agent that opens a browser tab
+ * while the window is down has that tab silently dropped, where today it is
+ * waiting as a float when the user comes back.
+ *
+ * So the conjunction is composed at the consumers that want it, each reading
+ * `lib/dom/document-visibility.ts` alongside this set:
+ * `lib/epics/epic-parking.ts` (whose hidden-window clock must start when the
+ * window goes down) and `lib/epics/cross-window-epic-visibility.ts` (which must
+ * stop claiming these Epics to other windows while hidden).
+ */
 export function setEpicSurfaceVisibility(
   epicId: string,
   viewTabId: string,
   visible: boolean,
 ): void {
+  const wasVisible = isEpicSurfaceVisible(epicId);
   const visibleViews = visibleEpicSurfaces.get(epicId);
   if (visible) {
     if (visibleViews === undefined) {
@@ -100,15 +142,32 @@ export function setEpicSurfaceVisibility(
     } else {
       visibleViews.add(viewTabId);
     }
-    return;
+  } else if (visibleViews !== undefined) {
+    visibleViews.delete(viewTabId);
+    if (visibleViews.size === 0) visibleEpicSurfaces.delete(epicId);
   }
-  if (visibleViews === undefined) return;
-  visibleViews.delete(viewTabId);
-  if (visibleViews.size === 0) visibleEpicSurfaces.delete(epicId);
+  if (isEpicSurfaceVisible(epicId) === wasVisible) return;
+  for (const listener of Array.from(epicSurfaceVisibilityListeners)) {
+    listener(epicId);
+  }
 }
 
 export function isEpicSurfaceVisible(epicId: string): boolean {
   return (visibleEpicSurfaces.get(epicId)?.size ?? 0) > 0;
+}
+
+/**
+ * Every Epic with at least one visible pane in THIS window - the roll-up
+ * {@link isEpicSurfaceVisible} answers one epic at a time.
+ *
+ * Exists for the cross-window report (plan C, decision C6): main holds one set
+ * per window, so the renderer has to hand over the whole set rather than a
+ * stream of per-epic edges. Derived on demand rather than maintained as a
+ * second collection - the map above is already exactly this, minus the empty
+ * buckets `setEpicSurfaceVisibility` deletes as it goes.
+ */
+export function visibleEpicIds(): readonly string[] {
+  return Array.from(visibleEpicSurfaces.keys());
 }
 
 /** A manual (user-initiated) conversion must never be stomped by the agent. */
