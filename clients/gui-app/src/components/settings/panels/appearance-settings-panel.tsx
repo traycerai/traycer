@@ -386,8 +386,19 @@ export function AppearanceSettingsPanel() {
   );
 }
 
+/**
+ * The gate, and only the gate. Every hook the row needs reaches
+ * `useRunnerHost()`, which throws without a provider — so a host-less shell
+ * must decide "no row" BEFORE any of them run, which means they live in a
+ * child mounted only once the predicate has passed.
+ */
 function DesktopZoomSettingsRow() {
   const availability = useSettingsAvailabilityContext();
+  if (!isZoomRowAvailable(availability)) return null;
+  return <AvailableDesktopZoomSettingsRow />;
+}
+
+function AvailableDesktopZoomSettingsRow() {
   const zoom = useDesktopZoomBridge();
   const zoomQuery = useRunnerZoomPercentQuery(zoom);
   const setMutation = useRunnerZoomSetMutation(zoom);
@@ -395,11 +406,9 @@ function DesktopZoomSettingsRow() {
   useRunnerZoomChangeSubscription(zoom);
   const percent = zoomQuery.data ?? null;
 
-  // The predicate is the gate; `zoom === null` only narrows the bridge for
-  // the control below, and resolves the same bridge from the same host.
-  if (!isZoomRowAvailable(availability) || zoom === null) {
-    return null;
-  }
+  // The predicate above is the gate; this only narrows the bridge for the
+  // control below, and resolves the same bridge from the same host.
+  if (zoom === null) return null;
 
   return (
     <SettingsRow

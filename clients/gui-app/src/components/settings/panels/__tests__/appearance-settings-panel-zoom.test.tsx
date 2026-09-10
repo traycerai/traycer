@@ -109,6 +109,21 @@ describe("<AppearanceSettingsPanel /> zoom control", () => {
     expect(isZoomRowAvailable(context)).toBe(false);
     assertSettingsSearchTargets("appearance", context, container);
   });
+
+  // A host-less shell has no runner host at all, and every hook the Zoom row
+  // needs reaches for one — so the gate has to return before any of them run.
+  it("omits the Zoom row, and does not throw, with no runner host above it", () => {
+    const { container } = render(
+      <QueryClientProvider client={new QueryClient()}>
+        <AppearanceSettingsPanel />
+      </QueryClientProvider>,
+    );
+
+    expect(screen.queryByText("Zoom")).toBeNull();
+    expect(
+      container.querySelector('[data-settings-anchor="appearance-zoom"]'),
+    ).toBeNull();
+  });
 });
 
 let mountedRunnerHost: IRunnerHost | null = null;
