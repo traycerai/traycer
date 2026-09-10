@@ -53,7 +53,10 @@ export function NotificationChimeSettingsSection() {
 
   return (
     <SettingsGroup
-      title="Sound"
+      // The page is already titled Sounds; a group heading (Sound, Chimes)
+      // would be a second name for the same four dropdowns. System / Events
+      // below keep titles because they are different destinations.
+      title={undefined}
       tone="default"
       dataTestId="notification-chime-section"
       fill={false}
