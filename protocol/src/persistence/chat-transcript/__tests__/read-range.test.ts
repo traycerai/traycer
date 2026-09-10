@@ -8,7 +8,12 @@ import {
   type Message,
 } from "@traycer/protocol/persistence/epic/messages";
 import type { TranscriptRowDescriptor } from "@traycer/protocol/persistence/chat-transcript/row-projection";
-import { recordByteLength } from "@traycer/protocol/persistence/chat-transcript/record-bytes";
+import {
+  recordByteLength,
+  RecordFingerprintMemo,
+  type FingerprintedRecord,
+  type RecordFingerprint,
+} from "@traycer/protocol/persistence/chat-transcript/record-bytes";
 import {
   TRANSCRIPT_RANGE_ENVELOPE_RESERVE_BYTES,
   TRANSCRIPT_RANGE_MAX_BYTES,
@@ -516,7 +521,37 @@ function tail(
     rows,
     buildTranscriptRecordLookup(messages, events),
     maxBytes,
+    null,
   );
+}
+
+/**
+ * A memo whose entries deliberately disagree with the real encoding.
+ *
+ * The point is to make the SOURCE of the number observable. Every honest
+ * `byteLength` the memo could return is by construction the same number
+ * `recordByteLength` computes - that is the invariant the memo is built on - so
+ * a tail that ignored the memo entirely would still produce identical output
+ * for every realistic input, and no assertion over real records could tell the
+ * two apart. Inflating one record's entry is the only way to prove which of the
+ * two the budget is actually spending.
+ */
+class InflatedByteLengthMemo extends RecordFingerprintMemo {
+  constructor(
+    private readonly inflatedMessageId: string,
+    private readonly extraBytes: number,
+  ) {
+    super();
+  }
+
+  override lookup(record: FingerprintedRecord): RecordFingerprint {
+    const honest = super.lookup(record);
+    const isInflatedRecord =
+      "messageId" in record && record.messageId === this.inflatedMessageId;
+    return isInflatedRecord
+      ? { ...honest, byteLength: honest.byteLength + this.extraBytes }
+      : honest;
+  }
 }
 
 /**
@@ -529,6 +564,45 @@ function tail(
  * to come back EMPTY and let `loadRange` do the work.
  */
 describe("sliceTranscriptTail", () => {
+  it("charges records through the memo, not through recordByteLength", () => {
+    // The tail runs once per rebuild of the host's transcript view - which is
+    // once per COMMIT of a live chat, not once per snapshot - immediately after
+    // the skeleton has fingerprinted every record in the transcript through
+    // this same memo. Reading the entries the skeleton just wrote is the whole
+    // point; a tail that called `recordByteLength` would re-encode up to
+    // `TRANSCRIPT_TAIL_MAX_BYTES` of records per commit to recompute numbers it
+    // already had.
+    //
+    // A budget sized to fit exactly the last two rows honestly. The memo then
+    // reports `m-1` as much larger than it is, so a tail spending the memo's
+    // numbers can no longer afford it and cuts to one row; a tail spending
+    // `recordByteLength` still fits both and this row fails.
+    const exactBudgetForTwo = tailBudgetFor([
+      { rowId: "m-1", records: [M1] },
+      { rowId: "m-2", records: [M2] },
+    ]);
+    const memo = new InflatedByteLengthMemo("m-1", 1_000);
+
+    const slice = sliceTranscriptTail(
+      THREE_ROWS,
+      buildTranscriptRecordLookup(THREE, []),
+      exactBudgetForTwo,
+      memo,
+    );
+
+    expect(slice.rowIds).toEqual(["m-2"]);
+    expect(slice.fromOrdinal).toBe(2);
+    expect(slice.messages.map((message) => message.messageId)).toEqual(["m-2"]);
+
+    // The control, same rows and same budget with no memo: the honest
+    // measurement fits both, so the cut above is the memo's doing and not the
+    // budget merely being too small.
+    expect(tail(THREE_ROWS, THREE, [], exactBudgetForTwo).rowIds).toEqual([
+      "m-1",
+      "m-2",
+    ]);
+  });
+
   it("takes the last rows that fit, not the first", () => {
     const exactBudget = tailBudgetFor([
       { rowId: "m-1", records: [M1] },
