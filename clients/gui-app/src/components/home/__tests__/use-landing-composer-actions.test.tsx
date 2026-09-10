@@ -3198,11 +3198,9 @@ function createdEpicIdFromRequests(): string {
   const call = landingMocks.request.mock.calls.find(
     (entry) => entry[0] === "epic.create",
   );
-  const payload = call?.[1] as
-    | { readonly epic: { readonly id: string } }
-    | undefined;
-  const epicId = payload?.epic.id;
-  if (epicId === undefined) throw new Error("no epic.create request was sent");
+  const epicId =
+    call === undefined ? null : epicIdFromCreateEpicPayload(call[1]);
+  if (epicId === null) throw new Error("no epic.create request was sent");
   return epicId;
 }
 

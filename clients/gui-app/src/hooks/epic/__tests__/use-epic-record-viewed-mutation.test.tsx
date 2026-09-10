@@ -115,8 +115,11 @@ describe("useEpicRecordViewed", () => {
 
     // Non-vacuity: the verdict returning is what admits the same dispatch.
     useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
+    // The context carries the NAMED host, not the client's own reading - the
+    // mock client still answers "host-1" here, which is exactly the divergence
+    // production shows while a named row is unresolved.
     expect(capturedOptions.onMutate?.({ epicId: "epic-1" })).toEqual({
-      hostId: "host-1",
+      hostId: RECORD_VIEWED_HOST_ID,
       userId: "user-1",
     });
   });
@@ -128,12 +131,12 @@ describe("useEpicRecordViewed", () => {
       sort: "last-viewed" as const,
     };
     const lastViewedKey = cloudEpicTasksQueryKey(
-      "host-1",
+      RECORD_VIEWED_HOST_ID,
       "user-1",
       lastViewedRequest,
     );
     const recentKey = cloudEpicTasksQueryKey(
-      "host-1",
+      RECORD_VIEWED_HOST_ID,
       "user-1",
       LIST_CLOUD_TASKS_REQUEST,
     );
@@ -145,8 +148,8 @@ describe("useEpicRecordViewed", () => {
     [lastViewedKey, recentKey, otherHostKey].forEach((queryKey) => {
       queryClient.setQueryData(queryKey, { tasks: [], hasMore: false });
     });
-    const lastViewedIdentity = `host-1|user-1|${JSON.stringify(lastViewedRequest)}`;
-    const recentIdentity = `host-1|user-1|${JSON.stringify(LIST_CLOUD_TASKS_REQUEST)}`;
+    const lastViewedIdentity = `${RECORD_VIEWED_HOST_ID}|user-1|${JSON.stringify(lastViewedRequest)}`;
+    const recentIdentity = `${RECORD_VIEWED_HOST_ID}|user-1|${JSON.stringify(LIST_CLOUD_TASKS_REQUEST)}`;
     const state = useCloudEpicTasksPagesStore.getState();
     state.appendPage(lastViewedIdentity, 0, { tasks: [], hasMore: false });
     state.appendPage(recentIdentity, 0, { tasks: [], hasMore: false });
@@ -154,8 +157,17 @@ describe("useEpicRecordViewed", () => {
       wrapper: makeWrapper(queryClient),
     });
 
+    // The named row is UNRESOLVED at dispatch time: the requester answers
+    // `null` for its active host, and `useHostMutation` awaits `onMutate`
+    // before it sends, so a row landing in that gap used to leave the context
+    // with no host and `onSuccess` skipped every invalidation below. The
+    // named id is the dispatch host whether or not the row has arrived.
+    testState.activeHostId = null;
     const context = capturedOptions.onMutate?.({ epicId: "epic-1" });
-    expect(context).toEqual({ hostId: "host-1", userId: "user-1" });
+    expect(context).toEqual({
+      hostId: RECORD_VIEWED_HOST_ID,
+      userId: "user-1",
+    });
     await capturedOptions.onSuccess?.(
       { viewedAt: 1234 },
       { epicId: "epic-1" },
