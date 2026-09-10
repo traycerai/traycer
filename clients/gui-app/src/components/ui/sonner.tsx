@@ -25,8 +25,12 @@ import {
 
 const TOAST_CLASS_NAME = cn("cn-toast", "group/toast");
 // Sonner itself always shows the close button. Hiding it until hover only
-// makes sense where hover exists, so the hide is scoped to `can-hover`; on a
-// touch device sonner's own visibility stands and the button is tappable.
+// makes sense for a fine pointer, so the hide is scoped to
+// `not-pointer-coarse` - the app's touch convention, the same `pointer-coarse`
+// the mobile header keys its touch chrome on. A coarse pointer keeps sonner's
+// own visibility, and the button is tappable, even on a device that can also
+// hover. (Sonner's stylesheet uses the stricter `(hover: none) and (pointer:
+// coarse)`, but only to reset its own lift transform.)
 // There the 20px glyph also gets a 44px hit area: a pseudo-element square
 // centred on it, so the visual size and sonner's corner transform are
 // untouched (the pseudo-element moves with the button). Sized outright rather
@@ -39,14 +43,14 @@ const TOAST_CLASS_NAME = cn("cn-toast", "group/toast");
 // reveal on specificity, and on desktop hovering the toaster expands the
 // stack first, so it never fights a hover reveal.
 const TOAST_CLOSE_BUTTON_CLASS_NAME = cn(
-  "can-hover:pointer-events-none",
-  "can-hover:opacity-0",
-  "touch:after:absolute",
-  "touch:after:top-1/2",
-  "touch:after:left-1/2",
-  "touch:after:size-11",
-  "touch:after:-translate-x-1/2",
-  "touch:after:-translate-y-1/2",
+  "not-pointer-coarse:pointer-events-none",
+  "not-pointer-coarse:opacity-0",
+  "pointer-coarse:after:absolute",
+  "pointer-coarse:after:top-1/2",
+  "pointer-coarse:after:left-1/2",
+  "pointer-coarse:after:size-11",
+  "pointer-coarse:after:-translate-x-1/2",
+  "pointer-coarse:after:-translate-y-1/2",
   "group-hover/toast:pointer-events-auto",
   "group-hover/toast:opacity-100",
   "group-focus-within/toast:pointer-events-auto",

@@ -14,14 +14,6 @@
    `syncDocumentWindowControlsOverlayClass`). Mac fullscreen autohide
    and browser shells both leave this class off. */
 @custom-variant wco (&:is(.wco, .wco *));
-/* A touch-first device: the exact query sonner's own stylesheet uses for
-   touch, so a toast's touch styling and ours switch on the same devices.
-   `can-hover` is its complement, written out rather than as `not-touch:` -
-   Tailwind negates a compound media variant as `not (a) and (b)`, which is
-   not valid media-query grammar and would match nothing. The MQ3 form
-   `not all and …` negates the whole query. */
-@custom-variant touch (@media (hover: none) and (pointer: coarse));
-@custom-variant can-hover (@media not all and (hover: none) and (pointer: coarse));
 @plugin "tailwindcss-animate";
 @plugin "@tailwindcss/typography";
 

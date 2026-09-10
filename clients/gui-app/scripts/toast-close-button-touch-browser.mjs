@@ -2,7 +2,7 @@
 // where the toaster sits in the installed mobile app.
 //
 // jsdom cannot answer either: it evaluates no media queries, so a class scoped
-// to `(hover: none) and (pointer: coarse)` looks the same on every device, and
+// to `(pointer: coarse)` looks the same on every device, and
 // it has no layout, so an offset written as a CSS `calc()` is never resolved.
 // This renders the real `Toaster` against the real stylesheet and flips the
 // media query with Chrome's touch emulation, which switches both `hover` and
@@ -32,7 +32,7 @@ const projectRoot = path.resolve(
 const fixtureUrlPath = "/src/__tests__/browser/toast-close-button-touch.html";
 const chromePath = await findChrome("the toast close-button touch regression");
 const vitePort = await freePort();
-const TOUCH_QUERY = "(hover: none) and (pointer: coarse)";
+const TOUCH_QUERY = "(pointer: coarse)";
 const CLOSE_BUTTON =
   '[data-sonner-toast][data-mounted="true"][data-front="true"] [data-close-button]';
 // The header's icon buttons get a 44px hit area on touch

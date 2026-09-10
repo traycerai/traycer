@@ -33,24 +33,24 @@ describe("<Toaster />", () => {
     expect(lastSonnerToasterProps().closeButton).toBe(true);
   });
 
-  it("hides close buttons until toast hover or focus on hover-capable devices", () => {
+  it("hides close buttons until toast hover or focus for a fine pointer", () => {
     render(<Toaster />);
 
     const classNames = lastSonnerToasterProps().toastOptions?.classNames;
     const closeButton = closeButtonTokens();
 
     expect(classNames?.toast).toContain("group/toast");
-    expect(closeButton).toContain("can-hover:opacity-0");
-    expect(closeButton).toContain("can-hover:pointer-events-none");
+    expect(closeButton).toContain("not-pointer-coarse:opacity-0");
+    expect(closeButton).toContain("not-pointer-coarse:pointer-events-none");
     expect(closeButton).toContain("group-hover/toast:opacity-100");
     expect(closeButton).toContain("group-focus-within/toast:opacity-100");
   });
 
-  it("leaves close buttons visible and tappable on touch devices", () => {
+  it("leaves close buttons visible and tappable for a coarse pointer", () => {
     render(<Toaster />);
 
-    // Every hiding utility is scoped to `can-hover`, so under sonner's touch
-    // query nothing overrides its always-visible default - except for the
+    // Every hiding utility is scoped to `not-pointer-coarse`, so for a coarse
+    // pointer nothing overrides sonner's always-visible default - except for the
     // back toasts of a collapsed stack, which sonner has already made
     // invisible. The real media query is exercised in
     // `scripts/toast-close-button-touch-browser.mjs`.
@@ -58,12 +58,15 @@ describe("<Toaster />", () => {
       /(^|:)(opacity-0|pointer-events-none)$/.test(token),
     );
     expect(hides).toEqual([
-      "can-hover:pointer-events-none",
-      "can-hover:opacity-0",
+      "not-pointer-coarse:pointer-events-none",
+      "not-pointer-coarse:opacity-0",
       "group-data-[expanded=false]/toast:group-data-[front=false]/toast:pointer-events-none",
     ]);
     expect(closeButtonTokens()).toEqual(
-      expect.arrayContaining(["touch:after:absolute", "touch:after:size-11"]),
+      expect.arrayContaining([
+        "pointer-coarse:after:absolute",
+        "pointer-coarse:after:size-11",
+      ]),
     );
   });
 
