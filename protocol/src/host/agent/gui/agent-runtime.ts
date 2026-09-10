@@ -20,6 +20,7 @@ import {
   interviewQuestionOptionSchema,
   interviewQuestionSchema,
 } from "@traycer/protocol/persistence/epic/schemas";
+import { permissionModeSchema } from "@traycer/protocol/persistence/epic/foundation";
 import {
   agentMessageReceiptSchema,
   agentMessageSendSchema,
@@ -130,11 +131,25 @@ export const runtimeTokenUsageSchema = z.object({
 });
 export type RuntimeTokenUsage = z.infer<typeof runtimeTokenUsageSchema>;
 
-export const runtimePermissionModeSchema = z.enum([
-  "supervised",
-  "auto_accept_edits",
-  "full_access",
-]);
+/**
+ * The permission mode a turn executes under, as the runtime seam carries it.
+ *
+ * Bound to the LIVE persisted enum rather than restated, and the difference is
+ * not stylistic. This used to be a hand-written triple, and being a hand-written
+ * triple is exactly how it fell behind: `auto` reached every persisted, wire and
+ * catalog surface while THIS one - the seam every adapter actually reads the
+ * mode from - could not express it, so the mode was unrepresentable at the one
+ * place that has to act on it.
+ *
+ * Binding by reference is safe here in a way it is not for the frozen copies
+ * next to it: `runtimeAgentRunInputSchema` is bound to no RPC contract, appears
+ * in no released baseline surface, and is parsed by nothing on the wire - it is
+ * a host-internal shape that happens to live in the protocol package. There is
+ * therefore no installed peer whose strict enum this can widen underneath.
+ * Should that ever change - should this schema be given a contract - it needs
+ * the same pre-`auto` freeze treatment as `chatRunSettingsSchemaPreReasonix`.
+ */
+export const runtimePermissionModeSchema = permissionModeSchema;
 export type RuntimePermissionMode = z.infer<typeof runtimePermissionModeSchema>;
 
 export const runtimeImageAttachmentSchema = attachmentMentionAttrsSchema.omit({

@@ -15,8 +15,12 @@ const MULTI_WORKSPACE_WITH_GLOBAL_PARAGRAPH = `Workspace instructions apply only
 
 const MULTI_WORKSPACE_PARAGRAPH = `Multiple workspaces provide instructions below. For each file you touch, use the instructions for the workspace that contains it. If more than one workspace contains the file, use the most specific workspace.`;
 
+// Byte-parity-locked to the host's copy in
+// `traycer-host/src/domain/agent/a2a-tool-catalog.ts`, which a host test
+// asserts against this constant. This side moves FIRST; the host copy follows
+// in the same change.
 export const A2A_PERMISSION_MODE_INSTRUCTION =
-  "Use `full_access` unless the user's agent selection guide explicitly instructs you to use `supervised` or `auto_accept_edits`; never infer a more restrictive permission mode from the task, the current or parent agent's mode, or a general safety preference.";
+  "Use `full_access` unless the user's agent selection guide explicitly instructs you to use `supervised`, `auto_accept_edits` or `auto`; never infer a more restrictive permission mode from the task, the current or parent agent's mode, or a general safety preference.";
 
 function withPermissionModeInstruction(content: string): string {
   return `${content}\n\nPermission mode: ${A2A_PERMISSION_MODE_INSTRUCTION}`;
