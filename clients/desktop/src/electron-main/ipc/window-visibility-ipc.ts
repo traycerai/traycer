@@ -30,6 +30,47 @@ export function windowOnScreen(window: IpcManagedWindow): boolean {
 }
 
 /**
+ * What each window's renderer was last TOLD about itself, by any route: the
+ * snapshot invoke, the startup replay, or a change event. The channel sends a
+ * window an event only when the answer differs from this, so a maximize, a
+ * focus or a title change (all of which reach the registry's events) is not
+ * an edge in the renderer.
+ *
+ * Keyed on what was TOLD, not on what was last derived, and that distinction
+ * is the whole point. An earlier cut memoised only what `publish` had sent and
+ * treated an absent entry as the renderer's default (`true`). That premise
+ * fails once the snapshot or the replay has said `false`: a window registered
+ * `show: false` before the bridge installs, answered `false` at startup and
+ * shown afterwards derived `true`, matched the absent-entry default, and was
+ * never told - its renderer kept `false` and parked the epic on screen.
+ *
+ * An absent entry still reads as `true`, because that IS the renderer's
+ * default until something here tells it otherwise, and every route that tells
+ * it records what it said.
+ */
+export class WindowVisibilityTold {
+  private readonly byWindowId = new Map<string, boolean>();
+
+  lastTold(windowId: string): boolean {
+    return this.byWindowId.get(windowId) ?? true;
+  }
+
+  record(windowId: string, onScreen: boolean): void {
+    this.byWindowId.set(windowId, onScreen);
+  }
+
+  forgetAllExcept(live: ReadonlySet<string>): void {
+    for (const windowId of Array.from(this.byWindowId.keys())) {
+      if (!live.has(windowId)) this.byWindowId.delete(windowId);
+    }
+  }
+
+  clear(): void {
+    this.byWindowId.clear();
+  }
+}
+
+/**
  * One invoke in - a window asking about ITSELF - and one event out, sent to
  * each window about itself only. Nothing cross-window: what other windows show
  * travels on `epicVisibility`, and a hidden window withdraws its claim there
@@ -37,6 +78,7 @@ export function windowOnScreen(window: IpcManagedWindow): boolean {
  * this channel.
  */
 export function registerWindowVisibilityIpc(bridge: RunnerIpcBridge): void {
+  const told = bridge.windowVisibilityTold;
   // The startup read. `replayCurrentStateToWindow` also pushes this on the
   // preload's synchronous `windowId` read, before any renderer effect has
   // subscribed, so the renderer's install reads it explicitly - the same
@@ -48,39 +90,39 @@ export function registerWindowVisibilityIpc(bridge: RunnerIpcBridge): void {
     // An unattributable sender is answered "visible": the cost of a wrong
     // "visible" is a deferred reclaim, the cost of a wrong "hidden" is a park
     // of something the user is looking at.
-    return record === null ? true : windowOnScreen(record.window);
+    if (windowId === null || record === null) return true;
+    const onScreen = windowOnScreen(record.window);
+    told.record(windowId, onScreen);
+    return onScreen;
   });
 
   // The registry's `geometry` (minimize/restore/(un)maximize) and `change`
   // (show/hide, among others) events carry no window id, so every event
-  // re-derives each window's answer and sends only the ones that moved. The
-  // per-window memo is what keeps a maximize, a focus or a title change from
-  // becoming an event in the renderer. A window with no memo entry counts as
-  // `true`, which is the renderer's own default until told otherwise, so a
-  // window that has never left the screen is never told anything.
-  const lastSent = new Map<string, boolean>();
+  // re-derives each window's answer and sends only the ones whose answer
+  // differs from what that window was last told.
   const publish = (): void => {
     const live = new Set<string>();
     for (const record of bridge.windowRegistry.records()) {
       live.add(record.windowId);
       const onScreen = windowOnScreen(record.window);
-      if ((lastSent.get(record.windowId) ?? true) === onScreen) continue;
-      lastSent.set(record.windowId, onScreen);
-      bridge.safeSendToWindow(
-        record.windowId,
-        RunnerHostEvent.windowVisibilityChange,
-        onScreen,
-      );
+      if (told.lastTold(record.windowId) === onScreen) continue;
+      if (
+        bridge.safeSendToWindow(
+          record.windowId,
+          RunnerHostEvent.windowVisibilityChange,
+          onScreen,
+        )
+      ) {
+        told.record(record.windowId, onScreen);
+      }
     }
-    for (const windowId of Array.from(lastSent.keys())) {
-      if (!live.has(windowId)) lastSent.delete(windowId);
-    }
+    told.forgetAllExcept(live);
   };
   bridge.windowRegistry.on("geometry", publish);
   bridge.windowRegistry.on("change", publish);
   bridge.disposeFns.push(() => {
     bridge.windowRegistry.off("geometry", publish);
     bridge.windowRegistry.off("change", publish);
-    lastSent.clear();
+    told.clear();
   });
 }

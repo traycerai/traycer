@@ -78,6 +78,7 @@ import { registerEpicVisibilityIpc } from "./epic-visibility-ipc";
 import {
   registerWindowVisibilityIpc,
   windowOnScreen,
+  WindowVisibilityTold,
 } from "./window-visibility-ipc";
 import { EpicWindowVisibility } from "../windows/epic-window-visibility";
 import { registerPerWindowStateIpc } from "./per-window-state-ipc";
@@ -542,6 +543,7 @@ export class RunnerIpcBridge {
    * carry to say the same thing this line says.
    */
   readonly epicVisibility = new EpicWindowVisibility();
+  readonly windowVisibilityTold = new WindowVisibilityTold();
   readonly perWindowState: IpcPerWindowState;
   readonly authSession: IpcDesktopAuthSession;
   readonly authTokenStore: IpcAuthTokenStore;
@@ -1253,11 +1255,16 @@ export class RunnerIpcBridge {
     // other way to learn it.
     const ownRecord = this.windowRegistry.getRecordById(windowId);
     if (ownRecord !== null) {
-      this.safeSendToWindow(
-        windowId,
-        RunnerHostEvent.windowVisibilityChange,
-        windowOnScreen(ownRecord.window),
-      );
+      const onScreen = windowOnScreen(ownRecord.window);
+      if (
+        this.safeSendToWindow(
+          windowId,
+          RunnerHostEvent.windowVisibilityChange,
+          onScreen,
+        )
+      ) {
+        this.windowVisibilityTold.record(windowId, onScreen);
+      }
     }
     this.safeSendToWindow(
       windowId,

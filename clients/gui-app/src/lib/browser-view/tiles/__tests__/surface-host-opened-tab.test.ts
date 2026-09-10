@@ -173,12 +173,12 @@ describe("hostOpenedTabSuppressReason", () => {
   // window.
   it("does not fold document (window) visibility into surface placement, so a placed pane in a hidden document still arms the PiP float", () => {
     const originalVisibilityState = document.visibilityState;
+    const viewTabId = "view-doc-hidden-control";
     Object.defineProperty(document, "visibilityState", {
       configurable: true,
       value: "hidden",
     });
     try {
-      const viewTabId = "view-doc-hidden-control";
       setEpicSurfaceVisibility(EPIC, viewTabId, true);
 
       expect(
@@ -195,9 +195,10 @@ describe("hostOpenedTabSuppressReason", () => {
         }),
         'folding document visibility into the shared placement set would return "pip-epic-hidden" here and silently drop an agent-opened PiP tab while the window is merely minimized',
       ).not.toBe("pip-epic-hidden");
-
-      setEpicSurfaceVisibility(EPIC, viewTabId, false);
     } finally {
+      // In `finally`, so a failed assertion above cannot leave the placement
+      // standing for a later test that expects the epic hidden.
+      setEpicSurfaceVisibility(EPIC, viewTabId, false);
       Object.defineProperty(document, "visibilityState", {
         configurable: true,
         value: originalVisibilityState,

@@ -5,6 +5,8 @@ import {
   unrecoverableSendNotice,
   pruneAcceptedActions,
   withoutResolvedAcceptedQueueCancellations,
+  withoutSettledAcceptedQueueStatusActions,
+  withoutStartedAcceptedRestoreActions,
   reconcileQueueChange,
   reconcileSnapshotChange,
   reconcileTurnSettled,
@@ -354,6 +356,12 @@ export interface PendingChatAction {
   readonly action: ChatOwnerActionFrame["kind"];
   /** Queue row targeted by a queue mutation; populated for queueCancel. */
   readonly queueItemId: string | null;
+  /**
+   * Checkpoint targeted by a `restoreCheckpoint`; `null` for every other
+   * action. Lets the parking verdict tell THIS restore's slot from an earlier
+   * checkpoint's completed one, which persists for toast consumers.
+   */
+  readonly checkpointId: string | null;
   // For `interviewAnswer` / `interviewError`, the interview block this action
   // targets; `null` for every other action. Lets the UI gate exactly the card
   // whose answer/skip is in flight (or accepted-but-unresolved) rather than all
@@ -493,6 +501,8 @@ export interface AcceptedChatAction {
   readonly action: ChatOwnerActionFrame["kind"];
   /** Carries an accepted queueCancel projection until host queue truth lands. */
   readonly queueItemId: string | null;
+  /** See {@link PendingChatAction.checkpointId}. */
+  readonly checkpointId: string | null;
   // Carried over from the originating `PendingChatAction` so an accepted-but-
   // unresolved interview answer/skip keeps gating its card. `null` for every
   // non-interview action.
@@ -2599,30 +2609,33 @@ export function createChatSessionStoreWithNotificationDependencies(
         // pass that retires it was never reached from here. Same authoritative
         // queue, same rule, so the record expires whichever door delivers the
         // truth.
-        const acceptedActions = withoutResolvedAcceptedQueueCancellations(
-          withoutSupersededInterviewDeliveryRetryActions(
-            pruneAcceptedActions(
-              {
-                ...withoutSettledAcceptedActions(
-                  state.acceptedActions,
-                  // BOTH passes retire records: the snapshot pass for sends it
-                  // settled itself, the settled pass for rows it recovered.
-                  new Set([
-                    ...pending.settledAcceptedActionIds,
-                    ...settled.settledAcceptedActionIds,
-                  ]),
-                ),
-                // Confirmation stamps first, then this pass's own additions -
-                // an id cannot be in both, but ordering the merge makes that
-                // independent of whether it ever could be.
-                ...pending.confirmedAcceptedActions,
-                ...pending.acceptedActions,
-              },
-              now,
+        const acceptedActions = withoutSettledAcceptedQueueStatusActions(
+          withoutResolvedAcceptedQueueCancellations(
+            withoutSupersededInterviewDeliveryRetryActions(
+              pruneAcceptedActions(
+                {
+                  ...withoutSettledAcceptedActions(
+                    state.acceptedActions,
+                    // BOTH passes retire records: the snapshot pass for sends it
+                    // settled itself, the settled pass for rows it recovered.
+                    new Set([
+                      ...pending.settledAcceptedActionIds,
+                      ...settled.settledAcceptedActionIds,
+                    ]),
+                  ),
+                  // Confirmation stamps first, then this pass's own additions -
+                  // an id cannot be in both, but ordering the merge makes that
+                  // independent of whether it ever could be.
+                  ...pending.confirmedAcceptedActions,
+                  ...pending.acceptedActions,
+                },
+                now,
+              ),
+              messages,
+              state.liveAssistantMessage,
+              connectionEpoch,
             ),
-            messages,
-            state.liveAssistantMessage,
-            connectionEpoch,
+            frame.snapshot.queue,
           ),
           frame.snapshot.queue,
         );
@@ -5401,16 +5414,20 @@ export function createChatSessionStoreWithNotificationDependencies(
               new Set(Object.keys(patch.pendingActions)),
             ),
             pendingActions: patch.pendingActions,
-            acceptedActions: withoutResolvedAcceptedQueueCancellations(
-              pruneAcceptedActions(
-                {
-                  ...state.acceptedActions,
-                  // Confirmation stamps for records that were already accepted
-                  // when this frame arrived, then this pass's own transitions.
-                  ...patch.confirmedAcceptedActions,
-                  ...patch.acceptedActions,
-                },
-                now,
+            acceptedActions: withoutSettledAcceptedQueueStatusActions(
+              withoutResolvedAcceptedQueueCancellations(
+                pruneAcceptedActions(
+                  {
+                    ...state.acceptedActions,
+                    // Confirmation stamps for records that were already
+                    // accepted when this frame arrived, then this pass's own
+                    // transitions.
+                    ...patch.confirmedAcceptedActions,
+                    ...patch.acceptedActions,
+                  },
+                  now,
+                ),
+                frame.queue,
               ),
               frame.queue,
             ),
@@ -5939,7 +5956,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
         }
-        set({
+        set((state) => ({
           restore: {
             kind: "in-flight",
             checkpointId: frame.checkpointId,
@@ -5948,7 +5965,15 @@ export function createChatSessionStoreWithNotificationDependencies(
             startedAt: frame.startedAt,
             connectionEpoch,
           },
-        });
+          // From here on the slot is the authority for this checkpoint, so the
+          // accepted `restoreCheckpoint` record has nothing left to hold -
+          // retire it now rather than let a LATER restore's slot make it read
+          // unsettled again (`acceptedActionIsUnsettled`).
+          acceptedActions: withoutStartedAcceptedRestoreActions(
+            state.acceptedActions,
+            frame.checkpointId,
+          ),
+        }));
       },
       onRestoreProgress: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
@@ -6417,6 +6442,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             clientActionId,
             action: "send",
             queueItemId: null,
+            checkpointId: null,
             interviewBlockId: null,
             interviewDeliveryRetry: null,
             messageId,
@@ -6543,6 +6569,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             clientActionId: input.clientActionId,
             action: "send",
             queueItemId: null,
+            checkpointId: null,
             interviewBlockId: null,
             interviewDeliveryRetry: null,
             messageId: input.messageId,
@@ -6651,6 +6678,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             clientActionId,
             action: "editUserMessage",
             queueItemId: null,
+            checkpointId: null,
             interviewBlockId: null,
             interviewDeliveryRetry: null,
             messageId,
@@ -6726,6 +6754,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             clientActionId,
             action: "stop",
             queueItemId: null,
+            checkpointId: null,
             interviewBlockId: null,
             interviewDeliveryRetry: null,
             messageId: null,
@@ -7125,7 +7154,10 @@ export function createChatSessionStoreWithNotificationDependencies(
           set,
           get,
           frame,
-          pending: basicPending(clientActionId, "restoreCheckpoint"),
+          pending: {
+            ...basicPending(clientActionId, "restoreCheckpoint"),
+            checkpointId,
+          },
           pendingUserMessage: null,
         });
       },
@@ -7484,6 +7516,7 @@ function basicPending(
     clientActionId,
     action,
     queueItemId: null,
+    checkpointId: null,
     interviewBlockId: null,
     interviewDeliveryRetry: null,
     messageId: null,

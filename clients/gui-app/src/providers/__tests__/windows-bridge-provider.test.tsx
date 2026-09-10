@@ -42,6 +42,7 @@ import {
   isDocumentVisible,
   setDesktopWindowOnScreen,
 } from "@/lib/dom/document-visibility";
+import { RETRY_DELAYS_MS } from "@/lib/epics/bounded-retry";
 import { setEpicSurfaceVisibility } from "@/lib/browser-view/tiles/surface-host-opened-tab";
 import { PARK_HIDDEN_EPIC_AFTER_MS } from "@/stores/replica-memory/retention-profile";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -1059,7 +1060,13 @@ describe("<WindowsBridgeProvider /> - renderer parking's cross-window channel", 
 interface FakeWindowVisibilityChannel {
   readonly channel: NonNullable<DesktopWindowsBridge["windowVisibility"]>;
   readonly disposals: { count: number };
+  readonly snapshotCalls: { count: number };
   emit(onScreen: boolean): void;
+  /** Leave the NEXT snapshot unsettled until `settlePendingSnapshot`. */
+  setSnapshotPending(): void;
+  /** Reject the next `n` snapshots, then resolve with the configured value. */
+  rejectNextSnapshots(n: number): void;
+  settlePendingSnapshot(outcome: "resolve" | "reject", onScreen: boolean): void;
 }
 
 function createWindowVisibilityChannel(
@@ -1067,10 +1074,44 @@ function createWindowVisibilityChannel(
 ): FakeWindowVisibilityChannel {
   let handler: ((onScreen: boolean) => void) | null = null;
   const disposals = { count: 0 };
+  const snapshotCalls = { count: 0 };
+  let pending = false;
+  let rejectionsLeft = 0;
+  let settle:
+    | ((outcome: "resolve" | "reject", onScreen: boolean) => void)
+    | null = null;
   return {
     disposals,
+    snapshotCalls,
+    setSnapshotPending: () => {
+      pending = true;
+    },
+    rejectNextSnapshots: (n) => {
+      rejectionsLeft = n;
+    },
+    settlePendingSnapshot: (outcome, onScreen) => {
+      const current = settle;
+      settle = null;
+      current?.(outcome, onScreen);
+    },
     channel: {
-      snapshot: () => Promise.resolve(snapshotOnScreen),
+      snapshot: () => {
+        snapshotCalls.count += 1;
+        if (pending) {
+          pending = false;
+          return new Promise<boolean>((resolve, reject) => {
+            settle = (outcome, onScreen) => {
+              if (outcome === "resolve") resolve(onScreen);
+              else reject(new Error("window visibility snapshot failed"));
+            };
+          });
+        }
+        if (rejectionsLeft > 0) {
+          rejectionsLeft -= 1;
+          return Promise.reject(new Error("window visibility snapshot failed"));
+        }
+        return Promise.resolve(snapshotOnScreen);
+      },
       onChange: (nextHandler) => {
         handler = nextHandler;
         return {
@@ -1243,6 +1284,238 @@ describe("<WindowsBridgeProvider /> - renderer parking's window visibility input
     // A late edge from the retired channel must not land either.
     windowVisibility.emit(false);
     expect(isDocumentVisible()).toBe(true);
+  });
+
+  // ── The startup read is OLDER than any event that lands while it is in
+  // flight (Codex re-review of 343f6cc0b9, P1) ───────────────────────────────
+  //
+  // Main answers the snapshot from what the window looked like when the invoke
+  // arrived; an `onChange` that lands before the answer does is newer. Applying
+  // the answer afterwards puts the older fact back, in BOTH directions: a late
+  // `false` over a restore parks an epic the user is looking at, a late `true`
+  // over a minimise un-hides one. The ordinary pins resolve the snapshot
+  // immediately and so never exercise this ordering.
+  it("a snapshot that resolves AFTER a newer restore event does not re-hide the window", async () => {
+    const EPIC = "epic-provider-late-snapshot-false";
+    const VIEW = "view-provider-late-snapshot-false";
+    const fake = createDesktopWindowsBridge();
+    const visibility = createEpicVisibilityChannel([]);
+    const windowVisibility = createWindowVisibilityChannel(false);
+    windowVisibility.setSnapshotPending();
+    vi.useFakeTimers();
+    setEpicSurfaceVisibility(EPIC, VIEW, true);
+    try {
+      render(
+        <RunnerHostProvider
+          runnerHost={createRunnerHostWithWindows({
+            ...bridgeWithEpicVisibility(fake, visibility),
+            windowVisibility: windowVisibility.channel,
+          })}
+        >
+          <WindowsBridgeProvider>
+            <BridgeProbe onBridge={() => undefined} />
+          </WindowsBridgeProvider>
+        </RunnerHostProvider>,
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      // The newer fact: the window is on screen.
+      act(() => {
+        windowVisibility.emit(true);
+      });
+      // The older fact arrives late.
+      await act(async () => {
+        windowVisibility.settlePendingSnapshot("resolve", false);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(isDocumentVisible()).toBe(true);
+      act(() => {
+        openEpicTabForParking("tab-provider-late-snapshot-false", EPIC);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(PARK_HIDDEN_EPIC_AFTER_MS);
+      });
+      expect(isEpicParked(EPIC)).toBe(false);
+      expect(visibility.reports.at(-1)).toContain(EPIC);
+    } finally {
+      setEpicSurfaceVisibility(EPIC, VIEW, false);
+    }
+  });
+
+  it("a snapshot that resolves AFTER a newer minimise event does not un-hide the window", async () => {
+    const EPIC = "epic-provider-late-snapshot-true";
+    const VIEW = "view-provider-late-snapshot-true";
+    const fake = createDesktopWindowsBridge();
+    const visibility = createEpicVisibilityChannel([]);
+    const windowVisibility = createWindowVisibilityChannel(true);
+    windowVisibility.setSnapshotPending();
+    vi.useFakeTimers();
+    setEpicSurfaceVisibility(EPIC, VIEW, true);
+    try {
+      render(
+        <RunnerHostProvider
+          runnerHost={createRunnerHostWithWindows({
+            ...bridgeWithEpicVisibility(fake, visibility),
+            windowVisibility: windowVisibility.channel,
+          })}
+        >
+          <WindowsBridgeProvider>
+            <BridgeProbe onBridge={() => undefined} />
+          </WindowsBridgeProvider>
+        </RunnerHostProvider>,
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      act(() => {
+        windowVisibility.emit(false);
+      });
+      await act(async () => {
+        windowVisibility.settlePendingSnapshot("resolve", true);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(isDocumentVisible()).toBe(false);
+      expect(visibility.reports.at(-1)).toEqual([]);
+      act(() => {
+        openEpicTabForParking("tab-provider-late-snapshot-true", EPIC);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(PARK_HIDDEN_EPIC_AFTER_MS);
+      });
+      expect(isEpicParked(EPIC)).toBe(true);
+    } finally {
+      setEpicSurfaceVisibility(EPIC, VIEW, false);
+    }
+  });
+
+  // ── A transient snapshot failure is retried, because "the next edge" never
+  // comes for a window minimised at startup and left alone (P2) ──────────────
+  it("retries a failed startup snapshot and reclaims a quiet minimised window without any further edge", async () => {
+    const EPIC = "epic-provider-snapshot-retry";
+    const VIEW = "view-provider-snapshot-retry";
+    const fake = createDesktopWindowsBridge();
+    const visibility = createEpicVisibilityChannel([]);
+    const windowVisibility = createWindowVisibilityChannel(false);
+    windowVisibility.rejectNextSnapshots(1);
+    vi.useFakeTimers();
+    setEpicSurfaceVisibility(EPIC, VIEW, true);
+    try {
+      render(
+        <RunnerHostProvider
+          runnerHost={createRunnerHostWithWindows({
+            ...bridgeWithEpicVisibility(fake, visibility),
+            windowVisibility: windowVisibility.channel,
+          })}
+        >
+          <WindowsBridgeProvider>
+            <BridgeProbe onBridge={() => undefined} />
+          </WindowsBridgeProvider>
+        </RunnerHostProvider>,
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      // The first read failed; nothing has moved yet, and nothing ever will
+      // from main's side - the window just sits minimised.
+      expect(windowVisibility.snapshotCalls.count).toBe(1);
+      expect(isDocumentVisible()).toBe(true);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(RETRY_DELAYS_MS[0]);
+      });
+      expect(windowVisibility.snapshotCalls.count).toBe(2);
+      expect(isDocumentVisible()).toBe(false);
+      expect(visibility.reports.at(-1)).toEqual([]);
+      act(() => {
+        openEpicTabForParking("tab-provider-snapshot-retry", EPIC);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(PARK_HIDDEN_EPIC_AFTER_MS);
+      });
+      expect(isEpicParked(EPIC)).toBe(true);
+    } finally {
+      setEpicSurfaceVisibility(EPIC, VIEW, false);
+    }
+  });
+
+  it("an event arriving while the snapshot is being retried stops the retry, and a snapshot still pending at teardown is ignored however it settles", async () => {
+    const fake = createDesktopWindowsBridge();
+    const visibility = createEpicVisibilityChannel([]);
+    const windowVisibility = createWindowVisibilityChannel(false);
+    windowVisibility.rejectNextSnapshots(1);
+    vi.useFakeTimers();
+    render(
+      <RunnerHostProvider
+        runnerHost={createRunnerHostWithWindows({
+          ...bridgeWithEpicVisibility(fake, visibility),
+          windowVisibility: windowVisibility.channel,
+        })}
+      >
+        <WindowsBridgeProvider>
+          <BridgeProbe onBridge={() => undefined} />
+        </WindowsBridgeProvider>
+      </RunnerHostProvider>,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(windowVisibility.snapshotCalls.count).toBe(1);
+    // The fact arrives by the better route while the retry timer is armed.
+    act(() => {
+      windowVisibility.emit(false);
+    });
+    expect(isDocumentVisible()).toBe(false);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RETRY_DELAYS_MS[0] * 2);
+    });
+    // No second read once the fact arrived by the better route. Behavioural
+    // coverage, NOT a discriminator for `snapshotLeg.cancel()` in the
+    // `onChange` handler: ablating that call leaves this green, because the
+    // supersession flag already makes the retried attempt return before it
+    // reads. The cancel is kept for the timer it clears.
+    expect(windowVisibility.snapshotCalls.count).toBe(1);
+    cleanup();
+    setDesktopWindowOnScreen(true);
+    __resetEpicParkingForTests();
+    __resetCrossWindowEpicVisibilityForTests();
+
+    // Second half: a snapshot still in flight when the provider unmounts.
+    for (const outcome of ["resolve", "reject"] as const) {
+      const late = createWindowVisibilityChannel(false);
+      late.setSnapshotPending();
+      const view = render(
+        <RunnerHostProvider
+          runnerHost={createRunnerHostWithWindows({
+            ...bridgeWithEpicVisibility(
+              createDesktopWindowsBridge(),
+              createEpicVisibilityChannel([]),
+            ),
+            windowVisibility: late.channel,
+          })}
+        >
+          <WindowsBridgeProvider>
+            <BridgeProbe onBridge={() => undefined} />
+          </WindowsBridgeProvider>
+        </RunnerHostProvider>,
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      act(() => {
+        view.unmount();
+      });
+      await act(async () => {
+        late.settlePendingSnapshot(outcome, false);
+        await vi.advanceTimersByTimeAsync(RETRY_DELAYS_MS[0] * 2);
+      });
+      expect(isDocumentVisible(), `late ${outcome} after teardown`).toBe(true);
+      // A rejection after teardown must not arm a retry either.
+      expect(late.snapshotCalls.count, `late ${outcome} retries`).toBe(1);
+      cleanup();
+      setDesktopWindowOnScreen(true);
+      __resetEpicParkingForTests();
+      __resetCrossWindowEpicVisibilityForTests();
+    }
   });
 });
 

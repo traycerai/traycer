@@ -197,6 +197,7 @@ function pendingChatActionFixture(clientActionId: string): PendingChatAction {
     clientActionId,
     action: "send",
     queueItemId: null,
+    checkpointId: null,
     interviewBlockId: null,
     interviewDeliveryRetry: null,
     messageId: "msg-1",
@@ -2211,18 +2212,103 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
 
       startChatRestore(chat.callbacks, EPIC, CHAT_ID, "checkpoint-pin8b");
       expect(chat.handle.store.getState().restore?.kind).toBe("in-flight");
+      // The accepted record retires the moment the restore STARTS: from here
+      // on the slot is the authority for this checkpoint, and a record left
+      // behind would read unsettled again once a later restore's slot
+      // replaced this one (pin 8c). Retired by `restoreStarted`, not by the
+      // retention window.
+      expect(
+        chat.handle.store.getState().acceptedActions[acceptedId],
+      ).toBeUndefined();
+      // The in-flight slot holds on its own (`hasUnsettledChatWork`).
+      expect(isEpicParked(EPIC)).toBe(false);
       completeChatRestore(chat.callbacks, EPIC, CHAT_ID, "checkpoint-pin8b");
       // Synchronous, right after the frame.
       expect(chat.handle.store.getState().restore?.kind).toBe("completed");
-      // The accepted record is still retained here - completion parks
-      // DESPITE it, not because pruning quietly took it away first.
-      expect(
-        chat.handle.store.getState().acceptedActions[acceptedId],
-      ).not.toBeUndefined();
 
       expect(isEpicParked(EPIC)).toBe(true);
       expect(epicHandle.disposed).toBe(true);
       expect(chatRegistry.peek(EPIC, CHAT_ID, HOST_ID)).toBeNull();
+    } finally {
+      closeEpicTab(TAB);
+    }
+  });
+
+  // Pin 8c (CodeRabbit on 343f6cc0b9): a `completed` slot PERSISTS for toast
+  // and dialog consumers, so with checkpoint A completed, a restore of B
+  // accepted afterwards used to read A's slot as its own settlement and park
+  // before B's `restoreStarted` arrived. The arm now matches the slot's
+  // checkpoint id against the action's. Both arms in one instance: B's ack
+  // holds against A's completed slot; B's own completion releases.
+  it("holds a restore of checkpoint B accepted after checkpoint A completed, until B's own restore starts and completes (pin 8c)", () => {
+    const EPIC = "epic-park-chat-restore-second-checkpoint-pin8c";
+    const TAB = "tab-park-chat-restore-second-checkpoint-pin8c";
+    const CHAT_ID = "chat-restore-second-checkpoint-pin8c";
+    const HOST_ID = "host-restore-second-checkpoint-pin8c";
+    const chatRegistry = __getChatSessionRegistryForTests();
+    const epicHandle = buildParkableEpicHandle(EPIC, false);
+    __getOpenEpicRegistryForTests().acquireMounted(
+      EPIC,
+      () => epicHandle.handle,
+    );
+    const chat = buildTestChatHandleWithFrames(EPIC, CHAT_ID, HOST_ID);
+    chatRegistry.acquire(
+      { epicId: EPIC, chatId: CHAT_ID, hostId: HOST_ID, scopeKey: "pin8c" },
+      () => chat.handle,
+    );
+    emitOwnerChatSnapshot(chat.callbacks, EPIC, CHAT_ID, HOST_ID);
+
+    // Checkpoint A: dispatched, accepted, started, completed. Its slot stays.
+    const restoreA = chat.handle.store
+      .getState()
+      .restoreCheckpoint("checkpoint-pin8c-a", false);
+    if (restoreA === null) throw new Error("Expected restore A");
+    acceptLastChatAction({
+      frames: chat.sent,
+      callbacks: chat.callbacks,
+      epicId: EPIC,
+      chatId: CHAT_ID,
+    });
+    startChatRestore(chat.callbacks, EPIC, CHAT_ID, "checkpoint-pin8c-a");
+    completeChatRestore(chat.callbacks, EPIC, CHAT_ID, "checkpoint-pin8c-a");
+    expect(chat.handle.store.getState().restore).toMatchObject({
+      kind: "completed",
+      checkpointId: "checkpoint-pin8c-a",
+    });
+
+    // Checkpoint B: dispatched and accepted while A's completed slot persists.
+    const restoreB = chat.handle.store
+      .getState()
+      .restoreCheckpoint("checkpoint-pin8c-b", false);
+    if (restoreB === null) throw new Error("Expected restore B");
+    const acceptedB = acceptLastChatAction({
+      frames: chat.sent,
+      callbacks: chat.callbacks,
+      epicId: EPIC,
+      chatId: CHAT_ID,
+    });
+    expect(acceptedB).toBe(restoreB);
+    expect(
+      chat.handle.store.getState().acceptedActions[acceptedB]?.checkpointId,
+    ).toBe("checkpoint-pin8c-b");
+
+    openEpicTab(TAB, EPIC);
+    try {
+      setEpicSurfaceVisibility(EPIC, "view-pin8c", false);
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS);
+      // A's completed slot is not B's settlement.
+      expect(isEpicParked(EPIC)).toBe(false);
+      expect(epicHandle.disposed).toBe(false);
+
+      startChatRestore(chat.callbacks, EPIC, CHAT_ID, "checkpoint-pin8c-b");
+      expect(isEpicParked(EPIC)).toBe(false);
+      completeChatRestore(chat.callbacks, EPIC, CHAT_ID, "checkpoint-pin8c-b");
+      expect(chat.handle.store.getState().restore).toMatchObject({
+        kind: "completed",
+        checkpointId: "checkpoint-pin8c-b",
+      });
+      expect(isEpicParked(EPIC)).toBe(true);
+      expect(epicHandle.disposed).toBe(true);
     } finally {
       closeEpicTab(TAB);
     }
@@ -2619,12 +2705,13 @@ describe("epic-parking - P1/P2 regression pins: history pruning is not settlemen
       items: [],
     });
     expect(chat.handle.store.getState().queue.status).toBe("paused");
-    // The record is not stripped by settling - `pauseQueue` has no dedicated
-    // retirement sweep, so what parks it below is `acceptedActionIsUnsettled`
-    // reading the live queue, not the record's absence.
+    // The settling frame also RETIRES the record
+    // (`withoutSettledAcceptedQueueStatusActions`): a pause that has landed
+    // has nothing left to hold, and a record left behind would read unsettled
+    // again the moment the queue was resumed by a later action (pin 12c).
     expect(
       chat.handle.store.getState().acceptedActions[acceptedId],
-    ).not.toBeUndefined();
+    ).toBeUndefined();
 
     openEpicTab(TAB, EPIC);
     try {
@@ -2634,6 +2721,60 @@ describe("epic-parking - P1/P2 regression pins: history pruning is not settlemen
       expect(isEpicParked(EPIC)).toBe(true);
       expect(epicHandle.disposed).toBe(true);
       expect(chatRegistry.peek(EPIC, CHAT_ID, HOST_ID)).toBeNull();
+    } finally {
+      closeEpicTab(TAB);
+    }
+  });
+
+  // Pin 12c (CodeRabbit on 343f6cc0b9): a pause that SETTLED must not come
+  // back as a veto when the queue is later resumed. Judged from live state
+  // alone, a retained `pauseQueue` record reads unsettled again the moment
+  // the status is no longer `paused`, which held the epic resident until the
+  // retention window happened to prune it. The record now retires when the
+  // pause lands, so the later resume finds nothing to hold on.
+  it("parks after a settled pause is followed by the host resuming the queue - the retired pause record is not a veto (pin 12c)", () => {
+    const EPIC = "epic-park-chat-pause-then-resumed-pin12c";
+    const TAB = "tab-park-chat-pause-then-resumed-pin12c";
+    const CHAT_ID = "chat-pause-then-resumed-pin12c";
+    const HOST_ID = "host-pause-then-resumed-pin12c";
+    const chatRegistry = __getChatSessionRegistryForTests();
+    const epicHandle = buildParkableEpicHandle(EPIC, false);
+    __getOpenEpicRegistryForTests().acquireMounted(
+      EPIC,
+      () => epicHandle.handle,
+    );
+    const chat = buildTestChatHandleWithFrames(EPIC, CHAT_ID, HOST_ID);
+    chatRegistry.acquire(
+      { epicId: EPIC, chatId: CHAT_ID, hostId: HOST_ID, scopeKey: "pin12c" },
+      () => chat.handle,
+    );
+    emitOwnerChatSnapshot(chat.callbacks, EPIC, CHAT_ID, HOST_ID);
+    chat.handle.store.getState().pauseQueue();
+    acceptLastChatAction({
+      frames: chat.sent,
+      callbacks: chat.callbacks,
+      epicId: EPIC,
+      chatId: CHAT_ID,
+    });
+    // The pause lands, then the host resumes the queue (a resume from another
+    // client, say). Both frames BEFORE the hidden-window advance, for the same
+    // retention-window reason pin 12b spells out.
+    emitChatQueueChanged(chat.callbacks, EPIC, CHAT_ID, {
+      status: "paused",
+      items: [],
+    });
+    emitChatQueueChanged(chat.callbacks, EPIC, CHAT_ID, {
+      status: "running",
+      items: [],
+    });
+    expect(chat.handle.store.getState().queue.status).toBe("running");
+
+    openEpicTab(TAB, EPIC);
+    try {
+      setEpicSurfaceVisibility(EPIC, "view-pin12c", false);
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS);
+      expect(isEpicParked(EPIC)).toBe(true);
+      expect(epicHandle.disposed).toBe(true);
     } finally {
       closeEpicTab(TAB);
     }

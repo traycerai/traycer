@@ -1,5 +1,5 @@
 import { setDesktopWindowOnScreen } from "@/lib/dom/document-visibility";
-import { appLogger } from "@/lib/logger";
+import { createBoundedRetry } from "@/lib/epics/bounded-retry";
 import type { DesktopWindowsBridge } from "@/lib/windows/types";
 
 /**
@@ -18,37 +18,55 @@ import type { DesktopWindowsBridge } from "@/lib/windows/types";
  * stays "visible", which is the pre-channel behaviour (parking waits for a
  * tab hide) rather than a failure.
  *
- * The `snapshot()` leg is the startup read - main's replay fires on the
- * preload's synchronous `windowId` read, before this effect subscribes - and a
- * window installed while minimised is the case it exists for. A failed
- * snapshot is not retried: the answer it would have carried is corrected by
- * this window's next minimise/restore edge, and the failure direction
- * ("visible") only defers a reclaim.
+ * ## The startup read, and the two ways it can lie
+ *
+ * `snapshot()` is the startup read - main's replay fires on the preload's
+ * synchronous `windowId` read, before this effect subscribes - and a window
+ * installed while minimised is the case it exists for. Two rules, both learnt
+ * from the `epicVisibility` snapshot leg:
+ *
+ * 1. AN EVENT SUPERSEDES IT. A snapshot still in flight when an `onChange`
+ *    lands is older than that event, and applying it afterwards would put the
+ *    older answer back - a late `false` over a restore parks an epic the user
+ *    is looking at, a late `true` over a minimise un-hides one. Once an event
+ *    has been seen the snapshot's answer is never applied, and its retry is
+ *    cancelled, because the fact arrived by the better route.
+ * 2. A FAILURE IS RETRIED, bounded. "The next edge corrects it" is not a
+ *    correction for the window this feature exists to reclaim: a window that
+ *    was minimised at startup and then left alone produces no further edge,
+ *    so a single failed read would advertise its epics and hold them resident
+ *    indefinitely. The retry stops on its own once an event supplies the
+ *    answer, and teardown invalidates a completion still in flight.
  */
 export function installDesktopWindowVisibility(
   bridge: DesktopWindowsBridge,
 ): () => void {
   const channel = bridge.windowVisibility;
   if (channel === undefined) return () => undefined;
-  let cancelled = false;
+  const lifecycle = { cancelled: false, eventSeen: false };
+  // Behind a call so the compiler cannot narrow the flags across the `await`
+  // below (same reason as the cross-window snapshot leg).
+  const snapshotSuperseded = (): boolean =>
+    lifecycle.cancelled || lifecycle.eventSeen;
+  const snapshotLeg = createBoundedRetry(
+    "window visibility snapshot",
+    async () => {
+      if (snapshotSuperseded()) return;
+      const onScreen = await channel.snapshot();
+      if (snapshotSuperseded()) return;
+      setDesktopWindowOnScreen(onScreen);
+    },
+  );
   const subscription = channel.onChange((onScreen) => {
-    if (cancelled) return;
+    if (lifecycle.cancelled) return;
+    lifecycle.eventSeen = true;
+    snapshotLeg.cancel();
     setDesktopWindowOnScreen(onScreen);
   });
-  void channel
-    .snapshot()
-    .then((onScreen) => {
-      if (cancelled) return;
-      setDesktopWindowOnScreen(onScreen);
-    })
-    .catch((error: unknown) => {
-      if (cancelled) return;
-      appLogger.warn("[epic-visibility] window visibility snapshot failed", {
-        error: error instanceof Error ? error.message : "unknown error",
-      });
-    });
+  snapshotLeg.restart();
   return () => {
-    cancelled = true;
+    lifecycle.cancelled = true;
+    snapshotLeg.cancel();
     subscription.dispose();
     // The renderer is leaving this bridge's lifetime; do not leave a stale
     // "hidden" behind for whatever installs next.

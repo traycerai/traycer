@@ -1339,11 +1339,17 @@ describe("RunnerIpcBridge", () => {
     windowA.sentMessages.length = 0;
     windowB.sentMessages.length = 0;
 
-    // Per SENDER: the same invoke answers differently for each window.
+    // Per SENDER: the same invoke answers differently for each window. The
+    // answer is also what A was TOLD, so restoring A afterwards is an edge
+    // (A hears `true`) while B, told nothing, stays on its default.
     aMinimised = true;
     expect(await Promise.resolve(snapshotHandler(sender(101)))).toBe(false);
     expect(await Promise.resolve(snapshotHandler(sender(202)))).toBe(true);
     aMinimised = false;
+    registry.emitGeometry();
+    expect(ownVisibilityEvents(windowA)).toEqual([true]);
+    expect(ownVisibilityEvents(windowB)).toEqual([]);
+    windowA.sentMessages.length = 0;
 
     // Minimise A: the registry's `geometry` event carries no window id, so
     // main re-derives every window and sends only the ones that MOVED. A
@@ -1371,6 +1377,67 @@ describe("RunnerIpcBridge", () => {
     // (The handler's "unattributable sender answers visible" arm is not
     // reachable here: `handleInvoke` rejects an unregistered sender as
     // untrusted before any handler runs.)
+
+    bridge.dispose();
+  });
+
+  it("tells a window shown for the first time that it is on screen when its startup snapshot said it was not (Codex re-review of 343f6cc0b9, P1)", async () => {
+    // Production registers its `show: false` windows BEFORE `bridge.install`
+    // (`desktop-startup.ts`), so no registry event has run for them under
+    // this channel when the renderer's startup snapshot asks. The snapshot
+    // answers `false`; the window is then shown. An earlier cut memoised
+    // only what `publish` had sent and read an absent entry as `true`, so the
+    // derived `true` on show matched the default and nothing was sent - the
+    // renderer kept `false` and parked the epic on screen. The memo now
+    // records what the window was TOLD, by every route.
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const windowA = buildWindow();
+    let aVisible = false;
+    const hiddenAtStartup: IpcManagedWindow = {
+      ...windowA,
+      isVisible: () => aVisible,
+    };
+    registry.add("window-a", 101, hiddenAtStartup);
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+    const snapshotHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.windowVisibilitySnapshot,
+    );
+    if (snapshotHandler === undefined) {
+      throw new Error("window visibility snapshot handler missing");
+    }
+    windowA.sentMessages.length = 0;
+    const ownVisibilityEvents = (): unknown[] =>
+      windowA.sentMessages
+        .filter((m) => m.channel === RunnerHostEvent.windowVisibilityChange)
+        .map((m) => m.payload);
+
+    expect(await Promise.resolve(snapshotHandler(sender(101)))).toBe(false);
+    expect(ownVisibilityEvents()).toEqual([]);
+
+    // Shown: the registry emits `change`, and the renderer - last told
+    // `false` - must hear `true`.
+    aVisible = true;
+    registry.add("window-b", 202, buildWindow()); // any `change` emission
+    expect(ownVisibilityEvents()).toEqual([true]);
+
+    // And not again on the next unrelated change.
+    registry.add("window-c", 303, buildWindow());
+    expect(ownVisibilityEvents()).toEqual([true]);
 
     bridge.dispose();
   });

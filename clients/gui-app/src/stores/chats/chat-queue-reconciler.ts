@@ -1781,6 +1781,7 @@ export function addAcceptedAction(
         clientActionId: pending.clientActionId,
         action: pending.action,
         queueItemId: pending.queueItemId,
+        checkpointId: pending.checkpointId,
         interviewBlockId: pending.interviewBlockId,
         interviewDeliveryRetry: pending.interviewDeliveryRetry,
         messageId: pending.messageId,
@@ -1885,6 +1886,61 @@ export function withoutResolvedAcceptedQueueCancellations(
   }, {});
 }
 
+/**
+ * Retire `pauseQueue` / `resumeQueue` records once the authoritative queue
+ * has reached the requested state, and `restoreCheckpoint` records once their
+ * restore has started - the removal paths {@link acceptedActionIsUnsettled}'s
+ * holds need so that settled history cannot come back as "unsettled".
+ *
+ * Without these, a record judged from LIVE state alone flips back: a pause
+ * that settled reads unsettled again the moment the queue is resumed by a
+ * later action, and a restore that completed reads unsettled again the moment
+ * a later restore's slot replaces its own. Both would veto parking until the
+ * retention window happened to prune the record. Retiring at settlement is
+ * what keeps the hold bounded by the lifecycle rather than by the calendar.
+ *
+ * Runs wherever the queue truth lands ({@link withoutResolvedAcceptedQueueCancellations}'s
+ * two doors) and on `restoreStarted`.
+ */
+export function withoutSettledAcceptedQueueStatusActions(
+  acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
+  queue: ChatQueueState,
+): Readonly<Record<string, AcceptedChatAction>> {
+  return withoutAcceptedActions(acceptedActions, (action) => {
+    if (action.action === "pauseQueue") return queue.status === "paused";
+    if (action.action === "resumeQueue") return queue.status !== "paused";
+    return false;
+  });
+}
+
+export function withoutStartedAcceptedRestoreActions(
+  acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
+  checkpointId: string,
+): Readonly<Record<string, AcceptedChatAction>> {
+  return withoutAcceptedActions(
+    acceptedActions,
+    (action) =>
+      action.action === "restoreCheckpoint" &&
+      (action.checkpointId === null || action.checkpointId === checkpointId),
+  );
+}
+
+function withoutAcceptedActions(
+  acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
+  retire: (action: AcceptedChatAction) => boolean,
+): Readonly<Record<string, AcceptedChatAction>> {
+  const retained = Object.values(acceptedActions).filter(
+    (action) => !retire(action),
+  );
+  if (retained.length === Object.keys(acceptedActions).length) {
+    return acceptedActions;
+  }
+  return retained.reduce<Record<string, AcceptedChatAction>>((next, action) => {
+    next[action.clientActionId] = action;
+    return next;
+  }, {});
+}
+
 function isAcceptedActionLifecycleLocked(action: AcceptedChatAction): boolean {
   return (
     action.interviewBlockId !== null ||
@@ -1958,11 +2014,17 @@ export interface AcceptedActionSettlementContext {
  * snapshot, so a verdict keyed on the record's EXISTENCE could never expire.
  * Keyed on the queue, the same answer falls out of either door.
  *
- * `restoreCheckpoint` holds only while the slot is still `null`, which is the
- * ack-to-`restoreStarted` gap; from `in-flight` on, the slot itself is the
- * authority and `completed` is finished. A `restoreStarted` lost outright would
- * hold until the next frame prunes the record - bounded, and a connection quiet
- * enough to lose it is one whose reconnect produces frames.
+ * `restoreCheckpoint` holds until the slot names THIS action's checkpoint,
+ * which is the ack-to-`restoreStarted` gap; from `in-flight` on, the slot
+ * itself is the authority and `completed` is finished. Matched by checkpoint
+ * id rather than by the slot being non-null because a `completed` slot
+ * persists for toast and dialog consumers: with checkpoint A completed, a
+ * restore of B accepted afterwards would otherwise read A's slot as its own
+ * settlement and park before B's frames arrive. A repeat restore of the SAME
+ * checkpoint still reads the earlier completed slot as settled - the residual
+ * gap, bounded exactly like a `restoreStarted` lost outright: the record holds
+ * until the next frame prunes it, and a connection quiet enough to lose it is
+ * one whose reconnect produces frames.
  */
 export function acceptedActionIsUnsettled(
   action: AcceptedChatAction,
@@ -1982,7 +2044,11 @@ export function acceptedActionIsUnsettled(
         )
       );
     case "restoreCheckpoint":
-      return context.restore === null;
+      return (
+        context.restore === null ||
+        (action.checkpointId !== null &&
+          context.restore.checkpointId !== action.checkpointId)
+      );
     default:
       return false;
   }
