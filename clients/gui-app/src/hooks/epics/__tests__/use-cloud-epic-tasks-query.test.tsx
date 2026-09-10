@@ -839,6 +839,10 @@ describe("useCloudEpicTasksQuery", () => {
         epicId: "pin-local",
         pinned: true,
         isLocalHome: false,
+        // The cloud control: no host named, so the write follows the window -
+        // which is what this case has always exercised. Omitting it passed only
+        // because the binding mock ignores the requester id it is asked for.
+        hostId: null,
       });
     });
     await waitFor(() => {

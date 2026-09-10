@@ -11,6 +11,7 @@ import { useCallback } from "react";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import {
   cloudEpicTasksQueryKeyMatchesScope,
+  epicPinReadingQueryKeyMatchesScope,
   setEpicPinnedInCloudTaskCaches,
 } from "@/lib/cloud-epic-tasks-query/cache";
 import { epicMutationKeys } from "@/lib/query-keys";
@@ -184,15 +185,24 @@ export function useEpicSetPinned() {
         if (ctx.hostId === null || ctx.userId === null) return;
         const scope = { hostId: ctx.hostId, userId: ctx.userId };
         resetCloudEpicTasksPagesForScope(ctx.hostId, ctx.userId);
+        // Both predicates also match the per-host PIN READING cache, which for
+        // a local-homed row is where the RENDERED pin state comes from. The
+        // optimistic patch already reaches it; these two are what make the
+        // committed state durable - an inactive reading is dropped so it is
+        // re-read on next use, an active one refetches now. `scope.hostId` is
+        // the DISPATCH host, which for such a row is the owner, and the reading
+        // key is keyed by that same host, so the two agree by construction.
         queryClient.removeQueries({
           type: "inactive",
           predicate: (query) =>
-            cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope),
+            cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope) ||
+            epicPinReadingQueryKeyMatchesScope(query.queryKey, scope),
         });
         await queryClient.invalidateQueries({
           type: "active",
           predicate: (query) =>
-            cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope),
+            cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope) ||
+            epicPinReadingQueryKeyMatchesScope(query.queryKey, scope),
         });
       },
       onError: (

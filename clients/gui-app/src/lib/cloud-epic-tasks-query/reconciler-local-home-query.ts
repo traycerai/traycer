@@ -74,20 +74,37 @@ export function epicPinReadingListQueryOptions(args: {
   readonly params: ListCloudTasksRequest;
 }) {
   return queryOptions<ListTasksResponse>({
-    queryKey: [
-      ...queryKeys.hostMethod<HostRpcRegistry, typeof LOCAL_HOME_LIST_METHOD>(
-        args.hostId,
-        LOCAL_HOME_LIST_METHOD,
-        args.params,
-      ),
+    queryKey: queryKeys.cloudEpicPinReading(
+      args.hostId,
       args.userId,
-      "pin-reading",
-    ],
+      args.params,
+    ),
     queryFn: ({ signal }) =>
       fetchCloudEpicTasksFirstPageByHostId(args.hostId, args.userId, {
         request: args.params,
         abortSignal: signal,
-        localFirstPhase: undefined,
+        // `"initial"` and NOT `undefined`, which is what this passed first and
+        // is the one value that cannot work here. `cloudLegAdmittedAtDispatch`
+        // refuses a phase-less page outright under an unverified verdict - a
+        // page with no local-first directive is an ordinary cloud call, and an
+        // unverified session may not spend one. So the exact cohort this query
+        // exists for (R1: a cold unverified tab) got no RPC at all and kept
+        // `pinnedKnown: false`, which is the defect it was written to fix.
+        //
+        // `"initial"` is also the honest description: this IS the first (and
+        // only) leg of a local-first read, and under `local-first-only`
+        // admission the dispatch attaches the `@1.6` floor as a requirement
+        // answered by the connection carrying the frame - which is precisely
+        // the guarantee the local rows depend on. A host that restarted below
+        // `@1.6` refuses rather than silently running the released cloud list
+        // on a retained credential.
+        //
+        // No local-first revalidation EPISODE is begun for this key, unlike
+        // `cloudEpicTasksFirstPageQueryOptions`: that coordinator exists to
+        // order a follow-up `"revalidate"` leg against the same cache entry,
+        // and this query issues none (`staleTime: Infinity`, one shot). The
+        // phase is a request directive, not an obligation to revalidate.
+        localFirstPhase: "initial",
         requestContextPolicy: "require-current",
       }),
   });

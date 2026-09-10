@@ -8,7 +8,9 @@ import {
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
-import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import { useHostBinding, useHostClient, type HostRpcRegistry } from "@/lib/host";
+import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
+import { registerCloudEpicTasksClient } from "@/lib/cloud-epic-tasks-query";
 import {
   useLocalHomedOpenEpicHostIds,
   useLocalHomedOpenEpicIds,
@@ -87,6 +89,7 @@ export function useEpicTaskPinnedStates(
   epicIds: ReadonlyArray<string>,
 ): ReadonlyMap<string, TaskPinnedState> {
   const client = useHostClient();
+  const binding = useHostBinding();
   const localHomedEpicIds = useLocalHomedOpenEpicIds(epicIds);
   const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
   // `contextMetadata.userId` admits the local plane and is deliberately not
@@ -163,6 +166,28 @@ export function useEpicTaskPinnedStates(
     }),
     [],
   );
+  // The reading dispatches by HOST ID through the list module's own client
+  // registry, so the owning host's client has to be IN that registry or the
+  // fetch rejects with `No host client registered for <owner>` before any
+  // transport is touched. Nothing else registers it for this path: the two route
+  // loaders and the History hook register the WINDOW's client, and the tab
+  // reconciler's all-host registration is gated on `signed-in` - which is the
+  // one verdict this query exists to work without.
+  //
+  // Registered during render, matching `useCloudEpicTasksQuery`'s own
+  // `registerCloudEpicTasksClientIfAvailable` call: the registry is a Map, the
+  // write is idempotent, and it has to be in place before the query below
+  // dispatches in this same pass. An effect would run after it.
+  //
+  // `resolveNamedHostClient` is the sanctioned binding resolver (AGENTS.md) and
+  // is a plain function, which is what lets this run per host rather than one
+  // `useHostClientForHostId` per component.
+  for (const hostId of pinReadingHostIds) {
+    const ownerClient = resolveNamedHostClient(binding, hostId);
+    if (ownerClient !== null) {
+      registerCloudEpicTasksClient(hostId, ownerClient);
+    }
+  }
   const localPinReadings = useQueries({
     queries:
       userId === null
@@ -227,6 +252,15 @@ export function combineLocalPinReadings(
       if (task.home !== "local") continue;
       const epicId = task.epic?.light?.id;
       if (epicId === undefined) continue;
+      // `pinned` is OPTIONAL on the wire (`z.boolean().optional()`), and an
+      // absent one is the same kind of silence as a cloud-homed row's `false`:
+      // the host stated no pin. It must not enter the map, because membership is
+      // what `pinnedKnown` reports - an `undefined` value stored here would make
+      // `readings.has(epicId)` true while the reading says nothing, and the
+      // overlay would then call the answer KNOWN. The observable state happened
+      // to come out right through `??`, which is precisely what made this a type
+      // error rather than a visible bug.
+      if (task.pinned === undefined) continue;
       readings.set(epicId, task.pinned);
     }
   }

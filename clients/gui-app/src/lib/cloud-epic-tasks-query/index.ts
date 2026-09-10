@@ -1,4 +1,7 @@
-export { registerCloudEpicTasksClient } from "@/lib/cloud-epic-tasks-query/client-registry";
+export {
+  registerCloudEpicTasksClient,
+  __resetCloudEpicTasksClientsForTests,
+} from "@/lib/cloud-epic-tasks-query/client-registry";
 export {
   LIST_TASKS_LOCAL_FIRST_MINOR,
   negotiatedListTasksServesLocalFirst,
