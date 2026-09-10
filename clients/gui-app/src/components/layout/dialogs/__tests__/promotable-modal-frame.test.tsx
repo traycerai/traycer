@@ -42,6 +42,7 @@ describe("PromotableModalFrame", () => {
           closeTestId="close"
           onPromote={() => {}}
           onClose={() => {}}
+          onEscapeKeyDown={() => {}}
         >
           <div data-testid="modal-body">body</div>
         </PromotableModalFrame>

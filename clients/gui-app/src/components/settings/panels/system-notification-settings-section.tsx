@@ -4,24 +4,27 @@ import { SettingsRow } from "@/components/settings/settings-row";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { useNotificationSystemSettingsOpenMutation } from "@/hooks/runner/use-notification-system-settings-open-mutation";
-import { useRunnerHost } from "@/providers/use-runner-host";
+import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
+import { isSystemNotificationsGroupAvailable } from "@/lib/settings/settings-availability";
 
 /** Desktop pointer to native banner, badge and delivery preferences. */
 export function SystemNotificationSettingsSection(): ReactNode {
-  const systemSettings = useRunnerHost().notifications.systemSettings;
+  const availability = useSettingsAvailabilityContext();
   const openSettings = useNotificationSystemSettingsOpenMutation();
 
-  if (systemSettings === null) return null;
+  if (!isSystemNotificationsGroupAvailable(availability)) return null;
 
   return (
     <SettingsGroup
       title="System"
+      anchor="app-notifications-system"
       tone="default"
       dataTestId="system-notification-settings-section"
       fill={false}
     >
       <SettingsRow
         label="OS notifications"
+        anchor="app-notifications-os"
         description="Banners, badges, and delivery are managed by your operating system."
         control={
           <Button

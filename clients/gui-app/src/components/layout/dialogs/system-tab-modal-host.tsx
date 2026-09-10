@@ -9,6 +9,7 @@ import {
 } from "@/stores/tabs/use-system-tab-modal";
 import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import {
+  overlayConsumesEscape,
   overlayMeta,
   renderOverlayBody,
 } from "@/stores/tabs/system-overlay-registry";
@@ -59,13 +60,15 @@ export function SystemTabModalHost(): ReactNode {
   );
 }
 
-interface SystemTabModalSurfaceProps {
+export interface SystemTabModalSurfaceProps {
   readonly active: SystemModalActive;
   readonly onClose: () => void;
   readonly onPromote: () => void;
 }
 
-function SystemTabModalSurface(props: SystemTabModalSurfaceProps): ReactNode {
+export function SystemTabModalSurface(
+  props: SystemTabModalSurfaceProps,
+): ReactNode {
   const { active, onClose, onPromote } = props;
   const meta = useMemo(() => overlayMeta(active), [active]);
   const Icon = meta.Icon;
@@ -90,6 +93,9 @@ function SystemTabModalSurface(props: SystemTabModalSurfaceProps): ReactNode {
       closeTestId={`system-tab-modal-close-${active.kind}`}
       onPromote={onPromote}
       onClose={onClose}
+      onEscapeKeyDown={(event) => {
+        if (overlayConsumesEscape(active)) event.preventDefault();
+      }}
     >
       <SystemTabModalBody active={active} onClose={onClose} />
     </PromotableModalFrame>

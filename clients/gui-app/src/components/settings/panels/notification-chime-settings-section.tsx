@@ -54,6 +54,7 @@ export function NotificationChimeSettingsSection() {
   return (
     <SettingsGroup
       title="Sound"
+      anchor="app-notifications-sound"
       tone="default"
       dataTestId="notification-chime-section"
       fill={false}

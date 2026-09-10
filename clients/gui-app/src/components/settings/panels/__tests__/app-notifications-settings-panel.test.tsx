@@ -16,7 +16,12 @@ import type {
   PushPermissionState,
 } from "@traycer-clients/shared/platform/runner-host";
 import { createFakeRunnerHost } from "../../../../../__tests__/create-fake-runner-host";
+import { assertSettingsSearchTargets } from "@/components/settings/__tests__/settings-search-targets";
 import { AppNotificationsSettingsPanel } from "@/components/settings/panels/app-notifications-settings-panel";
+import {
+  isPushPermissionGroupAvailable,
+  isSystemNotificationsGroupAvailable,
+} from "@/lib/settings/settings-availability";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
@@ -163,6 +168,65 @@ describe("<AppNotificationsSettingsPanel />", () => {
 
     expect(navigateToSettingsSectionMock).toHaveBeenCalledWith("notifications");
   });
+
+  // The search index offers the System and This phone groups exactly where
+  // they render: each bridge alone, both, and neither — the last is what
+  // catches an entry left always-available while its group is gated.
+  describe("search targets", () => {
+    const cases: ReadonlyArray<{
+      readonly name: string;
+      readonly capabilities: NotificationCapabilities;
+      readonly system: boolean;
+      readonly push: boolean;
+    }> = [
+      {
+        name: "every bridge absent",
+        capabilities: { pushPermission: null, systemSettings: null },
+        system: false,
+        push: false,
+      },
+      {
+        name: "only the OS notification-settings bridge",
+        capabilities: {
+          pushPermission: null,
+          systemSettings: { open: () => Promise.resolve() },
+        },
+        system: true,
+        push: false,
+      },
+      {
+        name: "only the push-permission bridge",
+        capabilities: {
+          pushPermission: fakePushPermission("granted"),
+          systemSettings: null,
+        },
+        system: false,
+        push: true,
+      },
+      {
+        name: "both bridges",
+        capabilities: {
+          pushPermission: fakePushPermission("prompt"),
+          systemSettings: { open: () => Promise.resolve() },
+        },
+        system: true,
+        push: true,
+      },
+    ];
+
+    for (const testCase of cases) {
+      it(`matches the index with ${testCase.name}`, () => {
+        const { container, runnerHost } = mountPanel(testCase.capabilities);
+        const context = { runnerHost, featureSettings: null, mobileApp: false };
+        expect(isSystemNotificationsGroupAvailable(context)).toBe(
+          testCase.system,
+        );
+        expect(isPushPermissionGroupAvailable(context)).toBe(testCase.push);
+
+        assertSettingsSearchTargets("app-notifications", context, container);
+      });
+    }
+  });
 });
 
 interface NotificationCapabilities {
@@ -171,6 +235,14 @@ interface NotificationCapabilities {
 }
 
 function renderPanel(capabilities: NotificationCapabilities): void {
+  mountPanel(capabilities);
+}
+
+/** Mounts the panel and returns the runner host it was mounted under. */
+function mountPanel(capabilities: NotificationCapabilities): {
+  readonly container: HTMLElement;
+  readonly runnerHost: IRunnerHost;
+} {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -178,36 +250,29 @@ function renderPanel(capabilities: NotificationCapabilities): void {
     },
   });
   const baseRunnerHost = createFakeRunnerHost({});
-  render(
-    <Providers
-      queryClient={queryClient}
-      pushPermission={capabilities.pushPermission}
-      systemSettings={capabilities.systemSettings}
-      baseRunnerHost={baseRunnerHost}
-    >
+  const runnerHost = createFakeRunnerHost({
+    pushPermission: capabilities.pushPermission,
+    notifications: {
+      ...baseRunnerHost.notifications,
+      systemSettings: capabilities.systemSettings,
+    },
+  });
+  const { container } = render(
+    <Providers queryClient={queryClient} runnerHost={runnerHost}>
       <AppNotificationsSettingsPanel />
     </Providers>,
   );
+  return { container, runnerHost };
 }
 
 function Providers(props: {
   readonly children: ReactNode;
-  readonly pushPermission: IPushPermissionHost | null;
-  readonly systemSettings: INotificationSystemSettingsHost | null;
   readonly queryClient: QueryClient;
-  readonly baseRunnerHost: IRunnerHost;
+  readonly runnerHost: IRunnerHost;
 }): ReactNode {
   return (
     <QueryClientProvider client={props.queryClient}>
-      <RunnerHostProvider
-        runnerHost={createFakeRunnerHost({
-          pushPermission: props.pushPermission,
-          notifications: {
-            ...props.baseRunnerHost.notifications,
-            systemSettings: props.systemSettings,
-          },
-        })}
-      >
+      <RunnerHostProvider runnerHost={props.runnerHost}>
         {props.children}
       </RunnerHostProvider>
     </QueryClientProvider>

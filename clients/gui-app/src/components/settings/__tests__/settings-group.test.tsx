@@ -93,4 +93,37 @@ describe("SettingsGroup", () => {
         .closest("section"),
     ).toBe(section);
   });
+
+  it("anchors settings search to the card, not to the heading's section", () => {
+    // The search reveal draws a ring and a wash on whatever carries the
+    // anchor. On the `<section>` that shape swallowed the group's own label
+    // and the gutter under it, so the group's name lit up as part of its
+    // contents. The card is the shape the group already has at rest.
+    render(
+      <SettingsGroup
+        title="Interface"
+        tone="default"
+        dataTestId="settings-group-interface"
+        fill={false}
+        anchor="appearance-interface"
+      >
+        <div>row</div>
+      </SettingsGroup>,
+    );
+
+    const section = screen.getByTestId("settings-group-interface");
+    expect(section.hasAttribute("data-settings-anchor")).toBe(false);
+
+    const anchored = section.querySelector(
+      '[data-settings-anchor="appearance-interface"]',
+    );
+    expect(anchored).not.toBeNull();
+    // The heading is a sibling of the anchored card, never inside it.
+    const heading = screen.getByRole("heading", {
+      level: 2,
+      name: "Interface",
+    });
+    expect(anchored?.contains(heading)).toBe(false);
+    expect(anchored?.textContent).toBe("row");
+  });
 });

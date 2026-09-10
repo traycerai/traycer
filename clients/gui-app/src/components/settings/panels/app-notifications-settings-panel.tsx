@@ -24,12 +24,14 @@ export function AppNotificationsSettingsPanel() {
         <PushPermissionSection />
         <SettingsGroup
           title="Events"
+          anchor="app-notifications-events"
           tone="default"
           dataTestId="notification-event-settings-section"
           fill={false}
         >
           <SettingsRow
             label="Notification events"
+            anchor="app-notification-events"
             description="Choose which events alert you for the host selected in Settings."
             control={
               <Button
