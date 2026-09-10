@@ -105,6 +105,12 @@ export class FakeStreamClient implements IHostStreamClient<HostStreamRpcRegistry
     readonly method: string;
     readonly params: unknown;
   }> = [];
+  /** Version-pinned opens only; each one also lands in {@link subscribes}. */
+  readonly subscribesAtVersion: Array<{
+    readonly method: string;
+    readonly schemaVersion: SchemaVersion;
+    readonly params: unknown;
+  }> = [];
   private readonly autoOpen: boolean;
   private closed = false;
 
@@ -130,9 +136,32 @@ export class FakeStreamClient implements IHostStreamClient<HostStreamRpcRegistry
 
   subscribeWithParamsProvider(
     method: string,
-    paramsProvider: () => unknown,
+    paramsProvider: (onWireVersion: SchemaVersion | null) => unknown,
   ): FakeStreamSession {
-    return this.subscribe(method, paramsProvider());
+    // `null`: this double negotiates nothing, so it has no version to report -
+    // which is exactly the "answer with your newest line" case the seam
+    // documents.
+    return this.subscribe(method, paramsProvider(null));
+  }
+
+  /**
+   * Answered rather than omitted, even though this double pins nothing.
+   *
+   * The method is optional on `IStreamClient`, and a consumer that pins has to
+   * degrade when it is absent (see `subscribeAtScopeAddressedBrowserVersion`).
+   * A double that omits it therefore silently routes every such consumer down
+   * its FALLBACK path, so the suite stops testing what production runs - which
+   * is how `browser.sessions`' `independent` pin came to be exercised nowhere.
+   * The version is recorded on `subscribesAtVersion` for a test that cares
+   * which one was asked for.
+   */
+  subscribeAtVersion(
+    method: string,
+    schemaVersion: SchemaVersion,
+    params: unknown,
+  ): FakeStreamSession {
+    this.subscribesAtVersion.push({ method, schemaVersion, params });
+    return this.subscribe(method, params);
   }
 
   getMethodSchemaVersion(): SchemaVersion | null {

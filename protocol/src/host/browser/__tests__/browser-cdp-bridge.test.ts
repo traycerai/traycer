@@ -3,7 +3,7 @@ import {
   browserCdpCommandSchema,
   browserSessionsClientFrameSchema,
   browserSessionsServerFrameSchema,
-  browserSessionsV1,
+  browserSessionsV20,
   CURATED_CDP_METHOD_BY_KIND,
   CURATED_CDP_METHODS,
   type BrowserCdpCommand,
@@ -115,7 +115,7 @@ const SUCCESS_RESULTS: readonly BrowserCdpResult[] = [
   { kind: "cdpDescribeNode", ok: true, frameId: "child-frame-1" },
 ];
 
-describe("browser.sessions@1.0 CDP bridge", () => {
+describe("browser.sessions@2.0 CDP bridge", () => {
   it("carries the canonical command union in one request frame", () => {
     for (const command of COMMANDS) {
       const parsed = browserSessionsServerFrameSchema.safeParse({
@@ -273,10 +273,10 @@ describe("browser.sessions@1.0 CDP bridge", () => {
   });
 
   it("keeps the bridge on the single unreleased browser.sessions baseline", () => {
-    const serverKinds = browserSessionsV1.serverFrameSchema.def.options.map(
+    const serverKinds = browserSessionsV20.serverFrameSchema.def.options.map(
       (option): string => String(option.shape.kind.def.values[0]),
     );
-    const clientKinds = browserSessionsV1.clientFrameSchema.def.options.map(
+    const clientKinds = browserSessionsV20.clientFrameSchema.def.options.map(
       (option): string => String(option.shape.kind.def.values[0]),
     );
     expect(serverKinds.filter((kind) => kind.startsWith("cdp"))).toEqual([

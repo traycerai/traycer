@@ -1,0 +1,163 @@
+import { useId } from "react";
+import { AppWindow, RadioTower } from "lucide-react";
+import {
+  useHostClientForHostId,
+  useHostDirectoryEntryForHostId,
+} from "@/hooks/host/use-host-client-for-host-id";
+import { useHostQuery } from "@/hooks/host/use-host-query";
+import type { HostResourceScope } from "@traycer/protocol/host/resource-scope";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+
+interface BrowserStartPageProps {
+  readonly scope: HostResourceScope;
+  readonly hostId: string;
+  readonly browserRunsOnHost: boolean;
+  /**
+   * Whether the tile this start page fills is actually on screen.
+   *
+   * The tile's own three-axis answer, passed straight down rather than
+   * re-derived: a start page has no view of the panel, the pane, or which tab
+   * is active, and a fourth spelling of "visible" is a fourth thing to keep in
+   * agreement.
+   */
+  readonly visible: boolean;
+  readonly onNavigate: (url: string) => void;
+}
+
+export function BrowserStartPage(props: BrowserStartPageProps) {
+  const headingId = useId();
+  const client = useHostClientForHostId(props.hostId);
+  const hostEntry = useHostDirectoryEntryForHostId(props.hostId);
+  const hostLabel = hostEntry?.label ?? props.hostId;
+  const localServersReachable =
+    client !== null && (props.browserRunsOnHost || hostEntry?.kind === "local");
+  const query = useHostQuery({
+    client,
+    method: "resources.listLocalServers",
+    // The canvas start page is always inside a task. The Start Page panel
+    // renders the same surface under `{ kind: "independent" }`, which lists the
+    // ports that device's own terminals own rather than any epic's.
+    params: { scope: props.scope },
+    cacheKeyIdentity: undefined,
+    options: {
+      // Visibility is part of the GATE, not just of the rendering: this query
+      // polls, the surfaces that host it keep every tab mounted while it is
+      // inactive / the panel is collapsed / the pane is backgrounded, and a
+      // blank tab is what the panel opens by default. Without this term every
+      // retained start page keeps asking a device for its listening ports on
+      // the poll cadence with nothing able to show the answer.
+      enabled: localServersReachable && props.visible,
+      poll: true,
+      retry: false,
+    },
+  });
+  const servers =
+    localServersReachable && !query.isError ? (query.data?.servers ?? []) : [];
+
+  return (
+    <div className="h-full overflow-y-auto bg-background text-foreground">
+      <section
+        aria-labelledby={headingId}
+        className="mx-auto w-full max-w-3xl px-4 py-6 sm:px-6 sm:py-10"
+      >
+        <div className="mb-5 flex min-w-0 items-center gap-2 text-muted-foreground">
+          <RadioTower className="size-5" aria-hidden />
+          <h2
+            id={headingId}
+            className="flex min-w-0 items-baseline gap-2 text-ui-lg font-medium text-foreground"
+          >
+            <span className="shrink-0">Local servers</span>
+            <TooltipWrapper
+              label={hostLabel}
+              side="top"
+              sideOffset={undefined}
+              align={undefined}
+            >
+              <span
+                className="min-w-0 truncate text-ui-sm font-normal text-muted-foreground"
+                aria-label={hostLabel}
+              >
+                on {hostLabel}
+              </span>
+            </TooltipWrapper>
+          </h2>
+        </div>
+        {servers.length > 0 ? (
+          <ul className="divide-y divide-border overflow-hidden rounded-md border border-border">
+            {servers.map((server) => {
+              const address = `localhost:${server.port}`;
+              // ponytail: treat tracked TCP listeners as HTTP until non-HTTP
+              // entries justify a host-side protocol probe.
+              const url = `http://${address}`;
+              return (
+                <li key={server.port}>
+                  <button
+                    type="button"
+                    className="flex min-h-16 w-full items-center gap-4 px-4 py-3 text-left outline-none transition-colors hover:bg-foreground/5 focus-visible:bg-foreground/5 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                    aria-label={`Open ${server.processName} at ${address} (running)`}
+                    onClick={() => props.onNavigate(url)}
+                  >
+                    <span className="flex size-11 shrink-0 items-center justify-center rounded-md border border-border bg-background">
+                      <AppWindow
+                        className="size-5 text-muted-foreground"
+                        aria-hidden
+                      />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-ui-base font-medium">
+                        {server.processName}
+                      </span>
+                      <span className="block truncate font-mono text-ui-sm text-muted-foreground">
+                        {address}
+                      </span>
+                    </span>
+                    <span
+                      className="size-2.5 shrink-0 rounded-full bg-emerald-500 ring-4 ring-emerald-500/10"
+                      aria-hidden
+                    />
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        ) : (
+          <div
+            className="rounded-md border border-dashed border-border px-5 py-8 text-center text-ui-sm text-muted-foreground"
+            role="status"
+          >
+            {startPageStatus(
+              props.scope,
+              localServersReachable,
+              query.isPending,
+              query.isError,
+            )}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+/**
+ * The empty state has to name the right place to go start a server, and that
+ * differs by scope: the canvas start page lists what this epic's terminals own,
+ * while the Start Page panel renders the same surface under
+ * `{ kind: "independent" }` and lists what the DEVICE's own terminals own. A
+ * single "in this epic" line was wrong on the panel, where there is no epic.
+ */
+function startPageStatus(
+  scope: HostResourceScope,
+  localServersReachable: boolean,
+  pending: boolean,
+  failed: boolean,
+): string {
+  if (!localServersReachable) {
+    return "Local server shortcuts aren’t available for this browser. Enter a URL above.";
+  }
+  if (pending) return "Looking for local servers…";
+  if (failed) return "Unable to find local servers. Enter a URL above.";
+  if (scope.kind === "independent") {
+    return "No local servers detected. Start one in a terminal here or enter a URL above.";
+  }
+  return "No local servers detected. Start one in this epic or enter a URL above.";
+}
