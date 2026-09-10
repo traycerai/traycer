@@ -18,7 +18,11 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
-import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
+import type {
+  ChatRecordHeadStamp,
+  ChatRecordSummaryV11,
+  ChatRecordSummaryV12,
+} from "@traycer/protocol/host/epic/chat-records";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -1337,6 +1341,157 @@ describe("pending chat creations", () => {
     });
 
     expect(store.getState().chats.allIds).toEqual([]);
+    session.handle.dispose();
+  });
+});
+
+/**
+ * The publication HEAD plane, which rides beside the record table rather than
+ * inside it (see `../chat-record-head`).
+ *
+ * These are the cases the record table's own `revision` guard cannot express,
+ * which is the entire reason the head is a separate plane: its ordering fact
+ * is the server-monotonic `publishedAt`, and it moves independently of the
+ * metadata revision in BOTH directions.
+ */
+describe("chatRecordHeads merges on publishedAt, independently of revision", () => {
+  const HEAD: ChatRecordHeadStamp = {
+    headSha256: "a".repeat(64),
+    throughRecordSeq: 3,
+    publishedAt: 1_000,
+  };
+
+  /** A `@1.2` list row - `record()` plus whatever it says about a head. */
+  function published(
+    overrides: Partial<ChatRecordSummaryV12>,
+  ): ChatRecordSummaryV12 {
+    const { head, ...rest } = overrides;
+    return { ...record(rest), head };
+  }
+
+  const keyOf = (ownerUserId: string, chatId: string): string =>
+    `${ownerUserId}\u001f${chatId}`;
+
+  it("keys a served head on the record identity, not the chat id alone", () => {
+    const session = newSession(seedChats([]));
+    const store = session.handle.store;
+
+    store
+      .getState()
+      .applyChatRecords(
+        [
+          published({ chatId: "shared", ownerUserId: "user-a", head: HEAD }),
+          published({ chatId: "shared", ownerUserId: "user-b", head: null }),
+        ],
+        null,
+      );
+
+    // `chatId` is host-minted and two owners can hold the same one, so keying
+    // on it alone would let one collaborator's row answer for the other's.
+    expect(store.getState().chatRecordHeads).toEqual({
+      [keyOf("user-a", "shared")]: HEAD,
+    });
+    session.handle.dispose();
+  });
+
+  it("lands a head-only delta the record table's revision guard drops", () => {
+    // THE case the plane exists for: a turn is published and nothing is
+    // renamed, so the row arrives at an UNCHANGED revision. The record table
+    // correctly rejects it - no metadata is newer - and the head must land
+    // anyway.
+    const session = newSession(seedChats([]));
+    const store = session.handle.store;
+    store
+      .getState()
+      .applyChatRecords([record({ chatId: "c", revision: 4 })], null);
+    const titleBefore = store.getState().chats.byId["c"].title;
+
+    const next: ChatRecordHeadStamp = { ...HEAD, publishedAt: 2_000 };
+    store.getState().applyChatRecordDelta({
+      kind: "upsert",
+      epicId: "epic-test",
+      record: published({
+        chatId: "c",
+        revision: 4,
+        title: "ignored",
+        head: next,
+      }),
+    });
+
+    expect(store.getState().chatRecordHeads[keyOf("user-a", "c")]).toEqual(
+      next,
+    );
+    // Ablation: the metadata half must still be governed by `revision`, so the
+    // stale title on that same frame is still refused.
+    expect(store.getState().chats.byId["c"].title).toBe(titleBefore);
+    session.handle.dispose();
+  });
+
+  it("never clears a held head with a row that states none", () => {
+    // Absent (an older peer's row) and `null` (a host's "no publication") are
+    // both silence, not a retraction. A rename racing a publication would
+    // otherwise send the tile back to an unkeyed read.
+    const session = newSession(seedChats([]));
+    const store = session.handle.store;
+    store
+      .getState()
+      .applyChatRecords([published({ chatId: "c", head: HEAD })], null);
+
+    store
+      .getState()
+      .applyChatRecords(
+        [published({ chatId: "c", revision: 2, head: null })],
+        null,
+      );
+    store
+      .getState()
+      .applyChatRecords([record({ chatId: "c", revision: 3 })], null);
+
+    expect(store.getState().chatRecordHeads[keyOf("user-a", "c")]).toEqual(
+      HEAD,
+    );
+    session.handle.dispose();
+  });
+
+  it("refuses a head that does not advance publishedAt, and keeps identity", () => {
+    const session = newSession(seedChats([]));
+    const store = session.handle.store;
+    store
+      .getState()
+      .applyChatRecords([published({ chatId: "c", head: HEAD })], null);
+    const held = store.getState().chatRecordHeads;
+
+    store.getState().applyChatRecordDelta({
+      kind: "upsert",
+      epicId: "epic-test",
+      record: published({
+        chatId: "c",
+        revision: 9,
+        head: { ...HEAD, headSha256: "b".repeat(64), publishedAt: 500 },
+      }),
+    });
+
+    // Same TABLE object, so nothing keyed on a stamp re-renders - which is
+    // what makes the 20s poll free while an epic is quiet.
+    expect(store.getState().chatRecordHeads).toBe(held);
+    session.handle.dispose();
+  });
+
+  it("drops the head on a remove, which is the only thing that retracts one", () => {
+    const session = newSession(seedChats([]));
+    const store = session.handle.store;
+    store
+      .getState()
+      .applyChatRecords([published({ chatId: "c", head: HEAD })], null);
+
+    store.getState().applyChatRecordDelta({
+      kind: "remove",
+      epicId: "epic-test",
+      chatId: "c",
+      reason: "deleted",
+    });
+
+    expect(store.getState().chatRecordHeads).toEqual({});
     session.handle.dispose();
   });
 });

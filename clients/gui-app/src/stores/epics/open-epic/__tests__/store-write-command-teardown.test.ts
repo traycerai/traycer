@@ -92,7 +92,7 @@ function openRigWithNeverSettlingWrite(): {
   if (captured.value === null) throw new Error("factory not invoked");
   // Transport open BEFORE the snapshot - see `write-command-delivery.test.ts`
   // for why the order matters.
-  captured.value.onConnectionStatus("open", null);
+  captured.value.onConnectionStatus("open", null, false);
   captured.value.onSnapshot(makeMeta(), Y.encodeStateAsUpdate(new Y.Doc()));
   const artifactId = createArtifactInDocForTests(handle.doc, "spec", null);
   return { handle, artifactId };

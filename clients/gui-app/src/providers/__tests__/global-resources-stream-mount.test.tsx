@@ -54,6 +54,7 @@ const fakeStreamClient: IHostStreamClient<HostStreamRpcRegistry> = {
   // Never-ready is the honest answer for a fake that carries no session.
   isReady: () => false,
   notifyBearerRotated: () => undefined,
+  notifyCloudVerdictChanged: () => undefined,
   reconnectAll: () => undefined,
   getMethodSupport: () => "unknown",
   subscribeMethodSupport: () => () => undefined,

@@ -130,6 +130,7 @@ const MANIFEST: HostVersionsManifest = {
     deprecationReason: null,
     requiredCliVersion: null,
     minimumEpoch: null,
+    storeFormats: null,
     platforms: { "darwin-arm64": AVAILABLE_ASSET },
   })),
 };

@@ -284,6 +284,7 @@ function makeInterviewFindTranscript(count: number): ChatMessageModel[] {
             header: null,
             options: [],
             multiSelect: false,
+            allowsCustomAnswer: null,
           },
         ],
         answers: [

@@ -56,7 +56,7 @@ import type {
   EpicStatusStreamCallbacks,
 } from "@traycer-clients/shared/host-transport/epic-status-stream-client";
 import { artifactSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/artifact-subscribe";
-import { epicStatusSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/status-subscribe";
+import { epicStatusSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/status-subscribe";
 import {
   openStoreForTestWithQueuedBridge,
   type OpenedStoreForTest,
@@ -70,7 +70,7 @@ const ARTIFACT = "art-1";
 const EPOCH = "epoch-1";
 
 function statusSnapshot(): EpicStatusSnapshotFrame {
-  const parsed = epicStatusSubscribeServerFrameSchemaV10.parse({
+  const parsed = epicStatusSubscribeServerFrameSchemaV11.parse({
     kind: "snapshot",
     hasBinaryPayload: false,
     authorityEpoch: EPOCH,
@@ -157,7 +157,7 @@ function createConcurrentRig(): ConcurrentRig {
     handle,
     async announceEpoch(): Promise<void> {
       if (statusCallbacks === null) throw new Error("no status client");
-      statusCallbacks.onSnapshot(statusSnapshot());
+      statusCallbacks.onSnapshot(statusSnapshot(), true);
       await settle();
     },
     mountTile(): readonly (() => void)[] {

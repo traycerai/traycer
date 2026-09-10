@@ -199,41 +199,89 @@ export const usageCostCoverageSchema = z.object({
   unpricedTokenCount: nonNegativeIntSchema,
 });
 
-export const hostUsageSummaryRequestSchemaV10 = z
-  .object({
-    timezone: z.string().min(1).max(100),
-    windowDays: z.number().int().positive(),
-    epicId: z.string().min(1).max(191).nullable(),
-    /**
-     * Ticket 10 addition - `.optional()` (unlike the original fields above,
-     * which are required-but-nullable) so a client built against the
-     * original v1.0 shape (no chat filter) still validates: the key can be
-     * absent entirely, not merely `null`. Chat implies its epic - not
-     * required alongside `epicId`. Host-side, the chat must belong to the
-     * authenticated caller.
-     */
-    chatId: z.string().min(1).max(191).nullable().optional(),
-    /**
-     * Ticket 10 addition, same `.optional()` compatibility reasoning as
-     * `chatId`. Absent = the original `windowDays`-bounded behavior.
-     * `"epic"` is valid only alongside a non-null `epicId`/`chatId` -
-     * bounded by that epic/chat's own fact span, never a general unbounded
-     * query.
-     */
-    window: z.enum(["epic"]).optional(),
-    /**
-     * Ticket 13 addition, same `.optional()` compatibility reasoning as
-     * `chatId`. Absent or `null` = every host on the account - the global
-     * dashboard's "All hosts" default. Only ever a NARROWING: the host
-     * resolves the plane and the owner itself, so this cannot widen a read
-     * past the authenticated caller, and on the local plane a host id other
-     * than that host's own simply matches zero facts.
-     */
-    hostId: z.string().min(1).max(36).nullable().optional(),
-  })
-  .strict();
+/**
+ * The `host.usage.summary` request FIELDS, before either line's `.strict()`.
+ *
+ * Factored out so `@2.0` can grow the request without restating `@1.0`'s
+ * shape - and so the two lines cannot drift, which on a `.strict()` schema
+ * is not a cosmetic risk: an unknown key here is REJECTED, not stripped.
+ *
+ * A MAJOR, not a minor, and the `.strict()` above is the whole reason: the
+ * additivity a new minor promises is exactly what a strict object refuses.
+ */
+const hostUsageSummaryRequestFields = z.object({
+  timezone: z.string().min(1).max(100),
+  windowDays: z.number().int().positive(),
+  epicId: z.string().min(1).max(191).nullable(),
+  /**
+   * Ticket 10 addition - `.optional()` (unlike the original fields above,
+   * which are required-but-nullable) so a client built against the
+   * original v1.0 shape (no chat filter) still validates: the key can be
+   * absent entirely, not merely `null`. Chat implies its epic - not
+   * required alongside `epicId`. Host-side, the chat must belong to the
+   * authenticated caller.
+   */
+  chatId: z.string().min(1).max(191).nullable().optional(),
+  /**
+   * Ticket 10 addition, same `.optional()` compatibility reasoning as
+   * `chatId`. Absent = the original `windowDays`-bounded behavior.
+   * `"epic"` is valid only alongside a non-null `epicId`/`chatId` -
+   * bounded by that epic/chat's own fact span, never a general unbounded
+   * query.
+   */
+  window: z.enum(["epic"]).optional(),
+  /**
+   * Ticket 13 addition, same `.optional()` compatibility reasoning as
+   * `chatId`. Absent or `null` = every host on the account - the global
+   * dashboard's "All hosts" default. Only ever a NARROWING: the host
+   * resolves the plane and the owner itself, so this cannot widen a read
+   * past the authenticated caller, and on the local plane a host id other
+   * than that host's own simply matches zero facts.
+   */
+  hostId: z.string().min(1).max(36).nullable().optional(),
+});
+
+// `host.usage.summary@1.0` request - FROZEN.
+export const hostUsageSummaryRequestSchemaV10 =
+  hostUsageSummaryRequestFields.strict();
 export type HostUsageSummaryRequestV10 = z.infer<
   typeof hostUsageSummaryRequestSchemaV10
+>;
+
+/**
+ * `@2.0`: ask for the LOCAL reader explicitly.
+ *
+ * `servedBy` on the response says which reader answered, and the host has
+ * always chosen - from the account's cloud-sync entitlement, which it learns
+ * by making the cloud call. That is the problem for a session holding no
+ * cloud verdict: the only way to reach the local reader on `@1.0` is to make
+ * a cloud request first and be refused in the one specific way
+ * (`FREE_TIER_NO_CLOUD_SYNC`) that licenses the fallback. Every other refusal
+ * - including the expired bearer an unverified session has - is a retriable
+ * 503, so that cohort gets no usage panel at all while sitting on facts its
+ * own host recorded locally.
+ *
+ * `local-only` says "do not make the cloud call"; the local reader answers and
+ * the response is stamped `servedBy: "local"`, a value the released line
+ * already carries. Narrowing only: it can reach nothing the released request
+ * could not.
+ *
+ * THIS LINE'S COMPAT IS NOT THE USUAL STRIP. Every other selector in this
+ * program rides a plain `z.object`, so an older peer drops the key and runs
+ * its released behaviour. This request is `.strict()`, so a `@1.0` peer
+ * REJECTS the whole request with a 400 instead. That is what forced a MAJOR
+ * rather than a minor, and it is why the client's negotiated-VERSION gate
+ * (`negotiatedUsageServesLocalOnly`, major >= 2) is load-bearing rather than
+ * belt-and-braces: send this to an old host and the usage panel breaks
+ * outright rather than degrading. For the same reason the `2 -> 1` downgrade
+ * REFUSES a request carrying `plane` instead of dropping it - dropping it
+ * would restore the cloud round trip the caller just asked not to spend.
+ */
+export const hostUsageSummaryRequestSchema = hostUsageSummaryRequestFields
+  .extend({ plane: z.literal("local-only").optional() })
+  .strict();
+export type HostUsageSummaryRequest = z.infer<
+  typeof hostUsageSummaryRequestSchema
 >;
 
 /**

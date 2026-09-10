@@ -3,15 +3,23 @@ import {
   BROWSER_VIEW_VIEWPORT_PRESET_IDS,
   type BrowserViewViewportPresetId,
 } from "@traycer-clients/shared/platform/browser-view";
+import { DEFAULT_BROWSER_VIEWPORT_PRESET } from "@/lib/browser-view/browser-tile-defaults";
 import type { DesktopJsonValue } from "@/lib/windows/types";
 import { TILE_KIND_BROWSER_SESSION } from "../tile-kinds";
 import type { BrowserSessionTileRef } from "../types";
 import type { TileSchema } from "./index";
 import { readTileInstanceId } from "./instance-id";
 
-export const DEFAULT_BROWSER_TILE_URL = "about:blank";
-export const DEFAULT_BROWSER_VIEWPORT_PRESET: BrowserViewViewportPresetId =
-  "responsive";
+/**
+ * Re-exported, not defined here: they are browser facts and now live in
+ * `@/lib/browser-view/browser-tile-defaults`, which the shared tab-tile body
+ * can import without reaching into the canvas store. This module keeps naming
+ * them so its own callers do not have to learn a second import site.
+ */
+export {
+  DEFAULT_BROWSER_TILE_URL,
+  DEFAULT_BROWSER_VIEWPORT_PRESET,
+} from "@/lib/browser-view/browser-tile-defaults";
 
 /** Constant label, like the blank tile's - a browser tab is never renamed. */
 export const BROWSER_TILE_NAME = "Browser";

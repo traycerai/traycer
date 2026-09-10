@@ -71,10 +71,42 @@ function releasePayload(
 }
 
 describe("projectDesktopRelease", () => {
+  it("accepts a canonical staging prerelease only in staging mode", () => {
+    const tag = "desktop-v1.2.3-staging.4.gabcdef1";
+    const assets = macReleaseAsset(tag);
+
+    expect(
+      projectDesktopRelease(
+        releasePayload(tag, false, true, assets),
+        "staging",
+      ),
+    ).toEqual([{ tag, version: "1.2.3-staging.4.gabcdef1", assets }]);
+    expect(
+      projectDesktopRelease(releasePayload(tag, false, true, assets), "stable"),
+    ).toEqual([]);
+  });
+
+  it.each([
+    ["desktop-v1.2.3", false],
+    ["desktop-v1.2.3-rc.1", true],
+    ["desktop-v1.2.3-staging.4.gabcdef1", false],
+    ["desktop-v1.2.3-staging.04.gabcdef1", true],
+    ["desktop-v1.2.3-staging.4.gABCDEF1", true],
+    ["desktop-v1.2.3-staging.4.gabc_de1", true],
+  ] as const)("rejects invalid staging release %s", (tag, prerelease) => {
+    expect(
+      projectDesktopRelease(
+        releasePayload(tag, false, prerelease, macReleaseAsset(tag)),
+        "staging",
+      ),
+    ).toEqual([]);
+  });
+
   it("accepts a stable desktop release and retains its assets", () => {
     const assets = macReleaseAsset("desktop-v1.4.0");
     const result = projectDesktopRelease(
       releasePayload("desktop-v1.4.0", false, false, assets),
+      "stable",
     );
 
     expect(result).toEqual([
@@ -86,6 +118,7 @@ describe("projectDesktopRelease", () => {
     const assets = macReleaseAsset("desktop-v1.4.0-rc.2");
     const result = projectDesktopRelease(
       releasePayload("desktop-v1.4.0-rc.2", false, true, assets),
+      "stable",
     );
 
     expect(result).toEqual([
@@ -100,6 +133,7 @@ describe("projectDesktopRelease", () => {
   ])("rejects a non-rc prerelease tag form: %s", (tag) => {
     const result = projectDesktopRelease(
       releasePayload(tag, false, true, macReleaseAsset(tag)),
+      "stable",
     );
 
     expect(result).toEqual([]);
@@ -113,6 +147,7 @@ describe("projectDesktopRelease", () => {
         false,
         macReleaseAsset("host-v1.4.0"),
       ),
+      "stable",
     );
 
     expect(result).toEqual([]);
@@ -126,17 +161,21 @@ describe("projectDesktopRelease", () => {
         false,
         macReleaseAsset("desktop-v1.4.0"),
       ),
+      "stable",
     );
 
     expect(result).toEqual([]);
   });
 
   it("rejects a release with a missing prerelease field", () => {
-    const result = projectDesktopRelease({
-      tag_name: "desktop-v1.4.0",
-      draft: false,
-      assets: macReleaseAsset("desktop-v1.4.0"),
-    });
+    const result = projectDesktopRelease(
+      {
+        tag_name: "desktop-v1.4.0",
+        draft: false,
+        assets: macReleaseAsset("desktop-v1.4.0"),
+      },
+      "stable",
+    );
 
     expect(result).toEqual([]);
   });
@@ -149,6 +188,7 @@ describe("projectDesktopRelease", () => {
         "true",
         macReleaseAsset("desktop-v1.4.0"),
       ),
+      "stable",
     );
 
     expect(result).toEqual([]);
@@ -162,6 +202,7 @@ describe("projectDesktopRelease", () => {
         true,
         macReleaseAsset("desktop-v1.4.0"),
       ),
+      "stable",
     );
 
     expect(result).toEqual([]);
@@ -175,6 +216,7 @@ describe("projectDesktopRelease", () => {
         false,
         macReleaseAsset("desktop-v1.4.0-rc.2"),
       ),
+      "stable",
     );
 
     expect(result).toEqual([]);
@@ -191,6 +233,7 @@ describe("projectDesktopRelease", () => {
   ])("rejects a leading-zero numeric identifier: %s", (tag, prerelease) => {
     const result = projectDesktopRelease(
       releasePayload(tag, false, prerelease, macReleaseAsset(tag)),
+      "stable",
     );
 
     expect(result).toEqual([]);
@@ -200,6 +243,7 @@ describe("projectDesktopRelease", () => {
     const assets = macReleaseAsset("desktop-v1.2.3-rc.0");
     const result = projectDesktopRelease(
       releasePayload("desktop-v1.2.3-rc.0", false, true, assets),
+      "stable",
     );
 
     expect(result).toEqual([
@@ -211,6 +255,7 @@ describe("projectDesktopRelease", () => {
     const assets = macReleaseAsset("desktop-v1.2.3-rc.10");
     const result = projectDesktopRelease(
       releasePayload("desktop-v1.2.3-rc.10", false, true, assets),
+      "stable",
     );
 
     expect(result).toEqual([
@@ -618,7 +663,14 @@ describe("buildDesktopReleaseFeed", () => {
   };
 
   it("builds a generic exact-release URL when no token is configured", () => {
-    const feed = buildDesktopReleaseFeed("traycerai", "traycer", release, "");
+    const feed = buildDesktopReleaseFeed(
+      "traycerai",
+      "traycer",
+      release,
+      "",
+      null,
+      false,
+    );
 
     expect(feed).toEqual({
       provider: "generic",
@@ -632,6 +684,8 @@ describe("buildDesktopReleaseFeed", () => {
       "private-traycer",
       release,
       "secret-token",
+      "deb",
+      true,
     );
 
     expect(feed).toEqual({
@@ -643,6 +697,14 @@ describe("buildDesktopReleaseFeed", () => {
       // assets, which `assets` above (this release alone) cannot supply.
       owner: "traycerai",
       repo: "private-traycer",
+      // Carried so `resolveFiles` can keep only the files the RUNNING package
+      // format can install; the asset URLs it swaps in are opaque, so
+      // electron-updater's own extension filter sees nothing to match on.
+      linuxPackageType: "deb",
+      // Carried so `resolveFiles` can filter by macOS architecture before the
+      // extension filter runs; the asset URLs it swaps in have no filename for
+      // `MacUpdater.filterFilesForArch` to read `arm64` out of.
+      isArm64Mac: true,
     });
   });
 });
@@ -687,7 +749,13 @@ describe("ExactReleaseAssetProvider", () => {
     "",
   ].join("\n");
 
-  function buildProvider(assets: readonly DesktopReleaseAsset[]): {
+  type TestLinuxPackageType = "deb" | "rpm" | null;
+
+  function buildProviderWithType(
+    assets: readonly DesktopReleaseAsset[],
+    linuxPackageType: TestLinuxPackageType,
+    isArm64Mac: boolean,
+  ): {
     readonly executor: FakeHttpExecutor;
     readonly provider: ExactReleaseAssetProvider;
   } {
@@ -700,11 +768,20 @@ describe("ExactReleaseAssetProvider", () => {
         token: "secret-token",
         owner: "traycerai",
         repo: "private-traycer",
+        linuxPackageType,
+        isArm64Mac,
       },
       undefined,
       buildRuntimeOptions(executor),
     );
     return { executor, provider };
+  }
+
+  function buildProvider(assets: readonly DesktopReleaseAsset[]): {
+    readonly executor: FakeHttpExecutor;
+    readonly provider: ExactReleaseAssetProvider;
+  } {
+    return buildProviderWithType(assets, null, false);
   }
 
   it("resolves the platform manifest asset with authenticated, non-following headers", async () => {
@@ -770,6 +847,76 @@ describe("ExactReleaseAssetProvider", () => {
     expect(() => provider.resolveFiles(updateInfo)).toThrow(
       /Traycer-1\.6\.0-rc\.3-mac\.zip/,
     );
+  });
+
+  function linuxUpdateInfo(fileNames: readonly string[]): UpdateInfo {
+    const first = fileNames[0];
+    if (first === undefined) throw new Error("test requires an update file");
+    return {
+      version: "1.6.0-rc.3",
+      files: fileNames.map((url) => ({ url, sha512: "abcDEF123==" })),
+      path: first,
+      sha512: "abcDEF123==",
+      releaseDate: "2026-07-01T00:00:00.000Z",
+    };
+  }
+
+  function linuxProvider(
+    linuxPackageType: TestLinuxPackageType,
+    fileNames: readonly string[],
+  ): ExactReleaseAssetProvider {
+    return buildProviderWithType(
+      fileNames.map((name, index) => ({
+        name,
+        url: `https://api.github.com/repos/traycerai/private-traycer/releases/assets/linux-${index}`,
+      })),
+      linuxPackageType,
+      false,
+    ).provider;
+  }
+
+  it.each([
+    ["deb", "Traycer-1.6.0-rc.3-linux.deb"],
+    ["rpm", "Traycer-1.6.0-rc.3-linux.rpm"],
+    [null, "Traycer-1.6.0-rc.3-linux.AppImage"],
+  ] as const)(
+    "selects the %s installer from a mixed Linux manifest",
+    (linuxPackageType, expectedName) => {
+      setPlatform("linux");
+      const fileNames = [
+        "Traycer-1.6.0-rc.3-linux.AppImage",
+        "Traycer-1.6.0-rc.3-linux.deb",
+        "Traycer-1.6.0-rc.3-linux.rpm",
+      ];
+      const provider = linuxProvider(linuxPackageType, fileNames);
+      const [resolved] = provider.resolveFiles(linuxUpdateInfo(fileNames));
+
+      expect(resolved?.info.url).toBe(expectedName);
+      expect(resolved?.url.toString()).toContain(
+        `linux-${fileNames.indexOf(expectedName)}`,
+      );
+    },
+  );
+
+  it("throws when a multi-file Linux manifest has no matching installer format", () => {
+    setPlatform("linux");
+    const fileNames = [
+      "Traycer-1.6.0-rc.3-linux.AppImage",
+      "Traycer-1.6.0-rc.3-linux.rpm",
+    ];
+    const provider = linuxProvider("deb", fileNames);
+
+    expect(() => provider.resolveFiles(linuxUpdateInfo(fileNames))).toThrow(
+      /No update file matches this installer format/,
+    );
+  });
+
+  it("keeps a single Linux file even when its extension does not match", () => {
+    setPlatform("linux");
+    const fileNames = ["Traycer-1.6.0-rc.3-linux.zip"];
+    const provider = linuxProvider("deb", fileNames);
+
+    expect(provider.resolveFiles(linuxUpdateInfo(fileNames))).toHaveLength(1);
   });
 
   // The differential downloader asks for the blockmap of the release being
@@ -870,6 +1017,111 @@ describe("ExactReleaseAssetProvider", () => {
           "1.6.0-rc.3",
         ),
       ).rejects.toThrow(/9999/);
+    });
+  });
+
+  // The important pin: `resolveFiles` is the sole place a macOS architecture
+  // filter can still see filenames once the URLs it swaps in are opaque
+  // `releases/assets/<id>` links. Before this filter, `findFile` (in
+  // electron-updater, downstream of `resolveFiles`) would look for `arm64` in
+  // the pathname of whatever `resolveFiles` returned, find it in neither
+  // opaque URL, and fall through to `files[0]` - so listing order alone
+  // decided which architecture an Intel or Apple Silicon Mac was handed. Both
+  // manifest orderings are exercised so a regression that drops the filter
+  // fails regardless of which ZIP GitHub happened to list first.
+  describe("resolveFiles macOS architecture filtering", () => {
+    const arm64ZipName = "Traycer-1.7.0-arm64-mac.zip";
+    const x64ZipName = "Traycer-1.7.0-mac.zip";
+    const arm64AssetUrl =
+      "https://api.github.com/repos/traycerai/private-traycer/releases/assets/arm64-zip";
+    const x64AssetUrl =
+      "https://api.github.com/repos/traycerai/private-traycer/releases/assets/x64-zip";
+
+    function bothArchAssets(): DesktopReleaseAsset[] {
+      return [
+        { name: arm64ZipName, url: arm64AssetUrl },
+        { name: x64ZipName, url: x64AssetUrl },
+      ];
+    }
+
+    function macArchUpdateInfo(fileNames: readonly string[]): UpdateInfo {
+      const first = fileNames[0];
+      if (first === undefined) throw new Error("test requires an update file");
+      return {
+        version: "1.7.0",
+        files: fileNames.map((url) => ({ url, sha512: "abcDEF123==" })),
+        path: first,
+        sha512: "abcDEF123==",
+        releaseDate: "2026-07-01T00:00:00.000Z",
+      };
+    }
+
+    it("resolves the arm64 asset on an arm64 Mac when the arm64 ZIP is listed first", () => {
+      const { provider } = buildProviderWithType(bothArchAssets(), null, true);
+
+      const files = provider.resolveFiles(
+        macArchUpdateInfo([arm64ZipName, x64ZipName]),
+      );
+
+      expect(files.map((file) => file.url.toString())).toEqual([arm64AssetUrl]);
+    });
+
+    it("resolves the x64 asset on an x64 Mac when the arm64 ZIP is listed first", () => {
+      const { provider } = buildProviderWithType(bothArchAssets(), null, false);
+
+      const files = provider.resolveFiles(
+        macArchUpdateInfo([arm64ZipName, x64ZipName]),
+      );
+
+      expect(files.map((file) => file.url.toString())).toEqual([x64AssetUrl]);
+    });
+
+    it("resolves the arm64 asset on an arm64 Mac when the x64 ZIP is listed first", () => {
+      const { provider } = buildProviderWithType(bothArchAssets(), null, true);
+
+      const files = provider.resolveFiles(
+        macArchUpdateInfo([x64ZipName, arm64ZipName]),
+      );
+
+      expect(files.map((file) => file.url.toString())).toEqual([arm64AssetUrl]);
+    });
+
+    it("resolves the x64 asset on an x64 Mac when the x64 ZIP is listed first", () => {
+      const { provider } = buildProviderWithType(bothArchAssets(), null, false);
+
+      const files = provider.resolveFiles(
+        macArchUpdateInfo([x64ZipName, arm64ZipName]),
+      );
+
+      expect(files.map((file) => file.url.toString())).toEqual([x64AssetUrl]);
+    });
+
+    it("throws on an x64 Mac when only an arm64 ZIP is published, even though it is the sole file", () => {
+      // This is the case the old `matching.length > 1` guard would have let
+      // through: a single file never triggers the extension-disambiguation
+      // throw, so an arm64-only release would have resolved on an Intel Mac
+      // without the architecture gate.
+      const { provider } = buildProviderWithType(
+        [{ name: arm64ZipName, url: arm64AssetUrl }],
+        null,
+        false,
+      );
+
+      expect(() =>
+        provider.resolveFiles(macArchUpdateInfo([arm64ZipName])),
+      ).toThrow(/architecture/);
+    });
+
+    it("still resolves a single x64-only manifest on an x64 Mac", () => {
+      const { provider } = buildProviderWithType(
+        [{ name: x64ZipName, url: x64AssetUrl }],
+        null,
+        false,
+      );
+
+      const files = provider.resolveFiles(macArchUpdateInfo([x64ZipName]));
+
+      expect(files.map((file) => file.url.toString())).toEqual([x64AssetUrl]);
     });
   });
 });

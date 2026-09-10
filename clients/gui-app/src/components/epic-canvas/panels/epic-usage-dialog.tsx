@@ -98,6 +98,9 @@ export function EpicUsageDialog(props: EpicUsageDialogProps): ReactNode {
       buildUsageSummaryRequest({
         windowDays,
         epicId,
+        // Same as the chat dialog: an epic-scoped surface that has not been
+        // given the verdict-less cohort, so the host keeps picking the reader.
+        plane: null,
       }),
     [epicId, windowDays],
   );

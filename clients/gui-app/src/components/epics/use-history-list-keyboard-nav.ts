@@ -26,9 +26,21 @@ export interface HistoryListKeyboardNav {
   readonly onRowKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
 }
 
-function rowTargets(list: HTMLUListElement | null): ReadonlyArray<HTMLElement> {
-  if (list === null) return [];
-  return Array.from(list.querySelectorAll<HTMLElement>(ROW_TARGET_SELECTOR));
+/**
+ * Every row target under `scope`, in DOM order.
+ *
+ * `scope` is the scroll container rather than one `<ul>`, and that is the
+ * whole of what makes preserved-orphan rows reachable: they render in their
+ * own `<section>`/`<ul>` ABOVE the ordinary results, so a scope pinned to the
+ * ordinary list skipped them on the way down from search and answered `-1` to
+ * `indexOf` for a keystroke ON one - leaving the arrows dead on those rows,
+ * and the whole result set unreachable from search on a page that had only
+ * them. Any future section of rows joins the sequence by rendering inside the
+ * same container, which is the property a per-list ref cannot have.
+ */
+function rowTargets(scope: HTMLElement | null): ReadonlyArray<HTMLElement> {
+  if (scope === null) return [];
+  return Array.from(scope.querySelectorAll<HTMLElement>(ROW_TARGET_SELECTOR));
 }
 
 /**
@@ -40,25 +52,25 @@ function rowTargets(list: HTMLUListElement | null): ReadonlyArray<HTMLElement> {
  */
 export function useHistoryListKeyboardNav(
   searchInputRef: RefObject<HTMLInputElement | null>,
-  listRef: RefObject<HTMLUListElement | null>,
+  rowsScopeRef: RefObject<HTMLElement | null>,
 ): HistoryListKeyboardNav {
   const onSearchKeyDown = useCallback(
     (event: KeyboardEvent<HTMLInputElement>) => {
       if (event.key !== "ArrowDown") return;
-      const targets = rowTargets(listRef.current);
+      const targets = rowTargets(rowsScopeRef.current);
       if (targets.length === 0) return;
       // Only claim the key once there is somewhere to go, so an empty result
       // set leaves the caret's own ArrowDown behaviour intact.
       event.preventDefault();
       targets[0].focus();
     },
-    [listRef],
+    [rowsScopeRef],
   );
 
   const onRowKeyDown = useCallback(
     (event: KeyboardEvent<HTMLElement>) => {
       if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-      const targets = rowTargets(listRef.current);
+      const targets = rowTargets(rowsScopeRef.current);
       const index = targets.indexOf(event.currentTarget);
       // The row unmounted from the list this keystroke resolves against (a
       // refetch landed mid-cycle) - drop the key rather than jumping somewhere
@@ -77,7 +89,7 @@ export function useHistoryListKeyboardNav(
       }
       targets[index - 1].focus();
     },
-    [listRef, searchInputRef],
+    [rowsScopeRef, searchInputRef],
   );
 
   return { onSearchKeyDown, onRowKeyDown };

@@ -69,6 +69,32 @@ export interface StreamRebuildPacer {
    * streak, so it must be called exactly once per close.
    */
   readonly nextRebuildDelayMs: (nowMs: number) => number;
+  /**
+   * Forget the quick-close streak because the CAUSE of those closes is gone -
+   * not because a client survived, and not because the endpoint moved.
+   *
+   * The two existing resets both infer recovery from something observable
+   * about the transport: a client that lived out `REBUILD_HEALTHY_LIFETIME_MS`,
+   * or a `transportIdentity` that changed. A withdrawn-then-restored capability
+   * is neither. A same-user demotion force-closes held sessions, every rebuild
+   * under the withdrawn capability dies the same way, and the streak climbs to
+   * the ceiling - on ONE endpoint, with no client ever living long enough to
+   * count. The promotion back is evidence about the next dial that neither
+   * existing rule can express, which is why this is a third entry point rather
+   * than a wider reading of the other two.
+   *
+   * Deliberately leaves the lifetime clock and the identity ALONE. This is not
+   * a build: moving `builtAt` here would make the next close look like it
+   * followed a fresh client and silently extend the healthy-lifetime window,
+   * and adopting an identity would suppress the genuine cross-endpoint reset
+   * that `markBuilt` owes the next dial.
+   *
+   * Callers must gate this on a strictly-once EDGE. Clearing on a signal that
+   * merely repeats while the bad condition holds would disable the backoff
+   * altogether and restore the hot loop this pacer exists to prevent - see
+   * `useCloudCapabilityRestored`, which is the only sanctioned trigger.
+   */
+  readonly clearStreak: () => void;
 }
 
 function createStreamRebuildPacer(): StreamRebuildPacer {
@@ -103,6 +129,9 @@ function createStreamRebuildPacer(): StreamRebuildPacer {
         REBUILD_BACKOFF_MAX_MS,
         REBUILD_BACKOFF_BASE_MS * 2 ** (quickCloses - 2),
       );
+    },
+    clearStreak: (): void => {
+      quickCloses = 0;
     },
   };
 }

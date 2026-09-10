@@ -344,12 +344,12 @@ describe("resume divider", () => {
       />,
     );
 
-    expect(screen.getByText("Monitor still running")).not.toBeNull();
+    expect(screen.getByText("Monitor running")).not.toBeNull();
   });
 
-  it("keeps the generic copy for a legacy trigger that names no shell", () => {
-    // Written before the trigger carried `managedCommand`, so the divider has
-    // nothing to be specific about and must not guess.
+  it("keeps monitor copy for a legacy trigger that names no shell", () => {
+    // Written before the trigger carried `managedCommand`; the reliable
+    // monitor kind still gives the divider its specific label.
     renderInChatTile(
       <AutonomousResumeSegment
         triggers={[
@@ -362,7 +362,7 @@ describe("resume divider", () => {
       />,
     );
 
-    expect(screen.getByText("Command still running")).not.toBeNull();
+    expect(screen.getByText("Monitor running")).not.toBeNull();
   });
 
   it("names the shell in its terminal copy, by whether it was watching", () => {

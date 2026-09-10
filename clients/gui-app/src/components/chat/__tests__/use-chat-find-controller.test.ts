@@ -341,6 +341,7 @@ function makeTranscriptWithInterviewDetailNeedle(): ReadonlyArray<ChatMessageMod
             header: null,
             options: [],
             multiSelect: false,
+            allowsCustomAnswer: null,
           },
         ],
         answers: [

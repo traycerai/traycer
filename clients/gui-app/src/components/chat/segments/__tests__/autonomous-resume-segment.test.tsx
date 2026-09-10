@@ -75,8 +75,8 @@ describe("<AutonomousResumeSegment />", () => {
     );
 
     expect(screen.queryByText("Shell completed")).toBeNull();
-    expect(screen.getByText("Command still running")).toBeTruthy();
-    expect(screen.getByText("still running - 12 new log lines")).toBeTruthy();
+    expect(screen.getByText("Monitor running")).toBeTruthy();
+    expect(screen.getByText("12 new log lines")).toBeTruthy();
   });
 
   it("still reports a terminal outcome once the producer has stopped", () => {
@@ -101,6 +101,7 @@ describe("<AutonomousResumeSegment />", () => {
     // Kind-only trigger (no `managedCommand` block): the harness's own
     // Monitor tool, which keeps its real name.
     expect(screen.getByText("Monitor failed")).toBeTruthy();
+    expect(screen.queryByText("Monitor running")).toBeNull();
     expect(screen.queryByText("Command still running")).toBeNull();
   });
 
@@ -288,6 +289,164 @@ describe("<AutonomousResumeSegment />", () => {
     expect(screen.queryByText("Output")).toBeNull();
     expect(screen.queryByText("Output file unavailable.")).toBeNull();
     expect(hostQueryMock.calls).toHaveLength(0);
+  });
+
+  it("keeps a monitor delivery summary in the same compact card", () => {
+    render(
+      <AutonomousResumeSegment
+        triggers={[
+          {
+            kind: "monitor",
+            title: "PR checks",
+            status: "completed",
+            summary: "2 new log lines",
+            blockId: "monitor-delivery-1",
+            outputFile: {
+              workspacePath: "/tmp/traycer-output",
+              filePath: "monitor.output",
+            },
+            mcp: null,
+            managedCommand: null,
+            live: false,
+          },
+        ]}
+      />,
+    );
+
+    const summary = screen.getByText("2 new log lines");
+    const card = summary.closest(".rounded-md");
+    expect(card).not.toBeNull();
+    expect(card?.textContent).toContain("Monitor completed");
+    expect(card?.textContent).toContain("PR checks");
+    expect(card?.querySelector("button")).toBeNull();
+    expect(hostQueryMock.calls).toHaveLength(0);
+  });
+
+  it("renders in-turn monitor deliveries as non-expandable rows", () => {
+    render(
+      <AutonomousResumeSegment
+        variant="row"
+        triggers={[
+          {
+            kind: "monitor",
+            title: "PR checks",
+            status: "completed",
+            summary: "still running - 2 new log lines",
+            blockId: "monitor-row-1",
+            outputFile: {
+              workspacePath: "/tmp/traycer-output",
+              filePath: "monitor.output",
+            },
+            mcp: null,
+            managedCommand: null,
+            live: true,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("Monitor update")).toBeTruthy();
+    expect(screen.getByText("2 new log lines")).toBeTruthy();
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("uses the shared radar icon and shell labels for live managed deliveries", () => {
+    render(
+      <AutonomousResumeSegment
+        triggers={[
+          {
+            kind: "command",
+            title: "watcher",
+            status: "completed",
+            summary: "still running - 1 new log line",
+            blockId: "managed-monitor-1",
+            outputFile: null,
+            mcp: null,
+            managedCommand: {
+              commandId: "cmd-monitor",
+              monitoring: true,
+            },
+            live: true,
+          },
+          {
+            kind: "command",
+            title: "migration",
+            status: "completed",
+            summary: "still running - 1 new log line",
+            blockId: "managed-shell-1",
+            outputFile: null,
+            mcp: null,
+            managedCommand: {
+              commandId: "cmd-shell",
+              monitoring: false,
+            },
+            live: true,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("Monitor running")).toBeTruthy();
+    expect(screen.getByText("Shell running")).toBeTruthy();
+    expect(document.querySelector("[data-monitor-icon='on']")).not.toBeNull();
+    expect(document.querySelector("[data-monitor-icon='off']")).not.toBeNull();
+  });
+
+  it("keeps same-command triggers with distinct blocks across rerenders", () => {
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const triggers = [
+      {
+        kind: "command" as const,
+        title: "same command",
+        status: "completed" as const,
+        summary: "first child",
+        blockId: "block-first",
+        outputFile: {
+          workspacePath: "/tmp/traycer-output",
+          filePath: "first.output",
+        },
+        mcp: null,
+        managedCommand: { commandId: "same-command", monitoring: false },
+        live: false,
+      },
+      {
+        kind: "command" as const,
+        title: "same command",
+        status: "completed" as const,
+        summary: "second child",
+        blockId: "block-second",
+        outputFile: {
+          workspacePath: "/tmp/traycer-output",
+          filePath: "second.output",
+        },
+        mcp: null,
+        managedCommand: { commandId: "same-command", monitoring: false },
+        live: false,
+      },
+    ];
+
+    try {
+      const view = render(<AutonomousResumeSegment triggers={triggers} />);
+
+      expect(screen.getByText("first child")).toBeTruthy();
+      expect(screen.getByText("second child")).toBeTruthy();
+      view.rerender(<AutonomousResumeSegment triggers={[...triggers]} />);
+      expect(screen.getByText("first child")).toBeTruthy();
+      expect(screen.getByText("second child")).toBeTruthy();
+      expect(
+        consoleError.mock.calls.some((call) =>
+          call.some(
+            (value) =>
+              typeof value === "string" &&
+              /same key|unique ["']key/i.test(value),
+          ),
+        ),
+      ).toBe(false);
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   it("renders wakeup triggers as non-expandable cards carrying the prompt", () => {

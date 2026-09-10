@@ -8,6 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import type { PathLike, RmOptions } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -57,6 +58,15 @@ const mocks = vi.hoisted(() => ({
   // exact-call gate above.
   forceRenameFailureUntilCall: null as number | null,
   renameCallCountByDestination: new Map<string, number>(),
+  // The `RegistryClient` `stageHostInstallSource`'s registry arm resolves
+  // through `createDefaultRegistryClient`. Only the private-source registry
+  // pin sets it; every other test in this file stages from a local
+  // directory and never reaches the registry at all.
+  registryClient: null as RegistryClient | null,
+  assertStoreFormatFloorAtCommitMock: vi.fn(),
+  assertStoreFormatFloorAfterStopMock: vi.fn(),
+  observeSwapQuiescenceMock: vi.fn(),
+  serviceManagerMayRespawnMock: vi.fn(),
 }));
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -123,6 +133,46 @@ vi.mock("node:os", async (importOriginal) => {
   return { ...actual, homedir: () => osHome.current || actual.tmpdir() };
 });
 
+// `observeSwapQuiescence`'s post-stop check asks `serviceManagerMayRespawn`
+// (the `service/index.ts` facade - `swap-quiescence.ts` never reaches into
+// `platforms/` directly), which shells out to `launchctl print` /
+// `systemctl --user is-active` for real when it reaches the "no process right
+// now" arms. Left unmocked, this suite reads the developer's OWN machine
+// state - on a machine with a loaded, crash-throttled Traycer agent, that is
+// load-bearing rather than benign: every test driving `commitInstallFromSource`
+// past the pre-commit gate gets refused by the operator's real launchd/systemd
+// state. Default to "cannot respawn" so the existing fixtures (which assume an
+// ordinary quiescent machine) keep clearing as before.
+vi.mock("../../service", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../service")>();
+  return {
+    ...actual,
+    serviceManagerMayRespawn: (
+      ...callArgs: Parameters<typeof actual.serviceManagerMayRespawn>
+    ) => mocks.serviceManagerMayRespawnMock(...callArgs),
+  };
+});
+// Nothing in this file resets this - set once, module scope, and every
+// test that never mentions respawn risk inherits "cannot respawn" silently.
+mocks.serviceManagerMayRespawnMock.mockResolvedValue(false);
+
+// Only `createDefaultRegistryClient` is replaced - `releaseDownloadSlot` and
+// the rest stay real, so the registry pin below exercises the same
+// archive-release tail production runs.
+vi.mock("../../registry", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../registry")>();
+  return {
+    ...actual,
+    createDefaultRegistryClient: async (): Promise<RegistryClient> => {
+      const client = mocks.registryClient;
+      if (client === null) {
+        throw new Error("no fake registry client installed for this test");
+      }
+      return client;
+    },
+  };
+});
+
 vi.mock("../../store/paths", async () => {
   const actual =
     await vi.importActual<typeof import("../../store/paths")>(
@@ -147,6 +197,63 @@ vi.mock("../../store/paths", async () => {
   };
 });
 
+// Real by default - `hostHomeDir` above is sandboxed to an empty temp tree,
+// which the commit-tail floor clears unconditionally, so every existing
+// test here runs the genuine check. Only the one test proving "the floor
+// runs BEFORE `lifecycle.beforeSwap()`" configures a rejection.
+vi.mock("../../host/store-format-floor", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../host/store-format-floor")>();
+  return {
+    ...actual,
+    assertStoreFormatFloorAtCommit: async (
+      ...callArgs: Parameters<typeof actual.assertStoreFormatFloorAtCommit>
+    ) => {
+      if (mocks.assertStoreFormatFloorAtCommitMock.getMockImplementation()) {
+        return mocks.assertStoreFormatFloorAtCommitMock(...callArgs);
+      }
+      mocks.assertStoreFormatFloorAtCommitMock(...callArgs);
+      return actual.assertStoreFormatFloorAtCommit(...callArgs);
+    },
+    // Same pass-through-by-default shape as the commit-tail spy above: real
+    // by default (an empty sandboxed `hostHome` and an absent pid.json clear
+    // it unconditionally), so every existing test still exercises the
+    // genuine post-stop check. Only the tests proving the
+    // `restartAfterAbortedSwap` wiring configure a rejection.
+    assertStoreFormatFloorAfterStop: async (
+      ...callArgs: Parameters<typeof actual.assertStoreFormatFloorAfterStop>
+    ) => {
+      if (mocks.assertStoreFormatFloorAfterStopMock.getMockImplementation()) {
+        return mocks.assertStoreFormatFloorAfterStopMock(...callArgs);
+      }
+      mocks.assertStoreFormatFloorAfterStopMock(...callArgs);
+      return actual.assertStoreFormatFloorAfterStop(...callArgs);
+    },
+  };
+});
+
+// Same pass-through-by-default shape as the floor mocks above - real by
+// default (an empty sandboxed `hostHome`, no pid.json), so every existing
+// test still exercises the genuine post-stop probe. Only the test proving
+// "a probe failure unrelated to the floor still triggers the restore, and
+// surfaces as ITSELF rather than a floor refusal" configures a rejection.
+vi.mock("../../host/swap-quiescence", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../host/swap-quiescence")>();
+  return {
+    ...actual,
+    observeSwapQuiescence: async (
+      ...callArgs: Parameters<typeof actual.observeSwapQuiescence>
+    ) => {
+      if (mocks.observeSwapQuiescenceMock.getMockImplementation()) {
+        return mocks.observeSwapQuiescenceMock(...callArgs);
+      }
+      mocks.observeSwapQuiescenceMock(...callArgs);
+      return actual.observeSwapQuiescence(...callArgs);
+    },
+  };
+});
+
 import {
   commitHostInstallSource as commitHostInstallSourceWithAuthority,
   commitInstallFromSource as commitInstallFromSourceWithAuthority,
@@ -155,6 +262,7 @@ import {
   discardStagedHostInstallSource,
   installHost,
   setSwapRenameDelaysForTests,
+  stageHostInstallSource as stageHostInstallSourceRaw,
   SWAP_RENAME_DELAYS_MS,
   SWAP_RENAME_MAX_TOTAL_MS,
   sweepOldTrash,
@@ -163,10 +271,55 @@ import {
 import { readHostInstallRecord } from "../../manifest/host-install";
 import { createCliLogger } from "../../logger";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
+import { currentHostPlatformKey } from "../../registry";
+import type {
+  HostPlatformAsset,
+  HostVersionEntry,
+  HostVersionsManifest,
+  RegistryClient,
+} from "../../registry";
+import { ungatedStoreFormatFloorEvidence } from "../../host/store-format-floor";
+import { EPIC_STATE_DIRNAME } from "../../host/chat-store-survey";
+import {
+  expectReached,
+  expectStillGated,
+  makeBarrierGate,
+} from "../../__tests__/support/barrier-gate";
+
+// Written the same way `chat-store-survey.test.ts` writes its fixtures - the
+// real on-disk shape the host itself produces, at
+// `<hostHome>/epic-state/<epicId>/chat/chat.db`.
+async function writeStampedChatDbFor(
+  environment: Environment,
+  epicId: string,
+  schemaVersion: number,
+): Promise<void> {
+  const dir = join(
+    hostHomeFor(environment),
+    EPIC_STATE_DIRNAME,
+    epicId,
+    "chat",
+  );
+  mkdirSync(dir, { recursive: true });
+  const { DatabaseSync } = await import("node:sqlite");
+  const db = new DatabaseSync(join(dir, "chat.db"));
+  try {
+    db.exec(
+      "CREATE TABLE chat_db_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+    );
+    db.prepare("INSERT INTO chat_db_meta (key, value) VALUES (?, ?)").run(
+      "schema_version",
+      String(schemaVersion),
+    );
+  } finally {
+    db.close();
+  }
+}
 
 const ENV: Environment = "production";
 
 const testMutationVerifier = async (): Promise<void> => undefined;
+const noopBeforeExtract = async (): Promise<void> => undefined;
 type CommitHostOptions = Parameters<
   typeof commitHostInstallSourceWithAuthority
 >[0];
@@ -182,19 +335,119 @@ const commitHostInstallSource = (
 type CommitSourceOptions = Parameters<
   typeof commitInstallFromSourceWithAuthority
 >[0];
+// `onWillSwap` joins `verifyMutationCapability` in the defaulted set: it is
+// the actuator-reported disruption boundary (#1752 rounds 10/11), which every
+// call must STATE in production and which only the pins that assert the
+// boundary care about here. The sites that do assert it pass their own.
+type CommitDefaultedOptions = "verifyMutationCapability" | "onWillSwap";
 const commitInstallFromSource = (
-  options: Omit<CommitSourceOptions, "verifyMutationCapability"> &
-    Partial<Pick<CommitSourceOptions, "verifyMutationCapability">>,
+  options: Omit<CommitSourceOptions, CommitDefaultedOptions> &
+    Partial<Pick<CommitSourceOptions, CommitDefaultedOptions>>,
 ) =>
   commitInstallFromSourceWithAuthority({
     ...options,
     verifyMutationCapability:
       options.verifyMutationCapability ?? testMutationVerifier,
+    onWillSwap: options.onWillSwap ?? null,
+  });
+type StageSourceOptions = Parameters<typeof stageHostInstallSourceRaw>[0];
+const stageHostInstallSource = (
+  options: Omit<
+    StageSourceOptions,
+    "verifyMutationCapability" | "beforeExtract"
+  > &
+    Partial<
+      Pick<StageSourceOptions, "verifyMutationCapability" | "beforeExtract">
+    >,
+) =>
+  stageHostInstallSourceRaw({
+    ...options,
+    verifyMutationCapability:
+      options.verifyMutationCapability ?? testMutationVerifier,
+    beforeExtract: options.beforeExtract ?? noopBeforeExtract,
   });
 
 function writeLocalHostSource(sourceDir: string, marker: string): void {
   mkdirSync(sourceDir, { recursive: true });
   writeFileSync(join(sourceDir, "traycer-host"), `binary-${marker}`);
+}
+
+interface FakeRegistryOptions {
+  readonly version: string;
+  readonly onDownloadStart: () => void;
+  // Held open by the private-registry pin so the test can prove the hook
+  // runs on the far side of verification.
+  readonly downloadGate: Promise<void>;
+  readonly onArchiveWritten: (archivePath: string) => void;
+}
+
+// A `RegistryClient` double for the registry arm of `stageHostInstallSource`
+// (the shape `host update --allow-downgrade` drives). The real minisign and
+// sha256 chain lives inside `downloadAndVerify` and has its own suites -
+// what matters here is only that this call RESOLVES before the staging code
+// touches the bytes, so the double writes its "verified" archive at the
+// moment the real one would.
+function fakeRegistryClient(opts: FakeRegistryOptions): RegistryClient {
+  const platformKey = currentHostPlatformKey();
+  const asset: HostPlatformAsset = {
+    available: true,
+    unavailableReason: null,
+    url: `https://example.com/${opts.version}/traycer-host`,
+    sizeBytes: Buffer.byteLength("fake host binary"),
+    sha256: "unused-in-fake",
+    signatureUrl: `https://example.com/${opts.version}/traycer-host.minisig`,
+    signatureAlgorithm: "minisign",
+    publicKeyId: "fake-key-id",
+  };
+  const entry: HostVersionEntry = {
+    version: opts.version,
+    releasedAt: new Date().toISOString(),
+    releaseNotesUrl: "",
+    yanked: false,
+    deprecationReason: null,
+    requiredCliVersion: null,
+    minimumEpoch: null,
+    storeFormats: null,
+    platforms: { [platformKey]: asset },
+  };
+  const manifest: HostVersionsManifest = {
+    schemaVersion: 1,
+    generatedAt: new Date().toISOString(),
+    latest: opts.version,
+    versions: [entry],
+  };
+  return {
+    async fetchManifest() {
+      return manifest;
+    },
+    async resolveAsset() {
+      return { entry, asset };
+    },
+    async downloadAndVerify(_entry, downloadAsset, onProgress) {
+      opts.onDownloadStart();
+      onProgress({
+        downloadedBytes: downloadAsset.sizeBytes,
+        totalBytes: downloadAsset.sizeBytes,
+      });
+      await opts.downloadGate;
+      // `extractHostSource`'s bare-file branch copies using the SOURCE
+      // file's own basename, so the archive must be named exactly like the
+      // executable `resolveHostExecutable` then looks for. Kept outside the
+      // staging root so the "nothing extracted yet" assertions there stay
+      // about the staging tree alone.
+      const archiveDir = join(sandboxRoot, "archives", randomUUID());
+      mkdirSync(archiveDir, { recursive: true });
+      const archivePath = join(archiveDir, "traycer-host");
+      writeFileSync(archivePath, "fake host binary");
+      opts.onArchiveWritten(archivePath);
+      return {
+        archivePath,
+        archiveSha256: "f".repeat(64),
+        signatureKeyId: "fake-key-id",
+        signatureVerifiedAt: new Date().toISOString(),
+      };
+    },
+  };
 }
 
 describe("sweepOldTrash", () => {
@@ -209,6 +462,9 @@ describe("sweepOldTrash", () => {
     mocks.forceRenameFailureForDestination = null;
     mocks.forceRenameFailureForDestinationOnCall = null;
     mocks.renameCallCountByDestination.clear();
+    mocks.assertStoreFormatFloorAtCommitMock.mockReset();
+    mocks.assertStoreFormatFloorAfterStopMock.mockReset();
+    mocks.observeSwapQuiescenceMock.mockReset();
     rmSync(sandboxRoot, { recursive: true, force: true });
   });
 
@@ -257,6 +513,9 @@ describe("installHost", () => {
     mocks.forceRenameFailureForDestination = null;
     mocks.forceRenameFailureForDestinationOnCall = null;
     mocks.renameCallCountByDestination.clear();
+    mocks.assertStoreFormatFloorAtCommitMock.mockReset();
+    mocks.assertStoreFormatFloorAfterStopMock.mockReset();
+    mocks.observeSwapQuiescenceMock.mockReset();
     rmSync(sandboxRoot, { recursive: true, force: true });
   });
 
@@ -270,6 +529,7 @@ describe("installHost", () => {
       onProgress: () => {},
       lifecycle: null,
       recordVersionOverride: "1.0.0",
+      storeFormatFloor: ungatedStoreFormatFloorEvidence("host install", false),
     });
 
     expect(record.installId).not.toBeNull();
@@ -287,6 +547,7 @@ describe("installHost", () => {
       onProgress: () => {},
       lifecycle: null,
       recordVersionOverride: "1.0.0",
+      storeFormatFloor: ungatedStoreFormatFloorEvidence("host install", false),
     });
 
     const secondSource = join(sandboxRoot, "source-2");
@@ -297,6 +558,7 @@ describe("installHost", () => {
       onProgress: () => {},
       lifecycle: null,
       recordVersionOverride: "2.0.0",
+      storeFormatFloor: ungatedStoreFormatFloorEvidence("host install", false),
     });
 
     expect(second.previous?.version).toBe("1.0.0");
@@ -327,6 +589,9 @@ describe("commitInstallFromSource", () => {
     mocks.forceRenameFailureForDestination = null;
     mocks.forceRenameFailureForDestinationOnCall = null;
     mocks.renameCallCountByDestination.clear();
+    mocks.assertStoreFormatFloorAtCommitMock.mockReset();
+    mocks.assertStoreFormatFloorAfterStopMock.mockReset();
+    mocks.observeSwapQuiescenceMock.mockReset();
     rmSync(sandboxRoot, { recursive: true, force: true });
   });
 
@@ -358,7 +623,12 @@ describe("commitInstallFromSource", () => {
         onProgress: () => {},
         lifecycle: null,
         onWillSwap: null,
+        onSwapCommitted: null,
         onCommitted: () => {},
+        storeFormatFloor: ungatedStoreFormatFloorEvidence(
+          "host install",
+          false,
+        ),
       }),
     ).rejects.toThrow();
 
@@ -371,6 +641,273 @@ describe("commitInstallFromSource", () => {
     >;
     expect(parsed.version).toBe("1.0.0");
     expect(typeof parsed.installId).toBe("string");
+  });
+
+  it("the late fallback: a refused store-format floor at the commit tail runs BEFORE lifecycle.beforeSwap, and nothing is stopped or swapped", async () => {
+    const sourceDir = join(sandboxRoot, "pre-staged");
+    writeLocalHostSource(sourceDir, "v1");
+    const executablePath = join(sourceDir, "traycer-host");
+    mocks.assertStoreFormatFloorAtCommitMock.mockRejectedValue(
+      Object.assign(new Error("host install: refusing to install host 1.0.0"), {
+        code: "E_HOST_STORE_FORMAT_FLOOR",
+      }),
+    );
+    let beforeSwapCalled = false;
+
+    await expect(
+      commitInstallFromSource({
+        environment: ENV,
+        sourceDir,
+        executablePath,
+        version: "1.0.0",
+        runtimeVersion: null,
+        source: { kind: "local-file", value: sourceDir },
+        archiveSha256: null,
+        signatureVerifiedAt: new Date().toISOString(),
+        signatureKeyId: "local-file:unsigned",
+        sizeBytes: 0,
+        onProgress: () => {},
+        lifecycle: {
+          beforeSwap: async () => {
+            beforeSwapCalled = true;
+          },
+          beforeSwapCommit: async () => {},
+          afterSwap: async () => {},
+          restartAfterAbortedSwap: async () => {},
+          swapLockRecovery: null,
+        },
+        onWillSwap: null,
+        onCommitted: () => {},
+        onSwapCommitted: null,
+        storeFormatFloor: ungatedStoreFormatFloorEvidence(
+          "host install",
+          false,
+        ),
+      }),
+    ).rejects.toMatchObject({ code: "E_HOST_STORE_FORMAT_FLOOR" });
+
+    expect(mocks.assertStoreFormatFloorAtCommitMock).toHaveBeenCalledTimes(1);
+    expect(beforeSwapCalled).toBe(false);
+    expect(existsSync(installDirFor(ENV))).toBe(false);
+  });
+
+  describe("the post-stop refusal (assertStoreFormatFloorAfterStop) and restartAfterAbortedSwap", () => {
+    it("calls restartAfterAbortedSwap and never reaches atomicSwap - the install dir still holds the old bytes", async () => {
+      // The host is stopped by the time this arm runs (it sits after
+      // `lifecycle.beforeSwap()`), so a refusal here owes the machine its
+      // host back - that is the whole reason the member exists.
+      const sourceDir = join(sandboxRoot, "pre-staged");
+      writeLocalHostSource(sourceDir, "v2");
+      const executablePath = join(sourceDir, "traycer-host");
+      // A real prior install, so "the install dir still holds the old
+      // bytes" is something this test can actually observe rather than
+      // just "no install dir was ever created".
+      const oldInstallDir = installDirFor(ENV);
+      mkdirSync(oldInstallDir, { recursive: true });
+      writeFileSync(join(oldInstallDir, "traycer-host"), "binary-v1");
+      mocks.assertStoreFormatFloorAfterStopMock.mockRejectedValue(
+        Object.assign(
+          new Error("host install: refusing to install host 1.0.0"),
+          { code: "E_HOST_STORE_FORMAT_FLOOR" },
+        ),
+      );
+      const restartAfterAbortedSwap = vi.fn(async () => {});
+
+      await expect(
+        commitInstallFromSource({
+          environment: ENV,
+          sourceDir,
+          executablePath,
+          version: "1.0.0",
+          runtimeVersion: null,
+          source: { kind: "local-file", value: sourceDir },
+          archiveSha256: null,
+          signatureVerifiedAt: new Date().toISOString(),
+          signatureKeyId: "local-file:unsigned",
+          sizeBytes: 0,
+          onProgress: () => {},
+          lifecycle: {
+            beforeSwap: async () => {},
+            beforeSwapCommit: async () => {},
+            afterSwap: async () => {},
+            restartAfterAbortedSwap,
+            swapLockRecovery: null,
+          },
+          onWillSwap: null,
+          onCommitted: () => {},
+          onSwapCommitted: null,
+          storeFormatFloor: ungatedStoreFormatFloorEvidence(
+            "host install",
+            false,
+          ),
+        }),
+      ).rejects.toMatchObject({ code: "E_HOST_STORE_FORMAT_FLOOR" });
+
+      expect(mocks.assertStoreFormatFloorAfterStopMock).toHaveBeenCalledTimes(
+        1,
+      );
+      expect(restartAfterAbortedSwap).toHaveBeenCalledTimes(1);
+      expect(readFileSync(join(oldInstallDir, "traycer-host"), "utf8")).toBe(
+        "binary-v1",
+      );
+    });
+
+    it("a restartAfterAbortedSwap that itself rejects does NOT replace the original refusal - the caller still sees E_HOST_STORE_FORMAT_FLOOR, and the restart failure is a warn", async () => {
+      const sourceDir = join(sandboxRoot, "pre-staged");
+      writeLocalHostSource(sourceDir, "v2");
+      const executablePath = join(sourceDir, "traycer-host");
+      mocks.assertStoreFormatFloorAfterStopMock.mockRejectedValue(
+        Object.assign(
+          new Error("host install: refusing to install host 1.0.0"),
+          { code: "E_HOST_STORE_FORMAT_FLOOR" },
+        ),
+      );
+      const restartAfterAbortedSwap = vi.fn(async () => {
+        throw new Error("simulated restart failure");
+      });
+
+      let thrown: unknown;
+      try {
+        await commitInstallFromSource({
+          environment: ENV,
+          sourceDir,
+          executablePath,
+          version: "1.0.0",
+          runtimeVersion: null,
+          source: { kind: "local-file", value: sourceDir },
+          archiveSha256: null,
+          signatureVerifiedAt: new Date().toISOString(),
+          signatureKeyId: "local-file:unsigned",
+          sizeBytes: 0,
+          onProgress: () => {},
+          lifecycle: {
+            beforeSwap: async () => {},
+            beforeSwapCommit: async () => {},
+            afterSwap: async () => {},
+            restartAfterAbortedSwap,
+            swapLockRecovery: null,
+          },
+          onWillSwap: null,
+          onCommitted: () => {},
+          onSwapCommitted: null,
+          storeFormatFloor: ungatedStoreFormatFloorEvidence(
+            "host install",
+            false,
+          ),
+        });
+      } catch (err) {
+        thrown = err;
+      }
+
+      // The ORIGINAL refusal, not the restart failure.
+      expect(thrown).toMatchObject({ code: "E_HOST_STORE_FORMAT_FLOOR" });
+      expect(restartAfterAbortedSwap).toHaveBeenCalledTimes(1);
+    });
+
+    it("a quiescence PROBE failure unrelated to the floor (a launchctl spawn error, a timeout, a revoked mutation capability) still triggers the restore, and surfaces as ITSELF - not a floor refusal, not the restore's own failure", async () => {
+      // `observeSwapQuiescence` used to be awaited BEFORE the try in
+      // `assertFloorAfterStopOrRestore`, so a throw from the probe itself
+      // (as opposed to a REFUSAL the floor decided) skipped the restore
+      // entirely and left a stopped host's machine hostless for a reason
+      // that has nothing to do with the floor. Moving the await inside the
+      // try is the fix; this pins that the restore still runs and that the
+      // PROBE's own error - not a synthesized floor refusal - is what the
+      // caller sees.
+      const sourceDir = join(sandboxRoot, "pre-staged");
+      writeLocalHostSource(sourceDir, "v2");
+      const executablePath = join(sourceDir, "traycer-host");
+      const probeFailure = Object.assign(
+        new Error("simulated launchctl spawn failure"),
+        { code: "ENOENT" },
+      );
+      mocks.observeSwapQuiescenceMock.mockRejectedValue(probeFailure);
+      const restartAfterAbortedSwap = vi.fn(async () => {});
+
+      let thrown: unknown;
+      try {
+        await commitInstallFromSource({
+          environment: ENV,
+          sourceDir,
+          executablePath,
+          version: "1.0.0",
+          runtimeVersion: null,
+          source: { kind: "local-file", value: sourceDir },
+          archiveSha256: null,
+          signatureVerifiedAt: new Date().toISOString(),
+          signatureKeyId: "local-file:unsigned",
+          sizeBytes: 0,
+          onProgress: () => {},
+          lifecycle: {
+            beforeSwap: async () => {},
+            beforeSwapCommit: async () => {},
+            afterSwap: async () => {},
+            restartAfterAbortedSwap,
+            swapLockRecovery: null,
+          },
+          onWillSwap: null,
+          onCommitted: () => {},
+          onSwapCommitted: null,
+          storeFormatFloor: ungatedStoreFormatFloorEvidence(
+            "host install",
+            false,
+          ),
+        });
+      } catch (err) {
+        thrown = err;
+      }
+
+      // The PROBE's own error - neither a floor refusal (no
+      // E_HOST_STORE_FORMAT_FLOOR code) nor a restore failure (the restore
+      // here never fails).
+      expect(thrown).toBe(probeFailure);
+      expect(mocks.observeSwapQuiescenceMock).toHaveBeenCalledTimes(1);
+      // The probe is asked from INSIDE `assertStoreFormatFloorAfterStop`
+      // (lazily, once formats fail to settle the move), so the check ran and
+      // the probe's own rejection is what escaped it - not a refusal it
+      // synthesized.
+      expect(mocks.assertStoreFormatFloorAfterStopMock).toHaveBeenCalledTimes(
+        1,
+      );
+      expect(restartAfterAbortedSwap).toHaveBeenCalledTimes(1);
+    });
+
+    it("an ordinary successful install calls restartAfterAbortedSwap zero times", async () => {
+      const sourceDir = join(sandboxRoot, "pre-staged");
+      writeLocalHostSource(sourceDir, "v1");
+      const executablePath = join(sourceDir, "traycer-host");
+      const restartAfterAbortedSwap = vi.fn(async () => {});
+
+      const { record } = await commitInstallFromSource({
+        environment: ENV,
+        sourceDir,
+        executablePath,
+        version: "1.0.0",
+        runtimeVersion: null,
+        source: { kind: "local-file", value: sourceDir },
+        archiveSha256: null,
+        signatureVerifiedAt: new Date().toISOString(),
+        signatureKeyId: "local-file:unsigned",
+        sizeBytes: 0,
+        onProgress: () => {},
+        lifecycle: {
+          beforeSwap: async () => {},
+          beforeSwapCommit: async () => {},
+          afterSwap: async () => {},
+          restartAfterAbortedSwap,
+          swapLockRecovery: null,
+        },
+        onWillSwap: null,
+        onCommitted: () => {},
+        onSwapCommitted: null,
+        storeFormatFloor: ungatedStoreFormatFloorEvidence(
+          "host install",
+          false,
+        ),
+      });
+
+      expect(record.version).toBe("1.0.0");
+      expect(restartAfterAbortedSwap).not.toHaveBeenCalled();
+    });
   });
 
   it("invokes onCommitted only after the rename succeeds, never on a failed swap", async () => {
@@ -395,13 +932,707 @@ describe("commitInstallFromSource", () => {
         onProgress: () => {},
         lifecycle: null,
         onWillSwap: null,
+        onSwapCommitted: null,
         onCommitted: () => {
           committed = true;
         },
+        storeFormatFloor: ungatedStoreFormatFloorEvidence(
+          "host install",
+          false,
+        ),
       }),
     ).rejects.toThrow();
 
     expect(committed).toBe(false);
+  });
+
+  it("awaits beforeSwapCommit between beforeSwap resolving and atomicSwap replacing the install dir", async () => {
+    const sourceDir = join(sandboxRoot, "pre-staged");
+    writeLocalHostSource(sourceDir, "v1");
+    const executablePath = join(sourceDir, "traycer-host");
+    const order: string[] = [];
+
+    await commitInstallFromSource({
+      environment: ENV,
+      sourceDir,
+      executablePath,
+      version: "1.0.0",
+      runtimeVersion: null,
+      source: { kind: "local-file", value: sourceDir },
+      archiveSha256: null,
+      signatureVerifiedAt: new Date().toISOString(),
+      signatureKeyId: "local-file:unsigned",
+      sizeBytes: 0,
+      onProgress: () => {},
+      lifecycle: {
+        beforeSwap: async () => {
+          order.push("beforeSwap");
+        },
+        beforeSwapCommit: async () => {
+          order.push("beforeSwapCommit");
+          // The stop resolved, but nothing has moved yet - `atomicSwap`
+          // has not run.
+          expect(existsSync(installDirFor(ENV))).toBe(false);
+        },
+        afterSwap: async () => {
+          order.push("afterSwap");
+        },
+        restartAfterAbortedSwap: async () => {},
+        swapLockRecovery: null,
+      },
+      onSwapCommitted: null,
+      onCommitted: () => {},
+      storeFormatFloor: ungatedStoreFormatFloorEvidence("host install", false),
+    });
+
+    expect(order).toEqual(["beforeSwap", "beforeSwapCommit", "afterSwap"]);
+    expect(existsSync(installDirFor(ENV))).toBe(true);
+    // Falsification: await `beforeSwapCommit` before `beforeSwap`, or after
+    // `atomicSwap`, and either `order` reorders or the pre-swap existence
+    // check above fails.
+  });
+
+  it("never calls beforeSwapCommit and swaps nothing when beforeSwap denies the cooperative stop", async () => {
+    const sourceDir = join(sandboxRoot, "pre-staged");
+    writeLocalHostSource(sourceDir, "v1");
+    const executablePath = join(sourceDir, "traycer-host");
+    let beforeSwapCommitCalled = false;
+
+    await expect(
+      commitInstallFromSource({
+        environment: ENV,
+        sourceDir,
+        executablePath,
+        version: "1.0.0",
+        runtimeVersion: null,
+        source: { kind: "local-file", value: sourceDir },
+        archiveSha256: null,
+        signatureVerifiedAt: new Date().toISOString(),
+        signatureKeyId: "local-file:unsigned",
+        sizeBytes: 0,
+        onProgress: () => {},
+        lifecycle: {
+          beforeSwap: async () => {
+            throw new Error("host busy");
+          },
+          beforeSwapCommit: async () => {
+            beforeSwapCommitCalled = true;
+          },
+          afterSwap: async () => {},
+          restartAfterAbortedSwap: async () => {},
+          swapLockRecovery: null,
+        },
+        onSwapCommitted: null,
+        onCommitted: () => {},
+        storeFormatFloor: ungatedStoreFormatFloorEvidence(
+          "host install",
+          false,
+        ),
+      }),
+    ).rejects.toThrow("host busy");
+
+    expect(beforeSwapCommitCalled).toBe(false);
+    expect(existsSync(installDirFor(ENV))).toBe(false);
+    // Falsification: move `beforeSwapCommit` ahead of `beforeSwap`, or
+    // swallow `beforeSwap`'s rejection instead of propagating it, and
+    // `beforeSwapCommitCalled` flips to `true`.
+  });
+
+  it("reaches neither lifecycle barrier on the lifecycle: null path (--no-service)", async () => {
+    // There is no lifecycle object to observe here - `--no-service`'s whole
+    // point is stopping nothing and starting nothing, so there is no
+    // stop-succeeded or pre-relaunch moment for a barrier to mark. This pin
+    // only needs the `noService` commit to keep succeeding with a `null`
+    // lifecycle now that `InstallHostLifecycle` carries a required
+    // `beforeSwapCommit` member - a caller passing `lifecycle: null` is
+    // exempt from that requirement altogether.
+    const sourceDir = join(sandboxRoot, "pre-staged");
+    writeLocalHostSource(sourceDir, "v1");
+    const executablePath = join(sourceDir, "traycer-host");
+
+    const { record } = await commitInstallFromSource({
+      environment: ENV,
+      sourceDir,
+      executablePath,
+      version: "1.0.0",
+      runtimeVersion: null,
+      source: { kind: "local-file", value: sourceDir },
+      archiveSha256: null,
+      signatureVerifiedAt: new Date().toISOString(),
+      signatureKeyId: "local-file:unsigned",
+      sizeBytes: 0,
+      onProgress: () => {},
+      lifecycle: null,
+      onSwapCommitted: null,
+      onCommitted: () => {},
+      storeFormatFloor: ungatedStoreFormatFloorEvidence("host install", false),
+    });
+
+    expect(record.version).toBe("1.0.0");
+    expect(existsSync(installDirFor(ENV))).toBe(true);
+  });
+
+  describe("host install --from a released archive - the floor runs genuinely, not mocked", () => {
+    // `assertStoreFormatFloorAtCommitMock` is a pass-through spy by default
+    // (see the `../../host/store-format-floor` mock above) - none of these
+    // tests configure an implementation, so the REAL floor decides. This is
+    // the regression these tests exist to pin: `host install --from` records
+    // `deriveLocalVersion(sourcePath)` (`local-<basename>-<timestamp>`) as
+    // the install version, which no released-version table can place, so
+    // before the production fix the floor stood aside on precisely the
+    // downgrade it exists to refuse. `runtimeVersion`/`version.json` are what
+    // let the tail resolve the ACTUAL release being installed instead.
+    const LOCAL_VERSION = "local-host-v1.2.0.tar.gz-2026-01-01T00-00-00-000Z";
+
+    async function setUpPreviousInstall(): Promise<void> {
+      // The hostHome is empty at this point - no chat stores yet - so the
+      // floor clears this setup install unconditionally regardless of
+      // version, exactly like every other `installHost` call in this file.
+      const firstSource = join(sandboxRoot, "source-previous");
+      writeLocalHostSource(firstSource, "previous");
+      await installHost({
+        environment: ENV,
+        source: { kind: "local-file", path: firstSource },
+        onProgress: () => {},
+        lifecycle: null,
+        recordVersionOverride: "1.3.0-rc.4",
+        storeFormatFloor: ungatedStoreFormatFloorEvidence(
+          "host install",
+          false,
+        ),
+      });
+      await writeStampedChatDbFor(ENV, "epic-on-disk", 9);
+    }
+
+    it("refuses a released archive with no storeFormats declaration, never swapping - the bug this fixes", async () => {
+      await setUpPreviousInstall();
+      const sourceDir = join(sandboxRoot, "source-1.2.0-undeclared");
+      writeLocalHostSource(sourceDir, "1.2.0-undeclared");
+      writeFileSync(
+        join(sourceDir, "version.json"),
+        JSON.stringify({ version: "1.2.0" }),
+      );
+      const executablePath = join(sourceDir, "traycer-host");
+      let beforeSwapCalled = false;
+
+      await expect(
+        commitInstallFromSource({
+          environment: ENV,
+          sourceDir,
+          executablePath,
+          version: LOCAL_VERSION,
+          runtimeVersion: "1.2.0",
+          source: { kind: "local-file", value: sourceDir },
+          archiveSha256: null,
+          signatureVerifiedAt: new Date().toISOString(),
+          signatureKeyId: "local-file:unsigned",
+          sizeBytes: 0,
+          onProgress: () => {},
+          lifecycle: {
+            beforeSwap: async () => {
+              beforeSwapCalled = true;
+            },
+            beforeSwapCommit: async () => {},
+            afterSwap: async () => {},
+            restartAfterAbortedSwap: async () => {},
+            swapLockRecovery: null,
+          },
+          onWillSwap: null,
+          onCommitted: () => {},
+          onSwapCommitted: null,
+          storeFormatFloor: ungatedStoreFormatFloorEvidence(
+            "host install",
+            false,
+          ),
+        }),
+      ).rejects.toMatchObject({ code: "E_HOST_STORE_FORMAT_FLOOR" });
+
+      // Nothing was stopped or swapped - a refusal that happens after the
+      // stop is not a floor.
+      expect(beforeSwapCalled).toBe(false);
+      expect(
+        readFileSync(join(installDirFor(ENV), "traycer-host"), "utf8"),
+      ).toBe("binary-previous");
+    });
+
+    it("commits when the archive declares a storeFormats that clears the chat store on disk", async () => {
+      await setUpPreviousInstall();
+      const sourceDir = join(sandboxRoot, "source-1.2.0-declared");
+      writeLocalHostSource(sourceDir, "1.2.0-declared");
+      writeFileSync(
+        join(sourceDir, "version.json"),
+        JSON.stringify({ version: "1.2.0", storeFormats: { chatDb: 9 } }),
+      );
+      const executablePath = join(sourceDir, "traycer-host");
+
+      const { record } = await commitInstallFromSource({
+        environment: ENV,
+        sourceDir,
+        executablePath,
+        version: LOCAL_VERSION,
+        runtimeVersion: "1.2.0",
+        source: { kind: "local-file", value: sourceDir },
+        archiveSha256: null,
+        signatureVerifiedAt: new Date().toISOString(),
+        signatureKeyId: "local-file:unsigned",
+        sizeBytes: 0,
+        onProgress: () => {},
+        lifecycle: null,
+        onWillSwap: null,
+        onCommitted: () => {},
+        onSwapCommitted: null,
+        storeFormatFloor: ungatedStoreFormatFloorEvidence(
+          "host install",
+          false,
+        ),
+      });
+
+      expect(record.version).toBe(LOCAL_VERSION);
+      expect(
+        readFileSync(join(installDirFor(ENV), "traycer-host"), "utf8"),
+      ).toBe("binary-1.2.0-declared");
+    });
+
+    it("judges a REGISTRY target by its declaration when the installed tree came from a local archive recorded under the same version (the `ensure --from` shape)", async () => {
+      // `host ensure --from` records a bundled local build under the CLI's
+      // own version. A registry artifact of that version landing over it is
+      // a same-string move between DIFFERENT bytes, so the version shortcut
+      // must not apply: the installed sidecar says format 10, the registry
+      // build declares 9, and a format-10 store is on disk.
+      const previousSource = join(sandboxRoot, "source-local-1.3.0");
+      writeLocalHostSource(previousSource, "local-1.3.0");
+      writeFileSync(
+        join(previousSource, "version.json"),
+        JSON.stringify({ version: "1.3.0", storeFormats: { chatDb: 10 } }),
+      );
+      await installHost({
+        environment: ENV,
+        source: { kind: "local-file", path: previousSource },
+        onProgress: () => {},
+        lifecycle: null,
+        recordVersionOverride: "1.3.0",
+        storeFormatFloor: ungatedStoreFormatFloorEvidence(
+          "host install",
+          false,
+        ),
+      });
+      await writeStampedChatDbFor(ENV, "epic-on-format-10", 10);
+      const sourceDir = join(sandboxRoot, "source-registry-1.3.0");
+      writeLocalHostSource(sourceDir, "registry-1.3.0");
+      writeFileSync(
+        join(sourceDir, "version.json"),
+        JSON.stringify({ version: "1.3.0", storeFormats: { chatDb: 9 } }),
+      );
+      const executablePath = join(sourceDir, "traycer-host");
+
+      await expect(
+        commitInstallFromSource({
+          environment: ENV,
+          sourceDir,
+          executablePath,
+          version: "1.3.0",
+          runtimeVersion: "1.3.0",
+          source: { kind: "registry", value: "1.3.0" },
+          archiveSha256: "a".repeat(64),
+          signatureVerifiedAt: new Date().toISOString(),
+          signatureKeyId: "key-1",
+          sizeBytes: 0,
+          onProgress: () => {},
+          lifecycle: null,
+          onWillSwap: null,
+          onCommitted: () => {},
+          onSwapCommitted: null,
+          storeFormatFloor: ungatedStoreFormatFloorEvidence(
+            "host install",
+            false,
+          ),
+        }),
+      ).rejects.toMatchObject({ code: "E_HOST_STORE_FORMAT_FLOOR" });
+
+      expect(
+        readFileSync(join(installDirFor(ENV), "traycer-host"), "utf8"),
+      ).toBe("binary-local-1.3.0");
+    });
+
+    it("commits an archive with no version.json at all - unchanged off-ladder behaviour", async () => {
+      await setUpPreviousInstall();
+      const sourceDir = join(sandboxRoot, "source-no-version-json");
+      writeLocalHostSource(sourceDir, "no-version-json");
+      const executablePath = join(sourceDir, "traycer-host");
+
+      const { record } = await commitInstallFromSource({
+        environment: ENV,
+        sourceDir,
+        executablePath,
+        version: LOCAL_VERSION,
+        runtimeVersion: null,
+        source: { kind: "local-file", value: sourceDir },
+        archiveSha256: null,
+        signatureVerifiedAt: new Date().toISOString(),
+        signatureKeyId: "local-file:unsigned",
+        sizeBytes: 0,
+        onProgress: () => {},
+        lifecycle: null,
+        onWillSwap: null,
+        onCommitted: () => {},
+        onSwapCommitted: null,
+        storeFormatFloor: ungatedStoreFormatFloorEvidence(
+          "host install",
+          false,
+        ),
+      });
+
+      expect(record.version).toBe(LOCAL_VERSION);
+      expect(
+        readFileSync(join(installDirFor(ENV), "traycer-host"), "utf8"),
+      ).toBe("binary-no-version-json");
+    });
+  });
+
+  it("fires onSwapCommitted at the swap-in rename even when post-rename work rejects", async () => {
+    // A pre-existing install is required so the post-rename work
+    // (`preserveLegacyProviders` / aside invalidation) actually runs - both
+    // are gated on `targetExists`.
+    const firstSourceDir = join(sandboxRoot, "pre-staged-1");
+    writeLocalHostSource(firstSourceDir, "v1");
+    const { record: firstRecord } = await commitInstallFromSource({
+      environment: ENV,
+      sourceDir: firstSourceDir,
+      executablePath: join(firstSourceDir, "traycer-host"),
+      version: "1.0.0",
+      runtimeVersion: null,
+      source: { kind: "local-file", value: firstSourceDir },
+      archiveSha256: null,
+      signatureVerifiedAt: new Date().toISOString(),
+      signatureKeyId: "local-file:unsigned",
+      sizeBytes: 0,
+      onProgress: () => {},
+      lifecycle: null,
+      onSwapCommitted: null,
+      storeFormatFloor: ungatedStoreFormatFloorEvidence("host install", false),
+      onCommitted: () => {},
+    });
+
+    const secondSourceDir = join(sandboxRoot, "pre-staged-2");
+    writeLocalHostSource(secondSourceDir, "v2");
+    // Succeeds through the swap-in rename, then starts throwing a
+    // lost-mutation-authority error the instant the NEW install.json is on
+    // disk at `install/` - the exact edge `preserveLegacyProviders` and the
+    // aside invalidation revalidate against.
+    const verifyMutationCapability = async (): Promise<void> => {
+      const recordPath = join(installDirFor(ENV), "install.json");
+      if (!existsSync(recordPath)) return;
+      const parsed = JSON.parse(readFileSync(recordPath, "utf8")) as Record<
+        string,
+        unknown
+      >;
+      if (parsed.version === "2.0.0") {
+        throw new CliError({
+          code: CLI_ERROR_CODES.CLI_LOCK_BUSY,
+          message: "lost mutation authority",
+          details: null,
+          exitCode: 1,
+        });
+      }
+    };
+    const observed: Array<{
+      readonly record: { readonly installId: string | null };
+      readonly previous: { readonly installId: string | null } | null;
+    }> = [];
+
+    await expect(
+      commitInstallFromSource({
+        environment: ENV,
+        sourceDir: secondSourceDir,
+        executablePath: join(secondSourceDir, "traycer-host"),
+        version: "2.0.0",
+        runtimeVersion: null,
+        source: { kind: "local-file", value: secondSourceDir },
+        archiveSha256: null,
+        signatureVerifiedAt: new Date().toISOString(),
+        signatureKeyId: "local-file:unsigned",
+        sizeBytes: 0,
+        onProgress: () => {},
+        lifecycle: null,
+        verifyMutationCapability,
+        onSwapCommitted: async (info) => {
+          observed.push(info);
+        },
+        storeFormatFloor: ungatedStoreFormatFloorEvidence(
+          "host install",
+          false,
+        ),
+        onCommitted: () => {},
+      }),
+    ).rejects.toThrow("lost mutation authority");
+
+    expect(existsSync(installDirFor(ENV))).toBe(true);
+    const onDisk = JSON.parse(
+      readFileSync(join(installDirFor(ENV), "install.json"), "utf8"),
+    ) as Record<string, unknown>;
+    expect(onDisk.version).toBe("2.0.0");
+    expect(observed).toHaveLength(1);
+    expect(observed[0]?.record.installId).toBe(onDisk.installId);
+    expect(observed[0]?.previous?.installId).toBe(firstRecord.installId);
+  });
+
+  it("runs onSwapCommitted before onCommitted and before lifecycle.afterSwap", async () => {
+    const sourceDir = join(sandboxRoot, "pre-staged");
+    writeLocalHostSource(sourceDir, "v1");
+    const executablePath = join(sourceDir, "traycer-host");
+    const order: string[] = [];
+
+    await commitInstallFromSource({
+      environment: ENV,
+      sourceDir,
+      executablePath,
+      version: "1.0.0",
+      runtimeVersion: null,
+      source: { kind: "local-file", value: sourceDir },
+      archiveSha256: null,
+      signatureVerifiedAt: new Date().toISOString(),
+      signatureKeyId: "local-file:unsigned",
+      sizeBytes: 0,
+      onProgress: () => {},
+      lifecycle: {
+        beforeSwap: async () => {},
+        beforeSwapCommit: async () => {},
+        afterSwap: async () => {
+          order.push("afterSwap");
+        },
+        restartAfterAbortedSwap: async () => {},
+        swapLockRecovery: null,
+      },
+      onSwapCommitted: async () => {
+        order.push("onSwapCommitted");
+      },
+      storeFormatFloor: ungatedStoreFormatFloorEvidence("host install", false),
+      onCommitted: () => {
+        order.push("onCommitted");
+      },
+    });
+
+    expect(order).toEqual(["onSwapCommitted", "onCommitted", "afterSwap"]);
+  });
+
+  it("swallows an onSwapCommitted rejection without failing the commit", async () => {
+    const sourceDir = join(sandboxRoot, "pre-staged");
+    writeLocalHostSource(sourceDir, "v1");
+    const executablePath = join(sourceDir, "traycer-host");
+    let committed = false;
+
+    const { record } = await commitInstallFromSource({
+      environment: ENV,
+      sourceDir,
+      executablePath,
+      version: "1.0.0",
+      runtimeVersion: null,
+      source: { kind: "local-file", value: sourceDir },
+      archiveSha256: null,
+      signatureVerifiedAt: new Date().toISOString(),
+      signatureKeyId: "local-file:unsigned",
+      sizeBytes: 0,
+      onProgress: () => {},
+      lifecycle: null,
+      onSwapCommitted: async () => {
+        throw new Error("observer boom");
+      },
+      storeFormatFloor: ungatedStoreFormatFloorEvidence("host install", false),
+      onCommitted: () => {
+        committed = true;
+      },
+    });
+
+    expect(record.version).toBe("1.0.0");
+    expect(committed).toBe(true);
+    expect(existsSync(installDirFor(ENV))).toBe(true);
+  });
+});
+
+describe("stageHostInstallSource", () => {
+  beforeEach(() => {
+    sandboxRoot = mkdtempSync(join(tmpdir(), "traycer-install-test-"));
+    osHome.current = sandboxRoot;
+  });
+
+  afterEach(() => {
+    rmSync(sandboxRoot, { recursive: true, force: true });
+  });
+
+  it("blocks extraction until beforeExtract RESOLVES - the downgrade/private-source path, not only downloadAndStageHost", async () => {
+    // The ticket's first ablation: putting `beforeExtract` only in
+    // `downloadAndStageHost` (download-stage.ts) would leave THIS path -
+    // `stageHostInstallSource`, which `commands/host-update-downgrade.ts`
+    // drives for a private-source downgrade - never observing the barrier
+    // at all. This pin calls `stageHostInstallSource` directly, so that
+    // ablation reddens it.
+    const sourceDir = join(sandboxRoot, "source-1");
+    writeLocalHostSource(sourceDir, "v1");
+    const order: string[] = [];
+    const hookEntered = makeBarrierGate();
+    const hookGate = makeBarrierGate();
+    const extractionStarted = makeBarrierGate();
+
+    const stagePromise = stageHostInstallSource({
+      environment: ENV,
+      source: { kind: "local-file", path: sourceDir },
+      onProgress: (info) => {
+        if (
+          info.stage === "extract" &&
+          order[order.length - 1] !== "progress-extract"
+        ) {
+          order.push("progress-extract");
+          extractionStarted.release();
+        }
+      },
+      recordVersionOverride: "9.9.9",
+      beforeExtract: async () => {
+        order.push("before-extract");
+        // The owned temp dir under the staging root already exists (it is
+        // created before staging begins), but nothing has been extracted
+        // into it yet. The ownership marker (`store/owned-temp.ts`) is
+        // written at creation, so ITS presence - and nothing else - is
+        // what a not-yet-extracted tree looks like.
+        const [ownedDirName, ...rest] = readdirSync(stagingRootFor(ENV));
+        expect(rest).toEqual([]);
+        if (ownedDirName === undefined) {
+          throw new Error("expected one owned staging dir to exist by now");
+        }
+        expect(readdirSync(join(stagingRootFor(ENV), ownedDirName))).toEqual([
+          ".owner.json",
+        ]);
+        hookEntered.release();
+        await hookGate.promise;
+      },
+    });
+
+    await expectReached(hookEntered.promise, "beforeExtract");
+    // The gating claim, which an ordering array cannot make on its own:
+    // extraction has not begun while this hook is pending.
+    await expectStillGated(extractionStarted.promise, "extraction started");
+    expect(order).toEqual(["before-extract"]);
+
+    hookGate.release();
+    const staged = await stagePromise;
+
+    expect(order).toEqual(["before-extract", "progress-extract"]);
+    expect(existsSync(staged.executablePath)).toBe(true);
+    // Falsification: change `await opts.beforeExtract()` in
+    // `stageVerifiedSource` to `void opts.beforeExtract()` and extraction
+    // runs while this hook is still pending - `expectStillGated` reddens.
+  });
+
+  it("awaits the hook AFTER downloadAndVerify has returned, on the private REGISTRY source", async () => {
+    // The local-directory arm above cannot see this edge: it has no
+    // download to be after. `commands/host-update-downgrade.ts` stages a
+    // registry version through this same function, so the verified-bytes
+    // ordering has to be pinned on the registry arm too - moving
+    // `beforeExtract` ahead of the transfer would otherwise be invisible on
+    // both of this file's paths.
+    const order: string[] = [];
+    const downloadStarted = makeBarrierGate();
+    const downloadGate = makeBarrierGate();
+    const hookEntered = makeBarrierGate();
+    const hookGate = makeBarrierGate();
+    const extractionStarted = makeBarrierGate();
+    let verifiedArchivePath = "";
+    // What the transfer had produced by the time the hook ran.
+    let archiveAtHook = "";
+    mocks.registryClient = fakeRegistryClient({
+      version: "3.2.1",
+      onDownloadStart: () => {
+        order.push("download-start");
+        downloadStarted.release();
+      },
+      downloadGate: downloadGate.promise,
+      onArchiveWritten: (archivePath) => {
+        verifiedArchivePath = archivePath;
+      },
+    });
+
+    const stagePromise = stageHostInstallSource({
+      environment: ENV,
+      source: { kind: "registry", versionRequest: "3.2.1" },
+      onProgress: (info) => {
+        if (
+          info.stage === "extract" &&
+          order[order.length - 1] !== "progress-extract"
+        ) {
+          order.push("progress-extract");
+          extractionStarted.release();
+        }
+      },
+      recordVersionOverride: null,
+      beforeExtract: async () => {
+        order.push("before-extract");
+        // Captured, not asserted, INSIDE the hook: a throw here would
+        // reject before `hookEntered` fires and the gating assertions below
+        // would hang to the suite timeout instead of failing on the spot.
+        archiveAtHook = verifiedArchivePath;
+        hookEntered.release();
+        await hookGate.promise;
+      },
+    });
+
+    // Checked BEFORE waiting on the download so a hook hoisted ahead of the
+    // transfer fails this assertion outright instead of deadlocking the
+    // test: with the hook in front, `downloadStarted` would never fire at
+    // all (the hoisted hook blocks on its own gate) and a plain
+    // `await downloadStarted.promise` here would hang to the suite timeout.
+    await expectStillGated(hookEntered.promise, "beforeExtract ran");
+    await downloadStarted.promise;
+    expect(order).toEqual(["download-start"]);
+
+    downloadGate.release();
+    await expectReached(hookEntered.promise, "beforeExtract");
+    await expectStillGated(extractionStarted.promise, "extraction started");
+
+    hookGate.release();
+    const staged = await stagePromise;
+
+    expect(order).toEqual([
+      "download-start",
+      "before-extract",
+      "progress-extract",
+    ]);
+    // `downloadAndVerify` had RETURNED before the hook ran - sha256 and
+    // minisign both live inside it - so its verified archive was on disk.
+    expect(archiveAtHook).toBe(verifiedArchivePath);
+    expect(archiveAtHook).not.toBe("");
+    expect(staged.version).toBe("3.2.1");
+    expect(existsSync(staged.executablePath)).toBe(true);
+    // Falsification: run `beforeExtract` before the registry transfer (the
+    // reviewer's mutation - hoist it to just after the owned temp dir is
+    // created) and the `expectStillGated(hookEntered...)` above reddens;
+    // drop its `await` and the extraction gate reddens.
+  });
+
+  it("propagates a rejecting beforeExtract, extracts nothing, and scrubs the staging tree", async () => {
+    const sourceDir = join(sandboxRoot, "source-1");
+    writeLocalHostSource(sourceDir, "v1");
+    let extractProgressSeen = false;
+
+    await expect(
+      stageHostInstallSource({
+        environment: ENV,
+        source: { kind: "local-file", path: sourceDir },
+        onProgress: (info) => {
+          if (info.stage === "extract") extractProgressSeen = true;
+        },
+        recordVersionOverride: "9.9.9",
+        beforeExtract: async () => {
+          throw new Error("the writer refused the preparing phase");
+        },
+      }),
+    ).rejects.toThrow("the writer refused the preparing phase");
+
+    expect(extractProgressSeen).toBe(false);
+    // `stageHostInstallSource`'s own catch scrubs the owner-tokened temp on
+    // every throw between staging and the return - a refusing hook is now
+    // one of them, and must not leak a staging tree.
+    expect(readdirSync(stagingRootFor(ENV))).toEqual([]);
+    // Falsification: swallow the hook's rejection in `stageVerifiedSource`
+    // and this resolves with `extractProgressSeen` true.
   });
 });
 
@@ -433,6 +1664,7 @@ describe("atomicSwap - swap-lock recovery", () => {
       onProgress: () => {},
       lifecycle: null,
       recordVersionOverride: version,
+      storeFormatFloor: ungatedStoreFormatFloorEvidence("host install", false),
     });
   }
 
@@ -454,13 +1686,16 @@ describe("atomicSwap - swap-lock recovery", () => {
       onProgress: () => {},
       lifecycle: {
         beforeSwap: async () => {},
+        beforeSwapCommit: async () => {},
         afterSwap: async () => {},
+        restartAfterAbortedSwap: async () => {},
         swapLockRecovery: {
           killLingeringProcesses: kill,
           describeLockHolders: async () => [],
         },
       },
       recordVersionOverride: "2.0.0",
+      storeFormatFloor: ungatedStoreFormatFloorEvidence("host install", false),
     });
 
     expect(record.version).toBe("2.0.0");
@@ -486,7 +1721,9 @@ describe("atomicSwap - swap-lock recovery", () => {
         onProgress: () => {},
         lifecycle: {
           beforeSwap: async () => {},
+          beforeSwapCommit: async () => {},
           afterSwap: async () => {},
+          restartAfterAbortedSwap: async () => {},
           swapLockRecovery: {
             killLingeringProcesses: async () => {},
             describeLockHolders: async () => [
@@ -499,6 +1736,10 @@ describe("atomicSwap - swap-lock recovery", () => {
           },
         },
         recordVersionOverride: "2.0.0",
+        storeFormatFloor: ungatedStoreFormatFloorEvidence(
+          "host install",
+          false,
+        ),
       });
     } catch (err) {
       thrown = err;
@@ -541,7 +1782,9 @@ describe("atomicSwap - swap-lock recovery", () => {
         onProgress: () => {},
         lifecycle: {
           beforeSwap: async () => {},
+          beforeSwapCommit: async () => {},
           afterSwap: async () => {},
+          restartAfterAbortedSwap: async () => {},
           swapLockRecovery: {
             killLingeringProcesses: async () => {},
             describeLockHolders: async () => [
@@ -550,6 +1793,10 @@ describe("atomicSwap - swap-lock recovery", () => {
           },
         },
         recordVersionOverride: "2.0.0",
+        storeFormatFloor: ungatedStoreFormatFloorEvidence(
+          "host install",
+          false,
+        ),
       });
     } catch (err) {
       thrown = err;
@@ -607,13 +1854,19 @@ describe("atomicSwap - swap-lock recovery", () => {
         onProgress: () => {},
         lifecycle: {
           beforeSwap: async () => {},
+          beforeSwapCommit: async () => {},
           afterSwap: async () => {},
+          restartAfterAbortedSwap: async () => {},
           swapLockRecovery: {
             killLingeringProcesses: kill,
             describeLockHolders: async () => [],
           },
         },
         recordVersionOverride: "2.0.0",
+        storeFormatFloor: ungatedStoreFormatFloorEvidence(
+          "host install",
+          false,
+        ),
       });
     } catch (err) {
       thrown = err;
@@ -664,13 +1917,19 @@ describe("atomicSwap - swap-lock recovery", () => {
         onProgress: () => {},
         lifecycle: {
           beforeSwap: async () => {},
+          beforeSwapCommit: async () => {},
           afterSwap: async () => {},
+          restartAfterAbortedSwap: async () => {},
           swapLockRecovery: {
             killLingeringProcesses: kill,
             describeLockHolders: async () => [],
           },
         },
         recordVersionOverride: "2.0.0",
+        storeFormatFloor: ungatedStoreFormatFloorEvidence(
+          "host install",
+          false,
+        ),
       });
     } catch (err) {
       thrown = err;
@@ -708,13 +1967,19 @@ describe("atomicSwap - swap-lock recovery", () => {
         onProgress: () => {},
         lifecycle: {
           beforeSwap: async () => {},
+          beforeSwapCommit: async () => {},
           afterSwap: async () => {},
+          restartAfterAbortedSwap: async () => {},
           swapLockRecovery: {
             killLingeringProcesses: async () => {},
             describeLockHolders: async () => [],
           },
         },
         recordVersionOverride: "2.0.0",
+        storeFormatFloor: ungatedStoreFormatFloorEvidence(
+          "host install",
+          false,
+        ),
       });
     } catch (err) {
       thrown = err;
@@ -753,6 +2018,9 @@ describe("commitHostInstallSource - reconcile runs BEFORE the commit (Finding 2)
     mocks.forceRenameFailureForDestination = null;
     mocks.forceRenameFailureForDestinationOnCall = null;
     mocks.renameCallCountByDestination.clear();
+    mocks.assertStoreFormatFloorAtCommitMock.mockReset();
+    mocks.assertStoreFormatFloorAfterStopMock.mockReset();
+    mocks.observeSwapQuiescenceMock.mockReset();
     rmSync(sandboxRoot, { recursive: true, force: true });
   });
 
@@ -831,6 +2099,11 @@ describe("commitHostInstallSource - reconcile runs BEFORE the commit (Finding 2)
         onProgress: () => {},
         lifecycle: null,
         onWillSwap: null,
+        storeFormatFloor: ungatedStoreFormatFloorEvidence(
+          "host install",
+          false,
+        ),
+        onSwapCommitted: null,
       }),
     ).rejects.toThrow();
 
@@ -854,6 +2127,8 @@ describe("commitHostInstallSource - reconcile runs BEFORE the commit (Finding 2)
       onProgress: () => {},
       lifecycle: null,
       onWillSwap: null,
+      storeFormatFloor: ungatedStoreFormatFloorEvidence("host install", false),
+      onSwapCommitted: null,
     });
 
     expect(result.record.version).toBe("2.0.0");
@@ -877,6 +2152,11 @@ describe("commitHostInstallSource - reconcile runs BEFORE the commit (Finding 2)
         onProgress: () => {},
         lifecycle: null,
         onWillSwap: null,
+        storeFormatFloor: ungatedStoreFormatFloorEvidence(
+          "host install",
+          false,
+        ),
+        onSwapCommitted: null,
       }),
     ).rejects.toMatchObject({ code: "E_HOST_INSTALL_RECORD_INVALID" });
 

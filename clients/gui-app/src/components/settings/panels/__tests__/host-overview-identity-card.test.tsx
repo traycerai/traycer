@@ -282,6 +282,8 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
             // which is exactly what host.status@1.2-and-older peers send.
             updateOperation: null,
             updateTransaction: null,
+            storeFormats: null,
+            install: null,
           };
         },
       },
@@ -335,6 +337,8 @@ describe("<HostSettingsPanel /> Overview identity card — busy chip", () => {
             },
             updateOperation: null,
             updateTransaction: null,
+            storeFormats: null,
+            install: null,
           };
         },
       },

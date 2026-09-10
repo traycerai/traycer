@@ -17,7 +17,14 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { createAppQueryClient } from "@/lib/query-client";
 import { CommentSidebar } from "@/components/comments/comment-sidebar";
+import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
+import {
+  type EpicStreamClientFactory,
+  type OpenEpicStoreHandle,
+} from "@/stores/epics/open-epic/store";
+import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import { useCommentThreadsStore } from "@/stores/comments/comment-threads-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 
 const EPIC_ID = "epic-1";
 const ARTIFACT_ID = "artifact-1";
@@ -90,8 +97,23 @@ function threadFixtureWith(
 
 let queryClient: QueryClient;
 let messenger: MockHostMessenger<HostRpcRegistry>;
+/** Cloud-homed open-epic session for the read-failure suite: the sidebar now
+ *  reads durability via `useEpicDurabilityStatus`, which requires a live
+ *  epic session. Default is non-local so those cases still exercise the RPC
+ *  path rather than the local-mode gate. */
+let defaultEpicHandle: OpenEpicStoreHandle;
 
 beforeEach(() => {
+  // A cloud-backed room (the default handle below leaves durability unset)
+  // is reachable only under a cloud verdict; the unverified cases set their
+  // own status.
+  useAuthStore
+    .getState()
+    .setSignedIn(
+      { userId: "user-1", userName: "U", email: "u@example.com" },
+      { userId: "user-1", username: "U" },
+      [],
+    );
   respondToListThreads = () => ({ threads: [] });
   queryClient = createAppQueryClient();
   let requestCount = 0;
@@ -113,6 +135,18 @@ beforeEach(() => {
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
   hostClientRef.current = spine.createRequester(mockLocalHostEntry);
+  defaultEpicHandle = openStoreForTest({
+    epicId: EPIC_ID,
+    userId: "user-1",
+    factories: {
+      streamClientFactory: noopEpicStreamClientFactory,
+      laneSelection: null,
+    },
+    writeCommand: null,
+  });
+  // Cloud-backed epics leave durability unset; only local lifecycle states
+  // populate this field. That keeps the normal list-query assertions below.
+  defaultEpicHandle.store.setState({ durabilityStatus: null });
 
   otherHostListCalls = 0;
   let otherRequestCount = 0;
@@ -140,8 +174,10 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  useAuthStore.getState().setSignedOut();
   queryClient.clear();
   hostClientRef.current = null;
+  defaultEpicHandle.dispose();
   otherHostClientRef.current = null;
   useCommentThreadsStore.setState({
     activeByEpicId: {},
@@ -152,21 +188,35 @@ afterEach(() => {
   });
 });
 
-function renderSidebar(laneThreads: readonly CommentThreadWire[] | null) {
+const noopEpicStreamClientFactory: EpicStreamClientFactory = () => ({
+  applyUpdate: () => undefined,
+  awareness: () => undefined,
+  applyArtifactRoomUpdate: () => undefined,
+  artifactRoomAwareness: () => undefined,
+  retryMigration: () => undefined,
+  close: () => undefined,
+});
+
+function renderSidebar(
+  epicHandle: OpenEpicStoreHandle,
+  laneThreads: readonly CommentThreadWire[] | null,
+) {
   return render(
     <QueryClientProvider client={queryClient}>
-      <CommentSidebar
-        epicId={EPIC_ID}
-        hostClient={hostClientRef.current}
-        artifactType="spec"
-        artifactId={ARTIFACT_ID}
-        laneThreads={laneThreads}
-        laneDroppedAt={null}
-        anchorPositions={{ positions: new Map() }}
-        currentUserId="user-1"
-        canModerate={false}
-        onActivateThread={() => undefined}
-      />
+      <EpicSessionContext.Provider value={epicHandle}>
+        <CommentSidebar
+          epicId={EPIC_ID}
+          hostClient={hostClientRef.current}
+          artifactType="spec"
+          artifactId={ARTIFACT_ID}
+          laneThreads={laneThreads}
+          laneDroppedAt={null}
+          anchorPositions={{ positions: new Map() }}
+          currentUserId="user-1"
+          canModerate={false}
+          onActivateThread={() => undefined}
+        />
+      </EpicSessionContext.Provider>
     </QueryClientProvider>,
   );
 }
@@ -209,7 +259,7 @@ describe("<CommentSidebar /> read failures", () => {
         resolveResponse = resolve;
       });
 
-    renderSidebar(null);
+    renderSidebar(defaultEpicHandle, null);
 
     await waitFor(() => {
       expect(loadingPanel()).not.toBeNull();
@@ -231,7 +281,7 @@ describe("<CommentSidebar /> read failures", () => {
   it("says comments could not be loaded when the cold query is disabled without a host client", async () => {
     hostClientRef.current = null;
 
-    renderSidebar(null);
+    renderSidebar(defaultEpicHandle, null);
 
     expect(
       await screen.findByText("Comments couldn't be loaded."),
@@ -245,7 +295,7 @@ describe("<CommentSidebar /> read failures", () => {
   it("says comments could not be LOADED - never that there are none - when the cold read fails", async () => {
     respondToListThreads = unavailableHost;
 
-    renderSidebar(null);
+    renderSidebar(defaultEpicHandle, null);
 
     expect(
       await screen.findByText(
@@ -268,7 +318,7 @@ describe("<CommentSidebar /> read failures", () => {
   it("still renders the empty state when the read SUCCEEDS with no threads", async () => {
     respondToListThreads = () => ({ threads: [] });
 
-    renderSidebar(null);
+    renderSidebar(defaultEpicHandle, null);
 
     expect(await screen.findByText(/No open comments/)).not.toBeNull();
     expect(unavailablePanel()).toBeNull();
@@ -278,7 +328,7 @@ describe("<CommentSidebar /> read failures", () => {
   it("keeps the last successful threads on screen when a REFETCH fails", async () => {
     respondToListThreads = () => ({ threads: [threadFixture()] });
 
-    renderSidebar(null);
+    renderSidebar(defaultEpicHandle, null);
     expect(await screen.findByText(QUOTED_TEXT)).not.toBeNull();
 
     respondToListThreads = unavailableHost;
@@ -302,6 +352,237 @@ describe("<CommentSidebar /> read failures", () => {
 
     expect(unavailablePanel()).toBeNull();
     expect(screen.getByText(QUOTED_TEXT)).not.toBeNull();
+  });
+});
+
+describe("<CommentSidebar /> local durability honesty", () => {
+  let epicHandle: OpenEpicStoreHandle | null = null;
+  let listThreadsCalls = 0;
+
+  beforeEach(() => {
+    listThreadsCalls = 0;
+    respondToListThreads = () => {
+      listThreadsCalls += 1;
+      return { threads: [threadFixture()] };
+    };
+    epicHandle = openStoreForTest({
+      epicId: EPIC_ID,
+      userId: "user-1",
+      factories: {
+        streamClientFactory: noopEpicStreamClientFactory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+  });
+
+  afterEach(() => {
+    epicHandle?.dispose();
+    epicHandle = null;
+  });
+
+  it("loads local-home comments through the enabled query path", async () => {
+    if (epicHandle === null) {
+      throw new Error("expected open epic handle");
+    }
+    // Real open-epic store slot the sidebar reads via useEpicDurabilityStatus.
+    epicHandle.store.setState({ durabilityStatus: "local" });
+
+    renderSidebar(epicHandle, null);
+
+    expect(await screen.findByText(QUOTED_TEXT)).not.toBeNull();
+    expect(listThreadsCalls).toBeGreaterThan(0);
+    // A local home has a usable provider, so the former cloud-room gate must
+    // stay absent and the sidebar must not show an unavailable panel.
+    expect(
+      screen.queryByText("Comments need a cloud room, and this epic has none."),
+    ).toBeNull();
+    expect(
+      screen.queryByText("Comments are temporarily unavailable."),
+    ).toBeNull();
+    expect(unavailablePanel()).toBeNull();
+    expect(queryStatuses()).not.toContain("error");
+  });
+
+  it("still loads threads for a non-local epic through the real query path", async () => {
+    if (epicHandle === null) {
+      throw new Error("expected open epic handle");
+    }
+    epicHandle.store.setState({ durabilityStatus: null });
+
+    renderSidebar(epicHandle, null);
+
+    expect(await screen.findByText(QUOTED_TEXT)).not.toBeNull();
+    expect(listThreadsCalls).toBeGreaterThan(0);
+    expect(
+      screen.queryByText("Comments need a cloud room, and this epic has none."),
+    ).toBeNull();
+  });
+
+  it("withholds a cloud-backed room - and its poll - from a session without a cloud verdict", async () => {
+    // A cloud-homed epic stays mounted after `signed-in` -> `unverified`. The
+    // structural gate still says the room exists, but the poll and every
+    // write would ride the local-host context, which carries no renderer
+    // verdict. The gate closes on the verdict and the poll never fires.
+    if (epicHandle === null) {
+      throw new Error("expected open epic handle");
+    }
+    epicHandle.store.setState({ durabilityStatus: "cloud" });
+    useAuthStore
+      .getState()
+      .setUnverifiedSession(
+        { userId: "user-1", userName: "U", email: "u@example.com" },
+        { userId: "user-1", username: "U" },
+      );
+
+    renderSidebar(epicHandle, null);
+
+    expect(
+      await screen.findByText("Comments need a verified sign-in."),
+    ).not.toBeNull();
+    expect(unavailablePanel()).not.toBeNull();
+    // A settled tick: a poll that WAS going to fire has fired by now.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(listThreadsCalls).toBe(0);
+    expect(screen.queryByText(QUOTED_TEXT)).toBeNull();
+  });
+
+  it("keeps a local-homed room readable without a cloud verdict", async () => {
+    // The exemption: the room is on this disk, and the lane serving it needs
+    // no verdict - the same rule the rename gates apply.
+    if (epicHandle === null) {
+      throw new Error("expected open epic handle");
+    }
+    epicHandle.store.setState({ durabilityStatus: "local" });
+    useAuthStore
+      .getState()
+      .setUnverifiedSession(
+        { userId: "user-1", userName: "U", email: "u@example.com" },
+        { userId: "user-1", username: "U" },
+      );
+
+    renderSidebar(epicHandle, null);
+
+    expect(await screen.findByText(QUOTED_TEXT)).not.toBeNull();
+    expect(listThreadsCalls).toBeGreaterThan(0);
+    expect(unavailablePanel()).toBeNull();
+  });
+
+  it("keeps comments gated while promotion is in flight", async () => {
+    if (epicHandle === null) {
+      throw new Error("expected open epic handle");
+    }
+    // The reserved-but-pre-cutover state: promotion is recorded and the upload
+    // is in flight, so the selector marks the room as temporarily unusable.
+    epicHandle.store.setState({
+      durabilityStatus: "promoting",
+      durabilityPromotionState: "active",
+    });
+
+    renderSidebar(epicHandle, null);
+
+    expect(
+      await screen.findByText("Comments are temporarily unavailable."),
+    ).not.toBeNull();
+    // The copy states the condition rather than predicting cloud sync.
+    expect(
+      screen.getByText("This epic is still uploading to the cloud."),
+    ).not.toBeNull();
+    // The defect was a generic failure standing in for a known boundary.
+    expect(screen.queryByText("Comments couldn't be loaded.")).toBeNull();
+    // Arrangement fidelity: the RPC was never issued, so this is the known
+    // promotion boundary rather than a generic read failure.
+    expect(listThreadsCalls).toBe(0);
+    expect(queryStatuses()).not.toContain("error");
+  });
+
+  it("keeps the uploading copy through a reconnect reset of promoting status", async () => {
+    if (epicHandle === null) {
+      throw new Error("expected open epic handle");
+    }
+    epicHandle.store.setState({
+      durabilityStatus: "promoting",
+      durabilityPauseReason: null,
+      durabilityPromotionState: "active",
+    });
+
+    renderSidebar(epicHandle, null);
+    expect(
+      await screen.findByText("This epic is still uploading to the cloud."),
+    ).not.toBeNull();
+
+    act(() => {
+      epicHandle?.store.setState({
+        durabilityStatus: null,
+        durabilityPauseReason: null,
+        durabilityPromotionState: null,
+        durabilityLegsNegotiated: false,
+        retainedDurabilityStatus: "promoting",
+        retainedDurabilityPauseReason: null,
+      });
+    });
+
+    expect(
+      await screen.findByText("This epic is still uploading to the cloud."),
+    ).not.toBeNull();
+    expect(
+      screen.queryByText("This epic's cloud room is no longer available."),
+    ).toBeNull();
+    expect(listThreadsCalls).toBe(0);
+  });
+
+  it("uses closed recovery copy for a cloud-deleted orphaned room", async () => {
+    if (epicHandle === null) {
+      throw new Error("expected open epic handle");
+    }
+    epicHandle.store.setState({
+      durabilityStatus: "paused",
+      durabilityPauseReason: "orphaned-local-edits-after-cloud-delete",
+      durabilityLegsNegotiated: true,
+    });
+
+    renderSidebar(epicHandle, null);
+
+    expect(await screen.findByText("Comments are unavailable.")).not.toBeNull();
+    expect(
+      screen.getByText(
+        "This epic's cloud room was deleted. Export or recover the preserved local edits manually.",
+      ),
+    ).not.toBeNull();
+    expect(
+      screen.queryByText("Comments are temporarily unavailable."),
+    ).toBeNull();
+    expect(listThreadsCalls).toBe(0);
+  });
+
+  it("shows checking copy when durability status is negotiated without a statement", async () => {
+    if (epicHandle === null) {
+      throw new Error("expected open epic handle");
+    }
+    epicHandle.store.setState({
+      durabilityStatus: null,
+      durabilityPauseReason: null,
+      retainedDurabilityStatus: null,
+      retainedDurabilityPauseReason: null,
+      // `@1.6` legs imply the earlier `@1.4` status capability. This is a
+      // manually seeded pre-status window, so preserve both negotiated facts
+      // the real `open` transition publishes together.
+      durabilityLegsNegotiated: true,
+      durabilityStatusNegotiated: true,
+    });
+
+    renderSidebar(epicHandle, null);
+
+    expect(await screen.findByText("Comments are unavailable.")).not.toBeNull();
+    expect(
+      screen.getByText("This epic's comment room is still being checked."),
+    ).not.toBeNull();
+    expect(
+      screen.queryByText("This epic is still uploading to the cloud."),
+    ).toBeNull();
+    expect(listThreadsCalls).toBe(0);
   });
 });
 
@@ -363,7 +644,9 @@ describe("<CommentSidebar /> state-lane threads", () => {
       threads: [threadFixtureWith("poll-thread", "the poll's answer")],
     });
 
-    renderSidebar([threadFixtureWith("lane-thread", "the lane's answer")]);
+    renderSidebar(defaultEpicHandle, [
+      threadFixtureWith("lane-thread", "the lane's answer"),
+    ]);
 
     expect(await screen.findByText("the lane's answer")).not.toBeNull();
     expect(screen.queryByText("the poll's answer")).toBeNull();
@@ -372,7 +655,7 @@ describe("<CommentSidebar /> state-lane threads", () => {
   it("renders the poll's thread when the lane has said nothing - the ordinary case on a poll-only host", async () => {
     respondToListThreads = () => ({ threads: [threadFixture()] });
 
-    renderSidebar(null);
+    renderSidebar(defaultEpicHandle, null);
 
     expect(await screen.findByText(QUOTED_TEXT)).not.toBeNull();
   });
@@ -386,7 +669,7 @@ describe("<CommentSidebar /> state-lane threads", () => {
         resolveResponse = resolve;
       });
 
-    renderSidebar(null);
+    renderSidebar(defaultEpicHandle, null);
 
     await waitFor(() => {
       expect(loadingPanel()).not.toBeNull();
@@ -408,7 +691,7 @@ describe("<CommentSidebar /> state-lane threads", () => {
   it("renders the empty state off an empty lane answer, even with the poll erroring", async () => {
     respondToListThreads = unavailableHost;
 
-    renderSidebar([]);
+    renderSidebar(defaultEpicHandle, []);
 
     expect(await screen.findByText(/No open comments/)).not.toBeNull();
     expect(emptyPanel()).not.toBeNull();
@@ -418,7 +701,9 @@ describe("<CommentSidebar /> state-lane threads", () => {
   it("keeps a lane-served list on screen through a poll outage", async () => {
     respondToListThreads = unavailableHost;
 
-    renderSidebar([threadFixtureWith("lane-thread", "the lane's answer")]);
+    renderSidebar(defaultEpicHandle, [
+      threadFixtureWith("lane-thread", "the lane's answer"),
+    ]);
 
     expect(await screen.findByText("the lane's answer")).not.toBeNull();
     expect(unavailablePanel()).toBeNull();

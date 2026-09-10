@@ -14,6 +14,7 @@ import {
 import {
   publishedHostProcessGone,
   readHostPidMetadata,
+  readHostPidMetadataEvidence,
   removeHostPidMetadata,
 } from "../../host/pid-metadata";
 import {
@@ -96,7 +97,8 @@ export function createWindowsController(
     install: (options) => installService(options, run),
     uninstall: (options) => uninstallService(options, run, deps),
     status: (label) => statusService(label),
-    stop: (label) => stopService(label, run, deps),
+    stop: (label, options) =>
+      stopService(label, run, deps, options.onHostAddressed ?? null),
     start: (label) => startService(label, run),
     restart: (label) => restartService(label, run, deps),
     hostStartAdoptionLabel: (label) => Promise.resolve(label.id),
@@ -106,7 +108,7 @@ export function createWindowsController(
     // never set: `stopService` kills the tree and waits, so nothing survives
     // to need a recycle.
     stopForRestart: async (label) => {
-      await stopService(label, run, deps);
+      await stopService(label, run, deps, null);
       return { forcedRecycle: false };
     },
     relaunchAfterRestart: (label) => startService(label, run),
@@ -389,7 +391,14 @@ async function stopService(
   label: ServiceLabel,
   run: ProcessRunner,
   deps: WindowsControllerDeps,
+  // See `StopServiceOptions.onHostAddressed`: reported from this route's own
+  // read of the record, immediately before the task is ended.
+  onHostAddressed: (() => void) | null,
 ): Promise<void> {
+  const before = await readHostPidMetadataEvidence(label.environment);
+  if (before.kind === "read" && !publishedHostProcessGone(before.metadata)) {
+    onHostAddressed?.();
+  }
   await run("schtasks", ["/End", "/TN", windowsTaskName(label)], {
     env: undefined,
     cwd: undefined,

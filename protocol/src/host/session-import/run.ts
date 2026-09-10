@@ -45,6 +45,7 @@ import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   guiHarnessIdSchema,
+  guiHarnessIdSchemaPreAntigravity,
   permissionModeSchema,
 } from "@traycer/protocol/persistence/epic/foundation";
 import {
@@ -101,43 +102,71 @@ export type SessionImportRunCounts = z.infer<
   typeof sessionImportRunCountsSchema
 >;
 
+// The three arms that carry no harness id, shared verbatim by the live union
+// and the frozen @1.0 copy below - only the `progress` arm's enum differs
+// between them, so naming these keeps the two unions from drifting in any
+// other respect.
+const sessionImportRunStartedFrameSchema = z.object({
+  kind: z.literal("started"),
+  runId: z.string().min(1),
+  total: z.number().int().nonnegative(),
+  // False when this subscription STARTED the run, true when it attached to
+  // one already in flight (see the module doc). The wizard needs the
+  // difference: an attach ignores the `selections` it just submitted, and the
+  // `progress` frames that follow are a replay of work already done, not
+  // live progress on this client's request.
+  attached: z.boolean(),
+  hasBinaryPayload: z.literal(false),
+});
+
+const sessionImportRunCompleteFrameSchema = z.object({
+  kind: z.literal("complete"),
+  runId: z.string().min(1),
+  counts: sessionImportRunCountsSchema,
+  hasBinaryPayload: z.literal(false),
+});
+
+const sessionImportRunPongFrameSchema = z.object({
+  kind: z.literal("pong"),
+  hasBinaryPayload: z.literal(false),
+});
+
+const sessionImportRunProgressFrameSchema = z.object({
+  kind: z.literal("progress"),
+  runId: z.string().min(1),
+  index: z.number().int().nonnegative(),
+  total: z.number().int().nonnegative(),
+  harness: guiHarnessIdSchema,
+  nativeSessionId: z.string().min(1),
+  outcome: sessionImportOutcomeSchema,
+  hasBinaryPayload: z.literal(false),
+});
+
 export const sessionImportRunServerFrameSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("started"),
-    runId: z.string().min(1),
-    total: z.number().int().nonnegative(),
-    // False when this subscription STARTED the run, true when it attached to
-    // one already in flight (see the module doc). The wizard needs the
-    // difference: an attach ignores the `selections` it just submitted, and the
-    // `progress` frames that follow are a replay of work already done, not
-    // live progress on this client's request.
-    attached: z.boolean(),
-    hasBinaryPayload: z.literal(false),
-  }),
-  z.object({
-    kind: z.literal("progress"),
-    runId: z.string().min(1),
-    index: z.number().int().nonnegative(),
-    total: z.number().int().nonnegative(),
-    harness: guiHarnessIdSchema,
-    nativeSessionId: z.string().min(1),
-    outcome: sessionImportOutcomeSchema,
-    hasBinaryPayload: z.literal(false),
-  }),
-  z.object({
-    kind: z.literal("complete"),
-    runId: z.string().min(1),
-    counts: sessionImportRunCountsSchema,
-    hasBinaryPayload: z.literal(false),
-  }),
-  z.object({
-    kind: z.literal("pong"),
-    hasBinaryPayload: z.literal(false),
-  }),
+  sessionImportRunStartedFrameSchema,
+  sessionImportRunProgressFrameSchema,
+  sessionImportRunCompleteFrameSchema,
+  sessionImportRunPongFrameSchema,
 ]);
 export type SessionImportRunServerFrame = z.infer<
   typeof sessionImportRunServerFrameSchema
 >;
+
+/**
+ * Frozen server-frame shape as `cli-v1.3.0` / `host-v1.3.0` shipped @1.0: the
+ * `progress` arm's harness is pinned to the twenty ids those peers strict-
+ * decode. Streams carry no downgrade bridge, so a host must GATE EMISSION on
+ * the negotiated minor rather than expecting a projection to save it.
+ */
+export const sessionImportRunServerFrameSchemaPreAntigravity =
+  z.discriminatedUnion("kind", [
+    sessionImportRunStartedFrameSchema,
+    sessionImportRunProgressFrameSchema.extend({
+      harness: guiHarnessIdSchemaPreAntigravity,
+    }),
+    sessionImportRunCompleteFrameSchema,
+    sessionImportRunPongFrameSchema,
+  ]);
 
 export const sessionImportRunClientFrameSchema = z.discriminatedUnion("kind", [
   z.object({
@@ -152,6 +181,19 @@ export type SessionImportRunClientFrame = z.infer<
 export const sessionImportRunV10 = defineStreamRpcContract({
   method: "sessionImport.run",
   schemaVersion: { major: 1, minor: 0 } as const,
+  openRequestSchema: sessionImportRunOpenRequestSchema,
+  serverFrameSchema: sessionImportRunServerFrameSchemaPreAntigravity,
+  clientFrameSchema: sessionImportRunClientFrameSchema,
+});
+
+/**
+ * @1.1 is the first minor whose `progress` frames may name Antigravity. The
+ * open request already accepted the id (client->host slots may widen freely),
+ * so this minor only widens what the host is allowed to REPORT back.
+ */
+export const sessionImportRunV11 = defineStreamRpcContract({
+  method: "sessionImport.run",
+  schemaVersion: { major: 1, minor: 1 } as const,
   openRequestSchema: sessionImportRunOpenRequestSchema,
   serverFrameSchema: sessionImportRunServerFrameSchema,
   clientFrameSchema: sessionImportRunClientFrameSchema,

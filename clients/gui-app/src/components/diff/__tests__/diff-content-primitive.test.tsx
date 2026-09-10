@@ -431,6 +431,9 @@ describe("<DiffContentPrimitive />", () => {
       />,
     );
     const firstHost = await screen.findByTestId("file-diff");
+    await waitFor(() => {
+      expect(captured.mountCount).toBeGreaterThan(0);
+    });
     const mountsBefore = captured.mountCount;
     const unmountsBefore = captured.unmountCount;
 

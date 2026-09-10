@@ -6,7 +6,12 @@ import type {
   InterviewQuestion,
   InterviewQuestionOption,
 } from "@traycer/protocol/persistence/epic/schemas";
-import { InterviewOptionDetailsButton } from "@/components/chat/segments/interview-visuals";
+import {
+  InterviewOptionDetailsButton,
+  InterviewOptionDetailsRegion,
+} from "@/components/chat/segments/interview-visuals";
+import { useInterviewOptionDetailsDisclosure } from "@/components/chat/segments/use-interview-option-details-disclosure";
+import { questionAllowsCustomAnswer } from "@/components/chat/segments/interview-custom-answer";
 import { isMobileApp } from "@/lib/mobile-app";
 import { cn } from "@/lib/utils";
 import type { DraftAnswer } from "./interview-draft";
@@ -101,7 +106,14 @@ export function QuestionPage(props: QuestionPageProps) {
 
   // A question with no options is pure free-text: a single textarea that
   // focuses itself so the user can type right away.
+  //
+  // Withdrawing free text leaves such a question with no answer channel at
+  // all, which the raiser is not supposed to produce (see
+  // `allowsCustomAnswer`) - options are the only other channel and there are
+  // none. Render no input rather than a field whose contents provably cannot
+  // be delivered; Skip stays available, so the card is still resolvable.
   if (question.options.length === 0) {
+    if (!questionAllowsCustomAnswer(question)) return null;
     return (
       <textarea
         ref={focusFieldIfActive}
@@ -139,14 +151,16 @@ export function QuestionPage(props: QuestionPageProps) {
           );
         })}
       </ul>
-      <OtherRow
-        selected={draft.otherSelected}
-        value={draft.otherText}
-        disabled={disabled}
-        inputRef={focusFieldIfActive}
-        onSelect={onToggleOther}
-        onValueChange={onOtherTextChange}
-      />
+      {questionAllowsCustomAnswer(question) ? (
+        <OtherRow
+          selected={draft.otherSelected}
+          value={draft.otherText}
+          disabled={disabled}
+          inputRef={focusFieldIfActive}
+          onSelect={onToggleOther}
+          onValueChange={onOtherTextChange}
+        />
+      ) : null}
     </div>
   );
 }
@@ -239,13 +253,14 @@ function OptionRow(props: OptionRowProps) {
     onToggle,
   } = props;
   const shouldReduceMotion = useReducedMotion();
+  const disclosure = useInterviewOptionDetailsDisclosure();
   return (
     <m.div
       animate={
         pending && !shouldReduceMotion ? { scale: [1, 1.015, 1] } : { scale: 1 }
       }
       transition={QUESTION_TRANSITION}
-      className="w-full"
+      className="flex w-full flex-col gap-1.5"
     >
       <div
         className={cn(
@@ -286,11 +301,15 @@ function OptionRow(props: OptionRowProps) {
             option={option}
             className="pointer-events-auto relative z-20 self-center"
             pinnedDetailRegionId={null}
+            disclosure={disclosure}
           />
         )}
         <span aria-hidden className="pointer-events-none min-w-0 flex-1" />
         {badge}
       </div>
+      {option === null ? null : (
+        <InterviewOptionDetailsRegion option={option} disclosure={disclosure} />
+      )}
     </m.div>
   );
 }

@@ -18,9 +18,11 @@ import { CredentialLeaseReleasedError } from "@traycer/protocol/auth/request-con
 import type { OpenFrameBearerSource } from "@traycer-clients/shared/auth/bearer-source";
 import type { TransportEvidenceReporter } from "@traycer-clients/shared/host-selection/transport-evidence";
 import {
+  HostMethodVersionUnsatisfiedError,
   HostRequestAbortedError,
   HostRpcError,
   HostTransportFailureError,
+  negotiatedVersionMeetsRequirement,
   RetryableTransportError,
   type HostRequestAuthority,
   type HostRequestOptions,
@@ -373,6 +375,14 @@ export class WsRpcClient<
         optionalManifest: clientManifest.optionalManifest,
         capabilities: [CLIENT_CAPABILITY_EPIC_WRITE_PATH_V1],
         clientIdentity: this.clientIdentity,
+        // Additive and needs no negotiation to send: an older host's copy of
+        // the open-frame schema strips the key (zod objects are non-strict) and
+        // behaves exactly as it does today. `undefined` travels as an absent
+        // key, which is the same "does not speak verdicts" signal a released
+        // client sends - so an authority built before this existed is
+        // indistinguishable on the wire from a client that predates it, which
+        // is the correct reading of both.
+        cloudAuthorized: authority.cloudAuthorized?.(),
       });
 
       // Handshake stays on the transport default even when the caller
@@ -407,6 +417,27 @@ export class WsRpcClient<
       // truthfully which methods the host has, and the gate wants that fact
       // even when this particular call is about to fail.
       recordNegotiatedHostManifest(selected.hostId, mergedHostManifest);
+      // The caller's version floor, answered by THIS connection rather than by
+      // whatever the registry above remembers. First check after the manifest
+      // lands and before anything is written: the point of carrying the
+      // requirement on the request is that no frame goes out to a host that
+      // does not meet it.
+      const requirement = options.requiredHostMethodVersion;
+      if (
+        requirement !== null &&
+        !negotiatedVersionMeetsRequirement(
+          mergedHostManifest[requirement.method],
+          requirement,
+        )
+      ) {
+        throw new HostMethodVersionUnsatisfiedError({
+          requirement,
+          negotiated: mergedHostManifest[requirement.method],
+          requestId,
+          method,
+          hostId: selected.hostId,
+        });
+      }
       const clientCanonical = mergedClientManifest[method];
       const hostCanonical = mergedHostManifest[method];
       const wireIdempotencyKey =

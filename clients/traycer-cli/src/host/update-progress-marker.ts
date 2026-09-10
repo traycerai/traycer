@@ -614,6 +614,26 @@ export function updateProgressRecordHasProvenLiveWriter(
 }
 
 /**
+ * Whether THIS process wrote the record.
+ *
+ * The executor mirrors its own attempt writes onto this marker, so "a marker
+ * exists" is the normal state during an update and says nothing on its own.
+ * Ticket 07's detective half needs the other question - is a marker being
+ * driven by somebody ELSE - and that is what this separates out.
+ *
+ * Identity, not liveness: `writerId` is minted once per process, so a record
+ * carrying ours was written by us however many times we have rewritten it. A
+ * `null` writerId is NOT ours - it is a marker from a CLI old enough to
+ * predate the field, which is exactly the lock-blind actor the fence exists
+ * to detect.
+ */
+export function updateProgressRecordWrittenByThisProcess(
+  record: HostUpdateProgress,
+): boolean {
+  return record.writerId === PROGRESS_WRITER_ID;
+}
+
+/**
  * The pre-lock publish: claim the live path for `next` WITHOUT overwriting
  * an update that may be in progress.
  *

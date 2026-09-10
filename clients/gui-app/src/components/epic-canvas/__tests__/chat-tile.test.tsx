@@ -54,11 +54,14 @@ const EMPTY_BROWSER_SESSIONS_STATE: BrowserSessionsState = {
   lifecycle: "live",
   inventoryReady: true,
   canMaterializeElectron: false,
+  connectionGeneration: 0,
   items: [],
   errorMessage: null,
   retry: () => undefined,
   openTab: () => Promise.reject(new Error("not used")),
   closeTab: () => Promise.resolve(),
+  attachTab: () => Promise.reject(new Error("not used")),
+  moveTab: () => Promise.reject(new Error("not used")),
 };
 
 vi.mock(
@@ -938,6 +941,7 @@ function streamingInterviewAssistantMessage(): Message {
               { label: "Option B", description: null, preview: null },
             ],
             multiSelect: false,
+            allowsCustomAnswer: null,
           },
         ],
         answers: [],
@@ -988,6 +992,7 @@ function answeredInterviewAssistantMessage(): Message {
               { label: "Option B", description: null, preview: null },
             ],
             multiSelect: false,
+            allowsCustomAnswer: null,
           },
         ],
         answers: [

@@ -32,7 +32,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { epicStateSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/state-subscribe";
-import { epicStatusSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/status-subscribe";
+import { epicStatusSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/status-subscribe";
 import type { EpicStatusSnapshotFrame } from "@traycer-clients/shared/host-transport/epic-status-stream-client";
 import type { EpicStateSnapshotFrame } from "@traycer-clients/shared/host-transport/epic-state-stream-client";
 import type {
@@ -88,7 +88,7 @@ interface LaneRig {
 }
 
 function statusSnapshot(authorityEpoch: string): EpicStatusSnapshotFrame {
-  const parsed = epicStatusSubscribeServerFrameSchemaV10.parse({
+  const parsed = epicStatusSubscribeServerFrameSchemaV11.parse({
     kind: "snapshot",
     hasBinaryPayload: false,
     authorityEpoch,
@@ -98,6 +98,16 @@ function statusSnapshot(authorityEpoch: string): EpicStatusSnapshotFrame {
     // still shut writes for a second, unrelated reason.
     permissionRole: "editor",
     cloudSyncStatus: "connected",
+    // The durability leg, and it has to be STATED. This lane reports
+    // `peerSpeaksDurabilityLegs: true` unconditionally (see
+    // `durabilityLegsOf` in `epic-status-lane-adapter.ts`), so an omitted
+    // `durability` here is not "a peer that predates the datum" - it is the
+    // wire's stated UNKNOWN, and `syncedClaimIsHonest` refuses the green claim
+    // over it. A frame without this key made the pill read `connected`, which
+    // is the correct rendering of that frame and not the state this case is
+    // about: its subject is the transport legs across an authority
+    // replacement, over an epic that really is durable in the cloud.
+    durability: "cloud",
     dirty: false,
     migration: null,
     deletion: { state: "none" },
@@ -199,7 +209,7 @@ function openLaneRig(options: LaneRigOptions): LaneRig {
     if (statusCallbacks === null) {
       throw new Error("the status lane factory was not invoked");
     }
-    statusCallbacks.onSnapshot(statusSnapshot(authorityEpoch));
+    statusCallbacks.onSnapshot(statusSnapshot(authorityEpoch), true);
   }
 
   function deliverStateSnapshot(
@@ -261,6 +271,12 @@ function pillStateOf(state: OpenEpicState): EpicSyncPillState {
     hasUnsyncedDocClassChanges: state.isDirty,
     writeCommands: summarizeEpicWriteCommands(state.writeCommands),
     hasConnectedOnce: state.hasConnectedOnce,
+    // The durability and freshness legs, mapped exactly as
+    // `useEpicSyncPillState` maps them (`epic-selectors.ts`).
+    durability: state.durabilityStatus ?? undefined,
+    localProtection: state.localProtection ?? undefined,
+    durabilityLegsNegotiated: state.durabilityLegsNegotiated,
+    cloudFreshness: state.cloudFreshness ?? undefined,
   });
 }
 

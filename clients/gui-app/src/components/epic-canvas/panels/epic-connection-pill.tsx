@@ -9,6 +9,7 @@ import {
 } from "@/lib/epic-selectors";
 import { useLinkDownTooLong } from "@/components/epic-canvas/panels/use-link-down-too-long";
 import { useCloudLinkGrace } from "@/components/epic-canvas/panels/use-cloud-link-grace";
+import type { EpicDurabilityPlane } from "@/components/epic-canvas/panels/epic-durability-plane";
 import type {
   EpicSyncPillState,
   EpicWriteCommandAlert,
@@ -35,11 +36,15 @@ import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 
 /**
  * Small inline status pill that the active Epic header renders. It selects the
- * highest-severity signal across artifact/Yjs durability, chat publication,
- * remote-terminal discovery, the communication-graph feed, and agent-activity
- * presence. Secondary-plane failures live here rather than only in the panel
- * whose data happened to expose them - or, in the graph's case, captioned onto
- * every agent node, and in presence's, nowhere at all.
+ * highest-severity signal across artifact/Yjs durability, the host's routing
+ * truth for the epic (local, promoting, an offline mirror, a stale local copy
+ * - `epic-durability-plane.ts`), chat publication, remote-terminal
+ * discovery, the communication-graph feed, and agent-activity presence.
+ * Secondary-plane failures live here rather than only in the panel whose data
+ * happened to expose them - or, in the graph's case, captioned onto every
+ * agent node, and in presence's, nowhere at all. The routing plane used to be
+ * its own pill beside this one, saying everything inline; it is one dot now,
+ * and its sentence rides the hover like every other secondary plane.
  *
  * It is deliberately NOT a connection indicator. It used to be one - it read
  * the renderer↔host stream status alone - and that is why it read "All changes
@@ -71,6 +76,13 @@ import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
  */
 export interface EpicConnectionPillProps {
   readonly epicId: string;
+  /**
+   * The host's routing truth for the epic, or `null` when there is nothing
+   * to say (or before the snapshot that would say it has loaded - the status
+   * row gates it, because a not-yet-loaded epic must not read as "Storage
+   * status unknown" for the second it takes to load).
+   */
+  readonly durability: EpicDurabilityPlane | null;
 }
 
 export function EpicConnectionPill(props: EpicConnectionPillProps) {
@@ -93,7 +105,8 @@ export function EpicConnectionPill(props: EpicConnectionPillProps) {
   const linkDownTooLong = useLinkDownTooLong(derived, hasFreshCloudSyncStatus);
   const chatBackupStatus = useEpicChatBackupStatus(props.epicId);
   const commGraphFeedHealth = useCommGraphFeedHealth(props.epicId);
-  const canvasHostId = useCanvasHostId() ?? UNKNOWN_HOST_PLACEHOLDER;
+  const resolvedCanvasHostId = useCanvasHostId();
+  const canvasHostId = resolvedCanvasHostId ?? UNKNOWN_HOST_PLACEHOLDER;
   const terminalAuthority = useHostPlainTerminalAuthority({
     hostId: canvasHostId,
     scope: { kind: "epic", epicId: props.epicId },
@@ -103,6 +116,10 @@ export function EpicConnectionPill(props: EpicConnectionPillProps) {
       terminalAuthority.coverage === "partial-serving-host",
     JSON.stringify([terminalAuthority.hostId, props.epicId]),
   );
+  // No host argument: this reports on the DATA, not a machine. "Agent status
+  // may be stale" names no host, and the hook resolves the stream carrying
+  // this Epic's activity itself - passing the canvas host here would amber
+  // permanently on any remote-bound canvas.
   const presenceDegraded = useAgentActivityPresenceDegraded();
   // Input (v), read as its own plane. It bypasses `useSyncPillDisplayState`
   // entirely: the settle hold exists to stop routine save churn from strobing,
@@ -112,6 +129,7 @@ export function EpicConnectionPill(props: EpicConnectionPillProps) {
   // verdict so it can truthfully say synced during the positive settle hold.
   const secondarySignals = {
     writeCommandAlert,
+    durability: props.durability,
     chatBackupStatus,
     terminalCatalogUnavailable,
     commGraphFeedHealth,
@@ -183,10 +201,15 @@ function warningAnnouncement(
   ) {
     return accessibleNameFor(selected);
   }
+  // `unprotected` is the only sync-pill state here that reports a RISK rather
+  // than a stage, so it is the one that most needs the live region: the red
+  // pill appears while focus is elsewhere, and an `aria-label` swap on an
+  // unfocused button is not announced.
   switch (state) {
     case "offlineWithUnsavedChanges":
     case "offlineWithHostPending":
     case "offlineChangesSavedLocally":
+    case "unprotected":
     case "offline":
       return accessibleNameFor(selected);
     // A routine reconnect stays silent - it announces nothing a sighted user
@@ -265,6 +288,7 @@ interface PillIndicator {
 type PillSource =
   | "artifact"
   | "write-command"
+  | "durability"
   | "chat-backup"
   | "terminal-catalog"
   | "comm-graph"
@@ -274,38 +298,50 @@ interface SelectedIndicator {
   readonly source: PillSource;
   readonly indicator: PillIndicator;
   /**
-   * Every OTHER plane that is degraded (warning or worse) right now, in
-   * source order. The visible row stays the selected plane's alone - one
-   * light, at most one label - and these ride the hover and the accessible
-   * name, so a second outage is never hidden behind the first.
+   * Every OTHER plane with something to report right now, in source order.
+   * The visible row stays the selected plane's alone - one light, at most one
+   * label - and these ride the hover and the accessible name, so a second
+   * outage is never hidden behind the first.
+   *
+   * "Something to report" is degraded (warning or worse), PLUS the durability
+   * plane at any severity: that plane already decides for itself whether it
+   * has anything to say (`deriveEpicDurabilityPlane` returns null when it does
+   * not), and the state that forced this exception is a calm one - a
+   * mirror-first cloud epic whose freshness is `local-copy` produces a steady
+   * "Local copy · never synced" that loses the light to `connected`'s
+   * activity. Dropping it left the pill saying only "Connected" over a
+   * document the protocol had just stated has never been checked against the
+   * cloud, which is the one distinction the plane was added to expose. The
+   * severity stays steady on purpose - a local copy of a cloud epic is not a
+   * fault, and pulsing the dot for an ordinary mirror-first open would be.
    */
-  readonly alsoDegraded: ReadonlyArray<PillIndicator>;
+  readonly alsoReported: ReadonlyArray<PillIndicator>;
 }
 
 /**
  * The hover copy: the selected plane's sentence, then one line per other
- * degraded plane. A single-plane case stays a plain string so the tooltip
+ * reported plane. A single-plane case stays a plain string so the tooltip
  * reads exactly as it always has.
  */
 function tooltipFor(selected: SelectedIndicator): ReactNode {
-  if (selected.alsoDegraded.length === 0) return selected.indicator.tooltip;
-  // A real list, winner first: one entry per degraded plane, in the order
+  if (selected.alsoReported.length === 0) return selected.indicator.tooltip;
+  // A real list, winner first: one entry per reported plane, in the order
   // the accessible name reads them.
   return (
     <ul className="flex flex-col gap-1">
       <li>{selected.indicator.tooltip ?? selected.indicator.ariaLabel}</li>
-      {selected.alsoDegraded.map((other) => (
+      {selected.alsoReported.map((other) => (
         <li key={other.ariaLabel}>{other.tooltip ?? other.ariaLabel}</li>
       ))}
     </ul>
   );
 }
 
-/** The accessible name and live announcement: every degraded plane, selected first. */
+/** The accessible name and live announcement: every reported plane, selected first. */
 function accessibleNameFor(selected: SelectedIndicator): string {
   return [
     selected.indicator.ariaLabel,
-    ...selected.alsoDegraded.map((other) => other.ariaLabel),
+    ...selected.alsoReported.map((other) => other.ariaLabel),
   ].join(" ");
 }
 
@@ -406,13 +442,14 @@ const SEVERITY_RANK: Record<PillIndicator["severity"], number> = {
 
 /**
  * The secondary planes weighed against the artifact/Yjs verdict. An object
- * rather than a parameter list: there are six of them now, and a positional
+ * rather than a parameter list: there are seven of them now, and a positional
  * call site stops being readable (and trips `max-params`) well before the
  * pill runs out of planes to report.
  */
 interface PillSignals {
   readonly artifactIndicator: PillIndicator;
   readonly writeCommandAlert: EpicWriteCommandAlert | null;
+  readonly durability: EpicDurabilityPlane | null;
   readonly chatBackupStatus: EpicChatBackupStatus | null;
   readonly terminalCatalogUnavailable: boolean;
   readonly commGraphFeedHealth: CommGraphFeedHealth | null;
@@ -444,6 +481,15 @@ function highestSeverityIndicator(signals: PillSignals): SelectedIndicator {
     secondary.push({
       source: "write-command",
       indicator: indicatorForWriteCommandAlert(signals.writeCommandAlert),
+    });
+  }
+  // Second: it is about the user's DATA (where the epic lives, whether this
+  // session's edits are held anywhere) where every plane below is about a
+  // feed that heals by itself.
+  if (signals.durability !== null) {
+    secondary.push({
+      source: "durability",
+      indicator: indicatorForDurability(signals.durability),
     });
   }
   if (signals.chatBackupStatus !== null) {
@@ -480,17 +526,19 @@ function highestSeverityIndicator(signals: PillSignals): SelectedIndicator {
     }
   }
   // One light, at most one label: the others are not dropped, they move to
-  // the hover and the accessible name (see `SelectedIndicator.alsoDegraded`).
-  // Only degraded planes ride along - a plane that is merely busy ("Saving
-  // changes", "Backing up chats") is not a second outage to report.
-  const alsoDegraded = [artifact, ...secondary]
+  // the hover and the accessible name (see `SelectedIndicator.alsoReported`).
+  // Degraded planes ride along - a plane that is merely busy ("Saving
+  // changes", "Backing up chats") is not a second outage to report - and so
+  // does the durability plane at any severity, for the reason given there.
+  const alsoReported = [artifact, ...secondary]
     .filter(
       (candidate) =>
         candidate !== selected &&
-        SEVERITY_RANK[candidate.indicator.severity] >= SEVERITY_RANK.warning,
+        (SEVERITY_RANK[candidate.indicator.severity] >= SEVERITY_RANK.warning ||
+          candidate.source === "durability"),
     )
     .map((candidate) => candidate.indicator);
-  return { ...selected, alsoDegraded };
+  return { ...selected, alsoReported };
 }
 
 /**
@@ -548,6 +596,46 @@ function indicatorForWriteCommandAlert(
     pulse: null,
     tooltip: copy.message,
     ariaLabel: copy.message,
+  };
+}
+
+/**
+ * Dot-only, deliberately: the routing truth used to be its own pill beside
+ * this one and said its whole three-clause reading inline for the length of
+ * an outage. The sentence is the hover and the accessible name now, and the
+ * dot keeps the pill's palette - red for a stated loss, amber for doubt, the
+ * idle pulse for a promotion or reconciliation in flight. A steady reading
+ * ("Stored locally") is never selected over the artifact leg's own steady
+ * verdict, which already says the same thing in its tooltip.
+ */
+const DURABILITY_DOT_CLASS: Readonly<
+  Record<EpicDurabilityPlane["severity"], string>
+> = {
+  steady: "",
+  activity: "",
+  warning: "bg-amber-500",
+  danger: "bg-red-500",
+};
+
+const DURABILITY_PULSE: Readonly<
+  Record<EpicDurabilityPlane["severity"], PillIndicator["pulse"]>
+> = {
+  steady: "active",
+  activity: "idle",
+  warning: null,
+  danger: null,
+};
+
+function indicatorForDurability(plane: EpicDurabilityPlane): PillIndicator {
+  return {
+    severity: plane.severity,
+    containerClassName: QUIET_CONTAINER_CLASS,
+    dotClassName: DURABILITY_DOT_CLASS[plane.severity],
+    label: null,
+    showAgentSpinner: false,
+    pulse: DURABILITY_PULSE[plane.severity],
+    tooltip: plane.sentence,
+    ariaLabel: plane.sentence,
   };
 }
 
@@ -723,6 +811,41 @@ function indicatorFor(
           "The cloud connection is down. Your changes are saved on this device and sync when it is back.",
         ariaLabel:
           "Offline. Changes are saved on this device and sync when the connection is back.",
+      };
+    // The epic is not in the cloud at all. This used to render as `synced`
+    // — "All changes synced", beside the durability badge's "Stored
+    // locally", about an epic no cloud has ever seen. The copy is now the
+    // true statement, and it agrees with the badge instead of contradicting
+    // it inches away.
+    case "storedLocally":
+      return {
+        severity: "steady",
+        containerClassName: QUIET_CONTAINER_CLASS,
+        dotClassName: "",
+        label: null,
+        showAgentSpinner: false,
+        pulse: "active",
+        tooltip: "Saved on this device. This epic is not in the cloud yet.",
+        ariaLabel: "Saved on this device. This epic is not in the cloud yet.",
+      };
+    // The one alerting state that is about RISK rather than progress: no
+    // local WAL and no cloud link, so an edit made now exists only in memory
+    // and does not survive a quit — graceful included. Red rather than
+    // amber, because unlike every other offline state nothing here is
+    // "pending"; there is nothing holding the work at all.
+    case "unprotected":
+      return {
+        severity: "danger",
+        containerClassName:
+          "rounded-md bg-destructive/10 px-2 py-0.5 text-destructive",
+        dotClassName: "bg-destructive",
+        label: "Offline — changes not saved",
+        showAgentSpinner: false,
+        pulse: null,
+        tooltip:
+          "The cloud connection is down and this session has no local backup, so recent changes are only in this window. Reconnect, or copy anything you cannot lose.",
+        ariaLabel:
+          "Offline and unprotected. Recent changes are only in this window and will be lost if it closes.",
       };
     // The stream is up but this cycle has not supplied enough evidence for a
     // cloud/durability claim. Keep the copy factual and intentionally avoid

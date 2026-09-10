@@ -5,7 +5,10 @@ import {
   ChatStreamClient,
   type ChatStreamCallbacks,
 } from "@traycer-clients/shared/host-transport/chat-stream-client";
-import type { IStreamClient } from "@traycer-clients/shared/host-transport/i-stream-client";
+import type {
+  IStreamClient,
+  StreamParamsProvider,
+} from "@traycer-clients/shared/host-transport/i-stream-client";
 import type { ParamsOf } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type {
   IStreamSession,
@@ -131,7 +134,7 @@ class FakeChatStreamRpcClient implements IStreamClient<HostStreamRpcRegistry> {
     Method extends keyof HostStreamRpcRegistry & string,
   >(
     _method: Method,
-    _paramsProvider: () => ParamsOf<HostStreamRpcRegistry, Method>,
+    _paramsProvider: StreamParamsProvider<HostStreamRpcRegistry, Method>,
   ): IStreamSession {
     throw new Error(
       "FakeChatStreamRpcClient.subscribeWithParamsProvider is unused by ChatStreamClient",

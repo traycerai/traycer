@@ -8,6 +8,7 @@ import {
   PaneVisibilityContext,
 } from "@/components/epic-tabs/pane-visibility-context";
 import {
+  BrowserSessionsHostBoundary,
   BrowserSessionsHostProvider,
   BrowserSessionsProvider,
 } from "@/components/epic-canvas/renderers/browser-sessions-provider";
@@ -16,11 +17,19 @@ import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
+import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import {
   hostRpcRegistry,
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
+import {
+  epicScope,
+  independentScope,
+  openRequest,
+  sessionInfo,
+  tabInfo,
+} from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
 
 const hookState = vi.hoisted(() => ({
   streamClient: null as FakeStreamClient | null,
@@ -84,6 +93,14 @@ vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
   useEpicSessionHostClient: () => hookState.hostClient,
 }));
 
+// `BrowserSessionsHostBoundary` resolves its own client by host id, and the
+// real hook reads the host binding and the app-wide client - neither of which
+// this suite stands up. Same fake the epic provider is handed, so a boundary
+// that decides to wrap opens a stream through the same transport.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => hookState.hostClient,
+}));
+
 const openTransport = vi.hoisted(
   () =>
     (hostId: string): FakeDurableTransport => {
@@ -119,6 +136,9 @@ vi.mock("@/providers/use-runner-host", () => ({
  * frame is discarded until the stream reports `open` (provider lifecycle
  * `live`) - matching host behavior that drops pre-live readiness frames.
  */
+/** What a host serving the live `browser.sessions` line negotiates. */
+const LIVE_BROWSER_STREAM_VERSION: SchemaVersion = { major: 2, minor: 0 };
+
 class FakeStreamSession {
   readonly sentFrames: Array<Record<string, unknown>> = [];
   readonly droppedFrames: Array<Record<string, unknown>> = [];
@@ -173,6 +193,11 @@ class FakeStreamSession {
 
   close(): void {
     this.closed = true;
+  }
+
+  /** A peer on the live line; the wrapper reads this to pick lift or not. */
+  getNegotiatedSchemaVersion(): SchemaVersion | null {
+    return LIVE_BROWSER_STREAM_VERSION;
   }
 
   emitStatus(status: StreamConnectionStatus): void {
@@ -234,6 +259,26 @@ class FakeStreamClient {
       params,
     });
     return session;
+  }
+
+  // These three are one seam, and a double must answer all three: the browser
+  // wrappers open through `subscribeWithParamsProvider` (the open request is
+  // shaped for the negotiated major) and through `subscribeAtVersion` for the
+  // `independent` scope, which pins `@2`. A double answering only `subscribe`
+  // sends this suite down a path production never takes.
+  subscribeWithParamsProvider(
+    method: string,
+    paramsProvider: (onWireVersion: SchemaVersion | null) => unknown,
+  ): FakeStreamSession {
+    return this.subscribe(method, paramsProvider(LIVE_BROWSER_STREAM_VERSION));
+  }
+
+  subscribeAtVersion(
+    method: string,
+    _schemaVersion: SchemaVersion,
+    params: unknown,
+  ): FakeStreamSession {
+    return this.subscribe(method, params);
   }
 
   setEndpoint(endpoint: string): void {
@@ -438,15 +483,12 @@ function browserSessionFixture(
   hostId: string,
   sessionId: string,
 ): BrowserSessionInfo {
-  return {
+  return sessionInfo({
     sessionId,
-    epicId: "epic-1",
     hostId,
-    profile: "primary",
     lastActivityAt: 2,
     runtime: { kind: "electron", revision: 0 },
-    tabs: [],
-  };
+  });
 }
 
 describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
@@ -467,9 +509,53 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
     expect(client?.subscribes).toEqual([
       {
         method: "browser.sessions",
-        params: { epicId: "epic-1" },
+        params: openRequest({}),
       },
     ]);
+  });
+
+  it("mounts its own provider for an independent scope on the canvas host", async () => {
+    // The short-circuit exists so a boundary for the canvas host does not
+    // re-wrap the stream the canvas already provides. That stream is
+    // EPIC-scoped, so matching the host alone is not enough to reuse it: an
+    // independent-scope caller falling through would silently read the epic's
+    // inventory instead of the device's. Inert today - every call site passes
+    // epic scope - which is exactly why it needs a test rather than a reader
+    // noticing later.
+    render(
+      <BrowserSessionsHostBoundary
+        hostId="host-test"
+        scope={independentScope()}
+      >
+        <SharedProbe id="independent" />
+      </BrowserSessionsHostBoundary>,
+    );
+
+    await waitFor(() => {
+      expect(hookState.streamClient?.subscribes).toEqual([
+        {
+          method: "browser.sessions",
+          params: openRequest({ scope: independentScope() }),
+        },
+      ]);
+    });
+  });
+
+  it("still falls through for an epic scope on the canvas host", () => {
+    // The other half of the guard: the behavior it must not change. A canvas
+    // -host, epic-scope boundary opens nothing, because the canvas already
+    // provides exactly that stream.
+    render(
+      <BrowserSessionsHostBoundary
+        hostId="host-test"
+        scope={epicScope("epic-1")}
+      >
+        <div data-testid="fell-through" />
+      </BrowserSessionsHostBoundary>,
+    );
+
+    expect(screen.getByTestId("fell-through")).toBeTruthy();
+    expect(hookState.streamClient?.subscribes).toEqual([]);
   });
 
   it("shares one coordinator until the last same-owner provider unmounts", async () => {
@@ -492,7 +578,7 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
       expect(client.subscribes).toEqual([
         {
           method: "browser.sessions",
-          params: { epicId: "epic-1" },
+          params: openRequest({}),
         },
       ]);
     });
@@ -561,6 +647,7 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
           sessionId: "session-popup",
           tabId: "tab-popup",
           source: "page",
+          openerTabId: null,
         },
         null,
       );
@@ -614,6 +701,7 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
           sessionId: "session-popup",
           tabId: "tab-popup",
           source: "page",
+          openerTabId: null,
         },
         null,
       );
@@ -653,14 +741,14 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
         <BrowserSessionsHostProvider
           hostId="host-a"
           hostClient={hostClientA}
-          epicId="epic-1"
+          scope={epicScope("epic-1")}
         >
           <SharedProbe id="host-a" />
         </BrowserSessionsHostProvider>
         <BrowserSessionsHostProvider
           hostId="host-b"
           hostClient={hostClientB}
-          epicId="epic-1"
+          scope={epicScope("epic-1")}
         >
           <SharedProbe id="host-b" />
         </BrowserSessionsHostProvider>
@@ -733,14 +821,14 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
         <BrowserSessionsHostProvider
           hostId="shared-host"
           hostClient={hostClientA}
-          epicId="epic-1"
+          scope={epicScope("epic-1")}
         >
           <SharedProbe id="owner-a" />
         </BrowserSessionsHostProvider>
         <BrowserSessionsHostProvider
           hostId="shared-host"
           hostClient={hostClientB}
-          epicId="epic-1"
+          scope={epicScope("epic-1")}
         >
           <SharedProbe id="owner-b" />
         </BrowserSessionsHostProvider>
@@ -804,7 +892,7 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
       expect(client.subscribes).toEqual([
         {
           method: "browser.sessions",
-          params: { epicId: "epic-1" },
+          params: openRequest({}),
         },
       ]);
     });
@@ -813,7 +901,7 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
       {
         endpoint: INITIAL_ENDPOINT,
         method: "browser.sessions",
-        params: { epicId: "epic-1" },
+        params: openRequest({}),
       },
     ]);
 
@@ -869,7 +957,7 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
     expect(client.wireSubscriptions[1]).toEqual({
       endpoint: RESTARTED_ENDPOINT,
       method: "browser.sessions",
-      params: { epicId: "epic-1" },
+      params: openRequest({}),
     });
     expect(stream.closed).toBe(false);
 
@@ -887,25 +975,19 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
           kind: "snapshot",
           hasBinaryPayload: false,
           sessions: [
-            {
+            sessionInfo({
               sessionId: "sess-1",
-              epicId: "epic-1",
               hostId: "host-test",
-              profile: "primary",
               lastActivityAt: 2,
               runtime: { kind: "electron", revision: 0 },
               tabs: [
-                {
+                tabInfo({
                   tabId: "tab-1",
                   url: "https://example.com",
-                  originTier: "dev",
-                  status: "ready",
                   title: "Example",
-                  viewed: false,
-                  drivenBy: [],
-                },
+                }),
               ],
-            },
+            }),
           ],
         },
         null,
@@ -934,25 +1016,19 @@ describe("BrowserSessionsProvider (ticket 08 epic subscription)", () => {
           kind: "snapshot",
           hasBinaryPayload: false,
           sessions: [
-            {
+            sessionInfo({
               sessionId: "sess-1",
-              epicId: "epic-1",
               hostId: "host-test",
-              profile: "primary",
               lastActivityAt: 2,
               runtime: { kind: "electron", revision: 0 },
               tabs: [
-                {
+                tabInfo({
                   tabId: "tab-1",
                   url: "https://example.com",
-                  originTier: "dev",
-                  status: "ready",
                   title: "Example",
-                  viewed: false,
-                  drivenBy: [],
-                },
+                }),
               ],
-            },
+            }),
           ],
         },
         null,

@@ -8,6 +8,15 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostQuery } from "@/hooks/host/use-host-query";
+import { cloudReadRefusedWithoutVerdict } from "@/lib/host/cloud-verdict-preflight";
+import { isLocalHomedEpicHandle } from "@/lib/epic-selectors";
+import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
+import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
+import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 
 /**
  * Query-key builder shared between the threads query and the mutation
@@ -81,8 +90,9 @@ export function commentThreadsShouldPoll(
  * TanStack Query backed read of the host's comment thread snapshot for a
  * single artifact. The host `epic.listCommentThreads` resolver wraps
  * `CommentThreadManager.readArtifactCommentThreads`, which is fed by the
- * Tiptap Cloud `TiptapCollabProvider` Y.Doc. Mutations from gui-app + Views
- * land in the same Y.Doc, so this query always returns the union of writers.
+ * artifact room's `TiptapCollabProvider` Y.Doc, cloud-backed or locally
+ * durable. Mutations from gui-app + Views land in the same Y.Doc, so this
+ * query always returns the union of writers.
  *
  * Cross-product writes from Views currently rely on TanStack Query's default
  * stale window plus mutation-driven invalidation; a future iteration should
@@ -95,6 +105,38 @@ export function commentThreadsShouldPoll(
  * asked the machine the app happened to be pointed at for another host's
  * threads during an A→B re-point, and keyed the cache under that host (D15).
  */
+/**
+ * The read twin of `assertCommentWriteAuthorized`, taken at DISPATCH.
+ *
+ * `enabled: !commentsUnavailable` stops the NEXT fetch. It does not stop a
+ * `refetch()` override, and it does not stop the transient-retry episode
+ * already running when the session is demoted mid-flight - and a same-user
+ * demotion retains the host credential those retries ride, so a cloud-backed
+ * thread read could still go out after the verdict was withdrawn. That is the
+ * hazard `UseHostQueryOptions.preflight` documents, and every other
+ * cloud-gated read already takes it (`cloudVerdictPreflight`).
+ *
+ * It lives on the HOOK rather than at a call site because all three mounts -
+ * the collab tile, its hover popover and the Epic sidebar - dispatch the same
+ * cloud-backed read, and only the sidebar has the availability gate.
+ *
+ * `cloudVerdictPreflight` itself is not reusable here: comments on a
+ * local-homed epic are served by a local durable room and need no verdict, so
+ * this takes the same current-then-retained local-home exemption the write
+ * gate does, read live from the same seam.
+ */
+function commentThreadReadPreflight(
+  epicId: string,
+  sessionHandle: OpenEpicStoreHandle | null,
+): () => void {
+  return () => {
+    if (authorizesCloudCapability(useAuthStore.getState().status)) return;
+    const handle = sessionHandle ?? getOpenEpicRegistry().peek(epicId);
+    if (isLocalHomedEpicHandle(handle)) return;
+    throw cloudReadRefusedWithoutVerdict("epic.listCommentThreads");
+  };
+}
+
 export function useEpicCommentThreadsForClient(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly epicId: string;
@@ -103,11 +145,13 @@ export function useEpicCommentThreadsForClient(args: {
   readonly options: UseEpicCommentThreadsOptions;
 }): UseQueryResult<ListCommentThreadsResponse, HostRpcError> {
   const { client, epicId, artifactType, artifactId, options } = args;
+  const sessionHandle = useMaybeOpenEpicHandle();
   return useHostQuery({
     cacheKeyIdentity: undefined,
     client,
     method: "epic.listCommentThreads",
     params: { epicId, artifactType, artifactId },
+    preflight: commentThreadReadPreflight(epicId, sessionHandle),
     options: {
       enabled: options.enabled,
       staleTime: 15_000,

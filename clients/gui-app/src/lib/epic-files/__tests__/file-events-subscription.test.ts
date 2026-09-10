@@ -97,7 +97,7 @@ function createFakeTransport(): FakeTransport {
       return session;
     },
     subscribeWithParamsProvider: (method, paramsProvider) => {
-      subscribeCalls.push({ method, params: paramsProvider() });
+      subscribeCalls.push({ method, params: paramsProvider(null) });
       const session = new FakeStreamSession();
       sessions.push(session);
       return session;
@@ -108,6 +108,7 @@ function createFakeTransport(): FakeTransport {
     onClosed: () => () => undefined,
     instanceId: "fake-file-events-ws-stream-client",
     notifyBearerRotated: () => undefined,
+    notifyCloudVerdictChanged: () => undefined,
     reconnectAll: () => undefined,
     isReady: () => true,
     getMethodSupport: () => "unknown",

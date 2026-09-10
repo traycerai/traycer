@@ -9,6 +9,18 @@
  * rendering hosts Online to the next identity, off connections whose
  * credential lease the transition released.
  *
+ * That was this sweep's ORIGINAL rationale and it is now only half of it.
+ * `retireAllRemoteSessions` used to stop at `refCount > 0`, so a held entry
+ * stopped ADVERTISING readiness while keeping its socket until its last
+ * consumer let go - and an open tab is exactly such a consumer. That changed
+ * what surfaces which ASK could see, and nothing about what a bound tab could
+ * still SEND, so RPCs and streams kept reaching the remote host after
+ * sign-out. The sweep now force-closes held entries too, which makes this the
+ * trigger for ENDING DISPATCH and not merely for correcting a status readout.
+ * See `retireAllRemoteSessions` for why an authorization boundary is the one
+ * case a holder does not get to keep its socket, and its deliberate asymmetry
+ * with `closeSupersededIdentities`.
+ *
  * The comparison is the context OBJECT REFERENCE, deliberately not the
  * userId:
  *

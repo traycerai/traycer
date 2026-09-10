@@ -40,6 +40,8 @@ export const HARNESS_ACCENT: Readonly<Record<GuiHarnessId, string>> = {
   omp: "#ef4444",
   huggingface: "#facc15",
   reasonix: "#0891b2",
+  // The dominant blue of Antigravity's own four-color mark, not a picked hue.
+  antigravity: "#3186ff",
 };
 
 /** A chat has no harness, so it carries the app's own accent instead. */

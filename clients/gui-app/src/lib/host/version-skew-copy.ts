@@ -11,6 +11,22 @@ export interface VersionSkewCopy {
   readonly direction: "host-outdated" | "client-outdated";
 }
 
+/**
+ * The words for "this host is the leg that has to move".
+ *
+ * Exported as a value so a surface whose evidence is NOT a version comparison
+ * can say the same thing without routing through {@link describeVersionSkew}
+ * and getting its version ordering applied. The chat tile's data-format
+ * refusal is that surface: a store written by a build newer than the host is
+ * a fact about the host's own reader, and updating the app cannot change it.
+ * One definition, so the two surfaces cannot drift apart.
+ */
+export const HOST_UPDATE_SKEW_COPY: VersionSkewCopy = {
+  title: "Host update needed",
+  action: "Update now",
+  direction: "host-outdated",
+};
+
 export interface VersionSkewInput {
   readonly hostAppVersion: string | null;
   readonly clientAppVersion: string | null;
@@ -39,11 +55,7 @@ export function describeVersionSkew(input: VersionSkewInput): VersionSkewCopy {
     input.clientAppVersion,
   );
   if (comparison === "host-behind") {
-    return {
-      title: "Host update needed",
-      action: "Update now",
-      direction: "host-outdated",
-    };
+    return HOST_UPDATE_SKEW_COPY;
   }
   if (comparison === "client-behind") {
     return {
@@ -57,11 +69,7 @@ export function describeVersionSkew(input: VersionSkewInput): VersionSkewCopy {
     input.guidance.hostShouldUpgrade &&
     !input.guidance.clientShouldUpgrade
   ) {
-    return {
-      title: "Host update needed",
-      action: "Update now",
-      direction: "host-outdated",
-    };
+    return HOST_UPDATE_SKEW_COPY;
   }
   if (
     input.guidance !== null &&
@@ -93,11 +101,31 @@ export function describeVersionSkew(input: VersionSkewInput): VersionSkewCopy {
             },
     },
   );
-  return {
-    title: "Host update needed",
-    action: "Update now",
-    direction: "host-outdated",
-  };
+  return HOST_UPDATE_SKEW_COPY;
+}
+
+/**
+ * Whether the two DTO versions ALONE prove the host is older than this app.
+ *
+ * The question a surface asks when it has no handshake verdict to go on - a
+ * stalled load rather than a refused one - and deliberately not answerable by
+ * calling {@link describeVersionSkew} with `guidance: null`: that function is
+ * a copy chooser for a failure already attributed to a skew, so its last
+ * branch WARNS and falls back to host-update copy for versions it cannot
+ * compare. A surface that is merely wondering must get `false` there, not a
+ * warning and an update offer aimed at a host that may be perfectly current.
+ *
+ * Callers that then want to say something use `describeVersionSkew` for the
+ * words, so one skew is described one way everywhere.
+ */
+export function hostIsBehindClient(input: {
+  readonly hostAppVersion: string | null;
+  readonly clientAppVersion: string | null;
+}): boolean {
+  return (
+    compareAppVersions(input.hostAppVersion, input.clientAppVersion) ===
+    "host-behind"
+  );
 }
 
 export function hostAppVersionFromDirectoryEntry(
@@ -134,8 +162,11 @@ function compareAppVersions(
   return "same";
 }
 
-function cleanVersion(version: string | null): string | null {
-  if (version === null) {
+// `undefined` as well as `null`: a directory row is built from a snapshot
+// whose version field predates some hosts and some test doubles, and a tile
+// must render (with no version verdict) rather than throw on a missing one.
+function cleanVersion(version: string | null | undefined): string | null {
+  if (version === null || version === undefined) {
     return null;
   }
   const trimmed = version.trim();

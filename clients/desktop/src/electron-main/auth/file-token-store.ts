@@ -461,7 +461,11 @@ export class FileTokenStore {
         refreshTokenOverride: null,
         signal: null,
       });
-      return { outcome: result.outcome, pair: result.credentials };
+      return {
+        outcome: result.outcome,
+        pair: result.credentials,
+        rejection: result.rejection,
+      };
     });
   }
 

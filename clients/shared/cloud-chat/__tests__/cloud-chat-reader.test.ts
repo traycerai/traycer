@@ -533,13 +533,13 @@ describe("failing closed", () => {
 
 describe("the version gate", () => {
   it("refuses a head above this reader's minimum WITHOUT fetching a part", async () => {
-    // A 1.4 writer that declares older readers cannot safely INTERPRET this
+    // A 1.5 writer that declares older readers cannot safely INTERPRET this
     // publication. The minimum may not exceed the head's own version, so
     // exercising it at all requires publishing as a future writer.
     const published = await publishCloudChat({
       ...DEFAULT_PUBLISH,
-      payloadMinor: 4,
-      minReaderVersion: { major: 1, minor: 4 },
+      payloadMinor: 5,
+      minReaderVersion: { major: 1, minor: 5 },
     });
     const port = recordingPort(servingBehaviour(published));
 

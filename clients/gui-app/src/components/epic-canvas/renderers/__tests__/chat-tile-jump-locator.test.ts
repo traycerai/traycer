@@ -3,8 +3,14 @@ import type { RowSkeletonEntry } from "@traycer/protocol/persistence/chat-transc
 import {
   coldJumpOrdinal,
   hostLocatorForJumpTarget,
+  receiptAnchorBlockId,
 } from "@/components/epic-canvas/renderers/chat-tile-jump-logic";
-import type { ChatMessage } from "@/stores/composer/chat-store";
+import type {
+  ChatMessage,
+  MessageSegment,
+  SubagentSegment,
+  ToolSegment,
+} from "@/stores/composer/chat-store";
 import {
   emptyTranscriptWindow,
   type TranscriptWindow,
@@ -70,6 +76,200 @@ function renderedRow(input: {
     steerBadge: null,
   };
 }
+
+/** Only the fields either resolver reads; the rest is inert scaffolding. */
+function toolSegment(input: {
+  readonly id: string;
+  readonly agentMessageReceipt: { readonly messageId: string } | null;
+}): ToolSegment {
+  return {
+    id: input.id,
+    kind: "tool",
+    toolName: "traycer_send_message",
+    inputSummary: null,
+    inputDetail: null,
+    taskTodoItems: null,
+    error: null,
+    agentMessageSend: null,
+    managedCommand: null,
+    agentMessageReceipt:
+      input.agentMessageReceipt === null
+        ? null
+        : {
+            receiverAgentId: "receiver-1",
+            messageId: input.agentMessageReceipt.messageId,
+          },
+    isStreaming: false,
+    endState: null,
+    stopped: false,
+    progress: null,
+    backgroundOutput: null,
+    backgroundTask: null,
+    startedAt: 0,
+    durationMs: null,
+    parentId: null,
+    imageResults: [],
+  };
+}
+
+function subagentSegment(input: {
+  readonly id: string;
+  readonly children: ReadonlyArray<ToolSegment>;
+}): SubagentSegment {
+  return {
+    id: input.id,
+    kind: "subagent",
+    name: null,
+    agentType: null,
+    task: null,
+    progressUpdates: [],
+    result: null,
+    isStreaming: false,
+    endState: null,
+    stopped: false,
+    startedAt: null,
+    durationMs: null,
+    spawnToolCallId: null,
+    parentId: null,
+    workflowMeta: null,
+    children: input.children,
+  };
+}
+
+function messageWithSegments(
+  id: string,
+  segments: ReadonlyArray<MessageSegment>,
+): ChatMessage {
+  return {
+    id,
+    role: "assistant",
+    content: "",
+    segments,
+    structuredContent: null,
+    attachments: [],
+    settings: null,
+    createdAt: 1,
+    completedAt: null,
+    stopped: null,
+    persistentMessageId: null,
+    senderLabel: null,
+    assistantMeta: null,
+    statusLabel: null,
+    agentSenderInfo: null,
+    agentMessage: null,
+    runState: null,
+    sessionAnchor: null,
+    steerBadge: null,
+  };
+}
+
+describe("receiptAnchorBlockId", () => {
+  it("finds a top-level tool segment whose receipt names the message", () => {
+    const messages = [
+      messageWithSegments("m-1", [
+        toolSegment({ id: "block-1", agentMessageReceipt: null }),
+        toolSegment({
+          id: "block-2",
+          agentMessageReceipt: { messageId: "m-received" },
+        }),
+      ]),
+    ];
+
+    expect(receiptAnchorBlockId(messages, "m-received")).toBe("block-2");
+  });
+
+  it("finds a receipt nested inside a subagent card's children", () => {
+    const messages = [
+      messageWithSegments("m-1", [
+        subagentSegment({
+          id: "subagent-1",
+          children: [
+            toolSegment({
+              id: "nested-block",
+              agentMessageReceipt: { messageId: "m-received" },
+            }),
+          ],
+        }),
+      ]),
+    ];
+
+    expect(receiptAnchorBlockId(messages, "m-received")).toBe("nested-block");
+  });
+
+  it("returns null when no rendered tool segment carries the receipt", () => {
+    const messages = [
+      messageWithSegments("m-1", [
+        toolSegment({
+          id: "block-1",
+          agentMessageReceipt: { messageId: "some-other-message" },
+        }),
+      ]),
+    ];
+
+    expect(receiptAnchorBlockId(messages, "m-received")).toBeNull();
+  });
+});
+
+describe("hostLocatorForJumpTarget: a `receipt` target", () => {
+  it("asks the host when no rendered tool segment carries the receipt", () => {
+    const locator = hostLocatorForJumpTarget({
+      target: { kind: "receipt", messageId: "m-received" },
+      transcriptWindow: windowNaming(["m-1"]),
+      messages: [],
+    });
+
+    expect(locator).toEqual({ kind: "receipt", messageId: "m-received" });
+  });
+
+  it("does NOT ask once the send block carrying the receipt is rendered", () => {
+    const messages = [
+      messageWithSegments("m-1", [
+        toolSegment({
+          id: "block-1",
+          agentMessageReceipt: { messageId: "m-received" },
+        }),
+      ]),
+    ];
+
+    const locator = hostLocatorForJumpTarget({
+      target: { kind: "receipt", messageId: "m-received" },
+      transcriptWindow: windowNaming(["m-1"]),
+      messages,
+    });
+
+    expect(locator).toBeNull();
+  });
+
+  it("asks for nothing on the legacy line, which holds the whole transcript", () => {
+    const locator = hostLocatorForJumpTarget({
+      target: { kind: "receipt", messageId: "m-received" },
+      transcriptWindow: null,
+      messages: [],
+    });
+
+    expect(locator).toBeNull();
+  });
+});
+
+describe("coldJumpOrdinal: a `receipt` target", () => {
+  const window = windowNaming(["m-1", "m-2"]);
+
+  it("returns the host's answer, mirroring `block` and `sent-message`", () => {
+    expect(
+      coldJumpOrdinal(window, { kind: "receipt", messageId: "m-received" }, 1),
+    ).toBe(1);
+  });
+
+  it("stays null while the host has not answered", () => {
+    expect(
+      coldJumpOrdinal(
+        window,
+        { kind: "receipt", messageId: "m-received" },
+        null,
+      ),
+    ).toBeNull();
+  });
+});
 
 describe("hostLocatorForJumpTarget: a `message` target", () => {
   it("asks the host for an assistant record whose turn-keyed rows are cold", () => {

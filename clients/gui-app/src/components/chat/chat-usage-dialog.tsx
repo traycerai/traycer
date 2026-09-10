@@ -71,6 +71,11 @@ export function ChatUsageDialog(): ReactNode {
         epicId: null,
         chatId: target?.chatId ?? null,
         window: target === null ? undefined : "epic",
+        // This dialog has not been given the verdict-less cohort - it opens
+        // from a chat tab, which has its own auth gating - so it keeps the
+        // released "host picks the reader" behavior. Stated rather than
+        // defaulted; see `buildUsageSummaryRequest`.
+        plane: null,
       }),
     [target],
   );

@@ -84,7 +84,7 @@ import {
 } from "@/lib/terminals/terminal-focus-registry";
 import { resetPrimaryFocusCoordinatorForTests } from "@/lib/focus/primary-focus-coordinator";
 import { PrimaryFocusCoordinatorProvider } from "@/lib/focus/primary-focus-coordinator-provider";
-import { useLandingTerminalStore } from "@/stores/home/landing-terminal-store";
+import { useLandingPanelStore } from "@/stores/home/landing-panel-store";
 
 const stableTileSurfaceHostTestState = vi.hoisted(() => ({ enabled: false }));
 
@@ -429,7 +429,7 @@ describe("<TopLevelTabHost />", () => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
     useAuthStore.setState(useAuthStore.getInitialState(), true);
-    useLandingTerminalStore.getState().resetForTests();
+    useLandingPanelStore.getState().resetForTests();
   });
 
   afterEach(() => {
@@ -438,7 +438,7 @@ describe("<TopLevelTabHost />", () => {
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
     useAuthStore.setState(useAuthStore.getInitialState(), true);
-    useLandingTerminalStore.getState().resetForTests();
+    useLandingPanelStore.getState().resetForTests();
     resetTerminalFocusRegistryForTests();
     resetPrimaryFocusCoordinatorForTests();
   });
@@ -670,8 +670,9 @@ describe("<TopLevelTabHost />", () => {
     }));
     seedSources(refs);
     setSingle(refs[0], refs);
-    const terminalStore = useLandingTerminalStore.getState();
+    const terminalStore = useLandingPanelStore.getState();
     terminalStore.addTab({
+      kind: "terminal",
       instanceId: "integrated-terminal",
       sessionId: "integrated-terminal-session",
       hostId: TEST_HOST_ID,
@@ -1251,6 +1252,7 @@ describe("TopLevelTabHost: a background epic's pending interview card cannot sna
     header: null,
     options: [],
     multiSelect: false,
+    allowsCustomAnswer: null,
   };
 
   /**
@@ -1377,7 +1379,7 @@ describe("TopLevelTabHost: a background epic's pending interview card cannot sna
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
     useAuthStore.setState(useAuthStore.getInitialState(), true);
-    useLandingTerminalStore.getState().resetForTests();
+    useLandingPanelStore.getState().resetForTests();
     tabCommandCoordinator.resetReconciliationForTesting();
     resetTileSurfaceMembershipForTesting();
     resetTileSurfaceEnvironmentRegistryForTesting();
@@ -1401,7 +1403,7 @@ describe("TopLevelTabHost: a background epic's pending interview card cannot sna
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useLandingDraftStore.setState(useLandingDraftStore.getInitialState(), true);
     useAuthStore.setState(useAuthStore.getInitialState(), true);
-    useLandingTerminalStore.getState().resetForTests();
+    useLandingPanelStore.getState().resetForTests();
     tabCommandCoordinator.resetReconciliationForTesting();
     resetTileSurfaceMembershipForTesting();
     resetTileSurfaceEnvironmentRegistryForTesting();

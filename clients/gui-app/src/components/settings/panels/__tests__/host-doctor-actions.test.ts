@@ -1,8 +1,98 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   doctorFixRoute,
   freePortConfirmWentStale,
+  runFixAction,
 } from "@/components/settings/panels/host-doctor-actions";
+import type {
+  HostDoctorIssue,
+  IHostManagement,
+  QueuedDoctorRepair,
+  QueuedDoctorRepairResult,
+} from "@traycer-clients/shared/platform/runner-host";
+
+function makeIssue(fixAction: string): HostDoctorIssue {
+  return {
+    code: "TEST_ISSUE",
+    severity: "error",
+    title: "Test issue",
+    message: "Test issue message",
+    fixAction,
+    terminalCommand: null,
+    details: null,
+  };
+}
+
+function makeManagementWithRunDoctorRepairQueued(
+  runDoctorRepairQueued: (input: {
+    readonly repair: QueuedDoctorRepair;
+    readonly expectedHostId: string;
+  }) => Promise<QueuedDoctorRepairResult>,
+): IHostManagement {
+  const notImplemented = (method: string) => (): Promise<never> =>
+    Promise.reject(new Error(`${method} not implemented in mock`));
+  return {
+    getHostControllerStatus: vi.fn(notImplemented("getHostControllerStatus")),
+    convergeReady: vi.fn(notImplemented("convergeReady")),
+    applyStaged: vi.fn(notImplemented("applyStaged")),
+    activateInstalled: vi.fn(notImplemented("activateInstalled")),
+    installVersion: vi.fn(notImplemented("installVersion")),
+    uninstallHost: vi.fn(notImplemented("uninstallHost")),
+    restartHost: vi.fn(notImplemented("restartHost")),
+    uninstallTraycer: vi.fn(notImplemented("uninstallTraycer")),
+    getRemovalState: vi.fn(notImplemented("getRemovalState")),
+    clearRemoval: vi.fn(notImplemented("clearRemoval")),
+    getHostLogs: vi.fn(notImplemented("getHostLogs")),
+    runDoctor: vi.fn(notImplemented("runDoctor")),
+    availableVersions: vi.fn(notImplemented("availableVersions")),
+    installedRecord: vi.fn(notImplemented("installedRecord")),
+    registerService: vi.fn(notImplemented("registerService")),
+    deregisterService: vi.fn(notImplemented("deregisterService")),
+    registryCheck: vi.fn(notImplemented("registryCheck")),
+    freePortAndRestart: vi.fn(notImplemented("freePortAndRestart")),
+    runDoctorRepairQueued: vi.fn(runDoctorRepairQueued),
+    freePortAndRestartIfIdle: vi.fn(notImplemented("freePortAndRestartIfIdle")),
+    cliManifest: vi.fn(notImplemented("cliManifest")),
+    maintenanceUpdateCheck: vi.fn(notImplemented("maintenanceUpdateCheck")),
+    maintenanceDoctor: vi.fn(notImplemented("maintenanceDoctor")),
+    maintenanceInstallationInfo: vi.fn(
+      notImplemented("maintenanceInstallationInfo"),
+    ),
+    maintenanceInstallVersion: vi.fn(
+      notImplemented("maintenanceInstallVersion"),
+    ),
+    restartHostIfIdle: vi.fn(notImplemented("restartHostIfIdle")),
+    runDoctorRepairIfIdle: vi.fn(notImplemented("runDoctorRepairIfIdle")),
+    getHostName: vi.fn(notImplemented("getHostName")),
+    setHostName: vi.fn(notImplemented("setHostName")),
+  };
+}
+
+describe("runFixAction", () => {
+  it.each(["host-install", "host-install-latest"] as const)(
+    "%s dispatches the version-seeking converge-latest repair",
+    async (fixAction) => {
+      const runDoctorRepairQueued = vi.fn(() =>
+        Promise.resolve<QueuedDoctorRepairResult>({ kind: "applied" }),
+      );
+      const management = makeManagementWithRunDoctorRepairQueued(
+        runDoctorRepairQueued,
+      );
+
+      const result = await runFixAction(
+        management,
+        makeIssue(fixAction),
+        "local-host",
+      );
+
+      expect(runDoctorRepairQueued).toHaveBeenCalledWith({
+        repair: "converge-latest",
+        expectedHostId: "local-host",
+      });
+      expect(result).toEqual({ kind: "applied" });
+    },
+  );
+});
 
 describe("doctorFixRoute", () => {
   it.each([

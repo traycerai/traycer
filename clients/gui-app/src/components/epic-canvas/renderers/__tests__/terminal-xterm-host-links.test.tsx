@@ -48,7 +48,11 @@ const xtermMocks = vi.hoisted(() => ({
   webLinksHandlers: [] as LinkActivate[],
   openExternalLink: vi.fn(() => Promise.resolve()),
   openTab: vi.fn<BrowserSessionsState["openTab"]>(() =>
-    Promise.resolve({ sessionId: "session-terminal", tabId: "tab-terminal" }),
+    Promise.resolve({
+      sessionId: "session-terminal",
+      tabId: "tab-terminal",
+      handoffToken: null,
+    }),
   ),
 }));
 
@@ -225,11 +229,14 @@ function renderHostWithBrowserRouting(): void {
     lifecycle: "live",
     inventoryReady: true,
     canMaterializeElectron: false,
+    connectionGeneration: 0,
     items: [],
     errorMessage: null,
     retry: () => undefined,
     openTab: xtermMocks.openTab,
     closeTab: () => Promise.resolve(),
+    attachTab: () => Promise.reject(new Error("not used")),
+    moveTab: () => Promise.reject(new Error("not used")),
   };
   render(
     <BrowserSessionsContext.Provider value={sessions}>

@@ -10,6 +10,7 @@ import { createCliLogger, errorFromUnknown } from "../logger";
 import { isProcessAlive } from "../store/cli-lock";
 import { hostPidMetadataPath } from "../store/paths";
 import { readProcessStartIdentity } from "../store/process-identity";
+import { isReadablePid } from "./pid-value";
 
 // Mirror of the writer contract owned by the host (the external
 // Traycer Host). Read by string path so
@@ -28,6 +29,33 @@ export interface HostPidMetadata {
    * must never be read as a mismatch.
    */
   readonly processStartIdentity: ProcessStartIdentity | null;
+  /**
+   * WHY {@link processStartIdentity} is what it is - three states where that
+   * field has two (cold review C, V1).
+   *
+   * The stamp collapses "the key was absent" and "the key was present and did
+   * not parse" into one `null`. That was harmless while `null` had a single
+   * consequence: both failed closed as `pid-start-stamp-missing`. Q1 gave
+   * `null` a SECOND meaning - "this run may skip the identity comparison" -
+   * and the collapse became load-bearing, because a TAMPERED or torn stamp
+   * would then earn the fallback exactly as a genuinely old host does.
+   *
+   * So the reason is recorded beside the value rather than replacing it. A
+   * three-valued `processStartIdentity` would say this more directly and is
+   * the better shape in the abstract, but that field has ~60 readers across
+   * the CLI, the shared lock and Desktop, none of which need the distinction;
+   * this is additive and every existing reader keeps its two-valued view.
+   *
+   * `unrecognized` is also the state a PLATFORM disagreement produces - the
+   * stamp is platform-tagged, so a token this build does not recognize reads
+   * identically to no token at all - which is the case the fleet's floor
+   * derivation has to be able to see in the field.
+   *
+   * Mirrors {@link decodeLayer0Record}'s three-valued contract in this same
+   * file, and for the same reason: present-and-unexpected must never read as
+   * healthy.
+   */
+  readonly processStartIdentityRead: "present" | "absent" | "unrecognized";
   /**
    * The host's Layer 0 single-writer (I1) verdict, `null` when this pid.json
    * carries none. Absence is "not recorded" - every file written before the
@@ -130,11 +158,27 @@ export function publishedHostProcessGone(metadata: HostPidMetadata): boolean {
 export async function readHostPidMetadataEvidence(
   environment: Environment | undefined,
 ): Promise<HostPidMetadataEvidence> {
-  const logEnvironment = environment ?? config.environment;
+  return readHostPidMetadataEvidenceAt(
+    hostPidMetadataPath(environment),
+    environment ?? config.environment,
+  );
+}
+
+/**
+ * The same read against an EXPLICIT record path, for the one reader that has
+ * to account for a host home other than its own: the swap quiescence check
+ * walks every dev run slot's record before a swap (`swap-quiescence.ts`).
+ * `logEnvironment` only names the environment in the log lines; it resolves
+ * no path.
+ */
+export async function readHostPidMetadataEvidenceAt(
+  path: string,
+  logEnvironment: Environment,
+): Promise<HostPidMetadataEvidence> {
   const logger = createCliLogger(logEnvironment);
   let raw: string;
   try {
-    raw = await readFile(hostPidMetadataPath(environment), "utf8");
+    raw = await readFile(path, "utf8");
   } catch (err) {
     const code = readErrorCode(err);
     if (code === "ENOENT") return { kind: "absent" };
@@ -164,7 +208,7 @@ export async function readHostPidMetadataEvidence(
   }
   const obj = parsed as Record<string, unknown>;
   if (
-    typeof obj.pid !== "number" ||
+    !isReadablePid(obj.pid) ||
     typeof obj.hostId !== "string" ||
     typeof obj.version !== "string" ||
     typeof obj.websocketUrl !== "string" ||
@@ -172,7 +216,7 @@ export async function readHostPidMetadataEvidence(
   ) {
     logger.warn("Host pid metadata rejected malformed payload", {
       environment: logEnvironment,
-      hasPid: typeof obj.pid === "number",
+      hasPid: isReadablePid(obj.pid),
       hasHostId: typeof obj.hostId === "string",
       hasVersion: typeof obj.version === "string",
       hasWebsocketUrl: typeof obj.websocketUrl === "string",
@@ -200,6 +244,15 @@ export async function readHostPidMetadataEvidence(
       processStartIdentity: isProcessStartIdentity(obj.processStartIdentity)
         ? obj.processStartIdentity
         : null,
+      // Derived in the same breath as the value above, deliberately: two
+      // expressions that could disagree about one field is the drift this
+      // field exists to prevent, not to create.
+      processStartIdentityRead: isProcessStartIdentity(obj.processStartIdentity)
+        ? "present"
+        : obj.processStartIdentity === undefined ||
+            obj.processStartIdentity === null
+          ? "absent"
+          : "unrecognized",
       layer0: decodeLayer0Record(obj.layer0),
       // Same decoder, same fail-open-on-shape contract. An old record simply
       // has no such key and decodes to `null`.

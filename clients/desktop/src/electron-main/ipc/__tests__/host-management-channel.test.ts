@@ -25,8 +25,10 @@ import type {
   ApplyStagedOk,
   ApplyStagedTrigger,
   ConvergeReadyOk,
+  ConvergeReadyVersionPolicy,
   HostControllerStatus,
   InstallVersionOk,
+  LocalHostMutationIntent,
   MutationOutcome,
   MutationProgress,
   MutationKind,
@@ -175,7 +177,7 @@ class FakeHostController implements IpcHostController {
   };
   applyStagedResult: MutationOutcome<ApplyStagedOk> = {
     kind: "ok",
-    value: { appliedVersion: "1.7.0", runningActivated: true },
+    value: { appliedVersion: "1.7.0", runningActivated: true, applied: true },
   };
   activateInstalledResult: MutationOutcome<ActivateInstalledOk> = {
     kind: "ok",
@@ -251,8 +253,13 @@ class FakeHostController implements IpcHostController {
   }
   async convergeReady(
     force: boolean,
+    intent: LocalHostMutationIntent,
+    versionPolicy: ConvergeReadyVersionPolicy,
   ): Promise<MutationOutcome<ConvergeReadyOk>> {
-    this.calls.push({ method: "convergeReady", args: [force] });
+    this.calls.push({
+      method: "convergeReady",
+      args: [force, intent, versionPolicy],
+    });
     return this.convergeReadyResult;
   }
   async stageLatest(): Promise<void> {
@@ -660,7 +667,7 @@ describe("host-management IPC - CLI subprocess argv carries NO --environment (CL
     );
     bridge.options.hostController.applyStagedResult = {
       kind: "ok",
-      value: { appliedVersion: "2.0.0", runningActivated: true },
+      value: { appliedVersion: "2.0.0", runningActivated: true, applied: true },
     };
     mgmt.registerHostManagementIpc(bridge as never);
 
@@ -1115,7 +1122,7 @@ describe("host-management IPC - traycerHostConvergeReady delegates to HostContro
     });
     expect(bridge.options.hostController.calls).toContainEqual({
       method: "convergeReady",
-      args: [true],
+      args: [true, { kind: "background" }, "keep-installed"],
     });
   });
 
@@ -1141,7 +1148,7 @@ describe("host-management IPC - traycerHostConvergeReady delegates to HostContro
     });
     expect(bridge.options.hostController.calls).toContainEqual({
       method: "convergeReady",
-      args: [false],
+      args: [false, { kind: "background" }, "keep-installed"],
     });
   });
 

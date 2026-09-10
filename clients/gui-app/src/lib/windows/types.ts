@@ -271,6 +271,7 @@ export interface DesktopSupportFreezeEvidenceInput {
 
 export interface DesktopSupportFreezeEvidenceResult {
   readonly reportId: string;
+  readonly contactEmail: string | null;
 }
 
 /**
@@ -655,7 +656,7 @@ export interface DesktopReportIssueForm {
   // D7: only non-null when the user actively changed the pre-filled
   // "Where did this happen?" selector away from its default.
   readonly location: string | null;
-  // G1: identity is attached to the private report only when this is true.
+  // Retained for older clients. Signed-in email always accompanies private reports.
   readonly allowContact: boolean;
   // Consent panel's two log toggles (default on): withholds the tail from
   // the private submission / diagnostic bundle when false.
@@ -781,7 +782,39 @@ export interface DesktopWindowsBridge {
     set(
       snapshot: DesktopAuthSessionSnapshot,
     ): Promise<DesktopAuthSessionSetResult>;
+    /**
+     * Withdraws main's verification of the session it holds - the renderer's
+     * TERMINAL verdict loss, which `set` cannot carry because the status an
+     * `unverified` flattens to signs sibling windows out. Optional +
+     * capability-probed like `perWindowState.clear`: a desktop shell built
+     * before the channel existed has no `revoke`, and the bridge degrades to
+     * the pre-channel behaviour (main keeps its verification until the
+     * bearer expires) rather than failing the `isDesktopWindowsBridge` guard.
+     * Names the rejected bearer: main applies it only while that is still
+     * the session it holds, so a revoke racing a sibling window's fresh
+     * sign-in cannot strip the new session.
+     */
+    revoke?(rejectedToken: string): Promise<void>;
     onChange(handler: (snapshot: DesktopAuthSessionSnapshot) => void): {
+      dispose(): void;
+    };
+    /**
+     * The verdict-loss edge fanned to EVERY window, including the one that
+     * raised it.
+     *
+     * `onChange` structurally cannot deliver this: main answers a revoke by
+     * dropping its own verification and republishing the SAME snapshot, which
+     * every window's latch discards as an echo - so a sibling never learned
+     * its bearer had been refused and kept spending it on cloud work until it
+     * revalidated on its own schedule.
+     *
+     * Optional and capability-probed for the same reason as `revoke`: a
+     * desktop shell built before the channel existed does not have it, and
+     * the bridge degrades to the pre-channel behaviour rather than failing
+     * the `isDesktopWindowsBridge` guard. Carries the rejected bearer so each
+     * window fences the demotion to the session it actually holds.
+     */
+    onVerificationRevoked?(handler: (rejectedToken: string) => void): {
       dispose(): void;
     };
   };

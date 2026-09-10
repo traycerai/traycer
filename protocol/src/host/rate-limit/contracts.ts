@@ -9,6 +9,7 @@ import {
   providersConsumeRateLimitResetCreditResponseSchema,
   providersRefreshProfileStatusRequestSchema,
   providersRefreshProfileStatusResponseSchema,
+  providersRefreshProfileStatusResponseSchemaV10,
   rateLimitUsageRequestSchemaV10,
   rateLimitUsageRequestSchemaV11,
   rateLimitUsageRequestSchemaV12,
@@ -68,8 +69,55 @@ export const providersRefreshProfileStatusV10 = defineRpcContract({
   method: "providers.refreshProfileStatus",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: providersRefreshProfileStatusRequestSchema,
+  // Frozen: the `1.3.0` tags shipped this line. The REQUEST keeps the live
+  // provider enum - a client->host slot may widen freely.
+  responseSchema: providersRefreshProfileStatusResponseSchemaV10,
+});
+
+export const providersRefreshProfileStatusV20 = defineRpcContract({
+  method: "providers.refreshProfileStatus",
+  schemaVersion: { major: 2, minor: 0 } as const,
+  requestSchema: providersRefreshProfileStatusRequestSchema,
   responseSchema: providersRefreshProfileStatusResponseSchema,
 });
+
+export const providersRefreshProfileStatusUpgradeV10ToV20 = defineUpgradePath<
+  typeof providersRefreshProfileStatusV10,
+  typeof providersRefreshProfileStatusV20
+>({
+  from: { major: 1, minor: 0 },
+  to: { major: 2, minor: 0 },
+  // Request shape identical; only the response's provider enum grows.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const providersRefreshProfileStatusDowngradeV20ToV10 =
+  defineDowngradePath<
+    typeof providersRefreshProfileStatusV20,
+    typeof providersRefreshProfileStatusV10
+  >({
+    from: { major: 2, minor: 0 },
+    to: { major: 1, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) => {
+      // One provider per response: pass through or refuse. The message names
+      // no provider so it stays honest as the enum grows.
+      const parsed =
+        providersRefreshProfileStatusResponseSchemaV10.safeParse(response);
+      if (!parsed.success) {
+        return {
+          ok: false,
+          error: {
+            code: "DOWNGRADE_UNSUPPORTED" as const,
+            message:
+              "Refreshing this provider's profile status requires a newer Traycer client.",
+          },
+        };
+      }
+      return { ok: true, value: parsed.data };
+    },
+  });
 
 export const hostGetRateLimitUsageV10 = defineRpcContract({
   method: "host.getRateLimitUsage",
@@ -323,8 +371,10 @@ export const hostGetRateLimitUsageUpgradeV30ToV40 = defineUpgradePath<
 // Cursor-available snapshots each degrade to the unavailable
 // `unsupported_provider` shape - none has an arm in the frozen v3.0 union, and
 // all three ride 4.0 (the release collapsed Hugging Face and OpenCode onto one
-// major, and 4.0 is still unreleased, so Cursor joins them rather than opening
-// a 5.0). Every other arm - grok included, since v3.0 is where grok landed - is
+// major, and 4.0 was still unreleased when Cursor was added, so it joined them
+// rather than opening a 5.0 - `host.getRateLimitUsage` is now in the released
+// baseline at canonical 4.0, so a fourth such provider opens 5.0 instead).
+// Every other arm - grok included, since v3.0 is where grok landed - is
 // already valid v3.0 and passes through the re-parse unchanged.
 export const hostGetRateLimitUsageDowngradeV4ToV3 = defineDowngradePath<
   typeof hostGetRateLimitUsageV40,

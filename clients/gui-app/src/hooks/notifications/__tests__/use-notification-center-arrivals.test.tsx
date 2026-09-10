@@ -31,6 +31,50 @@ function occurrenceEntry(input: {
   };
 }
 
+describe("computeLiveArrivalKeys mixed-plane ordering", () => {
+  // Mixed mode concatenates two ordered lanes - every `local` row precedes
+  // every `cloud` row regardless of timestamp, because `updatedAt` means
+  // different things in the two origins. A single GLOBAL front made the
+  // positional rule unsatisfiable for the trailing lane.
+
+  it("counts a new cloud occurrence that lands behind the whole local lane", () => {
+    const previous = entries("host:a@10", "cloud:x@9");
+    const current = entries("host:a@10", "cloud:new@11", "cloud:x@9");
+
+    // Pre-fix: the previous front is `host:a` at global index 0, so the cloud
+    // arrival at index 1 failed `index < 0` and was read as paginated history
+    // - the "N new" affordance never appeared for ANY cloud arrival once a
+    // single local row was loaded.
+    expect(computeLiveArrivalKeys(previous, current)).toEqual(["cloud:new@11"]);
+  });
+
+  it("still refuses an APPENDED cloud page in the same shape", () => {
+    // The rule has to keep discriminating, or the fix is just "count
+    // everything": an older page lands after its own lane's front.
+    const previous = entries("host:a@10", "cloud:x@9");
+    const current = entries("host:a@10", "cloud:x@9", "cloud:older@2");
+
+    expect(computeLiveArrivalKeys(previous, current)).toEqual([]);
+  });
+
+  it("keeps counting a new local row against the local lane's own front", () => {
+    const previous = entries("host:a@10", "cloud:x@9");
+    const current = entries("host:new@12", "host:a@10", "cloud:x@9");
+
+    expect(computeLiveArrivalKeys(previous, current)).toEqual(["host:new@12"]);
+  });
+
+  it("treats a lane with nothing loaded as a first page, not an arrival", () => {
+    // No cloud front to compare against, so the cloud snapshot's first rows
+    // are a load rather than a live prepend - the same rule the whole list
+    // already had for an empty baseline.
+    const previous = entries("host:a@10");
+    const current = entries("host:a@10", "cloud:first@99");
+
+    expect(computeLiveArrivalKeys(previous, current)).toEqual([]);
+  });
+});
+
 describe("computeLiveArrivalKeys", () => {
   it("returns empty when there is no prior baseline", () => {
     expect(
@@ -38,13 +82,30 @@ describe("computeLiveArrivalKeys", () => {
     ).toEqual([]);
   });
 
-  it("returns empty for a brand-new feedId when the prior front feedId is gone", () => {
-    // Previous front feedId vanished entirely - positional reference is lost,
-    // so a brand-new feedId is not treated as a live prepend.
+  it("counts a live prepend when the prior front is gone but a prior row survives", () => {
+    // An authoritative snapshot can drop the previous front and introduce a new
+    // row in the SAME pass - another window clearing the old front while a
+    // notification lands. The positional reference is not lost when that
+    // happens: `host:b@50` is still on screen and still sits behind anything
+    // that arrived, so it is the boundary the departed front used to be.
+    //
+    // This asserted `[]` before, which silently swallowed the "N new"
+    // affordance for genuine arrivals whenever a snapshot removed the front.
     expect(
       computeLiveArrivalKeys(
         entries("host:old-front@100", "host:b@50"),
         entries("host:new@200", "host:b@50"),
+      ),
+    ).toEqual(["host:new@200"]);
+  });
+
+  it("returns empty when NO prior row of the lane survives", () => {
+    // Wholesale replacement. Nothing positional distinguishes it from a fresh
+    // baseline, and announcing a first page as "N new" is the louder mistake.
+    expect(
+      computeLiveArrivalKeys(
+        entries("host:old-front@100", "host:old-b@50"),
+        entries("host:new@200", "host:other-new@150"),
       ),
     ).toEqual([]);
   });

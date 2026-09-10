@@ -19,6 +19,7 @@ import {
   type VersionedRpcRegistry,
 } from "@traycer/protocol/framework/index";
 import {
+  HostMethodVersionUnsatisfiedError,
   HostRequestAbortedError,
   HostRpcError,
   HostTransportFailureError,
@@ -26,6 +27,7 @@ import {
   type HostRequestAuthority,
   type IHostMessenger,
   type RequestOfMethod,
+  type RequiredHostMethodVersion,
   type ResponseOfMethod,
 } from "../host-messenger";
 import { MutableBearerLease } from "@traycer-clients/shared/auth/bearer-source";
@@ -201,6 +203,20 @@ class BoundWsRpcClient<Registry extends VersionedRpcRegistry> {
   ): Promise<ResponseOfMethod<Registry, Method>> {
     return this.inner.request(method, params, {
       replayMustBeKeyed: false,
+      requiredHostMethodVersion: null,
+      idempotencyKey: null,
+      authority: this.authority,
+    });
+  }
+
+  requestRequiringHostMethodVersion<Method extends keyof Registry & string>(
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+    requiredHostMethodVersion: RequiredHostMethodVersion,
+  ): Promise<ResponseOfMethod<Registry, Method>> {
+    return this.inner.request(method, params, {
+      replayMustBeKeyed: false,
+      requiredHostMethodVersion,
       idempotencyKey: null,
       authority: this.authority,
     });
@@ -217,6 +233,7 @@ class BoundWsRpcClient<Registry extends VersionedRpcRegistry> {
       responseTimeoutMs,
       {
         replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
         idempotencyKey: null,
         authority: this.authority,
       },
@@ -285,7 +302,12 @@ async function expectPostOpenTimeoutRecovery(fatal: HostFrame): Promise<void> {
   const pending = client.request(
     "host.echo",
     { message: "hi" },
-    { idempotencyKey: null, authority: authority, replayMustBeKeyed: false },
+    {
+      idempotencyKey: null,
+      authority: authority,
+      replayMustBeKeyed: false,
+      requiredHostMethodVersion: null,
+    },
   );
   await flush();
   sockets[0].socket.fireOpen();
@@ -334,6 +356,7 @@ function makeRequestContext(bearer: string): RequestContext {
     connectionId: undefined,
     operationId: undefined,
     externalAbortSignal: undefined,
+    cloudAuthorized: true,
   });
 }
 
@@ -640,6 +663,7 @@ describe("WsRpcClient", () => {
         idempotencyKey: null,
         authority: authorityForToken("token-abc"),
         replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
       },
     );
     await flush();
@@ -723,6 +747,320 @@ describe("WsRpcClient", () => {
     expect(stub.closed).toEqual({ code: 1000, reason: "ok" });
   });
 
+  describe("cloud verdict wire (lane 5, F1 unary carrier + F2 queued unary)", () => {
+    function authorityWithVerdict(
+      token: string,
+      verdictRef: { value: boolean },
+    ): HostRequestAuthority {
+      return {
+        ...authorityForToken(token),
+        cloudAuthorized: () => verdictRef.value,
+      };
+    }
+
+    /**
+     * `host-messenger.ts`'s `cloudAuthorized` doc comment requires a LIVE read
+     * at send time, not a value captured when the request was issued -
+     * `WsRpcClient` reads it inline at `session.send({kind:"open", ...})`,
+     * which is after `await session.dial()`. This request sits "queued"
+     * behind its own dial (the stub socket has not fired `open` yet, so
+     * nothing has gone out) while the authority is demoted - the same window
+     * F2 names. If the read were hoisted above the dial (captured into a local
+     * before `session.dial()`), the open frame would carry the pre-demotion
+     * `true` instead.
+     */
+    it("the open frame carries the verdict as it stands at dial completion, not as it stood when the request was issued", async () => {
+      const { factory, sockets } = makeFactory();
+      const inner = new WsRpcClient<typeof testRegistry>({
+        clientIdentity: TEST_CLIENT_IDENTITY,
+        registry: testRegistry,
+        requestId: () => "req-verdict-1",
+        webSocketFactory: factory,
+        dialTimeoutMs: 1_000,
+        frameTimeoutMs: 1_000,
+        hostAttestationWindowMs: 0,
+        evidence: NO_TRANSPORT_EVIDENCE,
+      });
+      const verdict = { value: true };
+      const authority = authorityWithVerdict("token-abc", verdict);
+
+      const pending = inner.request(
+        "host.status",
+        {},
+        {
+          idempotencyKey: null,
+          authority,
+          replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
+        },
+      );
+      await flush();
+
+      expect(sockets).toHaveLength(1);
+      // Queued behind its own dial: the stub has not fired `open`, so no
+      // frame has gone out yet. Demote here, while the request waits.
+      expect(sockets[0].sent).toHaveLength(0);
+      verdict.value = false;
+
+      sockets[0].socket.fireOpen();
+      await flush();
+
+      const openFrame = expectOpenFrame(sockets[0].sent[0]);
+      expect(openFrame.cloudAuthorized).toBe(false);
+
+      sockets[0].socket.fireMessage({
+        kind: "openAck",
+        manifest: { "host.status": { major: 1, minor: 0 } },
+      });
+      await flush();
+      sockets[0].socket.fireMessage({
+        kind: "response",
+        requestId: "req-verdict-1",
+        method: "host.status",
+        schemaVersion: { major: 1, minor: 0 },
+        result: { ready: true },
+        error: null,
+      });
+      await expect(pending).resolves.toEqual({ ready: true });
+    });
+
+    it("positive control: an authority with no demotion in the queued window sends the value it started with, unchanged", async () => {
+      const { factory, sockets } = makeFactory();
+      const inner = new WsRpcClient<typeof testRegistry>({
+        clientIdentity: TEST_CLIENT_IDENTITY,
+        registry: testRegistry,
+        requestId: () => "req-verdict-2",
+        webSocketFactory: factory,
+        dialTimeoutMs: 1_000,
+        frameTimeoutMs: 1_000,
+        hostAttestationWindowMs: 0,
+        evidence: NO_TRANSPORT_EVIDENCE,
+      });
+      const verdict = { value: true };
+      const authority = authorityWithVerdict("token-abc", verdict);
+
+      void inner.request(
+        "host.status",
+        {},
+        {
+          idempotencyKey: null,
+          authority,
+          replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
+        },
+      );
+      await flush();
+      sockets[0].socket.fireOpen();
+      await flush();
+
+      const openFrame = expectOpenFrame(sockets[0].sent[0]);
+      expect(openFrame.cloudAuthorized).toBe(true);
+    });
+
+    it("an authority built with no `cloudAuthorized` source omits the key rather than sending a default", async () => {
+      const { factory, sockets } = makeFactory();
+      const inner = new WsRpcClient<typeof testRegistry>({
+        clientIdentity: TEST_CLIENT_IDENTITY,
+        registry: testRegistry,
+        requestId: () => "req-verdict-3",
+        webSocketFactory: factory,
+        dialTimeoutMs: 1_000,
+        frameTimeoutMs: 1_000,
+        hostAttestationWindowMs: 0,
+        evidence: NO_TRANSPORT_EVIDENCE,
+      });
+      const authority = authorityForToken("token-abc");
+
+      void inner.request(
+        "host.status",
+        {},
+        {
+          idempotencyKey: null,
+          authority,
+          replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
+        },
+      );
+      await flush();
+      sockets[0].socket.fireOpen();
+      await flush();
+
+      const openFrame = expectOpenFrame(sockets[0].sent[0]);
+      expect(openFrame).not.toHaveProperty("cloudAuthorized");
+    });
+  });
+
+  /**
+   * A caller's version floor has to be answered by the handshake of the
+   * connection that carries its request, because that is the only connection
+   * whose version is a fact about what will actually serve the call. Every
+   * local unary dials and handshakes afresh, so a floor established anywhere
+   * earlier - a render-time registry read, or even a probe RPC that forces its
+   * own handshake - describes a host process that can be gone by the time this
+   * frame is written.
+   *
+   * These pin the refusal at the only place that closes it, and that it is
+   * PRE-SEND: the frame count separates "refused" from "sent and rejected",
+   * which for a create is the difference between nothing happening and an epic
+   * existing on the wrong resolver.
+   */
+  it("refuses pre-send when the dispatch's own handshake is below the caller's floor", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "token-abc",
+      requestId: "req-floor",
+      dialTimeoutMs: 1000,
+      frameTimeoutMs: 1000,
+      hostAttestationWindowMs: undefined,
+    });
+
+    const settled = client
+      .requestRequiringHostMethodVersion(
+        "host.echo",
+        { message: "hi" },
+        { method: "host.echo", version: { major: 1, minor: 6 } },
+      )
+      .then(
+        () => null,
+        (reason: unknown) => reason,
+      );
+    await flush();
+    sockets[0].socket.fireOpen();
+    await flush();
+    // The open frame went out - the refusal is decided AFTER the handshake,
+    // from what this host advertised, not from a guess made before dialing.
+    expect(sockets[0].sent).toHaveLength(1);
+
+    sockets[0].socket.fireMessage(
+      openAckWithOptionalHostEcho({ major: 1, minor: 5 }),
+    );
+    await flush();
+
+    const error = await settled;
+    expect(error).toBeInstanceOf(HostMethodVersionUnsatisfiedError);
+    expect((error as HostMethodVersionUnsatisfiedError).negotiated).toEqual({
+      major: 1,
+      minor: 5,
+    });
+    // Never retried: the class extends `HostRpcError`, and a redial reaches
+    // the same downgraded host.
+    expect(error).toBeInstanceOf(HostRpcError);
+    expect(error).not.toBeInstanceOf(RetryableTransportError);
+    // The whole point: no request frame was ever written.
+    expect(sockets[0].sent).toHaveLength(1);
+  });
+
+  it("refuses when the host does not advertise the required method at all", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "token-abc",
+      requestId: "req-floor-absent",
+      dialTimeoutMs: 1000,
+      frameTimeoutMs: 1000,
+      hostAttestationWindowMs: undefined,
+    });
+
+    // The floor names a method this host's manifest has no entry for, which is
+    // a different fact from "advertised, but too old" and must not read as
+    // satisfied by the absence of a contradiction.
+    const settled = client
+      .requestRequiringHostMethodVersion(
+        "host.echo",
+        { message: "hi" },
+        { method: "host.absent", version: { major: 1, minor: 1 } },
+      )
+      .then(
+        () => null,
+        (reason: unknown) => reason,
+      );
+    await flush();
+    sockets[0].socket.fireOpen();
+    await flush();
+    sockets[0].socket.fireMessage(
+      openAckWithOptionalHostEcho({ major: 1, minor: 9 }),
+    );
+    await flush();
+
+    const error = await settled;
+    expect(error).toBeInstanceOf(HostMethodVersionUnsatisfiedError);
+    expect((error as HostMethodVersionUnsatisfiedError).negotiated).toBeNull();
+    expect(sockets[0].sent).toHaveLength(1);
+  });
+
+  it("dispatches normally when the same handshake MEETS the floor", async () => {
+    // The control. Without it every assertion above is also satisfied by a
+    // floor that refuses unconditionally, which would break every caller.
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "token-abc",
+      requestId: "req-floor-met",
+      dialTimeoutMs: 1000,
+      frameTimeoutMs: 1000,
+      hostAttestationWindowMs: undefined,
+    });
+
+    const pending = client.requestRequiringHostMethodVersion(
+      "host.echo",
+      { message: "hi" },
+      { method: "host.echo", version: { major: 1, minor: 6 } },
+    );
+    await flush();
+    sockets[0].socket.fireOpen();
+    await flush();
+    sockets[0].socket.fireMessage(
+      openAckWithOptionalHostEcho({ major: 1, minor: 6 }),
+    );
+    await flush();
+
+    expect(sockets[0].sent).toHaveLength(2);
+    expect(expectRequestFrame(sockets[0].sent[1]).method).toBe("host.echo");
+    sockets[0].socket.fireMessage({
+      kind: "response",
+      requestId: "req-floor-met",
+      method: "host.echo",
+      schemaVersion: { major: 1, minor: 6 },
+      result: { echoed: "HI" },
+      error: null,
+    });
+    await expect(pending).resolves.toEqual({ echoed: "HI" });
+  });
+
+  it("refuses across a MAJOR even when the minor is higher - a major is a break, not an upgrade", async () => {
+    const { factory, sockets } = makeFactory();
+    const client = makeClient({
+      factory,
+      authToken: "token-abc",
+      requestId: "req-floor-major",
+      dialTimeoutMs: 1000,
+      frameTimeoutMs: 1000,
+      hostAttestationWindowMs: undefined,
+    });
+
+    const settled = client
+      .requestRequiringHostMethodVersion(
+        "host.echo",
+        { message: "hi" },
+        { method: "host.echo", version: { major: 1, minor: 6 } },
+      )
+      .then(
+        () => null,
+        (reason: unknown) => reason,
+      );
+    await flush();
+    sockets[0].socket.fireOpen();
+    await flush();
+    sockets[0].socket.fireMessage(
+      openAckWithOptionalHostEcho({ major: 2, minor: 9 }),
+    );
+    await flush();
+
+    expect(await settled).toBeInstanceOf(HostMethodVersionUnsatisfiedError);
+    expect(sockets[0].sent).toHaveLength(1);
+  });
+
   it("dials the priority `dialPriorityForMethod` computes for the method, not a literal - background for a listed method, interactive for an unlisted one", async () => {
     const { factory, sockets } = makeFactory();
     let nextRequestId = 0;
@@ -742,14 +1080,24 @@ describe("WsRpcClient", () => {
     const backgroundPending = client.request(
       "host.status",
       {},
-      { idempotencyKey: null, authority, replayMustBeKeyed: false },
+      {
+        idempotencyKey: null,
+        authority,
+        replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
+      },
     );
     await flush();
     // "host.echo" is not - it must fall through to the interactive default.
     const interactivePending = client.request(
       "host.echo",
       { message: "hi" },
-      { idempotencyKey: null, authority, replayMustBeKeyed: false },
+      {
+        idempotencyKey: null,
+        authority,
+        replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
+      },
     );
     await flush();
 
@@ -809,6 +1157,7 @@ describe("WsRpcClient", () => {
       { message: "hi" },
       {
         replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
         idempotencyKey: "requested-key",
         authority: authorityForToken("token-abc"),
       },
@@ -847,6 +1196,7 @@ describe("WsRpcClient", () => {
       { message: "hi" },
       {
         replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
         idempotencyKey: "requested-key",
         authority: authorityForToken("token-abc"),
       },
@@ -893,6 +1243,7 @@ describe("WsRpcClient", () => {
         // What `createRetryingMessenger` sets after a post-send loss that only
         // a negotiated key made retryable.
         replayMustBeKeyed: true,
+        requiredHostMethodVersion: null,
         idempotencyKey: "requested-key",
         authority: authorityForToken("token-abc"),
       },
@@ -949,6 +1300,7 @@ describe("WsRpcClient", () => {
       { message: "hi" },
       {
         replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
         idempotencyKey: null,
         authority: {
           endpoint: {
@@ -1030,6 +1382,7 @@ describe("WsRpcClient", () => {
         { message: "hi" },
         {
           replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
           idempotencyKey: null,
           authority: {
             endpoint: {
@@ -1142,13 +1495,23 @@ describe("WsRpcClient", () => {
     const pending1 = client.request(
       "host.echo",
       { message: "one" },
-      { idempotencyKey: null, authority: authority, replayMustBeKeyed: false },
+      {
+        idempotencyKey: null,
+        authority: authority,
+        replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
+      },
     );
     await flush();
     const pending2 = client.request(
       "host.echo",
       { message: "two" },
-      { idempotencyKey: null, authority: authority, replayMustBeKeyed: false },
+      {
+        idempotencyKey: null,
+        authority: authority,
+        replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
+      },
     );
     await flush();
     expect(sockets).toHaveLength(2);
@@ -1230,7 +1593,12 @@ describe("WsRpcClient", () => {
     const pendingOld = oldClient.request(
       "host.echo",
       { message: "old" },
-      { idempotencyKey: null, authority: authority, replayMustBeKeyed: false },
+      {
+        idempotencyKey: null,
+        authority: authority,
+        replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
+      },
     );
     await flush();
     sockets[0].socket.fireOpen();
@@ -1242,7 +1610,12 @@ describe("WsRpcClient", () => {
     const pendingNew = newClient.request(
       "host.echo",
       { message: "new" },
-      { idempotencyKey: null, authority: authority, replayMustBeKeyed: false },
+      {
+        idempotencyKey: null,
+        authority: authority,
+        replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
+      },
     );
     await flush();
     sockets[1].socket.fireOpen();
@@ -1304,6 +1677,7 @@ describe("WsRpcClient", () => {
       { message: "hi" },
       {
         replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
         idempotencyKey: null,
         authority: {
           endpoint: {
@@ -1336,6 +1710,7 @@ describe("WsRpcClient", () => {
         idempotencyKey: null,
         authority: authorityForToken("token-abc"),
         replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
       },
     );
     await flush();
@@ -1832,6 +2207,7 @@ describe("WsRpcClient", () => {
           idempotencyKey: null,
           authority: authority,
           replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
         },
       );
       await driveUntilRequestSent(sockets);
@@ -1873,6 +2249,7 @@ describe("WsRpcClient", () => {
           idempotencyKey: null,
           authority: authority,
           replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
         },
       );
       await driveUntilRequestSent(sockets);
@@ -1913,6 +2290,7 @@ describe("WsRpcClient", () => {
           idempotencyKey: null,
           authority: authority,
           replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
         },
       );
       await driveUntilRequestSent(sockets);
@@ -1957,6 +2335,7 @@ describe("WsRpcClient", () => {
           idempotencyKey: null,
           authority: authority,
           replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
         },
       );
       // Attach before timers fire so the rejection is not unhandled under fake timers.
@@ -2100,6 +2479,7 @@ describe("WsRpcClient", () => {
             idempotencyKey: null,
             authority: authority,
             replayMustBeKeyed: false,
+            requiredHostMethodVersion: null,
           },
         );
         const rejection = expect(pending).rejects.toSatisfy(
@@ -2156,6 +2536,7 @@ describe("WsRpcClient", () => {
           idempotencyKey: null,
           authority: authority,
           replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
         },
       );
       await driveUntilRequestSent(sockets);
@@ -2208,6 +2589,7 @@ describe("WsRpcClient", () => {
           idempotencyKey: null,
           authority: authority,
           replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
         },
       );
       await driveUntilRequestSent(sockets);
@@ -2245,6 +2627,7 @@ describe("WsRpcClient", () => {
           idempotencyKey: null,
           authority: authority,
           replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
         },
       );
       await driveUntilRequestSent(sockets);
@@ -2293,6 +2676,7 @@ describe("WsRpcClient", () => {
           idempotencyKey: null,
           authority: authority,
           replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
         },
       );
       const rejection = expect(pending).rejects.toSatisfy(
@@ -2394,6 +2778,7 @@ describe("WsRpcClient", () => {
         { message: "hi" },
         {
           replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
           idempotencyKey: null,
           authority: {
             endpoint: {

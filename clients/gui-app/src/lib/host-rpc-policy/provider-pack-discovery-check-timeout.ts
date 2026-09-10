@@ -7,17 +7,17 @@
  * so the frame this budget covers can be the whole enabled set's poll, not the
  * one pack the user pressed the button for. Sized from that worst case:
  *
- *   15 managed packs      `traycer-host/resources/providers/PROVIDERS.json`
+ *   16 managed packs      `traycer-host/resources/providers/PROVIDERS.json`
  *    x 2 signed objects   `readLiveHead` calls `RegistryTransport.getSigned`
  *                         twice - the generation pointer, then the head
  *    x 2 HTTP requests    `HttpRegistryTransport.getSigned` fetches the object
  *                         AND its sibling `<path>.minisig`, sequentially
  *    x 10s per request    each carries its own
  *                         `AbortSignal.timeout(metadataTimeoutMs)`
- *   = 600s, run serially, with every request burning its full timeout
+ *   = 640s, run serially, with every request burning its full timeout
  *   + 60s margin for the deferred keyring load a manual check may kick, which
  *     is itself signed-metadata reads under that same 10s ceiling
- *   = 660s.
+ *   = 700s.
  *
  * FOUR timeout windows per pack, not two. The signature fetch is the one that
  * is easy to miss: it is inside `getSigned`, so it does not appear at the two
@@ -47,12 +47,14 @@
  * Read this constant as the one-poll bound it is rather than a guarantee that
  * no press can time out.
  *
- * ZERO SLACK, by design: 15 x 4 x 10s + 60s is exactly 660s, so the sixteenth
- * pack turns the internal mirror pin red the moment it lands. That is the
- * tripwire working, not an oversight - re-derive both numbers when it fires,
- * and do not pad this one to buy headroom, which disarms it silently. The
- * pack count is a COUNT, not a constant. The internal repo pins the other
- * direction - that today's real count still fits inside this number - at
+ * ZERO SLACK, by design: 16 x 4 x 10s + 60s is exactly 700s, so the
+ * seventeenth pack turns the internal mirror pin red the moment it lands. That
+ * is the tripwire working, not an oversight - re-derive both numbers when it
+ * fires, and do not pad this one to buy headroom, which disarms it silently.
+ * It has fired once already: the sixteenth pack (antigravity) is what moved
+ * this from 660s, re-derived rather than padded. The pack count is a COUNT,
+ * not a constant. The internal repo pins the other direction - that today's
+ * real count still fits inside this number - at
  * `traycer-host/src/domain/providers/__tests__/provider-pack-count-fits-gui-discovery-check-budget.test.ts`.
  *
  * Must equal the `joinResponseTimeoutMs` declared for
@@ -68,4 +70,4 @@
  * A standalone leaf module (no other imports), so the policy table and the
  * mutation hook can share one number without importing each other.
  */
-export const PROVIDER_PACK_DISCOVERY_CHECK_TIMEOUT_MS = 11 * 60 * 1000;
+export const PROVIDER_PACK_DISCOVERY_CHECK_TIMEOUT_MS = 700 * 1000;

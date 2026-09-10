@@ -81,7 +81,12 @@ export function resolveCreateProfileGate(
     };
   }
   const oauthArgs = loginCapability?.oauthArgs ?? null;
-  const disabled = !hostIsLocal || oauthArgs === null || oauthArgs.length === 0;
+  // Non-null, empty included: an ACP-authenticate provider's headless sign-in
+  // carries no login subcommand at all (the host drives ACP `authenticate`),
+  // so `[]` is capability, not absence. See `providerSignInUnavailableHint`
+  // for the full reasoning - these two gates must not disagree about whether a
+  // provider can browser-sign-in.
+  const disabled = !hostIsLocal || oauthArgs === null;
   return {
     disabled,
     reason: disabled

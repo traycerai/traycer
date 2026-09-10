@@ -14,3 +14,5 @@ resources/cli/*/
 # inject-host-launch-agent tests under scripts/prepack/__tests__/ and
 # scripts/prepack/__integration_tests__/.
 .tmp-*/
+.release-target-stamp.json
+resources/bundle/.release-target-uninstall-host-autostart.nsh

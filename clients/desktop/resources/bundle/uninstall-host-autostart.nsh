@@ -32,15 +32,17 @@
 ; CLI's own `host uninstall` has no destructive purge path either. The
 ; *execution* is what has to stop.
 ;
-; Production identity is hardcoded because it is the only one that ships: the
-; Windows release job runs `set-deploy-target.cjs --target=production`, and
-; `set-deploy-target.cjs` defines no target that would produce a Windows
-; installer under another label. The names below must stay in lockstep with
-; `windowsTaskName()` in clients/traycer-cli/src/service/label.ts (production ->
-; `\Traycer\Host`) and `hiddenHostLauncherPath()` in
-; clients/traycer-cli/src/service/platforms/windows.ts, which resolves to
-; `<cliInstallHomeDir("production")>\host-start-hidden.vbs` =
-; `%USERPROFILE%\.traycer\cli\host-start-hidden.vbs`.
+; A descriptor-stamped release include overrides these values. The defaults
+; preserve the historical production package command exactly.
+!ifndef TRAYCER_WINDOWS_TASK_NAME
+!define TRAYCER_WINDOWS_TASK_NAME "\Traycer\Host"
+!endif
+!ifndef TRAYCER_WINDOWS_TASK_FOLDER
+!define TRAYCER_WINDOWS_TASK_FOLDER "Traycer"
+!endif
+!ifndef TRAYCER_HOST_LAUNCHER
+!define TRAYCER_HOST_LAUNCHER "$PROFILE\.traycer\cli\host-start-hidden.vbs"
+!endif
 
 !macro customUnInstall
   ; THE UPDATE GUARD - the single most important line in this file.
@@ -77,16 +79,16 @@
     ; windows.ts, which needs a pid-verified scan to do better). That orphan is
     ; harmless here: it holds no handle on $INSTDIR, so it cannot block this
     ; uninstall, and with the trigger deleted below it never comes back.
-    nsExec::ExecToLog 'schtasks /End /TN "\Traycer\Host"'
+    nsExec::ExecToLog 'schtasks /End /TN "${TRAYCER_WINDOWS_TASK_NAME}"'
     Pop $R0
 
     ; Delete the logon trigger. THIS is the fix - it is what stops the host
     ; coming back at every future logon.
-    nsExec::ExecToLog 'schtasks /Delete /TN "\Traycer\Host" /F'
+    nsExec::ExecToLog 'schtasks /Delete /TN "${TRAYCER_WINDOWS_TASK_NAME}" /F'
     Pop $R0
 
     ; Remove the launcher the task's action pointed at.
-    Delete "$PROFILE\.traycer\cli\host-start-hidden.vbs"
+    Delete "${TRAYCER_HOST_LAUNCHER}"
 
     ; `schtasks /Delete` removes only the task; the `\Traycer` FOLDER it lived
     ; in survives and stays visible in the Task Scheduler tree. schtasks has no
@@ -106,7 +108,7 @@
     ;
     ; Wrapped in try/catch because GetFolder throws when the folder is already
     ; gone, which is a perfectly normal outcome here.
-    nsExec::ExecToLog `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "try{$$s=New-Object -ComObject Schedule.Service;$$s.Connect();$$f=$$s.GetFolder('\Traycer');if((@($$f.GetTasks(1)).Count -eq 0) -and (@($$f.GetFolders(0)).Count -eq 0)){$$s.GetFolder('\').DeleteFolder('Traycer',0)}}catch{}"`
+    nsExec::ExecToLog `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "try{$$s=New-Object -ComObject Schedule.Service;$$s.Connect();$$f=$$s.GetFolder('\${TRAYCER_WINDOWS_TASK_FOLDER}');if((@($$f.GetTasks(1)).Count -eq 0) -and (@($$f.GetFolders(0)).Count -eq 0)){$$s.GetFolder('\').DeleteFolder('${TRAYCER_WINDOWS_TASK_FOLDER}',0)}}catch{}"`
     Pop $R0
   ${endIf}
 !macroend

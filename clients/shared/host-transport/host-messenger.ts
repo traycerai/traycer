@@ -8,6 +8,7 @@ import {
   type ResponseOf,
   type RpcErrorCode,
   type RpcErrorDetails,
+  type SchemaVersion,
   type VersionedRpcRegistry,
   type WorktreeBusyHolder,
 } from "@traycer/protocol/framework/index";
@@ -33,6 +34,42 @@ export interface HostRequestAuthority {
   readonly endpoint: HostTransportEndpoint;
   readonly bearer: OpenFrameBearerSource;
   readonly abortSignal: AbortSignal;
+  /**
+   * Whether the session behind `bearer` may spend a CLOUD CAPABILITY, carried
+   * to the host on this request's `open` frame so a context the host registers
+   * as live inherits the verdict instead of defaulting to authorized.
+   *
+   * That registration is the reason a one-request socket needs a verdict at
+   * all. The request itself is the small half: the host registers this
+   * connection's context in its live-context registry, where background workers
+   * select it for work no client asked for - so a `/rpc` call from an
+   * unverified session would otherwise hand the host an authorized context to
+   * spend on that user's account.
+   *
+   * A LIVE READ, not a captured boolean, and that is the whole correctness of
+   * it. An authority outlives its construction: the request coordinator queues
+   * it, and `WsRpcClient` then awaits `session.dial()` before the open frame
+   * goes out. A snapshot taken at construction can therefore be sent long after
+   * the verdict moved - and a same-context demotion does NOT abort the context
+   * (that is the point of demoting in place), so the `abortSignal` fence never
+   * fires and nothing else catches it. The result was an `open` frame asserting
+   * `cloudAuthorized: true` for a session already demoted.
+   *
+   * So it is read as LATE as the frame allows - in `WsRpcClient` at the
+   * `session.send({kind: "open"})` that follows the dial. Note this is later
+   * than `bearer`, which `extractBearerOrThrowRpcError` pulls before
+   * `session.dial()`; the two are deliberately NOT level. The skew only runs
+   * one way and that way is closed: a demotion during the dial sends
+   * `cloudAuthorized: false` beside a pre-demotion bearer, which denies. The
+   * opposite pairing - a stale `true` beside a fresh bearer - is the one that
+   * would spend, and reading the verdict last is what makes it unreachable.
+   *
+   * OPTIONAL, and the absence is meaningful rather than a default: an authority
+   * that does not carry a verdict is one built before this existed, and the
+   * host reads its silence as authorized - the same "presence is the
+   * declaration" rule the wire field itself follows.
+   */
+  readonly cloudAuthorized?: () => boolean;
 }
 
 /**
@@ -67,6 +104,70 @@ export interface HostRequestOptions {
    * transports must refuse and answer ambiguously instead of dispatching.
    */
   readonly replayMustBeKeyed: boolean;
+  /**
+   * A floor this dispatch's OWN handshake must clear, or the request must not
+   * go out at all.
+   *
+   * The problem it solves is that a version read and the call it authorizes
+   * are two different connections. Every local unary dials a fresh socket and
+   * handshakes again, so a caller that asks `readNegotiatedMethodVersion` -
+   * or that forces a handshake with a probe RPC and reads what it recorded -
+   * has learned about a host process that may be gone by the time the real
+   * frame is written. A host restarted or rolled back under the same id in
+   * that window answers the request on its older resolver, and an additive
+   * request field the caller was relying on is silently stripped by the
+   * frozen schema of the version actually negotiated. The caller sees a
+   * normal response and cannot tell.
+   *
+   * So the requirement travels WITH the request and is checked against the
+   * manifest of the connection carrying it, between `openAck` and the request
+   * frame. Below the floor, both transports refuse pre-send with
+   * {@link HostMethodVersionUnsatisfiedError}; nothing was dispatched, so the
+   * refusal is unambiguous.
+   *
+   * `method` is not necessarily the method being sent. A caller may condition
+   * one call on the version of another - `epic.create` advertises no version
+   * of its own, and what decides whether this host serves creates locally is
+   * the `epic.listTasks` line it is on - so the requirement names its own
+   * subject. `null` is the ordinary case: no floor, dispatch whatever the
+   * handshake negotiates.
+   */
+  readonly requiredHostMethodVersion: RequiredHostMethodVersion | null;
+}
+
+/**
+ * "Method `method` must be advertised at `version` or higher, in the same
+ * major." See {@link HostRequestOptions.requiredHostMethodVersion}.
+ */
+export interface RequiredHostMethodVersion {
+  readonly method: string;
+  readonly version: SchemaVersion;
+}
+
+/**
+ * Whether a connection's advertised version for the required method clears the
+ * floor. `undefined` - the host does not advertise the method at all - does
+ * not, and neither does a different major: a major is a break, so "higher"
+ * across one is not the same capability.
+ *
+ * A host whose canonical entry sits on a HIGHER major also fails, and that is
+ * fail-closed rather than a gap. Such a peer may still serve the caller's
+ * major through the same-major downgrade, but its manifest entry carries only
+ * the canonical `{ major, minor }` - the minor it would serve on the older
+ * major is not in it - so there is no evidence here that the floor is met, and
+ * a floor exists precisely because guessing is what went wrong.
+ *
+ * Shared by both transports so the local and remote answers cannot drift.
+ */
+export function negotiatedVersionMeetsRequirement(
+  negotiated: SchemaVersion | undefined,
+  requirement: RequiredHostMethodVersion,
+): boolean {
+  if (negotiated === undefined) return false;
+  return (
+    negotiated.major === requirement.version.major &&
+    negotiated.minor >= requirement.version.minor
+  );
 }
 
 /**
@@ -232,6 +333,46 @@ export class HostRpcError extends Error {
         error.holdersRevision,
       ),
     });
+  }
+}
+
+/**
+ * A pre-send refusal: this connection's handshake does not meet the floor the
+ * caller attached to the request.
+ *
+ * Extends `HostRpcError` so it is non-retryable by construction - the retrying
+ * messenger only retries `RetryableTransportError`, and retrying is exactly
+ * wrong here, since a redial reaches the same downgraded host. Callers that
+ * have their own copy for this condition (`epic.listTasks`' withdrawn-verdict
+ * error, the composer's inline create refusal) catch this specific type rather
+ * than matching on `code`, which several unrelated paths also produce.
+ */
+export class HostMethodVersionUnsatisfiedError extends HostRpcError {
+  readonly requirement: RequiredHostMethodVersion;
+  /** What the connection advertised, or `null` when it advertised nothing. */
+  readonly negotiated: SchemaVersion | null;
+
+  constructor(details: {
+    requirement: RequiredHostMethodVersion;
+    negotiated: SchemaVersion | undefined;
+    requestId: string;
+    method: string;
+    hostId: string;
+  }) {
+    const advertised =
+      details.negotiated === undefined
+        ? "not advertised"
+        : `${String(details.negotiated.major)}.${String(details.negotiated.minor)}`;
+    super({
+      code: "DOWNGRADE_UNSUPPORTED",
+      message: `Host '${details.hostId}' negotiated '${details.requirement.method}' at ${advertised}, below the ${String(details.requirement.version.major)}.${String(details.requirement.version.minor)} this '${details.method}' call requires`,
+      requestId: details.requestId,
+      method: details.method,
+      fatalDetails: null,
+    });
+    this.name = "HostMethodVersionUnsatisfiedError";
+    this.requirement = details.requirement;
+    this.negotiated = details.negotiated ?? null;
   }
 }
 

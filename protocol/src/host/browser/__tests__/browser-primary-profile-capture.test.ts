@@ -45,7 +45,7 @@ const CAPTURED_RESPONSE = {
   reason: null,
 } as const;
 
-describe("browser.sessions@1.0 primary profile capture frames (ticket 06)", () => {
+describe("browser.sessions@2.0 primary profile capture frames (ticket 06)", () => {
   it("parses capturePrimaryProfile request frames", () => {
     expect(
       browserSessionsServerFrameSchema.safeParse(CAPTURE_REQUEST).success,

@@ -297,7 +297,11 @@ describe("HostUpdateBanner (Host Update Layer Redesign, D4)", () => {
     const applyStaged = vi.fn(() =>
       Promise.resolve<MutationOutcome<ApplyStagedOk>>({
         kind: "ok",
-        value: { appliedVersion: "1.4.2", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.2",
+          runningActivated: true,
+          applied: true,
+        },
       }),
     );
     const activateInstalled = vi.fn(() =>
@@ -327,7 +331,11 @@ describe("HostUpdateBanner (Host Update Layer Redesign, D4)", () => {
     const applyStaged = vi.fn(() =>
       Promise.resolve<MutationOutcome<ApplyStagedOk>>({
         kind: "ok",
-        value: { appliedVersion: "1.4.2", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.2",
+          runningActivated: true,
+          applied: true,
+        },
       }),
     );
     const management = makeManagement({
@@ -359,7 +367,11 @@ describe("HostUpdateBanner (Host Update Layer Redesign, D4)", () => {
       })
       .mockResolvedValueOnce({
         kind: "ok" as const,
-        value: { appliedVersion: "1.4.2", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.2",
+          runningActivated: true,
+          applied: true,
+        },
       });
     const management = makeManagement({ status: READY_STATUS, applyStaged });
     renderBanner(makeHost(management));
@@ -440,7 +452,11 @@ describe("HostUpdateBanner (Host Update Layer Redesign, D4)", () => {
       })
       .mockResolvedValueOnce({
         kind: "ok" as const,
-        value: { appliedVersion: "1.4.2", runningActivated: true },
+        value: {
+          appliedVersion: "1.4.2",
+          runningActivated: true,
+          applied: true,
+        },
       });
     const management = makeManagement({ status: READY_STATUS, applyStaged });
     renderBanner(makeHost(management));

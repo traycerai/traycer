@@ -1704,6 +1704,7 @@ describe("accumulateEvent", () => {
             { label: "date-fns", description: "Small", preview: "Preview" },
           ],
           multiSelect: false,
+          allowsCustomAnswer: null,
         },
       ],
     });
@@ -1746,6 +1747,7 @@ describe("accumulateEvent", () => {
           header: null,
           options: [{ label: "Yes", description: null, preview: null }],
           multiSelect: false,
+          allowsCustomAnswer: null,
         },
       ],
     });
@@ -1787,6 +1789,7 @@ describe("accumulateEvent", () => {
           header: "Approval",
           options: [{ label: "Yes", description: null, preview: null }],
           multiSelect: false,
+          allowsCustomAnswer: null,
         },
       ],
     });
@@ -1823,6 +1826,7 @@ describe("accumulateEvent", () => {
           header: "Library",
           options: [{ label: "date-fns", description: null, preview: null }],
           multiSelect: false,
+          allowsCustomAnswer: null,
         },
       ],
       answers: [],
@@ -1901,6 +1905,7 @@ describe("accumulateEvent", () => {
           header: "Library",
           options: [{ label: "date-fns", description: null, preview: null }],
           multiSelect: false,
+          allowsCustomAnswer: null,
         },
       ],
       answers: [submitted],
@@ -1973,6 +1978,7 @@ describe("accumulateEvent", () => {
           header: "Library",
           options: [{ label: "date-fns", description: null, preview: null }],
           multiSelect: false,
+          allowsCustomAnswer: null,
         },
       ],
       answers: [],
@@ -2030,6 +2036,7 @@ describe("accumulateEvent", () => {
           header: "Library",
           options: [{ label: "date-fns", description: null, preview: null }],
           multiSelect: false,
+          allowsCustomAnswer: null,
         },
       ],
     });

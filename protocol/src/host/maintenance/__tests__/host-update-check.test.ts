@@ -8,11 +8,14 @@ import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
   hostUpdateCheckV10,
   hostUpdateCheckV11,
+  hostUpdateCheckUpgradeV11ToV12,
+  hostUpdateCheckV12,
 } from "@traycer/protocol/host/maintenance/contracts";
 import {
   hostUpdateCheckRequestSchema,
   hostUpdateCheckRequestSchemaV11,
   hostUpdateCheckResponseSchemaV11,
+  hostUpdateCheckResponseSchemaV12,
   type HostAvailableManifest,
 } from "@traycer/protocol/host/maintenance/schemas";
 
@@ -20,7 +23,36 @@ const MANIFEST: HostAvailableManifest = {
   schemaVersion: 1,
   generatedAt: "2026-06-22T01:00:00.000Z",
   latest: "1.2.0",
-  versions: [],
+  versions: [
+    {
+      version: "1.2.0",
+      releasedAt: "2026-06-22T00:00:00.000Z",
+      releaseNotesUrl: "https://example.test/1.2.0",
+      yanked: false,
+      deprecationReason: null,
+      requiredCliVersion: null,
+      platforms: {
+        "darwin-arm64": {
+          available: false,
+          unavailableReason: "fixture",
+          url: "",
+          sizeBytes: 0,
+          sha256: "",
+          signatureUrl: "",
+          signatureAlgorithm: "minisign",
+          publicKeyId: "",
+        },
+      },
+    },
+  ],
+};
+
+const MANIFEST_WITH_STORE_FORMATS: HostAvailableManifest = {
+  ...MANIFEST,
+  versions: MANIFEST.versions.map((entry) => ({
+    ...entry,
+    storeFormats: { chatDb: 8 },
+  })),
 };
 
 const V10 = hostUpdateCheckV10.schemaVersion;
@@ -116,6 +148,55 @@ describe("host.update.check v1.1 response", () => {
         outcome,
       });
     }
+  });
+});
+
+describe("host.update.check v1.2 storeFormats", () => {
+  it("preserves published store formats in the catalog response", () => {
+    const response = hostUpdateCheckResponseSchemaV12.parse({
+      outcome: "ok",
+      manifest: MANIFEST_WITH_STORE_FORMATS,
+      effectiveIncludePreReleases: false,
+      includePreReleasesSource: "stable-default",
+    });
+    expect(response).toMatchObject({
+      outcome: "ok",
+      manifest: { versions: [{ storeFormats: { chatDb: 8 } }] },
+    });
+  });
+
+  it("upgrades an older peer with null per-entry formats", () => {
+    const response = hostUpdateCheckV11.responseSchema.parse({
+      outcome: "ok",
+      manifest: MANIFEST,
+      effectiveIncludePreReleases: false,
+      includePreReleasesSource: "stable-default",
+    });
+    const upgraded = hostUpdateCheckUpgradeV11ToV12.upgradeResponse(response);
+    expect(upgraded).toMatchObject({
+      outcome: "ok",
+      manifest: { versions: [{ storeFormats: null }] },
+    });
+    expect(() =>
+      hostUpdateCheckV12.responseSchema.parse(upgraded),
+    ).not.toThrow();
+  });
+
+  it("rejects an invalid published chat format", () => {
+    expect(
+      hostUpdateCheckResponseSchemaV12.safeParse({
+        outcome: "ok",
+        manifest: {
+          ...MANIFEST,
+          versions: MANIFEST.versions.map((entry) => ({
+            ...entry,
+            storeFormats: { chatDb: -1 },
+          })),
+        },
+        effectiveIncludePreReleases: false,
+        includePreReleasesSource: "stable-default",
+      }).success,
+    ).toBe(false);
   });
 });
 
@@ -258,10 +339,14 @@ describe("the derive state as a resolver sees it", () => {
 });
 
 describe("host.update.check registry line", () => {
-  it("makes v1.1 the current minor of major 1", () => {
-    expect(REGISTRY[1].latestMinor).toBe(1);
+  it("makes v1.2 the current minor of major 1", () => {
+    expect(REGISTRY[1].latestMinor).toBe(2);
     expect(REGISTRY[1].versions[1].contract).toBe(hostUpdateCheckV11);
     expect(REGISTRY[1].versions[1].upgradeFromPreviousVersion).not.toBe(null);
+    expect(REGISTRY[1].versions[2].contract).toBe(hostUpdateCheckV12);
+    expect(REGISTRY[1].versions[2].upgradeFromPreviousVersion).toBe(
+      hostUpdateCheckUpgradeV11ToV12,
+    );
   });
 
   it("adds no cross-major downgrade bridge - v1.0 and v1.1 share major 1", () => {

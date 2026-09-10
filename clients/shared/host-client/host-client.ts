@@ -5,6 +5,7 @@ import type {
   HostRequestAuthority,
   IHostMessenger,
   RequestOfMethod,
+  RequiredHostMethodVersion,
   ResponseOfMethod,
 } from "../host-transport/host-messenger";
 import { HostRpcError as HostRpcErrorCtor } from "../host-transport/host-messenger";
@@ -105,6 +106,22 @@ export interface HostRequester<Registry extends VersionedRpcRegistry> {
     params: RequestOfMethod<Registry, Method>,
     signal: AbortSignal | undefined,
   ): Promise<ResponseOfMethod<Registry, Method>>;
+  /**
+   * `requestWithSignal` under a version floor the dispatch's own handshake
+   * must clear, refused pre-send otherwise. On the narrow surface rather than
+   * only on the class because the callers that need it reach their host
+   * through a requester, and a floor a routed facade cannot express is a floor
+   * that silently is not applied. See the implementation for why it is a
+   * separate entry point.
+   */
+  requestWithSignalRequiringHostMethodVersion<
+    Method extends keyof Registry & string,
+  >(
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+    signal: AbortSignal | undefined,
+    requiredHostMethodVersion: RequiredHostMethodVersion,
+  ): Promise<ResponseOfMethod<Registry, Method>>;
   requestWithResponseTimeout<Method extends keyof Registry & string>(
     method: Method,
     params: RequestOfMethod<Registry, Method>,
@@ -151,6 +168,15 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     (event: HostClientChangeEvent) => void
   >();
   private readonly bearerRotationHandlers = new Set<() => void>();
+  /**
+   * Separate from `bearerRotationHandlers` because the two events are separate:
+   * a verdict can change with no rotation (a demotion whose bearer is
+   * untouched, a regain after a successful validation) and every ordinary
+   * refresh rotates without touching the verdict. One handler set would make
+   * each refresh re-assert a verdict and each verdict change look like a
+   * refresh.
+   */
+  private readonly cloudVerdictHandlers = new Set<() => void>();
 
   constructor(options: HostClientOptions<Registry>) {
     this.registry = options.registry;
@@ -202,9 +228,25 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
 
   /**
    * Returns the active `RequestContext`, or `null` when signed out / not
-   * yet authenticated. Final transport clients call this to extract a
-   * bearer (`ctx.credentials.getBearerToken()`) when opening a WS frame;
-   * shared-core consumers thread the context itself past the boundary.
+   * yet authenticated. Shared-core consumers thread the context itself past
+   * the boundary.
+   *
+   * Composition roots also read `.credentials` off this to hand the LEASE
+   * OBJECT to a transport as its `BearerSourceProvider` — that is the
+   * injection pattern, and it is what the five `bearer: () =>
+   * …getRequestContext()?.credentials ?? null` sites in gui-app are doing.
+   * Handing over the lease is fine; EXTRACTING the token from it here is not.
+   * `ctx.credentials.getBearerToken()` is lint-fenced
+   * (`eslint/traycer-cloud-bearer-fence-rules.mjs`), because reaching a raw
+   * bearer out of a context is how a call helps itself to a credential the
+   * composition never authorized for cloud use.
+   *
+   * An earlier version of this comment said final transport clients call this
+   * to extract a bearer when opening a WS frame. That was wrong in both halves:
+   * they receive an `OpenFrameBearerSource` INJECTED and call
+   * `source.getBearerToken()` on it (`ws-rpc-client.ts`,
+   * `auth-aware-messenger.ts` — the fence's allowlist), and they never call
+   * this method at all.
    */
   getRequestContext(): RequestContext | null {
     return this.requestContext;
@@ -326,7 +368,7 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
           return readActiveHostId;
         }
         if (property === "request") {
-          // The entry is captured HERE, at property access, so all four
+          // The entry is captured HERE, at property access, so all five
           // request members resolve at the same instant.
           const entry = resolveEntry();
           return <Method extends keyof Registry & string>(
@@ -350,6 +392,12 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
         }
         if (property === "requestWithSignal") {
           return target.requestForWithSignal.bind(target, resolveEntry());
+        }
+        if (property === "requestWithSignalRequiringHostMethodVersion") {
+          return target.requestForWithSignalRequiringHostMethodVersion.bind(
+            target,
+            resolveEntry(),
+          );
         }
         if (property === "requestWithResponseTimeout") {
           return target.requestForWithResponseTimeout.bind(
@@ -575,6 +623,25 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
     }
   }
 
+  onCloudVerdictChanged(handler: () => void): HostClientUnsubscribe {
+    this.cloudVerdictHandlers.add(handler);
+    return () => {
+      this.cloudVerdictHandlers.delete(handler);
+    };
+  }
+
+  /**
+   * Fires every `onCloudVerdictChanged` subscriber. Called by `HostRuntime`
+   * when the auth boundary changes what the active context may SPEND, which is
+   * a different event from rotating what it holds - see
+   * `notifyBearerRotated` above, and the two wire frames they drive.
+   */
+  notifyCloudVerdictChanged(): void {
+    for (const handler of [...this.cloudVerdictHandlers]) {
+      handler();
+    }
+  }
+
   /**
    * Delegates to the messenger. The messenger reads the latest endpoint /
    * context state at call time, so any `bind` / `setRequestContext` update
@@ -698,6 +765,59 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
         // `createRetryingMessenger`, and only for the attempts that follow a
         // failure whose retryability a negotiated key earned.
         replayMustBeKeyed: false,
+        // No floor: an ordinary caller dispatches whatever the handshake
+        // negotiates. `requestWithSignalRequiringHostMethodVersion` is the
+        // opt-in.
+        requiredHostMethodVersion: null,
+      }),
+    );
+  }
+
+  /**
+   * `requestWithSignal`, with a version floor the DISPATCH's own handshake
+   * must clear or the request is refused pre-send
+   * (`HostRequestOptions.requiredHostMethodVersion`, which documents the
+   * window this closes).
+   *
+   * A separate entry point rather than a parameter on the existing ones
+   * because the requirement is not a default any caller should acquire by
+   * accident: it makes a call REFUSABLE on a host that would otherwise serve
+   * it, and only a caller that knows why - one relying on an additive request
+   * field an older peer would silently strip - should opt in.
+   */
+  requestWithSignalRequiringHostMethodVersion<
+    Method extends keyof Registry & string,
+  >(
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+    signal: AbortSignal | undefined,
+    requiredHostMethodVersion: RequiredHostMethodVersion,
+  ): Promise<ResponseOfMethod<Registry, Method>> {
+    return this.requestForWithSignalRequiringHostMethodVersion(
+      // ∅ — see `request`.
+      null,
+      method,
+      params,
+      signal,
+      requiredHostMethodVersion,
+    );
+  }
+
+  requestForWithSignalRequiringHostMethodVersion<
+    Method extends keyof Registry & string,
+  >(
+    entry: HostDirectoryEntry | null,
+    method: Method,
+    params: RequestOfMethod<Registry, Method>,
+    signal: AbortSignal | undefined,
+    requiredHostMethodVersion: RequiredHostMethodVersion,
+  ): Promise<ResponseOfMethod<Registry, Method>> {
+    return this.scheduleRequest(entry, method, params, signal, (authority) =>
+      this.messenger.request(method, params, {
+        idempotencyKey: null,
+        authority,
+        replayMustBeKeyed: false,
+        requiredHostMethodVersion,
       }),
     );
   }
@@ -715,6 +835,10 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
         // A key the CALLER supplied, which is not the same as a replay that
         // requires one - see the sibling above.
         replayMustBeKeyed: false,
+        // No floor: an ordinary caller dispatches whatever the handshake
+        // negotiates. `requestWithSignalRequiringHostMethodVersion` is the
+        // opt-in.
+        requiredHostMethodVersion: null,
       }),
     );
   }
@@ -742,6 +866,7 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
           idempotencyKey: null,
           authority,
           replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
         },
       ),
     );
@@ -805,6 +930,15 @@ export class HostClient<Registry extends VersionedRpcRegistry> {
           binding.abortSignal,
           context.abortSignal,
         ]),
+        // A READER over this exact context, not its value at capture. The
+        // earlier version snapshotted here and argued that pairing it with the
+        // bearer made them "one snapshot"; that was wrong in the one direction
+        // that matters. `bearer` above is a LIVE source read when the open
+        // frame is built, while this was frozen at capture - so a request
+        // queued by the coordinator and then parked on `session.dial()` sent a
+        // stale verdict alongside a fresh bearer. Bound to the same context so
+        // both answer for the same session.
+        cloudAuthorized: () => context.cloudAuthorized,
       },
       authorityDomain: {
         bindingToken: binding.token,

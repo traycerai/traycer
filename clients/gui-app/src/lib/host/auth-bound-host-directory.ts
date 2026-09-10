@@ -61,9 +61,19 @@ export function buildDefaultRemoteFetcher(
       const response = await auth.fetchRegisteredHosts(era);
       if (response === null) {
         // See the mapping contract above: only a refresh issued for a
-        // signed-out era may read `null` as the authoritative clear. For a
-        // signed-in era, `null` can only be the registry 401-ing a bearer
-        // that is still current - a transient, retriable failure.
+        // signed-out era may read `null` as the authoritative clear. For an era
+        // that names an identity, `null` is never evidence the account has no
+        // hosts, so it takes the transient retain-last-known path.
+        //
+        // TWO causes reach it now, and neither is a clear. The registry may
+        // have 401-ed a bearer that is still current; or the session may be
+        // `unverified`, in which case `AuthService.cloudBearer()` refused to
+        // send at all. The second issues no request, so retrying it costs a
+        // local call and nothing on the wire, and the directory heals by itself
+        // the moment a verdict lands. Do NOT "simplify" this to `signed-out` for
+        // the unverified case: that would wipe a user's remote host list because
+        // their laptop woke up on a dead network, which is the exact tear-down
+        // this ticket exists to stop.
         return era.identity === null
           ? { kind: "signed-out" }
           : { kind: "failed" };

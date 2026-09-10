@@ -1,6 +1,6 @@
 import { isValidCompatibilityEpoch } from "@traycer/protocol/framework/index";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
-import { releaseManifestUrl } from "../config";
+import { config, releaseManifestUrl } from "../config";
 import { fetchText } from "./fetch-resource";
 import { currentHostPlatformKey } from "./platform-key";
 import type { HostPlatformAsset, HostPlatformKey } from "./types";
@@ -59,7 +59,7 @@ export interface CliVersionsManifest {
 // LOCKSTEP: config.releaseRepo MUST match the publisher side -
 // `${{ vars.RELEASE_REPO || 'traycerai/traycer' }}` in
 // update-cli-package-managers.yml, which uploads the `cli-manifest` asset.
-const CLI_VERSIONS_URL = releaseManifestUrl("cli-manifest");
+const CLI_VERSIONS_URL = releaseManifestUrl(config.cliFeedTag);
 
 export async function fetchCliVersions(): Promise<CliVersionsManifest> {
   return fetchCliVersionsWithSignal(null);

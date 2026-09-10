@@ -61,6 +61,16 @@ function describe(props: PublishedChatNoticeProps): {
       body: "The published copy could not be fetched. Check your connection and reopen this agent.",
     };
   }
+  if (props.state.kind === "unauthorized") {
+    // Deliberately not "could not reach" - nothing was attempted, and the
+    // remedy is a sign-in rather than a retry. Saying "check your connection"
+    // here sends someone to debug a network that is very likely fine, which
+    // is the same wrong conclusion the bounded host load used to draw.
+    return {
+      title: "Sign in to read this published copy",
+      body: `Your session could not be verified, so this device is not asking the cloud for anything. Local work is unaffected; sign in again to read the copy ${props.ownerLabel} published.`,
+    };
+  }
   if (props.refusal !== null) return props.refusal;
   // `loading` never reaches here (the tile renders its skeleton for that), and
   // `ready` is the whole point of the surface - so this is the refusal arm

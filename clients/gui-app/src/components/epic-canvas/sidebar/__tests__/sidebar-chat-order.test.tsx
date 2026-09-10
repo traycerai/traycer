@@ -1,10 +1,12 @@
 import "../../../../../__tests__/test-browser-apis";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
-import { useMemo } from "react";
-import { afterEach, describe, expect, it } from "vitest";
+import { useMemo, useState } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
+import { useEpicChatSortClock } from "@/components/epic-canvas/sidebar/epic-sidebar-filter";
+import type { NodeSortClock } from "@/lib/epic-sort";
 import {
   CHATS_TREE_FILTER,
   collectVisibleSidebarTreeIds,
@@ -13,7 +15,10 @@ import {
   useSidebarArchiveHiddenIds,
   useSidebarChatOrder,
 } from "@/components/epic-canvas/sidebar/epic-sidebar-selection";
-import { EpicSessionContext } from "@/lib/registries/epic-session-registry";
+import {
+  EpicSessionContext,
+  handleHostIds,
+} from "@/lib/registries/epic-session-registry";
 import { useEpicTreeIndex } from "@/lib/epic-selectors";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
@@ -167,6 +172,7 @@ function ChatOrderProbe() {
           tree,
           treeFilter: CHATS_TREE_FILTER,
           comparator: null,
+          clock: null,
         }).filter((id) => !archiveHiddenIds.has(id)),
         // The picker flattens, so compare against a fully expanded panel.
         expandedIds: new Set(Object.keys(tree.nodeById)),
@@ -175,6 +181,7 @@ function ChatOrderProbe() {
         emitFilter: CHATS_TREE_FILTER,
         visibleIds: combineSidebarVisibleIds(null, archiveHiddenIds, tree),
         comparator: null,
+        clock: null,
       }),
     [archiveHiddenIds, tree],
   );
@@ -188,6 +195,66 @@ function ChatOrderProbe() {
           .join(",")}
       </output>
     </>
+  );
+}
+
+/**
+ * The two picker hooks alone, with nothing else that needs a session, so this
+ * can render outside every provider.
+ */
+function ProviderlessOrderProbe() {
+  const chatOrder = useSidebarChatOrder(EPIC_ID);
+  const archiveHiddenIds = useSidebarArchiveHiddenIds(EPIC_ID);
+  return (
+    <>
+      <output data-testid="providerless-order">{chatOrder.join(",")}</output>
+      <output data-testid="providerless-hidden">{archiveHiddenIds.size}</output>
+    </>
+  );
+}
+
+/**
+ * The clock itself, rather than the order derived from it.
+ *
+ * The order probe above cannot see the clock's CONTENT: with no session there
+ * is no tree, so an empty order is what it reports whatever the clock says. A
+ * mutation proved that - a no-session clock carrying a bogus entry passed every
+ * test in this file. What the surface is owed is a NEUTRAL clock, and neutral is
+ * a fact about the map, so it has to be read off the map.
+ */
+function ProviderlessClockProbe() {
+  const clock = useEpicChatSortClock();
+  // The FIRST render's clock, held by a state initializer - which runs exactly
+  // once - rather than a ref, because reading a ref during render is banned
+  // here. A snapshot that is not identity-stable is not merely churn: React
+  // requires `useSyncExternalStore`'s snapshot to be cached, and re-mints loop.
+  const [firstClock] = useState<NodeSortClock | null>(clock);
+  return (
+    <>
+      <output data-testid="clock-size">
+        {clock === null ? "null" : clock.size}
+      </output>
+      <output data-testid="clock-stable">{String(clock === firstClock)}</output>
+    </>
+  );
+}
+
+/**
+ * The in-session path, counting SUBSCRIPTIONS rather than reading a value.
+ *
+ * `useEpicStore` handed `useSyncExternalStore` the store's own `subscribe`,
+ * which is one stable reference for the life of the store, so the sidebar
+ * subscribed once however often it re-rendered. Reaching the store directly
+ * puts that reference behind a closure over the handle, and an unmemoised one
+ * would re-subscribe on every render of a panel that re-renders constantly.
+ * Nothing else in the suite would notice.
+ */
+function CountingSessionClockProbe(props: { readonly label: string }) {
+  const clock = useEpicChatSortClock();
+  return (
+    <output data-testid="session-clock">
+      {props.label}:{clock === null ? "null" : clock.size}
+    </output>
   );
 }
 
@@ -222,6 +289,278 @@ describe("useSidebarChatOrder", () => {
       expect(chatOrder).toBe(
         screen.getByTestId("sidebar-chat-rows").textContent,
       );
+    } finally {
+      view.unmount();
+      handle.dispose();
+    }
+  });
+
+  /**
+   * The picker is not canvas-only: a browser tile on the Start Page resolves
+   * the same annotation route at the app shell, and a Start Page browser tab
+   * belongs to no epic, so there is no `<EpicSessionProvider>` above it. This
+   * used to throw out of the tree read and take the whole window down.
+   */
+  it("resolves to an empty order with no epic session", () => {
+    expect(() => {
+      render(<ProviderlessOrderProbe />);
+    }).not.toThrow();
+    expect(screen.getByTestId("providerless-order").textContent).toBe("");
+    expect(screen.getByTestId("providerless-hidden").textContent).toBe("0");
+  });
+
+  it("hands a providerless surface an EMPTY clock, and the same one each render", () => {
+    const view = render(<ProviderlessClockProbe />);
+
+    // Empty is the neutral answer, not a degraded one: the clock carries only
+    // the entries that differ from a node's own stamp, so none means every
+    // node sorts on its own stamp - what this surface did before the clock.
+    expect(screen.getByTestId("clock-size").textContent).toBe("0");
+
+    view.rerender(<ProviderlessClockProbe />);
+
+    expect(screen.getByTestId("clock-stable").textContent).toBe("true");
+  });
+
+  it("subscribes to the session store once, however often it re-renders", () => {
+    const handle = createSession();
+    // Spied on the REAL handle rather than a rebuilt one: the store is a
+    // callable bound store, and a spread copy silently drops its call
+    // signature.
+    const subscribeSpy = vi.spyOn(handle.store, "subscribe");
+    const view = render(
+      <EpicSessionContext.Provider value={handle}>
+        <CountingSessionClockProbe label="a" />
+      </EpicSessionContext.Provider>,
+    );
+    try {
+      const afterFirst = subscribeSpy.mock.calls.length;
+      expect(afterFirst).toBeGreaterThan(0);
+
+      for (const label of ["b", "c", "d"]) {
+        view.rerender(
+          <EpicSessionContext.Provider value={handle}>
+            <CountingSessionClockProbe label={label} />
+          </EpicSessionContext.Provider>,
+        );
+      }
+      // The probe really did re-render, so the count below is a fact about
+      // re-subscription rather than about a component that never ran again.
+      expect(screen.getByTestId("session-clock").textContent).toContain("d:");
+
+      expect(subscribeSpy.mock.calls.length).toBe(afterFirst);
+    } finally {
+      subscribeSpy.mockRestore();
+      view.unmount();
+      handle.dispose();
+    }
+  });
+});
+
+/**
+ * The picker follows the publication clock, at BOTH tree levels.
+ *
+ * The send-to-chat picker is reached from a terminal quote, an artifact quote
+ * and a browser annotation - none of them inside a chat panel - so it has no
+ * `SidebarSortClockContext` to read and used to sort on the projection's raw
+ * `updatedAt`. For a FOREIGN row that stamp is a metadata timestamp a
+ * publication never moves, so a collaborator's chat that had just streamed a
+ * turn stayed wherever its last rename left it, one or more places off the
+ * order the sidebar renders.
+ *
+ * `useEpicChatSortClock` derives the same clock the panel publishes from the
+ * same store inputs. The head arrives on `chatRecordHeads`, which the record
+ * stream feeds - so this is the head-only delta case end to end: nothing about
+ * the row's METADATA moves, and the order still changes.
+ */
+const SESSION_HOST_ID = "host-a";
+const PICKER_FOREIGN_HOST_ID = "host-b";
+const OLDER_ROOT_ID = "chat-foreign-older";
+const NEWER_ROOT_ID = "chat-foreign-newer";
+const OLDER_CHILD_ID = "chat-foreign-child-older";
+const NEWER_CHILD_ID = "chat-foreign-child-newer";
+const PARENT_ID = "chat-local-parent";
+
+function foreignChat(id: string, parentId: string | null, updatedAt: number) {
+  const entry = new Y.Map<unknown>();
+  entry.set("id", id);
+  entry.set("title", id);
+  entry.set("parentId", parentId);
+  entry.set("createdAt", 1);
+  // The metadata stamp. A publication does not move it, which is the whole
+  // reason this row needs a clock.
+  entry.set("updatedAt", updatedAt);
+  entry.set("hostId", PICKER_FOREIGN_HOST_ID);
+  entry.set("archivedAt", null);
+  entry.set("messages", new Y.Array<unknown>());
+  return entry;
+}
+
+function seedForeignDoc(doc: Y.Doc): void {
+  const chats = new Y.Map<unknown>();
+  chats.set(NEWER_ROOT_ID, foreignChat(NEWER_ROOT_ID, null, 200));
+  chats.set(OLDER_ROOT_ID, foreignChat(OLDER_ROOT_ID, null, 100));
+  // A local parent so the nested pair is walked as CHILDREN - the level
+  // `collectVisibleSidebarTreeIds` orders, which is a different call from the
+  // one that orders roots.
+  const parent = new Y.Map<unknown>();
+  parent.set("id", PARENT_ID);
+  parent.set("title", PARENT_ID);
+  parent.set("parentId", null);
+  parent.set("createdAt", 1);
+  parent.set("updatedAt", 300);
+  parent.set("hostId", SESSION_HOST_ID);
+  parent.set("archivedAt", null);
+  parent.set("messages", new Y.Array<unknown>());
+  chats.set(PARENT_ID, parent);
+  chats.set(NEWER_CHILD_ID, foreignChat(NEWER_CHILD_ID, PARENT_ID, 200));
+  chats.set(OLDER_CHILD_ID, foreignChat(OLDER_CHILD_ID, PARENT_ID, 100));
+  const epic = doc.getMap("epic");
+  epic.set("title", "Chat order");
+  epic.set("artifacts", new Y.Map<unknown>());
+  epic.set("chats", chats);
+}
+
+function createForeignSession(): OpenedStoreForTest {
+  const captured: { value: EpicStreamCallbacks | null } = { value: null };
+  const factory: EpicStreamClientFactory = (_epicId, callbacks) => {
+    captured.value = callbacks;
+    return {
+      applyUpdate: () => undefined,
+      awareness: () => undefined,
+      applyArtifactRoomUpdate: () => undefined,
+      artifactRoomAwareness: () => undefined,
+      retryMigration: () => undefined,
+      close: () => undefined,
+    };
+  };
+  const handle = openStoreForTest({
+    epicId: EPIC_ID,
+    userId: "user-1",
+    factories: { streamClientFactory: factory, laneSelection: null },
+    writeCommand: null,
+  });
+  if (captured.value === null) throw new Error("stream factory not invoked");
+  // What `epic-session-provider.tsx` stamps in production. Without it
+  // `useEpicSessionHostId` reads `null`, every row reads as own-host, and the
+  // clock is empty - so this registration is what makes the test non-vacuous.
+  handleHostIds.set(handle, SESSION_HOST_ID);
+  const donor = new Y.Doc();
+  seedForeignDoc(donor);
+  captured.value.onSnapshot(makeMeta(), Y.encodeStateAsUpdate(donor));
+  donor.destroy();
+  return handle;
+}
+
+function PickerOrderProbe() {
+  return (
+    <output data-testid="chat-order">
+      {useSidebarChatOrder(EPIC_ID).join(",")}
+    </output>
+  );
+}
+
+function publishHead(
+  handle: OpenedStoreForTest,
+  chatId: string,
+  parentChatId: string | null,
+  publishedAt: number,
+): void {
+  handle.store.getState().applyChatRecordDelta({
+    kind: "upsert",
+    epicId: EPIC_ID,
+    record: {
+      chatId,
+      ownerUserId: "user-1",
+      originHostId: PICKER_FOREIGN_HOST_ID,
+      title: chatId,
+      isTitleEditedByUser: false,
+      // The row's REAL parent. Passing `null` here would reparent the chat to
+      // a root, and a clocked root sort would then float it for a reason that
+      // has nothing to do with the level under test - which is exactly what
+      // an ablation of the child-level clock caught.
+      parentChatId,
+      createdAt: 1,
+      // Unchanged from the doc entry: this is a HEAD-ONLY delta, so nothing
+      // the metadata guard orders by has moved.
+      updatedAt: 100,
+      archived: false,
+      archivedAt: null,
+      runSettingsSummary: "claude",
+      revision: 1,
+      visibility: "task",
+      origin: "foreign",
+      head: {
+        headSha256: "a".repeat(64),
+        throughRecordSeq: 1,
+        publishedAt,
+      },
+    },
+  });
+}
+
+describe("useSidebarChatOrder follows the record head's publishedAt", () => {
+  it("floats a foreign ROOT above its newer-stamped sibling on a head-only delta", async () => {
+    const handle = createForeignSession();
+    const view = render(
+      <EpicSessionContext.Provider value={handle}>
+        <PickerOrderProbe />
+      </EpicSessionContext.Provider>,
+    );
+    try {
+      await waitFor(() => {
+        expect(screen.getByTestId("chat-order").textContent).toContain(
+          OLDER_ROOT_ID,
+        );
+      });
+      const before = screen.getByTestId("chat-order").textContent;
+      // Metadata order: the newer stamp leads.
+      expect(before.indexOf(NEWER_ROOT_ID)).toBeLessThan(
+        before.indexOf(OLDER_ROOT_ID),
+      );
+
+      publishHead(handle, OLDER_ROOT_ID, null, 900);
+
+      await waitFor(() => {
+        const after = screen.getByTestId("chat-order").textContent;
+        expect(after.indexOf(OLDER_ROOT_ID)).toBeLessThan(
+          after.indexOf(NEWER_ROOT_ID),
+        );
+      });
+    } finally {
+      view.unmount();
+      handle.dispose();
+    }
+  });
+
+  it("floats a foreign CHILD above its newer-stamped sibling too", async () => {
+    // The second ordering call: roots and children are sorted by different
+    // functions, and clocking only one leaves the list half-corrected.
+    const handle = createForeignSession();
+    const view = render(
+      <EpicSessionContext.Provider value={handle}>
+        <PickerOrderProbe />
+      </EpicSessionContext.Provider>,
+    );
+    try {
+      await waitFor(() => {
+        expect(screen.getByTestId("chat-order").textContent).toContain(
+          OLDER_CHILD_ID,
+        );
+      });
+      const before = screen.getByTestId("chat-order").textContent;
+      expect(before.indexOf(NEWER_CHILD_ID)).toBeLessThan(
+        before.indexOf(OLDER_CHILD_ID),
+      );
+
+      publishHead(handle, OLDER_CHILD_ID, PARENT_ID, 900);
+
+      await waitFor(() => {
+        const after = screen.getByTestId("chat-order").textContent;
+        expect(after.indexOf(OLDER_CHILD_ID)).toBeLessThan(
+          after.indexOf(NEWER_CHILD_ID),
+        );
+      });
     } finally {
       view.unmount();
       handle.dispose();

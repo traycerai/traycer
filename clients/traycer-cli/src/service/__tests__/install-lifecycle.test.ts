@@ -3,6 +3,7 @@ import type {
   CompetingRegistrationRetirement,
   ServiceController,
   ServiceLabel,
+  StopServiceOptions,
 } from "../index";
 import {
   createBytesOnlyInstallLifecycle,
@@ -11,7 +12,8 @@ import {
   type ServiceInstallLifecycleState,
 } from "../install-lifecycle";
 import { CLI_ERROR_CODES, CliError } from "../../runner/errors";
-import type { SwapLockRecovery } from "../../installer";
+import { NO_INSTALL_PHASE_HOOKS, type SwapLockRecovery } from "../../installer";
+import { makeBarrierGate } from "../../__tests__/support/barrier-gate";
 import { epochMicrosNow } from "../platforms/windows";
 
 const mocks = vi.hoisted(() => ({
@@ -99,7 +101,15 @@ interface ControllerHarness {
   readonly install: Mock<() => Promise<void>>;
   readonly start: Mock<() => Promise<void>>;
   readonly restart: Mock<() => Promise<void>>;
-  readonly stop: Mock<() => Promise<void>>;
+  readonly stop: Mock<
+    (label: ServiceLabel, options: StopServiceOptions) => Promise<void>
+  >;
+  /**
+   * Whether the fake stop route reports a live host before acting
+   * (`StopServiceOptions.onHostAddressed`). `true` models every fixture's
+   * assumed running host; a test that models a stopped or dead one flips it.
+   */
+  stopAddressesHost: boolean;
   // The kickstart -k half of the post-swap externally-managed relaunch -
   // surfaced separately from `start` so tests can assert which of the two
   // kickstart routes the lifecycle actually took.
@@ -114,7 +124,18 @@ function makeController(initialState: HarnessServiceState): ControllerHarness {
   const install = vi.fn(async () => undefined);
   const start = vi.fn(async () => undefined);
   const restart = vi.fn(async () => undefined);
-  const stop = vi.fn(async () => undefined);
+  // A real route reports a live host only when its own pid read finds one:
+  // `running` and `externally-managed` fixtures model a host that is up, a
+  // `stopped` or unregistered one models none.
+  const harnessState = {
+    stopAddressesHost:
+      initialState === "running" || initialState === "externally-managed",
+  };
+  const stop = vi.fn(
+    async (_label: ServiceLabel, options: StopServiceOptions) => {
+      if (harnessState.stopAddressesHost) options.onHostAddressed?.();
+    },
+  );
   const relaunchAfterRestart = vi.fn(async () => {
     await start();
   });
@@ -135,8 +156,8 @@ function makeController(initialState: HarnessServiceState): ControllerHarness {
     stop,
     start,
     restart,
-    stopForRestart: vi.fn(async () => {
-      await stop();
+    stopForRestart: vi.fn(async (serviceLabel, options) => {
+      await stop(serviceLabel, options);
       return { forcedRecycle: false };
     }),
     relaunchAfterRestart,
@@ -154,6 +175,12 @@ function makeController(initialState: HarnessServiceState): ControllerHarness {
     stop,
     relaunchAfterRestart,
     retireCompetingRegistration,
+    get stopAddressesHost() {
+      return harnessState.stopAddressesHost;
+    },
+    set stopAddressesHost(value: boolean) {
+      harnessState.stopAddressesHost = value;
+    },
   };
 }
 
@@ -177,6 +204,7 @@ async function runLifecycle(
     bootstrap: options,
     force,
     onWillStopHost: null,
+    hooks: NO_INSTALL_PHASE_HOOKS,
   });
   await handle.lifecycle.beforeSwap();
   await handle.lifecycle.afterSwap();
@@ -248,6 +276,36 @@ describe("service install lifecycle re-registration", () => {
     },
   );
 
+  it("runs hooks.afterSwap at the TOP of its own afterSwap, before the re-registration install call", async () => {
+    const harness = makeController("running");
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const order: string[] = [];
+    harness.install.mockImplementation(async () => {
+      order.push("install");
+    });
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap,
+      force: false,
+      onWillStopHost: null,
+      hooks: {
+        beforeSwapCommit: async () => {},
+        afterSwap: async () => {
+          order.push("hooks.afterSwap");
+        },
+      },
+    });
+
+    await handle.lifecycle.beforeSwap();
+    await handle.lifecycle.afterSwap();
+
+    expect(order).toEqual(["hooks.afterSwap", "install"]);
+    // Falsification: move `await options.hooks.afterSwap()` below the
+    // re-registration branch in `install-lifecycle.ts`'s `afterSwap` (or
+    // drop the call) and "install" would lead "hooks.afterSwap" in `order`,
+    // or the hook would never appear at all.
+  });
+
   it("leaves a not-installed service untouched when bootstrap is null", async () => {
     const { state, harness } = await runLifecycle("not-installed", null, false);
 
@@ -288,6 +346,7 @@ describe("service install lifecycle re-registration", () => {
       bootstrap,
       force: false,
       onWillStopHost: null,
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
     runningHandle.lifecycle.setMutationVerifier?.(async () => {
       throw lost;
@@ -307,6 +366,7 @@ describe("service install lifecycle re-registration", () => {
       bootstrap,
       force: false,
       onWillStopHost: null,
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
     let verifierCalls = 0;
     externalHandle.lifecycle.setMutationVerifier?.(async () => {
@@ -332,6 +392,7 @@ describe("service install lifecycle re-registration", () => {
       bootstrap,
       force: false,
       onWillStopHost: null,
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
     bootstrapHandle.lifecycle.setMutationVerifier?.(async () => {
       throw lost;
@@ -449,7 +510,10 @@ describe("service install lifecycle re-registration", () => {
         true,
       );
 
-      expect(harness.stop).toHaveBeenCalledWith(label, { force: true });
+      expect(harness.stop).toHaveBeenCalledWith(
+        label,
+        expect.objectContaining({ force: true }),
+      );
     },
   );
 
@@ -458,7 +522,10 @@ describe("service install lifecycle re-registration", () => {
     // forwards `options.force` on every platform.
     const { harness } = await runLifecycle("running", bootstrap, true);
 
-    expect(harness.stop).toHaveBeenCalledWith(label, { force: true });
+    expect(harness.stop).toHaveBeenCalledWith(
+      label,
+      expect.objectContaining({ force: true }),
+    );
   });
 
   it.runIf(process.platform === "darwin")(
@@ -483,6 +550,7 @@ describe("service install lifecycle re-registration", () => {
         bootstrap,
         force: false,
         onWillStopHost: null,
+        hooks: NO_INSTALL_PHASE_HOOKS,
       });
 
       await expect(handle.lifecycle.beforeSwap()).rejects.toMatchObject({
@@ -519,6 +587,7 @@ describe("service install lifecycle re-registration", () => {
         bootstrap,
         force: false,
         onWillStopHost: null,
+        hooks: NO_INSTALL_PHASE_HOOKS,
       });
 
       await expect(handle.lifecycle.beforeSwap()).resolves.toBeUndefined();
@@ -559,6 +628,7 @@ describe("service install lifecycle re-registration", () => {
         bootstrap,
         force: false,
         onWillStopHost: null,
+        hooks: NO_INSTALL_PHASE_HOOKS,
       });
 
       await expect(handle.lifecycle.beforeSwap()).resolves.toBeUndefined();
@@ -587,6 +657,7 @@ describe("service install lifecycle re-registration", () => {
         bootstrap,
         force: false,
         onWillStopHost: null,
+        hooks: NO_INSTALL_PHASE_HOOKS,
       });
       await handle.lifecycle.beforeSwap();
 
@@ -624,6 +695,7 @@ describe("service install lifecycle re-registration", () => {
       bootstrap,
       force: false,
       onWillStopHost: null,
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
     await handle.lifecycle.beforeSwap();
 
@@ -804,6 +876,7 @@ describe("runWithPublishedHostStartAdoption (via registerService's install)", ()
       bootstrap,
       force: false,
       onWillStopHost: null,
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
     const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
     if (setPublisher === undefined) {
@@ -838,6 +911,7 @@ describe("runWithPublishedHostStartAdoption (via registerService's install)", ()
       bootstrap,
       force: false,
       onWillStopHost: null,
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
     const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
     if (setPublisher === undefined) {
@@ -879,6 +953,7 @@ describe("runWithPublishedHostStartAdoption (via registerService's install)", ()
       bootstrap,
       force: false,
       onWillStopHost: null,
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
     const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
     if (setPublisher === undefined) {
@@ -910,6 +985,7 @@ describe("runWithPublishedHostStartAdoption (via registerService's install)", ()
       bootstrap,
       force: false,
       onWillStopHost: null,
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
     const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
     if (setPublisher === undefined) {
@@ -952,6 +1028,7 @@ describe("runWithPublishedHostStartAdoption (via registerService's install)", ()
       bootstrap,
       force: false,
       onWillStopHost: null,
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
     const setPublisher = handle.lifecycle.setHostStartAdoptionPublisher;
     if (setPublisher === undefined) {
@@ -1003,10 +1080,12 @@ describe("swap-lock recovery wiring", () => {
         bootstrap: null,
         force: false,
         onWillStopHost: null,
+        hooks: NO_INSTALL_PHASE_HOOKS,
       });
       const bytesOnly = createBytesOnlyInstallLifecycle(
         harness.controller,
         label,
+        NO_INSTALL_PHASE_HOOKS,
       );
       recoveries = [
         serviceHandle.lifecycle.swapLockRecovery,
@@ -1058,10 +1137,12 @@ describe("swap-lock recovery wiring", () => {
         bootstrap: null,
         force: false,
         onWillStopHost: null,
+        hooks: NO_INSTALL_PHASE_HOOKS,
       });
       const bytesOnly = createBytesOnlyInstallLifecycle(
         harness.controller,
         label,
+        NO_INSTALL_PHASE_HOOKS,
       );
       expect(serviceHandle.lifecycle.swapLockRecovery).toBeNull();
       expect(bytesOnly.swapLockRecovery).toBeNull();
@@ -1100,6 +1181,7 @@ describe("service install lifecycle onWillStopHost", () => {
       onWillStopHost: () => {
         order.push("boundary");
       },
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
 
     await handle.lifecycle.beforeSwap();
@@ -1117,6 +1199,7 @@ describe("service install lifecycle onWillStopHost", () => {
       bootstrap: null,
       force: false,
       onWillStopHost,
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
     const lost = new Error("update attempt capability was lost");
     handle.lifecycle.setMutationVerifier?.(async () => {
@@ -1140,6 +1223,7 @@ describe("service install lifecycle onWillStopHost", () => {
       bootstrap: null,
       force: false,
       onWillStopHost,
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
 
     await expect(handle.lifecycle.beforeSwap()).rejects.toBe(probeFailure);
@@ -1157,6 +1241,7 @@ describe("service install lifecycle onWillStopHost", () => {
       bootstrap: null,
       force: false,
       onWillStopHost,
+      hooks: NO_INSTALL_PHASE_HOOKS,
     });
 
     await withPlatformAsync("linux", () => handle.lifecycle.beforeSwap());
@@ -1164,5 +1249,411 @@ describe("service install lifecycle onWillStopHost", () => {
     expect(onWillStopHost).not.toHaveBeenCalled();
     expect(harness.stop).not.toHaveBeenCalled();
     expect(handle.state.stoppedBeforeSwap).toBe(false);
+  });
+});
+
+// Codex P2: `restartAfterAbortedSwap` used to gate on "did we call stop?"
+// when the question is "was there a host to put back?". Those differ on
+// Windows, where both lifecycles stop UNCONDITIONALLY - a force-kill of
+// stray processes whose open handles inside `install/` would fail the
+// rename, not a host shutdown. A service the probe found `stopped` still
+// set the flag, and a refused post-stop floor check then started a host the
+// user had deliberately stopped, directly against the bytes-only no-start
+// contract. Fixed via `hostWasRunningBefore(priorState)`, true only for
+// `running`/`externally-managed`. These tests call `restartAfterAbortedSwap`
+// directly after `beforeSwap` - exactly what `assertFloorAfterStopOrRestore`
+// does on a refusal, without needing to drive a real floor refusal through
+// the full install path.
+describe("restartAfterAbortedSwap (hostWasRunningBefore gating)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.serviceLabelForMock.mockReturnValue(label);
+  });
+
+  describe("service lifecycle", () => {
+    it("restarts a host that was RUNNING before the stop via relaunchAfterRestart, not a plain start", async () => {
+      // NOT `controller.start` - macOS's `stopService` waits on the HOST
+      // pid from `pid.json`, while the launchd job is the SUPERVISOR, which
+      // outlives its child by the whole post-mortem. There is a window
+      // where the host is gone, the stop has returned, and launchd still
+      // considers the job running - and a plain kickstart against a
+      // running job is a silent no-op (`relaunchServiceAfterRestart`,
+      // `platforms/macos.ts`). The recovery would report success and leave
+      // the machine hostless on the old install.
+      const harness = makeController("running");
+      mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+      const handle = createServiceInstallLifecycle({
+        environment: "production",
+        bootstrap: null,
+        force: false,
+        onWillStopHost: null,
+        hooks: NO_INSTALL_PHASE_HOOKS,
+      });
+
+      await withPlatformAsync("linux", () => handle.lifecycle.beforeSwap());
+      expect(handle.state.stoppedBeforeSwap).toBe(true);
+
+      await handle.lifecycle.restartAfterAbortedSwap();
+
+      expect(harness.relaunchAfterRestart).toHaveBeenCalledTimes(1);
+      expect(harness.relaunchAfterRestart).toHaveBeenCalledWith(label, {
+        forcedRecycle: true,
+      });
+    });
+
+    it("on Windows, never restarts a service the probe found STOPPED, even though the handle-kill stop still ran", async () => {
+      const harness = makeController("stopped");
+      mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+      const handle = createServiceInstallLifecycle({
+        environment: "production",
+        bootstrap: null,
+        force: false,
+        onWillStopHost: null,
+        hooks: NO_INSTALL_PHASE_HOOKS,
+      });
+
+      await withPlatformAsync("win32", () => handle.lifecycle.beforeSwap());
+      // The Windows handle-kill runs regardless of prior state - this is the
+      // fact `stoppedBeforeSwap` alone used to be (wrongly) read as "there
+      // is a host to put back".
+      expect(handle.state.stoppedBeforeSwap).toBe(true);
+      expect(harness.stop).toHaveBeenCalledTimes(1);
+
+      await withPlatformAsync("win32", () =>
+        handle.lifecycle.restartAfterAbortedSwap(),
+      );
+
+      // Both routes, so a future regression cannot slip through on
+      // whichever one this suite left unwatched.
+      expect(harness.start).not.toHaveBeenCalled();
+      expect(harness.relaunchAfterRestart).not.toHaveBeenCalled();
+    });
+
+    it("a degraded Desktop-managed stop still counts as DISPATCHED - relaunchAfterRestart runs on a post-stop refusal even though controller.stop rejected", async () => {
+      // `state.stoppedBeforeSwap` is assigned only after `controller.stop`
+      // RESOLVES. A Desktop-managed stop that degrades - the claim commits
+      // on the host but its acknowledgement is lost, so this route reports
+      // `unreachable`/`hung` and the `externally-managed` + darwin branch
+      // swallows it - used to leave that flag false, no-opping the restore
+      // and finishing the shutdown the host had already committed to: a
+      // machine left hostless with the old install never touched. Gating on
+      // DISPATCH (`onWillStopHost` firing) instead of success is the fix.
+      const harness = makeController("externally-managed");
+      mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+      // The route found the live host (and reports it) before the claim
+      // degraded - the shape of a commit whose acknowledgement was lost.
+      harness.stop.mockImplementation(async (_label, options) => {
+        options.onHostAddressed?.();
+        throw Object.assign(new Error("simulated degraded stop"), {
+          code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        });
+      });
+      const handle = createServiceInstallLifecycle({
+        environment: "production",
+        bootstrap: null,
+        force: false,
+        onWillStopHost: null,
+        hooks: NO_INSTALL_PHASE_HOOKS,
+      });
+
+      await withPlatformAsync("darwin", () => handle.lifecycle.beforeSwap());
+      // The degrade is swallowed - `beforeSwap` itself does not throw - and
+      // `stoppedBeforeSwap` stays false because the stop never resolved.
+      expect(handle.state.stoppedBeforeSwap).toBe(false);
+
+      await handle.lifecycle.restartAfterAbortedSwap();
+
+      expect(harness.relaunchAfterRestart).toHaveBeenCalledTimes(1);
+      expect(harness.relaunchAfterRestart).toHaveBeenCalledWith(label, {
+        forcedRecycle: true,
+      });
+    });
+
+    it("the same degraded-stop configuration does NOT restore a service that was never running - keeps the hostWasRunningBefore gate honest", async () => {
+      // Same rejecting `controller.stop`, but a `stopped` prior state never
+      // reaches either stop branch at all on darwin/POSIX, so nothing is
+      // dispatched. This is the counterpart that proves DISPATCH alone
+      // is not sufficient either - `restartAfterAbortedSwap` still needs
+      // `hostWasRunningBefore(priorState)` to be true.
+      const harness = makeController("stopped");
+      mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+      harness.stop.mockRejectedValue(
+        Object.assign(new Error("simulated degraded stop"), {
+          code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        }),
+      );
+      const handle = createServiceInstallLifecycle({
+        environment: "production",
+        bootstrap: null,
+        force: false,
+        onWillStopHost: null,
+        hooks: NO_INSTALL_PHASE_HOOKS,
+      });
+
+      await withPlatformAsync("darwin", () => handle.lifecycle.beforeSwap());
+      expect(harness.stop).not.toHaveBeenCalled();
+
+      await handle.lifecycle.restartAfterAbortedSwap();
+
+      expect(harness.relaunchAfterRestart).not.toHaveBeenCalled();
+      expect(harness.start).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("bytes-only lifecycle", () => {
+    it("on Windows, restarts a host that was RUNNING before the handle-kill stop via a plain start - deliberately NOT relaunchAfterRestart", async () => {
+      // This lifecycle only ever restores on Windows, where there is no
+      // launchd supervisor and therefore no kickstart-against-a-running-job
+      // hazard - `controller.start` is correct here, unlike the service
+      // lifecycle above.
+      const harness = makeController("running");
+      const lifecycle = createBytesOnlyInstallLifecycle(
+        harness.controller,
+        label,
+        NO_INSTALL_PHASE_HOOKS,
+      );
+
+      await withPlatformAsync("win32", () => lifecycle.beforeSwap());
+      expect(harness.stop).toHaveBeenCalledTimes(1);
+
+      await withPlatformAsync("win32", () =>
+        lifecycle.restartAfterAbortedSwap(),
+      );
+
+      expect(harness.start).toHaveBeenCalledTimes(1);
+      expect(harness.relaunchAfterRestart).not.toHaveBeenCalled();
+    });
+
+    it("on Windows, leaves a STOPPED service stopped, but the handle-kill stop still ran - the regression this pins", async () => {
+      // If a future "fix" skips the stop entirely when the service is not
+      // running, the rename loses its handle-kill and Windows installs
+      // start failing with EBUSY. Asserting `stop` WAS called is what makes
+      // that regression visible instead of passing quietly alongside the
+      // "never restarts" half.
+      const harness = makeController("stopped");
+      const lifecycle = createBytesOnlyInstallLifecycle(
+        harness.controller,
+        label,
+        NO_INSTALL_PHASE_HOOKS,
+      );
+
+      await withPlatformAsync("win32", () => lifecycle.beforeSwap());
+      expect(harness.stop).toHaveBeenCalledTimes(1);
+
+      await withPlatformAsync("win32", () =>
+        lifecycle.restartAfterAbortedSwap(),
+      );
+
+      expect(harness.start).not.toHaveBeenCalled();
+      expect(harness.relaunchAfterRestart).not.toHaveBeenCalled();
+    });
+
+    it("on POSIX, stops nothing before the swap, so restartAfterAbortedSwap is already a no-op", async () => {
+      const harness = makeController("running");
+      const lifecycle = createBytesOnlyInstallLifecycle(
+        harness.controller,
+        label,
+        NO_INSTALL_PHASE_HOOKS,
+      );
+
+      await withPlatformAsync("linux", () => lifecycle.beforeSwap());
+      expect(harness.stop).not.toHaveBeenCalled();
+
+      await withPlatformAsync("linux", () =>
+        lifecycle.restartAfterAbortedSwap(),
+      );
+
+      expect(harness.start).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe("InstallPhaseHooks forwarding", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("createServiceInstallLifecycle forwards beforeSwapCommit to the caller's hook and waits for it", async () => {
+    // Cold review A (R2): this suite drove `beforeSwap` and `afterSwap` but
+    // never `beforeSwapCommit`, so the real forwarding could be replaced by
+    // an async no-op with nothing failing here. The barrier's PLACEMENT
+    // (after a resolved stop, before the swap) belongs to
+    // `commitInstallFromSource` and is pinned in
+    // `installer/__tests__/apply-real-lifecycle.test.ts`; what this pins is
+    // that the constructor hands the member through at all, and returns the
+    // caller's promise rather than a resolved one.
+    const harness = makeController("running");
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    let released = false;
+    const gate = makeBarrierGate();
+    const calls: string[] = [];
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap,
+      force: false,
+      onWillStopHost: null,
+      hooks: {
+        beforeSwapCommit: async () => {
+          calls.push("beforeSwapCommit");
+          await gate.promise;
+          released = true;
+        },
+        afterSwap: async () => {
+          calls.push("afterSwap");
+        },
+      },
+    });
+
+    const pending = handle.lifecycle.beforeSwapCommit();
+    gate.release();
+    await pending;
+
+    expect(calls).toEqual(["beforeSwapCommit"]);
+    // The awaited half: a forwarding that dropped the caller's promise
+    // would resolve `pending` before the hook body finished.
+    expect(released).toBe(true);
+    // Falsification: replace the forwarding with `async () => {}` and
+    // `calls` stays empty; return without awaiting the caller's promise and
+    // `released` is false.
+  });
+
+  it("createBytesOnlyInstallLifecycle forwards both barriers verbatim and starts nothing itself", async () => {
+    const harness = makeController("running");
+    const calls: string[] = [];
+    const lifecycle = createBytesOnlyInstallLifecycle(
+      harness.controller,
+      label,
+      {
+        beforeSwapCommit: async () => {
+          calls.push("beforeSwapCommit");
+        },
+        afterSwap: async () => {
+          calls.push("afterSwap");
+        },
+      },
+    );
+
+    await lifecycle.beforeSwapCommit();
+    await lifecycle.afterSwap();
+
+    expect(calls).toEqual(["beforeSwapCommit", "afterSwap"]);
+    // This lifecycle never starts/registers anything on its own - its
+    // `afterSwap` IS the caller's hook, verbatim, with nothing else behind
+    // it (unlike the service lifecycle's `afterSwap`, which runs the hook
+    // and THEN its own retire/kickstart/register work).
+    expect(harness.start).not.toHaveBeenCalled();
+    expect(harness.restart).not.toHaveBeenCalled();
+    expect(harness.install).not.toHaveBeenCalled();
+    // Falsification: have `createBytesOnlyInstallLifecycle` wrap the hooks
+    // in its own logic (e.g. swallow their errors, or re-derive `afterSwap`
+    // from `hooks.beforeSwapCommit`) and `calls` would stop matching the
+    // exact identity/order pinned above.
+  });
+});
+
+// `externally-managed` says only that Desktop owns the loaded label -
+// `statusService` reports it with no pid - so it is as true of a Desktop host
+// the person deliberately stopped as of one that is serving. The restore after
+// a refused swap must not START the stopped one, and must not leave down one
+// this operation took down: only the stop route's own pid read can say which,
+// and it reports through `StopServiceOptions.onHostAddressed`.
+describe("restartAfterAbortedSwap (Desktop-managed: the stop route reports what it addressed)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.serviceLabelForMock.mockReturnValue(label);
+  });
+
+  function desktopLifecycle(harness: ControllerHarness) {
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    return createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap: null,
+      force: false,
+      onWillStopHost: null,
+      hooks: NO_INSTALL_PHASE_HOOKS,
+    });
+  }
+
+  it("does NOT restore when the route addressed no host and the stop degraded on no-metadata - a Desktop host the person had stopped", async () => {
+    const harness = makeController("externally-managed");
+    harness.stopAddressesHost = false;
+    harness.stop.mockImplementation(async () => {
+      throw new CliError({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: "host stop: no host endpoint is published",
+        details: {},
+        exitCode: 1,
+      });
+    });
+    const handle = desktopLifecycle(harness);
+
+    await withPlatformAsync("darwin", () => handle.lifecycle.beforeSwap());
+    expect(harness.stop).toHaveBeenCalledTimes(1);
+
+    await handle.lifecycle.restartAfterAbortedSwap();
+
+    expect(harness.relaunchAfterRestart).not.toHaveBeenCalled();
+    expect(harness.start).not.toHaveBeenCalled();
+  });
+
+  it("does NOT restore when the stop RESOLVED without addressing a host - a stale record naming a dead process (`no-host`)", async () => {
+    const harness = makeController("externally-managed");
+    harness.stopAddressesHost = false;
+    const handle = desktopLifecycle(harness);
+
+    await withPlatformAsync("darwin", () => handle.lifecycle.beforeSwap());
+    expect(handle.state.stoppedBeforeSwap).toBe(true);
+
+    await handle.lifecycle.restartAfterAbortedSwap();
+
+    expect(harness.relaunchAfterRestart).not.toHaveBeenCalled();
+    expect(harness.start).not.toHaveBeenCalled();
+  });
+
+  it("restores a running Desktop-managed host the route addressed and stopped", async () => {
+    const harness = makeController("externally-managed");
+    const handle = desktopLifecycle(harness);
+
+    await withPlatformAsync("darwin", () => handle.lifecycle.beforeSwap());
+    expect(harness.stop).toHaveBeenCalledWith(
+      label,
+      expect.objectContaining({ onHostAddressed: expect.any(Function) }),
+    );
+
+    await handle.lifecycle.restartAfterAbortedSwap();
+
+    expect(harness.relaunchAfterRestart).toHaveBeenCalledTimes(1);
+  });
+
+  it("restores when the route addressed a live host and the stop then DEGRADED - the claim may have committed with its acknowledgement lost", async () => {
+    const harness = makeController("externally-managed");
+    harness.stop.mockImplementation(async (_label, options) => {
+      options.onHostAddressed?.();
+      throw new CliError({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: "host stop: the running host's RPC endpoint is unreachable",
+        details: {},
+        exitCode: 1,
+      });
+    });
+    const handle = desktopLifecycle(harness);
+
+    await withPlatformAsync("darwin", () => handle.lifecycle.beforeSwap());
+    expect(handle.state.stoppedBeforeSwap).toBe(false);
+
+    await handle.lifecycle.restartAfterAbortedSwap();
+
+    expect(harness.relaunchAfterRestart).toHaveBeenCalledTimes(1);
+  });
+
+  it("a CLI-owned RUNNING service is restored on the status probe's word, and the route's report is passed along too", async () => {
+    const harness = makeController("running");
+    harness.stopAddressesHost = false;
+    const handle = desktopLifecycle(harness);
+
+    await withPlatformAsync("linux", () => handle.lifecycle.beforeSwap());
+    await handle.lifecycle.restartAfterAbortedSwap();
+
+    expect(harness.relaunchAfterRestart).toHaveBeenCalledTimes(1);
   });
 });

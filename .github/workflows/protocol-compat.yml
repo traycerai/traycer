@@ -145,7 +145,18 @@ jobs:
             args+=(--baseline "$pair")
           done < /tmp/baseline-args.txt
           bun run protocol/scripts/compat/check-protocol-compat.ts --mine /tmp/working-tree.json "${args[@]}"
-      - name: Drive the real client transports against the released manifests
+      - name: Add this tree's own surface as the working-tree baseline for the transport smoke
+        # The released set only ever asks the transports for what a RELEASED
+        # peer negotiates, so a test fixture that lags this tree's own latest
+        # minor is invisible until this tree becomes a release tag - which the
+        # stable release does mid-run, after the rc gate on the same commit
+        # passed (cli-v1.3.0: host.status@1.4 reddened the stable desktop gate
+        # minutes after rc.5 went green). Feeding the working tree in as a
+        # baseline makes every PR negotiate the latest minor here. It is added
+        # AFTER the surface-compat check above, which takes its baselines from
+        # the explicit argument list, not from this directory.
+        run: cp /tmp/working-tree.json /tmp/surfaces/working-tree.json
+      - name: Drive the real client transports against the released manifests and the working tree
         env:
           PROTOCOL_BASELINE_SURFACES_DIR: /tmp/surfaces
         run: |

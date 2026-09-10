@@ -326,7 +326,7 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
     expect(refreshCalls).toBe(0);
   });
 
-  it("refresh-rejected keeps the credentials file", async () => {
+  it("a 401 refresh rejection is credential-scoped and keeps the credentials file", async () => {
     const store = makeStore();
     await store.signIn({ token: "tok-1", refreshToken: "rt-1" }, IDENTITY);
 
@@ -343,7 +343,9 @@ describe("FileTokenStore (real fs + lock/WAL)", () => {
       userId: IDENTITY.id,
       token: "tok-1",
     });
-    expect(result.outcome).toBe("refresh-rejected");
+    // 401 is a verdict about the TOKEN, so it classifies credential-scoped -
+    // which is exactly why the file survives it.
+    expect(result.outcome).toBe("refresh-rejected-credential");
     expect(await store.get()).toEqual({
       token: "tok-1",
       refreshToken: "rt-1",

@@ -459,6 +459,7 @@ const REPEAT_SENSITIVE_ACTIONS: ReadonlySet<ActionId> = new Set([
   "composer.model-picker.toggle",
   "app.terminal.toggle",
   "app.terminal.new",
+  "app.browser.new",
   "app.terminal.maximize",
   "tab.new",
 ]);

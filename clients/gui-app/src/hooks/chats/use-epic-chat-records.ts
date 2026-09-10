@@ -1,7 +1,7 @@
 import { useEffect, useMemo } from "react";
 import type { QueryClient } from "@tanstack/react-query";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
-import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
+import type { ChatRecordSummaryV12 } from "@traycer/protocol/host/epic/chat-records";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
@@ -19,14 +19,25 @@ import { GUI_PROJECTS_EPIC_DOC_REPLICA } from "@/stores/epics/open-epic/projecti
  */
 interface ChatRecordListAnswer {
   /**
-   * The `@1.1` row, NOT the base one. The base row is assignable to it in the
-   * wrong direction, so typing this as `ChatRecordSummary` is a silent
-   * narrowing rather than a type error: the request asks for the doc-resident
-   * remainder and the cache then drops `docResident`, the one field that says
-   * which rows those are. What is lost surfaces on the WRITE, not the render -
-   * a rename routed to `epic.renameChat` with an id naming no registry chat.
+   * The `@1.2` row, NOT the base one and not `@1.1`'s. A narrower row is
+   * assignable to this in the wrong direction, so typing it down is a silent
+   * narrowing rather than a type error, and each dropped field fails
+   * somewhere different:
+   *
+   *  - without `docResident` (the `@1.1` field), the request asks for the
+   *    doc-resident remainder and the cache then drops the one field that
+   *    says which rows those are. What is lost surfaces on the WRITE, not the
+   *    render - a rename routed to `epic.renameChat` with an id naming no
+   *    registry chat.
+   *  - without `head` (the `@1.2` field), a host that serves the cloud
+   *    publication stamp never reaches the store with it, and the
+   *    published-copy tile is back to one read per mount.
+   *
+   * A host on an older minor upgrades with `head` absent, which the head
+   * plane treats as "nothing to say about the head" rather than as a
+   * retraction.
    */
-  readonly chats: readonly ChatRecordSummaryV11[];
+  readonly chats: readonly ChatRecordSummaryV12[];
   readonly issuedAtSeq: number | null;
   /**
    * WHICH store's counter `issuedAtSeq` was read from

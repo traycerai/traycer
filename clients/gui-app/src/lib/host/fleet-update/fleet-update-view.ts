@@ -4,7 +4,12 @@ import type {
   HostStatusUpdateProgress,
   HostUpdateTransactionCapability,
 } from "@traycer/protocol/host/status/index";
-import type { HostUpdateAttemptPhase } from "@traycer/protocol/config/host-update-attempt";
+import {
+  isTerminalPhase,
+  HOST_UPDATE_REFUSES_RPC_CODE,
+  type HostUpdateAttemptPhase,
+} from "@traycer/protocol/config/host-update-attempt";
+import type { LocalAttemptLiveness } from "@traycer-clients/shared/platform/runner-host";
 import type { LegacyUpdateFacts } from "@/lib/host/fleet-update/legacy-update-facts";
 
 /**
@@ -56,6 +61,23 @@ export interface FleetUpdateWireObservation {
    * NOT mean "no update": see {@link projectFleetUpdateView}'s `unknown` arm.
    */
   readonly operation: HostStatusUpdateOperation | null;
+  /**
+   * The version the host is RUNNING, from `host.status`'s `hostVersion` — the
+   * SAME read that produced {@link operation}.
+   *
+   * That sameness is the whole value of carrying it here rather than letting a
+   * consumer join a version from some other query: the one question it answers
+   * is "is the machine already serving what this attempt was trying to
+   * install", and pairing a version from one instant with a phase from another
+   * would answer it about two different moments. Identical discipline to
+   * `busySessionCount`'s note in the wire contract.
+   *
+   * Non-nullable because `hostVersion` is required at every `host.status`
+   * minor from @1.0 — there is no peer that answers a status without one, so a
+   * `null` arm here would be an unreachable branch inviting a fabricated
+   * default.
+   */
+  readonly runningVersion: string;
   /** `null` = peer did not say. Every transaction gate fails closed on it. */
   readonly transaction: HostUpdateTransactionCapability | null;
   /**
@@ -121,6 +143,112 @@ export interface FleetUpdateRecordObservation {
   readonly targetVersion: string;
   /** The phase the record names, already narrowed at the read boundary. */
   readonly phase: HostUpdateAttemptPhase;
+  /**
+   * The cause a `failed` record carries, `null` on every other phase. The
+   * record is the only evidence of it once the host is down, so the retained
+   * `failed` view carries it the way the stale coarse marker's does.
+   */
+  readonly errorMessage: string | null;
+  /**
+   * What the READER's own holder probe established (D13), never something
+   * derived from the record's contents.
+   *
+   * This is the one fact the record cannot supply about itself: a file saying
+   * `restarting` proves an executor once wrote that, never that one is still
+   * carrying it. `live` is minted only from a `holder-live` probe whose record
+   * identity was unchanged across a bracketing re-read; `interrupted` and
+   * `unknown` are conclusions this projector keeps OUTSIDE the lifecycle gate.
+   */
+  readonly liveness: LocalAttemptLiveness;
+  /**
+   * The PROBER's clock at the probe that produced {@link liveness}, or `null`
+   * when no probe ran (parked and terminal records are never probed).
+   *
+   * A positive proof has to be allowed to expire, which is why this travels
+   * beside the verdict rather than being folded into it. The controller query
+   * that carries these facts keeps its last value indefinitely
+   * (`staleTime: Infinity`) and the publisher stops publishing when its read
+   * fails, so `live` with no deadline would hold a lifecycle gate open forever
+   * on a payload nothing is refreshing.
+   */
+  readonly livenessObservedAtMs: number | null;
+  /**
+   * The record's OWN last-write timestamp (ISO 8601), as the record states it.
+   *
+   * Ordering-only, and only across DIFFERENT attempts — see
+   * {@link preferLiveOverRecord}. Not a freshness signal: how old the record is
+   * says nothing about whether anything is still working on it.
+   */
+  readonly updatedAt: string;
+  /**
+   * The record's position, which is what orders two observations of the SAME
+   * attempt. Monotone per attempt by the writer's construction, and — unlike
+   * any timestamp — comparable across the two readers (the host's observer and
+   * this machine's own read) without trusting either one's clock.
+   */
+  readonly generation: number;
+  readonly sequence: number;
+}
+
+/**
+ * How long a POSITIVE holder probe may still be presented as proof (D13).
+ *
+ * Five seconds: comfortably above the 750 ms cadence a live record is
+ * published at, so an ordinary publication always renews the proof before it
+ * lapses, and short enough that a publisher which has stopped publishing
+ * cannot hold the lifecycle gate for more than one blink.
+ *
+ * Measured against a clock that TICKS on its own — never against the last
+ * `host.status` success, which stops advancing exactly when the host goes
+ * down, which is precisely when this proof is load-bearing.
+ */
+export const LOCAL_LIVENESS_PROOF_MS = 5_000;
+
+/**
+ * How far a probe stamp may sit in this reader's FUTURE before it stops
+ * counting as proof.
+ *
+ * The rule D13 states is `0 ≤ nowMs - livenessObservedAtMs`, and a strict `0`
+ * would be wrong here for a reason that has nothing to do with clocks
+ * disagreeing: `nowMs` comes from a one-second renderer tick, so it lags real
+ * time by up to that interval, while the stamp is written at the instant of
+ * the probe. A record published 200 ms after the last tick therefore carries a
+ * stamp "ahead" of `nowMs` every single time — refusing it would reject
+ * exactly the freshest proofs.
+ *
+ * So the lower bound is one tick's worth of slack, which is what the
+ * quantisation can produce and nothing more. A real backward wall-clock step —
+ * the `lock.ts` TTL pitfall this bound exists for — moves the clock by seconds
+ * or minutes and is still refused.
+ */
+export const LOCAL_LIVENESS_CLOCK_SLACK_MS = 1_000;
+
+/**
+ * The two instants the local (wire + record) projection is evaluated against.
+ *
+ * They are separate because the two legs measure different things and one
+ * clock cannot answer both. Passing the same value for both is a legitimate
+ * thing for a test to do, but a production call site that does it has a bug in
+ * one leg or the other — see {@link preferLiveOverRecord} for which.
+ */
+export interface LocalUpdateClock {
+  /**
+   * The instant the WIRE read was taken at (the query's `dataUpdatedAt`).
+   *
+   * A healthy read must be fresh by construction, because its deadline was
+   * derived from this same instant plus the query's health. Anything that
+   * advances independently turns "the round trip was slow" into "the host
+   * stopped reporting", which is a different and much louder claim.
+   */
+  readonly wireNowMs: number;
+  /**
+   * A clock that TICKS, for the RECORD leg alone.
+   *
+   * The record's proof expires on its own, and every timestamp attached to the
+   * record stops advancing in exactly the situation the record is read in — so
+   * only a clock nobody has to refresh can retire it.
+   */
+  readonly recordNowMs: number;
 }
 
 /**
@@ -200,13 +328,97 @@ export type FleetUpdateViewKind =
   | "verifying"
   | "complete"
   | "failed"
+  /**
+   * The update LANDED and only the bookkeeping did not: the host is verified
+   * running the target, and the attempt record was never concluded.
+   *
+   * A success state, rendered without failure treatment, and the distinction it
+   * draws is not cosmetic. The CLI's verify loop breaks only on installed AND
+   * running both verified at the target with the process host-home-bound, so
+   * reaching the completion write at all PROVES the machine is serving the new
+   * version. When that write is then refused — a rejected intent, or a record
+   * path that cannot be written durably at all — the update is done and the
+   * only thing outstanding is a file. Saying "update failed" over a machine
+   * provably running the new version is false in every part.
+   *
+   * The CLI leaves the record alone on that path rather than stamping `failed`
+   * (the rule `AttemptRecordWriter.supersede()` established for its own sibling
+   * case: "no stale rule clears a `failed` whose target is not the running
+   * version"), which is exactly what leaves this state observable — an
+   * untouched verify-side record beside a healthy host at the target IS the
+   * signal. A stamped `failed` would have destroyed it.
+   *
+   * Terminal for this client's purposes: nothing is executing, so it holds no
+   * lifecycle gate and earns no fast poll. The next update run's reconciler
+   * concludes the record.
+   */
+  | "finalizing-record"
+  /**
+   * The host came up and ANSWERED — with a refusal. Bytes are installed at the
+   * target, the process is serving, and it rejected the CLI's authenticated
+   * check, so verification never completed (Q19: two consecutive
+   * UNAUTHORIZED/FORBIDDEN frames end the verify loop and stamp a terminal
+   * record with code `host-refuses-rpc`).
+   *
+   * Distinct from all three of its neighbours, and each distinction is load-
+   * bearing. Not `complete`: nothing was verified. Not `finalizing-record`:
+   * that kind ASSERTS the update landed and says only the record is open,
+   * whereas landing is exactly what could not be established here. Not
+   * `failed`: a refusal is an answer from a running host, and dressing it in
+   * the destructive treatment is the Q11 defect arriving through a second
+   * door.
+   *
+   * Diagnostic and repairable, like `unavailable`, and carries that kind's
+   * affordance set rather than the failure arm's.
+   */
+  | "verification-refused"
   /** Fail-closed record evidence. Diagnostic and repairable, NOT a failure. */
   | "unavailable";
+
+/**
+ * WHERE in an attempt's history an observation sat — the two thirds of the
+ * ordering key that are not the attempt's id.
+ *
+ * `host.status` calls `attemptId + generation + sequence` "the ordering key, in
+ * full" (`protocol/src/host/status/contracts.ts`), and this view had been
+ * carrying only the id. That was not a smaller version of the same fact: an
+ * attempt can advance and park AGAIN under one id, so a view holding the id
+ * alone cannot say which park it described. Keeping the pair here is what lets
+ * a bound dispatch name the position the user was actually shown.
+ *
+ * Deliberately NOT merged into a single triple with `attemptId`. The id answers
+ * "which attempt" and is what every existing consumer wants; the pair answers
+ * "which position of it" and has exactly one consumer. Merging them would put
+ * the id in two places on one object.
+ */
+export interface FleetUpdateAttemptPosition {
+  readonly generation: number;
+  readonly sequence: number;
+}
+
+/**
+ * The one place this pair is minted, so the two observation legs and the
+ * staleness comparison cannot drift into three spellings of it.
+ */
+function attemptPositionOf(source: FleetUpdateAttemptPosition): {
+  readonly generation: number;
+  readonly sequence: number;
+} {
+  return { generation: source.generation, sequence: source.sequence };
+}
 
 export interface FleetUpdateView {
   readonly kind: FleetUpdateViewKind;
   /** The attempt this view describes, when there is one to name. */
   readonly attemptId: string | null;
+  /**
+   * Which position of {@link FleetUpdateView.attemptId} this view describes.
+   *
+   * `null` exactly when `attemptId` is: a view with no attempt has no position
+   * in one. The two are set together at every site that builds a view, which is
+   * what a consumer reading both is entitled to assume.
+   */
+  readonly attemptPosition: FleetUpdateAttemptPosition | null;
   readonly targetVersion: string | null;
   readonly progress: FleetUpdateProgress;
   /**
@@ -275,6 +487,7 @@ export interface FleetUpdateView {
 export const UNKNOWN_FLEET_UPDATE_VIEW: FleetUpdateView = {
   kind: "unknown",
   attemptId: null,
+  attemptPosition: null,
   targetVersion: null,
   progress: { kind: "none" },
   qualified: true,
@@ -359,14 +572,13 @@ export function projectFleetUpdateView(
   // vantage is `restarting`, and reading a record because the host is down IS
   // the disconnected vantage. Passing `true` here would render `restarting`
   // for a host that is not answering.
+  //
+  // THE ONE EXCEPTION is the probed live `restarting` below, and it is an
+  // exception to the paragraph above rather than to the module header: a
+  // holder probe is evidence, not an inference from the file's contents, so
+  // that arm is not "we do not know" dressed up as a phase.
   if (isRecordObservation(observation)) {
-    return {
-      ...UNKNOWN_FLEET_UPDATE_VIEW,
-      attemptId: observation.attemptId,
-      targetVersion: observation.targetVersion,
-      lastKnownKind: phaseKind(observation.phase, false),
-      lastObservedAtMs: observation.observedAtMs,
-    };
+    return recordObservationView(observation, nowMs);
   }
 
   const stale = nowMs > observation.freshUntilMs;
@@ -459,67 +671,108 @@ export function projectFleetUpdateView(
     };
   }
 
-  const base = {
-    attemptId: operation.attemptId,
-    targetVersion: operation.targetVersion,
-    progress: projectProgress(operation),
-    blockingSessionCount: operation.busySessionCount,
-    blockingBreakdown: operation.busyBreakdown,
-    errorMessage: operation.error?.message ?? null,
-  } satisfies Omit<
-    FleetUpdateView,
-    "kind" | "qualified" | "lastKnownKind" | "lastObservedAtMs"
-  >;
-  const noRetainedPhase = {
-    lastKnownKind: null,
-    lastObservedAtMs: null,
-  } satisfies Pick<FleetUpdateView, "lastKnownKind" | "lastObservedAtMs">;
+  // THE ATTEMPT ARM, in its own function beside the other three
+  // (`coarseProgressView`, `legacyFactsView`, `recordObservationView`). It is
+  // the last arm that was still inline, and D-49's terminal fall-back is what
+  // made that worth changing: the rule is a statement about which LEG answers,
+  // so it belongs where the legs are chosen from rather than buried in the
+  // middle of the longest branch.
+  return attemptOperationView({
+    operation,
+    observation,
+    stale,
+    connected: input.connected,
+  });
+}
 
-  if (stale) {
-    // The last phase, explicitly qualified, and now actually CARRIED rather
-    // than described in a comment. `kind` decays to `unknown` — every gate and
-    // every cadence decision reads it, and both must treat this host as one we
-    // know nothing current about — while `lastKnownKind` keeps the phase so a
-    // surface can say "last seen preparing v1.2.3" instead of dropping to a
-    // bare "offline" that loses everything we knew.
-    return {
-      ...base,
-      kind: "unknown",
-      qualified: true,
-      lastKnownKind: phaseKind(operation.phase, input.connected),
-      lastObservedAtMs: observation.observedAtMs,
-    };
-  }
-
-  // Liveness is the host's read-side conclusion joining the attempt lock's
-  // holder, and a client cannot re-derive it — so it outranks the phase.
-  if (operation.liveness === "interrupted") {
-    // The ONLY route to `failed` that the phase alone does not carry: a
-    // non-terminal, non-parked attempt with positive proof its executor is
-    // gone. `indeterminate` deliberately does not reach here.
-    return {
-      ...base,
-      ...noRetainedPhase,
-      kind: "failed",
-      qualified: false,
-      errorMessage: base.errorMessage ?? "The update was interrupted.",
-    };
-  }
-
-  const view = {
-    ...base,
-    ...noRetainedPhase,
-    kind: phaseKind(operation.phase, input.connected),
+/**
+ * What the DURABLE RECORD projects on its own (D13).
+ *
+ * Two arms, and the split is exactly the difference between evidence and
+ * inference:
+ *
+ *  - **`restarting` with a FRESH positive holder probe** projects the live
+ *    `restarting` kind — indeterminate bar, lifecycle gate held, exactly as a
+ *    live wire `restarting` does. Nothing is invented: the probe read the
+ *    sibling lock's holder and found it alive, which is the same join the
+ *    host's own observer performs, and this is the one window in which no host
+ *    exists to perform it. `connected` is not consulted (the wire arm's
+ *    restarting/reconnecting split is about whether OUR connection survived
+ *    the restart; here the executor's liveness is the observed fact, and it is
+ *    observed locally).
+ *
+ *  - **everything else** keeps the qualified-stale shape it has always had:
+ *    `kind: "unknown"` with the phase retained as `lastKnownKind`, so a
+ *    surface says "last seen preparing v2.0.0" and every gate and cadence
+ *    decision — all of which read `kind` — treats this host as one we know
+ *    nothing current about. `interrupted` and `unknown` liveness land here, and
+ *    so does a `live` verdict whose proof has aged out, stepped backward, or
+ *    arrived without a usable stamp.
+ *
+ * On expiry the observation does NOT disappear: it returns to the second arm,
+ * keeping its last-seen history while the gate releases.
+ */
+function recordObservationView(
+  observation: FleetUpdateRecordObservation,
+  nowMs: number,
+): FleetUpdateView {
+  const identity = {
+    attemptId: observation.attemptId,
+    attemptPosition: attemptPositionOf(observation),
+    targetVersion: observation.targetVersion,
   };
-  // `indeterminate` means the host could not establish whether the executor is
-  // alive. The phase is still the best thing we have, so it is shown — and
-  // qualified, so no surface presents it as confirmed-live.
-  //
-  // No retained phase here even though this view IS qualified: `kind` is the
-  // live phase, so there is nothing in the past that `kind` is not already
-  // saying. `lastKnownKind` is populated only where `kind` decayed to
-  // `unknown` — that is the invariant the field's doc states.
-  return { ...view, qualified: operation.liveness === "indeterminate" };
+  if (
+    observation.phase === "restarting" &&
+    localLivenessProofHolds(observation, nowMs)
+  ) {
+    return {
+      ...UNKNOWN_FLEET_UPDATE_VIEW,
+      ...identity,
+      kind: "restarting",
+      // Indeterminate, never `none`: a restart is motion with nothing to
+      // measure, and the wire's own `restarting` frame draws the same bar.
+      progress: { kind: "indeterminate", bytes: null, totalBytes: null },
+      qualified: false,
+    };
+  }
+  return {
+    ...UNKNOWN_FLEET_UPDATE_VIEW,
+    ...identity,
+    lastKnownKind: phaseKind(observation.phase, false),
+    lastObservedAtMs: observation.observedAtMs,
+    // Same slot the stale coarse marker fills: a retained `failed` with its
+    // cause, so the host-down window can say WHY, not only that it failed.
+    errorMessage: observation.errorMessage,
+  };
+}
+
+/**
+ * Whether a positive holder probe may still be presented as proof.
+ *
+ * Three ways to fail, all of them projecting `unknown` rather than a phase:
+ * the verdict was never `live`; the stamp is absent or not a finite instant
+ * (nothing to age it against — refusing beats guessing); or the age is outside
+ * `[-LOCAL_LIVENESS_CLOCK_SLACK_MS, LOCAL_LIVENESS_PROOF_MS]`.
+ *
+ * The lower bound is the half worth stating. A cached positive that never
+ * expires is the defect this whole mechanism exists for, and a wall-clock step
+ * BACKWARD is how a bounded proof silently becomes an unbounded one — the same
+ * pitfall the attempt lock's TTL already guards. Ageing a stamp against a clock
+ * that has moved backward produces a negative age, which reads as "even fresher
+ * than new" to any check that only looks at the upper bound.
+ */
+function localLivenessProofHolds(
+  observation: FleetUpdateRecordObservation,
+  nowMs: number,
+): boolean {
+  if (observation.liveness !== "live") return false;
+  const observedAtMs = observation.livenessObservedAtMs;
+  if (observedAtMs === null) return false;
+  if (!Number.isFinite(observedAtMs) || !Number.isFinite(nowMs)) return false;
+  const ageMs = nowMs - observedAtMs;
+  return (
+    ageMs >= -LOCAL_LIVENESS_CLOCK_SLACK_MS && ageMs <= LOCAL_LIVENESS_PROOF_MS
+  );
 }
 
 /**
@@ -640,6 +893,275 @@ function legacyFactsView(
   };
 }
 
+/**
+ * What a REPORTED attempt projects to: the phase, qualified by staleness and
+ * by the host's own liveness conclusion — plus D-49's one exception, where a
+ * terminal attempt steps aside for the record-derived parks.
+ *
+ * Extracted from {@link projectFleetUpdateView} so every arm is a named
+ * function and the leg-selection rules read together. Behaviour is unchanged
+ * by the extraction itself.
+ */
+function attemptOperationView(input: {
+  readonly operation: Extract<HostStatusUpdateOperation, { kind: "attempt" }>;
+  readonly observation: FleetUpdateWireObservation;
+  readonly stale: boolean;
+  readonly connected: boolean;
+}): FleetUpdateView {
+  const { operation, observation, stale } = input;
+  // D-49: A TERMINAL attempt that is NOT `failed` does not occupy the
+  // operation slot for the purpose of the record-derived parks.
+  //
+  // The case is D-47's: another actor delivered the requested version and the
+  // host is not running it, so the executor ends the attempt `superseded` - no
+  // error, nothing owed on the attempt itself - while `install.json` names X
+  // and the runtime names Y. That IS an activation debt, and it is visible in
+  // the records and nowhere else. Without this the attempt arm takes the
+  // frame, `superseded` projects `idle`, `idle` is quiet, and the page says
+  // nothing at all after an "Updating…" toast: the user's last word on their
+  // own update is a sentence that turned out to be wrong.
+  //
+  // GUI-SIDE ON PURPOSE. The alternative was a host guarantee that terminal
+  // records stop appearing on `host.status`, and whether the host's
+  // `projectUpdateOperation` withholds them is a projection detail that can
+  // change under us. The debt sentence is derived from the RECORDS, so it has
+  // to be reachable whenever the records say debt - deciding it from the wire
+  // leg's phase instead is the class of error findings 1/4/6 were.
+  //
+  // FALL-BACK, NOT REPLACEMENT: the substitution applies to THIS CHOICE only.
+  // With no park the attempt arm below still runs and still answers, so
+  // `superseded` keeps projecting `idle` and - the case that makes the
+  // distinction load-bearing - `complete` keeps projecting `complete`. The
+  // landing banner renders a completion acknowledgement off that kind and
+  // auto-collapses it (`useLandingCompletionCollapse`), and ITS leg passes
+  // `legacyFacts: null`, so a blanket substitution would have deleted that
+  // surface outright rather than merely reordering it.
+  //
+  // `failed` is excluded because its cause must render: it is the one terminal
+  // state with something to say that the records cannot say for it. And a park
+  // OUTRANKING a `complete` is deliberate rather than incidental - a completed
+  // attempt whose install record disagrees with the running version is exactly
+  // "delivered, not running it", which is the debt.
+  //
+  // BOTH parks, not just the debt one. `legacyPark` answers for the staged
+  // wait too, and it should: a terminal attempt does not make a stage stop
+  // waiting any more than it makes an install stop needing a restart. The
+  // records describe what is still owed; the attempt describes what is over.
+  //
+  // ABOVE the `stale` decay below, which is not the bypass it looks like:
+  // `legacyFactsView` decays on its own `stale` argument and returns the
+  // qualified `unknown` + `lastKnownKind` shape, never a live park. The
+  // reachable case is a STATUS read that aged while the INSTALLATION read
+  // stayed healthy (two independent legs - `legacyFacts` is nulled by
+  // `installationLive`, `stale` comes from the status observation's
+  // `freshUntilMs`), and there the retained phase becomes the park's kind
+  // rather than the attempt's `idle`. That is the same answer the identical
+  // records produce under `{kind:"none"}`, which is the point: the terminal
+  // attempt stops being the thing that decides.
+  if (isTerminalPhase(operation.phase) && operation.phase !== "failed") {
+    const parkedView = legacyFactsView(observation, stale);
+    if (parkedView !== null) return parkedView;
+  }
+
+  const base = {
+    attemptId: operation.attemptId,
+    attemptPosition: attemptPositionOf(operation),
+    targetVersion: operation.targetVersion,
+    progress: projectProgress(operation),
+    blockingSessionCount: operation.busySessionCount,
+    blockingBreakdown: operation.busyBreakdown,
+    errorMessage: operation.error?.message ?? null,
+  } satisfies Omit<
+    FleetUpdateView,
+    "kind" | "qualified" | "lastKnownKind" | "lastObservedAtMs"
+  >;
+  const noRetainedPhase = {
+    lastKnownKind: null,
+    lastObservedAtMs: null,
+  } satisfies Pick<FleetUpdateView, "lastKnownKind" | "lastObservedAtMs">;
+
+  if (stale) {
+    // The last phase, explicitly qualified, and now actually CARRIED rather
+    // than described in a comment. `kind` decays to `unknown` — every gate and
+    // every cadence decision reads it, and both must treat this host as one we
+    // know nothing current about — while `lastKnownKind` keeps the phase so a
+    // surface can say "last seen preparing v1.2.3" instead of dropping to a
+    // bare "offline" that loses everything we knew.
+    return {
+      ...base,
+      kind: "unknown",
+      qualified: true,
+      lastKnownKind: phaseKind(operation.phase, input.connected),
+      lastObservedAtMs: observation.observedAtMs,
+    };
+  }
+
+  // Q19/Q23 — ABOVE the liveness arm, and the order is the point.
+  //
+  // A terminal `failed` record whose code says the host REFUSED the CLI's
+  // authenticated check. What is known: bytes installed at the target, the
+  // host came up and answered (a refusal is an answer), verification did not
+  // complete. So it is neither `complete` nor `failed`, and it must not reach
+  // Q11's state-derived route below either — `finalizing-record` asserts the
+  // update LANDED and says only the record is open, which is precisely the
+  // thing that could not be established here.
+  //
+  // Ordering it first makes that independent of how the two predicates happen
+  // to be written. `concludesAsFinalizingRecord` already refuses a `failed`
+  // phase, so today the routes cannot collide whatever their order — but that
+  // is a property of one predicate's phase set, not a guarantee, and the phase
+  // set is exactly the kind of thing a later change widens. Deciding by
+  // position costs nothing and cannot be widened out of.
+  //
+  // Rendering by CODE is right HERE and was not available to Q11: this is a
+  // terminal record carrying a named code that means one thing. Q11 had to be
+  // derived from state because the path that needed a code could not write
+  // one at all.
+  if (refusesAuthenticatedCheck(operation)) {
+    return {
+      ...base,
+      ...noRetainedPhase,
+      kind: "verification-refused",
+      qualified: false,
+    };
+  }
+
+  // Liveness is the host's read-side conclusion joining the attempt lock's
+  // holder, and a client cannot re-derive it — so it outranks the phase.
+  if (operation.liveness === "interrupted") {
+    // BEFORE the failure below, because the same three facts describe two
+    // opposite outcomes and only the version tells them apart.
+    //
+    // An executor that died in `verifying` is ordinarily a failure: it was
+    // proving the new host healthy and never finished. But the CLI's verify
+    // loop breaks ONLY on installed and running both verified at the target,
+    // host-home-bound — so if the machine is now serving the target, the loop
+    // must have broken, and everything after it is bookkeeping. That is the
+    // refused completion write: the update landed, the record did not conclude,
+    // and the CLI deliberately leaves the record untouched rather than stamping
+    // `failed` over a healthy host.
+    //
+    // WHY THE VERSION IS THE DISCRIMINATOR AND NOT A CODE. The refusal has two
+    // causes — a `rejected` intent, and a `durability-unverified` write medium
+    // — and the second one cannot write anything at all, so no error code can
+    // exist on the path that needs it most. Both leave the identical shape on
+    // disk, which is what makes one rule cover both.
+    //
+    // Both halves come from the SAME `host.status` read (`hostVersion` beside
+    // `updateOperation`), so this can never pair a version from one instant
+    // with a phase from another.
+    if (concludesAsFinalizingRecord(operation, observation)) {
+      return {
+        ...base,
+        ...noRetainedPhase,
+        kind: "finalizing-record",
+        qualified: false,
+        // No cause to show: nothing failed. The `errorMessage` slot is for the
+        // `failed` arm, and carrying a refusal reason here would put a red
+        // sentence's worth of alarm into a success card.
+        errorMessage: null,
+      };
+    }
+    // The ONLY route to `failed` that the phase alone does not carry: a
+    // non-terminal, non-parked attempt with positive proof its executor is
+    // gone. `indeterminate` deliberately does not reach here.
+    return {
+      ...base,
+      ...noRetainedPhase,
+      kind: "failed",
+      qualified: false,
+      errorMessage: base.errorMessage ?? "The update was interrupted.",
+    };
+  }
+
+  const view = {
+    ...base,
+    ...noRetainedPhase,
+    kind: phaseKind(operation.phase, input.connected),
+  };
+  // `indeterminate` means the host could not establish whether the executor is
+  // alive. The phase is still the best thing we have, so it is shown — and
+  // qualified, so no surface presents it as confirmed-live.
+  //
+  // No retained phase here even though this view IS qualified: `kind` is the
+  // live phase, so there is nothing in the past that `kind` is not already
+  // saying. `lastKnownKind` is populated only where `kind` decayed to
+  // `unknown` — that is the invariant the field's doc states.
+  return { ...view, qualified: operation.liveness === "indeterminate" };
+}
+
+/**
+ * The phases from which a dead executor may still have LANDED the update.
+ *
+ * Exactly one, and the narrowness is the point. `verifying` is the only phase
+ * an executor can be in after the bytes are committed and the new host has been
+ * proven healthy — it is the phase the CLI writes before its evidence loop, and
+ * the completion write is the very next thing that happens after that loop
+ * breaks. Every earlier phase (`downloading`, `preparing`, `applying`) dies
+ * with work genuinely unfinished, and a version match there means something
+ * else entirely: a host that was ALREADY on the target when a redundant attempt
+ * was started, which is a different situation with its own answer
+ * (`E_HOST_UPDATE_NOT_NEWER` → `superseded` → `idle`) and must not be dressed
+ * up as a completed update.
+ *
+ * `restarting` is deliberately excluded too, tempting though it looks: a host
+ * that reports the target version during a restart phase has not yet been
+ * verified — the running process may be the new one with the install record
+ * still disagreeing, which is the activation-debt shape, not this one.
+ */
+const FINALIZING_RECORD_PHASES: ReadonlySet<HostUpdateAttemptPhase> =
+  new Set<HostUpdateAttemptPhase>(["verifying"]);
+
+/**
+ * Whether this terminal record says the host refused the authenticated check
+ * — the code Q19 stamps when the freshly started target host answers the
+ * verify leg's authenticated RPC with two consecutive UNAUTHORIZED/FORBIDDEN
+ * frames.
+ *
+ * Both halves are required. The PHASE guard is not ceremony: a code is only
+ * meaningful on a record that actually concluded, and reading one off a
+ * non-terminal record would let a mid-flight attempt that happens to carry a
+ * stale error jump to a terminal rendering.
+ *
+ * The code was a local literal here, justified by the CLI's
+ * `UNCONDITIONALLY_STAMPED_FAILURE_CODES` living "in a package the renderer
+ * cannot reach". That is true of the CLI and was never true of the module the
+ * constant is now in: it is renderer-safe by design, and the import two lines
+ * from the old literal already proved the renderer reaches it. The
+ * justification was reasoning about the wrong package, so it is gone rather
+ * than edited.
+ *
+ * Still a WIRE read, which the import does not change: `error.code` is a free
+ * `string` on the schema, so this is a comparison against a value a writer
+ * this reader predates may not send, not a narrowing of the record vocabulary.
+ * Renaming the constant is free; changing its VALUE would silently stop every
+ * already-written record being recognised as a refusal, which is why the
+ * protocol pins it as a wire string and this module does not restate it.
+ */
+function refusesAuthenticatedCheck(
+  operation: Extract<HostStatusUpdateOperation, { kind: "attempt" }>,
+): boolean {
+  if (operation.phase !== "failed") return false;
+  return operation.error?.code === HOST_UPDATE_REFUSES_RPC_CODE;
+}
+
+/**
+ * Whether a dead executor left behind a SUCCESS rather than a failure.
+ *
+ * Both facts come off one `host.status` read, and both are required: the phase
+ * establishes that the executor had got as far as proving the host healthy, and
+ * the version establishes that the host it proved healthy is the one still
+ * running. Either alone is not evidence — a `verifying` corpse on a host still
+ * serving the OLD version is the genuine verify failure this must not swallow.
+ */
+function concludesAsFinalizingRecord(
+  operation: Extract<HostStatusUpdateOperation, { kind: "attempt" }>,
+  observation: FleetUpdateWireObservation,
+): boolean {
+  if (!FINALIZING_RECORD_PHASES.has(operation.phase)) return false;
+  return observation.runningVersion === operation.targetVersion;
+}
+
 function coarseKind(coarse: HostStatusUpdateProgress | null): {
   readonly kind: "updating" | "failed";
   readonly errorMessage: string | null;
@@ -712,10 +1234,38 @@ function phaseKind(
     case "failed":
       return "failed";
     case "superseded":
-      // A superseded attempt is terminal bookkeeping, not something a person
-      // needs to act on: a NEWER attempt replaced it, and that attempt is what
-      // the record now describes. Showing it would put a dead target on screen
-      // beside the live one.
+      // A superseded attempt is terminal bookkeeping: the request it recorded
+      // was WITHDRAWN. THREE causes, one rendering, and the record carries no
+      // discriminator between them.
+      //
+      //  1. A NEWER attempt replaced it, and that attempt is what the record
+      //     now describes - showing the old one would put a dead target on
+      //     screen beside the live one.
+      //  2. The executor refused the request as not newer than what is
+      //     already installed (`E_HOST_UPDATE_NOT_NEWER`, D-46). It withdraws
+      //     its own marker rather than failing, because "you asked for a
+      //     version you already have" is not a failure to report.
+      //  3. Another actor delivered the requested version but the host is not
+      //     RUNNING it (D-47). Nothing failed; the remedy is a restart, and a
+      //     record must not carry an `error` for that.
+      //
+      // `idle` is right for all three as far as THIS projection goes - there
+      // is no operation - and it is why this phase is dropped by
+      // `recordObservationFromLocalAttempt` rather than memorialised the way
+      // `failed` is.
+      //
+      // Cause 3 is the one where saying nothing is least acceptable, and the
+      // answer is deliberately NOT here: `install.json` names the delivered
+      // version and the runtime does not, which is the activation-debt park,
+      // and `legacyFactsView` renders it with its Restart from the RECORDS
+      // alone. Reaching that arm is not left to the host: D-49's terminal
+      // fall-through above consults the parks BEFORE this mapping is ever
+      // used, so the debt speaks whether or not the peer is still reporting
+      // the terminal attempt. This `idle` is what remains when the records
+      // have nothing to say - which for cause 1 and cause 2 is the whole
+      // truth. Telling the three apart in COPY would need the record to carry
+      // a cause, which is a CLI-side change and an accepted residual of the
+      // cutover, not something to infer here.
       return "idle";
   }
 }
@@ -819,26 +1369,34 @@ export function offersForceRestart(view: FleetUpdateView): boolean {
  * and the service verbs disabled indefinitely by an update nobody is running.
  * The marker informs (a card, a moving bar); it never stands between a
  * person and their host.
+ *
+ * `finalizing-record` is in the fail-open arm for the strongest form of that
+ * reason: the update is OVER and the host is healthy and serving. A gate there
+ * would disable Restart, Diagnostics and the service verbs on a perfectly good
+ * machine for as long as an unconcluded record sits on disk — which is until
+ * the next update RUN, not until any timer expires, and possibly never.
  */
+const HOLDS_LIFECYCLE_GATE: Record<FleetUpdateViewKind, boolean> = {
+  downloading: true,
+  preparing: true,
+  applying: true,
+  restarting: true,
+  verifying: true,
+  updating: false,
+  reconnecting: false,
+  "waiting-for-work": false,
+  "waiting-to-activate": false,
+  complete: false,
+  failed: false,
+  "finalizing-record": false,
+  "verification-refused": false,
+  unavailable: false,
+  idle: false,
+  unknown: false,
+};
+
 export function holdsLifecycleGate(view: FleetUpdateView): boolean {
-  switch (view.kind) {
-    case "downloading":
-    case "preparing":
-    case "applying":
-    case "restarting":
-    case "verifying":
-      return true;
-    case "updating":
-    case "reconnecting":
-    case "waiting-for-work":
-    case "waiting-to-activate":
-    case "complete":
-    case "failed":
-    case "unavailable":
-    case "idle":
-    case "unknown":
-      return false;
-  }
+  return HOLDS_LIFECYCLE_GATE[view.kind];
 }
 
 /**
@@ -856,53 +1414,176 @@ export function holdsLifecycleGate(view: FleetUpdateView): boolean {
  * updater would otherwise keep one host on the 2s cadence for as long as any
  * surface observing it stays mounted. The `host.status` 10s baseline still
  * shows the card within one poll of a real legacy update.
+ *
+ * `finalizing-record` does not earn it either: nothing is moving, and nothing
+ * ON THIS HOST will change the record — the reconciliation happens on the next
+ * update RUN. Polling every two seconds would be a retry storm waiting for an
+ * event that cannot arrive.
  */
 export function warrantsFastPoll(view: FleetUpdateView): boolean {
   if (view.qualified) return false;
-  switch (view.kind) {
-    case "downloading":
-    case "preparing":
-    case "applying":
-    case "restarting":
-    case "reconnecting":
-    case "verifying":
-      return true;
-    case "updating":
-    case "unknown":
-    case "idle":
-    case "waiting-for-work":
-    case "waiting-to-activate":
-    case "complete":
-    case "failed":
-    case "unavailable":
-      return false;
-  }
+  return kindWarrantsFastPoll(view.kind);
 }
 
 /**
- * Precedence between a live read and the durable record (Ticket 07 §5.2.7).
+ * Split from {@link warrantsFastPoll} so the qualified guard and the kind table
+ * are separately legible — the same shape `host-option-model.ts` uses for its
+ * badge words, and the same reason `phaseSentence` takes a kind rather than a
+ * view. Kept as an exhaustive switch rather than a lookup table so that adding
+ * a {@link FleetUpdateViewKind} still fails the BUILD until someone decides
+ * what cadence it earns.
+ */
+const WARRANTS_FAST_POLL: Record<FleetUpdateViewKind, boolean> = {
+  downloading: true,
+  preparing: true,
+  applying: true,
+  restarting: true,
+  reconnecting: true,
+  verifying: true,
+  updating: false,
+  unknown: false,
+  idle: false,
+  "waiting-for-work": false,
+  "waiting-to-activate": false,
+  complete: false,
+  failed: false,
+  "finalizing-record": false,
+  "verification-refused": false,
+  unavailable: false,
+};
+
+function kindWarrantsFastPoll(kind: FleetUpdateViewKind): boolean {
+  return WARRANTS_FAST_POLL[kind];
+}
+
+/**
+ * Precedence between a live read and the durable record (Ticket 07 §5.2.7,
+ * ordering per D13).
  *
  * A FRESH wire observation always wins: a running host reporting on itself is
  * strictly better evidence than a file describing what it last wrote, and the
- * record arm exists for the host-down window only.
- *
- * Once the wire read has gone stale the record is better — it was read from
- * this machine's disk just now, so it is a current reading of a durable fact,
- * where the stale wire observation is an old reading of a live one.
+ * record arm exists for the host-down window. Once the wire read has gone stale
+ * the record is better — it was read from this machine's disk just now, so it is
+ * a current reading of a durable fact, where the stale wire observation is an
+ * old reading of a live one.
  *
  * Deliberately NOT expressed as "whichever was observed most recently". That
  * rule looks equivalent and is not: the record is re-read on every tick, so its
  * `observedAtMs` is always newer, and a recency comparison would let it
  * outrank a perfectly good live read and permanently suppress real progress.
+ * **No read time is an input here** — neither observation's `observedAtMs`
+ * reaches this decision, and the clock is consulted only to ask whether the
+ * wire read is still presentable and whether the record's own timestamp is
+ * sane.
+ *
+ * ## Two instants, because those two questions are asked of different clocks
+ *
+ * `wireNowMs` is the instant the wire read was taken at — the query's
+ * `dataUpdatedAt`. Measuring a wire read's own deadline against it is what
+ * makes a HEALTHY read fresh by construction, which is the pre-existing
+ * semantics and the only correct one: `observationFromCanonicalRead` already
+ * folds the query's health into `freshUntilMs` and stamps an unhealthy read as
+ * expired, so freshness is a health verdict and never a race against how long
+ * the round trip took. Handing this a ticking clock instead — which is what
+ * this function briefly did — means a single `host.status` round trip longer
+ * than the fresh window demotes a live attempt to "last seen", drops the
+ * page-wide lifecycle gate, and disengages the poll accelerator that was
+ * keeping the wire caught up, on a host that is answering perfectly well and
+ * is merely far away.
+ *
+ * `recordNowMs` is a renderer tick, and only the record's questions may use
+ * it. The record's evidence expires on its own — a holder probe's proof lives
+ * five seconds — while both timestamps that could age it stop advancing
+ * exactly when it matters, so nothing but a clock that keeps running can
+ * retire it. `recordTimestampIsSane` takes the tick for the same reason from
+ * the other side: its tolerance is one second, so judging a current record
+ * against a `dataUpdatedAt` frozen minutes ago would reject it as
+ * "future-dated" for being what it is, current.
+ *
+ * What ORDERS the two once the wire is stale depends on whether they are even
+ * talking about the same attempt:
+ *
+ *  - **Same attempt** → `(generation, sequence)`, the writer's own monotone
+ *    position. A record BEHIND the last wire frame is a lagging copy of a story
+ *    the wire already told better, so the wire keeps it; at or ahead, the record
+ *    wins and brings its liveness with it. Equality is the common case in the
+ *    host-down window (both readers read the same last write) and it must go to
+ *    the record, which is the only side that can still say anything about a
+ *    holder.
+ *  - **Different attempts**, or a wire frame naming no attempt at all → the
+ *    record's own `updatedAt`, as a BOUND rather than as a comparison: there is
+ *    nothing on the wire to compare it against (no timestamp crosses it, by
+ *    design), so all it can do is establish that the record is not obvious
+ *    nonsense. An unparseable or future-dated stamp is treated as unknown and
+ *    the wire keeps the slot.
+ *
+ * The tie rule is what preserves the invariant a repeated read must not break:
+ * re-reading ONE unchanged record produces the same `(generation, sequence)`
+ * every time, so it can never climb over a healthy live frame of that attempt.
  */
 export function preferLiveOverRecord(
   wire: FleetUpdateWireObservation | null,
   record: FleetUpdateRecordObservation | null,
-  nowMs: number,
+  clock: LocalUpdateClock,
 ): FleetUpdateObservation | null {
-  if (wire !== null && nowMs <= wire.freshUntilMs) return wire;
-  // Stale or absent wire. The record fills the window when there is one; when
-  // there is not, the stale wire is retained rather than dropped, because its
-  // own stale arm still carries `lastKnownKind`.
-  return record ?? wire;
+  if (record === null) return wire;
+  if (wire === null) return record;
+  // A HEALTHY live read wins outright, whatever the record says. Handing the
+  // slot to a record that happens to sit one `sequence` ahead — which it
+  // routinely does, being re-read several times per `host.status` poll — would
+  // replace a live phase and its percentage with "last seen …" for most of
+  // every download, and then remove the fast poll that was keeping the wire
+  // caught up. Progress the host is actively reporting is never improved by a
+  // file that cannot report liveness.
+  if (clock.wireNowMs <= wire.freshUntilMs) return wire;
+  const wireAttempt = wireAttemptPosition(wire);
+  if (wireAttempt !== null && wireAttempt.attemptId === record.attemptId) {
+    return recordIsBehind(record, wireAttempt) ? wire : record;
+  }
+  return recordTimestampIsSane(record, clock.recordNowMs) ? record : wire;
+}
+
+/** The wire frame's attempt position, or `null` when it names no attempt. */
+function wireAttemptPosition(wire: FleetUpdateWireObservation): {
+  readonly attemptId: string;
+  readonly generation: number;
+  readonly sequence: number;
+} | null {
+  const operation = wire.operation;
+  if (operation === null || operation.kind !== "attempt") return null;
+  return { attemptId: operation.attemptId, ...attemptPositionOf(operation) };
+}
+
+/** Lexicographic on `(generation, sequence)`; equality is NOT behind. */
+function recordIsBehind(
+  record: FleetUpdateRecordObservation,
+  wire: { readonly generation: number; readonly sequence: number },
+): boolean {
+  if (record.generation !== wire.generation) {
+    return record.generation < wire.generation;
+  }
+  return record.sequence < wire.sequence;
+}
+
+/**
+ * Whether the record's `updatedAt` is usable as the different-attempt bound.
+ *
+ * `Date.parse` on a non-timestamp yields `NaN`, which every comparison answers
+ * `false` to — so the finiteness check is written out rather than relied upon
+ * implicitly, because "invalid loses" and "invalid silently wins" differ by one
+ * negated operator.
+ *
+ * The future allowance is {@link LOCAL_LIVENESS_CLOCK_SLACK_MS} for the same
+ * reason the proof's lower bound has one: `nowMs` is a one-second tick and lags
+ * real time, so a record written moments ago is routinely stamped after it.
+ * Anything beyond that is a timestamp we cannot account for, and an
+ * unaccountable timestamp orders nothing.
+ */
+function recordTimestampIsSane(
+  record: FleetUpdateRecordObservation,
+  nowMs: number,
+): boolean {
+  const updatedAtMs = Date.parse(record.updatedAt);
+  if (!Number.isFinite(updatedAtMs) || !Number.isFinite(nowMs)) return false;
+  return updatedAtMs - nowMs <= LOCAL_LIVENESS_CLOCK_SLACK_MS;
 }

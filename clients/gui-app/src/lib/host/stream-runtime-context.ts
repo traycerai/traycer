@@ -121,6 +121,13 @@ export type StreamMethodSupportSource =
 // null-client handling; only the per-snapshot read differs. The readers are
 // module-level constants so `getSnapshot`'s identity stays keyed on
 // `[client, method]` alone.
+//
+// The other half of that contract is the CLIENT's: `getMethodSupport` and
+// `getMethodSchemaVersion` must answer with one identity between
+// `subscribeMethodSupport` notifications, because `useSyncExternalStore`
+// re-reads the snapshot after every commit and a fresh object is a change to
+// commit again - fifty deep and React throws #185. `RemoteSession` once built
+// its version per read and took the Start Page down with it.
 function useStreamMethodValueForClient<
   TClient extends StreamMethodSupportSource,
   T,
@@ -195,6 +202,13 @@ export function useStreamMethodSupportFor(
   return useStreamMethodValueForClient(client, method, readMethodSupport);
 }
 
+/**
+ * Negotiated schema version for an EXPLICIT client instance.
+ *
+ * The `Support` sibling above existed already; without this one a caller with
+ * a non-default client had to mix the two and read the minor off the app-wide
+ * context, which is the exact skew the sibling was added to prevent.
+ */
 export function useStreamMethodSchemaVersionFor(
   client: IHostStreamClient<HostStreamRpcRegistry> | null,
   method: keyof HostStreamRpcRegistry & string,

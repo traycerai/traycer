@@ -56,6 +56,7 @@ import {
 } from "@/lib/composer/image-atoms";
 import { stringValue } from "@/lib/composer/tiptap-json-content";
 import { useEpicArtifact, useOpenEpicId } from "@/lib/epic-selectors";
+import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
 import { cn, formatSingleLine } from "@/lib/utils";
 import { deriveA2AReceivedCollapsibleKey } from "@/components/chat/chat-collapsible-key";
 import {
@@ -87,7 +88,10 @@ import { LivePulse } from "@/components/ui/live-pulse";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { AgentHeaderLink } from "./segments/agent-header-link";
 import { AgentMessageBody } from "./segments/agent-message-body";
-import { ReplyExpectedBadge } from "./segments/reply-expected-badge";
+import {
+  ReplyExpectedIcon,
+  ReplyExpectedNote,
+} from "./segments/reply-expected";
 import { SegmentCard } from "./segments/segment-card";
 import { useTombstonedProfileLabel } from "./use-tombstoned-profile-label";
 import { AccentDot } from "@/components/providers/accent-dot";
@@ -261,6 +265,7 @@ function AgentMessageDisplayView({
   const expectReply =
     agentMessage?.reply.expectsReply ?? agentSenderInfo.expectReply;
 
+  const requestJump = useChatTranscriptJumpStore((s) => s.requestJump);
   const openSenderTab = useCallback(() => {
     if (openTarget === null) return;
     openTile(
@@ -277,29 +282,42 @@ function AgentMessageDisplayView({
         "direct_ui",
       ),
     );
-  }, [agentSenderInfo.agentId, epicId, openTarget, senderName, openTile]);
+    // Mirror of the sent card's receiver link: park a jump for the sender's
+    // tile, which picks it up whether it is already mounted or is being
+    // opened by the call above. This row's own id IS the receipt the sender's
+    // harness stamped on its send block, so the landing is the exact "Sent
+    // message" card. A terminal-agent sender has no transcript, and a send
+    // persisted before receipts existed just leaves the tile open at rest.
+    if (openTarget.type !== "chat") return;
+    requestJump(openTarget.hostId, agentSenderInfo.agentId, {
+      kind: "receipt",
+      messageId,
+    });
+  }, [
+    agentSenderInfo.agentId,
+    epicId,
+    messageId,
+    openTarget,
+    openTile,
+    requestJump,
+    senderName,
+  ]);
 
+  // Same shape as the sent card's header (`A2ASendToolSegment`): the sender
+  // name is the only element allowed to shrink, so the direction words are
+  // for assistive tech only and reply-expected is an icon. The icon plus
+  // "from" carry the meaning for sighted users.
   const header = (
     <>
       <Inbox className="size-3.5 shrink-0 text-primary" aria-hidden />
-      <span className="shrink-0 text-ui-sm font-medium text-foreground/85">
-        Received message
-      </span>
-      <span aria-hidden className="shrink-0 text-muted-foreground/40">
-        ·
-      </span>
-      {/* flex-wrap lets the badge drop to a second line on narrow (mobile)
-          widths; the name group truncates last, so the sender stays visible
-          and tappable instead of collapsing to "from agent …". */}
-      <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-1 text-ui-sm">
-        <span className="flex min-w-0 items-center gap-1">
-          <span className="shrink-0 text-muted-foreground">from agent</span>
-          <AgentHeaderLink
-            name={senderName}
-            onOpen={openTarget !== null ? openSenderTab : null}
-          />
-        </span>
-        {expectReply ? <ReplyExpectedBadge /> : null}
+      <span className="sr-only">Received message</span>
+      <span className="flex min-w-0 flex-1 items-center gap-1.5 text-ui-sm">
+        <span className="shrink-0 text-muted-foreground">from</span>
+        <AgentHeaderLink
+          name={senderName}
+          onOpen={openTarget !== null ? openSenderTab : null}
+        />
+        {expectReply ? <ReplyExpectedIcon /> : null}
       </span>
     </>
   );
@@ -312,6 +330,7 @@ function AgentMessageDisplayView({
 
   const body = open ? (
     <div className="flex flex-col gap-2">
+      {expectReply ? <ReplyExpectedNote /> : null}
       <AgentMessageBody
         value={messageText}
         bodyFindUnitId={bodyFindUnitId}

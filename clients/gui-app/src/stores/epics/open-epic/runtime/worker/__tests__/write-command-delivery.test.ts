@@ -114,7 +114,7 @@ function openRig(): DeliveryRig {
   // so opening after would wipe the freshness the snapshot set and the send
   // gate's OTHER arm would hold the command - which would make this suite pass
   // or fail for a reason that is not the one it is about.
-  captured.value.onConnectionStatus("open", null);
+  captured.value.onConnectionStatus("open", null, false);
   captured.value.onSnapshot(makeMeta(), Y.encodeStateAsUpdate(new Y.Doc()));
   return { handle, received };
 }

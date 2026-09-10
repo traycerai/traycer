@@ -222,7 +222,7 @@ interface RowBodyFingerprint {
 }
 
 /** Absorbed where a record was expected and not found. See above. */
-const ABSENT_RECORD_MARKER = " absent";
+const ABSENT_RECORD_MARKER = "\u0000absent";
 
 /**
  * The row's projection CONTEXT, as a stable string.

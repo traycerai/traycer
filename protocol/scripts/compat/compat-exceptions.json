@@ -1,5 +1,5 @@
 {
-  "$comment": "Static policy encoding which host\u2192client payload paths are catalog-gated (id-agnostic \u2014 future harnesses never touch this file). Not a per-change review mechanism. Method/path support globs (* one segment, ** any depth; method * is non-dot). Catalog methods agent.gui.listHarnesses / agent.list / providers.list must never appear here for host\u2192client payloads \u2014 growth on those requires freezing the shipped line and opening a new major with downgrade bridges (amp 003d7586 / devin 407d110 template).",
+  "$comment": "Static policy encoding which host→client payload paths are catalog-gated (id-agnostic — future harnesses never touch this file). Not a per-change review mechanism. Method/path support globs (* one segment, ** any depth; method * is non-dot). Catalog methods agent.gui.listHarnesses / agent.list / providers.list must never appear here for host→client payloads — growth on those requires freezing the shipped line and opening a new major with downgrade bridges (amp 003d7586 / devin 407d110 template).",
   "exceptions": [
     {
       "family": "unary",
@@ -278,6 +278,22 @@
       "method": "chat.subscribe",
       "version": "*",
       "payload": "serverFrame",
+      "path": "**.blocks.items.anyOf[*].properties.questions.items.properties.allowsCustomAnswer",
+      "reason": "Interview answer-channel capability, nullable/.default(null). It describes the CHANNEL the answer travels back on, not the question: a permission-riding interview answers over ACP session/request_permission, which carries an option id and no text, so free text typed into 'Other' is undeliverable. null means unstated and the client offers 'Other' exactly as it shipped - which is precisely what a pre-field host produces, so old-host frames degrade to today's behavior and an old client strips the key and is unaffected. Only false hides the affordance, and only a host that knows the channel cannot carry text sends it. Scoped by field path."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.event.anyOf[*].properties.questions.items.properties.allowsCustomAnswer",
+      "reason": "The interview.requested counterpart of the **.blocks.items.anyOf[*].properties.questions.items.properties.allowsCustomAnswer entry (nullable/.default(null)): the shared accumulator copies the questions onto the interview block it builds, so host and client derive an identical block. Absent from a pre-field host's events, which yields the same null the block schema defaults to."
+    },
+    {
+      "family": "stream",
+      "method": "chat.subscribe",
+      "version": "*",
+      "payload": "serverFrame",
       "path": "**.backgroundTask",
       "reason": "Parsed-stream background-task marker (block: nullable/.default(false); events: .optional() with `?? null` in the shared accumulator): falsy means no background-card promotion, so old-host tool calls collapse into the generic activity group exactly as before #127."
     },
@@ -464,6 +480,14 @@
       "payload": "response",
       "path": "**.deprecationNotice",
       "reason": "Model-row sunset copy, nullable/.optional() with an in-schema note that absent and null are treated identically downstream (#176). Delivered by cast at same-version; verified safe: consumers normalize `?? null` and render no deprecation badge - exactly 'not deprecated', the pre-feature state."
+    },
+    {
+      "family": "stream",
+      "method": "browser.sessions",
+      "version": "*",
+      "payload": "serverFrame",
+      "path": "**.properties.command.anyOf[*]",
+      "reason": "Curated CDP command vocabulary on the cdpRequest frame. contracts-v1.ts imports this union live rather than hand-freezing it, on the stated posture that the vocabulary is its own additive surface and a command a v1.3.0 peer never learned is withheld at EMISSION. The withholding is structural, not a convention: the two Page.*ScriptToEvaluateOnNewDocument commands exist only to inject and retract the rrweb track while a recording runs (epic-media-pipeline D17), a recording only starts from the startTabRecording server frame, and that frame lives on the live @2.0 line alone - a peer that negotiated @1.0 cannot be told to record, so it can never be sent one of these. Scoped to the command union path, so an unrelated addition anywhere else on this stream stays guarded."
     }
   ]
 }

@@ -9,11 +9,11 @@ import type {
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import {
   hostNotificationsSubscribeClientFrameSchema,
-  hostNotificationsSubscribeServerFrameSchemaV12,
+  hostNotificationsSubscribeServerFrameSchemaV13,
   type HostNotificationEntryV22,
   type HostNotificationsAttentionCursor,
   type HostNotificationsChronologicalCursor,
-  type HostNotificationsSubscribeServerFrameV12,
+  type HostNotificationsSubscribeServerFrameV13,
   type HostNotificationsSummary,
 } from "@traycer/protocol/host/notifications/contracts";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
@@ -54,8 +54,9 @@ export const HOST_NOTIFICATIONS_PRESENCE_HEARTBEAT_MS = 5_000;
 export type HostNotificationFeedEntry = HostNotificationEntryV22;
 
 export type HostNotificationsFeedFrame = Extract<
-  HostNotificationsSubscribeServerFrameV12,
+  HostNotificationsSubscribeServerFrameV13,
   | { readonly kind: "snapshot" }
+  | { readonly kind: "partitionSnapshot" }
   | { readonly kind: "upserted" }
   | { readonly kind: "readStateChanged" }
   | { readonly kind: "removed" }
@@ -593,8 +594,12 @@ export function openHostNotificationsStream(
         reconnect();
         return;
       }
+      // The `@1.3` union, deliberately: zod STRIPS unknown keys and rejects
+      // unknown discriminants, so parsing through `@1.2` would drop the
+      // `partitionSnapshot` frame this client negotiates for. The superset
+      // parses every minor the client can be served.
       const parsed =
-        hostNotificationsSubscribeServerFrameSchemaV12.safeParse(envelope);
+        hostNotificationsSubscribeServerFrameSchemaV13.safeParse(envelope);
       if (!parsed.success) {
         reconnect();
         return;
@@ -602,6 +607,7 @@ export function openHostNotificationsStream(
       const frame = parsed.data;
       switch (frame.kind) {
         case "snapshot":
+        case "partitionSnapshot":
           useHostNotificationsStore.getState().applySnapshot(frame);
           // A schema-valid snapshot — not the raw transport `open` — is the
           // proof the stream is actually usable; the host resolver's async

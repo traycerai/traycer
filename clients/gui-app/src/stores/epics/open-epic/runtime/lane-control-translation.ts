@@ -142,6 +142,13 @@ export function legacyControlEventOf(event: ControlEvent): EpicControlEvent {
       return {
         kind: "cloud-sync-status",
         status: narrowCloudSyncStatus(event.status),
+        // The legs are the adapter's reading of its own wire and are passed
+        // through untouched: the status lane carries the `@1.6` keys and
+        // reports `peerSpeaksDurabilityLegs: true`, so an omitted key reaches
+        // the replica as the wire's stated UNKNOWN. A wire with no legs at
+        // all reports `NO_CLOUD_SYNC_DURABILITY`, which every selector reads
+        // as unknown too - never as reassurance.
+        durability: event.durability,
       };
     case "aggregate-dirty":
       // The ATOMIC arm, not the delta arm - see the module doc. This is the

@@ -290,7 +290,12 @@ async function rotateStaleCredentials(
     case "deleted":
     case "tombstoned":
     case "user-mismatch":
-    case "refresh-rejected":
+    // Both sides of the credential/account line are terminal HERE. The split
+    // exists for the GUI, which has a local plane to hold or clear; the CLI
+    // has no such surface, so it reports `rejected` either way rather than
+    // inventing a distinction it cannot act on.
+    case "refresh-rejected-credential":
+    case "refresh-rejected-account":
       logger.warn("Stored credential validation rotate rejected", {
         environment: config.environment,
         outcome: result.outcome,

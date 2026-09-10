@@ -25,4 +25,14 @@ describe("providerSignedOutMessage", () => {
       );
     }
   });
+
+  it("shows Antigravity's real name in its generic reconnect sentence", () => {
+    // The loop above only proves the sentence is built from whatever
+    // `PROVIDER_DISPLAY_NAMES.antigravity` happens to hold - it would pass
+    // even if that entry were a typo. Pin the literal copy separately.
+    expect(PROVIDER_DISPLAY_NAMES.antigravity).toBe("Antigravity");
+    expect(providerSignedOutMessage("antigravity")).toBe(
+      "Antigravity is signed out. Reconnect to continue.",
+    );
+  });
 });

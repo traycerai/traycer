@@ -15,6 +15,11 @@ import type {
   HostUpdateAttemptPhase,
   HostUpdateTrigger,
 } from "@traycer/protocol/config/host-update-attempt";
+// A VALUE import, and a safe one: `installation-records` is the browser-safe
+// half of the installation contracts (its header says why it was split from
+// the Node readers), and `host/maintenance/schemas.ts` already puts these
+// records on the wire the same way.
+import { hostInstallSourceKindSchema } from "@traycer/protocol/config/installation-records";
 
 export const hostStatusV10 = defineRpcContract({
   method: "host.status",
@@ -366,6 +371,40 @@ export const hostStatusV13 = defineRpcContract({
   }),
 });
 
+/**
+ * The build's chat format and the last complete survey of its data directory.
+ * `survey` distinguishes not yet checked, checked empty, and failed to read.
+ * `onDiskMax: null` is only an empty-directory claim when survey is complete;
+ * it must never be interpreted as format zero or a successful read otherwise.
+ * `epicCount` counts stores found, including ones whose stamp was unreadable;
+ * it is not a count of epics at the maximum format.
+ */
+export const hostStatusStoreFormatsSchema = z.object({
+  chatDb: z.object({
+    current: z.number().int().positive(),
+    onDiskMax: z.number().int().positive().nullable(),
+    epicCount: z.number().int().nonnegative(),
+    // Pending is boot before the first complete walk; failed means a root or
+    // store could not be read. Complete + null maximum is an affirmative
+    // empty-directory claim, unlike storeFormats:null from an older peer.
+    survey: z.enum(["pending", "complete", "failed"]),
+  }),
+});
+export type HostStatusStoreFormats = z.infer<
+  typeof hostStatusStoreFormatsSchema
+>;
+
+export const hostStatusV14 = defineRpcContract({
+  method: "host.status",
+  schemaVersion: { major: 1, minor: 4 } as const,
+  requestSchema: hostStatusV13.requestSchema,
+  responseSchema: hostStatusV13.responseSchema.extend({
+    // A pre-1.4 peer did not report its formats. Manufacturing the current
+    // build's format here would authorize offers using another host's data.
+    storeFormats: hostStatusStoreFormatsSchema.nullable(),
+  }),
+});
+
 // A v1.0 peer never reports busy/update-progress state through this RPC.
 //
 // `busySessionCount` upgrades to `null`, NOT to `0`. This used to fabricate a
@@ -443,4 +482,72 @@ export const hostStatusUpgradeV12ToV13 = defineUpgradePath<
     updateOperation: null,
     updateTransaction: null,
   }),
+});
+
+export const hostStatusUpgradeV13ToV14 = defineUpgradePath<
+  typeof hostStatusV13,
+  typeof hostStatusV14
+>({
+  from: hostStatusV13.schemaVersion,
+  to: hostStatusV14.schemaVersion,
+  upgradeRequest: (request) => request,
+  // Like updateTransaction, null means the PEER did not say, never that its
+  // directory is empty or that its installed build can read our format.
+  upgradeResponse: (response) => ({ ...response, storeFormats: null }),
+});
+
+/**
+ * The INSTALLED side of the store-format floor, as the CLI will judge it.
+ *
+ * `storeFormats.chatDb.current` above is what this build writes. It is not
+ * what the CLI's floor sees when it lands a registry artifact over this
+ * install: the CLI reads `install.json` and the runtime `version.json` beside
+ * the installed executable, and decides from BOTH records' provenance
+ * (`StoreFloorTargetIdentity` in the CLI) whether the move takes the
+ * version shortcut at all. A desktop provisions from its bundled archive, so
+ * its record is `local-file` under the CLI's own version, and its first
+ * registry upgrade EVALUATES - cleared from formats when the installed side
+ * can be placed (the sidecar, or the fixed table on the recorded version),
+ * walked otherwise. A client that judged only from `current` would call such
+ * an upgrade unrestricted and then meet the CLI's refusal. These three fields
+ * are the operands the client needs to agree with the CLI up front.
+ *
+ * `source` and `version` are `install.json`'s, verbatim. `declaredFormats` is
+ * what the sidecar beside the installed executable says, or `null` for every
+ * way of not getting one (absent, malformed, unreadable) - the same collapse
+ * the CLI's `readInstalledFloorOperands` performs, so both ends resolve the
+ * installed side to one `HostStoreFormatsKnowledge` through
+ * `resolveHostStoreFormats(version, declaredFormats)`.
+ */
+export const hostStatusInstallSchema = z.object({
+  source: hostInstallSourceKindSchema,
+  version: z.string().min(1),
+  declaredFormats: z.object({ chatDb: z.number().int().positive() }).nullable(),
+});
+export type HostStatusInstall = z.infer<typeof hostStatusInstallSchema>;
+
+export const hostStatusV15 = defineRpcContract({
+  method: "host.status",
+  schemaVersion: { major: 1, minor: 5 } as const,
+  requestSchema: hostStatusV14.requestSchema,
+  responseSchema: hostStatusV14.responseSchema.extend({
+    // `null` is "no install record" - an unmanaged host, a dev host run from
+    // source, or a record this build could not read - and a client treats it
+    // as a registry install (the only identity the version shortcut serves),
+    // which is what it did before the field existed.
+    install: hostStatusInstallSchema.nullable(),
+  }),
+});
+
+export const hostStatusUpgradeV14ToV15 = defineUpgradePath<
+  typeof hostStatusV14,
+  typeof hostStatusV15
+>({
+  from: hostStatusV14.schemaVersion,
+  to: hostStatusV15.schemaVersion,
+  upgradeRequest: (request) => request,
+  // A pre-1.5 peer did not report its install record. Manufacturing
+  // `registry` here would be the same fabrication `storeFormats: null`
+  // exists to avoid; `null` lands the client on the path it took before.
+  upgradeResponse: (response) => ({ ...response, install: null }),
 });

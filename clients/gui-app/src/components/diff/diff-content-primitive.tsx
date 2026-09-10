@@ -1,3 +1,4 @@
+import { useThemeRevision } from "@/providers/use-theme-revision";
 import {
   useMemo,
   type KeyboardEvent,
@@ -10,6 +11,7 @@ import {
   hydratePartialDiff,
   parseDiffFromFile,
   parsePatchFiles,
+  type DiffsThemeNames,
   type FileContents,
   type FileDiffContentsLoader,
   type FileDiffMetadata,
@@ -159,14 +161,16 @@ export function DiffContentFrame(props: DiffContentFrameProps): ReactNode {
 export function DiffContentPrimitive(
   props: DiffContentPrimitiveProps,
 ): ReactNode {
+  useThemeRevision();
   const { resolvedTheme } = useResolvedTheme();
+  const themeName = resolveDiffThemeName(resolvedTheme);
   const parsed = useMemo(() => {
     const cacheKey = buildPatchCacheKey(
       props.patch,
-      `${resolvedTheme}:${props.cacheScope}`,
+      `${themeName}:${props.cacheScope}`,
     );
     return parsePatchFiles(props.patch, cacheKey);
-  }, [resolvedTheme, props.patch, props.cacheScope]);
+  }, [themeName, props.patch, props.cacheScope]);
   const parsedFileDiffs = useMemo(
     () => parsed.flatMap((patchGroup) => patchGroup.files),
     [parsed],
@@ -179,7 +183,6 @@ export function DiffContentPrimitive(
       hydrateFileDiffForEdit(fileDiff, editOldFile ?? null, editNewFile),
     );
   }, [parsedFileDiffs, editOldFile, editNewFile]);
-  const themeName = resolveDiffThemeName(resolvedTheme);
   const highlightReady = useDiffsDiffHighlightReady({
     fileDiffs,
     theme: themeName,
@@ -282,7 +285,7 @@ function renderDiffContentBody(args: {
   readonly nonEmptyEditorReady: boolean;
   readonly props: DiffContentPrimitiveProps;
   readonly pierreOverflow: "wrap" | "scroll";
-  readonly themeName: "pierre-light" | "pierre-dark";
+  readonly themeName: DiffsThemeNames;
   readonly resolvedTheme: ResolvedTheme;
 }): ReactNode {
   const { emptyFileEditSession, props } = args;

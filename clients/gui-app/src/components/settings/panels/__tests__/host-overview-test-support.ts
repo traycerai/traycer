@@ -26,7 +26,11 @@ import type {
   HostAvailableManifest,
   HostGetInstallationInfoResponseV11,
 } from "@traycer/protocol/host/maintenance/index";
-import type { HostBusyBreakdown } from "@traycer/protocol/host/status/index";
+import type {
+  HostBusyBreakdown,
+  HostStatusInstall,
+  HostStatusStoreFormats,
+} from "@traycer/protocol/host/status/index";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 
 /**
@@ -141,6 +145,9 @@ export function buildOverviewHostFixture(options: {
   readonly busy?: boolean;
   readonly busySessionCount?: number;
   readonly busyBreakdown?: HostBusyBreakdown | null;
+  readonly storeFormats?: HostStatusStoreFormats | null;
+  /** `host.status@1.5`'s install report; `null` (the default) is "not reported". */
+  readonly install?: HostStatusInstall | null;
   readonly installation?: HostGetInstallationInfoResponseV11;
   /**
    * Replaces (rather than merges into) individual method handlers after the
@@ -184,6 +191,8 @@ export function buildOverviewHostFixture(options: {
         // which is exactly what host.status@1.2-and-older peers send.
         updateOperation: null,
         updateTransaction: null,
+        storeFormats: options.storeFormats ?? null,
+        install: options.install ?? null,
       };
     },
     "host.identity.get": () => ({ ...identity }),

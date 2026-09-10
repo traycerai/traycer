@@ -330,7 +330,11 @@ export class DesktopHostFleetSource implements HostFleetSource {
     const generation = identity.generation;
     this.refreshSeq += 1;
     const seq = this.refreshSeq;
-    const bearerToken = this.options.authSession.get().token;
+    // ONE read of the snapshot, not two: `token` and `verified` are committed
+    // together and a second `get()` could straddle a revoke, spending a bearer
+    // this snapshot had already disowned.
+    const authSnapshot = this.options.authSession.get();
+    const bearerToken = authSnapshot.token;
     if (bearerToken === null) {
       // Signed out: the account fleet is empty, and the local host is not
       // addressable without a credential context either. Stamped like any
@@ -344,6 +348,29 @@ export class DesktopHostFleetSource implements HostFleetSource {
     this.localIdentitySeq += 1;
     const identitySeq = this.localIdentitySeq;
     const localHostId = await this.readLocalHostId();
+    if (!authSnapshot.verified) {
+      // `revokeVerification` deliberately keeps `status: "signed-in"` and the
+      // token - flattening either would sign sibling windows out - so a
+      // revoked bearer is indistinguishable from a live one by the `!== null`
+      // test above, and this poll runs every 60s. Unverified means authn has
+      // rejected the refresh credential, so the account registry is exactly
+      // what this bearer may no longer speak to; spending it here would keep
+      // asking the cloud for account membership with a credential the
+      // renderer has already withdrawn, and could still be answered when only
+      // the refresh half was rejected.
+      //
+      // The LOCAL host is kept, by the same rule the two failure arms below
+      // apply: it was read from disk, it is real and dialable whatever the
+      // registry says, and the offline plane is precisely what an unverified
+      // session still needs. Membership rows wait for a verified fetch; local
+      // usability does not. `browser-view-ipc.ts` gates its own cloud read on
+      // this flag the same way.
+      this.options.log.debug("[selection-fleet] unverified session", {
+        generation,
+      });
+      this.adoptLocalIdentityRead(generation, identitySeq, localHostId);
+      return;
+    }
     let result: HostListFetchResult;
     try {
       result = await this.options.listRegisteredHosts(
@@ -691,9 +718,11 @@ export function createDesktopLocalHostEnsurePort(
 ): LocalHostEnsurePort {
   return {
     ensureReady: async () => {
-      const outcome = await hostController.convergeReady(false, {
-        kind: "background",
-      });
+      const outcome = await hostController.convergeReady(
+        false,
+        { kind: "background" },
+        "keep-installed",
+      );
       if (outcome.kind === "ok") {
         // `ok` ALONE IS NOT PROOF OF LIFE, and the engine reads this answer as
         // exactly that (`onHostProvedAlive`: it clears the refusal streak and

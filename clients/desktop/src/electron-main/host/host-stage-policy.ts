@@ -19,14 +19,20 @@
  * NOTHING HERE RE-DECLARES A VERSION PREDICATE. The controller has to predict
  * which rows `host available` will return - a staged build whose row is missing
  * reads as yanked and gets purged - and that prediction is only safe while both
- * processes read ONE definition, so `isPreReleaseVersion` comes from
+ * processes read ONE definition, so `isHiddenFromDefaultCatalog` comes from
  * `@traycer-clients/shared/host-version/release-line`, which the CLI's own
- * catalog filter now consumes too.
+ * catalog filter consumes too.
+ *
+ * Specifically the DEFAULT-catalog predicate, not the bare shape test beside
+ * it. What this file predicts is the listing a user gets when they state no
+ * preference, and that listing exempts the staging train; the bare test exists
+ * for the CLI's explicit `--no-include-pre-releases`, which is an instruction
+ * rather than a default and takes no exemption.
  */
 import { isStrictlyNewerHostVersion } from "@traycer-clients/shared/host-version/compare-host-versions";
 import {
+  isHiddenFromDefaultCatalog,
   isMatchingStableRelease,
-  isPreReleaseVersion,
   isSameReleaseLine,
 } from "@traycer-clients/shared/host-version/release-line";
 import {
@@ -78,7 +84,8 @@ export function requiresPreReleaseListing(input: {
     return true;
   }
   return (
-    input.stagedVersion !== null && isPreReleaseVersion(input.stagedVersion)
+    input.stagedVersion !== null &&
+    isHiddenFromDefaultCatalog(input.stagedVersion)
   );
 }
 
@@ -166,7 +173,7 @@ function resolveBroadPreReleaseTarget(
   stableLatest: string | null,
 ): string | null {
   const newest = newestVersion(availableVersions);
-  if (newest === null || !isPreReleaseVersion(newest)) {
+  if (newest === null || !isHiddenFromDefaultCatalog(newest)) {
     return null;
   }
   if (!isStrictlyNewerHostVersion(newest, installedVersion)) {

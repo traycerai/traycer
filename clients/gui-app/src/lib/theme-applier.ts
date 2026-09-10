@@ -1,8 +1,23 @@
+import { formatHex8, parse, rgb, wcagContrast } from "culori";
+import {
+  buildFontFamilyValue,
+  DEFAULT_UI_FONT_STACK,
+} from "@/lib/default-font-stacks";
 import {
   useSettingsStore,
   type ThemeMode,
 } from "@/stores/settings/settings-store";
-import type { ThemePreset } from "@/lib/theme-presets";
+import {
+  DEFAULT_THEME_PRESET,
+  THEME_PRESETS,
+  type ThemePreset,
+} from "@/lib/theme-presets";
+import { useThemeLibraryStore } from "@/stores/settings/theme-library-store";
+import { getBuiltinThemeColors } from "@/lib/themes/builtin-palettes";
+import {
+  themeTokenNames,
+  type ThemeDefinition,
+} from "@/lib/themes/theme-definition";
 
 /**
  * Imperative owner of the document-element theme attributes (`class`,
@@ -38,7 +53,8 @@ function readSystemTheme(): ResolvedTheme {
 }
 
 function resolve(theme: ThemeMode, system: ResolvedTheme): ResolvedTheme {
-  return theme === "system" ? system : theme;
+  if (theme === "dark" || theme === "light") return theme;
+  return system;
 }
 
 function applyVariant(resolved: ResolvedTheme, preset: ThemePreset): void {
@@ -51,11 +67,105 @@ function applyVariant(resolved: ResolvedTheme, preset: ThemePreset): void {
 
 let systemTheme: ResolvedTheme = readSystemTheme();
 const resolvedListeners = new Set<() => void>();
+let themeRevision = 0;
+export function getThemeRevision(): number {
+  return themeRevision;
+}
+export function getActiveThemeDefinition(): ThemeDefinition | null {
+  const library = useThemeLibraryStore.getState();
+  if (library.draft) return library.draft;
+  const mode = resolve(useSettingsStore.getState().theme, systemTheme);
+  return (
+    library.themes.find(
+      (theme) =>
+        theme.id === library.selected[mode] && theme.appearance === mode,
+    ) ?? null
+  );
+}
+export function getActiveThemePreset(): ThemePreset {
+  const custom = getActiveThemeDefinition();
+  if (custom) return custom.base;
+  const selected = useThemeLibraryStore.getState().selected[getResolvedTheme()];
+  return (
+    THEME_PRESETS.find(
+      (preset) =>
+        preset.id === (selected ?? useSettingsStore.getState().themePreset),
+    )?.id ?? DEFAULT_THEME_PRESET
+  );
+}
 
 function applyFromState(): void {
   if (typeof window === "undefined") return;
-  const s = useSettingsStore.getState();
-  applyVariant(resolve(s.theme, systemTheme), s.themePreset);
+  const library = useThemeLibraryStore.getState();
+  const custom = getActiveThemeDefinition();
+  const mode = getResolvedTheme();
+  const preset = getActiveThemePreset();
+  applyVariant(mode, preset);
+  const root = window.document.documentElement;
+  for (const token of themeTokenNames) root.style.removeProperty(`--${token}`);
+  const colors = { ...getBuiltinThemeColors(preset, mode), ...custom?.colors };
+  for (const [token, color] of Object.entries(colors)) {
+    root.style.setProperty(`--${token}`, color);
+  }
+  root.style.setProperty("--glass-opacity", String(library.glassOpacity / 100));
+  root.style.setProperty(
+    "--traycer-font-prompt",
+    library.promptFontFamily === null
+      ? "var(--traycer-font-ui)"
+      : buildFontFamilyValue(library.promptFontFamily, DEFAULT_UI_FONT_STACK),
+  );
+  root.style.setProperty("--prompt-font-size", `${library.promptFontSize}px`);
+  root.style.setProperty(
+    "--appearance-ligatures",
+    library.fontLigatures ? "normal" : "none",
+  );
+  root.toggleAttribute("data-reduce-panel-motion", !library.panelAnimations);
+  root.style.setProperty(
+    "--panel-animation-duration",
+    `${library.panelAnimationDuration}ms`,
+  );
+  if (library.contrast !== 100) {
+    const computed = getComputedStyle(root);
+    for (const [foreground, background] of [
+      ["foreground", "background"],
+      ["muted-foreground", "background"],
+      ["canvas-foreground", "canvas"],
+      ["card-foreground", "card"],
+      ["popover-foreground", "popover"],
+      ["border", "background"],
+      ["canvas-border", "canvas"],
+    ]) {
+      const fg = parse(computed.getPropertyValue(`--${foreground}`).trim());
+      const bg = parse(computed.getPropertyValue(`--${background}`).trim());
+      if (!fg || !bg) continue;
+      const source = rgb(fg);
+      const destination =
+        library.contrast < 100
+          ? rgb(bg)
+          : rgb(
+              wcagContrast(bg, "#fff") > wcagContrast(bg, "#000")
+                ? { mode: "rgb", r: 1, g: 1, b: 1 }
+                : { mode: "rgb", r: 0, g: 0, b: 0 },
+            );
+      const amount = Math.abs(library.contrast - 100) / 100;
+      root.style.setProperty(
+        `--${foreground}`,
+        formatHex8({
+          mode: "rgb",
+          r: source.r + (destination.r - source.r) * amount,
+          g: source.g + (destination.g - source.g) * amount,
+          b: source.b + (destination.b - source.b) * amount,
+          alpha: source.alpha,
+        }),
+      );
+    }
+  }
+  root.setAttribute("data-theme-id", custom?.id ?? preset);
+  root.toggleAttribute(
+    "data-theme-sidebar-artwork",
+    custom?.sidebarArtwork === true,
+  );
+  themeRevision += 1;
 }
 
 function notify(): void {
@@ -79,6 +189,24 @@ function install(): void {
     if (state.theme === prev.theme && state.themePreset === prev.themePreset) {
       return;
     }
+    applyFromState();
+    notify();
+  });
+
+  useThemeLibraryStore.subscribe((state, prev) => {
+    if (
+      state.themes === prev.themes &&
+      state.selected === prev.selected &&
+      state.draft === prev.draft &&
+      state.glassOpacity === prev.glassOpacity &&
+      state.promptFontFamily === prev.promptFontFamily &&
+      state.promptFontSize === prev.promptFontSize &&
+      state.fontLigatures === prev.fontLigatures &&
+      state.panelAnimations === prev.panelAnimations &&
+      state.panelAnimationDuration === prev.panelAnimationDuration &&
+      state.contrast === prev.contrast
+    )
+      return;
     applyFromState();
     notify();
   });
@@ -107,7 +235,10 @@ install();
  * renders for the same logical state - primitives compare by value.
  */
 export function getResolvedTheme(): ResolvedTheme {
-  return resolve(useSettingsStore.getState().theme, systemTheme);
+  return (
+    useThemeLibraryStore.getState().draft?.appearance ??
+    resolve(useSettingsStore.getState().theme, systemTheme)
+  );
 }
 
 /**

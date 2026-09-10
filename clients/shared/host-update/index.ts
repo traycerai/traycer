@@ -12,9 +12,11 @@ export {
 } from "./paths";
 
 export type {
+  HostUpdateAttemptClaimBaseline,
   HostUpdateAttemptContinuation,
   HostUpdateAttemptError,
   HostUpdateAttemptExecution,
+  HostUpdateAttemptVerification,
   HostUpdateAttemptIdentity,
   HostUpdateAttemptPhase,
   HostUpdateAttemptProgress,
@@ -57,6 +59,7 @@ export type {
   PublicAttemptMutationIntent,
   PublicAttemptMutationIntent as AttemptMutationIntent,
   AttemptMutationRejection,
+  AttemptDiscardOutcome,
   AttemptPruneOutcome,
   AttemptPruneRejection,
   CommitAttemptMutationOptions,
@@ -65,6 +68,7 @@ export type {
 export {
   AttemptRecordDurabilityError,
   commitAttemptMutation,
+  discardAttemptRecordForUninstall,
   pruneTerminalAttemptRecord,
   readRegularFileNoFollow,
   readUpdateAttemptRecord,
@@ -102,6 +106,7 @@ export type {
   AttemptClaimDecision,
   AttemptClaimAction,
   AttemptClaimHolderDisposition,
+  AttemptClaimRefresh,
   AttemptClaimRequest,
   AttemptRecoveryArtifactEvidence,
   AttemptRecoveryContext,
@@ -136,6 +141,8 @@ export type {
   UpdateMutationCapability,
   UpdateMutationCapabilityAdoption,
   UpdateMutationCapabilityVerdict,
+  SupervisorRelaunchIdentityReader,
+  SupervisorRelaunchInstalledIdentity,
   WithUpdateContenderOptions,
 } from "./contender";
 export {
@@ -144,7 +151,9 @@ export {
   validateUpdateMutationCapabilityAdoption,
   rebindUpdateMutationCapabilityLiveness,
   withUpdateContender,
+  withSupervisorRelaunchContender,
   commitAttemptMutationWithCapability,
+  discardAttemptRecordWithCapability,
   withUpdateContenderAdoption,
 } from "./contender";
 
@@ -169,20 +178,27 @@ export type {
 // Desktop consume ONE definition of the floors rather than each keeping a copy.
 export {
   COMPATIBILITY_FLOOR_UNPINNED,
+  FIRST_LOCK_AWARE_RELEASE,
+  HOST_START_STAMP_FLOOR,
+  HOST_START_STAMP_PROVEN_FLOOR,
+  HOST_START_STAMP_WRITER_FLOOR,
   LOCK_AWARE_CLI_FLOOR,
   LOCK_AWARE_DESKTOP_FLOOR,
   SHIPPED_COMPATIBILITY_FLOORS,
   decideCompatibilityFence,
+  decideHostStampPolicy,
   decideLegacyMarkerConcurrency,
   resolveCohortPolicy,
 } from "./compatibility-fence";
 export type {
   CompatibilityFenceInput,
+  NonReleaseAdmission,
   CompatibilityFloors,
   CompatibilityFenceVerdict,
   CompatibilityRefusalReason,
   CohortPolicyResolution,
   CohortPolicySource,
+  HostStampPolicy,
   LegacyMarkerAbortDisposition,
   LegacyMarkerConcurrencyInput,
   LegacyMarkerConcurrencyVerdict,

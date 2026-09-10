@@ -1,6 +1,7 @@
 import type { HostActivationState } from "./host-state";
 import type {
   HostUpdateAttemptContinuation,
+  HostUpdateAttemptError,
   HostUpdateAttemptPhase,
 } from "@traycer/protocol/config/host-update-attempt";
 
@@ -79,6 +80,9 @@ export interface DownloadLaneStatus {
   readonly lastError: string | null;
 }
 
+/** Mirror of `@traycer-clients/shared`'s `LocalAttemptLiveness` - see there. */
+export type LocalAttemptLiveness = "live" | "interrupted" | "unknown";
+
 /**
  * Mirror of `@traycer-clients/shared`'s `LocalAttemptFacts`.
  *
@@ -97,6 +101,12 @@ export interface LocalAttemptFacts {
   // `HostUpdateAttemptContinuation` already includes `null`.
   readonly continuation: HostUpdateAttemptContinuation;
   readonly updatedAt: string;
+  /** The record's terminal cause, `null` on every non-failed record. See the shared declaration. */
+  readonly error: HostUpdateAttemptError;
+  /** Probed, never inferred (D13). See the shared declaration. */
+  readonly liveness: LocalAttemptLiveness;
+  /** Desktop's clock at the probe; `null` when no probe ran. */
+  readonly livenessObservedAtMs: number | null;
 }
 
 // Two independent lanes, per the Tech Plan's canonical status shape.
@@ -107,6 +117,15 @@ export interface HostControllerStatus {
   readonly mutation: MutationLaneStatus | null;
   readonly installedVersion: string | null;
   readonly latestVersion: string | null;
+  /**
+   * The staged (pre-downloaded) host version, if any. Whether the launch-time
+   * apply of that stage may proceed is NOT a status question: the version hold
+   * (CLI-owned `held-host-version.json`) is decided by the CLI under its own
+   * mutation lock - `host apply --respect-hold`, which the implicit launch
+   * apply always reaches - never from a desktop-side snapshot that a terminal
+   * downgrade could race. `updateReady` therefore keeps advertising the stage
+   * for a held host too, and an explicit apply still moves forward.
+   */
   readonly stagedVersion: string | null;
   readonly installedRuntimeVersion: string | null;
   readonly runningRuntimeVersion: string | null;
@@ -244,6 +263,29 @@ export function backgroundMutationOutcome<TOk>(
     : outcome;
 }
 
+/**
+ * Which host version a `convergeReady` may leave installed - the ONLY axis on
+ * which a liveness converge and a Doctor "Install host" repair differ, and
+ * part of the lane's coalesce key for that reason.
+ *
+ *   - `keep-installed` (`host ensure --keep-installed`, the CLI's `viability`
+ *     policy): bring a down host back up on WHATEVER non-yanked version is
+ *     installed and never move the version as a matter of client preference.
+ *     Every implicit converge - the reconciler, launch convergence, the
+ *     selection ports, and Doctor's `converge-ready` - is this, which is what
+ *     keeps a deliberately downgraded host from being reverted by liveness.
+ *     A missing or yanked install still gets the pinned host.
+ *   - `pinned-minimum` (`host ensure` with no flag, the CLI's default
+ *     satisfaction policy): additionally reinstall when the installed version
+ *     is BELOW this build's pinned host. Explicit and version-seeking by
+ *     design: it is Doctor's `converge-latest`, the repair behind the
+ *     "Install host" button on a host whose protocol is too old for this
+ *     client (`host-install-latest`), a missing binary, or an unreadable
+ *     record. A liveness converge would report that repair applied having
+ *     kept the very host that cannot serve the client.
+ */
+export type ConvergeReadyVersionPolicy = "keep-installed" | "pinned-minimum";
+
 export interface ConvergeReadyOk {
   readonly running: boolean;
   readonly version: string | null;
@@ -252,6 +294,20 @@ export interface ConvergeReadyOk {
 export interface ApplyStagedOk {
   readonly appliedVersion: string;
   readonly runningActivated: boolean;
+  /**
+   * `false` when the CLI apply was a NO-OP - nothing was staged by the time it
+   * ran, or (for the implicit launch trigger, `host apply --respect-hold`) the
+   * installed host is the deliberately-held install instance and still viable,
+   * so the CLI kept it. `appliedVersion` then names the version that stayed
+   * installed. Only a REACHABLE host reports it: a no-op against an
+   * unreachable host is an `installedNotConverged` failure instead (the
+   * controller's `noOpApplyOutcome`), which the launch reconcile's
+   * `recoverAfterFailedApply` turns into a keep-installed converge - so a held
+   * host that is DOWN is started that way. The `ok`/`applied: false` shape is
+   * what lets the reconcile fall through to its activation arm for a held host
+   * that is up but carries activation debt.
+   */
+  readonly applied: boolean;
 }
 
 export interface ActivateInstalledOk {

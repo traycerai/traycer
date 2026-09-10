@@ -1,6 +1,7 @@
 import type { HighlighterCore, ThemeRegistrationRaw } from "shiki/core";
 import type { ThemePreset } from "@/lib/theme-presets";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import { getActiveThemePreset } from "@/lib/theme-applier";
+import { getActiveSyntaxTheme } from "@/lib/themes/syntax-theme";
 
 /**
  * Content longer than this (in characters) skips syntax highlighting -
@@ -139,8 +140,9 @@ let highlighterPromise: Promise<HighlighterCore> | null = null;
  */
 export function getOrCreateHighlighter(): Promise<HighlighterCore> {
   if (!highlighterPromise) {
-    const preset = useSettingsStore.getState().themePreset;
+    const preset = getActiveThemePreset();
     const pair = SHIKI_BY_PRESET[preset];
+    const custom = getActiveSyntaxTheme();
     highlighterPromise = Promise.all([
       import("shiki/core"),
       import("shiki/engine/javascript"),
@@ -148,7 +150,10 @@ export function getOrCreateHighlighter(): Promise<HighlighterCore> {
       .then(([core, engine]) =>
         core.createHighlighterCore({
           langs: CURATED_LANG_IMPORTERS.map((importer) => importer()),
-          themes: [THEME_IMPORTERS[pair.light](), THEME_IMPORTERS[pair.dark]()],
+          themes:
+            custom === null
+              ? [THEME_IMPORTERS[pair.light](), THEME_IMPORTERS[pair.dark]()]
+              : [custom],
           engine: engine.createJavaScriptRegexEngine(),
         }),
       )
@@ -187,8 +192,10 @@ function ensureThemePair(
 }
 
 /** Active Shiki theme for the current preset + document light/dark class. */
-export function resolveActiveShikiTheme(): ShikiThemeId {
-  const preset = useSettingsStore.getState().themePreset;
+export function resolveActiveShikiTheme(): string {
+  const custom = getActiveSyntaxTheme();
+  if (custom?.name !== undefined) return custom.name;
+  const preset = getActiveThemePreset();
   const pair = SHIKI_BY_PRESET[preset];
   return getDocIsDark() ? pair.dark : pair.light;
 }
@@ -197,7 +204,13 @@ export function resolveActiveShikiTheme(): ShikiThemeId {
 export function ensureActiveThemePair(
   highlighter: HighlighterCore,
 ): Promise<void> {
-  return ensureThemePair(highlighter, useSettingsStore.getState().themePreset);
+  const custom = getActiveSyntaxTheme();
+  if (custom?.name !== undefined) {
+    return highlighter.getLoadedThemes().includes(custom.name)
+      ? Promise.resolve()
+      : highlighter.loadTheme(custom);
+  }
+  return ensureThemePair(highlighter, getActiveThemePreset());
 }
 
 /** Plaintext infos shiki's core handles natively without a grammar. */

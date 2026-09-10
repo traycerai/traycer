@@ -8,9 +8,11 @@ import {
   isTerminalPhase,
   nextAttemptCounter,
   sameAttemptIdentity,
+  type HostUpdateAttemptClaimBaseline,
   type HostUpdateAttemptContinuation,
   type HostUpdateAttemptError,
   type HostUpdateAttemptIdentity,
+  type HostUpdateAttemptVerification,
   type HostUpdateAttemptPhase,
   type HostUpdateAttemptProgress,
   type HostUpdateAttemptRecovery,
@@ -49,9 +51,22 @@ export type AttemptClaimAction =
   | "resume-apply"
   | "activate"
   | "force"
+  /**
+   * An identity-bound resume of whatever the park is waiting to do. Legal only
+   * with `expected !== null` (the generic rule below), and it adopts EITHER
+   * continuation - which is exactly why it is a separate action rather than a
+   * widening of `resume-apply` or `activate`: the dispatcher named an attempt,
+   * not an operation, and the record is what says which operation that is.
+   */
+  | "continue"
   | "defer";
 
-export interface AttemptClaimRequest {
+/**
+ * Everything about a claim request that does not depend on which continuation
+ * it is born into. The two fields that DO depend on each other are added by
+ * `AttemptClaimRequest`'s union below.
+ */
+interface AttemptClaimRequestBase {
   readonly targetVersion: string;
   readonly trigger: HostUpdateTrigger;
   /** The exact operation this request may perform. */
@@ -72,10 +87,59 @@ export interface AttemptClaimRequest {
    * the executor, which §1.2 makes the sole minter, is visibly the minter.
    */
   readonly newAttemptId: string;
-  /** The phase a newly created attempt commits before its first side effect. */
-  readonly initialPhase: ActiveHostUpdateAttemptPhase;
+  /**
+   * The claim baseline (D19), written verbatim by `createdRecord`, or `null`
+   * for a claimant with nothing to record.
+   *
+   * `null` is not a degraded baseline: it writes NO `claim` key at all, which
+   * is byte-identical to what every pre-D19 build produced, and a record with
+   * no baseline is deliberately resumable only as an upgrade park.
+   */
+  readonly claim: HostUpdateAttemptClaimBaseline | null;
   readonly nowIso: string;
 }
+
+/**
+ * The birth phase and the birth continuation, which are NOT independent.
+ *
+ * `createdRecord` writes both verbatim, so any pair the type admits is a
+ * record this module can put on disk. Declaring them as two free fields
+ * admitted two that nothing can execute:
+ *
+ *  - `downloading` + `activate` is born durably ACTIVE and cannot progress:
+ *    `continuationPhaseOrderRejected` refuses every successor an `activate`
+ *    continuation is allowed, because none of them is reachable from
+ *    `downloading`. The attempt is stuck until something supersedes it.
+ *  - `applying` + `activate` can park `waiting-to-activate` with no bytes
+ *    placed - the park says a restart is owed for an install that never
+ *    happened.
+ *
+ * `"activate"` exists for exactly one situation, and that situation has
+ * exactly one phase: an attempt CREATED to activate bytes that are ALREADY
+ * placed (the activation-debt arm), which starts at `preparing` because there
+ * is nothing left to download or apply. Without the continuation such an
+ * attempt is born with none, and a busy host at the activation gate has no
+ * legal park to write - `waiting-to-activate` may be born only from
+ * `applying`, or re-parked from an `activate` segment.
+ *
+ * Pairing them here rather than adding a refusal to `decideAttemptClaim` is
+ * deliberate: an ill-formed request becomes unconstructible without a cast,
+ * which is a stronger guarantee than a runtime reason, and a new reason would
+ * ripple into every consumer's switch. The untyped entry - `store.ts`'s
+ * `normalizeClaimRequest`, where types have disappeared - enforces the same
+ * rule at runtime.
+ */
+export type AttemptClaimRequest = AttemptClaimRequestBase &
+  (
+    | {
+        readonly initialPhase: "preparing";
+        readonly initialContinuation: "activate";
+      }
+    | {
+        readonly initialPhase: ActiveHostUpdateAttemptPhase;
+        readonly initialContinuation: null;
+      }
+  );
 
 export interface AttemptClaimContext {
   /** The record as just decoded, in whatever state the decoder found it. */
@@ -197,6 +261,21 @@ export type AttemptRecoveryRunningEvidence =
       readonly owner: "host-home-bound";
     }
   | { readonly kind: "unbound"; readonly version: string }
+  /**
+   * A host process is running and answering, but its reported identity is not
+   * a catalog version this install record vouches for - a staging identity
+   * that matches no record, or the record's own catalog version while the
+   * record names a DIFFERENT `runtimeVersion` (the "C/R collision").
+   *
+   * It is deliberately a kind of its own rather than an `unbound` at the raw
+   * identity, and no equality below accepts it. That is what makes the
+   * collision read as activation DEBT - `recoveryContinuation` keys `activate`
+   * on the INSTALLED leg, which is exactly how `readActivationState` already
+   * reads it - instead of the evidence CONTRADICTION an `unbound` at the
+   * target version means. It is lowered to a persistable leg in exactly one
+   * place, `recoverySummary`.
+   */
+  | { readonly kind: "foreign"; readonly runtimeIdentity: string }
   | { readonly kind: "unreadable" };
 
 export interface AttemptRecoveryEvidence {
@@ -477,17 +556,45 @@ function recoverySummary(
           ? evidence.staged.version
           : null,
     },
-    running: {
-      kind: evidence.running.kind,
-      version:
-        evidence.running.kind === "verified" ||
-        evidence.running.kind === "unbound"
-          ? evidence.running.version
-          : null,
-      ownerBound:
-        evidence.running.kind === "verified" &&
-        evidence.running.owner === "host-home-bound",
-    },
+    running: runningSummaryLeg(evidence.running),
+  };
+}
+
+/**
+ * THE ONE PLACE a `foreign` running leg is lowered onto the persisted shape.
+ *
+ * `foreign` has no encoding of its own: the durable leg's `kind` is frozen at
+ * four values, and both alternatives to `unbound` + the raw identity are worse
+ * than they look. A fifth kind, or `unbound` with a null `version`, is read as
+ * CORRUPT by every observer built before this change (`parseRecoveryRunningLeg`
+ * requires a non-null version on `unbound`) - a fail-closed verdict on an
+ * otherwise perfectly good terminal record. The raw identity carried in
+ * `version`, plus the additive `runtimeIdentity` key an old reader ignores,
+ * keeps the record readable everywhere and loses nothing.
+ *
+ * Lowering it ANYWHERE else - the store's live-input normalizer above all -
+ * changes a recovery DECISION rather than a record's encoding: `unbound` at the
+ * target version is an evidence contradiction, while `foreign` is debt.
+ */
+function runningSummaryLeg(
+  running: AttemptRecoveryRunningEvidence,
+): HostUpdateAttemptRecovery["evidence"]["running"] {
+  if (running.kind === "foreign") {
+    return {
+      kind: "unbound",
+      version: running.runtimeIdentity,
+      ownerBound: false,
+      runtimeIdentity: running.runtimeIdentity,
+    };
+  }
+  return {
+    kind: running.kind,
+    version:
+      running.kind === "verified" || running.kind === "unbound"
+        ? running.version
+        : null,
+    ownerBound:
+      running.kind === "verified" && running.owner === "host-home-bound",
   };
 }
 
@@ -687,8 +794,11 @@ export function decideAttemptClaim(
  *
  * `force` is a request to proceed through the pre-apply busy gate, so it
  * may resume only `resume-apply`. Activation has its own action because
- * `waiting-to-activate` says promotion is already complete. `defer` is a
- * future in-segment parking action, not a claim action, and therefore cannot
+ * `waiting-to-activate` says promotion is already complete. `continue` is the
+ * identity-bound "resume whatever this attempt is waiting for" authorization
+ * and therefore adopts either continuation - it is bound to an attempt, and
+ * the record it names is what decides the operation. `defer` is a future
+ * in-segment parking action, not a claim action, and therefore cannot
  * accidentally turn into a resume while the durable-core API has no request
  * journal to consume it from.
  */
@@ -696,6 +806,7 @@ function actionMayResume(
   action: AttemptClaimAction,
   continuation: Exclude<HostUpdateAttemptContinuation, null>,
 ): boolean {
+  if (action === "continue") return true;
   if (continuation === "resume-apply") {
     return action === "resume-apply" || action === "force";
   }
@@ -712,12 +823,15 @@ function createdRecord(request: AttemptClaimRequest): HostUpdateAttemptRecord {
     targetVersion: request.targetVersion,
     phase: request.initialPhase,
     execution: executionForPhase(request.initialPhase),
-    continuation: null,
+    continuation: request.initialContinuation,
     progress: null,
     startedAt: request.nowIso,
     updatedAt: request.nowIso,
     completedAt: null,
     error: null,
+    // The key is OMITTED for `null`, never written as null: a `start` with no
+    // baseline must produce the exact bytes every pre-D19 build produced.
+    ...(request.claim === null ? {} : { claim: request.claim }),
   };
 }
 
@@ -911,7 +1025,55 @@ export interface AttemptAdvance {
   readonly continuation: HostUpdateAttemptContinuation;
   readonly progress: HostUpdateAttemptProgress;
   readonly error: HostUpdateAttemptError;
+  /**
+   * The install identity read under the lock at THIS write, or `null` to carry
+   * the record's existing claim baseline unchanged.
+   *
+   * Required and nullable rather than an optional key, deliberately: a park is
+   * the one write whose baseline MUST be current (it is the fact the next
+   * resume is authorized against), and omitting a key is not a decision anyone
+   * makes on purpose. Every advance therefore says which it is. Phase advances
+   * pass `null`.
+   *
+   * All three arms, in one sentence each:
+   *
+   *  - a refresh on a record WITH a claim replaces those three fields and
+   *    COPIES both consents (`allowDowngrade`, `acceptStoreFormatLoss`) from
+   *    the prior record - consent travels with the attempt and is never
+   *    recomputed from arguments or version order;
+   *  - a refresh on a record WITHOUT a claim is IGNORED - a legacy
+   *    continuation cannot gain an authorization nobody ever granted it;
+   *  - `null` carries the prior claim unchanged.
+   *
+   * A park may refresh or carry. It may never drop.
+   */
+  readonly claimRefresh: AttemptClaimRefresh | null;
+  /**
+   * How the verify leg proved the host, or `null` for every advance that is
+   * not the terminal completion (Q1).
+   *
+   * REQUIRED rather than optional, deliberately. The record's `verification`
+   * is written positively so that its ABSENCE means "a writer that predates
+   * the key" and never "verified fully"; a field that a caller could simply
+   * omit here would put that guarantee back at the mercy of care. Required, an
+   * author has to write `null`, and the compiler enumerates every site.
+   */
+  readonly verification: HostUpdateAttemptVerification | null;
   readonly nowIso: string;
+}
+
+/**
+ * The install identity a park write re-read under the lock.
+ *
+ * Deliberately NOT `HostUpdateAttemptClaimBaseline`: the two consents
+ * (`allowDowngrade`, `acceptStoreFormatLoss`) are absent because a refresh may
+ * not restate consent, and a shape that cannot carry them cannot accidentally
+ * recompute them.
+ */
+export interface AttemptClaimRefresh {
+  readonly installedVersion: string;
+  readonly installGeneration: string;
+  readonly stageFingerprint: string | null;
 }
 
 export type AttemptAdvanceRejection =
@@ -934,6 +1096,9 @@ export type AttemptAdvanceRejection =
   // next state: a resumed apply has not written `applying` yet, or an
   // activation segment has skipped its restart boundary.
   | "continuation-phase-order"
+  // A verification describes how the verify leg CONCLUDED, so it is legal on
+  // exactly one advance: the terminal completion (Q1).
+  | "verification-not-on-completion"
   | "counter-exhausted";
 
 export type AttemptAdvanceOutcome =
@@ -998,23 +1163,68 @@ export function advanceAttempt(
     return { kind: "rejected", reason: "counter-exhausted" };
   }
 
+  // A verification describes how the verify leg CONCLUDED, so it belongs to
+  // exactly one advance: the terminal completion. Refused rather than ignored
+  // on any other phase - the record decoder treats a verification on a live
+  // phase as CORRUPT, so silently carrying one here would let a caller put an
+  // unreadable record on disk. Rejecting the intent keeps the failure at the
+  // boundary that can still answer for it.
+  if (advance.verification !== null && advance.phase !== "complete") {
+    return { kind: "rejected", reason: "verification-not-on-completion" };
+  }
   const execution = executionForPhase(advance.phase);
+  const refreshed = refreshedClaimBaseline(current, advance.claimRefresh);
   return {
     kind: "advanced",
     record: {
       ...current,
+      // Spread AFTER `...current` so a refresh replaces the prior baseline,
+      // and omitted entirely when there is nothing to refresh - which is what
+      // makes `...current` the carry-unchanged path.
+      ...(refreshed === null ? {} : { claim: refreshed }),
       sequence,
       phase: advance.phase,
       execution,
       continuation: advance.continuation,
       progress: advance.progress,
       error: advance.error,
+      // Written only where the advance carries one - the terminal completion.
+      // Spread rather than assigned so a `null` leaves whatever `...current`
+      // had, which is what makes a non-terminal advance unable to erase it.
+      ...(advance.verification === null
+        ? {}
+        : { verification: advance.verification }),
       updatedAt: advance.nowIso,
       // Stamped once, when the attempt actually ends. Timestamps are display
       // and staleness inputs only (§1.3) - never ordering - so this is the
       // one place a terminal record's age comes from.
       completedAt: execution === "terminal" ? advance.nowIso : null,
     },
+  };
+}
+
+/**
+ * The claim baseline this advance writes, or `null` for "leave it exactly as
+ * the record has it".
+ *
+ * Note which way the two `null`s point: a `null` REFRESH carries the prior
+ * baseline, and a record with NO baseline stays without one however specific
+ * the refresh is. Neither can drop a baseline the record already carries,
+ * which is the property the resume authorization rests on.
+ */
+function refreshedClaimBaseline(
+  current: HostUpdateAttemptRecord,
+  refresh: AttemptClaimRefresh | null,
+): HostUpdateAttemptClaimBaseline | null {
+  const prior = current.claim;
+  if (refresh === null || prior === undefined) return null;
+  return {
+    installedVersion: refresh.installedVersion,
+    installGeneration: refresh.installGeneration,
+    stageFingerprint: refresh.stageFingerprint,
+    // COPIED, never recomputed. The refresh shape cannot even express them.
+    allowDowngrade: prior.allowDowngrade,
+    acceptStoreFormatLoss: prior.acceptStoreFormatLoss,
   };
 }
 

@@ -5,6 +5,7 @@ import type { RemoteHostDirectoryEntry } from "@traycer-clients/shared/host-clie
 import type { HostRpcRegistry } from "@/lib/host";
 import {
   composerHostLabel,
+  refuseCreateWithoutCloudVerdict,
   resolveLandingPlacement,
   type LandingPlacementTarget,
 } from "@/lib/composer/landing-placement";
@@ -257,5 +258,61 @@ describe("composerHostLabel", () => {
 
   it("has copy for the ∅ case", () => {
     expect(composerHostLabel(entries, null)).toBe("This device");
+  });
+});
+
+describe("refuseCreateWithoutCloudVerdict", () => {
+  it("never refuses a signed-in session, whatever the host's line", () => {
+    expect(
+      refuseCreateWithoutCloudVerdict({
+        status: "signed-in",
+        negotiatedCreate: null,
+        hostLabel: "Laptop",
+      }),
+    ).toBeNull();
+    expect(
+      refuseCreateWithoutCloudVerdict({
+        status: "signed-in",
+        negotiatedCreate: { major: 1, minor: 0 },
+        hostLabel: "Laptop",
+      }),
+    ).toBeNull();
+  });
+
+  it("admits an unverified session on a host that serves the local-first line", () => {
+    expect(
+      refuseCreateWithoutCloudVerdict({
+        status: "unverified",
+        negotiatedCreate: { major: 1, minor: 1 },
+        hostLabel: "Laptop",
+      }),
+    ).toBeNull();
+  });
+
+  it("refuses an unverified session on a pre-1.1 host, naming the device", () => {
+    // `epic.create@1.0` would send this create to the cloud on the retained
+    // credential. `@1.1` is the minor that tells the two hosts apart; it used
+    // to be read off `epic.listTasks@1.6`, a proxy for the same release.
+    const refusal = refuseCreateWithoutCloudVerdict({
+      status: "unverified",
+      negotiatedCreate: { major: 1, minor: 0 },
+      hostLabel: "Laptop",
+    });
+    expect(refusal?.kind).toBe("refused");
+    expect(refusal?.kind === "refused" ? refusal.message : "").toContain(
+      "Laptop",
+    );
+  });
+
+  it("refuses an unverified session before the host's manifest has arrived", () => {
+    // Fails closed on `null`: a decision that could spend the withheld
+    // capability does not assert the host's line without evidence.
+    expect(
+      refuseCreateWithoutCloudVerdict({
+        status: "unverified",
+        negotiatedCreate: null,
+        hostLabel: "Laptop",
+      })?.kind,
+    ).toBe("refused");
   });
 });

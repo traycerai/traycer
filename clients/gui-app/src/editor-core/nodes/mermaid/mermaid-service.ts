@@ -1,3 +1,4 @@
+import { subscribeResolvedTheme } from "@/lib/theme-applier";
 import {
   buildMermaidThemeVariables,
   readMermaidPalette,
@@ -6,7 +7,7 @@ import {
 /**
  * Thin façade over the lazily-imported `mermaid` package. Centralising the
  * loader means (a) only one editor pays the ~400 kB import cost, (b) the
- * dark-mode MutationObserver is wired once per document, and (c) render /
+ * palette subscription is wired once per document, and (c) render /
  * export helpers share the same singleton instance.
  *
  * All exported functions are `async` and idempotent: they await
@@ -22,7 +23,7 @@ interface ReadyState {
 }
 
 let readyPromise: Promise<ReadyState> | null = null;
-let darkObserver: MutationObserver | null = null;
+let unsubscribeTheme: (() => void) | null = null;
 const themeChangeListeners = new Set<() => void>();
 let themeVersion = 0;
 
@@ -77,22 +78,12 @@ function applyTheme(mermaid: MermaidModule, doc: Document): void {
   });
 }
 
-/**
- * Attach a single MutationObserver to `html` that reacts to `class`
- * changes (next-themes toggles `dark` here). Because mermaid's config is
- * global, one observer is enough - all mounted NodeViews share the same
- * initialized module.
- */
-function ensureDarkObserver(mermaid: MermaidModule, doc: Document): void {
-  if (darkObserver !== null) return;
-  const root = doc.documentElement;
-  darkObserver = new MutationObserver(() => {
+/** The shared palette signal also covers live edits that keep the same theme id. */
+function ensureThemeSubscription(mermaid: MermaidModule, doc: Document): void {
+  if (unsubscribeTheme !== null) return;
+  unsubscribeTheme = subscribeResolvedTheme(() => {
     applyTheme(mermaid, doc);
     notifyThemeChange();
-  });
-  darkObserver.observe(root, {
-    attributes: true,
-    attributeFilter: ["class", "data-theme"],
   });
 }
 
@@ -109,7 +100,7 @@ export function ensureMermaidReady(): Promise<ReadyState> {
     const doc =
       typeof document !== "undefined" ? document : globalThis.document;
     applyTheme(mermaid, doc);
-    ensureDarkObserver(mermaid, doc);
+    ensureThemeSubscription(mermaid, doc);
     return { mermaid, doc };
   })().catch((err) => {
     // Drop the cached failure so a later retry can re-import.

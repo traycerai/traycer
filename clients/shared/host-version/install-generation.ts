@@ -34,6 +34,26 @@ const LEGACY_PREFIX = "legacy:";
 // synthetic form - none of those alphabets include `|`.
 const LEGACY_SEPARATOR = "|";
 
+/**
+ * ## Pass a record, never a hand-picked literal
+ *
+ * Any value carrying the four fields satisfies `InstallGenerationIdentity`, so
+ * every caller holding an install record passes the RECORD — never
+ * `{installId: r.installId, installedAt: r.installedAt, …}` rebuilt by hand.
+ *
+ * Six call sites did rebuild it, and two of them are COMPARED against each
+ * other: the claim baseline a park records, and the supervisor-relaunch
+ * admission that re-reads the install under the attempt lock. Byte-identical
+ * construction is the only thing that makes that comparison mean anything, and
+ * a per-site mapping is exactly what can drift without a type error — change
+ * which record field feeds `installedAt` at one site and nothing catches it.
+ * The failure is silent AND fail-closed: comparisons stop matching, the
+ * exemption never fires, `host start` exits 0 again while an update is parked,
+ * and the indefinite outage it exists to prevent returns with nothing red.
+ *
+ * Passing the record removes the mapping, so there is nothing left to drift.
+ * Found by cold review of the Q3 supervisor-admission patch.
+ */
 export function encodeInstallGeneration(
   identity: InstallGenerationIdentity,
 ): string {

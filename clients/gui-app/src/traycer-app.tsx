@@ -1,3 +1,4 @@
+import { ThemeEditorHost } from "@/components/settings/themes/theme-editor-host";
 import { ChatUsageDialog } from "@/components/chat/chat-usage-dialog";
 import { PersistentBrowserGuestHost } from "@/components/epic-canvas/browser-guest/persistent-browser-guest-host";
 import { AppUpdateToastController } from "@/components/layout/bridges/app-update-toast-controller";
@@ -27,6 +28,7 @@ import {
   HostScopeReady,
 } from "@/components/layout/host-readiness-controller";
 import { queryClient } from "@/lib/query-client";
+import { readDesktopWindowId } from "@/lib/windows/desktop-window-id";
 import { EpicSessionLifecycleBridge } from "@/providers/auth-lifecycle-bridge";
 import { AuthSessionExpiredToastBridge } from "@/providers/auth-session-expired-toast-bridge";
 import { HostTrustAlertBridge } from "@/providers/host-trust-alert-bridge";
@@ -209,6 +211,7 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
                   <DesktopZoomController />
                   <ReportIssueDialogHost />
                   <Toaster />
+                  <ThemeEditorHost />
                   <HostRuntimeProvider
                     registry={props.registry}
                     messengerFactory={props.messengerFactory ?? null}
@@ -241,18 +244,6 @@ export function TraycerApp(props: TraycerAppProps): ReactNode {
       </LazyMotion>
     </RunnerHostProvider>
   );
-}
-
-function readDesktopWindowId(runnerHost: IRunnerHost): string | null {
-  if (!isRecord(runnerHost)) return null;
-  const windows = runnerHost.windows;
-  if (!isRecord(windows)) return null;
-  const windowId = windows.windowId;
-  return typeof windowId === "string" && windowId.length > 0 ? windowId : null;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 interface TraycerAuthenticatedRuntimeProps {

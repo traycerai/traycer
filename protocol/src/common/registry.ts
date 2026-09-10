@@ -141,7 +141,10 @@ const harnessIdDowngradeV200ToV100 = defineRecordDowngradePath<
       ok: false as const,
       error: {
         code: "DOWNGRADE_UNSUPPORTED" as const,
-        message: "Reasonix cannot be represented by harness-id record 1.0",
+        // Names no harness: 1.0 froze before Reasonix, and every id added
+        // after it (Antigravity, and whatever follows) takes this same path.
+        // Naming the first one would have misreported every id after it.
+        message: "This harness cannot be represented by harness-id record 1.0",
       },
     };
   },

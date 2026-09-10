@@ -94,6 +94,7 @@ function samplePidMetadata(
     websocketUrl: "ws://127.0.0.1:1234",
     startedAt: "2026-05-15T00:00:00.000Z",
     processStartIdentity: null,
+    processStartIdentityRead: "absent",
     layer0: null,
     layer0Slot: null,
     ...overrides,

@@ -24,6 +24,8 @@ function record(fields: {
     websocketUrl: "ws://127.0.0.1:7100/rpc",
     startedAt: "2026-09-06T22:00:00.000Z",
     processStartIdentity: fields.processStartIdentity,
+    processStartIdentityRead:
+      fields.processStartIdentity === null ? "absent" : "present",
     layer0: null,
     layer0Slot: null,
   };

@@ -2,6 +2,7 @@ import { use, useMemo } from "react";
 import { formatHex, parse } from "culori";
 import type { TerminalThemeHint } from "@traycer/protocol/host/terminal/unary-schemas";
 import { ResolvedThemeContext } from "@/providers/use-resolved-theme";
+import { useThemeRevision } from "@/providers/use-theme-revision";
 import { readCssVar } from "@/lib/css-color";
 
 // Per-appearance fallbacks matching the neutral canvas tokens, for the
@@ -50,8 +51,13 @@ export function buildTerminalThemeHint(
   return {
     appearance: resolvedTheme,
     foreground:
-      hexify(readCssVar(doc, "--canvas-foreground")) ?? fallback.foreground,
-    background: hexify(readCssVar(doc, "--canvas")) ?? fallback.background,
+      hexify(readCssVar(doc, "--term-foreground")) ??
+      hexify(readCssVar(doc, "--canvas-foreground")) ??
+      fallback.foreground,
+    background:
+      hexify(readCssVar(doc, "--term-background")) ??
+      hexify(readCssVar(doc, "--canvas")) ??
+      fallback.background,
   };
 }
 
@@ -67,6 +73,7 @@ export function buildTerminalThemeHint(
  * making theme context a hard dependency of terminal creation.
  */
 export function useTerminalThemeHint(): TerminalThemeHint {
+  const themeRevision = useThemeRevision();
   const themeContext = use(ResolvedThemeContext);
   const resolvedTheme = themeContext?.resolvedTheme ?? null;
   const themePreset = themeContext?.themePreset ?? null;
@@ -74,9 +81,10 @@ export function useTerminalThemeHint(): TerminalThemeHint {
     // Part of the memo identity for the same reason as `useTerminalTheme`:
     // the preset's values flow in through the CSS cascade, not the closure.
     themePreset;
+    themeRevision;
     const appearance =
       resolvedTheme ??
       (document.documentElement.classList.contains("dark") ? "dark" : "light");
     return buildTerminalThemeHint(appearance, document);
-  }, [resolvedTheme, themePreset]);
+  }, [resolvedTheme, themePreset, themeRevision]);
 }

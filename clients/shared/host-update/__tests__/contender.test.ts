@@ -11,21 +11,32 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { HostUpdateAttemptVerification } from "../record";
 import {
   __resetHeldInProcessForTest,
   isUpdateAttemptLockHeldInProcess,
 } from "../lock";
 import { updateAttemptLockPath, updateAttemptRecordPath } from "../paths";
 import { TERMINAL_ATTEMPT_RETENTION_MS } from "../record";
-import type { HostUpdateAttemptRecord } from "../record";
-import { __setBeforeRecordRenameHookForTest } from "../store";
+import { advanceAttempt } from "../transition";
+import { attemptIdentityOf } from "@traycer/protocol/config/host-update-attempt";
+import type {
+  HostUpdateAttemptClaimBaseline,
+  HostUpdateAttemptRecord,
+} from "../record";
+import {
+  __setBeforeRecordRenameHookForTest,
+  readUpdateAttemptRecord,
+} from "../store";
 import {
   commitExecutorAttemptMutation,
   commitExecutorRecoveryMutation,
   verifyUpdateMutationCapability,
+  withSupervisorRelaunchContender,
   withUpdateContender,
   withUpdateExecutorCompletionSegment,
   type ExecutorCompletionSession,
+  type SupervisorRelaunchInstalledIdentity,
   type UpdateContenderAdmission,
   type UpdateContenderExecutionContext,
   type UpdateContenderOutcome,
@@ -98,16 +109,29 @@ function record(
 function baseCreateRequest(
   overrides: Partial<AttemptClaimRequest>,
 ): AttemptClaimRequest {
-  return {
+  const { initialPhase, initialContinuation, ...rest } = {
     targetVersion: "1.2.3",
     trigger: "manual",
     action: "start",
     expected: null,
     newAttemptId: "attempt-1",
     initialPhase: "downloading",
+    initialContinuation: null,
+    claim: null,
     nowIso: "2026-01-01T00:00:00.000Z",
     ...overrides,
-  };
+  } as const;
+  // The dependent union, honoured rather than routed around: a fixture must
+  // not be able to build a pair production cannot. `Partial<AttemptClaimRequest>`
+  // distributes over the union, so a spread alone would re-admit
+  // `downloading` + `activate`.
+  if (initialContinuation === "activate") {
+    if (initialPhase !== "preparing") {
+      throw new Error("fixture: `activate` may be born only at `preparing`");
+    }
+    return { ...rest, initialPhase, initialContinuation };
+  }
+  return { ...rest, initialPhase, initialContinuation };
 }
 
 async function writeRecord(
@@ -889,7 +913,13 @@ describe("withUpdateContender - active attempt admissions", () => {
 
   it.each([
     ["legacy-update-shadow", "yield"],
+    ["service-maintenance", "refuse"],
+    ["desktop-activation-maintenance", "refuse"],
+    // The Desktop login-item STEP of an uninstall - removes nothing, so it
+    // keeps refusing. The whole-product removal is the row below.
     ["uninstall-maintenance", "refuse"],
+    ["host-uninstall-maintenance", "allow"],
+    ["desktop-install-maintenance", "allow"],
     ["recovery-maintenance", "allow"],
   ] as const)(
     "returns the exact %s disposition for a nonterminal record",
@@ -906,7 +936,7 @@ describe("withUpdateContender - active attempt admissions", () => {
         },
       );
 
-      if (admission === "recovery-maintenance") {
+      if (disposition === "allow") {
         expect(outcome).toEqual({ kind: "ran", result: "must-not-run" });
         expect(callbackCalls).toBe(1);
         return;
@@ -1032,6 +1062,759 @@ describe("withUpdateContender - active attempt admissions", () => {
   );
 });
 
+describe("withSupervisorRelaunchContender - the parked-record admission exemption", () => {
+  const INSTALL_GENERATION = "install-7|2026-01-01T00:00:00.000Z|abc123|1.2.3";
+
+  function claim(
+    overrides: Partial<HostUpdateAttemptClaimBaseline>,
+  ): HostUpdateAttemptClaimBaseline {
+    return {
+      installedVersion: "1.2.3",
+      installGeneration: INSTALL_GENERATION,
+      stageFingerprint: null,
+      allowDowngrade: false,
+      acceptStoreFormatLoss: false,
+      ...overrides,
+    };
+  }
+
+  function installed(
+    overrides: Partial<SupervisorRelaunchInstalledIdentity>,
+  ): SupervisorRelaunchInstalledIdentity {
+    return {
+      installedVersion: "1.2.3",
+      installGeneration: INSTALL_GENERATION,
+      ...overrides,
+    };
+  }
+
+  /** A `waiting-to-activate` park whose bytes are already the installed ones. */
+  function activatablePark(
+    overrides: Partial<HostUpdateAttemptRecord>,
+  ): HostUpdateAttemptRecord {
+    return record({
+      phase: "waiting-to-activate",
+      execution: "parked",
+      continuation: "activate",
+      claim: claim({}),
+      ...overrides,
+    });
+  }
+
+  async function relaunch(
+    hostHomeDir: string,
+    identity: SupervisorRelaunchInstalledIdentity | null,
+  ): Promise<{
+    outcome: UpdateContenderOutcome<string>;
+    callbackCalls: number;
+    readerCalls: number;
+  }> {
+    let callbackCalls = 0;
+    let readerCalls = 0;
+    // `admission` is deliberately stripped rather than overridden: the entry
+    // point's options type has no such field, and supplying one is the
+    // excess-property error the last test in this block pins.
+    const { admission: _admission, ...base } = options(
+      hostHomeDir,
+      "recovery-maintenance",
+    );
+    const outcome = await withSupervisorRelaunchContender(
+      {
+        ...base,
+        readInstalledIdentity: async () => {
+          readerCalls += 1;
+          return identity;
+        },
+      },
+      async () => {
+        callbackCalls += 1;
+        return "host-spawned";
+      },
+    );
+    return { outcome, callbackCalls, readerCalls };
+  }
+
+  it("admits a waiting-to-activate park whose installed version and install generation both match the claim - the relaunch IS the activation the park is waiting for", async () => {
+    const hostHomeDir = await freshHome();
+    await writeRecord(hostHomeDir, activatablePark({}));
+    const before = await readFile(updateAttemptRecordPath(hostHomeDir), "utf8");
+
+    const { outcome, callbackCalls, readerCalls } = await relaunch(
+      hostHomeDir,
+      installed({}),
+    );
+
+    expect(outcome).toEqual({ kind: "ran", result: "host-spawned" });
+    expect(callbackCalls).toBe(1);
+    expect(readerCalls).toBe(1);
+    // The supervisor holds no capability that could close the record, and must
+    // not: the reconciler's evidence pass owns that (patch B). An admission
+    // that quietly advanced the attempt here would be a write from a process
+    // that never claimed it.
+    expect(await readFile(updateAttemptRecordPath(hostHomeDir), "utf8")).toBe(
+      before,
+    );
+  });
+
+  it.each([
+    [
+      "installed version is not the target",
+      activatablePark({ targetVersion: "1.3.0" }),
+      installed({}),
+    ],
+    [
+      "installed version drifted from the claim baseline",
+      activatablePark({ claim: claim({ installedVersion: "1.2.2" }) }),
+      installed({}),
+    ],
+    [
+      "install generation moved under the park",
+      activatablePark({}),
+      installed({ installGeneration: "install-9|later|def456|1.2.3" }),
+    ],
+    ["there is no readable install record", activatablePark({}), null],
+    [
+      // Pre-cutover records carry no baseline. Refused on the same terms a
+      // bound `host.update.activate` refuses them (`refused-unverifiable`):
+      // version equality alone cannot tell this attempt's bytes from a
+      // different install that happens to carry the same version.
+      "the park carries no claim baseline",
+      record({
+        phase: "waiting-to-activate",
+        execution: "parked",
+        continuation: "activate",
+      }),
+      installed({}),
+    ],
+  ] as const)(
+    "refuses a waiting-to-activate park when %s",
+    async (_label, current, identity) => {
+      const hostHomeDir = await freshHome();
+      await writeRecord(hostHomeDir, current);
+
+      const { outcome, callbackCalls } = await relaunch(hostHomeDir, identity);
+
+      expect(outcome.kind).toBe("nonterminal-attempt");
+      if (outcome.kind !== "nonterminal-attempt") return;
+      expect(outcome.disposition).toBe("refuse");
+      expect(outcome.admission).toBe("supervisor-relaunch-maintenance");
+      expect(outcome.record).toEqual(current);
+      expect(callbackCalls).toBe(0);
+    },
+  );
+
+  it("admits a waiting-for-work park without consulting the install record at all - no bytes are placed, so what comes up is the host that was already installed", async () => {
+    const hostHomeDir = await freshHome();
+    const parked = record({
+      phase: "waiting-for-work",
+      execution: "parked",
+      continuation: "resume-apply",
+      claim: claim({}),
+    });
+    await writeRecord(hostHomeDir, parked);
+
+    const { outcome, callbackCalls, readerCalls } = await relaunch(
+      hostHomeDir,
+      // Deliberately contradictory evidence: this arm must not depend on it.
+      installed({ installedVersion: "9.9.9" }),
+    );
+
+    expect(outcome).toEqual({ kind: "ran", result: "host-spawned" });
+    expect(callbackCalls).toBe(1);
+    expect(readerCalls).toBe(0);
+  });
+
+  it("admits a waiting-for-work park written before claim baselines existed", async () => {
+    const hostHomeDir = await freshHome();
+    await writeRecord(
+      hostHomeDir,
+      record({
+        phase: "waiting-for-work",
+        execution: "parked",
+        continuation: "resume-apply",
+      }),
+    );
+
+    const { outcome, callbackCalls } = await relaunch(hostHomeDir, null);
+
+    expect(outcome).toEqual({ kind: "ran", result: "host-spawned" });
+    expect(callbackCalls).toBe(1);
+  });
+
+  it.each([
+    ["downloading", record({ claim: claim({}) })],
+    [
+      "applying",
+      record({ phase: "applying", execution: "active", claim: claim({}) }),
+    ],
+    [
+      "applying-resume-apply",
+      record({
+        phase: "applying",
+        execution: "active",
+        continuation: "resume-apply",
+        claim: claim({}),
+      }),
+    ],
+    [
+      "preparing",
+      record({ phase: "preparing", execution: "active", claim: claim({}) }),
+    ],
+    [
+      "preparing-resume-apply",
+      record({
+        phase: "preparing",
+        execution: "active",
+        continuation: "resume-apply",
+        claim: claim({}),
+      }),
+    ],
+  ] as const)(
+    "refuses an active %s record even with matching install evidence",
+    async (_label, current) => {
+      const hostHomeDir = await freshHome();
+      await writeRecord(hostHomeDir, current);
+
+      const { outcome, callbackCalls, readerCalls } = await relaunch(
+        hostHomeDir,
+        installed({}),
+      );
+
+      expect(outcome.kind).toBe("nonterminal-attempt");
+      if (outcome.kind !== "nonterminal-attempt") return;
+      expect(outcome.disposition).toBe("refuse");
+      expect(outcome.admission).toBe("supervisor-relaunch-maintenance");
+      expect(callbackCalls).toBe(0);
+      // The phase decides before any evidence is read: a record that has
+      // placed nothing must not even be compared against the install tree, or
+      // a future edit could make "the evidence lines up" enough to admit one.
+      // These are all PRE-placement, so a supervisor start is not this
+      // record's own next act - its next act is to STOP the host and swap.
+      expect(readerCalls).toBe(0);
+    },
+  );
+
+  it("Q9 dependency: a resume-apply record that has not written `applying` may not reach `restarting`", () => {
+    // `supervisorRelaunchOverActive` admits `restarting`/`verifying` on the
+    // premise that reaching either means this record's target is PLACED.
+    // `LEGAL_SUCCESSORS` does NOT carry that premise - `preparing ->
+    // restarting` is a legal edge, and `preparing` covers pre-placement
+    // states. `continuationPhaseOrderRejected` is what carries it for a
+    // `resume-apply` record, and this is the pin the admission actually
+    // depends on. (Cold review B found the citation naming the wrong
+    // function.)
+    //
+    // The `null`-continuation case falls through to `false` here and is NOT
+    // guarded by this package at all - what forbids it is that all three
+    // writers of `restarting` in `traycer-cli`'s `update-run.ts` write it
+    // after placement. That half stays a cross-package citation, and the
+    // live `installedVersion === targetVersion` read is what actually
+    // protects the admission in both halves.
+    const current = record({
+      phase: "preparing",
+      execution: "active",
+      continuation: "resume-apply",
+      claim: claim({}),
+    });
+
+    expect(
+      advanceAttempt(current, attemptIdentityOf(current), {
+        phase: "restarting",
+        continuation: "resume-apply",
+        progress: null,
+        error: null,
+        claimRefresh: null,
+        // Q1's field, required on every advance. `null` here: this row is
+        // about the claim refresh, and a `restarting` advance records no
+        // verification.
+        verification: null,
+        nowIso: "2026-01-01T00:00:01.000Z",
+      }),
+    ).toEqual({ kind: "rejected", reason: "continuation-phase-order" });
+  });
+
+  it.each([
+    [
+      "restarting-activate",
+      record({
+        phase: "restarting",
+        execution: "active",
+        continuation: "activate",
+        claim: claim({}),
+      }),
+    ],
+    [
+      "verifying-activate",
+      record({
+        phase: "verifying",
+        execution: "active",
+        continuation: "activate",
+        claim: claim({}),
+      }),
+    ],
+    [
+      "preparing-activate",
+      record({
+        phase: "preparing",
+        execution: "active",
+        continuation: "activate",
+        claim: claim({}),
+      }),
+    ],
+    // The literal shape the Linux E6L box wedged in: a CLI killed at
+    // `restarting` has written no continuation, because the continuation is
+    // what a RESUME computes. Nothing may key the admission on
+    // `continuation: "activate"` alone, or the one record this exists to
+    // rescue is the one it refuses.
+    [
+      "restarting with no continuation (the field-observed wedge)",
+      record({
+        phase: "restarting",
+        execution: "active",
+        continuation: null,
+        claim: claim({}),
+      }),
+    ],
+    [
+      "verifying with no continuation",
+      record({
+        phase: "verifying",
+        execution: "active",
+        continuation: null,
+        claim: claim({}),
+      }),
+    ],
+  ] as const)(
+    "admits a relaunch over an interrupted %s record: starting the host is that record's OWN next act",
+    async (_label, current) => {
+      // These three refused until Q9, on the argument that a live segment owns
+      // the continuation. The argument was sound and the conclusion was still
+      // an outage: a CLI killed after its swap leaves `restarting` with the
+      // host stopped for that swap, a refusal exits 0, no service manager
+      // relaunches on a zero exit, and the box stays down - with the
+      // reconciler that would resume the record living inside the host that is
+      // not running. That is the Linux E6L wedge.
+      //
+      // What replaced the argument is not "the holder is gone" - a supervisor
+      // still cannot prove that - but IDEMPOTENCE. In all three shapes the
+      // record's own next act IS starting the host, so a live holder and this
+      // supervisor are performing the same act on the same bytes and it does
+      // not matter which wins. `preparing-activate` is in the set because
+      // `resumedRecord` normalizes every recovery resume to `preparing`: the
+      // continuation, not the phase, is what says the bytes are placed.
+      const hostHomeDir = await freshHome();
+      await writeRecord(hostHomeDir, current);
+
+      const { outcome, callbackCalls, readerCalls } = await relaunch(
+        hostHomeDir,
+        installed({}),
+      );
+
+      expect(outcome).toEqual({ kind: "ran", result: "host-spawned" });
+      expect(callbackCalls).toBe(1);
+      // Read UNDER the lock, and read at all: the admission is only sound
+      // against live evidence, never against the phase alone.
+      expect(readerCalls).toBe(1);
+      // Left for recovery, byte for byte. A supervisor holds no capability
+      // that could advance, terminalize or complete a record, and must not
+      // appear to.
+      await expect(
+        readFile(updateAttemptRecordPath(hostHomeDir), "utf8"),
+      ).resolves.toBe(`${JSON.stringify(current)}\n`);
+    },
+  );
+
+  it("refuses an interrupted restarting record whose install is NOT the target - a supervisor may start the bytes this attempt placed, never someone else's", async () => {
+    const hostHomeDir = await freshHome();
+    const midActivation = record({
+      phase: "restarting",
+      execution: "active",
+      continuation: "activate",
+      claim: claim({}),
+    });
+    await writeRecord(hostHomeDir, midActivation);
+
+    // The install moved to a version this record never targeted, so starting
+    // it is no longer the record's own next act - it is a different act
+    // wearing the same phase.
+    const { outcome, callbackCalls, readerCalls } = await relaunch(
+      hostHomeDir,
+      installed({ installedVersion: "9.9.9" }),
+    );
+
+    expect(outcome.kind).toBe("nonterminal-attempt");
+    if (outcome.kind !== "nonterminal-attempt") return;
+    expect(outcome.disposition).toBe("refuse");
+    expect(outcome.record).toEqual(midActivation);
+    expect(callbackCalls).toBe(0);
+    expect(readerCalls).toBe(1);
+  });
+
+  it("refuses an interrupted restarting record when there is NO readable install record - the swap's absent window is not a whole tree", async () => {
+    const hostHomeDir = await freshHome();
+    await writeRecord(
+      hostHomeDir,
+      record({
+        phase: "restarting",
+        execution: "active",
+        continuation: "activate",
+        claim: claim({}),
+      }),
+    );
+
+    // `atomicSwap` renames the old install aside before renaming the new one
+    // in, so between those two renames there is no install directory at all.
+    // A reader that finds nothing is that window (or a broken install), and
+    // either way there is nothing to start.
+    const { outcome, callbackCalls, readerCalls } = await relaunch(
+      hostHomeDir,
+      null,
+    );
+
+    expect(outcome.kind).toBe("nonterminal-attempt");
+    if (outcome.kind !== "nonterminal-attempt") return;
+    expect(outcome.disposition).toBe("refuse");
+    expect(callbackCalls).toBe(0);
+    expect(readerCalls).toBe(1);
+  });
+
+  it("refuses an interrupted restarting record whose install matches only by GENERATION drift - the parked arm's claim test is deliberately not applied here", async () => {
+    const hostHomeDir = await freshHome();
+    await writeRecord(
+      hostHomeDir,
+      record({
+        phase: "restarting",
+        execution: "active",
+        continuation: "activate",
+        // The claim baseline still names the PRE-swap install, because nothing
+        // refreshes it across `applying -> restarting`. That staleness is the
+        // Q5 defect, and it is why this arm cannot use the parked arm's
+        // generation equality: applying it here would refuse every genuine
+        // post-swap record, E6L included.
+        claim: claim({
+          installedVersion: "1.0.0",
+          installGeneration: "id:pre-swap-generation",
+        }),
+      }),
+    );
+
+    // Target-equal, but the claim disagrees with the live install in both
+    // fields. The parked arm would refuse this; this arm admits it, and that
+    // asymmetry is the point of the pin.
+    const { outcome, callbackCalls } = await relaunch(
+      hostHomeDir,
+      installed({}),
+    );
+
+    expect(outcome).toEqual({ kind: "ran", result: "host-spawned" });
+    expect(callbackCalls).toBe(1);
+  });
+
+  it.each([
+    ["waiting-to-activate", activatablePark({})],
+    [
+      "waiting-for-work",
+      record({
+        phase: "waiting-for-work",
+        execution: "parked",
+        continuation: "resume-apply",
+        claim: claim({}),
+      }),
+    ],
+  ] as const)(
+    "leaves every OTHER admission's disposition for a parked %s record exactly as it was - the exemption is this admission's alone",
+    async (_label, parked) => {
+      const hostHomeDir = await freshHome();
+      await writeRecord(hostHomeDir, parked);
+
+      for (const [admission, disposition] of [
+        // The name this exemption was carved out of. `host stamp-runtime`
+        // still shares it, and stamping moves the very install generation a
+        // park's claim is validated against.
+        ["runtime-repair-maintenance", "refuse"],
+        ["service-maintenance", "refuse"],
+        ["desktop-activation-maintenance", "refuse"],
+        // `uninstall-maintenance` and `desktop-install-maintenance` are
+        // absent on purpose: they admit every unheld nonterminal record,
+        // parks included, and have their own describe below.
+        // `recovery-maintenance` is absent for the same reason (`allow` by
+        // base disposition).
+        ["legacy-update-shadow", "yield"],
+      ] as const) {
+        let callbackCalls = 0;
+        const outcome = await withUpdateContender(
+          options(hostHomeDir, admission),
+          async () => {
+            callbackCalls += 1;
+            return "must-not-run";
+          },
+        );
+
+        expect(outcome.kind).toBe("nonterminal-attempt");
+        if (outcome.kind !== "nonterminal-attempt") continue;
+        expect(outcome.admission).toBe(admission);
+        expect(outcome.disposition).toBe(disposition);
+        expect(callbackCalls).toBe(0);
+      }
+    },
+  );
+
+  it("still admits a supervisor relaunch when no attempt record exists at all", async () => {
+    const hostHomeDir = await freshHome();
+
+    const { outcome, callbackCalls, readerCalls } = await relaunch(
+      hostHomeDir,
+      installed({}),
+    );
+
+    expect(outcome).toEqual({ kind: "ran", result: "host-spawned" });
+    expect(callbackCalls).toBe(1);
+    expect(readerCalls).toBe(0);
+  });
+
+  it("withSupervisorRelaunchContender forces its own admission - its options type has no admission field to override", () => {
+    const forced: Parameters<typeof withSupervisorRelaunchContender>[0] = {
+      hostHomeDir: "/does/not/matter",
+      reason: "contender-test",
+      waitMs: 0,
+      pollIntervalMs: 10,
+      readInstalledIdentity: async () => null,
+    };
+    // @ts-expect-error - `admission` is omitted from the options type, so a
+    // caller cannot select a wider exemption while supplying install evidence.
+    forced.admission = "recovery-maintenance";
+    expect(forced.reason).toBe("contender-test");
+  });
+});
+
+describe("withUpdateContender - the whole-product admissions admit every unheld nonterminal record", () => {
+  // The two operations that replace or remove the product itself: an
+  // uninstall removes the install the record describes (and, in
+  // `traycer-cli`'s `installer/uninstall.ts`, the record itself), and the
+  // cloud-install script swaps the app bundle without writing `install/`,
+  // promoting staged bytes, or stamping an install generation. Neither can
+  // corrupt what a park protects, so no standing record may refuse them.
+  // The lock is what rules out a LIVE segment: a running executor holds the
+  // attempt lock for its whole span and answers `busy` before any
+  // disposition is consulted, which the last pin below demonstrates
+  // directly.
+  //
+  // `desktop-activation-maintenance` is the deliberate NEGATIVE throughout -
+  // the Desktop app's own activation cycle applies bytes and stamps the
+  // generation, so it must keep refusing every record admitted here. Each
+  // case below asserts both directions against the SAME record, so a future
+  // widening of the Desktop admission cannot pass unnoticed.
+  const WHOLE_PRODUCT_ADMISSIONS = [
+    "host-uninstall-maintenance",
+    "desktop-install-maintenance",
+  ] as const;
+  // Both consent flags `false`: the routine park these admissions exist for is
+  // one nobody authorized anything special on. They are written EXPLICITLY
+  // rather than left out, because the decode side reconstructs an absent key
+  // as `false` - so an omitted flag would make the readback differ from this
+  // literal and redden the round-trip pins below for a reason that has
+  // nothing to do with admission policy.
+  const claimBaseline: HostUpdateAttemptClaimBaseline = {
+    installedVersion: "1.2.3",
+    installGeneration: "install-7|2026-01-01T00:00:00.000Z|abc123|1.2.3",
+    stageFingerprint: null,
+    allowDowngrade: false,
+    acceptStoreFormatLoss: false,
+  };
+
+  it.each([
+    [
+      "waiting-for-work park (the routine busy-host park)",
+      record({
+        phase: "waiting-for-work",
+        execution: "parked",
+        continuation: "resume-apply",
+        claim: claimBaseline,
+      }),
+    ],
+    [
+      "waiting-to-activate park with placed bytes",
+      record({
+        phase: "waiting-to-activate",
+        execution: "parked",
+        continuation: "activate",
+        claim: claimBaseline,
+      }),
+    ],
+    [
+      "claim-less waiting-for-work park",
+      record({
+        phase: "waiting-for-work",
+        execution: "parked",
+        continuation: "resume-apply",
+      }),
+    ],
+    [
+      "interrupted applying record (active, holder gone)",
+      record({
+        phase: "applying",
+        execution: "active",
+        updatedAt: "2020-01-01T00:00:00.000Z",
+      }),
+    ],
+    [
+      "fresh active record with no holder",
+      record({ updatedAt: "2026-08-25T00:00:00.000Z" }),
+    ],
+  ] as const)(
+    "runs the callback over a %s for both, while desktop-activation-maintenance still refuses the same record",
+    async (_label, standing) => {
+      for (const admission of WHOLE_PRODUCT_ADMISSIONS) {
+        const hostHomeDir = await freshHome();
+        await writeRecord(hostHomeDir, standing);
+        let callbackCalls = 0;
+        let seenAttempt: HostUpdateAttemptRecord | null | undefined;
+
+        const outcome = await withUpdateContender(
+          options(hostHomeDir, admission),
+          async (_capability, context) => {
+            callbackCalls += 1;
+            seenAttempt = context.activeAttempt;
+            return "ran-the-operation";
+          },
+        );
+
+        expect(outcome).toEqual({ kind: "ran", result: "ran-the-operation" });
+        expect(callbackCalls).toBe(1);
+        expect(seenAttempt).toEqual(standing);
+
+        // The paired negative, against the very same record: the Desktop
+        // app's activation admission is untouched by this widening.
+        let activationCalls = 0;
+        const refused = await withUpdateContender(
+          options(hostHomeDir, "desktop-activation-maintenance"),
+          async () => {
+            activationCalls += 1;
+            return "must-not-run";
+          },
+        );
+        expect(refused.kind).toBe("nonterminal-attempt");
+        if (refused.kind !== "nonterminal-attempt") return;
+        expect(refused.disposition).toBe("refuse");
+        expect(activationCalls).toBe(0);
+      }
+    },
+  );
+
+  it("does not itself touch the record - deleting it (uninstall) or leaving it for the next executor (install) is the caller's job", async () => {
+    for (const admission of WHOLE_PRODUCT_ADMISSIONS) {
+      const hostHomeDir = await freshHome();
+      const standing = record({
+        phase: "waiting-for-work",
+        execution: "parked",
+        continuation: "resume-apply",
+        claim: claimBaseline,
+      });
+      await writeRecord(hostHomeDir, standing);
+
+      // Reading the record back proves the VALUE survived, which a contender
+      // that atomically rewrote byte-identical JSON would also satisfy. Every
+      // record write lands through a rename, so counting renames is what
+      // separates "unchanged" from "never written" - the claim this test
+      // actually makes, and the one the uninstall's own deletion depends on.
+      let recordRenames = 0;
+      __setBeforeRecordRenameHookForTest(async () => {
+        recordRenames += 1;
+      });
+      try {
+        await withUpdateContender(
+          options(hostHomeDir, admission),
+          async () => "ran-the-operation",
+        );
+      } finally {
+        __setBeforeRecordRenameHookForTest(null);
+      }
+      expect(recordRenames).toBe(0);
+
+      const after = await readUpdateAttemptRecord(hostHomeDir);
+      expect(after.kind).toBe("valid");
+      if (after.kind !== "valid") return;
+      expect(after.value).toEqual(standing);
+    }
+  });
+
+  it.each(WHOLE_PRODUCT_ADMISSIONS)(
+    "%s answers busy to a live holder in ANOTHER PROCESS - the lock, not the disposition, is what excludes a running update",
+    async (admission) => {
+      // Deliberately cross-process. Nesting two `withUpdateContender` calls in
+      // THIS process proves nothing about `busy`:
+      // `acquireUpdateAttemptLock` short-circuits on its in-process map and
+      // returns `held-in-process` before `acquireLock` is ever reached, so
+      // such a test passes unchanged even if the cross-process path is
+      // broken outright. The real barrier tests above spawn `lock-worker.ts`
+      // for exactly this reason, and so does this one.
+      const hostHomeDir = await freshHome();
+      await writeRecord(hostHomeDir, record({ phase: "applying" }));
+      const barrierDir = join(hostHomeDir, "live-holder-barrier");
+      await mkdir(barrierDir, { recursive: true });
+
+      const holder = spawnAttemptCompetitor(hostHomeDir, barrierDir);
+      await waitForFile(join(barrierDir, "held"), 10_000);
+
+      let callbackCalls = 0;
+      const outcome = await withUpdateContender(
+        options(hostHomeDir, admission),
+        async () => {
+          callbackCalls += 1;
+          return "must-not-run";
+        },
+      );
+
+      expect(outcome.kind).toBe("busy");
+      expect(callbackCalls).toBe(0);
+
+      await writeFile(join(barrierDir, "release"), "");
+      await waitForFile(join(barrierDir, "released"), 10_000);
+      await new Promise<void>((resolve) => {
+        if (holder.exitCode !== null) resolve();
+        else holder.once("close", resolve);
+      });
+      forgetChild(holder);
+    },
+    60_000,
+  );
+
+  // The regression guard for the blast-radius miss this change was built
+  // around. `uninstall-maintenance` is NOT a whole-product admission: two
+  // shipped Desktop sites take it (`host-controller.ts#uninstallHost` and
+  // `#removeTraycer`) to run `unregisterHostLoginItemWithAttempt`, a
+  // login-item bootout that removes nothing and rewrites no record. Admitting
+  // it over a park would unregister the login item and then, if the teardown
+  // that follows failed, leave a host that will not relaunch beside a park
+  // nothing can reach. It must keep refusing every record the whole-product
+  // admissions are allowed to step over.
+  it.each([
+    ["waiting-for-work park", "waiting-for-work", "parked", "resume-apply"],
+    ["waiting-to-activate park", "waiting-to-activate", "parked", "activate"],
+  ] as const)(
+    "uninstall-maintenance (the Desktop login-item step) still REFUSES a %s",
+    async (_label, phase, execution, continuation) => {
+      const hostHomeDir = await freshHome();
+      await writeRecord(
+        hostHomeDir,
+        record({ phase, execution, continuation, claim: claimBaseline }),
+      );
+      let calls = 0;
+      const refused = await withUpdateContender(
+        options(hostHomeDir, "uninstall-maintenance"),
+        async () => {
+          calls += 1;
+          return "must-not-run";
+        },
+      );
+      expect(refused.kind).toBe("nonterminal-attempt");
+      if (refused.kind !== "nonterminal-attempt") return;
+      expect(refused.disposition).toBe("refuse");
+      expect(calls).toBe(0);
+    },
+  );
+});
+
 describe("withUpdateContender - fail closed record reads", () => {
   it.each([
     ["corrupt", "not-json"],
@@ -1089,8 +1872,10 @@ describe("commitExecutorAttemptMutation - executor-only capability", () => {
     "legacy-update-shadow",
     "stage-maintenance",
     "uninstall-maintenance",
+    "host-uninstall-maintenance",
     "service-maintenance",
     "desktop-activation-maintenance",
+    "desktop-install-maintenance",
     "runtime-repair-maintenance",
     "recovery-maintenance",
   ] as const)(
@@ -1149,6 +1934,8 @@ describe("commitExecutorAttemptMutation - executor-only capability", () => {
               continuation: null,
               progress: null,
               error: null,
+              claimRefresh: null,
+              verification: null,
               nowIso: "2026-01-01T00:05:00.000Z",
             },
           });
@@ -1191,6 +1978,8 @@ describe("commitExecutorAttemptMutation - executor-only capability", () => {
             continuation: null,
             progress: null,
             error: null,
+            claimRefresh: null,
+            verification: null,
             nowIso: "2026-01-01T00:05:00.000Z",
           },
         });
@@ -1226,8 +2015,10 @@ describe("commitExecutorRecoveryMutation - the internal recovery-only writer, no
     "legacy-update-shadow",
     "stage-maintenance",
     "uninstall-maintenance",
+    "host-uninstall-maintenance",
     "service-maintenance",
     "desktop-activation-maintenance",
+    "desktop-install-maintenance",
     "runtime-repair-maintenance",
     "recovery-maintenance",
   ] as const)(
@@ -1395,6 +2186,8 @@ describe("withUpdateExecutorCompletionSegment / ExecutorCompletionSession.comple
             continuation: null,
             progress: null,
             error: null,
+            claimRefresh: null,
+            verification: null,
             nowIso: "2026-01-01T00:05:00.000Z",
           },
         },
@@ -1424,6 +2217,7 @@ describe("withUpdateExecutorCompletionSegment / ExecutorCompletionSession.comple
     readonly targetVersion: string;
     readonly runningVersion: string;
     readonly runningOwner: "host-home-bound";
+    readonly verification: HostUpdateAttemptVerification;
     readonly nowIso: string;
   }
 
@@ -1446,6 +2240,7 @@ describe("withUpdateExecutorCompletionSegment / ExecutorCompletionSession.comple
       targetVersion: "1.2.3",
       runningVersion: "1.2.3",
       runningOwner: "host-home-bound",
+      verification: { mode: "identity" },
       nowIso: "2026-01-01T00:06:00.000Z",
       ...overrides,
     };

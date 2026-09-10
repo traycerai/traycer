@@ -14,6 +14,7 @@
  */
 import type { BarrierRef, LaneCursor } from "./lane-cursor";
 import type { SeedTrust } from "./freshness";
+import type { EpicCloudSyncDurability } from "@traycer-clients/shared/host-transport/epic-stream-client";
 
 // ─── Records ──────────────────────────────────────────────────────────────
 
@@ -580,6 +581,23 @@ export type ControlEvent =
       readonly kind: "cloud-sync-status";
       readonly status: string;
       readonly observedAtMs: number;
+      /**
+       * Where the epic is durable and whether this session has local
+       * protection - the `epic.subscribe@1.4`-`@1.6` legs, carried WITH the
+       * connection status because they are read against it: a mirror served
+       * `offline` beside a document that is perfectly usable is exactly the
+       * state where the two disagree, and a consumer that saw one without the
+       * other would be back to guessing.
+       *
+       * An adapter whose wire carries no legs reports
+       * `NO_CLOUD_SYNC_DURABILITY` - every value `undefined` and
+       * `peerSpeaksDurabilityLegs: false` - which every reader takes as
+       * UNKNOWN, never as reassurance. An adapter whose wire does carry them
+       * reports `peerSpeaksDurabilityLegs: true` even when the frame omitted a
+       * key, so the omission is read under the wire's absence rule (unknown)
+       * rather than as a peer that has no opinion.
+       */
+      readonly durability: EpicCloudSyncDurability;
     }
   /**
    * One aggregate durability boolean owned by the authority (root OR any room).

@@ -31,6 +31,8 @@ import {
   chatRunSettingsSchema,
   chatRunSettingsSchemaPreReasonix,
   chatSchema,
+  chatSchemaV18,
+  messageSchemaV18,
   chatSchemaPreInReplyTo,
   chatSchemaV14,
   chatSchemaV15,
@@ -38,7 +40,7 @@ import {
   interviewDeliveryProjectionSchema,
   userMessagePayloadSchema,
   userMessagePayloadSchemaPreAnnotation,
-  userMessageSchema,
+  userMessageSchemaV18,
   userMessageSchemaPreInReplyTo,
   userMessageSchemaPreReasonix,
   userMessageSchemaV16,
@@ -114,6 +116,8 @@ import {
   chatTranscriptDerivedSchema,
   chatTranscriptWindowSchema,
 } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
+import { transcriptRowContextSchema } from "@traycer/protocol/persistence/chat-transcript/row-context";
+import { transcriptRowContextSchemaPreAntigravity } from "@traycer/protocol/persistence/chat-transcript/row-context";
 
 const jsonContentSchema = getRecordSchema(
   commonRecordRegistry,
@@ -731,8 +735,10 @@ export const chatAccessSchema = z.object({
 });
 export type ChatAccess = z.infer<typeof chatAccessSchema>;
 
-export const chatSnapshotSchema = z.object({
-  chat: chatSchema,
+// Historical snapshot field set. The live snapshot grows from this base;
+// additions must not flow backwards into chat.subscribe 1.7.
+const chatSnapshotSchemaV17 = z.object({
+  chat: chatSchemaV18,
   access: chatAccessSchema,
   queue: chatQueueStateSchema,
   // Authoritative in-progress state (see `chatRunStatusSchema`). The GUI's
@@ -807,6 +813,9 @@ export const chatSnapshotSchema = z.object({
   // missing value as either "always active" or "never active" - both would
   // be wrong for the whole session against an older host.
   turnInProgress: z.boolean().optional(),
+});
+export const chatSnapshotSchema = chatSnapshotSchemaV17.extend({
+  chat: chatSchema,
 });
 export type ChatSnapshot = z.infer<typeof chatSnapshotSchema>;
 
@@ -1023,6 +1032,8 @@ function blockDeltaServerFrameSchema<EventSchema extends z.ZodType>(
   });
 }
 
+// Common frame membership through chat.subscribe 1.8. Add newer frame kinds
+// to the current list rather than changing this shared historical factory.
 // Order-preserving factory for the common (non-blockDelta) shared frames. The
 // three sender-bearing frames (`messageAccepted`/`queueChanged`/`eventAppended`)
 // are parameterized so the released `chat.subscribe@1.0–1.3` lines can bind the
@@ -1166,9 +1177,9 @@ function buildChatSubscribeCommonServerFrameSchemas<
   ];
 }
 
-const chatSubscribeCommonServerFrameSchemas =
+const chatSubscribeCommonServerFrameSchemasV18 =
   buildChatSubscribeCommonServerFrameSchemas({
-    message: userMessageSchema,
+    message: userMessageSchemaV18,
     queue: chatQueueStateSchema,
     event: chatEventSchema,
     action: chatActionSchema,
@@ -1211,9 +1222,14 @@ const chatSubscribeSharedServerFrameSchemasV12 = [
   blockDeltaServerFrameSchema(runtimeEventSchemaV12PreInReplyTo),
 ];
 
-const chatSubscribeSharedServerFrameSchemas = [
-  ...chatSubscribeCommonServerFrameSchemas,
+// The 1.8 common frames are unchanged in 1.9. New frame kinds belong in
+// the current list below; both versions reuse the existing validators.
+const chatSubscribeSharedServerFrameSchemasV18 = [
+  ...chatSubscribeCommonServerFrameSchemasV18,
   blockDeltaServerFrameSchema(runtimeEventSchema),
+];
+const chatSubscribeSharedServerFrameSchemas = [
+  ...chatSubscribeSharedServerFrameSchemasV18,
 ];
 
 // Frozen live-shape shared frames for `chat.subscribe@1.3` (workflow-bearing
@@ -2480,8 +2496,9 @@ const chatSubscribeServerFrameSchemaV16 = z.discriminatedUnion("kind", [
 // `clientFrameSchema` is DELIBERATELY the live union, unlike the frozen
 // serverFrame above. `1.6`'s action set is identical to the live one - diffing
 // its clientFrame against the released baseline shows only the deliberate
-// `reasonix` enum add - so nothing is unrepresentable today, and the enum grows
-// on a client→HOST slot, where a wider host is the safe direction.
+// post-freeze enum adds (`reasonix`, `antigravity`) - so nothing is
+// unrepresentable today, and the enum grows on a client→HOST slot, where a
+// wider host is the safe direction.
 //
 // It is not free, though, and the compat checker cannot catch the regression:
 // its oracle only guards host→client additions, so a new action appended to
@@ -2512,13 +2529,22 @@ export const chatSubscribeV16 = defineStreamRpcContract({
  * change they cannot observe. So the fast path is retained per-line, not
  * per-"is this the newest line".
  *
- * `1.6` lacks interview settlement and browser payload fields inside
- * `chat.messages`, which this schema does not walk. So this is deliberately
- * paired with `normalizeV16MessagesInShallowSnapshot`: a targeted pass over
- * user-authored payloads and interview blocks. Callers MUST run it before
- * handing the snapshot to consumers, or those consumers read fields typed as
- * present that are genuinely missing — the exact hazard the live schema's doc
- * above describes.
+ * `1.6` lacks interview settlement and browser payload fields, and this schema
+ * walks NEITHER history that can carry them: `chat.messages` holds the
+ * interview blocks, and `chat.events` holds the same settlement facts as
+ * metadata on a durable event. Both are `z.custom(isStructuralRecord)` below,
+ * so nothing here validates or strips what is inside either.
+ *
+ * So this is deliberately paired with `normalizeV16InterviewFieldsInFrame`,
+ * which covers both — it delegates the message history to
+ * `normalizeV16MessagesInShallowSnapshot` and walks the event log beside it.
+ * Callers MUST run it on the whole frame before handing the snapshot to
+ * consumers, and the two omissions fail DIFFERENTLY. Omitting the pass
+ * entirely leaves consumers reading message fields typed as present that are
+ * genuinely missing — the exact hazard the live schema's doc above describes.
+ * Pairing this schema with the message pass ALONE repairs the messages and
+ * still hands the event log to consumers carrying `1.7` metadata this line
+ * cannot express; nothing reads as missing, which is why it went unnoticed.
  *
  * Every bounded envelope field is still validated deeply, against the FROZEN
  * `1.6` shapes, which is what makes this exact rather than merely permissive.
@@ -2563,14 +2589,25 @@ export const chatSubscribeSnapshotServerFrameShallowSchemaV16 = z.object({
 // (`projectChatClientFrameForVersion`) — negotiation is the mechanism, not
 // permissive unknown-field parsing.
 //
-// The Reasonix half is the same story in the enum dimension: every
+// The harness half is the same story in the enum dimension: every
 // harness-bearing leaf on `1.6` is pinned to the nineteen-id set above, and
-// only this line admits `reasonix`.
+// only this line admits the ids added since (`reasonix`, `antigravity`).
 export const chatSubscribeV17 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 7 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
-  serverFrameSchema: chatSubscribeServerFrameSchema,
+  serverFrameSchema: z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("snapshot"),
+      ...textFrameFields,
+      ...chatReferenceFields,
+      snapshot: chatSnapshotSchemaV17,
+    }),
+    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    ...chatSubscribeSharedServerFrameSchemasV18,
+  ]),
   clientFrameSchema: chatSubscribeClientFrameSchema,
 });
 
@@ -2628,6 +2665,15 @@ export const chatSubscribeFullSnapshotSchemaVersion =
 // that is not about the transcript) is deliberate and is what keeps the
 // renderer's reducers identical across the two modes.
 
+const chatTranscriptWindowSchemaV18 = z.object({
+  fromOrdinal: z.number().int().nonnegative(),
+  rowIds: z.array(z.string()).optional(),
+  incompleteRowIds: z.array(z.string()).optional(),
+  messages: z.array(messageSchemaV18),
+  events: z.array(chatEventSchema),
+  rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
+});
+
 /**
  * The bounded snapshot.
  *
@@ -2644,9 +2690,10 @@ export const chatSubscribeFullSnapshotSchemaVersion =
  * lines, and making it required here would fork the one reducer that reads it
  * for no gain.
  */
-export const chatWindowedSnapshotSchema = z.object({
+// The pre-placement envelope is fixed; 1.9 uses the current message schema.
+const chatWindowedSnapshotSchemaV18 = z.object({
   /** The chat record WITHOUT `messages` / `events` — see `chatRecordSchema`. */
-  chat: chatRecordSchema,
+  chat: chatSchemaV18.omit({ messages: true, events: true }),
   access: chatAccessSchema,
   queue: chatQueueStateSchema,
   runStatus: chatRunStatusSchema,
@@ -2704,9 +2751,13 @@ export const chatWindowedSnapshotSchema = z.object({
    * The hydrated tail. Always present, because the tail is where a live turn
    * happens and the client must paint it without a round trip.
    */
-  tail: chatTranscriptWindowSchema,
+  tail: chatTranscriptWindowSchemaV18,
   /** Whole-transcript folds a windowed client cannot compute for itself. */
   derived: chatTranscriptDerivedSchema,
+});
+export const chatWindowedSnapshotSchema = chatWindowedSnapshotSchemaV18.extend({
+  chat: chatRecordSchema,
+  tail: chatTranscriptWindowSchema,
 });
 export type ChatWindowedSnapshot = z.infer<typeof chatWindowedSnapshotSchema>;
 
@@ -2790,6 +2841,21 @@ const chatSubscribeRangeServerFrameSchema = z.object({
   range: chatRangeResponseSchema,
 });
 
+const chatRangeResponseSchemaV18 = z.object({
+  // Reuse this unchanged scalar validator, not the live response's field set.
+  requestId: chatRangeResponseSchema.shape.requestId,
+  epoch: z.number().int().nonnegative(),
+  fromOrdinal: z.number().int().nonnegative(),
+  rowIds: z.array(z.string()),
+  incompleteRowIds: z.array(z.string()).optional(),
+  messages: z.array(messageSchemaV18),
+  events: z.array(chatEventSchema),
+  rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
+  reachedStart: z.boolean(),
+  reachedEnd: z.boolean(),
+  truncatedAtOrdinal: z.number().int().nonnegative().optional(),
+});
+
 export const chatSubscribeWindowedServerFrameSchema = z.discriminatedUnion(
   "kind",
   [
@@ -2807,6 +2873,44 @@ export const chatSubscribeWindowedServerFrameSchema = z.discriminatedUnion(
 export type ChatSubscribeWindowedServerFrame = z.infer<
   typeof chatSubscribeWindowedServerFrameSchema
 >;
+
+/**
+ * Frozen windowed server frame as `cli-v1.3.0` / `host-v1.3.0` shipped `@1.8`.
+ *
+ * The only difference is the anchor union reachable through `rowContext` on
+ * the two arms that carry one: 1.3.0 was cut before Antigravity, so a released
+ * `@1.8` peer's `discriminatedUnion` has twenty arms and rejects a frame
+ * carrying the twenty-first outright - the whole frame, not the one row.
+ *
+ * Built from the pre-placement checkpoint, overriding the two anchor-bearing
+ * arms. The unreleased `@1.9` adds Antigravity anchors and delivery placement.
+ */
+export const chatSubscribeWindowedServerFrameSchemaPreAntigravity =
+  z.discriminatedUnion("kind", [
+    chatSubscribeWindowedSnapshotServerFrameSchema.extend({
+      snapshot: chatWindowedSnapshotSchemaV18.extend({
+        tail: chatTranscriptWindowSchemaV18.extend({
+          rowContext: z
+            .record(z.string(), transcriptRowContextSchemaPreAntigravity)
+            .optional(),
+        }),
+      }),
+    }),
+    chatSubscribeSkeletonChunkServerFrameSchema,
+    chatSubscribeAccumulatedChangesServerFrameSchema,
+    chatSubscribeIndexChangedServerFrameSchema,
+    chatSubscribeRangeServerFrameSchema.extend({
+      range: chatRangeResponseSchemaV18.extend({
+        rowContext: z
+          .record(z.string(), transcriptRowContextSchemaPreAntigravity)
+          .default({}),
+      }),
+    }),
+    chatSubscribeTurnStateChangedServerFrameSchema,
+    chatSubscribeManagedCommandsChangedServerFrameSchema,
+    chatSubscribeHeldUpdatesChangedServerFrameSchema,
+    ...chatSubscribeSharedServerFrameSchemasV18,
+  ]);
 
 /**
  * Ask for a span of bodies.
@@ -2864,6 +2968,37 @@ export type ChatSubscribeWindowedClientFrame = z.infer<
 export const chatSubscribeV18 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 8 } as const,
+  openRequestSchema: chatSubscribeOpenRequestSchema,
+  serverFrameSchema: chatSubscribeWindowedServerFrameSchemaPreAntigravity,
+  clientFrameSchema: chatSubscribeWindowedClientFrameSchema,
+});
+
+/**
+ * The windowed line, with Antigravity session anchors and delivery placement.
+ *
+ * `@1.8` shipped in 1.3.0 and is frozen at the twenty-arm anchor union; this
+ * is the first minor whose `rowContext` may carry an Antigravity anchor and
+ * whose notification blocks carry recorded delivery placement. The windowing
+ * design, client frames and open request are shared by reference.
+ *
+ * Streams have no downgrade bridge, so the host must GATE on the negotiated
+ * minor: an `@1.8` subscriber gets rows whose `sessionAnchor` is withheld
+ * rather than a frame it cannot decode. That projection is
+ * `projectWindowedFrameForVersion` in the internal repo's
+ * `traycer-host/src/domain/chat/chat-session-manager.ts`, applied at
+ * `emitWindowedFrameToSubscriber` - the same per-minor discipline
+ * `chatSubscribeClientFrameSchemaForVersion` already applies in the client
+ * direction.
+ *
+ * A SECOND, independent gate covers the harness id itself:
+ * `HARNESS_MINIMUM_CHAT_SUBSCRIBE_MINOR` refuses to serve an Antigravity CHAT
+ * below `1.9` at all. The two are not redundant - that one keys on the chat's
+ * harness, this one on an anchor that can appear on a row of a chat the peer
+ * can otherwise render.
+ */
+export const chatSubscribeV19 = defineStreamRpcContract({
+  method: "chat.subscribe",
+  schemaVersion: { major: 1, minor: 9 } as const,
   openRequestSchema: chatSubscribeOpenRequestSchema,
   serverFrameSchema: chatSubscribeWindowedServerFrameSchema,
   clientFrameSchema: chatSubscribeWindowedClientFrameSchema,

@@ -36,6 +36,11 @@ export function buildHostDownloadCommand(args: HostDownloadArgs): CommandFn {
       // running host, so there is no in-flight update for a remote client to
       // be told about.
       onWillDownload: null,
+      // Same reason: no attempt record to advance across the verified-bytes
+      // barrier, and no attempt of this run's own for the promotion guard to
+      // exempt - every nonterminal record it meets is someone else's.
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     ctx.runtime.logger.info("Host download command completed", {
       environment: ctx.runtime.environment,

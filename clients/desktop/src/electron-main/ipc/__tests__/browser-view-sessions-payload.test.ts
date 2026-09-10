@@ -3,7 +3,8 @@ import { BROWSER_SESSIONS_UX_CLIENT_FRAME_KINDS } from "@traycer/protocol/host/b
 import { browserViewIpcPayload } from "../browser-view-ipc-payload";
 
 /**
- * WHICH client frames a renderer may put on the jar plane's stream (H10).
+ * WHICH client frames a renderer may put on the jar plane's stream (H10), and
+ * WHICH stream it may name.
  *
  * The parse is the protocol's own client-frame schema, so it is not the gate;
  * the narrowing behind it is. `forgetLogins` and `clearSite` shred every
@@ -15,10 +16,15 @@ import { browserViewIpcPayload } from "../browser-view-ipc-payload";
  * The recording answers sit on the allowed side: main owns the helper window
  * that produces them, they name a `recordingId` the host minted, and they
  * grant nothing a toolbar press could not already do.
+ *
+ * The key is parsed by the same strict schema, so a send carries BOTH halves
+ * and either half can refuse it. That matters for the negatives below: a key
+ * of the wrong shape would refuse every frame, which is a green test bench
+ * that has stopped reading the frames at all.
  */
 
 const KEY = {
-  epicId: "epic-1",
+  scope: { kind: "epic", epicId: "epic-1" },
   hostId: "host-1",
   identityKey: "identity-1",
 };
@@ -71,6 +77,23 @@ const RENDERER_FRAMES: Record<string, Record<string, unknown>> = {
     recordingId: "recording-1",
     reason: "capture-stream-ended",
   },
+  // The only place an `attachTab` frame meets the protocol's schema on this
+  // boundary: the coordinator's own suite records what it sent without
+  // validating the shape, so this sample is the frame's wire coverage.
+  attachTab: {
+    kind: "attachTab",
+    hasBinaryPayload: false,
+    requestId: "request-1",
+    tabId: "tab-1",
+  },
+  // Same coverage role as `attachTab` above: the coordinator records what it
+  // sent without validating the shape.
+  moveTab: {
+    kind: "moveTab",
+    hasBinaryPayload: false,
+    requestId: "request-1",
+    tabId: "tab-1",
+  },
 };
 
 describe("a renderer may only send the tab requests and the recording answers", () => {
@@ -84,6 +107,22 @@ describe("a renderer may only send the tab requests and the recording answers", 
     for (const frame of Object.values(RENDERER_FRAMES)) {
       expect(parse(frame)).toBe(true);
     }
+  });
+
+  it("refuses a well-formed frame sent on a key of the pre-scope shape", () => {
+    // The negatives below all read `false`, and a key the schema cannot parse
+    // would produce that answer for every one of them without the frame ever
+    // being looked at. This is the test that keeps them honest: same frame,
+    // accepted above, refused here for the KEY alone.
+    const validFrame = RENDERER_FRAMES.openTab;
+    if (validFrame === undefined) throw new Error("expected an openTab sample");
+    expect(parse(validFrame)).toBe(true);
+    expect(
+      browserViewIpcPayload.sessionsStreamSend.safeParse({
+        key: { epicId: "epic-1", hostId: "host-1", identityKey: "identity-1" },
+        frame: validFrame,
+      }).success,
+    ).toBe(false);
   });
 
   it("refuses the two destructive frames main mints behind its own dialog", () => {

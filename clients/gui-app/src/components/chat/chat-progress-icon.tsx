@@ -10,6 +10,8 @@ import {
 import { useExistingChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { chatActivityIndicator } from "@/components/epic-canvas/renderers/chat-tile-session-state";
 import type { IndicatorRunningKind } from "@/components/notifications/notification-indicator-icon";
+import type { AgentActivityCoverage } from "@/lib/agent-activity";
+import { useAgentActivityCoverage } from "@/stores/agent-activity-store";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 import type { NotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
 import { EPIC_NODE_ICONS } from "@/lib/artifacts/node-display";
@@ -67,6 +69,12 @@ export function ChatProgressIcon(props: ChatProgressIconProps) {
   const awarenessRunning: IndicatorRunningKind =
     useRegisteredEpicAgentActivityTiers(props.epicId).get(props.chatId) ??
     false;
+  // Read for the HANDLE-LESS arm below, but hooks cannot be called
+  // conditionally so it is resolved here for both. `null` answers
+  // `indeterminate` by construction, which is the right reading for a row
+  // whose projection carries no host: unable to name the machine, unable to
+  // detect exclusion.
+  const awarenessCoverage = useAgentActivityCoverage(props.hostId);
   const fallbackReadOnly =
     useRegisteredEpicPermissionRole(props.epicId) === "viewer";
   const handle = useExistingChatSessionHandle(
@@ -86,6 +94,7 @@ export function ChatProgressIcon(props: ChatProgressIconProps) {
       <ChatProgressPresentation
         indicatorState={indicatorState}
         running={awarenessRunning}
+        activityCoverage={awarenessCoverage}
         isReadOnly={fallbackReadOnly}
         subjectId={props.chatId}
         className={props.className}
@@ -138,6 +147,11 @@ function ChatProgressIconWithHandle(props: {
       // awareness reports what the HOST classified. Awareness only backfills
       // the brief subscription-gap window where the store still reads idle.
       running={activity ?? props.awarenessRunning}
+      // An OPEN session is a direct subscription to this chat on its own host,
+      // so the activity plane's reach is not what this icon depends on -
+      // whatever that plane can or cannot see, this row has its own source.
+      // `indeterminate` says exactly that: no exclusion to report.
+      activityCoverage="indeterminate"
       // A session's access snapshot is authoritative. Keep the icon neutral
       // while it is unknown so an owner never sees the unopened-chat fallback
       // lock flash before the snapshot arrives.
@@ -154,6 +168,7 @@ function ChatProgressIconWithHandle(props: {
 function ChatProgressPresentation(props: {
   readonly indicatorState: NotificationIndicatorState;
   readonly running: IndicatorRunningKind;
+  readonly activityCoverage: AgentActivityCoverage;
   readonly isReadOnly: boolean;
   readonly subjectId: string;
   readonly className: string | undefined;
@@ -192,6 +207,7 @@ function ChatProgressPresentation(props: {
     <NotificationIndicatorIcon
       state={props.indicatorState}
       running={props.running}
+      activityCoverage={props.activityCoverage}
       subjectId={props.subjectId}
       testIdPrefix={props.testId}
       className={icon.className}

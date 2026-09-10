@@ -56,7 +56,7 @@ import type {
   EpicStatusStreamCallbacks,
 } from "@traycer-clients/shared/host-transport/epic-status-stream-client";
 import { artifactSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/artifact-subscribe";
-import { epicStatusSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/status-subscribe";
+import { epicStatusSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/status-subscribe";
 import {
   openStoreForTest,
   type OpenedStoreForTest,
@@ -74,7 +74,7 @@ function statusSnapshot(
   authorityEpoch: string,
   dirty: boolean,
 ): EpicStatusSnapshotFrame {
-  const parsed = epicStatusSubscribeServerFrameSchemaV10.parse({
+  const parsed = epicStatusSubscribeServerFrameSchemaV11.parse({
     kind: "snapshot",
     hasBinaryPayload: false,
     authorityEpoch,
@@ -203,7 +203,7 @@ function createRefusalRig(): RefusalRig {
   return {
     handle,
     async announceEpoch(): Promise<void> {
-      liveStatus().onSnapshot(statusSnapshot(EPOCH, false));
+      liveStatus().onSnapshot(statusSnapshot(EPOCH, false), true);
       await settle();
     },
     async mountTile(): Promise<() => void> {
@@ -235,13 +235,13 @@ function createRefusalRig(): RefusalRig {
       // A control frame at the SAME epoch, twice, with a field varied so each
       // one really does publish a projection. This is the stimulus that must
       // change nothing.
-      liveStatus().onSnapshot(statusSnapshot(EPOCH, true));
+      liveStatus().onSnapshot(statusSnapshot(EPOCH, true), true);
       await settle();
-      liveStatus().onSnapshot(statusSnapshot(EPOCH, false));
+      liveStatus().onSnapshot(statusSnapshot(EPOCH, false), true);
       await settle();
     },
     async announceNewEpoch(): Promise<void> {
-      liveStatus().onSnapshot(statusSnapshot(NEXT_EPOCH, false));
+      liveStatus().onSnapshot(statusSnapshot(NEXT_EPOCH, false), true);
       await settle();
     },
     async seed(authorityEpoch: string): Promise<void> {

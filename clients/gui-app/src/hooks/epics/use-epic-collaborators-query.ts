@@ -10,6 +10,7 @@ import type { HostRequester } from "@traycer-clients/shared/host-client/host-cli
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { normalizeAvatarUrl } from "@/lib/avatar-url";
+import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
 
 export const EPIC_COLLABORATORS_CLOSED_STALE_TIME_MS = 30_000;
 export const EPIC_COLLABORATORS_OPEN_REFRESH_MS = 5 * 60_000;
@@ -61,6 +62,24 @@ export interface UseEpicCollaboratorsQueryOptions {
    * the query until a client exists.
    */
   readonly client: HostRequester<HostRpcRegistry> | null;
+  /**
+   * Whether this caller may SPEND the account's cloud capability on the list.
+   *
+   * `epic.listCollaborators` resolves grants against the account's servers, so
+   * it is a spend and not a local read - which makes it the wrong side of this
+   * PR's split. A surface stays MOUNTED under `unverified` (`admitsLocalPlane`)
+   * and may render whatever the local plane already holds; it does not thereby
+   * acquire permission to ask the cloud who else has access.
+   *
+   * Required rather than defaulted, and required rather than read from the auth
+   * store in here: three surfaces mount this hook and they do not all resolve
+   * the question the same way, so the answer belongs at the call site where it
+   * can be seen. A default of `true` would be the opposite - a decision nobody
+   * made, recorded by the type system as though someone had.
+   *
+   * ANDed with the hook's own gates; it never overrides the null-client one.
+   */
+  readonly enabled: boolean;
   readonly poll: boolean | undefined;
   readonly staleTime: number | undefined;
 }
@@ -76,6 +95,24 @@ export interface UseEpicCollaboratorsQueryOptions {
  * exposes a manual refresh control for on-demand updates. The fixed builder
  * keeps polling focus-gated. The default remains a relaxed 30 s stale window
  * with no polling.
+ *
+ * `options.enabled` is the cloud-authorization gate every caller must answer -
+ * see {@link UseEpicCollaboratorsQueryOptions.enabled}. It holds at all three
+ * edges, in here, so that no consumer has to remember it:
+ *
+ * - the NEXT fetch (`enabled` on the query);
+ * - the DISPATCH of a fetch already committed to - a `refetch()` override, or
+ *   the transient-retry episode running when the session is demoted, which a
+ *   same-user demotion would otherwise carry through on the retained host
+ *   credential (`preflight`, the same read every other cloud-gated query
+ *   makes);
+ * - the PROJECTION. `enabled: false` stops fetching, but TanStack keeps the
+ *   last `data` on the shared cache entry, and a consumer that read only
+ *   `data` kept rendering the grants it loaded under the verdict the session
+ *   has since lost - the "Shared with task" glyph stayed on a chat after
+ *   demotion for as long as the tab lived. Withheld means `data: undefined`,
+ *   whatever the cache still holds, which every consumer renders as "not
+ *   loaded" rather than as an empty grant set.
  */
 export function useEpicCollaboratorsQuery(
   epicId: string,
@@ -85,21 +122,24 @@ export function useEpicCollaboratorsQuery(
     options.staleTime ?? EPIC_COLLABORATORS_CLOSED_STALE_TIME_MS;
   const poll = options.poll ?? false;
   const client = options.client;
+  const enabled = options.enabled;
   const query = useHostQuery({
     cacheKeyIdentity: undefined,
     client,
     method: "epic.listCollaborators",
     params: { epicId },
+    preflight: cloudVerdictPreflight("epic.listCollaborators"),
     options: {
+      enabled,
       poll,
       staleTime,
     },
   });
 
   const data = useMemo<EpicCollaboratorsView | undefined>(() => {
-    if (query.data === undefined) return undefined;
+    if (!enabled || query.data === undefined) return undefined;
     return projectCollaborators(query.data.collaborators);
-  }, [query.data]);
+  }, [enabled, query.data]);
 
   return {
     query,

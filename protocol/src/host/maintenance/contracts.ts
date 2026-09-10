@@ -19,9 +19,15 @@ import {
   hostUpdateCheckRequestSchemaV11,
   hostUpdateCheckResponseSchema,
   hostUpdateCheckResponseSchemaV11,
+  hostUpdateCheckResponseSchemaV12,
+  hostUpdateBoundDispatchRequestSchema,
+  hostUpdateBoundDispatchRequestSchemaPreExpectedIdentity,
+  hostUpdateBoundDispatchResponseSchema,
   hostUpdateInstallRequestSchema,
+  hostUpdateInstallRequestV13Schema,
   hostUpdateInstallResponseSchema,
   hostUpdateInstallResponseV11Schema,
+  hostUpdateInstallResponseV13Schema,
 } from "./schemas";
 
 /** Runs the host's own CLI doctor against the host's local installation. */
@@ -52,6 +58,38 @@ export const hostUpdateCheckV11 = defineRpcContract({
   schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: hostUpdateCheckRequestSchemaV11,
   responseSchema: hostUpdateCheckResponseSchemaV11,
+});
+
+/** @1.2 adds each release's published store formats to the catalog. */
+export const hostUpdateCheckV12 = defineRpcContract({
+  method: "host.update.check",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: hostUpdateCheckRequestSchemaV11,
+  responseSchema: hostUpdateCheckResponseSchemaV12,
+});
+
+export const hostUpdateCheckUpgradeV11ToV12 = defineUpgradePath<
+  typeof hostUpdateCheckV11,
+  typeof hostUpdateCheckV12
+>({
+  from: hostUpdateCheckV11.schemaVersion,
+  to: hostUpdateCheckV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) =>
+    response.outcome === "ok"
+      ? {
+          ...response,
+          manifest: {
+            ...response.manifest,
+            versions: response.manifest.versions.map((entry) => ({
+              ...entry,
+              // The old peer never reported a format. The released table is
+              // consulted by the consumer; the bridge must not invent one.
+              storeFormats: null,
+            })),
+          },
+        }
+      : response,
 });
 
 /**
@@ -143,6 +181,36 @@ export const hostUpdateInstallV12 = defineRpcContract({
   responseSchema: hostUpdateInstallResponseV11Schema,
 });
 
+/**
+ * @1.3 adds per-dispatch store-loss consent and typed refusal details. The
+ * refusal names unreadable stores separately from proven-newer stores so a
+ * partial survey cannot misstate which chats the target is known to reject.
+ */
+export const hostUpdateInstallV13 = defineRpcContract({
+  method: "host.update.install",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  requestSchema: hostUpdateInstallRequestV13Schema,
+  responseSchema: hostUpdateInstallResponseV13Schema,
+});
+
+export const hostUpdateInstallUpgradeV12ToV13 = defineUpgradePath<
+  typeof hostUpdateInstallV12,
+  typeof hostUpdateInstallV13
+>({
+  from: hostUpdateInstallV12.schemaVersion,
+  to: hostUpdateInstallV13.schemaVersion,
+  // An old caller never authorized loss of chat access. Conversely, the
+  // framework's lower-minor projection parses through @1.2 and drops this
+  // field: that peer has no store floor to bypass, so no behavior is lost.
+  // Same-major projections use the released request schema, not a cross-major
+  // downgradePathsFromLatest entry.
+  upgradeRequest: (request) => ({ ...request, acceptStoreFormatLoss: false }),
+  upgradeResponse: (response) =>
+    response.outcome === "cli-failed"
+      ? { ...response, reason: null, storeFloor: null }
+      : response,
+});
+
 export const hostUpdateInstallUpgradeV11ToV12 = defineUpgradePath<
   typeof hostUpdateInstallV11,
   typeof hostUpdateInstallV12
@@ -172,6 +240,107 @@ export const hostUpdateInstallUpgradeV10ToV11 = defineUpgradePath<
     response.outcome === "accepted" || response.outcome === "already-updating"
       ? { ...response, attemptId: null }
       : response,
+});
+
+/**
+ * Resumes a parked attempt's ACTIVATION — the bytes are already placed and
+ * only the restart is owed.
+ *
+ * A METHOD rather than a field on `host.update.install`, and that is the
+ * authorization design, not a naming preference. An intent carried as a
+ * request field is silently DROPPED when the client projects its request onto
+ * a lower negotiated minor, so an old host would run a plain install for a
+ * request that asked for an activation. A method a host does not have is
+ * refused at dispatch instead, and the client falls back to the legacy route
+ * with nothing lost in translation.
+ */
+export const hostUpdateActivateV10 = defineRpcContract({
+  method: "host.update.activate",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: hostUpdateBoundDispatchRequestSchemaPreExpectedIdentity,
+  responseSchema: hostUpdateBoundDispatchResponseSchema,
+});
+
+/**
+ * Resumes a parked attempt's OWN continuation, whichever it is — the apply a
+ * busy host deferred, or the activation.
+ *
+ * The distinction from {@link hostUpdateActivateV10} is the authority the
+ * caller is exercising, not the work performed: `activate` says "restart into
+ * bytes that are already placed", while `continue` says "carry on with
+ * whatever this attempt was authorized to do". They share a request and a
+ * response shape and stay separate methods so a host can offer, refuse and log
+ * them independently.
+ */
+export const hostUpdateContinueV10 = defineRpcContract({
+  method: "host.update.continue",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: hostUpdateBoundDispatchRequestSchemaPreExpectedIdentity,
+  responseSchema: hostUpdateBoundDispatchResponseSchema,
+});
+
+/**
+ * `@1.1` — the same two authorizations, with the caller able to say WHICH
+ * position of the attempt it observed (`expected`).
+ *
+ * A MINOR, on the same reasoning as `host.update.check@1.1`: the request only
+ * grows an OPTIONAL key and the response is untouched, so a `@1.0` peer keeps
+ * exactly its current semantics and nothing needs a downgrade bridge. The two
+ * methods bump together because they are two authorizations of one shape — a
+ * host that offered the check on one but not the other would make support for
+ * it indistinguishable from support for neither.
+ *
+ * What a host does with the key is the host's: present and disagreeing with
+ * the record it observes is a refusal (`refused-attempt-moved`, carried on the
+ * existing `dispatch-indeterminate { reason }` arm), absent is today's unbound
+ * behaviour. See {@link hostUpdateBoundDispatchRequestSchema}.
+ */
+export const hostUpdateActivateV11 = defineRpcContract({
+  method: "host.update.activate",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: hostUpdateBoundDispatchRequestSchema,
+  responseSchema: hostUpdateBoundDispatchResponseSchema,
+});
+
+/** @1.1 of the sibling authorization. See {@link hostUpdateActivateV11}. */
+export const hostUpdateContinueV11 = defineRpcContract({
+  method: "host.update.continue",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: hostUpdateBoundDispatchRequestSchema,
+  responseSchema: hostUpdateBoundDispatchResponseSchema,
+});
+
+/**
+ * Both upgrades are the identity, and that is the point rather than an
+ * omission.
+ *
+ * `upgradeRequest`: a `@1.0` request has no `expected` and must not acquire
+ * one. Synthesising a position here would put an affirmative claim in an old
+ * client's mouth — it never observed a generation to authorize — and the host's
+ * whole rule is that ABSENT means "the caller did not say".
+ *
+ * `upgradeResponse`: the response schema is byte-identical across the two
+ * minors, so there is nothing to bridge.
+ */
+export const hostUpdateActivateUpgradeV10ToV11 = defineUpgradePath<
+  typeof hostUpdateActivateV10,
+  typeof hostUpdateActivateV11
+>({
+  from: hostUpdateActivateV10.schemaVersion,
+  to: hostUpdateActivateV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+/** See {@link hostUpdateActivateUpgradeV10ToV11}; identical, and identically empty. */
+export const hostUpdateContinueUpgradeV10ToV11 = defineUpgradePath<
+  typeof hostUpdateContinueV10,
+  typeof hostUpdateContinueV11
+>({
+  from: hostUpdateContinueV10.schemaVersion,
+  to: hostUpdateContinueV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 /** Returns this slot's shared on-disk installation records, or tree-run state. */

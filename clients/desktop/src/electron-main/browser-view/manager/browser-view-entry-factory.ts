@@ -163,6 +163,7 @@ export class BrowserViewEntryFactory {
       rendererResetPending: false,
       closePromise: null,
       internalNavigation: false,
+      succeededByReplacement: false,
     };
     this.popups.installGuestGesture(webContents);
     // The tile's opener context is a live view of the entry: read at open time,
@@ -261,7 +262,10 @@ export class BrowserViewEntryFactory {
     // only place in the chain that knows a browser tile has focus, so the
     // whole focus-scoped input policy is decided here. `preventDefault` is
     // what stops a menu equivalent (Cmd+W's "Close Tab") from also firing.
-    const reserved = this.chords.match(input);
+    // The guest's OWN window decides the policy: each renderer registers a
+    // table derived from its own surface state, and this seam is the only
+    // place that knows which window's guest has focus.
+    const reserved = this.chords.match(entry.surface?.windowId ?? null, input);
     if (reserved !== null) {
       event.preventDefault();
       // Every reserved chord is one-shot - holding Cmd+T at ~25 Hz would open

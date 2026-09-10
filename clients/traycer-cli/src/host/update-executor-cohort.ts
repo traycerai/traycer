@@ -39,11 +39,15 @@ export type UpdateExecutorCohortVerdict =
     };
 
 export function decideUpdateExecutorCohort(
-  _platform: HostInstallPlatform,
+  platform: HostInstallPlatform,
 ): UpdateExecutorCohortVerdict {
-  // This is intentionally static release policy, not a test-only runtime
-  // switch. Ticket 07 is the only authorized cutover point. Keeping the
-  // decision as a function lets callers preserve one explicit gate while the
-  // shipped branch is structurally incapable of selecting schema-v2 work.
-  return { kind: "shadow", reason: "disabled" };
+  // THE CUTOVER. This is intentionally static release policy, not a test-only
+  // runtime switch: `host update` now runs every arm on the attempt executor
+  // from `host/update-run.ts`, on every shipped platform, and the shadow
+  // verdict this used to return would refuse the command outright.
+  //
+  // Keeping the decision as a function - rather than deleting the gate - is
+  // what leaves one explicit, mockable place for a future rollout to narrow,
+  // and what keeps every caller's `!== "eligible"` arm reachable in tests.
+  return { kind: "eligible", platform };
 }

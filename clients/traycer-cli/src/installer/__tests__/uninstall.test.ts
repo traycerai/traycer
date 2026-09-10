@@ -8,6 +8,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { updateAttemptRecordPath } from "@traycer-clients/shared/host-update";
 import { noopLogger } from "../../logger";
 import { hostPidMetadataPath } from "../../store/paths";
 import {
@@ -155,6 +156,7 @@ describe("uninstallHost", () => {
       environment: ENV,
       purgeChannelRuntime: false,
       verifyMutationCapability: testMutationVerifier,
+      discardAttemptRecord: null,
     });
 
     expect(result.removedInstallDir).toBe(true);
@@ -174,10 +176,98 @@ describe("uninstallHost", () => {
       environment: ENV,
       purgeChannelRuntime: true,
       verifyMutationCapability: testMutationVerifier,
+      discardAttemptRecord: null,
     });
 
     expect(result.removedStagedDir).toBe(true);
     expect(existsSync(stagedDir)).toBe(false);
+  });
+
+  it("removes the schema-v2 update attempt record beside install/ - a park must not outlive the install it describes", async () => {
+    const { uninstallHost } = await import("../uninstall");
+    mkdirSync(installDirFor(ENV), { recursive: true });
+    // The record lives in the host home, NOT under install/, so removing the
+    // install tree alone leaves it standing - which is exactly the shape that
+    // refused every later maintenance admission for a host that was gone.
+    const recordPath = updateAttemptRecordPath(hostHomeFor(ENV));
+    writeFileSync(
+      recordPath,
+      JSON.stringify({
+        schemaVersion: 2,
+        attemptId: "attempt-1",
+        generation: 1,
+        sequence: 1,
+        trigger: "manual",
+        targetVersion: "2.0.0",
+        phase: "waiting-for-work",
+        execution: "parked",
+        continuation: "resume-apply",
+        progress: null,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        completedAt: null,
+        error: null,
+      }),
+    );
+    // The caller's live lock handle is not evidence and must survive.
+    const lockPath = join(hostHomeFor(ENV), "update-attempt.lock");
+    writeFileSync(lockPath, '{"pid":1,"reason":"test","startedAt":"now"}');
+
+    // The record is canonical state, so it goes ONLY through the caller's
+    // handle-bound discard - never a raw unlink here. With no discard seam
+    // (the legacy/no-contender path) the record must be left exactly as
+    // found: an uninstall without a live capability has no authority to
+    // clear it, and unlinking anyway is the defect `store.ts`'s banner
+    // forbids.
+    let discardCalls = 0;
+    await uninstallHost({
+      environment: ENV,
+      purgeChannelRuntime: false,
+      verifyMutationCapability: testMutationVerifier,
+      discardAttemptRecord: null,
+    });
+    expect(existsSync(recordPath)).toBe(true);
+
+    // Given the seam, the uninstall drives it exactly once, and the lock file
+    // is still untouched - it is the caller's live handle, not evidence.
+    await uninstallHost({
+      environment: ENV,
+      purgeChannelRuntime: false,
+      verifyMutationCapability: testMutationVerifier,
+      discardAttemptRecord: async () => {
+        discardCalls += 1;
+        rmSync(recordPath, { force: true });
+      },
+    });
+    expect(discardCalls).toBe(1);
+    expect(existsSync(recordPath)).toBe(false);
+    expect(existsSync(lockPath)).toBe(true);
+  });
+
+  it("FAILS the uninstall when the attempt-record discard fails - a surviving record is the original defect, not litter", async () => {
+    const { uninstallHost } = await import("../uninstall");
+    const recordPath = updateAttemptRecordPath(hostHomeFor(ENV));
+    mkdirSync(hostHomeFor(ENV), { recursive: true });
+    writeFileSync(recordPath, JSON.stringify({ schemaVersion: 2 }));
+
+    // Reporting success here would leave a valid nonterminal record in a host
+    // home whose install is gone - which refuses the NEXT install's admission,
+    // the exact bug this seam exists to prevent. It must not be swallowed the
+    // way the best-effort directory removals are.
+    await expect(
+      uninstallHost({
+        environment: ENV,
+        purgeChannelRuntime: false,
+        verifyMutationCapability: testMutationVerifier,
+        discardAttemptRecord: async () => {
+          throw new Error(
+            "update attempt record discard was refused (lock-not-live)",
+          );
+        },
+      }),
+    ).rejects.toThrow("discard was refused");
+
+    expect(existsSync(recordPath)).toBe(true);
   });
 
   it("reports removedStagedDir: true even when staged/ never existed", async () => {
@@ -192,8 +282,65 @@ describe("uninstallHost", () => {
       environment: ENV,
       purgeChannelRuntime: false,
       verifyMutationCapability: testMutationVerifier,
+      discardAttemptRecord: null,
     });
 
     expect(result.removedStagedDir).toBe(true);
+  });
+
+  // Final hold model: uninstall is the ONE place a version hold is removed
+  // (`resetHeldHostVersion`) - a later fresh install of the same version must
+  // not inherit a stale hold and silently park its updates. Exercised against
+  // the real hold-record file (same sandboxed `os.homedir()` this suite
+  // already mocks for `store/paths`), not a mock, since the point is the
+  // record is actually gone from disk afterward.
+  it("resets the held-host-version record on uninstall", async () => {
+    const { uninstallHost } = await import("../uninstall");
+    const { setHeldHostVersion } = await import("../../host/held-host-version");
+    const { hostHeldVersionRecordPath, readHostHeldVersion } =
+      await import("@traycer/protocol/config/installation");
+    mkdirSync(installDirFor(ENV), { recursive: true });
+    // `setHeldHostVersion` reaches the record through the CLI's OWN
+    // `ensureHostHomeDir` (module-constant `HOST_HOME`, frozen at this
+    // suite's static import time - before `beforeEach` ever points
+    // `os.homedir()` at the sandbox), while the record's actual path comes
+    // from the protocol package's call-time `hostHeldVersionRecordPath`
+    // (which DOES see the sandbox). Pre-creating the real parent here keeps
+    // the write inside the sandbox rather than leaking into whatever
+    // pre-sandbox path `HOST_HOME` froze to.
+    mkdirSync(join(hostHeldVersionRecordPath(ENV), ".."), {
+      recursive: true,
+    });
+    await setHeldHostVersion(ENV, "1.2.0", "install-a");
+    expect(existsSync(hostHeldVersionRecordPath(ENV))).toBe(true);
+
+    await uninstallHost({
+      environment: ENV,
+      purgeChannelRuntime: false,
+      verifyMutationCapability: testMutationVerifier,
+      discardAttemptRecord: null,
+    });
+
+    expect(existsSync(hostHeldVersionRecordPath(ENV))).toBe(false);
+    await expect(readHostHeldVersion(ENV)).resolves.toBeNull();
+  });
+
+  it("uninstalling with nothing held is a no-op for the hold record (never throws)", async () => {
+    const { uninstallHost } = await import("../uninstall");
+    const { hostHeldVersionRecordPath } =
+      await import("@traycer/protocol/config/installation");
+    mkdirSync(installDirFor(ENV), { recursive: true });
+    expect(existsSync(hostHeldVersionRecordPath(ENV))).toBe(false);
+
+    await expect(
+      uninstallHost({
+        environment: ENV,
+        purgeChannelRuntime: false,
+        verifyMutationCapability: testMutationVerifier,
+        discardAttemptRecord: null,
+      }),
+    ).resolves.toBeDefined();
+
+    expect(existsSync(hostHeldVersionRecordPath(ENV))).toBe(false);
   });
 });

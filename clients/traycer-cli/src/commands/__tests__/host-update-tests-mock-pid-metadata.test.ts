@@ -36,20 +36,70 @@ function testFilesUnder(dir: string): string[] {
   return found;
 }
 
-describe("every test that executes buildHostUpdateCommand mocks host/pid-metadata", () => {
+// The cutover MOVED the hazard this gate exists for. `readActivationState`
+// now lives in `host/update-run.ts`, so `runHostUpdate` is the function that
+// reads the real `pid.json` and can restart a developer's own host; the
+// command file is a thin shell that calls it. Both entry points are therefore
+// scanned, and the pid-metadata mock is recognised at either depth
+// (`../../host/pid-metadata` from `commands/__tests__`, `../pid-metadata`
+// from `host/__tests__`).
+const EXECUTES = ["buildHostUpdateCommand(", "runHostUpdate("];
+
+// The THIRD way in, and the one neither function marker sees: a registration
+// suite reaches exactly the same code through
+// `program.parseAsync(["host", "update", ...])`. That is the caller "one
+// directory over" this gate exists for, and it was missed until a
+// package-wide run under a redirected HOME caught the suite writing into the
+// host home. Anchored on `parseAsync` on purpose - the bare literal also
+// appears in a `findByPath(program, ["host", "update"])` lookup and in an
+// argv FIXTURE that is never parsed, neither of which executes anything.
+const EXECUTES_VIA_ARGV = /parseAsync\([^)]*"host",\s*"update"/s;
+
+// A file that mocks - or stubs out - the module under test never executes the
+// real thing. A `vi.spyOn(module, "buildHostUpdateCommand")` counts: it
+// replaces the command factory for the whole test just as a module mock does,
+// which is how the argv-contract suite parses real `host update` invocations
+// without running one.
+const MOCKS_ENTRY_POINT =
+  /vi\.mock\(\s*["'](?:\.\.\/)*(?:commands\/)?host-update["']|vi\.mock\(\s*["'](?:\.\.\/)*(?:host\/)?update-run["']|\.spyOn\([^,]+,\s*["']buildHostUpdateCommand["']\)/;
+
+const MOCKS_PID_METADATA =
+  /vi\.mock\(\s*["'](?:\.\.\/)+(?:host\/)?pid-metadata["']/;
+
+// The SECOND hazard class, and a different one: the pid-metadata mock
+// isolates a READ, and nothing about it isolates a WRITE. `host update` on
+// the executor takes a real attempt lock, reads and writes a real attempt
+// record, and publishes a real dispatch ACK - all under
+// `hostHomeDir(environment)`, which no per-module mock intercepts because
+// only the PATHS decide where a write lands. A unit test was observed
+// publishing the developer's own `~/.traycer/host/update-dispatch-ack.json`
+// exactly this way.
+const MOCKS_PATHS = /vi\.mock\(\s*["'](?:\.\.\/)+store\/paths["']/;
+
+/** Reaches the real command, by either name or argv, without stubbing it. */
+function executesHostUpdate(source: string): boolean {
+  const reaches =
+    EXECUTES.some((marker) => source.includes(marker)) ||
+    EXECUTES_VIA_ARGV.test(source);
+  return reaches && !MOCKS_ENTRY_POINT.test(source);
+}
+
+describe("every test that executes host update mocks host/pid-metadata", () => {
   it("no test file under src runs the real command against the real pid.json", () => {
     const offenders = testFilesUnder(SRC_ROOT)
       .filter((path) => {
         const source = readFileSync(path, "utf8");
-        const executesCommand =
-          source.includes("buildHostUpdateCommand(") &&
-          // A file that mocks the command module itself never executes it.
-          !/vi\.mock\(\s*["'](?:\.\.\/)*(?:commands\/)?host-update["']/.test(
-            source,
-          );
-        const mocksPidMetadata =
-          /vi\.mock\(\s*["'](?:\.\.\/)+host\/pid-metadata["']/.test(source);
-        return executesCommand && !mocksPidMetadata;
+        return executesHostUpdate(source) && !MOCKS_PID_METADATA.test(source);
+      })
+      .map((path) => relative(SRC_ROOT, path));
+    expect(offenders).toEqual([]);
+  });
+
+  it("no test file under src runs the real command against the real host home", () => {
+    const offenders = testFilesUnder(SRC_ROOT)
+      .filter((path) => {
+        const source = readFileSync(path, "utf8");
+        return executesHostUpdate(source) && !MOCKS_PATHS.test(source);
       })
       .map((path) => relative(SRC_ROOT, path));
     expect(offenders).toEqual([]);
@@ -57,13 +107,26 @@ describe("every test that executes buildHostUpdateCommand mocks host/pid-metadat
 
   it("the gate sees the files it guards", () => {
     // A predicate that matches nothing passes vacuously; pin that the scan
-    // reaches the command's own suite so an empty offender list means
-    // "every caller mocks", not "no caller was found".
-    const guarded = testFilesUnder(SRC_ROOT).filter((path) =>
-      readFileSync(path, "utf8").includes("buildHostUpdateCommand("),
+    // reaches BOTH entry points' own suites, so an empty offender list means
+    // "every caller mocks", not "no caller was found". The legacy
+    // `commands/__tests__/host-update.test.ts` this used to name was retired
+    // by the executor cutover and its pins live in `update-run.test.ts`.
+    const guarded = testFilesUnder(SRC_ROOT)
+      .filter((path) => {
+        const source = readFileSync(path, "utf8");
+        return (
+          EXECUTES.some((marker) => source.includes(marker)) ||
+          EXECUTES_VIA_ARGV.test(source)
+        );
+      })
+      .map((path) => relative(SRC_ROOT, path));
+    expect(guarded).toContain(join("host", "__tests__", "update-run.test.ts"));
+    expect(guarded).toContain(
+      join("commands", "__tests__", "host-update-dispatch-ack-guard.test.ts"),
     );
-    expect(guarded.map((path) => relative(SRC_ROOT, path))).toContain(
-      join("commands", "__tests__", "host-update.test.ts"),
+    // ...and the argv caller, which neither of the two function markers sees.
+    expect(guarded).toContain(
+      join("commands", "__tests__", "cli-entrypoint-registration.test.ts"),
     );
   });
 });

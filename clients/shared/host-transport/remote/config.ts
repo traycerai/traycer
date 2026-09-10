@@ -271,15 +271,17 @@ export const RELAY_AWAITING_PING_INTERVAL_MS = 5_000;
 export const RELAY_AWAITING_PONG_TIMEOUT_MS = 12_000;
 
 /**
- * How long after a completed attach the session waits before logging that its
- * ready boundary is still blocked by streams with NO restore evidence (no
- * delivered frame and no in-flight chunk).
+ * How long after a completed attach the session waits before logging which
+ * streams have produced NO inbound evidence yet (no delivered frame and no
+ * in-flight chunk).
  *
- * Sized well past a healthy resubscribe fan-out round trip and well under the
- * point a person gives up on a stuck surface: a stream that has produced
- * nothing for this long is not slow, it is silent, and the session-level
- * verdict the surfaces render ("still can't connect") cannot name it. The
- * log line is the only artifact that attributes that state to a method.
+ * Sized well past a healthy resubscribe fan-out round trip: a stream that has
+ * produced nothing for this long is not slow, it is silent. Silence has two
+ * causes that look identical from the client - a subscription whose subject
+ * has not changed, and one the host failed to replay - and no other artifact
+ * names the methods involved, which is what makes a field report about one
+ * stuck surface attributable at all. The session's own readiness does not
+ * depend on any of it (see `RemoteSession.maybeReachReadyBoundary`).
  *
  * Deliberately NOT equal to any other NAMED timeout in this file (see the
  * collision warning on {@link RECONNECT_STABLE_RESET_MS}): the session suite
@@ -297,9 +299,9 @@ export const RESTORE_STALL_LOG_AFTER_MS = 8_000;
  * every accepted chunk; expiry treats that stream's transfer as stopped and
  * reopens it on a fresh stream id through the per-stream reopen backoff.
  *
- * This is the ONLY deadline that speaks for a partial transfer. The ready
- * boundary deliberately accepts the first chunk as restore evidence, so
- * completion no longer bounds anything; the socket's awaiting-response fast
+ * This is the ONLY deadline that speaks for a partial transfer. Message
+ * completion bounds nothing - a transfer that stops mid-sequence never
+ * produces one; the socket's awaiting-response fast
  * deadline is cleared by the very chunk that opened the sequence (any inbound
  * frame does); and the relay answers keepalive pings at its edge, so a
  * host-side forwarding stall on one stream keeps both keepalive deadlines fed

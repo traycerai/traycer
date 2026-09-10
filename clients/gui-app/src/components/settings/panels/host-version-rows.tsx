@@ -37,6 +37,11 @@ export interface HostVersionRow {
    * unavailable one, or a publisher's own note.
    */
   readonly unavailableReason: string | null;
+  /** Longer explanation for the disabled action; the inline row stays terse. */
+  readonly unavailableDetail: string | null;
+  readonly newerData: boolean;
+  /** Non-null only when this refusal can be overridden with explicit consent. */
+  readonly storeFormatConfirmation: string | null;
 }
 
 /**
@@ -57,6 +62,7 @@ export function HostVersionRows(props: {
   /** Something else holds the surface (another mutation, a degraded host). */
   readonly disabled: boolean;
   readonly onInstall: (version: string) => void;
+  readonly onInstallAnyway: (version: string) => void;
 }): ReactNode {
   const { rows } = props;
   if (rows.length === 0) {
@@ -82,6 +88,7 @@ export function HostVersionRows(props: {
             // mid-swap retargets an update already running.
             disabled={props.disabled || props.installingVersion !== null}
             onInstall={props.onInstall}
+            onInstallAnyway={props.onInstallAnyway}
           />
         ))}
       </ul>
@@ -106,10 +113,14 @@ function VersionRow(props: {
   readonly installing: boolean;
   readonly disabled: boolean;
   readonly onInstall: (version: string) => void;
+  readonly onInstallAnyway: (version: string) => void;
 }): ReactNode {
   const { row } = props;
+  const canInstallAnyway = row.storeFormatConfirmation !== null;
   const blocked =
-    row.isInstalled || row.yanked || row.unavailableReason !== null;
+    row.isInstalled ||
+    row.yanked ||
+    (row.unavailableReason !== null && !canInstallAnyway);
   return (
     <li className="flex flex-wrap items-center justify-between gap-3 px-3 py-2 text-ui-sm">
       <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -129,6 +140,11 @@ function VersionRow(props: {
             yanked
           </VersionPill>
         ) : null}
+        {row.newerData ? (
+          <VersionPill className="bg-rose-900/40 text-rose-300">
+            newer data
+          </VersionPill>
+        ) : null}
         <span className="text-ui-xs text-muted-foreground">
           {formatInstallDate(row.releasedAt)}
         </span>
@@ -139,20 +155,24 @@ function VersionRow(props: {
         )}
       </div>
       <TooltipWrapper
-        label={row.unavailableReason ?? undefined}
+        label={row.unavailableDetail ?? row.unavailableReason ?? undefined}
         side="top"
         sideOffset={undefined}
         align={undefined}
       >
         <span className="inline-flex">
           <Button
-            variant="secondary"
+            variant={canInstallAnyway ? "outline" : "secondary"}
             size="sm"
             disabled={props.disabled || blocked}
             // The version lives in a SIBLING element, so every row's button
             // otherwise reads as the same bare "Install" to a screen reader.
-            aria-label={`Install ${row.version}`}
-            onClick={() => props.onInstall(row.version)}
+            aria-label={`Install ${row.version}${canInstallAnyway ? " anyway" : ""}`}
+            onClick={() =>
+              canInstallAnyway
+                ? props.onInstallAnyway(row.version)
+                : props.onInstall(row.version)
+            }
           >
             {props.installing ? (
               <AgentSpinningDots
@@ -161,7 +181,7 @@ function VersionRow(props: {
                 variant={undefined}
               />
             ) : null}
-            Install
+            {canInstallAnyway ? "Install anyway" : "Install"}
           </Button>
         </span>
       </TooltipWrapper>
