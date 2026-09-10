@@ -1504,12 +1504,25 @@ describe("<WindowsBridgeProvider /> - renderer parking's window visibility input
       act(() => {
         view.unmount();
       });
+      const timersAfterUnmount = vi.getTimerCount();
       await act(async () => {
         late.settlePendingSnapshot(outcome, false);
+        // Microtasks only: the settle runs the leg's `.then`/`.catch`.
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      // The discriminator for teardown's `snapshotLeg.cancel()` (Codex on
+      // 7f3f67441): a rejection after teardown must not ARM a retry timer.
+      // Asserted on the timer count before the backoff elapses, because a
+      // stray retry that does fire returns at `snapshotSuperseded()` before
+      // it reads, leaving `snapshotCalls` unchanged - so the count below is
+      // not evidence about the cancel, only this line is.
+      expect(vi.getTimerCount(), `late ${outcome} armed a retry`).toBe(
+        timersAfterUnmount,
+      );
+      await act(async () => {
         await vi.advanceTimersByTimeAsync(RETRY_DELAYS_MS[0] * 2);
       });
       expect(isDocumentVisible(), `late ${outcome} after teardown`).toBe(true);
-      // A rejection after teardown must not arm a retry either.
       expect(late.snapshotCalls.count, `late ${outcome} retries`).toBe(1);
       cleanup();
       setDesktopWindowOnScreen(true);

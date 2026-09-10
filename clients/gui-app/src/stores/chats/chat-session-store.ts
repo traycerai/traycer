@@ -6,7 +6,7 @@ import {
   pruneAcceptedActions,
   withoutResolvedAcceptedQueueCancellations,
   withoutSettledAcceptedQueueStatusActions,
-  withoutStartedAcceptedRestoreActions,
+  withoutEarliestAcceptedRestoreActionFor,
   reconcileQueueChange,
   reconcileSnapshotChange,
   reconcileTurnSettled,
@@ -5967,9 +5967,14 @@ export function createChatSessionStoreWithNotificationDependencies(
           },
           // From here on the slot is the authority for this checkpoint, so the
           // accepted `restoreCheckpoint` record has nothing left to hold -
-          // retire it now rather than let a LATER restore's slot make it read
-          // unsettled again (`acceptedActionIsUnsettled`).
-          acceptedActions: withoutStartedAcceptedRestoreActions(
+          // retire it now. The record's EXISTENCE is the hold
+          // (`acceptedActionIsUnsettled`): it is added at the ack and only a
+          // frame arriving after that ack retires it, which is what tells a
+          // repeat restore of the same checkpoint apart from the completed
+          // slot the earlier one left behind. ONE record per frame: this
+          // frame is one attempt starting, and a second attempt accepted
+          // behind it keeps its own record until its own start.
+          acceptedActions: withoutEarliestAcceptedRestoreActionFor(
             state.acceptedActions,
             frame.checkpointId,
           ),
@@ -6012,13 +6017,33 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
         }
-        set({
-          restore: {
-            kind: "completed",
-            checkpointId: frame.checkpointId,
-            finishedAt: frame.finishedAt,
-            results: [...frame.results],
-          },
+        set((state) => {
+          // Did this attempt's `restoreStarted` reach us? If the slot is
+          // in flight for this checkpoint it did, and it already retired the
+          // attempt's record - retiring another here would take the NEXT
+          // attempt's record (two restores of one checkpoint accepted back
+          // to back) and let this completion park before that one started.
+          // If it did not - the start lost on the wire, the slot still null
+          // or an older `completed` - this completion is the first proof the
+          // restore ran after the ack, and retires the attempt's record.
+          const startSeen =
+            state.restore !== null &&
+            state.restore.kind !== "completed" &&
+            state.restore.checkpointId === frame.checkpointId;
+          return {
+            restore: {
+              kind: "completed",
+              checkpointId: frame.checkpointId,
+              finishedAt: frame.finishedAt,
+              results: [...frame.results],
+            },
+            acceptedActions: startSeen
+              ? state.acceptedActions
+              : withoutEarliestAcceptedRestoreActionFor(
+                  state.acceptedActions,
+                  frame.checkpointId,
+                ),
+          };
         });
       },
       onErrorNotice: (frame) => {

@@ -383,13 +383,14 @@ function hasUnsettledChatWork(handle: ChatSessionStoreHandle): boolean {
   if (state.failedSendRestoration !== null) return true;
   // An accepted action is not finished at its ACK - but what "finished" means
   // is the action's own, so `acceptedActionIsUnsettled` decides per kind
-  // against live queue and restore state. Reading `confirmedByHost` here
-  // instead was wrong twice over: it is a send-only fact that no other kind
-  // ever gains, so a session that once paused a queue never parked again; and
-  // the records it judged were free to be pruned by age or by the cap while
-  // the hold was still needed, which is why the pruner now locks exactly the
-  // records this asks about.
-  const settlement = { queue: state.queue, restore: state.restore };
+  // against the live queue (a `restoreCheckpoint` record is retired by its
+  // own frames instead, so for it existence is the hold). Reading
+  // `confirmedByHost` here instead was wrong twice over: it is a send-only
+  // fact that no other kind ever gains, so a session that once paused a queue
+  // never parked again; and the records it judged were free to be pruned by
+  // age or by the cap while the hold was still needed, which is why the
+  // pruner now locks exactly the records this asks about.
+  const settlement = { queue: state.queue };
   for (const action of Object.values(state.acceptedActions)) {
     if (acceptedActionIsUnsettled(action, settlement)) return true;
   }

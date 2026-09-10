@@ -15,13 +15,13 @@ import {
 } from "@/lib/composer/content-recovery";
 import type {
   AcceptedChatAction,
-  ChatRestoreSlot,
   FailedSendRestorationState,
   PendingChatAction,
   PendingUserMessage,
   StagedWorktreeIntentSource,
 } from "@/stores/chats/chat-session-store";
 import { buildAttachmentsFromJSONContent } from "@/lib/composer/tiptap-json-content";
+import { queueItemCanPauseFromQueueHeader } from "@/components/chat/queued-message-utils";
 
 /**
  * Notice code for a send whose text the CLIENT is the last holder of - the
@@ -1887,41 +1887,100 @@ export function withoutResolvedAcceptedQueueCancellations(
 }
 
 /**
+ * What the host's `pauseQueue` leaves behind, read from the ROWS. The host
+ * holds every human backlog prompt it can (`queueItemCanPauseForUser`, which
+ * {@link queueItemCanPauseFromQueueHeader} mirrors), and the queue's overall
+ * `status` is DERIVED from the rows afterwards - `running` while any row is
+ * still runnable, `paused` only when none is. So a pause has landed once no
+ * row it would hold remains, whatever the derived status says: with a
+ * runnable system-owned row (an A2A reply, a managed-command digest) beside
+ * the held prompts the status stays `running` and a status-keyed verdict
+ * would never settle.
+ */
+export function queuePauseSettled(queue: ChatQueueState): boolean {
+  return !queue.items.some(queueItemCanPauseFromQueueHeader);
+}
+
+/**
+ * What the host's `resumeQueue` leaves behind: every `paused` row released
+ * to `pending`. Read from the rows for the same reason as {@link
+ * queuePauseSettled}, and because the header offers Resume on
+ * `items.some(paused)` regardless of `status` - a queue whose status reads
+ * `idle` or `running` can still carry paused rows, and a resume accepted
+ * against it is not settled until they are released.
+ */
+export function queueResumeSettled(queue: ChatQueueState): boolean {
+  return !queue.items.some((item) => item.status === "paused");
+}
+
+/**
  * Retire `pauseQueue` / `resumeQueue` records once the authoritative queue
- * has reached the requested state, and `restoreCheckpoint` records once their
- * restore has started - the removal paths {@link acceptedActionIsUnsettled}'s
- * holds need so that settled history cannot come back as "unsettled".
+ * shows the requested state on its rows ({@link queuePauseSettled} /
+ * {@link queueResumeSettled}) - the removal path {@link
+ * acceptedActionIsUnsettled}'s holds need so that settled history cannot come
+ * back as "unsettled".
  *
- * Without these, a record judged from LIVE state alone flips back: a pause
- * that settled reads unsettled again the moment the queue is resumed by a
- * later action, and a restore that completed reads unsettled again the moment
- * a later restore's slot replaces its own. Both would veto parking until the
- * retention window happened to prune the record. Retiring at settlement is
- * what keeps the hold bounded by the lifecycle rather than by the calendar.
+ * Without it, a record judged from LIVE state alone flips back: a pause that
+ * settled reads unsettled again the moment the queue is resumed by a later
+ * action, and would veto parking until the retention window happened to
+ * prune the record. Retiring at settlement is what keeps the hold bounded by
+ * the lifecycle rather than by the calendar. The same two predicates decide
+ * here and in the verdict, so the record and the hold expire together.
  *
  * Runs wherever the queue truth lands ({@link withoutResolvedAcceptedQueueCancellations}'s
- * two doors) and on `restoreStarted`.
+ * two doors).
  */
 export function withoutSettledAcceptedQueueStatusActions(
   acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
   queue: ChatQueueState,
 ): Readonly<Record<string, AcceptedChatAction>> {
   return withoutAcceptedActions(acceptedActions, (action) => {
-    if (action.action === "pauseQueue") return queue.status === "paused";
-    if (action.action === "resumeQueue") return queue.status !== "paused";
+    if (action.action === "pauseQueue") return queuePauseSettled(queue);
+    if (action.action === "resumeQueue") return queueResumeSettled(queue);
     return false;
   });
 }
 
-export function withoutStartedAcceptedRestoreActions(
+/**
+ * Retire ONE accepted `restoreCheckpoint` record for `checkpointId` - the
+ * earliest accepted - because a restore frame for it has just arrived.
+ *
+ * Called from the frame doors, so it only ever sees records accepted BEFORE
+ * the frame, which is the ordering {@link acceptedActionIsUnsettled}'s
+ * `restoreCheckpoint` arm relies on: a record exists exactly while no frame
+ * for its checkpoint has followed its acceptance. One record per frame
+ * because the host runs restores serially and each `restoreStarted` is one
+ * attempt starting: two restores of the same checkpoint accepted back to back
+ * (the composer's gate reads `pendingActions`, so the first ack re-opens it)
+ * are two attempts, and one frame retiring both let the first attempt's
+ * completion park the epic before the second had started. Earliest first
+ * because that is the attempt the host reaches first.
+ *
+ * Runs on `restoreStarted` (the ordinary retirement) and on
+ * `restoreCompleted` when no start for that checkpoint was seen, so a
+ * `restoreStarted` lost on the wire still retires at the completion that
+ * proves the restore ran - see the store's `onRestoreCompleted`.
+ */
+export function withoutEarliestAcceptedRestoreActionFor(
   acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
   checkpointId: string,
 ): Readonly<Record<string, AcceptedChatAction>> {
+  const earliest = Object.values(acceptedActions)
+    .filter(
+      (action) =>
+        action.action === "restoreCheckpoint" &&
+        (action.checkpointId === null || action.checkpointId === checkpointId),
+    )
+    .toSorted(
+      (a, b) =>
+        a.acceptedAt - b.acceptedAt ||
+        a.clientActionId.localeCompare(b.clientActionId),
+    )
+    .at(0);
+  if (earliest === undefined) return acceptedActions;
   return withoutAcceptedActions(
     acceptedActions,
-    (action) =>
-      action.action === "restoreCheckpoint" &&
-      (action.checkpointId === null || action.checkpointId === checkpointId),
+    (action) => action.clientActionId === earliest.clientActionId,
   );
 }
 
@@ -1985,7 +2044,6 @@ export function acceptedActionHoldsUnrecoveredSend(
 /** The live state an accepted action's settlement is judged against. */
 export interface AcceptedActionSettlementContext {
   readonly queue: ChatQueueState;
-  readonly restore: ChatRestoreSlot | null;
 }
 
 /**
@@ -2003,9 +2061,9 @@ export interface AcceptedActionSettlementContext {
  * | kind | held until |
  * | --- | --- |
  * | `send` / `editUserMessage` | confirmed, or the content is consumed |
- * | `pauseQueue` / `resumeQueue` | the authoritative queue reaches that state |
+ * | `pauseQueue` / `resumeQueue` | the queue's ROWS show it ({@link queuePauseSettled} / {@link queueResumeSettled}) |
  * | `queueCancel` | the target row leaves the authoritative queue |
- * | `restoreCheckpoint` | the restore starts (the slot then owns it) |
+ * | `restoreCheckpoint` | a restore frame for its checkpoint follows the ack |
  * | everything else | not at all - no local-only state to lose |
  *
  * Deriving from live state is what makes the `queueCancel` arm correct on both
@@ -2014,17 +2072,28 @@ export interface AcceptedActionSettlementContext {
  * snapshot, so a verdict keyed on the record's EXISTENCE could never expire.
  * Keyed on the queue, the same answer falls out of either door.
  *
- * `restoreCheckpoint` holds until the slot names THIS action's checkpoint,
- * which is the ack-to-`restoreStarted` gap; from `in-flight` on, the slot
- * itself is the authority and `completed` is finished. Matched by checkpoint
- * id rather than by the slot being non-null because a `completed` slot
- * persists for toast and dialog consumers: with checkpoint A completed, a
- * restore of B accepted afterwards would otherwise read A's slot as its own
- * settlement and park before B's frames arrive. A repeat restore of the SAME
- * checkpoint still reads the earlier completed slot as settled - the residual
- * gap, bounded exactly like a `restoreStarted` lost outright: the record holds
- * until the next frame prunes it, and a connection quiet enough to lose it is
- * one whose reconnect produces frames.
+ * The pause and resume arms read the rows, not the derived `status`: the
+ * host computes `status` from the rows AFTER the mutation (`running` while
+ * any row is runnable), so a queue can carry paused rows under `running` or
+ * `idle`, and a status-keyed resume verdict parked over rows still held while
+ * a status-keyed pause verdict never settled beside a runnable system-owned
+ * row (Codex on 7f3f67441).
+ *
+ * `restoreCheckpoint` is the one kind whose settlement is NOT readable from
+ * live state, and the arm deliberately does not try. The restore slot cannot
+ * say whether it belongs to THIS action: `completed` persists for toast and
+ * dialog consumers, so with checkpoint A completed, a restore of B accepted
+ * afterwards read A's slot as its own settlement (fixed by matching ids), and
+ * a REPEAT restore of A accepted afterwards still did - same id, older slot -
+ * and parked before its own `restoreStarted` arrived (CodeRabbit and Codex on
+ * 7f3f67441). What does identify the action's own restore is ORDER: the
+ * record is added at the ack and retired one per frame by the frame doors
+ * ({@link withoutEarliestAcceptedRestoreActionFor}), so a frame retires only
+ * the earliest record accepted before it, and a record that still exists has
+ * had no frame of its own since its ack. Existence IS the hold; the slot is
+ * the authority from `in-flight` on and `hasUnsettledChatWork` reads it
+ * directly. A restore whose frames are lost outright holds until the
+ * retention window prunes the record, the same bound as before.
  */
 export function acceptedActionIsUnsettled(
   action: AcceptedChatAction,
@@ -2033,9 +2102,9 @@ export function acceptedActionIsUnsettled(
   if (acceptedActionHoldsUnrecoveredSend(action)) return true;
   switch (action.action) {
     case "pauseQueue":
-      return context.queue.status !== "paused";
+      return !queuePauseSettled(context.queue);
     case "resumeQueue":
-      return context.queue.status === "paused";
+      return !queueResumeSettled(context.queue);
     case "queueCancel":
       return (
         action.queueItemId !== null &&
@@ -2044,11 +2113,7 @@ export function acceptedActionIsUnsettled(
         )
       );
     case "restoreCheckpoint":
-      return (
-        context.restore === null ||
-        (action.checkpointId !== null &&
-          context.restore.checkpointId !== action.checkpointId)
-      );
+      return true;
     default:
       return false;
   }
