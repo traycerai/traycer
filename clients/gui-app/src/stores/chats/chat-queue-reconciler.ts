@@ -9,6 +9,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import type { AccountContext } from "@traycer/protocol/common/schemas";
+import type { ChatEvent } from "@traycer/protocol/persistence/epic/chat-events";
 import {
   classifyContentRecovery,
   recoveryTextFromContent,
@@ -1943,23 +1944,28 @@ export function withoutSettledAcceptedQueueStatusActions(
 
 /**
  * Retire ONE accepted `restoreCheckpoint` record for `checkpointId` - the
- * earliest accepted - because a restore frame for it has just arrived.
+ * earliest accepted - because a `restoreCompleted` frame for it has just
+ * arrived.
  *
- * Called from the frame doors, so it only ever sees records accepted BEFORE
+ * Called from the frame door, so it only ever sees records accepted BEFORE
  * the frame, which is the ordering {@link acceptedActionIsUnsettled}'s
- * `restoreCheckpoint` arm relies on: a record exists exactly while no frame
- * for its checkpoint has followed its acceptance. One record per frame
- * because the host runs restores serially and each `restoreStarted` is one
- * attempt starting: two restores of the same checkpoint accepted back to back
- * (the composer's gate reads `pendingActions`, so the first ack re-opens it)
- * are two attempts, and one frame retiring both let the first attempt's
+ * `restoreCheckpoint` arm relies on: a record exists exactly while no
+ * completion for its checkpoint has followed its acceptance. One record per
+ * frame because the host runs restores serially and each completion is one
+ * attempt finishing: two restores of the same checkpoint accepted back to
+ * back (the composer's gate reads `pendingActions`, so the first ack re-opens
+ * it) are two attempts, and one frame retiring both let the first attempt's
  * completion park the epic before the second had started. Earliest first
  * because that is the attempt the host reaches first.
  *
- * Runs on `restoreStarted` (the ordinary retirement) and on
- * `restoreCompleted` when no start for that checkpoint was seen, so a
- * `restoreStarted` lost on the wire still retires at the completion that
- * proves the restore ran - see the store's `onRestoreCompleted`.
+ * Completion, not start: the record used to retire at `restoreStarted` and
+ * hand the hold to the in-flight slot, but that slot is UI state a reconnect
+ * snapshot sweeps (`sweepStaleRestoreSlot`), so a restore still running
+ * across a reconnect had no hold left and the epic parked over it (Codex on
+ * b63aa85d7). The record is the bookkeeping now and the slot is only the
+ * spinner. The durable `checkpoint.restored` event is the other door
+ * ({@link restoredClientActionIds}), exact by client action id, for a
+ * completion frame that died with the dropped stream.
  */
 export function withoutEarliestAcceptedRestoreActionFor(
   acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
@@ -1984,6 +1990,46 @@ export function withoutEarliestAcceptedRestoreActionFor(
   );
 }
 
+/**
+ * The client action ids whose restore the host has durably finished: every
+ * `checkpoint.restored` outcome event in `events`. The host writes that event
+ * BEFORE it broadcasts `restoreCompleted`, so a completion frame lost with a
+ * dropped stream still has this record of it in the next snapshot's events
+ * (and in the live `eventAppended` for the same event). Read on both, so a
+ * `restoreCheckpoint` record whose frame never came is retired by the
+ * evidence rather than by a clock.
+ */
+export function restoredClientActionIds(
+  events: ReadonlyArray<ChatEvent>,
+): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (const event of events) {
+    if (event.type === "checkpoint.restored" && event.clientActionId !== null) {
+      ids.add(event.clientActionId);
+    }
+  }
+  return ids;
+}
+
+/**
+ * Retire the accepted `restoreCheckpoint` records the given evidence names by
+ * client action id: durable outcomes ({@link restoredClientActionIds}) or an
+ * error notice for the action. Exact, unlike the completion frame's
+ * earliest-first retirement, because these carry the id.
+ */
+export function withoutAcceptedRestoreActionsNamed(
+  acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
+  clientActionIds: ReadonlySet<string>,
+): Readonly<Record<string, AcceptedChatAction>> {
+  if (clientActionIds.size === 0) return acceptedActions;
+  return withoutAcceptedActions(
+    acceptedActions,
+    (action) =>
+      action.action === "restoreCheckpoint" &&
+      clientActionIds.has(action.clientActionId),
+  );
+}
+
 function withoutAcceptedActions(
   acceptedActions: Readonly<Record<string, AcceptedChatAction>>,
   retire: (action: AcceptedChatAction) => boolean,
@@ -2005,6 +2051,16 @@ function isAcceptedActionLifecycleLocked(action: AcceptedChatAction): boolean {
     action.interviewBlockId !== null ||
     action.interviewDeliveryRetry !== null ||
     (action.action === "queueCancel" && action.queueItemId !== null) ||
+    // A restore is file mutation still running on the host, and this record
+    // is the only parking hold that survives a reconnect: the progress slot
+    // is frame-driven and the post-reconnect snapshot sweeps it (Codex on
+    // b63aa85d7). Aging it out mid-restore would park over live work, so it
+    // is retired only by completion evidence - the `restoreCompleted` frame,
+    // the durable `checkpoint.restored` event (appended live or carried by a
+    // snapshot), or an error notice for the action. A host that dies
+    // mid-restore emits none of those, and the record then holds until the
+    // tab closes: fail closed, like the busy gate.
+    action.action === "restoreCheckpoint" ||
     // AGE IS NOT SETTLEMENT, and for this record the difference is a destroyed
     // prompt. An accepted send whose content is still the last copy has no
     // other holder: dropping it here (by the retention window, or by the cap
@@ -2086,14 +2142,18 @@ export interface AcceptedActionSettlementContext {
  * afterwards read A's slot as its own settlement (fixed by matching ids), and
  * a REPEAT restore of A accepted afterwards still did - same id, older slot -
  * and parked before its own `restoreStarted` arrived (CodeRabbit and Codex on
- * 7f3f67441). What does identify the action's own restore is ORDER: the
- * record is added at the ack and retired one per frame by the frame doors
- * ({@link withoutEarliestAcceptedRestoreActionFor}), so a frame retires only
- * the earliest record accepted before it, and a record that still exists has
- * had no frame of its own since its ack. Existence IS the hold; the slot is
- * the authority from `in-flight` on and `hasUnsettledChatWork` reads it
- * directly. A restore whose frames are lost outright holds until the
- * retention window prunes the record, the same bound as before.
+ * 7f3f67441). And the slot does not survive a reconnect: the snapshot sweeps
+ * an in-flight slot stamped on the old connection, so a restore still running
+ * on the host had no hold at all once the record had handed off to it (Codex
+ * on b63aa85d7). What does identify the action's own restore is ORDER: the
+ * record is added at the ack and retired one per `restoreCompleted` by the
+ * frame door ({@link withoutEarliestAcceptedRestoreActionFor}), or exactly by
+ * its id when the durable `checkpoint.restored` event or an error notice
+ * names it ({@link withoutAcceptedRestoreActionsNamed}). Existence IS the
+ * hold, from the ack to the completion evidence, and the record is
+ * lifecycle-locked for that span ({@link pruneAcceptedActions}) because
+ * age is not completion. The slot stays a spinner `hasUnsettledChatWork`
+ * also reads, for a restore another client started.
  */
 export function acceptedActionIsUnsettled(
   action: AcceptedChatAction,

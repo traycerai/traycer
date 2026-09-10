@@ -6,6 +6,8 @@ import {
   pruneAcceptedActions,
   withoutResolvedAcceptedQueueCancellations,
   withoutSettledAcceptedQueueStatusActions,
+  restoredClientActionIds,
+  withoutAcceptedRestoreActionsNamed,
   withoutEarliestAcceptedRestoreActionFor,
   reconcileQueueChange,
   reconcileSnapshotChange,
@@ -2614,14 +2616,23 @@ export function createChatSessionStoreWithNotificationDependencies(
             withoutSupersededInterviewDeliveryRetryActions(
               pruneAcceptedActions(
                 {
-                  ...withoutSettledAcceptedActions(
-                    state.acceptedActions,
-                    // BOTH passes retire records: the snapshot pass for sends it
-                    // settled itself, the settled pass for rows it recovered.
-                    new Set([
-                      ...pending.settledAcceptedActionIds,
-                      ...settled.settledAcceptedActionIds,
-                    ]),
+                  ...withoutAcceptedRestoreActionsNamed(
+                    withoutSettledAcceptedActions(
+                      state.acceptedActions,
+                      // BOTH passes retire records: the snapshot pass for sends
+                      // it settled itself, the settled pass for rows it
+                      // recovered.
+                      new Set([
+                        ...pending.settledAcceptedActionIds,
+                        ...settled.settledAcceptedActionIds,
+                      ]),
+                    ),
+                    // A restore whose `restoreCompleted` died with the dropped
+                    // stream: the snapshot's events carry its durable outcome,
+                    // which is the evidence that retires the record. A restore
+                    // still running has no outcome yet and keeps its hold -
+                    // the slot below is swept, the record is not.
+                    restoredClientActionIds(frame.snapshot.chat.events),
                   ),
                   // Confirmation stamps first, then this pass's own additions -
                   // an id cannot be in both, but ordering the merge makes that
@@ -5938,6 +5949,18 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
         }
+        // The durable outcome of a restore names its action, so it retires
+        // the accepted `restoreCheckpoint` record exactly - the door for a
+        // `restoreCompleted` frame that never arrives. Before the transcript
+        // arms below, which differ by line; the record is line-independent.
+        if (frame.event.type === "checkpoint.restored") {
+          set((state) => ({
+            acceptedActions: withoutAcceptedRestoreActionsNamed(
+              state.acceptedActions,
+              restoredClientActionIds([frame.event]),
+            ),
+          }));
+        }
         if (windowedLine) {
           takeLiveRecords({ messages: [], events: [frame.event] });
           return;
@@ -5956,7 +5979,15 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
         }
-        set((state) => ({
+        // The accepted `restoreCheckpoint` record is NOT retired here. This
+        // slot is the spinner, and a reconnect snapshot sweeps it
+        // (`sweepStaleRestoreSlot`); the record is the parking hold, and it
+        // keeps holding until completion evidence (`onRestoreCompleted`, the
+        // durable `checkpoint.restored` event, an error notice for the
+        // action). Retiring it at the start handed the hold to a slot that
+        // did not survive the reconnect, and the epic parked over a restore
+        // still writing files.
+        set({
           restore: {
             kind: "in-flight",
             checkpointId: frame.checkpointId,
@@ -5965,20 +5996,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             startedAt: frame.startedAt,
             connectionEpoch,
           },
-          // From here on the slot is the authority for this checkpoint, so the
-          // accepted `restoreCheckpoint` record has nothing left to hold -
-          // retire it now. The record's EXISTENCE is the hold
-          // (`acceptedActionIsUnsettled`): it is added at the ack and only a
-          // frame arriving after that ack retires it, which is what tells a
-          // repeat restore of the same checkpoint apart from the completed
-          // slot the earlier one left behind. ONE record per frame: this
-          // frame is one attempt starting, and a second attempt accepted
-          // behind it keeps its own record until its own start.
-          acceptedActions: withoutEarliestAcceptedRestoreActionFor(
-            state.acceptedActions,
-            frame.checkpointId,
-          ),
-        }));
+        });
       },
       onRestoreProgress: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
@@ -6017,34 +6035,24 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
         }
-        set((state) => {
-          // Did this attempt's `restoreStarted` reach us? If the slot is
-          // in flight for this checkpoint it did, and it already retired the
-          // attempt's record - retiring another here would take the NEXT
-          // attempt's record (two restores of one checkpoint accepted back
-          // to back) and let this completion park before that one started.
-          // If it did not - the start lost on the wire, the slot still null
-          // or an older `completed` - this completion is the first proof the
-          // restore ran after the ack, and retires the attempt's record.
-          const startSeen =
-            state.restore !== null &&
-            state.restore.kind !== "completed" &&
-            state.restore.checkpointId === frame.checkpointId;
-          return {
-            restore: {
-              kind: "completed",
-              checkpointId: frame.checkpointId,
-              finishedAt: frame.finishedAt,
-              results: [...frame.results],
-            },
-            acceptedActions: startSeen
-              ? state.acceptedActions
-              : withoutEarliestAcceptedRestoreActionFor(
-                  state.acceptedActions,
-                  frame.checkpointId,
-                ),
-          };
-        });
+        set((state) => ({
+          restore: {
+            kind: "completed",
+            checkpointId: frame.checkpointId,
+            finishedAt: frame.finishedAt,
+            results: [...frame.results],
+          },
+          // One attempt finished: retire ONE record for this checkpoint, the
+          // earliest accepted, which is the attempt the host reached first.
+          // A second attempt accepted behind it keeps its own record until
+          // its own completion. The frame carries no client action id; the
+          // durable `checkpoint.restored` event that precedes it does, and
+          // `onEventAppended` / the snapshot pass retire by that too.
+          acceptedActions: withoutEarliestAcceptedRestoreActionFor(
+            state.acceptedActions,
+            frame.checkpointId,
+          ),
+        }));
       },
       onErrorNotice: (frame) => {
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
@@ -6056,6 +6064,16 @@ export function createChatSessionStoreWithNotificationDependencies(
             frame.notice,
             state.deliveredNoticeActionIds,
           ),
+          // A notice naming an accepted restore is the host saying that
+          // attempt is over without a completion - the third retirement
+          // door, so a failed restore does not hold the epic resident.
+          acceptedActions:
+            frame.notice.clientActionId === null
+              ? state.acceptedActions
+              : withoutAcceptedRestoreActionsNamed(
+                  state.acceptedActions,
+                  new Set([frame.notice.clientActionId]),
+                ),
         }));
       },
       onConnectionStatus: (status, reason) => {

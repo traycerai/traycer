@@ -47,6 +47,7 @@ import type {
   ChatSubscribeClientFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { ChatEvent } from "@traycer/protocol/persistence/epic/chat-events";
 import type {
   Chat,
   UserMessageSender,
@@ -538,12 +539,14 @@ interface ReconnectChatSnapshotWithQueue {
   readonly chatId: string;
   readonly hostId: string;
   readonly queue: ChatQueueState;
+  /** The snapshot's durable transcript events - the restore outcome door. */
+  readonly events: ReadonlyArray<ChatEvent>;
 }
 
 function emitOwnerChatSnapshotWithQueue(
   input: ReconnectChatSnapshotWithQueue,
 ): void {
-  const { callbacks, epicId, chatId, hostId, queue } = input;
+  const { callbacks, epicId, chatId, hostId, queue, events } = input;
   callbacks().onConnectionStatus("open", null);
   const chat: Chat = {
     id: chatId,
@@ -558,7 +561,7 @@ function emitOwnerChatSnapshotWithQueue(
     activeSessionChain: null,
     claudePendingWakes: [],
     messages: [],
-    events: [],
+    events: [...events],
     archivedAt: null,
     pinnedUserProviderHandle: null,
     lastDeliveredRolesDigest: null,
@@ -633,6 +636,32 @@ function pausedPromptItemFixture(
   return {
     ...queuedPromptItemFixture(queueItemId, messageId),
     status: "paused",
+  };
+}
+
+/**
+ * The durable outcome the host journals BEFORE it broadcasts
+ * `restoreCompleted`, naming the action - what a reconnect snapshot carries
+ * for a restore whose completion frame died with the dropped stream.
+ */
+function restoredEventFixture(
+  clientActionId: string,
+  checkpointId: string,
+): ChatEvent {
+  return {
+    eventId: `effect:restore:${clientActionId}:outcome`,
+    type: "checkpoint.restored",
+    timestamp: 3,
+    clientActionId,
+    actor: SEND_SENDER,
+    message: "Checkpoint restored.",
+    turnId: checkpointId,
+    messageId: null,
+    queueItemId: null,
+    approvalId: null,
+    blockId: null,
+    severity: "info",
+    metadata: { checkpointId, restoredAt: 3, results: [] },
   };
 }
 
@@ -2246,19 +2275,21 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
 
       startChatRestore(chat.callbacks, EPIC, CHAT_ID, "checkpoint-pin8b");
       expect(chat.handle.store.getState().restore?.kind).toBe("in-flight");
-      // The accepted record retires the moment the restore STARTS: from here
-      // on the slot is the authority for this checkpoint, and a record left
-      // behind would read unsettled again once a later restore's slot
-      // replaced this one (pin 8c). Retired by `restoreStarted`, not by the
-      // retention window.
+      // The accepted record SURVIVES the start: the in-flight slot is the
+      // spinner, and a reconnect snapshot sweeps it, so the record is the
+      // hold from the ack all the way to completion evidence (pin 8g). It
+      // retires at `restoreCompleted`, not at `restoreStarted` and not by
+      // the retention window.
       expect(
         chat.handle.store.getState().acceptedActions[acceptedId],
-      ).toBeUndefined();
-      // The in-flight slot holds on its own (`hasUnsettledChatWork`).
+      ).toBeDefined();
       expect(isEpicParked(EPIC)).toBe(false);
       completeChatRestore(chat.callbacks, EPIC, CHAT_ID, "checkpoint-pin8b");
       // Synchronous, right after the frame.
       expect(chat.handle.store.getState().restore?.kind).toBe("completed");
+      expect(
+        chat.handle.store.getState().acceptedActions[acceptedId],
+      ).toBeUndefined();
 
       expect(isEpicParked(EPIC)).toBe(true);
       expect(epicHandle.disposed).toBe(true);
@@ -2354,8 +2385,8 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
   // checkpoint defeats - A's completed slot names A, so a second restore of A
   // accepted afterwards read that older slot as its own settlement and the
   // probe could dispose the session before the second `restoreStarted`. The
-  // record no longer consults the slot at all: it exists from the ack until a
-  // frame for its checkpoint follows, so ORDER identifies the invocation.
+  // record no longer consults the slot at all: it exists from the ack until
+  // its checkpoint's completion follows, so ORDER identifies the invocation.
   it("holds a repeat restore of the same checkpoint accepted after its earlier restore completed, until the second restore's own frames arrive (pin 8d)", () => {
     const EPIC = "epic-park-chat-restore-repeat-pin8d";
     const TAB = "tab-park-chat-restore-repeat-pin8d";
@@ -2387,10 +2418,10 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
       chatId: CHAT_ID,
     });
     startChatRestore(chat.callbacks, EPIC, CHAT_ID, CHECKPOINT);
+    completeChatRestore(chat.callbacks, EPIC, CHAT_ID, CHECKPOINT);
     expect(
       chat.handle.store.getState().acceptedActions[acceptedFirst],
     ).toBeUndefined();
-    completeChatRestore(chat.callbacks, EPIC, CHAT_ID, CHECKPOINT);
     expect(chat.handle.store.getState().restore).toMatchObject({
       kind: "completed",
       checkpointId: CHECKPOINT,
@@ -2427,14 +2458,17 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
         chat.handle.store.getState().acceptedActions[acceptedSecond],
       ).toBeDefined();
 
-      // The second restore's own start frame retires the record; its slot
-      // then holds on its own until completion.
+      // The second restore's own frames: the record survives the start and
+      // retires at the completion.
       startChatRestore(chat.callbacks, EPIC, CHAT_ID, CHECKPOINT);
       expect(
         chat.handle.store.getState().acceptedActions[acceptedSecond],
-      ).toBeUndefined();
+      ).toBeDefined();
       expect(isEpicParked(EPIC)).toBe(false);
       completeChatRestore(chat.callbacks, EPIC, CHAT_ID, CHECKPOINT);
+      expect(
+        chat.handle.store.getState().acceptedActions[acceptedSecond],
+      ).toBeUndefined();
       expect(isEpicParked(EPIC)).toBe(true);
       expect(epicHandle.disposed).toBe(true);
     } finally {
@@ -2442,10 +2476,9 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
     }
   });
 
-  // Pin 8e: the record is also retired at `restoreCompleted`, for a
-  // `restoreStarted` lost on the wire. Without that door the record would
-  // hold - the arm reads existence alone now - until the retention window
-  // pruned it, long after the completion proved the restore ran.
+  // Pin 8e: a `restoreStarted` lost on the wire changes nothing - the record
+  // never depended on the start. The completion alone retires it; without
+  // that door a lifecycle-locked record would hold until the tab closed.
   it("retires the accepted restore record at restoreCompleted when restoreStarted never arrived (pin 8e)", () => {
     const EPIC = "epic-park-chat-restore-lost-start-pin8e";
     const TAB = "tab-park-chat-restore-lost-start-pin8e";
@@ -2500,11 +2533,11 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
   // back to back - the composer's gate reads `pendingActions`, so the first
   // ack re-opens it - are two attempts the host runs serially. One
   // `restoreStarted` used to retire BOTH records, and the first attempt's
-  // completion then parked the epic before the second had started. A frame
-  // now retires ONE record, the earliest; a completion whose start was seen
-  // retires none (that would take the second attempt's record); the second
-  // attempt's own start retires the second.
-  it("retires one accepted restore record per frame, so a second restore of the same checkpoint accepted before the first started holds until its own start (pin 8f)", () => {
+  // completion then parked the epic before the second had started. A
+  // completion now retires ONE record, the earliest; the second attempt's
+  // record holds through the first attempt's start and completion until its
+  // own completion.
+  it("retires one accepted restore record per completion, so a second restore of the same checkpoint accepted before the first started holds until its own completion (pin 8f)", () => {
     const EPIC = "epic-park-chat-restore-two-accepted-pin8f";
     const TAB = "tab-park-chat-restore-two-accepted-pin8f";
     const CHAT_ID = "chat-restore-two-accepted-pin8f";
@@ -2554,17 +2587,20 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
       vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS);
       expect(isEpicParked(EPIC)).toBe(false);
 
-      // The first attempt starts: only ITS record retires.
+      // The first attempt starts: both records still hold.
       startChatRestore(chat.callbacks, EPIC, CHAT_ID, CHECKPOINT);
       expect(
         chat.handle.store.getState().acceptedActions[acceptedFirst],
-      ).toBeUndefined();
+      ).toBeDefined();
       expect(
         chat.handle.store.getState().acceptedActions[acceptedSecond],
       ).toBeDefined();
-      // The first attempt completes: its start was seen, so the completion
-      // retires nothing - the second attempt's record is still the hold.
+      // The first attempt completes: only ITS record retires - the second
+      // attempt's record is still the hold.
       completeChatRestore(chat.callbacks, EPIC, CHAT_ID, CHECKPOINT);
+      expect(
+        chat.handle.store.getState().acceptedActions[acceptedFirst],
+      ).toBeUndefined();
       expect(
         chat.handle.store.getState().acceptedActions[acceptedSecond],
       ).toBeDefined();
@@ -2573,15 +2609,265 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
 
       // The second attempt's own frames.
       startChatRestore(chat.callbacks, EPIC, CHAT_ID, CHECKPOINT);
+      expect(isEpicParked(EPIC)).toBe(false);
+      completeChatRestore(chat.callbacks, EPIC, CHAT_ID, CHECKPOINT);
       expect(
         chat.handle.store.getState().acceptedActions[acceptedSecond],
       ).toBeUndefined();
-      expect(isEpicParked(EPIC)).toBe(false);
-      completeChatRestore(chat.callbacks, EPIC, CHAT_ID, CHECKPOINT);
       expect(isEpicParked(EPIC)).toBe(true);
       expect(epicHandle.disposed).toBe(true);
     } finally {
       closeEpicTab(TAB);
+    }
+  });
+
+  // Pin 8g (Codex on b63aa85d7): a restore still RUNNING across a transport
+  // reconnect. The in-flight slot is frame-driven and the post-reconnect
+  // snapshot sweeps it (`sweepStaleRestoreSlot`), and with the record retired
+  // at the start that sweep left no hold: the registry's synchronous retry
+  // parked and disposed the session while the host was still writing files.
+  // The record is the hold now, it survives the snapshot (no outcome in its
+  // events), it survives the retention window and cap (lifecycle-locked),
+  // and the completion frame on the NEW connection retires it.
+  it("holds a restore still running across a reconnect whose snapshot swept the in-flight slot, past the retention window, until its completion arrives (pin 8g)", () => {
+    const EPIC = "epic-park-chat-restore-reconnect-running-pin8g";
+    const TAB = "tab-park-chat-restore-reconnect-running-pin8g";
+    const CHAT_ID = "chat-restore-reconnect-running-pin8g";
+    const HOST_ID = "host-restore-reconnect-running-pin8g";
+    const CHECKPOINT = "checkpoint-pin8g";
+    const chatRegistry = __getChatSessionRegistryForTests();
+    const epicHandle = buildParkableEpicHandle(EPIC, false);
+    __getOpenEpicRegistryForTests().acquireMounted(
+      EPIC,
+      () => epicHandle.handle,
+    );
+    const chat = buildTestChatHandleWithFrames(EPIC, CHAT_ID, HOST_ID);
+    chatRegistry.acquire(
+      { epicId: EPIC, chatId: CHAT_ID, hostId: HOST_ID, scopeKey: "pin8g" },
+      () => chat.handle,
+    );
+    emitOwnerChatSnapshot(chat.callbacks, EPIC, CHAT_ID, HOST_ID);
+    const restore = chat.handle.store
+      .getState()
+      .restoreCheckpoint(CHECKPOINT, false);
+    if (restore === null) throw new Error("Expected a restore");
+    const accepted = acceptLastChatAction({
+      frames: chat.sent,
+      callbacks: chat.callbacks,
+      epicId: EPIC,
+      chatId: CHAT_ID,
+    });
+    startChatRestore(chat.callbacks, EPIC, CHAT_ID, CHECKPOINT);
+    expect(chat.handle.store.getState().restore?.kind).toBe("in-flight");
+
+    openEpicTab(TAB, EPIC);
+    try {
+      setEpicSurfaceVisibility(EPIC, "view-pin8g", false);
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS);
+      expect(isEpicParked(EPIC)).toBe(false);
+
+      // The transport drops and comes back while the host is still restoring:
+      // the snapshot carries the durable START but no outcome yet.
+      chat.callbacks().onConnectionStatus("reconnecting", null);
+      emitOwnerChatSnapshotWithQueue({
+        callbacks: chat.callbacks,
+        epicId: EPIC,
+        chatId: CHAT_ID,
+        hostId: HOST_ID,
+        queue: { status: "idle", items: [] },
+        events: [],
+      });
+      // The spinner is gone (the sweep is UI truth: its completion frame may
+      // have died with the stream), the hold is not.
+      expect(chat.handle.store.getState().restore).toBeNull();
+      expect(
+        chat.handle.store.getState().acceptedActions[accepted],
+      ).toBeDefined();
+      expect(isEpicParked(EPIC)).toBe(false);
+      expect(epicHandle.disposed).toBe(false);
+      expect(chatRegistry.peek(EPIC, CHAT_ID, HOST_ID)).not.toBeNull();
+
+      // Long past the retention window, with a second snapshot pass running
+      // the pruner: the record is lifecycle-locked while the restore runs.
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS * 3);
+      chat.callbacks().onConnectionStatus("reconnecting", null);
+      emitOwnerChatSnapshotWithQueue({
+        callbacks: chat.callbacks,
+        epicId: EPIC,
+        chatId: CHAT_ID,
+        hostId: HOST_ID,
+        queue: { status: "idle", items: [] },
+        events: [],
+      });
+      expect(
+        chat.handle.store.getState().acceptedActions[accepted],
+      ).toBeDefined();
+      expect(isEpicParked(EPIC)).toBe(false);
+
+      // The completion arrives on the new connection.
+      completeChatRestore(chat.callbacks, EPIC, CHAT_ID, CHECKPOINT);
+      expect(
+        chat.handle.store.getState().acceptedActions[accepted],
+      ).toBeUndefined();
+      expect(isEpicParked(EPIC)).toBe(true);
+      expect(epicHandle.disposed).toBe(true);
+    } finally {
+      closeEpicTab(TAB);
+    }
+  });
+
+  // Pin 8h, the converse of 8g: the restore FINISHED during the disconnect
+  // and its `restoreCompleted` died with the stream. The host journals the
+  // `checkpoint.restored` outcome, naming the action, before it broadcasts
+  // the frame, so the reconnect snapshot's events carry the evidence - and
+  // that, not a clock, retires the record.
+  it("retires a restore record whose completion frame was lost when the reconnect snapshot carries the durable restored outcome for its action (pin 8h)", () => {
+    const EPIC = "epic-park-chat-restore-reconnect-finished-pin8h";
+    const TAB = "tab-park-chat-restore-reconnect-finished-pin8h";
+    const CHAT_ID = "chat-restore-reconnect-finished-pin8h";
+    const HOST_ID = "host-restore-reconnect-finished-pin8h";
+    const CHECKPOINT = "checkpoint-pin8h";
+    const chatRegistry = __getChatSessionRegistryForTests();
+    const epicHandle = buildParkableEpicHandle(EPIC, false);
+    __getOpenEpicRegistryForTests().acquireMounted(
+      EPIC,
+      () => epicHandle.handle,
+    );
+    const chat = buildTestChatHandleWithFrames(EPIC, CHAT_ID, HOST_ID);
+    chatRegistry.acquire(
+      { epicId: EPIC, chatId: CHAT_ID, hostId: HOST_ID, scopeKey: "pin8h" },
+      () => chat.handle,
+    );
+    emitOwnerChatSnapshot(chat.callbacks, EPIC, CHAT_ID, HOST_ID);
+    const restore = chat.handle.store
+      .getState()
+      .restoreCheckpoint(CHECKPOINT, false);
+    if (restore === null) throw new Error("Expected a restore");
+    const accepted = acceptLastChatAction({
+      frames: chat.sent,
+      callbacks: chat.callbacks,
+      epicId: EPIC,
+      chatId: CHAT_ID,
+    });
+    startChatRestore(chat.callbacks, EPIC, CHAT_ID, CHECKPOINT);
+
+    openEpicTab(TAB, EPIC);
+    try {
+      setEpicSurfaceVisibility(EPIC, "view-pin8h", false);
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS);
+      expect(isEpicParked(EPIC)).toBe(false);
+
+      // An outcome for a DIFFERENT action is not this record's evidence.
+      chat.callbacks().onConnectionStatus("reconnecting", null);
+      emitOwnerChatSnapshotWithQueue({
+        callbacks: chat.callbacks,
+        epicId: EPIC,
+        chatId: CHAT_ID,
+        hostId: HOST_ID,
+        queue: { status: "idle", items: [] },
+        events: [restoredEventFixture("some-other-action", CHECKPOINT)],
+      });
+      expect(
+        chat.handle.store.getState().acceptedActions[accepted],
+      ).toBeDefined();
+      expect(isEpicParked(EPIC)).toBe(false);
+
+      // The outcome for THIS action: retired, parked, no frame needed.
+      chat.callbacks().onConnectionStatus("reconnecting", null);
+      emitOwnerChatSnapshotWithQueue({
+        callbacks: chat.callbacks,
+        epicId: EPIC,
+        chatId: CHAT_ID,
+        hostId: HOST_ID,
+        queue: { status: "idle", items: [] },
+        events: [
+          restoredEventFixture("some-other-action", CHECKPOINT),
+          restoredEventFixture(accepted, CHECKPOINT),
+        ],
+      });
+      expect(
+        chat.handle.store.getState().acceptedActions[accepted],
+      ).toBeUndefined();
+      expect(isEpicParked(EPIC)).toBe(true);
+      expect(epicHandle.disposed).toBe(true);
+    } finally {
+      closeEpicTab(TAB);
+    }
+  });
+
+  // Pin 8i: the same outcome arriving LIVE as an appended event (the host
+  // broadcasts the event alongside the frame), and an error notice naming
+  // the action - the two other doors, each retiring by id.
+  it("retires a restore record on a live checkpoint.restored event or an error notice naming its action (pin 8i)", () => {
+    for (const door of ["event", "notice"] as const) {
+      const EPIC = `epic-park-chat-restore-door-${door}-pin8i`;
+      const TAB = `tab-park-chat-restore-door-${door}-pin8i`;
+      const CHAT_ID = `chat-restore-door-${door}-pin8i`;
+      const HOST_ID = `host-restore-door-${door}-pin8i`;
+      const CHECKPOINT = `checkpoint-${door}-pin8i`;
+      const chatRegistry = __getChatSessionRegistryForTests();
+      const epicHandle = buildParkableEpicHandle(EPIC, false);
+      __getOpenEpicRegistryForTests().acquireMounted(
+        EPIC,
+        () => epicHandle.handle,
+      );
+      const chat = buildTestChatHandleWithFrames(EPIC, CHAT_ID, HOST_ID);
+      chatRegistry.acquire(
+        {
+          epicId: EPIC,
+          chatId: CHAT_ID,
+          hostId: HOST_ID,
+          scopeKey: `pin8i-${door}`,
+        },
+        () => chat.handle,
+      );
+      emitOwnerChatSnapshot(chat.callbacks, EPIC, CHAT_ID, HOST_ID);
+      const restore = chat.handle.store
+        .getState()
+        .restoreCheckpoint(CHECKPOINT, false);
+      if (restore === null) throw new Error("Expected a restore");
+      const accepted = acceptLastChatAction({
+        frames: chat.sent,
+        callbacks: chat.callbacks,
+        epicId: EPIC,
+        chatId: CHAT_ID,
+      });
+      openEpicTab(TAB, EPIC);
+      try {
+        setEpicSurfaceVisibility(EPIC, `view-${door}-pin8i`, false);
+        vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS);
+        expect(isEpicParked(EPIC), door).toBe(false);
+        if (door === "event") {
+          chat.callbacks().onEventAppended({
+            kind: "eventAppended",
+            hasBinaryPayload: false,
+            epicId: EPIC,
+            chatId: CHAT_ID,
+            event: restoredEventFixture(accepted, CHECKPOINT),
+          });
+        } else {
+          chat.callbacks().onErrorNotice({
+            kind: "errorNotice",
+            hasBinaryPayload: false,
+            epicId: EPIC,
+            chatId: CHAT_ID,
+            notice: {
+              code: "CHECKPOINT_RESTORE_FAILED",
+              message: "Restore failed.",
+              severity: "error",
+              clientActionId: accepted,
+            },
+          });
+        }
+        expect(
+          chat.handle.store.getState().acceptedActions[accepted],
+          door,
+        ).toBeUndefined();
+        expect(isEpicParked(EPIC), door).toBe(true);
+        expect(epicHandle.disposed, door).toBe(true);
+      } finally {
+        closeEpicTab(TAB);
+      }
     }
   });
 
@@ -2913,6 +3199,7 @@ describe("epic-parking - P1/P2 regression pins: history pruning is not settlemen
         status: "running",
         items: [queuedPromptItemFixture("queue-item-pin12a", "msg-pin12a")],
       },
+      events: [],
     });
     chat.handle.store.getState().pauseQueue();
     const acceptedId = acceptLastChatAction({
@@ -3103,6 +3390,7 @@ describe("epic-parking - P1/P2 regression pins: history pruning is not settlemen
       chatId: CHAT_ID,
       hostId: HOST_ID,
       queue: heldQueue,
+      events: [],
     });
     chat.handle.store.getState().resumeQueue();
     const acceptedId = acceptLastChatAction({
@@ -3122,6 +3410,7 @@ describe("epic-parking - P1/P2 regression pins: history pruning is not settlemen
       chatId: CHAT_ID,
       hostId: HOST_ID,
       queue: heldQueue,
+      events: [],
     });
     expect(
       chat.handle.store.getState().acceptedActions[acceptedId],
@@ -3186,6 +3475,7 @@ describe("epic-parking - P1/P2 regression pins: history pruning is not settlemen
           queuedManagedCommandItemFixture("queue-item-pin12e-cmd"),
         ],
       },
+      events: [],
     });
     chat.handle.store.getState().pauseQueue();
     const acceptedId = acceptLastChatAction({
@@ -3384,6 +3674,7 @@ describe("epic-parking - P1/P2 regression pins: history pruning is not settlemen
         chatId: CHAT_ID,
         hostId: HOST_ID,
         queue: { status: "idle", items: [] },
+        events: [],
       });
       expect(
         chat.handle.store.getState().acceptedActions[acceptedId],
