@@ -143,7 +143,14 @@ export class MobileAuthSheet {
 
   private emitReturn(): void {
     for (const handler of Array.from(this.returnHandlers)) {
-      handler();
+      try {
+        handler();
+      } catch (error) {
+        // One bad subscriber must not cost the others their nudge - nor, on
+        // iOS, reject `open()` after the sheet already completed, which would
+        // read as "the OS refused" and reopen the page in the browser app.
+        console.error("[mobile] auth-sheet return handler threw", error);
+      }
     }
   }
 }

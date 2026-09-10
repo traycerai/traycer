@@ -101,6 +101,34 @@ describe("MobileAuthSheet", () => {
       expect(second).toHaveBeenCalledTimes(1);
     });
 
+    it("still calls the second onReturn handler and resolves true when the first throws", async () => {
+      const errorSpy = vi
+        .spyOn(console, "error")
+        .mockImplementation(() => undefined);
+      try {
+        const plugin = new FakeAuthSessionPlugin();
+        plugin.open.mockResolvedValue({ outcome: "callback" });
+        const app = new FakeAppUrlOpenSlice();
+        const sheet = new MobileAuthSheet(plugin, app, SCHEME);
+        const first = vi.fn(() => {
+          throw new Error("first handler boom");
+        });
+        const second = vi.fn();
+        sheet.onReturn(first);
+        sheet.onReturn(second);
+        await flush();
+
+        await expect(
+          sheet.open("https://app.traycer.test/device"),
+        ).resolves.toBe(true);
+
+        expect(first).toHaveBeenCalledTimes(1);
+        expect(second).toHaveBeenCalledTimes(1);
+      } finally {
+        errorSpy.mockRestore();
+      }
+    });
+
     it("fires no handler when the plugin resolves dismissed", async () => {
       const plugin = new FakeAuthSessionPlugin();
       plugin.open.mockResolvedValue({ outcome: "dismissed" });

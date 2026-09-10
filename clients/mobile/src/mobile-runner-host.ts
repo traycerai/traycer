@@ -750,7 +750,12 @@ class MobileDeviceFlowHost implements IDeviceFlowHost {
    * `openExternalLink`.
    */
   isLiveVerificationUrl(url: string): boolean {
-    return url === this.liveSession?.authorization.verificationUriComplete;
+    const session = this.liveSession;
+    return (
+      session !== null &&
+      session.isLive &&
+      url === session.authorization.verificationUriComplete
+    );
   }
 }
 
@@ -800,6 +805,11 @@ class MobileDeviceFlowSession implements DeviceFlowSession {
 
   pollNow(): void {
     this.wakePoll?.();
+  }
+
+  /** Whether this attempt can still be approved: neither settled nor cancelled. */
+  get isLive(): boolean {
+    return this.settledResult === null && !this.abortController.signal.aborted;
   }
 
   cancel(): void {

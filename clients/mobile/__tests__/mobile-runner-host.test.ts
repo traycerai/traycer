@@ -2155,6 +2155,8 @@ describe("MobileRunnerHost", () => {
       const fetchMock = vi.fn<typeof fetch>();
       fetchMock
         .mockResolvedValueOnce(Response.json(DEVICE_AUTHORIZE_RESPONSE))
+        // Kept pending until the sheet is opened, then the denied poll.
+        .mockResolvedValueOnce(new Response(null, { status: 428 }))
         .mockResolvedValueOnce(
           Response.json({ error: "access_denied" }, { status: 400 }),
         );
@@ -2168,12 +2170,101 @@ describe("MobileRunnerHost", () => {
       const session = await host.deviceFlow.start();
       expect(session).not.toBeNull();
       if (session === null) return;
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+      // Drive the sheet open first, so `presented` is true when the poll
+      // settles - close() is now a no-op unless a sheet this object opened
+      // may still be up.
+      await host.openExternalLink(
+        session.authorization.verificationUriComplete,
+      );
+      expect(plugin.open).toHaveBeenCalledTimes(1);
+
       const result = new Promise<DeviceFlowResult>((resolve) => {
         session.onResult(resolve);
       });
+      session.pollNow();
 
       await expect(result).resolves.toEqual({ kind: "denied" });
       expect(plugin.close).not.toHaveBeenCalled();
+    });
+
+    it("goes to AppLauncher.openUrl and does not reopen the sheet once the poll has settled authorized", async () => {
+      const fetchMock = vi.fn<typeof fetch>();
+      fetchMock
+        .mockResolvedValueOnce(Response.json(DEVICE_AUTHORIZE_RESPONSE))
+        .mockResolvedValueOnce(new Response(null, { status: 428 }))
+        .mockResolvedValueOnce(
+          Response.json({
+            token: "access-token",
+            refreshToken: "refresh-token",
+          }),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const plugin = new FakeAuthSessionPlugin();
+      const app = new FakeAppUrlOpenSlice();
+      const sheet = new MobileAuthSheet(plugin, app, "traycer");
+      const host = runnerWithAuthSheet(sheet);
+
+      const session = await host.deviceFlow.start();
+      expect(session).not.toBeNull();
+      if (session === null) return;
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+      const result = new Promise<DeviceFlowResult>((resolve) => {
+        session.onResult(resolve);
+      });
+      session.pollNow();
+      await expect(result).resolves.toEqual({
+        kind: "authorized",
+        token: "access-token",
+        refreshToken: "refresh-token",
+      });
+
+      // The session settled - isLive is now false, so this URL is no longer
+      // the live verification URL and must fall through to the browser.
+      await host.openExternalLink(
+        session.authorization.verificationUriComplete,
+      );
+
+      expect(plugin.open).not.toHaveBeenCalled();
+      expect(nativeMocks.browserOpen).toHaveBeenCalledWith({
+        url: session.authorization.verificationUriComplete,
+      });
+    });
+
+    it("goes to AppLauncher.openUrl and does not open the sheet once the session was cancelled", async () => {
+      const fetchMock = vi.fn<typeof fetch>();
+      fetchMock
+        .mockResolvedValueOnce(Response.json(DEVICE_AUTHORIZE_RESPONSE))
+        // Kept pending for the rest of the test so the attempt would stay
+        // live if not for the cancel below.
+        .mockResolvedValue(new Response(null, { status: 428 }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const plugin = new FakeAuthSessionPlugin();
+      const app = new FakeAppUrlOpenSlice();
+      const sheet = new MobileAuthSheet(plugin, app, "traycer");
+      const host = runnerWithAuthSheet(sheet);
+
+      const session = await host.deviceFlow.start();
+      expect(session).not.toBeNull();
+      if (session === null) return;
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+      session.cancel();
+
+      // The session is cancelled - isLive is now false, so this URL is no
+      // longer the live verification URL and must fall through to the browser.
+      await host.openExternalLink(
+        session.authorization.verificationUriComplete,
+      );
+
+      expect(plugin.open).not.toHaveBeenCalled();
+      expect(nativeMocks.browserOpen).toHaveBeenCalledWith({
+        url: session.authorization.verificationUriComplete,
+      });
     });
   });
 });
