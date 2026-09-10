@@ -20,15 +20,11 @@
   }
 }
 
-/* One animation for the whole splash: hold, then fade over the last 240ms of
-   2500ms (90.4%). `pointer-events` is not interpolable, so it switches
-   discretely AT that frame - which is exactly the behaviour wanted. The layer
-   swallows taps while it is opaque, because a tap there would hit a sign-in
-   control the user cannot see, and stops the instant the page beneath starts
-   becoming visible. Doing it here rather than in React is what keeps the
-   component down to one boolean. */
-/* 89.29% of 2240ms is 2000ms - the frame the last piece lands on, where the
-   fade starts, so the surface is never still.
+/* One animation for the whole splash: hold, then fade over its last 240ms.
+   89.29% of 2240ms is 2000ms - the frame the last piece lands on, where the
+   fade starts, so the surface is never still. Doing the fade and the input
+   hand-off here rather than in React is what keeps the component down to one
+   boolean.
 
    THE 89.28% KEYFRAME IS LOAD-BEARING. `pointer-events` is not interpolable,
    and a discrete property does not hold its value until the next keyframe: it
@@ -59,11 +55,8 @@
   }
 }
 
-/* The four pieces travel in from their own offsets and the whole mark settles
-   once. The FIRST piece starts on the splash's first frame - a leading delay
-   here is indistinguishable from a slow launch, because the surface is already
-   on screen and nothing is moving on it. The stagger between pieces is what
-   reads as sequence, so it stays; the wait before any of it does not. */
+/* The whole mark easing down onto its resting size while the pieces arrive
+   inside it - one settle across the assembly, not a second motion after it. */
 @keyframes auth-mark-settle {
   0% {
     transform: scale(1.04);
@@ -117,7 +110,13 @@
   /* The splash restates the per-piece animation rather than inheriting the
      shorter one `BrandEntrance` applies elsewhere: on this surface the motion
      has a whole launch to fill, and the same mark on the sign-in page behind it
-     keeps its own quicker arrival. */
+     keeps its own quicker arrival.
+
+     The FIRST piece starts at 0ms - a leading delay here is indistinguishable
+     from a slow launch, because the surface is already on screen and nothing is
+     moving on it. The stagger between pieces is what reads as sequence, so it
+     stays; the wait before any of it does not. The last piece lands at 2000ms
+     (270ms + 1730ms), which is where the fade begins. */
   .auth-splash .brand-entrance-mark g > path {
     transform-box: fill-box;
     transform-origin: center;
