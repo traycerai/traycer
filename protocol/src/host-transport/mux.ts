@@ -119,6 +119,8 @@ export const MuxFrameType = {
   RESUME: 11,
   /** In-place bearer rotation: `{bearer}` on streamId 0. */
   CREDENTIAL_UPDATE: 12,
+  /** In-place cloud-verdict change: `{cloudAuthorized}` on streamId 0. */
+  CLOUD_VERDICT_UPDATE: 13,
 } as const;
 
 export type MuxFrameTypeValue =
@@ -261,6 +263,23 @@ export interface SessionOpenPayload {
    * identity per logical stream.
    */
   readonly clientIdentity?: ClientHandshakeIdentity;
+  /**
+   * Whether this session may spend a CLOUD CAPABILITY on the account behind
+   * `bearer` - the mux copy of the local `/stream` open frame's field, with the
+   * same contract: presence is the declaration that this peer speaks verdicts,
+   * absence is a peer that predates the capability and is authorized in fact.
+   *
+   * `.optional()` for exactly the reason `capabilities` and `clientIdentity`
+   * above are: a required key holding `undefined` still fails zod's shape check,
+   * which would turn every rc.1 client's `open` into `UNAUTHORIZED: Malformed
+   * OPEN frame` - a fleet-wide break delivered by a purely additive field.
+   *
+   * The session gates ONCE on this frame and updates through
+   * {@link MuxFrameType.CLOUD_VERDICT_UPDATE}; the unary calls and streams
+   * multiplexed inside it inherit the verdict rather than re-declaring it per
+   * logical stream.
+   */
+  readonly cloudAuthorized?: boolean;
 }
 
 /**
@@ -368,6 +387,16 @@ export interface CredentialUpdatePayload {
   readonly bearer: string;
 }
 
+/**
+ * Payload of {@link MuxFrameType.CLOUD_VERDICT_UPDATE}: the session's new
+ * ABSOLUTE cloud verdict, not an edge, so a dropped or reordered frame converges
+ * on the next one rather than leaving the peers disagreeing about how many
+ * transitions have occurred.
+ */
+export interface CloudVerdictUpdatePayload {
+  readonly cloudAuthorized: boolean;
+}
+
 // -----------------------------------------------------------------------------
 // Zod schemas
 // -----------------------------------------------------------------------------
@@ -391,6 +420,12 @@ export const sessionOpenPayloadSchema: z.ZodType<SessionOpenPayload> = z.object(
     resume: z.null(),
     capabilities: z.array(z.string()).optional(),
     clientIdentity: clientHandshakeIdentitySchema.optional(),
+    // `.optional()` and NOT `.default(true)`: absence ("this peer does not speak
+    // verdicts, and never will on this session") and an asserted `true` ("it
+    // does, and right now it is authorized") license different host behaviour -
+    // only the second may later be withdrawn by a control frame - so the parse
+    // boundary keeps them apart instead of collapsing them.
+    cloudAuthorized: z.boolean().optional(),
   },
 );
 
@@ -454,8 +489,31 @@ export const reauthNoticePayloadSchema: z.ZodType<ReauthNoticePayload> =
 export const credentialUpdatePayloadSchema: z.ZodType<CredentialUpdatePayload> =
   z.object({ bearer: z.string() });
 
+export const cloudVerdictUpdatePayloadSchema: z.ZodType<CloudVerdictUpdatePayload> =
+  z.object({ cloudAuthorized: z.boolean() });
+
 /** Capability tag advertised in `openAck.capabilities` for bearer rotation. */
 export const SESSION_CAPABILITY_CREDENTIAL_UPDATE = "credentialUpdate";
+
+/**
+ * Advertised in `openAck.capabilities` by a host that accepts
+ * {@link MuxFrameType.CLOUD_VERDICT_UPDATE} - an in-place change to what this
+ * session's credential may BUY, carrying no bearer.
+ *
+ * Kept independent of {@link SESSION_CAPABILITY_CREDENTIAL_UPDATE} for the reason
+ * its `/stream` twin is: "what the token is" and "what it may buy" change
+ * independently in BOTH directions, so one frame cannot carry both honestly. A
+ * client MUST NOT send the frame without seeing this tag.
+ *
+ * THAT GATE IS MANDATORY, NOT ADVISORY, and this carrier is stricter than
+ * `/stream` about it. {@link decodeMuxFrame} rejects an unrecognized frame TYPE
+ * outright - `KNOWN_MUX_FRAME_TYPES` is closed - and the host's decode-failure
+ * branch force-closes the session. So an ungated send does not degrade to "the
+ * host ignored it": it kills every logical stream multiplexed inside that
+ * session. Contrast the additive open-frame FIELD, which needs no tag at all
+ * because zod objects are non-strict and an older host simply strips it.
+ */
+export const SESSION_CAPABILITY_CLOUD_VERDICT_UPDATE = "cloudVerdictUpdate";
 
 /**
  * Advertised by a peer that can INFLATE {@link MuxFlags.COMPRESSED} frames.

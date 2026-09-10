@@ -668,6 +668,10 @@ function TabLeadingIcon(props: {
     <NotificationIndicatorIcon
       state={indicatorState}
       running={props.activityStatus === "idle" ? false : props.activityStatus}
+      // An EPIC-level rollup over however many machines its agents sit on, so
+      // there is no single host whose coverage could be asked about. The
+      // per-agent rows inside the epic are where an unserved plane is reported.
+      activityCoverage="indeterminate"
       subjectId={props.tabId}
       testIdPrefix="header-tab"
       className="text-muted-foreground"

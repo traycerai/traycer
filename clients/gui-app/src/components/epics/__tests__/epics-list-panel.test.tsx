@@ -122,6 +122,10 @@ interface RenameEpicTitleVariables {
 }
 
 interface SetEpicPinnedVariables {
+  // Mirrors production's dispatch-side host. Declared locally here, which is
+  // exactly why the compile cannot flag a drift - the assertions below are the
+  // only thing that can, and only if they name the key.
+  readonly hostId: string | null;
   readonly epicId: string;
   readonly pinned: boolean;
 }
@@ -244,6 +248,16 @@ vi.mock("@/hooks/epic/use-epic-set-pinned-mutation", () => ({
     mutate: testState.setPinnedMutate,
   }),
   usePendingSetPinnedEpicIds: () => testState.pendingSetPinnedEpicIds,
+}));
+
+/**
+ * `useEpicPinLocalHomeSupported` reads `useHostClient()`, which throws
+ * outside a `<HostRuntimeProvider>` - absent in this file. Fixed at `false`:
+ * every existing case here predates lane 9 item 5 and pins the pre-`@1.1`
+ * reading (`local-home` permanently unavailable).
+ */
+vi.mock("@/hooks/epic/use-epic-pin-local-home-support", () => ({
+  useEpicPinLocalHomeSupported: () => false,
 }));
 
 vi.mock("@/hooks/epic/use-epic-activity-status", () => ({
@@ -576,6 +590,8 @@ describe("<EpicsListPanel />", () => {
     expect(testState.setPinnedMutate).toHaveBeenCalledWith({
       epicId: "epic-from-history",
       pinned: false,
+      isLocalHome: false,
+      hostId: null,
     });
   });
 
@@ -590,6 +606,8 @@ describe("<EpicsListPanel />", () => {
     expect(testState.setPinnedMutate).toHaveBeenCalledWith({
       epicId: "epic-from-history",
       pinned: true,
+      isLocalHome: false,
+      hostId: null,
     });
   });
 
@@ -620,6 +638,8 @@ describe("<EpicsListPanel />", () => {
     expect(testState.setPinnedMutate).toHaveBeenCalledWith({
       epicId: "epic-from-history",
       pinned: true,
+      isLocalHome: false,
+      hostId: null,
     });
     // The pin control sits alongside - not inside - the row's absolute <Link>
     // overlay. A regression that nested it inside the link, or dropped the
@@ -828,7 +848,7 @@ describe("<EpicsListPanel />", () => {
     renderPanel("embedded", "/");
 
     const pin = await screen.findByRole("button", {
-      name: "Pinning Local only epic needs cloud sync; it is stored on this device",
+      name: "Pinning Local only epic needs a newer host on the connected device; it is stored there",
     });
     // `aria-disabled`, not the native attribute: a natively disabled button is
     // unfocusable and swallows pointer events, so the tooltip below - the only
@@ -843,7 +863,7 @@ describe("<EpicsListPanel />", () => {
     // account never gets and a stale row has already had - see
     // `HistoryPinControl`.
     expect(tooltipTextNear(pin)).toBe(
-      "This epic is stored on this device. Pinning needs cloud sync.",
+      "This epic is stored on the connected device. Pinning it needs a newer host version there; update that device's Traycer host.",
     );
   });
 
@@ -863,13 +883,13 @@ describe("<EpicsListPanel />", () => {
     renderPanel("embedded", "/");
 
     const pin = await screen.findByRole("button", {
-      name: "Pinning Orphaned epic is unavailable; its cloud copy was deleted and only this device's edits remain",
+      name: "Pinning Orphaned epic is unavailable; its cloud copy was deleted and only the connected device's edits remain",
     });
     expect(pin.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(pin);
     expect(testState.setPinnedMutate).not.toHaveBeenCalled();
     expect(tooltipTextNear(pin)).toBe(
-      "This epic's cloud copy was deleted. Only this device's edits remain, so it can't be pinned.",
+      "This epic's cloud copy was deleted. Only the connected device's edits remain, so it can't be pinned.",
     );
   });
 

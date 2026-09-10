@@ -14,6 +14,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
+  EpicCreateRefusal,
   ListTasksFacets,
   ListTasksResponse,
   ListTaskLight,
@@ -28,7 +29,7 @@ import {
 } from "@traycer/protocol/host/epic/unary-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
-import { LIST_TASKS_LOCAL_FIRST_MINOR } from "@/lib/cloud-epic-tasks-query/local-first-admission";
+import { EPIC_CREATE_LOCAL_FIRST_MINOR } from "@/lib/epic-create-admission";
 import { createWithoutCloudVerdictMessage } from "@/lib/composer/landing-placement";
 import {
   authorizesCloudCapability,
@@ -38,6 +39,8 @@ import { hostQueryKeys } from "@/lib/query-keys";
 import { cloudEpicTasksQueryKeyMatchesScope } from "@/lib/cloud-epic-tasks-query/cache";
 import type { ListCloudTasksRequest } from "@/lib/cloud-epic-tasks-query";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { openLocalStoreRepair } from "@/stores/local-store/local-store-repair-store";
+import { toast } from "sonner";
 import {
   Analytics,
   AnalyticsEvent,
@@ -119,6 +122,25 @@ export function useEpicCreateForClient(
         };
       },
       onSuccess: (response, variables, ctx) => {
+        // A REFUSAL arrives here, not in `onError`: `epic.create@1.1` carries
+        // it as an optional key on the ordinary response, because the method
+        // is on `RELEASED_FLOOR_METHOD_NAMES` and a discriminated union would
+        // have cost a new major. So this success path has to ask whether a
+        // success actually happened.
+        //
+        // Refusal is AUTHORITATIVE. The type permits `refusal` beside a
+        // non-null `roomInfo` - the cost of staying additive - and the host
+        // never emits that pair, so reading the refusal first is what keeps a
+        // shape the host cannot produce from being read as a create.
+        if (response.refusal !== undefined) {
+          Analytics.getInstance().track(AnalyticsEvent.TaskCreationFailed, {
+            source: "direct_ui",
+            mode: taskCreationMode(variables.chat),
+            blocker: `refused:${response.refusal.kind}`,
+          });
+          reportEpicCreateRefusal(response.refusal, ctx.hostId);
+          return;
+        }
         Analytics.getInstance().track(AnalyticsEvent.TaskCreated, {
           mode: taskCreationMode(variables.chat),
         });
@@ -151,6 +173,45 @@ export function useEpicCreateForClient(
           blocker: analyticsBlockerFromError(error),
         });
         toastFromHostError(error, "Couldn't create epic.");
+      },
+    },
+  });
+}
+
+/**
+ * Surface a refused create, with the host's own words.
+ *
+ * `message` and `remedy` are rendered VERBATIM. That is the whole point of the
+ * typed arm: before it, the host flattened both into a thrown `RPC_ERROR`
+ * string with the epic id and no delimiter, so this side could recover neither
+ * and showed "Couldn't create epic." - which reads as a network or account
+ * problem and sends people chasing the wrong thing. The schema constrains both
+ * to non-empty strings a host wrote for a person, so passing them through is
+ * now the honest rendering rather than the lossy one.
+ *
+ * `hostId` is the client the create was DISPATCHED on, captured in `onMutate`.
+ * It is the machine whose store refused, and on a pinned composer it is not the
+ * window's effective host - repairing the latter would rebind a healthy store,
+ * report success, and leave the refusing one untouched.
+ *
+ * No `hostId` means no action, not a guessed one. The remedy still renders, and
+ * it is a sentence the user can act on at the machine itself; an affordance
+ * pointed at an unknown host is the one outcome worse than no affordance.
+ */
+function reportEpicCreateRefusal(
+  refusal: EpicCreateRefusal,
+  hostId: string | null,
+): void {
+  if (hostId === null) {
+    toast.error(refusal.message, { description: refusal.remedy });
+    return;
+  }
+  toast.error(refusal.message, {
+    description: refusal.remedy,
+    action: {
+      label: "Repair",
+      onClick: () => {
+        openLocalStoreRepair({ hostId, refusal });
       },
     },
   });
@@ -703,16 +764,22 @@ function liveOpenEpicTitle(epicId: string): string | null {
  * the floor now rides on the create's own request and the transport answers it
  * from the connection carrying the frame ({@link HostRequestOptions}).
  *
- * `epic.create` advertises no version of its own, so the subject is the
- * `epic.listTasks` line - a host on the local-first list line is the host on
- * the local-first create line. `null` for a `signed-in` session: it may spend
- * the capability whatever the peer's minor is, and pays no floor.
+ * The subject is now `epic.create`'s own line, `@1.1`. It used to be
+ * `epic.listTasks@1.6` - a proxy adopted because `epic.create` advertised no
+ * version of its own, resting on "a host on the local-first list line is the
+ * host on the local-first create line". That held, but it tied two methods'
+ * release histories together with a claim nothing enforced, and it asked the
+ * floor about a method this request does not call. Both halves are fixed by
+ * asking the method being dispatched.
+ *
+ * `null` for a `signed-in` session: it may spend the capability whatever the
+ * peer's minor is, and pays no floor.
  */
 function createRequiresLocalFirstHost(): RequiredHostMethodVersion | null {
   if (authorizesCloudCapability(useAuthStore.getState().status)) return null;
   return {
-    method: "epic.listTasks",
-    version: { major: 1, minor: LIST_TASKS_LOCAL_FIRST_MINOR },
+    method: "epic.create",
+    version: { major: 1, minor: EPIC_CREATE_LOCAL_FIRST_MINOR },
   };
 }
 
