@@ -98,6 +98,36 @@ function createAcceptedAction(
   };
 }
 
+/** A `send` accepted record, with the recovery fields pin 1/pin 2 pivot on. */
+function createSendAcceptedAction(options: {
+  readonly clientActionId: string;
+  readonly acceptedAt: number;
+  readonly restore: { readonly content: JsonContent } | null;
+  readonly confirmedByHost: boolean;
+}): AcceptedChatAction {
+  return {
+    clientActionId: options.clientActionId,
+    action: "send",
+    queueItemId: null,
+    interviewBlockId: null,
+    interviewDeliveryRetry: null,
+    messageId: null,
+    acceptedAt: options.acceptedAt,
+    restore:
+      options.restore === null
+        ? null
+        : { content: options.restore.content, browserAnnotations: [] },
+    sender: SENDER,
+    settings: SETTINGS,
+    accountContext: null,
+    deliveryPolicy: null,
+    restoreWorktreeIntent: null,
+    displayWorktreeIntent: null,
+    connectionEpoch: 0,
+    confirmedByHost: options.confirmedByHost,
+  };
+}
+
 function createPendingUserMessage(
   clientActionId: string,
   messageId: string,
@@ -977,6 +1007,116 @@ describe("chat-queue-reconciler", () => {
 
       expect(result).toHaveProperty("interview-action");
       expect(Object.keys(result).length).toBeLessThanOrEqual(65);
+    });
+
+    it("retains an accepted send whose content is unrecovered past the 5-minute retention window", () => {
+      const acceptedActions = {
+        "action-1": createSendAcceptedAction({
+          clientActionId: "action-1",
+          acceptedAt: 0,
+          restore: { content: CONTENT },
+          confirmedByHost: false,
+        }),
+      };
+
+      const result = pruneAcceptedActions(acceptedActions, 350_000);
+
+      // `restore !== null && !confirmedByHost` means this record is the ONLY
+      // holder of the prompt's text - `pendingActions` released it at the
+      // ack, and nothing else has received it yet. The retention window must
+      // not destroy it.
+      expect(result).toHaveProperty("action-1");
+    });
+
+    it("prunes a confirmed send, and separately a send with no restore content, past the retention window", () => {
+      const confirmed = {
+        "confirmed-send": createSendAcceptedAction({
+          clientActionId: "confirmed-send",
+          acceptedAt: 0,
+          restore: { content: CONTENT },
+          confirmedByHost: true,
+        }),
+      };
+      const noRestore = {
+        "no-restore-send": createSendAcceptedAction({
+          clientActionId: "no-restore-send",
+          acceptedAt: 0,
+          restore: null,
+          confirmedByHost: false,
+        }),
+      };
+
+      // The lock is scoped to UNRECOVERED content, not to "sends are
+      // immortal" - a confirmed send (the transcript already holds it) and a
+      // send whose restore was already consumed both prune normally.
+      expect(pruneAcceptedActions(confirmed, 350_000)).not.toHaveProperty(
+        "confirmed-send",
+      );
+      expect(pruneAcceptedActions(noRestore, 350_000)).not.toHaveProperty(
+        "no-restore-send",
+      );
+    });
+
+    it("retains an accepted send whose content is unrecovered beyond the record cap", () => {
+      const acceptedActions: Record<string, AcceptedChatAction> = {
+        "unrecovered-send": createSendAcceptedAction({
+          clientActionId: "unrecovered-send",
+          acceptedAt: 0,
+          restore: { content: CONTENT },
+          confirmedByHost: false,
+        }),
+      };
+      // Fill past the 64-record cap with unrelated, prunable traffic.
+      for (let i = 0; i < 70; i += 1) {
+        const id = `action-${i}`;
+        acceptedActions[id] = createAcceptedAction(id, i, null);
+      }
+
+      const result = pruneAcceptedActions(acceptedActions, 5000);
+
+      expect(result).toHaveProperty("unrecovered-send");
+      expect(Object.keys(result).length).toBeLessThanOrEqual(65);
+    });
+
+    it("prunes a confirmed send, and separately a send with no restore content, under cap pressure", () => {
+      const buildWithCapPressure = (
+        target: AcceptedChatAction,
+      ): Record<string, AcceptedChatAction> => {
+        const acceptedActions: Record<string, AcceptedChatAction> = {
+          [target.clientActionId]: target,
+        };
+        for (let i = 0; i < 70; i += 1) {
+          const id = `action-${i}`;
+          acceptedActions[id] = createAcceptedAction(id, i, null);
+        }
+        return acceptedActions;
+      };
+
+      const confirmedResult = pruneAcceptedActions(
+        buildWithCapPressure(
+          createSendAcceptedAction({
+            clientActionId: "confirmed-send",
+            acceptedAt: 0,
+            restore: { content: CONTENT },
+            confirmedByHost: true,
+          }),
+        ),
+        5000,
+      );
+      const noRestoreResult = pruneAcceptedActions(
+        buildWithCapPressure(
+          createSendAcceptedAction({
+            clientActionId: "no-restore-send",
+            acceptedAt: 0,
+            restore: null,
+            confirmedByHost: false,
+          }),
+        ),
+        5000,
+      );
+
+      expect(confirmedResult).not.toHaveProperty("confirmed-send");
+      expect(noRestoreResult).not.toHaveProperty("no-restore-send");
     });
   });
 

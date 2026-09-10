@@ -40,6 +40,8 @@ import {
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
 import type {
+  ChatQueuedPromptItem,
+  ChatQueueState,
   ChatRunSettings,
   ChatSubscribeClientFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -511,6 +513,139 @@ function completeChatRestore(
     finishedAt: 3,
     results: [],
   });
+}
+
+// ── Chat-plane fixtures for the P1/P2 regression pins (transcript-record-
+// fingerprint-memo) ─────────────────────────────────────────────────────────
+//
+// These drive `pruneAcceptedActions`, `acceptedActionIsUnsettled` and the
+// queue reconciler's own queueCancel retirement through the same real host
+// frames as pins 6-9 above - a live `queueChanged`, a reconnect `snapshot`
+// with a caller-chosen queue, and the real `pauseQueue`/`queueCancel`/
+// `restoreCheckpoint` action creators - never a `setState` poke.
+
+/**
+ * Like {@link emitOwnerChatSnapshot}, but lets the caller choose the
+ * snapshot's `queue` - used to settle an accepted `queueCancel` through the
+ * RECONNECT door instead of a live `queueChanged`, which is the door a
+ * cancel accepted just before a reconnect used to never reach.
+ */
+interface ReconnectChatSnapshotWithQueue {
+  readonly callbacks: () => ChatStreamCallbacks;
+  readonly epicId: string;
+  readonly chatId: string;
+  readonly hostId: string;
+  readonly queue: ChatQueueState;
+}
+
+function emitOwnerChatSnapshotWithQueue(
+  input: ReconnectChatSnapshotWithQueue,
+): void {
+  const { callbacks, epicId, chatId, hostId, queue } = input;
+  callbacks().onConnectionStatus("open", null);
+  const chat: Chat = {
+    id: chatId,
+    parentId: null,
+    userId: "user-1",
+    hostId,
+    title: "Test Chat",
+    createdAt: 1,
+    updatedAt: 1,
+    isTitleEditedByUser: false,
+    settings: null,
+    activeSessionChain: null,
+    claudePendingWakes: [],
+    messages: [],
+    events: [],
+    archivedAt: null,
+    pinnedUserProviderHandle: null,
+    lastDeliveredRolesDigest: null,
+  };
+  callbacks().onSnapshot({
+    kind: "snapshot",
+    hasBinaryPayload: false,
+    epicId,
+    chatId,
+    snapshot: {
+      chat,
+      access: { role: "owner", ownerUserId: "user-1", canAct: true },
+      queue,
+      runStatus: "idle",
+      activeTurn: null,
+      pendingApprovals: [],
+      pendingInterviews: [],
+      worktreeBinding: null,
+      missingWorktreePaths: [],
+      pendingFileEditApprovals: [],
+      accumulatedFileChanges: [],
+      managedCommands: [],
+      heldUpdates: [],
+    },
+  });
+}
+
+/** A live `queueChanged` frame carrying an arbitrary authoritative queue. */
+function emitChatQueueChanged(
+  callbacks: () => ChatStreamCallbacks,
+  epicId: string,
+  chatId: string,
+  queue: ChatQueueState,
+): void {
+  callbacks().onQueueChanged({
+    kind: "queueChanged",
+    hasBinaryPayload: false,
+    epicId,
+    chatId,
+    queue,
+  });
+}
+
+/** A queued prompt row, standing in for a `queueCancel` accepted action's target. */
+function queuedPromptItemFixture(
+  queueItemId: string,
+  messageId: string,
+): ChatQueuedPromptItem {
+  return {
+    kind: "prompt",
+    queueItemId,
+    messageId,
+    message: { kind: "user", content: SEND_CONTENT, browserAnnotations: [] },
+    sender: SEND_SENDER,
+    settings: SEND_SETTINGS,
+    accountContext: { type: "PERSONAL" as const },
+    delivery: "next_turn",
+    status: "pending",
+    targetTurnId: null,
+    steerRequest: null,
+    fallbackReason: null,
+    createdAt: 1000,
+    updatedAt: 1000,
+  };
+}
+
+/**
+ * Send, accept and transcript-confirm a filler message - a settled `send`
+ * accepted action with nothing left for P1/P2 to hold. Used only to push the
+ * 64-record cap past its limit with same-rank (`send`) competition, so
+ * eviction has to choose by recency rather than by kind.
+ */
+function sendAndConfirmFillerMessage(
+  chat: {
+    readonly handle: ChatSessionStoreHandle;
+    readonly sent: ChatSubscribeClientFrame[];
+    readonly callbacks: () => ChatStreamCallbacks;
+  },
+  epicId: string,
+  chatId: string,
+): void {
+  const filler = sendChatTestMessage(chat.handle);
+  acceptLastChatAction({
+    frames: chat.sent,
+    callbacks: chat.callbacks,
+    epicId,
+    chatId,
+  });
+  confirmChatMessageAccepted(chat.callbacks, epicId, chatId, filler.messageId);
 }
 
 describe("epic-parking - visibility roll-up (C6)", () => {
@@ -1885,6 +2020,16 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
   // Pin 8b, negative: the restore reaches `completed`, driven by a real
   // `restoreCompleted` frame. `completed` persists in the slot for toast/dialog
   // consumers, so it must read as finished, not merely "an entry exists".
+  //
+  // Extended (transcript-record-fingerprint-memo, P2): the original version of
+  // this pin only drove `restoreStarted`/`restoreCompleted` frames - it never
+  // dispatched a real `restoreCheckpoint` action, so it never had the
+  // ACCEPTED record `acceptedActionIsUnsettled`'s `restoreCheckpoint` arm is
+  // about. Now it does: the action is dispatched and ACKed first (an accepted
+  // record with `confirmedByHost: false` forever, since that field is a
+  // send-only fact), which must hold the park on its own before the restore
+  // even starts, and the record is still retained - not pruned away - when
+  // completion finally parks despite it.
   it("parks once the checkpoint restore completes (pin 8b)", () => {
     const EPIC = "epic-park-chat-restore-completed-pin8b";
     const TAB = "tab-park-chat-restore-completed-pin8b";
@@ -1902,16 +2047,46 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
       { epicId: EPIC, chatId: CHAT_ID, hostId: HOST_ID, scopeKey: "pin8b" },
       () => chat.handle,
     );
-    startChatRestore(chat.callbacks, EPIC, CHAT_ID, "checkpoint-pin8b");
-    expect(chat.handle.store.getState().restore?.kind).toBe("in-flight");
-    completeChatRestore(chat.callbacks, EPIC, CHAT_ID, "checkpoint-pin8b");
-    // Synchronous, right after the frame.
-    expect(chat.handle.store.getState().restore?.kind).toBe("completed");
+    emitOwnerChatSnapshot(chat.callbacks, EPIC, CHAT_ID, HOST_ID);
+
+    // A REAL `restoreCheckpoint` action, dispatched and ACKed - the accepted
+    // record P2 is about.
+    const restoreClientActionId = chat.handle.store
+      .getState()
+      .restoreCheckpoint("checkpoint-pin8b", false);
+    if (restoreClientActionId === null) {
+      throw new Error("Expected a restoreCheckpoint action");
+    }
+    const acceptedId = acceptLastChatAction({
+      frames: chat.sent,
+      callbacks: chat.callbacks,
+      epicId: EPIC,
+      chatId: CHAT_ID,
+    });
+    expect(acceptedId).toBe(restoreClientActionId);
+    expect(
+      chat.handle.store.getState().acceptedActions[acceptedId]?.action,
+    ).toBe("restoreCheckpoint");
 
     openEpicTab(TAB, EPIC);
     try {
       setEpicSurfaceVisibility(EPIC, "view-pin8b", false);
       vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS * 3);
+      // Accepted, but the restore slot is still `null` -
+      // `acceptedActionIsUnsettled`'s `restoreCheckpoint` arm holds until the
+      // restore actually starts.
+      expect(isEpicParked(EPIC)).toBe(false);
+
+      startChatRestore(chat.callbacks, EPIC, CHAT_ID, "checkpoint-pin8b");
+      expect(chat.handle.store.getState().restore?.kind).toBe("in-flight");
+      completeChatRestore(chat.callbacks, EPIC, CHAT_ID, "checkpoint-pin8b");
+      // Synchronous, right after the frame.
+      expect(chat.handle.store.getState().restore?.kind).toBe("completed");
+      // The accepted record is still retained here - completion parks
+      // DESPITE it, not because pruning quietly took it away first.
+      expect(
+        chat.handle.store.getState().acceptedActions[acceptedId],
+      ).not.toBeUndefined();
 
       expect(isEpicParked(EPIC)).toBe(true);
       expect(epicHandle.disposed).toBe(true);
@@ -1965,6 +2140,610 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
       chat.handle.store.getState().ackFailedSendRestoration(clientActionId);
 
       expect(isEpicParked(EPIC)).toBe(true);
+    } finally {
+      closeEpicTab(TAB);
+    }
+  });
+});
+
+describe("epic-parking - P1/P2 regression pins: history pruning is not settlement, and confirmedByHost is a send-only fact (transcript-record-fingerprint-memo)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    __setAgentActivityPlaneAnsweringForTests();
+    __resetEpicDraftGuardForTests();
+  });
+
+  afterEach(() => {
+    __resetEpicParkingForTests();
+    __getOpenEpicRegistryForTests().disposeAll();
+    disposeAllChatSessions();
+    __resetAgentActivityStoreForTests();
+    __resetEpicDraftGuardForTests();
+    resetCanvasStore();
+    vi.useRealTimers();
+  });
+
+  // Pin 10a, positive (P1 - age eviction). An unconfirmed accepted send
+  // survives past the 5-minute retention window once a frame actually RUNS
+  // pruning - an empty same-connection `queueChanged`, the reviewer's exact
+  // repro. `acceptedActionHoldsUnrecoveredSend` is what keeps it out of the
+  // prunable set; without it the record would be gone and nothing would hold
+  // the park.
+  it("does not evict an unconfirmed accepted send by AGE alone, and the chat survives (pin 10a / P1 age)", () => {
+    const EPIC = "epic-park-chat-send-age-retention-pin10a";
+    const TAB = "tab-park-chat-send-age-retention-pin10a";
+    const CHAT_ID = "chat-send-age-retention-pin10a";
+    const HOST_ID = "host-send-age-retention-pin10a";
+    const chatRegistry = __getChatSessionRegistryForTests();
+    const epicHandle = buildParkableEpicHandle(EPIC, false);
+    __getOpenEpicRegistryForTests().acquireMounted(
+      EPIC,
+      () => epicHandle.handle,
+    );
+
+    const chat = buildTestChatHandleWithFrames(EPIC, CHAT_ID, HOST_ID);
+    chatRegistry.acquire(
+      { epicId: EPIC, chatId: CHAT_ID, hostId: HOST_ID, scopeKey: "pin10a" },
+      () => chat.handle,
+    );
+    emitOwnerChatSnapshot(chat.callbacks, EPIC, CHAT_ID, HOST_ID);
+    sendChatTestMessage(chat.handle);
+    const clientActionId = acceptLastChatAction({
+      frames: chat.sent,
+      callbacks: chat.callbacks,
+      epicId: EPIC,
+      chatId: CHAT_ID,
+    });
+    expect(
+      chat.handle.store.getState().acceptedActions[clientActionId]
+        ?.confirmedByHost,
+    ).toBe(false);
+
+    // Past the 5-minute retention window `pruneAcceptedActions` reads, then a
+    // frame that actually runs pruning.
+    vi.advanceTimersByTime(5 * 60_000 + 1_000);
+    emitChatQueueChanged(chat.callbacks, EPIC, CHAT_ID, {
+      status: "idle",
+      items: [],
+    });
+    expect(
+      chat.handle.store.getState().acceptedActions[clientActionId],
+    ).not.toBeUndefined();
+
+    openEpicTab(TAB, EPIC);
+    try {
+      setEpicSurfaceVisibility(EPIC, "view-pin10a", false);
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS * 3);
+
+      expect(isEpicParked(EPIC)).toBe(false);
+      expect(epicHandle.disposed).toBe(false);
+      expect(chatRegistry.peek(EPIC, CHAT_ID, HOST_ID)).not.toBeNull();
+    } finally {
+      closeEpicTab(TAB);
+    }
+  });
+
+  // Pin 10b, negative: the SAME age pressure, but the send is confirmed
+  // first. Proves the fix is not "never prune, never park" - once the host
+  // confirms, the record is no longer lifecycle-locked and the epic parks
+  // exactly as it did before this record ever existed.
+  it("parks once the previously-retained send is confirmed, under the same age pressure (pin 10b)", () => {
+    const EPIC = "epic-park-chat-send-age-confirmed-pin10b";
+    const TAB = "tab-park-chat-send-age-confirmed-pin10b";
+    const CHAT_ID = "chat-send-age-confirmed-pin10b";
+    const HOST_ID = "host-send-age-confirmed-pin10b";
+    const chatRegistry = __getChatSessionRegistryForTests();
+    const epicHandle = buildParkableEpicHandle(EPIC, false);
+    __getOpenEpicRegistryForTests().acquireMounted(
+      EPIC,
+      () => epicHandle.handle,
+    );
+
+    const chat = buildTestChatHandleWithFrames(EPIC, CHAT_ID, HOST_ID);
+    chatRegistry.acquire(
+      { epicId: EPIC, chatId: CHAT_ID, hostId: HOST_ID, scopeKey: "pin10b" },
+      () => chat.handle,
+    );
+    emitOwnerChatSnapshot(chat.callbacks, EPIC, CHAT_ID, HOST_ID);
+    const sent = sendChatTestMessage(chat.handle);
+    const clientActionId = acceptLastChatAction({
+      frames: chat.sent,
+      callbacks: chat.callbacks,
+      epicId: EPIC,
+      chatId: CHAT_ID,
+    });
+    expect(
+      chat.handle.store.getState().acceptedActions[clientActionId]
+        ?.confirmedByHost,
+    ).toBe(false);
+
+    vi.advanceTimersByTime(5 * 60_000 + 1_000);
+    confirmChatMessageAccepted(chat.callbacks, EPIC, CHAT_ID, sent.messageId);
+    // Synchronous, right after the frame.
+    expect(
+      chat.handle.store.getState().acceptedActions[clientActionId]
+        ?.confirmedByHost,
+    ).toBe(true);
+    emitChatQueueChanged(chat.callbacks, EPIC, CHAT_ID, {
+      status: "idle",
+      items: [],
+    });
+
+    openEpicTab(TAB, EPIC);
+    try {
+      setEpicSurfaceVisibility(EPIC, "view-pin10b", false);
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS * 3);
+
+      expect(isEpicParked(EPIC)).toBe(true);
+      expect(epicHandle.disposed).toBe(true);
+      expect(chatRegistry.peek(EPIC, CHAT_ID, HOST_ID)).toBeNull();
+    } finally {
+      closeEpicTab(TAB);
+    }
+  });
+
+  // Pin 11a, positive (P1 - count eviction). Push more than the 64-record cap
+  // through with same-rank ("send"), strictly more recent, CONFIRMED filler
+  // actions - an unlocked scan would sort the unconfirmed target out as the
+  // oldest same-rank entry, so its survival here is the lock, not luck of the
+  // sort.
+  it("does not evict an unconfirmed accepted send by the 64-record CAP, and the chat survives (pin 11a / P1 cap)", () => {
+    const EPIC = "epic-park-chat-send-cap-retention-pin11a";
+    const TAB = "tab-park-chat-send-cap-retention-pin11a";
+    const CHAT_ID = "chat-send-cap-retention-pin11a";
+    const HOST_ID = "host-send-cap-retention-pin11a";
+    const chatRegistry = __getChatSessionRegistryForTests();
+    const epicHandle = buildParkableEpicHandle(EPIC, false);
+    __getOpenEpicRegistryForTests().acquireMounted(
+      EPIC,
+      () => epicHandle.handle,
+    );
+
+    const chat = buildTestChatHandleWithFrames(EPIC, CHAT_ID, HOST_ID);
+    chatRegistry.acquire(
+      { epicId: EPIC, chatId: CHAT_ID, hostId: HOST_ID, scopeKey: "pin11a" },
+      () => chat.handle,
+    );
+    emitOwnerChatSnapshot(chat.callbacks, EPIC, CHAT_ID, HOST_ID);
+    sendChatTestMessage(chat.handle);
+    const clientActionId = acceptLastChatAction({
+      frames: chat.sent,
+      callbacks: chat.callbacks,
+      epicId: EPIC,
+      chatId: CHAT_ID,
+    });
+    expect(
+      chat.handle.store.getState().acceptedActions[clientActionId]
+        ?.confirmedByHost,
+    ).toBe(false);
+
+    for (let i = 0; i < 70; i += 1) {
+      vi.advanceTimersByTime(1);
+      sendAndConfirmFillerMessage(chat, EPIC, CHAT_ID);
+    }
+    expect(
+      chat.handle.store.getState().acceptedActions[clientActionId],
+    ).not.toBeUndefined();
+
+    openEpicTab(TAB, EPIC);
+    try {
+      setEpicSurfaceVisibility(EPIC, "view-pin11a", false);
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS * 3);
+
+      expect(isEpicParked(EPIC)).toBe(false);
+      expect(epicHandle.disposed).toBe(false);
+      expect(chatRegistry.peek(EPIC, CHAT_ID, HOST_ID)).not.toBeNull();
+    } finally {
+      closeEpicTab(TAB);
+    }
+  });
+
+  // Pin 11b, negative: the SAME cap pressure, but the send is confirmed
+  // first - proves the lock lifts on confirmation even under heavy unrelated
+  // traffic, not just when the chat is otherwise quiet.
+  it("parks once the previously-retained send is confirmed, under the same cap pressure (pin 11b)", () => {
+    const EPIC = "epic-park-chat-send-cap-confirmed-pin11b";
+    const TAB = "tab-park-chat-send-cap-confirmed-pin11b";
+    const CHAT_ID = "chat-send-cap-confirmed-pin11b";
+    const HOST_ID = "host-send-cap-confirmed-pin11b";
+    const chatRegistry = __getChatSessionRegistryForTests();
+    const epicHandle = buildParkableEpicHandle(EPIC, false);
+    __getOpenEpicRegistryForTests().acquireMounted(
+      EPIC,
+      () => epicHandle.handle,
+    );
+
+    const chat = buildTestChatHandleWithFrames(EPIC, CHAT_ID, HOST_ID);
+    chatRegistry.acquire(
+      { epicId: EPIC, chatId: CHAT_ID, hostId: HOST_ID, scopeKey: "pin11b" },
+      () => chat.handle,
+    );
+    emitOwnerChatSnapshot(chat.callbacks, EPIC, CHAT_ID, HOST_ID);
+    const sent = sendChatTestMessage(chat.handle);
+    const clientActionId = acceptLastChatAction({
+      frames: chat.sent,
+      callbacks: chat.callbacks,
+      epicId: EPIC,
+      chatId: CHAT_ID,
+    });
+    confirmChatMessageAccepted(chat.callbacks, EPIC, CHAT_ID, sent.messageId);
+    expect(
+      chat.handle.store.getState().acceptedActions[clientActionId]
+        ?.confirmedByHost,
+    ).toBe(true);
+
+    for (let i = 0; i < 70; i += 1) {
+      vi.advanceTimersByTime(1);
+      sendAndConfirmFillerMessage(chat, EPIC, CHAT_ID);
+    }
+
+    openEpicTab(TAB, EPIC);
+    try {
+      setEpicSurfaceVisibility(EPIC, "view-pin11b", false);
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS * 3);
+
+      expect(isEpicParked(EPIC)).toBe(true);
+      expect(epicHandle.disposed).toBe(true);
+      expect(chatRegistry.peek(EPIC, CHAT_ID, HOST_ID)).toBeNull();
+    } finally {
+      closeEpicTab(TAB);
+    }
+  });
+
+  // Pin 12a, positive (P2 - pauseQueue is not a send fact). Accepted, but the
+  // authoritative queue has not reached `paused` yet - `confirmedByHost` for
+  // this record is `false` and never becomes anything else, so only reading
+  // the LIVE queue can tell held from settled.
+  it("does not park while a chat holds an accepted pauseQueue the authoritative queue has not caught up to, and the chat survives (pin 12a)", () => {
+    const EPIC = "epic-park-chat-pause-queue-unsettled-pin12a";
+    const TAB = "tab-park-chat-pause-queue-unsettled-pin12a";
+    const CHAT_ID = "chat-pause-queue-unsettled-pin12a";
+    const HOST_ID = "host-pause-queue-unsettled-pin12a";
+    const chatRegistry = __getChatSessionRegistryForTests();
+    const epicHandle = buildParkableEpicHandle(EPIC, false);
+    __getOpenEpicRegistryForTests().acquireMounted(
+      EPIC,
+      () => epicHandle.handle,
+    );
+
+    const chat = buildTestChatHandleWithFrames(EPIC, CHAT_ID, HOST_ID);
+    chatRegistry.acquire(
+      { epicId: EPIC, chatId: CHAT_ID, hostId: HOST_ID, scopeKey: "pin12a" },
+      () => chat.handle,
+    );
+    emitOwnerChatSnapshot(chat.callbacks, EPIC, CHAT_ID, HOST_ID);
+    chat.handle.store.getState().pauseQueue();
+    const acceptedId = acceptLastChatAction({
+      frames: chat.sent,
+      callbacks: chat.callbacks,
+      epicId: EPIC,
+      chatId: CHAT_ID,
+    });
+    expect(
+      chat.handle.store.getState().acceptedActions[acceptedId]?.action,
+    ).toBe("pauseQueue");
+    expect(chat.handle.store.getState().queue.status).not.toBe("paused");
+
+    openEpicTab(TAB, EPIC);
+    try {
+      setEpicSurfaceVisibility(EPIC, "view-pin12a", false);
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS * 3);
+
+      expect(isEpicParked(EPIC)).toBe(false);
+      expect(epicHandle.disposed).toBe(false);
+      expect(chatRegistry.peek(EPIC, CHAT_ID, HOST_ID)).not.toBeNull();
+    } finally {
+      closeEpicTab(TAB);
+    }
+  });
+
+  // Pin 12b, negative: a live `queueChanged` reports the queue actually
+  // `paused`. The old `confirmedByHost` scan could never see this - a
+  // `pauseQueue` record never gains that flag - so a session that ever paused
+  // its queue would never park again.
+  //
+  // The settling frame fires BEFORE the hidden-window advance below, not
+  // after: `pruneAcceptedActions`'s 5-minute retention window and
+  // `PARK_HIDDEN_EPIC_AFTER_MS` are the same constant, so a `queueChanged`
+  // dispatched only after that advance would age-evict this unlocked record
+  // by the CAP/retention path and settle the test for the wrong reason -
+  // indistinguishable from `acceptedActionIsUnsettled` ever running at all.
+  // Settling first and then advancing with no further frame keeps the record
+  // present and unpruned, so what actually parks it is legible.
+  it("parks once a live queueChanged reports the queue actually paused (pin 12b)", () => {
+    const EPIC = "epic-park-chat-pause-queue-settled-pin12b";
+    const TAB = "tab-park-chat-pause-queue-settled-pin12b";
+    const CHAT_ID = "chat-pause-queue-settled-pin12b";
+    const HOST_ID = "host-pause-queue-settled-pin12b";
+    const chatRegistry = __getChatSessionRegistryForTests();
+    const epicHandle = buildParkableEpicHandle(EPIC, false);
+    __getOpenEpicRegistryForTests().acquireMounted(
+      EPIC,
+      () => epicHandle.handle,
+    );
+
+    const chat = buildTestChatHandleWithFrames(EPIC, CHAT_ID, HOST_ID);
+    chatRegistry.acquire(
+      { epicId: EPIC, chatId: CHAT_ID, hostId: HOST_ID, scopeKey: "pin12b" },
+      () => chat.handle,
+    );
+    emitOwnerChatSnapshot(chat.callbacks, EPIC, CHAT_ID, HOST_ID);
+    chat.handle.store.getState().pauseQueue();
+    const acceptedId = acceptLastChatAction({
+      frames: chat.sent,
+      callbacks: chat.callbacks,
+      epicId: EPIC,
+      chatId: CHAT_ID,
+    });
+    // DELIBERATELY before `openEpicTab`/the hidden-window advance below - do
+    // not move this after it. See the block comment above the `it(...)`: this
+    // frame and that advance both cross the SAME five-minute mark
+    // (`PARK_HIDDEN_EPIC_AFTER_MS` === the retention window
+    // `pruneAcceptedActions` reads), so settling after the advance would
+    // age-evict this unlocked record and park the epic for the wrong reason -
+    // a test that passes whether or not `acceptedActionIsUnsettled` ever runs.
+    emitChatQueueChanged(chat.callbacks, EPIC, CHAT_ID, {
+      status: "paused",
+      items: [],
+    });
+    expect(chat.handle.store.getState().queue.status).toBe("paused");
+    // The record is not stripped by settling - `pauseQueue` has no dedicated
+    // retirement sweep, so what parks it below is `acceptedActionIsUnsettled`
+    // reading the live queue, not the record's absence.
+    expect(
+      chat.handle.store.getState().acceptedActions[acceptedId],
+    ).not.toBeUndefined();
+
+    openEpicTab(TAB, EPIC);
+    try {
+      setEpicSurfaceVisibility(EPIC, "view-pin12b", false);
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS * 3);
+
+      expect(isEpicParked(EPIC)).toBe(true);
+      expect(epicHandle.disposed).toBe(true);
+      expect(chatRegistry.peek(EPIC, CHAT_ID, HOST_ID)).toBeNull();
+    } finally {
+      closeEpicTab(TAB);
+    }
+  });
+
+  // Pin 13a, positive (P2 - queueCancel is not a send fact either). Accepted,
+  // and a live `queueChanged` still carries the target row - the cancel has
+  // not actually landed yet.
+  it("does not park while an accepted queueCancel's target row is still in the authoritative queue, and the chat survives (pin 13a)", () => {
+    const EPIC = "epic-park-chat-queue-cancel-unsettled-pin13a";
+    const TAB = "tab-park-chat-queue-cancel-unsettled-pin13a";
+    const CHAT_ID = "chat-queue-cancel-unsettled-pin13a";
+    const HOST_ID = "host-queue-cancel-unsettled-pin13a";
+    const chatRegistry = __getChatSessionRegistryForTests();
+    const epicHandle = buildParkableEpicHandle(EPIC, false);
+    __getOpenEpicRegistryForTests().acquireMounted(
+      EPIC,
+      () => epicHandle.handle,
+    );
+
+    const chat = buildTestChatHandleWithFrames(EPIC, CHAT_ID, HOST_ID);
+    chatRegistry.acquire(
+      { epicId: EPIC, chatId: CHAT_ID, hostId: HOST_ID, scopeKey: "pin13a" },
+      () => chat.handle,
+    );
+    emitOwnerChatSnapshot(chat.callbacks, EPIC, CHAT_ID, HOST_ID);
+    chat.handle.store.getState().queueCancel("queue-item-pin13a");
+    const acceptedId = acceptLastChatAction({
+      frames: chat.sent,
+      callbacks: chat.callbacks,
+      epicId: EPIC,
+      chatId: CHAT_ID,
+    });
+    expect(
+      chat.handle.store.getState().acceptedActions[acceptedId]?.queueItemId,
+    ).toBe("queue-item-pin13a");
+    emitChatQueueChanged(chat.callbacks, EPIC, CHAT_ID, {
+      status: "idle",
+      items: [queuedPromptItemFixture("queue-item-pin13a", "msg-pin13a")],
+    });
+    expect(
+      chat.handle.store.getState().acceptedActions[acceptedId],
+    ).not.toBeUndefined();
+
+    openEpicTab(TAB, EPIC);
+    try {
+      setEpicSurfaceVisibility(EPIC, "view-pin13a", false);
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS * 3);
+
+      expect(isEpicParked(EPIC)).toBe(false);
+      expect(epicHandle.disposed).toBe(false);
+      expect(chatRegistry.peek(EPIC, CHAT_ID, HOST_ID)).not.toBeNull();
+    } finally {
+      closeEpicTab(TAB);
+    }
+  });
+
+  // Pin 13b, negative: a later `queueChanged` reports the target row gone -
+  // both the pre-existing `withoutResolvedAcceptedQueueCancellations` sweep
+  // and `acceptedActionIsUnsettled`'s own `queueCancel` arm agree it is
+  // settled, and the record is retired.
+  it("parks once a live queueChanged shows the queueCancel target gone (pin 13b)", () => {
+    const EPIC = "epic-park-chat-queue-cancel-settled-pin13b";
+    const TAB = "tab-park-chat-queue-cancel-settled-pin13b";
+    const CHAT_ID = "chat-queue-cancel-settled-pin13b";
+    const HOST_ID = "host-queue-cancel-settled-pin13b";
+    const chatRegistry = __getChatSessionRegistryForTests();
+    const epicHandle = buildParkableEpicHandle(EPIC, false);
+    __getOpenEpicRegistryForTests().acquireMounted(
+      EPIC,
+      () => epicHandle.handle,
+    );
+
+    const chat = buildTestChatHandleWithFrames(EPIC, CHAT_ID, HOST_ID);
+    chatRegistry.acquire(
+      { epicId: EPIC, chatId: CHAT_ID, hostId: HOST_ID, scopeKey: "pin13b" },
+      () => chat.handle,
+    );
+    emitOwnerChatSnapshot(chat.callbacks, EPIC, CHAT_ID, HOST_ID);
+    chat.handle.store.getState().queueCancel("queue-item-pin13b");
+    const acceptedId = acceptLastChatAction({
+      frames: chat.sent,
+      callbacks: chat.callbacks,
+      epicId: EPIC,
+      chatId: CHAT_ID,
+    });
+    emitChatQueueChanged(chat.callbacks, EPIC, CHAT_ID, {
+      status: "idle",
+      items: [queuedPromptItemFixture("queue-item-pin13b", "msg-pin13b")],
+    });
+
+    openEpicTab(TAB, EPIC);
+    try {
+      setEpicSurfaceVisibility(EPIC, "view-pin13b", false);
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS * 3);
+      expect(isEpicParked(EPIC)).toBe(false);
+
+      emitChatQueueChanged(chat.callbacks, EPIC, CHAT_ID, {
+        status: "idle",
+        items: [],
+      });
+      expect(
+        chat.handle.store.getState().acceptedActions[acceptedId],
+      ).toBeUndefined();
+
+      expect(isEpicParked(EPIC)).toBe(true);
+      expect(epicHandle.disposed).toBe(true);
+      expect(chatRegistry.peek(EPIC, CHAT_ID, HOST_ID)).toBeNull();
+    } finally {
+      closeEpicTab(TAB);
+    }
+  });
+
+  // Pin 14, both arms (P2 - the reconnect door): the same accepted
+  // queueCancel, held while a live `queueChanged` still shows its target, then
+  // settled by a RECONNECT SNAPSHOT - not a `queueChanged` - whose queue no
+  // longer holds the row. Before this round's fix a cancel accepted just
+  // before a reconnect survived every later snapshot, because the retirement
+  // sweep ran only on `queueChanged` and the confirmedByHost scan could never
+  // see a queueCancel settle either; this is the door that used to be
+  // unreachable.
+  it("does not park while an accepted queueCancel's target survives, then parks once a RECONNECT SNAPSHOT shows it gone (pin 14)", () => {
+    const EPIC = "epic-park-chat-queue-cancel-snapshot-pin14";
+    const TAB = "tab-park-chat-queue-cancel-snapshot-pin14";
+    const CHAT_ID = "chat-queue-cancel-snapshot-pin14";
+    const HOST_ID = "host-queue-cancel-snapshot-pin14";
+    const chatRegistry = __getChatSessionRegistryForTests();
+    const epicHandle = buildParkableEpicHandle(EPIC, false);
+    __getOpenEpicRegistryForTests().acquireMounted(
+      EPIC,
+      () => epicHandle.handle,
+    );
+
+    const chat = buildTestChatHandleWithFrames(EPIC, CHAT_ID, HOST_ID);
+    chatRegistry.acquire(
+      { epicId: EPIC, chatId: CHAT_ID, hostId: HOST_ID, scopeKey: "pin14" },
+      () => chat.handle,
+    );
+    emitOwnerChatSnapshot(chat.callbacks, EPIC, CHAT_ID, HOST_ID);
+    chat.handle.store.getState().queueCancel("queue-item-pin14");
+    const acceptedId = acceptLastChatAction({
+      frames: chat.sent,
+      callbacks: chat.callbacks,
+      epicId: EPIC,
+      chatId: CHAT_ID,
+    });
+    emitChatQueueChanged(chat.callbacks, EPIC, CHAT_ID, {
+      status: "idle",
+      items: [queuedPromptItemFixture("queue-item-pin14", "msg-pin14")],
+    });
+    expect(
+      chat.handle.store.getState().acceptedActions[acceptedId],
+    ).not.toBeUndefined();
+
+    openEpicTab(TAB, EPIC);
+    try {
+      setEpicSurfaceVisibility(EPIC, "view-pin14", false);
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS * 3);
+      expect(isEpicParked(EPIC)).toBe(false);
+
+      // Settle through a RECONNECT SNAPSHOT, not a live queueChanged.
+      emitOwnerChatSnapshotWithQueue({
+        callbacks: chat.callbacks,
+        epicId: EPIC,
+        chatId: CHAT_ID,
+        hostId: HOST_ID,
+        queue: { status: "idle", items: [] },
+      });
+      expect(
+        chat.handle.store.getState().acceptedActions[acceptedId],
+      ).toBeUndefined();
+
+      expect(isEpicParked(EPIC)).toBe(true);
+      expect(epicHandle.disposed).toBe(true);
+      expect(chatRegistry.peek(EPIC, CHAT_ID, HOST_ID)).toBeNull();
+    } finally {
+      closeEpicTab(TAB);
+    }
+  });
+
+  // Pin 15 (P1 - consumed send restoration). An accepted send's content is
+  // consumed by `takeSetupFailedRestoration` (what a setup-failed replay
+  // calls once the composer takes the content back), nulling `restore` while
+  // `confirmedByHost` stays `false` forever. This is the case
+  // `acceptedActionHoldsUnrecoveredSend` reads `restore`, not the action kind,
+  // for: a consumed restoration stops holding on its own, with no second flag
+  // to keep in step.
+  it("parks once an accepted send's content is consumed by takeSetupFailedRestoration, leaving confirmedByHost false (pin 15)", () => {
+    const EPIC = "epic-park-chat-send-restoration-consumed-pin15";
+    const TAB = "tab-park-chat-send-restoration-consumed-pin15";
+    const CHAT_ID = "chat-send-restoration-consumed-pin15";
+    const HOST_ID = "host-send-restoration-consumed-pin15";
+    const chatRegistry = __getChatSessionRegistryForTests();
+    const epicHandle = buildParkableEpicHandle(EPIC, false);
+    __getOpenEpicRegistryForTests().acquireMounted(
+      EPIC,
+      () => epicHandle.handle,
+    );
+
+    const chat = buildTestChatHandleWithFrames(EPIC, CHAT_ID, HOST_ID);
+    chatRegistry.acquire(
+      { epicId: EPIC, chatId: CHAT_ID, hostId: HOST_ID, scopeKey: "pin15" },
+      () => chat.handle,
+    );
+    emitOwnerChatSnapshot(chat.callbacks, EPIC, CHAT_ID, HOST_ID);
+    const sent = sendChatTestMessage(chat.handle);
+    const acceptedId = acceptLastChatAction({
+      frames: chat.sent,
+      callbacks: chat.callbacks,
+      epicId: EPIC,
+      chatId: CHAT_ID,
+    });
+    expect(
+      chat.handle.store.getState().acceptedActions[acceptedId]?.confirmedByHost,
+    ).toBe(false);
+    expect(
+      chat.handle.store.getState().acceptedActions[acceptedId]?.restore,
+    ).not.toBeNull();
+
+    openEpicTab(TAB, EPIC);
+    try {
+      setEpicSurfaceVisibility(EPIC, "view-pin15", false);
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS * 3);
+      expect(isEpicParked(EPIC)).toBe(false);
+
+      const restored = chat.handle.store
+        .getState()
+        .takeSetupFailedRestoration(sent.messageId);
+      expect(restored).not.toBeNull();
+      // The two fields that distinguish "consumed" from "confirmed" - only
+      // `restore` moved.
+      expect(
+        chat.handle.store.getState().acceptedActions[acceptedId]?.restore,
+      ).toBeNull();
+      expect(
+        chat.handle.store.getState().acceptedActions[acceptedId]
+          ?.confirmedByHost,
+      ).toBe(false);
+
+      expect(isEpicParked(EPIC)).toBe(true);
+      expect(epicHandle.disposed).toBe(true);
+      expect(chatRegistry.peek(EPIC, CHAT_ID, HOST_ID)).toBeNull();
     } finally {
       closeEpicTab(TAB);
     }

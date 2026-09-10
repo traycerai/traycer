@@ -2592,29 +2592,39 @@ export function createChatSessionStoreWithNotificationDependencies(
           state.liveAssistantMessage,
           null,
         );
-        const acceptedActions = withoutSupersededInterviewDeliveryRetryActions(
-          pruneAcceptedActions(
-            {
-              ...withoutSettledAcceptedActions(
-                state.acceptedActions,
-                // BOTH passes retire records: the snapshot pass for sends it
-                // settled itself, the settled pass for rows it recovered.
-                new Set([
-                  ...pending.settledAcceptedActionIds,
-                  ...settled.settledAcceptedActionIds,
-                ]),
-              ),
-              // Confirmation stamps first, then this pass's own additions -
-              // an id cannot be in both, but ordering the merge makes that
-              // independent of whether it ever could be.
-              ...pending.confirmedAcceptedActions,
-              ...pending.acceptedActions,
-            },
-            now,
+        // The resolved-cancellation retirement runs on BOTH doors now. It used
+        // to be on `queueChanged` only, so a `queueCancel` accepted just before
+        // a reconnect kept its record through every later snapshot: the cap and
+        // the retention window skip it (it is lifecycle-locked), and the one
+        // pass that retires it was never reached from here. Same authoritative
+        // queue, same rule, so the record expires whichever door delivers the
+        // truth.
+        const acceptedActions = withoutResolvedAcceptedQueueCancellations(
+          withoutSupersededInterviewDeliveryRetryActions(
+            pruneAcceptedActions(
+              {
+                ...withoutSettledAcceptedActions(
+                  state.acceptedActions,
+                  // BOTH passes retire records: the snapshot pass for sends it
+                  // settled itself, the settled pass for rows it recovered.
+                  new Set([
+                    ...pending.settledAcceptedActionIds,
+                    ...settled.settledAcceptedActionIds,
+                  ]),
+                ),
+                // Confirmation stamps first, then this pass's own additions -
+                // an id cannot be in both, but ordering the merge makes that
+                // independent of whether it ever could be.
+                ...pending.confirmedAcceptedActions,
+                ...pending.acceptedActions,
+              },
+              now,
+            ),
+            messages,
+            state.liveAssistantMessage,
+            connectionEpoch,
           ),
-          messages,
-          state.liveAssistantMessage,
-          connectionEpoch,
+          frame.snapshot.queue,
         );
         return {
           // Destructured rather than spread-and-overwritten: the point is

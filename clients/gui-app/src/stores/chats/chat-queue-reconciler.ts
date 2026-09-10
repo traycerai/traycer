@@ -15,6 +15,7 @@ import {
 } from "@/lib/composer/content-recovery";
 import type {
   AcceptedChatAction,
+  ChatRestoreSlot,
   FailedSendRestorationState,
   PendingChatAction,
   PendingUserMessage,
@@ -1888,8 +1889,103 @@ function isAcceptedActionLifecycleLocked(action: AcceptedChatAction): boolean {
   return (
     action.interviewBlockId !== null ||
     action.interviewDeliveryRetry !== null ||
-    (action.action === "queueCancel" && action.queueItemId !== null)
+    (action.action === "queueCancel" && action.queueItemId !== null) ||
+    // AGE IS NOT SETTLEMENT, and for this record the difference is a destroyed
+    // prompt. An accepted send whose content is still the last copy has no
+    // other holder: dropping it here (by the retention window, or by the cap
+    // under enough unrelated traffic) leaves the text in no slot at all -
+    // `pendingActions` released it at the ack, `failedSendRestoration` never
+    // received it because nothing rejected, and the transcript never got it
+    // because the host never confirmed. It is retired by a real transition
+    // like every other lock: host confirmation, the reconnect passes'
+    // `withoutSettledAcceptedActions`, or `takeSetupFailedRestoration`
+    // nulling `restore` once the composer has it back.
+    acceptedActionHoldsUnrecoveredSend(action)
   );
+}
+
+/**
+ * The record still holds the ONLY copy of a prompt the host has not confirmed.
+ *
+ * Reads `restore`, not the action kind, because `restore` already IS this fact:
+ * it is `null` on every non-`send` action and is nulled by
+ * `takeSetupFailedRestoration` the moment the content is handed back. So a
+ * consumed restoration stops holding on its own, with no second flag to keep
+ * in step.
+ *
+ * Shared on purpose by the two places that must agree: {@link
+ * pruneAcceptedActions}, which must not evict such a record, and {@link
+ * acceptedActionIsUnsettled}, which must not let an epic park over one. A
+ * verdict that held on something the pruner was free to delete was exactly the
+ * defect - the hold was real, and one empty `queueChanged` later the record it
+ * depended on was gone.
+ */
+export function acceptedActionHoldsUnrecoveredSend(
+  action: AcceptedChatAction,
+): boolean {
+  return action.restore !== null && !action.confirmedByHost;
+}
+
+/** The live state an accepted action's settlement is judged against. */
+export interface AcceptedActionSettlementContext {
+  readonly queue: ChatQueueState;
+  readonly restore: ChatRestoreSlot | null;
+}
+
+/**
+ * Whether an accepted action still has a lifecycle of its own to finish.
+ *
+ * `confirmedByHost` cannot answer this. It is a SEND fact - the four doors that
+ * set it are all about a message reaching the transcript or the queue - and
+ * every non-send action is born with it `false` and never gains it. Read as a
+ * universal settlement flag it says "unsettled" forever, so a session that once
+ * paused its queue or restored a checkpoint would never park again.
+ *
+ * So each kind retires on its own evidence, read from LIVE state rather than
+ * from whether some pruning pass happened to run:
+ *
+ * | kind | held until |
+ * | --- | --- |
+ * | `send` / `editUserMessage` | confirmed, or the content is consumed |
+ * | `pauseQueue` / `resumeQueue` | the authoritative queue reaches that state |
+ * | `queueCancel` | the target row leaves the authoritative queue |
+ * | `restoreCheckpoint` | the restore starts (the slot then owns it) |
+ * | everything else | not at all - no local-only state to lose |
+ *
+ * Deriving from live state is what makes the `queueCancel` arm correct on both
+ * doors: `withoutResolvedAcceptedQueueCancellations` runs on `queueChanged`,
+ * and a cancel accepted before a reconnect used to survive every later
+ * snapshot, so a verdict keyed on the record's EXISTENCE could never expire.
+ * Keyed on the queue, the same answer falls out of either door.
+ *
+ * `restoreCheckpoint` holds only while the slot is still `null`, which is the
+ * ack-to-`restoreStarted` gap; from `in-flight` on, the slot itself is the
+ * authority and `completed` is finished. A `restoreStarted` lost outright would
+ * hold until the next frame prunes the record - bounded, and a connection quiet
+ * enough to lose it is one whose reconnect produces frames.
+ */
+export function acceptedActionIsUnsettled(
+  action: AcceptedChatAction,
+  context: AcceptedActionSettlementContext,
+): boolean {
+  if (acceptedActionHoldsUnrecoveredSend(action)) return true;
+  switch (action.action) {
+    case "pauseQueue":
+      return context.queue.status !== "paused";
+    case "resumeQueue":
+      return context.queue.status === "paused";
+    case "queueCancel":
+      return (
+        action.queueItemId !== null &&
+        context.queue.items.some(
+          (item) => item.queueItemId === action.queueItemId,
+        )
+      );
+    case "restoreCheckpoint":
+      return context.restore === null;
+    default:
+      return false;
+  }
 }
 
 /**

@@ -11,6 +11,7 @@ import {
   isChatRunInProgress,
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
+import { acceptedActionIsUnsettled } from "@/stores/chats/chat-queue-reconciler";
 
 /**
  * How long a chat session is kept warm after its last tile unmounts. A chat
@@ -380,12 +381,17 @@ function hasUnsettledChatWork(handle: ChatSessionStoreHandle): boolean {
   // Held until the slot is consumed, which is what `ackFailedSendRestoration`
   // marks.
   if (state.failedSendRestoration !== null) return true;
-  // An accepted send is not finished until the host confirms it; until then
-  // its restore content is still only local. Scoped to UNCONFIRMED entries on
-  // purpose - `acceptedActions` retains confirmed ones as history, and vetoing
-  // on those would mean an epic that ever sent a message never parks again.
+  // An accepted action is not finished at its ACK - but what "finished" means
+  // is the action's own, so `acceptedActionIsUnsettled` decides per kind
+  // against live queue and restore state. Reading `confirmedByHost` here
+  // instead was wrong twice over: it is a send-only fact that no other kind
+  // ever gains, so a session that once paused a queue never parked again; and
+  // the records it judged were free to be pruned by age or by the cap while
+  // the hold was still needed, which is why the pruner now locks exactly the
+  // records this asks about.
+  const settlement = { queue: state.queue, restore: state.restore };
   for (const action of Object.values(state.acceptedActions)) {
-    if (!action.confirmedByHost) return true;
+    if (acceptedActionIsUnsettled(action, settlement)) return true;
   }
   // A checkpoint restore that is still running. `completed` persists in this
   // slot for toast and dialog consumers, so it is finished and does not hold.
