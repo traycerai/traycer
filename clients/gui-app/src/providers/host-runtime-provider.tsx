@@ -1,3 +1,4 @@
+import { markHostRuntimeStarted } from "@/lib/launch/launch-runtime-signal";
 import {
   createContext,
   use,
@@ -505,6 +506,13 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
           };
           setLatestBindingSnapshot(nextBinding);
           setBinding(nextBinding);
+          // Raised HERE, beside the binding, because this line is the first
+          // moment auth is guaranteed to have answered: `auth.start()` above is
+          // awaited before it. The launch mark reads this to tell "auth has not
+          // spoken yet" from "auth said signed-out", which the auth store's
+          // initial `signed-out` cannot express. Moving it earlier would hand
+          // the mark a verdict that has not been reached.
+          markHostRuntimeStarted();
           appLogger.info("[host-runtime] startup complete", {
             hostCardinality: directory.getCardinality(),
             hasLocalHost: directory.getLocalEntry() !== null,

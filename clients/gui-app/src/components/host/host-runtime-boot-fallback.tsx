@@ -2,6 +2,10 @@ import type { ReactNode } from "react";
 import { HostBootSurface } from "@/components/host/host-boot-surface";
 import { APP_HEADER_HEIGHT_CLASS } from "@/components/layout/header/app-header-height";
 import { cn } from "@/lib/utils";
+import {
+  launchMarkOwnsWindow,
+  useLaunchMark,
+} from "@/hooks/launch/use-launch-mark";
 
 /**
  * THE FIRST of a launch's three boot surfaces: what `HostRuntimeProvider`
@@ -23,6 +27,16 @@ export function HostRuntimeBootFallback(props: {
   readonly onConfigureShell: () => void;
   readonly onOpenSettings: () => void;
 }): ReactNode {
+  // While the launch mark still owns the window this surface stays EMPTY rather
+  // than rendering behind it. Covering the card would have hidden it visually,
+  // but the card would still be in the tree - and its heading is host copy
+  // ("Starting Traycer…") describing a wait that, before auth answers, contains
+  // no host work at all. That sentence was the surface a signed-out user
+  // reported seeing before the animation. It comes back the moment the mark
+  // gives up the window, which on a stalled launch is the whole point: the
+  // heading, the progress bar and `Open settings` all return together.
+  const launchMarkCovers = launchMarkOwnsWindow(useLaunchMark());
+
   return (
     <div
       className="flex min-h-safe-svh w-full flex-col bg-background text-foreground"
@@ -30,11 +44,13 @@ export function HostRuntimeBootFallback(props: {
     >
       <div aria-hidden className={cn("shrink-0", APP_HEADER_HEIGHT_CLASS)} />
       <div className="flex flex-1 items-center justify-center p-6">
-        <HostBootSurface
-          testId={null}
-          onConfigureShell={props.onConfigureShell}
-          onOpenSettings={props.onOpenSettings}
-        />
+        {launchMarkCovers ? null : (
+          <HostBootSurface
+            testId={null}
+            onConfigureShell={props.onConfigureShell}
+            onOpenSettings={props.onOpenSettings}
+          />
+        )}
       </div>
     </div>
   );

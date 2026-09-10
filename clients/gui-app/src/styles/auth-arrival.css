@@ -40,7 +40,7 @@
   }
 }
 
-@keyframes brand-splash-settle {
+@keyframes launch-mark-settle {
   from {
     transform: scale(1.025);
   }
@@ -49,7 +49,7 @@
   }
 }
 
-@keyframes brand-splash-leave {
+@keyframes launch-mark-leave {
   from {
     opacity: 1;
   }
@@ -112,12 +112,12 @@
      assembling well before the splash ends, and a screen that then freezes
      completely reads as a stall rather than as a pause. Finite, single-shot,
      and it lands exactly where the static mark would have been. */
-  .brand-splash-mark {
-    animation: brand-splash-settle 2260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  .launch-mark-settle {
+    animation: launch-mark-settle 2260ms cubic-bezier(0.22, 1, 0.36, 1) both;
   }
 
-  .brand-splash-exit {
-    animation: brand-splash-leave 240ms ease-out both;
+  .launch-mark-exit {
+    animation: launch-mark-leave 240ms ease-out both;
   }
 
   .auth-arrival-actions {

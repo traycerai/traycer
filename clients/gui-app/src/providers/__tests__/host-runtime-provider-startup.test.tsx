@@ -124,6 +124,16 @@ describe("HostRuntimeProvider startup (real messenger path)", () => {
     // children mounted synchronously, the suite above stops proving anything.
     expect(screen.queryByTestId("startup-fallback")).not.toBeNull();
     expect(screen.queryByTestId("startup-complete")).toBeNull();
-    expect(screen.getByTestId("brand-entrance")).toBeTruthy();
+    // The fallback is EMPTY for as long as the launch mark owns the window,
+    // and the mark itself is not in this tree - it is mounted above this
+    // provider precisely so it can outlive the swap this test is about (see
+    // `launch-mark-surface.test.tsx` for its identity across that swap).
+    //
+    // Empty rather than merely covered: the boot card's heading is
+    // "Starting Traycer…", which before auth answers describes host work that
+    // has not started, and a covered card is still a card in the tree.
+    expect(screen.queryByTestId("brand-entrance")).toBeNull();
+    expect(screen.queryByTestId("host-boot-open-settings")).toBeNull();
+    expect(document.body.textContent).not.toContain("Starting Traycer");
   });
 });
