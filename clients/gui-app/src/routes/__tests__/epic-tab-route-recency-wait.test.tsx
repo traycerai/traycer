@@ -42,7 +42,14 @@ const homeReadingStore = vi.hoisted(() => {
       reading = next;
       for (const listener of listeners) listener();
     },
-    subscribe(listener: () => void): () => void {
+    // An arrow PROPERTY, like `get` beside it, and not a method shorthand: this
+    // one is passed BY REFERENCE to `useSyncExternalStore`, which a shorthand
+    // makes an unbound method (`unbound-method`). Fixed here rather than wrapped
+    // at the call site on purpose - a wrapper would be a new function identity on
+    // every render, so React would re-subscribe on every commit, and this suite's
+    // whole subject is what happens across commits and timers. `set` stays a
+    // method because it is only ever called, never referenced.
+    subscribe: (listener: () => void): (() => void) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
@@ -68,7 +75,8 @@ const sessionHostStore = vi.hoisted(() => {
       hostId = next;
       for (const listener of listeners) listener();
     },
-    subscribe(listener: () => void): () => void {
+    // An arrow property for the same reason as `homeReadingStore.subscribe`.
+    subscribe: (listener: () => void): (() => void) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
@@ -266,8 +274,9 @@ describe("EpicRouteTabSync recency bounded wait (7d521991d)", () => {
   it("fires once with isLocalHome:true when a local-homed session appears before the bound", async () => {
     seedUnverifiedAuth();
 
-    await act(async () => {
+    await act(() => {
       renderRoute();
+      return Promise.resolve();
     });
     expect(recordViewed).not.toHaveBeenCalled();
 
@@ -283,8 +292,9 @@ describe("EpicRouteTabSync recency bounded wait (7d521991d)", () => {
 
     // The wait's own timer is cleared once the effect re-runs and decides;
     // running whatever remains scheduled must not add a second call.
-    await act(async () => {
+    await act(() => {
       vi.runOnlyPendingTimers();
+      return Promise.resolve();
     });
     expect(recordViewed).toHaveBeenCalledTimes(1);
   });
@@ -303,8 +313,9 @@ describe("EpicRouteTabSync recency bounded wait (7d521991d)", () => {
     sessionHostStore.set(SESSION_HOST_ID);
     seedUnverifiedAuth();
 
-    await act(async () => {
+    await act(() => {
       renderRoute();
+      return Promise.resolve();
     });
     act(() => {
       homeReadingStore.set("local");
@@ -333,8 +344,9 @@ describe("EpicRouteTabSync recency bounded wait (7d521991d)", () => {
     sessionHostStore.set(null);
     seedSignedInAuth();
 
-    await act(async () => {
+    await act(() => {
       renderRoute();
+      return Promise.resolve();
     });
 
     expect(recordViewed).toHaveBeenCalledTimes(1);
@@ -351,8 +363,9 @@ describe("EpicRouteTabSync recency bounded wait (7d521991d)", () => {
     // recorded as though it had been prompt, and the bound means nothing.
     seedUnverifiedAuth();
 
-    await act(async () => {
+    await act(() => {
       renderRoute();
+      return Promise.resolve();
     });
     expect(recordViewed).not.toHaveBeenCalled();
 
@@ -369,8 +382,9 @@ describe("EpicRouteTabSync recency bounded wait (7d521991d)", () => {
     expect(recordViewed).not.toHaveBeenCalled();
 
     // And the latch closed, so the timer firing later cannot revive it.
-    await act(async () => {
+    await act(() => {
       vi.runOnlyPendingTimers();
+      return Promise.resolve();
     });
     expect(recordViewed).not.toHaveBeenCalled();
   });
@@ -384,8 +398,9 @@ describe("EpicRouteTabSync recency bounded wait (7d521991d)", () => {
     // its sibling. An overdue deadline is expired, never decided.
     seedUnverifiedAuth();
 
-    await act(async () => {
+    await act(() => {
       renderRoute();
+      return Promise.resolve();
     });
     expect(recordViewed).not.toHaveBeenCalled();
 
@@ -397,8 +412,9 @@ describe("EpicRouteTabSync recency bounded wait (7d521991d)", () => {
     });
 
     expect(recordViewed).not.toHaveBeenCalled();
-    await act(async () => {
+    await act(() => {
       vi.runOnlyPendingTimers();
+      return Promise.resolve();
     });
     expect(recordViewed).not.toHaveBeenCalled();
   });
@@ -411,8 +427,9 @@ describe("EpicRouteTabSync recency bounded wait (7d521991d)", () => {
     // made it look like the legitimate carve-out rather than a late write.
     seedUnverifiedAuth();
 
-    await act(async () => {
+    await act(() => {
       renderRoute();
+      return Promise.resolve();
     });
 
     act(() => {
@@ -434,8 +451,9 @@ describe("EpicRouteTabSync recency bounded wait (7d521991d)", () => {
     // deadline.
     seedUnverifiedAuth();
 
-    await act(async () => {
+    await act(() => {
       renderRoute();
+      return Promise.resolve();
     });
 
     act(() => {
@@ -455,13 +473,15 @@ describe("EpicRouteTabSync recency bounded wait (7d521991d)", () => {
   it("records nothing when the reading is still `unstated` past the bound, and does not retry on a later state change", async () => {
     seedUnverifiedAuth();
 
-    await act(async () => {
+    await act(() => {
       renderRoute();
+      return Promise.resolve();
     });
     expect(recordViewed).not.toHaveBeenCalled();
 
-    await act(async () => {
+    await act(() => {
       vi.runOnlyPendingTimers();
+      return Promise.resolve();
     });
     expect(recordViewed).not.toHaveBeenCalled();
 
@@ -486,8 +506,9 @@ describe("EpicRouteTabSync recency bounded wait (7d521991d)", () => {
     seedUnverifiedAuth();
     homeReadingStore.set("no-local-claim");
 
-    await act(async () => {
+    await act(() => {
       renderRoute();
+      return Promise.resolve();
     });
     expect(recordViewed).not.toHaveBeenCalled();
 
@@ -496,8 +517,9 @@ describe("EpicRouteTabSync recency bounded wait (7d521991d)", () => {
     });
     expect(recordViewed).not.toHaveBeenCalled();
 
-    await act(async () => {
+    await act(() => {
       vi.runOnlyPendingTimers();
+      return Promise.resolve();
     });
     expect(recordViewed).not.toHaveBeenCalled();
   });
@@ -506,8 +528,9 @@ describe("EpicRouteTabSync recency bounded wait (7d521991d)", () => {
     seedUnverifiedAuth();
     homeReadingStore.set("local");
 
-    await act(async () => {
+    await act(() => {
       renderRoute();
+      return Promise.resolve();
     });
 
     expect(recordViewed).toHaveBeenCalledTimes(1);
@@ -518,8 +541,9 @@ describe("EpicRouteTabSync recency bounded wait (7d521991d)", () => {
 
     // No wait was armed for this decision: running whatever else is pending
     // must not add a second call.
-    await act(async () => {
+    await act(() => {
       vi.runOnlyPendingTimers();
+      return Promise.resolve();
     });
     expect(recordViewed).toHaveBeenCalledTimes(1);
   });
@@ -528,8 +552,9 @@ describe("EpicRouteTabSync recency bounded wait (7d521991d)", () => {
     seedSignedInAuth();
     homeReadingStore.set("unstated");
 
-    await act(async () => {
+    await act(() => {
       renderRoute();
+      return Promise.resolve();
     });
 
     expect(recordViewed).toHaveBeenCalledTimes(1);
@@ -538,8 +563,9 @@ describe("EpicRouteTabSync recency bounded wait (7d521991d)", () => {
       isLocalHome: false,
     });
 
-    await act(async () => {
+    await act(() => {
       vi.runOnlyPendingTimers();
+      return Promise.resolve();
     });
     expect(recordViewed).toHaveBeenCalledTimes(1);
   });
@@ -547,13 +573,15 @@ describe("EpicRouteTabSync recency bounded wait (7d521991d)", () => {
   it("fires when the verdict returns DURING the wait - the deliberate trade", async () => {
     seedUnverifiedAuth();
 
-    await act(async () => {
+    await act(() => {
       renderRoute();
+      return Promise.resolve();
     });
     expect(recordViewed).not.toHaveBeenCalled();
 
-    await act(async () => {
+    await act(() => {
       seedSignedInAuth();
+      return Promise.resolve();
     });
 
     expect(recordViewed).toHaveBeenCalledTimes(1);
@@ -562,8 +590,9 @@ describe("EpicRouteTabSync recency bounded wait (7d521991d)", () => {
       isLocalHome: false,
     });
 
-    await act(async () => {
+    await act(() => {
       vi.runOnlyPendingTimers();
+      return Promise.resolve();
     });
     expect(recordViewed).toHaveBeenCalledTimes(1);
   });
@@ -571,17 +600,20 @@ describe("EpicRouteTabSync recency bounded wait (7d521991d)", () => {
   it("records nothing when the verdict returns AFTER the bound - the marker is already set", async () => {
     seedUnverifiedAuth();
 
-    await act(async () => {
+    await act(() => {
       renderRoute();
+      return Promise.resolve();
     });
 
-    await act(async () => {
+    await act(() => {
       vi.runOnlyPendingTimers();
+      return Promise.resolve();
     });
     expect(recordViewed).not.toHaveBeenCalled();
 
-    await act(async () => {
+    await act(() => {
       seedSignedInAuth();
+      return Promise.resolve();
     });
 
     expect(recordViewed).not.toHaveBeenCalled();
