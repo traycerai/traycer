@@ -111,6 +111,9 @@ function buildSectionItem(section: SettingsSection): CommandItem {
       "settings",
       section.label.toLowerCase(),
       section.id,
+      // Hyphenated ids stay findable by each segment ("notifications" still
+      // reaches Sounds after that row dropped the word from its label).
+      ...section.id.split("-"),
       ...(group === undefined ? [] : [group.toLowerCase()]),
     ],
     group: "navigation",

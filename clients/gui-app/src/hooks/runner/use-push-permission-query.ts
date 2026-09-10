@@ -12,7 +12,7 @@ import { useRunnerHost } from "@/providers/use-runner-host";
 export type PushPermissionQuery = UseQueryResult<PushPermissionState>;
 
 /**
- * This phone's OS push permission, for the Settings → Notifications "This
+ * This phone's OS push permission, for the Settings → Sounds "This
  * phone" row. Disabled - and therefore never fetched - on the shells that
  * have no OS push at all (desktop, dev web, tests), where the row is hidden
  * outright.
@@ -61,7 +61,7 @@ export function usePushPermissionQuery(): PushPermissionQuery {
       // query fresh for 60s, but the OS owns this value and moves it while
       // Traycer is backgrounded - and the `onChange` subscription above is
       // disposed the moment this row unmounts, so nothing invalidates in
-      // between. Without this, reopening Notifications within a minute of
+      // between. Without this, reopening Sounds within a minute of
       // enabling push in the OS Settings app renders "Off · Open Settings" on
       // a phone where push is already on.
       staleTime: 0,
