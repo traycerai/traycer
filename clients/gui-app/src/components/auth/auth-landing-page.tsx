@@ -1,5 +1,7 @@
 import { BrandEntrance } from "@/components/auth/brand-entrance";
+import { BrandSplash } from "@/components/auth/brand-splash";
 import { PhotoBloom } from "@/components/auth/cinematic-backdrop";
+import { useBrandSplashHold } from "@/hooks/auth/use-brand-splash-hold";
 import { SignInButton } from "@/components/layout/header/sign-in-button";
 import { getClientAppVersionLabel } from "@/lib/app-version";
 import type { ShellAdmissionRefusal } from "@/hooks/auth/use-shell-local-plane-admission";
@@ -47,10 +49,21 @@ export function AuthLandingPage(props: {
    */
   readonly refusal: ShellAdmissionRefusal | null;
 }) {
+  // Enabled for the ordinary signed-out arrival only. A refused shell is on
+  // this surface to be TOLD something, and a brand animation in front of that
+  // sentence delays the one thing the screen is for.
+  const splashPhase = useBrandSplashHold(props.refusal === null);
+
   return (
     // min-h-full, not min-h-svh: the standalone shell owns the viewport
     // height and reserves the Windows title-bar band above this page.
     <main className="relative isolate flex min-h-full flex-1 overflow-hidden bg-zinc-950 text-white">
+      {/* Mounted while the splash leaves, not swapped for it: both layers sit
+          on the same dark ground, so the page is already underneath as the
+          splash fades and the mark never blinks out and back. */}
+      {splashPhase === "done" ? null : (
+        <BrandSplash exiting={splashPhase === "exit"} />
+      )}
       <div className="auth-arrival-backdrop pointer-events-none absolute inset-0">
         <PhotoBloom />
       </div>

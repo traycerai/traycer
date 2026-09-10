@@ -40,6 +40,24 @@
   }
 }
 
+@keyframes brand-splash-settle {
+  from {
+    transform: scale(1.025);
+  }
+  to {
+    transform: scale(1);
+  }
+}
+
+@keyframes brand-splash-leave {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
 @keyframes app-ready-arrive {
   from {
     opacity: 0.9;
@@ -88,6 +106,18 @@
 
   .brand-entrance-copy {
     animation: brand-copy-arrive 600ms 120ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  /* One slow settle across the whole hold, not a loop: the mark finishes
+     assembling well before the splash ends, and a screen that then freezes
+     completely reads as a stall rather than as a pause. Finite, single-shot,
+     and it lands exactly where the static mark would have been. */
+  .brand-splash-mark {
+    animation: brand-splash-settle 2260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .brand-splash-exit {
+    animation: brand-splash-leave 240ms ease-out both;
   }
 
   .auth-arrival-actions {
