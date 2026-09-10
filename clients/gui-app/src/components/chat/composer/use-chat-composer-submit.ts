@@ -8,10 +8,8 @@ import type {
 import { blurTextEntry } from "@/components/layout/shell/shell-gestures";
 import { isMobileApp } from "@/lib/mobile-app";
 import { useChatStore } from "@/stores/composer/chat-store";
-import {
-  readComposerDraftSnapshot,
-  useComposerDraftStore,
-} from "@/stores/composer/composer-draft-store";
+import { submitComposerDraft } from "@/lib/drafts/draft-mirror-coordinator";
+import { readComposerDraftSnapshot } from "@/stores/composer/composer-draft-store";
 import { appLogger } from "@/lib/logger";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 import {
@@ -93,6 +91,13 @@ interface UseChatComposerSubmitArgs {
   readonly workspaceBlocked: boolean;
   readonly imagesUnsupported: boolean;
   readonly attachmentPreparationPending: boolean;
+  /**
+   * True while this chat's draft is a replica of another host's row that has
+   * not been claimed. The editor is disabled, but the toolbar's send button
+   * and the deferred steer confirm both reach this hook without passing the
+   * editor, so the block belongs in `submitBlocked` beside the others.
+   */
+  readonly draftReadOnly: boolean;
   readonly onSubmitMessage:
     | ((input: ChatComposerSubmitInput) => boolean)
     | null;
@@ -168,11 +173,11 @@ export function useChatComposerSubmit(
     workspaceBlocked,
     imagesUnsupported,
     attachmentPreparationPending,
+    draftReadOnly,
     onSubmitMessage,
     onSideChat,
   } = args;
   const appendMessage = useChatStore((state) => state.appendMessage);
-  const clearDraftInStore = useComposerDraftStore((state) => state.clearDraft);
   const [pendingConflict, setPendingConflict] =
     useState<PendingSteerConflict | null>(null);
   const [annotationPreparationPending, setAnnotationPreparationPending] =
@@ -182,7 +187,7 @@ export function useChatComposerSubmit(
   // Everything an ACCEPTED submit does to the composer, shared by the send and
   // the side-chat paths so a refused one leaves the text in place on both.
   const clearAcceptedDraft = useCallback((): void => {
-    clearDraftInStore(taskId);
+    void submitComposerDraft(taskId);
     pickerStore.getState().reset();
     editorRef.current?.clear();
     // A rejected send leaves the text in place, and dropping the keyboard
@@ -190,7 +195,7 @@ export function useChatComposerSubmit(
     // On a phone the keyboard covers most of the screen, so holding it open
     // after a send hides the reply the send was for.
     if (isMobileApp()) blurTextEntry();
-  }, [clearDraftInStore, editorRef, pickerStore, taskId]);
+  }, [editorRef, pickerStore, taskId]);
 
   const finalizeSend = useCallback(
     (input: ChatComposerSubmitInput): boolean => {
@@ -222,10 +227,12 @@ export function useChatComposerSubmit(
       sendDisabled === true ||
       workspaceBlocked ||
       imagesUnsupported ||
-      attachmentPreparationPending,
+      attachmentPreparationPending ||
+      draftReadOnly,
     [
       activeTurnStatus,
       attachmentPreparationPending,
+      draftReadOnly,
       hasPendingApprovals,
       imagesUnsupported,
       sendDisabled,

@@ -42,6 +42,7 @@ import type { PendingInterviewView } from "@/components/epic-canvas/renderers/ch
 import { WORKSPACE_COMPOSER_READY } from "@/lib/composer/workspace-composer-availability";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 
 const EMPTY_BACKGROUND_STOP_TASK_IDS: ReadonlySet<string> = new Set();
 
@@ -77,9 +78,11 @@ const ANSWERABLE_CARD: PendingInterviewView = {
 
 function render(ui: ReactElement) {
   return testingRender(
-    <TooltipProvider delayDuration={0}>
-      <LazyMotion features={domAnimation}>{ui}</LazyMotion>
-    </TooltipProvider>,
+    <TabHostProvider hostId="host-1">
+      <TooltipProvider delayDuration={0}>
+        <LazyMotion features={domAnimation}>{ui}</LazyMotion>
+      </TooltipProvider>
+    </TabHostProvider>,
   );
 }
 

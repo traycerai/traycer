@@ -482,9 +482,11 @@ function placeResolvedCanvasTile(
   // position the user dropped at. This is the same resolution the pre-intent
   // `insertNodeOnTabStrip` / `splitPaneAtEdge` did for a `node` source, only
   // spelled at the call site now that placement travels in the intent.
+  // A drop names a tab slot or an edge, never a `beside` placement - that one
+  // defers its shape to a setting, and a drop position has no shape to defer.
   const openDroppedTile = (
     viewTabId: string,
-    placement: ExplicitTilePlacement | null,
+    placement: Exclude<ExplicitTilePlacement, { kind: "beside" }> | null,
   ): boolean => {
     if (placement !== null) {
       const existing = findOpenTileInTab(viewTabId, tile);

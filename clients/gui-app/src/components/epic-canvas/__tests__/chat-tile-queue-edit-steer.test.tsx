@@ -83,6 +83,13 @@ const MOCK_HOST_DIRECTORY = {
     hostId === MOCK_HOST_ENTRY.hostId ? MOCK_HOST_ENTRY : null,
 };
 
+// ENUMERATES deliberately - do NOT convert to an `importOriginal` spread.
+// `@/lib/host` is a barrel of provider-coupled hooks, so the un-overridden
+// residue is not inert: spreading leaks the real `useAuthService` into
+// `EpicSessionProvider` -> `useStreamAuthRevalidator`, which throws "Host
+// runtime hooks must be used inside a <HostRuntimeProvider>" from deep inside
+// an unrelated component (~55 tests across these files). Enumeration fails the
+// useful way instead: vitest names the missing export and the module.
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
   useHostDirectory: () => MOCK_HOST_DIRECTORY,

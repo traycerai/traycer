@@ -1343,7 +1343,8 @@ export type ParamsOf<
   Method extends keyof Registry & string,
 > = ExtractOpenRequest<Registry[Method]>;
 
-export type StreamMethodSupport = "unknown" | "supported" | "unsupported";
+export type { StreamMethodSupport } from "@traycer/protocol/host-transport/stream-session";
+import type { StreamMethodSupport } from "@traycer/protocol/host-transport/stream-session";
 
 /** A minted host credential held only until a live session can carry it. */
 interface PendingHostCredentialProvision {
@@ -3538,30 +3539,8 @@ export function prepareStreamSubscribeRequest(
   };
 }
 
-/**
- * Which version {@link prepareStreamSubscribeRequest} will declare, decided
- * from the two manifests alone - so a caller can know it BEFORE it has the
- * params, which is what lets a params provider shape its open request for the
- * major that was actually negotiated (see `StreamParamsProvider`).
- *
- * Extracted rather than duplicated at the call sites precisely because those
- * two answers must never diverge: a provider told `@1` whose payload is then
- * declared as `@2` writes a frame the peer's strict schema drops, silently and
- * on the open. Both transports read it through this function and then hand the
- * same pair to `prepareStreamSubscribeRequest`.
- */
-export function selectStreamSubscribeVersion(
-  myCanonical: SchemaVersion,
-  theirCanonical: SchemaVersion,
-): SchemaVersion {
-  if (
-    myCanonical.major !== theirCanonical.major ||
-    myCanonical.minor <= theirCanonical.minor
-  ) {
-    return myCanonical;
-  }
-  return theirCanonical;
-}
+import { selectStreamSubscribeVersion } from "@traycer/protocol/host-transport/remote/stream-codec";
+export { selectStreamSubscribeVersion };
 
 type SessionPhase = "idle" | "dialing" | "awaitingOpenAck" | "subscribed";
 

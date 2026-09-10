@@ -197,6 +197,7 @@ export const RunnerHostInvoke = {
   diagnosticsMeasureJsHeaps: "runnerHost:diagnostics:measureJsHeaps",
   diagnosticsTraceStart: "runnerHost:diagnostics:trace:start",
   diagnosticsTraceStop: "runnerHost:diagnostics:trace:stop",
+  rendererCrashPersist: "runnerHost:rendererCrash:persist",
   appUpdateGetSnapshot: "runnerHost:appUpdate:getSnapshot",
   appUpdateCheck: "runnerHost:appUpdate:check",
   appUpdateSetAllowPrerelease: "runnerHost:appUpdate:setAllowPrerelease",

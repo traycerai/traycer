@@ -3,7 +3,7 @@ import type {
   WorktreeBranchStatus,
   WorktreeHostEntryV12,
   WorktreeSubmoduleMergeFactV12,
-} from "@traycer/protocol/host/index";
+} from "@traycer/protocol/host/worktree-schemas";
 import {
   GIT_UNREADABLE_REASON,
   WORKTREE_TIER_ORDER,
@@ -13,7 +13,7 @@ import {
   provenRemovable,
   worktreeTierRank,
   type WorktreeTier,
-} from "@traycer-clients/shared/worktree/classify-worktree";
+} from "@traycer/protocol/worktree/classify-worktree";
 
 function status(over: Partial<WorktreeBranchStatus>): WorktreeBranchStatus {
   return { ahead: 0, behind: 0, mergedIntoDefault: false, ...over };
