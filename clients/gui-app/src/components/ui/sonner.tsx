@@ -31,6 +31,13 @@ const TOAST_CLASS_NAME = cn("cn-toast", "group/toast");
 // centred on it, so the visual size and sonner's corner transform are
 // untouched (the pseudo-element moves with the button). Sized outright rather
 // than inset, because an inset measures from inside the button's border.
+//
+// A collapsed stack's back toasts are hidden by sonner with `opacity: 0` on
+// their children and nothing else, so without the hide above their close
+// buttons stay tappable while invisible - and they peek out past the front
+// toast. The last rule takes them out of hit testing; it outranks every
+// reveal on specificity, and on desktop hovering the toaster expands the
+// stack first, so it never fights a hover reveal.
 const TOAST_CLOSE_BUTTON_CLASS_NAME = cn(
   "can-hover:pointer-events-none",
   "can-hover:opacity-0",
@@ -46,6 +53,7 @@ const TOAST_CLOSE_BUTTON_CLASS_NAME = cn(
   "group-focus-within/toast:opacity-100",
   "focus-visible:pointer-events-auto",
   "focus-visible:opacity-100",
+  "group-data-[expanded=false]/toast:group-data-[front=false]/toast:pointer-events-none",
 );
 const TOAST_CANCEL_BUTTON_CLASS_NAME = cn(
   "border border-border bg-background text-foreground",
@@ -67,12 +75,13 @@ const SONNER_TOASTER_LIST_SELECTOR = "[data-sonner-toaster]";
 // expected on a phone; sonner derives swipe-up-to-dismiss from the position.
 // The toaster is `fixed` and paints above everything, so it is offset past
 // the app header rather than over it - the header row sits directly under
-// `#root`'s top inset and never scrolls. The extra 1.25rem clears the close
-// button's touch hit area: sonner pulls the 20px button 7px above the toast's
-// top edge and the 44px hit area reaches 12px past that, so anything less
-// lets a visible toast steal the bottom of the header's own buttons.
+// `#root`'s top inset and never scrolls. The extra 1.5rem keeps the close
+// button's touch hit area clear of the header's: sonner pulls the 20px button
+// 6px above the toast's outer edge, so its 44px hit area reaches 18px above
+// the toast, and the header's own 44px hit areas overhang its 40px row by
+// 2px. 1.25rem would make the two touch exactly; 1.5rem leaves 4px.
 const MOBILE_APP_TOASTER_ANCHOR: ToasterAnchor = "top-center";
-const MOBILE_APP_TOASTER_TOP = `calc(var(--safe-area-inset-top) + ${APP_HEADER_HEIGHT} + 1.25rem)`;
+const MOBILE_APP_TOASTER_TOP = `calc(var(--safe-area-inset-top) + ${APP_HEADER_HEIGHT} + 1.5rem)`;
 // Both offsets: sonner reads `mobileOffset` at <=600px and `offset` above
 // it, and a phone in landscape is wider than that.
 const MOBILE_APP_TOASTER_OFFSET = { top: MOBILE_APP_TOASTER_TOP };

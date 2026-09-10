@@ -34,7 +34,11 @@ const chromePath = await findChrome("the toast close-button touch regression");
 const vitePort = await freePort();
 const TOUCH_QUERY = "(hover: none) and (pointer: coarse)";
 const CLOSE_BUTTON =
-  '[data-sonner-toast][data-mounted="true"] [data-close-button]';
+  '[data-sonner-toast][data-mounted="true"][data-front="true"] [data-close-button]';
+// The header's icon buttons get a 44px hit area on touch
+// (`mobile-shell-touch-targets.css`), centred on a 40px row, so it overhangs
+// the row's bottom edge by 2px.
+const HEADER_HIT_OVERHANG_PX = 2;
 // Sonner's 20px close glyph, grown to a 44px hit area on touch.
 const TOUCH_HIT_AREA_PX = 44;
 let chrome;
@@ -147,6 +151,13 @@ try {
     "auto",
     "a revealed close button must take clicks",
   );
+  // The resting desktop reading cannot tell: pointer-events none hides any
+  // hit area from the probe. Revealed, a leaked touch hit area would show.
+  assert.equal(
+    hovered.hitNearCorner,
+    false,
+    "a revealed desktop close button must not carry the touch hit area",
+  );
   await moveMouse(client, 5, 5);
 
   // --- Touch: sonner's own always-visible default stands. ---
@@ -181,6 +192,10 @@ try {
     touch.hitNearCorner,
     true,
     "a tap just outside the glyph must land on the close button",
+  );
+  const desktopWidthStack = await assertCollapsedStackInert(
+    client,
+    "1200x800 touch",
   );
 
   await client.send("Emulation.setTouchEmulationEnabled", { enabled: false });
@@ -218,14 +233,14 @@ try {
       `mobile app toaster anchor at ${label}`,
     );
     // No device insets headless, so the header's bottom edge is its 2.5rem
-    // height and the toaster's top is that plus the 1.25rem gap.
+    // height and the toaster's top is that plus the 1.5rem gap.
     assert.equal(
       mobile.toasterTop,
-      mobile.rootFontPx * 3.75,
+      mobile.rootFontPx * 4,
       `mobile app toaster top at ${label}`,
     );
     assert.ok(
-      mobile.hitAreaTop >= mobile.rootFontPx * 2.5,
+      mobile.hitAreaTop >= mobile.rootFontPx * 2.5 + HEADER_HIT_OVERHANG_PX,
       `the close button's hit area must stay clear of the header at ${label} (hit area top ${mobile.hitAreaTop})`,
     );
     assert.equal(
@@ -233,13 +248,16 @@ try {
       "1",
       `mobile app close button visible at ${label}`,
     );
+    const stack = await assertCollapsedStackInert(client, label);
     placements.push(
-      `${label} top=${mobile.toasterTop} hitTop=${mobile.hitAreaTop}`,
+      `${label} top=${mobile.toasterTop} hitTop=${mobile.hitAreaTop} ${stack}`,
     );
   }
 
   console.log(
-    "toast close-button touch regression passed: desktop hidden/hover-revealed, touch visible with a 44px hit area, mobile app " +
+    "toast close-button touch regression passed: desktop hidden/hover-revealed, touch visible with a 44px hit area (" +
+      desktopWidthStack +
+      "), mobile app " +
       placements.join(", "),
   );
 } catch (error) {
@@ -258,6 +276,72 @@ try {
       maxRetries: 3,
     });
   }
+}
+
+/**
+ * Stacks two newer toasts in front of the first and checks that the back
+ * toasts' close buttons - invisible, because sonner hides a collapsed stack's
+ * back toasts with `opacity: 0` alone - take no taps anywhere, including the
+ * strip where they peek out past the front toast.
+ */
+async function assertCollapsedStackInert(client, label) {
+  await evaluate(client, "window.__probeStackToasts()");
+  await waitFor(
+    client,
+    "the stacked toasts to mount",
+    `document.querySelectorAll('[data-sonner-toast][data-mounted="true"][data-front="false"]').length === 2`,
+  );
+  await evaluate(client, `new Promise((r) => setTimeout(r, 600))`);
+  const stack = await evaluate(
+    client,
+    `(() => {
+       const back = Array.from(
+         document.querySelectorAll('[data-sonner-toast][data-front="false"] [data-close-button]'),
+       );
+       const hits = [];
+       for (const button of back) {
+         const rect = button.getBoundingClientRect();
+         const centerX = rect.left + rect.width / 2;
+         const centerY = rect.top + rect.height / 2;
+         for (let dx = -24; dx <= 24; dx += 3) {
+           for (let dy = -24; dy <= 24; dy += 3) {
+             const hit = document
+               .elementFromPoint(centerX + dx, centerY + dy)
+               ?.closest("[data-close-button]");
+             if (hit !== undefined && hit !== null && back.includes(hit)) {
+               hits.push([Math.round(centerX + dx), Math.round(centerY + dy)]);
+             }
+           }
+         }
+       }
+       return {
+         count: back.length,
+         collapsed: back.every(
+           (button) => button.closest("[data-sonner-toast]").dataset.expanded === "false",
+         ),
+         pointerEvents: back.map((button) => getComputedStyle(button).pointerEvents),
+         hitCount: hits.length,
+         firstHits: hits.slice(0, 5),
+       };
+     })()`,
+  );
+  assert.equal(stack.count, 2, `two back toasts at ${label}`);
+  assert.equal(
+    stack.collapsed,
+    true,
+    `the stack must be collapsed at ${label}`,
+  );
+  assert.deepEqual(
+    stack.pointerEvents,
+    ["none", "none"],
+    `back toasts' close buttons must take no taps at ${label}`,
+  );
+  assert.equal(
+    stack.hitCount,
+    0,
+    `a tap must never land on a hidden back toast's close button at ${label} (hits at ${JSON.stringify(stack.firstHits)})`,
+  );
+  return "collapsed stack inert";
 }
 
 async function waitForToast(client) {

@@ -50,14 +50,17 @@ describe("<Toaster />", () => {
     render(<Toaster />);
 
     // Every hiding utility is scoped to `can-hover`, so under sonner's touch
-    // query nothing overrides its always-visible default. The real media
-    // query is exercised in `scripts/toast-close-button-touch-browser.mjs`.
+    // query nothing overrides its always-visible default - except for the
+    // back toasts of a collapsed stack, which sonner has already made
+    // invisible. The real media query is exercised in
+    // `scripts/toast-close-button-touch-browser.mjs`.
     const hides = closeButtonTokens().filter((token) =>
       /(^|:)(opacity-0|pointer-events-none)$/.test(token),
     );
     expect(hides).toEqual([
       "can-hover:pointer-events-none",
       "can-hover:opacity-0",
+      "group-data-[expanded=false]/toast:group-data-[front=false]/toast:pointer-events-none",
     ]);
     expect(closeButtonTokens()).toEqual(
       expect.arrayContaining(["touch:after:absolute", "touch:after:size-11"]),

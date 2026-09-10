@@ -25,6 +25,18 @@ export function ToastCloseButtonTouchFixture(): React.ReactElement {
       description: "Swipe, wait, or tap the close button.",
       duration: Infinity,
     });
+    // Stacks two more behind it, for the collapsed-stack check. Driven from
+    // the page rather than on mount so the single-toast readings come first.
+    const probeWindow = window as Window & { __probeStackToasts?: () => void };
+    probeWindow.__probeStackToasts = () => {
+      for (const id of ["probe-toast-2", "probe-toast-3"]) {
+        toast("Draft kept", {
+          id,
+          description: "A newer toast in front of the first.",
+          duration: Infinity,
+        });
+      }
+    };
   }, []);
 
   return <Toaster />;

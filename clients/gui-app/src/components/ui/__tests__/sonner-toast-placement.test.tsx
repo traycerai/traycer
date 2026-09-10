@@ -193,7 +193,7 @@ describe("<Toaster /> toast placement", () => {
     const props = lastSonnerToasterProps();
     expect(props.position).toBe("top-center");
     const expectedOffset = {
-      top: "calc(var(--safe-area-inset-top) + 2.5rem + 1.25rem)",
+      top: "calc(var(--safe-area-inset-top) + 2.5rem + 1.5rem)",
     };
     expect(props.offset).toEqual(expectedOffset);
     expect(props.mobileOffset).toEqual(expectedOffset);
