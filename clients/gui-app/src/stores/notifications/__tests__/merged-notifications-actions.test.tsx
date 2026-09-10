@@ -42,7 +42,9 @@ import {
   useNotificationsStore,
 } from "@/stores/notifications/notifications-store";
 
-const hostRequestMock = vi.hoisted(() => vi.fn());
+const hostRequestMock = vi.hoisted(() =>
+  vi.fn<(method: string, params: unknown) => Promise<unknown>>(),
+);
 const notificationFeedMode = vi.hoisted<{ value: "local" | "cloud" }>(() => ({
   value: "local",
 }));

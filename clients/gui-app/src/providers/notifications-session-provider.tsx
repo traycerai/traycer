@@ -746,13 +746,13 @@ function NotificationsSessionBody(
       const streamHostId = servingHostId;
       if (lease === null || servingStreamClient === null) return;
       if (streamHostId === null) return;
-      activityDisposerRef.current = openAgentActivityStream(
-        streamHostId,
-        lease.reconnect,
-        servingStreamClient,
-        onStreamAuthError,
-        cloudAuthorized ? null : "local-only",
-      );
+      activityDisposerRef.current = openAgentActivityStream({
+        hostId: streamHostId,
+        reconnectEngine: lease.reconnect,
+        wsStreamClient: servingStreamClient,
+        onAuthError: onStreamAuthError,
+        plane: cloudAuthorized ? null : "local-only",
+      });
       activityStreamHostIdRef.current = streamHostId;
       activityLanePinnedLocalOnlyRef.current = !cloudAuthorized;
     },
@@ -1246,7 +1246,12 @@ function NotificationsSessionBody(
       onFeedFrame,
       onPresenceChanged,
       onHostStreamOpened,
-      activityServesLocalOnly,
+      // Read at the activity-lane open below (hoisted to `onAuthError`), so it
+      // belongs here. It costs no extra invalidation: it is a `useCallback`
+      // memoized on `authService` alone, which is already a dependency of this
+      // array, so its identity moves exactly when `authService` does and never
+      // on its own.
+      onStreamAuthError,
       // CALLED at the activity-lane open above, so it belongs here. Omitting
       // it did not merely risk staleness in the abstract: this callback then
       // captures whichever `openActivityLane` existed when the OTHER deps last
@@ -1255,9 +1260,18 @@ function NotificationsSessionBody(
       // feed reopens while the captured lane opener still holds the
       // `signing-in` reading and agent activity never comes back.
       //
-      // `activityServesLocalOnly` above is NOT a substitute. It is one input to
-      // that opener, and listing an input while omitting the function is
-      // precisely the pattern that looks correct and refreshes nothing.
+      // `activityServesLocalOnly` is deliberately NOT listed beside it, and
+      // that is the same argument rather than an exception to it. This body
+      // never reads the value - it is one INPUT to the opener, and
+      // `openActivityLane` already carries it in its own dependency array, so
+      // a flip re-creates the opener and re-creates this callback through it.
+      // Listing the raw input as well refreshes nothing the function does not
+      // already refresh, which is exactly the pattern the paragraph above
+      // warns about, one level down.
+      //
+      // Nor is the raw value what re-opens a pinned lane when the capability
+      // returns: that is the effect keyed on `activityServesLocalOnly` beside
+      // `openActivityLane`, which owns the wake and is untouched here.
       openActivityLane,
     ],
   );

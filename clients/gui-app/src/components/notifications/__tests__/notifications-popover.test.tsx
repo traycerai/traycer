@@ -77,7 +77,9 @@ const PLAN_ALLOWS_REMOTE = true;
 
 const reconnectEngine = createHostReconnectEngine();
 
-const hostRequestMock = vi.hoisted(() => vi.fn());
+const hostRequestMock = vi.hoisted(() =>
+  vi.fn<(method: string, params: unknown) => Promise<unknown>>(),
+);
 
 /**
  * `createRequesterForHostId` is not optional decoration: production resolves
@@ -111,17 +113,26 @@ interface StubHostClient {
   readonly createRequesterForHostId: (hostId: string | null) => StubHostClient;
 }
 
-/** Floors this fixture's host was asked for, so a dropped one is visible
- * rather than merely absent. */
-const floorsRequested = vi.hoisted(
-  () =>
-    ({ calls: [] }) as {
-      calls: Array<{
-        readonly method: string;
-        readonly version: { readonly major: number; readonly minor: number };
-      }>;
-    },
-);
+interface RequestedFloor {
+  readonly method: string;
+  readonly version: { readonly major: number; readonly minor: number };
+}
+
+/**
+ * Floors this fixture's host was asked for, so a dropped one is visible rather
+ * than merely absent.
+ *
+ * Typed through the factory's RETURN annotation rather than an `as` assertion
+ * on the literal. `oxlint --fix` strips a redundant-looking assertion here, and
+ * stripping it silently infers `calls: never[]` - which makes every push a type
+ * error and reads as the recorder being wrong rather than the fixer. A return
+ * annotation is not something the fixer has anything to remove.
+ */
+interface FloorsRequested {
+  calls: Array<RequestedFloor>;
+}
+
+const floorsRequested = vi.hoisted((): FloorsRequested => ({ calls: [] }));
 
 const hostBindingState = vi.hoisted(() => ({
   current: null as {
