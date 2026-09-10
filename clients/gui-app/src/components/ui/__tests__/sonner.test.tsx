@@ -33,16 +33,40 @@ describe("<Toaster />", () => {
     expect(lastSonnerToasterProps().closeButton).toBe(true);
   });
 
-  it("shows close buttons only on toast hover or focus", () => {
+  it("hides close buttons until toast hover or focus for a fine pointer", () => {
     render(<Toaster />);
 
     const classNames = lastSonnerToasterProps().toastOptions?.classNames;
+    const closeButton = closeButtonTokens();
 
     expect(classNames?.toast).toContain("group/toast");
-    expect(classNames?.closeButton).toContain("opacity-0");
-    expect(classNames?.closeButton).toContain("group-hover/toast:opacity-100");
-    expect(classNames?.closeButton).toContain(
-      "group-focus-within/toast:opacity-100",
+    expect(closeButton).toContain("not-pointer-coarse:opacity-0");
+    expect(closeButton).toContain("not-pointer-coarse:pointer-events-none");
+    expect(closeButton).toContain("group-hover/toast:opacity-100");
+    expect(closeButton).toContain("group-focus-within/toast:opacity-100");
+  });
+
+  it("leaves close buttons visible and tappable for a coarse pointer", () => {
+    render(<Toaster />);
+
+    // Every hiding utility is scoped to `not-pointer-coarse`, so for a coarse
+    // pointer nothing overrides sonner's always-visible default - except for the
+    // back toasts of a collapsed stack, which sonner has already made
+    // invisible. The real media query is exercised in
+    // `scripts/toast-close-button-touch-browser.mjs`.
+    const hides = closeButtonTokens().filter((token) =>
+      /(^|:)(opacity-0|pointer-events-none)$/.test(token),
+    );
+    expect(hides).toEqual([
+      "not-pointer-coarse:pointer-events-none",
+      "not-pointer-coarse:opacity-0",
+      "group-data-[expanded=false]/toast:group-data-[front=false]/toast:pointer-events-none",
+    ]);
+    expect(closeButtonTokens()).toEqual(
+      expect.arrayContaining([
+        "pointer-coarse:after:absolute",
+        "pointer-coarse:after:size-11",
+      ]),
     );
   });
 
@@ -60,6 +84,15 @@ describe("<Toaster />", () => {
     expect(lastSonnerToasterProps().theme).toBe("system");
   });
 });
+
+function closeButtonTokens(): string[] {
+  const closeButton =
+    lastSonnerToasterProps().toastOptions?.classNames?.closeButton;
+  if (closeButton === undefined) {
+    throw new Error("Expected a close button class name.");
+  }
+  return closeButton.split(/\s+/);
+}
 
 function lastSonnerToasterProps(): ToasterProps {
   const lastCall = sonnerToasterProps.mock.lastCall;
