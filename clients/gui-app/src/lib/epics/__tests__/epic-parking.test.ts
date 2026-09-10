@@ -2874,10 +2874,14 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
   // and a restore outcome is not one - so pin 8h's door never opens there
   // and a completed restore's record would hold until the tab closed. The
   // recovery that works on both lines is the host's own: a retried client
-  // action id is answered from the journal. After a reconnect the record is
-  // RETRANSMITTED as the same frame, once per reconnect; whatever the host
-  // answers - the re-broadcast completion, a fresh run's completion, or a
-  // rejection - is evidence that settles it.
+  // action id is answered from the journal, on a fresh session by
+  // `handleRestoreCheckpoint` and on a session that survived the disconnect
+  // by the dedup path (`replaySettledRestoreOutcomeTo`, the host half of
+  // this contract, pinned by the resolver's producer test). After a
+  // reconnect the record is RETRANSMITTED as the same frame, once per
+  // reconnect; whatever the host answers - the replayed completion, a fresh
+  // run's completion, or a rejection - is evidence that settles it. The
+  // completion this pin delivers by hand is what BOTH host paths send.
   it("retransmits a surviving restore record once per reconnect on the windowed line and settles it from the host's answer (pin 8j)", () => {
     for (const answer of ["completed", "rejected"] as const) {
       const EPIC = `epic-park-chat-restore-windowed-${answer}-pin8j`;
@@ -2990,6 +2994,74 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
       } finally {
         closeEpicTab(TAB);
       }
+    }
+  });
+
+  // Pin 8k (Codex on ad9f99fb8): an OBSERVER window - one that saw
+  // `restoreStarted` for a restore another window dispatched - has no
+  // accepted record, so the record-matched settlement could not reach its
+  // spinner: with the completion frame lost and the live outcome event
+  // arriving, the slot stayed in flight and vetoed the park on its own.
+  // Settled by checkpoint from the live outcome (in order, so it is this
+  // attempt's), with an outcome for a different checkpoint as the control.
+  it("settles an observed restore's in-flight slot from a live outcome event without a local record, and parks (pin 8k)", () => {
+    const EPIC = "epic-park-chat-restore-observer-pin8k";
+    const TAB = "tab-park-chat-restore-observer-pin8k";
+    const CHAT_ID = "chat-restore-observer-pin8k";
+    const HOST_ID = "host-restore-observer-pin8k";
+    const CHECKPOINT = "checkpoint-pin8k";
+    const chatRegistry = __getChatSessionRegistryForTests();
+    const epicHandle = buildParkableEpicHandle(EPIC, false);
+    __getOpenEpicRegistryForTests().acquireMounted(
+      EPIC,
+      () => epicHandle.handle,
+    );
+    const chat = buildTestChatHandleWithFrames(EPIC, CHAT_ID, HOST_ID);
+    chatRegistry.acquire(
+      { epicId: EPIC, chatId: CHAT_ID, hostId: HOST_ID, scopeKey: "pin8k" },
+      () => chat.handle,
+    );
+    emitOwnerChatSnapshot(chat.callbacks, EPIC, CHAT_ID, HOST_ID);
+    // No dispatch, no ack, no record: only the start frame another window's
+    // action produced.
+    startChatRestore(chat.callbacks, EPIC, CHAT_ID, CHECKPOINT);
+    expect(chat.handle.store.getState().restore?.kind).toBe("in-flight");
+    expect(chat.handle.store.getState().acceptedActions).toEqual({});
+
+    openEpicTab(TAB, EPIC);
+    try {
+      setEpicSurfaceVisibility(EPIC, "view-pin8k", false);
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS);
+      expect(isEpicParked(EPIC)).toBe(false);
+
+      // Control: an outcome for a different checkpoint is not this spinner's.
+      chat.callbacks().onEventAppended({
+        kind: "eventAppended",
+        hasBinaryPayload: false,
+        epicId: EPIC,
+        chatId: CHAT_ID,
+        event: restoredEventFixture("other-window-action", "other-checkpoint"),
+      });
+      expect(chat.handle.store.getState().restore?.kind).toBe("in-flight");
+      expect(isEpicParked(EPIC)).toBe(false);
+
+      // The completion frame was lost; the live outcome for THIS checkpoint
+      // arrives, naming an action this window never dispatched.
+      chat.callbacks().onEventAppended({
+        kind: "eventAppended",
+        hasBinaryPayload: false,
+        epicId: EPIC,
+        chatId: CHAT_ID,
+        event: restoredEventFixture("other-window-action", CHECKPOINT),
+      });
+      expect(chat.handle.store.getState().restore).toMatchObject({
+        kind: "completed",
+        checkpointId: CHECKPOINT,
+      });
+      expect(isEpicParked(EPIC)).toBe(true);
+      expect(epicHandle.disposed).toBe(true);
+    } finally {
+      closeEpicTab(TAB);
     }
   });
 
@@ -3148,6 +3220,68 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
       chat.handle.store.getState().ackFailedSendRestoration(clientActionId);
 
       expect(isEpicParked(EPIC)).toBe(true);
+    } finally {
+      closeEpicTab(TAB);
+    }
+  });
+
+  // Pin 9b (Codex on ac6c4eca1): the restoration slot is not the only home a
+  // failed send's text ends up in. When the composer already holds a newer
+  // draft, `stateFailedSendRestoration` clears the slot and STATES the
+  // displaced prompt in a `SEND_NOT_RECORDED` notice whose message body is
+  // then the only copy. The toast layer replays such a notice only when a
+  // pane focuses, and a hidden chat never focuses - so with the slot empty
+  // and no action accepted, the park disposed the session and the notice
+  // with it. Held until the notice is marked delivered, and released by that
+  // store write through the same watcher as pin 9.
+  it("does not park while an undelivered last-copy notice holds a displaced prompt, and parks once the notice is delivered (pin 9b)", () => {
+    const EPIC = "epic-park-undelivered-last-copy-notice-pin9b";
+    const TAB = "tab-park-undelivered-last-copy-notice-pin9b";
+    const CHAT_ID = "chat-park-undelivered-last-copy-notice-pin9b";
+    const HOST_ID = "host-park-undelivered-last-copy-notice-pin9b";
+    const chatRegistry = __getChatSessionRegistryForTests();
+
+    const chat = buildTestChatHandleWithFrames(EPIC, CHAT_ID, HOST_ID);
+    chatRegistry.acquire(
+      { epicId: EPIC, chatId: CHAT_ID, hostId: HOST_ID, scopeKey: "pin9b" },
+      () => chat.handle,
+    );
+    emitOwnerChatSnapshot(chat.callbacks, EPIC, CHAT_ID, HOST_ID);
+    sendChatTestMessage(chat.handle);
+    const clientActionId = rejectLastChatAction({
+      frames: chat.sent,
+      callbacks: chat.callbacks,
+      epicId: EPIC,
+      chatId: CHAT_ID,
+      reason: "Message was not accepted.",
+    });
+    expect(chat.handle.store.getState().failedSendRestoration).not.toBeNull();
+    // The composer had a newer draft: the prompt is STATED, not handed back.
+    chat.handle.store.getState().stateFailedSendRestoration(clientActionId);
+    expect(chat.handle.store.getState().failedSendRestoration).toBeNull();
+    // Beside the rejection's own notice for the same action id.
+    expect(
+      chat.handle.store
+        .getState()
+        .errorNotices.filter((entry) => entry.clientActionId === clientActionId)
+        .map((entry) => entry.code),
+    ).toEqual(["ACTION_REJECTED", "SEND_NOT_RECORDED"]);
+    expect(
+      chat.handle.store.getState().deliveredNoticeActionIds.has(clientActionId),
+    ).toBe(false);
+
+    openEpicTab(TAB, EPIC);
+    try {
+      setEpicSurfaceVisibility(EPIC, "view-pin9b", false);
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS * 3);
+      // Slot empty, nothing pending or accepted - the notice is the hold.
+      expect(isEpicParked(EPIC)).toBe(false);
+      expect(chatRegistry.peek(EPIC, CHAT_ID, HOST_ID)).not.toBeNull();
+
+      // A pane showed it: the toast layer marks it delivered.
+      chat.handle.store.getState().markNoticeDelivered(clientActionId);
+      expect(isEpicParked(EPIC)).toBe(true);
+      expect(chatRegistry.peek(EPIC, CHAT_ID, HOST_ID)).toBeNull();
     } finally {
       closeEpicTab(TAB);
     }

@@ -11,7 +11,10 @@ import {
   isChatRunInProgress,
   type ChatSessionStoreHandle,
 } from "@/stores/chats/chat-session-store";
-import { acceptedActionIsUnsettled } from "@/stores/chats/chat-queue-reconciler";
+import {
+  acceptedActionIsUnsettled,
+  noticeCarriesOnlyCopy,
+} from "@/stores/chats/chat-queue-reconciler";
 
 /**
  * How long a chat session is kept warm after its last tile unmounts. A chat
@@ -398,6 +401,26 @@ function hasUnsettledChatWork(handle: ChatSessionStoreHandle): boolean {
   // slot for toast and dialog consumers, so it is finished and does not hold.
   const restoreKind = state.restore?.kind;
   if (restoreKind === "in-flight" || restoreKind === "progressing") return true;
+  // A notice that IS the last copy of someone's prompt, not yet shown. The
+  // restoration slot above is not the only home a failed send's text ends up
+  // in: when the composer already holds a newer draft, `stateFailedSendRestoration`
+  // clears the slot and states the displaced prompt in a `SEND_NOT_RECORDED`
+  // notice instead, whose message body is now the only copy. The toast layer
+  // replays such a notice only when a pane focuses and marks it delivered
+  // then; a hidden chat never focuses, so the slot is empty, no action is
+  // accepted, and parking would dispose the session with the notice in it
+  // (Codex on ac6c4eca1). Held until delivered - the same promise the slot
+  // makes, kept for the text's other home.
+  if (
+    state.errorNotices.some(
+      (notice) =>
+        noticeCarriesOnlyCopy(notice) &&
+        notice.clientActionId !== null &&
+        !state.deliveredNoticeActionIds.has(notice.clientActionId),
+    )
+  ) {
+    return true;
+  }
   return false;
 }
 

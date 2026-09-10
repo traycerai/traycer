@@ -2092,6 +2092,37 @@ export function settleRestoreAttemptsByEvidence(
 }
 
 /**
+ * Settle a progress slot this window did NOT originate, from a LIVE outcome.
+ *
+ * An observer window - one that saw `restoreStarted` for a restore another
+ * window dispatched - has no accepted record, so {@link
+ * settleRestoreAttemptsByEvidence} (which settles the slot only through a
+ * record) leaves its spinner in flight when the completion frame is lost and
+ * the outcome event arrives, and `hasUnsettledChatWork` keeps vetoing the
+ * park on that spinner alone (Codex on ad9f99fb8). Matched by checkpoint,
+ * which is sound only for the live door: live events arrive in order, so an
+ * outcome for the checkpoint a live slot names is that attempt's, never an
+ * older attempt's. A snapshot's events can carry older outcomes for the same
+ * checkpoint and go through the record-matched path only.
+ */
+export function settleObservedRestoreSlot(
+  restore: ChatRestoreSlot | null,
+  evidence: ReadonlyArray<RestoreAttemptEvidence>,
+): ChatRestoreSlot | null {
+  if (restore === null || restore.kind === "completed") return restore;
+  const outcome = evidence.find(
+    (item) => item.outcome?.checkpointId === restore.checkpointId,
+  )?.outcome;
+  if (outcome === undefined || outcome === null) return restore;
+  return {
+    kind: "completed",
+    checkpointId: outcome.checkpointId,
+    finishedAt: outcome.restoredAt,
+    results: outcome.results,
+  };
+}
+
+/**
  * The accepted `restoreCheckpoint` records dispatched on a connection older
  * than `connectionEpoch` - the ones a reconnect has to RETRANSMIT.
  *
@@ -2101,12 +2132,17 @@ export function settleRestoreAttemptsByEvidence(
  * (its tail is hydrated transcript rows; a restore outcome is not one). What
  * survives is the host's journal, and the host answers a RETRIED client
  * action id from it: an attempt that completed is acked and its completion
- * re-broadcast from the recorded outcome; one that never finished is run
- * again (the same bytes twice) and completes; one it will not run is
- * rejected, which names the action too. Every branch produces the evidence
- * the record is waiting for, so the retransmit is the bounded recovery path
- * - once per reconnect per record, which is what re-stamping the epoch
- * ({@link withRetransmittedRestoreActions}) enforces.
+ * replayed from the recorded outcome (by `handleRestoreCheckpoint` on a
+ * fresh session, by the dedup path's `replaySettledRestoreOutcomeTo` on a
+ * session another window kept alive - the cached ack alone says accepted,
+ * never finished); one that never finished is run again (the same bytes
+ * twice) and completes; one it will not run is rejected, which names the
+ * action too. Every branch produces the evidence the record is waiting for,
+ * so the retransmit is the bounded recovery path - once per reconnect per
+ * record, which is what re-stamping the epoch
+ * ({@link withRetransmittedRestoreActions}) enforces. A host older than the
+ * dedup replay answers the live-session case with the ack alone, and the
+ * record then holds until the tab closes: fail closed, as before.
  */
 export function retransmittableRestoreActions(
   acceptedActions: Readonly<Record<string, AcceptedChatAction>>,

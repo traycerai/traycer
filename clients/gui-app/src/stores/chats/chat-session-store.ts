@@ -8,6 +8,7 @@ import {
   withoutSettledAcceptedQueueStatusActions,
   restoreOutcomesFrom,
   retransmittableRestoreActions,
+  settleObservedRestoreSlot,
   settleRestoreAttemptsByEvidence,
   withoutEarliestAcceptedRestoreActionFor,
   withRetransmittedRestoreActions,
@@ -6027,13 +6028,21 @@ export function createChatSessionStoreWithNotificationDependencies(
         // `restoreCompleted` frame that never arrives. Before the transcript
         // arms below, which differ by line; the record is line-independent.
         if (frame.event.type === "checkpoint.restored") {
-          set((state) =>
-            settleRestoreAttemptsByEvidence(
+          set((state) => {
+            const evidence = restoreOutcomesFrom([frame.event]);
+            const settled = settleRestoreAttemptsByEvidence(
               state.acceptedActions,
               state.restore,
-              restoreOutcomesFrom([frame.event]),
-            ),
-          );
+              evidence,
+            );
+            return {
+              acceptedActions: settled.acceptedActions,
+              // Also for a spinner this window did not originate (no record
+              // to match through): a live outcome is in order, so it is the
+              // slot's own attempt.
+              restore: settleObservedRestoreSlot(settled.restore, evidence),
+            };
+          });
         }
         if (windowedLine) {
           takeLiveRecords({ messages: [], events: [frame.event] });
