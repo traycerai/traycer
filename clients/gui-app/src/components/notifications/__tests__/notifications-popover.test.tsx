@@ -776,6 +776,11 @@ describe("NotificationsPopover", () => {
     __resetTabNavigationControllerForTesting();
     hostRequestMock.mockReset();
     hostRequestMock.mockImplementation(defaultHostRequest);
+    // Reset BESIDE the request mock, deliberately. The floor assertion below
+    // reads these two as ONE instrument, and a recorder that outlives the mock
+    // it is joined to is exactly how that assertion first came to be
+    // satisfiable by a previous case's record.
+    floorsRequested.calls.length = 0;
     hostBindingState.current = null;
     vi.mocked(toastFromHostError).mockClear();
     vi.mocked(toast.error).mockClear();
@@ -1329,16 +1334,45 @@ describe("NotificationsPopover", () => {
     // whole-origin delete - so the floor riding is part of this case's claim,
     // not incidental. Asserting it here is also what keeps the fixture's
     // recorder live rather than a stub nothing reads.
-    // Asserted as "every clearAll dispatch carried the floor", not "exactly
-    // one did": this path dispatches clearAll more than once, and pinning the
-    // COUNT would be pinning that incidental fact rather than the claim.
+    // Every `clearAll` THIS case dispatched carried the floor - joined to this
+    // case's dispatches rather than read off the recorder alone. The first
+    // version filtered the recorder with no such join, and because the recorder
+    // was a hoisted array with no per-case reset, the preceding cloud-confirm
+    // case's record satisfied it: an assertion that could pass while this case
+    // dispatched nothing at all.
+    //
+    // The join is by CARDINALITY, not identity - sound here rather than merely
+    // convenient. The floored stub forwards to `hostRequestMock`, so EVERY
+    // clearAll dispatch lands in `mock.calls` while only floored ones land in
+    // the recorder. Building the expected array from the DISPATCHES therefore
+    // asserts two things at once: that no clearAll went out unfloored, and that
+    // each record is the whole floor. It does NOT claim a particular record
+    // belongs to a particular call; if identity is ever needed, record
+    // `{ method, params, requirement }` tuples from both stub methods instead.
+    //
+    // The record is matched COMPLETE, never on `minor` alone - `minor === 1`
+    // is equally true of `@2.1`, which is a different major and not this floor.
+    //
+    // The count is deliberately not pinned. An earlier version of this
+    // assertion was shaped around having seen two dispatches, but that
+    // observation predates the per-case reset and may have been one record from
+    // the preceding cloud-confirmation case plus one from this gesture - an
+    // unmeasured number, and not a fact to build an assertion on.
+    const clearAllDispatches = hostRequestMock.mock.calls.filter(
+      (entry) => entry[0] === "host.notifications.clearAll",
+    );
     const clearAllFloors = floorsRequested.calls.filter(
       (call) => call.method === "host.notifications.clearAll",
     );
-    expect(clearAllFloors.length).toBeGreaterThan(0);
-    expect([...new Set(clearAllFloors.map((call) => call.version.minor))]).toEqual([
-      1,
-    ]);
+    // Empty-refusing: a case that dispatched nothing fails HERE, rather than
+    // satisfying the comparison below with two empty arrays.
+    expect(clearAllDispatches.length).toBeGreaterThan(0);
+    expect(clearAllFloors).toEqual(
+      clearAllDispatches.map(() => ({
+        method: "host.notifications.clearAll",
+        version: { major: 1, minor: 1 },
+      })),
+    );
     expect(useAppLocalNotificationsStore.getState().orderedIds).toHaveLength(0);
   });
 
