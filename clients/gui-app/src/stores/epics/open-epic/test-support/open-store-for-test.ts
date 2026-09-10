@@ -307,6 +307,7 @@ function openStoreOver(
     onRetryTransport: () => {
       retryTransportRequests += 1;
     },
+    onWakeTransport: () => undefined,
     runtime: {
       port: worker.port,
       command: (command) => {

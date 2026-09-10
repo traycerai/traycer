@@ -1085,6 +1085,14 @@ export interface ChatSessionState {
   requestTranscriptOrdinal: (ordinal: number | null) => void;
   retry: () => void;
   /**
+   * Stops this session's transport waiting out its backoff and re-dials now.
+   *
+   * Keeps the transcript, the snapshot and every pending action exactly as
+   * they are - see {@link ChatSessionStoreOptions.wakeTransport} for why that
+   * distinction matters, and why this is not {@link retry}.
+   */
+  wake: () => void;
+  /**
    * Which ordinals the transcript viewport is currently showing, from the
    * timeline's viewability pass - the second obligation
    * `planTranscriptHydration` folds in (the first is the tail). `null` means
@@ -1268,6 +1276,25 @@ export interface ChatSessionStoreOptions {
    * the Traycer *session* auth (an unauthorized stream close).
    */
   readonly onProviderAuthError: (() => void) | null;
+  /**
+   * Collapse this session's own transport backoff and re-dial NOW, keeping
+   * everything the session holds.
+   *
+   * Deliberately NOT {@link ChatSessionState.retry}, and the difference is what
+   * makes it safe behind a button someone presses while reading. `retry()`
+   * tears the stream down and clears `snapshotLoaded`, so the transcript on
+   * screen is replaced by its loading state - and any surface gating on
+   * "content is showing" loses its own precondition at the same moment. A wake
+   * touches no state at all: the socket is already redialing on a backoff, and
+   * this only declines to wait for it.
+   *
+   * Injected because the session owns its transport but the store does not see
+   * it. The registry builds the socket, so only the registry can name the
+   * connection this wakes - and it must be THIS chat's, never the app-wide one.
+   * `null` where no transport was built (a test factory), which reads as
+   * nothing to wake.
+   */
+  readonly wakeTransport: (() => void) | null;
 }
 
 /**
@@ -6263,6 +6290,15 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (get().jumpTargetOrdinal === ordinal) return;
         set({ jumpTargetOrdinal: ordinal });
         if (ordinal !== null) requestPlannedHydration();
+      },
+      wake: () => {
+        if (disposed) return;
+        // No state written, deliberately. The status stays whatever the
+        // transport reports; if the re-dial succeeds the stream reports `open`
+        // through its normal callback, and if it fails the backoff re-arms.
+        // Writing an optimistic "connecting" here would claim progress this
+        // has no way to observe.
+        options.wakeTransport?.();
       },
       retry: () => {
         if (disposed) return;
