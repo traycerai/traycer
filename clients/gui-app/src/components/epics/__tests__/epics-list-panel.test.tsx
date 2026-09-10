@@ -966,7 +966,10 @@ describe("<EpicsListPanel />", () => {
         "expected the provenance glyph to have a status slot parent",
       );
     }
-    expect(glyphSlot.id).toBe(link.getAttribute("aria-describedby"));
+    // The row names both status slots; the leading one comes first.
+    expect(link.getAttribute("aria-describedby")?.split(" ").at(0)).toBe(
+      glyphSlot.id,
+    );
   });
 
   it("shows the local-only provenance glyph telling an unverified viewer it can't sync until the sign-in is confirmed", async () => {
@@ -1325,7 +1328,12 @@ describe("<EpicsListPanel />", () => {
     }
     expect(describedById.length).toBeGreaterThan(0);
 
-    const describedByElement = document.getElementById(describedById);
+    // Two ids: the leading status slot first, then the imported-unseen slot.
+    const leadingDescribedById = describedById.split(" ").at(0);
+    if (leadingDescribedById === undefined) {
+      throw new Error("expected aria-describedby to name the leading slot");
+    }
+    const describedByElement = document.getElementById(leadingDescribedById);
     if (describedByElement === null) {
       throw new Error("expected the described element to exist in the DOM");
     }
@@ -1353,7 +1361,9 @@ describe("<EpicsListPanel />", () => {
     if (importedUnseenSlot === undefined) {
       throw new Error("expected a second slot");
     }
-    expect(importedUnseenSlot.hasAttribute("id")).toBe(false);
+    // The imported-unseen slot is the SECOND described id: heard through the
+    // description, never held open on screen.
+    expect(importedUnseenSlot.id).toBe(describedById.split(" ").at(1));
   });
 
   it("describes the selection-mode toggle by the same status slot", async () => {
@@ -1380,7 +1390,12 @@ describe("<EpicsListPanel />", () => {
     }
     expect(describedById.length).toBeGreaterThan(0);
 
-    const describedByElement = document.getElementById(describedById);
+    // Two ids: the leading status slot first, then the imported-unseen slot.
+    const leadingDescribedById = describedById.split(" ").at(0);
+    if (leadingDescribedById === undefined) {
+      throw new Error("expected aria-describedby to name the leading slot");
+    }
+    const describedByElement = document.getElementById(leadingDescribedById);
     if (describedByElement === null) {
       throw new Error("expected the described element to exist in the DOM");
     }
@@ -1524,7 +1539,13 @@ describe("<EpicsListPanel />", () => {
     ).toBe(true);
   });
 
-  it("opens the imported-unseen dot's tooltip when the row's overlay link gets keyboard focus", async () => {
+  it("exposes the imported-unseen dot through the row's description but holds only the leading mark's tooltip open on keyboard focus", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
     act(() => {
       useImportedUnseenStore
         .getState()
@@ -1532,12 +1553,18 @@ describe("<EpicsListPanel />", () => {
     });
     renderPanel("embedded", "/");
 
-    expect(await screen.findByTestId("imported-unseen-dot")).not.toBeNull();
+    const provenanceGlyph = await screen.findByTestId(
+      "epics-list-row-provenance-local-only-epic-from-history",
+    );
+    const provenanceTooltip = provenanceGlyph.getAttribute("aria-label");
+    expect(provenanceTooltip).not.toBeNull();
+
+    const importedDot = await screen.findByTestId("imported-unseen-dot");
+    const importedTooltip = `Imported from ${harnessDisplayName("claude")} - not opened yet`;
 
     const link = await screen.findByRole("link", {
-      name: "Open task Open from landing",
+      name: "Open task Local only epic",
     });
-    const expectedTooltip = `Imported from ${harnessDisplayName("claude")} - not opened yet`;
 
     expect(screen.queryByRole("tooltip")).toBeNull();
 
@@ -1547,11 +1574,99 @@ describe("<EpicsListPanel />", () => {
 
     const tooltips = await screen.findAllByRole("tooltip");
     expect(
-      tooltips.some((tooltip) => tooltip.textContent === expectedTooltip),
+      tooltips.some((tooltip) => tooltip.textContent === provenanceTooltip),
     ).toBe(true);
+    expect(
+      tooltips.some((tooltip) => tooltip.textContent === importedTooltip),
+    ).toBe(false);
+    // Radix can render a visually-hidden duplicate of the same open tooltip's
+    // content alongside the positioned one - dedupe by text so that harmless
+    // duplication cannot be misread as a second, distinct tooltip being open.
+    const distinctTooltipTexts = new Set(
+      tooltips.map((tooltip) => tooltip.textContent),
+    );
+    expect(distinctTooltipTexts.size).toBe(1);
+
+    const describedById = link.getAttribute("aria-describedby");
+    if (describedById === null) {
+      throw new Error("expected the link to carry aria-describedby");
+    }
+    const describedByIds = describedById.split(" ");
+    expect(describedByIds.length).toBe(2);
+    const [statusId, importedId] = describedByIds;
+
+    const statusElement = document.getElementById(statusId);
+    if (statusElement === null) {
+      throw new Error("expected the leading status slot to exist");
+    }
+    expect(statusElement.contains(provenanceGlyph)).toBe(true);
+
+    const importedElement = document.getElementById(importedId);
+    if (importedElement === null) {
+      throw new Error("expected the imported-unseen slot to exist");
+    }
+    expect(importedElement.contains(importedDot)).toBe(true);
 
     act(() => {
       link.blur();
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
+  });
+
+  it("opens only the selection toggle's own tooltip when a row that cannot be selected gets keyboard focus in selection mode", async () => {
+    // A row alongside the orphan CAN be selected - `canSelect` (and so the
+    // "Select history items" affordance) requires at least one deletable
+    // item, and a preserved orphan is never one.
+    testState.items = [
+      historyItem({
+        id: "history-orphan",
+        epicId: "orphan",
+        title: "Orphaned epic",
+        isPreservedOrphan: true,
+      }),
+      historyItem({}),
+    ];
+    renderPanel("embedded", "/");
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Select history items" }),
+    );
+
+    const provenanceGlyph = await screen.findByTestId(
+      "epics-list-row-provenance-preserved-orphan-orphan",
+    );
+    const provenanceTooltip = provenanceGlyph.getAttribute("aria-label");
+    expect(provenanceTooltip).not.toBeNull();
+
+    const toggle = await screen.findByRole("button", {
+      name: "Cannot select Orphaned epic",
+    });
+
+    expect(screen.queryByRole("tooltip")).toBeNull();
+
+    act(() => {
+      toggle.focus();
+    });
+
+    const tooltips = await screen.findAllByRole("tooltip");
+    const deleteDisabledTooltip =
+      "This task was already deleted. Only its unsynced edits remain, so there is nothing left to delete.";
+    expect(
+      tooltips.some((tooltip) => tooltip.textContent === deleteDisabledTooltip),
+    ).toBe(true);
+    expect(
+      tooltips.some((tooltip) => tooltip.textContent === provenanceTooltip),
+    ).toBe(false);
+    const distinctTooltipTexts = new Set(
+      tooltips.map((tooltip) => tooltip.textContent),
+    );
+    expect(distinctTooltipTexts.size).toBe(1);
+
+    act(() => {
+      toggle.blur();
     });
 
     await waitFor(() => {

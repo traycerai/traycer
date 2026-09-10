@@ -11,9 +11,12 @@ import { useImportedUnseenStore } from "@/stores/session-import/imported-unseen-
  * is a different kind of fact. This is the unread idiom instead: a quiet dot
  * by the title that disappears the first time the task is opened.
  *
- * Not in the registry, but under the same rule as its glyphs: the dot is not
- * a tab stop, so the containing row's keyboard focus holds the tooltip open
- * (`StatusGlyphFocusContext`), or the sentence would be hover-only.
+ * Not in the registry, but it reads the registry glyphs' `StatusGlyphFocusContext`
+ * so a slot that chooses to hold its mark open on row keyboard focus can. The
+ * history row's imported slot does not choose to: a row holds ONE tooltip open
+ * and the leading status mark's is it, while this dot's sentence reaches a
+ * screen reader through the row's `aria-describedby` and on screen it stays
+ * the quiet unread dot it is by design (`HistoryRowStatusSlot`).
  */
 export function ImportedUnseenDot(props: { readonly epicId: string }) {
   const harness = useImportedUnseenStore((state) => state.unseen[props.epicId]);
