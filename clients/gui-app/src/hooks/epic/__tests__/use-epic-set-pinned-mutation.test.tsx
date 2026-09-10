@@ -584,6 +584,73 @@ describe("useEpicSetPinned", () => {
     });
   });
 
+  it("patches an UNPIN into the pin-reading cache too", () => {
+    // The pin direction is not symmetric by construction - the patch writes
+    // `variables.pinned` through - so unpin gets its own case rather than being
+    // assumed from the pin one.
+    const queryClient = new QueryClient();
+    const ownerReadingKey = queryKeys.cloudEpicPinReading(
+      "host-owning",
+      "user-1",
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    queryClient.setQueryData(
+      ownerReadingKey,
+      pageWith([epicTask("epic-1", true)]),
+    );
+    renderHook(() => useEpicSetPinned(), {
+      wrapper: makeWrapper(queryClient),
+    });
+
+    capturedOptions.onMutate?.({
+      epicId: "epic-1",
+      pinned: false,
+      isLocalHome: true,
+      hostId: "host-owning",
+    });
+
+    expect(pinnedById(queryClient.getQueryData(ownerReadingKey))).toEqual({
+      "epic-1": false,
+    });
+  });
+
+  it("leaves another USER's pin reading on the same host alone", () => {
+    // The predicate checks `queryKey[4] === scope.userId`, one index earlier than
+    // the History key's user. Host isolation is pinned above; this is the other
+    // half of the scope, and the index is exactly what would make it silently
+    // match every user.
+    const queryClient = new QueryClient();
+    const mineKey = queryKeys.cloudEpicPinReading(
+      "host-owning",
+      "user-1",
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    const theirsKey = queryKeys.cloudEpicPinReading(
+      "host-owning",
+      "user-2",
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    queryClient.setQueryData(mineKey, pageWith([epicTask("epic-1", false)]));
+    queryClient.setQueryData(theirsKey, pageWith([epicTask("epic-1", false)]));
+    renderHook(() => useEpicSetPinned(), {
+      wrapper: makeWrapper(queryClient),
+    });
+
+    capturedOptions.onMutate?.({
+      epicId: "epic-1",
+      pinned: true,
+      isLocalHome: true,
+      hostId: "host-owning",
+    });
+
+    expect(pinnedById(queryClient.getQueryData(mineKey))).toEqual({
+      "epic-1": true,
+    });
+    expect(pinnedById(queryClient.getQueryData(theirsKey))).toEqual({
+      "epic-1": false,
+    });
+  });
+
   it("invalidates the dispatch host's pin reading on success", async () => {
     const queryClient = new QueryClient();
     const ownerReadingKey = queryKeys.cloudEpicPinReading(
@@ -600,9 +667,18 @@ describe("useEpicSetPinned", () => {
     // `useHostMutation`, so there is no real query observer to refetch - what is
     // being pinned is that the reading key is MATCHED by the success sweep.
     const originalInvalidate = queryClient.invalidateQueries.bind(queryClient);
-    queryClient.invalidateQueries = (filters?: {
-      predicate?: (query: { queryKey: readonly unknown[] }) => boolean;
-    }) => {
+    // `filters: X | undefined`, NOT `filters?: X` - the repo's no-optional-
+    // parameter rule binds in tests too, and a stub standing in for a real
+    // signature is exactly where that slips in unnoticed. The nested `predicate`
+    // PROPERTY stays optional, which the rule permits: it is a property of an
+    // object type, not a parameter.
+    queryClient.invalidateQueries = (
+      filters:
+        | {
+            predicate?: (query: { queryKey: readonly unknown[] }) => boolean;
+          }
+        | undefined,
+    ) => {
       if (filters?.predicate?.({ queryKey: ownerReadingKey }) === true) {
         invalidated.push(ownerReadingKey);
       }

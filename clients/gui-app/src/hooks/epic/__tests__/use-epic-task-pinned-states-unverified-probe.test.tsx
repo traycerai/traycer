@@ -1,7 +1,7 @@
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type {
   ListTaskLight,
   ListTasksRequest,
@@ -65,10 +65,22 @@ const transport = vi.hoisted(() => {
     responseByHostId: Map<string, unknown>;
     /** Host ids the binding is willing to build a requester for. */
     resolvableHostIds: Set<string>;
+    /**
+     * The request-context user each host's client currently reports. A host whose
+     * session is registered before its context arrives reports `null` here, which
+     * is the readiness window the `"wait"` policy exists for.
+     */
+    contextUserByHostId: Map<string, string | null>;
+    listenersByHostId: Map<string, Set<() => void>>;
+    /** `epic.setPinned` dispatches, so Undo can be shown to reach the owner. */
+    mutations: Array<{ hostId: string; params: unknown }>;
   } = {
     dispatched: [],
     responseByHostId: new Map(),
     resolvableHostIds: new Set(),
+    contextUserByHostId: new Map(),
+    listenersByHostId: new Map(),
+    mutations: [],
   };
   return state;
 });
@@ -89,14 +101,57 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
   },
 }));
 
+/** Publishes a host's request-context user and notifies its `onChange` watchers. */
+function arriveRequestContext(hostId: string, userId: string | null): void {
+  transport.contextUserByHostId.set(hostId, userId);
+  for (const listener of transport.listenersByHostId.get(hostId) ?? []) {
+    listener();
+  }
+}
+
 function makeClient(hostId: string) {
   return {
     getActiveHostId: () => hostId,
-    getRequestContextUserId: () => USER_ID,
-    onChange: () => () => undefined,
+    getRequestContextUserId: () =>
+      transport.contextUserByHostId.has(hostId)
+        ? (transport.contextUserByHostId.get(hostId) ?? null)
+        : USER_ID,
+    onChange: (listener: () => void) => {
+      const listeners =
+        transport.listenersByHostId.get(hostId) ?? new Set<() => void>();
+      listeners.add(listener);
+      transport.listenersByHostId.set(hostId, listeners);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
     requestWithSignal: (_method: string, params: unknown) => {
       transport.dispatched.push({ hostId, params, withVersionFloor: false });
       return Promise.resolve(transport.responseByHostId.get(hostId));
+    },
+    // The real `useHostMutation` dispatches here when no version requirement is
+    // attached, which is the case for `epic.setPinned`.
+    //
+    // The fake WRITES THROUGH to its own list response, because a host that
+    // accepts `pinned: false` and then still lists `true` is not a host - and an
+    // unfaithful double here produces a confusing failure rather than a finding:
+    // the optimistic patch lands, `onSuccess` invalidates, the refetch re-reads
+    // the stale lie, and the test looks like the enrolment is broken when what is
+    // broken is the double.
+    request: (_method: string, params: unknown) => {
+      const { epicId, pinned } = params as { epicId: string; pinned: boolean };
+      transport.mutations.push({ hostId, params });
+      const current = transport.responseByHostId.get(hostId);
+      if (current !== undefined) {
+        const response = current as ListTasksResponse;
+        transport.responseByHostId.set(hostId, {
+          ...response,
+          tasks: response.tasks.map((task) =>
+            task.epic?.light?.id === epicId ? { ...task, pinned } : task,
+          ),
+        });
+      }
+      return Promise.resolve({ pinned });
     },
     requestWithSignalRequiringHostMethodVersion: (
       _method: string,
@@ -128,6 +183,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
 });
 
 import { useEpicTaskPinnedStates } from "@/hooks/epic/use-epic-task-pinned-states-query";
+import { useEpicSetPinned } from "@/hooks/epic/use-epic-set-pinned-mutation";
 import { __resetCloudEpicTasksClientsForTests } from "@/lib/cloud-epic-tasks-query";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
@@ -190,12 +246,108 @@ function ownerDispatches(): ReadonlyArray<DispatchedRequest> {
     }));
 }
 
+/**
+ * R7's Undo, through the REAL reading query.
+ *
+ * The tab strip's Undo coverage runs against a mocked mutation, which can show
+ * the host riding the toast closure but not that the rendered pin follows the
+ * write. This renders the reading hook and `useEpicSetPinned` over ONE
+ * QueryClient and drives the real mutation twice - the write, then its inverse -
+ * so the claim is end to end: real list read, real key, real shared patch, real
+ * overlay, and a real `epic.setPinned` dispatch reaching the owner both times.
+ */
+describe("the pin write and its Undo reach the real reading", () => {
+  function renderBoth(epicIds: ReadonlyArray<string>) {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    return renderHook(
+      () => ({
+        readings: useEpicTaskPinnedStates(epicIds),
+        pin: useEpicSetPinned(),
+      }),
+      { wrapper: makeWrapper(queryClient) },
+    );
+  }
+
+  beforeEach(() => {
+    hostQueriesCalls.length = 0;
+    transport.dispatched.length = 0;
+    transport.mutations.length = 0;
+    transport.responseByHostId.clear();
+    transport.resolvableHostIds.clear();
+    transport.contextUserByHostId.clear();
+    transport.listenersByHostId.clear();
+    __resetCloudEpicTasksClientsForTests();
+    transport.resolvableHostIds.add(OWNER_HOST_ID);
+    transport.responseByHostId.set(
+      OWNER_HOST_ID,
+      page([localRow(EPIC_LOCAL, true)]),
+    );
+    registryState.localHomedEpicIds = new Set([EPIC_LOCAL]);
+    registryState.localHomedByHost = new Map([[EPIC_LOCAL, OWNER_HOST_ID]]);
+    useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
+  });
+
+  afterEach(() => {
+    cleanup();
+    useAuthStore.getState().setSignedOut();
+  });
+
+  it("unpins, then Undo restores the reading - both reaching the owner", async () => {
+    const { result } = renderBoth([EPIC_LOCAL]);
+
+    // The host says pinned; that is what the strip renders.
+    await waitFor(() => {
+      expect(result.current.readings.get(EPIC_LOCAL)?.pinnedKnown).toBe(true);
+    });
+    expect(result.current.readings.get(EPIC_LOCAL)?.pinned).toBe(true);
+
+    const variables = {
+      epicId: EPIC_LOCAL,
+      pinned: false,
+      isLocalHome: true,
+      hostId: OWNER_HOST_ID,
+    };
+
+    // The unpin. Before the cache enrolment this left the rendered pin at `true`
+    // after a SUCCESSFUL write, offering Unpin again indefinitely.
+    await act(async () => {
+      result.current.pin.mutate(variables);
+    });
+    await waitFor(() => {
+      expect(result.current.readings.get(EPIC_LOCAL)?.pinned).toBe(false);
+    });
+
+    // ...and Undo, which is the same dispatch with the bit inverted, carrying
+    // the host in its own variables because the row may be gone by then.
+    await act(async () => {
+      result.current.pin.mutate({ ...variables, pinned: true });
+    });
+    await waitFor(() => {
+      expect(result.current.readings.get(EPIC_LOCAL)?.pinned).toBe(true);
+    });
+
+    // Both writes went to the OWNER, and carried the bit they claimed.
+    expect(transport.mutations.map((m) => m.hostId)).toEqual([
+      OWNER_HOST_ID,
+      OWNER_HOST_ID,
+    ]);
+    expect(
+      transport.mutations.map((m) => (m.params as { pinned: boolean }).pinned),
+    ).toEqual([false, true]);
+  });
+});
+
 describe("useEpicTaskPinnedStates - the unverified pin reading (R1)", () => {
   beforeEach(() => {
     hostQueriesCalls.length = 0;
     transport.dispatched.length = 0;
     transport.responseByHostId.clear();
     transport.resolvableHostIds.clear();
+    transport.contextUserByHostId.clear();
+    transport.listenersByHostId.clear();
+    transport.mutations.length = 0;
     // The by-host-id client registry is MODULE-global, so a registration from an
     // earlier case outlives it - which silently made the "owner not reachable"
     // control below dispatch anyway the first time it was written.
@@ -287,6 +439,75 @@ describe("useEpicTaskPinnedStates - the unverified pin reading (R1)", () => {
     });
     expect(ownerDispatches()).toHaveLength(0);
     expect(result.current.get(EPIC_LOCAL)?.pinnedKnown).toBe(false);
+  });
+
+  /**
+   * READINESS. The owning host's session can be registered before that host's
+   * client has a request context - the window `useCloudEpicTasksQuery` covers
+   * with `useReactiveHostReadiness`, which a per-host fan-out cannot call.
+   *
+   * Under `requestContextPolicy: "require-current"` that moment is fatal and
+   * permanently so: the dispatch throws, TanStack exhausts its retries, and with
+   * `staleTime: Infinity` and no refetch trigger a context that arrives later is
+   * never read at all. `"wait"` waits for it instead.
+   */
+  it("waits for a request context that arrives after the query starts", async () => {
+    useAuthStore.setState({ status: "unverified" });
+    // The owner is resolvable, but has no context yet.
+    arriveRequestContext(OWNER_HOST_ID, null);
+
+    const { result } = renderPinnedStates([EPIC_LOCAL]);
+
+    // Nothing dispatched while the context is absent - and nothing failed,
+    // which is the whole point: it is still waiting.
+    await waitFor(() => {
+      expect(result.current.get(EPIC_LOCAL)?.home).toBe("local");
+    });
+    expect(ownerDispatches()).toHaveLength(0);
+    expect(result.current.get(EPIC_LOCAL)?.pinnedKnown).toBe(false);
+
+    // ...then it arrives, as it does on a cold start.
+    arriveRequestContext(OWNER_HOST_ID, USER_ID);
+
+    await waitFor(() => {
+      expect(result.current.get(EPIC_LOCAL)?.pinnedKnown).toBe(true);
+    });
+    expect(result.current.get(EPIC_LOCAL)?.pinned).toBe(true);
+    expect(ownerDispatches()).toHaveLength(1);
+  });
+
+  /**
+   * The positive control for the policy change: `"wait"` did NOT weaken the
+   * principal rule. `require-current`'s own doc names the hazard it exists for -
+   * a cache-owned read must not "wait across an A -> B transition and then write
+   * B's page under A's infinite-lifetime cache key".
+   *
+   * GREEN AT HEAD AND GREEN UNDER THE `require-current` ABLATION, deliberately:
+   * that is what makes it a control rather than a second readiness test. The
+   * hazard is structurally excluded under both policies, because
+   * `waitForMatchingRequestContext` resolves only for `expectedUserId` - this
+   * query's own user, never whoever arrives - and the post-wait dispatch
+   * re-checks the principal anyway.
+   */
+  it("refuses a context that arrives for a DIFFERENT user - green under both policies", async () => {
+    useAuthStore.setState({ status: "unverified" });
+    arriveRequestContext(OWNER_HOST_ID, null);
+
+    const { result } = renderPinnedStates([EPIC_LOCAL]);
+
+    await waitFor(() => {
+      expect(result.current.get(EPIC_LOCAL)?.home).toBe("local");
+    });
+
+    // Another account's context lands on the owning host.
+    arriveRequestContext(OWNER_HOST_ID, "user-someone-else");
+
+    // The wait is not satisfied by it, and nothing is written under this user's
+    // key. Asserted after flushing the microtasks an onChange would have used.
+    await Promise.resolve();
+    expect(ownerDispatches()).toHaveLength(0);
+    expect(result.current.get(EPIC_LOCAL)?.pinnedKnown).toBe(false);
+    expect(result.current.get(EPIC_LOCAL)?.pinned).toBe(false);
   });
 
   it("reads an UNPINNED local row as a real `false`, not as filler", async () => {
