@@ -1168,6 +1168,10 @@ describe("DesktopHostFleetSource", () => {
     gateOpen = true;
     enrollmentGate.resolve();
     await enrollmentSettled.promise;
+    // `enrollmentSettled` fires in the mock's `finally`, which runs before
+    // the mock promise settles for `refreshLocalIdentity`. One microtask
+    // later the generation fence has either dropped or adopted the result.
+    await Promise.resolve();
     expect(fleet.snapshot()).toMatchObject({
       identityGeneration: 1,
       localHostId: null,
