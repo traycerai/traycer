@@ -727,7 +727,9 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       };
       renderPanel("embedded", "/");
 
-      expect(await screen.findByTestId("epics-list-unavailable")).not.toBeNull();
+      expect(
+        await screen.findByTestId("epics-list-unavailable"),
+      ).not.toBeNull();
       expect(screen.queryByTestId("epics-list-empty")).toBeNull();
     });
 
