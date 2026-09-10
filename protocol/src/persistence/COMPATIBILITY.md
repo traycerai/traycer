@@ -49,6 +49,39 @@ A breaking change requires a new registered persistence major and an explicit
 migration/downgrade strategy. Regenerating a fixture is not a substitute for
 versioning the contract.
 
+### Logged exception: the `auto` permission mode stays same-major on V300
+
+Adding `auto` to `permissionModeSchema` grows an enum inside the epic record,
+which the list above classifies as breaking. It ships same-major anyway. The
+argument, recorded here because the next enum growth will want to cite it and
+should have to meet the same bar:
+
+**The `chats` map is a draining residue plane, not the live one.** Since the
+chat-plane pivot, a GUI chat's authoritative settings live in the chat registry
+row (`chat.db`) and its published copy in the chat-sync records; the epic
+Y.Doc's `chats` entries are what the eviction sweep is draining, plus the doc
+arm that still serves entries written by hosts predating the registry
+(`traycer-host/src/domain/chat/chat-registry/AGENTS.md`). A reader that would
+choke on `auto` is a reader of that plane.
+
+**A doc entry cannot acquire `auto` retroactively.** Every entry the doc arm
+still serves was written by a host that predates auto mode, so its
+`permissionMode` is one of the three original values. The only way `auto`
+reaches the map is a host that already understands it writing there.
+
+**That last sentence is an obligation, not an observation.** It holds only
+while the host does not write auto-mode settings back into `epic.chats`, and
+nothing in the protocol enforces it — this file is where the requirement is
+recorded, and the host work that introduces the mode owns it. If that ever
+stops being true, the fallback is the Reasonix shape: a new persistence major
+with a `DOWNGRADE_UNSUPPORTED` arm in `registry.ts`.
+
+Note what is NOT being claimed. This is not "an enum value is additive"; it is
+"this particular subtree has no reader that can meet the new value". The
+chat-sync records, whose readers genuinely are shipped elsewhere, got the other
+treatment entirely — `permissionMode` is reopened to a checked string there
+(§5's reasoning, applied to a non-harness leaf).
+
 ## Frozen epic-schema guard
 
 `epic-schema-surface-compat.test.ts` resolves the latest epic schema through the
@@ -280,7 +313,19 @@ which §1 puts in the opaque `hostPrivate` section. An anchor a writer leaves on
 the message anyway is just an unmodeled key: it rides the message's preserved
 `raw` and never reaches a schema that could reject it.
 
-**One non-harness leaf is reopened on the same reasoning.**
+**Two non-harness leaves are reopened on the same reasoning.**
+
+`core.settings.permissionMode` is a plain non-empty string here. The mode
+roster grows too — `auto` is its third member added after v1 — and this leaf is
+worse-placed than the harness id beside it: `core.settings` is ALWAYS present,
+so there is no unknown-variant passthrough to catch a value a reader cannot
+spell, and a chat published in a mode the reader has never heard of is a hard
+reject of the whole head. No reader needs the enum: the cloud renderer shows
+the mode as a label and nothing switches on it, and the value is authoritative
+only to the host that wrote it, which reads it back through the epic tree's
+`chatRunSettingsSchema` rather than this one. Adding a mode therefore needs
+nothing here — like adding a harness id.
+
 `blocks[].text.providerNotice.noticeKind` is a plain non-empty string here —
 the same `z.string().min(1)` the harness ids beside it take, so `""` is not a
 kind. The kind roster grows whenever a harness gains a notice worth persisting,

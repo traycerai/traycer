@@ -199,6 +199,7 @@ import {
   agentGuiListHarnessesUpgradeV6ToV7,
   agentGuiListHarnessesUpgradeV70ToV71,
   agentGuiListHarnessesUpgradeV71ToV80,
+  agentGuiListHarnessesUpgradeV80ToV81,
   agentGuiListHarnessesV10,
   agentGuiListHarnessesV20,
   agentGuiListHarnessesV21,
@@ -209,6 +210,7 @@ import {
   agentGuiListHarnessesV70,
   agentGuiListHarnessesV71,
   agentGuiListHarnessesV80,
+  agentGuiListHarnessesV81,
   agentGuiListModelsV10,
   chatSubscribeV10,
   chatSubscribeV11,
@@ -219,6 +221,7 @@ import {
   chatSubscribeV16,
   chatSubscribeV17,
   chatSubscribeV18,
+  chatSubscribeV19,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -598,7 +601,17 @@ import {
   sessionImportScanV10,
   sessionImportScanV11,
 } from "@traycer/protocol/host/session-import/scan";
-import { sessionImportRunV10 } from "@traycer/protocol/host/session-import/run";
+import {
+  autoJudgeGetV10,
+  autoJudgeSetV10,
+  autoPolicyGetV10,
+  autoPolicySetV10,
+  providersSetAutoJudgeV10,
+} from "@traycer/protocol/host/auto-mode/contracts";
+import {
+  sessionImportRunV10,
+  sessionImportRunV11,
+} from "@traycer/protocol/host/session-import/run";
 import { sessionImportStatusV10 } from "@traycer/protocol/host/session-import/contracts";
 import {
   worktreeDeleteBatchByPathStreamV10,
@@ -4108,6 +4121,76 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   // released method floor, so a peer that predates them advertises neither
   // handler nor capability; clients feature-detect and render their explicit
   // unsupported state rather than making the whole connection incompatible.
+  // The `auto` permission mode's two host-scoped settings, plus the
+  // per-provider judge switch. All optional-capability methods with an
+  // `unsupported` degrade - see `auto-mode/contracts.ts` for why none of them
+  // may enter `RELEASED_FLOOR_METHOD_NAMES`, and why neither setting could live
+  // in the CLI config's `features` block.
+  "providers.setAutoJudge": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: providersSetAutoJudgeV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "autoJudge.get": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: autoJudgeGetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "autoJudge.set": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: autoJudgeSetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "autoPolicy.get": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: autoPolicyGetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "autoPolicy.set": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: autoPolicySetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "config.shell.get": {
     degrade: { kind: "unsupported" },
     1: {
@@ -5153,11 +5236,24 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       },
     },
     8: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: agentGuiListHarnessesV80,
           upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV71ToV80,
+        },
+        1: {
+          contract: agentGuiListHarnessesV81,
+          upgradeFromPreviousVersion: agentGuiListHarnessesUpgradeV80ToV81,
+          // `supportedPermissionModes` gains `auto` over 8.0, which is response
+          // VALUE growth - refused by default, because a response value is
+          // normally decided by shared state and would poison every 8.0 peer's
+          // projection with no opt-out. Here it is genuinely emission-gated:
+          // the host resolves the catalog against the negotiated minor and
+          // serves an 8.0 peer the pre-`auto` array (ticket 02). The row's
+          // other addition, `nativeAutoJudge`, needs no annotation - a new KEY
+          // is stripped by the within-major re-parse.
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {
@@ -9340,10 +9436,16 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   },
   "sessionImport.run": {
     1: {
-      latestMinor: 0,
+      // 1.1 carries no shape delta over 1.0 - it is the negotiable fact that
+      // the host understands `auto` in the open request's `permissionMode`.
+      // See the contract's own note for why a shape cannot say that.
+      latestMinor: 1,
       versions: {
         0: {
           contract: sessionImportRunV10,
+        },
+        1: {
+          contract: sessionImportRunV11,
         },
       },
     },
@@ -9440,7 +9542,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 8,
+      latestMinor: 9,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -9468,6 +9570,9 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         },
         8: {
           contract: chatSubscribeV18,
+        },
+        9: {
+          contract: chatSubscribeV19,
         },
       },
     },

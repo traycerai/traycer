@@ -128,12 +128,41 @@ export type TuiHarnessId = z.infer<typeof tuiHarnessIdSchema>;
 
 // ---- Permission + run settings --------------------------------------- //
 
+// Ordered most-restrictive to most-permissive; `ALL_PERMISSION_MODES` below
+// documents that order as load-bearing. `auto` sits above `auto_accept_edits`
+// because it does everything that mode does AND lets a judge approve the
+// commands that mode still parks on a human.
 export const permissionModeSchema = z.enum([
+  "supervised",
+  "auto_accept_edits",
+  "auto",
+  "full_access",
+]);
+export type PermissionMode = z.infer<typeof permissionModeSchema>;
+
+/**
+ * Frozen copy of the permission-mode enum as every line before `auto` shipped
+ * it.
+ *
+ * This enum is BOUND BY REFERENCE from more released surfaces than any other
+ * value in this file - the persisted chat run settings, the `chat.subscribe`
+ * server frames that carry them, the `listHarnesses` catalog rows, and the
+ * `epic.getChatRunSettings` response - so widening the live enum above without
+ * pinning this one into each of those would put `auto` on wires whose
+ * installed peers strict-decode against a three-value set. One unknown member
+ * fails the WHOLE frame or response, not the one field: the documented
+ * `authStatus` / Reasonix hazard, in the mode dimension.
+ *
+ * Do NOT add modes here. Add them to `permissionModeSchema` above and gate
+ * emission on the negotiated version, exactly as `guiHarnessIdSchemaPreReasonix`
+ * does for the harness roster.
+ */
+export const permissionModeSchemaPreAuto = z.enum([
   "supervised",
   "auto_accept_edits",
   "full_access",
 ]);
-export type PermissionMode = z.infer<typeof permissionModeSchema>;
+export type PermissionModePreAuto = z.infer<typeof permissionModeSchemaPreAuto>;
 
 // Canonical full set of permission modes, ordered most-restrictive to
 // most-permissive. Single source of truth shared by:
@@ -143,6 +172,14 @@ export type PermissionMode = z.infer<typeof permissionModeSchema>;
 // Adding a mode here propagates to every consumer; never duplicate this list.
 export const ALL_PERMISSION_MODES: readonly PermissionMode[] =
   permissionModeSchema.options;
+
+// The same list as the released lines shipped it, for the `.default(...)` of
+// every FROZEN `supportedPermissionModes` slot. A frozen enum whose default
+// still came from the live list would carry `auto` as a parse-time fill on a
+// line whose enum cannot spell it - a value zod's `.default()` never
+// re-validates, so it would reach a released client's reducer intact.
+export const ALL_PERMISSION_MODES_PRE_AUTO: readonly PermissionModePreAuto[] =
+  permissionModeSchemaPreAuto.options;
 
 export const chatRunSettingsSchema = z.object({
   harnessId: guiHarnessIdSchema,
@@ -184,11 +221,18 @@ export type ChatRunSettings = z.infer<typeof chatRunSettingsSchema>;
  * today: a released client's own enum cannot spell `reasonix`, so only a
  * crafted peer could send it, and the server-frame freezes above are what stop
  * such a chat from ever being served back to a line that cannot decode it.
+ *
+ * The tuple is frozen on TWO axes now. `harnessId` is pinned to the
+ * pre-Reasonix roster for the reason above; `permissionMode` is pinned to
+ * `permissionModeSchemaPreAuto` for the identical reason one dimension over -
+ * every released `chat.subscribe` line below `1.7` reaches the permission mode
+ * only through this tuple, so pinning it here is what stops an `auto` chat's
+ * settings from being served onto a line whose client rejects the value.
  */
 export const chatRunSettingsSchemaPreReasonix = z.object({
   harnessId: guiHarnessIdSchemaPreReasonix,
   model: z.string().min(1),
-  permissionMode: permissionModeSchema,
+  permissionMode: permissionModeSchemaPreAuto,
   reasoningEffort: z.string().nullable(),
   serviceTier: z.string().nullable().default(null),
   agentMode: agentModeSchema,

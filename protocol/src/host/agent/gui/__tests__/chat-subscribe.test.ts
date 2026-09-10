@@ -15,7 +15,10 @@ import {
   chatSubscribeV16,
   chatSubscribeV17,
   chatSubscribeV18,
+  chatSubscribeV19,
   createImageResolutionUpdatedFrame,
+  chatApprovalStateSchema,
+  chatApprovalStateSchemaPreAuto,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import {
   guiAgentModelCapabilitiesSchema,
@@ -2271,18 +2274,82 @@ describe("chat.subscribe@1.6 (image generation)", () => {
 });
 
 describe("chat.subscribe registry membership", () => {
-  it("registers chat.subscribe major 1 latestMinor 8 as chatSubscribeV18", () => {
+  it("registers chat.subscribe major 1 latestMinor 9 as chatSubscribeV19", () => {
     const entry = hostStreamRpcRegistry["chat.subscribe"];
     expect(entry).toBeDefined();
     // Registering `8` IS the switch to the windowed line: a stream minor
-    // negotiates to the highest the peers share, so this line flipping to `8`
-    // is the moment `1.8`-capable peers start exchanging windowed frames.
-    expect(entry[1].latestMinor).toBe(8);
+    // negotiates to the highest the peers share, so that line flipping to `8`
+    // is the moment `1.8`-capable peers start exchanging windowed frames. `9`
+    // does not switch anything - it is the auto-mode line, and its shapes are
+    // `8`'s by reference (see `chatSubscribeV19`). What it switches is the
+    // host's willingness to SERVE an `auto` chat at all.
+    expect(entry[1].latestMinor).toBe(9);
     expect(entry[1].versions[6].contract).toBe(chatSubscribeV16);
     expect(entry[1].versions[7].contract).toBe(chatSubscribeV17);
     expect(entry[1].versions[8].contract).toBe(chatSubscribeV18);
+    expect(entry[1].versions[9].contract).toBe(chatSubscribeV19);
     expect(chatSubscribeV17.schemaVersion).toEqual({ major: 1, minor: 7 });
     expect(chatSubscribeV18.schemaVersion).toEqual({ major: 1, minor: 8 });
+    expect(chatSubscribeV19.schemaVersion).toEqual({ major: 1, minor: 9 });
+  });
+
+  it("keeps the judge fields off every RELEASED chat.subscribe line", () => {
+    // `reason` / `reviewing` are additive and defaulted, which is exactly the
+    // shape that looks safe to let a released line track live and is not: a key
+    // a released host never emits leaves that line's consumers reading
+    // `undefined` from a field their types call present.
+    // `released-baseline-compat.test.ts` is the gate; this is the local,
+    // readable statement of what the gate protects, keyed to the schema
+    // objects rather than to a JSON dump.
+    expect(Object.keys(chatApprovalStateSchemaPreAuto.shape)).not.toContain(
+      "reason",
+    );
+    expect(Object.keys(chatApprovalStateSchemaPreAuto.shape)).not.toContain(
+      "reviewing",
+    );
+    expect(Object.keys(chatApprovalStateSchema.shape)).toContain("reason");
+    expect(Object.keys(chatApprovalStateSchema.shape)).toContain("reviewing");
+
+    // Absent on the wire parses as "no judge ran", never as a missing key.
+    const parsed = chatApprovalStateSchema.parse({
+      approvalId: "a1",
+      toolName: "Bash",
+      description: "run tests",
+      input: null,
+      requestedAt: 1,
+    });
+    expect(parsed.reason).toBeNull();
+    expect(parsed.reviewing).toBeNull();
+  });
+
+  it("carries a judge verdict and a transient stage on the live card", () => {
+    const parsed = chatApprovalStateSchema.parse({
+      approvalId: "a1",
+      toolName: "Bash",
+      description: "git push --force",
+      input: null,
+      requestedAt: 1,
+      reason: { rule: "Force push", text: "Rewrites published history." },
+      reviewing: "reviewing",
+    });
+    expect(parsed.reason).toEqual({
+      rule: "Force push",
+      text: "Rewrites published history.",
+    });
+    expect(parsed.reviewing).toBe("reviewing");
+
+    // The stage vocabulary is closed: an unknown stage is a bug in the emitter,
+    // not something a card should try to render.
+    expect(() =>
+      chatApprovalStateSchema.parse({
+        approvalId: "a1",
+        toolName: "Bash",
+        description: "x",
+        input: null,
+        requestedAt: 1,
+        reviewing: "thinking",
+      }),
+    ).toThrow();
   });
 });
 

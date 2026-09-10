@@ -54,10 +54,11 @@ import { z } from "zod";
  * | `blocks[].steer.sender` | `snapshotSteerBlockSchema` |
  * | `events[].actor` | `snapshotChatEventSchema` |
  *
- * One NON-harness leaf is reopened here too, on identical reasoning:
+ * Two NON-harness leaves are reopened here too, on identical reasoning:
  * `blocks[].text.providerNotice.noticeKind` (see the note on
- * `snapshotProviderNoticeMetadataSchema`). It is out of the table above because
- * the sweep test that backs the table is specifically a harness-id sweep.
+ * `snapshotProviderNoticeMetadataSchema`) and `core.settings.permissionMode`
+ * (see `openPermissionModeSchema`). Both are out of the table above because the
+ * sweep test that backs the table is specifically a harness-id sweep.
  *
  * `messages[].sessionAnchor` is not in this table because it is no longer in
  * the presentation core at all. Its harness id is a per-variant discriminator
@@ -101,6 +102,23 @@ export const openHarnessIdSchema = z.string().min(1);
  */
 export const openProviderNoticeKindSchema = z.string().min(1);
 
+/**
+ * A permission mode as this record carries it: any non-empty string.
+ *
+ * Reopened for the same reason as `noticeKind` beside it, and the reasoning
+ * transfers line for line. The mode roster grows (`auto` is the third addition
+ * to it), a published chat's `core.settings` is ALWAYS present so there is no
+ * unknown-variant passthrough to catch a bad value, and a closed enum therefore
+ * turns "this chat runs in a mode you have not heard of" into a hard reject of
+ * the whole head - which is to say, a chat published in `auto` would be
+ * unreadable to every shipped cloud reader and every clone target.
+ *
+ * No reader needs the enum. The cloud renderer shows the mode as a label and
+ * nothing switches on it; the value is authoritative only to the host that
+ * wrote it, which reads it back through `chatRunSettingsSchema`, not this one.
+ */
+export const openPermissionModeSchema = z.string().min(1);
+
 // ---- Senders ----------------------------------------------------------- //
 
 export const snapshotAgentSenderSchema = agentSenderSchema.extend({
@@ -120,6 +138,7 @@ export type SnapshotUserMessageSender = z.infer<
 
 export const snapshotChatRunSettingsSchema = chatRunSettingsSchema.extend({
   harnessId: openHarnessIdSchema,
+  permissionMode: openPermissionModeSchema,
 });
 export type SnapshotChatRunSettings = z.infer<
   typeof snapshotChatRunSettingsSchema

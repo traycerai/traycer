@@ -259,8 +259,19 @@ describe("chat-head minReaderVersion coherence", () => {
   it("refuses a minimum ahead of the head it guards", () => {
     // The change that forces a higher minimum is the change that cuts the
     // record's own minor, so a minimum can never run ahead of its payload.
+    //
+    // Derived from the pinned constant rather than hard-coded: a literal here
+    // stops being "ahead" the moment the contract reaches it, and the test then
+    // passes for the wrong reason - which is exactly what happened when this
+    // said `minor: 4` and the contract cut 1.4.
     expect(() =>
-      parse({ ...wireHead, minReaderVersion: { major: 1, minor: 4 } }),
+      parse({
+        ...wireHead,
+        minReaderVersion: {
+          major: CHAT_SYNC_SCHEMA_VERSION.major,
+          minor: CHAT_SYNC_SCHEMA_VERSION.minor + 1,
+        },
+      }),
     ).toThrow();
   });
 });

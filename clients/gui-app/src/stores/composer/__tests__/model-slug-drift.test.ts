@@ -44,6 +44,7 @@ function catalog(models: ReadonlyArray<ModelOption>): ComposerToolbarCatalog {
         modes: ["gui", "tui"],
         requiresApiKey: false,
         supportedPermissionModes: ["supervised", "full_access"],
+        nativeAutoJudge: false,
         availabilityPending: false,
       },
     ],

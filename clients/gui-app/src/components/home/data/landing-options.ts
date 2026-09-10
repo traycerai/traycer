@@ -13,6 +13,7 @@ import {
 import type { TuiHarnessId } from "@traycer/protocol/persistence/epic/schemas";
 import {
   FileCheck2,
+  Gavel,
   ShieldCheck,
   UnlockKeyhole,
   type LucideIcon,
@@ -51,7 +52,17 @@ export function isTuiHarnessId(value: string): value is TuiHarnessId {
   return tuiHarnessIdSchema.safeParse(value).success;
 }
 
-export type PermissionMode = "supervised" | "auto_accept_edits" | "full_access";
+// Hand-written duplicate of the protocol's `permissionModeSchema`. It stays
+// hand-written because `PERMISSION_OPTIONS` below has to pair each mode with
+// renderer-only copy and an icon, and a mode with no option is not renderable -
+// but it means the two lists must be widened together, and the ORDER here and
+// there is the same most-restrictive-to-most-permissive order the protocol
+// documents (`ALL_PERMISSION_MODES`), because the clamp walks it.
+export type PermissionMode =
+  | "supervised"
+  | "auto_accept_edits"
+  | "auto"
+  | "full_access";
 
 export interface PermissionOption {
   id: PermissionMode;
@@ -72,6 +83,13 @@ const AUTO_ACCEPT_EDITS_PERMISSION_OPTION: PermissionOption = {
   description: "Auto-approve edits, ask before other actions.",
   icon: FileCheck2,
 };
+const AUTO_PERMISSION_OPTION: PermissionOption = {
+  id: "auto",
+  label: "Auto",
+  description:
+    "Auto-approve edits; a judge reviews commands and asks you only when unsure.",
+  icon: Gavel,
+};
 const FULL_ACCESS_PERMISSION_OPTION: PermissionOption = {
   id: "full_access",
   label: "Full access",
@@ -79,9 +97,15 @@ const FULL_ACCESS_PERMISSION_OPTION: PermissionOption = {
   icon: UnlockKeyhole,
 };
 
+// Order is load-bearing twice over: the picker renders in this order, and
+// `findSafestSupportedPermissionMode` walks it to pick a clamp target. `auto`
+// sits above `auto_accept_edits` because it does everything that mode does and
+// additionally lets a judge approve commands - so clamping DOWN to
+// `auto_accept_edits` is the safe move, which is what this position produces.
 export const PERMISSION_OPTIONS: ReadonlyArray<PermissionOption> = [
   SUPERVISED_PERMISSION_OPTION,
   AUTO_ACCEPT_EDITS_PERMISSION_OPTION,
+  AUTO_PERMISSION_OPTION,
   FULL_ACCESS_PERMISSION_OPTION,
 ];
 
@@ -95,6 +119,7 @@ export function findPermissionOption(mode: PermissionMode): PermissionOption {
   if (mode === "auto_accept_edits") {
     return AUTO_ACCEPT_EDITS_PERMISSION_OPTION;
   }
+  if (mode === "auto") return AUTO_PERMISSION_OPTION;
   if (mode === "full_access") return FULL_ACCESS_PERMISSION_OPTION;
   return SUPERVISED_PERMISSION_OPTION;
 }

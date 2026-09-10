@@ -21,6 +21,12 @@ import {
  * directions: upgrades fill, frozen parses strip.
  */
 
+// `supportedPermissionModes` is stated rather than defaulted: the live default
+// now carries `auto`, and these rows are fed STRAIGHT into the frozen 1.0/2.0
+// schemas below, whose enum rejects it. A rejected row would not exercise this
+// suite's thesis (frozen parses STRIP what they predate) - it would replace it
+// with a throw. `nativeAutoJudge` is deliberately left on, because it IS an
+// unmodeled key for those lines and stripping it is exactly what is asserted.
 function harnessRow(id: string, enabled: boolean) {
   return guiHarnessOptionSchema.parse({
     id,
@@ -30,6 +36,12 @@ function harnessRow(id: string, enabled: boolean) {
     error: null,
     modes: ["gui" as const],
     requiresApiKey: false,
+    supportedPermissionModes: [
+      "supervised",
+      "auto_accept_edits",
+      "full_access",
+    ],
+    nativeAutoJudge: true,
     availabilityPending: false,
   });
 }
@@ -54,6 +66,7 @@ describe("frozen agent.gui.listHarnesses lines predate enabled/availabilityPendi
     });
     expect(parsed.harnesses[0]).not.toHaveProperty("enabled");
     expect(parsed.harnesses[0]).not.toHaveProperty("availabilityPending");
+    expect(parsed.harnesses[0]).not.toHaveProperty("nativeAutoJudge");
   });
 
   it("the frozen 2.0 row keeps availabilityPending but drops an unmodeled enabled key", () => {
@@ -61,6 +74,7 @@ describe("frozen agent.gui.listHarnesses lines predate enabled/availabilityPendi
       harnesses: [harnessRow("claude", false)],
     });
     expect(parsed.harnesses[0]).not.toHaveProperty("enabled");
+    expect(parsed.harnesses[0]).not.toHaveProperty("nativeAutoJudge");
     expect(parsed.harnesses[0].availabilityPending).toBe(false);
   });
 

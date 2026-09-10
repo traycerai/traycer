@@ -33,6 +33,7 @@ import {
   listGuiHarnessesResponseSchemaV60,
   listGuiHarnessesResponseSchemaV70,
   listGuiHarnessesResponseSchemaV71,
+  listGuiHarnessesResponseSchemaV80,
   listGuiHarnessesResponseSchema,
 } from "../../src/host/agent/gui/unary-schemas";
 import {
@@ -82,9 +83,12 @@ const FIXTURES = {
   // grows an enum over its predecessor - so no minor of major 7 can carry an id
   // 7.0 lacks, released or not. Its dump is unchanged by that freeze.
   "agent.gui.listHarnesses@7.1": dump(listGuiHarnessesResponseSchemaV71),
+  // 8.0 froze when 8.1 opened for the `auto` permission mode and the
+  // `nativeAutoJudge` row field. Its dump is unchanged by that freeze.
+  "agent.gui.listHarnesses@8.0": dump(listGuiHarnessesResponseSchemaV80),
   // The head line, pinned for the same reason `providers.list@8.0` is: growth
   // of the live row now has nothing else to fail against.
-  "agent.gui.listHarnesses@8.0": dump(listGuiHarnessesResponseSchema),
+  "agent.gui.listHarnesses@8.1": dump(listGuiHarnessesResponseSchema),
   "agent.list@1.0": dump(listAgentsResponseSchemaV10),
   "agent.list@2.0": dump(listAgentsResponseSchemaV20),
   "agent.list@3.0": dump(listAgentsResponseSchemaV30),

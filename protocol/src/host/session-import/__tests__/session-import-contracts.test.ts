@@ -9,6 +9,7 @@ import {
   sessionImportRunClientFrameSchema,
   sessionImportRunServerFrameSchema,
   sessionImportRunV10,
+  sessionImportRunV11,
 } from "@traycer/protocol/host/session-import/run";
 import { sessionImportStatusV10 } from "@traycer/protocol/host/session-import/contracts";
 import { sessionImportFailureReasonSchema } from "@traycer/protocol/host/session-import/candidate";
@@ -615,7 +616,7 @@ describe("sessionImport.status@1.0", () => {
  * feature the wire cannot carry, and nothing else in the suite would notice.
  */
 describe("sessionImport.* registry membership", () => {
-  it("registers scan at minors 0 and 1, retaining the v1.0 contract for older hosts", () => {
+  it("registers scan and run at minors 0 and 1, retaining the v1.0 contracts for older hosts", () => {
     const scan = hostStreamRpcRegistry["sessionImport.scan"];
     expect(scan).toBeDefined();
     expect(scan[1].latestMinor).toBe(1);
@@ -624,11 +625,17 @@ describe("sessionImport.* registry membership", () => {
     expect(sessionImportScanV10.schemaVersion).toEqual({ major: 1, minor: 0 });
     expect(sessionImportScanV11.schemaVersion).toEqual({ major: 1, minor: 1 });
 
+    // `run@1.1` carries no shape delta over 1.0 - it exists so a client can
+    // detect a host that understands the `auto` permission mode in the open
+    // request, which no shape can express. Both minors stay reachable, so this
+    // asserts the pair rather than just the head.
     const run = hostStreamRpcRegistry["sessionImport.run"];
     expect(run).toBeDefined();
-    expect(run[1].latestMinor).toBe(0);
+    expect(run[1].latestMinor).toBe(1);
     expect(run[1].versions[0].contract).toBe(sessionImportRunV10);
+    expect(run[1].versions[1].contract).toBe(sessionImportRunV11);
     expect(sessionImportRunV10.schemaVersion).toEqual({ major: 1, minor: 0 });
+    expect(sessionImportRunV11.schemaVersion).toEqual({ major: 1, minor: 1 });
   });
 
   it("registers the status method as a unary that degrades unsupported", () => {

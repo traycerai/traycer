@@ -31,6 +31,7 @@ function claudeHarnessEntry(): GuiHarnessCatalogEntry {
       "auto_accept_edits",
       "full_access",
     ],
+    nativeAutoJudge: false,
     availabilityPending: false,
     models: [
       {

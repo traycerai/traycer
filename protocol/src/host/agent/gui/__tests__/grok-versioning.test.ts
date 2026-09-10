@@ -57,6 +57,7 @@ import {
   agentGuiListHarnessesDowngradeV8ToV5,
   agentGuiListHarnessesDowngradeV8ToV6,
   agentGuiListHarnessesDowngradeV8ToV7,
+  agentGuiListHarnessesUpgradeV80ToV81,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   guiHarnessOptionSchema,
@@ -69,6 +70,7 @@ import {
   listGuiHarnessesResponseSchemaV50,
   listGuiHarnessesResponseSchemaV60,
   listGuiHarnessesResponseSchemaV71,
+  listGuiHarnessesResponseSchemaV80,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import {
   PROVIDER_AUTH_STATUS_SCHEMA,
@@ -113,6 +115,13 @@ import {
   providersSetApiKeyDowngradeV21ToV10,
 } from "@traycer/protocol/host/registry";
 
+// States `supportedPermissionModes` explicitly rather than taking the live
+// schema default, which now includes `auto`. Several tests below feed these
+// rows STRAIGHT into an older line's schema (not through a bridge) to build the
+// "what a v2.1/v3.0 host returned" input, and a live default would put a mode
+// on those rows that the older line's frozen enum rejects. The `auto`-bearing
+// case has its own test at the bottom of this file, where the bridge that
+// strips it is the subject.
 function harnessOption(id: string) {
   return guiHarnessOptionSchema.parse({
     id,
@@ -121,6 +130,11 @@ function harnessOption(id: string) {
     error: null,
     modes: ["gui"],
     requiresApiKey: false,
+    supportedPermissionModes: [
+      "supervised",
+      "auto_accept_edits",
+      "full_access",
+    ],
   });
 }
 
@@ -953,5 +967,92 @@ describe("post-v6.0 Hugging Face/Reasonix non-breaking downgrade bridges", () =>
     expect(() =>
       providersListResponseSchemaV10.parse(toV1.value),
     ).not.toThrow();
+  });
+});
+
+/**
+ * The `auto` permission mode and the `nativeAutoJudge` row field ride
+ * `agent.gui.listHarnesses@8.1`. Everything below 8.1 has to lose both, and the
+ * two lose them by different mechanisms - which is the whole reason this has
+ * its own suite rather than an extra assertion on the Reasonix one.
+ */
+describe("agent.gui.listHarnesses@8.1 auto-mode downgrades", () => {
+  function autoHarnessOption(id: string) {
+    return guiHarnessOptionSchema.parse({
+      id,
+      label: id,
+      available: true,
+      error: null,
+      modes: ["gui"],
+      requiresApiKey: false,
+      supportedPermissionModes: [
+        "supervised",
+        "auto_accept_edits",
+        "auto",
+        "full_access",
+      ],
+      nativeAutoJudge: true,
+    });
+  }
+
+  const v81Response = listGuiHarnessesResponseSchema.parse({
+    harnesses: [autoHarnessOption("claude"), autoHarnessOption("reasonix")],
+  });
+
+  it("keeps auto and nativeAutoJudge on the head line", () => {
+    expect(v81Response.harnesses[0].supportedPermissionModes).toContain("auto");
+    expect(v81Response.harnesses[0].nativeAutoJudge).toBe(true);
+  });
+
+  it("strips auto and nativeAutoJudge for a 7.1 caller, keeping the row", () => {
+    // The row must SURVIVE, minus the mode. The bridges filter by
+    // `safeParse().success`, so an unstripped `auto` would not degrade the one
+    // field - it would drop every row and empty the caller's picker.
+    const toV7 =
+      agentGuiListHarnessesDowngradeV8ToV7.downgradeResponse(v81Response);
+    expect(toV7.ok).toBe(true);
+    if (!toV7.ok) return;
+
+    expect(toV7.value.harnesses.map((harness) => harness.id)).toEqual([
+      "claude",
+    ]);
+    expect(toV7.value.harnesses[0].supportedPermissionModes).toEqual([
+      "supervised",
+      "auto_accept_edits",
+      "full_access",
+    ]);
+    expect(Object.hasOwn(toV7.value.harnesses[0], "nativeAutoJudge")).toBe(
+      false,
+    );
+    expect(() =>
+      listGuiHarnessesResponseSchemaV71.parse(toV7.value),
+    ).not.toThrow();
+  });
+
+  it("strips auto all the way down to the frozen 1.0 row", () => {
+    const toV1 =
+      agentGuiListHarnessesDowngradeV8ToV1.downgradeResponse(v81Response);
+    expect(toV1.ok).toBe(true);
+    if (!toV1.ok) return;
+    expect(toV1.value.harnesses[0].supportedPermissionModes).toEqual([
+      "supervised",
+      "auto_accept_edits",
+      "full_access",
+    ]);
+    expect(() =>
+      listGuiHarnessesResponseSchemaV10.parse(toV1.value),
+    ).not.toThrow();
+  });
+
+  it("upgrades an 8.0 row by filling nativeAutoJudge false", () => {
+    // A host that predates 8.1 has no native-judge concept, so `false` is the
+    // pre-feature reading rather than a guess.
+    const v80Response = listGuiHarnessesResponseSchemaV80.parse({
+      harnesses: [harnessOption("claude")],
+    });
+    const upgraded =
+      agentGuiListHarnessesUpgradeV80ToV81.upgradeResponse(v80Response);
+    expect(upgraded.harnesses[0].nativeAutoJudge).toBe(false);
+    expect(() => listGuiHarnessesResponseSchema.parse(upgraded)).not.toThrow();
   });
 });

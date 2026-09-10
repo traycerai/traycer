@@ -107,6 +107,8 @@ function approval(
     description: "approval",
     input: null,
     requestedAt: 1,
+    reason: null,
+    reviewing: null,
     kind,
     planId: kind === "plan" ? "plan-1" : null,
     actions: [],

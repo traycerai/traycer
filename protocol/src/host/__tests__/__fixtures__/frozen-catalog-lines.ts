@@ -1043,6 +1043,131 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
       ],
       "additionalProperties": false
     },
+    "agent.gui.listHarnesses@8.1": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "harnesses": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "enum": [
+                  "claude",
+                  "codex",
+                  "opencode",
+                  "traycer",
+                  "cursor",
+                  "grok",
+                  "qwen",
+                  "kiro",
+                  "droid",
+                  "kimi",
+                  "copilot",
+                  "kilocode",
+                  "openrouter",
+                  "amp",
+                  "devin",
+                  "pi",
+                  "hermes",
+                  "omp",
+                  "huggingface",
+                  "reasonix"
+                ]
+              },
+              "label": {
+                "type": "string"
+              },
+              "enabled": {
+                "default": true,
+                "type": "boolean"
+              },
+              "available": {
+                "type": "boolean"
+              },
+              "error": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "modes": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "gui",
+                    "tui"
+                  ]
+                }
+              },
+              "requiresApiKey": {
+                "type": "boolean"
+              },
+              "supportedPermissionModes": {
+                "default": [
+                  "supervised",
+                  "auto_accept_edits",
+                  "auto",
+                  "full_access"
+                ],
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "supervised",
+                    "auto_accept_edits",
+                    "auto",
+                    "full_access"
+                  ]
+                }
+              },
+              "nativeAutoJudge": {
+                "default": false,
+                "type": "boolean"
+              },
+              "availabilityPending": {
+                "default": false,
+                "type": "boolean"
+              },
+              "authStatus": {
+                "type": "string",
+                "enum": [
+                  "authenticated",
+                  "unauthenticated",
+                  "configured",
+                  "unavailable",
+                  "unknown"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "label",
+              "enabled",
+              "available",
+              "error",
+              "modes",
+              "requiresApiKey",
+              "supportedPermissionModes",
+              "nativeAutoJudge",
+              "availabilityPending"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "harnesses"
+      ],
+      "additionalProperties": false
+    },
     "agent.list@1.0": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "type": "object",
@@ -11390,6 +11515,7 @@ export const FROZEN_CATALOG_LINE_SNAPSHOTS = {
                   "enum": [
                     "supervised",
                     "auto_accept_edits",
+                    "auto",
                     "full_access"
                   ]
                 },

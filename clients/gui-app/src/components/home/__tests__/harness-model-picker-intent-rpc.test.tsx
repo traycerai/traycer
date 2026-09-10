@@ -291,6 +291,7 @@ function harnessEntry(
     modes: ["gui", "tui"],
     requiresApiKey: false,
     supportedPermissionModes: [...ALL_PERMISSION_MODES],
+    nativeAutoJudge: false,
     availabilityPending: false,
   };
 }

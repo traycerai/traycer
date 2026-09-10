@@ -2712,6 +2712,8 @@ describe("useRenderedMessages", () => {
           description: "Apply edit",
           input: null,
           requestedAt: 15_000,
+          reason: null,
+          reviewing: null,
           kind: "tool",
           planId: null,
           actions: [],

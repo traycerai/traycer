@@ -1067,6 +1067,8 @@ function approvalState(
     planId: kind === "plan" ? "plan-1" : null,
     actions: [],
     requestedAt: 4,
+    reason: null,
+    reviewing: null,
   };
 }
 
@@ -1850,6 +1852,8 @@ describe("<ChatTile />", () => {
           planId: null,
           actions: [],
           requestedAt: 2,
+          reason: null,
+          reviewing: null,
         },
       });
     });
@@ -1921,6 +1925,8 @@ describe("<ChatTile />", () => {
           planId: null,
           actions: [],
           requestedAt: 3,
+          reason: null,
+          reviewing: null,
         },
       });
     });
