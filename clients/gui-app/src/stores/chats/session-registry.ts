@@ -342,9 +342,18 @@ function chatSessionKeyHostId(key: SessionKey): string {
   return sessionKeyPartsOf(key)[2] ?? "";
 }
 /**
- * {@link hasActiveChatWork} plus the actions the user has issued and the host
- * has not yet acknowledged - a pause, a queue edit, a checkpoint restore, an
- * approval response.
+ * {@link hasActiveChatWork} plus everything the user has issued that has not
+ * reached its OWN end - a pause, a queue edit, an approval response, a
+ * checkpoint restore still running, an accepted send the host has not confirmed,
+ * and a rejected send's prompt still waiting for the composer to take it.
+ *
+ * The unit is the lifecycle, not the acknowledgement. `pendingActions` empties
+ * when the host says it heard the frame, which is the START of the interesting
+ * part for a send: an ack moves the record to `acceptedActions` with its
+ * recovery fields, and a rejection moves the prompt to `failedSendRestoration`
+ * where it is the only copy until a mounted driver persists it. Both are read
+ * here, because a park that fires between the ack and the end destroys the
+ * state that would have recovered.
  *
  * SEPARATE from `hasActiveChatWork`, and deliberately so. That predicate
  * governs whether the idle TTL and the warm-overflow cap may reclaim a session
@@ -358,7 +367,31 @@ function chatSessionKeyHostId(key: SessionKey): string {
  */
 function hasUnsettledChatWork(handle: ChatSessionStoreHandle): boolean {
   if (hasActiveChatWork(handle)) return true;
-  return Object.keys(handle.store.getState().pendingActions).length > 0;
+  const state = handle.store.getState();
+  if (Object.keys(state.pendingActions).length > 0) return true;
+  // AN ACTION LEAVING `pendingActions` IS AN ACKNOWLEDGEMENT, NOT A
+  // SETTLEMENT, and reading it as one destroyed user text.
+  //
+  // A send rejected after a deferred deadline does not simply vanish: it moves
+  // the prompt into `failedSendRestoration`, where it is the ONLY copy until
+  // the initial-chat-handoff driver's effect writes it into the composer draft
+  // store. Parking on the acknowledgement disposes both planes, the gate
+  // unmounts that driver, and the effect never runs - so the prompt is gone.
+  // Held until the slot is consumed, which is what `ackFailedSendRestoration`
+  // marks.
+  if (state.failedSendRestoration !== null) return true;
+  // An accepted send is not finished until the host confirms it; until then
+  // its restore content is still only local. Scoped to UNCONFIRMED entries on
+  // purpose - `acceptedActions` retains confirmed ones as history, and vetoing
+  // on those would mean an epic that ever sent a message never parks again.
+  for (const action of Object.values(state.acceptedActions)) {
+    if (!action.confirmedByHost) return true;
+  }
+  // A checkpoint restore that is still running. `completed` persists in this
+  // slot for toast and dialog consumers, so it is finished and does not hold.
+  const restoreKind = state.restore?.kind;
+  if (restoreKind === "in-flight" || restoreKind === "progressing") return true;
+  return false;
 }
 
 function hasActiveChatWork(handle: ChatSessionStoreHandle): boolean {

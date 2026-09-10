@@ -73,6 +73,16 @@ interface BoundedRetry {
  * Bounded because a channel that is broken rather than blipping must not spin
  * forever. Giving up restores the pre-retry behaviour for that leg rather than
  * anything worse, and the budget resets on the next `restart`.
+ *
+ * CANCELLING IS ABOUT THE ATTEMPT, NOT ONLY ABOUT THE TIMER. The pending
+ * `attempt()` promise is the half a `clearTimeout` cannot reach, and it is the
+ * half that outlives teardown: an invoke still in flight when the window
+ * uninstalls rejects afterwards, lands in the catch, and arms a timer that
+ * reports through a channel nobody owns any more. Each attempt therefore
+ * carries the generation it was started in, and a completion whose generation
+ * has moved on is not this retry's news - neither its failure (no timer) nor
+ * its success (no budget reset, which would otherwise hand a stale resolve the
+ * power to un-exhaust a live leg's budget).
  */
 function createBoundedRetry(
   label: string,
@@ -80,17 +90,23 @@ function createBoundedRetry(
 ): BoundedRetry {
   let timer: number | null = null;
   let failures = 0;
+  let generation = 0;
   const cancel = (): void => {
+    generation += 1;
     if (timer === null) return;
     window.clearTimeout(timer);
     timer = null;
   };
   const run = (): void => {
+    const attemptGeneration = generation;
+    const superseded = (): boolean => attemptGeneration !== generation;
     void attempt()
       .then(() => {
+        if (superseded()) return;
         failures = 0;
       })
       .catch((error: unknown) => {
+        if (superseded()) return;
         appLogger.warn(`[epic-visibility] cross-window ${label} failed`, {
           error: error instanceof Error ? error.message : "unknown error",
           attempt: failures,
@@ -224,13 +240,9 @@ export function installCrossWindowEpicVisibility(
   const report = (): void => {
     // A fresh edge supersedes whatever the pending attempt was carrying, and
     // restarts the budget: this is a new fact, not a continuation of the failed
+    // one. A slow completion from the superseded attempt is dropped by
+    // `restart`'s generation bump rather than arming a retry behind the live
     // one.
-    //
-    // A slow rejection from a SUPERSEDED attempt can still land after this and
-    // arm one redundant retry. That is harmless and not worth sequencing away:
-    // the retry re-reads the visible set like every other attempt, so it sends
-    // the truth, and `EpicWindowVisibility.report` is change-gated, so an
-    // unchanged set emits nothing.
     reportLeg.restart();
   };
   const subscription = channel.onChange((entries) => {

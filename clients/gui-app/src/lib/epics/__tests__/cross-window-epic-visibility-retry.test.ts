@@ -49,30 +49,77 @@ function controllableEpicVisibilityChannel(): {
   // DESTRUCTURES this off the result, and the type-aware `unbound-method` rule
   // reads a method shorthand as a `this`-bearing method being unbound.
   readonly setReportOutcome: (outcome: "resolve" | "reject") => void;
+  // Leaves a call to `channel.report` unsettled until `settlePendingReport`
+  // resolves or rejects it by hand - for pinning teardown against an invoke
+  // that is still IN FLIGHT, not one that already settled.
+  readonly setReportPending: () => void;
+  readonly settlePendingReport: (outcome: "resolve" | "reject") => void;
   readonly snapshotCalls: { count: number };
   readonly setSnapshotOutcome: (
     outcome: "resolve" | "reject",
     entries: readonly DesktopEpicVisibilityEntry[],
   ) => void;
+  readonly setSnapshotPending: () => void;
+  readonly settlePendingSnapshot: (
+    outcome: "resolve" | "reject",
+    entries?: readonly DesktopEpicVisibilityEntry[],
+  ) => void;
   readonly emitChange: (entries: readonly DesktopEpicVisibilityEntry[]) => void;
 } {
-  let outcome: "resolve" | "reject" = "resolve";
-  let snapshotOutcome: "resolve" | "reject" = "resolve";
+  type Outcome = "resolve" | "reject" | "pending";
+  let outcome: Outcome = "resolve";
+  let snapshotOutcome: Outcome = "resolve";
   let snapshotEntries: readonly DesktopEpicVisibilityEntry[] = [];
   let changeHandler:
     | ((entries: readonly DesktopEpicVisibilityEntry[]) => void)
     | null = null;
   const reportCalls: Array<readonly string[]> = [];
   const snapshotCalls = { count: 0 };
+  let pendingReportSettlers: Array<{
+    resolve: () => void;
+    reject: (error: Error) => void;
+  }> = [];
+  let pendingSnapshotSettlers: Array<{
+    resolve: (entries: readonly DesktopEpicVisibilityEntry[]) => void;
+    reject: (error: Error) => void;
+  }> = [];
   return {
     reportCalls,
     snapshotCalls,
     setReportOutcome: (next) => {
       outcome = next;
     },
+    setReportPending: () => {
+      outcome = "pending";
+    },
+    settlePendingReport: (next) => {
+      const settlers = pendingReportSettlers;
+      pendingReportSettlers = [];
+      for (const settler of settlers) {
+        if (next === "resolve") {
+          settler.resolve();
+        } else {
+          settler.reject(new Error("cross-window report failed"));
+        }
+      }
+    },
     setSnapshotOutcome: (next, entries) => {
       snapshotOutcome = next;
       snapshotEntries = entries;
+    },
+    setSnapshotPending: () => {
+      snapshotOutcome = "pending";
+    },
+    settlePendingSnapshot: (next, entries) => {
+      const settlers = pendingSnapshotSettlers;
+      pendingSnapshotSettlers = [];
+      for (const settler of settlers) {
+        if (next === "resolve") {
+          settler.resolve(entries ?? snapshotEntries);
+        } else {
+          settler.reject(new Error("cross-window snapshot failed"));
+        }
+      }
     },
     emitChange: (entries) => {
       changeHandler?.(entries);
@@ -80,12 +127,24 @@ function controllableEpicVisibilityChannel(): {
     channel: {
       report: (epicIds) => {
         reportCalls.push([...epicIds]);
+        if (outcome === "pending") {
+          return new Promise<void>((resolve, reject) => {
+            pendingReportSettlers.push({ resolve, reject });
+          });
+        }
         return outcome === "resolve"
           ? Promise.resolve()
           : Promise.reject(new Error("cross-window report failed"));
       },
       snapshot: () => {
         snapshotCalls.count += 1;
+        if (snapshotOutcome === "pending") {
+          return new Promise<readonly DesktopEpicVisibilityEntry[]>(
+            (resolve, reject) => {
+              pendingSnapshotSettlers.push({ resolve, reject });
+            },
+          );
+        }
         return snapshotOutcome === "resolve"
           ? Promise.resolve(snapshotEntries)
           : Promise.reject(new Error("cross-window snapshot failed"));
@@ -271,6 +330,71 @@ describe("installCrossWindowEpicVisibility - failed-report retry (fixup 2, item 
       uninstall();
     }
   });
+
+  it("does not report again if a still-pending report only rejects after teardown", async () => {
+    const { channel, reportCalls, setReportPending, settlePendingReport } =
+      controllableEpicVisibilityChannel();
+    setReportPending();
+    const uninstall = installCrossWindowEpicVisibility(
+      fakeDesktopWindowsBridge("window-a", channel),
+    );
+    // The install-time push, still in flight - not yet settled.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reportCalls).toHaveLength(1);
+
+    uninstall();
+
+    // The invoke rejects AFTER teardown: this is what a `cancel()` that only
+    // reaches an already-scheduled timer cannot prevent.
+    settlePendingReport("reject");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reportCalls).toHaveLength(1);
+
+    // Advance past the full backoff budget: no retry got armed by the
+    // post-teardown rejection.
+    await vi.advanceTimersByTimeAsync(250 + 1_000 + 4_000 + 1_000);
+    expect(reportCalls).toHaveLength(1);
+  });
+
+  it("a stale completion from a superseded report attempt neither re-arms a retry nor resets the live leg's failure budget", async () => {
+    const {
+      channel,
+      reportCalls,
+      setReportOutcome,
+      setReportPending,
+      settlePendingReport,
+    } = controllableEpicVisibilityChannel();
+    setReportPending();
+    const uninstall = installCrossWindowEpicVisibility(
+      fakeDesktopWindowsBridge("window-a", channel),
+    );
+    try {
+      // Attempt A - the install-time push - is still in flight.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(reportCalls).toHaveLength(1);
+
+      // A fresh visibility edge supersedes A before it settles: `restart()`
+      // cancels A and starts attempt B, which fails and arms its own retry.
+      setReportOutcome("reject");
+      surfaceHostState.listener?.("epic-x");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(reportCalls).toHaveLength(2);
+
+      // A's stale promise settles now, well after B took over.
+      settlePendingReport("resolve");
+      await vi.advanceTimersByTimeAsync(0);
+      // Synchronous observable: settling the stale attempt produced no call.
+      expect(reportCalls).toHaveLength(2);
+
+      // Drain B's own retry budget (250 + 1_000 + 4_000) plus margin. If A's
+      // stale resolve had reset the failure counter (the bug), B would earn
+      // an extra retry cycle out of it and this would land on 6, not 5.
+      await vi.advanceTimersByTimeAsync(250 + 1_000 + 4_000 + 4_000 + 1_000);
+      expect(reportCalls).toHaveLength(5);
+    } finally {
+      uninstall();
+    }
+  });
 });
 
 /**
@@ -377,5 +501,53 @@ describe("installCrossWindowEpicVisibility - failed-snapshot retry (fixup 2, cla
     } finally {
       uninstall();
     }
+  });
+
+  it("does not arm a new retry timer if a still-pending snapshot only rejects after teardown", async () => {
+    const controls = controllableEpicVisibilityChannel();
+    controls.setSnapshotPending();
+    const uninstall = installCrossWindowEpicVisibility(
+      fakeDesktopWindowsBridge("window-a", controls.channel),
+    );
+    // The startup snapshot read, still in flight - not yet settled.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(controls.snapshotCalls.count).toBe(1);
+
+    uninstall();
+
+    const timersBeforeRejection = vi.getTimerCount();
+
+    // On THIS leg, a channel-call-count assertion here is NOT the pin: it
+    // passes even under the reverted `cancel()`. `snapshotSuperseded()`
+    // (`lifecycle.cancelled || lifecycle.fanOutSeen`) is the attempt's FIRST
+    // line, before `channel.snapshot()` is ever called again - and on this
+    // leg `lifecycle.cancelled` and the generation bump always flip together:
+    // production `restart()`s this leg exactly once, at install, and only
+    // ever `cancel()`s it at teardown, so there is no window where the
+    // generation has moved on but `lifecycle.cancelled` has not. That guard
+    // alone already stops a second `channel.snapshot()` call regardless of
+    // the fix, so counting calls can't distinguish fixed from reverted here.
+    // What the fix DOES still change on this leg: without the generation
+    // check in `.catch`, a rejection landing after teardown still logs a
+    // warning and arms a fresh `window.setTimeout` that will later fire and
+    // no-op on the lifecycle guard - a leaked timer, not an extra call. That
+    // timer is the load-bearing assertion below.
+    controls.settlePendingSnapshot("reject");
+    // Flush the microtask so `.catch` - and, on the reverted code, the
+    // `window.setTimeout` it would arm - has run before we read the count.
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(vi.getTimerCount()).toBe(timersBeforeRejection);
+
+    // Kept as an extra guard, not the pin (see comment above): the retry
+    // entry guard already keeps this at 1 either way.
+    expect(controls.snapshotCalls.count).toBe(1);
+    expect(isEpicVisibleInAnotherWindow("epic-in-window-b")).toBe(false);
+
+    // Advance past the full backoff budget: nothing further got called or
+    // published by the post-teardown rejection.
+    await vi.advanceTimersByTimeAsync(250 + 1_000 + 4_000 + 1_000);
+    expect(controls.snapshotCalls.count).toBe(1);
+    expect(isEpicVisibleInAnotherWindow("epic-in-window-b")).toBe(false);
   });
 });

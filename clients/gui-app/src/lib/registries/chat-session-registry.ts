@@ -108,13 +108,17 @@ setEpicChatWorkProbe((epicId) => registry.unsettledWorkForEpic(epicId));
  * The registry's own signal is NOT enough, and assuming it was left this retry
  * mostly inert.
  *
- * `unsettledWorkForEpic` reads `activeTurn`, `runStatus`, the approval lists
- * and `pendingActions` out of each chat's STORE, but `registry.subscribe`
- * relays only the shared session registry's membership and demand events -
- * acquire, release, dispose. An inner store write is none of those. So the
- * exact moment this retry exists for, a chat's last pending action being
- * acknowledged, emitted nothing, and a park deferred for chat work sat waiting
- * for some unrelated acquire elsewhere to shake it loose.
+ * `unsettledWorkForEpic` reads `activeTurn`, `runStatus`, the approval lists,
+ * `pendingActions`, `acceptedActions`, `failedSendRestoration` and `restore`
+ * out of each chat's STORE, but `registry.subscribe` relays only the shared
+ * session registry's membership and demand events - acquire, release, dispose.
+ * An inner store write is none of those. So the exact moments this retry exists
+ * for - a chat's last action settling, a restoration slot being taken into the
+ * composer, a restore completing - emitted nothing, and a park deferred for
+ * chat work sat waiting for some unrelated acquire elsewhere to shake it loose.
+ *
+ * Every one of those settlements is a store write and nothing else, which is
+ * why the watch is on the store rather than on any narrower signal.
  *
  * So watch the stores themselves, rebinding on every membership change because
  * membership is precisely what changes the set of live handles. Firing on
