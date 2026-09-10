@@ -530,12 +530,13 @@ describe("<EpicsListPanel />", () => {
     };
     renderPanel("embedded", "/");
 
-    expect(
-      await screen.findByTestId("epics-list-cloud-page-unavailable"),
-    ).not.toBeNull();
+    expect(await screen.findByTestId("epics-list-unavailable")).not.toBeNull();
     // RED before the fix: "No tasks yet" rendered under the notice, a claim
     // about an account whose tasks may all live on other devices.
     expect(screen.queryByTestId("epics-list-empty")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("epics-list-unavailable-retry"));
+    expect(testState.refetch).toHaveBeenCalled();
   });
 
   it("shows the explicit cloud-pending state instead of an empty list", async () => {
@@ -544,12 +545,7 @@ describe("<EpicsListPanel />", () => {
     renderPanel("embedded", "/");
 
     expect(screen.queryByTestId("epics-list-empty")).toBeNull();
-    expect(
-      await screen.findByTestId("epics-list-cloud-page-pending"),
-    ).not.toBeNull();
-    expect(screen.getByTestId("epics-list-completeness").textContent).toContain(
-      "Cloud tasks are still loading",
-    );
+    expect(await screen.findByTestId("epics-list-loading")).not.toBeNull();
   });
 
   it("labels a task that is already open in the tab strip", async () => {
@@ -726,48 +722,12 @@ describe("<EpicsListPanel />", () => {
     expect(rows.textContent).not.toContain("Preserved orphan");
   });
 
-  it("states what an offline page is missing instead of presenting it as complete", async () => {
+  it("never tells the user which rows came from the cloud or the device", async () => {
+    // The worst-case statement that used to render every line of the
+    // completeness notice: an unavailable cloud page, partial facets,
+    // a truncated local page and an order that is only a loaded union.
     testState.items = [
       historyItem({ id: "history-local", epicId: "local", title: "Local" }),
-    ];
-    testState.completeness = {
-      cloudPage: "unavailable",
-      facets: "partial",
-      localRows: "present",
-      sort: "loaded-union",
-    };
-    renderPanel("embedded", "/");
-
-    const notice = await screen.findByTestId("epics-list-completeness");
-    expect(notice.getAttribute("data-cloud-page")).toBe("unavailable");
-    expect(notice.textContent).toContain("Cloud tasks couldn't be reached");
-    // `facets: "partial"` means the counts describe a DIFFERENT set from the
-    // rows, so the notice may not claim they cover the listed tasks - the
-    // fixture sets exactly that, and the older wording asserted the opposite.
-    expect(notice.textContent).toContain("Order covers the tasks listed here");
-    expect(notice.textContent).toContain("filter counts may leave some");
-  });
-
-  it("keeps the complete-counts wording when only the ORDER is a loaded union", async () => {
-    testState.items = [
-      historyItem({ id: "history-local", epicId: "local", title: "Local" }),
-    ];
-    testState.completeness = {
-      cloudPage: "settled",
-      facets: "server",
-      localRows: "present",
-      sort: "loaded-union",
-    };
-    renderPanel("embedded", "/");
-
-    const notice = await screen.findByTestId("epics-list-completeness");
-    expect(notice.textContent).toContain("not everything you have");
-    expect(notice.textContent).not.toContain("filter counts may leave some");
-  });
-
-  it("says a truncated page may be missing tasks, without claiming where", async () => {
-    testState.items = [
-      historyItem({ id: "history-m1", epicId: "m1", title: "Mirror 1" }),
     ];
     testState.completeness = {
       cloudPage: "unavailable",
@@ -777,52 +737,17 @@ describe("<EpicsListPanel />", () => {
     };
     renderPanel("embedded", "/");
 
-    const notice = await screen.findByTestId("epics-list-completeness");
-    expect(notice.getAttribute("data-local-rows")).toBe("truncated");
-    // A `truncated` page that says nothing reads as covered-everything - the
-    // banner going silent is what this guards against, not one particular
-    // wording. The copy deliberately does not name WHERE the gap is:
-    // `truncated` has more than one producer (the page cap, an unprovable
-    // filter, an unread root doc), and the wire member does not distinguish
-    // them, so a client must not either.
-    expect(notice.textContent).toContain(
-      "couldn't be checked against your filters",
-    );
-  });
-
-  it("names a filter this device cannot check rather than showing an empty list", async () => {
-    testState.items = [];
-    testState.completeness = {
-      cloudPage: "unavailable",
-      facets: "partial",
-      localRows: "suppressed-unprovable-filter",
-      sort: "server",
-    };
-    renderPanel("embedded", "/");
-
-    const notice = await screen.findByTestId("epics-list-completeness");
-    expect(notice.getAttribute("data-local-rows")).toBe(
-      "suppressed-unprovable-filter",
-    );
-    expect(notice.textContent).toContain("can't be checked against tasks");
-  });
-
-  it("says nothing at all for a fully server-owned page", async () => {
-    testState.items = [
-      historyItem({ id: "history-cloud", epicId: "cloud", title: "Cloud" }),
-    ];
-    testState.completeness = {
-      cloudPage: "settled",
-      facets: "server",
-      localRows: "none",
-      sort: "server",
-    };
-    renderPanel("embedded", "/");
-
-    expect(await screen.findByText("Cloud")).not.toBeNull();
-    // A caveat that appears on a complete page is the same defect wearing the
-    // other sign.
-    expect(screen.queryByTestId("epics-list-completeness")).toBeNull();
+    const rows = await screen.findByTestId("epics-list-rows");
+    expect(rows.textContent).toContain("Local");
+    expect(screen.queryByRole("status")).toBeNull();
+    // Scoped to the list body's own container rather than the whole
+    // document: unrelated chrome (a filter chip label, for example) could
+    // otherwise fail this assertion for a reason that has nothing to do with
+    // the row or empty-state copy under test.
+    const listBody = rows.closest("section");
+    expect(listBody).not.toBeNull();
+    expect(listBody?.textContent ?? "").not.toMatch(/cloud/i);
+    expect(listBody?.textContent ?? "").not.toMatch(/device/i);
   });
 
   it("disables pin mutation for a local-home epic and names the cloud-sync boundary", async () => {

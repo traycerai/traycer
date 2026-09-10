@@ -4,8 +4,6 @@ import type { HistoryItem } from "@/components/home/data/home-page.data";
 import type { ListTasksCompleteness } from "@traycer/protocol/host/epic/unary-schemas";
 import {
   EpicsListChatHostFilterUnsupported,
-  EpicsListCloudPagePending,
-  EpicsListCloudPageUnavailable,
   EpicsListEmpty,
   EpicsListError,
   EpicsListFilteredEmpty,
@@ -13,7 +11,7 @@ import {
   EpicsListHostRequiresCloudToList,
   EpicsListLoading,
   EpicsListShowMore,
-  HistoryCompletenessNotice,
+  EpicsListUnavailable,
 } from "@/components/epics/epics-list-shared";
 import { MobileHistoryRow } from "@/components/epics/mobile/mobile-history-row";
 import {
@@ -271,52 +269,25 @@ function MobileHistoryListBody(props: MobileHistoryListBodyProps): ReactNode {
     return <EpicsListChatHostFilterUnsupported />;
   }
   // The first page is a usable local snapshot while the cloud leg resolves.
-  // Empty local storage cannot answer whether the account has tasks yet.
+  // Empty local storage cannot answer whether the account has tasks yet, so
+  // this stays a load, never "No tasks yet".
   if (props.items.length === 0 && props.cloudPagePending) {
-    return (
-      <>
-        <HistoryCompletenessNotice
-          completeness={props.completeness}
-          cloudPagePending={props.cloudPagePending}
-        />
-        <EpicsListCloudPagePending />
-      </>
-    );
+    return <EpicsListLoading />;
   }
   if (props.items.length === 0 && !props.hasActiveFilters) {
-    // Same rule as the desktop panel: no cloud page means no claim of an
+    // Same rule as the desktop panel: no settled page means no claim of an
     // empty account.
-    return (
-      <>
-        <HistoryCompletenessNotice
-          completeness={props.completeness}
-          cloudPagePending={props.cloudPagePending}
-        />
-        {props.completeness?.cloudPage === "unavailable" ? (
-          <EpicsListCloudPageUnavailable />
-        ) : (
-          <EpicsListEmpty />
-        )}
-      </>
+    return props.completeness?.cloudPage === "unavailable" ? (
+      <EpicsListUnavailable onRetry={props.onRetry} />
+    ) : (
+      <EpicsListEmpty />
     );
   }
   if (props.items.length === 0 && props.hasActiveFilters && props.isFetching) {
-    return (
-      <>
-        <HistoryCompletenessNotice
-          completeness={props.completeness}
-          cloudPagePending={props.cloudPagePending}
-        />
-        <EpicsListFilteringLoading />
-      </>
-    );
+    return <EpicsListFilteringLoading />;
   }
   return (
     <>
-      <HistoryCompletenessNotice
-        completeness={props.completeness}
-        cloudPagePending={props.cloudPagePending}
-      />
       {props.items.length > 0 ? (
         <ul className="flex flex-col gap-2" data-testid="epics-list-rows">
           {props.items.map((item) => (

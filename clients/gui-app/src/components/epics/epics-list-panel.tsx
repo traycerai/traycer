@@ -80,8 +80,6 @@ import {
 import { EpicsFilterPopover } from "@/components/epics/epics-filter-popover";
 import {
   EpicsListChatHostFilterUnsupported,
-  EpicsListCloudPagePending,
-  EpicsListCloudPageUnavailable,
   EpicsListEmpty,
   EpicsListError,
   EpicsListFilteredEmpty,
@@ -89,7 +87,7 @@ import {
   EpicsListHostRequiresCloudToList,
   EpicsListLoading,
   EpicsListShowMore,
-  HistoryCompletenessNotice,
+  EpicsListUnavailable,
   HistoryRowLeadingIcon,
 } from "@/components/epics/epics-list-shared";
 import {
@@ -311,10 +309,10 @@ function historyPanelView(
     availableWorkspaces: data.availableWorkspaces,
     facets: data.facets,
     // `?? null` rather than a straight read: `completeness` is declared
-    // non-optional but arrives absent from partial fixtures, and the notice
+    // non-optional but arrives absent from partial fixtures, and the body
     // below dereferences it. The previous `data?.completeness ?? null` carried
     // that same coercion, so dropping it turned an omitted field into a render
-    // crash rather than a missing notice.
+    // crash.
     completeness: data.completeness ?? null,
   };
 }
@@ -1389,49 +1387,23 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
   if (items.length === 0) {
     // A pending local-first page is a renderable device snapshot, not a settled
     // account result. Keep the distinct state ahead of every empty branch so an
-    // empty mirror never becomes the definitive "No tasks yet" claim.
+    // empty mirror never becomes the definitive "No tasks yet" claim - it is
+    // still a load.
     if (cloudPagePending) {
-      return (
-        <>
-          <HistoryCompletenessNotice
-            completeness={completeness}
-            cloudPagePending={cloudPagePending}
-          />
-          <EpicsListCloudPagePending />
-        </>
-      );
+      return <EpicsListLoading />;
     }
     if (!hasActiveFilters) {
-      // The notice renders HERE too, and this is the case it matters most for:
-      // an empty History with no explanation is the strongest possible claim of
-      // completeness, and it is the one a suppressed local projection or an
-      // unreachable cloud page produces. With NO cloud page the body must not
-      // make that claim either: zero local rows is not evidence of an empty
-      // account.
-      return (
-        <>
-          <HistoryCompletenessNotice
-            completeness={completeness}
-            cloudPagePending={cloudPagePending}
-          />
-          {completeness?.cloudPage === "unavailable" ? (
-            <EpicsListCloudPageUnavailable />
-          ) : (
-            <EpicsListEmpty />
-          )}
-        </>
+      // With NO settled page the body must not claim an empty account: zero
+      // rows is not evidence of one. It says the load failed, and nothing
+      // about where.
+      return completeness?.cloudPage === "unavailable" ? (
+        <EpicsListUnavailable onRetry={onRetry} />
+      ) : (
+        <EpicsListEmpty />
       );
     }
     if (isFetching) {
-      return (
-        <>
-          <HistoryCompletenessNotice
-            completeness={completeness}
-            cloudPagePending={cloudPagePending}
-          />
-          <EpicsListFilteringLoading />
-        </>
-      );
+      return <EpicsListFilteringLoading />;
     }
   }
   const rowProps = {
@@ -1452,10 +1424,6 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
   };
   return (
     <>
-      <HistoryCompletenessNotice
-        completeness={completeness}
-        cloudPagePending={cloudPagePending}
-      />
       {preservedItems.length > 0 ? (
         <section
           className="mb-3 flex flex-col gap-2"

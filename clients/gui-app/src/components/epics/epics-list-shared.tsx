@@ -24,7 +24,6 @@ import { useSurfaceNotificationIndicatorState } from "@/components/notifications
 import { useEpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
-import type { ListTasksCompleteness } from "@traycer/protocol/host/epic/unary-schemas";
 
 /**
  * A task row's status: the epic's notification indicator when it has one, its
@@ -125,29 +124,6 @@ export function EpicsListFilteringLoading(): ReactNode {
 }
 
 /**
- * A local-first response can be ready to render before its cloud counterpart.
- * An empty local snapshot is therefore not an empty account: the cloud page is
- * still authoritative for that answer.
- */
-export function EpicsListCloudPagePending(): ReactNode {
-  return (
-    <div
-      className="flex flex-col items-center justify-center gap-2 py-16 text-center text-ui-sm text-muted-foreground"
-      data-testid="epics-list-cloud-page-pending"
-      aria-busy="true"
-      aria-live="polite"
-    >
-      <AgentSpinningDots
-        variant="dots"
-        className="text-muted-foreground"
-        testId={undefined}
-      />
-      <p className="font-medium text-foreground">Loading cloud tasks</p>
-    </div>
-  );
-}
-
-/**
  * Shown when a host filter is active but the serving peer cannot apply it, so
  * the rows were withheld. Deliberately NOT an empty-history message: the
  * account's tasks exist, this client just declined to show a list it could not
@@ -218,25 +194,32 @@ export function EpicsListEmpty(): ReactNode {
 }
 
 /**
- * No local rows AND no cloud page. Not an empty account: the cloud leg failed
- * or was withheld (an unverified session), so tasks that live only on other
- * devices are simply not visible from here, and "No tasks yet" would be the
- * one claim of completeness this page cannot make.
+ * No rows AND no settled page. Not an empty account: the listing failed or was
+ * withheld, so "No tasks yet" would be the one claim of completeness this page
+ * cannot make. It says only that, and offers the retry - the user is never
+ * told which side of the listing failed.
  */
-export function EpicsListCloudPageUnavailable(): ReactNode {
+export function EpicsListUnavailable(props: {
+  readonly onRetry: () => void;
+}): ReactNode {
   return (
     <div
       className="flex flex-col items-center justify-center gap-2 py-16 text-center text-ui-sm text-muted-foreground"
-      data-testid="epics-list-cloud-page-unavailable"
+      data-testid="epics-list-unavailable"
       role="status"
     >
       <p className="font-medium text-foreground">
-        Cloud tasks couldn&apos;t be loaded
+        Couldn&apos;t load your tasks
       </p>
-      <p>
-        This device holds no tasks of its own. Tasks from your other devices
-        will appear once the cloud can be reached.
-      </p>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        data-testid="epics-list-unavailable-retry"
+        onClick={props.onRetry}
+      >
+        Retry
+      </Button>
     </div>
   );
 }
@@ -250,108 +233,6 @@ export function EpicsListFilteredEmpty(): ReactNode {
       <p className="font-medium text-foreground">
         No tasks match these filters.
       </p>
-    </div>
-  );
-}
-
-/**
- * What this page is NOT, stated once above either responsive list body.
- *
- * A `pending` cloud page is deliberately an early return. Its `facets` are
- * necessarily partial, but a filter-count caveat is secondary to explaining
- * that the account-wide page has not arrived yet.
- */
-export function HistoryCompletenessNotice(props: {
-  readonly completeness: ListTasksCompleteness | null;
-  readonly cloudPagePending: boolean;
-}): ReactNode {
-  const { completeness } = props;
-  const cloudPagePending =
-    props.cloudPagePending || completeness?.cloudPage === "pending";
-  if (cloudPagePending) {
-    return (
-      <div
-        role="status"
-        aria-live="polite"
-        data-testid="epics-list-completeness"
-        data-cloud-page="pending"
-        data-local-rows={completeness?.localRows}
-        className="mb-3 flex flex-col gap-1 rounded-md border border-dashed border-border/60 bg-muted/20 px-3 py-2 text-ui-xs text-muted-foreground"
-      >
-        <p>
-          Cloud tasks are still loading. Showing what the connected device
-          holds.
-        </p>
-      </div>
-    );
-  }
-  if (completeness === null) return null;
-  const lines: string[] = [];
-  if (completeness.cloudPage === "unavailable") {
-    lines.push(
-      "Cloud tasks couldn't be reached. Showing what the connected device holds.",
-    );
-  }
-  if (completeness.localRows === "truncated") {
-    // Deliberately says INCOMPLETE and not WHERE, because `truncated` has more
-    // than one producer and they leave the gap in different places. The page
-    // cap does drop a suffix; a filter meeting a row with no association
-    // evidence, or a text query judged against a row whose root document could
-    // not be read (so only the immutable creation title was available), drops a
-    // row from the MIDDLE - an epic renamed after creation vanishes from a
-    // search for the name it now has.
-    //
-    // The previous copy - "Showing the first tasks stored on this device, not
-    // all" - was written when the cap was the only producer, and for the others
-    // it is the wrong SHAPE of claim rather than merely imprecise: a reader
-    // told they have a prefix concludes the rest is further down the list.
-    //
-    // "the connected device", not "this device", for the same reason as
-    // `history-pin-availability.ts`: these rows are the SERVING HOST's local
-    // rows, and on a phone or a relay-only shell that is another machine.
-    //
-    // Do NOT branch this line on which producer fired. The wire member
-    // deliberately does not distinguish them, so a client that split the copy
-    // would be reading a distinction it was never sent.
-    lines.push(
-      "Some tasks on the connected device couldn't be checked against your filters, so this list may be missing a few.",
-    );
-  }
-  if (completeness.localRows === "suppressed-unprovable-filter") {
-    // The difference between "you have no local epics matching" and "this
-    // filter cannot be answered from the connected device". Collapsing them is
-    // how a filtered offline History came to look empty and authoritative.
-    lines.push(
-      "This filter can't be checked against tasks stored on the connected device, so they aren't listed.",
-    );
-  }
-  // `facets: "partial"` is the protocol saying the counts describe a DIFFERENT
-  // set from the rows - host rows were injected beside them, or the cloud page
-  // is missing. Both lines used to assert the opposite ("counts cover the tasks
-  // listed here"), so the one state where the numbers provably disagree with
-  // the list was reported as the state where they agree.
-  if (completeness.sort === "loaded-union") {
-    lines.push(
-      completeness.facets === "partial"
-        ? "Order covers the tasks listed here, and filter counts may leave some of them out."
-        : "Order and counts cover the tasks listed here, not everything you have.",
-    );
-  } else if (completeness.facets === "partial") {
-    lines.push("Filter counts may not include every task listed here.");
-  }
-  if (lines.length === 0) return null;
-  return (
-    <div
-      role="status"
-      aria-live="polite"
-      data-testid="epics-list-completeness"
-      data-cloud-page={completeness.cloudPage}
-      data-local-rows={completeness.localRows}
-      className="mb-3 flex flex-col gap-1 rounded-md border border-dashed border-border/60 bg-muted/20 px-3 py-2 text-ui-xs text-muted-foreground"
-    >
-      {lines.map((line) => (
-        <p key={line}>{line}</p>
-      ))}
     </div>
   );
 }

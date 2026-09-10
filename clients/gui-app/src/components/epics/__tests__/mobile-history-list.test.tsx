@@ -716,7 +716,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     });
   });
 
-  describe("completeness and pending cloud page", () => {
+  describe("unavailable and pending cloud page", () => {
     it("does not declare the account empty when the cloud page is unavailable", async () => {
       testState.items = [];
       testState.completeness = {
@@ -727,13 +727,11 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       };
       renderPanel("embedded", "/");
 
-      expect(
-        await screen.findByTestId("epics-list-cloud-page-unavailable"),
-      ).not.toBeNull();
+      expect(await screen.findByTestId("epics-list-unavailable")).not.toBeNull();
       expect(screen.queryByTestId("epics-list-empty")).toBeNull();
     });
 
-    it("explains when cloud tasks are unavailable instead of implying a complete local list", async () => {
+    it("renders the rows with no cloud or device notice when the cloud page is unavailable", async () => {
       testState.items = [
         historyItem({ id: "history-local", epicId: "local", title: "Local" }),
       ];
@@ -745,28 +743,17 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       };
       renderPanel("embedded", "/");
 
-      const notice = await screen.findByTestId("epics-list-completeness");
-      expect(notice.getAttribute("data-cloud-page")).toBe("unavailable");
-      expect(notice.textContent).toContain("Cloud tasks couldn't be reached");
-      expect(notice.textContent).toContain(
-        "Order covers the tasks listed here",
-      );
-    });
-
-    it("explains when local rows are truncated, without claiming where", async () => {
-      testState.completeness = {
-        cloudPage: "settled",
-        facets: "server",
-        localRows: "truncated",
-        sort: "loaded-union",
-      };
-      renderPanel("embedded", "/");
-
-      const notice = await screen.findByTestId("epics-list-completeness");
-      expect(notice.getAttribute("data-local-rows")).toBe("truncated");
-      expect(notice.textContent).toContain(
-        "couldn't be checked against your filters",
-      );
+      const rows = await screen.findByTestId("epics-list-rows");
+      expect(rows.textContent).toContain("Local");
+      expect(screen.queryByRole("status")).toBeNull();
+      // Scoped to the list body's own container rather than the whole
+      // document: unrelated chrome (a filter chip label, for example) could
+      // otherwise fail this assertion for a reason that has nothing to do
+      // with the row or empty-state copy under test.
+      const listBody = rows.closest("section");
+      expect(listBody).not.toBeNull();
+      expect(listBody?.textContent ?? "").not.toMatch(/cloud/i);
+      expect(listBody?.textContent ?? "").not.toMatch(/device/i);
     });
 
     it("explains an empty filtered result when the local filter is unprovable", async () => {
@@ -782,15 +769,10 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       });
       renderPanel("embedded", "/");
 
-      const notice = await screen.findByTestId("epics-list-completeness");
-      expect(notice.getAttribute("data-local-rows")).toBe(
-        "suppressed-unprovable-filter",
-      );
-      expect(notice.textContent).toContain(
-        "can't be checked against tasks stored on the connected device",
-      );
+      expect(
+        await screen.findByTestId("epics-list-filtered-empty"),
+      ).not.toBeNull();
       expect(screen.queryByTestId("epics-list-empty")).toBeNull();
-      expect(screen.getByTestId("epics-list-filtered-empty")).not.toBeNull();
     });
 
     it("shows the explicit cloud-pending state when local storage is empty", async () => {
@@ -799,12 +781,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       renderPanel("embedded", "/");
 
       expect(screen.queryByTestId("epics-list-empty")).toBeNull();
-      expect(
-        await screen.findByTestId("epics-list-cloud-page-pending"),
-      ).not.toBeNull();
-      expect(
-        screen.getByTestId("epics-list-completeness").textContent,
-      ).toContain("Cloud tasks are still loading");
+      expect(await screen.findByTestId("epics-list-loading")).not.toBeNull();
     });
   });
 
