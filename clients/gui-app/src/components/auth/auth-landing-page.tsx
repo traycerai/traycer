@@ -66,20 +66,9 @@ export function AuthLandingPage(props: {
       <section className="relative z-10 mx-auto flex w-full flex-col items-center justify-center pt-[max(clamp(4rem,12vh,8rem),var(--safe-area-inset-top))] pr-[max(clamp(1.5rem,5vw,4.5rem),var(--safe-area-inset-right))] pb-[clamp(5rem,12vh,8rem)] pl-[max(clamp(1.5rem,5vw,4.5rem),var(--safe-area-inset-left))] text-center font-heading">
         <div className="flex w-full max-w-[min(88vw,31rem)] flex-col items-center gap-[clamp(1.2rem,2.8vh,2rem)]">
           <BrandEntrance size="hero">
-            <div className="brand-entrance-copy flex flex-col items-center gap-5">
-              <h1
-                aria-label="Welcome to traycer"
-                className="flex flex-col items-center gap-2 font-medium"
-              >
-                <span className="text-ui text-white/65">Welcome to</span>
-                <span className="text-[clamp(3.5rem,14vw,5rem)] leading-none tracking-[-0.055em]">
-                  traycer
-                </span>
-              </h1>
-              <p className="text-ui text-white/65">
-                Pick up where you left off.
-              </p>
-            </div>
+            <h1 className="brand-entrance-copy mb-2 text-[clamp(2rem,5vw,2.75rem)] font-semibold leading-[clamp(2.25rem,5.5vw,3rem)] tracking-tight">
+              Welcome to Traycer
+            </h1>
           </BrandEntrance>
           {/* Above the button, not below it: this is the reason the button is
               being shown at all, and a reader who has already pressed it has

@@ -19,7 +19,7 @@ export function BrandEntrance(props: {
         className={cn(
           "brand-entrance-mark h-auto",
           props.size === "hero"
-            ? "w-[clamp(4.5rem,18vw,6.5rem)] drop-shadow-[0_1.5rem_2.5rem_rgba(0,0,0,0.42)]"
+            ? "w-[clamp(3.75rem,8vw,5.4rem)] drop-shadow-[0_1.5rem_2.5rem_rgba(0,0,0,0.42)]"
             : "w-[clamp(3rem,12vw,4.5rem)]",
         )}
       />
