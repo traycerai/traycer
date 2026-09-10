@@ -90,7 +90,12 @@ describe("historyRowProvenanceTitle", () => {
     );
   });
 
-  it("tells an unauthorized local-only viewer to sign in again", () => {
-    expect(historyRowProvenanceTitle("local-only", false)).toMatch(/sign in/i);
+  it("tells an unauthorized local-only viewer it syncs once the sign-in is confirmed", () => {
+    expect(historyRowProvenanceTitle("local-only", false)).toMatch(
+      /once your sign-in is confirmed/i,
+    );
+    expect(historyRowProvenanceTitle("local-only", false)).not.toMatch(
+      /sign in again/i,
+    );
   });
 });

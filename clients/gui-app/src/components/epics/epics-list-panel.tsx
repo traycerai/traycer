@@ -4,6 +4,7 @@ import {
   type RefObject,
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -1681,6 +1682,9 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
     if (!canDeleteItem) return;
     onToggleSelection(item.epicId);
   };
+  // Names the leading status slot so both row targets can be described by
+  // whatever status mark is showing - see `HistoryRowStatusSlot`.
+  const statusDescriptionId = useId();
   const openEpicRow = (event: React.MouseEvent<HTMLAnchorElement>) => {
     event.preventDefault();
     if (event.ctrlKey || event.metaKey) {
@@ -1757,12 +1761,14 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
       item={item}
       canDeleteItem={canDeleteItem}
       deleteDisabledTooltip={deleteDisabledTooltip}
+      describedById={statusDescriptionId}
       onToggleSelection={toggleEpicSelection}
       onBlockUnavailableDelete={blockUnavailableDeleteAction}
       onRowKeyDown={onRowKeyDown}
     />
   ) : (
     <Link
+      aria-describedby={statusDescriptionId}
       to="/epics/$epicId/$tabId"
       params={{ epicId: item.epicId, tabId: linkTabId }}
       search={{
@@ -1809,7 +1815,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
           "updated ..." label squeezes the title to nothing at phone width. */}
       <div className={historyRowContentClassName(rowSweep.isVisible)}>
         <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden max-md:basis-full">
-          <HistoryRowStatusSlot>
+          <HistoryRowStatusSlot id={statusDescriptionId}>
             <HistoryRowLeadingIcon item={item} />
           </HistoryRowStatusSlot>
           {isRenaming ? (
@@ -1825,7 +1831,7 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
               <span className="truncate font-medium text-foreground">
                 {displayTitle}
               </span>
-              <HistoryRowStatusSlot>
+              <HistoryRowStatusSlot id={null}>
                 <ImportedUnseenDot epicId={item.epicId} />
               </HistoryRowStatusSlot>
               <HistoryOpenBadge epicId={item.epicId} isOpen={isOpen} />
@@ -2209,12 +2215,18 @@ function HistorySweepMenuItem(props: {
  * slot needs to know nothing about what activation means - the overlay link
  * and the selection-mode toggle both carry `data-history-row-target`.
  *
- * The glyph stays non-focusable, like every other status indicator: its
- * sentence is its accessible name (`role="status"` + `aria-label`), which is
- * how a screen reader reaches it, and a tab stop on every row for a
- * non-interactive mark would cost keyboard users a keypress per row.
+ * The marks stay non-focusable - a tab stop on every row for a
+ * non-interactive mark would cost keyboard users a keypress per row - and
+ * keyboard users reach the sentence through the row instead: the leading
+ * slot carries an `id`, and both row activation targets (the overlay link and
+ * the selection-mode toggle) name it in `aria-describedby`. The description
+ * is computed from the slot's contents, so it is whatever status mark is
+ * showing - the running spinner's title, an attention tone's, or the
+ * provenance dot's - and empty for the plain layers glyph, which is
+ * `aria-hidden`. `id` is `null` for the slot that has no target describing it.
  */
 function HistoryRowStatusSlot(props: {
+  readonly id: string | null;
   readonly children: ReactNode;
 }): ReactNode {
   const forwardClickToRow = useCallback(
@@ -2245,9 +2257,15 @@ function HistoryRowStatusSlot(props: {
     // announce itself and take focus, and the thing it activates already has
     // both. `role="presentation"` states exactly that - the span contributes
     // no semantics of its own; the status child keeps its `role="status"`.
+    // `empty:hidden`: a mark that renders nothing (the imported-unseen dot on
+    // a task with no unseen import) must not leave an empty flex item behind,
+    // or the parent's `gap` puts a stray space between the title and the next
+    // control. Decided by the DOM rather than by re-reading each mark's
+    // condition here, so a new mark cannot get the gap wrong.
     <span
+      id={props.id ?? undefined}
       role="presentation"
-      className="pointer-events-auto inline-flex shrink-0 items-center"
+      className="pointer-events-auto inline-flex shrink-0 items-center empty:hidden"
       data-testid="epics-list-row-status-slot"
       onClick={forwardClickToRow}
     >
@@ -2351,6 +2369,9 @@ function HistorySelectionOverlay(props: {
   readonly item: HistoryItem;
   readonly canDeleteItem: boolean;
   readonly deleteDisabledTooltip: string;
+  /** The row's status slot, so the toggle is described by the same sentence
+   * the overlay link is - see `HistoryRowStatusSlot`. */
+  readonly describedById: string;
   readonly onToggleSelection: () => void;
   readonly onBlockUnavailableDelete: (
     event: React.MouseEvent<HTMLElement>,
@@ -2362,6 +2383,7 @@ function HistorySelectionOverlay(props: {
       <button
         type="button"
         aria-label={`Toggle selection for ${historyItemDisplayTitle(props.item)}`}
+        aria-describedby={props.describedById}
         data-history-row-target=""
         className="absolute inset-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
         onClick={props.onToggleSelection}
@@ -2376,6 +2398,7 @@ function HistorySelectionOverlay(props: {
           type="button"
           aria-disabled="true"
           aria-label={`Cannot select ${historyItemDisplayTitle(props.item)}`}
+          aria-describedby={props.describedById}
           data-history-row-target=""
           className="absolute inset-0 cursor-not-allowed rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
           onClick={props.onBlockUnavailableDelete}

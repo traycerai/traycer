@@ -747,7 +747,8 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       const unavailable = await screen.findByTestId("epics-list-unavailable");
       expect(unavailable.getAttribute("data-remedy")).toBe("sign-in");
       expect(screen.queryByTestId("epics-list-unavailable-retry")).toBeNull();
-      expect(unavailable.textContent).toContain("Sign in again");
+      expect(unavailable.textContent).toMatch(/once it is/i);
+      expect(unavailable.textContent).not.toMatch(/sign in again/i);
       expect(screen.queryByTestId("epics-list-empty")).toBeNull();
     });
 

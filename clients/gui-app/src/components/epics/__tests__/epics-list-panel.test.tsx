@@ -20,6 +20,7 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import {
+  act,
   cleanup,
   createEvent,
   fireEvent,
@@ -40,6 +41,7 @@ import type { HistoryFacets } from "@/hooks/home/use-history-query";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useHistorySearchStore } from "@/stores/home/history-search-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useImportedUnseenStore } from "@/stores/session-import/imported-unseen-store";
 import { DEFAULT_HISTORY_SEARCH } from "@/lib/history-search";
 import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
 import { setDesktopEpicOwnershipBridge } from "@/lib/windows/desktop-epic-ownership";
@@ -282,6 +284,13 @@ function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
   };
 }
 
+function resetImportedUnseenStore(): void {
+  act(() => {
+    const state = useImportedUnseenStore.getState();
+    for (const epicId of Object.keys(state.unseen)) state.markSeen(epicId);
+  });
+}
+
 function historyWorktree(): WorktreeHostEntryV12 {
   return {
     worktreePath: "/worktrees/app/feature-history",
@@ -412,6 +421,7 @@ describe("<EpicsListPanel />", () => {
     // holding a verdict. The store defaults to `signed-out`, under which every
     // pin assertion below would pass vacuously against a disabled control.
     useAuthStore.setState({ status: "signed-in" });
+    resetImportedUnseenStore();
   });
 
   it("lets a destination picker replace normal row navigation", async () => {
@@ -469,6 +479,7 @@ describe("<EpicsListPanel />", () => {
     setDesktopEpicOwnershipBridge(null);
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
+    resetImportedUnseenStore();
   });
 
   it("opens landing history rows through the canonical epic tab route", async () => {
@@ -556,7 +567,8 @@ describe("<EpicsListPanel />", () => {
     const unavailable = await screen.findByTestId("epics-list-unavailable");
     expect(unavailable.getAttribute("data-remedy")).toBe("sign-in");
     expect(screen.queryByTestId("epics-list-unavailable-retry")).toBeNull();
-    expect(unavailable.textContent).toContain("Sign in again");
+    expect(unavailable.textContent).toMatch(/once it is/i);
+    expect(unavailable.textContent).not.toMatch(/sign in again/i);
     expect(screen.queryByTestId("epics-list-empty")).toBeNull();
   });
 
@@ -931,9 +943,20 @@ describe("<EpicsListPanel />", () => {
       "epics-list-row-provenance-local-only-epic-from-history",
     );
     expect(glyph.getAttribute("aria-label")).toMatch(/open this task to sync/i);
+
+    const link = await screen.findByRole("link", {
+      name: "Open task Local only epic",
+    });
+    const glyphSlot = glyph.parentElement;
+    if (glyphSlot === null) {
+      throw new Error(
+        "expected the provenance glyph to have a status slot parent",
+      );
+    }
+    expect(glyphSlot.id).toBe(link.getAttribute("aria-describedby"));
   });
 
-  it("shows the local-only provenance glyph telling an unverified viewer to sign in again", async () => {
+  it("shows the local-only provenance glyph telling an unverified viewer it syncs once the sign-in is confirmed", async () => {
     testState.items = [
       historyItem({
         title: "Local only epic",
@@ -946,7 +969,10 @@ describe("<EpicsListPanel />", () => {
     const glyph = await screen.findByTestId(
       "epics-list-row-provenance-local-only-epic-from-history",
     );
-    expect(glyph.getAttribute("aria-label")).toMatch(/sign in again/i);
+    expect(glyph.getAttribute("aria-label")).toMatch(
+      /once your sign-in is confirmed/i,
+    );
+    expect(glyph.getAttribute("aria-label")).not.toMatch(/sign in again/i);
   });
 
   it("shows no provenance glyph for an ordinary row carrying neither marker", async () => {
@@ -1084,6 +1110,158 @@ describe("<EpicsListPanel />", () => {
     expect(
       screen.getByTestId("epics-list-delete-selected").matches(":disabled"),
     ).toBe(false);
+  });
+
+  it("hides the imported-unseen status slot when there is nothing to show, so the title keeps no stray gap", async () => {
+    renderPanel("embedded", "/");
+
+    const link = await screen.findByRole("link", {
+      name: "Open task Open from landing",
+    });
+    const row = link.closest("li");
+    if (row === null) throw new Error("expected the row's <li> ancestor");
+
+    const slots = row.querySelectorAll(
+      '[data-testid="epics-list-row-status-slot"]',
+    );
+    expect(slots.length).toBe(2);
+
+    // First slot: the leading glyph, which always renders something and so
+    // never engages `empty:hidden`.
+    const leadingSlot = slots[0];
+    if (leadingSlot === undefined) throw new Error("expected a leading slot");
+    expect(leadingSlot.childElementCount).toBeGreaterThan(0);
+
+    // Second slot: the imported-unseen dot, which renders nothing for this
+    // ordinary (never-imported) row. `empty:hidden` is jsdom-invisible as
+    // computed style, so the class plus emptiness together are what prove the
+    // fix's mechanism is actually wired to this slot.
+    const importedSlot = slots[1];
+    if (importedSlot === undefined) throw new Error("expected a second slot");
+    expect(importedSlot.childElementCount).toBe(0);
+    expect(importedSlot.textContent).toBe("");
+    expect(importedSlot.className).toMatch(/\bempty:hidden\b/);
+
+    expect(screen.queryByTestId("imported-unseen-dot")).toBeNull();
+  });
+
+  it("fills the imported-unseen status slot once the task is a seeded imported-unseen row", async () => {
+    act(() => {
+      useImportedUnseenStore
+        .getState()
+        .markImported("epic-from-history", "claude");
+    });
+    renderPanel("embedded", "/");
+
+    const link = await screen.findByRole("link", {
+      name: "Open task Open from landing",
+    });
+    const row = link.closest("li");
+    if (row === null) throw new Error("expected the row's <li> ancestor");
+
+    const slots = row.querySelectorAll(
+      '[data-testid="epics-list-row-status-slot"]',
+    );
+    expect(slots.length).toBe(2);
+
+    const importedSlot = slots[1];
+    if (importedSlot === undefined) throw new Error("expected a second slot");
+    expect(importedSlot.childElementCount).toBe(1);
+    expect(
+      importedSlot.querySelector('[data-testid="imported-unseen-dot"]'),
+    ).not.toBeNull();
+  });
+
+  it("describes the row link by the leading status slot, so keyboard users get the provenance sentence without a tab stop", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    renderPanel("embedded", "/");
+
+    const link = await screen.findByRole("link", {
+      name: "Open task Local only epic",
+    });
+    const describedById = link.getAttribute("aria-describedby");
+    if (describedById === null) {
+      throw new Error("expected the row link to carry aria-describedby");
+    }
+    expect(describedById.length).toBeGreaterThan(0);
+
+    const describedByElement = document.getElementById(describedById);
+    if (describedByElement === null) {
+      throw new Error("expected the described element to exist in the DOM");
+    }
+    expect(describedByElement.getAttribute("data-testid")).toBe(
+      "epics-list-row-status-slot",
+    );
+
+    const glyph = describedByElement.querySelector(
+      '[data-testid^="epics-list-row-provenance-local-only-"]',
+    );
+    if (glyph === null) {
+      throw new Error(
+        "expected the provenance glyph inside the described slot",
+      );
+    }
+    expect(glyph.getAttribute("aria-label")).toMatch(/not synced yet/i);
+
+    const row = link.closest("li");
+    if (row === null) throw new Error("expected the row's <li> ancestor");
+    const slots = row.querySelectorAll(
+      '[data-testid="epics-list-row-status-slot"]',
+    );
+    expect(slots.length).toBe(2);
+    const importedUnseenSlot = slots[1];
+    if (importedUnseenSlot === undefined) {
+      throw new Error("expected a second slot");
+    }
+    expect(importedUnseenSlot.hasAttribute("id")).toBe(false);
+  });
+
+  it("describes the selection-mode toggle by the same status slot", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    renderPanel("embedded", "/");
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Select history items" }),
+    );
+
+    const toggle = await screen.findByRole("button", {
+      name: "Toggle selection for Local only epic",
+    });
+    const describedById = toggle.getAttribute("aria-describedby");
+    if (describedById === null) {
+      throw new Error(
+        "expected the selection toggle to carry aria-describedby",
+      );
+    }
+    expect(describedById.length).toBeGreaterThan(0);
+
+    const describedByElement = document.getElementById(describedById);
+    if (describedByElement === null) {
+      throw new Error("expected the described element to exist in the DOM");
+    }
+    expect(describedByElement.getAttribute("data-testid")).toBe(
+      "epics-list-row-status-slot",
+    );
+
+    const glyph = describedByElement.querySelector(
+      '[data-testid^="epics-list-row-provenance-local-only-"]',
+    );
+    if (glyph === null) {
+      throw new Error(
+        "expected the provenance glyph inside the described slot",
+      );
+    }
+    expect(glyph.getAttribute("aria-label")).toMatch(/not synced yet/i);
   });
 
   it("never names the cloud or the device when the host requires cloud access to list", () => {

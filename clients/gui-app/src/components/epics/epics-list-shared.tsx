@@ -262,7 +262,7 @@ export function EpicsListHostRequiresCloudToList(): ReactNode {
       </p>
       <p className="max-w-full">
         Your sign-in couldn&apos;t be confirmed, and this host version needs it
-        to list tasks. Sign in again, or update the host, to see them.
+        to list tasks. They&apos;ll show once it is, or update the host.
       </p>
     </div>
   );
@@ -289,7 +289,11 @@ export function EpicsListEmpty(): ReactNode {
  * `useCloudEpicTasksQuery` settles the page as unavailable without dispatching
  * the cloud leg while the session holds no verdict, and its guarded `refetch`
  * resolves without a request under the same condition, so a Retry there is a
- * button that does nothing. Sign-in is what changes the verdict.
+ * button that does nothing. A confirmed sign-in is what changes the verdict,
+ * and the copy states that CONDITION rather than telling the person to sign
+ * in again: `unverified` also covers authn being unreachable (which recovers
+ * on its own) and an unavailable account (which a re-sign-in cannot fix), and
+ * this component holds only the boolean - see `stores/auth/auth-store.ts`.
  */
 export function EpicsListUnavailable(props: {
   readonly onRetry: () => void;
@@ -319,7 +323,7 @@ export function EpicsListUnavailable(props: {
         </Button>
       ) : (
         <p>
-          Your sign-in couldn&apos;t be confirmed. Sign in again to see them.
+          Your sign-in couldn&apos;t be confirmed. They&apos;ll load once it is.
         </p>
       )}
     </div>
