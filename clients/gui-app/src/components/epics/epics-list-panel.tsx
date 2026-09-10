@@ -80,14 +80,11 @@ import {
 import { EpicsFilterPopover } from "@/components/epics/epics-filter-popover";
 import {
   EpicsListChatHostFilterUnsupported,
-  EpicsListEmpty,
   EpicsListError,
-  EpicsListFilteredEmpty,
-  EpicsListFilteringLoading,
   EpicsListHostRequiresCloudToList,
   EpicsListLoading,
+  EpicsListNoRows,
   EpicsListShowMore,
-  EpicsListUnavailable,
   HistoryRowLeadingIcon,
 } from "@/components/epics/epics-list-shared";
 import {
@@ -1379,38 +1376,21 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
   if (chatHostFilterUnsupported) {
     return <EpicsListChatHostFilterUnsupported />;
   }
-  // Every "there are no rows" reading, grouped under the one test they share.
-  // Ordering inside is load-bearing and unchanged; nesting only stops each arm
-  // from re-asking `items.length === 0`, and lets the last arm drop its
-  // `hasActiveFilters` re-test - the arm above it returns whenever that is
-  // false, so reaching the last one already means it is true.
+  // Every "there are no rows" reading, decided once for both responsive bodies
+  // in `EpicsListNoRows` - the ordering there is load-bearing.
   if (items.length === 0) {
-    // A pending local-first page is a renderable device snapshot, not a settled
-    // account result. Keep the distinct state ahead of every empty branch so an
-    // empty mirror never becomes the definitive "No tasks yet" claim - it is
-    // still a load.
-    if (cloudPagePending) {
-      return <EpicsListLoading />;
-    }
-    if (!hasActiveFilters) {
-      // With NO settled page the body must not claim an empty account: zero
-      // rows is not evidence of one. It says the load failed, and nothing
-      // about where.
-      return completeness?.cloudPage === "unavailable" ? (
-        <EpicsListUnavailable onRetry={onRetry} />
-      ) : (
-        <EpicsListEmpty />
-      );
-    }
-    if (isFetching) {
-      return <EpicsListFilteringLoading />;
-    }
-    // A filtered result with no settled page is not "No tasks match": the
-    // filter was never evaluated over the account. Same neutral state as the
-    // unfiltered arm - a failed load with a retry, and nothing about where.
-    if (completeness?.cloudPage === "unavailable") {
-      return <EpicsListUnavailable onRetry={onRetry} />;
-    }
+    return (
+      <EpicsListNoRows
+        cloudPagePending={cloudPagePending}
+        cloudPageUnavailable={completeness?.cloudPage === "unavailable"}
+        hasActiveFilters={hasActiveFilters}
+        isFetching={isFetching}
+        onRetry={onRetry}
+        hasNextPage={hasNextPage}
+        isFetchingNextPage={isFetchingNextPage}
+        onLoadMore={onLoadMore}
+      />
+    );
   }
   const rowProps = {
     selectionMode,
@@ -1484,14 +1464,11 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
         </ul>
       ) : null}
       {/*
-        Only when there is genuinely nothing to show. A page whose only rows
-        are preserved orphans is not an empty filter result, and telling the
-        person "no tasks match" over a section they can see would be the same
-        untruth from the other direction.
+        No "no tasks match" here: zero rows returned above through
+        `EpicsListNoRows`, and a page whose only rows are preserved orphans is
+        not an empty filter result - telling the person "no tasks match" over a
+        section they can see would be the same untruth from the other direction.
       */}
-      {ordinaryItems.length === 0 && preservedItems.length === 0 ? (
-        <EpicsListFilteredEmpty />
-      ) : null}
       <EpicsListShowMore
         hasNextPage={hasNextPage}
         isFetchingNextPage={isFetchingNextPage}

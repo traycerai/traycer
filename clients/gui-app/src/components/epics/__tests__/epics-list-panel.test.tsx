@@ -530,13 +530,33 @@ describe("<EpicsListPanel />", () => {
     };
     renderPanel("embedded", "/");
 
-    expect(await screen.findByTestId("epics-list-unavailable")).not.toBeNull();
+    const unavailable = await screen.findByTestId("epics-list-unavailable");
+    expect(unavailable).not.toBeNull();
     // RED before the fix: "No tasks yet" rendered under the notice, a claim
     // about an account whose tasks may all live on other devices.
     expect(screen.queryByTestId("epics-list-empty")).toBeNull();
+    expect(unavailable.getAttribute("data-remedy")).toBe("retry");
 
     fireEvent.click(screen.getByTestId("epics-list-unavailable-retry"));
     expect(testState.refetch).toHaveBeenCalled();
+  });
+
+  it("offers sign-in instead of a dead Retry when the session is unverified", async () => {
+    testState.items = [];
+    testState.completeness = {
+      cloudPage: "unavailable",
+      facets: "partial",
+      localRows: "none",
+      sort: "server",
+    };
+    useAuthStore.setState({ status: "unverified" });
+    renderPanel("embedded", "/");
+
+    const unavailable = await screen.findByTestId("epics-list-unavailable");
+    expect(unavailable.getAttribute("data-remedy")).toBe("sign-in");
+    expect(screen.queryByTestId("epics-list-unavailable-retry")).toBeNull();
+    expect(unavailable.textContent).toContain("Sign in again");
+    expect(screen.queryByTestId("epics-list-empty")).toBeNull();
   });
 
   it("does not call a filtered result empty when the listing was unavailable", async () => {

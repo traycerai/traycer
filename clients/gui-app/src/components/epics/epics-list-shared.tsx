@@ -23,6 +23,10 @@ import { NotificationIndicatorIcon } from "@/components/notifications/notificati
 import { useSurfaceNotificationIndicatorState } from "@/components/notifications/notification-indicator-context";
 import { useEpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
 import { createReportIssueContext } from "@/lib/report-issue-context";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
 
 /**
@@ -196,31 +200,95 @@ export function EpicsListEmpty(): ReactNode {
 /**
  * No rows AND no settled page. Not an empty account: the listing failed or was
  * withheld, so "No tasks yet" would be the one claim of completeness this page
- * cannot make. It says only that, and offers the retry - the user is never
- * told which side of the listing failed.
+ * cannot make. It says only that - the user is never told which side of the
+ * listing failed - and offers the remedy that can actually change the answer.
+ *
+ * Under an unverified session that remedy is NOT a retry:
+ * `useCloudEpicTasksQuery` settles the page as unavailable without dispatching
+ * the cloud leg while the session holds no verdict, and its guarded `refetch`
+ * resolves without a request under the same condition, so a Retry there is a
+ * button that does nothing. Sign-in is what changes the verdict.
  */
 export function EpicsListUnavailable(props: {
   readonly onRetry: () => void;
 }): ReactNode {
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
   return (
     <div
       className="flex flex-col items-center justify-center gap-2 py-16 text-center text-ui-sm text-muted-foreground"
       data-testid="epics-list-unavailable"
+      data-remedy={cloudAuthorized ? "retry" : "sign-in"}
       role="status"
     >
       <p className="font-medium text-foreground">
         Couldn&apos;t load your tasks
       </p>
-      <Button
-        type="button"
-        size="sm"
-        variant="outline"
-        data-testid="epics-list-unavailable-retry"
-        onClick={props.onRetry}
-      >
-        Retry
-      </Button>
+      {cloudAuthorized ? (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          data-testid="epics-list-unavailable-retry"
+          onClick={props.onRetry}
+        >
+          Retry
+        </Button>
+      ) : (
+        <p>
+          Your sign-in couldn&apos;t be confirmed. Sign in again to see them.
+        </p>
+      )}
     </div>
+  );
+}
+
+/**
+ * Every "there are no rows" reading, decided once for both responsive list
+ * bodies. Ordering is load-bearing:
+ *
+ * 1. A pending cloud page is a renderable device snapshot, not a settled
+ *    account result, so an empty one is still a load - never "No tasks yet".
+ * 2. With no filters, an unavailable page is a failed load, not an empty
+ *    account; a settled one is genuinely empty.
+ * 3. Under a filter, a fetch in flight is the search spinner; an unavailable
+ *    page is again a failed load (the filter was never evaluated over the
+ *    account); only a settled page may say "No tasks match".
+ *
+ * Renders `null` for nothing: a caller reaches this only with zero rows.
+ */
+export function EpicsListNoRows(props: {
+  readonly cloudPagePending: boolean;
+  readonly cloudPageUnavailable: boolean;
+  readonly hasActiveFilters: boolean;
+  readonly isFetching: boolean;
+  readonly onRetry: () => void;
+  readonly hasNextPage: boolean;
+  readonly isFetchingNextPage: boolean;
+  readonly onLoadMore: () => void;
+}): ReactNode {
+  if (props.cloudPagePending) return <EpicsListLoading />;
+  if (!props.hasActiveFilters) {
+    return props.cloudPageUnavailable ? (
+      <EpicsListUnavailable onRetry={props.onRetry} />
+    ) : (
+      <EpicsListEmpty />
+    );
+  }
+  if (props.isFetching) return <EpicsListFilteringLoading />;
+  if (props.cloudPageUnavailable) {
+    return <EpicsListUnavailable onRetry={props.onRetry} />;
+  }
+  return (
+    <>
+      <EpicsListFilteredEmpty />
+      <EpicsListShowMore
+        hasNextPage={props.hasNextPage}
+        isFetchingNextPage={props.isFetchingNextPage}
+        onLoadMore={props.onLoadMore}
+      />
+    </>
   );
 }
 

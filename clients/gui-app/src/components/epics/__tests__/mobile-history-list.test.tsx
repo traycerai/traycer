@@ -727,9 +727,27 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       };
       renderPanel("embedded", "/");
 
-      expect(
-        await screen.findByTestId("epics-list-unavailable"),
-      ).not.toBeNull();
+      const unavailable = await screen.findByTestId("epics-list-unavailable");
+      expect(unavailable).not.toBeNull();
+      expect(screen.queryByTestId("epics-list-empty")).toBeNull();
+      expect(unavailable.getAttribute("data-remedy")).toBe("retry");
+    });
+
+    it("offers sign-in instead of a dead Retry when the session is unverified", async () => {
+      testState.items = [];
+      testState.completeness = {
+        cloudPage: "unavailable",
+        facets: "partial",
+        localRows: "none",
+        sort: "server",
+      };
+      useAuthStore.setState({ status: "unverified" });
+      renderPanel("embedded", "/");
+
+      const unavailable = await screen.findByTestId("epics-list-unavailable");
+      expect(unavailable.getAttribute("data-remedy")).toBe("sign-in");
+      expect(screen.queryByTestId("epics-list-unavailable-retry")).toBeNull();
+      expect(unavailable.textContent).toContain("Sign in again");
       expect(screen.queryByTestId("epics-list-empty")).toBeNull();
     });
 
