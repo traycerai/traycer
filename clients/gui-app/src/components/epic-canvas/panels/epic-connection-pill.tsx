@@ -791,10 +791,16 @@ function indicatorFor(
         label: "Offline — changes pending",
         showAgentSpinner: false,
         pulse: null,
+        // Names the SERVING HOST, not "Traycer": in this state the window is
+        // no longer the last holder and it is the host's flush that is still
+        // unknown (`use-cloud-link-grace.ts`), so from a phone or a browser
+        // attached to a remote host "keep Traycer running" pointed at the
+        // wrong process - a person could follow it and still shut down the
+        // one machine that must stay up.
         tooltip:
-          "Offline. Pending changes are still being processed; keep Traycer running.",
+          "Offline. Pending changes are still being processed on the host serving this task; keep that host running.",
         ariaLabel:
-          "Offline. Pending changes are still being processed; keep Traycer running.",
+          "Offline. Pending changes are still being processed on the host serving this task; keep that host running.",
       };
     // No spinner: nothing is in flight while the host's cloud link is down.
     // The durability claim in this copy is load-bearing and true - the host

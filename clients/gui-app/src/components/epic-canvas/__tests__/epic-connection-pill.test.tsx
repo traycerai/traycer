@@ -673,10 +673,10 @@ describe("<EpicConnectionPill />", () => {
 
   it("shows host-pending offline work immediately, without claiming it is durable", async () => {
     // Cloud-down, but never quieted: the aria-label and tooltip below say
-    // "keep it running", which is an instruction about the DEVICE. The host
-    // has acked this replica's work, so the window is not its last holder -
-    // but the host's own durable flush is unknown, and a 15s quiet window is
-    // exactly when a shutdown would interrupt it.
+    // "keep that host running", an instruction about the SERVING HOST. The
+    // host has acked this replica's work, so the window is not its last
+    // holder - but the host's own durable flush is unknown, and a 15s quiet
+    // window is exactly when a shutdown would interrupt it.
     vi.useFakeTimers();
     renderPill("offlineWithHostPending");
     vi.useRealTimers();
@@ -693,13 +693,13 @@ describe("<EpicConnectionPill />", () => {
       .getByTestId("epic-connection-pill")
       .getAttribute("aria-label");
     expect(offlineWithHostPendingLabel).toBe(
-      "Offline. Pending changes are still being processed; keep Traycer running.",
+      "Offline. Pending changes are still being processed on the host serving this task; keep that host running.",
     );
     expect(offlineWithHostPendingLabel).not.toMatch(
       /\bcloud\b|\blocally\b|this device/i,
     );
     const offlineWithHostPendingTooltip =
-      "Offline. Pending changes are still being processed; keep Traycer running.";
+      "Offline. Pending changes are still being processed on the host serving this task; keep that host running.";
     await expectTooltip(offlineWithHostPendingTooltip);
     expect(offlineWithHostPendingTooltip).not.toMatch(
       /\bcloud\b|\blocally\b|this device/i,
