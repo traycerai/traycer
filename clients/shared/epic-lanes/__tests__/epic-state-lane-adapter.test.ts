@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { epicStateSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/state-subscribe";
+import { epicStateSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/state-subscribe";
 import type {
   AdapterHost,
   AdapterStatus,
@@ -51,7 +51,7 @@ function snapshotFrame(
     reconciledWithCloud: boolean;
   }>,
 ): EpicStateSnapshotFrame {
-  const parsed = epicStateSubscribeServerFrameSchemaV10.parse({
+  const parsed = epicStateSubscribeServerFrameSchemaV11.parse({
     kind: "snapshot",
     authorityEpoch: overrides.authorityEpoch ?? "epoch-1",
     position: overrides.position ?? 0,
@@ -81,7 +81,7 @@ function resumedFrame(
   position: number,
   reconciledWithCloud: boolean,
 ): EpicStateResumedFrame {
-  const parsed = epicStateSubscribeServerFrameSchemaV10.parse({
+  const parsed = epicStateSubscribeServerFrameSchemaV11.parse({
     kind: "resumed",
     authorityEpoch,
     position,
@@ -198,7 +198,7 @@ interface DeltaFrameOverrides {
 }
 
 function deltaFrame(overrides: DeltaFrameOverrides): EpicStateDeltaFrame {
-  const parsed = epicStateSubscribeServerFrameSchemaV10.parse({
+  const parsed = epicStateSubscribeServerFrameSchemaV11.parse({
     kind: "delta",
     authorityEpoch: overrides.authorityEpoch ?? "epoch-1",
     seq: overrides.seq ?? 1,
@@ -563,7 +563,7 @@ describe("createEpicStateLaneAdapter - snapshot row decode", () => {
     adapter.attach(host);
 
     const frame = snapshotFrame({ basis: "cold" });
-    const withRows = epicStateSubscribeServerFrameSchemaV10.parse({
+    const withRows = epicStateSubscribeServerFrameSchemaV11.parse({
       ...frame,
       artifactRecords: [artifactRecordFixture({ id: "a1", revision: 3 })],
       deletedArtifacts: [deletedArtifactRecordFixture("a2", 4)],
@@ -897,7 +897,7 @@ describe("createEpicStateLaneAdapter - delta decode", () => {
     const { host, log } = createRecordingHost();
     adapter.attach(host);
 
-    const frame = epicStateSubscribeServerFrameSchemaV10.parse({
+    const frame = epicStateSubscribeServerFrameSchemaV11.parse({
       ...snapshotFrame({ basis: "cold" }),
       epicMeta: {
         revision: 42,
@@ -1062,7 +1062,7 @@ describe("createEpicStateLaneAdapter - seed trust", () => {
     latest().callbacks.onSnapshot(
       snapshotFrame({ basis: "cold", reconciledWithCloud: false }),
     );
-    const parsed = epicStateSubscribeServerFrameSchemaV10.parse({
+    const parsed = epicStateSubscribeServerFrameSchemaV11.parse({
       kind: "trustChanged",
       authorityEpoch: "epoch-1",
       reconciledWithCloud: true,

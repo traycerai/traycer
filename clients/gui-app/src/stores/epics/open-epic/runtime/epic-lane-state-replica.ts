@@ -60,7 +60,10 @@
  * replacement instead of racing two.
  */
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
-import type { EpicMeta } from "@traycer/protocol/host/epic/state-subscribe";
+import type {
+  EpicDeletedArtifactRecord,
+  EpicMeta,
+} from "@traycer/protocol/host/epic/state-subscribe";
 import type { CommentThreadWire } from "@traycer/protocol/host/epic/unary-schemas";
 import type {
   EpicStateLaneEvent,
@@ -305,6 +308,30 @@ function laneSlicesEq(a: EpicLaneStateSlices, b: EpicLaneStateSlices): boolean {
 }
 
 /**
+ * The tombstone arm, lifted out of `buildLaneSlices` so the ticket-status
+ * narrowing does not count against that function's complexity budget.
+ *
+ * `?? null` because the tombstone's `status` is NULLISH on the wire: the
+ * metadata-only schema made the ticket slots optional so slim tombstones
+ * written before it stay valid, so a ticket row can arrive with the key absent
+ * rather than merely null.
+ */
+function projectTombstone(
+  record: EpicDeletedArtifactRecord,
+): DeletedArtifactProjection {
+  return {
+    id: record.id,
+    kind: record.kind,
+    title: record.title,
+    deletedAt: record.deletedAt,
+    status:
+      record.kind === "ticket" || record.kind === "story"
+        ? (record.status ?? null)
+        : null,
+  };
+}
+
+/**
  * Demultiplex the one keyed set into the five populations.
  *
  * The `@1` head's own field-for-field mapping, applied to typed rows instead of
@@ -359,16 +386,7 @@ function buildLaneSlices(rows: readonly HeldLaneRow[]): EpicLaneStateSlices {
       }
       case "artifact-tombstone": {
         const record = row.record;
-        deletedById[record.id] = {
-          id: record.id,
-          kind: record.kind,
-          title: record.title,
-          deletedAt: record.deletedAt,
-          status:
-            record.kind === "ticket" || record.kind === "story"
-              ? record.status
-              : null,
-        };
+        deletedById[record.id] = projectTombstone(record);
         deletedIds.push(record.id);
         break;
       }
