@@ -50,7 +50,7 @@ export function usePublishBrowserGuestTile(input: {
 
   useLayoutEffect(() => {
     const stage = stageRef?.current;
-    if (stage === undefined || stage === null) return;
+    if (stage === undefined || stage === null || !presented) return;
     stage.style.setProperty("anchor-name", clipAnchorName);
     stage.style.setProperty("--browser-clip-size-anchor", clipSizeAnchorName);
     return () => {

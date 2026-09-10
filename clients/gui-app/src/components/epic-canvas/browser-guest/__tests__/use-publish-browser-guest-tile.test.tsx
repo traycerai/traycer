@@ -96,7 +96,10 @@ function TileProbe(props: {
   );
 }
 
-function StageTileProbe(props: { readonly registrationId: string }) {
+function StageTileProbe(props: {
+  readonly registrationId: string;
+  readonly presented: boolean;
+}) {
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   usePublishBrowserGuestTile({
@@ -107,7 +110,7 @@ function StageTileProbe(props: { readonly registrationId: string }) {
     instanceId: "tile-1",
     viewTabId: "view-1",
     paneId: "pane-1",
-    presented: true,
+    presented: props.presented,
     tileKey: null,
   });
   return (
@@ -127,14 +130,16 @@ afterEach(() => {
 
 describe("usePublishBrowserGuestTile", () => {
   it("moves the stage clip anchor with registration changes and clears it on unmount", () => {
-    const view = render(<StageTileProbe registrationId={REGISTRATION_A} />);
+    const view = render(
+      <StageTileProbe registrationId={REGISTRATION_A} presented />,
+    );
     const stage = screen.getByTestId("tile-stage");
     expect(stage.style.getPropertyValue("anchor-name")).toBe(CLIP_ANCHOR_A);
     expect(stage.style.getPropertyValue("--browser-clip-size-anchor")).toBe(
       CLIP_SIZE_ANCHOR_A,
     );
 
-    view.rerender(<StageTileProbe registrationId={REGISTRATION_B} />);
+    view.rerender(<StageTileProbe registrationId={REGISTRATION_B} presented />);
     expect(stage.style.getPropertyValue("anchor-name")).toBe(CLIP_ANCHOR_B);
     expect(stage.style.getPropertyValue("--browser-clip-size-anchor")).toBe(
       CLIP_SIZE_ANCHOR_B,
@@ -143,6 +148,33 @@ describe("usePublishBrowserGuestTile", () => {
     view.unmount();
     expect(stage.style.getPropertyValue("anchor-name")).toBe("");
     expect(stage.style.getPropertyValue("--browser-clip-size-anchor")).toBe("");
+  });
+
+  it("only assigns stage clip anchors while presented", () => {
+    const view = render(
+      <StageTileProbe registrationId={REGISTRATION_A} presented={false} />,
+    );
+    const stage = screen.getByTestId("tile-stage");
+    expect(stage.style.getPropertyValue("anchor-name")).toBe("");
+    expect(stage.style.getPropertyValue("--browser-clip-size-anchor")).toBe("");
+
+    view.rerender(<StageTileProbe registrationId={REGISTRATION_A} presented />);
+    expect(stage.style.getPropertyValue("anchor-name")).toBe(CLIP_ANCHOR_A);
+    expect(stage.style.getPropertyValue("--browser-clip-size-anchor")).toBe(
+      CLIP_SIZE_ANCHOR_A,
+    );
+
+    view.rerender(
+      <StageTileProbe registrationId={REGISTRATION_A} presented={false} />,
+    );
+    expect(stage.style.getPropertyValue("anchor-name")).toBe("");
+    expect(stage.style.getPropertyValue("--browser-clip-size-anchor")).toBe("");
+
+    view.rerender(<StageTileProbe registrationId={REGISTRATION_A} presented />);
+    expect(stage.style.getPropertyValue("anchor-name")).toBe(CLIP_ANCHOR_A);
+    expect(stage.style.getPropertyValue("--browser-clip-size-anchor")).toBe(
+      CLIP_SIZE_ANCHOR_A,
+    );
   });
 
   it("keeps the registration-id anchor-name on the tile surface across pane and presentation changes", () => {
