@@ -242,6 +242,20 @@ import type { BridgeMessageEventLike } from "@traycer-clients/shared/replica-run
 import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/runtime/legacy-epic-stream-adapter";
 import { createEpicSessionFixture } from "./epic-session-fixture";
 import {
+  __resetEpicParkingForTests,
+  isEpicParked,
+  trackEpicParkingSurface,
+} from "@/lib/epics/epic-parking";
+import { setEpicSurfaceVisibility } from "@/lib/browser-view/tiles/surface-host-opened-tab";
+import { PARK_HIDDEN_EPIC_AFTER_MS } from "@/stores/replica-memory/retention-profile";
+import { EpicSessionGate } from "@/providers/epic-session-gate";
+import { useEpicCommentThreadsForClient } from "@/hooks/comments/use-epic-comment-threads";
+import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import {
+  __resetAgentActivityStoreForTests,
+  __setAgentActivityPlaneAnsweringForTests,
+} from "@/stores/agent-activity-store";
+import {
   ArtifactAttachmentScopeContext,
   type ArtifactAttachmentScopeValue,
 } from "@/lib/attachments/artifact-attachment-scope-context";
@@ -3508,5 +3522,221 @@ describe("<EpicSessionProvider />", () => {
     // The candidate's own transport. Under the unfixed tree this stays 0 for
     // the life of the tab.
     expect(streams[1].closeCount).toBe(1);
+  });
+
+  // ── Renderer parking (plan C, decision C1) ─────────────────────────────
+  //
+  // Pin: "showing a parked tab re-acquires the session ... with a NEW fence
+  // identity" (`epics/.../tickets/renderer-parking`). The session-identity
+  // half lives here, against the real provider and the real
+  // `OpenEpicSessionRegistry` singleton this file already exercises for every
+  // other re-acquire pin (identity switch, host re-point, ...) - parking is
+  // one more trigger for the same "old handle disposed, new handle built"
+  // shape, driven through the real `lib/epics/epic-parking.ts` clock instead
+  // of a stand-in. The record-query consequence (a fresh
+  // `useEpicSyncChatRecords` call, which is what actually reads the new
+  // store's `ingestFenceIdentity`) is pinned beside `<EpicRouteSessionBody />`
+  // in `epic-route-session-body.test.tsx`, where that hook's call count is
+  // already observable.
+  let unsubscribeParkingSurface: (() => void) | null = null;
+
+  beforeEach(() => {
+    // `canPark` reads `epicIsBusy`, which fails CLOSED until the agent
+    // activity plane has answered at least once (see the same note in
+    // `stores/epics/open-epic/__tests__/session-registry.test.ts`) - without
+    // this every park attempt below refuses forever, not because of the
+    // 5-minute window but because the plane never vouched for "idle".
+    __setAgentActivityPlaneAnsweringForTests();
+  });
+
+  afterEach(() => {
+    unsubscribeParkingSurface?.();
+    unsubscribeParkingSurface = null;
+    __resetEpicParkingForTests();
+    __resetAgentActivityStoreForTests();
+  });
+
+  it("parks a mounted session (dropping the handle, closing the stream) and re-acquires a genuinely NEW one on show", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const EPIC_ID = "epic-parking-reacquire";
+    const streams: ControlledStream[] = [];
+    const seenHandles: OpenEpicStoreHandle[] = [];
+    installStreamFactory((_epicId, _callbacks) => {
+      const stream: ControlledStream = { closeCount: 0 };
+      streams.push(stream);
+      return {
+        applyUpdate: () => undefined,
+        awareness: () => undefined,
+        applyArtifactRoomUpdate: () => undefined,
+        artifactRoomAwareness: () => undefined,
+        retryMigration: () => undefined,
+        close: () => {
+          stream.closeCount += 1;
+        },
+      };
+    });
+
+    render(
+      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+        <HandleProbe onHandle={(handle) => seenHandles.push(handle)} />
+      </EpicSessionProvider>,
+    );
+
+    await waitFor(() => {
+      expect(seenHandles).toHaveLength(1);
+    });
+    const firstHandle = seenHandles.at(-1);
+    if (firstHandle === undefined) throw new Error("expected initial handle");
+    expect(streams).toHaveLength(1);
+
+    act(() => {
+      unsubscribeParkingSurface = trackEpicParkingSurface(EPIC_ID, EPIC_ID);
+    });
+    act(() => {
+      setEpicSurfaceVisibility(EPIC_ID, EPIC_ID, false);
+    });
+    // Both arms in one flow, matching the ticket's "delete the threshold and
+    // this cannot fail" bar: nothing released one second short of the window.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(PARK_HIDDEN_EPIC_AFTER_MS - 1_000);
+    });
+    expect(isEpicParked(EPIC_ID)).toBe(false);
+    expect(streams[0].closeCount).toBe(0);
+    expect(screen.getByTestId("handle-probe").dataset.ready).toBe("true");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(isEpicParked(EPIC_ID)).toBe(true);
+    expect(streams[0].closeCount).toBe(1);
+    expect(screen.getByTestId("handle-probe").dataset.ready).toBe("false");
+    expect(__getOpenEpicRegistryForTests().get(EPIC_ID)).toBeNull();
+
+    act(() => {
+      setEpicSurfaceVisibility(EPIC_ID, EPIC_ID, true);
+    });
+    expect(isEpicParked(EPIC_ID)).toBe(false);
+
+    // Re-acquisition is the provider's own acquire effect reacting to
+    // `parked` flipping back - a cold open, exactly as decision C5 asks a
+    // shown parked tab to look like.
+    await waitFor(() => {
+      expect(streams).toHaveLength(2);
+    });
+    await waitFor(() => {
+      expect(seenHandles.at(-1)).not.toBe(firstHandle);
+    });
+    const secondHandle = seenHandles.at(-1);
+    if (secondHandle === undefined) {
+      throw new Error("expected the re-acquired handle");
+    }
+    // A NEW store, never the disposed one. `OpenEpicState.ingestFenceIdentity`
+    // is a per-store counter (`store.ts`) that `use-epic-chat-records.ts`
+    // reads and compares against on apply, degrading a stale answer to `null`
+    // on mismatch - so a consumer built against THIS store can only ever read
+    // a fence this store minted, never the disposed one's.
+    expect(secondHandle.store).not.toBe(firstHandle.store);
+    expect(streams[1].closeCount).toBe(0);
+  });
+
+  // Pin: "comment-thread polling is not running for a parked epic." All three
+  // production callers of `useEpicCommentThreadsForClient` sit inside the
+  // canvas subtree behind `EpicSessionGate`, so this drives the same gate
+  // directly with a probe standing in for one of them - the pin is that the
+  // unmount this gate performs on park actually stops the poll, not that any
+  // one caller remembered to read `useEpicParked` itself (none of them do).
+  it("stops comment-thread polling once the epic is parked", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const EPIC_ID = "epic-parking-comments";
+    installStreamFactory((_epicId, _callbacks) => ({
+      applyUpdate: () => undefined,
+      awareness: () => undefined,
+      applyArtifactRoomUpdate: () => undefined,
+      artifactRoomAwareness: () => undefined,
+      retryMigration: () => undefined,
+      close: () => undefined,
+    }));
+
+    const requestCount = { value: 0 };
+    const commentSpine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: { invalidateHostScope: () => undefined },
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+      messenger: new MockHostMessenger<HostRpcRegistry>({
+        registry: hostRpcRegistry,
+        requestId: () => `req-comment-park-${requestCount.value}`,
+        handlers: {
+          "epic.listCommentThreads": () => {
+            requestCount.value += 1;
+            return { threads: [] };
+          },
+        },
+      }),
+    });
+    commentSpine.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+    );
+    const commentClient = commentSpine.createRequester(mockLocalHostEntry);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+
+    function CommentPollProbe(): null {
+      useEpicCommentThreadsForClient({
+        client: commentClient,
+        epicId: EPIC_ID,
+        artifactType: "spec",
+        artifactId: "artifact-parking-comments",
+        options: { enabled: true, laneDroppedAt: 1_000 },
+      });
+      return null;
+    }
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+          <EpicSessionGate fallback={null}>
+            <CommentPollProbe />
+          </EpicSessionGate>
+        </EpicSessionProvider>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(requestCount.value).toBeGreaterThan(0);
+    });
+
+    // THE POSITIVE CONTROL, and the reason it is here rather than left to the
+    // first request alone: the assertion at the end of this test is that a
+    // count stops moving, and a count that was never going to move again
+    // satisfies that vacuously. Advancing the SAME span before the park, and
+    // requiring the poll to have issued more requests over it, is what makes
+    // the flat count afterwards evidence of the park rather than of a query
+    // that had already gone quiet.
+    const beforeParkCount = requestCount.value;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(requestCount.value).toBeGreaterThan(beforeParkCount);
+
+    act(() => {
+      unsubscribeParkingSurface = trackEpicParkingSurface(EPIC_ID, EPIC_ID);
+    });
+    act(() => {
+      setEpicSurfaceVisibility(EPIC_ID, EPIC_ID, false);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(PARK_HIDDEN_EPIC_AFTER_MS);
+    });
+    expect(isEpicParked(EPIC_ID)).toBe(true);
+    const afterParkCount = requestCount.value;
+
+    // Several 15s cadences' worth of time - a poll still running would have
+    // issued more requests by now.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(requestCount.value).toBe(afterParkCount);
   });
 });

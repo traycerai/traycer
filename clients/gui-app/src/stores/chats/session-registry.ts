@@ -243,6 +243,42 @@ export class ChatSessionRegistry {
     this.sessions.forceRelease(chatSessionKey(epicId, chatId, hostId));
   }
 
+  /**
+   * End every live session of one epic - leased, warm, on any host.
+   *
+   * Renderer parking's half of this plane (plan C, decision C1). A chat session
+   * claims a VISIBLE lease on its epic through the host's chat session, so one
+   * surviving `chat.subscribe` keeps the epic pinned and the whole park buys
+   * nothing. Dropping the tiles' leases is not enough on its own: this plane's
+   * whole design is that a lease-free session stays warm with its websocket
+   * open for `idleTtlMs`, so a park that only released leases would leave the
+   * epic pinned for another ten minutes - past the host's own idle window, and
+   * past the "an epic with no agent activity sheds in about seven minutes"
+   * the plan is sized around.
+   *
+   * Leased sessions go too, and that is not a violation of the lease contract
+   * so much as the reason this method exists: parking is the caller stating
+   * that no surface of this epic is visible, so a lease still held is one from
+   * a tile that is about to unmount with the epic's own React subtree. The
+   * shared `discard` tears down regardless of demand and the later
+   * `releaseHandle` from that unmount is a no-op against a gone entry, so the
+   * order the two happen in does not matter.
+   *
+   * Deliberately NOT `hasActiveChatWork`-gated. That predicate governs whether
+   * the TTL and the cap may reclaim a session on their own schedule; this is a
+   * caller with a fact neither of them has. Eligibility for a park is decided
+   * once, at the epic, through the open-epic registry's own gates - and an epic
+   * whose agents are working never reaches this call.
+   */
+  disposeForEpic(epicId: string): void {
+    this.sessions.transact(() => {
+      for (const entry of this.sessions.entries()) {
+        if (entry.session.epicId !== epicId) continue;
+        this.sessions.discard(entry.key, "released");
+      }
+    });
+  }
+
   disposeAll(): void {
     this.sessions.disposeAll();
   }

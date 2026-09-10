@@ -17,6 +17,7 @@ import {
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
 import { openOwnedDurableStreamClient } from "@/lib/host/owned-durable-stream-client";
 import { useOpenEpicId } from "@/lib/epic-selectors";
+import { isEpicParked, subscribeEpicParking } from "@/lib/epics/epic-parking";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
@@ -89,6 +90,28 @@ export function getChatSessionHandleHostId(
 export function disposeAllChatSessions(): void {
   registry.disposeAll();
 }
+
+/**
+ * Renderer parking (plan C, decision C1): a parked epic holds no
+ * `chat.subscribe`.
+ *
+ * Wired here, on the plane that OWNS chat sessions, rather than called from
+ * the parking module - so that module stays a near-leaf that knows about
+ * visibility, a clock and the epic session registry, and each plane answers
+ * for its own subscriptions. It is also what makes the release complete
+ * without the tiles' cooperation: a chat tile releasing its lease leaves the
+ * session WARM with its websocket open for `DEFAULT_CHAT_IDLE_TTL_MS`, and one
+ * surviving subscription keeps the epic visible-leased on the host, which is
+ * the whole thing parking exists to end.
+ *
+ * Module-scoped and never torn down, matching the registry singleton it acts
+ * on. `isEpicParked` is re-read rather than trusted from the notification: the
+ * signal fires on both edges and only the parked one releases anything.
+ */
+subscribeEpicParking((epicId) => {
+  if (!isEpicParked(epicId)) return;
+  registry.disposeForEpic(epicId);
+});
 
 export function useChatSessionHandle(
   chatId: string,

@@ -87,11 +87,35 @@ function effectiveBrowserPlacement(input: {
  */
 const visibleEpicSurfaces = new Map<string, Set<string>>();
 
+/**
+ * Watchers of the PER-EPIC roll-up, notified only when
+ * {@link isEpicSurfaceVisible} actually changes answer for that epic.
+ *
+ * Per-epic rather than per-view because that is the only question a second
+ * reader has ever needed: renderer parking (plan C, decision C6) debounces
+ * "no visible pane in ANY window" into a park signal, and a view-level edge -
+ * a duplicated header view of one Epic hiding while its twin stays on screen -
+ * is not a change in that answer. Notifying on it would re-arm the debounce
+ * every time a split pane flipped, which is the opposite of what the window
+ * measures.
+ */
+const epicSurfaceVisibilityListeners = new Set<(epicId: string) => void>();
+
+export function subscribeEpicSurfaceVisibility(
+  listener: (epicId: string) => void,
+): () => void {
+  epicSurfaceVisibilityListeners.add(listener);
+  return () => {
+    epicSurfaceVisibilityListeners.delete(listener);
+  };
+}
+
 export function setEpicSurfaceVisibility(
   epicId: string,
   viewTabId: string,
   visible: boolean,
 ): void {
+  const wasVisible = isEpicSurfaceVisible(epicId);
   const visibleViews = visibleEpicSurfaces.get(epicId);
   if (visible) {
     if (visibleViews === undefined) {
@@ -100,11 +124,14 @@ export function setEpicSurfaceVisibility(
     } else {
       visibleViews.add(viewTabId);
     }
-    return;
+  } else if (visibleViews !== undefined) {
+    visibleViews.delete(viewTabId);
+    if (visibleViews.size === 0) visibleEpicSurfaces.delete(epicId);
   }
-  if (visibleViews === undefined) return;
-  visibleViews.delete(viewTabId);
-  if (visibleViews.size === 0) visibleEpicSurfaces.delete(epicId);
+  if (isEpicSurfaceVisible(epicId) === wasVisible) return;
+  for (const listener of Array.from(epicSurfaceVisibilityListeners)) {
+    listener(epicId);
+  }
 }
 
 export function isEpicSurfaceVisible(epicId: string): boolean {

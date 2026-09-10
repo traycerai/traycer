@@ -5,7 +5,20 @@ import {
   expect,
   it,
   onTestFinished,
+  vi,
 } from "vitest";
+import {
+  __resetEpicParkingForTests,
+  isEpicParked,
+  trackEpicParkingSurface,
+} from "@/lib/epics/epic-parking";
+import { setEpicSurfaceVisibility } from "@/lib/browser-view/tiles/surface-host-opened-tab";
+import { PARK_HIDDEN_EPIC_AFTER_MS } from "@/stores/replica-memory/retention-profile";
+import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
+import {
+  __resetAgentActivityStoreForTests,
+  __setAgentActivityPlaneAnsweringForTests,
+} from "@/stores/agent-activity-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicCanvasState, EpicNodeRef } from "@/stores/epics/canvas/types";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
@@ -1009,6 +1022,78 @@ describe("design-review F2: shared eligibility discriminator (remote-deletion)",
     resetChatRemoteDeletionRegistryForTesting();
 
     expect(notifications).toBe(1);
+    expect(getTileSurfaceMembership().has("chat-1")).toBe(true);
+  });
+});
+
+describe("renderer parking (plan C, C1): a parked epic keeps no hosted surface", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    __setAgentActivityPlaneAnsweringForTests();
+    resetAll();
+  });
+
+  afterEach(() => {
+    __resetEpicParkingForTests();
+    __getOpenEpicRegistryForTests().disposeAll();
+    __resetAgentActivityStoreForTests();
+    resetAll();
+    vi.useRealTimers();
+  });
+
+  /**
+   * The branch this pins exists because a hosted chat body is mounted by
+   * `StableTileSurfaceHost`, which lives ABOVE every `EpicSessionProvider`.
+   * Unlike an inline tile it therefore does NOT unmount when the epic's
+   * session gate closes: it would go on rendering against the disposed handle
+   * its environment record still names, holding the `chat.subscribe` lease
+   * parking exists to drop. Membership is the only authority that can delete
+   * that record, so the drop has to happen here.
+   *
+   * Both arms in one instance, and both are synchronous reads of membership
+   * and of the environment registry - never a spy consulted after an await.
+   */
+  it("drops the epic's hosted records on park and re-admits them on show", () => {
+    const EPIC = "epic-membership-parking";
+    useEpicCanvasStore.setState({
+      tabsById: { "tab-1": { tabId: "tab-1", epicId: EPIC, name: "Epic 1" } },
+      canvasByTabId: { "tab-1": canvasWithChat("chat-1", "p1") },
+      openTabOrder: ["tab-1"],
+      activeTabId: "tab-1",
+    });
+    seedSingleTabStrip([{ kind: "epic", id: "tab-1" }], {
+      kind: "epic",
+      id: "tab-1",
+    });
+    publishTileSurfaceEnvironment(
+      buildSyntheticTileSurfaceEnvironment("chat-1", {}),
+    );
+    expect(getTileSurfaceMembership().has("chat-1")).toBe(true);
+    expect(getTileSurfaceEnvironment("chat-1")).not.toBeNull();
+
+    const unsubscribe = trackEpicParkingSurface(EPIC, "tab-1");
+    onTestFinished(unsubscribe);
+    setEpicSurfaceVisibility(EPIC, "tab-1", false);
+
+    // One second short of the window: the epic is hidden, not parked, and its
+    // hosted record is untouched.
+    vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS - 1_000);
+    expect(isEpicParked(EPIC)).toBe(false);
+    expect(getTileSurfaceMembership().has("chat-1")).toBe(true);
+    expect(getTileSurfaceEnvironment("chat-1")).not.toBeNull();
+
+    vi.advanceTimersByTime(1_000);
+    expect(isEpicParked(EPIC)).toBe(true);
+    expect(getTileSurfaceMembership().has("chat-1")).toBe(false);
+    // The record itself is gone, not merely unpresented: `reconcileAgainstMembership`
+    // deletes it, which is what unmounts the body.
+    expect(getTileSurfaceEnvironment("chat-1")).toBeNull();
+
+    // Showing the epic again re-admits the instance. The environment stays
+    // null until a slot republishes - the designed cold state, and the reason
+    // `publishTileSurfaceEnvironment` drops a publish for a non-member.
+    setEpicSurfaceVisibility(EPIC, "tab-1", true);
+    expect(isEpicParked(EPIC)).toBe(false);
     expect(getTileSurfaceMembership().has("chat-1")).toBe(true);
   });
 });

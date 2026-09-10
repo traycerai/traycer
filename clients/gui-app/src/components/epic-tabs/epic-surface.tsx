@@ -11,6 +11,7 @@ import {
 import { EpicViewTabContext } from "@/components/epic-canvas/view-tab-context";
 import { useTabSurfaceActivity } from "@/components/layout/tab-surface-activity-hooks";
 import { setEpicSurfaceVisibility } from "@/lib/browser-view/tiles/surface-host-opened-tab";
+import { trackEpicParkingSurface } from "@/lib/epics/epic-parking";
 import { EpicSessionProvider } from "@/providers/epic-session-provider";
 import { AgentBrowserPip } from "@/components/epic-canvas/pip/agent-browser-pip";
 import { BrowserSessionsProvider } from "@/components/epic-canvas/renderers/browser-sessions-provider";
@@ -24,13 +25,23 @@ interface EpicSurfaceProps {
 export function EpicSurface(props: EpicSurfaceProps) {
   const activity = useTabSurfaceActivity();
   // Report visibility for the agent-tab-surfacing pipeline: PiP auto-surfacing
-  // only arms while this epic is the visible surface.
+  // only arms while this epic is the visible surface. Renderer parking rolls
+  // the same per-epic set up with a debounce - see `lib/epics/epic-parking.ts`.
   useEffect(() => {
     setEpicSurfaceVisibility(props.epicId, props.tabId, activity.visible);
     return () => {
       setEpicSurfaceVisibility(props.epicId, props.tabId, false);
     };
   }, [activity.visible, props.epicId, props.tabId]);
+  // Its own effect, keyed WITHOUT `activity.visible`: this one is about the
+  // surface existing, not about it being on screen, and the effect above
+  // re-runs on every visibility flip. Folding the two would make each flip
+  // look like an unmount-and-remount to the parking module, which is exactly
+  // the pair of events it must be able to tell apart - a hidden surface arms
+  // the park window, a departed one ends the epic's tracking altogether.
+  useEffect(() => {
+    return trackEpicParkingSurface(props.epicId, props.tabId);
+  }, [props.epicId, props.tabId]);
   const activeRoute = useMatch({
     from: "/epics/$epicId/$tabId",
     shouldThrow: false,
