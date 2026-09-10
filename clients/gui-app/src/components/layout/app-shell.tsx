@@ -11,6 +11,7 @@ import { MobileNavDrawer } from "@/components/layout/shell/mobile-nav-drawer";
 import { SWIPE_NAV_SCREEN_ATTRIBUTE } from "@/components/layout/shell/screen-snapshot";
 import { useDragToDismissKeyboard } from "@/components/layout/shell/use-drag-to-dismiss-keyboard";
 import { SessionConnectivityStrip } from "@/components/layout/session-connectivity-strip";
+import { useHostSessionConnectivity } from "@/lib/host/session-connectivity";
 import { ClockSkewBanner } from "@/components/layout/clock-skew-banner";
 import { useMobileHistorySwipes } from "@/components/layout/shell/use-mobile-history-swipes";
 import { useSystemBack } from "@/components/layout/shell/use-system-back";
@@ -63,6 +64,12 @@ export function AppShell(props: AppShellProps) {
   // history through the same `goBack`. Self-gated on the shell capability, so
   // every other shell attaches nothing.
   useSystemBack();
+  // Read ONCE, here, and handed both to the strip that renders it and to the
+  // surfaces that defer to it. `useHostSessionConnectivity` builds a store per
+  // call - its own poll timer and its own latched episode - so a second reader
+  // would be a second episode, and the two could disagree about whether a bar
+  // is on screen.
+  const sessionConnectivity = useHostSessionConnectivity();
 
   return (
     <PrimaryFocusCoordinatorProvider>
@@ -82,7 +89,7 @@ export function AppShell(props: AppShellProps) {
                 interruption the strip reports, so if both are showing the
                 actionable one has to be read first. */}
               <ClockSkewBanner />
-              <SessionConnectivityStrip />
+              <SessionConnectivityStrip connectivity={sessionConnectivity} />
               <main className="relative flex min-h-0 flex-1 flex-col">
                 {/* The app's edge-to-edge content viewport. Individual surfaces
                   own their internal overflow, including the landing terminal.
