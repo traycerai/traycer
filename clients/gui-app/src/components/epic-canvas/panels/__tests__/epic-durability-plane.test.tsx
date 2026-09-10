@@ -187,7 +187,7 @@ describe("deriveEpicDurabilityPlane", () => {
     ).toEqual({ severity: "warning", sentence: "Storage status unknown" });
   });
 
-  it("shows 'Not backed up' beside a stated status, not instead of it", () => {
+  it("shows 'Recent changes only in this window' beside a stated status, not instead of it", () => {
     expect(
       planeFor({
         status: "offline",
@@ -199,11 +199,11 @@ describe("deriveEpicDurabilityPlane", () => {
       }),
     ).toEqual({
       severity: "danger",
-      sentence: "Offline — sync paused · Not backed up",
+      sentence: "Offline — sync paused · Recent changes only in this window",
     });
   });
 
-  it("shows 'Not backed up' on an otherwise-calm cloud-durable epic", () => {
+  it("shows 'Recent changes only in this window' on an otherwise-calm cloud-durable epic", () => {
     expect(
       planeFor({
         status: "cloud",
@@ -213,7 +213,10 @@ describe("deriveEpicDurabilityPlane", () => {
         pauseReason: null,
         promotionState: null,
       }),
-    ).toEqual({ severity: "danger", sentence: "Not backed up" });
+    ).toEqual({
+      severity: "danger",
+      sentence: "Recent changes only in this window",
+    });
   });
 
   it("reads unknown protection beside a stated local status as its own clause", () => {
@@ -385,7 +388,7 @@ describe("deriveEpicDurabilityPlane", () => {
     ).toEqual({
       severity: "danger",
       sentence:
-        "Not synced yet · Not backed up · Saved copy — may be out of date · never synced",
+        "Not synced yet · Recent changes only in this window · Saved copy — may be out of date · never synced",
     });
   });
 

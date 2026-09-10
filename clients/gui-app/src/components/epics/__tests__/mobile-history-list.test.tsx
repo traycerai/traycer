@@ -1362,10 +1362,22 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       const label = await screen.findByTestId(
         "epics-list-row-provenance-label-local-only",
       );
-      expect(label.textContent).toBe("Not synced");
+      expect(label.textContent).toBe("· Not synced");
+      expect(label.className).toMatch(/\bshrink-0\b/);
+      expect(label.closest(".truncate")).toBeNull();
 
-      const card = await screen.findByTestId("epics-list-row-card");
-      expect(card.textContent).toMatch(/updated .* · Not synced/);
+      const metadataLine = label.parentElement;
+      if (metadataLine === null) {
+        throw new Error("expected the provenance label to have a parent");
+      }
+      expect(metadataLine.className).toMatch(/\bflex\b/);
+
+      const timestamp = label.previousElementSibling;
+      if (timestamp === null) {
+        throw new Error("expected a preceding timestamp sibling span");
+      }
+      expect(timestamp.className).toMatch(/\btruncate\b/);
+      expect(timestamp.textContent).toMatch(/^updated/);
     });
 
     it("renders the preserved-orphan provenance label with a destructive tint", async () => {
@@ -1380,8 +1392,23 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       const label = await screen.findByTestId(
         "epics-list-row-provenance-label-preserved-orphan",
       );
-      expect(label.textContent).toBe("Deleted, edits kept");
+      expect(label.textContent).toBe("· Deleted, edits kept");
       expect(label.className).toMatch(/text-destructive/);
+      expect(label.className).toMatch(/\bshrink-0\b/);
+      expect(label.closest(".truncate")).toBeNull();
+
+      const metadataLine = label.parentElement;
+      if (metadataLine === null) {
+        throw new Error("expected the provenance label to have a parent");
+      }
+      expect(metadataLine.className).toMatch(/\bflex\b/);
+
+      const timestamp = label.previousElementSibling;
+      if (timestamp === null) {
+        throw new Error("expected a preceding timestamp sibling span");
+      }
+      expect(timestamp.className).toMatch(/\btruncate\b/);
+      expect(timestamp.textContent).toMatch(/^updated/);
     });
 
     it("renders neither provenance label for an ordinary row carrying no marker", async () => {

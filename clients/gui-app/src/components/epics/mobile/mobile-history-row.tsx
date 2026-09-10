@@ -411,20 +411,21 @@ function RowTitleBlock(props: {
           {props.displayTitle}
         </span>
       </span>
-      <span className="truncate text-ui-xs text-muted-foreground">
-        updated {props.updatedLabel}
+      {/* The timestamp is the part that may truncate; the provenance label
+          is the part that must not, so it is a non-shrinking sibling rather
+          than a tail on the same truncating text. */}
+      <span className="flex min-w-0 items-center gap-1 text-ui-xs text-muted-foreground">
+        <span className="truncate">updated {props.updatedLabel}</span>
         {props.provenance === null ? null : (
-          <>
-            {" · "}
-            <span
-              data-testid={`epics-list-row-provenance-label-${props.provenance}`}
-              className={cn(
-                props.provenance === "preserved-orphan" && "text-destructive",
-              )}
-            >
-              {historyRowProvenanceLabel(props.provenance)}
-            </span>
-          </>
+          <span
+            data-testid={`epics-list-row-provenance-label-${props.provenance}`}
+            className={cn(
+              "shrink-0",
+              props.provenance === "preserved-orphan" && "text-destructive",
+            )}
+          >
+            · {historyRowProvenanceLabel(props.provenance)}
+          </span>
         )}
       </span>
     </span>

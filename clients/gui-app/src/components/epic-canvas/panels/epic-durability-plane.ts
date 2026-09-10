@@ -307,8 +307,12 @@ interface DurabilityClause {
  */
 function durabilityRiskCopy(view: EpicDurabilityView): DurabilityClause | null {
   if (view.kind !== "stated" && view.kind !== "cloudDurable") return null;
+  // Scoped to THIS SESSION's edits on purpose: beside `cloudDurable` the task
+  // itself is backed up, and only what is typed here while the WAL is unarmed
+  // lives nowhere but this window. "Not backed up" without a subject read as
+  // a claim about the whole task.
   if (view.protection === "unavailable") {
-    return { label: "Not backed up", severity: "danger" };
+    return { label: "Recent changes only in this window", severity: "danger" };
   }
   // The `stated` sibling of `statusCopy`'s cloudDurable unknown arm, and the
   // reason that arm was not enough on its own: a stated status answers WHERE
@@ -357,10 +361,11 @@ function statusCopy(
   if (view.kind === "indeterminate") {
     // `unavailable` is a stated FACT about risk, not an absence, so it gets
     // the stronger treatment and names the consequence rather than the
-    // mechanism - "not backed up" is what a person can act on; "the WAL is
-    // unarmed" is not.
+    // mechanism - "recent changes only in this window" is what a person can
+    // act on; "the WAL is unarmed" is not. Same subject as the risk clause
+    // below: the session's edits, never the task.
     return view.protection === "unavailable"
-      ? { label: "Not backed up", severity: "danger" }
+      ? { label: "Recent changes only in this window", severity: "danger" }
       : { label: "Storage status unknown", severity: "warning" };
   }
   const status = viewStatus(view);

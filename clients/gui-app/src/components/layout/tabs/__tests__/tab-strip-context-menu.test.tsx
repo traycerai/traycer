@@ -239,11 +239,12 @@ describe("TabContextMenuContent local-home pin gate (lane 9 item 5)", () => {
     expect(onSetTaskPinned).toHaveBeenCalledWith(true);
   });
 
-  it("stays unavailable on a @1.1 host when the reading is a filler (pinnedKnown false) - the item 5 regression", async () => {
-    // For RED: reverting the `localHomePinSupported && pinReadingKnown`
-    // conjunct in `tab-strip-context-menu.tsx` back to plain
-    // `localHomePinSupported` makes this offer "Pin" for a fabricated
-    // `pinned: false` instead.
+  it("stays unavailable on a @1.1 host when the reading is a filler (pinnedKnown false), reading pin state unknown rather than needs a newer host", async () => {
+    // For RED: reverting the `pinReadingKnown` check ahead of the
+    // host-capability arm in `tabPinUnavailableReason` would make this fall
+    // through to `local-home` and say "needs a newer host" instead - the
+    // wrong remedy, since this host DOES speak `@1.1` and a newer host would
+    // change nothing.
     pinSupportState.supported = true;
     const onSetTaskPinned = vi.fn<(pinned: boolean) => void>();
 
@@ -255,11 +256,15 @@ describe("TabContextMenuContent local-home pin gate (lane 9 item 5)", () => {
     });
 
     const item = await screen.findByTestId(`tab-pin-history-${EPIC_TAB.id}`);
-    expect(item.getAttribute("data-local-home-pin-unavailable")).toBe("true");
+    expect(item.getAttribute("data-local-home-pin-unavailable")).toBeNull();
+    expect(
+      item.getAttribute("data-preserved-orphan-pin-unavailable"),
+    ).toBeNull();
     expect(item.getAttribute("aria-disabled")).toBe("true");
     expect(item.textContent).toContain(
-      "Pin Task in History — needs a newer host",
+      "Pin Task in History — pin state unknown",
     );
+    expect(item.textContent).not.toMatch(/newer host/i);
     expect(item.textContent).not.toMatch(/cloud|device/i);
     fireEvent.click(item);
     expect(onSetTaskPinned).not.toHaveBeenCalled();
@@ -320,5 +325,33 @@ describe("TabContextMenuContent local-home pin gate (lane 9 item 5)", () => {
     expect(item.getAttribute("aria-disabled")).toBeNull();
     fireEvent.click(item);
     expect(onSetTaskPinned).toHaveBeenCalledWith(true);
+  });
+
+  it("reads pin state unknown, not needs a newer host, on the EPIC's own @1.1 host when its reading is a filler (pinnedKnown false)", async () => {
+    // Even the epic's OWN host negotiating `@1.1` must not paper over a
+    // filler reading: `pinReadingKnown` is checked before the
+    // host-capability arm, so this stays "pin-unknown" rather than falling
+    // through to a "needs a newer host" remedy that would be wrong here -
+    // the epic's own host already speaks `@1.1`.
+    pinSupportState.supported = false;
+    pinSupportState.supportedByHostId.set("host-owning-epic", true);
+    const onSetTaskPinned = vi.fn<(pinned: boolean) => void>();
+
+    renderPinMenu(onSetTaskPinned, {
+      pinned: false,
+      home: "local",
+      hostId: "host-owning-epic",
+      pinnedKnown: false,
+    });
+
+    const item = await screen.findByTestId(`tab-pin-history-${EPIC_TAB.id}`);
+    expect(item.getAttribute("data-local-home-pin-unavailable")).toBeNull();
+    expect(item.getAttribute("aria-disabled")).toBe("true");
+    expect(item.textContent).toContain(
+      "Pin Task in History — pin state unknown",
+    );
+    expect(item.textContent).not.toMatch(/newer host/i);
+    fireEvent.click(item);
+    expect(onSetTaskPinned).not.toHaveBeenCalled();
   });
 });

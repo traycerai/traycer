@@ -71,7 +71,14 @@ function tabPinUnavailableReason(input: {
   readonly cloudAuthorized: boolean;
   /** `epic.setPinned@1.1` negotiated - see `useEpicPinLocalHomeSupported`. */
   readonly localHomePinSupported: boolean;
-}): "local-home" | "preserved-orphan" | "unverified-session" | null {
+  /** See `TaskPinnedState.pinnedKnown`: a real pin reading exists to toggle. */
+  readonly pinReadingKnown: boolean;
+}):
+  | "local-home"
+  | "pin-unknown"
+  | "preserved-orphan"
+  | "unverified-session"
+  | null {
   // The two row reasons are SPLIT rather than one `"row"` verdict, and that is
   // no longer cosmetic. They were collapsed while both were permanent and both
   // wore the same label; `local-home` is now conditional on the host, so a
@@ -86,6 +93,13 @@ function tabPinUnavailableReason(input: {
   // verdict is not a reason to refuse. `useEpicSetPinned` carries the same
   // exemption at dispatch.
   if (input.localOnly) {
+    // Two different unavailabilities, and they used to share one verdict
+    // because they shared one sentence ("stored on the connected device" was
+    // true of both). Now that the `local-home` sentence names a remedy - a
+    // newer host - a row whose pin reading simply never arrived must not wear
+    // it: that host may already speak `@1.1`, and telling the person to update
+    // it changes nothing. Checked first because it is the more specific fact.
+    if (!input.pinReadingKnown) return "pin-unknown";
     return input.localHomePinSupported ? null : "local-home";
   }
   if (!input.cloudAuthorized) return "unverified-session";
@@ -101,6 +115,7 @@ function tabPinUnavailableReason(input: {
 function pinActionLabel(
   unavailableReason:
     | "local-home"
+    | "pin-unknown"
     | "preserved-orphan"
     | "unverified-session"
     | null,
@@ -113,6 +128,12 @@ function pinActionLabel(
   // `history-pin-availability.ts` for that rule.
   if (unavailableReason === "local-home") {
     return "Pin Task in History \u2014 needs a newer host";
+  }
+  // No remedy named on purpose: the reading may still arrive (a live session
+  // that has not resolved it yet) or never (a host that does not own the
+  // epic), and neither is something the person can act on from this menu.
+  if (unavailableReason === "pin-unknown") {
+    return "Pin Task in History \u2014 pin state unknown";
   }
   if (unavailableReason === "preserved-orphan") {
     return "Pin Task in History \u2014 task deleted";
@@ -176,9 +197,12 @@ function EpicTabMenuItems(props: {
     localOnly,
     preservedOrphan,
     cloudAuthorized,
-    // A negotiated `@1.1` only enables the control where there is a real pin
-    // reading to toggle; see `pinReadingKnown` at the call site.
-    localHomePinSupported: localHomePinSupported && pinReadingKnown,
+    localHomePinSupported,
+    // Passed as its own fact rather than folded into `localHomePinSupported`:
+    // a negotiated `@1.1` only enables the control where there is a real pin
+    // reading to toggle, but a missing reading is a different unavailability
+    // from an old host and wears a different sentence.
+    pinReadingKnown,
   });
   const pinUnavailable = pinUnavailableReason !== null;
   return (
