@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { access, mkdir, readFile, rm, stat } from "node:fs/promises";
 import type { Stats } from "node:fs";
 import { arch as osArch, platform as osPlatform } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
 import {
   type HostInstallArch,
@@ -904,8 +904,8 @@ export async function commitInstallFromSource(
     // Resolved once for both checks: on dev this can span a run slot AND the
     // pooled identity homes, and the two checks must judge the same machine.
     surveyRoots: await resolveChatStoreSurveyRoots(opts.environment),
-    declaredStoreFormats: await readExtractedStoreFormats(
-      dirname(opts.executablePath),
+    declaredStoreFormats: await readDeclarationOfInstalledTree(
+      opts.executablePath,
       opts.environment,
       logger,
     ),
@@ -913,8 +913,8 @@ export async function commitInstallFromSource(
     installedStoreFormats:
       previous === null
         ? null
-        : await readExtractedStoreFormats(
-            dirname(previous.executablePath),
+        : await readDeclarationOfInstalledTree(
+            previous.executablePath,
             opts.environment,
             logger,
           ),
@@ -1744,4 +1744,44 @@ export function currentInstallArch(): HostInstallArch {
     details: { arch },
     exitCode: 1,
   });
+}
+
+/**
+ * The declaration of the tree an executable path names, or `null` when that
+ * path cannot name one.
+ *
+ * Only an ABSOLUTE path names a runtime directory. `HostInstallRecord`'s
+ * schema admits any string and `dirname("")` is `"."`, so a truncated or
+ * hand-edited `install.json` would otherwise make this read `version.json`
+ * out of the CLI's CURRENT WORKING DIRECTORY and treat a stray file as what
+ * the installed tree declares. That is not a missing declaration but an
+ * INVENTED one, and it feeds the operand the floor clears moves with: a
+ * fabricated `chatDb` clears a target the stores on disk would refuse.
+ *
+ * The same guard as the host's own reader (`host-status-install.ts`) and the
+ * CLI's installed-side reader (`host/installed-store-formats.ts`), spelled
+ * locally here rather than imported: `installer/install.ts` is mocked
+ * wholesale by suites that have no business loading the floor's readers, which
+ * is why that module was split out in the first place.
+ */
+async function readDeclarationOfInstalledTree(
+  executablePath: string,
+  environment: Environment,
+  logger: ILogger,
+): Promise<HostStoreFormats | null> {
+  // `typeof` first: a record whose `executablePath` is absent is outside the
+  // record type but is exactly what a truncated `install.json` looks like, and
+  // `isAbsolute(undefined)` throws rather than answering.
+  if (typeof executablePath !== "string" || !isAbsolute(executablePath)) {
+    logger.warn(
+      "Host store-format floor: an install record's executable path is not absolute, so that tree declares nothing",
+      { environment },
+    );
+    return null;
+  }
+  return await readExtractedStoreFormats(
+    dirname(executablePath),
+    environment,
+    logger,
+  );
 }

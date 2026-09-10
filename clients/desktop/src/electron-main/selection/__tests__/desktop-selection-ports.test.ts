@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AuthorityIdentitySource,
   HostFleetSnapshot,
@@ -39,12 +39,54 @@ import type {
 } from "../../../ipc-contracts/host-types";
 import { DesktopAuthSession } from "../../auth/desktop-auth-session";
 import type { DesktopAuthSessionSnapshot } from "../../../ipc-contracts/window-types";
+import type { LocalHostIdentityFiles } from "../../host/local-host-identity";
 import {
   createDesktopLocalHostEnsurePort,
   DesktopAuthorityIdentitySource,
   DesktopHostFleetSource,
   DesktopLocalHostOutageSignal,
 } from "../desktop-selection-ports";
+
+/**
+ * Controllable stand-in for the fleet port's enrollment read. Default is the
+ * real implementation; A1 overrides it with a deferred gate so the gen-0 read
+ * can be held across the identity switch and released under a known generation.
+ */
+const localHostIdentityTestDoubles = vi.hoisted(() => {
+  type ReadFn = (files: LocalHostIdentityFiles) => Promise<string | null>;
+  let actual: ReadFn = async () => null;
+  const readLastKnownLocalHostId = vi.fn<ReadFn>(async (files) =>
+    actual(files),
+  );
+  return {
+    readLastKnownLocalHostId,
+    /** The real reader, for gated call-throughs that must not re-enter the mock. */
+    get actual(): ReadFn {
+      return actual;
+    },
+    setActual(fn: ReadFn): void {
+      actual = fn;
+      readLastKnownLocalHostId.mockImplementation(fn);
+    },
+    restore(): void {
+      readLastKnownLocalHostId.mockReset();
+      readLastKnownLocalHostId.mockImplementation(async (files) =>
+        actual(files),
+      );
+    },
+  };
+});
+
+vi.mock("../../host/local-host-identity", async (importOriginal) => {
+  const mod =
+    await importOriginal<typeof import("../../host/local-host-identity")>();
+  localHostIdentityTestDoubles.setActual(mod.readLastKnownLocalHostId);
+  return {
+    ...mod,
+    readLastKnownLocalHostId:
+      localHostIdentityTestDoubles.readLastKnownLocalHostId,
+  };
+});
 
 const silentLog: AuthorityLog = {
   debug: () => undefined,
@@ -79,6 +121,7 @@ async function writeEnrollment(dir: string, hostId: string): Promise<string> {
 
 afterEach(async () => {
   tempDirs.length = 0;
+  localHostIdentityTestDoubles.restore();
 });
 
 /**
@@ -1043,37 +1086,67 @@ describe("DesktopHostFleetSource", () => {
       "utf8",
     );
     const authSession = new DesktopAuthSession();
-    // Signed out throughout: this isolates `refreshLocalIdentity` from
-    // `refresh()`'s own auto-triggered fetch (which would need a bearer
-    // token to reach `listRegisteredHosts` at all), so the only thing that
-    // can publish a snapshot here is the local-identity re-read this test is
-    // pinning.
-    const identity = new FakeIdentitySource(null, 0);
+    // Signed IN at the start so `refreshLocalIdentity` is eligible and
+    // actually starts an enrollment read. Signed-out-throughout skipped the
+    // read (`eligible === false`), which made the contamination assertions
+    // vacuous.
+    setVerifiedSession(authSession, signedInSnapshot("user-a", "token-a"));
+    const identity = new FakeIdentitySource("user-a", 0);
     const host = new FakeHostLifecycle();
     host.identityEnrollmentFile = enrollmentFile;
+
+    // Deterministic gate on the enrollment read (same shape as
+    // `recordingRegistryFetch`): hold the gen-0 read across the identity
+    // switch, release it while still signed out, and only then drive the
+    // valid gen-1 read. A `beforeSignIn` snapshot cutoff alone cannot prove
+    // the stale read settled - both completions can publish `local-a`.
+    const enrollmentGate = deferred<void>();
+    const enrollmentStarted = deferred<void>();
+    const enrollmentSettled = deferred<void>();
+    let gateOpen = false;
+    const actualRead = localHostIdentityTestDoubles.actual;
+    localHostIdentityTestDoubles.readLastKnownLocalHostId.mockImplementation(
+      async (files) => {
+        if (!gateOpen) {
+          enrollmentStarted.resolve();
+          await enrollmentGate.promise;
+          try {
+            return await actualRead(files);
+          } finally {
+            enrollmentSettled.resolve();
+          }
+        }
+        return actualRead(files);
+      },
+    );
+
     const fleet = buildFleetSource({
       identity,
       authSession,
       host,
-      listRegisteredHosts: async () => {
-        throw new Error("must not be called - signed out throughout");
-      },
+      // Identity-change `refresh()` may run while a bearer is briefly still
+      // present; answer empty rather than throwing.
+      listRegisteredHosts: async () => ({
+        kind: "ok",
+        response: { hosts: [] },
+      }),
     });
 
     const snapshots: HostFleetSnapshot[] = [];
     fleet.onChanged((snapshot) => snapshots.push(snapshot));
 
-    // Fire the `host` change: `refreshLocalIdentity` captures generation 0
-    // and starts its (real, libuv-backed) enrollment read. `fs.readFile`
-    // cannot resolve before this synchronous block finishes, so switching
-    // the identity here lands strictly BEFORE the read completes - the
-    // exact race the fix closes.
+    // Start the gen-0 eligible read and wait until it is parked on the gate
+    // before switching identity - so the race is exact under any load.
     host.emitChange();
+    await enrollmentStarted.promise;
+    // Sign out BEFORE bumping the generation so `identity.set`'s `refresh()`
+    // takes the signed-out branch (empty fleet) rather than re-adopting
+    // `local-a` under gen 1.
+    authSession.set({ status: "signed-out", token: null, profile: null });
     identity.set("user-b", 1);
 
     // The identity switch publishes the generation-1 shape synchronously
-    // (the empty-fleet publish plus the signed-out `refresh()` it triggers,
-    // both before the stale read has any chance to land).
+    // (the empty-fleet publish plus the signed-out `refresh()` it triggers).
     expect(snapshots.length).toBeGreaterThanOrEqual(1);
     for (const snapshot of snapshots) {
       expect(snapshot).toMatchObject({
@@ -1083,56 +1156,50 @@ describe("DesktopHostFleetSource", () => {
       });
     }
 
-    // Let the stale enrollment read (account A, generation 0) resolve.
-    await flushIo();
-
-    // No snapshot carrying A's local host id was published under
-    // identityGeneration: 1 - the stale read must not be stamped with
-    // whatever generation happens to be current when it completes.
-    const contaminatedUnderCurrentGeneration = snapshots.some(
-      (snapshot) =>
-        snapshot.identityGeneration === 1 &&
-        (snapshot.localHostId === "local-a" ||
-          snapshot.hosts.some((entry) => entry.hostId === "local-a")),
-    );
-    expect(contaminatedUnderCurrentGeneration).toBe(false);
-
-    // The port's latest snapshot still has the generation-1 shape the
-    // identity change published: no A rows, no A local host id.
+    // Release the stale gen-0 read WHILE STILL SIGNED OUT. Open the gate for
+    // later reads first so only this parked call was held. The generation
+    // fence must drop it - no `local-a` under gen 1.
+    gateOpen = true;
+    enrollmentGate.resolve();
+    await enrollmentSettled.promise;
+    // `enrollmentSettled` fires in the mock's `finally`, which runs before
+    // the mock promise settles for `refreshLocalIdentity`. One microtask
+    // later the generation fence has either dropped or adopted the result.
+    await Promise.resolve();
     expect(fleet.snapshot()).toMatchObject({
       identityGeneration: 1,
       localHostId: null,
       hosts: [],
     });
+    const contaminatedAfterStaleSettled = snapshots.some(
+      (snapshot) =>
+        snapshot.identityGeneration === 1 &&
+        (snapshot.localHostId === "local-a" ||
+          snapshot.hosts.some((entry) => entry.hostId === "local-a")),
+    );
+    expect(contaminatedAfterStaleSettled).toBe(false);
 
-    // ANTI-VACUITY ANCHOR, in two halves. The negative assertions above are
-    // only meaningful if the enrollment read actually had time to complete
-    // inside `flushIo`; a read still in flight would satisfy them for the
-    // wrong reason. But a signed-out read publishes NOTHING (eligibility, not
-    // just staleness, gates it - a durable local id must not repopulate a
-    // fleet `refresh` has declared empty), so "nothing was published" cannot
-    // by itself prove the pipeline ran.
-    //
-    // Half 1: SIGN IN, then drive a local-host change. The read must land and
-    // publish the id - this is what proves the pipeline completes inside the
-    // flush window, so the silence above was a decision and not a delay.
+    // ANTI-VACUITY: sign in and drive a fresh local-host change. Wait on the
+    // observable (not flushIo) so the pipeline is proven under CI load.
     setVerifiedSession(authSession, signedInSnapshot("user-b", "token-b"));
     host.emitChange();
-    await flushIo();
-    expect(fleet.snapshot()).toMatchObject({
-      identityGeneration: 1,
-      localHostId: "local-a",
+    await vi.waitFor(() => {
+      expect(fleet.snapshot()).toMatchObject({
+        identityGeneration: 1,
+        localHostId: "local-a",
+      });
     });
 
     // Half 2: SIGN OUT again and drive another change. The id is RETRACTED,
     // not retained - the same rule `refresh`'s signed-out branch applies.
     authSession.set({ status: "signed-out", token: null, profile: null });
     host.emitChange();
-    await flushIo();
-    expect(fleet.snapshot()).toMatchObject({
-      identityGeneration: 1,
-      localHostId: null,
-      hosts: [],
+    await vi.waitFor(() => {
+      expect(fleet.snapshot()).toMatchObject({
+        identityGeneration: 1,
+        localHostId: null,
+        hosts: [],
+      });
     });
 
     fleet.dispose();

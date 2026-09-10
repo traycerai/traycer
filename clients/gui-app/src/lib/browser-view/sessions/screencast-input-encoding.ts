@@ -4,7 +4,7 @@ import type {
   BrowserScreencastClientFrame,
 } from "@traycer/protocol/host/browser/contracts";
 import { SCREENCAST_ARM_BUFFER_CLICK_SLOP_PX } from "@/components/epic-canvas/renderers/screencast-arm-buffer";
-import { hasPlatformModKey } from "@/lib/keybindings/chord";
+import { hasPlatformModKey, normalizeCode } from "@/lib/keybindings/chord";
 
 const POINTER_CLICK_COUNT_WINDOW_MS = 500;
 const POINTER_CLICK_COUNT_MAX = 8;
@@ -200,16 +200,59 @@ export function pointerButton(
   return "none";
 }
 
+/** The platform mod alone - the shape both chords below are typed with. */
+function hasBareModifier(event: KeyboardEvent): boolean {
+  return hasPlatformModKey(event) && !event.altKey && !event.shiftKey;
+}
+
+/**
+ * Does this event carry the platform mod plus the PHYSICAL key `key` names?
+ *
+ * Derived from `code` through the shared `normalizeCode`, like the renderer's
+ * matcher (`lib/keybindings/chord.ts`) and the native guest's
+ * (`browser-view-chords.ts`). It was the third matcher of that set and the one
+ * left on `event.key`, which is the character a layout produces rather than the
+ * place it was pressed: on AZERTY the physical `KeyW` reports `key: "z"`, so an
+ * armed screencast sent the configured close chord to the remote page and
+ * closed the row on whichever key happened to produce a `w`. The app registry
+ * cannot cover for it either, because browser-scoped commands are excluded
+ * while a tile is armed.
+ *
+ * `key` falls back to the character for anything `normalizeCode` does not
+ * recognise, matching the native matcher exactly - a code we have no token for
+ * is better matched loosely than not at all.
+ *
+ * This is for chords that resolve a REGISTERED BINDING, whose tokens this
+ * codebase mints from `code` and which therefore have to be read back the same
+ * way. A platform convention is the opposite case and must not come here - see
+ * `isScreencastPasteChord`.
+ */
 export function isScreencastModChord(
   event: KeyboardEvent,
   key: string,
 ): boolean {
-  return (
-    hasPlatformModKey(event) &&
-    !event.altKey &&
-    !event.shiftKey &&
-    event.key.toLowerCase() === key
-  );
+  const physical = normalizeCode(event.code) ?? event.key.toLowerCase();
+  return hasBareModifier(event) && physical === key;
+}
+
+/**
+ * Is this the clipboard paste convention - deliberately by CHARACTER?
+ *
+ * The one screencast chord that must NOT derive from `code`, and the reason is
+ * the mirror of the reason the others must. Paste is not one of our bindings:
+ * its caller returns without `preventDefault` precisely so Chromium raises its
+ * own paste event, which the tile turns into `insertText`. It has to match
+ * wherever the reader's layout puts the letter V, because that is where they
+ * press it and where the browser's own paste is bound.
+ *
+ * Matching it physically breaks that contract rather than tightening it. On a
+ * Dvorak-style layout the V key reports `code: "Period"`, so a physical match
+ * fails, the handler falls through to `preventDefault`, and the native paste
+ * never happens - the chord is forwarded to the page as a rawKeyDown instead.
+ * Same class as the mod+K/Z/S conventions the renderer keeps on `key`.
+ */
+export function isScreencastPasteChord(event: KeyboardEvent): boolean {
+  return hasBareModifier(event) && event.key.toLowerCase() === "v";
 }
 
 /**
