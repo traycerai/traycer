@@ -71,7 +71,7 @@ afterEach(() => {
 });
 
 describe("HeaderTabDragOverlay: ghost-carried identity + indicator state", () => {
-  it("threads the ghost's identity color into the chip fill without any appearance/notification hook", () => {
+  it("threads the ghost's identity color into the chip border without any appearance/notification hook", () => {
     const tab = epicTab();
     const ghost = ghostWith({
       appearance: {
@@ -85,7 +85,7 @@ describe("HeaderTabDragOverlay: ghost-carried identity + indicator state", () =>
     render(<HeaderTabDragOverlay tab={tab} ghost={ghost} width={200} />);
 
     const chip = screen.getByTestId("header-tab-drag-overlay");
-    expect(chip.style.backgroundColor).toContain("654321");
+    expect(chip.style.borderColor).toBe("rgb(101, 67, 33)");
     // Identity icon (emoji) and the running-activity status render together.
     expect(screen.getByText("\u{1f680}")).toBeTruthy();
     expect(screen.getByTestId("header-tab-activity-tab-1")).toBeTruthy();
@@ -124,8 +124,8 @@ describe("HeaderTabDragOverlay: ghost-carried identity + indicator state", () =>
 
     expect(screen.getByTestId("header-tab-approval-tab-1")).toBeTruthy();
     expect(
-      screen.getByTestId("header-tab-drag-overlay").style.backgroundColor,
-    ).toContain("334455");
+      screen.getByTestId("header-tab-drag-overlay").style.borderColor,
+    ).toBe("rgb(51, 68, 85)");
   });
 
   it("falls back to no identity and an empty badge when the ghost is null", () => {

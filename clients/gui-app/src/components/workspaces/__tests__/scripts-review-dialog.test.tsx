@@ -97,7 +97,7 @@ describe("<ScriptsReviewDialog /> save gates", () => {
     cleanup();
   });
 
-  it("disables the complete editor until a rejected write settles", async () => {
+  it("disables the complete editor while a write is pending and re-enables after rejection", async () => {
     const scriptsWrite = deferred<unknown>();
     renderDialog({
       onSave: () => scriptsWrite.promise,
@@ -122,13 +122,13 @@ describe("<ScriptsReviewDialog /> save gates", () => {
       scriptsWrite.reject(new Error("scripts failed"));
       await Promise.resolve();
     });
-    expect(save.hasAttribute("disabled")).toBe(true);
-    expect(
-      screen
-        .getByRole("textbox", { name: "Setup script (Default)" })
-        .matches(":disabled"),
-    ).toBe(true);
-
-    await waitFor(() => expect(save.hasAttribute("disabled")).toBe(false));
+    await waitFor(() => {
+      expect(save.hasAttribute("disabled")).toBe(false);
+      expect(
+        screen
+          .getByRole("textbox", { name: "Setup script (Default)" })
+          .matches(":disabled"),
+      ).toBe(false);
+    });
   });
 });
