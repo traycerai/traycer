@@ -8,12 +8,14 @@ import "@/styles/auth-arrival.css";
 /**
  * How long the splash covers the sign-in page, fade included.
  *
- * ONE number, and the keyframes are authored to it: the mark's motion
- * fills the whole span rather than finishing early and leaving a frozen screen,
- * the layer fades over the last 240ms, and this timeout unmounts it exactly as
- * the fade lands. Changing the span means changing the keyframes with it.
+ * ONE number, and the keyframes are authored to it: the pieces are still
+ * arriving until 2000ms, the fade begins the instant the last one lands, and
+ * this timeout unmounts the layer exactly as the fade finishes. There is no
+ * still frame anywhere in it - an assembled mark holding on screen is a pause
+ * the viewer reads as the app having stopped. Changing the span means changing
+ * the keyframes with it.
  */
-export const AUTH_SPLASH_MS = 3500;
+export const AUTH_SPLASH_MS = 2240;
 
 /**
  * The brand animation a signed-out launch opens on, over the sign-in page.

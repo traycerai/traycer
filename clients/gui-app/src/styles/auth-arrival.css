@@ -47,12 +47,17 @@
    control the user cannot see, and stops the instant the page beneath starts
    becoming visible. Doing it here rather than in React is what keeps the
    component down to one boolean. */
+/* 89.29% of 2240ms is 2000ms - the frame the last piece lands on. The fade
+   starts there rather than after a beat, so the surface is never still.
+   `pointer-events` is not interpolable and switches discretely at that same
+   frame, which is what lets the sign-in page take a tap the moment it starts
+   becoming visible. */
 @keyframes auth-splash-play {
   0% {
     opacity: 1;
     pointer-events: auto;
   }
-  93.15% {
+  89.29% {
     opacity: 1;
     pointer-events: none;
   }
@@ -127,7 +132,7 @@
   }
 
   .auth-splash {
-    animation: auth-splash-play 3500ms linear both;
+    animation: auth-splash-play 2240ms linear both;
   }
 
   /* The splash restates the per-piece animation rather than inheriting the
@@ -137,7 +142,7 @@
   .auth-splash .brand-entrance-mark g > path {
     transform-box: fill-box;
     transform-origin: center;
-    animation: brand-mark-arrive 1500ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    animation: brand-mark-arrive 1730ms cubic-bezier(0.22, 1, 0.36, 1) both;
   }
 
   .auth-splash .brand-entrance-mark g > path:nth-child(1) {
@@ -169,7 +174,7 @@
   }
 
   .auth-splash .brand-entrance-mark {
-    animation: auth-mark-settle 3260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    animation: auth-mark-settle 2000ms cubic-bezier(0.22, 1, 0.36, 1) both;
   }
 
   .auth-arrival-actions {

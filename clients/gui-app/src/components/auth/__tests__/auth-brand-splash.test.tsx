@@ -45,7 +45,7 @@ describe("<AuthBrandSplash />", () => {
     // One timeout, one boolean: no second tick is needed to retire it, which is
     // exactly the property the previous phase machine lacked.
     expect(screen.queryByTestId("auth-brand-splash")).toBeNull();
-    expect(AUTH_SPLASH_MS).toBe(3500);
+    expect(AUTH_SPLASH_MS).toBe(2240);
   });
 
   it("is still covering just before the ceiling", () => {
@@ -57,6 +57,15 @@ describe("<AuthBrandSplash />", () => {
       vi.advanceTimersByTime(AUTH_SPLASH_MS - 1);
     });
     expect(screen.queryByTestId("auth-brand-splash")).not.toBeNull();
+  });
+
+  it("leaves no still frame: the fade begins as the last piece lands", () => {
+    // The span is the assembly (2000ms) plus the fade (240ms) and nothing
+    // else. A hold would show up here as slack between the two, which is the
+    // pause a viewer reads as the app having stopped.
+    const assembly = 2000;
+    const fade = 240;
+    expect(assembly + fade).toBe(AUTH_SPLASH_MS);
   });
 
   it("never appears under reduced motion", () => {
