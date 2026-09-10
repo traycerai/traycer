@@ -648,7 +648,9 @@ function updateHeaderTabSourcePreview(input: {
       activeHeaderStripGeometry?.stripBottom ?? null,
     )
   ) {
-    dndStore.headerTearOffPreviewChanged(true);
+    dndStore.headerTearOffPreviewChanged(
+      readTabDetachHandler()?.isAvailable === true,
+    );
     dndStore.headerStripDropIndexChanged(null);
     dndStore.headerStripDragStateChanged(null);
     dndStore.headerStripOffsetsChanged(EMPTY_HEADER_OFFSETS);

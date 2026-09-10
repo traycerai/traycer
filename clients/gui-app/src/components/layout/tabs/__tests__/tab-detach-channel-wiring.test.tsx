@@ -45,6 +45,7 @@ import { useDraggable } from "@dnd-kit/core";
 import { appLogger } from "@/lib/logger";
 import { fireEvent } from "@testing-library/react";
 import { RootDndProvider } from "@/components/epic-canvas/dnd/root-dnd-provider";
+import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import {
   HEADER_TAB_DND_TYPE,
   getHeaderTabDragId,
@@ -205,9 +206,17 @@ function seedHeaderProjection(): void {
   });
 }
 
+interface TearOffDrag {
+  readonly source: HTMLElement;
+  readonly pointerId: number;
+  readonly startX: number;
+  readonly releaseY: number;
+}
+
 /**
- * Drive a real tear-off: pointerdown, activation move, release BELOW the
- * measured strip bottom.
+ * Drive a real tear-off up to the point of release: pointerdown, activation
+ * move, move BELOW the measured strip bottom - but no `pointerUp` yet, so a
+ * caller can assert mid-drag state before choosing how the gesture ends.
  *
  * Rects are stubbed because jsdom returns zeros - without them `stripBottom` is
  * 0, every release counts as below it, and the threshold is degenerate. Each
@@ -215,7 +224,7 @@ function seedHeaderProjection(): void {
  * non-primary pointer, and batching activation with the first move collapses
  * two frames it treats separately.
  */
-function driveTearOff(view: RenderResult): void {
+function driveTearOffToPoint(view: RenderResult): TearOffDrag {
   const strip = view.getByTestId(HEADER_STRIP_SCROLL_TEST_ID);
   const source = view.getByTestId("header-drag-source");
   stubRect(strip, {
@@ -231,13 +240,14 @@ function driveTearOff(view: RenderResult): void {
     bottom: STRIP_BOTTOM,
   });
 
+  const pointerId = 1;
   const startX = TAB_LEFT + 20;
   const startY = STRIP_BOTTOM / 2;
   const releaseY = STRIP_BOTTOM + 200;
 
   act(() => {
     fireEvent.pointerDown(source, {
-      pointerId: 1,
+      pointerId,
       isPrimary: true,
       button: 0,
       clientX: startX,
@@ -246,23 +256,27 @@ function driveTearOff(view: RenderResult): void {
   });
   act(() => {
     fireEvent.pointerMove(source, {
-      pointerId: 1,
+      pointerId,
       clientX: startX + EPIC_CANVAS_DRAG_ACTIVATION_DISTANCE + 5,
       clientY: startY,
     });
   });
   act(() => {
     fireEvent.pointerMove(source, {
-      pointerId: 1,
+      pointerId,
       clientX: startX,
       clientY: releaseY,
     });
   });
+  return { source, pointerId, startX, releaseY };
+}
+
+function releaseTearOff(drag: TearOffDrag): void {
   act(() => {
-    fireEvent.pointerUp(source, {
-      pointerId: 1,
-      clientX: startX,
-      clientY: releaseY,
+    fireEvent.pointerUp(drag.source, {
+      pointerId: drag.pointerId,
+      clientX: drag.startX,
+      clientY: drag.releaseY,
     });
   });
 }
@@ -402,7 +416,11 @@ describe("tab detach channel wiring", () => {
     publishTabDetachHandler({ isAvailable: true, requestOpen });
 
     const view = await mountTearOffHarness();
-    driveTearOff(view);
+    const drag = driveTearOffToPoint(view);
+
+    expect(useEpicDndStore.getState().headerTearOffPreview).toBe(true);
+
+    releaseTearOff(drag);
 
     expect(requestOpen).toHaveBeenCalledTimes(1);
     expect(requestOpen.mock.calls[0][0]).toMatchObject({ id: EPIC_TAB.id });
@@ -426,7 +444,11 @@ describe("tab detach channel wiring", () => {
     expect(orderBefore).toHaveLength(2);
 
     const view = await mountTearOffHarness();
-    driveTearOff(view);
+    const drag = driveTearOffToPoint(view);
+
+    expect(useEpicDndStore.getState().headerTearOffPreview).toBe(false);
+
+    releaseTearOff(drag);
 
     const detachWarnings = warn.mock.calls.filter(
       (call) =>
@@ -459,7 +481,11 @@ describe("tab detach channel wiring", () => {
 
     seedHeaderProjection();
     const view = await mountTearOffHarness();
-    driveTearOff(view);
+    const drag = driveTearOffToPoint(view);
+
+    expect(useEpicDndStore.getState().headerTearOffPreview).toBe(false);
+
+    releaseTearOff(drag);
 
     // Negative detach assertions require the drag tree to remain mounted.
     expect(view.getByTestId(HEADER_STRIP_SCROLL_TEST_ID)).toBeTruthy();
