@@ -15,10 +15,10 @@
  *
  * What a predicate may read is the SHELL: the runner host's bridges, the
  * desktop feature-settings bridge and the product identity — and only through
- * its context argument, never a global, so the context is the whole truth. It never decides selected-host identity or a capability
- * negotiated over host RPC — a shell-level context has no stable answer to
- * either, so rows gated on them are not indexed and their enclosing group or
- * page is. The existing bridge resolvers stay the source of truth for each
+ * its context argument, never a global, so the context is the whole truth. It
+ * never decides selected-host identity or a capability negotiated over host
+ * RPC — a shell-level context has no stable answer to either, so rows gated
+ * on them are not indexed and their enclosing page is. The existing bridge resolvers stay the source of truth for each
  * bridge; a predicate only names which bridge its row needs.
  */
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";

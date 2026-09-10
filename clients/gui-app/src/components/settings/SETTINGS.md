@@ -90,7 +90,11 @@ row it lands on reads as the wrong result.
 
 **Keyboard.** The input keeps focus the whole time, so it is a `combobox`
 whose `aria-activedescendant` names the highlighted `option` and whose
-`aria-controls` names the `listbox`. The query lives in
+`aria-controls` names the `listbox` — an empty one when nothing matches, never a
+paragraph in its place. The pointer never takes focus either: result options
+are `tabIndex={-1}` and the options and the clear button cancel `mousedown`,
+so after a click the arrows, typing and Escape still reach the input (clearing
+unmounts the clear button, and focus taken by it would fall to the document). The query lives in
 `stores/settings/settings-search-store.ts` rather than in the rail, because
 the modal frame needs to know a search is running: the settings overlay's
 `consumeEscape` (`stores/tabs/overlays/settings.tsx`) clears it from the
@@ -218,7 +222,12 @@ is pending — deferred one tick and cancelled by the watcher's next mount.
 React's development double-mount unmounts and remounts synchronously, so its
 clear never runs and a request armed just before the panel existed (the
 phone's section list navigating into it) survives; a real unmount has nothing
-to cancel it.
+to cancel it. One close is not an abandonment: promoting the modal into the
+settings tab. The modal surface calls the settings overlay's
+`prepareForPromotion` first, which marks a handoff in the store; the closing
+watcher then leaves the request alone, and the next watcher to mount — the
+tab's, which mounts lazily, after any deferred clear would have run — ends the
+handoff and reveals it.
 
 An anchored row's scroll is done by hand on the row's **nearest scrolling
 ancestor**, not on the surface's pane: a fill-height panel such as Agent

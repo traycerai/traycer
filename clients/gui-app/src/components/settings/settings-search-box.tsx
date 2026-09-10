@@ -169,6 +169,10 @@ export function SettingsSearch(props: SettingsSearchProps): ReactNode {
               type="button"
               size="icon-xs"
               aria-label="Clear settings search"
+              // Clearing unmounts this button, so if it took focus on press,
+              // focus would fall to the document and the next keystroke would
+              // search nothing. It never takes it: the input keeps focus.
+              onMouseDown={(event) => event.preventDefault()}
               onClick={() => {
                 onQueryChange("");
                 setHighlighted(0);
@@ -206,12 +210,16 @@ function SettingsSearchResults(props: {
 }): ReactNode {
   if (props.results.length === 0) {
     return (
-      <p
+      // Still the listbox, just an empty one: the combobox's `aria-controls`
+      // names it for as long as the search is expanded.
+      <div
         id={props.listboxId}
+        role="listbox"
+        aria-label="Settings search results"
         className="px-3 py-6 text-center text-ui-xs text-muted-foreground"
       >
         Nothing in settings matches “{props.query.trim()}”.
-      </p>
+      </div>
     );
   }
   return (
@@ -254,6 +262,10 @@ function SettingsSearchResultRow(props: {
       aria-selected={active}
       data-result-index={index}
       data-testid={`settings-search-result-${settingsSearchResultKey(result.entry)}`}
+      // Options are pointed at, never focused: focus stays on the combobox,
+      // so after a click the arrows, typing and Escape all keep working.
+      tabIndex={-1}
+      onMouseDown={(event) => event.preventDefault()}
       onMouseEnter={() => props.onHighlight(index)}
       onClick={() => props.onSelect(result)}
       className={cn(

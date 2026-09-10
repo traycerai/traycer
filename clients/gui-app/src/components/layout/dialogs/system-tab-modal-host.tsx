@@ -11,6 +11,7 @@ import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import {
   overlayConsumesEscape,
   overlayMeta,
+  prepareOverlayForPromotion,
   renderOverlayBody,
 } from "@/stores/tabs/system-overlay-registry";
 import { LEADER_SCOPE_SETTINGS } from "@/lib/keybindings/leader-scope";
@@ -98,7 +99,12 @@ export function SystemTabModalSurface(
       promoteAriaLabel={`Open ${meta.label} as a tab`}
       promoteTestId={`system-tab-modal-promote-${active.kind}`}
       closeTestId={`system-tab-modal-close-${active.kind}`}
-      onPromote={onPromote}
+      // The body gets its say while it is still mounted: promotion unmounts
+      // it, and the tab's body mounts only afterwards.
+      onPromote={() => {
+        prepareOverlayForPromotion(active);
+        onPromote();
+      }}
       onClose={onClose}
       onEscapeKeyDown={(event) => {
         if (overlayConsumesEscape(active)) event.preventDefault();

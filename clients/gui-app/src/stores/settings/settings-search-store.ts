@@ -60,6 +60,16 @@ interface SettingsSearchState {
    * must not fire again on the next unrelated re-render of the panel.
    */
   readonly clearReveal: () => void;
+  /**
+   * The request is changing surfaces: the modal is being promoted into the
+   * settings tab. Promotion unmounts the modal's watcher and the tab mounts
+   * its own only afterwards — lazily, possibly well after a closing watcher's
+   * deferred clear would have run — so the closing watcher must leave the
+   * request alone. The next watcher to mount ends the handoff.
+   */
+  readonly handoffPending: boolean;
+  readonly beginRevealHandoff: () => void;
+  readonly endRevealHandoff: () => void;
 }
 
 export const useSettingsSearchStore = create<SettingsSearchState>((set) => ({
@@ -69,4 +79,7 @@ export const useSettingsSearchStore = create<SettingsSearchState>((set) => ({
   requestReveal: (section, anchor) =>
     set({ pendingReveal: { section, anchor, requestedAt: Date.now() } }),
   clearReveal: () => set({ pendingReveal: null }),
+  handoffPending: false,
+  beginRevealHandoff: () => set({ handoffPending: true }),
+  endRevealHandoff: () => set({ handoffPending: false }),
 }));

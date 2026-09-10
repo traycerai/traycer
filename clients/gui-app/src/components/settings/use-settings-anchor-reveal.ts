@@ -155,14 +155,22 @@ export function useSettingsAnchorReveal(
   // runs, and a request armed just before the panel existed (the phone's
   // section list navigating into it) survives; a real unmount has no remount
   // to cancel it.
+  //
+  // One close is not an abandonment: promoting the modal into the settings
+  // tab. The promotion marks a handoff first, the closing watcher leaves the
+  // request alone, and the watcher that mounts next — the tab's, whenever it
+  // arrives — ends the handoff and takes the request over.
   const deferredClearRef = useRef<number | null>(null);
   useEffect(() => {
     if (deferredClearRef.current !== null) {
       window.clearTimeout(deferredClearRef.current);
       deferredClearRef.current = null;
     }
+    const store = useSettingsSearchStore.getState();
+    if (store.handoffPending) store.endRevealHandoff();
     return () => {
       clearFlash();
+      if (useSettingsSearchStore.getState().handoffPending) return;
       deferredClearRef.current = window.setTimeout(() => {
         deferredClearRef.current = null;
         clearReveal();

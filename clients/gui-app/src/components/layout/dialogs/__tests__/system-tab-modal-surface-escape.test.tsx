@@ -55,7 +55,7 @@ function pressEscapeOnDocument(): void {
 
 afterEach(() => {
   cleanup();
-  useSettingsSearchStore.setState({ query: "" });
+  useSettingsSearchStore.setState({ query: "", handoffPending: false });
 });
 
 describe("<SystemTabModalSurface /> Escape", () => {
@@ -92,5 +92,48 @@ describe("<SystemTabModalSurface /> Escape", () => {
 
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(useSettingsSearchStore.getState().query).toBe("theme");
+  });
+});
+
+describe("<SystemTabModalSurface /> promotion", () => {
+  // Promotion unmounts the settings body before the tab's body mounts; the
+  // surface marks the reveal handoff while the body is still there.
+  it("marks a reveal handoff before promoting Settings", async () => {
+    const onPromote = vi.fn(() => {
+      expect(useSettingsSearchStore.getState().handoffPending).toBe(true);
+    });
+    render(
+      <DialogPrimitive.Root open>
+        <SystemTabModalSurface
+          active={{ kind: "settings", section: null }}
+          editingTheme={false}
+          onClose={() => undefined}
+          onPromote={onPromote}
+        />
+      </DialogPrimitive.Root>,
+    );
+    await waitForDismissableLayerListener();
+
+    fireEvent.click(screen.getByTestId("system-tab-modal-promote-settings"));
+
+    expect(onPromote).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks no handoff when promoting History", async () => {
+    render(
+      <DialogPrimitive.Root open>
+        <SystemTabModalSurface
+          active={{ kind: "history", section: null }}
+          editingTheme={false}
+          onClose={() => undefined}
+          onPromote={() => undefined}
+        />
+      </DialogPrimitive.Root>,
+    );
+    await waitForDismissableLayerListener();
+
+    fireEvent.click(screen.getByTestId("system-tab-modal-promote-history"));
+
+    expect(useSettingsSearchStore.getState().handoffPending).toBe(false);
   });
 });

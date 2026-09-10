@@ -76,9 +76,10 @@ export interface SettingsSearchEntry {
    * The words a user reaches for that the label does NOT contain. This is
    * where the search earns its keep: "dark mode" has to reach Theme, "proxy"
    * has to reach the Shell page, "stay signed in" has to reach the page that
-   * holds website sessions. Synonyms, the old name of a renamed thing, and the neighbouring
-   * vocabulary of the domain all belong here. Repeating a word already in the
-   * label does not — the label is searched at a higher weight than this is.
+   * holds website sessions. Synonyms, the old name of a renamed thing, and the
+   * neighbouring vocabulary of the domain all belong here. Repeating a word
+   * already in the label does not — the label is searched at a higher weight
+   * than this is.
    */
   readonly keywords: ReadonlyArray<string>;
 }
@@ -170,8 +171,7 @@ export const SETTINGS_SEARCH_ENTRIES: ReadonlyArray<SettingsSearchEntry> = [
     kind: "setting",
     availableWhen: alwaysAvailable,
     label: `Steer with ${MOD_ENTER_LABEL}`,
-    description:
-      "While a turn is running on a supported harness, sends the composer text as a same-turn steering message that jumps the queue. Plain Enter keeps queueing.",
+    description: `While a turn is running on a supported harness, ${MOD_ENTER_LABEL} sends the composer text as a same-turn steering message that jumps the queue. Plain Enter keeps queueing.`,
     group: "Chat & composer",
     keywords: [
       "steer",
@@ -261,8 +261,9 @@ export const SETTINGS_SEARCH_ENTRIES: ReadonlyArray<SettingsSearchEntry> = [
     kind: "setting",
     availableWhen: alwaysAvailable,
     label: "Default branch prefix",
-    description:
-      "New branches start with this prefix unless a repository sets its own in Environment.",
+    // The row's sentence embeds a live preview of the next branch name, so
+    // there is no fixed text to copy; the keywords carry the vocabulary.
+    description: null,
     group: "Worktrees",
     keywords: ["branch", "naming", "prefix", "git", "worktree"],
   },
@@ -324,7 +325,7 @@ export const SETTINGS_SEARCH_ENTRIES: ReadonlyArray<SettingsSearchEntry> = [
     availableWhen: alwaysAvailable,
     label: "Local app state",
     description:
-      "Reset this device's app state - open tabs, layout, drafts, settings, and view preferences - then reload. You stay signed in.",
+      "Reset this device's app state - open tabs, layout, drafts, settings, and view preferences - then reload. You stay signed in. File edit snapshots are cleared from the host's own Overview page.",
     group: "Danger Zone",
     keywords: ["clear", "reset", "cache", "storage", "wipe", "tabs", "layout"],
   },
@@ -451,7 +452,7 @@ export const SETTINGS_SEARCH_ENTRIES: ReadonlyArray<SettingsSearchEntry> = [
     availableWhen: alwaysAvailable,
     label: "Terminal font",
     description:
-      "Font and size used in the terminal. Follows the code font until changed.",
+      "Font and size used in the terminal. Follows the code font until you set them.",
     group: "Terminal",
     keywords: ["font", "monospace", "mono", "console", "xterm"],
   },
@@ -471,7 +472,7 @@ export const SETTINGS_SEARCH_ENTRIES: ReadonlyArray<SettingsSearchEntry> = [
     kind: "setting",
     availableWhen: alwaysAvailable,
     label: "Blink cursor",
-    description: null,
+    description: "Blink the terminal cursor while the terminal is focused.",
     group: "Terminal",
     keywords: ["blink", "flash", "cursor", "caret"],
   },

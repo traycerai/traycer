@@ -25,4 +25,8 @@ export const settingsOverlayModule: SystemOverlayModule<"settings"> = {
     setQuery("");
     return true;
   },
+  // A reveal armed in the modal has to land in the tab the modal becomes.
+  prepareForPromotion: () => {
+    useSettingsSearchStore.getState().beginRevealHandoff();
+  },
 };

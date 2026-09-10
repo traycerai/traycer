@@ -48,15 +48,21 @@ const READ_FAILED = "Couldn't read this phone's notification setting.";
  * is the UI word for a HOST (Settings → Devices lists hosts), so "This device"
  * would read as one more host-scoped setting - the exact confusion the row is
  * here to end.
+ *
+ * The gate is the only thing rendered above it: every hook the group uses
+ * reaches the runner host, which throws in a host-less shell, so they live in
+ * the child and run only once the gate has passed.
  */
 export function PushPermissionSection(): ReactNode {
   const availability = useSettingsAvailabilityContext();
+  if (!isPushPermissionGroupAvailable(availability)) return null;
+  return <PushPermissionGroup />;
+}
+
+function PushPermissionGroup(): ReactNode {
   const query = usePushPermissionQuery();
   const request = usePushPermissionRequestMutation();
   const openSettings = usePushPermissionOpenSettingsMutation();
-
-  if (!isPushPermissionGroupAvailable(availability)) return null;
-
   const view = pushPermissionView(query);
   return (
     <SettingsGroup

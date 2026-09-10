@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsSearch } from "@/components/settings/settings-search-box";
@@ -80,6 +81,57 @@ describe("<SettingsSearch /> keyboard exposure", () => {
 
     expect(screen.queryAllByRole("option")).toEqual([]);
     expect(combobox().hasAttribute("aria-activedescendant")).toBe(false);
+  });
+
+  // `aria-controls` names the listbox for as long as the search is expanded,
+  // so the empty state has to BE that listbox, not a paragraph in its place.
+  it("keeps aria-controls pointing at a listbox when nothing matches", () => {
+    render(<Harness />);
+    type("qqzzxwv");
+
+    const listbox = screen.getByRole("listbox", {
+      name: "Settings search results",
+    });
+    expect(combobox().getAttribute("aria-controls")).toBe(listbox.id);
+    expect(listbox.textContent).toContain("Nothing in settings matches");
+  });
+});
+
+// Pointer input, driven through user-event rather than `fireEvent` because
+// only user-event moves focus on press the way a browser does — and honours a
+// `preventDefault` on mousedown. `fireEvent.click` never moves focus, so a
+// focus assertion after it would pass whatever the component did.
+describe("<SettingsSearch /> focus under the pointer", () => {
+  it("keeps focus on the combobox after a result is clicked", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    await user.type(combobox(), "theme");
+
+    await user.click(screen.getAllByRole("option")[0]);
+
+    expect(navigateToSettingsSectionMock).toHaveBeenCalled();
+    expect(document.activeElement).toBe(combobox());
+    // ...so the keyboard still drives the list.
+    await user.keyboard("{ArrowDown}");
+    expect(combobox().getAttribute("aria-activedescendant")).toBe(
+      screen.getAllByRole("option")[1].id,
+    );
+  });
+
+  it("keeps focus on the combobox after the clear button is clicked", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    await user.type(combobox(), "theme");
+
+    await user.click(
+      screen.getByRole("button", { name: "Clear settings search" }),
+    );
+
+    expect(combobox()).toHaveProperty("value", "");
+    expect(document.activeElement).toBe(combobox());
+    // ...so the next keystroke starts the next search.
+    await user.keyboard("zoom");
+    expect(combobox()).toHaveProperty("value", "zoom");
   });
 });
 

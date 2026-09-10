@@ -25,13 +25,11 @@ import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { trackSettingChanged, type AnalyticsSetting } from "@/lib/analytics";
-import { modLabel } from "@/lib/keybindings/platform";
+import { MOD_ENTER_LABEL } from "@/lib/settings-search/settings-search-entries";
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
 import { isExperimentalGroupAvailable } from "@/lib/settings/settings-availability";
 import { useRunnerFeatureSettingsQuery } from "@/hooks/runner/use-runner-feature-settings-query";
 import { useRunnerAgentRolesSet } from "@/hooks/runner/use-runner-agent-roles-set-mutation";
-
-const MOD_ENTER_LABEL = `${modLabel()}+Enter`;
 
 function trackGeneralSetting(setting: AnalyticsSetting): void {
   trackSettingChanged("general", setting);

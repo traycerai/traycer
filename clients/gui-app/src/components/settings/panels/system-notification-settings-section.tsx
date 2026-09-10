@@ -7,13 +7,21 @@ import { useNotificationSystemSettingsOpenMutation } from "@/hooks/runner/use-no
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
 import { isSystemNotificationsGroupAvailable } from "@/lib/settings/settings-availability";
 
-/** Desktop pointer to native banner, badge and delivery preferences. */
+/**
+ * Desktop pointer to native banner, badge and delivery preferences.
+ *
+ * The gate is the only thing rendered above it: every hook the group uses
+ * reaches the runner host, which throws in a host-less shell, so they live in
+ * the child and run only once the gate has passed.
+ */
 export function SystemNotificationSettingsSection(): ReactNode {
   const availability = useSettingsAvailabilityContext();
-  const openSettings = useNotificationSystemSettingsOpenMutation();
-
   if (!isSystemNotificationsGroupAvailable(availability)) return null;
+  return <SystemNotificationSettingsGroup />;
+}
 
+function SystemNotificationSettingsGroup(): ReactNode {
+  const openSettings = useNotificationSystemSettingsOpenMutation();
   return (
     <SettingsGroup
       title="System"

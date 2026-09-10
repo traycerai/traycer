@@ -157,7 +157,10 @@ function pending(): unknown {
 
 beforeEach(() => {
   vi.useFakeTimers();
-  useSettingsSearchStore.setState({ pendingReveal: null });
+  useSettingsSearchStore.setState({
+    pendingReveal: null,
+    handoffPending: false,
+  });
   Object.defineProperty(Element.prototype, "checkVisibility", {
     configurable: true,
     value: function checkVisibility(this: Element): boolean {
@@ -332,6 +335,34 @@ describe("useSettingsAnchorReveal", () => {
 
     expect(flashedElement()).toBeNull();
     expect(pending()).toBeNull();
+  });
+
+  // Promoting the modal into the settings tab unmounts the modal's watcher, and
+  // the tab mounts its own only later. The request is changing surfaces, not
+  // being abandoned — so it must still be there when the tab arrives.
+  it("carries a request across a handoff to a watcher that mounts later", () => {
+    const view = render(<AnchorHarness anchor="elsewhere" />);
+    armReveal(ANCHOR);
+    flushFrame();
+    act(() => {
+      useSettingsSearchStore.getState().beginRevealHandoff();
+    });
+    act(() => {
+      view.unmount();
+    });
+    act(() => {
+      vi.advanceTimersByTime(50);
+    });
+    expect(pending()).not.toBeNull();
+
+    render(<AnchorHarness anchor={ANCHOR} />);
+    scrollSpies();
+    flushFrame();
+
+    expect(flashedElement()).not.toBeNull();
+    expect(pending()).toBeNull();
+    // The mount ended the handoff, so the next close abandons as usual.
+    expect(useSettingsSearchStore.getState().handoffPending).toBe(false);
   });
 
   // The phone's section list arms the request and THEN navigates into a panel,
