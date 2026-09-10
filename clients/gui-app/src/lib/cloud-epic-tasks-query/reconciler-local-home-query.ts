@@ -67,18 +67,49 @@ export function epicTabLocalHomeListQueryOptions(
  * against a later principal; this one is an ordinary reactive read whose
  * staleness costs a stale pin glyph. Sharing its cache entry would tie a
  * tab-strip render to a reconciliation run's lifetime.
+ *
+ * `population` - the local-homed open epic ids this host has to answer for -
+ * is in the KEY and deliberately not in the request. The request cannot carry
+ * it: the cursorless page is the host's whole local-homed set either way. What
+ * the population decides is whether an already-cached page is still an ANSWER,
+ * because the consumer reads membership out of it (R8). One fetch per
+ * population, not one per unresolved row - see the call site in
+ * `use-epic-task-pinned-states-query.ts` for why that distinction is the whole
+ * safety argument.
  */
 export function epicPinReadingListQueryOptions(args: {
   readonly hostId: string;
   readonly userId: string;
   readonly params: ListCloudTasksRequest;
+  readonly population: ReadonlyArray<string>;
 }) {
   return queryOptions<ListTasksResponse>({
     queryKey: queryKeys.cloudEpicPinReading(
       args.hostId,
       args.userId,
       args.params,
+      args.population,
     ),
+    // COST, stated because it is a consequence of the key and not an oversight:
+    // a new population is a new cache entry, so while its page is in flight the
+    // rows this host had already answered report `pinnedKnown: false` again for
+    // one local list read. They recover when it lands.
+    //
+    // `placeholderData: (previous) => previous` does NOT fix that here, and the
+    // reason is structural rather than a tuning question. The carry-the-previous
+    // idiom needs the observer to outlive the key change, which is how
+    // `useQuery` behaves; this reading runs under `useQueries`, whose
+    // `QueriesObserver` matches observers to queries by `queryHash` ALONE
+    // (`#findMatchingObservers`). A changed key matches nothing, so a fresh
+    // `QueryObserver` is constructed and destroys the old one - its
+    // last-query-with-data is empty, the placeholder function is handed
+    // `undefined`, and the option is inert. Verified by pin, not assumed: see
+    // "returns an answered row to unknown while the wider page is in flight".
+    //
+    // Falling back to unknown is also the SAFE direction by this query's own
+    // standard: `pinnedKnown: false` withholds the pin action, where carrying a
+    // page forward would be rendering one population's answer as another's. The
+    // defect this whole line exists to fix is silence presented as an answer.
     queryFn: ({ signal }) =>
       fetchCloudEpicTasksFirstPageByHostId(args.hostId, args.userId, {
         request: args.params,

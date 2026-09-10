@@ -130,6 +130,17 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 const PROFILE = { userId: "user-1", userName: "U", email: "u@example.com" };
 const CONTEXT = { userId: "user-1", username: "U" };
 
+/**
+ * The local-homed open population a pin-reading key is built for (R8). The write
+ * predicate deliberately does NOT match on it - a pin is a fact about the epic on
+ * that host, not about whichever question happened to fetch it - so the cases
+ * below use one population each and still prove the scope they are about.
+ * "patches every POPULATION's entry for the dispatch host" is the case that pins
+ * the non-match, because an entry this hook returns to after a tab closes has to
+ * be correct rather than stale.
+ */
+const PIN_READING_POPULATION: ReadonlyArray<string> = ["epic-1"];
+
 function epicTask(epicId: string, pinned: boolean): ListTaskLight {
   return {
     epic: {
@@ -498,7 +509,8 @@ describe("useEpicSetPinned", () => {
    *
    * It was not. The optimistic patch and the `onSuccess` invalidation both
    * matched only the History key (`cloud.listTasks`, user at index 5), while the
-   * reading key is `["host", host, "epic.listTasks", params, user, "pin-reading"]`.
+   * reading key is
+   * `["host", host, "epic.listTasks", params, user, population, "pin-reading"]`.
    * So a successful pin reached the owning host and changed the backend, and the
    * glyph kept the pre-click value indefinitely: `staleTime: Infinity` means
    * nothing refetches it on its own, and only a manual invalidation corrected it.
@@ -509,11 +521,13 @@ describe("useEpicSetPinned", () => {
       "host-owning",
       "user-1",
       LIST_CLOUD_TASKS_REQUEST,
+      PIN_READING_POPULATION,
     );
     const otherReadingKey = queryKeys.cloudEpicPinReading(
       "host-other",
       "user-1",
       LIST_CLOUD_TASKS_REQUEST,
+      PIN_READING_POPULATION,
     );
     queryClient.setQueryData(
       ownerReadingKey,
@@ -543,12 +557,54 @@ describe("useEpicSetPinned", () => {
     });
   });
 
+  it("patches every POPULATION's entry for the dispatch host", () => {
+    // R8 put the local-homed open population in the reading key, so one host/user
+    // can hold several entries at once - the page fetched for `{epic-1}` and the
+    // one fetched after a second tab opened. The write must reach all of them:
+    // closing that tab returns the hook to the narrower key, and an entry the
+    // write skipped would render the pre-click bit again, which is the same defect
+    // the enrolment fixed, re-entering through the cache's own history.
+    const queryClient = new QueryClient();
+    const narrowKey = queryKeys.cloudEpicPinReading(
+      "host-owning",
+      "user-1",
+      LIST_CLOUD_TASKS_REQUEST,
+      ["epic-1"],
+    );
+    const widerKey = queryKeys.cloudEpicPinReading(
+      "host-owning",
+      "user-1",
+      LIST_CLOUD_TASKS_REQUEST,
+      ["epic-1", "epic-2"],
+    );
+    queryClient.setQueryData(narrowKey, pageWith([epicTask("epic-1", false)]));
+    queryClient.setQueryData(widerKey, pageWith([epicTask("epic-1", false)]));
+    renderHook(() => useEpicSetPinned(), {
+      wrapper: makeWrapper(queryClient),
+    });
+
+    capturedOptions.onMutate?.({
+      epicId: "epic-1",
+      pinned: true,
+      isLocalHome: true,
+      hostId: "host-owning",
+    });
+
+    expect(pinnedById(queryClient.getQueryData(narrowKey))).toEqual({
+      "epic-1": true,
+    });
+    expect(pinnedById(queryClient.getQueryData(widerKey))).toEqual({
+      "epic-1": true,
+    });
+  });
+
   it("rolls the pin-reading cache back when the write fails", () => {
     const queryClient = new QueryClient();
     const ownerReadingKey = queryKeys.cloudEpicPinReading(
       "host-owning",
       "user-1",
       LIST_CLOUD_TASKS_REQUEST,
+      PIN_READING_POPULATION,
     );
     queryClient.setQueryData(
       ownerReadingKey,
@@ -593,6 +649,7 @@ describe("useEpicSetPinned", () => {
       "host-owning",
       "user-1",
       LIST_CLOUD_TASKS_REQUEST,
+      PIN_READING_POPULATION,
     );
     queryClient.setQueryData(
       ownerReadingKey,
@@ -624,11 +681,13 @@ describe("useEpicSetPinned", () => {
       "host-owning",
       "user-1",
       LIST_CLOUD_TASKS_REQUEST,
+      PIN_READING_POPULATION,
     );
     const theirsKey = queryKeys.cloudEpicPinReading(
       "host-owning",
       "user-2",
       LIST_CLOUD_TASKS_REQUEST,
+      PIN_READING_POPULATION,
     );
     queryClient.setQueryData(mineKey, pageWith([epicTask("epic-1", false)]));
     queryClient.setQueryData(theirsKey, pageWith([epicTask("epic-1", false)]));
@@ -657,6 +716,7 @@ describe("useEpicSetPinned", () => {
       "host-owning",
       "user-1",
       LIST_CLOUD_TASKS_REQUEST,
+      PIN_READING_POPULATION,
     );
     const invalidated: Array<readonly unknown[]> = [];
     queryClient.setQueryData(
