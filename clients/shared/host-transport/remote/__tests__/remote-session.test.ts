@@ -2128,16 +2128,36 @@ describe("RemoteStreamClient dynamic subscribe params", () => {
           version,
         );
 
-        // A drop retracts the manifest and the version with it; the redial's
-        // ack installs a manifest again and the version is readable again,
-        // and once more stable across reads.
+        // A drop retracts the manifest and the version with it. The redial's
+        // ack installs a DIFFERENT manifest - one without the method - and
+        // the verdict must follow it: a cache keyed on the method alone would
+        // keep answering the retired manifest's `supported` here.
         relay.dropCurrentConnection();
+        relay.streamManifest = {};
         await vi.waitFor(
           () =>
             expect(
               streamClient.getMethodSchemaVersion("cursor.subscribe"),
             ).toBe(null),
           WAIT,
+        );
+        await vi.waitFor(
+          () =>
+            expect(streamClient.getMethodSupport("cursor.subscribe")).toBe(
+              "unsupported",
+            ),
+          WAIT,
+        );
+        expect(streamClient.getMethodSchemaVersion("cursor.subscribe")).toBe(
+          null,
+        );
+
+        // And back: the method returns with the next ack, readable again and
+        // once more one identity across reads.
+        relay.dropCurrentConnection();
+        relay.streamManifest = buildStreamManifest(
+          cursorStreamRegistry,
+          SERVES_EVERY_INSTALLED_MAJOR,
         );
         await vi.waitFor(
           () =>
