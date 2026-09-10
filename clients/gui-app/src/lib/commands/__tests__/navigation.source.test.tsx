@@ -107,4 +107,15 @@ describe("navigationSource", () => {
     expect(ids).not.toContain("nav:settings/appearance");
     expect(ids).toContain("nav:settings/general");
   });
+
+  it("distinguishes application Sounds from host Notifications", () => {
+    const items = captureSettingsSubpage("/");
+    const app = items.find((i) => i.id === "nav:settings/app-notifications");
+    const host = items.find((i) => i.id === "nav:settings/notifications");
+    expect(app?.label).toBe("Sounds");
+    expect(app?.statusBadge).toBe("Application");
+    expect(app?.keywords).toContain("notifications");
+    expect(host?.label).toBe("Notifications");
+    expect(host?.statusBadge).toBe("Host");
+  });
 });
