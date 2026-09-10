@@ -3,7 +3,13 @@ import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/hos
 import { hostUnavailability } from "@traycer-clients/shared/host-client/remote-fetcher";
 import type { HostRpcRegistry } from "@/lib/host";
 import { hasReadyRemoteSession } from "@traycer-clients/shared/host-transport/remote/index";
+import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import { dialableHostEndpointFor } from "@/lib/host/transport-key";
+import { negotiatedCreateServesLocalFirst } from "@/lib/epic-create-admission";
+import {
+  authorizesCloudCapability,
+  type AuthStatus,
+} from "@/stores/auth/auth-store";
 
 /**
  * Display name for a host the composer is about to talk about. The generic
@@ -57,6 +63,49 @@ export type LandingPlacement =
       readonly client: HostClient<HostRpcRegistry>;
     }
   | { readonly kind: "refused"; readonly message: string };
+
+/**
+ * Whether a session WITHOUT a cloud verdict may create on the placement host.
+ *
+ * `admitsLocalPlane` lets an `unverified` session onto the landing workspace,
+ * and the composer there is live. What must not happen is that create going to
+ * the cloud on the retained credential, spending the capability the verdict
+ * withheld.
+ *
+ * The subject is `epic.create`'s OWN negotiated line: `@1.1` is the minor from
+ * which the create is local-first. This used to ask `epic.listTasks@1.6`
+ * instead, because `epic.create` advertised a single `@1.0` line and could not
+ * answer for itself - see `negotiatedCreateServesLocalFirst` for why that
+ * proxy was retired rather than merely renamed. A `null` version (no handshake
+ * yet) refuses too, with copy that says why; the chip re-resolves when the
+ * manifest lands.
+ *
+ * Applied AFTER `resolveLandingPlacement` says `ready`, on the same host id
+ * that placement named, so the version consulted is the target's own. A
+ * `signed-in` session is never refused here. Found in review.
+ */
+export function refuseCreateWithoutCloudVerdict(input: {
+  readonly status: AuthStatus;
+  readonly negotiatedCreate: SchemaVersion | null;
+  readonly hostLabel: string;
+}): LandingPlacement | null {
+  if (authorizesCloudCapability(input.status)) return null;
+  if (negotiatedCreateServesLocalFirst(input.negotiatedCreate)) {
+    return null;
+  }
+  return {
+    kind: "refused",
+    message: createWithoutCloudVerdictMessage(input.hostLabel),
+  };
+}
+
+/**
+ * The refusal's copy, shared with the create mutation's own pre-flight (the
+ * dispatch-time re-check against the LIVE host) so the two say one thing.
+ */
+export function createWithoutCloudVerdictMessage(hostLabel: string): string {
+  return `Traycer couldn't confirm your sign-in, and ${hostLabel} can't create epics on this device without it. Sign in again, or update the device and try again.`;
+}
 
 /**
  * Selection model §54's submit-time re-validation, as a pure function.

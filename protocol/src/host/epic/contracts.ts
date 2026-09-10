@@ -6,6 +6,7 @@ import {
 import {
   batchDeleteRequestSchema,
   batchDeleteResponseSchema,
+  batchDeleteResponseSchemaPre11,
   batchUpdateEpicRolesRequestSchema,
   batchUpdateEpicRolesResponseSchema,
   createArtifactRequestSchema,
@@ -17,6 +18,7 @@ import {
   createCommentThreadResponseSchema,
   createEpicRequestSchema,
   createEpicResponseSchema,
+  createEpicResponseSchemaPre11,
   createTuiAgentRequestSchema,
   createTuiAgentRequestSchemaV10,
   createTuiAgentResponseSchema,
@@ -51,13 +53,18 @@ import {
   getTaskContextsResponseSchema,
   getTaskContextsResponseSchemaPre12,
   getTaskContextsResponseSchemaV10,
+  getTaskContextsResponseSchemaPre13,
   isFoundTaskContext,
   listTasksRequestSchema,
+  listTasksRequestSchemaPre16,
   listTasksRequestSchemaV11,
   listTasksRequestSchemaPre13,
   listTasksResponseSchema,
   listTasksResponseSchemaV10,
   listTasksResponseSchemaPre13,
+  listTasksResponseSchemaPre14,
+  listTasksResponseSchemaPre15,
+  listTasksResponseSchemaPre16,
   prepareArtifactImageRequestSchema,
   prepareArtifactImageResponseSchema,
   removeEpicRepoRequestSchema,
@@ -90,6 +97,7 @@ import {
   setCommentThreadResolvedResponseSchema,
   setEpicPinnedRequestSchema,
   setEpicPinnedResponseSchema,
+  setEpicPinnedResponseSchemaPre11,
   updateArtifactStatusRequestSchema,
   updateArtifactStatusResponseSchema,
   updateChatProfileRequestSchema,
@@ -109,6 +117,9 @@ import {
   epicSubscribeV11,
   epicSubscribeV12,
   epicSubscribeV13,
+  epicSubscribeV14,
+  epicSubscribeV15,
+  epicSubscribeV16,
 } from "@traycer/protocol/host/epic/subscribe";
 import {
   listCloudChatPayloadsRequestSchema,
@@ -151,6 +162,7 @@ import {
 } from "@traycer/protocol/host/epic/chat-records";
 import {
   readChatAttachmentRequestSchema,
+  readChatAttachmentRequestSchemaPre11,
   readChatAttachmentResponseSchema,
 } from "@traycer/protocol/host/epic/chat-attachment";
 import {
@@ -168,8 +180,9 @@ export const epicListTasksV10 = defineRpcContract({
 });
 
 // `epic.listTasks@1.1` adds the signed-in user's personal `pinned` bit to each
-// row and reuses CloudData's canonical current list response schema. The
-// request is unchanged; an older host's rows upgrade as unpinned.
+// row. The request is unchanged; an older host's rows upgrade as unpinned.
+// Response shape is frozen at the pin-aware (pre-home) schema so later home
+// tagging lands on a new minor rather than rewriting released 1.1/1.2.
 export const epicListTasksV11 = defineRpcContract({
   method: "epic.listTasks",
   schemaVersion: { major: 1, minor: 1 } as const,
@@ -218,8 +231,8 @@ export const epicListTasksUpgradeV11ToV12 = defineUpgradePath<
 export const epicListTasksV13 = defineRpcContract({
   method: "epic.listTasks",
   schemaVersion: { major: 1, minor: 3 } as const,
-  requestSchema: listTasksRequestSchema,
-  responseSchema: listTasksResponseSchema,
+  requestSchema: listTasksRequestSchemaPre16,
+  responseSchema: listTasksResponseSchemaPre14,
 });
 
 export const epicListTasksUpgradeV12ToV13 = defineUpgradePath<
@@ -235,6 +248,93 @@ export const epicListTasksUpgradeV12ToV13 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
+// `epic.listTasks@1.4` adds the optional per-row `home` marker so the host can
+// union local-homed registry rows into the cloud list without breaking older
+// clients (absence ⇒ treat as cloud / unknown). Request is unchanged from 1.3.
+export const epicListTasksV14 = defineRpcContract({
+  method: "epic.listTasks",
+  schemaVersion: { major: 1, minor: 4 } as const,
+  requestSchema: listTasksRequestSchemaPre16,
+  responseSchema: listTasksResponseSchemaPre15,
+});
+
+export const epicListTasksUpgradeV13ToV14 = defineUpgradePath<
+  typeof epicListTasksV13,
+  typeof epicListTasksV14
+>({
+  from: epicListTasksV13.schemaVersion,
+  to: epicListTasksV14.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    tasks: response.tasks.map((task) => ({ ...task })),
+  }),
+});
+
+// `epic.listTasks@1.5` - the s5 discovery-honesty minor. TWO tickets land on
+// it because they are two halves of one answer and a client that negotiated
+// only half would render the other half's rows without its caveats:
+//
+// - `s5-offline-history` (C5/C6) adds `completeness`, the positive statement
+//   of whether the cloud leg settled, whether the facets still describe the
+//   rows, whether host rows are present or were suppressed as unprovable, and
+//   whether the order is the server's or a loaded-union.
+// - `s5-orphaned-epic-recovery` adds the per-row `preservation` marker, which
+//   is what makes an epic preserved through a refused delete listable at all.
+//
+// Both keys are additive and optional, so `@1.0`-`@1.4` peers keep byte-
+// identical payloads: the older response schemas strip them, and the host
+// gates emission on the negotiated minor rather than trusting the strip.
+// Request is unchanged from 1.3.
+export const epicListTasksV15 = defineRpcContract({
+  method: "epic.listTasks",
+  schemaVersion: { major: 1, minor: 5 } as const,
+  requestSchema: listTasksRequestSchemaPre16,
+  responseSchema: listTasksResponseSchemaPre16,
+});
+
+export const epicListTasksUpgradeV14ToV15 = defineUpgradePath<
+  typeof epicListTasksV14,
+  typeof epicListTasksV15
+>({
+  from: epicListTasksV14.schemaVersion,
+  to: epicListTasksV15.schemaVersion,
+  upgradeRequest: (request) => request,
+  // No synthesized `completeness`. An upgraded `@1.4` payload came from a host
+  // that cannot make this statement, and absence is exactly the right reading:
+  // manufacturing `cloudPage: "settled"` here would be the reassuring default
+  // this minor exists to remove.
+  upgradeResponse: (response) => ({
+    ...response,
+    tasks: response.tasks.map((task) => ({ ...task })),
+  }),
+});
+
+// `epic.listTasks@1.6` permits a capable client to receive locally provable
+// rows immediately, then perform one explicit cloud revalidation. The new
+// request directive and `pending` completeness state are deliberately absent
+// from 1.5: a new renderer negotiating an old host must keep today's single,
+// settled-or-unavailable response behaviour.
+export const epicListTasksV16 = defineRpcContract({
+  method: "epic.listTasks",
+  schemaVersion: { major: 1, minor: 6 } as const,
+  requestSchema: listTasksRequestSchema,
+  responseSchema: listTasksResponseSchema,
+});
+
+export const epicListTasksUpgradeV15ToV16 = defineUpgradePath<
+  typeof epicListTasksV15,
+  typeof epicListTasksV16
+>({
+  from: epicListTasksV15.schemaVersion,
+  to: epicListTasksV16.schemaVersion,
+  upgradeRequest: (request) => request,
+  // An older host cannot have returned a local-first page. Do not manufacture
+  // `pending`: its absence continues to mean the released single-response
+  // behaviour, exactly as a 1.5 renderer already reads it.
+  upgradeResponse: (response) => response,
+});
+
 // Personal cloud preference. Optional/non-floor so clients retain the released
 // unary handshake against older hosts and receive E_HOST_UNSUPPORTED only when
 // they try to change a pin.
@@ -242,7 +342,39 @@ export const epicSetPinnedV10 = defineRpcContract({
   method: "epic.setPinned",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: setEpicPinnedRequestSchema,
+  responseSchema: setEpicPinnedResponseSchemaPre11,
+});
+
+// `epic.setPinned@1.1` states the durability `home` of the epic it just
+// pinned. Request is unchanged from 1.0.
+//
+// The released line is cloud-only by CONSTRUCTION, not by declaration: the
+// host's only arm writes to the cloud, so a local-homed epic 404s. A host that
+// grows a local arm therefore changes what a success MEANS, and a `@1.0`
+// response has no room to say so. The client gating its pin control on this
+// minor is what keeps the two facts - "this host can pin a local-homed epic"
+// and "this response tells me which store took it" - from being negotiated
+// separately and disagreeing.
+export const epicSetPinnedV11 = defineRpcContract({
+  method: "epic.setPinned",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: setEpicPinnedRequestSchema,
   responseSchema: setEpicPinnedResponseSchema,
+});
+
+export const epicSetPinnedUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicSetPinnedV10,
+  typeof epicSetPinnedV11
+>({
+  from: epicSetPinnedV10.schemaVersion,
+  to: epicSetPinnedV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  // `home` stays ABSENT rather than becoming `"cloud"`. A `@1.0` host's
+  // success does happen to be a cloud write today, but synthesizing the marker
+  // here would hand a client the same unearned certainty the minor exists to
+  // remove, and it would survive a host that later serves the pin locally on a
+  // still-`@1.0`-negotiated connection.
+  upgradeResponse: (response) => response,
 });
 
 // Personal cloud recency. Optional/non-floor so older hosts remain compatible;
@@ -302,7 +434,7 @@ export const epicGetTaskContextsV12 = defineRpcContract({
   method: "epic.getTaskContexts",
   schemaVersion: { major: 1, minor: 2 } as const,
   requestSchema: getTaskContextsRequestSchema,
-  responseSchema: getTaskContextsResponseSchema,
+  responseSchema: getTaskContextsResponseSchemaPre13,
 });
 
 export const epicGetTaskContextsUpgradeV11ToV12 = defineUpgradePath<
@@ -319,10 +451,39 @@ export const epicGetTaskContextsUpgradeV11ToV12 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
+// `epic.getTaskContexts@1.3` adds the optional sibling `localHomedTaskIds` id
+// list (see `unary-schemas.ts` for why it is a sibling rather than the per-row
+// `home` marker `epic.listTasks@1.4` carries), so the tab strip can tell a
+// local epic from a cloud one on the only method it uses (`s5-parity-gaps`
+// gap 4). Request unchanged; `@1.0`-`@1.2` stay frozen and simply strip the
+// key.
+export const epicGetTaskContextsV13 = defineRpcContract({
+  method: "epic.getTaskContexts",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  requestSchema: getTaskContextsRequestSchema,
+  responseSchema: getTaskContextsResponseSchema,
+});
+
+export const epicGetTaskContextsUpgradeV12ToV13 = defineUpgradePath<
+  typeof epicGetTaskContextsV12,
+  typeof epicGetTaskContextsV13
+>({
+  from: epicGetTaskContextsV12.schemaVersion,
+  to: epicGetTaskContextsV13.schemaVersion,
+  upgradeRequest: (request) => request,
+  // No synthesized `localHomedTaskIds`. An older host did not answer the
+  // question, and absence already means "cloud or unknown" - which is the
+  // reading that keeps the pin action enabled, so inventing an id list here
+  // would be indistinguishable from the defect.
+  upgradeResponse: (response) => response,
+});
+
 /**
  * A v1.0 caller cannot represent the v1.1 row union. Host dispatch uses this
  * at the negotiated-version boundary, preserving its released nullable wire
- * shape while the canonical resolver continues to return the v1.1 contract.
+ * shape while the canonical resolver continues to return the latest contract.
+ * (The v1.2 sibling key needs no projection of its own: a v1.0 body drops it
+ * here, and a v1.1 peer's frozen schema strips it at parse time.)
  */
 export function projectEpicGetTaskContextsResponseToV10(
   response: GetTaskContextsResponse,
@@ -345,7 +506,44 @@ export const epicCreateV10 = defineRpcContract({
   method: "epic.create",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: createEpicRequestSchema,
+  responseSchema: createEpicResponseSchemaPre11,
+});
+
+/**
+ * `epic.create@1.1` - the create refusal, carried as data.
+ *
+ * The host's local-store create refusal was THROWN and flattened to an
+ * `RPC_ERROR` string. `LOCAL_STORE_UNAVAILABLE` is not an `RPC_ERROR_CODES`
+ * member, so the client could not recover the remedy from prose and could only
+ * surface the sentence - no Repair action, no branch on the cause. This minor
+ * gives the refusal the same treatment the open path already gives it
+ * (`SnapshotFetchError.localStoreRemedy`) and `host.rebindLocalStore` already
+ * gives its own refusal.
+ *
+ * The response grows by an optional key rather than gaining a `status` union
+ * arm; `createEpicResponseSchema`'s own note has the reasoning, and the short
+ * version is that a shape change on a floor method costs a major whose
+ * downgrade could not represent a refusal anyway.
+ */
+export const epicCreateV11 = defineRpcContract({
+  method: "epic.create",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: createEpicRequestSchema,
   responseSchema: createEpicResponseSchema,
+});
+
+export const epicCreateUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicCreateV10,
+  typeof epicCreateV11
+>({
+  from: epicCreateV10.schemaVersion,
+  to: epicCreateV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  // No synthesized `refusal`. A `@1.0` host that could not create THREW, and
+  // that error is already travelling its own path; manufacturing a refusal
+  // here would invent a `kind` and a `remedy` this host never said, and the
+  // client would offer a Repair action on a guess.
+  upgradeResponse: (response) => response,
 });
 
 // `epic.batchDelete@1.0` - host-side entry point for the CloudData
@@ -357,7 +555,35 @@ export const epicBatchDeleteV10 = defineRpcContract({
   method: "epic.batchDelete",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: batchDeleteRequestSchema,
+  responseSchema: batchDeleteResponseSchemaPre11,
+});
+
+// `@1.1` states the durability `home` each deletion landed in, per id. The
+// request is unchanged. See `unary-schemas.ts` for why the tombstone SCOPE is
+// unanswerable without it, and why a batch needs the marker per row rather
+// than per response.
+export const epicBatchDeleteV11 = defineRpcContract({
+  method: "epic.batchDelete",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: batchDeleteRequestSchema,
   responseSchema: batchDeleteResponseSchema,
+});
+
+export const epicBatchDeleteUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicBatchDeleteV10,
+  typeof epicBatchDeleteV11
+>({
+  from: epicBatchDeleteV10.schemaVersion,
+  to: epicBatchDeleteV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  // `home` stays ABSENT on every upgraded row. The marker licenses an
+  // ACCOUNT-WIDE tombstone, which is the destructive direction, and a `@1.0`
+  // host produced no evidence for it - so absence must keep meaning "scope
+  // this to the host that issued the delete", exactly as a released client
+  // already reads it.
+  upgradeResponse: (response) => ({
+    results: response.results.map((result) => ({ ...result })),
+  }),
 });
 
 export const epicRemoveRepoV10 = defineRpcContract({
@@ -964,8 +1190,33 @@ export const epicListChatRecordsUpgradeV11ToV12 = defineUpgradePath<
 export const epicReadChatAttachmentV10 = defineRpcContract({
   method: "epic.readChatAttachment",
   schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: readChatAttachmentRequestSchemaPre11,
+  responseSchema: readChatAttachmentResponseSchema,
+});
+
+// `@1.1` adds the `plane: "local-only"` request selector so a caller holding
+// no cloud verdict can ask for the DISK leg alone instead of having to skip
+// the whole read. Response is unchanged: a disk miss is already `missing`,
+// and that is the truthful answer for "not obtainable on the plane you asked
+// about" as much as for "not obtainable at all".
+export const epicReadChatAttachmentV11 = defineRpcContract({
+  method: "epic.readChatAttachment",
+  schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: readChatAttachmentRequestSchema,
   responseSchema: readChatAttachmentResponseSchema,
+});
+
+export const epicReadChatAttachmentUpgradeV10ToV11 = defineUpgradePath<
+  typeof epicReadChatAttachmentV10,
+  typeof epicReadChatAttachmentV11
+>({
+  from: epicReadChatAttachmentV10.schemaVersion,
+  to: epicReadChatAttachmentV11.schemaVersion,
+  // No synthesized `plane`. An upgraded `@1.0` request asked for the released
+  // two-leg chain, and narrowing it here would silently withhold the cloud
+  // leg from a caller entitled to it - a blank image where one used to load.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
 });
 
 // Artifact attachment bytes remain canonical in the root document during the
@@ -1144,4 +1395,7 @@ export {
   epicSubscribeV11,
   epicSubscribeV12,
   epicSubscribeV13,
+  epicSubscribeV14,
+  epicSubscribeV15,
+  epicSubscribeV16,
 };

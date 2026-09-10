@@ -4,6 +4,7 @@ import {
   agentActivitySubscribeServerFrameSchema,
   agentActivitySubscribeV10,
   agentActivitySubscribeV11,
+  agentActivitySubscribeV12,
 } from "@traycer/protocol/host/agent/activity";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 
@@ -104,7 +105,7 @@ describe("agent.activity.subscribe@1.1", () => {
     ).toBe(false);
   });
 
-  it("registers 1.0 and 1.1 densely with 1.1 as the latest minor", () => {
+  it("registers 1.0, 1.1 and 1.2 densely with 1.2 as the latest minor", () => {
     expect(
       agentActivitySubscribeClientFrameSchema.parse({
         kind: "ping",
@@ -112,9 +113,10 @@ describe("agent.activity.subscribe@1.1", () => {
       }),
     ).toEqual({ kind: "ping", hasBinaryPayload: false });
     const entry = hostStreamRpcRegistry["agent.activity.subscribe"];
-    expect(entry[1].latestMinor).toBe(1);
+    expect(entry[1].latestMinor).toBe(2);
     expect(entry[1].versions[0].contract).toBe(agentActivitySubscribeV10);
     expect(entry[1].versions[1].contract).toBe(agentActivitySubscribeV11);
+    expect(entry[1].versions[2].contract).toBe(agentActivitySubscribeV12);
   });
 
   // Read the schema OFF THE REGISTRY, not the imported symbol: a later edit

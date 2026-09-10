@@ -2,9 +2,15 @@ import "../../../../__tests__/test-browser-apis";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MobileEpicTileView } from "@/components/epic-canvas/mobile/mobile-epic-tile-view";
+import {
+  SURFACE_SYNC_RANK,
+  useSurfaceSyncStore,
+  type SurfaceSyncEntry,
+} from "@/stores/sync/surface-sync-store";
 import { selectMobileTile } from "@/components/epic-canvas/mobile/mobile-tile-selection";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
+import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type {
   EpicCanvasState,
   EpicCanvasTileRef,
@@ -14,6 +20,16 @@ import type {
 } from "@/stores/epics/canvas/types";
 
 const VIEW_TAB_ID = "view-tab-1";
+
+// The Epic session's two legs, per test. The stream-syncing strip is a pure
+// function of them, so they are the only thing its cases vary.
+const epicSession = vi.hoisted(() => {
+  const value: {
+    transportStatus: StreamConnectionStatus;
+    snapshotLoaded: boolean;
+  } = { transportStatus: "open", snapshotLoaded: true };
+  return { value };
+});
 
 // ActiveTabBody reads permission/snapshot/artifact state through epic-selectors;
 // stub them so the shared tile body mounts without a HostRuntimeProvider /
@@ -25,7 +41,8 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicTabDisplayTitle: (node: { readonly name: string }) => node.name,
   useEpicLiveArtifactTitleGenerating: () => false,
   useEpicPermissionRole: () => "owner",
-  useEpicSnapshotLoaded: () => true,
+  useEpicSnapshotLoaded: () => epicSession.value.snapshotLoaded,
+  useEpicHostTransportStatus: () => epicSession.value.transportStatus,
   useMaybeEpicTuiAgentHarnessId: () => null,
 }));
 
@@ -77,6 +94,17 @@ vi.mock("@/lib/host", () => ({
   useHostClient: () => null,
 }));
 
+// A bound Epic session, so the published wake has something real to reach.
+const epicHandleMock = vi.hoisted(() => ({
+  hostId: "host-A",
+  wakeTransport: vi.fn(),
+}));
+
+vi.mock("@/providers/use-open-epic-handle", () => ({
+  useMaybeOpenEpicHandle: () => epicHandleMock,
+  useOpenEpicHandle: () => epicHandleMock,
+}));
+
 vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
   useCloudChatList: () => ({
     data: undefined,
@@ -84,6 +112,7 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
     isPending: false,
     isFetching: false,
   }),
+  useCloudChatHasCloudAuthorization: () => true,
   cloudChatListAuthorizesRecordSweep: () => false,
 }));
 
@@ -224,6 +253,105 @@ describe("<MobileEpicTileView />", () => {
   afterEach(() => {
     cleanup();
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    epicSession.value = { transportStatus: "open", snapshotLoaded: true };
+    useSurfaceSyncStore.setState({ entries: {} });
+    epicHandleMock.wakeTransport.mockClear();
+  });
+
+  describe("stream-syncing report", () => {
+    // Entries are keyed by PUBLISHER token, not by surface, so a lookup finds
+    // the one whose `key` names this surface.
+    function published(): SurfaceSyncEntry | undefined {
+      return Object.values(useSurfaceSyncStore.getState().entries).find(
+        (entry) => entry.key === "epic:host-A:epic-1",
+      );
+    }
+
+    it("reports nothing running while the Epic's own stream is open", () => {
+      seed(twoPaneCanvas("pane-A"));
+      renderView();
+      expect(published()?.spell.syncing).toBe(false);
+    });
+
+    it("reports a running spell while its stream comes back under a painted canvas", () => {
+      epicSession.value = {
+        transportStatus: "reconnecting",
+        snapshotLoaded: true,
+      };
+      seed(twoPaneCanvas("pane-A"));
+      renderView();
+      expect(published()?.spell.syncing).toBe(true);
+      expect(published()?.rank).toBe(SURFACE_SYNC_RANK.epic);
+      expect(published()?.label).toBe("Task");
+      // The tile it describes is still on screen underneath, not replaced by a
+      // skeleton - that is the whole state the report exists to narrate.
+      expect(screen.queryByTestId("tile-spec-1")).not.toBeNull();
+    });
+
+    it("carries the Epic session's OWN wake, so Retry reaches this Epic's socket", () => {
+      // A null handle publishes a null wake, which renders no Retry at all -
+      // so the wired path needs a bound session to be worth anything.
+      epicSession.value = {
+        transportStatus: "reconnecting",
+        snapshotLoaded: true,
+      };
+      seed(twoPaneCanvas("pane-A"));
+      renderView();
+      expect(published()?.wake).not.toBeNull();
+      published()?.wake?.();
+      expect(epicHandleMock.wakeTransport).toHaveBeenCalledTimes(1);
+      // The key is host-scoped: an epic id is host-minted, so the bare id
+      // names a different Epic on another machine.
+      expect(published()?.key).toBe("epic:host-A:epic-1");
+    });
+
+    it("renders no bar of its own", () => {
+      epicSession.value = {
+        transportStatus: "reconnecting",
+        snapshotLoaded: true,
+      };
+      seed(twoPaneCanvas("pane-A"));
+      renderView();
+      expect(screen.queryByTestId("epic-stream-syncing-bar")).toBeNull();
+    });
+
+    it("reports nothing on a cold open, where the skeleton already says loading", () => {
+      epicSession.value = {
+        transportStatus: "connecting",
+        snapshotLoaded: false,
+      };
+      seed(twoPaneCanvas("pane-A"));
+      renderView();
+      expect(published()?.spell.syncing).toBe(false);
+    });
+
+    it("reports nothing on a closed stream rather than animating forever", () => {
+      epicSession.value = { transportStatus: "closed", snapshotLoaded: true };
+      seed(twoPaneCanvas("pane-A"));
+      renderView();
+      expect(published()?.spell.syncing).toBe(false);
+    });
+
+    it("still reports on an empty pane - the Epic's own data is what is stale", () => {
+      epicSession.value = {
+        transportStatus: "reconnecting",
+        snapshotLoaded: true,
+      };
+      seed({
+        root: makePane("pane-A", [], null),
+        activePaneId: "pane-A",
+        tilesByInstanceId: {},
+        sizesByGroupId: {},
+      });
+      renderView();
+      expect(screen.queryByTestId("pane-opener")).not.toBeNull();
+      // Deliberate change from when the bar lived inside this view. The report
+      // is about the EPIC's stream - the tab list and the switcher's contents -
+      // not about whichever tile happens to be open, and an empty pane is a
+      // surface the user is about to open a tab from. `snapshotLoaded` is the
+      // Epic's own, so it is still true here.
+      expect(published()?.spell.syncing).toBe(true);
+    });
   });
 
   it("renders exactly one tile - the active pane's active tile", () => {

@@ -200,6 +200,7 @@ function makeRequestContext(bearer: string): RequestContext {
     connectionId: undefined,
     operationId: undefined,
     externalAbortSignal: undefined,
+    cloudAuthorized: true,
   });
 }
 
@@ -333,7 +334,12 @@ describe("host-v1.1.7 permission-mode downgrade protection", () => {
         workspace: null,
         profileSelection: { kind: "ambient" },
       },
-      { idempotencyKey: null, authority: authority, replayMustBeKeyed: false },
+      {
+        idempotencyKey: null,
+        authority: authority,
+        replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
+      },
     );
     await flush();
     const stub = sockets[0];
@@ -379,7 +385,12 @@ describe("host-v1.1.7 permission-mode downgrade protection", () => {
         fastMode: false,
         permissionMode: "full_access",
       },
-      { idempotencyKey: null, authority: authority, replayMustBeKeyed: false },
+      {
+        idempotencyKey: null,
+        authority: authority,
+        replayMustBeKeyed: false,
+        requiredHostMethodVersion: null,
+      },
     );
     await flush();
     const stub = sockets[0];
@@ -440,6 +451,7 @@ describe.skipIf(baselines.length === 0)(
             idempotencyKey: null,
             authority: authorityForContext(ctx),
             replayMustBeKeyed: false,
+            requiredHostMethodVersion: null,
           },
         );
         await flush();
@@ -504,6 +516,8 @@ describe.skipIf(baselines.length === 0)(
             updateTransaction: null,
             // @1.4
             storeFormats: null,
+            // @1.5
+            install: null,
           };
 
           // SELF-CHECKING FIXTURE. Without this, the next released minor a
@@ -564,6 +578,7 @@ describe.skipIf(baselines.length === 0)(
             idempotencyKey: null,
             authority: authorityForContext(ctx),
             replayMustBeKeyed: false,
+            requiredHostMethodVersion: null,
           },
         );
         await flush();
@@ -638,6 +653,7 @@ describe.skipIf(baselines.length === 0)(
             idempotencyKey: null,
             authority: authorityForContext(ctx),
             replayMustBeKeyed: false,
+            requiredHostMethodVersion: null,
           },
         );
         await flush();

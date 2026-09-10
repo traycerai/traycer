@@ -37,7 +37,7 @@ import type {
   EpicStatusSnapshotFrame,
   EpicStatusStreamCallbacks,
 } from "@traycer-clients/shared/host-transport/epic-status-stream-client";
-import { epicStatusSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/status-subscribe";
+import { epicStatusSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/status-subscribe";
 import type { EpicMigrationStatus } from "@traycer/protocol/host/epic/status-subscribe";
 import { epicStateSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/state-subscribe";
 import type { ArtifactStreamClientFactory } from "@traycer-clients/shared/epic-lanes";
@@ -233,7 +233,7 @@ function createCountingStatusFactory(): CountingStatusFactory {
      */
     deliverSnapshot(): void {
       if (live === null) throw new Error("no status client was constructed");
-      live.onSnapshot(statusSnapshotFrame());
+      live.onSnapshot(statusSnapshotFrame(), true);
     },
     /**
      * Resolve the subscribe as method-incompatible, the way the mux does -
@@ -264,7 +264,7 @@ function createCountingStatusFactory(): CountingStatusFactory {
  * exported discriminated union and narrows the result.
  */
 function statusSnapshotFrame(): EpicStatusSnapshotFrame {
-  const parsed = epicStatusSubscribeServerFrameSchemaV10.parse({
+  const parsed = epicStatusSubscribeServerFrameSchemaV11.parse({
     kind: "snapshot",
     // The text-only marker every frame on the two RECORD lanes carries.
     // Omitting it is a parse error, which is the point of building this
@@ -958,7 +958,7 @@ function statusSnapshotFrameAt(
   authorityEpoch: string,
   migration: EpicMigrationStatus | null,
 ): EpicStatusSnapshotFrame {
-  const parsed = epicStatusSubscribeServerFrameSchemaV10.parse({
+  const parsed = epicStatusSubscribeServerFrameSchemaV11.parse({
     kind: "snapshot",
     hasBinaryPayload: false,
     authorityEpoch,
@@ -1022,7 +1022,7 @@ function createControllableStatusFactory(): ControllableStatusFactory {
   return {
     factory,
     open: () => requireLive().onConnectionStatus("open", null),
-    deliverSnapshot: (frame) => requireLive().onSnapshot(frame),
+    deliverSnapshot: (frame) => requireLive().onSnapshot(frame, true),
   };
 }
 

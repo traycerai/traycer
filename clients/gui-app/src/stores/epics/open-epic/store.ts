@@ -34,7 +34,14 @@ import { persist, createJSONStorage } from "zustand/middleware";
 import type * as Y from "yjs";
 import type { Awareness } from "y-protocols/awareness";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
-import type { EpicCloudSyncStatus } from "@traycer/protocol/host/epic/subscribe";
+import type {
+  EpicCloudFreshness,
+  EpicCloudSyncStatus,
+  EpicDurabilityPauseReasonV15,
+  EpicDurabilityStatusV15,
+  EpicLocalProtection,
+  EpicPromotionState,
+} from "@traycer/protocol/host/epic/subscribe";
 import type {
   ChatRecordHeadStamp,
   ChatRecordRemovalReason,
@@ -170,6 +177,23 @@ export interface OpenEpicStoreOptions {
    * reopen here is a new SESSION, which is the provider's to build.
    */
   readonly onRetryTransport: () => void;
+  /**
+   * Collapse this session's own transport backoff and re-dial NOW, keeping
+   * everything the session holds.
+   *
+   * Distinct from {@link onRetryTransport} in what it costs, which is why it is
+   * a separate seam rather than a flag on that one. A retry builds a NEW
+   * session and cannot carry the replica or the unsynced queue, so it refuses
+   * outright while the session is dirty. A wake touches no state at all: the
+   * socket is already redialing on a backoff, and this only stops it waiting.
+   * That is what makes it safe to put behind a button a user presses while
+   * looking at content they do not want to lose.
+   *
+   * Injected for the same reason the retry is: the store owns no client. The
+   * session provider holds the socket, so only it can name the connection this
+   * wakes - and it must be THIS session's, never the app-wide one.
+   */
+  readonly onWakeTransport: () => void;
   /**
    * The spawned runtime. Constructed by the session provider, because the
    * worker needs the session's real stream client and this store never had one.
@@ -511,6 +535,51 @@ export interface OpenEpicState {
    * proof.
    */
   readonly cloudSyncStatus: EpicCloudSyncStatus;
+  /**
+   * Where the epic is durable, at `@1.6` width.
+   *
+   * `null` here means the host said NOTHING, and at `@1.6` that reads as
+   * unknown - never as synced. It is not a licence for the calm rendering;
+   * see `deriveEpicDurabilityView`, which requires a POSITIVE statement
+   * before it will resolve a missing durability claim as fine.
+   */
+  readonly durabilityStatus: EpicDurabilityStatusV15 | null;
+  /** Present for a recognised paused reason, at `@1.6` width. */
+  readonly durabilityPauseReason: EpicDurabilityPauseReasonV15 | null;
+  /** Optional @1.5 distinction behind a durable promotion reservation. */
+  readonly durabilityPromotionState: EpicPromotionState | null;
+  /**
+   * Whether this session has local (WAL) protection - `@1.6`.
+   *
+   * `null` means the host did not say, which is `unknown`: an unarmed session
+   * used to be indistinguishable from an armed one, so the ONLY reading that
+   * closes that hole is that silence is not protection.
+   */
+  readonly localProtection: EpicLocalProtection | null;
+  /**
+   * How the served document stands relative to the cloud - `@1.6`,
+   * `s5-mirror-first-serving`. `null` means the host did not say: silence is
+   * UNKNOWN, and unknown is not `current`.
+   */
+  readonly cloudFreshness: EpicCloudFreshness | null;
+  /**
+   * Whether the peer serving this stream negotiated the `@1.6` minor that
+   * carries the three legs above - `s5-status-truthfulness`. Every one of
+   * those legs is optional on the wire, so `null` alone cannot say WHICH
+   * silence it is; this bit is what separates a pre-`@1.6` peer from a
+   * `@1.6` peer that stated UNKNOWN.
+   */
+  readonly durabilityLegsNegotiated: boolean;
+  /** Whether this connection can report `epic.subscribe@1.4` durability. */
+  readonly durabilityStatusNegotiated: boolean;
+  /**
+   * The last durability the host actually STATED, kept across subscription
+   * cycles - unlike {@link durabilityStatus}, which a reconnect clears. See
+   * the projection's field of this name for the full rule.
+   */
+  readonly retainedDurabilityStatus: EpicDurabilityStatusV15 | null;
+  /** The pause reason observed beside {@link retainedDurabilityStatus}. */
+  readonly retainedDurabilityPauseReason: EpicDurabilityPauseReasonV15 | null;
   /** `true` only after a cloud-status frame for this exact open cycle. */
   readonly hasFreshCloudSyncStatus: boolean;
   /**
@@ -574,6 +643,15 @@ export interface OpenEpicState {
    * something the user did not do.
    */
   retryTransport: () => void;
+  /**
+   * Stops this session's transport waiting out its backoff and re-dials now.
+   *
+   * Keeps everything: no snapshot is dropped, no replica replaced, no queue
+   * cleared. The socket was already going to redial - this only declines to
+   * wait for it - so unlike { retryTransport} there is nothing to refuse
+   * over and no dirty-session gate.
+   */
+  wakeTransport: () => void;
   /**
    * Sends a `retryMigration` client frame so the host re-runs an
    * interrupted major migration without dropping the `epic.subscribe`
@@ -1035,6 +1113,8 @@ export interface OpenEpicStoreHandle {
   readonly detachTransport: () => void;
   readonly requestFreshSnapshot: () => void;
   readonly retryTransport: () => void;
+  /** See {@link OpenEpicState.wakeTransport}. */
+  readonly wakeTransport: () => void;
   /**
    * True when this renderer has a loaded, locally clean snapshot and can
    * still reach the host. Cloud acknowledgement is intentionally not part of
@@ -1868,6 +1948,15 @@ export function createOpenEpicStore(
             runtime.command({ kind: "request-fresh-snapshot", payload: {} });
           },
 
+          wakeTransport: () => {
+            // Same ended guard as the retry below, and nothing else. There is
+            // no dirty-session gate here because there is nothing to trade: a
+            // wake keeps the replica, the queue and the snapshot exactly as
+            // they are, and only declines to sit out the backoff.
+            if (sessionEndedReason !== null) return;
+            options.onWakeTransport();
+          },
+
           retryTransport: () => {
             // Ended covers BOTH exits: a disposed handle has nothing to
             // rebuild, and a detached one is frozen by contract ("takes no
@@ -2499,6 +2588,9 @@ export function createOpenEpicStore(
     },
     retryTransport: () => {
       store.getState().retryTransport();
+    },
+    wakeTransport: () => {
+      store.getState().wakeTransport();
     },
     isClean: () => {
       const state = store.getState();

@@ -2,6 +2,35 @@ import type { AgentActivityByEpic } from "@traycer/protocol/host/agent/activity"
 
 export type AgentActivityTier = "turn" | "background";
 
+/**
+ * What the served activity plane can say about ONE host's entities.
+ *
+ * The tier vocabulary above only ever describes an agent the union CONTAINS;
+ * absence from it is read as idleness by every consumer. That reading is a
+ * CLAIM, and the renderer only has standing to make it when the union it is
+ * reading actually reaches the host the entity lives on. A local-served plane
+ * (free tier, cloud sync off, the room unreachable) carries one host's agents,
+ * so an agent working on another machine was rendering as nothing happening -
+ * the exact defect `renderer-unserved-plane-assertions` describes, and the one
+ * this type exists to make un-representable.
+ *
+ * - `covered` - an answering union reaches this host, so absence IS idleness.
+ * - `unserved` - the plane ANSWERS and its union does not reach this host. No
+ *   claim is available: render unknown, never idle.
+ * - `indeterminate` - no answering union at all (pre-boot, the stream down, a
+ *   shell that opens none), or the surface named no host to ask about. Keeps
+ *   today's reading deliberately: "the activity plane is not vouching" is the
+ *   Epic connection pill's sentence to say once
+ *   (`useAgentActivityPresenceDegraded`), and repeating it per row would flash
+ *   an unknown glyph on every icon in the window through every cold start and
+ *   every socket flap.
+ *
+ * The two negative states are separate for that reason alone - they differ in
+ * WHO reports the absence, and collapsing them would make the honest state the
+ * noisy one.
+ */
+export type AgentActivityCoverage = "covered" | "unserved" | "indeterminate";
+
 export interface EpicAgentActivity {
   readonly working: ReadonlySet<string>;
   readonly turn: ReadonlySet<string>;
@@ -55,6 +84,45 @@ export function reconcileAgentActivityByEpic(
     next.set(epicId, { working, turn });
   }
   return changed ? next : previous;
+}
+
+/**
+ * Unions two hosts' views of the SAME epic.
+ *
+ * Two machines can each be running agents on one cloud-homed epic, and each
+ * host's frame is authoritative only about its own agents - so the answer to
+ * "what is running on this epic" is the union, not whichever frame arrived
+ * last. Agent ids are globally unique, so a plain set union is correct and
+ * needs no tie-break.
+ *
+ * Returns the left operand unchanged when the right adds nothing, so the
+ * single-host case (still the common one) keeps object identity and does not
+ * re-render every activity consumer.
+ */
+export function mergeEpicAgentActivity(
+  left: EpicAgentActivity,
+  right: EpicAgentActivity,
+): EpicAgentActivity {
+  const working = unionIdSets(left.working, right.working);
+  const turn = unionIdSets(left.turn, right.turn);
+  return working === left.working && turn === left.turn
+    ? left
+    : { working, turn };
+}
+
+function unionIdSets(
+  left: ReadonlySet<string>,
+  right: ReadonlySet<string>,
+): ReadonlySet<string> {
+  if (right.size === 0) return left;
+  let grew = false;
+  const next = new Set(left);
+  for (const id of right) {
+    if (next.has(id)) continue;
+    next.add(id);
+    grew = true;
+  }
+  return grew ? next : left;
 }
 
 function sameIdSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {

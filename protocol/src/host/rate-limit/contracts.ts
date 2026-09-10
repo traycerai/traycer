@@ -371,8 +371,10 @@ export const hostGetRateLimitUsageUpgradeV30ToV40 = defineUpgradePath<
 // Cursor-available snapshots each degrade to the unavailable
 // `unsupported_provider` shape - none has an arm in the frozen v3.0 union, and
 // all three ride 4.0 (the release collapsed Hugging Face and OpenCode onto one
-// major, and 4.0 is still unreleased, so Cursor joins them rather than opening
-// a 5.0). Every other arm - grok included, since v3.0 is where grok landed - is
+// major, and 4.0 was still unreleased when Cursor was added, so it joined them
+// rather than opening a 5.0 - `host.getRateLimitUsage` is now in the released
+// baseline at canonical 4.0, so a fourth such provider opens 5.0 instead).
+// Every other arm - grok included, since v3.0 is where grok landed - is
 // already valid v3.0 and passes through the re-parse unchanged.
 export const hostGetRateLimitUsageDowngradeV4ToV3 = defineDowngradePath<
   typeof hostGetRateLimitUsageV40,

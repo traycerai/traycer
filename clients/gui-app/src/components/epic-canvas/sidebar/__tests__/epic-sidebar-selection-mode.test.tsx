@@ -30,6 +30,7 @@ import {
   ChatTreeSurfaceContext,
   type ChatTreeSurface,
 } from "@/components/epic-canvas/sidebar/chat-tree-surface";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   requestSidebarNodeReveal,
   useSidebarNodeRevealStore,
@@ -377,6 +378,9 @@ vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
     isFetching: false,
     error: null,
     refetch: () => Promise.resolve(),
+    // The host that ANSWERED - the query files its rows under this origin, so
+    // an omitted field (undefined, not null) would scope them to no host.
+    hostId: "host-1",
   }),
 }));
 
@@ -590,11 +594,17 @@ vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => {
     // decides: a hard-coded `true` here would hide the difference between "this
     // query will never run" and "its answer has not arrived yet", which is the
     // one distinction the panel's empty state depends on.
-    isCloudChatListSettled: (query: {
-      readonly isEnabled: boolean;
-      readonly isSuccess: boolean;
-      readonly isError: boolean;
-    }) => !query.isEnabled || query.isSuccess || query.isError,
+    isCloudChatListSettled: (
+      query: {
+        readonly isEnabled: boolean;
+        readonly isSuccess: boolean;
+        readonly isError: boolean;
+      },
+      cloudAuthorized: boolean,
+    ) => {
+      if (!cloudAuthorized) return false;
+      return !query.isEnabled || query.isSuccess || query.isError;
+    },
   };
 });
 
@@ -911,6 +921,14 @@ vi.mock("@/lib/epic-selectors", () => ({
     };
   },
   useEpicArchivedNodeIds: () => testState.archivedIds,
+  // The sidebar's archive-hidden and chat-order hooks read the tree and the
+  // archived ids through the PROVIDER-OPTIONAL selectors, so the picker can
+  // also resolve on the Start Page where there is no epic session. A
+  // whole-module mock has to answer those forms too, with the same test state
+  // as their strict twins below - a fake that disagreed would make the panel
+  // and the picker read different trees.
+  useMaybeEpicArchivedNodeIds: () => testState.archivedIds,
+  useMaybeEpicTreeIndex: () => testState.tree,
   useEpicArtifactRecords: () => testState.records,
   // Dedup input for the cloud-chat section. Empty: this suite is about the
   // LOCAL tree, and the section hides itself when the cloud list has nothing
@@ -1136,8 +1154,21 @@ function clearLocalChatFailure(chatId: string): void {
     );
 }
 
+// `isCloudChatListSettled` / `cloudChatListAuthorizesRecordSweep` now take the
+// cloud-capability verdict as a required argument, read here off the REAL
+// `useAuthStore` (only `useCloudChatList` itself is stubbed above). The store
+// defaults to `signed-out`, under which every "settled" assertion in this
+// file would fail closed vacuously - stage `signed-in` for the whole file,
+// module-scope, so every describe block below gets it without its own copy.
+beforeEach(() => {
+  useAuthStore.setState({ status: "signed-in" });
+});
+
 afterEach(() => {
   useAppLocalNotificationsStore.getState().resetForTests();
+  // Zustand stores are module scope, so a status staged here outlives this
+  // file inside the same worker.
+  useAuthStore.setState({ status: "signed-out" });
 });
 
 describe("epic sidebar selection mode", () => {
@@ -3319,6 +3350,7 @@ function createSessionHandle(chatId: string): ChatSessionStoreHandle {
     userId: null,
     onAuthError: null,
     onProviderAuthError: null,
+    wakeTransport: null,
     streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
     streamClientFactory: () => ({
       sendAction: () => undefined,

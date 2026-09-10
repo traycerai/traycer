@@ -55,9 +55,8 @@ const bakedConfig = {
   cloudUiBaseUrl: "https://platform.traycer.ai",
   // Remote Host Support (ticket T14): the relay worker's WebSocket attach
   // endpoint (`workers/relay-do`, ticket T10) — mirrors the host build's own
-  // `relayAttachUrl` (`traycer-host/src/config.ts`). Committed directly like
-  // `authnBaseUrl`/`cloudUiBaseUrl` (the OSS build ships production endpoints
-  // in source); not stamped per-environment by the deploy script. Overridable
+  // `relayAttachUrl` (`traycer-host/src/config.ts`). The OSS source holds the
+  // production endpoint and release builds stamp the selected target. Overridable
   // in dev via `TRAYCER_DEV_RELAY_BASE_URL` (see `devRelayBaseUrlFromEnv`
   // below) so `make dev-remote` can point it at a local relay worker.
   // Served via Cloudflare for SaaS custom hostnames: traycer.ai DNS stays on
@@ -80,6 +79,11 @@ const bakedConfig = {
   appName: "Traycer Dev",
   protocolScheme: "traycer-dev",
   appId: "ai.traycer.desktop",
+  // Release routing is baked alongside the native identity. Production keeps
+  // its historical repository and channel; staging points at the internal
+  // train's repository and discovers only its `-staging.*` releases.
+  releaseRepo: "traycerai/traycer",
+  releaseChannel: "dev",
 };
 
 // The dev-gated backend URL overrides resolve once, at module init, so every
@@ -136,3 +140,10 @@ export const DESKTOP_PROTOCOL_SCHEME = config.protocolScheme;
 // build's identity is stamped at build time, not hardcoded per slot.
 export const DESKTOP_APP_NAME = config.appName;
 export const DESKTOP_APP_USER_MODEL_ID = config.appId;
+
+export const DESKTOP_RELEASE_CHANNEL = config.releaseChannel;
+
+export function configuredDesktopReleaseRepo(): string {
+  const repo = config.releaseRepo.trim();
+  return repo.length === 0 ? "traycerai/traycer" : repo;
+}

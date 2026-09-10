@@ -67,6 +67,51 @@ unary side's `downgradePathsFromLatest`) - so a future stream major bump
 correctly reports incompatible in this matrix rather than silently passing;
 that is intended v1 behaviour, not a bug for this test to paper over.
 
+## The two surfaces this document does NOT cover
+
+The two guards above are about the WIRE: what a client and a host can say to
+each other. A release also ships two things that outlive the connection and
+are judged by a different oracle each. Neither is a `{ major, minor }` on a
+method, so neither shows up in a support-matrix diff, and a release cut that
+only reads this file would miss both.
+
+1. **Persistence records** (`protocol/src/persistence/`) - the Yjs and
+   opaque-JSON records a host writes and a peer host or a later build reads
+   back: the epic document, chat head/shard, room metadata. Their versions are
+   `schemaVersion` lines on `persistenceRecordRegistry`, independent of RPC
+   minors. The policy and its guards (the frozen epic-schema surface fixture,
+   the registry validation in
+   `protocol/src/framework/__tests__/seeded-registries.test.ts`) live in
+   [`../persistence/COMPATIBILITY.md`](../persistence/COMPATIBILITY.md). Read
+   that file at a release cut for the same reason you read this one.
+
+2. **On-disk store stamps** (`protocol/src/host/store-formats.ts`) - the
+   `chat_db_meta.schema_version` a host build writes into every epic's
+   `chat.db`. The host refuses a file stamped newer than the schema it speaks,
+   so a build's stamp is a one-way floor for every OLDER build that could be
+   installed over the same data directory. The constant itself is
+   `CHAT_DB_SCHEMA_VERSION` in the host's `chat-store-schema.ts` (outer repo);
+   what the protocol holds is the knowledge of which released version writes
+   which stamp, and it has three sources with one precedence:
+
+   | source                                        | covers                                                                          | guarded by                                                                                                                                  |
+   | --------------------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+   | manifest entry `storeFormats.chatDb`          | every release published since it landed - and the ONLY source above the ceiling | outer repo: `publish-host-manifest.cjs` refuses an entry without it; `read-store-formats.cjs` reads it off the host source, never a literal |
+   | archive runtime `version.json` `storeFormats` | any archive, released or local                                                  | outer repo: `build-host-sea.cjs` writes it from the same reader and fails without the constant; `smoke-host-sea.cjs` asserts it as phase 0  |
+   | fixed table `CHAT_DB_FORMAT_ERAS`             | releases through the table's ceiling                                            | `__tests__/store-formats.test.ts` pins the rc.1/rc.2 boundary and the ceiling                                                               |
+
+   The release rule that follows: **a bump of `CHAT_DB_SCHEMA_VERSION` needs
+   no protocol change** - the manifest and the archive both publish the new
+   stamp from source - and **`CHAT_DB_FORMAT_TABLE_CEILING` is never raised**.
+   The table exists only for entries published before the field did; a
+   version above the ceiling that arrives without the field is `unknown`, and
+   unknown refuses. Extending the table to cover a new release would move the
+   floor's authority from the release artifact back to a hand-maintained
+   literal, which is the failure mode the field was added to end. What a
+   release cut has to check is therefore not the table but the artifacts: the
+   published manifest entry carries `storeFormats`, and the archive's
+   `version.json` declares the same value.
+
 ## Appending a new version to the support matrix
 
 At the point a new host/app version is cut for release:

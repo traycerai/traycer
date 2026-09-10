@@ -33,6 +33,32 @@ export interface OpenFrameBearerSource {
 export type BearerSourceProvider = () => OpenFrameBearerSource | null;
 
 /**
+ * A bearer a composition has declared fit for CLOUD use: the account's authn
+ * has confirmed this session, so spending the token on a capability (issuing a
+ * credential, reading the account's registry) is legitimate. `null` is the
+ * ordinary "not right now" channel - signed out, or holding a token with no
+ * verdict behind it.
+ *
+ * The `kind` discriminant is the whole point and it is doing exactly one job:
+ * an object literal is structurally incompatible with `() => string | null`, so
+ * a composition that wires a raw bearer reader where a cloud-authorized one is
+ * required is a `tsc` error rather than a silent egress. That catches the
+ * ACCIDENTAL mis-wire, which is the one that actually happens.
+ *
+ * BE CLEAR ABOUT WHAT THIS IS NOT. TypeScript is structural: nothing stops a
+ * caller minting `{ kind: "cloud", getBearerToken: () => token }` inline over a
+ * bearer no one has confirmed. This constrains what a consumer DECLARES AS ITS
+ * DEPENDENCY, not what any body can reach, and it is not a capability boundary
+ * on its own. The lint fence that restricts `getBearerToken` outside the
+ * host-local transport allowlist is what does that work; this type makes the
+ * requirement legible and the mis-wire loud.
+ */
+export interface CloudBearerSource {
+  readonly kind: "cloud";
+  getBearerToken(): string | null;
+}
+
+/**
  * Mutable counterpart used by the refresh path: the active bearer can be rotated
  * in place (same user) so the next `open` frame reads the rotated value without
  * rebuilding the client. The renderer's `CredentialLease.rotateBearerToken(...)`

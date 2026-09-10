@@ -103,6 +103,57 @@ describe("rebuild pacer (R9)", () => {
     pacer.markBuilt(0, "endpoint-a"); // adopting the FIRST identity
     expect(pacer.nextRebuildDelayMs(0)).toBe(1_000); // streak continued to #2, not reset
   });
+
+  it("clearStreak releases a ceiling-height streak that neither existing reset can", () => {
+    const pacer = engine.createRebuildPacer();
+    let t = 0;
+    pacer.markBuilt(t, "endpoint-a");
+    expect(pacer.nextRebuildDelayMs(t)).toBe(0); // quick close #1
+
+    // Exactly the shape a withdrawn cloud capability produces: every rebuild
+    // dies immediately, on the SAME endpoint. No client ever reaches the
+    // healthy lifetime and the identity never moves, so neither of the two
+    // existing resets can fire - the streak only climbs.
+    for (const expected of [1_000, 2_000, 4_000, 8_000, 16_000, 30_000]) {
+      t += 10;
+      pacer.markBuilt(t, "endpoint-a");
+      expect(pacer.nextRebuildDelayMs(t)).toBe(expected);
+    }
+
+    // The capability returns. Without this the recovered binding waits out a
+    // full 30s earned entirely by a condition that no longer holds.
+    pacer.clearStreak();
+    t += 10;
+    pacer.markBuilt(t, "endpoint-a");
+    expect(pacer.nextRebuildDelayMs(t)).toBe(0);
+  });
+
+  it("clearStreak does not adopt an identity, so the first real markBuilt still continues the streak", () => {
+    // `clearStreak` must not stand in for a build. If it adopted an identity,
+    // the rule directly above - the opening pre-build close is counted, not
+    // erased - would be silently satisfied by a wake that happened to land
+    // first, and that close would go missing.
+    const pacer = engine.createRebuildPacer();
+    pacer.clearStreak();
+    expect(pacer.nextRebuildDelayMs(0)).toBe(0); // pre-build close: quick close #1
+
+    pacer.markBuilt(0, "endpoint-a"); // still adopting the FIRST identity
+    expect(pacer.nextRebuildDelayMs(0)).toBe(1_000); // streak continued to #2
+  });
+
+  it("clearStreak is inert with no streak, and does not disable the backoff afterwards", () => {
+    const pacer = engine.createRebuildPacer();
+    pacer.markBuilt(0, "endpoint-a");
+    pacer.clearStreak();
+    pacer.clearStreak(); // idempotent - a repeated wake must not owe anything
+    expect(pacer.nextRebuildDelayMs(0)).toBe(0); // quick close #1, unchanged
+
+    // The half that matters: clearing is a one-time release, NOT a switch that
+    // turns pacing off. A cleared pacer must still climb on the next genuine
+    // streak, or the hot rebuild loop is back with a wake in front of it.
+    pacer.markBuilt(0, "endpoint-a");
+    expect(pacer.nextRebuildDelayMs(0)).toBe(1_000);
+  });
 });
 
 describe("close-reason predicates", () => {

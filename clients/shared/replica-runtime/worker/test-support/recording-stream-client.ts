@@ -12,7 +12,10 @@
  */
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
-import type { IStreamClient } from "@traycer-clients/shared/host-transport/i-stream-client";
+import type {
+  IStreamClient,
+  StreamParamsProvider,
+} from "@traycer-clients/shared/host-transport/i-stream-client";
 import type {
   IStreamSession,
   ServerFrameHandler,
@@ -129,9 +132,13 @@ export function createRecordingStreamClient(): RecordingStreamClient {
       Method extends keyof HostStreamRpcRegistry & string,
     >(
       method: Method,
-      paramsProvider: () => ParamsOf<HostStreamRpcRegistry, Method>,
+      paramsProvider: StreamParamsProvider<HostStreamRpcRegistry, Method>,
     ): IStreamSession {
-      const built = build(method, paramsProvider, paramsProvider());
+      // `null` for the same reason `createWorkerStreamClient` passes it - this
+      // double stands in for the worker side of the proxy, where the version
+      // main negotiated is not observable.
+      const readParams = (): unknown => paramsProvider(null);
+      const built = build(method, readParams, readParams());
       sessions.push(built.recorded);
       return built.session;
     },
