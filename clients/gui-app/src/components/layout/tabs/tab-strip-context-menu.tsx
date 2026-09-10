@@ -175,8 +175,7 @@ function EpicTabMenuItems(props: {
   // answer differently. Asking the window instead offered the item for an epic
   // whose own host never negotiated `@1.1`, and the dispatch gate then refused
   // the click in silence.
-  const localHomePinSupported =
-    useEpicPinLocalHomeSupported(pinDispatchHostId);
+  const localHomePinSupported = useEpicPinLocalHomeSupported(pinDispatchHostId);
   const pinUnavailableReason = tabPinUnavailableReason({
     localOnly,
     preservedOrphan,

@@ -174,9 +174,10 @@ vi.mock("@/components/epic-canvas/epic-route-session-body", () => ({
 }));
 
 vi.mock("@/lib/registries/epic-session-registry", async (importOriginal) => {
-  const actual = await importOriginal<
-    typeof import("@/lib/registries/epic-session-registry")
-  >();
+  const actual =
+    await importOriginal<
+      typeof import("@/lib/registries/epic-session-registry")
+    >();
   return {
     ...actual,
     useEpicLocalHomeReading: (): HomeReading =>

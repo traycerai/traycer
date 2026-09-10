@@ -31,7 +31,9 @@ const pinSupportState = vi.hoisted(() => ({
 vi.mock("@/hooks/epic/use-epic-pin-local-home-support", () => ({
   useEpicPinLocalHomeSupported: (hostId: string | null): boolean => {
     pinSupportState.askedHostIds.push(hostId);
-    return pinSupportState.supportedByHostId.get(hostId) ?? pinSupportState.supported;
+    return (
+      pinSupportState.supportedByHostId.get(hostId) ?? pinSupportState.supported
+    );
   },
 }));
 
@@ -202,7 +204,9 @@ describe("TabContextMenuContent local-home pin gate (lane 9 item 5)", () => {
 
     const item = await screen.findByTestId(`tab-pin-history-${EPIC_TAB.id}`);
     expect(item.getAttribute("data-local-home-pin-unavailable")).toBe("true");
-    expect(item.getAttribute("data-preserved-orphan-pin-unavailable")).toBeNull();
+    expect(
+      item.getAttribute("data-preserved-orphan-pin-unavailable"),
+    ).toBeNull();
     expect(item.getAttribute("aria-disabled")).toBe("true");
     expect(item.textContent).toContain(
       "Pin Task in History — stored on the connected device",
@@ -225,7 +229,9 @@ describe("TabContextMenuContent local-home pin gate (lane 9 item 5)", () => {
     const item = await screen.findByTestId(`tab-pin-history-${EPIC_TAB.id}`);
     // Neither unavailability attribute keys an ENABLED item.
     expect(item.getAttribute("data-local-home-pin-unavailable")).toBeNull();
-    expect(item.getAttribute("data-preserved-orphan-pin-unavailable")).toBeNull();
+    expect(
+      item.getAttribute("data-preserved-orphan-pin-unavailable"),
+    ).toBeNull();
     expect(item.getAttribute("aria-disabled")).toBeNull();
     expect(item.textContent).toContain("Pin Task in History");
     expect(item.textContent).not.toContain("stored on the connected device");

@@ -8,7 +8,11 @@ import {
 } from "@traycer/protocol/host/epic/unary-schemas";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { cloudVerdictPreflight } from "@/lib/host/cloud-verdict-preflight";
-import { useHostBinding, useHostClient, type HostRpcRegistry } from "@/lib/host";
+import {
+  useHostBinding,
+  useHostClient,
+  type HostRpcRegistry,
+} from "@/lib/host";
 import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
 import { registerCloudEpicTasksClient } from "@/lib/cloud-epic-tasks-query";
 import {

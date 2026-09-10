@@ -240,9 +240,7 @@ describe("<UsageSettingsPanel />", () => {
       expect.arrayContaining([30, 365, 90]),
     );
     expect(
-      usageRequests.requests.every(
-        (request) => request.plane === "local-only",
-      ),
+      usageRequests.requests.every((request) => request.plane === "local-only"),
     ).toBe(true);
   });
 

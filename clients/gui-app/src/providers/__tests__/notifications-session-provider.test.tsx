@@ -592,7 +592,9 @@ class MockWsStreamClient extends WsStreamClient<HostStreamRpcRegistry> {
    * close count independently of the new session that immediately replaces
    * it in `sessionsByMethod`'s tail slot.
    */
-  sessionsFor(method: keyof HostStreamRpcRegistry & string): MockStreamSession[] {
+  sessionsFor(
+    method: keyof HostStreamRpcRegistry & string,
+  ): MockStreamSession[] {
     return this.sessionsByMethod.get(method) ?? [];
   }
 }

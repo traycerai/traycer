@@ -152,9 +152,10 @@ vi.mock("@/hooks/epic/use-epic-set-pinned-mutation", async (importOriginal) => {
   // sites - kept REAL here via importOriginal, rather than mocked away,
   // because a mock that always admits would make the Undo/no-op assertions
   // below vacuous.
-  const actual = await importOriginal<
-    typeof import("@/hooks/epic/use-epic-set-pinned-mutation")
-  >();
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/epic/use-epic-set-pinned-mutation")
+    >();
   return {
     epicPinDispatchAdmitted: actual.epicPinDispatchAdmitted,
     useEpicSetPinned: () => ({ mutate: pinTestState.mutate }),
@@ -203,11 +204,9 @@ vi.mock("@/hooks/epic/use-epic-record-viewed-mutation", () => ({
  * real implementation (`useHostBinding`, `useHostDirectory`, etc., which
  * other parts of the render tree may still call for real).
  */
-const hostClientTestState = vi.hoisted(
-  (): { activeHostId: string | null } => ({
-    activeHostId: "host-a",
-  }),
-);
+const hostClientTestState = vi.hoisted((): { activeHostId: string | null } => ({
+  activeHostId: "host-a",
+}));
 vi.mock("@/lib/host", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/host")>();
   return {
@@ -1617,7 +1616,9 @@ describe("<TabStrip />", () => {
       render(<RouterProvider router={router} />);
 
       fireEvent.contextMenu(await screen.findByTestId("tab-epic-e-a"));
-      fireEvent.click(await screen.findByTestId(`tab-pin-history-${EPIC_A.id}`));
+      fireEvent.click(
+        await screen.findByTestId(`tab-pin-history-${EPIC_A.id}`),
+      );
 
       expect(pinTestState.mutate.mock.calls[0]?.[0]).toEqual({
         epicId: EPIC_A.id,
@@ -1658,7 +1659,9 @@ describe("<TabStrip />", () => {
       render(<RouterProvider router={router} />);
 
       fireEvent.contextMenu(await screen.findByTestId("tab-epic-e-a"));
-      fireEvent.click(await screen.findByTestId(`tab-pin-history-${EPIC_A.id}`));
+      fireEvent.click(
+        await screen.findByTestId(`tab-pin-history-${EPIC_A.id}`),
+      );
 
       expect(pinTestState.mutate).not.toHaveBeenCalled();
       expect(toastTestState.messages).toEqual([]);
@@ -1705,7 +1708,9 @@ describe("<TabStrip />", () => {
       render(<RouterProvider router={router} />);
 
       fireEvent.contextMenu(await screen.findByTestId("tab-epic-e-a"));
-      fireEvent.click(await screen.findByTestId(`tab-pin-history-${EPIC_A.id}`));
+      fireEvent.click(
+        await screen.findByTestId(`tab-pin-history-${EPIC_A.id}`),
+      );
 
       expect(pinTestState.mutate).toHaveBeenCalledTimes(1);
       expect(toastTestState.undo).not.toBeNull();

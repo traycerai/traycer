@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  hostUsageSummaryDowngradeV20ToV10,
-} from "@traycer/protocol/host/usage-analytics/contracts";
+import { hostUsageSummaryDowngradeV20ToV10 } from "@traycer/protocol/host/usage-analytics/contracts";
 import {
   hostUsageSummaryRequestSchema,
   hostUsageSummaryRequestSchemaV10,
@@ -15,9 +13,8 @@ const VALID_REQUEST = {
 
 describe("host.usage.summary request compatibility", () => {
   it("has a valid v1 request fixture before proving v1 rejects the local-only selector", () => {
-    const withoutPlane = hostUsageSummaryRequestSchemaV10.safeParse(
-      VALID_REQUEST,
-    );
+    const withoutPlane =
+      hostUsageSummaryRequestSchemaV10.safeParse(VALID_REQUEST);
     const withPlane = hostUsageSummaryRequestSchemaV10.safeParse({
       ...VALID_REQUEST,
       plane: "local-only",

@@ -198,9 +198,9 @@ export function EpicsListHostRequiresCloudToList(): ReactNode {
         This host needs cloud access to list Epics
       </p>
       <p className="max-w-full">
-        It&apos;s running a version that can&apos;t list Epics from the connected
-        device alone, and your sign-in couldn&apos;t be confirmed. Update the
-        host, or sign in again, to see them.
+        It&apos;s running a version that can&apos;t list Epics from the
+        connected device alone, and your sign-in couldn&apos;t be confirmed.
+        Update the host, or sign in again, to see them.
       </p>
     </div>
   );

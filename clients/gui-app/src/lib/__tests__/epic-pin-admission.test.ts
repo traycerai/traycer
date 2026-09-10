@@ -8,15 +8,15 @@ import { negotiatedSetPinnedServesLocalHome } from "@/lib/epic-pin-admission";
  */
 describe("negotiatedSetPinnedServesLocalHome", () => {
   it("is true at exactly the minor the local arm shipped on", () => {
-    expect(
-      negotiatedSetPinnedServesLocalHome({ major: 1, minor: 1 }),
-    ).toBe(true);
+    expect(negotiatedSetPinnedServesLocalHome({ major: 1, minor: 1 })).toBe(
+      true,
+    );
   });
 
   it("is false one minor below the local arm", () => {
-    expect(
-      negotiatedSetPinnedServesLocalHome({ major: 1, minor: 0 }),
-    ).toBe(false);
+    expect(negotiatedSetPinnedServesLocalHome({ major: 1, minor: 0 })).toBe(
+      false,
+    );
   });
 
   it("fails closed on null - no handshake yet", () => {
@@ -28,8 +28,8 @@ describe("negotiatedSetPinnedServesLocalHome", () => {
   });
 
   it("stays true for a higher minor - the floor, not an exact match", () => {
-    expect(
-      negotiatedSetPinnedServesLocalHome({ major: 1, minor: 2 }),
-    ).toBe(true);
+    expect(negotiatedSetPinnedServesLocalHome({ major: 1, minor: 2 })).toBe(
+      true,
+    );
   });
 });

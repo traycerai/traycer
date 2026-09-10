@@ -62,12 +62,8 @@ describe("selectAgentActivityCoverage", () => {
   });
 
   it("reads indeterminate for every host when nothing answers - an empty store", () => {
-    expect(selectAgentActivityCoverage(byHost(), HOST_A)).toBe(
-      "indeterminate",
-    );
-    expect(selectAgentActivityCoverage(byHost(), HOST_B)).toBe(
-      "indeterminate",
-    );
+    expect(selectAgentActivityCoverage(byHost(), HOST_A)).toBe("indeterminate");
+    expect(selectAgentActivityCoverage(byHost(), HOST_B)).toBe("indeterminate");
   });
 
   it("reads indeterminate when a slice is open but has not attested a frame this epoch", () => {
@@ -78,12 +74,8 @@ describe("selectAgentActivityCoverage", () => {
       stateFrameSeenThisEpoch: false,
     });
 
-    expect(selectAgentActivityCoverage(byHost(), HOST_A)).toBe(
-      "indeterminate",
-    );
-    expect(selectAgentActivityCoverage(byHost(), HOST_B)).toBe(
-      "indeterminate",
-    );
+    expect(selectAgentActivityCoverage(byHost(), HOST_A)).toBe("indeterminate");
+    expect(selectAgentActivityCoverage(byHost(), HOST_B)).toBe("indeterminate");
   });
 
   it("reads a null host id as indeterminate when nothing answers", () => {

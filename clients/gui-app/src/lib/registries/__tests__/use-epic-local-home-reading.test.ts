@@ -131,7 +131,9 @@ describe("useEpicLocalHomeReading", () => {
       epicDeleted: { deletedByDisplayName: null, deletedByTraycerUserId: null },
     });
 
-    const { result } = renderHook(() => useEpicLocalHomeReading("epic-deleted"));
+    const { result } = renderHook(() =>
+      useEpicLocalHomeReading("epic-deleted"),
+    );
 
     expect(result.current).toBe("no-local-claim");
   });

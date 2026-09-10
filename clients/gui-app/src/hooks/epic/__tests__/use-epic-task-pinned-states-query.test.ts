@@ -98,8 +98,14 @@ describe("combineTaskPinnedStateResults", () => {
     // No local-home set is supplied here, so `home` is absent for both.
     // `pinnedKnown` is `true` for every resolved task - the host answered.
     expect([...pinnedStates.entries()]).toEqual([
-      ["epic-a", { pinned: true, home: undefined, hostId: null, pinnedKnown: true }],
-      ["epic-b", { pinned: false, home: undefined, hostId: null, pinnedKnown: true }],
+      [
+        "epic-a",
+        { pinned: true, home: undefined, hostId: null, pinnedKnown: true },
+      ],
+      [
+        "epic-b",
+        { pinned: false, home: undefined, hostId: null, pinnedKnown: true },
+      ],
     ]);
   });
 
@@ -118,7 +124,10 @@ describe("combineTaskPinnedStateResults", () => {
     ]);
 
     expect([...pinnedStates.entries()]).toEqual([
-      ["epic-a", { pinned: true, home: "local", hostId: null, pinnedKnown: true }],
+      [
+        "epic-a",
+        { pinned: true, home: "local", hostId: null, pinnedKnown: true },
+      ],
     ]);
   });
 
@@ -139,7 +148,10 @@ describe("combineTaskPinnedStateResults", () => {
     ]);
 
     expect([...pinnedStates.entries()]).toEqual([
-      ["epic-a", { pinned: true, home: undefined, hostId: null, pinnedKnown: true }],
+      [
+        "epic-a",
+        { pinned: true, home: undefined, hostId: null, pinnedKnown: true },
+      ],
     ]);
   });
 });
@@ -196,7 +208,9 @@ describe("combineLocalPinReadings", () => {
 
   it("ignores a row with no `home` at all - a `@1.5` host answering", () => {
     const readings = combineLocalPinReadings([
-      { data: { tasks: [homedRow("epic-1", false, undefined)], hasMore: false } },
+      {
+        data: { tasks: [homedRow("epic-1", false, undefined)], hasMore: false },
+      },
     ]);
 
     expect(readings.size).toBe(0);
@@ -247,7 +261,10 @@ describe("overlayLocalHomedPinnedStates", () => {
     // case (no locally-homed epics among the open tabs) must not hand
     // consumers a fresh map every render.
     const queried: ReadonlyMap<string, TaskPinnedState> = new Map([
-      ["epic-a", { pinned: true, home: undefined, hostId: null, pinnedKnown: true }],
+      [
+        "epic-a",
+        { pinned: true, home: undefined, hostId: null, pinnedKnown: true },
+      ],
     ]);
 
     const overlaid = overlayLocalHomedPinnedStates(
@@ -291,7 +308,10 @@ describe("overlayLocalHomedPinnedStates", () => {
     // session's own answer. `pinnedKnown` is `true` here because the queried
     // map ALREADY had this epic - the host resolved it.
     const queried: ReadonlyMap<string, TaskPinnedState> = new Map([
-      ["epic-both", { pinned: true, home: undefined, hostId: null, pinnedKnown: true }],
+      [
+        "epic-both",
+        { pinned: true, home: undefined, hostId: null, pinnedKnown: true },
+      ],
     ]);
 
     const overlaid = overlayLocalHomedPinnedStates(
@@ -311,7 +331,10 @@ describe("overlayLocalHomedPinnedStates", () => {
 
   it("leaves an epic absent from `localHomedEpicIds` exactly as queried", () => {
     const queried: ReadonlyMap<string, TaskPinnedState> = new Map([
-      ["epic-cloud", { pinned: true, home: undefined, hostId: null, pinnedKnown: true }],
+      [
+        "epic-cloud",
+        { pinned: true, home: undefined, hostId: null, pinnedKnown: true },
+      ],
     ]);
 
     const overlaid = overlayLocalHomedPinnedStates(
@@ -359,7 +382,10 @@ describe("overlayLocalHomedPinnedStates", () => {
     // old rule, which was right while every pin was a cloud pin.
     const overlaid = overlayLocalHomedPinnedStates(
       new Map([
-        ["epic-both", { pinned: false, home: undefined, hostId: null, pinnedKnown: true }],
+        [
+          "epic-both",
+          { pinned: false, home: undefined, hostId: null, pinnedKnown: true },
+        ],
       ]),
       new Set(["epic-both"]),
       new Map([["epic-both", true]]),
@@ -391,7 +417,10 @@ describe("overlayLocalHomedPinnedStates", () => {
 
   it("does not mutate the queried map it was given", () => {
     const queried: ReadonlyMap<string, TaskPinnedState> = new Map([
-      ["epic-a", { pinned: false, home: undefined, hostId: null, pinnedKnown: true }],
+      [
+        "epic-a",
+        { pinned: false, home: undefined, hostId: null, pinnedKnown: true },
+      ],
     ]);
 
     overlayLocalHomedPinnedStates(

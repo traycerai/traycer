@@ -209,38 +209,37 @@ export const usageCostCoverageSchema = z.object({
  * A MAJOR, not a minor, and the `.strict()` above is the whole reason: the
  * additivity a new minor promises is exactly what a strict object refuses.
  */
-const hostUsageSummaryRequestFields = z
-  .object({
-    timezone: z.string().min(1).max(100),
-    windowDays: z.number().int().positive(),
-    epicId: z.string().min(1).max(191).nullable(),
-    /**
-     * Ticket 10 addition - `.optional()` (unlike the original fields above,
-     * which are required-but-nullable) so a client built against the
-     * original v1.0 shape (no chat filter) still validates: the key can be
-     * absent entirely, not merely `null`. Chat implies its epic - not
-     * required alongside `epicId`. Host-side, the chat must belong to the
-     * authenticated caller.
-     */
-    chatId: z.string().min(1).max(191).nullable().optional(),
-    /**
-     * Ticket 10 addition, same `.optional()` compatibility reasoning as
-     * `chatId`. Absent = the original `windowDays`-bounded behavior.
-     * `"epic"` is valid only alongside a non-null `epicId`/`chatId` -
-     * bounded by that epic/chat's own fact span, never a general unbounded
-     * query.
-     */
-    window: z.enum(["epic"]).optional(),
-    /**
-     * Ticket 13 addition, same `.optional()` compatibility reasoning as
-     * `chatId`. Absent or `null` = every host on the account - the global
-     * dashboard's "All hosts" default. Only ever a NARROWING: the host
-     * resolves the plane and the owner itself, so this cannot widen a read
-     * past the authenticated caller, and on the local plane a host id other
-     * than that host's own simply matches zero facts.
-     */
-    hostId: z.string().min(1).max(36).nullable().optional(),
-  });
+const hostUsageSummaryRequestFields = z.object({
+  timezone: z.string().min(1).max(100),
+  windowDays: z.number().int().positive(),
+  epicId: z.string().min(1).max(191).nullable(),
+  /**
+   * Ticket 10 addition - `.optional()` (unlike the original fields above,
+   * which are required-but-nullable) so a client built against the
+   * original v1.0 shape (no chat filter) still validates: the key can be
+   * absent entirely, not merely `null`. Chat implies its epic - not
+   * required alongside `epicId`. Host-side, the chat must belong to the
+   * authenticated caller.
+   */
+  chatId: z.string().min(1).max(191).nullable().optional(),
+  /**
+   * Ticket 10 addition, same `.optional()` compatibility reasoning as
+   * `chatId`. Absent = the original `windowDays`-bounded behavior.
+   * `"epic"` is valid only alongside a non-null `epicId`/`chatId` -
+   * bounded by that epic/chat's own fact span, never a general unbounded
+   * query.
+   */
+  window: z.enum(["epic"]).optional(),
+  /**
+   * Ticket 13 addition, same `.optional()` compatibility reasoning as
+   * `chatId`. Absent or `null` = every host on the account - the global
+   * dashboard's "All hosts" default. Only ever a NARROWING: the host
+   * resolves the plane and the owner itself, so this cannot widen a read
+   * past the authenticated caller, and on the local plane a host id other
+   * than that host's own simply matches zero facts.
+   */
+  hostId: z.string().min(1).max(36).nullable().optional(),
+});
 
 // `host.usage.summary@1.0` request - FROZEN.
 export const hostUsageSummaryRequestSchemaV10 =

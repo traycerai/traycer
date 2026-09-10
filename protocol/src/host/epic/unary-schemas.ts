@@ -697,7 +697,6 @@ export const listTaskLightSchemaPre14 = listTaskLightSchemaPre13.extend({
 });
 export type ListTaskLightPre14 = z.infer<typeof listTaskLightSchemaPre14>;
 
-
 // `epic.listTasks@1.4` list row: @1.3's chat-host dimension plus the optional
 // durability home.
 export const listTaskLightSchemaPre15 = listTaskLightSchemaPre14.extend({

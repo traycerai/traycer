@@ -457,7 +457,9 @@ describe("useEpicSetPinned", () => {
       })?.getActiveHostId(),
     ).toBe("host-owning");
     expect(
-      capturedClientResolver?.(followingVars("epic-1", true))?.getActiveHostId(),
+      capturedClientResolver?.(
+        followingVars("epic-1", true),
+      )?.getActiveHostId(),
     ).toBe("host-1");
   });
 

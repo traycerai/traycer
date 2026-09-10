@@ -69,18 +69,16 @@ describe("historyPinUnavailableReason - the version gate", () => {
   });
 
   it("still checks the session for a non-local-home row - unaffected by the new argument", () => {
-    expect(
-      historyPinUnavailableReason(historyItem({}), false, false),
-    ).toBe("unverified-session");
+    expect(historyPinUnavailableReason(historyItem({}), false, false)).toBe(
+      "unverified-session",
+    );
     expect(historyPinUnavailableReason(historyItem({}), false, true)).toBe(
       "unverified-session",
     );
     expect(historyPinUnavailableReason(historyItem({}), true, false)).toBe(
       null,
     );
-    expect(historyPinUnavailableReason(historyItem({}), true, true)).toBe(
-      null,
-    );
+    expect(historyPinUnavailableReason(historyItem({}), true, true)).toBe(null);
   });
 
   it("still returns 'phase' regardless of the new argument", () => {

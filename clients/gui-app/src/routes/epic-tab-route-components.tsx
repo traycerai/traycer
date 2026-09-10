@@ -232,8 +232,7 @@ function EpicRouteTabSync(props: {
     // during render means writing state from the render path. Nothing here is
     // rendered - the wait's only output is which branch decides - so an
     // effect-local timer keeps the whole thing on the effect side.
-    const deadline =
-      armedDeadline ?? Date.now() + RECENCY_HOME_ANSWER_WAIT_MS;
+    const deadline = armedDeadline ?? Date.now() + RECENCY_HOME_ANSWER_WAIT_MS;
     recencyWaitDeadline.current = { epicId, at: deadline };
     const timer = window.setTimeout(
       () => decideRecency(false),

@@ -158,7 +158,12 @@ describe("epicPinDispatchAdmitted", () => {
 
     expect(
       epicPinDispatchAdmitted(
-        { epicId: "e1", pinned: true, isLocalHome: true, hostId: OWNING_HOST_ID },
+        {
+          epicId: "e1",
+          pinned: true,
+          isLocalHome: true,
+          hostId: OWNING_HOST_ID,
+        },
         WINDOW_HOST_ID,
       ),
     ).toBe(true);
@@ -180,7 +185,12 @@ describe("epicPinDispatchAdmitted", () => {
 
     expect(
       epicPinDispatchAdmitted(
-        { epicId: "e1", pinned: true, isLocalHome: true, hostId: OWNING_HOST_ID },
+        {
+          epicId: "e1",
+          pinned: true,
+          isLocalHome: true,
+          hostId: OWNING_HOST_ID,
+        },
         WINDOW_HOST_ID,
       ),
     ).toBe(false);

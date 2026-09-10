@@ -53,7 +53,8 @@ const CONTEXT = { userId: USER_ID, username: USER_ID };
 
 const REFUSAL: EpicCreateRefusal = {
   kind: "local-store-unavailable",
-  message: "Traycer can't open this device's local store, so nothing was created.",
+  message:
+    "Traycer can't open this device's local store, so nothing was created.",
   remedy: "Quit the other Traycer running on this machine, then rebind.",
 };
 
@@ -255,9 +256,9 @@ describe("a refused epic.create repairs the host it was dispatched to", () => {
       hostId: PLACEMENT_HOST_ID,
       method: "host.rebindLocalStore",
     });
-    expect(
-      supportsMethodArgs.some((a) => a.hostId === EFFECTIVE_HOST_ID),
-    ).toBe(false);
+    expect(supportsMethodArgs.some((a) => a.hostId === EFFECTIVE_HOST_ID)).toBe(
+      false,
+    );
 
     // And the mutation that would actually rebind is bound to it too.
     expect(rebindHostIds).toContain(PLACEMENT_HOST_ID);

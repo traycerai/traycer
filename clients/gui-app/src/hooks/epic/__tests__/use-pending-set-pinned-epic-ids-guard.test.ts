@@ -1,6 +1,10 @@
 import { createElement, type ReactNode } from "react";
 import { describe, expect, it } from "vitest";
-import { QueryClient, QueryClientProvider, useMutation } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  useMutation,
+} from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { usePendingSetPinnedEpicIds } from "@/hooks/epic/use-epic-set-pinned-mutation";
 import { epicMutationKeys } from "@/lib/query-keys";
@@ -61,7 +65,10 @@ describe("usePendingSetPinnedEpicIds guard (eccc40b12)", () => {
     act(() => {
       // Deliberately no `isLocalHome` - the shape a pre-`@1.1` cache entry,
       // or any caller that has not been widened yet, would still carry.
-      result.current.mutate({ epicId: "epic-no-local-home-field", pinned: true });
+      result.current.mutate({
+        epicId: "epic-no-local-home-field",
+        pinned: true,
+      });
     });
 
     await waitFor(() => {

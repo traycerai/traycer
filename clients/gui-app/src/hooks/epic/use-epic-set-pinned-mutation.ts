@@ -5,7 +5,11 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 import { useHostMutation } from "@/hooks/host/use-host-query";
-import { useHostBinding, useHostClient, type HostRpcRegistry } from "@/lib/host";
+import {
+  useHostBinding,
+  useHostClient,
+  type HostRpcRegistry,
+} from "@/lib/host";
 import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
 import { useCallback } from "react";
 import { toastFromHostError } from "@/lib/host-error-toast";

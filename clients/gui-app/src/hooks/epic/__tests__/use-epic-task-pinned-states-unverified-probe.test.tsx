@@ -571,7 +571,10 @@ describe("the pin reading follows the local-homed population (R8)", () => {
     // A third local-homed epic appears on the OTHER host only.
     transport.responseByHostId.set(
       OTHER_HOST_ID,
-      page([localRow(EPIC_ON_OTHER_HOST, true), localRow(EPIC_DISCOVERED, true)]),
+      page([
+        localRow(EPIC_ON_OTHER_HOST, true),
+        localRow(EPIC_DISCOVERED, true),
+      ]),
     );
     registryReports([
       [EPIC_LOCAL, OWNER_HOST_ID],

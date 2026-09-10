@@ -555,10 +555,17 @@ describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
     await mobile.waitForAuthService();
 
     act(() => {
-      useAuthStore.getState().setUnverifiedSession(
-        { userId: "u1", userName: "U", email: "u@example.test", avatarUrl: null },
-        { userId: "u1", username: "U" },
-      );
+      useAuthStore
+        .getState()
+        .setUnverifiedSession(
+          {
+            userId: "u1",
+            userName: "U",
+            email: "u@example.test",
+            avatarUrl: null,
+          },
+          { userId: "u1", username: "U" },
+        );
     });
     act(() => {
       emitCode("ABCDEFGHJK");
@@ -583,11 +590,18 @@ describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
     await mobile.waitForAuthService();
 
     act(() => {
-      useAuthStore.getState().setSignedIn(
-        { userId: "u1", userName: "U", email: "u@example.test", avatarUrl: null },
-        { userId: "u1", username: "U" },
-        [],
-      );
+      useAuthStore
+        .getState()
+        .setSignedIn(
+          {
+            userId: "u1",
+            userName: "U",
+            email: "u@example.test",
+            avatarUrl: null,
+          },
+          { userId: "u1", username: "U" },
+          [],
+        );
     });
     act(() => {
       emitCode("ABCDEFGHJK");
@@ -597,7 +611,9 @@ describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
       expect(vi.mocked(toast.info).mock.calls.length).toBeGreaterThan(0);
     });
     const message = vi.mocked(toast.info).mock.calls.at(-1)?.[0];
-    expect(message).toBe("Already signed in on this phone — nothing to approve.");
+    expect(message).toBe(
+      "Already signed in on this phone — nothing to approve.",
+    );
     mobile.cleanupClient();
   });
 

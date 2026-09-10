@@ -1381,8 +1381,7 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
     await waitFor(() => {
       expect(
         floorsRequested.calls.some(
-          (call) =>
-            isRecord(call) && call.method === "host.notifications.list",
+          (call) => isRecord(call) && call.method === "host.notifications.list",
         ),
       ).toBe(true);
     });

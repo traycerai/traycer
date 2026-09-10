@@ -2623,7 +2623,9 @@ describe("useLandingComposerActions", () => {
           epicId: createdEpicIdFromRequests(),
         }),
       ),
-    ).toEqual({ rows: [expect.objectContaining({ workspacePath: WORKSPACE_PATH })] });
+    ).toEqual({
+      rows: [expect.objectContaining({ workspacePath: WORKSPACE_PATH })],
+    });
     queryClient.clear();
   });
 

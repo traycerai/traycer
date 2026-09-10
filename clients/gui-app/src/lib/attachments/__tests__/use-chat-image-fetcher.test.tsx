@@ -98,14 +98,15 @@ const request =
  * asserting "the floor leg was not called" must be able to fail independently
  * of whether the plain leg was.
  */
-const requestFloor = vi.fn<
-  (
-    method: "epic.readChatAttachment",
-    params: ReadChatAttachmentRequest,
-    signal: AbortSignal | undefined,
-    requirement: RequiredHostMethodVersion,
-  ) => Promise<ReadChatAttachmentResponse>
->();
+const requestFloor =
+  vi.fn<
+    (
+      method: "epic.readChatAttachment",
+      params: ReadChatAttachmentRequest,
+      signal: AbortSignal | undefined,
+      requirement: RequiredHostMethodVersion,
+    ) => Promise<ReadChatAttachmentResponse>
+  >();
 
 /**
  * `ChatAttachmentReadClient` (production, `chat-attachment-scope-context.ts`)

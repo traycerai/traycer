@@ -731,10 +731,10 @@ describe("deriveWindowNarration", () => {
         effectiveHostId: "host-a",
         leases: [
           lease({ hostId: "host-a", status: "connecting", dead: null }),
-          deadLease(
-            "host-b",
-            { reason: "incompatible", detail: incompatibility({}) },
-          ),
+          deadLease("host-b", {
+            reason: "incompatible",
+            detail: incompatibility({}),
+          }),
         ],
         hasBeenServed: false,
       }),

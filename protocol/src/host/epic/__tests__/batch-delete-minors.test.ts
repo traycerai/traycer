@@ -120,10 +120,11 @@ describe("epic.batchDelete@1.1", () => {
       results: [rawWireRow],
     });
     expect(parsedAsFromVersion.results[0]).not.toHaveProperty("home");
-    const upgraded = epicBatchDeleteUpgradeV10ToV11.upgradeResponse(
-      parsedAsFromVersion,
-    );
+    const upgraded =
+      epicBatchDeleteUpgradeV10ToV11.upgradeResponse(parsedAsFromVersion);
     expect(upgraded.results[0]).not.toHaveProperty("home");
-    expect(upgraded).toEqual({ results: [{ taskId: "epic-3", success: true }] });
+    expect(upgraded).toEqual({
+      results: [{ taskId: "epic-3", success: true }],
+    });
   });
 });
