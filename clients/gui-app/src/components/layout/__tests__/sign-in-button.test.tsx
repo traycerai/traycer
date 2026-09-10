@@ -555,17 +555,16 @@ describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
     await mobile.waitForAuthService();
 
     act(() => {
-      useAuthStore
-        .getState()
-        .setUnverifiedSession(
-          {
-            userId: "u1",
-            userName: "U",
-            email: "u@example.test",
-            avatarUrl: null,
-          },
-          { userId: "u1", username: "U" },
-        );
+      const auth = useAuthStore.getState();
+      auth.setUnverifiedSession(
+        {
+          userId: "u1",
+          userName: "U",
+          email: "u@example.test",
+          avatarUrl: null,
+        },
+        { userId: "u1", username: "U" },
+      );
     });
     act(() => {
       emitCode("ABCDEFGHJK");
@@ -590,18 +589,17 @@ describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
     await mobile.waitForAuthService();
 
     act(() => {
-      useAuthStore
-        .getState()
-        .setSignedIn(
-          {
-            userId: "u1",
-            userName: "U",
-            email: "u@example.test",
-            avatarUrl: null,
-          },
-          { userId: "u1", username: "U" },
-          [],
-        );
+      const auth = useAuthStore.getState();
+      auth.setSignedIn(
+        {
+          userId: "u1",
+          userName: "U",
+          email: "u@example.test",
+          avatarUrl: null,
+        },
+        { userId: "u1", username: "U" },
+        [],
+      );
     });
     act(() => {
       emitCode("ABCDEFGHJK");
