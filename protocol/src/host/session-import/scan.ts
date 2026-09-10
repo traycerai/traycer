@@ -34,8 +34,12 @@
  */
 import { z } from "zod";
 import { defineStreamRpcContract } from "@traycer/protocol/framework/versioned-stream-rpc";
-import { guiHarnessIdSchema } from "@traycer/protocol/persistence/epic/foundation";
 import {
+  guiHarnessIdSchema,
+  guiHarnessIdSchemaPreAntigravity,
+} from "@traycer/protocol/persistence/epic/foundation";
+import {
+  sessionImportCandidateSchema,
   sessionImportFailureReasonSchema,
   sessionImportGroupSchema,
 } from "@traycer/protocol/host/session-import/candidate";
@@ -113,9 +117,91 @@ export type SessionImportScanClientFrame = z.infer<
   typeof sessionImportScanClientFrameSchema
 >;
 
+/**
+ * Frozen server-frame shape as `cli-v1.3.0` / `host-v1.3.0` shipped @1.0 and
+ * @1.1: identical to the live union above except every harness slot is pinned
+ * to the twenty ids those peers strict-decode.
+ *
+ * Only the SERVER frame is frozen. `sessionImportScanOpenRequestSchema` stays
+ * on the live enum because it is a client->host slot - widening what a caller
+ * may ask for cannot break a released host, which simply has no reader for an
+ * id it does not know.
+ *
+ * Streams carry no downgrade bridge (`RELEASE-INVARIANT.md`: v1 stream peers
+ * reconnect on a mismatched major rather than bridging), so the freeze is the
+ * whole mechanism here - there is nothing to project a newer row through. The
+ * host must therefore GATE EMISSION on the negotiated minor and never hand an
+ * Antigravity row to a <1.2 subscriber.
+ */
+const sessionImportCandidateSchemaPreAntigravity =
+  sessionImportCandidateSchema.extend({
+    harness: guiHarnessIdSchemaPreAntigravity,
+  });
+
+const sessionImportGroupSchemaPreAntigravity = sessionImportGroupSchema.extend({
+  sessions: z.array(sessionImportCandidateSchemaPreAntigravity),
+});
+
+export const sessionImportScanServerFrameSchemaPreAntigravity =
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("started"),
+      providers: z.array(guiHarnessIdSchemaPreAntigravity),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("group"),
+      group: sessionImportGroupSchemaPreAntigravity,
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("providerFailed"),
+      harness: guiHarnessIdSchemaPreAntigravity,
+      reason: sessionImportFailureReasonSchema,
+      detail: z.string(),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("complete"),
+      totals: sessionImportScanTotalsSchema,
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ]);
+
 export const sessionImportScanV10 = defineStreamRpcContract({
   method: "sessionImport.scan",
   schemaVersion: { major: 1, minor: 0 } as const,
+  openRequestSchema: sessionImportScanOpenRequestSchema,
+  serverFrameSchema: sessionImportScanServerFrameSchemaPreAntigravity,
+  clientFrameSchema: sessionImportScanClientFrameSchema,
+});
+
+/**
+ * @1.1 includes live imported sessions as `already_in_traycer` candidates.
+ * The payload shapes are unchanged: the negotiated minor is the capability
+ * signal. Hosts retain @1.0 filtering and totals for older subscribers.
+ */
+export const sessionImportScanV11 = defineStreamRpcContract({
+  method: "sessionImport.scan",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  openRequestSchema: sessionImportScanOpenRequestSchema,
+  serverFrameSchema: sessionImportScanServerFrameSchemaPreAntigravity,
+  clientFrameSchema: sessionImportScanClientFrameSchema,
+});
+
+/**
+ * @1.2 is the first minor whose frames may carry an Antigravity row. Nothing
+ * else changes: the capability signal is the negotiated minor, exactly as
+ * @1.0 -> @1.1 established, and a host must keep the id out of every frame it
+ * sends a <1.2 subscriber.
+ */
+export const sessionImportScanV12 = defineStreamRpcContract({
+  method: "sessionImport.scan",
+  schemaVersion: { major: 1, minor: 2 } as const,
   openRequestSchema: sessionImportScanOpenRequestSchema,
   serverFrameSchema: sessionImportScanServerFrameSchema,
   clientFrameSchema: sessionImportScanClientFrameSchema,

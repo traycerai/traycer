@@ -14,7 +14,7 @@
  * fake here is a counting closure - no mocking framework, matching
  * `lane-adapter-probe.test.ts`'s convention. The one wire fixture in play (a
  * control-lane snapshot) is built through the real
- * `epicStatusSubscribeServerFrameSchemaV10.parse(...)`, for the same reason:
+ * `epicStatusSubscribeServerFrameSchemaV11.parse(...)`, for the same reason:
  * a hand-rolled object would let a field drift out of the contract with
  * nothing here noticing.
  *
@@ -45,7 +45,7 @@ import type {
   EpicStatusStreamCallbacks,
 } from "@traycer-clients/shared/host-transport/epic-status-stream-client";
 import type { StreamCloseReason } from "@traycer-clients/shared/host-transport/i-stream-session";
-import { epicStatusSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/status-subscribe";
+import { epicStatusSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/status-subscribe";
 import { epicStateSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/state-subscribe";
 import type {
   EpicStateDeltaFrame,
@@ -74,7 +74,7 @@ import { createRendererRuntimeEnvironment } from "../runtime-environment";
  * `lane-adapter-probe.test.ts`'s `statusSnapshotFrame()` does.
  */
 function statusSnapshotFrame(): EpicStatusSnapshotFrame {
-  const parsed = epicStatusSubscribeServerFrameSchemaV10.parse({
+  const parsed = epicStatusSubscribeServerFrameSchemaV11.parse({
     kind: "snapshot",
     hasBinaryPayload: false,
     authorityEpoch: "epoch-1",
@@ -123,7 +123,7 @@ function createCountingStatusFactory(): CountingStatusFactory {
     closeCount: () => closes,
     deliverSnapshot(): void {
       if (live === null) throw new Error("no status client was constructed");
-      live.onSnapshot(statusSnapshotFrame());
+      live.onSnapshot(statusSnapshotFrame(), true);
     },
     deliverClosed(reason: StreamCloseReason): void {
       if (live === null) throw new Error("no status client was constructed");
@@ -422,6 +422,48 @@ describe('the probe reports "unsupported" on a method-incompatible close', () =>
     });
 
     expect(rig.probeOutcomes).toEqual<EpicLaneProbeOutcome[]>(["unsupported"]);
+  });
+
+  it("a probe-only refusal does not spend the required-lane latch", () => {
+    const rig = buildArmRig();
+    rig.arm.probe();
+
+    rig.status.deliverClosed({
+      kind: "fatalError",
+      details: {
+        code: "INCOMPATIBLE",
+        reason: "epic.status.subscribe is not served by this host",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+
+    // The close IS the probe's answer, and nothing more: no arm was
+    // installed, so there is no required lane to have gone away. Reporting
+    // here used to set the latch AFTER the legacy install's detach had reset
+    // it, which left the next lanes arm with its one report already spent.
+    expect(rig.probeOutcomes).toEqual<EpicLaneProbeOutcome[]>(["unsupported"]);
+    expect(rig.requiredLaneUnsupportedCount()).toBe(0);
+  });
+
+  it("an INCOMPATIBLE close under an INSTALLED arm reports the required lane refused", () => {
+    const rig = buildArmRig();
+    rig.arm.probe();
+    rig.status.deliverSnapshot();
+    expect(rig.probeOutcomes).toEqual<EpicLaneProbeOutcome[]>(["succeeded"]);
+
+    rig.status.deliverClosed({
+      kind: "fatalError",
+      details: {
+        code: "INCOMPATIBLE",
+        reason: "epic.status.subscribe is not served by this host",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+
+    expect(rig.probeOutcomes).toEqual<EpicLaneProbeOutcome[]>(["succeeded"]);
+    expect(rig.requiredLaneUnsupportedCount()).toBe(1);
   });
 
   it("does NOT report an outcome on an UNAUTHORIZED close - a different failure must not install the legacy arm", () => {

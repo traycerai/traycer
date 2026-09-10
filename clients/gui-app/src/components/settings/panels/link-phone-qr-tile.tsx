@@ -135,9 +135,9 @@ function FinderEye(props: { readonly row: number; readonly col: number }) {
 }
 
 /**
- * Memoized because the countdown beside it re-renders the tile once a second
- * while the symbol itself cannot change - rebuilding several hundred `<rect>`
- * elements per tick for an identical result.
+ * Memoized because the panel around it re-renders once a second for the
+ * countdown text while the symbol itself cannot change - rebuilding several
+ * hundred `<rect>` elements per tick for an identical result.
  */
 const QrSymbolSvg = memo(function QrSymbolSvg(props: {
   readonly symbol: QrSymbol;
@@ -195,17 +195,16 @@ const QrSymbolSvg = memo(function QrSymbolSvg(props: {
 });
 
 /**
- * The code's life drawn on the tile's own frame: the stroke drains clockwise
- * as the seconds run out, so the thing that is expiring is the thing that
- * shows it. `pathLength` normalises the perimeter to 1, which makes the
- * remaining share the dash offset directly.
+ * The tile's static frame. A plain band, deliberately: it does not move with
+ * the code's remaining life. The text line beneath the tile carries the
+ * countdown, and a frame that visibly drained read as "hurry" — the code
+ * rotates on its own, so there is nothing to hurry for.
  *
- * Track and drain are the same path, and the drain's caps are butt — a round
- * cap would bulge past the band at the two dash boundaries and read as a
- * lumpy seam where the two colours meet.
+ * The band still owns the tile's edge geometry (see the constants above): it
+ * straddles the paper's boundary so no antialiased sliver of white survives
+ * beyond it in dark mode.
  */
-function ExpiryFrame(props: { readonly remainingFraction: number }) {
-  const remaining = Math.min(1, Math.max(0, props.remainingFraction));
+function TileFrame() {
   const side = 100 - FRAME_CENTRE_INSET_PERCENT * 2;
   return (
     <svg
@@ -220,24 +219,8 @@ function ExpiryFrame(props: { readonly remainingFraction: number }) {
         height={side}
         rx={FRAME_RADIUS_PERCENT}
         strokeWidth={FRAME_STROKE_PERCENT}
+        data-testid="link-phone-tile-frame"
         className="fill-none stroke-border"
-      />
-      <rect
-        x={FRAME_CENTRE_INSET_PERCENT}
-        y={FRAME_CENTRE_INSET_PERCENT}
-        width={side}
-        height={side}
-        rx={FRAME_RADIUS_PERCENT}
-        pathLength={1}
-        strokeWidth={FRAME_STROKE_PERCENT}
-        strokeLinecap="butt"
-        strokeDasharray={1}
-        strokeDashoffset={1 - remaining}
-        data-testid="link-phone-expiry-frame"
-        data-remaining-fraction={remaining.toFixed(2)}
-        // Linear over one tick so the drain reads as continuous between the
-        // clock's whole seconds.
-        className="fill-none stroke-primary transition-[stroke-dashoffset] duration-1000 ease-linear motion-reduce:transition-none"
       />
     </svg>
   );
@@ -249,7 +232,6 @@ function ExpiryFrame(props: { readonly remainingFraction: number }) {
  */
 function TileFootprint(props: {
   readonly state: "code" | "loading";
-  readonly remainingFraction: number;
   readonly children: ReactElement;
 }) {
   return (
@@ -259,7 +241,7 @@ function TileFootprint(props: {
       data-tile-state={props.state}
     >
       {props.children}
-      <ExpiryFrame remainingFraction={props.remainingFraction} />
+      <TileFrame />
     </div>
   );
 }
@@ -275,8 +257,6 @@ export function LinkPhoneQrTile(props: {
    * QR pointed at a guess would hand a live claim code to the wrong host.
    */
   readonly platformBaseUrl: string | null;
-  /** Share of the displayed code's life still left, 0..1. */
-  readonly remainingFraction: number;
 }) {
   const platformBaseUrl = props.platformBaseUrl;
   const code = props.code;
@@ -289,7 +269,7 @@ export function LinkPhoneQrTile(props: {
   );
   if (symbol === null) {
     return (
-      <TileFootprint state="loading" remainingFraction={0}>
+      <TileFootprint state="loading">
         <div
           className="absolute inset-0"
           data-testid="link-phone-qr-placeholder"
@@ -314,7 +294,7 @@ export function LinkPhoneQrTile(props: {
     );
   }
   return (
-    <TileFootprint state="code" remainingFraction={props.remainingFraction}>
+    <TileFootprint state="code">
       <div
         // Keyed on the code so a rotation mounts a fresh tile and fades it in
         // instead of swapping the matrix under the user.

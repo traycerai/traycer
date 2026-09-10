@@ -3,10 +3,12 @@ import type { ReactNode } from "react";
 import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  BrowserOpenedTab,
   BrowserSessionInfo,
   BrowserTabInfo,
 } from "@traycer/protocol/host/browser/contracts";
 import type { BrowserSessionsState } from "@/components/epic-canvas/renderers/browser-sessions-context";
+import { epicScope } from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
 import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 import { LinkTargetContext } from "@/lib/links/link-target-context";
 import { useOpenLink, type LinkClickEvent } from "@/lib/links/open-link";
@@ -87,6 +89,7 @@ function tab(overrides: Partial<BrowserTabInfo>): BrowserTabInfo {
     title: null,
     viewed: false,
     drivenBy: [],
+    boundWindowId: null,
     ...overrides,
   };
 }
@@ -94,7 +97,7 @@ function tab(overrides: Partial<BrowserTabInfo>): BrowserTabInfo {
 function session(tabs: readonly BrowserTabInfo[]): BrowserSessionInfo {
   return {
     sessionId: "session-1",
-    epicId: EPIC_ID,
+    scope: epicScope(EPIC_ID),
     hostId: HOST_ID,
     profile: "primary",
     lastActivityAt: 0,
@@ -104,7 +107,11 @@ function session(tabs: readonly BrowserTabInfo[]): BrowserSessionInfo {
 }
 
 const openTab = vi.fn<BrowserSessionsState["openTab"]>(() =>
-  Promise.resolve({ sessionId: "session-opened", tabId: "tab-opened" }),
+  Promise.resolve({
+    sessionId: "session-opened",
+    tabId: "tab-opened",
+    handoffToken: null,
+  }),
 );
 
 function liveSessions(
@@ -115,11 +122,14 @@ function liveSessions(
     lifecycle: "live",
     inventoryReady: true,
     canMaterializeElectron: false,
+    connectionGeneration: 0,
     items,
     errorMessage: null,
     retry: () => undefined,
     openTab,
     closeTab: () => Promise.resolve(),
+    attachTab: () => Promise.reject(new Error("not used")),
+    moveTab: () => Promise.reject(new Error("not used")),
   };
 }
 
@@ -353,7 +363,7 @@ describe("useOpenLink", () => {
 
   it("joins an openTab already in flight for the same page", async () => {
     const pending: {
-      settle: (tab: { sessionId: string; tabId: string }) => void;
+      settle: (tab: BrowserOpenedTab) => void;
     } = { settle: () => undefined };
     openTab.mockImplementationOnce(
       () =>
@@ -369,7 +379,11 @@ describe("useOpenLink", () => {
     void openLink(DOCS_URL, "markdown", null);
 
     expect(openTab).toHaveBeenCalledTimes(1);
-    pending.settle({ sessionId: "session-1", tabId: "tab-joined" });
+    pending.settle({
+      sessionId: "session-1",
+      tabId: "tab-joined",
+      handoffToken: null,
+    });
 
     await waitFor(() => expect(harness.intents).toHaveLength(2));
     expect(openTab).toHaveBeenCalledTimes(1);
@@ -406,8 +420,7 @@ describe("useOpenLink", () => {
   });
 
   it("falls back to the epic when the view tab closed mid-open (R8)", async () => {
-    const settles: Array<(tab: { sessionId: string; tabId: string }) => void> =
-      [];
+    const settles: Array<(tab: BrowserOpenedTab) => void> = [];
     openTab.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
@@ -424,7 +437,11 @@ describe("useOpenLink", () => {
       openTabOrder: [],
       activeTabId: null,
     });
-    settles[0]({ sessionId: "session-opened", tabId: "tab-opened" });
+    settles[0]({
+      sessionId: "session-opened",
+      tabId: "tab-opened",
+      handoffToken: null,
+    });
 
     await waitFor(() => expect(harness.intents).toHaveLength(1));
     expect(harness.intents[0].target).toEqual({ epicId: EPIC_ID });

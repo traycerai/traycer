@@ -17,6 +17,14 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSchemaVersion: () => state.version,
 }));
 
+// The editor branch resolves through the offerable-target catalog, which asks
+// the Finder gate too. Held closed here: this suite is about the "system"
+// routing decision, and an offerable Finder would change what the fallback
+// resolves to without being what any case is checking.
+vi.mock("@/hooks/host/use-host-directory-entry", () => ({
+  useHostDirectoryEntry: () => null,
+}));
+
 import { usePdfOpenExternallyTarget } from "../use-pdf-open-target";
 
 function resetSettingsStore(): void {

@@ -299,6 +299,7 @@ export class MockRunnerHost implements IRunnerHost {
   readonly hostTray: null = null;
   readonly zoom: null = null;
   readonly pushPermission: null = null;
+  readonly systemBack: null = null;
   readonly deviceFlow: MockDeviceFlowHost = new MockDeviceFlowHost();
 
   /**
@@ -661,13 +662,13 @@ export class MockRunnerHost implements IRunnerHost {
           ? null
           : raw;
       if (stored === null) {
-        return { outcome: "deleted", pair: null };
+        return { outcome: "deleted", pair: null, rejection: null };
       }
       if (stored.user.id !== expected.userId) {
-        return { outcome: "user-mismatch", pair: stored };
+        return { outcome: "user-mismatch", pair: stored, rejection: null };
       }
       if (stored.token !== expected.token) {
-        return { outcome: "superseded", pair: stored };
+        return { outcome: "superseded", pair: stored, rejection: null };
       }
       const refreshed = await refreshOnceAbortable({
         authnBaseUrl: this.authnBaseUrl,
@@ -677,10 +678,17 @@ export class MockRunnerHost implements IRunnerHost {
         signal: null,
       });
       if (refreshed.kind === "network-error") {
-        return { outcome: "refresh-network", pair: null };
+        return { outcome: "refresh-network", pair: null, rejection: null };
       }
       if (refreshed.kind === "rejected") {
-        return { outcome: "refresh-rejected", pair: null };
+        return {
+          outcome:
+            refreshed.rejection.kind === "account"
+              ? "refresh-rejected-account"
+              : "refresh-rejected-credential",
+          pair: null,
+          rejection: refreshed.rejection,
+        };
       }
       const next: StoredCredentials = {
         ...stored,
@@ -690,7 +698,7 @@ export class MockRunnerHost implements IRunnerHost {
       };
       this.tokenStoreEntries.set(MOCK_TOKEN_STORE_KEY, next);
       this.notifyTokenStoreChangedAfterMutation();
-      return { outcome: "applied", pair: next };
+      return { outcome: "applied", pair: next, rejection: null };
     },
     delete: async (): Promise<void> => {
       this.tokenStoreEntries.delete(MOCK_TOKEN_STORE_KEY);

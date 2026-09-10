@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readExtractedRuntimeVersion } from "../install";
+import { readExtractedRuntimeVersion } from "../version-sidecar";
 
 describe("readExtractedRuntimeVersion", () => {
   let dir: string;

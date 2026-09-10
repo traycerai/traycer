@@ -12,8 +12,11 @@ import {
   errorBlockSchemaPreFallback,
   providerNoticeKindSchema,
   providerNoticeKindSchemaPreFallback,
+  autonomousResumeBlockSchema,
+  autonomousResumeBlockSchemaV18,
   providerNoticeMetadataSchema,
   providerNoticeNormalizedMetadataSchema,
+  interviewQuestionSchema,
   subAgentBlockSchema,
   textBlockSchema,
   toolCallBlockSchema,
@@ -27,6 +30,10 @@ import {
   type ToolCallManagedCommandRestarted,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/index";
+import {
+  chatSubscribeV18,
+  chatSubscribeV19,
+} from "@traycer/protocol/host/agent/gui/subscribe";
 
 describe("fileChangeBlockSchema backward-compat", () => {
   it("parses a pre-compaction file_change block (no hashes/counts) via defaults", () => {
@@ -500,6 +507,44 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
     timestamp: 1,
   };
 
+  it("freezes delivery placement out of chat.subscribe 1.8 and includes it in 1.9", () => {
+    const frozen = z.toJSONSchema(chatSubscribeV18.serverFrameSchema);
+    const current = z.toJSONSchema(chatSubscribeV19.serverFrameSchema);
+    expect(JSON.stringify(frozen)).not.toContain("deliveryPlacement");
+    expect(JSON.stringify(current)).toContain("deliveryPlacement");
+  });
+
+  it("normalizes a missing delivery placement to null on schema and raw decode", () => {
+    const raw = {
+      ...baseFields,
+      triggers: [],
+      wakeTriggers: undefined,
+    };
+    expect(decodeAutonomousResumeBlock(raw).deliveryPlacement).toBeNull();
+    expect(contentBlockSchema.parse(raw)).toMatchObject({
+      type: "autonomous_resume",
+      deliveryPlacement: null,
+    });
+  });
+
+  it("round-trips both delivery placements and omits them from the frozen codec", () => {
+    for (const deliveryPlacement of ["in_turn", "turn_start"] as const) {
+      const domain = autonomousResumeBlockSchema.parse({
+        ...baseFields,
+        deliveryPlacement,
+        triggers: [],
+      });
+      expect(autonomousResumeBlockSchema.encode(domain).deliveryPlacement).toBe(
+        deliveryPlacement,
+      );
+      const frozen = autonomousResumeBlockSchemaV18.encode(domain);
+      expect("deliveryPlacement" in frozen).toBe(false);
+      expect(autonomousResumeBlockSchemaV18.decode(frozen)).not.toHaveProperty(
+        "deliveryPlacement",
+      );
+    }
+  });
+
   it("decodes a raw pre-wakeTriggers stored block (v1.1.3 data, NO schema parse) without throwing", () => {
     // The host's storage hot path (`decodeStoredBlock` in
     // `chat-message-collections.ts`) calls this function on raw Yjs JSON
@@ -673,6 +718,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
 
     const domain: AutonomousResumeBlock = {
       ...baseFields,
+      deliveryPlacement: null,
       triggers: [
         {
           kind: "wakeup",
@@ -699,6 +745,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
   it("round-trips encode -> decode for a mixed trigger set (canonical order: task triggers, then wakeup)", () => {
     const domain: AutonomousResumeBlock = {
       ...baseFields,
+      deliveryPlacement: null,
       triggers: [
         {
           kind: "subagent",
@@ -745,6 +792,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
   it("decode is idempotent - re-decoding an already-domain-shaped block is a no-op", () => {
     const domain: AutonomousResumeBlock = {
       ...baseFields,
+      deliveryPlacement: null,
       triggers: [
         {
           kind: "wakeup",
@@ -766,6 +814,7 @@ describe("autonomousResumeBlockSchema wakeup persistence compat", () => {
   it("z.encode on the full contentBlockSchema union splits wakeup triggers into wakeTriggers", () => {
     const domain: AutonomousResumeBlock = {
       ...baseFields,
+      deliveryPlacement: null,
       triggers: [
         {
           kind: "wakeup",
@@ -1063,7 +1112,7 @@ describe("textBlockSchema providerNotice (no new persisted block type)", () => {
   });
 });
 
-// ─── errorBlockSchema.failure (ticket 01, chat.subscribe@1.9) ─────────────
+// ─── errorBlockSchema.failure (ticket 01, chat.subscribe@1.10) ────────────
 describe("errorBlockSchema.failure round-trip and defaulting", () => {
   it("round-trips a full failure payload", () => {
     const block = {
@@ -1126,7 +1175,7 @@ describe("providerNoticeKindSchemaPreFallback rejects an unknown enum VALUE (not
     // one": a derived list would pass for any pair of enums, including the two
     // being identical, which is the property this cell exists to refuse. The
     // three MOVE arms are listed separately for the same reason - splitting
-    // `fallback_applied` into three kinds is exactly the growth a `1.7`/`1.8`
+    // `fallback_applied` into three kinds is exactly the growth a `1.7`-`1.9`
     // peer's frozen copy cannot absorb, so each new value has to be refused
     // here by name.
     for (const kind of [
@@ -1196,7 +1245,7 @@ describe("providerNoticeKindSchemaPreFallback rejects an unknown enum VALUE (not
   });
 });
 
-describe("errorBlockSchemaPreFallback (released chat.subscribe@1.0-1.8) strips failure as an unknown key", () => {
+describe("errorBlockSchemaPreFallback (frozen chat.subscribe@1.0-1.9) strips failure as an unknown key", () => {
   const errorWithFailure = {
     type: "error",
     blockId: "err-1",
@@ -1223,5 +1272,84 @@ describe("errorBlockSchemaPreFallback (released chat.subscribe@1.0-1.8) strips f
   it("contentBlockSchemaPreFallback strips failure from an error block via its frozen member", () => {
     const parsed = contentBlockSchemaPreFallback.parse(errorWithFailure);
     expect(parsed.type === "error" && "failure" in parsed).toBe(false);
+  });
+});
+
+describe("interviewQuestionSchema allowsCustomAnswer (additive, reader-permissive)", () => {
+  const baseQuestion = {
+    questionId: null,
+    question: "Choose",
+    header: null,
+    options: [{ label: "Alpha", description: null, preview: null }],
+    multiSelect: false,
+  };
+
+  it("parses a question persisted before the field existed as `null`", () => {
+    // The legacy path the field's `.default(null)` exists for: every question
+    // written before this change omits the key, and `null` means "unstated",
+    // which every renderer treats exactly as it did before - free text offered.
+    const question = interviewQuestionSchema.parse(baseQuestion);
+    expect(question.allowsCustomAnswer).toBeNull();
+  });
+
+  it("carries an explicit value through unchanged in both directions", () => {
+    expect(
+      interviewQuestionSchema.parse({
+        ...baseQuestion,
+        allowsCustomAnswer: false,
+      }).allowsCustomAnswer,
+    ).toBe(false);
+    expect(
+      interviewQuestionSchema.parse({
+        ...baseQuestion,
+        allowsCustomAnswer: true,
+      }).allowsCustomAnswer,
+    ).toBe(true);
+  });
+
+  it("ACCEPTS `false` with no options, deliberately, rather than rejecting the document", () => {
+    // The schema's doc calls this pair a raiser invariant, and it is not
+    // enforced here ON PURPOSE. This schema is BOTH the persistence schema for
+    // stored epic content and the wire schema released streamchat lines
+    // project (`runtimeInterviewQuestionSchema` aliases it), so a `.refine()`
+    // rejecting the pair would not withdraw a bad question - it would fail the
+    // parse of the whole content block, exactly the failure the file's first
+    // test names ("a hard ZodError here would break agent.getTranscript for
+    // the whole chat"), and drop a live interview frame from a peer host that
+    // is entitled to send it.
+    //
+    // The pair is refused where it can actually be decided: producers. Every
+    // per-harness bridge makes it unreachable by construction, the generic
+    // normalizer (`interview-detection.ts`) downgrades it to `null`, and the
+    // renderer treats it as a fail-safe - no input, Skip still available -
+    // which `pending-interview-card.test.tsx` pins with a CONTROL.
+    //
+    // Falsification: add that `.refine()` and this reddens, pointing whoever
+    // did it at the two consumers that would start failing.
+    const parsed = interviewQuestionSchema.parse({
+      ...baseQuestion,
+      options: [],
+      allowsCustomAnswer: false,
+    });
+    expect(parsed.options).toEqual([]);
+    expect(parsed.allowsCustomAnswer).toBe(false);
+  });
+
+  it("keeps a whole interview block parseable when a question carries the pair", () => {
+    // The consumer that matters: one bad question must not cost the block.
+    const block = contentBlockSchema.parse({
+      type: "interview",
+      blockId: "iv-degenerate",
+      status: "streaming",
+      timestamp: 1,
+      toolName: "AskUserQuestion",
+      title: null,
+      description: null,
+      questions: [{ ...baseQuestion, options: [], allowsCustomAnswer: false }],
+      answers: [],
+      error: null,
+      metadata: null,
+    }) as InterviewBlock;
+    expect(block.questions).toHaveLength(1);
   });
 });

@@ -180,9 +180,7 @@ const SnapshotDiffTileShell = memo(function SnapshotDiffTileShell(
         collapseAll={collapseAll}
         refreshing={false}
         onRefresh={null}
-        onOpenFile={null}
-        openFileDisabled={false}
-        openFileOpening={false}
+        openFile={null}
       />
     ),
     [collapseAll, handleViewPatch, toolbarView],

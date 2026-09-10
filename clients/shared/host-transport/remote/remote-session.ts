@@ -41,11 +41,14 @@ import type {
 } from "../i-stream-session";
 import type { TimerHandle } from "../timer-handle";
 import {
+  HostMethodVersionUnsatisfiedError,
   HostRequestAbortedError,
   HostRpcError,
   HostTransportFailureError,
+  negotiatedVersionMeetsRequirement,
   RetryableTransportError,
   type RequestOfMethod,
+  type RequiredHostMethodVersion,
   type ResponseOfMethod,
 } from "../host-messenger";
 import {
@@ -55,8 +58,11 @@ import {
 } from "../ws-rpc-client";
 import {
   prepareStreamSubscribeRequest,
+  selectStreamSubscribeVersion,
   type ParamsOf,
+  type StreamMethodSupport,
 } from "../ws-stream-client";
+import type { StreamParamsProvider } from "../i-stream-client";
 import type { WakeProbeTuning } from "../host-stream-client";
 import { jitteredBackoffFor } from "../backoff";
 import {
@@ -156,11 +162,15 @@ function qosForStreamMethod(method: string): QosClassValue {
  *   mint fresh grant → dial relay(?grant) → attach_ack{sid}
  *     → Noise-NK handshake (msg0 → msg1)
  *     → open{bearer, manifest, authz:null, resume:null}  (re-presents bearer, A2)
- *     → openAck{manifest, capabilities}  → compat mirror
- *     → re-subscribe every live stream → ready
+ *     → openAck{manifest, capabilities}  → compat mirror → ready
+ *     → re-subscribe every live stream
+ *
+ * Ready is the host's ack, not the fan-out that follows it: the re-subscribes
+ * go out from a session that is already carrying traffic, and what each stream
+ * then has to say is its own status rather than the connection's.
  *
  * Backoff resets ONLY after a connection SURVIVES: the ready boundary
- * (transport open · E2E handshake · session open · subscriptions restored) must
+ * (transport open · E2E handshake · session open · host attached) must
  * be reached AND held for `RECONNECT_STABLE_RESET_MS`. Never on socket-open,
  * never on the boundary alone, and never on a wake — a connection that opens
  * and dies repeatedly must escalate, not present itself as a first failure
@@ -390,6 +400,15 @@ export interface IRemoteSession<
      * one, so a stripped key here refuses instead of dispatching.
      */
     replayMustBeKeyed: boolean,
+    /**
+     * A version floor this send's own connection must clear
+     * (`HostRequestOptions.requiredHostMethodVersion` in `host-messenger.ts`,
+     * which documents why the check cannot live above the transport). Checked
+     * against the manifest this session negotiated, so a caller's requirement
+     * is answered by the host actually carrying the frame. `null` for the
+     * ordinary case.
+     */
+    requiredHostMethodVersion: RequiredHostMethodVersion | null,
   ): Promise<ResponseOfMethod<RpcRegistry, Method>>;
   subscribe<Method extends keyof StreamRegistry & string>(
     method: Method,
@@ -402,7 +421,7 @@ export interface IRemoteSession<
   ): IStreamSession;
   subscribeWithParamsProvider<Method extends keyof StreamRegistry & string>(
     method: Method,
-    paramsProvider: () => ParamsOf<StreamRegistry, Method>,
+    paramsProvider: StreamParamsProvider<StreamRegistry, Method>,
   ): IStreamSession;
   notifyBearerRotated(): void;
   /**
@@ -478,9 +497,9 @@ export interface IRemoteSession<
   terminalFatal(): FatalErrorDetails | null;
   /**
    * Subscribes to positive evidence that the session just reached its ready
-   * boundary (full attach + accepted restore evidence for every live
-   * stream; completed delivery stays each stream's own status) - EVERY boundary,
-   * including the clean first open. The remote analog of the recovery
+   * boundary (full attach through the host's own `openAck`, with the host
+   * still attached at the relay; what each stream then delivers stays that
+   * stream's own status) - EVERY boundary, including the clean first open. The remote analog of the recovery
    * evidence `WsStreamClient` surfaces via `subscribeAvailabilityRecovered`,
    * consumed to un-strand errored host-scoped queries.
    *
@@ -516,6 +535,29 @@ export interface IRemoteSession<
    * died is not a session that became unready).
    */
   subscribeReadinessLost(listener: () => void): () => void;
+  /**
+   * The stream method's compatibility against the manifest from this
+   * connection's most recent `openAck`. Until that acknowledgement arrives,
+   * the remote session has no capability evidence and answers `"unknown"`.
+   */
+  getMethodSupport<Method extends keyof StreamRegistry & string>(
+    method: Method,
+  ): StreamMethodSupport;
+  /**
+   * The version a new subscription would declare against this connection's
+   * current manifest, or `null` before its `openAck` settles.
+   */
+  getMethodSchemaVersion<Method extends keyof StreamRegistry & string>(
+    method: Method,
+  ): SchemaVersion | null;
+  /**
+   * Notified when manifest-derived stream capability evidence changes. A
+   * closed session retires its observers after the terminal retraction and
+   * accepts no new ones - like `onClosed`, a late attacher must check
+   * `isClosed()` and read `getMethodSupport` directly, which answers
+   * `"unknown"` forever from there.
+   */
+  subscribeMethodSupport(listener: () => void): () => void;
   close(): void;
 }
 
@@ -576,6 +618,23 @@ interface ActiveConnection {
  */
 let nextRemoteEvidenceScope = 0;
 
+type StreamMethodCapability = {
+  readonly support: StreamMethodSupport;
+  readonly schemaVersion: SchemaVersion | null;
+};
+
+// Module constants, not literals at the return sites: the verdict is read as
+// a `useSyncExternalStore` snapshot, so even the "nothing known" answers must
+// keep one identity across reads.
+const UNKNOWN_STREAM_METHOD_CAPABILITY: StreamMethodCapability = {
+  support: "unknown",
+  schemaVersion: null,
+};
+const UNSUPPORTED_STREAM_METHOD_CAPABILITY: StreamMethodCapability = {
+  support: "unsupported",
+  schemaVersion: null,
+};
+
 export class RemoteSession<
   RpcRegistry extends VersionedRpcRegistry,
   StreamRegistry extends VersionedStreamRpcRegistry,
@@ -584,6 +643,20 @@ export class RemoteSession<
 {
   private readonly options: RemoteSessionOptions<RpcRegistry, StreamRegistry>;
   private readonly clientManifests: SessionManifests;
+  /**
+   * Per-method verdicts of {@link streamMethodCapability}, keyed on the host
+   * manifest object they were derived from. Everything else the verdict
+   * reads (`options.streamRegistry`, `clientManifests`) is fixed for the
+   * session's life, so the manifest object is the whole input. It is also
+   * the same clock the method-support listeners run on: `handleOpenAck`
+   * installs a new manifest and notifies, `teardownConnection` drops it and
+   * notifies - so a cached verdict can only change when a listener is told
+   * it changed. No explicit invalidation: a new manifest misses the cache.
+   */
+  private streamMethodCapabilityCache: {
+    readonly hostManifest: SessionManifests;
+    readonly byMethod: Map<string, StreamMethodCapability>;
+  } | null = null;
   /** `clientManifests.rpc` + `.optionalRpc` merged - the dispatch view. */
   private readonly clientRpcMerged: ConnectionManifest;
   /**
@@ -602,21 +675,20 @@ export class RemoteSession<
    */
   private stableResetTimer: TimerHandle | null = null;
   /**
-   * Armed when an attach completes with the ready boundary still unreached,
-   * cleared by the boundary or by connection loss. If it fires, some stream's
-   * restore has produced no evidence at all for the whole window - no
-   * delivered frame and no in-flight chunk - and the session is sitting
-   * not-ready on a live mux. That state is otherwise invisible: the surfaces
-   * above can only say "still can't connect", which misattributes it. One
-   * line naming the unrestored methods is what lets a field report of a stuck
-   * banner be attributed to the stream that caused it.
+   * Armed when an attach completes, cleared by connection loss. If it fires,
+   * some stream has produced no evidence at all for the whole window - no
+   * delivered frame and no in-flight chunk - on a mux that is otherwise
+   * carrying traffic. Two very different things look identical from here (a
+   * subscription whose subject simply has not changed, and one the host failed
+   * to replay), and neither is visible anywhere else, so the line names the
+   * methods and leaves the reading to whoever has the host's side of it.
    */
   private restoreStallTimer: TimerHandle | null = null;
   /**
    * Per-stream progress deadlines for in-flight chunk reassembly on the
    * current connection - the replacement for the stall bound that message
-   * COMPLETION used to provide implicitly, before the ready boundary started
-   * accepting the first chunk as restore evidence. Armed/reset by every
+   * COMPLETION used to provide implicitly, before an accepted chunk counted as
+   * a stream having spoken. Armed/reset by every
    * accepted chunk of a subscription stream's message, retired when that
    * message completes (or the stream/connection ends). Expiry is the verdict
    * "this transfer stopped": the stream is reopened on a fresh id through the
@@ -733,6 +805,7 @@ export class RemoteSession<
   private readonly closedListeners = new Set<() => void>();
   private readonly availabilityRecoveredListeners = new Set<() => void>();
   private readonly readinessLostListeners = new Set<() => void>();
+  private readonly methodSupportListeners = new Set<() => void>();
   /**
    * Last readiness this session PUBLISHED, not last readiness it had.
    *
@@ -925,13 +998,13 @@ export class RemoteSession<
    * standing lie R4-B5 exists to kill (Settings would render Online, off this
    * session, for a host that is OFF — for up to the 15-min standing bound).
    *
-   * "Restored" means ACCEPTED restore evidence — a delivered frame, or the
-   * first accepted chunk of one still reassembling — not completed delivery.
-   * This verdict is connection/host liveness for session-level surfaces; a
-   * consumer that needs a specific stream's DATA reads that stream's own
-   * status, which stays `reconnecting` until its completed frame lands. The
-   * gap between the two (an in-flight transfer that stops) is bounded by the
-   * per-stream reassembly watchdog, not by this read.
+   * The boundary this reads is the host's own `openAck` for the current
+   * generation, not a poll of the subscriptions — see
+   * {@link maybeReachReadyBoundary}. This verdict is connection/host liveness
+   * for session-level surfaces; a consumer that needs a specific stream's DATA
+   * reads that stream's own status, which stays `reconnecting` until its
+   * completed frame lands. Those two answers differ on purpose, and a surface
+   * that states "the connection is interrupted" must read this one.
    */
   isReady(): boolean {
     return (
@@ -940,6 +1013,31 @@ export class RemoteSession<
       this.connection !== null &&
       this.connection.hostAttached
     );
+  }
+
+  getMethodSupport<Method extends keyof StreamRegistry & string>(
+    method: Method,
+  ): StreamMethodSupport {
+    return this.streamMethodCapability(method).support;
+  }
+
+  getMethodSchemaVersion<Method extends keyof StreamRegistry & string>(
+    method: Method,
+  ): SchemaVersion | null {
+    return this.streamMethodCapability(method).schemaVersion;
+  }
+
+  subscribeMethodSupport(listener: () => void): () => void {
+    // The closed guard the other three subscribers carry, for the same reason:
+    // `emitClosed` retires the set, so an attacher arriving after that would
+    // be added to a set nothing ever clears or notifies again.
+    if (this.phase === "closed") {
+      return () => undefined;
+    }
+    this.methodSupportListeners.add(listener);
+    return () => {
+      this.methodSupportListeners.delete(listener);
+    };
   }
 
   /**
@@ -1012,6 +1110,7 @@ export class RemoteSession<
     abortSignal: AbortSignal | null,
     responseTimeoutMs: number | undefined,
     replayMustBeKeyed: boolean,
+    requiredHostMethodVersion: RequiredHostMethodVersion | null,
   ): Promise<ResponseOfMethod<RpcRegistry, Method>> {
     this.start();
     const requestId = this.options.requestId();
@@ -1095,6 +1194,29 @@ export class RemoteSession<
           fatalDetails: null,
           // Pre-send, same as the detached case above.
           replaySafetyFromKey: false,
+        }),
+      );
+    }
+
+    // The caller's version floor, answered by the connection about to carry
+    // the frame rather than by an earlier read. Checked before the
+    // availability degrade below, because an unmet floor is a refusal and the
+    // degrade is a dispatch.
+    if (
+      requiredHostMethodVersion !== null &&
+      !negotiatedVersionMeetsRequirement(
+        connection.hostRpcMerged?.[requiredHostMethodVersion.method],
+        requiredHostMethodVersion,
+      )
+    ) {
+      return Promise.reject(
+        new HostMethodVersionUnsatisfiedError({
+          requirement: requiredHostMethodVersion,
+          negotiated:
+            connection.hostRpcMerged?.[requiredHostMethodVersion.method],
+          requestId,
+          method,
+          hostId: this.options.hostId,
         }),
       );
     }
@@ -1399,7 +1521,7 @@ export class RemoteSession<
    */
   subscribeWithParamsProvider<Method extends keyof StreamRegistry & string>(
     method: Method,
-    paramsProvider: () => ParamsOf<StreamRegistry, Method>,
+    paramsProvider: StreamParamsProvider<StreamRegistry, Method>,
   ): IStreamSession {
     return this.subscribeWithParamsProviderInternal(
       method,
@@ -1412,7 +1534,7 @@ export class RemoteSession<
     Method extends keyof StreamRegistry & string,
   >(
     method: Method,
-    paramsProvider: () => ParamsOf<StreamRegistry, Method>,
+    paramsProvider: StreamParamsProvider<StreamRegistry, Method>,
     requiredSchemaVersion: SchemaVersion | null,
   ): IStreamSession {
     this.start();
@@ -1657,7 +1779,6 @@ export class RemoteSession<
         },
         nextSeq,
       );
-      this.maybeReachReadyBoundary();
     }
   }
 
@@ -1717,7 +1838,6 @@ export class RemoteSession<
         nextSeq,
       );
     }
-    this.maybeReachReadyBoundary();
   }
 
   // ---- Connect / attach / handshake / open ------------------------------- //
@@ -1984,17 +2104,12 @@ export class RemoteSession<
       if (message === null) {
         // A chunk was accepted for a message still in flight. For a stream
         // subscription that is all the proof "restored" asks for: the host
-        // accepted the subscribe and its data is arriving on the mux, so the
-        // SESSION-level ready boundary must not stay hostage to the transfer
-        // finishing. A large snapshot (tens of MB through the relay) can take
-        // minutes on a slow link, during which every connection-plane surface
-        // - the connectivity banner, availability recovery, the backoff
-        // stable-reset - would otherwise report an outage on a link that is
-        // demonstrably carrying frames, inviting the exact retry/redial that
-        // restarts the transfer from zero. The stream's own consumer still
-        // waits for the completed message; only the session verdict moves
-        // early. Per-stream reopen escalation is deliberately NOT reset here
-        // - a delivered frame remains its only proof (see the dispatch path).
+        // accepted the subscribe and its data is arriving on the mux, so a
+        // transfer that runs for minutes is not a stream that has gone quiet
+        // and the stall diagnostic must not name it as one. The stream's own
+        // consumer still waits for the completed message. Per-stream reopen
+        // escalation is deliberately NOT reset here - a delivered frame
+        // remains its only proof (see the dispatch path).
         if (frame.type === MuxFrameType.STREAM_FRAME) {
           this.markStreamRestored(frame.streamId);
           // Early evidence needs its own progress bound: completion used to
@@ -2123,7 +2238,6 @@ export class RemoteSession<
       this.subscriptions.delete(frame.streamId);
       this.restoredStreamIds.delete(frame.streamId);
       this.stallReopenedStreamIds.delete(frame.streamId);
-      this.maybeReachReadyBoundary();
     }
     return true;
   }
@@ -2319,7 +2433,6 @@ export class RemoteSession<
           this.streamReopenAttempts.set(freshStreamId, reopenAttempts);
         }
         this.scheduleStreamReopen(stream);
-        this.maybeReachReadyBoundary();
         return;
       }
       stream.goFatal(parsed.data.details);
@@ -2328,7 +2441,6 @@ export class RemoteSession<
       this.outboundSeq.delete(message.streamId);
       this.clearStreamReopen(message.streamId);
       this.stallReopenedStreamIds.delete(message.streamId);
-      this.maybeReachReadyBoundary();
       return;
     }
     if (message.type === MuxFrameType.CLOSE) {
@@ -2351,7 +2463,6 @@ export class RemoteSession<
       // stream - leaked its entry in this long-lived session forever.
       this.clearStreamReopen(message.streamId);
       this.stallReopenedStreamIds.delete(message.streamId);
-      this.maybeReachReadyBoundary();
       return;
     }
     if (message.type === MuxFrameType.STREAM_FRAME) {
@@ -2477,6 +2588,11 @@ export class RemoteSession<
     }
     connection.hostManifest = parsed.data.manifest;
     connection.hostRpcMerged = hostRpcMerged;
+    // This is the first moment a remote session can answer a stream
+    // capability pre-check. Publish before re-opening streams: callers such as
+    // notification-feed selection deliberately need the prediction that lets
+    // them decide whether to open an optional stream in the first place.
+    this.notifyMethodSupportListeners();
     connection.credentialUpdateSupported = parsed.data.capabilities.includes(
       SESSION_CAPABILITY_CREDENTIAL_UPDATE,
     );
@@ -2520,23 +2636,21 @@ export class RemoteSession<
   }
 
   /**
-   * Arms the restore-stall diagnostic for this attach: a no-op when the
-   * boundary was already reached above, one line if any stream is still
-   * producing zero restore evidence a full window after the attach completed.
-   * See the field doc for why that state must be named rather than inferred.
+   * Arms the restore-stall diagnostic for this attach: one line if any stream
+   * is still producing zero restore evidence a full window after the attach
+   * completed. See the field doc for why that state must be named rather than
+   * inferred.
+   *
+   * A statement about STREAMS, not about the session. The session is ready as
+   * soon as the host acks the open, so silence here is not an outage - it is
+   * either a stream with nothing to say or a subscription the host did not
+   * replay, and only the log line distinguishes them for whoever is reading.
    */
   private armRestoreStallTimer(generation: number): void {
     this.clearRestoreStallTimer();
-    if (this.readyBoundaryGeneration === this.connectGeneration) {
-      return;
-    }
     this.restoreStallTimer = setTimeout(() => {
       this.restoreStallTimer = null;
-      if (
-        !this.isCurrent(generation) ||
-        this.phase !== "ready" ||
-        this.readyBoundaryGeneration === this.connectGeneration
-      ) {
+      if (!this.isCurrent(generation) || this.phase !== "ready") {
         return;
       }
       const unrestored: string[] = [];
@@ -2552,8 +2666,8 @@ export class RemoteSession<
         return;
       }
       console.warn(
-        `[remote-session] remote session (host ${this.options.hostId}) not ready ${RESTORE_STALL_LOG_AFTER_MS}ms after attach: ` +
-          `unrestored streams with no inbound evidence [${unrestored.join(", ")}], ` +
+        `[remote-session] remote session (host ${this.options.hostId}) ${RESTORE_STALL_LOG_AFTER_MS}ms after attach: ` +
+          `streams with no inbound evidence yet [${unrestored.join(", ")}], ` +
           `reassembling=${this.pendingReassemblyCount}`,
       );
     }, RESTORE_STALL_LOG_AFTER_MS);
@@ -2664,7 +2778,6 @@ export class RemoteSession<
     this.stallReopenedStreamIds.delete(streamId);
     this.stallReopenedStreamIds.add(freshStreamId);
     this.scheduleStreamReopen(stream);
-    this.maybeReachReadyBoundary();
   }
 
   private clearReassemblyWatchdog(streamId: number): void {
@@ -2745,12 +2858,18 @@ export class RemoteSession<
     // re-keys its stream to a FRESH id at the verdict, which is what keeps
     // every id this method subscribes un-tombstoned by construction - every
     // other terminal path removes its stream from `subscriptions` outright.
+    // Decided before the params are read, so a method served on more than one
+    // major shapes its open request for the negotiated one - the same ordering
+    // the local transport uses, and the same shared derivation, so a provider
+    // is never told one version while its payload is declared at another.
     const prepared = prepareStreamSubscribeRequest(
       this.options.streamRegistry,
       stream.method,
       clientCanonical,
       hostCanonical,
-      stream.readParams(),
+      stream.readParams(
+        selectStreamSubscribeVersion(clientCanonical, hostCanonical),
+      ),
     );
     stream.updateSchemaVersion(prepared.onWireVersion);
     this.enqueueMessage(connection, {
@@ -2781,6 +2900,93 @@ export class RemoteSession<
       // them. The arm retires through the same evidence/verdict/close/drop
       // set as any other.
       this.armReassemblyWatchdog(this.connectGeneration, stream.streamId);
+    }
+  }
+
+  /**
+   * Mirrors `openSubscription`'s manifest selection and compatibility check
+   * without opening a stream. A remote session has one peer manifest, so this
+   * is the exact answer a fresh subscription would reach on its current
+   * connection.
+   *
+   * Answered from {@link streamMethodCapabilityCache}, and the cache is for
+   * IDENTITY, not speed. `getMethodSupport` / `getMethodSchemaVersion` are
+   * read as `useSyncExternalStore` snapshots (gui-app's
+   * `useStreamMethodValueForClient`), and a snapshot has to hold one identity
+   * between notifications: React re-reads it after every commit, treats a
+   * fresh object as a change, commits again and reads again - fifty deep and
+   * it throws #185. `selectConnectionManifestForPeer` builds a new entry per
+   * call, so the client-canonical half of the answer below was a new object on
+   * every read whenever it won the minor comparison, which is whenever the
+   * host is at least as new as this client. The Start Page renders one such
+   * reader per remote host and crashed on open.
+   */
+  private streamMethodCapability(method: string): StreamMethodCapability {
+    const hostManifest = this.connection?.hostManifest;
+    if (hostManifest === null || hostManifest === undefined) {
+      return UNKNOWN_STREAM_METHOD_CAPABILITY;
+    }
+    let cache = this.streamMethodCapabilityCache;
+    if (cache === null || cache.hostManifest !== hostManifest) {
+      cache = { hostManifest, byMethod: new Map() };
+      this.streamMethodCapabilityCache = cache;
+    }
+    const cached = cache.byMethod.get(method);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const computed = this.computeStreamMethodCapability(hostManifest, method);
+    cache.byMethod.set(method, computed);
+    return computed;
+  }
+
+  private computeStreamMethodCapability(
+    hostManifest: SessionManifests,
+    method: string,
+  ): StreamMethodCapability {
+    const selectedClientManifest = selectConnectionManifestForPeer(
+      this.options.streamRegistry,
+      this.clientManifests.stream,
+      hostManifest.stream,
+    );
+    const clientCanonical = selectedClientManifest[method];
+    const hostCanonical = hostManifest.stream[method];
+    if (clientCanonical === undefined || hostCanonical === undefined) {
+      return UNSUPPORTED_STREAM_METHOD_CAPABILITY;
+    }
+    const compatibility = checkStreamMethodCompatibility(
+      this.options.streamRegistry,
+      selectedClientManifest,
+      hostManifest.stream,
+      "client",
+      method,
+    );
+    if (!compatibility.ok) {
+      return UNSUPPORTED_STREAM_METHOD_CAPABILITY;
+    }
+    // `prepareStreamSubscribeRequest` declares the older same-major minor.
+    // Compatibility above proved that either canonical can be selected safely;
+    // this is its payload-independent version half.
+    const schemaVersion =
+      clientCanonical.minor <= hostCanonical.minor
+        ? clientCanonical
+        : hostCanonical;
+    return { support: "supported", schemaVersion };
+  }
+
+  private notifyMethodSupportListeners(): void {
+    // Guarded per listener, same reason as the readiness-lost and
+    // availability-recovered emitters: the `handleOpenAck` publish runs inside
+    // inbound frame dispatch, whose rejection handler reads ANY throw as
+    // `inbound-decode-failed` and drops the connection. A capability observer
+    // that faults would therefore cost a healthy session - and would silence
+    // the other observers on the way out.
+    for (const listener of Array.from(this.methodSupportListeners)) {
+      try {
+        listener();
+      } catch (error) {
+        console.error("[remote-session] method-support listener threw", error);
+      }
     }
   }
 
@@ -3164,6 +3370,17 @@ export class RemoteSession<
    *                       is untouched, so this never counts toward the
    *                       give-up bound.
    *   - "rejected"      → terminal (the revalidator has already signed out).
+   *   - "local-plane-retained"
+   *                     → terminal HERE, unlike the local stream transport.
+   *                       That outcome says a local plane survives the lost
+   *                       cloud verdict; a relay session is not on it. Reaching
+   *                       this host means minting an attach grant, which
+   *                       `cloudAuthorized()` now refuses, so every redial is
+   *                       futile - and `demoteVerifiedSessionToUnverified`
+   *                       force-retires these sessions on the same edge for
+   *                       exactly that reason. Kept explicit rather than left
+   *                       to fall through to the "rotated" tail below, where it
+   *                       would spend the whole no-progress bound first.
    * A no-progress streak (revalidation keeps returning a current credential
    * the host keeps rejecting) is bounded and goes terminal to stop looping.
    */
@@ -3186,7 +3403,7 @@ export class RemoteSession<
       // revalidation was in flight.
       return;
     }
-    if (outcome === "rejected") {
+    if (outcome === "rejected" || outcome === "local-plane-retained") {
       this.goTerminalFatal(details);
       return;
     }
@@ -3470,9 +3687,14 @@ export class RemoteSession<
   /**
    * Emits the one line that makes the reattach budget falsifiable: total, and
    * where the time went. Without the split, a regression in any single leg -
-   * a slower grant mint, an extra Noise round trip, a resubscribe fan-out that
-   * grew with the epic - is invisible inside one aggregate number, and the
-   * budget becomes a claim nobody can check against a field log.
+   * a slower grant mint, an extra Noise round trip - is invisible inside one
+   * aggregate number, and the budget becomes a claim nobody can check against
+   * a field log.
+   *
+   * The legs end at the host's `openAck`, which is where the session is ready.
+   * What each stream does afterwards is its own story and is not timed here:
+   * a subscription that stays quiet is not a slow reattach, and folding the
+   * two together is what the stall diagnostic exists to keep apart.
    *
    * `info`, not `warn`: a successful reattach is not a problem, and the
    * scenario harness asserts zero ERROR-level lines per blip.
@@ -3508,7 +3730,6 @@ export class RemoteSession<
         `grant+dial=${leg(marks.startedAt, marks.attachAckAt)} ` +
         `noise=${leg(marks.attachAckAt, marks.handshakeAt)} ` +
         `open=${leg(marks.handshakeAt, marks.openAckAt)} ` +
-        `resubscribe=${leg(marks.openAckAt, now)} ` +
         `streams=${this.subscriptions.size})`,
     );
     this.reattachMarks = emptyReattachMarks();
@@ -3588,7 +3809,8 @@ export class RemoteSession<
     // A newly armed timer has not been collapsed, so the next wake gets its
     // one draw against it.
     this.backoffCollapsed = false;
-    this.armBackoffTimer(Date.now(), delay);
+    const now = Date.now();
+    this.armBackoffTimer(now, delay, now);
     return delay;
   }
 
@@ -3632,10 +3854,14 @@ export class RemoteSession<
    *
    * The delay is expressed against `armedAt`, not against now, so re-arming an
    * EXISTING deadline stays a deadline: the timer is set to whatever is left of
-   * it. Passing `Date.now()` as `armedAt` - what a fresh backoff does - makes
-   * the two the same thing.
+   * it. Passing the same instant as both `armedAt` and `now` - what a fresh
+   * backoff does - makes the two the same thing, and EXACTLY so: `now` is the
+   * caller's one clock read rather than a second read in here, because the
+   * millisecond that could tick between the two turned a 1000ms rung into a
+   * 999ms timer, which the reattach-duration log then reported and the ladder
+   * tests caught.
    */
-  private armBackoffTimer(armedAt: number, delayMs: number): void {
+  private armBackoffTimer(armedAt: number, delayMs: number, now: number): void {
     this.backoffArmedAt = armedAt;
     this.backoffDelayMs = delayMs;
     this.backoffTimer = setTimeout(
@@ -3643,7 +3869,7 @@ export class RemoteSession<
         this.backoffTimer = null;
         this.beginConnectGuarded();
       },
-      Math.max(0, armedAt + delayMs - Date.now()),
+      Math.max(0, armedAt + delayMs - now),
     );
   }
 
@@ -3701,7 +3927,7 @@ export class RemoteSession<
     console.info(
       `[remote-session] remote session (host ${this.options.hostId}) redialing early (${reason}) in ${wokenDelayMs}ms - ${Math.round(armedRemainingMs)}ms of backoff left`,
     );
-    this.armBackoffTimer(now, wokenDelayMs);
+    this.armBackoffTimer(now, wokenDelayMs, now);
   }
 
   /**
@@ -3770,7 +3996,8 @@ export class RemoteSession<
     console.info(
       `[remote-session] remote session (host ${this.options.hostId}) redialing now (${reason})`,
     );
-    this.armBackoffTimer(Date.now(), 0);
+    const now = Date.now();
+    this.armBackoffTimer(now, 0, now);
   }
 
   /**
@@ -4119,41 +4346,65 @@ export class RemoteSession<
     }
   }
 
+  /**
+   * Records that a stream has produced inbound evidence on the current attach.
+   *
+   * Read by the stall diagnostic only. It is deliberately NOT an input to the
+   * session's ready boundary: what one stream has to say is a fact about that
+   * stream, and a session cannot be held un-ready by a subscription whose
+   * subject has simply not changed.
+   */
   private markStreamRestored(streamId: number): void {
     if (!this.subscriptions.has(streamId)) {
       return;
     }
     this.restoredStreamIds.add(streamId);
-    this.maybeReachReadyBoundary();
   }
 
+  /**
+   * Crosses the ready boundary for the CURRENT generation, once.
+   *
+   * The boundary is the host's own answer: `open`/`openAck` accepted in-channel
+   * for this generation. That is first-hand host evidence rather than the
+   * relay's - the ack travels through the Noise channel, so a relay that
+   * accepted a socket cannot produce one - and it is the strongest statement
+   * about the CONNECTION that any single frame can carry.
+   *
+   * Deliberately NOT a poll of the subscriptions. Requiring an inbound frame
+   * per stream asks each one to prove something many of them cannot: an
+   * event-only subscription emits when its subject changes and is otherwise
+   * silent by contract, so a session carrying frames for every other stream
+   * stayed un-ready for as long as the quiet one had nothing to say - and with
+   * it the announcement, the availability-recovery signal and the host's
+   * death-streak clearance. A verdict about the connection cannot be a
+   * conjunction over what the application happens to be saying on it.
+   *
+   * Per-stream restore evidence keeps its own jobs: each stream's status stays
+   * `reconnecting` until its data lands, the reassembly watchdog paces
+   * in-flight transfers, and the stall diagnostic reports streams that stay
+   * silent after an attach. Those are statements about STREAMS, and a consumer
+   * that needs one reads it there.
+   */
   private maybeReachReadyBoundary(): void {
     if (
       this.phase !== "ready" ||
-      this.readyBoundaryGeneration === this.connectGeneration
+      this.readyBoundaryGeneration === this.connectGeneration ||
+      // The same conjunction {@link isReady} answers, and for the same reason:
+      // this is where the session is ANNOUNCED, and an announcement pins the
+      // host's lease `ready` and suppresses its death evidence until it is
+      // retracted. A relay `host_detached` can land between the host's ack and
+      // this crossing - the ack's decrypt is awaited while control frames
+      // dispatch synchronously - and crossing anyway would announce a live
+      // session for a host whose leg is gone, re-arm the probation a detach
+      // had just stood down, and publish a recovery that `isReady()` denies in
+      // the same tick. `onHostAttached` runs a full re-attach, which reaches
+      // this crossing honestly.
+      this.connection === null ||
+      !this.connection.hostAttached
     ) {
       return;
     }
-    for (const streamId of this.subscriptions.keys()) {
-      // A stream in its private retryable-FATAL loop (an attempt entry exists
-      // from its first verdict until a frame finally lands) must not hold the
-      // SESSION's boundary hostage: its id can never enter `restoredStreamIds`
-      // while the loop runs, so waiting on it meant one broken resolver kept
-      // `isReady()` false forever - the session was never announced,
-      // availability recovery never fired, and the reconnect backoff never
-      // reset, making the whole remote host look unavailable while every
-      // other stream exchanged frames on a healthy mux. The stream keeps its
-      // own reopen backoff either way; only the session-level verdict stops
-      // depending on it.
-      if (this.streamReopenAttempts.has(streamId)) {
-        continue;
-      }
-      if (!this.restoredStreamIds.has(streamId)) {
-        return;
-      }
-    }
     this.readyBoundaryGeneration = this.connectGeneration;
-    this.clearRestoreStallTimer();
     // A force recorded against this generation is satisfied by reaching
     // ready: a fresh attach is everything it could have bought. Consumed
     // unspent, so it cannot leak onto a later, unrelated loss.
@@ -4306,6 +4557,13 @@ export class RemoteSession<
     this.closedListeners.clear();
     this.availabilityRecoveredListeners.clear();
     this.readinessLostListeners.clear();
+    // Retired AFTER its last notification, not before: both terminal paths
+    // (`close`, `goTerminalFatal`) run `teardownConnection` first, and that is
+    // where the final `unknown` publish is delivered. A retired session can
+    // never answer anything but `unknown` again, so a retained observer is
+    // pure retention - the closure, and everything it captured, outliving the
+    // session that was cached for it.
+    this.methodSupportListeners.clear();
     for (const listener of listeners) {
       try {
         listener();
@@ -4379,6 +4637,12 @@ export class RemoteSession<
     this.retractSession();
     const connection = this.connection;
     this.connection = null;
+    // A reconnect can attach to a different host incarnation. Once this ack's
+    // manifest is gone, retaining its verdict would turn stale capability
+    // evidence into a pre-check answer; observers must re-read `unknown`.
+    if (connection !== null && connection.hostManifest !== null) {
+      this.notifyMethodSupportListeners();
+    }
     this.openFrameBearer = null;
     this.clearPhaseTimer();
     this.clearReauthTimer();

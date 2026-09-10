@@ -23,8 +23,10 @@ import type { LandingTerminalAvailability } from "./landing-terminal-availabilit
 export interface LandingTerminalTarget {
   readonly draftId: string | null;
   readonly hostId: string | null;
+  /** Workspace identities used by the primary badge and folder chooser. */
   readonly primaryWorkspacePath: string | null;
   readonly workspacePaths: ReadonlyArray<string>;
+  /** Execution directory, including a selected existing worktree's path. */
   readonly launchWorkspacePath: string | null;
   readonly availability: LandingTerminalAvailability;
   readonly generation: number;
@@ -40,11 +42,6 @@ export interface LandingTerminalGestureValue {
   readonly pending: boolean;
   /** The pending gesture's generation (for settlement matching), else `null`. */
   readonly pendingGeneration: number | null;
-  /**
-   * The draft the current open episode belongs to. The empty-panel auto-spawn
-   * is pinned to it so navigating to a different draft never spawns there.
-   */
-  readonly openEpisodeDraftId: string | null;
   /**
    * The workspace source for the EFFECTIVE draft (captured draft while pending).
    * Consumers (the folder picker) write through this so a folder lands in the

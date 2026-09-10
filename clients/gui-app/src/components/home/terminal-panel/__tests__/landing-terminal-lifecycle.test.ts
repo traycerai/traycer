@@ -5,12 +5,13 @@ import type {
 } from "@traycer/protocol/host/terminal/unary-schemas";
 import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
 import {
-  landingTerminalLayoutFor,
-  parsePersistedLandingTerminalState,
-  terminalSessionKey,
-  useLandingTerminalStore,
+  landingPanelLayoutFor,
+  landingTabRefKey,
+  landingTerminalTabs,
+  parsePersistedLandingPanelState,
+  useLandingPanelStore,
   type LandingTerminalTabRef,
-} from "@/stores/home/landing-terminal-store";
+} from "@/stores/home/landing-panel-store";
 import {
   reconcileHostAuthoritativeLandingTerminalTabs,
   adoptListedProviderLoginSessions,
@@ -36,6 +37,7 @@ function tab(input: {
   readonly hostId: string;
 }): LandingTerminalTabRef {
   return {
+    kind: "terminal",
     instanceId: input.instanceId,
     sessionId: input.sessionId,
     hostId: input.hostId,
@@ -124,7 +126,7 @@ function plainTerminal(input: {
 describe("landing terminal lifecycle", () => {
   beforeEach(() => {
     window.localStorage.clear();
-    useLandingTerminalStore.getState().resetForTests();
+    useLandingPanelStore.getState().resetForTests();
   });
 
   it("keeps probe capability states distinct", () => {
@@ -153,26 +155,24 @@ describe("landing terminal lifecycle", () => {
   });
 
   it("preserves persisted state while no active host is selected", () => {
-    useLandingTerminalStore
+    useLandingPanelStore
       .getState()
       .addTab(tab({ instanceId: "a", sessionId: "session-a", hostId: HOST_A }));
-    useLandingTerminalStore.getState().setPanelOpen(LANDING_PAGE_ID, true);
+    useLandingPanelStore.getState().setPanelOpen(LANDING_PAGE_ID, true);
 
     expect(resolveLandingTerminalAvailability(null, undefined, null)).toBe(
       "no-active-host",
     );
-    expect(useLandingTerminalStore.getState().tabs).toHaveLength(1);
+    expect(useLandingPanelStore.getState().tabs).toHaveLength(1);
     expect(
-      landingTerminalLayoutFor(
-        useLandingTerminalStore.getState(),
-        LANDING_PAGE_ID,
-      ).panelOpen,
+      landingPanelLayoutFor(useLandingPanelStore.getState(), LANDING_PAGE_ID)
+        .panelOpen,
     ).toBe(true);
   });
 
   it("parses capable-host acknowledgement without discarding legacy import evidence", () => {
     expect(
-      parsePersistedLandingTerminalState({
+      parsePersistedLandingPanelState({
         tabs: [
           {
             ...tab({
@@ -213,11 +213,6 @@ describe("landing terminal lifecycle", () => {
       name: "Stale local name",
       titleSource: "default" as const,
     };
-    const otherHost = tab({
-      instanceId: "other-host",
-      sessionId: "terminal-b",
-      hostId: HOST_B,
-    });
     const canonical = plainTerminal({
       terminalId: "terminal-1",
       hostId: HOST_A,
@@ -238,8 +233,7 @@ describe("landing terminal lifecycle", () => {
     });
 
     const result = reconcileHostAuthoritativeLandingTerminalTabs({
-      tabs: [first, otherHost],
-      activeInstanceId: "other-host",
+      tabs: [first],
       hostId: HOST_A,
       terminals: [canonical, discovered],
       excludedTerminalKeys: new Set(),
@@ -249,10 +243,8 @@ describe("landing terminal lifecycle", () => {
 
     expect(result.tabs.map((entry) => entry.instanceId)).toEqual([
       "first",
-      "other-host",
       "discovered-instance",
     ]);
-    expect(result.activeInstanceId).toBe("other-host");
     expect(result.tabs[0]).toMatchObject({
       instanceId: "first",
       sessionId: "terminal-1",
@@ -263,8 +255,7 @@ describe("landing terminal lifecycle", () => {
       hostAuthorityAcknowledged: true,
       pendingCreate: false,
     });
-    expect(result.tabs[1]).toEqual(otherHost);
-    expect(result.tabs[2]).toMatchObject({
+    expect(result.tabs[1]).toMatchObject({
       sessionId: "terminal-2",
       cwd: "/discovered",
       name: "discovered · New Terminal",
@@ -288,7 +279,6 @@ describe("landing terminal lifecycle", () => {
     });
     const result = reconcileHostAuthoritativeLandingTerminalTabs({
       tabs: [acknowledged, legacyEvidence],
-      activeInstanceId: "acknowledged",
       hostId: HOST_A,
       terminals: [],
       excludedTerminalKeys: new Set(),
@@ -297,7 +287,6 @@ describe("landing terminal lifecycle", () => {
     });
 
     expect(result.tabs).toEqual([legacyEvidence]);
-    expect(result.activeInstanceId).toBe("legacy");
     expect(result.exitedInstanceIds).toEqual(["acknowledged"]);
   });
 
@@ -312,11 +301,6 @@ describe("landing terminal lifecycle", () => {
         currentCwd: "/host/live",
         activeProcessName: "bun",
       },
-    });
-    const clientAOther = tab({
-      instanceId: "a-other",
-      sessionId: "a-other-terminal",
-      hostId: HOST_B,
     });
     const clientAShared = {
       ...tab({
@@ -335,8 +319,7 @@ describe("landing terminal lifecycle", () => {
       hostAuthorityAcknowledged: true,
     };
     const clientA = reconcileHostAuthoritativeLandingTerminalTabs({
-      tabs: [clientAOther, clientAShared],
-      activeInstanceId: "a-other",
+      tabs: [clientAShared],
       hostId: HOST_A,
       terminals: [renamed],
       excludedTerminalKeys: new Set(),
@@ -345,7 +328,6 @@ describe("landing terminal lifecycle", () => {
     });
     const clientB = reconcileHostAuthoritativeLandingTerminalTabs({
       tabs: [clientBShared],
-      activeInstanceId: "b-shared",
       hostId: HOST_A,
       terminals: [renamed],
       excludedTerminalKeys: new Set(),
@@ -353,18 +335,12 @@ describe("landing terminal lifecycle", () => {
       providerLoginProviderFor: () => null,
     });
 
-    expect(clientA.tabs.map((entry) => entry.instanceId)).toEqual([
-      "a-other",
-      "a-shared",
-    ]);
-    expect(clientA.activeInstanceId).toBe("a-other");
-    expect(clientB.activeInstanceId).toBe("b-shared");
-    expect(clientA.tabs[1]?.name).toBe("Renamed on host");
+    expect(clientA.tabs.map((entry) => entry.instanceId)).toEqual(["a-shared"]);
+    expect(clientA.tabs[0]?.name).toBe("Renamed on host");
     expect(clientB.tabs[0]?.name).toBe("Renamed on host");
 
     const closedA = reconcileHostAuthoritativeLandingTerminalTabs({
       tabs: clientA.tabs,
-      activeInstanceId: clientA.activeInstanceId,
       hostId: HOST_A,
       terminals: [],
       excludedTerminalKeys: new Set(),
@@ -373,21 +349,18 @@ describe("landing terminal lifecycle", () => {
     });
     const closedB = reconcileHostAuthoritativeLandingTerminalTabs({
       tabs: clientB.tabs,
-      activeInstanceId: clientB.activeInstanceId,
       hostId: HOST_A,
       terminals: [],
       excludedTerminalKeys: new Set(),
       mintInstanceId: () => "unused-b-close",
       providerLoginProviderFor: () => null,
     });
-    expect(closedA.tabs).toEqual([clientAOther]);
-    expect(closedA.activeInstanceId).toBe("a-other");
+    expect(closedA.tabs).toEqual([]);
     expect(closedB.tabs).toEqual([]);
-    expect(closedB.activeInstanceId).toBeNull();
   });
 
   it("restores collapse, width, and fullscreen independently by landing page", () => {
-    const restored = parsePersistedLandingTerminalState({
+    const restored = parsePersistedLandingPanelState({
       tabs: [],
       activeInstanceId: null,
       layoutsByLandingPageId: {
@@ -405,12 +378,12 @@ describe("landing terminal lifecycle", () => {
       pendingKills: [],
     });
 
-    expect(landingTerminalLayoutFor(restored, "draft-a")).toEqual({
+    expect(landingPanelLayoutFor(restored, "draft-a")).toEqual({
       panelOpen: false,
       panelWidthFraction: 0.3,
       maximized: false,
     });
-    expect(landingTerminalLayoutFor(restored, "draft-b")).toEqual({
+    expect(landingPanelLayoutFor(restored, "draft-b")).toEqual({
       panelOpen: true,
       panelWidthFraction: 0.48,
       maximized: true,
@@ -418,7 +391,7 @@ describe("landing terminal lifecycle", () => {
   });
 
   it("collapses every open layout when the shared terminal set becomes empty", () => {
-    const store = useLandingTerminalStore.getState();
+    const store = useLandingPanelStore.getState();
     store.setPanelOpen("draft-a", true);
     store.setPanelOpen("draft-b", true);
     store.addTab(
@@ -427,41 +400,40 @@ describe("landing terminal lifecycle", () => {
 
     store.closeTab("draft-b", "only");
 
-    const state = useLandingTerminalStore.getState();
-    expect(landingTerminalLayoutFor(state, "draft-a").panelOpen).toBe(false);
-    expect(landingTerminalLayoutFor(state, "draft-b").panelOpen).toBe(false);
+    const state = useLandingPanelStore.getState();
+    expect(landingPanelLayoutFor(state, "draft-a").panelOpen).toBe(false);
+    expect(landingPanelLayoutFor(state, "draft-b").panelOpen).toBe(false);
   });
 
   it("preserves a v1 layout without coupling later page changes", () => {
-    const restored = parsePersistedLandingTerminalState({
+    const restored = parsePersistedLandingPanelState({
       tabs: [],
       activeInstanceId: null,
       panelOpen: true,
       panelWidthFraction: 0.48,
       pendingKills: [],
     });
-    useLandingTerminalStore.setState(restored);
+    useLandingPanelStore.setState(restored);
 
-    expect(landingTerminalLayoutFor(restored, "draft-a")).toEqual({
+    expect(landingPanelLayoutFor(restored, "draft-a")).toEqual({
       panelOpen: true,
       panelWidthFraction: 0.48,
       maximized: false,
     });
 
-    useLandingTerminalStore.getState().setPanelOpen("draft-a", false);
+    useLandingPanelStore.getState().setPanelOpen("draft-a", false);
 
     expect(
-      landingTerminalLayoutFor(useLandingTerminalStore.getState(), "draft-a"),
+      landingPanelLayoutFor(useLandingPanelStore.getState(), "draft-a"),
     ).toMatchObject({ panelOpen: false, panelWidthFraction: 0.48 });
     expect(
-      landingTerminalLayoutFor(useLandingTerminalStore.getState(), "draft-b"),
+      landingPanelLayoutFor(useLandingPanelStore.getState(), "draft-b"),
     ).toMatchObject({ panelOpen: true, panelWidthFraction: 0.48 });
   });
 
   it("adopts a running host session before any auto-spawn decision", () => {
     const result = reconcileLandingTerminalTabs({
       tabs: [],
-      activeInstanceId: null,
       activeHostId: HOST_A,
       sessions: [session({ sessionId: "orphan", status: "running" })],
       excludedSessionKeys: new Set(),
@@ -487,7 +459,6 @@ describe("landing terminal lifecycle", () => {
   it("adopts an unmatched running session as a provider sign-in tab when providerLoginProviderFor resolves a provider", () => {
     const result = reconcileLandingTerminalTabs({
       tabs: [],
-      activeInstanceId: null,
       activeHostId: HOST_A,
       sessions: [session({ sessionId: "signin-session", status: "running" })],
       excludedSessionKeys: new Set(),
@@ -498,6 +469,7 @@ describe("landing terminal lifecycle", () => {
 
     expect(result.adoptedTabs).toEqual([
       {
+        kind: "terminal",
         instanceId: "adopted-signin-instance",
         sessionId: "signin-session",
         hostId: HOST_A,
@@ -520,7 +492,6 @@ describe("landing terminal lifecycle", () => {
   it("adopts no unmatched EXITED session, registry-claimed or not", () => {
     const result = reconcileLandingTerminalTabs({
       tabs: [],
-      activeInstanceId: null,
       activeHostId: HOST_A,
       sessions: [
         session({ sessionId: "signin-session", status: "exited" }),
@@ -537,7 +508,6 @@ describe("landing terminal lifecycle", () => {
   it("adopts the same unmatched running session as an ordinary tab when providerLoginProviderFor returns null", () => {
     const result = reconcileLandingTerminalTabs({
       tabs: [],
-      activeInstanceId: null,
       activeHostId: HOST_A,
       sessions: [session({ sessionId: "signin-session", status: "running" })],
       excludedSessionKeys: new Set(),
@@ -573,7 +543,6 @@ describe("landing terminal lifecycle", () => {
           hostId: HOST_A,
         }),
       ],
-      activeInstanceId: "already-adopted",
       activeHostId: HOST_A,
       sessions: [session({ sessionId: "signin-session", status: "running" })],
       excludedSessionKeys: new Set(),
@@ -585,6 +554,7 @@ describe("landing terminal lifecycle", () => {
     // Same instance, so no tile remount and no second tab for one session.
     expect(result.tabs).toEqual([
       {
+        kind: "terminal",
         instanceId: "already-adopted",
         sessionId: "signin-session",
         hostId: HOST_A,
@@ -616,7 +586,6 @@ describe("landing terminal lifecycle", () => {
           originProviderId: "reasonix",
         },
       ],
-      activeInstanceId: "sign-in",
       activeHostId: HOST_A,
       sessions: [session({ sessionId: "signin-session", status: "running" })],
       excludedSessionKeys: new Set(),
@@ -644,7 +613,6 @@ describe("landing terminal lifecycle", () => {
           hostId: HOST_A,
         }),
       ],
-      activeInstanceId: "already-adopted",
       activeHostId: HOST_A,
       // Exited, which for an ordinary tab means "drop it". The exit check has
       // to read the CLASSIFIED tab, not the raw one, or the sign-in tab is
@@ -674,7 +642,6 @@ describe("landing terminal lifecycle", () => {
           hostId: HOST_B,
         }),
       ],
-      activeInstanceId: "other-host",
       activeHostId: HOST_A,
       sessions: [session({ sessionId: "signin-session", status: "running" })],
       excludedSessionKeys: new Set(),
@@ -696,19 +663,19 @@ describe("landing terminal lifecycle", () => {
   });
 
   it("suppresses adoption after an offline close and across a reload", () => {
-    useLandingTerminalStore.getState().addTab(
+    useLandingPanelStore.getState().addTab(
       tab({
         instanceId: "closed",
         sessionId: "session-close",
         hostId: HOST_A,
       }),
     );
-    const closed = useLandingTerminalStore
+    const closed = useLandingPanelStore
       .getState()
       .closeTab(LANDING_PAGE_ID, "closed");
     expect(closed?.sessionId).toBe("session-close");
 
-    const restored = parsePersistedLandingTerminalState({
+    const restored = parsePersistedLandingPanelState({
       tabs: [],
       activeInstanceId: null,
       layoutsByLandingPageId: {
@@ -721,12 +688,15 @@ describe("landing terminal lifecycle", () => {
       pendingKills: [{ hostId: HOST_A, sessionId: "session-close" }],
     });
     const result = reconcileLandingTerminalTabs({
-      tabs: restored.tabs,
-      activeInstanceId: restored.activeInstanceId,
+      tabs: landingTerminalTabs(restored.tabs),
       activeHostId: HOST_A,
       sessions: [session({ sessionId: "session-close", status: "running" })],
       excludedSessionKeys: new Set([
-        terminalSessionKey(HOST_A, "session-close"),
+        landingTabRefKey({
+          kind: "terminal",
+          hostId: HOST_A,
+          sessionId: "session-close",
+        }),
       ]),
       mintInstanceId: () => "would-be-adopted",
       providerLoginProviderFor: () => null,
@@ -740,6 +710,7 @@ describe("landing terminal lifecycle", () => {
     // spent.
     expect(restored.pendingKills).toEqual([
       {
+        kind: "terminal",
         hostId: HOST_A,
         sessionId: "session-close",
         hostAuthorityAcknowledged: false,
@@ -753,7 +724,6 @@ describe("landing terminal lifecycle", () => {
   it("drops an exited session during restore instead of recreating it", () => {
     const result = reconcileLandingTerminalTabs({
       tabs: [tab({ instanceId: "exit", sessionId: "ended", hostId: HOST_A })],
-      activeInstanceId: "exit",
       activeHostId: HOST_A,
       sessions: [session({ sessionId: "ended", status: "exited" })],
       excludedSessionKeys: new Set(),
@@ -782,7 +752,6 @@ describe("landing terminal lifecycle", () => {
     };
     const result = reconcileLandingTerminalTabs({
       tabs: [signInTab],
-      activeInstanceId: "sign-in",
       activeHostId: HOST_A,
       sessions: [session({ sessionId: "ended-signin", status: "exited" })],
       excludedSessionKeys: new Set(),
@@ -799,14 +768,14 @@ describe("landing terminal lifecycle", () => {
   });
 
   it("re-keys a terminal-id collision without changing its bound host or cwd", () => {
-    useLandingTerminalStore
+    useLandingPanelStore
       .getState()
       .addTab(
         tab({ instanceId: "collision", sessionId: "taken", hostId: HOST_A }),
       );
-    useLandingTerminalStore.getState().rekeyTab("collision", "fresh");
+    useLandingPanelStore.getState().rekeyTab("collision", "fresh");
 
-    expect(useLandingTerminalStore.getState().tabs).toEqual([
+    expect(useLandingPanelStore.getState().tabs).toEqual([
       tab({ instanceId: "collision", sessionId: "fresh", hostId: HOST_A }),
     ]);
   });
@@ -814,10 +783,8 @@ describe("landing terminal lifecycle", () => {
   it("leaves other-host refs untouched while reconciling the active host", () => {
     const result = reconcileLandingTerminalTabs({
       tabs: [
-        tab({ instanceId: "dead-host", sessionId: "remote", hostId: HOST_B }),
         tab({ instanceId: "active", sessionId: "current", hostId: HOST_A }),
       ],
-      activeInstanceId: "dead-host",
       activeHostId: HOST_A,
       sessions: [session({ sessionId: "current", status: "running" })],
       excludedSessionKeys: new Set(),
@@ -825,11 +792,7 @@ describe("landing terminal lifecycle", () => {
       providerLoginProviderFor: () => null,
     });
 
-    expect(result.tabs.map((entry) => entry.instanceId)).toEqual([
-      "dead-host",
-      "active",
-    ]);
-    expect(result.activeInstanceId).toBe("dead-host");
+    expect(result.tabs.map((entry) => entry.instanceId)).toEqual(["active"]);
   });
 
   it("refreshes default titles from live metadata without overwriting manual names", () => {
@@ -847,13 +810,13 @@ describe("landing terminal lifecycle", () => {
       name: "Pinned name",
       titleSource: "manual" as const,
     };
-    useLandingTerminalStore.getState().addTab(defaultTab);
-    useLandingTerminalStore.getState().addTab(manualTab);
+    useLandingPanelStore.getState().addTab(defaultTab);
+    useLandingPanelStore.getState().addTab(manualTab);
 
-    useLandingTerminalStore.getState().syncDefaultTitle("default", "gui · vim");
-    useLandingTerminalStore.getState().syncDefaultTitle("manual", "gui · vim");
+    useLandingPanelStore.getState().syncDefaultTitle("default", "gui · vim");
+    useLandingPanelStore.getState().syncDefaultTitle("manual", "gui · vim");
 
-    expect(useLandingTerminalStore.getState().tabs).toEqual([
+    expect(useLandingPanelStore.getState().tabs).toEqual([
       { ...defaultTab, name: "gui · vim" },
       manualTab,
     ]);
@@ -916,7 +879,6 @@ describe("landing terminal lifecycle", () => {
     };
     const result = reconcileLandingTerminalTabs({
       tabs: [defaultTab, manualTab],
-      activeInstanceId: "default",
       activeHostId: HOST_A,
       sessions: [
         liveSession({
@@ -949,7 +911,6 @@ describe("landing terminal lifecycle", () => {
     });
     const result = reconcileLandingTerminalTabs({
       tabs: [defaultTab],
-      activeInstanceId: "default",
       activeHostId: HOST_A,
       sessions: [
         liveSession({
@@ -989,6 +950,7 @@ describe("adoptListedProviderLoginSessions", () => {
     // would race that arm with a second, unacknowledged tab.
     expect(adopted).toEqual([
       {
+        kind: "terminal",
         instanceId: "adopted-signin-instance",
         sessionId: "signin-session",
         hostId: HOST_A,
@@ -1029,7 +991,11 @@ describe("adoptListedProviderLoginSessions", () => {
       sessions: [session({ sessionId: "signin-session", status: "running" })],
       // Closed here; the kill is still in flight, so the host still lists it.
       excludedSessionKeys: new Set([
-        terminalSessionKey(HOST_A, "signin-session"),
+        landingTabRefKey({
+          kind: "terminal",
+          hostId: HOST_A,
+          sessionId: "signin-session",
+        }),
       ]),
       mintInstanceId: () => "never",
       providerLoginProviderFor,
@@ -1233,7 +1199,6 @@ describe("retiredProviderLoginPredecessors", () => {
           providerId: "reasonix",
         }),
       ],
-      activeInstanceId: "old-signin",
       activeHostId: HOST_A,
       sessions: [
         session({ sessionId: "signin-old", status: "exited" }),
@@ -1246,7 +1211,6 @@ describe("retiredProviderLoginPredecessors", () => {
     expect(result.tabs.map((entry) => entry.instanceId)).toEqual([
       "new-signin",
     ]);
-    expect(result.activeInstanceId).toBe("new-signin");
   });
 
   it("a tombstoned RUNNING successor still retires its predecessor, and retiring the last tab collapses the panel", () => {
@@ -1261,7 +1225,11 @@ describe("retiredProviderLoginPredecessors", () => {
       session({ sessionId: "signin-new", status: "running" }),
     ];
     const excludedSessionKeys = new Set([
-      terminalSessionKey(HOST_A, "signin-new"),
+      landingTabRefKey({
+        kind: "terminal",
+        hostId: HOST_A,
+        sessionId: "signin-new",
+      }),
     ]);
     const result = reconcileLandingTerminalTabs({
       tabs: [
@@ -1271,7 +1239,6 @@ describe("retiredProviderLoginPredecessors", () => {
           providerId: "reasonix",
         }),
       ],
-      activeInstanceId: "old-signin",
       activeHostId: HOST_A,
       sessions,
       excludedSessionKeys,
@@ -1286,11 +1253,11 @@ describe("retiredProviderLoginPredecessors", () => {
 
 describe("revealPanel", () => {
   beforeEach(() => {
-    useLandingTerminalStore.getState().resetForTests();
+    useLandingPanelStore.getState().resetForTests();
   });
 
   it("opens the named pages and records the reveal; clearPanelReveal retires it", () => {
-    const store = useLandingTerminalStore.getState();
+    const store = useLandingPanelStore.getState();
     store.setPanelOpen("page-a", false);
     store.setPanelOpen("page-b", false);
 
@@ -1300,19 +1267,19 @@ describe("revealPanel", () => {
       instanceId: "sign-in-instance",
     });
 
-    const state = useLandingTerminalStore.getState();
-    expect(landingTerminalLayoutFor(state, "page-a").panelOpen).toBe(true);
-    expect(landingTerminalLayoutFor(state, "page-b").panelOpen).toBe(true);
+    const state = useLandingPanelStore.getState();
+    expect(landingPanelLayoutFor(state, "page-a").panelOpen).toBe(true);
+    expect(landingPanelLayoutFor(state, "page-b").panelOpen).toBe(true);
     // A page it did not name keeps its own layout.
     expect(state.fallbackLayout?.panelOpen ?? false).toBe(false);
     expect(state.panelReveal).toBe("sign-in-instance");
 
     state.clearPanelReveal();
-    expect(useLandingTerminalStore.getState().panelReveal).toBeNull();
+    expect(useLandingPanelStore.getState().panelReveal).toBeNull();
   });
 
   it("with everyPage opens the named pages AND every other - each keyed layout and the fallback - and still records the reveal", () => {
-    const store = useLandingTerminalStore.getState();
+    const store = useLandingPanelStore.getState();
     store.setPanelOpen("page-closed", false);
 
     store.revealPanel({
@@ -1321,9 +1288,9 @@ describe("revealPanel", () => {
       instanceId: "sign-in-instance",
     });
 
-    const state = useLandingTerminalStore.getState();
-    expect(landingTerminalLayoutFor(state, "page-closed").panelOpen).toBe(true);
-    expect(landingTerminalLayoutFor(state, "page-never-seen").panelOpen).toBe(
+    const state = useLandingPanelStore.getState();
+    expect(landingPanelLayoutFor(state, "page-closed").panelOpen).toBe(true);
+    expect(landingPanelLayoutFor(state, "page-never-seen").panelOpen).toBe(
       true,
     );
     // The initiating page still records a layout of its own.
@@ -1334,15 +1301,15 @@ describe("revealPanel", () => {
   });
 
   it("does not persist the reveal", async () => {
-    useLandingTerminalStore.getState().revealPanel({
+    useLandingPanelStore.getState().revealPanel({
       landingPageIds: [],
       everyPage: true,
       instanceId: "sign-in-instance",
     });
-    await useLandingTerminalStore.persist.rehydrate();
+    await useLandingPanelStore.persist.rehydrate();
     const persisted = JSON.parse(
       window.localStorage.getItem(
-        useLandingTerminalStore.persist.getOptions().name ?? "",
+        useLandingPanelStore.persist.getOptions().name ?? "",
       ) ?? "{}",
     ) as { state?: Record<string, unknown> };
     expect(persisted.state).not.toHaveProperty("panelReveal");
@@ -1391,11 +1358,11 @@ describe("resolveLandingTerminalLaunchCwd", () => {
 
 describe("adoptHostTerminal", () => {
   beforeEach(() => {
-    useLandingTerminalStore.getState().resetForTests();
+    useLandingPanelStore.getState().resetForTests();
   });
 
   it("rekeys a tab to the canonical terminal id returned by a capable host", () => {
-    useLandingTerminalStore.getState().addTab(
+    useLandingPanelStore.getState().addTab(
       tab({
         instanceId: "local",
         sessionId: "legacy-evidence",
@@ -1417,10 +1384,11 @@ describe("adoptHostTerminal", () => {
     // Matched on instanceId + hostId only: importLegacy's canonical winner may
     // carry a different terminalId than the legacy evidence sent, and this is
     // exactly the pointer swap `adoptHostTerminal` must still perform.
-    useLandingTerminalStore.getState().adoptHostTerminal("local", canonical);
+    useLandingPanelStore.getState().adoptHostTerminal("local", canonical);
 
-    expect(useLandingTerminalStore.getState().tabs).toEqual([
+    expect(useLandingPanelStore.getState().tabs).toEqual([
       {
+        kind: "terminal",
         instanceId: "local",
         sessionId: "canonical-terminal",
         hostId: HOST_A,
@@ -1440,7 +1408,7 @@ describe("adoptHostTerminal", () => {
       sessionId: "legacy-evidence",
       hostId: HOST_B,
     });
-    useLandingTerminalStore.getState().addTab(otherHostTab);
+    useLandingPanelStore.getState().addTab(otherHostTab);
     const canonical = plainTerminal({
       terminalId: "canonical-terminal",
       hostId: HOST_A,
@@ -1449,9 +1417,9 @@ describe("adoptHostTerminal", () => {
       runtime: { status: "dormant" },
     });
 
-    useLandingTerminalStore.getState().adoptHostTerminal("local", canonical);
+    useLandingPanelStore.getState().adoptHostTerminal("local", canonical);
 
-    expect(useLandingTerminalStore.getState().tabs).toEqual([otherHostTab]);
+    expect(useLandingPanelStore.getState().tabs).toEqual([otherHostTab]);
   });
 });
 
@@ -1475,7 +1443,6 @@ describe("reconcileHostAuthoritativeLandingTerminalTabs identity reuse", () => {
     });
     const first = reconcileHostAuthoritativeLandingTerminalTabs({
       tabs: [seed],
-      activeInstanceId: "shared",
       hostId: HOST_A,
       terminals: [projection],
       excludedTerminalKeys: new Set(),
@@ -1485,7 +1452,6 @@ describe("reconcileHostAuthoritativeLandingTerminalTabs identity reuse", () => {
 
     const second = reconcileHostAuthoritativeLandingTerminalTabs({
       tabs: [first],
-      activeInstanceId: "shared",
       hostId: HOST_A,
       terminals: [projection],
       excludedTerminalKeys: new Set(),
@@ -1511,7 +1477,6 @@ describe("reconcileHostAuthoritativeLandingTerminalTabs identity reuse", () => {
     });
     const afterRename = reconcileHostAuthoritativeLandingTerminalTabs({
       tabs: [first],
-      activeInstanceId: "shared",
       hostId: HOST_A,
       terminals: [renamed],
       excludedTerminalKeys: new Set(),
@@ -1534,11 +1499,11 @@ describe("close tombstone provenance", () => {
   // Tombstones are durable by design, so they survive into the next test unless
   // the store is reset - and a leaked one reads as this test having written two.
   beforeEach(() => {
-    useLandingTerminalStore.getState().resetForTests();
+    useLandingPanelStore.getState().resetForTests();
   });
 
   it("records the acknowledgement that makes an absent projection proof of death", () => {
-    const store = useLandingTerminalStore.getState();
+    const store = useLandingPanelStore.getState();
     store.addTab({
       ...tab({ instanceId: "ack", sessionId: "s-ack", hostId: HOST_A }),
       hostAuthorityAcknowledged: true,
@@ -1546,8 +1511,9 @@ describe("close tombstone provenance", () => {
 
     store.closeTab("draft-a", "ack");
 
-    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+    expect(useLandingPanelStore.getState().pendingKills).toEqual([
       {
+        kind: "terminal",
         hostId: HOST_A,
         sessionId: "s-ack",
         hostAuthorityAcknowledged: true,
@@ -1557,7 +1523,7 @@ describe("close tombstone provenance", () => {
   });
 
   it("records a create that had not settled", () => {
-    const store = useLandingTerminalStore.getState();
+    const store = useLandingPanelStore.getState();
     store.addTab({
       ...tab({ instanceId: "new", sessionId: "s-new", hostId: HOST_A }),
       pendingCreate: true,
@@ -1567,8 +1533,9 @@ describe("close tombstone provenance", () => {
 
     // The session id is the one the CLIENT handed `terminal.plain.create`, so
     // the terminal that lands after this close is exactly the one named here.
-    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+    expect(useLandingPanelStore.getState().pendingKills).toEqual([
       {
+        kind: "terminal",
         hostId: HOST_A,
         sessionId: "s-new",
         hostAuthorityAcknowledged: false,
@@ -1578,15 +1545,16 @@ describe("close tombstone provenance", () => {
   });
 
   it("records a legacy session as unacknowledged, not as a settled plain terminal", () => {
-    const store = useLandingTerminalStore.getState();
+    const store = useLandingPanelStore.getState();
     store.addTab(
       tab({ instanceId: "legacy", sessionId: "s-legacy", hostId: HOST_B }),
     );
 
     store.closeTab("draft-a", "legacy");
 
-    expect(useLandingTerminalStore.getState().pendingKills).toEqual([
+    expect(useLandingPanelStore.getState().pendingKills).toEqual([
       {
+        kind: "terminal",
         hostId: HOST_B,
         sessionId: "s-legacy",
         hostAuthorityAcknowledged: false,
@@ -1609,7 +1577,7 @@ describe("close tombstone provenance", () => {
     // the first "already gone" answer after the update, and the create landing
     // afterwards leaves a live PTY with nothing owed against it. Only ABSENCE
     // means unknown; an explicit `false` is believed.
-    const restored = parsePersistedLandingTerminalState({
+    const restored = parsePersistedLandingPanelState({
       tabs: [],
       activeInstanceId: null,
       pendingKills: [
@@ -1625,12 +1593,14 @@ describe("close tombstone provenance", () => {
 
     expect(restored.pendingKills).toEqual([
       {
+        kind: "terminal",
         hostId: HOST_A,
         sessionId: "s-old",
         hostAuthorityAcknowledged: false,
         pendingCreate: true,
       },
       {
+        kind: "terminal",
         hostId: HOST_A,
         sessionId: "s-settled",
         hostAuthorityAcknowledged: true,
@@ -1640,7 +1610,7 @@ describe("close tombstone provenance", () => {
   });
 
   it("coerces non-boolean provenance rather than trusting persisted JSON", () => {
-    const restored = parsePersistedLandingTerminalState({
+    const restored = parsePersistedLandingPanelState({
       tabs: [],
       activeInstanceId: null,
       pendingKills: [
@@ -1655,6 +1625,7 @@ describe("close tombstone provenance", () => {
 
     expect(restored.pendingKills).toEqual([
       {
+        kind: "terminal",
         hostId: HOST_A,
         sessionId: "s-junk",
         hostAuthorityAcknowledged: false,

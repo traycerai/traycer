@@ -203,6 +203,43 @@ export const providerIdSchemaV70 = z.enum([
 ]);
 export type ProviderIdV70 = z.infer<typeof providerIdSchemaV70>;
 
+/**
+ * Frozen provider id set as `cli-v1.3.0` / `host-v1.3.0` shipped v8.0 - i.e.
+ * everything before Antigravity.
+ *
+ * v8.0's docblock above says v8.0 "owns live catalog growth". That was true
+ * only while v8.0 was UNRELEASED: 1.3.0 was cut from a branch that predates
+ * Antigravity, so the tag froze v8.0 at these twenty ids while `main` had
+ * already widened the live enum underneath it. v9.0 now owns live growth, and
+ * a v9->v8 bridge drops post-v8.0 ids for the peers that shipped with them.
+ *
+ * Do NOT add new providers here - extend the latest `providerIdSchema` and use
+ * the existing version bridges instead.
+ */
+export const providerIdSchemaV80 = z.enum([
+  "claude-code",
+  "codex",
+  "opencode",
+  "cursor",
+  "traycer",
+  "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
+  "amp",
+  "devin",
+  "pi",
+  "hermes",
+  "omp",
+  "huggingface",
+  "reasonix",
+]);
+export type ProviderIdV80 = z.infer<typeof providerIdSchemaV80>;
+
 /** Human-readable provider names, shared by the host and the GUI. */
 export const PROVIDER_DISPLAY_NAMES: Record<ProviderId, string> = {
   "claude-code": "Claude Code",
@@ -225,6 +262,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderId, string> = {
   omp: "Oh My Pi",
   huggingface: "Hugging Face",
   reasonix: "Reasonix",
+  antigravity: "Antigravity",
 };
 
 /**
@@ -1254,11 +1292,39 @@ const providerProfileShapeV70 = {
 
 export const providerProfileSchemaV70 = z.object(providerProfileShapeV70);
 
+/**
+ * Whether this profile authenticates with a pasted API key, and whether one is
+ * stored - never the key itself, which has no wire representation in either
+ * direction (`providers.setProfileApiKey` carries it inbound and nothing
+ * carries it back).
+ *
+ * `supported` is a property of the PROVIDER-and-kind pair, not of the account:
+ * a provider whose key method exists only for Traycer-owned profile
+ * directories reports `false` on its ambient row, because writing the method
+ * selection there would reconfigure a directory shared with the user's other
+ * clients. So a client must gate its paste form on this flag and not on the
+ * provider id.
+ */
+export const providerProfileApiKeyStateSchema = z.object({
+  supported: z.boolean(),
+  configured: z.boolean(),
+});
+export type ProviderProfileApiKeyState = z.infer<
+  typeof providerProfileApiKeyStateSchema
+>;
+
 export const providerProfileSchema = z.object({
   ...providerProfileShapeV70,
   // Host-wide eligibility. Old supporting decoders treat an omitted legacy
   // field as enabled; older protocol lines omit disabled rows entirely.
   enabled: z.boolean().default(true).catch(true),
+  // Per-profile API-key state (see the schema above). Same forward-compat
+  // shape as `launchCommand` below - `.catch(null).optional()`, so a host that
+  // predates the field degrades to "no key method here" rather than throwing
+  // and tripping the array-level `.catch([])` on `profiles`, which would wipe
+  // every profile for this provider. Null and absent both mean unknown, and a
+  // client renders no paste form for either.
+  apiKey: providerProfileApiKeyStateSchema.nullable().catch(null).optional(),
   // Copyable command for opening this managed account directly in its CLI.
   // The host owns the absolute config path and shell quoting; ambient rows and
   // hosts that predate this field omit it. Kept inside v8.0 because that line
@@ -1295,6 +1361,59 @@ export const providersSetProfileEnabledResponseSchema = z.object({
 });
 export type ProvidersSetProfileEnabledResponse = z.infer<
   typeof providersSetProfileEnabledResponseSchema
+>;
+
+/**
+ * Store an API key against ONE profile.
+ *
+ * Deliberately a new method rather than a `profileId` on the released
+ * `providers.setApiKey`: that method is in `RELEASED_FLOOR_METHOD_NAMES`, so a
+ * request field is projected AWAY when the peer is on the floor line, and a
+ * key meant for one managed account would land in the provider-wide store and
+ * authenticate every other profile with it. A scope that must not be lost in
+ * translation cannot ride as a field on a released request - it has to be the
+ * thing being called. (Same reasoning as `providers.setEnabled@2.1`'s
+ * `profileAction` in reverse: folding on is right when losing the field
+ * degrades to today's behavior, and wrong when it silently widens.)
+ *
+ * The key is write-only across the wire: no response, state field or list
+ * response ever returns it, and `providerProfileApiKeyStateSchema` carries
+ * only whether one is stored.
+ */
+export const providersSetProfileApiKeyRequestSchema = z.object({
+  providerId: providerIdSchema,
+  profileId: z.string(),
+  // `min(1)` rather than an empty-string clear: an empty paste is a slip, and
+  // an accidental credential deletion is not a recoverable one. Clearing is
+  // `providers.clearProfileApiKey`, which the caller has to mean.
+  apiKey: z.string().min(1),
+});
+export type ProvidersSetProfileApiKeyRequest = z.infer<
+  typeof providersSetProfileApiKeyRequestSchema
+>;
+
+export const providersSetProfileApiKeyResponseSchema = z.object({
+  profileId: z.string(),
+  apiKey: providerProfileApiKeyStateSchema,
+});
+export type ProvidersSetProfileApiKeyResponse = z.infer<
+  typeof providersSetProfileApiKeyResponseSchema
+>;
+
+export const providersClearProfileApiKeyRequestSchema = z.object({
+  providerId: providerIdSchema,
+  profileId: z.string(),
+});
+export type ProvidersClearProfileApiKeyRequest = z.infer<
+  typeof providersClearProfileApiKeyRequestSchema
+>;
+
+export const providersClearProfileApiKeyResponseSchema = z.object({
+  profileId: z.string(),
+  apiKey: providerProfileApiKeyStateSchema,
+});
+export type ProvidersClearProfileApiKeyResponse = z.infer<
+  typeof providersClearProfileApiKeyResponseSchema
 >;
 
 /**
@@ -1953,6 +2072,111 @@ export const providersListResponseSchemaV70 = z.object({
 });
 export type ProvidersListResponseV70 = z.infer<
   typeof providersListResponseSchemaV70
+>;
+
+// ── Frozen protocol-v8.0 provider state + list response ────────────────────
+//
+// v8.0 shipped in `cli-v1.3.0` / `host-v1.3.0` and bound the LIVE schema on
+// the (then true) reading that it was the unreleased head line. Two things
+// reached it afterwards and both are host→client:
+//
+//   - `antigravity`, on `providerId` and on `managedVersions`'
+//     `sharedWithProviders` array;
+//   - `profiles[].apiKey`, added by the per-profile API-key work, which the
+//     release branch predates.
+//
+// The key set is hand-listed off `providerCliStateBaseShapeV70` (identical to
+// the live shape's keys at this cut) rather than spread from the live shape,
+// for the reason `providerCliStateBaseShapeV20`'s comment gives: a released
+// line must not absorb a field the live shape grows later.
+const providerManagedVersionsSchemaV80 = z.object({
+  autoDownload: z.boolean(),
+  pinnedVersion: z.string().nullable(),
+  updateAvailable: z.object({ version: z.string() }).nullable(),
+  // The one leaf that differs from live - same reasoning as
+  // `providerManagedVersionsSchemaV70`: this is a host→client `providerId`
+  // enum, and leaving it live let Antigravity reach a released wire.
+  sharedWithProviders: z.array(providerIdSchemaV80).catch([]),
+  totalSizeBytes: z.number().int().nonnegative().nullable(),
+  available: z.array(providerPackVersionSchema),
+});
+
+/**
+ * Frozen `providers.list@8.0` profile row: the live profile as 1.3.0 shipped
+ * it, i.e. WITHOUT `apiKey`.
+ *
+ * `apiKey` is `.catch(null).optional()`, so a v8.0 client tolerates its
+ * presence at parse time - but tolerance is not a versioning mechanism, and
+ * the gate scores an added host→client property on a released line breaking
+ * for the reason the finding states: a released peer never sends the key, so a
+ * consumer that assumes it is populated reads `undefined`. `launchCommand`
+ * stays, because it DID ship in 1.3.0.
+ */
+export const providerProfileSchemaV80 = z.object({
+  ...providerProfileShapeV70,
+  enabled: z.boolean().default(true).catch(true),
+  launchCommand: z
+    .object({
+      command: z.string(),
+      shell: z.enum(["posix", "powershell"]),
+    })
+    .nullable()
+    .catch(null)
+    .optional(),
+});
+export type ProviderProfileV80 = z.infer<typeof providerProfileSchemaV80>;
+
+const providerCliStateBaseShapeV80 = {
+  enabled: z.boolean(),
+  disabledBy: providerDisabledBySchema.nullable(),
+  selected: providerSelectionSchema,
+  candidates: z.array(providerCliCandidateSchema),
+  authPending: z.boolean(),
+  checkedAt: z.number().nullable(),
+  apiKey: providerApiKeyStateSchema,
+  terminalAgentArgs: z.string().catch(""),
+  envOverrides: z.array(providerEnvOverrideSchema).catch([]),
+  loginCapability: providerLoginCapabilitySchema.nullable().catch(null),
+  availabilityPending: z.boolean().catch(false),
+  profiles: z.array(providerProfileSchemaV80).catch([]),
+  managedInstallState: providerManagedInstallStateSchema
+    .nullable()
+    .catch(null)
+    .optional(),
+  versionVisibility: providerVersionVisibilitySchema
+    .nullable()
+    .catch(null)
+    .optional(),
+  advisory: providerAdvisorySchema.nullable().catch(null).optional(),
+  cliBinaryResolved: z.boolean().catch(true).optional(),
+  packId: z.string().nullable().catch(null).optional(),
+  managedVersions: providerManagedVersionsSchemaV80
+    .nullable()
+    .catch(null)
+    .optional(),
+  managedVersionsUnavailable: providerManagedVersionsUnavailableSchema
+    .nullable()
+    .catch(null)
+    .optional(),
+  nextRunBinary: providerNextRunBinarySchema.nullable().catch(null).optional(),
+};
+
+export const providerCliStateSchemaV80 = z.object({
+  providerId: providerIdSchemaV80,
+  ...providerCliStateBaseShapeV80,
+  auth: PROVIDER_AUTH_SCHEMA_V20,
+  nativeCapabilities: providerNativeCapabilitiesSchema.catch(
+    DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
+  ),
+});
+export type ProviderCliStateV80 = z.infer<typeof providerCliStateSchemaV80>;
+
+export const providersListResponseSchemaV80 = z.object({
+  providers: z.array(providerCliStateSchemaV80),
+  native: nativeListResultSchema.nullable().default(null),
+});
+export type ProvidersListResponseV80 = z.infer<
+  typeof providersListResponseSchemaV80
 >;
 
 // THERE IS NO `providers.list@7.1`. One was opened for the auth-aware
@@ -3639,6 +3863,26 @@ export function downgradeProviderCliStateListToV70(
     const current = parseProviderStateWithEnabledProfiles(state);
     if (current === null) return [];
     const parsed = providerCliStateSchemaV70.safeParse(current);
+    return parsed.success ? [parsed.data] : [];
+  });
+}
+
+/**
+ * Drop post-v8.0 providers (currently `antigravity`) for an already-shipped
+ * v8.0 client, and strip `profiles[].apiKey`, which the frozen v8.0 profile
+ * does not model.
+ *
+ * Both fall out of the same reparse: `providerCliStateSchemaV80` is a plain
+ * (non-strict) object, so the added key is stripped, while an id outside the
+ * frozen enum fails the parse and the row is dropped. No `enabledProfilesOnly`
+ * pre-pass, unlike the v7.0 helper - v8.0 is the line that introduced
+ * `profiles[].enabled`, so it can carry a disabled row itself.
+ */
+export function downgradeProviderCliStateListToV80(
+  states: readonly unknown[],
+): ProviderCliStateV80[] {
+  return states.flatMap((state) => {
+    const parsed = providerCliStateSchemaV80.safeParse(state);
     return parsed.success ? [parsed.data] : [];
   });
 }

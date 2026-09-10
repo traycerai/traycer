@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   browserScreencastOpenRequestSchema,
-  browserScreencastV1,
+  browserScreencastV20,
   browserSessionsServerFrameSchema,
-  browserSessionsV1,
+  browserSessionsV20,
 } from "@traycer/protocol/host/browser/contracts";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/index";
 
@@ -34,13 +34,13 @@ const CAPTION = {
   cellTitle: "Filling checkout form",
 } as const;
 
-describe("browser.sessions@1.0 burst and caption frames", () => {
-  it("parses burstStarted, burstEnded, and caption on the 1.0 schema", () => {
+describe("browser.sessions@2.0 burst and caption frames", () => {
+  it("parses burstStarted, burstEnded, and caption on the 2.0 schema", () => {
     expect(
       browserSessionsServerFrameSchema.safeParse(BURST_STARTED).success,
     ).toBe(true);
     expect(
-      browserSessionsV1.serverFrameSchema.safeParse(BURST_STARTED).success,
+      browserSessionsV20.serverFrameSchema.safeParse(BURST_STARTED).success,
     ).toBe(true);
     expect(
       browserSessionsServerFrameSchema.safeParse(BURST_ENDED).success,
@@ -75,25 +75,26 @@ describe("browser.sessions@1.0 burst and caption frames", () => {
     ).toBe(false);
   });
 
-  it("advertises 1.0 as the sessions and screencast latest minors", () => {
-    const sessions = hostStreamRpcRegistry["browser.sessions"][1];
-    const screencast = hostStreamRpcRegistry["browser.screencast"][1];
+  it("advertises 2.0 as the sessions and screencast live line", () => {
+    const sessions = hostStreamRpcRegistry["browser.sessions"][2];
+    const screencast = hostStreamRpcRegistry["browser.screencast"][2];
     expect(sessions.latestMinor).toBe(0);
-    expect(sessions.versions[0]?.contract).toBe(browserSessionsV1);
+    expect(sessions.versions[0]?.contract).toBe(browserSessionsV20);
     expect(screencast.latestMinor).toBe(0);
-    expect(screencast.versions[0]?.contract).toBe(browserScreencastV1);
+    expect(screencast.versions[0]?.contract).toBe(browserScreencastV20);
   });
 });
 
-describe("browser.screencast@1.0 viewer role", () => {
+describe("browser.screencast@2.0 viewer role", () => {
   const baseOpen = {
-    epicId: "epic-1",
+    scope: { kind: "epic" as const, epicId: "epic-1" },
     sessionId: "session-1",
     tabId: "tab-1",
     maxWidth: 1280,
     maxHeight: 720,
     quality: 80,
     format: "jpeg" as const,
+    handoffToken: null,
   };
 
   it("requires the caller to name its viewer role", () => {

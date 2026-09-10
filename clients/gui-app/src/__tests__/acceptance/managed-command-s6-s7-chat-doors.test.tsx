@@ -461,10 +461,9 @@ describe("S7 · doors", () => {
         ]}
       />,
     );
-    // Named, like every other state: the trigger identifies a watching shell,
-    // so the divider says Monitor. Only a legacy trigger with no
-    // `managedCommand` at all falls back to "Command still running".
-    expect(screen.getByText("Monitor still running")).toBeTruthy();
+    // A watching shell gets the concise monitor label from its kind and
+    // identity, including while the producer is still active.
+    expect(screen.getByText("Monitor running")).toBeTruthy();
     expect(screen.queryByText(/completed|failed|stopped/)).toBeNull();
   });
 

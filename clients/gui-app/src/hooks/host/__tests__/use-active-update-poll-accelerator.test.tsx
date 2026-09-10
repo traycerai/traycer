@@ -23,6 +23,7 @@ import type { FleetUpdateView } from "@/lib/host/fleet-update/fleet-update-view"
 const ACTIVE_VIEW: FleetUpdateView = {
   kind: "downloading",
   attemptId: "attempt-1",
+  attemptPosition: { generation: 1, sequence: 1 },
   targetVersion: "1.3.0",
   progress: { kind: "none" },
   qualified: false,
@@ -36,6 +37,7 @@ const ACTIVE_VIEW: FleetUpdateView = {
 const IDLE_VIEW: FleetUpdateView = {
   kind: "idle",
   attemptId: null,
+  attemptPosition: null,
   targetVersion: null,
   progress: { kind: "none" },
   qualified: false,

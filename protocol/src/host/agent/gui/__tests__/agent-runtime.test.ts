@@ -432,7 +432,7 @@ describe("agent runtime stream schema", () => {
   });
 });
 
-// ─── `failure` on the two terminal runtime events (ticket 01, chat.subscribe@1.9) ───
+// ─── `failure` on the two terminal runtime events (ticket 01, chat.subscribe@1.10) ───
 describe("runtimeFailureReason", () => {
   it("is the identity conversion - the compile-time proof that host reasons are a subset of the persisted vocabulary", () => {
     expect(runtimeFailureReason("rate_limit")).toBe("rate_limit");

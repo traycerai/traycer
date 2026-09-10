@@ -128,12 +128,15 @@ export function observationFromCanonicalRead(input: {
   readonly dataUpdatedAt: number;
   readonly health: CanonicalReadHealth;
   readonly source: FleetUpdateSource;
+  /** See `FleetUpdateWireObservation.legacyFacts`; `null` = this leg did not look. */
+  readonly legacyFacts: FleetUpdateWireObservation["legacyFacts"];
 }): FleetUpdateWireObservation {
   const observation = observationFromStatus({
     hostId: input.hostId,
     status: input.status,
     nowMs: input.dataUpdatedAt,
     source: input.source,
+    legacyFacts: input.legacyFacts,
   });
   if (canonicalReadIsLive(input.health)) return observation;
   return { ...observation, freshUntilMs: EXPIRED_FRESH_UNTIL_MS };

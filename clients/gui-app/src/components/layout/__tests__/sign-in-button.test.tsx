@@ -78,6 +78,8 @@ function makeMessengerFactory(): (args: {
             // which is exactly what host.status@1.2-and-older peers send.
             updateOperation: null,
             updateTransaction: null,
+            storeFormats: null,
+            install: null,
           }),
       },
     });
@@ -285,6 +287,17 @@ describe("routing a link code the OS delivered", () => {
     // the attempt in progress. The decision is retaken when it settles.
     expect(decideDeepLinkRouting("signing-in")).toBe("hold");
   });
+
+  it("refuses to claim on the admitted local plane, and does not hold", () => {
+    // `unverified` projects a real user id and email from a stored credential
+    // authn could not be reached to verify, so claiming carries the SAME
+    // identity-swap hazard as `signed-in` - not the `signed-out` freedom.
+    //
+    // And it must not be `hold`: unlike `signing-in`, this state persists for
+    // as long as authn is unreachable, so holding would strand the scan in
+    // silence instead of answering it.
+    expect(decideDeepLinkRouting("unverified")).toBe("already-signed-in");
+  });
 });
 
 describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
@@ -348,6 +361,15 @@ describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
     };
   }
 
+  /**
+   * The control's own disabled state, not the attribute's presence: the
+   * property is what the browser consults when the user taps, and the two
+   * diverge for anything that sets `disabled` through the DOM property.
+   */
+  function isDisabled(testId: string): boolean {
+    return screen.getByTestId<HTMLButtonElement>(testId).disabled;
+  }
+
   it("locks the in-app scan while a camera-launched claim is still outstanding", async () => {
     // The race the gate closes: the claim POST is in flight, so nothing has
     // published poll progress yet. A tap on the still-live Scan button would
@@ -360,25 +382,53 @@ describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
     const { host, emitCode } = deepLinkHost();
     const mobile = mountSignInButton(host, "hero");
     await mobile.waitForAuthService();
-    expect(
-      screen.getByTestId("link-code-signin-open").hasAttribute("disabled"),
-    ).toBe(false);
+    expect(isDisabled("link-code-signin-open")).toBe(false);
+    expect(isDisabled("link-code-signin-manual")).toBe(false);
+    expect(isDisabled("signin-button")).toBe(false);
 
     act(() => {
       emitCode("ABCDEFGHJK");
     });
 
     await waitFor(() => {
-      expect(
-        screen.getByTestId("link-code-signin-open").hasAttribute("disabled"),
-      ).toBe(true);
+      expect(isDisabled("link-code-signin-open")).toBe(true);
     });
+    // Every way of starting a SECOND attempt is closed while the claim runs:
+    // the manual-entry link (opening it would offer a form with nothing useful
+    // to type - no approver surface shows a code mid-claim) and the browser
+    // device flow beneath it, whose `signIn()` would supersede the claim.
+    expect(isDisabled("link-code-signin-manual")).toBe(true);
+    expect(isDisabled("signin-button")).toBe(true);
     expect(screen.getByTestId("link-code-signin-waiting")).toBeTruthy();
     // Retry is the device flow's escape hatch from a stalled browser round
     // trip. Offering it here offers to throw away a claim the user's desktop
     // is prompting them to approve: `signIn()` is re-entrant, so tapping it
     // would supersede the camera-launched attempt.
     expect(screen.queryByTestId("signin-retry-link")).toBeNull();
+    outstanding();
+    mobile.cleanupClient();
+  });
+
+  it("locks the compact header's text entry while a camera-launched claim is outstanding", async () => {
+    // The `link` presentation's only control is the line that expands into
+    // the typed-code form; it is the manual-entry link of the compact header
+    // and closes for the same reason.
+    setMobileApp(true);
+    const outstanding = installFetch(
+      () => new Promise<Response>(() => undefined),
+    );
+    const { host, emitCode } = deepLinkHost();
+    const mobile = mountSignInButton(host, "compact");
+    await mobile.waitForAuthService();
+    expect(isDisabled("link-code-signin-open")).toBe(false);
+
+    act(() => {
+      emitCode("ABCDEFGHJK");
+    });
+
+    await waitFor(() => {
+      expect(isDisabled("link-code-signin-open")).toBe(true);
+    });
     outstanding();
     mobile.cleanupClient();
   });
@@ -527,6 +577,92 @@ describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
     expect(screen.getByTestId("link-code-signin-notice").textContent).toContain(
       "invalid, expired, or already used",
     );
+    mobile.cleanupClient();
+  });
+
+  it("shows the claim's match code through manual entry until the desktop decides", async () => {
+    // Composed, not the leaf: the code travels claim response → AuthService
+    // poll progress → subscription → wait block, and every hop is real here;
+    // only the HTTP boundary is scripted. Settled by a rejection so the
+    // whole wait is observed end to end without the token-application
+    // machinery, which is exercised elsewhere.
+    setMobileApp(true);
+    const tokenPolls = { count: 0 };
+    const scripted = installFetch((url) => {
+      if (url.includes("/link/claim")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              status: "claimed",
+              secret: "S".repeat(43),
+              interval: 1,
+              matchCode: "47",
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      if (url.includes("/link/token")) {
+        tokenPolls.count += 1;
+        return Promise.resolve(
+          new Response(
+            JSON.stringify(
+              tokenPolls.count < 2
+                ? { error: "authorization_pending" }
+                : { error: "access_denied" },
+            ),
+            {
+              status: tokenPolls.count < 2 ? 428 : 400,
+              headers: { "Content-Type": "application/json" },
+            },
+          ),
+        );
+      }
+      return Promise.resolve(new Response(null, { status: 401 }));
+    });
+    const mobile = mountSignInButton(buildHost(), "hero");
+    await mobile.waitForAuthService();
+
+    fireEvent.click(screen.getByTestId("link-code-signin-manual"));
+    fireEvent.change(screen.getByTestId("link-code-signin-input"), {
+      target: { value: "abcde-fghjk" },
+    });
+    fireEvent.click(screen.getByTestId("link-code-signin-submit"));
+
+    // The code is up from the first countdown, with the standing instruction
+    // beside it — an older desktop shows no code, so the instruction never
+    // conditions approval on a match.
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("link-code-signin-match-code").textContent,
+      ).toBe("Your code: 47");
+    });
+    const waiting = screen.getByTestId("link-code-signin-waiting").textContent;
+    expect(waiting).toContain("Waiting for approval on your computer…");
+    expect(waiting).toContain(
+      "If your computer asks, it should show this code.",
+    );
+
+    // Still up across a pending poll (the loop republishes progress every
+    // interval), then gone with the decision — nothing retains it.
+    await waitFor(
+      () => {
+        expect(tokenPolls.count).toBeGreaterThanOrEqual(1);
+      },
+      { timeout: 3_000 },
+    );
+    expect(screen.getByTestId("link-code-signin-match-code")).toBeTruthy();
+    await waitFor(
+      () => {
+        expect(
+          screen.getByTestId("link-code-signin-notice").textContent,
+        ).toContain("rejected on your computer");
+      },
+      { timeout: 4_000 },
+    );
+    expect(screen.queryByTestId("link-code-signin-match-code")).toBeNull();
+    expect(screen.queryByTestId("link-code-signin-waiting")).toBeNull();
+    scripted();
     mobile.cleanupClient();
   });
 
@@ -710,7 +846,51 @@ describe("<SignInButton />", () => {
     result.cleanupClient();
   });
 
-  it("keeps credentials file when a stored session is rejected (UI-only sign-out)", async () => {
+  it("an account-unavailable verdict renders terminal copy AND retargets the CTA at a different account", async () => {
+    // The two halves are one finding. Rendering "This account is no longer
+    // available." above a button that says "Sign in" points the user at the one
+    // path that provably cannot work: the account is gone server-side, so
+    // re-authenticating as it will fail again. The escape is a DIFFERENT
+    // account, and the CTA is where that has to be said.
+    //
+    // Driven end to end rather than by setting the error directly: a 404 on
+    // `/api/v3/user` classifies `refresh-rejected-account`, which HOLDS the
+    // plane at `unverified` (product ruling) and sets
+    // `AUTH_ERROR_ACCOUNT_UNAVAILABLE`. That hold is exactly why both surfaces
+    // needed widening - neither renders under `signed-out` any more for this
+    // arm, so a regression here shows as SILENCE rather than as wrong copy.
+    const host = buildHost();
+    await host.tokenStore.signIn(
+      { token: "gone-account-token", refreshToken: "gone-account-refresh" },
+      { id: "user-1", email: "test@example.com", name: "Test User" },
+    );
+    restoreFetch();
+    // 404 on BOTH `/user` and the refresh spend: the validate stops retrying,
+    // the rotate classifies it `refresh-rejected-account`, and that arm holds.
+    restoreFetch = installFetch(() =>
+      Promise.resolve(new Response(null, { status: 404 })),
+    );
+
+    const result = mountSignInButton(host, "compact");
+
+    await waitFor(() => {
+      expect(useAuthStore.getState().status).toBe("unverified");
+    });
+
+    // The terminal copy reaches the DOM, not merely the service error value.
+    await waitFor(() => {
+      expect(screen.getByTestId("signin-error").textContent).toContain(
+        "This account is no longer available.",
+      );
+    });
+    // ...and the CTA no longer offers the loop that cannot succeed.
+    expect(screen.getByTestId("signin-button").textContent).toContain(
+      "Sign in with a different account",
+    );
+    result.cleanupClient();
+  });
+
+  it("keeps credentials file when a stored session is rejected (local plane held)", async () => {
     // Automatic failure paths never destroy the shared credentials file —
     // only explicit sign-out does (tech plan §5). CLI seeding is gone; the
     // file is the single store.
@@ -730,7 +910,9 @@ describe("<SignInButton />", () => {
         { id: "auth-session:expired", cancel: null },
       );
     });
-    // UI is signed out but the file is kept so a sibling rotation can recover.
+    // The cloud session is over - hence the toast - but the file is kept, so a
+    // sibling rotation can recover it and the identity naming this machine's
+    // local epics survives (the session holds at `unverified`, not signed-out).
     // No `authnBaseUrl`: the stored session carries only the token pair and
     // the cached identity - the origin lives on the host's own config.
     expect(await host.tokenStore.get()).toEqual({
@@ -779,7 +961,13 @@ describe("<SignInButton />", () => {
         { id: "auth-session:expired", cancel: null },
       );
     });
-    expect(useAuthStore.getState().status).toBe("signed-out");
+    // Cold-review P1-4: a live refresh rejection is a verdict about the TOKEN,
+    // so the session is DEMOTED and the local plane survives - it is no longer
+    // torn down out from under whatever the user was editing.
+    expect(useAuthStore.getState().status).toBe("unverified");
+    // The toast has delivered the expiry, so the durable signal is cleared and
+    // no inline copy is left behind. That is the transient path; the TERMINAL
+    // account path deliberately does not clear (see the toast bridge).
     expect(result.getAuthService().getLastError()).toBeNull();
     expect(screen.queryByTestId("signin-error")).toBeNull();
     result.cleanupClient();

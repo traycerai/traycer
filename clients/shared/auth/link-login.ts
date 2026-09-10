@@ -72,6 +72,12 @@ export type ClaimLinkLoginCodeFetchResult =
       readonly kind: "claimed";
       readonly secret: string;
       readonly pollIntervalSeconds: number;
+      /**
+       * The claim's match code, for the phone to show while it waits; `null`
+       * from a server that predates it, in which case the desktop's prompt
+       * is showing no code either.
+       */
+      readonly matchCode: string | null;
     }
   | { readonly kind: "invalid-code" }
   | { readonly kind: "rate-limited" }
@@ -199,38 +205,58 @@ export function parseLinkLoginInput(text: string): string | null {
   return NORMALIZED_CODE_PATTERN.test(normalized) ? normalized : null;
 }
 
-/** The device strings a claimant reports as a bare family, article-less. */
-const CLAIMANT_DEVICE_FAMILIES: Readonly<Record<string, string>> = {
-  iPhone: "an iPhone",
-  iPad: "an iPad",
-};
+/**
+ * The generic device kinds a claimant can be bucketed into, with the article
+ * each takes in running prose. A self-reported name is never one of these.
+ */
+const CLAIMANT_DEVICE_KINDS: ReadonlyMap<string, string> = new Map([
+  ["iPhone", "an"],
+  ["iPad", "an"],
+  ["Android device", "an"],
+  ["device", "a"],
+]);
 
 /** A self-reported name longer than this is UA-shaped, not a device name. */
 const CLAIMANT_DEVICE_NAME_MAX = 40;
 
 /**
- * Best-effort device line for the approve prompt, from whatever the claimant
- * reported about itself. Descriptive, not authenticated — the copy says so,
- * and the real trust anchor is "you minted this code and someone just scanned
- * it". The result carries its own article where one is needed — it slots into
- * "Approve sign-in from ___?" and a proper name reads better bare.
+ * C0 and C1 control characters, DEL included. A self-reported name carrying
+ * one is not a name: it is a terminal control sequence aimed at the CLI's
+ * approval prompt, and it buckets to a family like any other unusable value.
+ */
+function hasControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const code = character.codePointAt(0) ?? 0;
+    if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * What the claimant is, as a bare noun phrase: "iPhone", "Pixel 8",
+ * "Android device", "device". For labels and separators ("· iPhone ·") where
+ * an article would read wrong. Descriptive, not authenticated — the real trust
+ * anchor is "you minted this code and someone just scanned it".
  *
  * Three shapes arrive here. A bare family ("iPhone") is what iOS reports,
- * since Apple exposes no marketing-name API; it needs the article added. A
- * self-reported model name ("Pixel 8") is short and UA-free, and reads best
- * verbatim. A browser or CFNetwork User-Agent is long and structured, and is
- * only good for a family bucket. Families are matched first because they
- * would otherwise satisfy the verbatim test and lose their article.
+ * since Apple exposes no marketing-name API. A self-reported model name
+ * ("Pixel 8") is short and UA-free, and reads best verbatim. A browser or
+ * CFNetwork User-Agent is long and structured, and is only good for a family
+ * bucket. The kinds live in a Map rather than an object so a claimant naming
+ * itself "constructor" or "__proto__" is a proper name, never an inherited
+ * property.
  */
-export function claimantDeviceLabel(userAgent: string | null): string {
+export function claimantDeviceName(userAgent: string | null): string {
   const value = userAgent ?? "";
-  const family = CLAIMANT_DEVICE_FAMILIES[value];
-  if (family !== undefined) {
-    return family;
+  if (CLAIMANT_DEVICE_KINDS.has(value)) {
+    return value;
   }
   if (
     value.length > 0 &&
     value.length <= CLAIMANT_DEVICE_NAME_MAX &&
+    !hasControlCharacter(value) &&
     !value.includes("Mozilla/") &&
     !value.includes("CFNetwork") &&
     !value.includes("(")
@@ -238,15 +264,26 @@ export function claimantDeviceLabel(userAgent: string | null): string {
     return value;
   }
   if (value.includes("iPhone")) {
-    return "an iPhone";
+    return "iPhone";
   }
   if (value.includes("iPad")) {
-    return "an iPad";
+    return "iPad";
   }
   if (value.includes("Android")) {
-    return "an Android device";
+    return "Android device";
   }
-  return "a device";
+  return "device";
+}
+
+/**
+ * `claimantDeviceName` for running prose: a generic kind carries its article
+ * ("an iPhone", "a device") so it slots into "Approve sign-in from ___?",
+ * while a proper name ("Pixel 8") reads better bare and stays so.
+ */
+export function claimantDeviceLabel(userAgent: string | null): string {
+  const name = claimantDeviceName(userAgent);
+  const article = CLAIMANT_DEVICE_KINDS.get(name);
+  return article === undefined ? name : `${article} ${name}`;
 }
 
 async function postJson(
@@ -321,6 +358,13 @@ export async function mintLinkLoginCodeViaHttp(
 }
 
 /**
+ * Declares that this client understands a `matchCode` in the response. The
+ * response schemas are strict, so the server sends the field only to callers
+ * that ask for it — an older client keeps parsing today's exact shape.
+ */
+const ACCEPT_MATCH_CODE = { acceptMatchCode: true } as const;
+
+/**
  * The phone attaches itself to a scanned/typed code. First scan wins and
  * ONLY that response carries the polling secret; claiming grants nothing
  * else. A 401 means the code is unknown, expired, or already
@@ -340,7 +384,9 @@ export async function claimLinkLoginCodeViaHttp(
     authnBaseUrl,
     "api/v3/auth/link/claim",
     null,
-    deviceHint === null ? { code } : { code, device: deviceHint },
+    deviceHint === null
+      ? { code, ...ACCEPT_MATCH_CODE }
+      : { code, device: deviceHint, ...ACCEPT_MATCH_CODE },
     null,
   );
   if (response === null) {
@@ -362,6 +408,7 @@ export async function claimLinkLoginCodeViaHttp(
         kind: "claimed",
         secret: parsed.secret,
         pollIntervalSeconds: parsed.interval,
+        matchCode: parsed.matchCode ?? null,
       };
 }
 
@@ -434,7 +481,10 @@ export async function linkLoginStatusViaHttp(
     authnBaseUrl,
     "api/v3/auth/link/status",
     bearerToken,
-    { code },
+    // `acceptClaimExpiry` declares the same understanding for the claim's
+    // deadline as `acceptMatchCode` does for the code: strict schemas, so the
+    // server sends each field only to callers that asked.
+    { code, ...ACCEPT_MATCH_CODE, acceptClaimExpiry: true },
     signal,
   );
   if (response === null) {

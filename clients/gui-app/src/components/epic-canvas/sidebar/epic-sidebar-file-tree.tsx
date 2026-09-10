@@ -800,7 +800,6 @@ function FileTreeBodyForResolvedHost(
       <FileTreeRowContextMenu
         hostId={hostId}
         workspacePath={props.workspacePath}
-        fileNameByPath={nameByTreePath}
       >
         <div
           {...bridge.wrapperProps}

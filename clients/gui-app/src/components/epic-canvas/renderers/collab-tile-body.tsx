@@ -41,6 +41,7 @@ import {
   useEpicArtifactBodySubscribeAnswered,
   useEpicArtifactBodyAwareness,
   useEpicArtifactFragment,
+  useEpicCommentsHaveNoUsableRoom,
   useEpicPermissionRole,
   useEpicSnapshotLoaded,
   useOpenEpicId,
@@ -54,6 +55,7 @@ import {
   useDraftRange,
   useFlashThread,
   useHoverThreadId,
+  type DraftRange,
 } from "@/stores/comments/comment-threads-store";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import { WORKSPACE_FILE_TAB_KIND } from "@/stores/epics/canvas/types";
@@ -83,6 +85,11 @@ import { seedArtifactTitleHeading } from "./artifact-editor-seed";
 import { useArtifactDocTitleFollow } from "./use-artifact-doc-title-follow";
 import { useCollabTileEditor } from "./use-collab-tile-editor";
 import { useArtifactLinkOpener } from "./use-artifact-link-opener";
+import { ArtifactQuotePopover } from "./artifact-quote/artifact-quote-popover";
+import {
+  useArtifactQuoteSurface,
+  type ArtifactQuoteSurface,
+} from "./artifact-quote/use-artifact-quote-surface";
 import { useArtifactImagePaste } from "@/hooks/artifacts/use-artifact-image-paste";
 import type { UseComposerPasteResult } from "@/hooks/composer/use-composer-paste";
 
@@ -292,6 +299,42 @@ function CollabTileSkeleton(props: {
   );
 }
 
+/**
+ * The empty-doc authoring placeholder ("Describe what you want to build…").
+ * A container (any artifact with children) renders its child index below the
+ * body, so the placeholder both fights that index and prompts the wrong
+ * thing - suppressed when children exist; the body stays editable for an
+ * optional overview.
+ */
+function bodyPlaceholderText(
+  nodeType: CollabTileBodyEditorProps["node"]["type"],
+  hasChildren: boolean,
+): string {
+  if (hasChildren) return "";
+  return isEpicArtifactKind(nodeType)
+    ? EPIC_NODE_PLACEHOLDER_TEXT[nodeType]
+    : "Start writing…";
+}
+
+/**
+ * The draft selection range, only when THIS tile's artifact owns it - a
+ * sibling pane's draft in the same Epic must not decorate this editor.
+ */
+function draftRangeOwnedByTile(
+  draft: DraftRange | null,
+  tileId: string,
+  artifactId: string,
+): { readonly from: number; readonly to: number } | null {
+  if (
+    draft === null ||
+    draft.tileId !== tileId ||
+    draft.artifactId !== artifactId
+  ) {
+    return null;
+  }
+  return { from: draft.from, to: draft.to };
+}
+
 function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
   const {
     node,
@@ -328,9 +371,18 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
     [profile],
   );
 
-  // Comments wiring - chat tiles get `null` and the toolbar / shortcut
-  // surfaces simply don't render; everything else opts in.
-  const commentsSupported = commentArtifactKind !== null;
+  // Local artifact rooms carry a durable, disconnected comment-thread provider
+  // beside their body Y.Doc. The reserved-but-pre-cutover `promoting` window
+  // has neither that provider nor its cloud replacement, so it remains gated.
+  //
+  // The STICKY hook rather than the bare predicate: a stream reconnect clears
+  // the store's durability slots, and for the few frames before the
+  // replacement arrives the raw answer flips to "comments are fine" on an epic
+  // whose replacement is not ready - long enough to start a draft the restored
+  // gate wipes.
+  const commentsUnavailable = useEpicCommentsHaveNoUsableRoom();
+  const commentsSupported =
+    commentArtifactKind !== null && !commentsUnavailable;
   const setDraft = useCommentThreadsStore((s) => s.setDraft);
   const activeThreadId = useActiveThreadId(epicId);
   const hoverThreadId = useHoverThreadId(epicId);
@@ -364,6 +416,9 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
     options: { enabled: commentsSupported, laneDroppedAt },
   });
   const clearFlashThread = useCommentThreadsStore((s) => s.clearFlashThread);
+  useEffect(() => {
+    if (commentsUnavailable) setDraft(epicId, null);
+  }, [commentsUnavailable, epicId, setDraft]);
   // The state lane's records for this artifact, or `null` where it has said
   // nothing. Resolved once here and fed to the decoration sets AND the hover
   // preview below, because they must agree by construction: a thread the
@@ -406,10 +461,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
     [commentThreads.threads],
   );
   const ownedDraftRange = useMemo(
-    () =>
-      draft !== null && draft.tileId === tileId && draft.artifactId === node.id
-        ? { from: draft.from, to: draft.to }
-        : null,
+    () => draftRangeOwnedByTile(draft, tileId, node.id),
     [draft, tileId, node.id],
   );
 
@@ -430,14 +482,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
       ).started;
   }, [commentsSupported, epicId, viewTabId, tileId, node.id, setDraft]);
 
-  // A container (any artifact with children) renders its child index below the
-  // body, so the empty-doc authoring placeholder ("Describe what you want to
-  // build…") both fights that index and prompts the wrong thing. Suppress it
-  // when children exist; the body stays editable for an optional overview.
   const hasChildren = useChildIdsOf(node.id).length > 0;
-  const kindPlaceholder = isEpicArtifactKind(node.type)
-    ? EPIC_NODE_PLACEHOLDER_TEXT[node.type]
-    : "Start writing…";
   const editor = useCollabTileEditor({
     doc,
     fragment,
@@ -446,7 +491,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
     user,
     onCommentShortcut,
     anchorScope: commentsSupported ? { epicId, artifactId: node.id } : null,
-    placeholderText: hasChildren ? "" : kindPlaceholder,
+    placeholderText: bodyPlaceholderText(node.type, hasChildren),
     titlePlaceholderText: ARTIFACT_TITLE_PLACEHOLDER,
   });
   const artifactImagePaste = useArtifactImagePaste(editor, epicId, node.id);
@@ -495,6 +540,22 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
       },
     };
   }, [commentsSupported, editor, epicId, viewTabId, tileId, node.id, setDraft]);
+
+  // Send to chat: the excerpt is frozen the moment the button is pressed and
+  // kept tile-local - a sibling pane editing the same artifact must not adopt
+  // it. The same artifact kinds that take comments can be quoted.
+  const quote = useArtifactQuoteSurface({
+    epicId,
+    viewTabId,
+    artifactId: node.id,
+    artifactKind: commentArtifactKind,
+    editor,
+  });
+  const selectionSurfaceOpen = isSelectionSurfaceOpen({
+    ownedDraftRange,
+    linkPopoverOpen,
+    quoteOpen: quote.isOpen,
+  });
 
   useEffect(() => {
     const rootElement = editorRootRef.current;
@@ -616,15 +677,13 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
       // this existing handler so the rail never attaches a scroll listener of
       // its own (the lesson the chat rail's own consolidation encodes).
       headingMinimapRefreshRef.current();
-      if (editor === null || ownedDraftRange !== null || linkPopoverOpen) {
-        return;
-      }
+      if (editor === null || selectionSurfaceOpen) return;
       // TipTap's native BubbleMenu scroll listener is trailing-debounced.
       // Drive its documented escape hatch from this existing handler so the
       // selection toolbar tracks every native tile scroll event immediately.
       updateArtifactToolbarPosition(editor);
     },
-    [editor, linkPopoverOpen, onScrollRestoration, ownedDraftRange],
+    [editor, onScrollRestoration, selectionSurfaceOpen],
   );
 
   // The heading rail is a sibling of the scroller, not a child: the scroller is
@@ -669,7 +728,8 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
                 className={undefined}
                 scrollTarget={scrollContainer}
                 commentAction={commentAction}
-                suppressBubbleMenu={ownedDraftRange !== null || linkPopoverOpen}
+                quoteAction={quote.action}
+                suppressBubbleMenu={selectionSurfaceOpen}
               />
             ) : null}
           </div>
@@ -682,7 +742,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
             />
           ) : null}
         </div>
-        {editor !== null && commentArtifactKind !== null ? (
+        {editor !== null && commentsSupported ? (
           <>
             <FloatingDraftPopover
               epicId={epicId}
@@ -706,6 +766,12 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
             />
           </>
         ) : null}
+        <ArtifactQuotePopoverMount
+          epicId={epicId}
+          viewTabId={viewTabId}
+          editor={editor}
+          quote={quote}
+        />
         {editor !== null ? (
           <ArtifactLinkPopover
             editor={editor}
@@ -752,6 +818,53 @@ function ArtifactHeadingMinimapMount(props: {
       refreshRef={props.refreshRef}
       scroller={props.scroller}
       side={side}
+    />
+  );
+}
+
+/**
+ * Whether a surface other than the bubble bar owns the current selection: the
+ * comment draft, the link popover, or the send-to-chat picker. The bar hides
+ * for it and the scroll handler stops repositioning it, which is what keeps
+ * the interaction single-modal. One predicate, so the next such surface is
+ * added in one place - and, like the gates below, so its conditions do not
+ * count against `CollabTileBodyEditor`'s complexity ceiling.
+ */
+function isSelectionSurfaceOpen(input: {
+  readonly ownedDraftRange: {
+    readonly from: number;
+    readonly to: number;
+  } | null;
+  readonly linkPopoverOpen: boolean;
+  readonly quoteOpen: boolean;
+}): boolean {
+  return (
+    input.ownedDraftRange !== null || input.linkPopoverOpen || input.quoteOpen
+  );
+}
+
+/**
+ * Gate for the send-to-chat picker, kept out of `CollabTileBodyEditor` for the
+ * same reason as the heading rail above: its two null checks would otherwise
+ * count against that component's complexity ceiling.
+ */
+function ArtifactQuotePopoverMount(props: {
+  readonly epicId: string;
+  readonly viewTabId: string;
+  readonly editor: Editor | null;
+  readonly quote: ArtifactQuoteSurface;
+}) {
+  const { editor, quote } = props;
+  if (editor === null || quote.snapshot === null) return null;
+  return (
+    <ArtifactQuotePopover
+      epicId={props.epicId}
+      viewTabId={props.viewTabId}
+      editor={editor}
+      snapshot={quote.snapshot}
+      onSendToChat={quote.actions.quoteToChat}
+      onSendToNewChat={quote.actions.quoteToNewChat}
+      onDone={quote.dismiss}
     />
   );
 }

@@ -64,7 +64,8 @@ import type {
   StreamFrameEnvelope,
 } from "./i-stream-session";
 import type { TransportEvidenceReporter } from "@traycer-clients/shared/host-selection/transport-evidence";
-import type { IStreamClient } from "./i-stream-client";
+import type { IStreamClient, StreamParamsProvider } from "./i-stream-client";
+import { describeRetryableClose } from "./retryable-close-log";
 import { dialPriorityForMethod } from "./dial-priority";
 import type {
   IStreamWebSocketFactory,
@@ -300,6 +301,23 @@ export class WsStreamClient<
    */
   private hasCompletedHandshake = false;
   private readonly methodSchemaVersions = new Map<string, SchemaVersion>();
+  /**
+   * What a subscribe on each method WOULD negotiate, derived from the peer's
+   * process manifest at any session's handshake - the version half of the
+   * cacheable pre-check {@link getMethodSupport} already provides, and the
+   * only evidence available for a method no session has opened yet.
+   *
+   * `methodSchemaVersions` above cannot answer that: it is rebuilt purely from
+   * LIVE sessions, so it stays empty for every method this client has not
+   * subscribed to. Two documented pre-checks read through it and were dead in
+   * exactly that state - `useGlobalResourcesPreCheckUnsupported`, whose whole
+   * premise is "the verdict available BEFORE any global stream is opened", and
+   * the notification feed mode, which gated OPENING the cloud feed on a
+   * version only that feed's own open session could have published. The second
+   * was a deadlock: the mode could never leave `local`, so the cloud stream
+   * never opened, so the version never arrived.
+   */
+  private readonly manifestSchemaVersions = new Map<string, SchemaVersion>();
   private readonly methodSupportListeners = new Set<() => void>();
   private readonly closedListeners = new Set<() => void>();
   /**
@@ -423,7 +441,7 @@ export class WsStreamClient<
    */
   subscribeWithParamsProvider<Method extends keyof Registry & string>(
     method: Method,
-    paramsProvider: () => ParamsOf<Registry, Method>,
+    paramsProvider: StreamParamsProvider<Registry, Method>,
   ): IStreamSession {
     return this.subscribeWithParamsProviderInternal(
       method,
@@ -436,7 +454,7 @@ export class WsStreamClient<
     Method extends keyof Registry & string,
   >(
     method: Method,
-    paramsProvider: () => ParamsOf<Registry, Method>,
+    paramsProvider: StreamParamsProvider<Registry, Method>,
     requiredSchemaVersion: SchemaVersion | null,
   ): IStreamSession {
     if (this.closed) {
@@ -531,6 +549,12 @@ export class WsStreamClient<
       session.close();
     }
     this.ownedSessions.clear();
+    // Every owned session is closed above, and `applyHostManifest` - the only
+    // publisher - is a session callback, so no further notification is owed.
+    // Dropping the set here keeps a retired client from retaining consumer
+    // closures for as long as something holds the client itself, matching how
+    // `closedListeners` is released just below.
+    this.methodSupportListeners.clear();
     const listeners = Array.from(this.closedListeners);
     this.closedListeners.clear();
     const listenerErrors: unknown[] = [];
@@ -660,13 +684,33 @@ export class WsStreamClient<
     return memoized === "supported" ? "supported" : "unknown";
   }
 
+  /**
+   * A LIVE session's negotiated version wins; otherwise the version the
+   * peer's manifest says a subscribe would settle on. The order matters and
+   * is not a preference: an open session has already declared a version on
+   * the wire, and the manifest cache is a prediction of that same value - so
+   * only where there is nothing live to report does the prediction speak.
+   */
   getMethodSchemaVersion<Method extends keyof Registry & string>(
     method: Method,
   ): SchemaVersion | null {
-    return this.methodSchemaVersions.get(method) ?? null;
+    return (
+      this.methodSchemaVersions.get(method) ??
+      this.manifestSchemaVersions.get(method) ??
+      null
+    );
   }
 
   subscribeMethodSupport(listener: () => void): () => void {
+    // A closed client's method support can no longer change - every session is
+    // gone and the cached versions above are frozen - so nothing is ever owed
+    // to a listener registered now. Without this the `close()` clear is only
+    // half a fix: `useSyncExternalStore` re-subscribes on client identity, so
+    // a consumer re-rendering after retirement would re-populate a set that is
+    // never cleared or notified again.
+    if (this.closed) {
+      return () => undefined;
+    }
     this.methodSupportListeners.add(listener);
     return () => {
       this.methodSupportListeners.delete(listener);
@@ -1078,6 +1122,24 @@ export class WsStreamClient<
       if (method === subscribedMethod) {
         changed =
           this.updateMethodSupport(method, subscribedMethodSupport) || changed;
+        // The subscribing session publishes its own negotiated version, which
+        // is the real thing rather than a prediction of it. Recording the
+        // prediction too keeps the entry alive across that session's disposal,
+        // when the live map drops back to nothing but the peer's manifest is
+        // still just as true as it was a moment earlier.
+        //
+        // Only when the method actually negotiated. On the incompatible
+        // handshake path this session's method is `unsupported`, and a
+        // prediction recorded anyway - a same-major minor the registry cannot
+        // bridge to still yields one - made `getMethodSchemaVersion()` report
+        // a usable version for a method that cannot subscribe.
+        changed =
+          this.recordManifestSchemaVersion(
+            method,
+            myManifest,
+            theirManifest,
+            subscribedMethodSupport === "supported",
+          ) || changed;
         if (handshakeHostId !== null) {
           recordNegotiatedStreamMethodSupport(
             handshakeHostId,
@@ -1099,6 +1161,13 @@ export class WsStreamClient<
         : "unsupported";
       changed =
         this.updateMethodSupportFromManifest(method, support) || changed;
+      changed =
+        this.recordManifestSchemaVersion(
+          method,
+          myManifest,
+          theirManifest,
+          compat.ok,
+        ) || changed;
       if (handshakeHostId !== null) {
         recordNegotiatedStreamMethodSupport(handshakeHostId, method, support);
       }
@@ -1106,6 +1175,41 @@ export class WsStreamClient<
     if (changed) {
       this.notifyMethodSupportListeners();
     }
+  }
+
+  /**
+   * Caches what a subscribe on `method` would put on the wire, from the peer's
+   * manifest alone.
+   *
+   * `bridgeable` is `checkStreamMethodCompatibility`'s verdict, and gating on
+   * it is what makes the arithmetic below exact rather than approximate: it is
+   * the proof that the majors match and that the older side's minor has a
+   * contract in the registry, which is the precondition
+   * {@link prepareStreamSubscribeRequest} is written against. An unbridgeable
+   * method has no version a subscribe could declare, so it caches none.
+   */
+  private recordManifestSchemaVersion(
+    method: string,
+    myManifest: ConnectionManifest,
+    theirManifest: ConnectionManifest,
+    bridgeable: boolean,
+  ): boolean {
+    const previous = this.manifestSchemaVersions.get(method) ?? null;
+    const next = bridgeable
+      ? predictedSubscribeSchemaVersion(
+          myManifest[method] ?? null,
+          theirManifest[method] ?? null,
+        )
+      : null;
+    if (previous?.major === next?.major && previous?.minor === next?.minor) {
+      return false;
+    }
+    if (next === null) {
+      this.manifestSchemaVersions.delete(method);
+      return true;
+    }
+    this.manifestSchemaVersions.set(method, next);
+    return true;
   }
 
   private updateMethodSupportFromManifest(
@@ -1131,10 +1235,16 @@ export class WsStreamClient<
     // routing while this session negotiates again.
     const versionChanged =
       this.reconcileMethodSchemaVersion(reconnectingMethod);
-    if (!hadMethodSupport && !versionChanged) {
+    // The manifest predictions are derived from the SAME evidence
+    // `methodSupport` is, so they are re-probed on the same terms: a new
+    // incarnation may answer a different set of methods at different minors,
+    // and a stale prediction is worse than none because it reads as learned.
+    const hadManifestVersions = this.manifestSchemaVersions.size > 0;
+    if (!hadMethodSupport && !versionChanged && !hadManifestVersions) {
       return;
     }
     this.methodSupport.clear();
+    this.manifestSchemaVersions.clear();
     this.notifyMethodSupportListeners();
   }
 
@@ -1159,9 +1269,22 @@ export class WsStreamClient<
     return !schemaVersionEqual(previous, liveVersion);
   }
 
+  // Guarded per listener, for the same reason as `emitAvailabilityRecovered`
+  // above: this publishes from `applyHostManifest`, which runs inside a
+  // session's `openAck` handling, so a throwing consumer would break that
+  // session's inbound processing and the listeners queued behind it rather
+  // than only itself. The local-plane twin of the same guard on
+  // `RemoteSession.notifyMethodSupportListeners`.
   private notifyMethodSupportListeners(): void {
     for (const listener of Array.from(this.methodSupportListeners)) {
-      listener();
+      try {
+        listener();
+      } catch (error) {
+        console.error(
+          `[stream] method-support listener threw (client=${this.instanceId})`,
+          error,
+        );
+      }
     }
   }
 }
@@ -1257,7 +1380,14 @@ type ExtractOpenRequest<MethodRegistry> =
 
 interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
   readonly method: keyof Registry & string;
-  readonly paramsProvider: () => unknown;
+  /**
+   * Read once per wire subscribe, and handed the version the params are about
+   * to be declared at. This transport always knows it by then -
+   * {@link selectStreamSubscribeVersion} decides it from the two manifests, on
+   * the line above the read - so the argument is never `null` here, unlike the
+   * `IStreamClient` seam this is invoked from.
+   */
+  readonly paramsProvider: (onWireVersion: SchemaVersion) => unknown;
   /** Exact client version to declare; rejects older peers before subscribe. */
   readonly requiredSchemaVersion: SchemaVersion | null;
   readonly registry: Registry;
@@ -1392,6 +1522,34 @@ class StreamSession<
    */
   private slowClientReconnectStreak = 0;
   private lastCloseWasSlowClient = false;
+  /**
+   * Fingerprint of the last retryable close this session logged, so a host
+   * that refuses the same subscribe on every reconnect (once per backoff,
+   * indefinitely) costs one warn line rather than a log flood. A different
+   * refusal is logged again; a change in the reason is worth a line of its
+   * own.
+   *
+   * A FINGERPRINT rather than the rendered line because both remote fields it
+   * is built from are unbounded on the wire - see `describeRetryableClose`,
+   * which bounds them - and this is retained for the life of the session.
+   *
+   * Cleared on the same proof of health the backoff uses, and at both of its
+   * sites: a delivered server frame ({@link emitServerFrame}, "every server
+   * frame proves the socket can deliver work") and the sustained-subscription
+   * dwell that stands in for one on a quiet stream
+   * ({@link resetLoopCounters}). Either way the next identical refusal is a
+   * NEW episode and logs again.
+   *
+   * Deliberately NOT on the subscribe ack, which is the one site that looks
+   * like the obvious place. The ack proves the handshake and nothing else:
+   * resolver-side failures land AFTER it as fatalError frames - a
+   * host-older-than-data refusal IS one - so a host that acks and immediately
+   * refuses would clear this key every lap and log the same line on every
+   * reconnect forever, which is precisely the flood the key exists to stop.
+   * `handleOpenAckFrame` declines to reset the loop counters there for the
+   * same reason, and cites the incident it cost (int #4781, traycer#892).
+   */
+  private lastRetryableCloseFingerprint: string | null = null;
   /**
    * Bounds the rare "valid-but-rejected" loop: AuthnV3 keeps accepting the
    * bearer (revalidation returns "rotated") yet the host keeps rejecting the
@@ -2184,12 +2342,21 @@ class StreamSession<
       return;
     }
 
+    // The version is decided BEFORE the params are read, so a method served on
+    // more than one major can shape its open request for the one that was
+    // negotiated. `prepareStreamSubscribeRequest` re-derives the same answer
+    // from the same pair, so the payload can never be declared at a version
+    // its provider was not told about.
+    const myCanonical = selectedManifest[this.config.method];
+    const theirCanonical = theirManifest[this.config.method];
     const prepared = prepareStreamSubscribeRequest(
       this.config.registry,
       this.config.method,
-      selectedManifest[this.config.method],
-      theirManifest[this.config.method],
-      this.config.paramsProvider(),
+      myCanonical,
+      theirCanonical,
+      this.config.paramsProvider(
+        selectStreamSubscribeVersion(myCanonical, theirCanonical),
+      ),
     );
     const subscribeFrame: ClientStreamSubscribeFrame = {
       kind: "subscribe",
@@ -2384,6 +2551,22 @@ class StreamSession<
       // streak left by a prior genuine `UNAUTHORIZED` episode so a later real
       // rejection starts from a clean slate.
       this.noProgressUnauthorizedReconnects = 0;
+      // The details go no further than this branch: the reconnect below is
+      // reported to consumers as a bare `reconnecting` transition, and a
+      // retryable close is by definition one the client does not act on. That
+      // is right for the transport, but it made a host that retries forever
+      // (a shipped 1.2.0 host refusing a chat store written by 1.3, once per
+      // reconnect) silent everywhere - the tile spun, and no log named the
+      // host's reason. One line here is what support has to go on.
+      const retryableClose = describeRetryableClose({
+        method: this.config.method,
+        code: details.code,
+        reason: details.reason,
+      });
+      if (retryableClose.fingerprint !== this.lastRetryableCloseFingerprint) {
+        this.lastRetryableCloseFingerprint = retryableClose.fingerprint;
+        console.warn(retryableClose.line);
+      }
       this.teardownSocket(1000, "host-retryable");
       this.onTransportDrop();
       return;
@@ -2454,6 +2637,34 @@ class StreamSession<
       // The credential was rejected (revoked / dead refresh token); the
       // revalidator has already signed out. Stop retrying.
       this.goTerminal(details);
+      return;
+    }
+    if (outcome === "local-plane-retained") {
+      // The cloud verdict is gone but the SESSION is not, and it is still
+      // admitted to the local plane - so this stream, which a local host can
+      // still serve, must not be closed the way a sign-out closes it.
+      //
+      // Counted as no-progress UNCONDITIONALLY, which is the difference from
+      // "rotated" below and is not a heuristic: no better bearer can arrive
+      // while the session stays in this state, so the token comparison that
+      // decides progress there can only ever answer "same". Bounding it is
+      // what keeps this from becoming an unbounded reconnect loop that spends
+      // a single-use refresh token on every cycle - the failure the terminal
+      // close was, crudely, preventing.
+      this.noProgressUnauthorizedReconnects += 1;
+      if (
+        this.noProgressUnauthorizedReconnects >=
+        MAX_NO_PROGRESS_UNAUTHORIZED_RECONNECTS
+      ) {
+        console.error(
+          `[stream] giving up after ${this.noProgressUnauthorizedReconnects} ` +
+            `UNAUTHORIZED reconnects on a session with no cloud verdict ` +
+            `(method=${String(this.config.method)}); reload required`,
+        );
+        this.goTerminal(details);
+        return;
+      }
+      this.scheduleReconnect();
       return;
     }
     if (outcome === "network-error") {
@@ -2835,6 +3046,10 @@ class StreamSession<
   private resetLoopCounters(): void {
     this.reconnectAttempt = 0;
     this.noProgressUnauthorizedReconnects = 0;
+    // The retryable-close suppression rides the same proof, for the same
+    // reason. This is the half that covers a QUIET stream, which has no frame
+    // to prove itself with; `emitServerFrame` clears it for every other.
+    this.lastRetryableCloseFingerprint = null;
   }
 
   /**
@@ -2997,6 +3212,14 @@ class StreamSession<
     if (envelope.kind === "snapshot") {
       this.noProgressUnauthorizedReconnects = 0;
     }
+    // The retryable-close suppression rides the same proof as the backoff, and
+    // for the same reason: a socket that has carried work since the last
+    // refusal ends that episode, so the next refusal is news rather than the
+    // repeat the key exists to swallow. Any frame counts here, unlike the
+    // auth-loop bound above - that one needs a `snapshot` because it is a
+    // give-up BOUND that an `earlyMeta` loop could otherwise evade, where this
+    // is only a log gate whose failure mode is one extra line.
+    this.lastRetryableCloseFingerprint = null;
     const handler = this.serverFrameHandler;
     if (handler === null) {
       return;
@@ -3040,6 +3263,29 @@ interface PreparedStreamSubscribeRequest {
 }
 
 /**
+ * The version {@link prepareStreamSubscribeRequest} would declare, without the
+ * payload transform - the whole of what a manifest can predict about a
+ * subscribe that has not happened.
+ *
+ * The rule is copied deliberately rather than shared through that function:
+ * the transform half needs a live `params` value, which is precisely what a
+ * pre-check does not have. Both sides encode the framework's asymmetric
+ * contract - the older side never transforms, so the newer side declares the
+ * older minor - and must move together.
+ *
+ * `null` when either side does not carry the method at all, or across a major
+ * skew, which streams have no bridge for.
+ */
+function predictedSubscribeSchemaVersion(
+  mine: SchemaVersion | null,
+  theirs: SchemaVersion | null,
+): SchemaVersion | null {
+  if (mine === null || theirs === null) return null;
+  if (mine.major !== theirs.major) return null;
+  return mine.minor <= theirs.minor ? mine : theirs;
+}
+
+/**
  * Computes what the `subscribe` control frame should actually declare on the
  * wire - the streaming analog of `ws-rpc-client.ts`'s `prepareRequestPayload`.
  *
@@ -3064,19 +3310,45 @@ export function prepareStreamSubscribeRequest(
   theirCanonical: SchemaVersion,
   params: unknown,
 ): PreparedStreamSubscribeRequest {
+  const onWireVersion = selectStreamSubscribeVersion(
+    myCanonical,
+    theirCanonical,
+  );
+  if (schemaVersionEqual(onWireVersion, myCanonical)) {
+    return { onWireVersion, onWirePayload: params };
+  }
+  const methodRegistry = registry[method] as StreamMethodVersionRegistry;
+  const olderLine = methodRegistry[myCanonical.major];
+  const olderEntry = olderLine.versions[onWireVersion.minor];
+  return {
+    onWireVersion,
+    onWirePayload: olderEntry.contract.openRequestSchema.parse(params),
+  };
+}
+
+/**
+ * Which version {@link prepareStreamSubscribeRequest} will declare, decided
+ * from the two manifests alone - so a caller can know it BEFORE it has the
+ * params, which is what lets a params provider shape its open request for the
+ * major that was actually negotiated (see `StreamParamsProvider`).
+ *
+ * Extracted rather than duplicated at the call sites precisely because those
+ * two answers must never diverge: a provider told `@1` whose payload is then
+ * declared as `@2` writes a frame the peer's strict schema drops, silently and
+ * on the open. Both transports read it through this function and then hand the
+ * same pair to `prepareStreamSubscribeRequest`.
+ */
+export function selectStreamSubscribeVersion(
+  myCanonical: SchemaVersion,
+  theirCanonical: SchemaVersion,
+): SchemaVersion {
   if (
     myCanonical.major !== theirCanonical.major ||
     myCanonical.minor <= theirCanonical.minor
   ) {
-    return { onWireVersion: myCanonical, onWirePayload: params };
+    return myCanonical;
   }
-  const methodRegistry = registry[method] as StreamMethodVersionRegistry;
-  const olderLine = methodRegistry[myCanonical.major];
-  const olderEntry = olderLine.versions[theirCanonical.minor];
-  return {
-    onWireVersion: theirCanonical,
-    onWirePayload: olderEntry.contract.openRequestSchema.parse(params),
-  };
+  return theirCanonical;
 }
 
 type SessionPhase = "idle" | "dialing" | "awaitingOpenAck" | "subscribed";

@@ -15,7 +15,7 @@ import type {
  * is how the wrong one gets read.
  *
  * **Both fields are read BY VALUE, never by key presence.** On a live
- * `chat.subscribe@1.9` frame the host sets both keys unconditionally, with
+ * `chat.subscribe@1.10` frame the host sets both keys unconditionally, with
  * `undefined` meaning "there is nothing here" - so `"pendingReturn" in state`
  * is true for a chat that has never had a fallback, and a surface gated on
  * presence renders forever.

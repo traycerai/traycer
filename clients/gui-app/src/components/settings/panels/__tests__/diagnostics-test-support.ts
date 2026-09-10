@@ -269,7 +269,8 @@ export function makeSupportBridge(overrides: {
           lines: [`line-one-${input.target}`, `line-two-${input.target}`],
           truncated: false,
         })),
-    freezeEvidence: () => Promise.resolve({ reportId: "report-1" }),
+    freezeEvidence: () =>
+      Promise.resolve({ reportId: "report-1", contactEmail: null }),
     discardFrozenEvidence: () => Promise.resolve(),
     readFrozenLogTail: (input) =>
       Promise.resolve<DesktopSupportLogTailResult>({

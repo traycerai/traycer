@@ -23,6 +23,18 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => activeHostIdRef.value,
 }));
 
+// The notification centre reads its host from `useNotificationResolveHost` (the local
+// host that owns the streams), not from the app-wide active host. Projected
+// from this suite's existing host ref so the scenario it was already
+// describing is unchanged.
+vi.mock("@/hooks/notifications/use-notification-host", () => ({
+  useNotificationResolveHostId: () => activeHostIdRef.value,
+  useNotificationResolveHost: () => ({
+    hostId: activeHostIdRef.value,
+    client: null,
+  }),
+}));
+
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: (hostId: string) => {
     if (hostId.length === 0 || directoryRef.value === null) return null;
@@ -69,6 +81,27 @@ describe("HeaderNotificationsBell auth gate", () => {
       </RunnerHostProvider>,
     );
     expect(screen.queryByTestId("notifications-bell")).toBeNull();
+  });
+
+  it("renders the bell for an unverified session - the local lanes need their only desktop entry point", () => {
+    // The session provider keeps the host-notification and agent-activity
+    // lanes running under `unverified` and withholds only the cloud lanes;
+    // gating the bell on the cloud verdict left those lanes with no way in.
+    useAuthStore
+      .getState()
+      .setUnverifiedSession(
+        { userId: "test-user", userName: "U", email: "u@example.com" },
+        { userId: "test-user", username: "U" },
+      );
+    const runnerHost = createRunnerHost();
+    render(
+      <RunnerHostProvider runnerHost={runnerHost}>
+        <TooltipProvider>
+          <HeaderNotificationsBell />
+        </TooltipProvider>
+      </RunnerHostProvider>,
+    );
+    expect(screen.getByTestId("notifications-bell")).not.toBeNull();
   });
 
   it("renders the bell once the user transitions to signed-in", () => {

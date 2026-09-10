@@ -202,6 +202,82 @@ describe("parseAttemptLockHolder vs the real writer's LockMetadata", () => {
     expect(attemptHolderUsesPlainIdentityProbe(holder)).toBe(false);
   });
 
+  // Release must key retention on the OUTSTANDING PUBLICATION, never on the
+  // publisher's pid. The rule previously read `current.pid !== meta.pid && (
+  // group || retain)`, where the pid comparison stood in for "the publication
+  // has not been handed back yet". That proxy held only while a supervising
+  // parent never published its own pid mid-session. The maintenance lease now
+  // does exactly that - it publishes the executing process across an
+  // in-process action - so a handback that fails before its rename leaves the
+  // parent published with the group flags still set, and the pid-keyed rule
+  // then UNLINKED a lock whose actuator group was still alive.
+  const lockExists = async (dir: string): Promise<boolean> => {
+    try {
+      await readFile(updateAttemptLockPath(dir), "utf8");
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  it("retains the lock on release when the group publication is outstanding, even though the publisher IS the acquiring process", async () => {
+    const dir = await freshDir();
+    const outcome = await withUpdateContender(
+      {
+        hostHomeDir: dir,
+        reason: "holder-conformance-retain-self-published",
+        waitMs: 0,
+        pollIntervalMs: 10,
+        admission: "legacy-update-shadow",
+      },
+      async (capability) => {
+        // Publisher == this process (what the lease's in-process swap does),
+        // AND the supervised group is still bound. This is the combination the
+        // old pid-keyed rule could not represent.
+        await rebindUpdateMutationCapabilityLiveness(capability, process.pid, {
+          supervisedProcessGroupId: process.pid,
+          retainOnPublisherDeath: true,
+        });
+        return "published";
+      },
+    );
+    expect(outcome).toEqual({ kind: "ran", result: "published" });
+    // The contender's `finally` has already run its release by here.
+    expect(await lockExists(dir)).toBe(true);
+  });
+
+  it("CONTROL: releases normally once the publication is handed back empty", async () => {
+    // The control that keeps the assertion above from being vacuous: release
+    // DOES unlink on the ordinary path, so a surviving file there is the
+    // retention rule firing and not release being inert in this rig. An empty
+    // publication is exactly what `restoreHolder` writes at clean completion.
+    const dir = await freshDir();
+    const outcome = await withUpdateContender(
+      {
+        hostHomeDir: dir,
+        reason: "holder-conformance-release-after-handback",
+        waitMs: 0,
+        pollIntervalMs: 10,
+        admission: "legacy-update-shadow",
+      },
+      async (capability) => {
+        await rebindUpdateMutationCapabilityLiveness(capability, process.pid, {
+          supervisedProcessGroupId: process.pid,
+          retainOnPublisherDeath: true,
+        });
+        // Hand back: clears both flags, which is what authorizes release.
+        await rebindUpdateMutationCapabilityLiveness(
+          capability,
+          process.pid,
+          {},
+        );
+        return "handed-back";
+      },
+    );
+    expect(outcome).toEqual({ kind: "ran", result: "handed-back" });
+    expect(await lockExists(dir)).toBe(false);
+  });
+
   it("supplemental liveness absent (the common case) keeps the plain-probe branch — the control for the case above", async () => {
     const dir = await freshDir();
     let capturedHolder: AttemptLockHolder | null = null;

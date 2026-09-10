@@ -146,7 +146,11 @@ export function createStoreBackedRevalidator(args: {
         case "deleted":
         case "tombstoned":
         case "user-mismatch":
-        case "refresh-rejected":
+        // Terminal for this lease on either side of the split - see the note in
+        // `auth/validate.ts`: the CLI holds no local plane to keep alive, so
+        // the credential/account distinction changes nothing it can do.
+        case "refresh-rejected-credential":
+        case "refresh-rejected-account":
           // Terminal for this lease: the file is gone (concurrent logout), a
           // sign-out stands, the file switched to a different account (never
           // adopt cross-user), or the refresh token is dead. The CLI leaves the

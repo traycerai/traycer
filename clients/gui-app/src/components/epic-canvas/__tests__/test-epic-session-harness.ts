@@ -107,7 +107,11 @@ export function createEpicSessionTestHarness(epicId: string): TestEpicHarness {
             // would race the initial-state construction. Tests await one
             // act() tick after render to flush this.
             setTimeout(() => {
-              stream.callbacks.onConnectionStatus("open", null);
+              // `true`: harness sessions simulate a `@1.4`-capable peer, so
+              // durability silence in a suite reads as UNKNOWN rather than as
+              // a legacy peer's calm - the same value the old stream-seam
+              // harness passed.
+              stream.callbacks.onConnectionStatus("open", null, true);
               stream.callbacks.onSnapshot(
                 makeMeta(epicId, permissionRole),
                 snapshot,

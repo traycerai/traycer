@@ -131,7 +131,11 @@ export function createFakeRunnerHost(
       get: () => Promise.resolve(null),
       signIn: () => Promise.resolve(),
       rotate: () =>
-        Promise.resolve({ outcome: "deleted" as const, pair: null }),
+        Promise.resolve({
+          outcome: "deleted" as const,
+          pair: null,
+          rejection: null,
+        }),
       delete: () => Promise.resolve(),
       deleteIfToken: () => Promise.resolve("kept" as const),
       subscribe: () => ({ dispose: () => undefined }),
@@ -160,6 +164,9 @@ export function createFakeRunnerHost(
     // Desktop-shaped by default; a phone-shaped test passes its own
     // `pushPermission` double through `overrides`.
     pushPermission: null,
+    // Likewise: a shell that raises an OS back request passes its own
+    // `systemBack` double through `overrides`.
+    systemBack: null,
   };
   return { ...base, ...overrides };
 }

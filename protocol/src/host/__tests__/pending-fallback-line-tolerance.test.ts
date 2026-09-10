@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/index";
 import {
   chatSnapshotSchema,
-  chatSubscribeV19,
+  chatSubscribeV110,
   chatWindowedSnapshotSchema,
   lastFailedAttemptSchema,
   pendingFallbackSchema,
@@ -11,8 +11,8 @@ import {
 
 /**
  * Tolerance proof for the additive-optional `pendingFallback` and
- * `pendingReturn` fields (`chat.subscribe@1.9`): the live windowed line
- * CARRIES them, and every released `chat.subscribe@1.0-1.8` line TOLERATES
+ * `pendingReturn` fields (`chat.subscribe@1.10`): the live windowed line
+ * CARRIES them, and every frozen `chat.subscribe@1.0-1.9` line TOLERATES
  * them - parses a frame carrying either without failing, and does not
  * surface the key on the parsed result, because each of those lines is a
  * hand-frozen literal pre-image rather than a reference to the live schema.
@@ -57,7 +57,7 @@ function pendingFallbackFixture() {
     failedTuple: chatRunSettingsFixture("gpt-5"),
     targetTuple: chatRunSettingsFixture("claude-opus-5"),
     // F5 (D202's sibling item): the impending-action preview, additive on
-    // `pendingFallbackSchema` since `chat.subscribe@1.9`. Populated, not
+    // `pendingFallbackSchema` since `chat.subscribe@1.10`. Populated, not
     // `null` - a `null` here would make every "strips the KEY" assertion in
     // Half 2 below pass whether or not the nested field was ever projected
     // away, since the container itself is what those assertions delete.
@@ -157,14 +157,14 @@ function frame(
 
 // ─── Half 1: the live windowed line CARRIES pendingFallback ───────────────
 
-describe("chat.subscribe@1.9 carries a fully-populated pendingFallback", () => {
+describe("chat.subscribe@1.10 carries a fully-populated pendingFallback", () => {
   it("the fixture covers every pendingFallbackSchema field", () => {
     assertFixtureMatchesSchema();
   });
 
   it("round-trips pendingFallback intact on a snapshot frame", () => {
     const pendingFallback = pendingFallbackFixture();
-    const parsed = chatSubscribeV19.serverFrameSchema.parse(
+    const parsed = chatSubscribeV110.serverFrameSchema.parse(
       frame("snapshot", {
         snapshot: { ...baseWindowedSnapshot(), pendingFallback },
       }),
@@ -176,7 +176,7 @@ describe("chat.subscribe@1.9 carries a fully-populated pendingFallback", () => {
 
   it("round-trips pendingFallback intact on a turnStateChanged frame", () => {
     const pendingFallback = pendingFallbackFixture();
-    const parsed = chatSubscribeV19.serverFrameSchema.parse(
+    const parsed = chatSubscribeV110.serverFrameSchema.parse(
       frame("turnStateChanged", {
         runStatus: "running",
         activeTurn: null,
@@ -213,20 +213,20 @@ describe("chat.subscribe@1.9 carries a fully-populated pendingFallback", () => {
   });
 });
 
-// ─── Half 2: every released `1.0`-`1.8` line TOLERATES it without gaining it ─
+// ─── Half 2: every frozen `1.0`-`1.9` line TOLERATES it without gaining it ──
 
 const chatSubscribeLine = hostStreamRpcRegistry["chat.subscribe"][1];
 
-// `chatSubscribeV19` (minor 9) is the live line proven above; everything
-// below it is released and must only tolerate, never carry.
+// `chatSubscribeV110` (minor 10) is the live line proven above; everything
+// below it is frozen and must only tolerate, never carry.
 const RELEASED_MINORS = Object.keys(chatSubscribeLine.versions)
   .map(Number)
-  .filter((minor) => minor < 9)
+  .filter((minor) => minor < 10)
   .sort((a, b) => a - b);
 
-describe("every released chat.subscribe line tolerates pendingFallback without gaining it", () => {
-  it("covers chat.subscribe@1.0 through @1.8 (nothing added later silently drops out)", () => {
-    expect(RELEASED_MINORS).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
+describe("every frozen chat.subscribe line tolerates pendingFallback without gaining it", () => {
+  it("covers chat.subscribe@1.0 through @1.9 (nothing added later silently drops out)", () => {
+    expect(RELEASED_MINORS).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
   });
 
   for (const minor of RELEASED_MINORS) {
@@ -235,11 +235,11 @@ describe("every released chat.subscribe line tolerates pendingFallback without g
     describe(`chat.subscribe@${version}`, () => {
       const { contract } = chatSubscribeLine.versions[minor];
 
-      // `1.8` is the released windowed line - its snapshot has no embedded
-      // transcript and carries the bounded-window fields instead of
-      // `accumulatedFileChanges`. Every other released minor (`1.0`-`1.7`)
+      // `1.8` and `1.9` are the frozen windowed lines - their snapshot has no
+      // embedded transcript and carries the bounded-window fields instead of
+      // `accumulatedFileChanges`. Every other frozen minor (`1.0`-`1.7`)
       // still embeds the whole chat record.
-      const isWindowed = minor === 8;
+      const isWindowed = minor >= 8;
 
       it("parses a snapshot frame carrying pendingFallback, and strips the key", () => {
         const pendingFallback = pendingFallbackFixture();
@@ -305,14 +305,14 @@ function assertReturnFixtureMatchesSchema() {
   );
 }
 
-describe("chat.subscribe@1.9 carries a fully-populated pendingReturn", () => {
+describe("chat.subscribe@1.10 carries a fully-populated pendingReturn", () => {
   it("the fixture covers every pendingReturnSchema field", () => {
     assertReturnFixtureMatchesSchema();
   });
 
   it("round-trips pendingReturn intact on a snapshot frame", () => {
     const pendingReturn = pendingReturnFixture();
-    const parsed = chatSubscribeV19.serverFrameSchema.parse(
+    const parsed = chatSubscribeV110.serverFrameSchema.parse(
       frame("snapshot", {
         snapshot: { ...baseWindowedSnapshot(), pendingReturn },
       }),
@@ -323,7 +323,7 @@ describe("chat.subscribe@1.9 carries a fully-populated pendingReturn", () => {
 
   it("round-trips pendingReturn intact on a turnStateChanged frame", () => {
     const pendingReturn = pendingReturnFixture();
-    const parsed = chatSubscribeV19.serverFrameSchema.parse(
+    const parsed = chatSubscribeV110.serverFrameSchema.parse(
       frame("turnStateChanged", {
         runStatus: "running",
         activeTurn: null,
@@ -357,9 +357,9 @@ describe("chat.subscribe@1.9 carries a fully-populated pendingReturn", () => {
   });
 });
 
-describe("every released chat.subscribe line tolerates pendingReturn without gaining it", () => {
-  it("covers chat.subscribe@1.0 through @1.8 (nothing added later silently drops out)", () => {
-    expect(RELEASED_MINORS).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
+describe("every frozen chat.subscribe line tolerates pendingReturn without gaining it", () => {
+  it("covers chat.subscribe@1.0 through @1.9 (nothing added later silently drops out)", () => {
+    expect(RELEASED_MINORS).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
   });
 
   for (const minor of RELEASED_MINORS) {
@@ -367,7 +367,7 @@ describe("every released chat.subscribe line tolerates pendingReturn without gai
 
     describe(`chat.subscribe@${version}`, () => {
       const { contract } = chatSubscribeLine.versions[minor];
-      const isWindowed = minor === 8;
+      const isWindowed = minor >= 8;
 
       it("parses a snapshot frame carrying pendingReturn, and strips the key", () => {
         const pendingReturn = pendingReturnFixture();
@@ -468,14 +468,14 @@ function assertLastFailedFixtureMatchesSchema() {
   );
 }
 
-describe("chat.subscribe@1.9 carries a fully-populated lastFailedAttempt", () => {
+describe("chat.subscribe@1.10 carries a fully-populated lastFailedAttempt", () => {
   it("the fixture covers every lastFailedAttemptSchema field", () => {
     assertLastFailedFixtureMatchesSchema();
   });
 
   it("round-trips lastFailedAttempt intact on a snapshot frame", () => {
     const lastFailedAttempt = lastFailedAttemptFixture();
-    const parsed = chatSubscribeV19.serverFrameSchema.parse(
+    const parsed = chatSubscribeV110.serverFrameSchema.parse(
       frame("snapshot", {
         snapshot: { ...baseWindowedSnapshot(), lastFailedAttempt },
       }),
@@ -486,7 +486,7 @@ describe("chat.subscribe@1.9 carries a fully-populated lastFailedAttempt", () =>
 
   it("round-trips lastFailedAttempt intact on a turnStateChanged frame", () => {
     const lastFailedAttempt = lastFailedAttemptFixture();
-    const parsed = chatSubscribeV19.serverFrameSchema.parse(
+    const parsed = chatSubscribeV110.serverFrameSchema.parse(
       frame("turnStateChanged", {
         runStatus: "running",
         activeTurn: null,
@@ -520,13 +520,13 @@ describe("chat.subscribe@1.9 carries a fully-populated lastFailedAttempt", () =>
   });
 });
 
-describe("every released chat.subscribe line tolerates lastFailedAttempt without gaining it", () => {
+describe("every frozen chat.subscribe line tolerates lastFailedAttempt without gaining it", () => {
   for (const minor of RELEASED_MINORS) {
     const version = `1.${minor}`;
 
     describe(`chat.subscribe@${version}`, () => {
       const { contract } = chatSubscribeLine.versions[minor];
-      const isWindowed = minor === 8;
+      const isWindowed = minor >= 8;
 
       it("parses a snapshot frame carrying lastFailedAttempt, and strips the key", () => {
         const lastFailedAttempt = lastFailedAttemptFixture();

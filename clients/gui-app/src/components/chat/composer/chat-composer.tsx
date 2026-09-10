@@ -592,7 +592,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     fallbackVisible: fallbackComposerCardVisible(providerFallback.pending),
     profileDisabled: profileEligibility.disabled,
     reauthVisible: reauthBanner !== null,
-    // BY VALUE. The key is present on every live `1.9` frame with `undefined`
+    // BY VALUE. The key is present on every live `1.10` frame with `undefined`
     // meaning "no offer", so a `"pendingReturn" in ...` test here would pin the
     // banner open for the life of the chat.
     fallbackReturnVisible: providerFallback.pendingReturn !== undefined,

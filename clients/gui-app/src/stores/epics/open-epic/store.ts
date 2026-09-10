@@ -1,3 +1,4 @@
+import type { ConfirmedChatMutation } from "@traycer-clients/shared/replica-runtime/worker/bridge-protocol";
 /**
  * The zustand adapter over the epic replica runtime.
  *
@@ -33,11 +34,24 @@ import { persist, createJSONStorage } from "zustand/middleware";
 import type * as Y from "yjs";
 import type { Awareness } from "y-protocols/awareness";
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
-import type { EpicCloudSyncStatus } from "@traycer/protocol/host/epic/subscribe";
 import type {
+  EpicCloudFreshness,
+  EpicCloudSyncStatus,
+  EpicDurabilityPauseReasonV15,
+  EpicDurabilityStatusV15,
+  EpicLocalProtection,
+  EpicPromotionState,
+} from "@traycer/protocol/host/epic/subscribe";
+import type {
+  ChatRecordHeadStamp,
   ChatRecordRemovalReason,
-  ChatRecordSummaryV11,
+  ChatRecordSummaryV12,
 } from "@traycer/protocol/host/epic/chat-records";
+import {
+  EMPTY_CHAT_RECORD_HEADS,
+  applyChatRecordHeadRows,
+  dropChatRecordHeadsForChat,
+} from "./chat-record-head";
 import type { TuiAgentRecordSummaryV12 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type {
   ChatRecordDelta,
@@ -330,6 +344,33 @@ export interface OpenEpicState {
    */
   readonly chatRecords: ChatsSlice;
   /**
+   * The cloud publication HEAD for each chat this session has heard about,
+   * keyed by `chatRecordKey(ownerUserId, chatId)` (see `./chat-record-head`).
+   * Chats with no publication - and every row from a host that predates
+   * `epic.listChatRecords@1.2` / `host.chatRecords.subscribe@1.3` - are
+   * absent.
+   *
+   * ## Its own plane, beside the record table rather than inside it
+   *
+   * MAIN-THREAD state, and the one record-shaped key that is NOT part of the
+   * worker's projection. The record table's ordering fact is `revision`, and
+   * its guard accepts or rejects a whole row on a strictly-exceeds test; a
+   * head advances on its own server-monotonic `publishedAt` and routinely
+   * moves at an UNCHANGED revision (a turn published, nothing renamed), which
+   * that guard correctly drops. Rather than teach the shared table - which
+   * the terminal-agent plane also uses - a second ordering fact for a field
+   * only chats have, the head is folded in here, at the two seams where both
+   * of its inputs already arrive on this thread: the `epic.listChatRecords`
+   * answer and the `host.chatRecords.subscribe` delta.
+   *
+   * Held BESIDE {@link OpenEpicState.chatRecords} rather than on
+   * `ChatProjection` for a second reason: the projection is keyed on `chatId`
+   * alone and filtered to the signed-in owner, while the head is read for a
+   * collaborator's chat too (the published-copy tile keys its cloud read on
+   * it). Read through `useEpicChatRecordHead`.
+   */
+  readonly chatRecordHeads: Readonly<Record<string, ChatRecordHeadStamp>>;
+  /**
    * Whether `epic.listChatRecords` has produced an answer this session.
    * Missing rows are not deletion evidence until this is true. Transient
    * failures leave it false; `E_HOST_UNSUPPORTED` marks it true because an
@@ -477,6 +518,51 @@ export interface OpenEpicState {
    * proof.
    */
   readonly cloudSyncStatus: EpicCloudSyncStatus;
+  /**
+   * Where the epic is durable, at `@1.6` width.
+   *
+   * `null` here means the host said NOTHING, and at `@1.6` that reads as
+   * unknown - never as synced. It is not a licence for the calm rendering;
+   * see `deriveEpicDurabilityView`, which requires a POSITIVE statement
+   * before it will resolve a missing durability claim as fine.
+   */
+  readonly durabilityStatus: EpicDurabilityStatusV15 | null;
+  /** Present for a recognised paused reason, at `@1.6` width. */
+  readonly durabilityPauseReason: EpicDurabilityPauseReasonV15 | null;
+  /** Optional @1.5 distinction behind a durable promotion reservation. */
+  readonly durabilityPromotionState: EpicPromotionState | null;
+  /**
+   * Whether this session has local (WAL) protection - `@1.6`.
+   *
+   * `null` means the host did not say, which is `unknown`: an unarmed session
+   * used to be indistinguishable from an armed one, so the ONLY reading that
+   * closes that hole is that silence is not protection.
+   */
+  readonly localProtection: EpicLocalProtection | null;
+  /**
+   * How the served document stands relative to the cloud - `@1.6`,
+   * `s5-mirror-first-serving`. `null` means the host did not say: silence is
+   * UNKNOWN, and unknown is not `current`.
+   */
+  readonly cloudFreshness: EpicCloudFreshness | null;
+  /**
+   * Whether the peer serving this stream negotiated the `@1.6` minor that
+   * carries the three legs above - `s5-status-truthfulness`. Every one of
+   * those legs is optional on the wire, so `null` alone cannot say WHICH
+   * silence it is; this bit is what separates a pre-`@1.6` peer from a
+   * `@1.6` peer that stated UNKNOWN.
+   */
+  readonly durabilityLegsNegotiated: boolean;
+  /** Whether this connection can report `epic.subscribe@1.4` durability. */
+  readonly durabilityStatusNegotiated: boolean;
+  /**
+   * The last durability the host actually STATED, kept across subscription
+   * cycles - unlike {@link durabilityStatus}, which a reconnect clears. See
+   * the projection's field of this name for the full rule.
+   */
+  readonly retainedDurabilityStatus: EpicDurabilityStatusV15 | null;
+  /** The pause reason observed beside {@link retainedDurabilityStatus}. */
+  readonly retainedDurabilityPauseReason: EpicDurabilityPauseReasonV15 | null;
   /** `true` only after a cloud-status frame for this exact open cycle. */
   readonly hasFreshCloudSyncStatus: boolean;
   /**
@@ -581,7 +667,7 @@ export interface OpenEpicState {
    * `chats` identical to the doc projection.
    */
   applyChatRecords: (
-    records: readonly ChatRecordSummaryV11[],
+    records: readonly ChatRecordSummaryV12[],
     issuedAtSeq: number | null,
   ) => void;
   /**
@@ -603,8 +689,10 @@ export interface OpenEpicState {
    * 20s list read.
    *
    * `upsert` is REVISION-GUARDED: `revision` is per-chat monotonic and the only
-   * ordering fact on a row, so a delta whose revision does not strictly exceed
-   * the one already held is dropped. That is what makes replayed, reordered and
+   * ordering fact on the ROW, so a delta whose revision does not strictly
+   * exceed the one already held is dropped. The row's `head` is ordered
+   * separately and lands regardless - see
+   * {@link OpenEpicState.chatRecordHeads}. That is what makes replayed, reordered and
    * duplicated frames harmless without any merge logic. `remove` carries no
    * revision and needs none - it applies unconditionally and idempotently, and
    * is remembered in {@link OpenEpicState.chatRetractions}.
@@ -613,6 +701,8 @@ export interface OpenEpicState {
    * host-scoped and covers every open epic, and this store is one of them.
    */
   applyChatRecordDelta: (delta: ChatRecordDelta) => void;
+  /** Reconcile an acknowledged mutation without manufacturing a host-stream event. */
+  applyConfirmedChatMutation: (mutation: ConfirmedChatMutation) => void;
   /**
    * Publishes the host's `epic.listTuiAgents` answer into the terminal-agent
    * record table - the terminal twin of {@link OpenEpicState.applyChatRecords},
@@ -1805,6 +1895,10 @@ export function createOpenEpicStore(
           // Same: its own key, so its own seed. `null` is "no arm selected
           // yet", which is what every reader already treats it as.
           installedArm: null,
+          // Not part of the worker's records projection at all - see the
+          // field's own note on why the head is a main-thread plane. Empty
+          // until a list answer or a delta carries one.
+          chatRecordHeads: EMPTY_CHAT_RECORD_HEADS,
           ingestFenceIdentity: mintedIngestFenceIdentity,
           lastFocusedArtifactId: null,
           lastFocusedThreadId: null,
@@ -1942,6 +2036,16 @@ export function createOpenEpicStore(
           },
 
           applyChatRecords: (records, issuedAtSeq) => {
+            // The head plane, folded in HERE rather than in the worker - see
+            // `OpenEpicState.chatRecordHeads`. Identity-preserving when the
+            // answer re-serves heads this session already holds, which is the
+            // 20s poll's steady state, so a quiet epic publishes nothing.
+            const heads = applyChatRecordHeadRows(
+              get().chatRecordHeads,
+              records,
+            );
+            if (heads !== get().chatRecordHeads)
+              set({ chatRecordHeads: heads });
             runtime.command({
               kind: "apply-chat-records",
               payload: { records, issuedAtSeq },
@@ -1954,7 +2058,29 @@ export function createOpenEpicStore(
               payload: {},
             });
           },
+          applyConfirmedChatMutation: (mutation) => {
+            runtime.command({
+              kind: "apply-confirmed-chat-mutation",
+              payload: { mutation },
+            });
+          },
           applyChatRecordDelta: (delta) => {
+            // The head plane's push half. An `upsert` folds its stamp in on
+            // `publishedAt`, INDEPENDENTLY of the record table's revision
+            // guard below - which is the whole point: a turn published with
+            // nothing renamed arrives at an unchanged revision, and that
+            // guard drops the row (correctly, its metadata is not newer)
+            // while the head still has to land.
+            //
+            // A `remove` drops the entry: removal is terminal and absorbing
+            // for the head exactly as it is for the row, and it is the only
+            // thing that ever retracts a stamp.
+            const held = get().chatRecordHeads;
+            const heads =
+              delta.kind === "upsert"
+                ? applyChatRecordHeadRows(held, [delta.record])
+                : dropChatRecordHeadsForChat(held, delta.chatId);
+            if (heads !== held) set({ chatRecordHeads: heads });
             runtime.command({
               kind: "apply-chat-record-delta",
               payload: { delta },

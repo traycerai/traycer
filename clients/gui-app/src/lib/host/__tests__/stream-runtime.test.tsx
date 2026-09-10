@@ -32,6 +32,8 @@ import {
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import type { SchemaVersion } from "@traycer/protocol/framework/index";
+import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
 
 const bindingRef = vi.hoisted(() => ({
   value: null as {
@@ -180,6 +182,7 @@ import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-st
 import {
   useStreamHostId,
   useWsStreamClient,
+  useStreamRuntimeBinding,
 } from "@/lib/host/stream-runtime-context";
 import {
   HostReadinessControllerContext,
@@ -367,6 +370,10 @@ interface FakeRemoteSession extends IRemoteSession<
   HostStreamRpcRegistry
 > {
   readonly closeCalls: number;
+  setMethodSupport(
+    support: StreamMethodSupport,
+    schemaVersion: SchemaVersion | null,
+  ): void;
 }
 
 // A plain `closeCalls` counter - not a `vi.fn()` reference - so assertions
@@ -376,6 +383,9 @@ interface FakeRemoteSession extends IRemoteSession<
 // `fakeSession()`.
 function fakeRemoteSession(): FakeRemoteSession {
   let closeCalls = 0;
+  let methodSupport: StreamMethodSupport = "unknown";
+  let methodSchemaVersion: SchemaVersion | null = null;
+  const methodSupportListeners = new Set<() => void>();
   const session: FakeRemoteSession = {
     get closeCalls() {
       return closeCalls;
@@ -399,8 +409,21 @@ function fakeRemoteSession(): FakeRemoteSession {
     onClosed: () => () => undefined,
     subscribeAvailabilityRecovered: () => () => undefined,
     subscribeReadinessLost: () => () => undefined,
+    getMethodSupport: () => methodSupport,
+    getMethodSchemaVersion: () => methodSchemaVersion,
+    subscribeMethodSupport: (listener) => {
+      methodSupportListeners.add(listener);
+      return () => {
+        methodSupportListeners.delete(listener);
+      };
+    },
     // These provider tests never exercise fatal verdicts.
     terminalFatal: () => null,
+    setMethodSupport: (support, schemaVersion) => {
+      methodSupport = support;
+      methodSchemaVersion = schemaVersion;
+      for (const listener of methodSupportListeners) listener();
+    },
     close: () => {
       closeCalls += 1;
     },
@@ -602,6 +625,36 @@ describe("HostStreamProvider", () => {
     expect(result.current).not.toBe(first);
     expect(closeSpy).toHaveBeenCalledTimes(1);
     expect(closeSpy.mock.contexts[0]).toBe(first);
+  });
+
+  it("keeps a retained client open across a host swap until the hold is released", () => {
+    const closeSpy = vi.spyOn(WsStreamClient.prototype, "close");
+    const { directory, client } = mountLocalHost();
+    directory.publishUnannounced([mockLocalHostEntry, OTHER_HOST]);
+
+    const { result, rerender } = renderHook(() => useStreamRuntimeBinding(), {
+      wrapper,
+    });
+    const first = result.current;
+    expect(first?.wsStreamClient).toBeInstanceOf(WsStreamClient);
+    // A run on the window's own host takes a hold, as the controllers do.
+    const release = first?.retain?.() ?? null;
+    expect(release).not.toBeNull();
+
+    pointWindowAt(client, OTHER_HOST_ID);
+    rerender();
+
+    // The successor is served, but the held client is NOT closed with the
+    // swap: the run subscribed on it is still listening.
+    expect(result.current?.wsStreamClient).not.toBe(first?.wsStreamClient);
+    expect(closeSpy).not.toHaveBeenCalled();
+
+    release?.();
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+    expect(closeSpy.mock.contexts[0]).toBe(first?.wsStreamClient);
+    // Idempotent: a second release does not close anything else.
+    release?.();
+    expect(closeSpy).toHaveBeenCalledTimes(1);
   });
 
   // Steady state only: `act()` flushes render and effects together, so this

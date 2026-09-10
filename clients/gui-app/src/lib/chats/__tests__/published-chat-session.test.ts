@@ -9,6 +9,7 @@ import type { Message } from "@traycer/protocol/persistence/epic/messages";
 import {
   convertPublishedChat,
   convertReplicaChat,
+  createPublishedChatSessionHandle,
   publishedChatSessionState,
   type PublishedChatSessionInput,
 } from "@/lib/chats/published-chat-session";
@@ -411,5 +412,165 @@ describe("publishedChatSessionState", () => {
     // consumer gating on equality would wait forever for a reconnect this
     // frozen copy will never have.
     expect(state.transcriptBaselineEpoch).toBe(state.connectionEpoch);
+  });
+});
+
+/**
+ * `applyConversion` - the one way a published copy's handle changes after
+ * construction, applied IN PLACE on the same store so a mounted tile's
+ * subscriptions never have to be re-established. See the method's own doc
+ * comment on `PublishedChatSessionHandle` for the two facts pinned here: row
+ * identity is preserved wherever the row did not change, and
+ * `transcriptBaselineEpoch` only moves when the new list is not a strict
+ * EXTENSION of what was already shown.
+ */
+describe("applyConversion", () => {
+  it("appending a message keeps the previous message's object identity, and leaves the baseline epoch unchanged", () => {
+    const handle = createPublishedChatSessionHandle(
+      publishedInputWith([publishedUserMessage("m1")], []),
+    );
+    const firstMessage = handle.store.getState().messages[0];
+    expect(handle.store.getState().transcriptBaselineEpoch).toBe(0);
+
+    handle.applyConversion({
+      title: "Published Chat",
+      updatedAt: 2,
+      conversion: {
+        messages: [publishedUserMessage("m1"), publishedUserMessage("m2")],
+        events: [],
+        unreadableCount: 0,
+      },
+    });
+
+    const state = handle.store.getState();
+    expect(state.messages).toHaveLength(2);
+    // Ablation: gate the merge on `held === row` alone (drop the deep-equal
+    // fallback) and a fixture that mints a fresh object per call - as every
+    // caller here does - would replace every untouched row on every append.
+    expect(state.messages[0]).toBe(firstMessage);
+    expect(state.transcriptBaselineEpoch).toBe(0);
+  });
+
+  it("replaces a changed message (same id, different content) while an untouched sibling keeps identity", () => {
+    const m1 = publishedUserMessage("m1");
+    const m2 = publishedUserMessage("m2");
+    const handle = createPublishedChatSessionHandle(
+      publishedInputWith([m1, m2], []),
+    );
+    const before = handle.store.getState().messages;
+
+    const changedM1: typeof m1 = { ...m1, timestamp: 999 };
+    handle.applyConversion({
+      title: "Published Chat",
+      updatedAt: 2,
+      conversion: {
+        messages: [changedM1, m2],
+        events: [],
+        unreadableCount: 0,
+      },
+    });
+
+    const state = handle.store.getState();
+    expect(state.messages[0]).not.toBe(before[0]);
+    expect(state.messages[0].timestamp).toBe(999);
+    expect(state.messages[1]).toBe(before[1]);
+  });
+
+  it("bumps the baseline epoch when a message id is removed - not an extension of what was shown", () => {
+    const handle = createPublishedChatSessionHandle(
+      publishedInputWith(
+        [publishedUserMessage("m1"), publishedUserMessage("m2")],
+        [],
+      ),
+    );
+    handle.applyConversion({
+      title: "Published Chat",
+      updatedAt: 2,
+      conversion: {
+        messages: [publishedUserMessage("m1")],
+        events: [],
+        unreadableCount: 0,
+      },
+    });
+    expect(handle.store.getState().transcriptBaselineEpoch).toBe(1);
+  });
+
+  it("bumps the baseline epoch on a reorder - the first difference is not at the tail", () => {
+    const handle = createPublishedChatSessionHandle(
+      publishedInputWith(
+        [publishedUserMessage("m1"), publishedUserMessage("m2")],
+        [],
+      ),
+    );
+    handle.applyConversion({
+      title: "Published Chat",
+      updatedAt: 2,
+      conversion: {
+        messages: [publishedUserMessage("m2"), publishedUserMessage("m1")],
+        events: [],
+        unreadableCount: 0,
+      },
+    });
+    expect(handle.store.getState().transcriptBaselineEpoch).toBe(1);
+  });
+
+  it("writes nothing when the conversion is identical to what is already held", () => {
+    const handle = createPublishedChatSessionHandle(
+      publishedInputWith(
+        [publishedUserMessage("m1")],
+        [publishedChatEvent("e1")],
+      ),
+    );
+    const before = handle.store.getState();
+
+    handle.applyConversion({
+      title: "Published Chat",
+      updatedAt: 2,
+      conversion: {
+        messages: [publishedUserMessage("m1")],
+        events: [publishedChatEvent("e1")],
+        unreadableCount: 0,
+      },
+    });
+
+    expect(handle.store.getState()).toBe(before);
+  });
+
+  it("updates chat.title and chat.updatedAt from a later publication", () => {
+    const handle = createPublishedChatSessionHandle(publishedInputWith([], []));
+    handle.applyConversion({
+      title: "Renamed",
+      updatedAt: 99,
+      conversion: { messages: [], events: [], unreadableCount: 0 },
+    });
+    const chat = handle.store.getState().chat;
+    if (chat === null) throw new Error("expected chat");
+    expect(chat.title).toBe("Renamed");
+    expect(chat.updatedAt).toBe(99);
+  });
+
+  it("reconciles events by eventId the same way messages do", () => {
+    const e1 = publishedChatEvent("e1");
+    const handle = createPublishedChatSessionHandle(
+      publishedInputWith([], [e1]),
+    );
+    const before = handle.store.getState().events;
+
+    const changedE1: typeof e1 = { ...e1, timestamp: 55 };
+    const e2 = publishedChatEvent("e2");
+    handle.applyConversion({
+      title: "Published Chat",
+      updatedAt: 2,
+      conversion: {
+        messages: [],
+        events: [changedE1, e2],
+        unreadableCount: 0,
+      },
+    });
+
+    const state = handle.store.getState();
+    expect(state.events).toHaveLength(2);
+    expect(state.events[0]).not.toBe(before[0]);
+    expect(state.events[0].timestamp).toBe(55);
   });
 });

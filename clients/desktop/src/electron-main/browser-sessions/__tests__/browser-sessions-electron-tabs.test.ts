@@ -213,7 +213,7 @@ describe("createElectronTabs", () => {
     });
   });
 
-  it("answers identity_violation for a second birth on the same tab key when the reason is not restore", async () => {
+  it("answers identity_violation for a second birth on the same tab key when the reason is neither restore nor move", async () => {
     const recorder = createTabRecorder();
     const { sent, electronTabs } = setup(recorder.port, () => "connection-1");
 
@@ -268,6 +268,126 @@ describe("createElectronTabs", () => {
     ).toEqual([]);
   });
 
+  it("accepts a move create for a tab key this window already holds an accepted birth for", async () => {
+    const recorder = createTabRecorder();
+    const { sent, electronTabs } = setup(recorder.port, () => "connection-1");
+
+    electronTabs.handleFrame(CREATE);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    electronTabs.handleFrame(acceptedFrame("registration-1"));
+    sent.length = 0;
+
+    electronTabs.handleFrame({
+      ...CREATE,
+      requestId: "request-move",
+      reason: "move",
+    });
+    await vi.waitFor(() => expect(recorder.ensured).toHaveLength(2));
+
+    expect(provisionedFrames(sent)).toContainEqual(
+      expect.objectContaining({
+        kind: "electronTabProvisioned",
+        requestId: "request-move",
+        tabId: "tab-1",
+        registrationId: "registration-2",
+      }),
+    );
+    expect(
+      sent.filter((frame) => frame.kind === "electronTabCreateFailed"),
+    ).toEqual([]);
+  });
+
+  it("retires a transferred guest's birth and fires tabReleased with the old id, so the next create into this window is accepted", async () => {
+    const recorder = createTabRecorder();
+    const { sent, released, electronTabs } = setup(
+      recorder.port,
+      () => "connection-1",
+    );
+
+    electronTabs.handleFrame(CREATE);
+    await vi.waitFor(() => expect(recorder.ensured).toHaveLength(1));
+    electronTabs.handleFrame(acceptedFrame("registration-1"));
+
+    const releaseCallsBefore = recorder.released.length;
+    recorder.emitTransferred({
+      key: { hostId: "host-1", sessionId: "session-1", tabId: "tab-1" },
+      previousRegistrationId: "registration-1",
+      toWindowId: "window-2",
+    });
+
+    expect(released).toEqual([
+      {
+        hostId: "host-1",
+        sessionId: "session-1",
+        tabId: "tab-1",
+        registrationId: "registration-1",
+      },
+    ]);
+    // A move never sends a release to the port: the guest is still alive
+    // under the new window, and this window's job is only to drop what it
+    // held, not to close the tab.
+    expect(recorder.released).toHaveLength(releaseCallsBefore);
+    sent.length = 0;
+
+    // The stale birth is gone, so an ORDINARY create for the same tab key
+    // into this window - reason "agent-open", not "restore" or "move" - is
+    // accepted rather than answered identity_violation. Before the transfer
+    // this exact frame would have been refused (the "neither restore nor
+    // move" case above pins that refusal).
+    electronTabs.handleFrame({
+      ...CREATE,
+      requestId: "request-fresh",
+      reason: "agent-open",
+    });
+    await vi.waitFor(() => expect(recorder.ensured).toHaveLength(2));
+    expect(
+      sent.filter((frame) => frame.kind === "electronTabCreateFailed"),
+    ).toEqual([]);
+  });
+
+  it("does not retire a birth when a transferred event's previousRegistrationId does not match", async () => {
+    const recorder = createTabRecorder();
+    const { sent, released, electronTabs } = setup(
+      recorder.port,
+      () => "connection-1",
+    );
+
+    electronTabs.handleFrame(CREATE);
+    await vi.waitFor(() => expect(recorder.ensured).toHaveLength(1));
+    electronTabs.handleFrame(acceptedFrame("registration-1"));
+    sent.length = 0;
+
+    recorder.emitTransferred({
+      key: { hostId: "host-1", sessionId: "session-1", tabId: "tab-1" },
+      previousRegistrationId: "registration-does-not-match",
+      toWindowId: "window-2",
+    });
+
+    expect(released).toEqual([]);
+
+    // The birth is still standing, so a second ordinary create into this
+    // window is refused as an identity violation - proof the birth survived.
+    electronTabs.handleFrame({
+      ...CREATE,
+      requestId: "request-2",
+      reason: "agent-open",
+    });
+    await Promise.resolve();
+    expect(sent).toEqual([
+      {
+        kind: "electronTabCreateFailed",
+        hasBinaryPayload: false,
+        requestId: "request-2",
+        sessionId: "session-1",
+        tabId: "tab-1",
+        code: "identity_violation",
+        message:
+          "Electron tab identity violation for request request-2, session session-1, tab tab-1.",
+      },
+    ]);
+    expect(released).toEqual([]);
+  });
+
   it("answers identity_violation when the provisioned native key doesn't match the birth", async () => {
     const tabs: BrowserSessionsTabPort = {
       ensureTab: () =>
@@ -281,6 +401,7 @@ describe("createElectronTabs", () => {
       releaseTab: () => Promise.resolve(true),
       dispatchElectronTabCdp: () => Promise.reject(new Error("not used")),
       onNativeTabStatusChange: () => () => undefined,
+      onNativeTabTransferred: () => () => undefined,
     };
     const released: BrowserViewNativeTabCapability[] = [];
     const wrapped: BrowserSessionsTabPort = {
@@ -387,6 +508,7 @@ describe("createElectronTabs", () => {
       },
       dispatchElectronTabCdp: () => Promise.reject(new Error("not used")),
       onNativeTabStatusChange: () => () => undefined,
+      onNativeTabTransferred: () => () => undefined,
     };
     const { sent, electronTabs } = setup(tabs, () => "connection-1");
     electronTabs.handleFrame(CREATE);
@@ -425,6 +547,7 @@ describe("createElectronTabs", () => {
       },
       dispatchElectronTabCdp: () => Promise.reject(new Error("not used")),
       onNativeTabStatusChange: () => () => undefined,
+      onNativeTabTransferred: () => () => undefined,
     };
     const { sent, electronTabs } = setup(tabs, () => "connection-1");
 
@@ -471,6 +594,7 @@ describe("createElectronTabs", () => {
       releaseTab: () => Promise.resolve(true),
       dispatchElectronTabCdp: () => Promise.reject(new Error("not used")),
       onNativeTabStatusChange: () => () => undefined,
+      onNativeTabTransferred: () => () => undefined,
     };
     const { sent, electronTabs } = setup(tabs, () => "connection-1");
     electronTabs.handleFrame(CREATE);
@@ -541,6 +665,7 @@ describe("createElectronTabs", () => {
         });
       },
       onNativeTabStatusChange: () => () => undefined,
+      onNativeTabTransferred: () => () => undefined,
     };
     const { sent, electronTabs } = setup(tabs, () => "connection-1");
     electronTabs.handleFrame(CREATE);
@@ -624,6 +749,7 @@ describe("createElectronTabs", () => {
       releaseTab: () => Promise.resolve(true),
       dispatchElectronTabCdp: () => dispatch.promise,
       onNativeTabStatusChange: () => () => undefined,
+      onNativeTabTransferred: () => () => undefined,
     };
     const { sent, electronTabs } = setup(tabs, () => "connection-1");
     electronTabs.handleFrame(CREATE);

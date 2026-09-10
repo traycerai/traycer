@@ -116,7 +116,7 @@ function FallbackPendingBanner({
   readonly hostId: string;
   readonly canAct: boolean;
 }) {
-  // BY VALUE, never by key presence: on a live `chat.subscribe@1.9` frame the
+  // BY VALUE, never by key presence: on a live `chat.subscribe@1.10` frame the
   // host sets the key unconditionally and `undefined` is what CLEARS the card,
   // so a `"pending" in ...` test would pin it open for the life of the chat.
   if (!visible || pending === undefined) return null;

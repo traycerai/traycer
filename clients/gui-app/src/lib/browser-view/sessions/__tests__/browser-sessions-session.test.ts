@@ -16,9 +16,10 @@ import type { BrowserSessionsUxServerFrame } from "@traycer/protocol/host/browse
 import type { DurableStreamTransport } from "@/lib/host/durable-stream-transport";
 import { openBrowserSessionsSession } from "@/lib/browser-view/sessions/browser-sessions-session";
 import { FakeBrowserViewBridge } from "@/lib/browser-view/__tests__/fake-browser-view-bridge";
+import { epicScope } from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
 
 const KEY: BrowserSessionsStreamKey = {
-  epicId: "epic-1",
+  scope: epicScope("epic-1"),
   hostId: "host-1",
   identityKey: "local\u0000host-1\u0000user-1",
 };
@@ -98,7 +99,7 @@ describe("openBrowserSessionsSession on a desktop shell (browserView present)", 
 
     // A frame on some OTHER stream's key must not reach this session.
     bridge.emitSessionsStreamEvent({
-      key: { ...KEY, epicId: "other-epic" },
+      key: { ...KEY, scope: epicScope("other-epic") },
       event: { kind: "status", lifecycle: "live", errorMessage: null },
     });
     expect(statuses).toEqual([]);

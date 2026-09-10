@@ -55,6 +55,17 @@ export function WindowsBridgeAuthSessionBridge(
 
     const writeOutbound = (snapshot: AuthSessionSnapshot): void => {
       if (projectingInbound) return;
+      // An `unverified` session is NOT a cross-window session transition: it
+      // is this window's local statement that it could not reach authn, and
+      // every sibling window reaches the same conclusion independently from
+      // the same credentials file via its own `start()`. Projecting it would
+      // mean flattening it to the nearest desktop status - `signed-out` - and
+      // an inbound `signed-out` is applied unconditionally
+      // (`applyExternalSession`), so a sibling that was quietly working
+      // offline would be signed out by this window's failure to validate.
+      // Publishing nothing leaves the last real transition standing, which is
+      // the truthful projection: no session transition has occurred.
+      if (snapshot.status === "unverified") return;
       const desktopSnapshot = toDesktopSnapshot(snapshot);
       const serialized = serializeDesktopSnapshot(desktopSnapshot);
       if (serialized === lastWrittenSerialized) {
@@ -103,25 +114,57 @@ export function WindowsBridgeAuthSessionBridge(
       });
     };
 
-    const sessionSubscription = auth.onSessionSnapshotChange(writeOutbound);
     const inboundSubscription = bridge.authSession.onChange(ingestInbound);
+    // The one `unverified` main must hear about: a TERMINAL verdict loss.
+    // `writeOutbound` publishes no `unverified` (above) and the status it
+    // would flatten to signs siblings out, so this travels on its own
+    // channel. Main drops its verification of the session it holds - what the
+    // jar plane's principal reads - and fans the session back out UNCHANGED,
+    // which every window's latch reads as an echo. The latch here stays put
+    // for the same reason: a later sign-in carries a new bearer, so it is a
+    // new serialization and is written. A desktop shell built before the
+    // channel existed has no `revoke`; it keeps the pre-channel behaviour.
+    const revokeSubscription = auth.onCloudAuthorizationRevoked((revoked) => {
+      const pending = bridge.authSession.revoke?.(revoked.token);
+      if (pending === undefined) return;
+      void pending.catch((cause: unknown) => {
+        appLogger.warn("[auth] could not revoke the desktop auth session", {
+          cause: cause instanceof Error ? cause.message : String(cause),
+        });
+      });
+    });
 
-    // Capture the identity generation BEFORE the delayed get so a stale
-    // initial snapshot cannot overwrite a newer local mutation (or reconcile)
-    // that landed while the get was in flight. ingestProjectedSessionSnapshot
-    // fences its own validation await; this fences the pre-ingest await.
-    void (async () => {
-      const generationAtRead = auth.getIdentityGeneration();
-      const initial = await bridge.authSession.get();
-      if (auth.getIdentityGeneration() !== generationAtRead) {
-        return;
-      }
-      ingestInbound(initial);
-    })();
+    // The INBOUND half of the same edge: another window lost its verdict and
+    // main has fanned that out here. Without this the demotion was strictly
+    // window-local - main's own verification went, but this renderer's store
+    // stayed `signed-in` and kept dispatching cloud work on the refused
+    // bearer until it happened to revalidate on its own. `onChange` cannot
+    // carry it: main republishes the SAME snapshot, which `ingestInbound`
+    // above discards as an echo by design.
+    //
+    // The service fences on the bearer and no-ops when this window holds a
+    // different (or already-unverified) session, so an unordered revoke that
+    // lands after a fresh sign-in here leaves that session alone. A desktop
+    // shell built before the channel existed has no `onVerificationRevoked`;
+    // it keeps the pre-channel behaviour.
+    const verdictLossSubscription =
+      bridge.authSession.onVerificationRevoked?.((rejectedToken) => {
+        auth.ingestCloudAuthorizationRevoked(rejectedToken);
+      }) ?? null;
+
+    // HostRuntimeProvider has already awaited auth.start(), restoring the
+    // shared credentials file. Subscribing synchronously replays that session
+    // to main. Do not read main's initial projection back: its signed-in write
+    // awaits bearer verification, so a concurrent get can still return the
+    // default signed-out snapshot and undo the restore until verification ends.
+    // Listen first so subsequent cross-window transitions remain observable.
+    const sessionSubscription = auth.onSessionSnapshotChange(writeOutbound);
 
     return () => {
       sessionSubscription.dispose();
       inboundSubscription.dispose();
+      revokeSubscription.dispose();
+      verdictLossSubscription?.dispose();
     };
   }, [auth, bridge]);
 

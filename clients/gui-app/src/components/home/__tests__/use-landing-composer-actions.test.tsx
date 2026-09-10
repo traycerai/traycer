@@ -4,10 +4,15 @@ import { useHostClient } from "@/lib/host";
 import { epicDisplayTitle } from "@/lib/display-title";
 import { createEpicName } from "@/lib/epic-name";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-settings-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { draftRuntimeRegistry } from "@/stores/home/draft-runtime-registry";
 import { useTabsStore } from "@/stores/tabs/store";
 import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
@@ -52,6 +57,7 @@ const landingMocks = vi.hoisted(() => ({
   navigate: vi.fn<(options: CapturedNavigation) => void>(),
   getActiveHostId: vi.fn(() => "host-landing"),
   getRequestContextUserId: vi.fn<() => string | null>(() => "user-landing"),
+  floorsRequested: new Array<unknown>(),
   getActiveHost: vi.fn(() => ({
     hostId: "host-landing",
     label: "Local",
@@ -70,28 +76,28 @@ vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
   useHostClient: () => ({
     request: landingMocks.request,
+    // An UNVERIFIED create dispatches here instead: the floor that decides
+    // whether this host creates locally rides on the request now, answered by
+    // the transport from its own handshake. Delegating to the same `request`
+    // spy is what a host MEETING the floor does, which is the second half of
+    // the case below; the floor is recorded so the admitted dispatch is
+    // distinguishable from an authorized one.
+    requestWithSignalRequiringHostMethodVersion: (
+      method: string,
+      payload: unknown,
+      _signal: AbortSignal | undefined,
+      requiredHostMethodVersion: unknown,
+    ): Promise<unknown> => {
+      landingMocks.floorsRequested.push(requiredHostMethodVersion);
+      return landingMocks.request(method, payload);
+    },
     getActiveHostId: landingMocks.getActiveHostId,
     getActiveHost: landingMocks.getActiveHost,
     getRequestContextUserId: landingMocks.getRequestContextUserId,
   }),
 }));
 
-// `landing-draft-store.ts` (real, unmocked - `createDraft` reads the global
-// workspace snapshot through it) and `use-landing-composer-actions.ts` itself
-// (the imperative "create draft" path) both resolve the per-host
-// workspace-folder / run-settings buckets through this imperative snapshot,
-// not through a hook. Left unmocked it falls back to the real (unbound)
-// implementation, which always reports `null` - so every fixture below would
-// seed a host bucket the code never reads. Pin it to the SAME host id
-// `landingMocks.getActiveHostId()` returns, so the two ways this suite's
-// production code resolves "the active host" agree.
-// `activeHostIdOrNull` is what `ensureSubmissionDraft` reads for the run-
-// settings bucket now: the spine accessor below answers `null` for every host
-// since P4.2/D17 deleted the active slot, so the id has to come from the
-// authority's projection instead. Both are driven by the SAME knob, so a test
-// that moves the host still moves it everywhere this suite reaches.
 vi.mock("@/lib/host/runtime", () => ({
-  activeHostIdOrNull: () => landingMocks.getActiveHostId(),
   getHostBindingSnapshot: () => ({
     hostClient: { getActiveHostId: landingMocks.getActiveHostId },
   }),
@@ -228,6 +234,15 @@ describe("useLandingComposerActions", () => {
     __resetTabNavigationControllerForTesting();
     draftRuntimeRegistry.resetForTesting();
     window.localStorage.clear();
+    // Creation is admitted for a session holding a cloud verdict; the
+    // unverified admission has its own case below.
+    useAuthStore
+      .getState()
+      .setSignedIn(
+        { userId: "user-landing", userName: "U", email: "u@example.com" },
+        { userId: "user-landing", username: "U" },
+        [],
+      );
     landingMocks.request.mockReset();
     landingMocks.createTerminalAgent.mockReset();
     landingMocks.navigate.mockReset();
@@ -272,6 +287,12 @@ describe("useLandingComposerActions", () => {
       defaultPermission: "supervised",
       defaultReasoning: "high",
     });
+    // Pre-created drafts read the real composer host snapshot. Match the
+    // mocked client's host so they inherit the workspace/settings fixtures.
+    useSelectionAuthorityStore.setState({
+      attached: true,
+      effectiveHostId: TEST_HOST_ID,
+    });
   });
 
   afterEach(() => {
@@ -279,6 +300,8 @@ describe("useLandingComposerActions", () => {
     __resetTabNavigationControllerForTesting();
     draftRuntimeRegistry.resetForTesting();
     cleanup();
+    useAuthStore.getState().setSignedOut();
+    resetNegotiatedManifests();
     useInitialChatHandoffStore.getState().resetForTests();
     useComposerRunSettingsStore.getState().resetForTests();
     useWorkspaceFoldersStore.setState({ byHost: {} });
@@ -295,6 +318,10 @@ describe("useLandingComposerActions", () => {
       openTabOrder: [],
       activeTabId: null,
       mostRecentTabIdByEpicId: {},
+    });
+    useSelectionAuthorityStore.setState({
+      attached: false,
+      effectiveHostId: null,
     });
   });
 
@@ -508,6 +535,68 @@ describe("useLandingComposerActions", () => {
         })
       ],
     ).toBeDefined();
+    queryClient.clear();
+  });
+
+  it("refuses an unverified session's create on a host without the local-first line, and admits it on one with it", async () => {
+    // `epic.create@1.0` cannot say whether this host creates locally or sends
+    // the create to the cloud on the retained credential; the host's
+    // `epic.listTasks` line can, and it is negotiated.
+    setSingleWorkspace();
+    useAuthStore
+      .getState()
+      .setUnverifiedSession(
+        { userId: "user-landing", userName: "U", email: "u@example.com" },
+        { userId: "user-landing", username: "U" },
+      );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      {
+        wrapper: queryClientWrapper(queryClient),
+      },
+    );
+
+    // No manifest recorded for the host: fails closed.
+    let refusal: { readonly message: string } | null = null;
+    act(() => {
+      refusal = result.current.submit({
+        draftId: null,
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+    expect(refusal).not.toBeNull();
+    expect(landingMocks.request).not.toHaveBeenCalled();
+
+    // The host advertises the local-first line: the same session is admitted.
+    recordNegotiatedHostManifest(TEST_HOST_ID, {
+      "epic.listTasks": { major: 1, minor: 6 },
+    });
+    let admitted: { readonly message: string } | null = { message: "unset" };
+    act(() => {
+      admitted = result.current.submit({
+        draftId: null,
+        editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+        slashCatalog: null,
+        toolbar: defaultToolbar(),
+      });
+    });
+    expect(admitted).toBeNull();
+    await waitFor(() => {
+      expect(landingMocks.request).toHaveBeenCalled();
+    });
+    // The admitted create carries the floor, which is what makes it safe to
+    // admit: the composer's own gate reads the negotiated-manifest registry,
+    // and that registry can name a host process already replaced by the time
+    // this create's handshake runs. The floor is what the connection carrying
+    // the create answers for itself.
+    expect(landingMocks.floorsRequested).toEqual([
+      { method: "epic.listTasks", version: { major: 1, minor: 6 } },
+    ]);
     queryClient.clear();
   });
 

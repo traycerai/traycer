@@ -4,9 +4,18 @@ import { createCliLogger } from "../logger";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
 import type { CliInvocation } from "./cli-binary";
 import type { ServiceLabel } from "./label";
-import { createLinuxController } from "./platforms/linux";
-import { createMacosController } from "./platforms/macos";
-import { createWindowsController } from "./platforms/windows";
+import { serviceLabelFor } from "./label";
+import type { Environment } from "../runner/environment";
+import {
+  createLinuxController,
+  linuxServiceMayRespawn,
+} from "./platforms/linux";
+import {
+  createMacosController,
+  macosServiceMayRespawn,
+} from "./platforms/macos";
+import { createWindowsController, epochMicrosNow } from "./platforms/windows";
+import { assertNotInsideHostUnit } from "../host/cgroup-relocation";
 import { clearStopIntent, writeStopIntent } from "../host/stop-intent";
 import { findLiveIncumbentHost } from "../host/incumbent-check";
 import { hostHomeDir } from "../store/paths";
@@ -129,11 +138,31 @@ export type DesktopRegistrationTakeover =
       readonly kind: "took-over";
       readonly agentLabelId: string;
       // How the running host was handled: "stopped" through its own
-      // lifecycle RPCs, "no-host" when nothing was running,
-      // "skipped-unreachable" when the host could not be asked (it is the
-      // broken part - the takeover IS the recovery) and the job was booted
-      // out underneath it.
+      // lifecycle RPCs; "no-host" when nothing was running to ask (the
+      // claim answered `no-host` or `no-metadata` with the agent idle - no
+      // process under the label, so there was nothing to interrupt whatever
+      // the metadata said - or the process seen under the CLI label at the
+      // probe had exited before its stand-down could ask it); "skipped-unreachable" when the host could not be asked
+      // (it is the broken part - the takeover IS the recovery) and the job
+      // was booted out underneath it. A running agent process that could
+      // not be asked is refused, never proceeded past.
       readonly cooperativeStop: "stopped" | "no-host" | "skipped-unreachable";
+    }
+  // No Desktop agent to retire, but the CLI label itself was loaded - a job
+  // this install's own reload would otherwise bootout with no cooperative
+  // claim (a KeepAlive respawn that started after the caller's probe, or an
+  // idle job launchd could start while the install writes its files). The
+  // takeover unloaded it under its own lock first, and waited for it.
+  // "stopped": a live process stood down through its own lifecycle RPCs;
+  // "skipped-unreachable": a published endpoint could not be asked (the
+  // job was booted out underneath it); "no-host": launchd reported no
+  // process under the job, so no claim was made (the `took-over` arm's
+  // "no-host" is the claim's own answer - metadata naming a host that has
+  // exited; here nothing was there to name one). A process with no live
+  // endpoint is refused, never proceeded past.
+  | {
+      readonly kind: "cli-host-stopped";
+      readonly cooperativeStop: "stopped" | "skipped-unreachable" | "no-host";
     }
   | { readonly kind: "not-applicable" };
 
@@ -157,6 +186,20 @@ export interface RestartStop {
 // this codebase can destroy live work should be answerable by grep.
 export interface StopServiceOptions {
   readonly force: boolean;
+  /**
+   * Fired by the route, at most once, when ITS OWN pid read finds a live
+   * published host it is about to address - before the signal, the claim or
+   * the kill, so it fires whether the stop then resolves or degrades.
+   *
+   * The one consumer is the install lifecycle's restore after a refused swap,
+   * which owes the machine a host only if this stop took one down. Nothing
+   * else can tell it that: `externally-managed` carries no pid, a `void`
+   * resolution covers both `stopped` and `no-host` (a record naming a process
+   * already dead), and a separate read taken before the stop misses a host
+   * that publishes in the gap. Optional because every other stop has no
+   * restore to inform.
+   */
+  readonly onHostAddressed?: () => void;
 }
 
 export interface ServiceController {
@@ -366,8 +409,18 @@ export function withCliInvocationRecord(
 ): ServiceController {
   return {
     ...controller,
-    install: (options) =>
-      runServiceRegistrationWithInvocationRecord({
+    install: async (options) => {
+      // The Linux self-protection guard runs BEFORE the record transaction
+      // here too, for the mirror image of the `uninstall` reason below: a
+      // throw from `register` is treated as an OS registration that may be
+      // half-done and marks the live record stale, and a refusal that touched
+      // nothing must not do that to an intact registration. The guard is on
+      // `install` at all because the Linux install's failure path is a stop:
+      // `installService` rolls a failed `enable --now` back with
+      // `disable --now` on the unit, which stops the live host - and the CLI
+      // with it, if the relocation silently left it inside the unit.
+      await assertNotInsideHostUnit();
+      return runServiceRegistrationWithInvocationRecord({
         environment: options.label.environment,
         hostHomeDir: hostHomeDir(options.label.environment),
         serviceLabel: options.label.id,
@@ -375,16 +428,28 @@ export function withCliInvocationRecord(
         register: () => controller.install(options),
         waitMs: CLI_INVOCATION_TXN_WAIT_MS,
         pollIntervalMs: CLI_INVOCATION_TXN_POLL_MS,
-      }),
-    uninstall: (options) =>
-      runServiceUninstallWithInvocationRecord({
+      });
+    },
+    uninstall: async (options) => {
+      // The Linux self-protection guard runs BEFORE the record transaction,
+      // not only inside `withStopIntent` beneath it. Inside the transaction a
+      // refusal is indistinguishable from an OS uninstall that threw, and
+      // `runServiceRemovalWithInvocationRecord` rightly treats that as "the
+      // service may be half-gone" and marks the live record stale - for a
+      // preflight that touched nothing, that would send every later host read
+      // through OS recovery for an intact registration. The inner guard stays:
+      // it is `withStopIntent`'s own contract for any composition that lacks
+      // this decorator, and a second cgroup read costs nothing.
+      await assertNotInsideHostUnit();
+      return runServiceUninstallWithInvocationRecord({
         environment: options.label.environment,
         hostHomeDir: hostHomeDir(options.label.environment),
         serviceLabel: options.label.id,
         uninstall: () => controller.uninstall(options),
         waitMs: CLI_INVOCATION_TXN_WAIT_MS,
         pollIntervalMs: CLI_INVOCATION_TXN_POLL_MS,
-      }),
+      });
+    },
     // The competing-registration repair removes THIS label's registration -
     // the one a live record describes - on macOS when Desktop owns host
     // registration, so it runs inside the same transaction as an uninstall.
@@ -442,7 +507,28 @@ export function withStopIntent(
     // written - before it has spawned a child or published `pid.json`. Clearing
     // there hands the old supervisor a window in which it sees neither intent
     // nor an incumbent, and it relaunches. One restart, two hosts.
+    //
+    // Each route also carries the Linux self-protection guard, BEFORE its
+    // announcement so a refusal leaves no record of a stop that never happened.
+    // This is the second line behind the relocation in `withRunner`
+    // (host/cgroup-relocation.ts): it re-reads the cgroup, so a machine with no
+    // `systemd-run`, no user manager, or a scope that failed to move us is
+    // refused here instead of killing the process issuing the stop. `restart`
+    // is included because it is a real actuator - `systemctl --user restart`
+    // goes through it, not through `stop` - and leaving it out would leave one
+    // allowlisted command with no second line. `install` carries the guard for
+    // the same reason and nothing else: it is not a stop and announces no
+    // intent, but the Linux `installService` rolls a failed `enable --now`
+    // back with `disable --now` on the unit, and that rollback stops the live
+    // host. Every route into it - `host service install`, and the
+    // registration inside `host install` / `ensure` / `apply` / `update` -
+    // reaches this decorator through the production factory.
+    install: async (options) => {
+      await assertNotInsideHostUnit();
+      return controller.install(options);
+    },
     stop: async (label, options) => {
+      await assertNotInsideHostUnit();
       await announceStop(label.environment, "stop", options.force);
       try {
         return await controller.stop(label, options);
@@ -452,6 +538,7 @@ export function withStopIntent(
       }
     },
     stopForRestart: async (label, options) => {
+      await assertNotInsideHostUnit();
       await announceStop(label.environment, "restart", options.force);
       try {
         return await controller.stopForRestart(label, options);
@@ -461,6 +548,7 @@ export function withStopIntent(
       }
     },
     uninstall: async (options) => {
+      await assertNotInsideHostUnit();
       await announceStop(options.label.environment, "uninstall", false);
       try {
         return await controller.uninstall(options);
@@ -470,6 +558,7 @@ export function withStopIntent(
       }
     },
     restart: async (label) => {
+      await assertNotInsideHostUnit();
       await announceStop(label.environment, "restart", false);
       try {
         return await controller.restart(label);
@@ -491,6 +580,10 @@ export function withStopIntent(
  * supervisor would sit silenced for the intent's lifetime with no uninstall
  * having occurred. Inside the transaction, the intent is announced only once
  * the backend uninstall is actually about to run.
+ *
+ * The one thing that runs before BOTH is the Linux cgroup guard: the outer
+ * decorator's uninstall re-runs it ahead of acquiring the transaction, so a
+ * refusal neither publishes an intent nor invalidates the record.
  */
 export function createServiceController(): ServiceController {
   const platform = osPlatform();
@@ -516,7 +609,7 @@ export function createServiceController(): ServiceController {
       environment: config.environment,
     });
     return withCliInvocationRecord(
-      withStopIntent(createWindowsController(null)),
+      withStopIntent(createWindowsController(null, { now: epochMicrosNow })),
     );
   }
   logger.error(
@@ -533,4 +626,47 @@ export function createServiceController(): ServiceController {
     details: { platform },
     exitCode: 1,
   });
+}
+
+/**
+ * Whether the platform's service manager could start a host for this
+ * environment on its own - the question the store-format floor's post-stop
+ * quiescence check asks once no host process can be found. Lives behind this
+ * facade, like every other platform actuator, so the floor never reaches into
+ * `platforms/` directly.
+ *
+ * Windows is deliberately absent rather than forgotten: its registration is a
+ * Scheduled Task whose `/Run` IS the recovery launch, with no crash-restart
+ * policy configured (no `RestartCount`/`RestartInterval`), so nothing there
+ * brings a dead host back on its own.
+ *
+ * `timeoutMs` bounds each subprocess the probe spawns. The floor asks this in
+ * a bounded settle loop, and a probe allowed to outlive that loop's remaining
+ * budget would stretch the wait past the bound it promises.
+ */
+export async function serviceManagerMayRespawn(
+  environment: Environment,
+  timeoutMs: number,
+): Promise<boolean> {
+  return await serviceLabelMayRespawn(serviceLabelFor(environment), timeoutMs);
+}
+
+/**
+ * The same probe against an EXPLICIT label.
+ *
+ * Split out because {@link serviceLabelFor} can only describe this process -
+ * it reads `DEV_DESKTOP_SLOT` from the environment - while the store-format
+ * floor has to ask about every dev run slot it enumerated. A job that can
+ * START a writer of the surveyed stores disqualifies the swap exactly as a
+ * running writer does, whichever slot owns it.
+ */
+export async function serviceLabelMayRespawn(
+  label: ServiceLabel,
+  timeoutMs: number,
+): Promise<boolean> {
+  if (process.platform === "darwin")
+    return await macosServiceMayRespawn(label, null, timeoutMs);
+  if (process.platform === "linux")
+    return await linuxServiceMayRespawn(label, null, timeoutMs);
+  return false;
 }

@@ -1,130 +1,68 @@
-import type { ApplyHostOutcome } from "../installer/apply";
-import {
-  downloadAndStageHost,
-  type HostDownloadOutcome,
-} from "../installer/download-stage";
-import {
-  deleteUpdateProgressMarker,
-  writeUpdateProgressMarker,
-} from "../host/update-progress-marker";
-import { probeHostHealth } from "../service/health-probe";
-import {
-  readHostInstallRecord,
-  type HostInstallRecord,
-} from "../manifest/host-install";
-import { readHostStagedRecord } from "../manifest/host-staged";
-import type { Environment } from "../runner/environment";
-import type { ILogger } from "../logger";
-import { CLI_ERROR_CODES, CliError, cliError } from "../runner/errors";
-import type { ProgressInfo } from "../runner/output";
+import { baseDispatchAckReason } from "@traycer/protocol/config/host-update-ack-reason";
 import type { CommandFn, CommandResult } from "../runner/runner";
-import { withCliUpdateContender } from "../host/update-contender";
-import type { WithCliUpdateContenderOptions } from "../host/update-contender";
-import { installDispatchAckStamper } from "../host/update-dispatch-ack";
-import { hostHomeDir } from "../store/paths";
-import { applyHostWithAttempt } from "../host/update-mutation";
+import {
+  runHostUpdate,
+  type HostUpdateRunOutcome,
+  type LegacyHostUpdateResult,
+} from "../host/update-run";
 
-// `traycer host update [--version X] [--force]` - the composite (Host Update Layer
-// Redesign Tech Plan, "New/changed commands" > `host update`, D6): stage
-// whatever `latest` requires (reusing an existing stage, explicit-
-// incomparable policy - a `local-*` install proceeds), then promote it.
-// `downloadAndStageHost` runs its OWN brief lock spans internally (no
-// network transfer ever runs under `cli-lock` - plan rule 1); only the
-// apply half below acquires the lock, matching `host apply`'s own
-// contract that the caller holds it across reconcile/read/no-op/busy/
-// commit.
+// `traycer host update [--version X] [--force]` - the THIN SHELL.
 //
-// Busy (D6): the stage is kept - `applyHost`'s busy check runs before it
-// touches the stage - and this command re-throws `E_HOST_BUSY` with the
-// staged version attached to `details`, rather than the generic
-// `details: null` `assertHostNotBusy` throws on its own.
+// Argument parsing, the `LegacyHostUpdateResult` projection and the human
+// summary live here; the run itself is `host/update-run.ts`, which owns the
+// advisory plan, the under-lock claim selection, the record writer, every arm
+// and the dispatch ACK. This file must never import `host/update-executor.ts`
+// directly - the admission fence in
+// `host/__tests__/update-executor.test.ts` pins that the released command
+// surface reaches the executor only through its dedicated owner.
 //
-// SUCCESS CONTRACT: when an update is actually applied, exit 0 here means a
-// host came back healthy after the swap. Two limits are deliberate and worth
-// naming rather than overstating:
-//   - an install already at the target short-circuits before the probe and
-//     re-checks nothing; it reports the installed version, not a live one;
-//   - `probeHostHealth` asks "is the recorded pid alive and its port
-//     accepting?" - it does not compare versions. On the Desktop-managed macOS
-//     degraded path a surviving OLD host can answer it, so a healthy probe is
-//     not by itself proof that the applied bytes are the ones serving.
-//     `traycer host status` reports the running version.
-// A version-comparing probe was tried and backed out: pid.json's version can
-// lag a restart, so it turned successful updates into failures - a worse
-// outcome than the narrower claim.
-// The post-apply `probeHostHealth` below is what earns the claim when it runs,
-// and a host that committed cleanly but never came back exits non-zero with
-// `E_HOST_UPDATE_HEALTH_CHECK_FAILED` (no rollback - see the note at the
-// probe). This is deliberately stronger than `host apply`'s exit 0, which
-// promises only that the bytes committed; `commands/host-apply.ts` records
-// why the low-level primitive must keep reporting "applied but not
-// converged" as a successful, inspectable outcome instead of an error.
-//
-// Legacy wire-contract compat: Desktop's `host-management-ipc.ts` runs
-// `host update`'s stdout through `projectInstallResult`, which reads a
-// *flat* legacy shape off `data` (`version`, `installedAt`,
-// `executablePath`, `source`, `archiveSha256`, `signatureKeyId`,
-// `sizeBytes`, `previousVersion`, `serviceLifecycle`) and silently
-// degrades every field to a fallback ("", 0, "none") if the shape
-// changes - Desktop bundles a version-matched CLI (D7), so "this CLI +
-// Desktop's not-yet-rewired handler" is a real shipped pairing, not a
-// hypothetical (D6's rejected-alternative note: "breaks the existing
-// `HostInstallResult` projection mid-migration"). `host apply` is a
-// brand-new command with no such consumer and is free to use
-// `ApplyHostOutcome` directly (see `commands/host-apply.ts`); this
-// compat boundary is scoped to `host update` alone - remove only when
-// Desktop's `host update` invocation is deleted (post ticket-4 cleanup).
+// Legacy wire-contract compat: Desktop's `host-management-ipc.ts` runs `host
+// update`'s stdout through `projectInstallResult`, which reads a FLAT legacy
+// shape off `data` and silently degrades every field to a fallback ("", 0,
+// "none") if the shape changes. Desktop no longer shells `host update` for its
+// own updates - it runs `host download` and applies itself - so this boundary
+// exists for `--json` consumers and the human summary alone. Remove only when
+// that projection is deleted.
 export interface HostUpdateArgs {
+  /** Explicit installs may downgrade; automatic update callers never opt in. */
+  readonly allowDowngrade: boolean;
   readonly force: boolean;
+  /** See `HostUpdateRunArgs.acceptStoreFormatLoss`. Forwarded verbatim. */
+  readonly acceptStoreFormatLoss: boolean;
   /** `null` stages the latest registry version; an explicit value is a pin. */
   readonly versionRequest?: string | null;
   /**
-   * Correlation nonce for the dispatch ACK (Ticket 07 §5.2.8), or `null` when
-   * this run was not dispatched by a host resolver waiting to name the attempt.
-   *
-   * A nonce, never a token: it grants nothing, so argv is a legitimate carrier
-   * for it. The child stamps it into the sibling ACK file at durable-claim
-   * time, and the resolver accepts an ACK only when the nonce matches one it
-   * minted for a child it spawned.
-   *
-   * Consumed at the schema-v2 executor's acknowledgement seam. That junction is
-   * the CUTOVER: today `host update` runs the legacy path, whose contender
-   * admission is `legacy-update-shadow` and which creates no schema-v2 attempt
-   * to acknowledge, so a nonce passed now is carried and not stamped. That is
-   * the same darkness the resolver's wait ships with, and the two flip together.
+   * Correlation nonce for the dispatch ACK. A nonce, never a token: it grants
+   * nothing, so argv is a legitimate carrier. The child stamps it into the
+   * sibling ACK file once its claim is durable (or once it has decided there
+   * is no attempt to name), and the resolver accepts an ACK only when the
+   * nonce matches one it minted for a child it spawned.
    */
   readonly ackNonce: string | null;
+  /**
+   * The bound intent, exactly as it arrived on argv (Plan D16). Raw all the
+   * way through to `runHostUpdate`, which refuses an illegal value with a CLI
+   * error a caller can read - and does so on the far side of its dispatch-ACK
+   * stamper, so the refusal still reaches the dispatching host.
+   */
+  readonly intent: string | null;
+  /** The attempt id a bound intent is bound to. */
+  readonly expectAttempt: string | null;
+  /**
+   * The generation and sequence the DISPATCHER observed, raw like `intent`
+   * and for the same reason - `runHostUpdate` refuses a malformed value on
+   * the far side of its dispatch-ACK stamper, so the refusal still reaches
+   * the host that spawned this. Both or neither; absent means a dispatcher
+   * that predates them, which keeps today's behaviour.
+   */
+  readonly expectGeneration: string | null;
+  readonly expectSequence: string | null;
 }
 
-export interface LegacyHostUpdateServiceLifecycle {
-  readonly priorServiceState: "running" | "stopped" | "not-installed";
-  readonly stoppedBeforeSwap: boolean;
-  readonly postSwapAction: "restart" | "start" | "install" | "none";
-  readonly postSwapError: string | null;
-}
-
-export interface LegacyHostUpdateResult {
-  readonly version: string;
-  readonly installedAt: string;
-  readonly executablePath: string;
-  readonly source: HostInstallRecord["source"];
-  readonly archiveSha256: string | null;
-  readonly signatureKeyId: string;
-  readonly sizeBytes: number;
-  readonly previousVersion: string | null;
-  readonly serviceLifecycle: LegacyHostUpdateServiceLifecycle;
-}
-
-// Matches `projectInstallResult`'s own fallback when `serviceLifecycle`
-// is absent from the payload - used whenever this command's own
-// operation took no service action (a genuine no-op) rather than
-// hand-rolling an equivalent-but-distinct literal.
-const NO_SERVICE_ACTION_LIFECYCLE: LegacyHostUpdateServiceLifecycle = {
-  priorServiceState: "not-installed",
-  stoppedBeforeSwap: false,
-  postSwapAction: "none",
-  postSwapError: null,
-};
+export type {
+  LegacyHostUpdateResult,
+  LegacyHostUpdateServiceLifecycle,
+} from "../host/update-run";
 
 export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
   return async (ctx): Promise<CommandResult> => {
@@ -133,309 +71,88 @@ export function buildHostUpdateCommand(args: HostUpdateArgs): CommandFn {
       environment,
       force: args.force,
     });
-
-    // Ticket 07 §5.2.8. FIRST, before `downloadAndStageHost` writes anything:
-    // a run dispatched with a nonce this build cannot honour has already lost
-    // the correlation its caller is waiting on, and discovering that after
-    // staging bytes would mean doing destructive work for a dispatch that can
-    // only ever report indeterminate.
-    //
-    // The returned callback is the executor segment's `acknowledge` hook, so
-    // the stamp lands after the claim is durable rather than beside it.
-    const dispatchAckAcknowledgement = installDispatchAckStamper(
-      hostHomeDir(environment),
-      args.ackNonce,
-    );
-
-    // Carried into the execution half. Referenced here so the installation is
-    // a real dependency of the run rather than a value the compiler can drop.
-    void dispatchAckAcknowledgement;
-
-    const downloadOutcome = await downloadAndStageHost({
-      environment,
-      versionRequest: args.versionRequest ?? null,
-      automatic: false,
-      onProgress: (info) => ctx.progress(info),
-      registryClient: null,
-    });
-    ctx.runtime.logger.info("Host update stage phase completed", {
-      environment,
-      outcome: downloadOutcome.outcome,
-    });
-
-    // "Zero fetch beyond the manifest when at latest": already at (or
-    // past) the target, so the apply half never needs to run - still
-    // routed through the same locked projection below (not a bare
-    // early return) so the legacy backfill read is never a racy
-    // unlocked read.
-    const needsApply = !(
-      downloadOutcome.outcome === "short-circuit" &&
-      downloadOutcome.reason === "installed-up-to-date"
-    );
-
-    // Remote Host Support T16: the daemon polls `update-progress.json` and
-    // folds it into `host.status@1.1` / the drain gate, so an update that is
-    // in flight (or that failed) is visible to a remote client that cannot
-    // watch this process. Written BEFORE the apply half touches the install
-    // and terminated on every exit path below. Marker I/O is deliberately
-    // never allowed to fail the update itself - a missing marker degrades
-    // the remote progress readout, it must not break the local update.
-    const targetVersion = downloadTargetVersion(downloadOutcome);
-    if (needsApply) {
-      await writeUpdateProgressMarkerSafely(ctx.runtime.logger, environment, {
-        state: "updating",
-        error: null,
-        targetVersion,
-        updatedAt: new Date().toISOString(),
-      });
-    }
-
-    let legacy: LegacyHostUpdateResult;
-    try {
-      legacy = await applyAndProjectLegacy(
+    const outcome = await runHostUpdate(
+      {
         environment,
-        args.force,
-        needsApply,
-        (info) => ctx.progress(info),
-      );
-    } catch (err) {
-      if (needsApply) {
-        await markUpdateFailed(
-          ctx.runtime.logger,
-          environment,
-          targetVersion,
-          err instanceof Error ? err.message : String(err),
-        );
-      }
-      throw err;
-    }
-
-    if (needsApply) {
-      // Verify the host the swap just installed actually comes back before
-      // reporting success: a binary that commits cleanly but never listens
-      // is exactly the failure the marker exists to surface remotely.
-      //
-      // NOTE: this does NOT roll back. `applyHost` documents an explicit
-      // no-rollback contract for the staged layer, so a failed probe is
-      // reported (marker + E_HOST_UPDATE_HEALTH_CHECK_FAILED) and left for
-      // an operator/next apply rather than silently reverted here.
-      const probe = await probeHostHealth({
-        environment,
-        checkProcessAlive: null,
-        checkTcpReachable: null,
-        totalBudgetMs: null,
-        retryDelayMs: null,
-      });
-      if (!probe.healthy) {
-        await markUpdateFailed(
-          ctx.runtime.logger,
-          environment,
-          legacy.version,
-          probe.detail,
-        );
-        throw cliError({
-          code: CLI_ERROR_CODES.HOST_UPDATE_HEALTH_CHECK_FAILED,
-          message: `host update: applied ${legacy.version} but the host did not become healthy: ${probe.detail}`,
-          details: { environment, version: legacy.version },
-          exitCode: 1,
-        });
-      }
-      await deleteUpdateProgressMarker(environment);
-    }
-
+        logger: ctx.runtime.logger,
+        onProgress: (info) => ctx.progress(info),
+        versionRequest: args.versionRequest ?? null,
+        allowDowngrade: args.allowDowngrade,
+        force: args.force,
+        acceptStoreFormatLoss: args.acceptStoreFormatLoss,
+        ackNonce: args.ackNonce,
+        // RAW. The pairing rule and the legal-value check live inside the run,
+        // after its dispatch-ACK stamper exists: a run dispatched with a nonce
+        // and an unusable intent pair must still answer the host that is
+        // waiting on it, and a refusal thrown out here could not.
+        intent: args.intent,
+        expectAttempt: args.expectAttempt,
+        expectGeneration: args.expectGeneration,
+        expectSequence: args.expectSequence,
+        registryClient: null,
+        verifyBudgetMs: null,
+        verifyPollIntervalMs: null,
+      },
+      process.env,
+    );
     ctx.runtime.logger.info("Host update command completed", {
       environment,
-      downloadOutcome: downloadOutcome.outcome,
-      version: legacy.version,
-      changed: legacy.previousVersion !== legacy.version,
-      hasPostSwapError: legacy.serviceLifecycle.postSwapError !== null,
+      version: outcome.legacy.version,
+      changed: outcome.legacy.previousVersion !== outcome.legacy.version,
+      releasedReason: outcome.releasedReason,
+      hasPostSwapError: outcome.legacy.serviceLifecycle.postSwapError !== null,
     });
+    // Version hold: nothing to do here. A DOWNGRADE's hold is written by the
+    // committer's post-swap observer inside `installHostDowngradeInSegment`
+    // (via `holdVersionOnSwapCommitted`), at the true successful-swap boundary
+    // UNDER the mutation lock and BEFORE the post-swap bookkeeping/health
+    // verification that may reject with the bytes already committed - so it
+    // survives that T6 failure and cannot be stomped by a racing post-return
+    // write. A FORWARD `host update` writes nothing: it installs a new instance
+    // whose `installId` no longer matches any held record, which the consulting
+    // gate treats as inert (the hold is set-only, never cleared - see
+    // `held-host-version`).
     return {
-      data: legacy,
-      human: humanSummary(legacy),
+      data: outcome.legacy,
+      human: humanSummary(outcome),
       exitCode: 0,
     };
   };
 }
 
-// Every `HostDownloadOutcome` branch names the version this invocation was
-// working toward; `promoted` reports it as the staged version it just placed.
-function downloadTargetVersion(outcome: HostDownloadOutcome): string {
-  return outcome.outcome === "promoted"
-    ? outcome.stagedVersion
-    : outcome.targetVersion;
-}
-
-async function writeUpdateProgressMarkerSafely(
-  logger: ILogger,
-  environment: Environment,
-  progress: Parameters<typeof writeUpdateProgressMarker>[1],
-): Promise<void> {
-  try {
-    await writeUpdateProgressMarker(environment, progress);
-  } catch (err) {
-    logger.warn("Host update failed to persist progress marker", {
-      environment,
-      state: progress.state,
-      errorMessage: err instanceof Error ? err.message : String(err),
-    });
+function humanSummary(outcome: HostUpdateRunOutcome): string {
+  const legacy = outcome.legacy;
+  // D-51, before every other reading: the run left a NON-RELEASE host alone.
+  // It is a no-op, so it must not read as one of the update sentences - but a
+  // bare "no-op" would hide the only fact that explains it, which is that the
+  // process serving is not the artifact the record names and this command
+  // does not replace a developer's build.
+  if (outcome.foreignRuntimeVersion !== null) {
+    return `host already at ${legacy.version} (no-op); the running host is ${outcome.foreignRuntimeVersion}, not a release build, so nothing was activated`;
   }
-}
-
-// Terminates the "updating" marker with the real cause so the daemon reports
-// a failed update instead of an update that appears to still be running.
-async function markUpdateFailed(
-  logger: ILogger,
-  environment: Environment,
-  targetVersion: string,
-  error: string,
-): Promise<void> {
-  await writeUpdateProgressMarkerSafely(logger, environment, {
-    state: "failed",
-    error,
-    targetVersion,
-    updatedAt: new Date().toISOString(),
-  });
-}
-
-async function applyAndProjectLegacy(
-  environment: Environment,
-  force: boolean,
-  needsApply: boolean,
-  onProgress: (info: ProgressInfo) => void,
-): Promise<LegacyHostUpdateResult> {
-  // ONE options value for acquisition and revalidation: two literals that
-  // must stay identical are how admission policies drift.
-  const contenderOptions: WithCliUpdateContenderOptions = {
-    environment,
-    reason: "host-update-apply",
-    waitMs: 30_000,
-    pollIntervalMs: 100,
-    admission: "legacy-update-shadow",
-  };
-  return withCliUpdateContender(contenderOptions, async (capability) => {
-    if (!needsApply) {
-      return projectNoOp(await requireInstalled(environment));
+  if (outcome.releasedReason !== null) {
+    // Compared on the BASE reason (Q26, third site). The release reason may
+    // arrive as `<base>-stale-attempt-closed` when the decline also closed an
+    // interrupted attempt it would otherwise have stranded; the base decides
+    // what the operator is told, the suffix adds one clause. Without the
+    // strip, a successful no-op run exits 0 while printing "did not claim an
+    // attempt (nothing-to-do-stale-attempt-closed)" - a sentence that reads
+    // as a failure. The two `update-run.ts` arms and the GUI's arm set
+    // already strip; this was the last `===` against the raw string.
+    const base = baseDispatchAckReason(outcome.releasedReason);
+    const closedStale = base !== outcome.releasedReason;
+    if (base === "nothing-to-do") {
+      return closedStale
+        ? `host already at ${legacy.version} (no-op); an interrupted update record was also cleaned up`
+        : `host already at ${legacy.version} (no-op)`;
     }
-    let outcome: ApplyHostOutcome;
-    try {
-      outcome = await applyHostWithAttempt(capability, contenderOptions, {
-        environment,
-        force,
-        noService: false,
-        expectedStageFingerprint: null,
-        onProgress,
-      });
-    } catch (err) {
-      if (err instanceof CliError && err.code === CLI_ERROR_CODES.HOST_BUSY) {
-        // The stage was left intact by `applyHost`'s own busy check (it
-        // runs before any commit) - read it HERE, still inside the same
-        // lock span `applyHost`'s busy decision was made under (never
-        // re-acquired), so the reported version can't have changed out
-        // from under the decision the way a read after this call's own
-        // lock release could. D6's "staged-version details in the error
-        // payload" contract needs this coherence, not just a value.
-        const staged = await readHostStagedRecord(environment);
-        throw cliError({
-          code: CLI_ERROR_CODES.HOST_BUSY,
-          message: err.message,
-          details: { stagedVersion: staged?.version ?? null },
-          exitCode: err.exitCode,
-        });
-      }
-      throw err;
-    }
-    if (outcome.outcome === "no-op") {
-      // Still holding the same lock `applyHost` itself ran under
-      // (it assumes the caller holds `cli-lock`, never re-acquires)
-      // - this re-read observes exactly the state `applyHost` had
-      // internal access to but didn't return, not a fresh race.
-      return projectNoOp(await requireInstalled(environment));
-    }
-    if (outcome.outcome === "stage-fingerprint-mismatch") {
-      throw cliError({
-        code: CLI_ERROR_CODES.UNEXPECTED,
-        message: "host update: staged handoff changed unexpectedly",
-        details: {
-          expectedStageFingerprint: outcome.expectedStageFingerprint,
-          actualStageFingerprint: outcome.actualStageFingerprint,
-        },
-        exitCode: 1,
-      });
-    }
-    return projectApplied(outcome);
-  });
-}
-
-async function requireInstalled(
-  environment: Environment,
-): Promise<HostInstallRecord> {
-  const installed = await readHostInstallRecord(environment);
-  if (installed === null) {
-    throw cliError({
-      code: CLI_ERROR_CODES.HOST_NOT_INSTALLED,
-      message: `host update: no host installed for environment=${environment}; run 'traycer host install' first`,
-      details: { environment },
-      exitCode: 1,
-    });
+    // The RUNNING host, never the installed version (Q5 defect 3). "host stays
+    // at 1.4.3" named the bytes on disk and read as an assurance about the
+    // machine - which is how a box with nothing running reported itself as
+    // fine. A bound verb that declines over a stopped host does not reach
+    // here at all any more; it exits non-zero from the run.
+    return `host update did not claim an attempt (${outcome.releasedReason}); ${runningState(outcome)}`;
   }
-  return installed;
-}
-
-function projectNoOp(installed: HostInstallRecord): LegacyHostUpdateResult {
-  return {
-    version: installed.version,
-    installedAt: installed.installedAt,
-    executablePath: installed.executablePath,
-    source: installed.source,
-    archiveSha256: installed.archiveSha256,
-    signatureKeyId: installed.signatureKeyId,
-    sizeBytes: installed.sizeBytes,
-    previousVersion: installed.version,
-    serviceLifecycle: NO_SERVICE_ACTION_LIFECYCLE,
-  };
-}
-
-function projectApplied(
-  outcome: Extract<ApplyHostOutcome, { outcome: "applied" }>,
-): LegacyHostUpdateResult {
-  return {
-    version: outcome.record.version,
-    installedAt: outcome.record.installedAt,
-    executablePath: outcome.record.executablePath,
-    source: outcome.record.source,
-    archiveSha256: outcome.record.archiveSha256,
-    signatureKeyId: outcome.record.signatureKeyId,
-    sizeBytes: outcome.record.sizeBytes,
-    previousVersion: outcome.previous?.version ?? null,
-    serviceLifecycle:
-      outcome.serviceLifecycle === null
-        ? NO_SERVICE_ACTION_LIFECYCLE
-        : {
-            ...outcome.serviceLifecycle,
-            priorServiceState: toLegacyPriorServiceState(
-              outcome.serviceLifecycle.priorServiceState,
-            ),
-            postSwapError: outcome.postSwapError,
-          },
-  };
-}
-
-// `LegacyHostUpdateServiceLifecycle` is a pinned, frozen wire shape (see
-// the module doc comment) - it must not silently grow to track new
-// `ServiceState` variants. `externally-managed` (macOS SMAppService-owned
-// label, added after this shape was pinned) has no legacy equivalent;
-// degrade it to `not-installed` exactly as Desktop's own
-// `projectInstallResult` reader already degrades any `priorServiceState`
-// value outside its own three-way union, so the projected wire value
-// matches what an old-CLI payload would already read as.
-function toLegacyPriorServiceState(
-  state: "running" | "stopped" | "not-installed" | "externally-managed",
-): "running" | "stopped" | "not-installed" {
-  return state === "externally-managed" ? "not-installed" : state;
-}
-
-function humanSummary(legacy: LegacyHostUpdateResult): string {
   if (legacy.previousVersion === legacy.version) {
     return `host already at ${legacy.version} (no-op)`;
   }
@@ -443,4 +160,11 @@ function humanSummary(legacy: LegacyHostUpdateResult): string {
     return `updated host to ${legacy.version}; service did not converge: ${legacy.serviceLifecycle.postSwapError}`;
   }
   return `updated host ${legacy.previousVersion ?? "?"} → ${legacy.version}`;
+}
+
+/** What is SERVING, for a run that changed nothing and must say so. */
+function runningState(outcome: HostUpdateRunOutcome): string {
+  return outcome.runningVersion === null
+    ? `no host is running (${outcome.legacy.version} is installed)`
+    : `the running host is ${outcome.runningVersion}`;
 }

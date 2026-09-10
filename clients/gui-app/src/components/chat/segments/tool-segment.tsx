@@ -3,11 +3,13 @@ import { useCallback, useMemo } from "react";
 import type { ReactNode } from "react";
 import { v4 as uuidv4 } from "uuid";
 import type {
+  AgentMessageReceipt,
   AgentMessageSend,
   BackgroundTaskOutput,
   ImageGenerationResult,
   ToolCallManagedCommand,
 } from "@traycer/protocol/persistence/epic/content-blocks";
+import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-store";
 import type { SegmentEndState } from "@/stores/composer/chat-store";
 import { deriveA2ASendCollapsibleKey } from "@/components/chat/chat-collapsible-key";
 import { chatFindA2ASendBodyUnitId } from "@/components/chat/chat-find";
@@ -27,7 +29,7 @@ import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { cn, formatSingleLine } from "@/lib/utils";
 import { AgentHeaderLink } from "./agent-header-link";
 import { AgentMessageBody } from "./agent-message-body";
-import { ReplyExpectedBadge } from "./reply-expected-badge";
+import { ReplyExpectedIcon, ReplyExpectedNote } from "./reply-expected";
 import { SegmentCard } from "./segment-card";
 import { SegmentPanel } from "./segment-panel";
 import { SegmentRow } from "./segment-row";
@@ -66,6 +68,9 @@ interface ToolSegmentProps {
   inputDetail: ToolInputDetail | null;
   error: string | null;
   agentMessageSend: AgentMessageSend | null;
+  // Where that send landed in the receiver's transcript, stamped at
+  // completion. Non-null lets the receiver link jump to the exact row.
+  agentMessageReceipt: AgentMessageReceipt | null;
   isStreaming: boolean;
   // Terminal outcome when the turn ended mid-call (else null): drives a neutral
   // "stopped"/"superseded" badge instead of a spinner.
@@ -655,6 +660,7 @@ function A2ASendToolSegment(
   props: ToolSegmentProps & { readonly send: AgentMessageSend },
 ) {
   const { id, error, isStreaming, endState, send, variant } = props;
+  const receipt = props.agentMessageReceipt;
   const bodyFindUnitId = chatFindA2ASendBodyUnitId(id);
   const tileInstanceId = useChatCollapsibleTileInstanceId();
   const collapsibleKey = useMemo(
@@ -684,6 +690,7 @@ function A2ASendToolSegment(
   const activeHostId = useTabHostId();
   const epicId = useOpenEpicId();
   const { openTile } = useEpicTileNavigation();
+  const requestJump = useChatTranscriptJumpStore((s) => s.requestJump);
   const receiverName = receiverDisplayName(receiverNode, send.receiverAgentId);
   const openTarget = receiverOpenTarget(receiverNode, activeHostId);
   const openReceiverTab = () => {
@@ -702,24 +709,30 @@ function A2ASendToolSegment(
         "direct_ui",
       ),
     );
+    // Same mechanism the communication graph uses for its receiver-side
+    // anchor: park a jump for the receiver's tile, which picks it up whether
+    // it is already mounted or is being opened by the call above. The receipt
+    // is the receiver's own transcript message id, so this lands on the exact
+    // row the message was delivered as. A send without one (TUI receiver, or
+    // a block persisted before the host carried receipts) just opens the tile.
+    if (
+      receipt === null ||
+      openTarget.type !== "chat" ||
+      receipt.receiverAgentId !== receiverNode.id
+    ) {
+      return;
+    }
+    requestJump(openTarget.hostId, receiverNode.id, {
+      kind: "message",
+      messageId: receipt.messageId,
+    });
   };
 
-  const receiver = (
-    // flex-wrap lets the badge drop to a second line on narrow (mobile)
-    // widths; the name group truncates last, so the receiver stays visible
-    // and tappable instead of collapsing to "to agent …".
-    <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-1 text-ui-sm">
-      <span className="flex min-w-0 items-center gap-1">
-        <span className="shrink-0 text-muted-foreground">to agent</span>
-        <AgentHeaderLink
-          name={receiverName}
-          onOpen={openTarget !== null ? openReceiverTab : null}
-        />
-      </span>
-      {send.expectReply ? <ReplyExpectedBadge /> : null}
-    </span>
-  );
-
+  // The header is one row and the receiver name is the only element allowed
+  // to shrink, so every fixed-width neighbour costs name characters on a
+  // phone card or a narrow desktop tile. "Sent message" is spoken, not
+  // painted: the icon and "to" already say it. The reply-expected marker is
+  // an icon for the same reason (see `ReplyExpectedIcon`).
   const header = (
     <>
       <SendHorizontal
@@ -729,13 +742,15 @@ function A2ASendToolSegment(
         )}
         aria-hidden
       />
-      <span className="shrink-0 text-ui-sm font-medium text-foreground/85">
-        Sent message
+      <span className="sr-only">Sent message</span>
+      <span className="flex min-w-0 flex-1 items-center gap-1.5 text-ui-sm">
+        <span className="shrink-0 text-muted-foreground">to</span>
+        <AgentHeaderLink
+          name={receiverName}
+          onOpen={openTarget !== null ? openReceiverTab : null}
+        />
+        {send.expectReply ? <ReplyExpectedIcon /> : null}
       </span>
-      <span aria-hidden className="shrink-0 text-muted-foreground/40">
-        ·
-      </span>
-      {receiver}
       <ToolBadge state={badgeState} endState={endState} />
     </>
   );
@@ -743,6 +758,7 @@ function A2ASendToolSegment(
   const preview = <AgentMessagePreview message={send.message} tone="primary" />;
   const body = open ? (
     <div className="flex flex-col gap-2">
+      {send.expectReply ? <ReplyExpectedNote /> : null}
       <AgentMessageBody
         value={send.message}
         bodyFindUnitId={bodyFindUnitId}

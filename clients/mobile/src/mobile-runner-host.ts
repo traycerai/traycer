@@ -75,6 +75,7 @@ import type {
   IPushPermissionHost,
   IRunnerHost,
   ISecureStorage,
+  ISystemBackHost,
   ITokenStore,
   ITrayState,
   IWorkspaceFoldersHost,
@@ -188,6 +189,12 @@ export interface MobileRunnerHostOptions {
    * may branch on the answer.
    */
   readonly canCopyImages: boolean;
+  /**
+   * The OS back request, or `null` where the OS raises none - see
+   * `IRunnerHost.systemBack`. Decided by the entry point like the members
+   * above: which platform this is stays the entry's business.
+   */
+  readonly systemBack: ISystemBackHost | null;
 }
 
 const STEP_UP_EXPIRY_SKEW_MS = 5_000;
@@ -253,6 +260,7 @@ export class MobileRunnerHost implements IRunnerHost {
    * wherever it would have nothing to report or no working button.
    */
   readonly pushPermission: IPushPermissionHost | null;
+  readonly systemBack: ISystemBackHost | null;
   private retainedStepUpCredential: RetainedStepUpCredential | null = null;
   // One evidence pair per platform - see `resumeEvidenceModeFor` and the
   // MobileSystemResume class doc for why the same Capacitor event names mean
@@ -296,6 +304,7 @@ export class MobileRunnerHost implements IRunnerHost {
     this.linkLoginDeepLinks = options.linkLoginDeepLinks;
     this.fileSave = options.fileSave;
     this.canCopyImages = options.canCopyImages;
+    this.systemBack = options.systemBack;
     this.notifications = buildNotifications(options.pushRegistration);
     this.pushPermission = buildPushPermission(
       options.pushRegistration,
@@ -674,16 +683,9 @@ export class MobileRunnerHost implements IRunnerHost {
 // The client kind this app signs in as. It labels the minted session on the
 // sessions page, keys the approval-page copy, and gates push-token
 // registration. The cloud /device page fires the return-to-app deep link for
-// either kind, so `return_scheme` behaves the same both ways.
-//
-// Production builds sign in as "desktop": the production authn deployment
-// rejects the "mobile" device client kind, and a build that sends it cannot
-// sign in at all. Every other environment sends the honest kind - dev and
-// staging authn accept it, which is what lets staging exercise the real
-// labeling. When the production authn accepts "mobile", this collapses back
-// to the unconditional kind.
-const DEVICE_FLOW_CLIENT_ID: DeviceClientId =
-  __TRAYCER_MOBILE_CONFIG__.environment === "production" ? "desktop" : "mobile";
+// either kind, so `return_scheme` behaves the same both ways. Every authn
+// deployment accepts it, so every environment sends the honest kind.
+const DEVICE_FLOW_CLIENT_ID: DeviceClientId = "mobile";
 
 class MobileDeviceFlowHost implements IDeviceFlowHost {
   constructor(
@@ -926,13 +928,13 @@ class MobileTokenStore implements ITokenStore {
   }): Promise<TokenRotateResult> {
     const stored = await this.get();
     if (stored === null) {
-      return { outcome: "deleted", pair: null };
+      return { outcome: "deleted", pair: null, rejection: null };
     }
     if (stored.user.id !== expected.userId) {
-      return { outcome: "user-mismatch", pair: stored };
+      return { outcome: "user-mismatch", pair: stored, rejection: null };
     }
     if (stored.token !== expected.token) {
-      return { outcome: "superseded", pair: stored };
+      return { outcome: "superseded", pair: stored, rejection: null };
     }
     const refreshed = await refreshOnceAbortable({
       authnBaseUrl: this.authnBaseUrl,
@@ -942,10 +944,24 @@ class MobileTokenStore implements ITokenStore {
       signal: null,
     });
     if (refreshed.kind === "network-error") {
-      return { outcome: "refresh-network", pair: null };
+      return { outcome: "refresh-network", pair: null, rejection: null };
     }
     if (refreshed.kind === "rejected") {
-      return { outcome: "refresh-rejected", pair: null };
+      // Carried through rather than collapsed. `refreshOnceAbortable` already
+      // knows WHAT the rejection was about - 403/404 is a statement about the
+      // ACCOUNT, 400/401 about the TOKEN - and that distinction is only
+      // knowable at the HTTP boundary. Collapsing it here would land the
+      // renderer three layers up with no way to decide whether to keep serving
+      // this device's own epics from disk, which is the defect the split
+      // exists to fix.
+      return {
+        outcome:
+          refreshed.rejection.kind === "account"
+            ? "refresh-rejected-account"
+            : "refresh-rejected-credential",
+        pair: null,
+        rejection: refreshed.rejection,
+      };
     }
     const next: StoredCredentials = {
       ...stored,
@@ -954,7 +970,7 @@ class MobileTokenStore implements ITokenStore {
       savedAt: new Date().toISOString(),
     };
     await this.write(next);
-    return { outcome: "applied", pair: next };
+    return { outcome: "applied", pair: next, rejection: null };
   }
 
   async delete(): Promise<void> {

@@ -3,13 +3,16 @@ import { resolve } from "node:path";
 import {
   commitAttemptMutation,
   commitExecutorOnlyAttemptMutation,
+  discardAttemptRecordForUninstall,
   pruneTerminalAttemptRecord,
   readUpdateAttemptRecord,
   type AttemptCommitOutcome,
+  type AttemptDiscardOutcome,
   type AttemptMutationIntent,
   type PublicAttemptMutationIntent,
 } from "./store";
 import type { HostUpdateAttemptRead } from "./decode";
+import type { HostUpdateAttemptVerification } from "./record";
 import {
   acquireUpdateAttemptLock,
   probeAttemptHolder,
@@ -34,16 +37,132 @@ import { updateAttemptLockPath } from "./paths";
  */
 export type UpdateMaintenanceExemption =
   | "stage-maintenance"
+  /**
+   * ONE STEP of an uninstall that is not itself a removal: the packaged-macOS
+   * login-item bootout (`unregisterHostLoginItemWithAttempt`) that Desktop's
+   * Settings uninstall and Danger-Zone remove run before streaming the CLI.
+   *
+   * It removes nothing and rewrites no record, so it has NO whole-product
+   * argument and refuses over a durable nonterminal attempt. Admitting it
+   * would unregister the login item and then, if the teardown that follows
+   * failed, leave a host that will not relaunch beside a park nothing can
+   * reach. The removal that DOES have the argument contends separately,
+   * inside the CLI process, as `host-uninstall-maintenance`.
+   */
   | "uninstall-maintenance"
+  /**
+   * `host uninstall` REMOVING the whole install: the CLI command, and the
+   * teardown the internal scripts drive through the maintenance lease.
+   *
+   * It takes the install tree the record describes away and discards the
+   * record with it, so a resumed holder has no end state left to disagree
+   * about - the whole-product criterion documented on the `allow` arm in
+   * `dispositionFor`. Deliberately distinct from `uninstall-maintenance`
+   * above, which is only a login-item step and keeps refusing.
+   */
+  | "host-uninstall-maintenance"
   | "service-maintenance"
   | "desktop-activation-maintenance"
+  /**
+   * The internal cloud-install script REPLACING the whole desktop .app
+   * bundle - `scripts/desktop-install-cloud.js`, the operation behind
+   * `make install-desktop{,-staging,-production}`.
+   *
+   * Deliberately its own name rather than a widening of
+   * `desktop-activation-maintenance`, which it used to share, and the split
+   * is not cosmetic: that name is ALSO
+   * `runLockedMacActivationCycle`'s, which backs `applyStaged` and
+   * `activateInstalled`. Those two APPLY BYTES, so admitting them beside a
+   * park would put a second actor on the work the park itself is waiting to
+   * do. It is also `runPendingLoginItemRevisionCycle`'s, which stamps the
+   * install generation inside the lock - the very field a park's `claim` is
+   * validated against, the same hazard `supervisor-relaunch-maintenance`
+   * documents for `host stamp-runtime`. Both must keep refusing.
+   *
+   * This operation does neither. It quits the app, stops an IDLE host
+   * (`shouldBootoutHostForInstall` independently declines to touch a busy
+   * one), boots out its LaunchAgent, writes a `{pending, writtenAt}` marker,
+   * and swaps the bundle in `/Applications`. It never writes `install/`,
+   * never promotes staged bytes, and never stamps an install identity - so
+   * the record it steps over stays exactly as it was, and the next
+   * `host ensure` reconciles it under `attempt-executor` with the full
+   * recovery path.
+   *
+   * **With a durable nonterminal attempt it therefore ALLOWS**, on the same
+   * reasoning as `host-uninstall-maintenance` and stated in full on that arm
+   * in `dispositionFor`: the criterion is IDEMPOTENCE, not the absence of a
+   * live holder. Do not restate this as "a running update answers `busy`
+   * first" - contention cannot exclude a holder that is alive but momentarily
+   * outside the lock. It allows because replacing the whole product leaves a
+   * resumed holder no end state to disagree about. Refusing it instead meant
+   * one parked update - the ROUTINE outcome of updating a busy host - made a
+   * developer machine un-reinstallable as well as un-uninstallable.
+   */
+  | "desktop-install-maintenance"
   | "runtime-repair-maintenance"
+  /**
+   * The supervisor's own relaunch: an OS service manager (or a crash
+   * relaunch) running a plain `host start`. Deliberately its own name rather
+   * than a widening of `runtime-repair-maintenance`, which it used to share:
+   * that name is also `host stamp-runtime`'s, and stamping the runtime
+   * identity while a park stands would move the very install generation the
+   * park's claim is validated against.
+   *
+   * **With a durable nonterminal attempt it REFUSES**, exactly as
+   * `runtime-repair-maintenance` does, with two parked exceptions where the
+   * relaunch IS the attempt's own next step rather than a parallel updater:
+   *
+   *  - `waiting-for-work` - no bytes are placed, so what comes up is the
+   *    currently installed host, the same one this park was created under.
+   *    The reconciler resumes the park at the idle edge as it already does.
+   *  - an activation park the restart already satisfied: a
+   *    `waiting-to-activate` attempt whose target is the version already
+   *    INSTALLED, and whose claim still matches that install. The park exists
+   *    because a busy host deferred the restart, and a busy condition cannot
+   *    survive the reboot that is asking for admission here.
+   *
+   *    Ticket 07's reconciler names the same state from the other side, as "a
+   *    `waiting-to-activate` attempt whose target is the version this host is
+   *    already running". The two vantage points are deliberate, not a drift:
+   *    the reconciler compares the RUNNING version because it executes inside
+   *    a live host; this admission compares the INSTALL RECORD because at
+   *    admission time nothing is running - that is the condition it exists to
+   *    resolve.
+   *
+   * It never creates, advances, or terminalizes a record - it holds no
+   * capability that could - so the record is closed by the reconciler's
+   * evidence pass, never from the supervisor.
+   */
+  | "supervisor-relaunch-maintenance"
   /**
    * User-confirmed restart/doctor recovery. This performs only the existing
    * service/process recovery edge; it neither creates nor advances a v2
    * attempt and is deliberately distinct from Desktop activation.
    */
   | "recovery-maintenance";
+
+/**
+ * The local installation facts a supervisor relaunch is admitted against.
+ *
+ * `installGeneration` is the string `encodeInstallGeneration` returns, never
+ * `installId` or any other single field, so it compares byte-equal with the
+ * baseline a claim recorded.
+ */
+export interface SupervisorRelaunchInstalledIdentity {
+  readonly installedVersion: string;
+  readonly installGeneration: string;
+}
+
+/**
+ * Reads the live install record. Invoked UNDER the canonical attempt lock and
+ * only when the record's phase could admit the relaunch, so the comparison is
+ * against what is on disk at the moment of the decision rather than whatever
+ * the supervisor happened to read before it contended.
+ *
+ * `null` when there is no readable install record: unverifiable, so refused.
+ */
+export type SupervisorRelaunchIdentityReader =
+  () => Promise<SupervisorRelaunchInstalledIdentity | null>;
 
 /**
  * The compatibility bridge while legacy update execution remains selected.
@@ -119,6 +238,18 @@ interface ExecutorCompletionObservation {
   readonly targetVersion: string;
   readonly runningVersion: string;
   readonly runningOwner: "host-home-bound";
+  /**
+   * How the live verifier actually proved this host (Q1), carried on the
+   * SEALED proof rather than reconstructed at the write.
+   *
+   * It travels here for the same reason every other fact on this observation
+   * does: the verifier derived it under the inner CLI lock, and a value
+   * re-derived at the durable edge would be a second opinion about a host
+   * nobody is looking at any more. It is not normalizable from a serialized
+   * intent either - see `normalizeAdvance` - so an intent that arrived as data
+   * cannot claim a verification it never performed.
+   */
+  readonly verification: HostUpdateAttemptVerification;
   readonly nowIso: string;
 }
 
@@ -351,6 +482,43 @@ export async function commitAttemptMutationWithCapability(
 }
 
 /**
+ * Discard the canonical record as part of REMOVING the install it describes.
+ *
+ * The uninstall's one write, and it is a write, which is why it is here and
+ * handle-bound rather than an `rm` at the call site: `store.ts`'s banner
+ * forbids a raw delete precisely because an unlink performs no check at the
+ * point of the write, and a handle can outlive its lock without anyone
+ * releasing it. This facade contributes the live-capability check; the core
+ * checks ownership once, immediately before the unlink. It reads no canonical
+ * bytes and compares no identity - unlike `pruneTerminalAttemptRecord`, which
+ * checks on both sides precisely BECAUSE it reads and compares in between.
+ *
+ * Restricted to `host-uninstall-maintenance` - the admission whose whole
+ * justification is that it removes the product. In particular
+ * `uninstall-maintenance`, the Desktop login-item STEP, cannot reach it: that
+ * operation removes nothing and has no business dropping the record.
+ */
+export async function discardAttemptRecordWithCapability(
+  capability: UpdateMutationCapability,
+  hostHomeDir: string,
+): Promise<AttemptDiscardOutcome> {
+  if (!issuedCapabilities.has(capability)) {
+    throw new Error("update uninstall capability was not issued");
+  }
+  const state = heldCapabilityState(capability);
+  if (state === null || state.admission !== "host-uninstall-maintenance") {
+    throw new Error("update uninstall capability was not admitted");
+  }
+  const verdict = await verifyUpdateMutationCapability(capability, hostHomeDir);
+  if (verdict.kind !== "live") {
+    throw new Error(
+      `update uninstall capability is not live (${verdict.kind})`,
+    );
+  }
+  return discardAttemptRecordForUninstall({ handle: state.handle });
+}
+
+/**
  * Capability-consuming durable mutation boundary for the schema-v2 executor.
  *
  * This is intentionally narrower than `commitAttemptMutation`: callers never
@@ -525,6 +693,13 @@ async function commitVerifiedExecutorCompletion(
         continuation: null,
         progress: canonical.value.progress,
         error: null,
+        // The attempt is over: there is no later resume for a baseline to
+        // authorize, so this write carries whatever the record already had.
+        claimRefresh: null,
+        // The one advance that carries a verification. It came off the sealed
+        // proof, so it is what the live verifier observed and not what any
+        // caller asked for.
+        verification: evidence.verification,
         nowIso: evidence.nowIso,
       },
     },
@@ -638,8 +813,36 @@ export async function withUpdateContender<T>(
     context: UpdateContenderExecutionContext,
   ) => Promise<T>,
 ): Promise<UpdateContenderOutcome<T>> {
-  return withUpdateContenderInternal(options, (capability, context) =>
-    run(capability, context),
+  return withUpdateContenderInternal(
+    options,
+    (capability, context) => run(capability, context),
+    null,
+  );
+}
+
+/**
+ * The supervisor's own relaunch admission - a plain `host start` asking
+ * whether it may spawn the host while a durable attempt stands.
+ *
+ * A dedicated entry point rather than an admission a caller can name, for the
+ * reason `withUpdateExecutorCompletionSegment` is one: the exemption is only
+ * sound while it is decided against a live install record, so the reader is
+ * required HERE and the admission is unreachable without it. A caller cannot
+ * select this exemption and forget the evidence it rests on.
+ */
+export async function withSupervisorRelaunchContender<T>(
+  options: Omit<WithUpdateContenderOptions, "admission"> & {
+    readonly readInstalledIdentity: SupervisorRelaunchIdentityReader;
+  },
+  run: (
+    capability: UpdateMutationCapability,
+    context: UpdateContenderExecutionContext,
+  ) => Promise<T>,
+): Promise<UpdateContenderOutcome<T>> {
+  return withUpdateContenderInternal(
+    { ...options, admission: "supervisor-relaunch-maintenance" },
+    (capability, context) => run(capability, context),
+    options.readInstalledIdentity,
   );
 }
 
@@ -671,6 +874,7 @@ export async function withUpdateExecutorCompletionSegment<T>(
         await completion.revoke();
       }
     },
+    null,
   );
 }
 
@@ -770,6 +974,10 @@ async function withUpdateContenderInternal<T>(
     context: UpdateContenderExecutionContext,
     completion: ExecutorCompletionSession | null,
   ) => Promise<T>,
+  // Supplied only by `withSupervisorRelaunchContender`, whose admission is the
+  // only one that consults it. `null` everywhere else, and a `null` reader can
+  // only ever refuse - there is no arm where its absence widens an admission.
+  readInstalledIdentity: SupervisorRelaunchIdentityReader | null,
 ): Promise<UpdateContenderOutcome<T>> {
   // The attempt lock lives directly under the canonical host home. First-run
   // install and Desktop activation legitimately contend before a legacy
@@ -838,7 +1046,11 @@ async function withUpdateContenderInternal<T>(
       });
     }
     if (activeAttempt !== null) {
-      const disposition = dispositionFor(options.admission);
+      const disposition = await dispositionForAttempt(
+        options.admission,
+        activeAttempt,
+        readInstalledIdentity,
+      );
       // Update state is not a global host-action mutex. A direct, confirmed
       // recovery restart/doctor action remains available while a logical
       // update is active or parked, provided this contender won the physical
@@ -1003,13 +1215,387 @@ function dispositionFor(
     case "legacy-update-shadow":
     case "stage-maintenance":
       return "yield";
-    case "uninstall-maintenance":
     case "service-maintenance":
     case "desktop-activation-maintenance":
+    // Two shipped Desktop sites take this to unregister the login item as
+    // one STEP of an uninstall (`host-controller.ts#uninstallHost`,
+    // `#removeTraycer`). That step removes nothing, so it has no
+    // whole-product claim and keeps refusing; the removal itself contends
+    // separately, inside the CLI, under `host-uninstall-maintenance`.
+    case "uninstall-maintenance":
     case "runtime-repair-maintenance":
+    // The BASE answer, and the one every non-parked record keeps. The parked
+    // exceptions are an upgrade applied by `supervisorRelaunchDisposition`
+    // below, never a different answer here: a disposition keyed on admission
+    // alone cannot see a phase, and flipping this arm to `allow` would admit
+    // a relaunch into an ACTIVE segment - the crash-during-activation case,
+    // which is exactly what must keep refusing.
+    case "supervisor-relaunch-maintenance":
       return "refuse";
+    // ## The two WHOLE-PRODUCT admissions
+    //
+    // The criterion here is the same one `supervisorRelaunchOverActive`
+    // reaches for below, and for the same reason: **not** "is there a live
+    // holder", but "if the holder IS alive and resumes, does admitting this
+    // change the DELIVERED END STATE?".
+    //
+    // Do not reach for the no-live-holder argument. Contention looks like it
+    // proves that - a live executor segment holds this same attempt lock for
+    // its whole span, so a running update answers `busy` from
+    // `withUpdateContenderInternal` before any disposition is consulted - but
+    // it does not, and the paragraph on `supervisorRelaunchOverActive` says
+    // why: what contention CANNOT exclude is a holder that is alive but
+    // momentarily outside the lock. The packaged-macOS executor releases
+    // between its swap span and its CLI verification span by design
+    // (`clients/desktop/.../update-executor.ts`), so a `restarting` record
+    // with a live owner mid-flight reaches this function legitimately.
+    //
+    // These two admissions are sound anyway, because they do not race that
+    // holder - they REMOVE or REPLACE the whole product it would resume
+    // into. An update exists to deliver a version of an install; when the
+    // install itself is being taken away or overwritten wholesale, there is
+    // no end state left for a resumed attempt to disagree about. Whatever the
+    // holder would have done next, the delivered result is the same.
+    //
+    // That is why this is deliberately NOT `uninstall-maintenance`, which two
+    // shipped Desktop sites also take (`host-controller.ts` - Settings
+    // uninstall and Danger-Zone remove). There the in-lock operation is
+    // `unregisterHostLoginItemWithAttempt`: a login-item bootout that removes
+    // NOTHING and rewrites no record. It has no whole-product argument, so it
+    // keeps refusing - admitting it would unregister the login item and then
+    // leave a park nothing can reach if the teardown that follows fails.
+    //
+    // Refusing the whole-product cases used to leave a machine that could not
+    // be uninstalled - or reinstalled, since the surviving park refused the
+    // install too - for as long as ONE update was parked, and a park is the
+    // ROUTINE outcome of updating a busy host (`parkForWork` in
+    // `traycer-cli`'s `host/update-run.ts`).
+    //
+    // `host uninstall`, which removes the install tree the record describes
+    // and discards the record with it.
+    case "host-uninstall-maintenance":
+    // The install counterpart: the cloud-install script replacing the whole
+    // .app bundle - see the type above for why it is NOT
+    // `desktop-activation-maintenance`.
+    case "desktop-install-maintenance":
     case "recovery-maintenance":
     case "attempt-executor":
       return "allow";
   }
+}
+
+/**
+ * The admission a nonterminal record actually gets, which for one exemption
+ * depends on the record rather than only on the name.
+ *
+ * Everything else is `dispositionFor` unchanged, evaluated first, so this
+ * function can only ever narrow the set of records that refuse - never widen
+ * what another admission may do.
+ */
+async function dispositionForAttempt(
+  admission: UpdateContenderAdmission,
+  activeAttempt: HostUpdateAttemptRecord,
+  readInstalledIdentity: SupervisorRelaunchIdentityReader | null,
+): Promise<ActiveAttemptDisposition> {
+  const base = dispositionFor(admission);
+  if (admission !== "supervisor-relaunch-maintenance") return base;
+  return supervisorRelaunchDisposition(activeAttempt, readInstalledIdentity);
+}
+
+/**
+ * Whether a plain supervisor relaunch may proceed with this record standing.
+ *
+ * The refusal this narrows is not hypothetical tidiness: a refused supervisor
+ * start exits 0, and both service managers relaunch only on a NON-zero exit,
+ * so a reboot while an update is parked leaves the host down with nothing left
+ * to bring it back. On a CLI-only install that is an indefinite silent outage,
+ * because the reconciler that would resume the park lives inside the host that
+ * is not running.
+ *
+ * What makes the two parked shapes safe is that neither asks this supervisor
+ * to do anything the attempt did not already authorize:
+ *
+ *  - `waiting-for-work` has placed no bytes, and that is a TABLE fact rather
+ *    than a property of the current writer: `LEGAL_SUCCESSORS`
+ *    (`transition.ts`) admits `waiting-for-work` only from `downloading` and
+ *    `preparing`, and `applying`'s successor set excludes it. `applying` is
+ *    the phase that places bytes, so no record that can exist reached this
+ *    park through one. Starting the installed host is therefore what the
+ *    machine did before the attempt began, and the park survives to be
+ *    resumed at the idle edge. (The single production writer, `parkForWork`
+ *    in `host/update-run.ts`, is the pre-apply busy park and agrees.)
+ *
+ *    CROSS-PACKAGE, so no test in this module can watch it: add
+ *    `applying -> waiting-for-work` to that map and this arm becomes unsafe
+ *    with nothing here reddening. The authority is `LEGAL_SUCCESSORS`; the
+ *    pin has to live beside it.
+ *  - `waiting-to-activate` has placed the target's bytes and is waiting for a
+ *    restart to run them. When the installed version IS the target and the
+ *    claim still matches that install, this relaunch is that restart. The
+ *    equality is what turns `recoveryActionFor`'s "possibly-new bytes" into
+ *    "exactly the bytes this attempt placed"; without it a relaunch would be
+ *    activating an install nobody in this attempt vouched for.
+ *
+ *    The arm is not confined to activation-debt parks, which is what makes it
+ *    worth having: `parkForActivation` refreshes the baseline at park time
+ *    (`readClaimRefresh` re-reads the live install record), so an ordinary
+ *    apply -> busy -> park attempt carries the POST-apply install identity and
+ *    matches here. A reader who assumes the baseline is the pre-apply one
+ *    would wrongly conclude this arm is dead code.
+ *
+ * `stageFingerprint` is deliberately NOT in the comparison, and not merely
+ * because the bytes are installed rather than staged: at `waiting-to-activate`
+ * a stage may LEGITIMATELY hold a different, later version - `parkForActivation`
+ * says so in as many words, and the refresh records that unrelated stage into
+ * the baseline. Comparing it would refuse perfectly good parks over an artifact
+ * that says nothing about the installed bytes.
+ *
+ * A claim-less park is REFUSED, deliberately, and it is the same answer a
+ * bound `host.update.activate` gives it (`refused-unverifiable`): with no
+ * baseline there is nothing to prove the installed generation is the one the
+ * claimant placed, and version equality alone cannot tell this attempt's bytes
+ * from a different install that happens to carry the same version.
+ *
+ * That refusal is NOT the codebase's single answer to a missing claim, and the
+ * difference is deliberate in all three places. Do not "make them consistent"
+ * without reading why each one differs:
+ *
+ *  | site | missing claim | why |
+ *  | ---- | ------------- | --- |
+ *  | here (parked relaunch) | REFUSE — fails closed | the supervisor is being asked to activate bytes; with no baseline nothing vouches for them |
+ *  | `readClaimRefresh` (Q5, `host/update-run.ts`) | proceed — fails OPEN | it is refreshing a baseline, not authorizing an activation; refusing there would strand attempts over a read |
+ *  | the Q9 active arm | never asks | deliberate: post-swap the record's baseline is STALE, so a claim test there would compare against the pre-swap install and refuse correct relaunches |
+ *
+ * The third row is the one that gets misread, and its cell was rewritten once
+ * for exactly that reason (cold review B). It used to LEAD with "post-swap the
+ * record's baseline is STALE", which post-Q12 is false of any record a current
+ * CLI wrote: `applyArm` / `downgradeArm` refresh across `applying ->
+ * restarting`, so that baseline names the swapped install. Staleness is now
+ * the RESIDUAL reason - true of a pre-Q12 record and of one whose swap-time
+ * read failed - and it is kept as the additional reason, not the headline.
+ *
+ * The durable reason is entitlement, and it does not decay: this arm is not
+ * authorizing an activation, so it has no business consulting an
+ * authorization. That holds for every record, including one whose baseline is
+ * perfectly fresh. The Q9 arm is therefore not "failing open" either - it does
+ * not consult the claim at all, and `RW-Q6` reddens if someone adds a test.
+ * Q12 fixed what the baseline SAYS; it never touched whether this arm may ask.
+ *
+ * The ordering inside the cell is the point, not pedantry. A table is what a
+ * reader trusts first, and this one exists to stop someone "making the three
+ * consistent" - so a cell leading with a reason that has since become
+ * conditional invites exactly the edit the table was built to prevent.
+ *
+ * A park whose baseline could not be REFRESHED is inadmissible for the same
+ * reason, and today it is so silently. `readClaimRefresh` returns
+ * `refresh: null` when the install record is unreadable at park time, which
+ * "carries the record's prior baseline unchanged" - for an apply-born attempt
+ * that prior baseline is the PRE-apply install, so `installedVersion` no
+ * longer matches afterwards and this function refuses. Rare and fail-closed,
+ * but worth naming: the exemption is off for that park, and the reason is a
+ * read that failed at park time rather than anything about this relaunch.
+ */
+async function supervisorRelaunchDisposition(
+  record: HostUpdateAttemptRecord,
+  readInstalledIdentity: SupervisorRelaunchIdentityReader | null,
+): Promise<ActiveAttemptDisposition> {
+  // The decoder refuses a park whose continuation is not its phase's own
+  // (`continuationLegalFor`), so the phase alone identifies the shape here.
+  if (record.phase === "waiting-for-work") return "allow";
+  if (record.phase !== "waiting-to-activate") {
+    return supervisorRelaunchOverActive(record, readInstalledIdentity);
+  }
+  const claim = record.claim;
+  // TWO DIFFERENT NULLS, and they are not the same failure:
+  //
+  //  - `readInstalledIdentity === null` means no reader was SUPPLIED. It is
+  //    structurally unreachable from the public entry point, which requires
+  //    one, and holds only for the admissions that never reach this function.
+  //    Written as a refusal rather than an assertion so that a caller which
+  //    cannot read the install record can never be treated as one that read
+  //    it and found agreement.
+  //  - `installed === null` (the next line) means the reader ran and there is
+  //    no readable install record. Unverifiable, so also refused.
+  if (claim === undefined || readInstalledIdentity === null) return "refuse";
+  const installed = await readInstalledIdentity();
+  if (installed === null) return "refuse";
+  return installed.installedVersion === record.targetVersion &&
+    installed.installedVersion === claim.installedVersion &&
+    installed.installGeneration === claim.installGeneration
+    ? "allow"
+    : "refuse";
+}
+
+/**
+ * A NON-parked record: the interrupted-attempt half of the same admission.
+ *
+ * ## Why refusing all of these was its own outage
+ *
+ * A CLI killed after its swap leaves `restarting` with `execution: "active"`,
+ * the host stopped for that swap and never brought back. Refusing here exits
+ * 0, no service manager relaunches on a zero exit, and the box stays down -
+ * the parked outage this admission already fixes, one phase over, and the
+ * shape the Linux matrix wedged on. It is the worse half: a park at least has
+ * a reconciler that would resume it, while the reconciler for this record
+ * lives inside the host that is not running.
+ *
+ * ## The criterion is IDEMPOTENCE, not whole bytes
+ *
+ * The tempting test - "is the install directory a complete tree of a known
+ * version" - is necessary and not sufficient, and the case it cannot see is
+ * the one that matters. A LIVE `applying` segment between lock spans may have
+ * finished its swap and be about to restart the host itself: the directory is
+ * whole, the version is known, and admitting here puts two actors on the same
+ * activation.
+ *
+ * A supervisor cannot rule that out, and it does not try. What it DOES have,
+ * and what stands in for a liveness probe here, is the lock it is already
+ * holding: a live executor segment holds this same attempt lock for its whole
+ * span - `withCliAttemptExecutorCompletion` wraps `execute` in
+ * `traycer-cli`'s `host/update-executor.ts` - and the supervisor contends with
+ * `waitMs: 0`, so a live holder returns `busy` from
+ * `withUpdateContenderInternal` before any disposition is consulted.
+ *
+ * That is why this function must NOT probe the holder itself. By the time it
+ * runs, this contender owns the lock, so `probeAttemptHolder` would observe
+ * US and report `holder-live` - a probe that refuses everything while looking
+ * like a safety check. The contention IS the read, and it happens earlier and
+ * proves more.
+ *
+ * What contention cannot exclude is a holder that is alive but momentarily
+ * outside the lock, which is what `decideAttemptRecovery`'s
+ * `holder-not-proven-absent` exists for. An active record is a claim that
+ * someone means to come back, and nothing available here can falsify it -
+ * hence a criterion that does not need it falsified.
+ *
+ * So the question is not "is the holder gone" but: **if the holder IS alive
+ * and resumes, does this supervisor having started the host change the
+ * DELIVERED END STATE?** Where the answer is no, admitting is safe without
+ * proving anything about the holder at all.
+ *
+ * "Delivered end state", not "outcome", and the difference decides a real
+ * row. Admitting `preparing`/`activate` can change the record's terminal
+ * LABEL: the resuming segment may find the target already installed and
+ * running, never write `restarting`, fail `canReachVerifying` (which for an
+ * `activate` continuation requires `restarting` or `verifying`), and settle
+ * `superseded` at exit 0 instead of `complete`. The update is still
+ * DELIVERED - target installed, target running - so nothing the machine
+ * needed was left undone. The refusals below are the opposite case: work not
+ * done at all.
+ *
+ * ## Which phases answer no, and why each one does
+ *
+ * Only the shapes whose own next act IS starting the host:
+ *
+ *  - `restarting` - the record has placed the target's bytes and stopped the
+ *    host for them; the holder's next act is the relaunch. Supervisor and
+ *    holder are performing the same act on the same bytes and it does not
+ *    matter which wins.
+ *  - `verifying` - the bytes are placed and the record is waiting for the
+ *    host to come up. Starting it is what the verification is waiting FOR, so
+ *    a supervisor start converges the record rather than racing it.
+ *  - `preparing` with an `activate` continuation - the recovery-resume shape.
+ *    `resumedRecord` normalizes every recovery resume to `preparing`, so the
+ *    phase alone cannot tell this from a fresh start; the continuation is what
+ *    still says "bytes are already placed, do not re-apply". Same act as
+ *    `restarting`, wearing the phase a resume was normalized to.
+ *
+ * Everything else refuses, and the refusals are not symmetry:
+ *
+ *  - `applying` is the phase that MOVES bytes. A live holder is between
+ *    `rename(install -> trash)` and `rename(stage -> install)`, and a host
+ *    started from that directory is one the swap then renames out from under
+ *    (or fails against, on Windows). Nothing about a whole directory makes
+ *    that safe, which is the whole reason the criterion above is idempotence.
+ *  - `downloading`, and `preparing` with a `null` or `resume-apply`
+ *    continuation, have placed nothing. Starting the host is not this
+ *    record's next act - its next act is to STOP the host and swap - so a
+ *    supervisor start can turn an update that would have applied into one
+ *    that hits a busy host and parks. That is a changed DELIVERED state -
+ *    bytes that would have been placed are not - which is what the criterion
+ *    forbids, and it is the distinction that separates these from the
+ *    relabelled `preparing`/`activate` case above. These are also the phases
+ *    where the host is normally still up, so the admission buys least where
+ *    it costs most.
+ *
+ * ## The identity test differs from the parked arm's, and must
+ *
+ * The parked arm proves the install is the attempt's own by matching the
+ * claim baseline, which `parkForActivation` refreshed at the park. This arm
+ * cannot lean on the same thing - but the reason has NARROWED rather than
+ * gone away, and the paragraph that used to say "nothing refreshes it across
+ * `applying -> restarting`" is no longer true as written.
+ *
+ * Q12 made the swap record what it installed: `phaseWrite` took a required
+ * `claimRefresh`, and `applyArm` / `downgradeArm` refresh the baseline across
+ * that edge. A record written by a current CLI, whose claim exists and whose
+ * post-swap read succeeded, does now carry a baseline naming its own install.
+ *
+ * The comparison still cannot become unconditional here, because three kinds
+ * of record reaching this arm carry a PRE-swap baseline and are
+ * indistinguishable from one another at the record:
+ *
+ *  - the claim PREDATES Q12 - an attempt started by an older CLI;
+ *  - there is NO claim - `refreshedClaimBaseline` ignores a refresh with no
+ *    prior claim, because a legacy continuation cannot gain an authorization
+ *    nobody ever granted it;
+ *  - Q12 RAN AND ITS READ FAILED - `generationWrittenBySwap` fails open, so an
+ *    unreadable install record at `afterSwap` leaves the prior baseline
+ *    standing, and no reader can tell that from the first case.
+ *
+ * Comparing generations against any of those refuses a genuine post-swap
+ * record - the E6L wedge above all. `installedByThisAttempt` in
+ * `host/update-run.ts` forgives exactly this staleness on the executor side,
+ * and must stay for exactly these cases.
+ *
+ * So the target-version equality carries it alone, and this arm remains
+ * knowingly weaker than the parked one: a foreign install that happens to
+ * land the same version is admitted as if it were this attempt's. Only the
+ * residual moved - it is no longer "nothing records the generation the swap
+ * wrote" but "the claim predates Q12, or there is none, or its read failed".
+ * What is admitted is still a complete, signed install of the version this
+ * record is trying to reach, being started on a machine whose supervisor
+ * asked for a host; the alternative is leaving that machine down.
+ */
+async function supervisorRelaunchOverActive(
+  record: HostUpdateAttemptRecord,
+  readInstalledIdentity: SupervisorRelaunchIdentityReader | null,
+): Promise<ActiveAttemptDisposition> {
+  if (!startsWhatThisRecordPlaced(record)) return "refuse";
+  // The same two nulls, refused for the same two reasons as the parked arm.
+  // `installed === null` also happens to be the swap's absent window - the
+  // instant between the two renames when there is no install directory at all
+  // - so the one state a torn read could produce is refused before the
+  // version test ever runs.
+  if (readInstalledIdentity === null) return "refuse";
+  const installed = await readInstalledIdentity();
+  if (installed === null) return "refuse";
+  return installed.installedVersion === record.targetVersion
+    ? "allow"
+    : "refuse";
+}
+
+/**
+ * Is starting the host this record's OWN next act?
+ *
+ * CROSS-PACKAGE, and no test in this module can watch it: `LEGAL_SUCCESSORS`
+ * (`transition.ts`) is what makes `restarting` and `verifying` mean "the
+ * target's bytes are placed". Both are reachable only from `preparing`,
+ * `applying` or `waiting-to-activate`, each of which has placed them. Admit a
+ * pre-placement phase into either successor set and this predicate silently
+ * starts a host from bytes nobody placed, with nothing here reddening.
+ *
+ * The set `{restarting, verifying}` also equals `POST_TOMBSTONE_PHASES` in
+ * `compatibility-fence.ts`, and that is a COINCIDENCE worth naming rather than
+ * an alias worth taking. Both sets mean "the record has promised a return",
+ * but they use it with opposite polarity - there, past the tombstone means a
+ * record can no longer walk back to a park and must terminalize; here, it
+ * means a supervisor start is the promised act and may proceed. Sharing the
+ * constant would let an edit made for one rule silently change the other.
+ */
+function startsWhatThisRecordPlaced(record: HostUpdateAttemptRecord): boolean {
+  if (record.phase === "restarting" || record.phase === "verifying") {
+    return true;
+  }
+  return record.phase === "preparing" && record.continuation === "activate";
 }

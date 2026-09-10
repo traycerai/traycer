@@ -1,3 +1,15 @@
+// This file is the maintenance entrypoint clients import by name
+// (`@traycer/protocol/host/maintenance/index`), and `../index` re-exports it
+// wholesale as `@traycer/protocol/host` - so a name absent here is absent from
+// both. Until now the BOUND dispatch surface was the one thing missing: 13
+// names, reachable only by importing `./contracts` or `./schemas` directly,
+// which is why the P1 wire change's consumers each hit the wall.
+//
+// The invariant these two blocks now hold, and the reason to add a name here
+// with every one added there: this barrel re-exports EVERY export of both
+// files. Prefer that over adding one name at a time - a barrel that offers
+// `HostUpdateBoundDispatchExpectedIdentity` but not the request schema the
+// field lives on just moves the wall one import along.
 export {
   hostDoctorV10,
   hostGetInstallationInfoUpgradeV10ToV11,
@@ -6,19 +18,35 @@ export {
   hostServiceDeregisterV10,
   hostServiceRegisterV10,
   hostServiceStatusV10,
+  hostUpdateActivateUpgradeV10ToV11,
+  hostUpdateActivateV10,
+  hostUpdateActivateV11,
   hostUpdateCheckUpgradeV10ToV11,
+  hostUpdateCheckUpgradeV11ToV12,
   hostUpdateCheckV10,
   hostUpdateCheckV11,
+  hostUpdateCheckV12,
+  hostUpdateContinueUpgradeV10ToV11,
+  hostUpdateContinueV10,
+  hostUpdateContinueV11,
   hostUpdateInstallV10,
   hostUpdateInstallV11,
+  hostUpdateInstallV12,
+  hostUpdateInstallV13,
+  hostUpdateInstallUpgradeV11ToV12,
+  hostUpdateInstallUpgradeV12ToV13,
   hostUpdateInstallUpgradeV10ToV11,
 } from "./contracts";
 
 export {
   RPC_DOCTOR_TRIVIALLY_GREEN_ISSUE_CODES,
+  HOST_STORE_FLOOR_EPIC_ID_LIMIT,
+  hostUpdateStoreFloorRefusalSchema,
+  type HostUpdateStoreFloorRefusal,
   LOCAL_WS_DOCTOR_TRIVIALLY_GREEN_ISSUE_CODES,
   doctorTriviallyGreenIssueCodesForVantage,
   hostAvailableManifestSchema,
+  hostAvailableManifestSchemaPreStoreFormats,
   hostDoctorIssueSchema,
   hostDoctorRequestSchema,
   hostDoctorResponseSchema,
@@ -33,13 +61,20 @@ export {
   hostServiceStatusRequestSchema,
   hostServiceStatusResponseSchema,
   hostIncludePreReleasesSourceSchema,
+  hostUpdateBoundDispatchExpectedIdentitySchema,
+  hostUpdateBoundDispatchRequestSchema,
+  hostUpdateBoundDispatchRequestSchemaPreExpectedIdentity,
+  hostUpdateBoundDispatchResponseSchema,
   hostUpdateCheckRequestSchema,
   hostUpdateCheckRequestSchemaV11,
   hostUpdateCheckResponseSchema,
   hostUpdateCheckResponseSchemaV11,
+  hostUpdateCheckResponseSchemaV12,
   hostUpdateInstallRequestSchema,
+  hostUpdateInstallRequestV13Schema,
   hostUpdateInstallResponseSchema,
   hostUpdateInstallResponseV11Schema,
+  hostUpdateInstallResponseV13Schema,
   type HostAvailableManifest,
   type HostDoctorIssue,
   type HostDoctorRequest,
@@ -55,11 +90,17 @@ export {
   type HostServiceStatusRequest,
   type HostServiceStatusResponse,
   type HostIncludePreReleasesSource,
+  type HostUpdateBoundDispatchExpectedIdentity,
+  type HostUpdateBoundDispatchRequest,
+  type HostUpdateBoundDispatchResponse,
   type HostUpdateCheckRequest,
   type HostUpdateCheckRequestV11,
   type HostUpdateCheckResponse,
   type HostUpdateCheckResponseV11,
+  type HostUpdateCheckResponseV12,
   type HostUpdateInstallRequest,
+  type HostUpdateInstallRequestV13,
   type HostUpdateInstallResponse,
   type HostUpdateInstallResponseV11,
+  type HostUpdateInstallResponseV13,
 } from "./schemas";

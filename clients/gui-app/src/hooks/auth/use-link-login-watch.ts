@@ -19,11 +19,43 @@ import {
  * refused while a claim is being decided), so the displayed code is the only
  * code that can ever report a claim — no multi-code bookkeeping exists.
  */
+/**
+ * What the approver can say about the claim's match code. `shown` is the
+ * two digits the phone is displaying. `not-presented` is the server saying
+ * the phone declined to show one — a legitimate older app, or a leaked-QR
+ * holder withholding the flag to dodge the check, which the card cannot
+ * tell apart and so must render as a warning. `unavailable` is a server that
+ * predates the code, where today's description prompt is all there is.
+ */
+export type LiveMatchCode =
+  | { readonly kind: "shown"; readonly code: string }
+  | { readonly kind: "not-presented" }
+  | { readonly kind: "unavailable" };
+
 export interface LiveClaim {
   readonly code: string;
   readonly address: string | null;
   readonly userAgent: string | null;
   readonly location: string | null;
+  readonly matchCode: LiveMatchCode;
+  /**
+   * When the claim expires unanswered (epoch ms) on the SERVER's clock, or
+   * `null` from a server that predates the field — the card then shows no
+   * countdown. The local deadline guard in this hook is independent of it.
+   */
+  readonly claimExpiresAt: number | null;
+}
+
+function liveMatchCodeOf(
+  claimant: NonNullable<LinkLoginStatusResponse["claimant"]>,
+): LiveMatchCode {
+  if (claimant.matchCode === undefined) {
+    return { kind: "unavailable" };
+  }
+  if (claimant.matchCode === null) {
+    return { kind: "not-presented" };
+  }
+  return { kind: "shown", code: claimant.matchCode };
 }
 
 /**
@@ -81,6 +113,8 @@ function claimFromStatus(
     address: claimant.address,
     userAgent: claimant.userAgent,
     location: claimant.location,
+    matchCode: liveMatchCodeOf(claimant),
+    claimExpiresAt: claimant.claimExpiresAt ?? null,
   };
 }
 

@@ -636,6 +636,8 @@ export interface DesktopWindowsBridge {
     set(
       snapshot: DesktopAuthSessionSnapshot,
     ): Promise<DesktopAuthSessionSetResult>;
+    /** See `AuthSessionBridgeSurface.revoke` in the preload. */
+    revoke(rejectedToken: string): Promise<void>;
     onChange(handler: (snapshot: DesktopAuthSessionSnapshot) => void): {
       dispose: () => void;
     };
@@ -694,6 +696,9 @@ export class DesktopRunnerHost implements IRunnerHost {
   // No OS push on the desktop: notifications here are native `show` calls, not
   // an APNs/FCM permission the user can revoke from a settings app.
   readonly pushPermission: null = null;
+  // No OS back request on the desktop: back is the header arrows, the mouse
+  // buttons and the keybinding, all of which the GUI owns itself.
+  readonly systemBack: null = null;
   readonly hostControllerStatus: DesktopHostControllerStatusBridge;
   readonly selectionAuthority: SelectionAuthorityClient;
   private readonly refreshSelectionFleet: () => Promise<void>;

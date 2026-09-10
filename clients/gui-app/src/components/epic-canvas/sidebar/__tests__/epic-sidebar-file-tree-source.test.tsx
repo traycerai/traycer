@@ -529,6 +529,7 @@ function installSearchHost(script: Partial<SearchScript>): void {
       connectionId: undefined,
       operationId: undefined,
       externalAbortSignal: undefined,
+      cloudAuthorized: true,
     }),
   );
   hostClientRef.current = spine.createRequester(entry);
@@ -570,7 +571,7 @@ function renderPanel(client: MockWsStreamClient): void {
   const wrap = (children: ReactNode) => (
     <QueryClientProvider client={queryClient}>
       <StreamRuntimeContext.Provider
-        value={{ wsStreamClient: client, hostId: null }}
+        value={{ wsStreamClient: client, hostId: null, retain: null }}
       >
         {children}
       </StreamRuntimeContext.Provider>
@@ -647,6 +648,7 @@ describe("sidebar file tree source selection", () => {
     pinnedStreamBindingRef.value = {
       wsStreamClient: pinned,
       hostId: HOST_ID,
+      retain: null,
     };
 
     renderPanel(ambient);

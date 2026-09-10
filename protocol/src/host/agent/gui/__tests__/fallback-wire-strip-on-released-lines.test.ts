@@ -2,7 +2,7 @@
  * The host does not schema-parse outbound bytes, so `failure` and the
  * fallback grace-hold lease `token` physically reach every released peer
  * regardless of what the live producer intends. What actually protects a
- * `chat.subscribe@1.0-1.8` client is that ITS OWN decoder is the frozen
+ * `chat.subscribe@1.0-1.9` client is that ITS OWN decoder is the frozen
  * schema, which strips the unknown key on parse - a Zod object schema is
  * non-strict by default, so an extra key is dropped, not rejected.
  *
@@ -57,7 +57,7 @@ describe("runtime-event unions bound to released chat.subscribe lines strip `fai
       agentRuntime.runtimeEventSchemaPreSettlement,
     ],
     [
-      "runtimeEventSchemaPreFallback (1.7/1.8)",
+      "runtimeEventSchemaPreFallback (1.7-1.9)",
       agentRuntime.runtimeEventSchemaPreFallback,
     ],
   ] as const;
@@ -113,9 +113,13 @@ describe("content-block unions bound to released chat-tree snapshots strip `fail
       contentBlocks.contentBlockSchemaPreSettlement,
     ],
     [
-      "contentBlockSchemaPreFallback",
+      "contentBlockSchemaPreFallback (1.9)",
       contentBlocks.contentBlockSchemaPreFallback,
     ],
+    // The 1.7/1.8 chat tree's union. It is upstream's pre-placement checkpoint,
+    // which bound the LIVE error block until the merge with provider fallback
+    // repointed it - so this row is the one that reddens if it drifts back.
+    ["contentBlockSchemaV18 (1.7/1.8)", contentBlocks.contentBlockSchemaV18],
   ] as const;
 
   for (const [label, union] of unions) {
@@ -151,11 +155,12 @@ function actionAckFrameWithToken(): unknown {
   };
 }
 
-describe("actionAck lease `token` strips on the released non-windowed lines and survives on the live windowed line", () => {
+describe("actionAck lease `token` strips on every frozen line and survives on the live line", () => {
   const strippingLines = [
     ["chatSubscribeV16", subscribe.chatSubscribeV16],
     ["chatSubscribeV17", subscribe.chatSubscribeV17],
     ["chatSubscribeV18", subscribe.chatSubscribeV18],
+    ["chatSubscribeV19", subscribe.chatSubscribeV19],
   ] as const;
 
   for (const [label, contract] of strippingLines) {
@@ -168,8 +173,8 @@ describe("actionAck lease `token` strips on the released non-windowed lines and 
     });
   }
 
-  it("chatSubscribeV19.serverFrameSchema keeps 'token' - the positive control that pins both directions at once", () => {
-    const parsed = subscribe.chatSubscribeV19.serverFrameSchema.parse(
+  it("chatSubscribeV110.serverFrameSchema keeps 'token' - the positive control that pins both directions at once", () => {
+    const parsed = subscribe.chatSubscribeV110.serverFrameSchema.parse(
       actionAckFrameWithToken(),
     );
     expect(parsed).toMatchObject({

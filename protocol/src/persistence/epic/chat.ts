@@ -10,7 +10,7 @@ import {
 } from "@traycer/protocol/persistence/epic/foundation";
 import {
   messageSchema,
-  messageSchemaPreFallback,
+  messageSchemaV18,
   messageSchemaPreImage,
   messageSchemaPreInReplyTo,
   messageSchemaPreReasonix,
@@ -80,7 +80,9 @@ const claudePendingWakeSchemaPreRetryDeadline = z.object({
  * clone-not-migrate; this id is the clone source.
  */
 
-export const chatSchema = z.object({
+// Historical field set for chat.subscribe 1.7/1.8. New fields belong on
+// the live extension below, not on this shared historical base.
+export const chatSchemaV18 = z.object({
   parentId: z.string().nullable(),
   id: z.string(),
   userId: z.string(),
@@ -97,7 +99,7 @@ export const chatSchema = z.object({
   settings: chatRunSettingsSchema.nullable().default(null),
   activeSessionChain: activeSessionChainSchema.nullable().default(null),
   claudePendingWakes: z.array(claudePendingWakeSchema).default([]),
-  messages: z.array(messageSchema),
+  messages: z.array(messageSchemaV18),
   events: z.array(chatEventSchema).default([]),
   /**
    * Wall-clock ms when this chat was archived, or `null` while active.
@@ -136,6 +138,9 @@ export const chatSchema = z.object({
    * this contract.
    */
   lastDeliveredRolesDigest: z.string().nullable().default(null),
+});
+export const chatSchema = chatSchemaV18.extend({
+  messages: z.array(messageSchema),
 });
 export type Chat = z.infer<typeof chatSchema>;
 
@@ -314,34 +319,6 @@ export const chatSchemaV16 = z.object({
   claudePendingWakes: z.array(claudePendingWakeSchemaPreReasonix).default([]),
   messages: z.array(messageSchemaPreSettlement),
   events: z.array(chatEventSchemaPreReasonix).default([]),
-  archivedAt: z.number().nullable().default(null),
-  pinnedUserProviderHandle: z.string().nullable().default(null),
-  lastDeliveredRolesDigest: z.string().nullable().default(null),
-});
-
-// Wire-freeze copy of the chat tree bound to `chat.subscribe@1.7`/`@1.8`: the
-// complete live shape with `messages` pinned to `messageSchemaPreFallback`, so
-// neither line observes a provider-notice kind its released decoder would
-// strict-reject. Everything else is the live sub-schema, which is what those
-// minors actually ship - they are the Reasonix/interview-settlement lines, so
-// no enum below them is held back.
-//
-// Hand-frozen field-for-field; NOT derived from `chatSchema`, for the reason
-// `chatSchemaV16` above records.
-export const chatSchemaPreFallback = z.object({
-  parentId: z.string().nullable(),
-  id: z.string(),
-  userId: z.string(),
-  hostId: z.string(),
-  title: z.string(),
-  createdAt: z.number(),
-  updatedAt: z.number(),
-  isTitleEditedByUser: z.boolean(),
-  settings: chatRunSettingsSchema.nullable().default(null),
-  activeSessionChain: activeSessionChainSchema.nullable().default(null),
-  claudePendingWakes: z.array(claudePendingWakeSchema).default([]),
-  messages: z.array(messageSchemaPreFallback),
-  events: z.array(chatEventSchema).default([]),
   archivedAt: z.number().nullable().default(null),
   pinnedUserProviderHandle: z.string().nullable().default(null),
   lastDeliveredRolesDigest: z.string().nullable().default(null),

@@ -413,6 +413,61 @@ describe("accumulateEvent", () => {
     expect((blocks[0] as ToolCallBlock).managedCommand).toEqual(restarted);
   });
 
+  it("tool_call.completed stamps an agentMessageReceipt onto the block, and a later re-completion without it keeps the identity", () => {
+    // The receipt id is minted once, inside the call, and only comes back on
+    // the successful RESULT - so completion is the only place this can land,
+    // exactly like `managedCommand` above.
+    const receipt = { receiverAgentId: "agent-2", messageId: "msg-1" };
+    let blocks = makeBlocks();
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.started",
+      blockId: "tc1",
+      timestamp: 1,
+      toolName: "traycer_send_message",
+      agentMessageSend: null,
+    });
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.completed",
+      blockId: "tc1",
+      timestamp: 2,
+      toolName: "traycer_send_message",
+      agentMessageSend: null,
+      agentMessageReceipt: receipt,
+      imageResults: [],
+    });
+
+    expect((blocks[0] as ToolCallBlock).agentMessageReceipt).toEqual(receipt);
+
+    blocks = accumulateEvent(blocks, {
+      type: "tool_call.completed",
+      blockId: "tc1",
+      timestamp: 3,
+      toolName: "traycer_send_message",
+      agentMessageSend: null,
+      imageResults: [],
+    });
+
+    expect((blocks[0] as ToolCallBlock).agentMessageReceipt).toEqual(receipt);
+  });
+
+  it("tool_call.completed stamps an agentMessageReceipt onto a block with no prior started event", () => {
+    const receipt = { receiverAgentId: "agent-2", messageId: "msg-1" };
+    const blocks = accumulateEvent(makeBlocks(), {
+      type: "tool_call.completed",
+      blockId: "tc-receipt-only",
+      timestamp: 3,
+      toolName: "traycer_send_message",
+      agentMessageSend: null,
+      agentMessageReceipt: receipt,
+      imageResults: [],
+    });
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].type).toBe("tool_call");
+    expect(blocks[0].status).toBe("completed");
+    expect((blocks[0] as ToolCallBlock).agentMessageReceipt).toEqual(receipt);
+  });
+
   it("tool_call events preserve detached background task timing", () => {
     let blocks = makeBlocks();
     blocks = accumulateEvent(blocks, {
@@ -1649,6 +1704,7 @@ describe("accumulateEvent", () => {
             { label: "date-fns", description: "Small", preview: "Preview" },
           ],
           multiSelect: false,
+          allowsCustomAnswer: null,
         },
       ],
     });
@@ -1691,6 +1747,7 @@ describe("accumulateEvent", () => {
           header: null,
           options: [{ label: "Yes", description: null, preview: null }],
           multiSelect: false,
+          allowsCustomAnswer: null,
         },
       ],
     });
@@ -1732,6 +1789,7 @@ describe("accumulateEvent", () => {
           header: "Approval",
           options: [{ label: "Yes", description: null, preview: null }],
           multiSelect: false,
+          allowsCustomAnswer: null,
         },
       ],
     });
@@ -1768,6 +1826,7 @@ describe("accumulateEvent", () => {
           header: "Library",
           options: [{ label: "date-fns", description: null, preview: null }],
           multiSelect: false,
+          allowsCustomAnswer: null,
         },
       ],
       answers: [],
@@ -1846,6 +1905,7 @@ describe("accumulateEvent", () => {
           header: "Library",
           options: [{ label: "date-fns", description: null, preview: null }],
           multiSelect: false,
+          allowsCustomAnswer: null,
         },
       ],
       answers: [submitted],
@@ -1918,6 +1978,7 @@ describe("accumulateEvent", () => {
           header: "Library",
           options: [{ label: "date-fns", description: null, preview: null }],
           multiSelect: false,
+          allowsCustomAnswer: null,
         },
       ],
       answers: [],
@@ -1975,6 +2036,7 @@ describe("accumulateEvent", () => {
           header: "Library",
           options: [{ label: "date-fns", description: null, preview: null }],
           multiSelect: false,
+          allowsCustomAnswer: null,
         },
       ],
     });

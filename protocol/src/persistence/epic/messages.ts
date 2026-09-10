@@ -3,6 +3,7 @@ import { getRecordSchema } from "@traycer/protocol/framework/versioned-record";
 import {
   contentBlockSchema,
   contentBlockSchemaPreFallback,
+  contentBlockSchemaV18,
   contentBlockSchemaPreImage,
   contentBlockSchemaPreReasonix,
   contentBlockSchemaPreSettlement,
@@ -201,7 +202,9 @@ const userMessageSenderKindRefine = (
   });
 };
 
-export const userMessageSchema = z
+// Fixed field set for chat.subscribe 1.7/1.8. Extend the live export below
+// when adding message fields, leaving the historical definition unchanged.
+export const userMessageSchemaV18 = z
   .object({
     role: z.literal("user"),
     messageId: z.string(),
@@ -211,6 +214,9 @@ export const userMessageSchema = z
     sessionAnchor: chatSessionAnchorSchema.nullable(),
   })
   .superRefine(userMessageSenderKindRefine);
+// There is no user-message delta in 1.9 or 1.10. Alias the frozen schema until
+// a newer contract needs its own extension (including the sender-kind check).
+export const userMessageSchema = userMessageSchemaV18;
 export type UserMessage = z.infer<typeof userMessageSchema>;
 
 /**
@@ -288,7 +294,9 @@ export const imageResolutionEntrySchema = z.discriminatedUnion("state", [
 ]);
 export type ImageResolutionEntry = z.infer<typeof imageResolutionEntrySchema>;
 
-export const assistantMessageSchema = z.object({
+// Historical message fields; newer blocks are selected only by the live
+// extension below. Unchanged nested leaves follow the existing freeze pattern.
+export const assistantMessageSchemaV18 = z.object({
   role: z.literal("assistant"),
   /**
    * Stable, unique id for this assistant row, minted once at creation and never
@@ -301,7 +309,7 @@ export const assistantMessageSchema = z.object({
    */
   messageId: z.string().min(1),
   sender: agentSenderSchema,
-  blocks: z.array(contentBlockSchema),
+  blocks: z.array(contentBlockSchemaV18),
   /**
    * Wall-clock the turn began (ms). Set once at turn-start and never
    * overwritten; distinct from `timestamp` which the host rewrites on every
@@ -353,6 +361,9 @@ export const assistantMessageSchema = z.object({
    * consent chips (see `imageResolutionEntrySchema`).
    */
   imageResolutions: z.array(imageResolutionEntrySchema).default([]),
+});
+export const assistantMessageSchema = assistantMessageSchemaV18.extend({
+  blocks: z.array(contentBlockSchema),
 });
 export type AssistantMessage = z.infer<typeof assistantMessageSchema>;
 
@@ -556,14 +567,15 @@ export const messageSchemaPreSettlement = z.discriminatedUnion("role", [
   assistantMessageSchemaPreSettlement,
 ]);
 
-// ── Wire-freeze variant (pre-fallback, `chat.subscribe@1.7`/`@1.8`) ─────────
-// Hand-frozen copy of `assistantMessageSchema` as those two minors ship it:
-// the complete live shape with `blocks` swapped for
-// `contentBlockSchemaPreFallback`, so neither line can observe a
-// `providerNotice.noticeKind` its released decoder would strict-reject. The
-// user branch needs no freeze - user messages carry no provider notice - so
-// the union binds the LIVE `userMessageSchema`, which is what those minors
-// actually ship (browser annotations included).
+// ── Wire-freeze variant (pre-fallback, `chat.subscribe@1.9`) ───────────────
+// Hand-frozen copy of `assistantMessageSchema` as the frozen `1.9` line ships
+// it: the complete live shape with `blocks` swapped for
+// `contentBlockSchemaPreFallback`, so that line can observe neither a
+// `providerNotice.noticeKind` nor an error `failure` that `1.10` added. `1.7`
+// and `1.8` bind `messageSchemaV18` below instead, which also holds back
+// delivery placement. The user branch needs no freeze - user messages carry
+// no provider notice - so the union binds the LIVE `userMessageSchema`, which
+// is what `1.9` actually ships (browser annotations included).
 //
 // Field-for-field hand copy, NOT `.extend()`: see
 // `assistantMessageSchemaPreImage` for why a released line must not follow the
@@ -587,4 +599,9 @@ export const assistantMessageSchemaPreFallback = z.object({
 export const messageSchemaPreFallback = z.discriminatedUnion("role", [
   userMessageSchema,
   assistantMessageSchemaPreFallback,
+]);
+
+export const messageSchemaV18 = z.discriminatedUnion("role", [
+  userMessageSchemaV18,
+  assistantMessageSchemaV18,
 ]);

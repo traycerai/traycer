@@ -7,9 +7,15 @@ import type {
 import { sessionImportSelectionKey } from "@/components/session-import/session-import-model";
 
 /**
- * Live state of the one import run this client is watching.
+ * Live state of the import runs this client is watching - ONE PER HOST.
  *
- * A module-level store rather than wizard state because the run deliberately
+ * "One run at a time" is the host's own rule, so it is a fact about a machine
+ * and not about this window: two hosts can be importing at once, and a store
+ * with a single slice would let the second start overwrite the first's tally.
+ * Every action therefore names the host it is about, and every surface reads
+ * the slice for the host it sits under (`sessionImportRunFor`).
+ *
+ * A module-level store rather than wizard state because a run deliberately
  * outlives its wizard: the user is told to close it and carry on, and the
  * Settings entry shows the same progress from a different surface. It also
  * outlives its SOCKET, so every frame is folded idempotently - a re-subscribe
@@ -59,23 +65,47 @@ export interface SessionImportRunState {
   readonly finalCounts: SessionImportRunCounts | null;
 }
 
-interface SessionImportRunActions {
-  readonly markStarting: (titles: ReadonlyMap<string, string>) => void;
-  readonly applyStarted: (input: {
-    readonly runId: string;
-    readonly total: number;
-    readonly attached: boolean;
-  }) => void;
-  readonly applyProgress: (entry: SessionImportProgressEntry) => void;
-  readonly applyComplete: (input: {
-    readonly runId: string;
-    readonly counts: SessionImportRunCounts;
-  }) => void;
-  readonly applyError: () => void;
-  readonly reset: () => void;
+export interface SessionImportRunsState {
+  /**
+   * One slice per host with a run this window is watching, in START ORDER: a
+   * host whose run begins is (re)inserted at the end, so the last entry is the
+   * newest run. The single ambient toast speaks for one run and picks it that
+   * way.
+   */
+  readonly runs: ReadonlyMap<string, SessionImportRunState>;
 }
 
-const INITIAL_STATE: SessionImportRunState = {
+interface SessionImportRunActions {
+  readonly markStarting: (
+    hostId: string,
+    titles: ReadonlyMap<string, string>,
+  ) => void;
+  readonly applyStarted: (
+    hostId: string,
+    input: {
+      readonly runId: string;
+      readonly total: number;
+      readonly attached: boolean;
+    },
+  ) => void;
+  readonly applyProgress: (
+    hostId: string,
+    entry: SessionImportProgressEntry,
+  ) => void;
+  readonly applyComplete: (
+    hostId: string,
+    input: {
+      readonly runId: string;
+      readonly counts: SessionImportRunCounts;
+    },
+  ) => void;
+  readonly applyError: (hostId: string) => void;
+  /** Retires one host's run; every other host keeps its own. */
+  readonly reset: (hostId: string) => void;
+}
+
+/** No import on this host - the shape every selector falls back to. */
+export const SESSION_IMPORT_RUN_IDLE: SessionImportRunState = {
   status: "idle",
   runId: null,
   total: 0,
@@ -85,6 +115,20 @@ const INITIAL_STATE: SessionImportRunState = {
   lastTitle: null,
   finalCounts: null,
 };
+
+/**
+ * The run for one host, or the idle state for a host with none. A single
+ * shared `SESSION_IMPORT_RUN_IDLE` instance, so a selector over a host that is
+ * not importing returns the same object every time and cannot churn its
+ * readers.
+ */
+export function sessionImportRunFor(
+  state: SessionImportRunsState,
+  hostId: string | null,
+): SessionImportRunState {
+  if (hostId === null) return SESSION_IMPORT_RUN_IDLE;
+  return state.runs.get(hostId) ?? SESSION_IMPORT_RUN_IDLE;
+}
 
 /** Sessions the run has reported on, however they turned out. */
 export function sessionImportDoneCount(state: SessionImportRunState): number {
@@ -123,18 +167,40 @@ export function sessionImportIsRunning(state: SessionImportRunState): boolean {
   return state.status === "starting" || state.status === "running";
 }
 
+/**
+ * Folds one host's slice. A fold that returns the slice it was given leaves
+ * the whole map alone, so a refused frame (a foreign run id, a late frame on
+ * a retired run) re-renders nothing.
+ */
+function foldRun(
+  hostId: string,
+  fold: (prev: SessionImportRunState) => SessionImportRunState,
+): (state: SessionImportRunsState) => SessionImportRunsState {
+  return (state) => {
+    const prev = state.runs.get(hostId) ?? SESSION_IMPORT_RUN_IDLE;
+    const next = fold(prev);
+    if (next === prev) return state;
+    const runs = new Map(state.runs);
+    runs.set(hostId, next);
+    return { runs };
+  };
+}
+
 export const useSessionImportRunStore = create<
-  SessionImportRunState & SessionImportRunActions
+  SessionImportRunsState & SessionImportRunActions
 >((set) => ({
-  ...INITIAL_STATE,
-  markStarting: (titles) =>
-    set({
-      ...INITIAL_STATE,
-      status: "starting",
-      titles,
-    }),
-  applyStarted: ({ runId, total, attached }) =>
-    set((prev) => {
+  runs: new Map(),
+  markStarting: (hostId, titles) =>
+    set(
+      foldRun(hostId, () => ({
+        ...SESSION_IMPORT_RUN_IDLE,
+        status: "starting",
+        titles,
+      })),
+    ),
+  applyStarted: (hostId, { runId, total, attached }) =>
+    set((state) => {
+      const prev = state.runs.get(hostId) ?? SESSION_IMPORT_RUN_IDLE;
       // Whose run this is was settled by the FIRST frame that named the id; a
       // redeclare only refreshes the totals. The distinction matters because
       // `attached: true` does not mean "someone else's run" - a physical
@@ -144,63 +210,90 @@ export const useSessionImportRunStore = create<
       // the user their selections were never started, and would throw away the
       // titles that caption the progress line.
       if (prev.runId === runId) {
-        return { ...prev, status: "running", total };
+        // A reconnect replay redeclaring an unchanged run is not a change;
+        // returning `prev` keeps every reader of the slice from re-rendering.
+        if (prev.status === "running" && prev.total === total) return state;
+        return foldRun(hostId, () => ({ ...prev, status: "running", total }))(
+          state,
+        );
       }
       // A run id we were not tracking supersedes the one we were: its outcomes
       // are about other sessions. Only here does `attached` decide ownership -
       // the host put us on a run already in flight, so our selections were
       // never started and the titles we captured caption nothing in it.
-      return {
-        ...INITIAL_STATE,
+      return foldRun(hostId, () => ({
+        ...SESSION_IMPORT_RUN_IDLE,
         status: "running",
         runId,
         total,
         attached,
-        titles: attached ? INITIAL_STATE.titles : prev.titles,
-      };
+        titles: attached ? SESSION_IMPORT_RUN_IDLE.titles : prev.titles,
+      }))(state);
     }),
-  applyProgress: (entry) =>
-    set((prev) => {
-      // Nothing is being tracked: either no run has started, or the user has
-      // retired a finished one. A late frame must not resurrect a run every
-      // surface has stopped showing.
-      if (prev.status === "idle") return prev;
-      // A frame from a superseded or foreign run would count its sessions into
-      // this run's progress - "14 of 8 imported" from the other direction.
-      if (prev.runId !== null && prev.runId !== entry.runId) return prev;
-      const outcomes = new Map(prev.outcomes);
-      outcomes.set(entry.selectionKey, entry);
-      return {
-        ...prev,
-        status: prev.status === "complete" ? prev.status : "running",
-        outcomes,
-        lastTitle: prev.titles.get(entry.selectionKey) ?? prev.lastTitle,
-      };
-    }),
-  applyComplete: ({ runId, counts }) =>
-    set((prev) =>
-      // Another run's summary is not this run's summary: its counts would
-      // replace the tally the surfaces are showing with numbers about sessions
-      // the user never selected.
-      prev.runId !== null && prev.runId !== runId
-        ? prev
-        : {
-            ...prev,
-            status: "complete",
-            runId,
-            finalCounts: counts,
-          },
+  applyProgress: (hostId, entry) =>
+    set(
+      foldRun(hostId, (prev) => {
+        // Nothing is being tracked: either no run has started, or the user has
+        // retired a finished one. A late frame must not resurrect a run every
+        // surface has stopped showing.
+        if (prev.status === "idle") return prev;
+        // A frame from a superseded or foreign run would count its sessions
+        // into this run's progress - "14 of 8 imported" from the other
+        // direction.
+        if (prev.runId !== null && prev.runId !== entry.runId) return prev;
+        const outcomes = new Map(prev.outcomes);
+        outcomes.set(entry.selectionKey, entry);
+        return {
+          ...prev,
+          status: prev.status === "complete" ? prev.status : "running",
+          outcomes,
+          lastTitle: prev.titles.get(entry.selectionKey) ?? prev.lastTitle,
+        };
+      }),
+    ),
+  applyComplete: (hostId, { runId, counts }) =>
+    set(
+      foldRun(hostId, (prev) =>
+        // Another run's summary is not this run's summary: its counts would
+        // replace the tally the surfaces are showing with numbers about
+        // sessions the user never selected.
+        prev.runId !== null && prev.runId !== runId
+          ? prev
+          : {
+              ...prev,
+              status: "complete",
+              runId,
+              finalCounts: counts,
+            },
+      ),
     ),
   // A drop after the run has completed is not an error - the summary the user
   // is reading is final.
-  applyError: () =>
-    set((prev) =>
-      prev.status === "complete" || prev.status === "idle"
-        ? prev
-        : { ...prev, status: "error" },
+  applyError: (hostId) =>
+    set(
+      foldRun(hostId, (prev) =>
+        prev.status === "complete" || prev.status === "idle"
+          ? prev
+          : { ...prev, status: "error" },
+      ),
     ),
-  reset: () => set(INITIAL_STATE),
+  reset: (hostId) =>
+    set((state) => {
+      if (!state.runs.has(hostId)) return state;
+      const runs = new Map(state.runs);
+      runs.delete(hostId);
+      return { runs };
+    }),
 }));
+
+/** The run for the host a surface sits under. */
+export function useSessionImportRun(
+  hostId: string | null,
+): SessionImportRunState {
+  return useSessionImportRunStore((state) =>
+    sessionImportRunFor(state, hostId),
+  );
+}
 
 export function progressEntryFrom(input: {
   readonly runId: string;

@@ -2,8 +2,12 @@ import { describe, expect, it } from "vitest";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
   hostUpdateInstallUpgradeV10ToV11,
+  hostUpdateInstallUpgradeV11ToV12,
+  hostUpdateInstallUpgradeV12ToV13,
   hostUpdateInstallV10,
   hostUpdateInstallV11,
+  hostUpdateInstallV12,
+  hostUpdateInstallV13,
 } from "../contracts";
 
 // `host.update.install@1.1` (Ticket 06): the same dispatch, additionally
@@ -155,6 +159,158 @@ describe("hostUpdateInstallResponseV11Schema — the dispatch-indeterminate arm"
   });
 });
 
+describe("hostUpdateInstallResponseV13Schema — cli-failed details", () => {
+  it("carries a CLI reason and a bounded store-floor refusal", () => {
+    const parsed = hostUpdateInstallV13.responseSchema.parse({
+      outcome: "cli-failed",
+      reason: "store-format-floor",
+      storeFloor: {
+        kind: "blocked",
+        reason: "newer-chat-stores",
+        targetVersion: "1.2.0",
+        targetChatDb: 8,
+        onDiskMax: null,
+        epicCount: 1,
+        epicIds: ["epic-new"],
+        unreadableEpicCount: 1,
+        unreadableEpicIds: ["epic-broken"],
+      },
+    });
+    expect(parsed).toMatchObject({
+      outcome: "cli-failed",
+      reason: "store-format-floor",
+      storeFloor: {
+        targetChatDb: 8,
+        onDiskMax: null,
+        epicCount: 1,
+        epicIds: ["epic-new"],
+        unreadableEpicCount: 1,
+        unreadableEpicIds: ["epic-broken"],
+      },
+    });
+  });
+
+  it("accepts indeterminate refusal details and caps named epics at ten", () => {
+    const refusal = {
+      kind: "indeterminate",
+      reason: "unreadable-stores",
+      targetVersion: "1.2.0",
+      targetChatDb: 8,
+      onDiskMax: null,
+      epicCount: 11,
+      epicIds: Array.from({ length: 10 }, (_, index) => `epic-${index}`),
+      unreadableEpicCount: 11,
+      unreadableEpicIds: Array.from(
+        { length: 10 },
+        (_, index) => `broken-${index}`,
+      ),
+    };
+    expect(
+      hostUpdateInstallV13.responseSchema.parse({
+        outcome: "cli-failed",
+        reason: "store-format-floor",
+        storeFloor: refusal,
+      }),
+    ).toEqual({
+      outcome: "cli-failed",
+      reason: "store-format-floor",
+      storeFloor: refusal,
+    });
+    expect(
+      hostUpdateInstallV13.responseSchema.safeParse({
+        outcome: "cli-failed",
+        reason: "store-format-floor",
+        storeFloor: {
+          ...refusal,
+          epicIds: [...refusal.epicIds, "epic-10"],
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      hostUpdateInstallV13.responseSchema.safeParse({
+        outcome: "cli-failed",
+        reason: "store-format-floor",
+        storeFloor: {
+          ...refusal,
+          unreadableEpicIds: [...refusal.unreadableEpicIds, "broken-10"],
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("requires both unreadable-store fields on a v1.3 refusal", () => {
+    const refusal = {
+      kind: "indeterminate",
+      reason: "unreadable-stores",
+      targetVersion: "1.2.0",
+      targetChatDb: 8,
+      onDiskMax: null,
+      epicCount: 0,
+      epicIds: [],
+      unreadableEpicCount: 0,
+      unreadableEpicIds: [],
+    };
+    const { unreadableEpicCount, unreadableEpicIds, ...base } = refusal;
+    const withoutCount = { ...base, unreadableEpicIds };
+    const withoutIds = { ...base, unreadableEpicCount };
+
+    expect(
+      hostUpdateInstallV13.responseSchema.safeParse({
+        outcome: "cli-failed",
+        reason: "store-format-floor",
+        storeFloor: withoutCount,
+      }).success,
+    ).toBe(false);
+    expect(
+      hostUpdateInstallV13.responseSchema.safeParse({
+        outcome: "cli-failed",
+        reason: "store-format-floor",
+        storeFloor: withoutIds,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("upgrades an older cli-failed response with explicit null details", () => {
+    const response = hostUpdateInstallV12.responseSchema.parse({
+      outcome: "cli-failed",
+    });
+    const upgraded = hostUpdateInstallUpgradeV12ToV13.upgradeResponse(response);
+    expect(upgraded).toEqual({
+      outcome: "cli-failed",
+      reason: null,
+      storeFloor: null,
+    });
+    expect(() =>
+      hostUpdateInstallV13.responseSchema.parse(upgraded),
+    ).not.toThrow();
+  });
+
+  it("requires explicit loss consent on @1.3 requests and upgrades old callers to false", () => {
+    const request = {
+      version: "1.2.0",
+      force: false,
+      acceptStoreFormatLoss: true,
+    };
+    expect(hostUpdateInstallV13.requestSchema.parse(request)).toEqual(request);
+    expect(
+      hostUpdateInstallV13.requestSchema.safeParse({
+        version: "1.2.0",
+        force: false,
+      }).success,
+    ).toBe(false);
+    expect(
+      hostUpdateInstallUpgradeV12ToV13.upgradeRequest({
+        version: "1.2.0",
+        force: false,
+      }),
+    ).toEqual({
+      version: "1.2.0",
+      force: false,
+      acceptStoreFormatLoss: false,
+    });
+  });
+});
+
 const V10_ACCEPTED = hostUpdateInstallV10.responseSchema.parse({
   outcome: "accepted",
 });
@@ -225,15 +381,35 @@ describe("hostUpdateInstallUpgradeV10ToV11", () => {
 });
 
 describe("host.update.install registry membership", () => {
-  it("installs @1.0 and @1.1 on the unary registry at major 1, with @1.1 wired to the v10->v11 upgrade", () => {
+  it("installs @1.0 through @1.3 on the unary registry", () => {
     const entry = hostRpcRegistry["host.update.install"];
     expect(entry).toBeDefined();
-    expect(entry[1].latestMinor).toBe(1);
+    expect(entry[1].latestMinor).toBe(3);
     expect(entry[1].versions[0].contract).toBe(hostUpdateInstallV10);
     expect(entry[1].versions[0].upgradeFromPreviousVersion).toBeNull();
     expect(entry[1].versions[1].contract).toBe(hostUpdateInstallV11);
     expect(entry[1].versions[1].upgradeFromPreviousVersion).toBe(
       hostUpdateInstallUpgradeV10ToV11,
+    );
+    expect(entry[1].versions[2].contract).toBe(hostUpdateInstallV12);
+    expect(entry[1].versions[2].upgradeFromPreviousVersion).toBe(
+      hostUpdateInstallUpgradeV11ToV12,
+    );
+    expect(entry[1].versions[3].contract).toBe(hostUpdateInstallV13);
+    expect(entry[1].versions[3].upgradeFromPreviousVersion).toBe(
+      hostUpdateInstallUpgradeV12ToV13,
+    );
+
+    const request = { version: "1.2.0", force: false };
+    const response = hostUpdateInstallV11.responseSchema.parse({
+      outcome: "accepted",
+      attemptId: null,
+    });
+    expect(hostUpdateInstallUpgradeV11ToV12.upgradeRequest(request)).toEqual(
+      request,
+    );
+    expect(hostUpdateInstallUpgradeV11ToV12.upgradeResponse(response)).toEqual(
+      response,
     );
   });
 });

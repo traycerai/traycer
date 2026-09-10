@@ -23,10 +23,10 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 
 import { useLandingProviderStartTerminalLogin } from "@/hooks/providers/use-landing-provider-terminal-login";
 import {
-  landingTerminalLayoutFor,
-  useLandingTerminalStore,
+  landingPanelLayoutFor,
+  useLandingPanelStore,
   type LandingTerminalTabRef,
-} from "@/stores/home/landing-terminal-store";
+} from "@/stores/home/landing-panel-store";
 import {
   providerLoginTerminalProviderId,
   useProviderLoginTerminalsStore,
@@ -36,6 +36,7 @@ import { useLandingPaneAnchorStore } from "@/components/home/terminal-panel/land
 const LANDING_PAGE_ID = "draft-1";
 
 const OLD_TAB: LandingTerminalTabRef = {
+  kind: "terminal",
   instanceId: "landing-term-old",
   sessionId: "term-old",
   hostId: HOST_ID,
@@ -75,7 +76,7 @@ function renderStarter(
 
 describe("useLandingProviderStartTerminalLogin", () => {
   beforeEach(() => {
-    useLandingTerminalStore.getState().resetForTests();
+    useLandingPanelStore.getState().resetForTests();
     useProviderLoginTerminalsStore.setState(
       useProviderLoginTerminalsStore.getInitialState(),
       true,
@@ -129,7 +130,7 @@ describe("useLandingProviderStartTerminalLogin", () => {
     });
     await waitFor(() => expect(result.current.isPending).toBe(false));
 
-    const state = useLandingTerminalStore.getState();
+    const state = useLandingPanelStore.getState();
     expect(state.tabs).toHaveLength(1);
     const tab = state.tabs[0];
     expect(tab).toMatchObject({
@@ -141,7 +142,7 @@ describe("useLandingProviderStartTerminalLogin", () => {
       originProviderId: "reasonix",
     });
 
-    const layout = landingTerminalLayoutFor(state, LANDING_PAGE_ID);
+    const layout = landingPanelLayoutFor(state, LANDING_PAGE_ID);
     expect(layout.panelOpen).toBe(true);
 
     expect(providerLoginTerminalProviderId(HOST_ID, "term-new")).toBe(
@@ -163,8 +164,8 @@ describe("useLandingProviderStartTerminalLogin", () => {
     });
     await waitFor(() => expect(result.current.isPending).toBe(false));
 
-    const state = useLandingTerminalStore.getState();
-    expect(landingTerminalLayoutFor(state, otherLandingPageId).panelOpen).toBe(
+    const state = useLandingPanelStore.getState();
+    expect(landingPanelLayoutFor(state, otherLandingPageId).panelOpen).toBe(
       true,
     );
     // Exactly one page recorded a layout, and it is the one `start()` named -
@@ -178,7 +179,7 @@ describe("useLandingProviderStartTerminalLogin", () => {
   });
 
   it("removes the replaced tab's session without adding a pendingKills entry", async () => {
-    useLandingTerminalStore.getState().addTab(OLD_TAB);
+    useLandingPanelStore.getState().addTab(OLD_TAB);
     mocks.startTerminalLoginRequest.mockResolvedValue({
       sessionId: "term-new",
       replacedSessionId: OLD_TAB.sessionId,
@@ -191,7 +192,7 @@ describe("useLandingProviderStartTerminalLogin", () => {
     });
     await waitFor(() => expect(result.current.isPending).toBe(false));
 
-    const state = useLandingTerminalStore.getState();
+    const state = useLandingPanelStore.getState();
     expect(state.tabs.some((tab) => tab.sessionId === OLD_TAB.sessionId)).toBe(
       false,
     );
@@ -209,7 +210,7 @@ describe("useLandingProviderStartTerminalLogin", () => {
       instanceId: "landing-term-dead",
       sessionId: "term-dead",
     };
-    useLandingTerminalStore.getState().addTab(deadTab);
+    useLandingPanelStore.getState().addTab(deadTab);
     mocks.startTerminalLoginRequest.mockResolvedValue({
       sessionId: "term-new",
       replacedSessionId: null,
@@ -222,7 +223,7 @@ describe("useLandingProviderStartTerminalLogin", () => {
     });
     await waitFor(() => expect(result.current.isPending).toBe(false));
 
-    const state = useLandingTerminalStore.getState();
+    const state = useLandingPanelStore.getState();
     expect(state.tabs.some((tab) => tab.sessionId === deadTab.sessionId)).toBe(
       false,
     );
@@ -253,7 +254,7 @@ describe("useLandingProviderStartTerminalLogin", () => {
     });
     await waitFor(() => expect(second.result.current.isPending).toBe(false));
 
-    const state = useLandingTerminalStore.getState();
+    const state = useLandingPanelStore.getState();
     expect(
       state.tabs.filter((tab) => tab.sessionId === "term-new"),
     ).toHaveLength(1);
@@ -276,12 +277,12 @@ describe("useLandingProviderStartTerminalLogin", () => {
     });
     await waitFor(() => expect(result.current.isPending).toBe(false));
 
-    const state = useLandingTerminalStore.getState();
+    const state = useLandingPanelStore.getState();
     // Both anchored pages open - the initiating one directly, and the other
     // because the retained hosted-page id (unreadable from outside) might be
     // either one.
-    expect(landingTerminalLayoutFor(state, "draft-a").panelOpen).toBe(true);
-    expect(landingTerminalLayoutFor(state, "draft-b").panelOpen).toBe(true);
+    expect(landingPanelLayoutFor(state, "draft-a").panelOpen).toBe(true);
+    expect(landingPanelLayoutFor(state, "draft-b").panelOpen).toBe(true);
   });
 
   it("opens only the initiating page's layout when no panel anchors are registered", async () => {
@@ -297,10 +298,8 @@ describe("useLandingProviderStartTerminalLogin", () => {
     });
     await waitFor(() => expect(result.current.isPending).toBe(false));
 
-    const state = useLandingTerminalStore.getState();
-    expect(landingTerminalLayoutFor(state, LANDING_PAGE_ID).panelOpen).toBe(
-      true,
-    );
+    const state = useLandingPanelStore.getState();
+    expect(landingPanelLayoutFor(state, LANDING_PAGE_ID).panelOpen).toBe(true);
     // No crash, and no layout key opened beyond the initiating page - an
     // empty anchor set contributes nothing to the union.
     expect(Object.keys(state.layoutsByLandingPageId)).toEqual([
@@ -324,19 +323,19 @@ describe("useLandingProviderStartTerminalLogin", () => {
     });
     await waitFor(() => expect(result.current.isPending).toBe(false));
 
-    const state = useLandingTerminalStore.getState();
+    const state = useLandingPanelStore.getState();
     // The tab is global, so the NEXT start page only has to open its panel.
     expect(state.tabs).toHaveLength(1);
     expect(
-      landingTerminalLayoutFor(state, "a-start-page-minted-later").panelOpen,
+      landingPanelLayoutFor(state, "a-start-page-minted-later").panelOpen,
     ).toBe(true);
   });
 
   it("with no anchors, also re-opens a start page that had already recorded a CLOSED layout", async () => {
-    // The next page to mount is not necessarily new: `landingTerminalLayoutFor`
+    // The next page to mount is not necessarily new: `landingPanelLayoutFor`
     // gives a page's own layout precedence over the fallback, so a page that
     // once closed its panel would hide the terminal behind that very layout.
-    useLandingTerminalStore.getState().setPanelOpen("draft-existing", false);
+    useLandingPanelStore.getState().setPanelOpen("draft-existing", false);
     mocks.startTerminalLoginRequest.mockResolvedValue({
       sessionId: "term-new",
       replacedSessionId: null,
@@ -349,10 +348,8 @@ describe("useLandingProviderStartTerminalLogin", () => {
     });
     await waitFor(() => expect(result.current.isPending).toBe(false));
 
-    const state = useLandingTerminalStore.getState();
-    expect(landingTerminalLayoutFor(state, "draft-existing").panelOpen).toBe(
-      true,
-    );
+    const state = useLandingPanelStore.getState();
+    expect(landingPanelLayoutFor(state, "draft-existing").panelOpen).toBe(true);
   });
 
   it("opens each of two in-flight presses on ITS OWN page, not both on the last one", async () => {
@@ -389,7 +386,7 @@ describe("useLandingProviderStartTerminalLogin", () => {
     // Only the first page has a keyed layout so far - the first session did
     // not open on "draft-second".
     expect(
-      Object.keys(useLandingTerminalStore.getState().layoutsByLandingPageId),
+      Object.keys(useLandingPanelStore.getState().layoutsByLandingPageId),
     ).toEqual(["draft-first"]);
 
     await act(async () => {
@@ -397,7 +394,7 @@ describe("useLandingProviderStartTerminalLogin", () => {
       await Promise.resolve();
     });
     await waitFor(() => expect(result.current.isPending).toBe(false));
-    const state = useLandingTerminalStore.getState();
+    const state = useLandingPanelStore.getState();
     expect(Object.keys(state.layoutsByLandingPageId).sort()).toEqual([
       "draft-first",
       "draft-second",
@@ -423,15 +420,13 @@ describe("useLandingProviderStartTerminalLogin", () => {
     });
     await waitFor(() => expect(result.current.isPending).toBe(false));
 
-    const state = useLandingTerminalStore.getState();
-    expect(landingTerminalLayoutFor(state, LANDING_PAGE_ID).panelOpen).toBe(
-      true,
-    );
+    const state = useLandingPanelStore.getState();
+    expect(landingPanelLayoutFor(state, LANDING_PAGE_ID).panelOpen).toBe(true);
     // The page-less open is a recovery for having nowhere to show this, not a
     // default: a mounted pane already showed it, so an unrelated page later
     // keeps its own (closed) default.
     expect(
-      landingTerminalLayoutFor(state, "a-start-page-minted-later").panelOpen,
+      landingPanelLayoutFor(state, "a-start-page-minted-later").panelOpen,
     ).toBe(false);
   });
 
@@ -453,7 +448,7 @@ describe("useLandingProviderStartTerminalLogin", () => {
     });
     await waitFor(() => expect(result.current.isPending).toBe(false));
 
-    const state = useLandingTerminalStore.getState();
+    const state = useLandingPanelStore.getState();
     expect(state.tabs).toHaveLength(1);
     // A tab bound to host-2 points at a PTY that does not exist there, and the
     // provenance record filed under host-2 never matches the session either -
@@ -486,8 +481,8 @@ describe("useLandingProviderStartTerminalLogin", () => {
     });
     await waitFor(() => expect(result.current.isPending).toBe(false));
 
-    const state = useLandingTerminalStore.getState();
-    expect(landingTerminalLayoutFor(state, "draft-a").panelOpen).toBe(true);
-    expect(landingTerminalLayoutFor(state, "draft-b").panelOpen).toBe(true);
+    const state = useLandingPanelStore.getState();
+    expect(landingPanelLayoutFor(state, "draft-a").panelOpen).toBe(true);
+    expect(landingPanelLayoutFor(state, "draft-b").panelOpen).toBe(true);
   });
 });

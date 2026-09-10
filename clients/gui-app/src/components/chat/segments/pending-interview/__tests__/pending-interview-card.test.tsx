@@ -19,7 +19,14 @@ import {
   emptyDraft,
   questionIdentity,
 } from "@/components/chat/segments/pending-interview/interview-draft";
-import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
+import {
+  focusActiveComposer,
+  focusRegisteredActiveComposer,
+} from "@/lib/composer/composer-focus-registry";
+import {
+  PaneFocusProbeContext,
+  PaneSurfaceActivityContext,
+} from "@/components/epic-tabs/pane-visibility-context";
 import { setMobileApp } from "@/lib/mobile-app";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { interviewDraftKey } from "@/lib/persist";
@@ -345,6 +352,7 @@ function singleSelect(
       preview: null,
     })),
     multiSelect: false,
+    allowsCustomAnswer: null,
   };
 }
 
@@ -354,6 +362,15 @@ function multiSelect(
   labels: ReadonlyArray<string>,
 ): InterviewQuestion {
   return { ...singleSelect(id, question, labels), multiSelect: true };
+}
+
+/**
+ * A question whose answer channel cannot carry free text - what an interview
+ * riding an ACP `session/request_permission` looks like, since that request's
+ * answer is an option id and nothing else.
+ */
+function withoutCustomAnswer(question: InterviewQuestion): InterviewQuestion {
+  return { ...question, allowsCustomAnswer: false };
 }
 
 function renderCard(
@@ -543,6 +560,77 @@ describe("PendingInterviewCard keyboard navigation", () => {
     expect(
       screen.getByRole("button", { name: "1. Alpha", pressed: true }),
     ).toBeTruthy();
+  });
+
+  // The unanswerable pair: no options AND no free text. The schema tolerates it
+  // deliberately (rejecting would drop the whole content block, not one bad
+  // question), and `content-blocks.ts` promises the renderer leaves Skip as the
+  // only exit. Before this gate the card rendered no input and still offered an
+  // ENABLED Submit, which sent `values: []` down a channel that requires a
+  // listed option - the card contradicting its own contract.
+  //
+  // FALSIFICATION: drop `!hasUnanswerableQuestion` from `canSubmit` and the
+  // button arm reddens; drop the `hasUnanswerableQuestion` guard from
+  // `submitDrafts` and the Enter arm reddens. They are separate paths -
+  // `proceed()` checks `isBusy` alone - so one gate does not cover both.
+  it("refuses Submit for a question with no answer channel, by button and by Enter", () => {
+    const onSubmit = vi.fn(() => "action-1");
+    renderCardFor({
+      chatId: "chat-unanswerable",
+      blockId: "iv-unanswerable",
+      questions: [withoutCustomAnswer(singleSelect("q1", "Pick one", []))],
+      isBusy: false,
+      onSubmit,
+      onSkip: vi.fn(() => "skip-1"),
+      onFork: null,
+    });
+
+    const submit = screen.getByRole<HTMLButtonElement>("button", {
+      name: /^Submit$/,
+    });
+    expect(submit.disabled).toBe(true);
+
+    // The keyboard path is the one that does NOT consult the button's disabled
+    // state: `proceed()` checks `isBusy` alone, so it reaches `submitDrafts`
+    // whatever the button looks like. Cmd+Enter on the card is how this suite
+    // drives it.
+    fireEvent.click(submit);
+    fireEvent.keyDown(card(), { key: "Enter", metaKey: true });
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    // Skip remains the documented exit, so the card is still resolvable.
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", { name: /Skip/ }).disabled,
+    ).toBe(false);
+  });
+
+  // CONTROL: the same question WITH an option submits normally, so the arm
+  // above is pinning the missing answer channel and not simply a card that
+  // never submits.
+  it("still submits when the question has a listed option", () => {
+    const onSubmit = vi.fn(() => "action-1");
+    renderCardFor({
+      chatId: "chat-answerable",
+      blockId: "iv-answerable",
+      questions: [withoutCustomAnswer(singleSelect("q1", "Pick one", ["A"]))],
+      isBusy: false,
+      onSubmit,
+      onSkip: vi.fn(() => "skip-1"),
+      onFork: null,
+    });
+
+    const submit = screen.getByRole<HTMLButtonElement>("button", {
+      name: /^Submit$/,
+    });
+    expect(submit.disabled).toBe(false);
+    fireEvent.click(submit);
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+
+    // The keyboard path reaches the same place, so the control covers both
+    // gates the arm above ablates.
+    onSubmit.mockClear();
+    fireEvent.keyDown(card(), { key: "Enter", metaKey: true });
+    expect(onSubmit).toHaveBeenCalledTimes(1);
   });
 
   it("retains the persisted draft after Submit returns an action id", () => {
@@ -884,6 +972,225 @@ describe("PendingInterviewCard keyboard navigation", () => {
     });
   });
 
+  it("withdraws the Other row when the question's answer channel cannot carry free text", () => {
+    renderCard(
+      [withoutCustomAnswer(singleSelect("q1", "Choose", ["Alpha", "Beta"]))],
+      () => null,
+      () => null,
+    );
+
+    // Falsification: render `OtherRow` unconditionally again and this finds
+    // the button - a field the user can type into whose text the ACP
+    // permission answer has no room to carry, so it is dropped in silence.
+    expect(screen.queryByRole("button", { name: "Other" })).toBeNull();
+    // The listed options are still offered: withdrawing free text must not
+    // withdraw the answer channel that DOES work.
+    expect(screen.getByRole("button", { name: "1. Alpha" })).not.toBeNull();
+    expect(screen.getByRole("button", { name: "2. Beta" })).not.toBeNull();
+  });
+
+  it("CONTROL: the same question still offers Other when the field is unstated, so the assertion above is about the flag and not the fixture", () => {
+    renderCard(
+      [singleSelect("q1", "Choose", ["Alpha", "Beta"])],
+      () => null,
+      () => null,
+    );
+
+    expect(screen.getByRole("button", { name: "Other" })).not.toBeNull();
+  });
+
+  it("offers no input at all for a question with no options that also withdraws free text, rather than a field whose answer cannot be delivered", () => {
+    renderCard(
+      [withoutCustomAnswer(singleSelect("q1", "Describe it", []))],
+      () => null,
+      () => null,
+    );
+
+    // The raiser is not supposed to produce this pair (see the schema's
+    // INVARIANT note); if it does, the card must not invite an answer it
+    // cannot deliver. Skip remains, so the card is still resolvable.
+    expect(
+      screen.queryByRole("textbox", { name: "Interview answer" }),
+    ).toBeNull();
+    // Name is a pattern: the button carries its `Esc` shortcut hint too.
+    expect(screen.getByRole("button", { name: /Skip/ })).not.toBeNull();
+  });
+
+  it("CONTROL: an option-less question with free text unstated still renders its textarea", () => {
+    renderCard(
+      [singleSelect("q1", "Describe it", [])],
+      () => null,
+      () => null,
+    );
+
+    expect(
+      screen.getByRole("textbox", { name: "Interview answer" }),
+    ).not.toBeNull();
+  });
+
+  // Hiding the Other ROW is only half of withdrawing the channel: the card
+  // also reaches it by digit, and a stored draft can carry one in from before
+  // the withdrawal. Both would produce an invisible custom selection - one the
+  // user cannot see, undo, or deliver.
+  it("ignores the withdrawn Other's digit instead of clearing the visible choice", () => {
+    vi.useFakeTimers();
+    try {
+      const onSubmit = vi.fn();
+      renderCard(
+        [
+          withoutCustomAnswer(
+            singleSelect("only", "Choose", ["Alpha", "Beta"]),
+          ),
+        ],
+        onSubmit,
+        () => null,
+      );
+
+      fireEvent.keyDown(card(), { key: "1" });
+      expect(
+        screen.getByRole("button", { name: "1. Alpha", pressed: true }),
+      ).toBeTruthy();
+
+      // `options.length + 1` is the Other row's digit, and that row is not
+      // rendered. Ungated, this reached `toggleOther()`, which in single-select
+      // does `selected: new Set()` - clearing the visible choice AND setting
+      // `otherSelected` behind a row that does not exist.
+      //
+      // FALSIFICATION takes BOTH gates, because they are deliberately
+      // redundant: remove `&& questionAllowsCustomAnswer(question)` from
+      // `selectByDigit` AND the `questionAllowsCustomAnswer` early return in
+      // `toggleOther`. Then Alpha comes back unpressed and the submitted
+      // values are empty. Dropping either one alone leaves the other holding
+      // the line and this stays green - measured, not assumed.
+      fireEvent.keyDown(card(), { key: "3" });
+      expect(
+        screen.getByRole("button", { name: "1. Alpha", pressed: true }),
+      ).toBeTruthy();
+
+      act(() => {
+        vi.advanceTimersByTime(ADVANCE_MS);
+      });
+      expect(onSubmit).toHaveBeenCalledWith("interview-1", [
+        expect.objectContaining({ values: ["Alpha"] }),
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("CONTROL: the same digit DOES reach Other when the field is unstated, so the arm above is about the flag", () => {
+    // Without this, `key: "3"` could simply be an unbound key and the test
+    // above would pass against a card that never had the shortcut at all.
+    renderCard(
+      [singleSelect("only", "Choose", ["Alpha", "Beta"])],
+      () => null,
+      () => null,
+    );
+
+    fireEvent.keyDown(card(), { key: "3" });
+
+    expect(
+      screen.getByRole("textbox", { name: "Other answer" }),
+    ).not.toBeNull();
+  });
+
+  it("does not submit a custom answer restored from a draft written before the withdrawal", () => {
+    // The draft is per block in localStorage and outlives the
+    // `interview.requested` that raised the question, so a re-raise carrying
+    // `allowsCustomAnswer: false` inherits whatever the user had typed.
+    //
+    // FALSIFICATION: restore `otherSelected: stored.otherSelected` in
+    // `draftFromStoredAnswer` and this reddens - the values carry the text
+    // through a channel that cannot deliver it.
+    const onSubmit = vi.fn();
+    useInterviewDraftStore.getState().saveDraft("chat-1", "interview-1", {
+      pageIndex: 0,
+      answers: [
+        {
+          selected: ["Alpha"],
+          otherText: "typed before the withdrawal",
+          otherSelected: true,
+        },
+      ],
+    });
+
+    renderCardFor({
+      chatId: "chat-1",
+      blockId: "interview-1",
+      questions: [
+        withoutCustomAnswer(singleSelect("only", "Choose", ["Alpha", "Beta"])),
+      ],
+      isBusy: false,
+      onSubmit,
+      onSkip: null,
+      onFork: null,
+    });
+
+    fireEvent.click(proceedButton());
+
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit).toHaveBeenCalledWith("interview-1", [
+      expect.objectContaining({ values: ["Alpha"] }),
+    ]);
+  });
+
+  it("takes card focus itself when an optionless question renders no field, so the keyboard still reaches it", () => {
+    vi.useFakeTimers();
+    try {
+      renderCardFor({
+        chatId: "chat-1",
+        blockId: "interview-1",
+        questions: [withoutCustomAnswer(singleSelect("q1", "Describe it", []))],
+        isBusy: false,
+        onSubmit: vi.fn(),
+        onSkip: vi.fn(),
+        onFork: null,
+      });
+      act(() => {
+        vi.runAllTimers();
+      });
+
+      // The card yields focus to a text field when it renders one. This pair
+      // renders none, so yielding would leave focus nowhere and the card's own
+      // key handler - which owns Escape/Skip and the pager - would never see a
+      // keystroke until the user clicked.
+      //
+      // FALSIFICATION: drop `&& questionAllowsCustomAnswer(question)` from
+      // `freeTextQuestion` and this reddens while the CONTROL below stays
+      // green.
+      expect(document.activeElement).toBe(screen.getByTestId("interview-card"));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("CONTROL: the same optionless question yields focus to its textarea when free text is unstated", () => {
+    vi.useFakeTimers();
+    try {
+      renderCardFor({
+        chatId: "chat-1",
+        blockId: "interview-1",
+        questions: [singleSelect("q1", "Describe it", [])],
+        isBusy: false,
+        onSubmit: vi.fn(),
+        onSkip: vi.fn(),
+        onFork: null,
+      });
+      act(() => {
+        vi.runAllTimers();
+      });
+
+      // Without this arm, "the card has focus" could be the behaviour for
+      // every optionless question and the assertion above would say nothing
+      // about the flag.
+      expect(document.activeElement).toBe(
+        screen.getByLabelText("Interview answer"),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("natively disables the free-text and Other answer fields while isBusy", () => {
     renderCardFor({
       chatId: "chat-1",
@@ -1153,6 +1460,205 @@ describe("PendingInterviewCard keyboard navigation", () => {
       });
 
       expect(onSubmit).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not answer with a DIFFERENT option when the options are reordered before the timer fires", () => {
+    // The sibling defect of the arm below, and the one that made holding only
+    // `submitDrafts` in a ref insufficient. `readCanonicalState` maps the
+    // stored row onto option INDICES for the questions IT was given, so a
+    // stale reader and a current submitter disagree about what index 0 means:
+    // pick `Alpha` from `[Alpha, Beta]`, receive `[Beta, Alpha]` during the
+    // highlight window, and the answer sent is `Beta` - a choice the user
+    // never made, from a card that showed them making another one.
+    //
+    // With both read from the current render, restoration repairs the index by
+    // LABEL (`draftFromStoredAnswer`), so the canonical answer is Alpha at its
+    // new index - which no longer matches the option this timer was armed on,
+    // and the supersession guard correctly declines to auto-advance. The user
+    // keeps their visible choice and submits it themselves.
+    //
+    // FALSIFICATION: read `readCanonicalState` from the arming closure instead
+    // of the ref and this reddens with `values: ["Beta"]`.
+    vi.useFakeTimers();
+    try {
+      const onSubmit = vi.fn(() => "action-1");
+      const view = render(
+        <TooltipProvider>
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: [
+              singleSelect("q1", "Which library?", ["Alpha", "Beta"]),
+            ],
+            isBusy: false,
+            onSubmit: onSubmit,
+            onSkip: null,
+            onFork: null,
+          })}
+        </TooltipProvider>,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "1. Alpha" }));
+
+      view.rerender(
+        <TooltipProvider>
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: [
+              singleSelect("q1", "Which library?", ["Beta", "Alpha"]),
+            ],
+            isBusy: false,
+            onSubmit: onSubmit,
+            onSkip: null,
+            onFork: null,
+          })}
+        </TooltipProvider>,
+      );
+      act(() => {
+        vi.advanceTimersByTime(ADVANCE_MS);
+      });
+
+      expect(onSubmit).not.toHaveBeenCalled();
+      // Not a dead end: the choice survived the reorder, so Submit is live and
+      // sends what the user actually picked. A green assertion above must not
+      // be the card having silently lost the answer instead.
+      expect(
+        screen.getByRole<HTMLButtonElement>("button", { name: "Submit" })
+          .disabled,
+      ).toBe(false);
+      fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+      expect(onSubmit).toHaveBeenCalledWith(
+        "interview-1",
+        expect.arrayContaining([
+          expect.objectContaining({ values: ["Alpha"] }),
+        ]),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("advances instead of submitting when a later question arrives before the timer fires", () => {
+    // `isLast` is a claim about the question COUNT, and a repeated
+    // `interview.requested` can change it. Armed as the last page of a
+    // one-question interview and fired after a second arrived, the captured
+    // `isLast` submits without ever showing the user the new question - and
+    // `answersFromDrafts` maps the CURRENT list, so what it sends is the
+    // second question answered with nothing.
+    //
+    // FALSIFICATION: use the arming render's `isLast` instead of re-deriving
+    // from the ref's `total` and this reddens - `onSubmit` fires and the card
+    // never reaches the second question.
+    vi.useFakeTimers();
+    try {
+      const onSubmit = vi.fn(() => "action-1");
+      const first = singleSelect("q1", "Which library?", ["Alpha", "Beta"]);
+      const view = render(
+        <TooltipProvider>
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: [first],
+            isBusy: false,
+            onSubmit: onSubmit,
+            onSkip: null,
+            onFork: null,
+          })}
+        </TooltipProvider>,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "1. Alpha" }));
+
+      view.rerender(
+        <TooltipProvider>
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: [first, singleSelect("q2", "Which runtime?", ["Bun"])],
+            isBusy: false,
+            onSubmit: onSubmit,
+            onSkip: null,
+            onFork: null,
+          })}
+        </TooltipProvider>,
+      );
+      act(() => {
+        vi.advanceTimersByTime(ADVANCE_MS);
+      });
+
+      expect(onSubmit).not.toHaveBeenCalled();
+      expect(screen.getByText("Which runtime?")).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not submit when the free-text channel is withdrawn before the timer fires", () => {
+    // The questions-side sibling of the busy-flip arm above, and the reason
+    // `latestIsBusyRef` alone was not enough: the timer's `submitDrafts` also
+    // captured its render's QUESTIONS, through `hasUnanswerableQuestion`.
+    //
+    // A repeated `interview.requested` for this block rewrites questions IN
+    // PLACE - the card is keyed by chat and block, so it re-renders rather than
+    // remounting - and here it withdraws free text from a question that has no
+    // options. That pair is unanswerable, the live render disables Submit, and
+    // the already-armed timer must not push the answer through behind it.
+    //
+    // FALSIFICATION: call the captured `submitDrafts` instead of the ref's and
+    // this reddens; the busy-flip arm above stays green either way, which is
+    // why it needed its own arm.
+    vi.useFakeTimers();
+    try {
+      const onSubmit = vi.fn(() => "action-1");
+      const freeText = singleSelect("q1", "Anything else?", []);
+      const last = singleSelect("q2", "Which library?", ["Alpha", "Beta"]);
+      const view = render(
+        <TooltipProvider>
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: [freeText, last],
+            isBusy: false,
+            onSubmit: onSubmit,
+            onSkip: null,
+            onFork: null,
+          })}
+        </TooltipProvider>,
+      );
+
+      // Land on the last page and arm the advance timer with a real choice.
+      fireEvent.click(screen.getByRole("button", { name: "Next" }));
+      fireEvent.click(screen.getByRole("button", { name: "1. Alpha" }));
+
+      view.rerender(
+        <TooltipProvider>
+          {cardElement({
+            chatId: "chat-1",
+            blockId: "interview-1",
+            questions: [withoutCustomAnswer(freeText), last],
+            isBusy: false,
+            onSubmit: onSubmit,
+            onSkip: null,
+            onFork: null,
+          })}
+        </TooltipProvider>,
+      );
+      act(() => {
+        vi.advanceTimersByTime(ADVANCE_MS);
+      });
+
+      expect(onSubmit).not.toHaveBeenCalled();
+      // And the card agrees with the timer: the same guard drives the button,
+      // so a green assertion above cannot be the card having submitted and
+      // moved on.
+      expect(
+        screen.getByRole<HTMLButtonElement>("button", { name: "Submit" })
+          .disabled,
+      ).toBe(true);
     } finally {
       vi.useRealTimers();
     }
@@ -1949,5 +2455,190 @@ describe("PendingInterviewCard keyboard navigation", () => {
     // The active-pane focus flow (and ⌘L) reaches the card through the registry.
     expect(focusActiveComposer()).toBe(true);
     expect(document.activeElement).toBe(cardEl);
+  });
+
+  // The tile flag the hosted chat body hands this card deliberately excludes
+  // top-level tab focus, so `isActive` alone is true for a card sitting in a
+  // background tab. Focus ownership is the composer's own predicate - tile
+  // active AND pane focused AND tab selected.
+  it("neither registers as active nor autofocuses while its surface is not focused", () => {
+    render(
+      <PaneSurfaceActivityContext.Provider
+        value={{ visible: true, focused: false }}
+      >
+        <TooltipProvider>
+          <PendingInterviewCard
+            chatId="chat-1"
+            blockId="unfocused-surface"
+            questions={[singleSelect("q", "Question?", ["Alpha", "Beta"])]}
+            isActive
+            isBusy={false}
+            onSubmit={vi.fn()}
+            onSkip={null}
+            onFork={null}
+          />
+        </TooltipProvider>
+      </PaneSurfaceActivityContext.Provider>,
+    );
+
+    expect(document.activeElement).not.toBe(
+      screen.getByTestId("interview-card"),
+    );
+    // A surface that becomes focused elsewhere must not be handed this card.
+    expect(focusRegisteredActiveComposer()).toBe(false);
+  });
+
+  it("does not autofocus its free-text field while its surface is not focused", async () => {
+    render(
+      <PaneSurfaceActivityContext.Provider
+        value={{ visible: true, focused: false }}
+      >
+        <TooltipProvider>
+          <PendingInterviewCard
+            chatId="chat-1"
+            blockId="unfocused-free-text"
+            questions={[singleSelect("q", "Describe it", [])]}
+            isActive
+            isBusy={false}
+            onSubmit={vi.fn()}
+            onSkip={null}
+            onFork={null}
+          />
+        </TooltipProvider>
+      </PaneSurfaceActivityContext.Provider>,
+    );
+
+    // The field focuses itself from a callback ref, one frame late.
+    await act(async () => {
+      await new Promise<void>((resolve) =>
+        window.requestAnimationFrame(() => resolve()),
+      );
+    });
+
+    expect(document.activeElement).not.toBe(
+      screen.getByLabelText("Interview answer"),
+    );
+  });
+
+  // The registration itself is a render-time value, and the surface that is
+  // becoming focused restores its own focus before a backgrounded card has
+  // re-rendered. So selection re-asks the live probe rather than trusting a
+  // claim that is one commit old.
+  it("is skipped by the registry when the live probe says its pane lost focus", () => {
+    render(
+      <PaneFocusProbeContext.Provider value={() => false}>
+        <TooltipProvider>
+          <PendingInterviewCard
+            chatId="chat-1"
+            blockId="stale-registration"
+            questions={[singleSelect("q", "Question?", ["Alpha", "Beta"])]}
+            isActive
+            isBusy={false}
+            onSubmit={vi.fn()}
+            onSkip={null}
+            onFork={null}
+          />
+        </TooltipProvider>
+      </PaneFocusProbeContext.Provider>,
+    );
+
+    const cardEl = screen.getByTestId("interview-card");
+    cardEl.blur();
+
+    expect(focusRegisteredActiveComposer()).toBe(false);
+    expect(document.activeElement).not.toBe(cardEl);
+  });
+
+  // Deliberately NOT the shape of the `?`'s accessible name (`Beta details`):
+  // the disclosure assertions must prove they found the REVEALED text, and a
+  // description that reads the same as the trigger's label cannot distinguish
+  // the two if a query ever starts matching accessible names.
+  const BETA_DESCRIPTION = "Beta explains the scope";
+
+  function renderDetailsCard() {
+    renderCard(
+      [
+        {
+          questionId: "q1",
+          question: "Pick one",
+          header: null,
+          options: [
+            { label: "Alpha", description: null, preview: null },
+            { label: "Beta", description: BETA_DESCRIPTION, preview: null },
+          ],
+          multiSelect: false,
+          allowsCustomAnswer: null,
+        },
+      ],
+      vi.fn(),
+      null,
+    );
+    return screen.getByRole("button", { name: "Beta details" });
+  }
+
+  // Drives the exact sequence Radix's own trigger sees from a finger, so the
+  // assertion fails against the pre-fix trigger and passes only because
+  // `onClick` now toggles the disclosure independently of the tooltip.
+  function tapWithFinger(element: HTMLElement) {
+    fireEvent.pointerMove(element, { pointerType: "touch" });
+    fireEvent.pointerDown(element, { pointerType: "touch" });
+    fireEvent.pointerUp(element, { pointerType: "touch" });
+    fireEvent.click(element);
+  }
+
+  // Radix Tooltip is hover/focus-only by construction: the trigger's
+  // `onPointerMove` returns early for `pointerType === "touch"`, and the
+  // tap's own `pointerdown` sets the flag that suppresses the focus
+  // fallback. Before the fix the `?` had no `onClick`, so a finger could
+  // never reach these strings at all.
+  it("reveals an option's description on a touch tap and collapses it on the next", () => {
+    const detailsButton = renderDetailsCard();
+    expect(screen.queryByText(BETA_DESCRIPTION)).toBeNull();
+
+    tapWithFinger(detailsButton);
+    expect(screen.getByText(BETA_DESCRIPTION)).toBeTruthy();
+
+    tapWithFinger(detailsButton);
+    expect(screen.queryByText(BETA_DESCRIPTION)).toBeNull();
+  });
+
+  // The `?` sits at `z-20` over the row's own `absolute inset-0` toggle
+  // button. Tapping it must disclose the details WITHOUT also selecting the
+  // option underneath - and the row's own label must still select normally,
+  // so the disclosure is additive rather than a replacement for the row's
+  // existing tap target.
+  it("does not select the option when tapping its details button, but does when tapping the row", () => {
+    const detailsButton = renderDetailsCard();
+
+    tapWithFinger(detailsButton);
+
+    expect(screen.getByText(BETA_DESCRIPTION)).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "2. Beta", pressed: false }),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "2. Beta" }));
+    expect(
+      screen.getByRole("button", { name: "2. Beta", pressed: true }),
+    ).toBeTruthy();
+  });
+
+  it("flips aria-expanded and points aria-controls at the revealed region", () => {
+    const detailsButton = renderDetailsCard();
+    expect(detailsButton.getAttribute("aria-expanded")).toBe("false");
+    expect(detailsButton.getAttribute("aria-controls")).toBeNull();
+
+    fireEvent.click(detailsButton);
+
+    expect(detailsButton.getAttribute("aria-expanded")).toBe("true");
+    const controlsId = detailsButton.getAttribute("aria-controls");
+    expect(controlsId).not.toBeNull();
+    expect(document.getElementById(controlsId ?? "")).toBe(
+      screen.getByText(BETA_DESCRIPTION).closest("[role='note']"),
+    );
+
+    fireEvent.click(detailsButton);
+    expect(detailsButton.getAttribute("aria-expanded")).toBe("false");
+    expect(detailsButton.getAttribute("aria-controls")).toBeNull();
   });
 });
