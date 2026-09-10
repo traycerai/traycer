@@ -164,7 +164,7 @@ describe("useEpicArtifactBodySubscribeAnswered", () => {
     const donor = new Y.Doc();
     seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
     act(() => {
-      streamHandle().callbacks.onConnectionStatus("open", null);
+      streamHandle().callbacks.onConnectionStatus("open", null, false);
       streamHandle().callbacks.onSnapshot(
         buildMeta("editor", donor),
         Y.encodeStateAsUpdate(donor),

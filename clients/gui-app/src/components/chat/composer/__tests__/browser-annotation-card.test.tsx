@@ -7,6 +7,10 @@ import type {
   BrowserTabInfo,
 } from "@traycer/protocol/host/browser/contracts";
 
+import {
+  sessionInfo,
+  tabInfo,
+} from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
 import { AttachmentStrip } from "@/components/chat/composer/attachments/attachment-strip";
 import { BrowserAnnotationCard } from "@/components/chat/composer/browser-annotation-card";
 import type { ScopedImageBytesFetcher } from "@/lib/attachments/image-blob-cache";
@@ -109,28 +113,18 @@ function makeRecord(
 function tab(
   overrides: Partial<BrowserTabInfo> & Pick<BrowserTabInfo, "tabId" | "url">,
 ): BrowserTabInfo {
-  return {
-    originTier: "dev",
-    status: "ready",
-    title: null,
-    viewed: false,
-    drivenBy: [],
-    ...overrides,
-  };
+  return tabInfo(overrides);
 }
 
 function session(
   overrides: Partial<BrowserSessionInfo> &
     Pick<BrowserSessionInfo, "sessionId" | "tabs">,
 ): BrowserSessionInfo {
-  return {
-    epicId: "epic-1",
-    hostId: "host-1",
-    profile: "primary",
+  return sessionInfo({
     lastActivityAt: 2,
+    runtime: { kind: "electron", revision: 0 },
     ...overrides,
-    runtime: overrides.runtime ?? { kind: "electron", revision: 0 },
-  };
+  });
 }
 
 const landingFetcher: ScopedImageBytesFetcher = {

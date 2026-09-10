@@ -54,6 +54,13 @@ function historyResult(
     },
     worktreesByEpicId: new Map<string, readonly WorktreeHostEntryV12[]>(),
     chatHostFilterUnsupported: false,
+    // `null` = the host made no completeness statement about this page, which
+    // is the honest fixture value: the palette source under test never reads
+    // it, so claiming a definite answer here would be inventing evidence.
+    completeness: null,
+    // The refused-initial-leg fixture is `true`; this suite's fixture is a
+    // served page, so `false` is the honest value here too.
+    hostRequiresCloudToList: false,
   };
   return {
     data,
@@ -65,6 +72,10 @@ function historyResult(
     fetchNextPage: () => undefined,
     hasNextPage: false,
     isFetchingNextPage: false,
+    // Same reasoning as `completeness` above: the palette source never reads
+    // it, so `false` is the quiet fixture rather than a claim that a cloud
+    // page is settled.
+    cloudPagePending: false,
   };
 }
 

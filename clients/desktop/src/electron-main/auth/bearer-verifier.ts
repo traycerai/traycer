@@ -238,6 +238,23 @@ export function createDesktopBearerVerifier(
   };
 }
 
+const expiryClaimSchema = z.object({ exp: z.number() });
+
+/**
+ * The `exp` claim of a bearer, in milliseconds, read WITHOUT verifying the
+ * token - `null` when the string is not a three-part JWT carrying a numeric
+ * `exp`. Only a bound, never a verdict: `DesktopAuthSession` uses it to decide
+ * how long a renderer's revocation of a bearer is worth remembering, and a
+ * string that cannot even be decoded could never have verified either, so
+ * remembering a revocation of it protects nothing.
+ */
+export function readBearerExpiryMs(token: string): number | null {
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  const claims = decodeSegment(parts[1], expiryClaimSchema);
+  return claims === null ? null : claims.exp * 1_000;
+}
+
 function decodeSegment<T>(segment: string, schema: z.ZodType<T>): T | null {
   try {
     const decoded: unknown = JSON.parse(

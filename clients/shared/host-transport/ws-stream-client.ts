@@ -42,9 +42,11 @@ import {
   hostStreamFatalErrorFrameSchema,
   streamMethodFrameEnvelopeSchema,
   STREAM_CAPABILITY_CREDENTIAL_UPDATE,
+  STREAM_CAPABILITY_CLOUD_VERDICT_UPDATE,
   STREAM_CAPABILITY_HOST_CREDENTIAL_PROVISION,
   STREAM_SUBSCRIBE_TIMEOUT_FATAL_CODE,
   type ClientStreamOpenFrame,
+  type ClientStreamCloudVerdictUpdateFrame,
   type ClientStreamSubscribeFrame,
   type ClientStreamFatalErrorFrame,
   type ClientStreamCredentialUpdateFrame,
@@ -64,7 +66,7 @@ import type {
   StreamFrameEnvelope,
 } from "./i-stream-session";
 import type { TransportEvidenceReporter } from "@traycer-clients/shared/host-selection/transport-evidence";
-import type { IStreamClient } from "./i-stream-client";
+import type { IStreamClient, StreamParamsProvider } from "./i-stream-client";
 import { describeRetryableClose } from "./retryable-close-log";
 import { dialPriorityForMethod } from "./dial-priority";
 import type {
@@ -102,6 +104,25 @@ export interface WsStreamClientOptions<
   readonly hostId: string | null;
   readonly endpoint: HostEndpointProvider;
   readonly bearer: BearerSourceProvider;
+  /**
+   * Reads whether the session behind `bearer` may spend a CLOUD CAPABILITY,
+   * asserted to the host on every `open` frame and updated in place through
+   * `cloudVerdictUpdate`.
+   *
+   * A LIVE READ rather than a captured boolean, for the same reason `bearer` is
+   * a provider: this client outlives any one verdict, and every redial must
+   * carry the verdict as it stands at that moment, not as it stood when the
+   * client was built.
+   *
+   * OMITTED means this client does not speak verdicts - it leaves the
+   * open-frame field absent and never sends the control frame, which is exactly
+   * how a released client behaves and is the right answer for the CLI, the
+   * desktop browser-session transport and any dev shell with no
+   * admission/authorization split to report. Absence is a complete and
+   * permanently-supported state here, not a default standing in for one, which
+   * is why this is an optional property rather than a required nullable.
+   */
+  readonly cloudAuthorized?: () => boolean;
   /**
    * Auth recovery hook invoked when the host rejects an open frame with
    * `UNAUTHORIZED` (the overnight-wake case: the bearer expired during sleep).
@@ -301,6 +322,23 @@ export class WsStreamClient<
    */
   private hasCompletedHandshake = false;
   private readonly methodSchemaVersions = new Map<string, SchemaVersion>();
+  /**
+   * What a subscribe on each method WOULD negotiate, derived from the peer's
+   * process manifest at any session's handshake - the version half of the
+   * cacheable pre-check {@link getMethodSupport} already provides, and the
+   * only evidence available for a method no session has opened yet.
+   *
+   * `methodSchemaVersions` above cannot answer that: it is rebuilt purely from
+   * LIVE sessions, so it stays empty for every method this client has not
+   * subscribed to. Two documented pre-checks read through it and were dead in
+   * exactly that state - `useGlobalResourcesPreCheckUnsupported`, whose whole
+   * premise is "the verdict available BEFORE any global stream is opened", and
+   * the notification feed mode, which gated OPENING the cloud feed on a
+   * version only that feed's own open session could have published. The second
+   * was a deadlock: the mode could never leave `local`, so the cloud stream
+   * never opened, so the version never arrived.
+   */
+  private readonly manifestSchemaVersions = new Map<string, SchemaVersion>();
   private readonly methodSupportListeners = new Set<() => void>();
   private readonly closedListeners = new Set<() => void>();
   /**
@@ -424,7 +462,7 @@ export class WsStreamClient<
    */
   subscribeWithParamsProvider<Method extends keyof Registry & string>(
     method: Method,
-    paramsProvider: () => ParamsOf<Registry, Method>,
+    paramsProvider: StreamParamsProvider<Registry, Method>,
   ): IStreamSession {
     return this.subscribeWithParamsProviderInternal(
       method,
@@ -437,7 +475,7 @@ export class WsStreamClient<
     Method extends keyof Registry & string,
   >(
     method: Method,
-    paramsProvider: () => ParamsOf<Registry, Method>,
+    paramsProvider: StreamParamsProvider<Registry, Method>,
     requiredSchemaVersion: SchemaVersion | null,
   ): IStreamSession {
     if (this.closed) {
@@ -467,6 +505,7 @@ export class WsStreamClient<
       registry: this.options.registry,
       endpoint: this.options.endpoint,
       bearer: this.options.bearer,
+      cloudAuthorized: this.options.cloudAuthorized,
       auth: this.options.auth,
       clock: this.options.clock,
       evidence: this.options.evidence,
@@ -532,6 +571,12 @@ export class WsStreamClient<
       session.close();
     }
     this.ownedSessions.clear();
+    // Every owned session is closed above, and `applyHostManifest` - the only
+    // publisher - is a session callback, so no further notification is owed.
+    // Dropping the set here keeps a retired client from retaining consumer
+    // closures for as long as something holds the client itself, matching how
+    // `closedListeners` is released just below.
+    this.methodSupportListeners.clear();
     const listeners = Array.from(this.closedListeners);
     this.closedListeners.clear();
     const listenerErrors: unknown[] = [];
@@ -661,13 +706,33 @@ export class WsStreamClient<
     return memoized === "supported" ? "supported" : "unknown";
   }
 
+  /**
+   * A LIVE session's negotiated version wins; otherwise the version the
+   * peer's manifest says a subscribe would settle on. The order matters and
+   * is not a preference: an open session has already declared a version on
+   * the wire, and the manifest cache is a prediction of that same value - so
+   * only where there is nothing live to report does the prediction speak.
+   */
   getMethodSchemaVersion<Method extends keyof Registry & string>(
     method: Method,
   ): SchemaVersion | null {
-    return this.methodSchemaVersions.get(method) ?? null;
+    return (
+      this.methodSchemaVersions.get(method) ??
+      this.manifestSchemaVersions.get(method) ??
+      null
+    );
   }
 
   subscribeMethodSupport(listener: () => void): () => void {
+    // A closed client's method support can no longer change - every session is
+    // gone and the cached versions above are frozen - so nothing is ever owed
+    // to a listener registered now. Without this the `close()` clear is only
+    // half a fix: `useSyncExternalStore` re-subscribes on client identity, so
+    // a consumer re-rendering after retirement would re-populate a set that is
+    // never cleared or notified again.
+    if (this.closed) {
+      return () => undefined;
+    }
     this.methodSupportListeners.add(listener);
     return () => {
       this.methodSupportListeners.delete(listener);
@@ -717,6 +782,29 @@ export class WsStreamClient<
     }
     for (const session of Array.from(this.ownedSessions)) {
       session.pushCredentialUpdate();
+    }
+  }
+
+  /**
+   * Pushes the current cloud verdict onto every open session so each host
+   * connection updates what its credential may BUY, in place, with no
+   * reconnect. Called by the owner on a verdict transition in EITHER direction.
+   *
+   * Both directions, deliberately. A demotion is the urgent one - it is what
+   * stops host-side background work spending on a refused account - but the
+   * regain matters too: without it a session demoted and then verified again
+   * stays refused on the host until something unrelated forces a redial.
+   *
+   * Sessions mid-reconnect, and hosts that did not advertise the capability,
+   * simply skip; their next open frame carries the verdict. No-op on a closed
+   * client.
+   */
+  notifyCloudVerdictChanged(): void {
+    if (this.closed) {
+      return;
+    }
+    for (const session of Array.from(this.ownedSessions)) {
+      session.pushCloudVerdictUpdate();
     }
   }
 
@@ -1079,6 +1167,24 @@ export class WsStreamClient<
       if (method === subscribedMethod) {
         changed =
           this.updateMethodSupport(method, subscribedMethodSupport) || changed;
+        // The subscribing session publishes its own negotiated version, which
+        // is the real thing rather than a prediction of it. Recording the
+        // prediction too keeps the entry alive across that session's disposal,
+        // when the live map drops back to nothing but the peer's manifest is
+        // still just as true as it was a moment earlier.
+        //
+        // Only when the method actually negotiated. On the incompatible
+        // handshake path this session's method is `unsupported`, and a
+        // prediction recorded anyway - a same-major minor the registry cannot
+        // bridge to still yields one - made `getMethodSchemaVersion()` report
+        // a usable version for a method that cannot subscribe.
+        changed =
+          this.recordManifestSchemaVersion(
+            method,
+            myManifest,
+            theirManifest,
+            subscribedMethodSupport === "supported",
+          ) || changed;
         if (handshakeHostId !== null) {
           recordNegotiatedStreamMethodSupport(
             handshakeHostId,
@@ -1100,6 +1206,13 @@ export class WsStreamClient<
         : "unsupported";
       changed =
         this.updateMethodSupportFromManifest(method, support) || changed;
+      changed =
+        this.recordManifestSchemaVersion(
+          method,
+          myManifest,
+          theirManifest,
+          compat.ok,
+        ) || changed;
       if (handshakeHostId !== null) {
         recordNegotiatedStreamMethodSupport(handshakeHostId, method, support);
       }
@@ -1107,6 +1220,41 @@ export class WsStreamClient<
     if (changed) {
       this.notifyMethodSupportListeners();
     }
+  }
+
+  /**
+   * Caches what a subscribe on `method` would put on the wire, from the peer's
+   * manifest alone.
+   *
+   * `bridgeable` is `checkStreamMethodCompatibility`'s verdict, and gating on
+   * it is what makes the arithmetic below exact rather than approximate: it is
+   * the proof that the majors match and that the older side's minor has a
+   * contract in the registry, which is the precondition
+   * {@link prepareStreamSubscribeRequest} is written against. An unbridgeable
+   * method has no version a subscribe could declare, so it caches none.
+   */
+  private recordManifestSchemaVersion(
+    method: string,
+    myManifest: ConnectionManifest,
+    theirManifest: ConnectionManifest,
+    bridgeable: boolean,
+  ): boolean {
+    const previous = this.manifestSchemaVersions.get(method) ?? null;
+    const next = bridgeable
+      ? predictedSubscribeSchemaVersion(
+          myManifest[method] ?? null,
+          theirManifest[method] ?? null,
+        )
+      : null;
+    if (previous?.major === next?.major && previous?.minor === next?.minor) {
+      return false;
+    }
+    if (next === null) {
+      this.manifestSchemaVersions.delete(method);
+      return true;
+    }
+    this.manifestSchemaVersions.set(method, next);
+    return true;
   }
 
   private updateMethodSupportFromManifest(
@@ -1132,10 +1280,16 @@ export class WsStreamClient<
     // routing while this session negotiates again.
     const versionChanged =
       this.reconcileMethodSchemaVersion(reconnectingMethod);
-    if (!hadMethodSupport && !versionChanged) {
+    // The manifest predictions are derived from the SAME evidence
+    // `methodSupport` is, so they are re-probed on the same terms: a new
+    // incarnation may answer a different set of methods at different minors,
+    // and a stale prediction is worse than none because it reads as learned.
+    const hadManifestVersions = this.manifestSchemaVersions.size > 0;
+    if (!hadMethodSupport && !versionChanged && !hadManifestVersions) {
       return;
     }
     this.methodSupport.clear();
+    this.manifestSchemaVersions.clear();
     this.notifyMethodSupportListeners();
   }
 
@@ -1160,9 +1314,22 @@ export class WsStreamClient<
     return !schemaVersionEqual(previous, liveVersion);
   }
 
+  // Guarded per listener, for the same reason as `emitAvailabilityRecovered`
+  // above: this publishes from `applyHostManifest`, which runs inside a
+  // session's `openAck` handling, so a throwing consumer would break that
+  // session's inbound processing and the listeners queued behind it rather
+  // than only itself. The local-plane twin of the same guard on
+  // `RemoteSession.notifyMethodSupportListeners`.
   private notifyMethodSupportListeners(): void {
     for (const listener of Array.from(this.methodSupportListeners)) {
-      listener();
+      try {
+        listener();
+      } catch (error) {
+        console.error(
+          `[stream] method-support listener threw (client=${this.instanceId})`,
+          error,
+        );
+      }
     }
   }
 }
@@ -1258,12 +1425,21 @@ type ExtractOpenRequest<MethodRegistry> =
 
 interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
   readonly method: keyof Registry & string;
-  readonly paramsProvider: () => unknown;
+  /**
+   * Read once per wire subscribe, and handed the version the params are about
+   * to be declared at. This transport always knows it by then -
+   * {@link selectStreamSubscribeVersion} decides it from the two manifests, on
+   * the line above the read - so the argument is never `null` here, unlike the
+   * `IStreamClient` seam this is invoked from.
+   */
+  readonly paramsProvider: (onWireVersion: SchemaVersion) => unknown;
   /** Exact client version to declare; rejects older peers before subscribe. */
   readonly requiredSchemaVersion: SchemaVersion | null;
   readonly registry: Registry;
   readonly endpoint: HostEndpointProvider;
   readonly bearer: BearerSourceProvider;
+  /** See `WsStreamClientOptions.cloudAuthorized`. */
+  readonly cloudAuthorized: (() => boolean) | undefined;
   readonly auth: StreamAuthRevalidator | null;
   /** See `WsStreamClientOptions.clock`. */
   readonly clock: ServerClockSkewSignal | null;
@@ -1445,6 +1621,18 @@ class StreamSession<
   private activeSocket: StreamWebSocketLike | null = null;
   private openFrameToken: string | null = null;
   /**
+   * The verdict this connection's `open` frame actually carried, or `undefined`
+   * when it carried none (a client with no verdict source).
+   *
+   * The verdict twin of {@link openFrameToken}, and it exists for the same
+   * reason: a change that lands DURING the handshake - after the open frame
+   * went out, before `subscribed` - is dropped by the phase gate on the push,
+   * and the frame already sent carries the stale value. Without a record of
+   * what was sent there is nothing to compare against at `openAck`, so the
+   * connection would sit on the wrong verdict for its whole life.
+   */
+  private openFrameCloudAuthorized: boolean | undefined = undefined;
+  /**
    * The hostId of the endpoint THIS connection dialed, captured at dial time.
    * Read from the live socket rather than from `endpoint()` on demand, because
    * the endpoint provider can already point at a different host by the time an
@@ -1477,6 +1665,8 @@ class StreamSession<
   private supportsCredentialUpdate = false;
   /** Same contract as `supportsCredentialUpdate`, for the provision frame. */
   private supportsHostCredentialProvision = false;
+  /** Same contract again, for the cloud-verdict frame. */
+  private supportsCloudVerdictUpdate = false;
   private phase: SessionPhase = "idle";
   private pendingBinaryEnvelope: StreamFrameEnvelope | null = null;
   private dialTimer: TimerHandle | null = null;
@@ -1740,6 +1930,91 @@ class StreamSession<
   }
 
   /**
+   * Pushes the current cloud verdict onto this open connection so the host
+   * updates every request context bound to it in place - no reconnect, and no
+   * bearer rotation. Called by `WsStreamClient.notifyCloudVerdictChanged`.
+   *
+   * GATED ON THE HOST'S TAG, like its two siblings, and here that gate is what
+   * keeps a newer client from tripping an older host's unknown-frame guard -
+   * which on `/stream` is fatal to the connection.
+   *
+   * A session that is not `subscribed` sends nothing HERE, and what it needs
+   * depends on where in the handshake it is - a distinction an earlier version
+   * of this comment got wrong, and the bug it caused is worth naming:
+   *
+   *   - Before the open frame goes out (`idle` / `dialing`), the drop is
+   *     harmless: that frame reads the verdict afresh at send time.
+   *   - AFTER the open frame goes out (`awaitingOpenAck`), it is NOT. The frame
+   *     already carries the pre-change value, so there is no later read to save
+   *     it, and a true -> false transition would leave the host authorizing a
+   *     session the client has already demoted for the life of the connection.
+   *
+   * `handleOpenAckFrame` closes that second window by comparing the live
+   * verdict against {@link openFrameCloudAuthorized} and pushing once if they
+   * differ - the same shape as the bearer reconciliation beside it, and needed
+   * separately because a verdict moves without the bearer moving.
+   */
+  pushCloudVerdictUpdate(): void {
+    if (this.disposed) {
+      return;
+    }
+    if (this.phase !== "subscribed" || !this.supportsCloudVerdictUpdate) {
+      return;
+    }
+    const read = this.config.cloudAuthorized;
+    if (read === undefined) {
+      return;
+    }
+    this.pushCloudVerdictValue(read());
+  }
+
+  /**
+   * The gated push for a verdict the caller has ALREADY read. Same phase and
+   * socket gates as {@link pushCloudVerdictUpdate}; split so the handshake's
+   * post-subscribe reconciliation sends the exact value it compared instead of
+   * reading the verdict a second time.
+   */
+  private pushCloudVerdictValue(cloudAuthorized: boolean): void {
+    if (this.disposed) {
+      return;
+    }
+    if (this.phase !== "subscribed" || !this.supportsCloudVerdictUpdate) {
+      return;
+    }
+    const socket = this.activeSocket;
+    if (socket === null) {
+      return;
+    }
+    this.sendCloudVerdictFrame(socket, cloudAuthorized);
+  }
+
+  /**
+   * Writes the verdict frame on `socket`, with no phase gate. Returns whether
+   * the frame went out; on `false` the socket has already been torn down and
+   * the reconnect scheduled, so a caller mid-handshake must stop there.
+   *
+   * Split out for the handshake, which has to correct a stale open-frame
+   * verdict BEFORE the subscribe frame goes out - and at that moment the phase
+   * is not yet `subscribed`, so the public push above would refuse. Every other
+   * caller goes through that gate; this one is reached only while holding the
+   * socket the handshake is running on.
+   */
+  private sendCloudVerdictFrame(
+    socket: StreamWebSocketLike,
+    cloudAuthorized: boolean,
+  ): boolean {
+    const frame: ClientStreamCloudVerdictUpdateFrame = {
+      kind: "cloudVerdictUpdate",
+      cloudAuthorized,
+    };
+    if (!this.sendControlText(socket, frame)) {
+      this.onSendFailure(socket);
+      return false;
+    }
+    return true;
+  }
+
+  /**
    * Hands a minted credential to the host on the other end of THIS connection.
    * Returns whether the frame actually went out, so the owning client can keep
    * the credential pending and try the next session instead of dropping it.
@@ -1948,11 +2223,25 @@ class StreamSession<
       this.config.registry,
       CLIENT_SERVED_STREAM_MAJORS,
     );
+    // Read ONCE and recorded, rather than read again later for the comparison:
+    // two reads of a live source can straddle a transition, which would make
+    // the reconciliation below compare the frame against a verdict the frame
+    // never carried - and then either push a redundant frame or, worse, skip a
+    // genuinely needed one because the two reads happened to agree.
+    const sentCloudAuthorized = this.config.cloudAuthorized?.();
+    this.openFrameCloudAuthorized = sentCloudAuthorized;
     const openFrame: ClientStreamOpenFrame = {
       kind: "open",
       token,
       manifest,
       clientIdentity: this.config.clientIdentity,
+      // READ AT DIAL TIME, per redial, not captured at construction: a session
+      // that reconnects after a demotion must assert the verdict it holds NOW,
+      // otherwise every reconnect would silently re-authorize it. Sending
+      // `undefined` (a client with no verdict source) omits the key, which an
+      // older host strips anyway and a newer host reads as "does not speak
+      // verdicts" - the same answer from both ends.
+      cloudAuthorized: sentCloudAuthorized,
     };
     if (!this.sendControlText(socket, openFrame)) {
       this.onSendFailure(socket);
@@ -2140,6 +2429,9 @@ class StreamSession<
     this.supportsHostCredentialProvision = ackParse.data.capabilities.includes(
       STREAM_CAPABILITY_HOST_CREDENTIAL_PROVISION,
     );
+    this.supportsCloudVerdictUpdate = ackParse.data.capabilities.includes(
+      STREAM_CAPABILITY_CLOUD_VERDICT_UPDATE,
+    );
     const hostCredentialState = ackParse.data.hostCredentialState;
 
     const theirManifest = ackParse.data.manifest;
@@ -2213,12 +2505,21 @@ class StreamSession<
       return;
     }
 
+    // The version is decided BEFORE the params are read, so a method served on
+    // more than one major can shape its open request for the one that was
+    // negotiated. `prepareStreamSubscribeRequest` re-derives the same answer
+    // from the same pair, so the payload can never be declared at a version
+    // its provider was not told about.
+    const myCanonical = selectedManifest[this.config.method];
+    const theirCanonical = theirManifest[this.config.method];
     const prepared = prepareStreamSubscribeRequest(
       this.config.registry,
       this.config.method,
-      selectedManifest[this.config.method],
-      theirManifest[this.config.method],
-      this.config.paramsProvider(),
+      myCanonical,
+      theirCanonical,
+      this.config.paramsProvider(
+        selectStreamSubscribeVersion(myCanonical, theirCanonical),
+      ),
     );
     const subscribeFrame: ClientStreamSubscribeFrame = {
       kind: "subscribe",
@@ -2226,6 +2527,31 @@ class StreamSession<
       schemaVersion: prepared.onWireVersion,
       params: prepared.onWirePayload,
     };
+    // RECONCILE THE VERDICT BEFORE THE SUBSCRIBE FRAME, not after the
+    // handshake completes. The host may construct and start a resolver the
+    // moment it reads `subscribe`, and it does so under whatever verdict the
+    // OPEN frame asserted - so a correction that lands after this write is
+    // already too late for the work it was supposed to govern. A verdict that
+    // moved during the handshake had its `notifyCloudVerdictChanged` dropped
+    // by the phase gate (we are not `subscribed` yet, which is also why this
+    // writes the frame directly rather than going through the public push).
+    //
+    // Needed separately from the bearer reconciliation further down for the
+    // reason that one cannot cover: a verdict moves without the bearer moving.
+    if (this.supportsCloudVerdictUpdate) {
+      const current = this.config.cloudAuthorized?.();
+      if (current !== undefined && current !== this.openFrameCloudAuthorized) {
+        // A failed write has already torn the socket down and scheduled the
+        // reconnect (`onSendFailure`); the subscribe frame below would go to
+        // a dead socket and the session must not be marked `subscribed` on
+        // it. The next open frame carries the live verdict, so
+        // `openFrameCloudAuthorized` is deliberately left as it was.
+        if (!this.sendCloudVerdictFrame(socket, current)) {
+          return;
+        }
+        this.openFrameCloudAuthorized = current;
+      }
+    }
     if (!this.sendControlText(socket, subscribeFrame)) {
       this.onSendFailure(socket);
       return;
@@ -2282,6 +2608,22 @@ class StreamSession<
       this.currentBearerToken() !== this.openFrameToken
     ) {
       this.pushCredentialUpdate();
+    }
+    // A SECOND VERDICT RECONCILIATION, covering only the window this method
+    // itself opens: the frames and callbacks above (`announceSession`, the
+    // status transition, the recovery edge) can re-enter and move the verdict
+    // again. The pre-subscribe correction is the one that matters for the
+    // resolver; this one keeps the host from finishing the handshake on a
+    // value that changed while it was being completed.
+    if (this.supportsCloudVerdictUpdate) {
+      const current = this.config.cloudAuthorized?.();
+      if (current !== undefined && current !== this.openFrameCloudAuthorized) {
+        this.openFrameCloudAuthorized = current;
+        // The value COMPARED is the value SENT. Nothing between the read and
+        // the write is re-entrant today; pushing the read value rather than
+        // re-reading keeps that true if something ever is.
+        this.pushCloudVerdictValue(current);
+      }
     }
     // Reported last, once the connection can actually carry a provision frame:
     // the owning client may respond to this synchronously by flushing a
@@ -2499,6 +2841,34 @@ class StreamSession<
       // The credential was rejected (revoked / dead refresh token); the
       // revalidator has already signed out. Stop retrying.
       this.goTerminal(details);
+      return;
+    }
+    if (outcome === "local-plane-retained") {
+      // The cloud verdict is gone but the SESSION is not, and it is still
+      // admitted to the local plane - so this stream, which a local host can
+      // still serve, must not be closed the way a sign-out closes it.
+      //
+      // Counted as no-progress UNCONDITIONALLY, which is the difference from
+      // "rotated" below and is not a heuristic: no better bearer can arrive
+      // while the session stays in this state, so the token comparison that
+      // decides progress there can only ever answer "same". Bounding it is
+      // what keeps this from becoming an unbounded reconnect loop that spends
+      // a single-use refresh token on every cycle - the failure the terminal
+      // close was, crudely, preventing.
+      this.noProgressUnauthorizedReconnects += 1;
+      if (
+        this.noProgressUnauthorizedReconnects >=
+        MAX_NO_PROGRESS_UNAUTHORIZED_RECONNECTS
+      ) {
+        console.error(
+          `[stream] giving up after ${this.noProgressUnauthorizedReconnects} ` +
+            `UNAUTHORIZED reconnects on a session with no cloud verdict ` +
+            `(method=${String(this.config.method)}); reload required`,
+        );
+        this.goTerminal(details);
+        return;
+      }
+      this.scheduleReconnect();
       return;
     }
     if (outcome === "network-error") {
@@ -2912,6 +3282,13 @@ class StreamSession<
     this.openFrameToken = null;
     this.openFrameHostId = null;
     this.supportsCredentialUpdate = false;
+    // Reset with its siblings. Not currently reachable - the push is gated on
+    // `phase === "subscribed"`, which no redial reaches before the next
+    // `openAck` overwrites this - but a capability flag surviving the socket
+    // that advertised it is wrong on its own terms, and the two doors beside it
+    // already make the opposite decision.
+    this.supportsCloudVerdictUpdate = false;
+    this.openFrameCloudAuthorized = undefined;
     this.supportsHostCredentialProvision = false;
     this.phase = "idle";
     this.pendingBinaryEnvelope = null;
@@ -2994,6 +3371,7 @@ class StreamSession<
       | ClientStreamSubscribeFrame
       | ClientStreamFatalErrorFrame
       | ClientStreamCredentialUpdateFrame
+      | ClientStreamCloudVerdictUpdateFrame
       | ClientStreamHostCredentialProvisionFrame,
   ): boolean {
     try {
@@ -3097,6 +3475,29 @@ interface PreparedStreamSubscribeRequest {
 }
 
 /**
+ * The version {@link prepareStreamSubscribeRequest} would declare, without the
+ * payload transform - the whole of what a manifest can predict about a
+ * subscribe that has not happened.
+ *
+ * The rule is copied deliberately rather than shared through that function:
+ * the transform half needs a live `params` value, which is precisely what a
+ * pre-check does not have. Both sides encode the framework's asymmetric
+ * contract - the older side never transforms, so the newer side declares the
+ * older minor - and must move together.
+ *
+ * `null` when either side does not carry the method at all, or across a major
+ * skew, which streams have no bridge for.
+ */
+function predictedSubscribeSchemaVersion(
+  mine: SchemaVersion | null,
+  theirs: SchemaVersion | null,
+): SchemaVersion | null {
+  if (mine === null || theirs === null) return null;
+  if (mine.major !== theirs.major) return null;
+  return mine.minor <= theirs.minor ? mine : theirs;
+}
+
+/**
  * Computes what the `subscribe` control frame should actually declare on the
  * wire - the streaming analog of `ws-rpc-client.ts`'s `prepareRequestPayload`.
  *
@@ -3121,19 +3522,45 @@ export function prepareStreamSubscribeRequest(
   theirCanonical: SchemaVersion,
   params: unknown,
 ): PreparedStreamSubscribeRequest {
+  const onWireVersion = selectStreamSubscribeVersion(
+    myCanonical,
+    theirCanonical,
+  );
+  if (schemaVersionEqual(onWireVersion, myCanonical)) {
+    return { onWireVersion, onWirePayload: params };
+  }
+  const methodRegistry = registry[method] as StreamMethodVersionRegistry;
+  const olderLine = methodRegistry[myCanonical.major];
+  const olderEntry = olderLine.versions[onWireVersion.minor];
+  return {
+    onWireVersion,
+    onWirePayload: olderEntry.contract.openRequestSchema.parse(params),
+  };
+}
+
+/**
+ * Which version {@link prepareStreamSubscribeRequest} will declare, decided
+ * from the two manifests alone - so a caller can know it BEFORE it has the
+ * params, which is what lets a params provider shape its open request for the
+ * major that was actually negotiated (see `StreamParamsProvider`).
+ *
+ * Extracted rather than duplicated at the call sites precisely because those
+ * two answers must never diverge: a provider told `@1` whose payload is then
+ * declared as `@2` writes a frame the peer's strict schema drops, silently and
+ * on the open. Both transports read it through this function and then hand the
+ * same pair to `prepareStreamSubscribeRequest`.
+ */
+export function selectStreamSubscribeVersion(
+  myCanonical: SchemaVersion,
+  theirCanonical: SchemaVersion,
+): SchemaVersion {
   if (
     myCanonical.major !== theirCanonical.major ||
     myCanonical.minor <= theirCanonical.minor
   ) {
-    return { onWireVersion: myCanonical, onWirePayload: params };
+    return myCanonical;
   }
-  const methodRegistry = registry[method] as StreamMethodVersionRegistry;
-  const olderLine = methodRegistry[myCanonical.major];
-  const olderEntry = olderLine.versions[theirCanonical.minor];
-  return {
-    onWireVersion: theirCanonical,
-    onWirePayload: olderEntry.contract.openRequestSchema.parse(params),
-  };
+  return theirCanonical;
 }
 
 type SessionPhase = "idle" | "dialing" | "awaitingOpenAck" | "subscribed";

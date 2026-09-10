@@ -14,7 +14,7 @@
  * fake here is a counting closure - no mocking framework, matching
  * `lane-adapter-probe.test.ts`'s convention. The one wire fixture in play (a
  * control-lane snapshot) is built through the real
- * `epicStatusSubscribeServerFrameSchemaV10.parse(...)`, for the same reason:
+ * `epicStatusSubscribeServerFrameSchemaV11.parse(...)`, for the same reason:
  * a hand-rolled object would let a field drift out of the contract with
  * nothing here noticing.
  *
@@ -45,7 +45,7 @@ import type {
   EpicStatusStreamCallbacks,
 } from "@traycer-clients/shared/host-transport/epic-status-stream-client";
 import type { StreamCloseReason } from "@traycer-clients/shared/host-transport/i-stream-session";
-import { epicStatusSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/status-subscribe";
+import { epicStatusSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/status-subscribe";
 import { epicStateSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/state-subscribe";
 import type {
   EpicStateDeltaFrame,
@@ -74,7 +74,7 @@ import { createRendererRuntimeEnvironment } from "../runtime-environment";
  * `lane-adapter-probe.test.ts`'s `statusSnapshotFrame()` does.
  */
 function statusSnapshotFrame(): EpicStatusSnapshotFrame {
-  const parsed = epicStatusSubscribeServerFrameSchemaV10.parse({
+  const parsed = epicStatusSubscribeServerFrameSchemaV11.parse({
     kind: "snapshot",
     hasBinaryPayload: false,
     authorityEpoch: "epoch-1",
@@ -123,7 +123,7 @@ function createCountingStatusFactory(): CountingStatusFactory {
     closeCount: () => closes,
     deliverSnapshot(): void {
       if (live === null) throw new Error("no status client was constructed");
-      live.onSnapshot(statusSnapshotFrame());
+      live.onSnapshot(statusSnapshotFrame(), true);
     },
     deliverClosed(reason: StreamCloseReason): void {
       if (live === null) throw new Error("no status client was constructed");

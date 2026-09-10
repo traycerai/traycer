@@ -56,7 +56,8 @@ only legal pair, `update-attempt.lock` + `update-attempt.json`. No mutation API
 accepts a lock or record path, so a sibling lock can never authorize canonical
 record writes (or the canonical lock arbitrary sibling names).
 
-`commitAttemptMutation` / `pruneTerminalAttemptRecord` take the issued handle —
+`commitAttemptMutation` / `pruneTerminalAttemptRecord` /
+`discardAttemptRecordForUninstall` take the issued handle —
 an object only `acquireUpdateAttemptLock` can mint (membership in a module-private
 `WeakSet`, so it cannot be forged by an object literal). A commit takes an
 explicit legal intent (`create`, `resume`, `advance`, or the first `supersede`

@@ -1,3 +1,4 @@
+import { NO_CLOUD_SYNC_DURABILITY } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import { describe, expect, it } from "vitest";
 import type {
   ControlEvent,
@@ -339,6 +340,7 @@ describe("createWorkspaceContextRefreshPolicy - noteControlEvent", () => {
         kind: "cloud-sync-status",
         status: "connected",
         observedAtMs: 0,
+        durability: NO_CLOUD_SYNC_DURABILITY,
       },
     },
     { event: { kind: "aggregate-dirty", dirty: true } },

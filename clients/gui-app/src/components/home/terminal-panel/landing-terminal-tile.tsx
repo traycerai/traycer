@@ -40,9 +40,9 @@ import { useBoundedHostLoad } from "@/hooks/host/use-bounded-host-load";
 import { TileHostLoadState } from "@/components/epic-canvas/renderers/tile-host-load-state";
 import {
   isProviderLoginLandingTab,
-  useLandingTerminalStore,
+  useLandingPanelStore,
   type LandingTerminalTabRef,
-} from "@/stores/home/landing-terminal-store";
+} from "@/stores/home/landing-panel-store";
 import { resolveLandingTerminalSyncedTitle } from "./landing-terminal-reconciliation";
 import type { LandingTerminalAuthorityEntry } from "./landing-terminal-authority-fleet";
 import { useLandingTerminalDurableLifecycle } from "./landing-terminal-durable-bootstrap";
@@ -126,7 +126,7 @@ export function LandingTerminalLegacyBootstrap(
   props: LandingTerminalTileProps,
 ): ReactNode {
   const handleExitedTab = useRemoveExitedLandingTab(props.landingPageId);
-  const rekeyTab = useLandingTerminalStore((state) => state.rekeyTab);
+  const rekeyTab = useLandingPanelStore((state) => state.rekeyTab);
   // Derivation, not a coarse read. This gate replaces the tile with an explicit
   // "is offline" state, which is a claim about a machine — so it asks the one
   // hook that knows the difference between the cloud saying a host is gone and
@@ -322,7 +322,7 @@ function LandingTerminalDurableBootstrap(
   );
   const adopt = useCallback(
     (terminal: PlainTerminalProjection): void => {
-      useLandingTerminalStore
+      useLandingPanelStore
         .getState()
         .adoptHostTerminal(props.tab.instanceId, terminal);
     },
@@ -482,7 +482,7 @@ export function LandingTerminalTileLive(props: {
     handle.store,
     (state) => state.currentCwdReported,
   );
-  const syncDefaultTitle = useLandingTerminalStore(
+  const syncDefaultTitle = useLandingPanelStore(
     (state) => state.syncDefaultTitle,
   );
   const syncedTitle = resolveLandingTerminalSyncedTitle({

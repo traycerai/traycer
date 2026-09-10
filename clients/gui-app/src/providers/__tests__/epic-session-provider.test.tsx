@@ -418,6 +418,7 @@ import {
   LIST_CLOUD_TASKS_REQUEST,
   cloudEpicTasksQueryKey,
 } from "@/lib/cloud-epic-tasks-query";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import type {
   DesktopOwnershipClaimResult,
   DesktopPerWindowStatePatch,
@@ -2167,6 +2168,116 @@ describe("<EpicSessionProvider />", () => {
     });
     expect(streams).toHaveLength(1);
     expect(__getOpenEpicRegistryForTests().size()).toBe(1);
+  });
+
+  it("clears a cached local home when a pre-1.6 peer omits the durability key, and keeps it when a 1.6 peer does", async () => {
+    // Through `epic.subscribe@1.5` the durability enum has no `cloud`
+    // member: a host that just finished promoting an epic reports the new
+    // home by OMITTING the key. Reading that omission as silence left the
+    // History row `home: "local"` (Pin withheld) until a manual refresh. A
+    // `@1.6` peer says `cloud` positively, so ITS omission is unknown and
+    // must not touch the cache - the two arms below pin both halves.
+    const queryClient = new QueryClient();
+    const cloudTasksUserId = "cloud-user-1";
+    useAuthStore.setState({
+      contextMetadata: { userId: cloudTasksUserId, username: "alice" },
+    });
+    const queryKey = cloudEpicTasksQueryKey(
+      "host-a",
+      cloudTasksUserId,
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    // A second host's History cache and pin batch: the session below lives
+    // on the tab's host, but History and the tab strip's `getTaskContexts`
+    // batch key under the app-wide EFFECTIVE host, which can be another one.
+    // The fact is the epic's, so the patch and the invalidation must reach
+    // every host's caches for the user.
+    const otherHostQueryKey = cloudEpicTasksQueryKey(
+      "host-b",
+      cloudTasksUserId,
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    const otherHostContextsKey = [
+      ...hostQueryKeys.methodScope("host-b", "epic.getTaskContexts"),
+      { taskIds: ["epic-session-test"] },
+      cloudTasksUserId,
+    ];
+    for (const key of [queryKey, otherHostQueryKey]) {
+      queryClient.setQueryData<ListTasksResponse>(key, {
+        tasks: [
+          {
+            ...makeHistoryTask(
+              "epic-session-test",
+              "Local epic",
+              cloudTasksUserId,
+            ),
+            home: "local",
+          },
+        ],
+        hasMore: false,
+      });
+    }
+    queryClient.setQueryData(otherHostContextsKey, { tasks: {} });
+    const cachedHome = (): "local" | "cloud" | undefined =>
+      queryClient.getQueryData<ListTasksResponse>(queryKey)?.tasks[0]?.home;
+    const otherHostCachedHome = (): "local" | "cloud" | undefined =>
+      queryClient.getQueryData<ListTasksResponse>(otherHostQueryKey)?.tasks[0]
+        ?.home;
+    const seenHandles: OpenEpicStoreHandle[] = [];
+    installStreamFactory(() => ({
+      applyUpdate: () => undefined,
+      awareness: () => undefined,
+      applyArtifactRoomUpdate: () => undefined,
+      artifactRoomAwareness: () => undefined,
+      retryMigration: () => undefined,
+      close: () => undefined,
+    }));
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <EpicSessionProvider
+          epicId="epic-session-test"
+          tabId="epic-session-test"
+        >
+          <HandleProbe
+            onHandle={(handle) => {
+              seenHandles.push(handle);
+            }}
+          />
+        </EpicSessionProvider>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => {
+      expect(seenHandles).toHaveLength(1);
+    });
+    const store = seenHandles[0].store;
+
+    // A `@1.6` peer's omission is unknown: the cached local home survives.
+    act(() => {
+      store.setState({
+        hasFreshCloudSyncStatus: true,
+        durabilityStatusNegotiated: true,
+        durabilityLegsNegotiated: true,
+        durabilityStatus: null,
+      });
+    });
+    expect(cachedHome()).toBe("local");
+    expect(otherHostCachedHome()).toBe("local");
+    expect(queryClient.getQueryState(otherHostContextsKey)?.isInvalidated).toBe(
+      false,
+    );
+
+    // A `@1.4`/`@1.5` peer's omission is the cloud answer: the key is
+    // dropped, which is the shape a normal cloud-backed row carries - on
+    // EVERY host's cache, and the other host's pin batch is invalidated.
+    act(() => {
+      store.setState({ durabilityLegsNegotiated: false });
+    });
+    expect(cachedHome()).toBeUndefined();
+    expect(otherHostCachedHome()).toBeUndefined();
+    expect(queryClient.getQueryState(otherHostContextsKey)?.isInvalidated).toBe(
+      true,
+    );
   });
 
   it("patches cached history titles when a generated epic title lands", async () => {

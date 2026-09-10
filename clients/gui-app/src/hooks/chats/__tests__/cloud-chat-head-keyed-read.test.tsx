@@ -104,7 +104,12 @@ function createFixture(initial: PortBehaviour): Fixture {
 
 describe("useCloudChatRead - head-keyed refresh", () => {
   beforeEach(() => {
+    // Identity AND verdict - see `use-cloud-chat-queries.ts`. Without
+    // `status`, the store's `signed-out` default disables `useCloudChatRead`
+    // and the read never runs, so the request counts this file measures are
+    // all zero and `data` never arrives.
     useAuthStore.setState({
+      status: "signed-in",
       contextMetadata: { userId: "viewer-1", username: "viewer-1" },
     });
   });

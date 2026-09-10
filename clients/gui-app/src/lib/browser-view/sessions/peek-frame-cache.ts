@@ -5,7 +5,7 @@ import type { ScreencastImage } from "@/lib/browser-view/sessions/use-screencast
 /**
  * Best-effort last-known frame per tab, outside React state on purpose.
  *
- * The dormant placeholder (`browser-session-tile.tsx`, decision #9) greys this
+ * The dormant placeholder (`browser-tab-tile.tsx`, decision #9) greys this
  * out when a tab's host goes unreachable - and by then the peek tile has
  * usually already unmounted, since the parent renders the placeholder instead.
  * A frame kept only in that component's state would be gone; this cache is
@@ -39,7 +39,7 @@ function retainLastFrame(key: string, image: ScreencastImage): void {
 /**
  * The one key builder for a browser peek tile's frame cache / dormant
  * placeholder lookup - host+session+tab+tile-instance. Shared by the tile and
- * by `browser-session-tile.tsx`'s placeholder/self-close reads, so the shape
+ * by `browser-tab-tile.tsx`'s placeholder/self-close reads, so the shape
  * cannot drift between the write side and any of its readers.
  */
 export function browserPeekFrameKey(node: {

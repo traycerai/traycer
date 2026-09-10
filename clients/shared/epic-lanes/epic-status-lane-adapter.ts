@@ -61,9 +61,42 @@ import type {
   EpicStatusStreamCallbacks,
   EpicStatusTransitionFrame,
 } from "@traycer-clients/shared/host-transport/epic-status-stream-client";
-import type { EpicMigrationStatus } from "@traycer/protocol/host/epic/status-subscribe";
+import type { EpicCloudSyncDurability } from "@traycer-clients/shared/host-transport/epic-stream-client";
+import type {
+  EpicMigrationStatus,
+  EpicStatusDurabilityLegs,
+} from "@traycer/protocol/host/epic/status-subscribe";
 import { isWritablePermissionRole } from "@traycer-clients/shared/epic/permission-role";
 import { EPIC_STATUS_LANE_ID } from "./lane-events";
+
+/**
+ * The durability legs a status frame carries, in the shape the control
+ * replica reads.
+ *
+ * `peerSpeaksDurabilityLegs` comes from the NEGOTIATED minor, which is the
+ * only thing that can answer it. This lane carries the legs from `@1.1` on;
+ * `@1.0` shipped in cli-v1.3.0 without them. So the same absent `durability`
+ * means two different things, and neither reading is safe for the other:
+ * against an `@1.1` peer it is the wire's stated UNKNOWN (the absence rule
+ * inherited from `epic.subscribe@1.6`), and reporting `false` there would hand
+ * every omission to the pre-`@1.4` rendering - silence read as reassurance,
+ * the exact defect the legs were put on this lane to end. Against an `@1.0`
+ * peer it is a host that never had the datum, and reporting `true` there
+ * claims the host answered a question it was never asked.
+ */
+function durabilityLegsOf(
+  frame: EpicStatusDurabilityLegs,
+  peerServesDurabilityLegs: boolean,
+): EpicCloudSyncDurability {
+  return {
+    durability: frame.durability,
+    pauseReason: frame.pauseReason,
+    promotionState: frame.promotionState,
+    localProtection: frame.localProtection,
+    freshness: frame.freshness,
+    peerSpeaksDurabilityLegs: peerServesDurabilityLegs,
+  };
+}
 
 /** The subset of the control lane's stream client this adapter drives. */
 export interface EpicStatusLaneStreamClient {
@@ -231,7 +264,10 @@ export function createEpicStatusLaneAdapter(
       host?.emit(event);
     };
     return {
-      onSnapshot: (frame: EpicStatusSnapshotFrame) => {
+      onSnapshot: (
+        frame: EpicStatusSnapshotFrame,
+        peerServesDurabilityLegs: boolean,
+      ) => {
         if (!accepts(generation)) return;
         foldAuthorityEpoch(frame.authorityEpoch);
         // BOTH folds before any emit, and the second one used to sit in the
@@ -282,6 +318,7 @@ export function createEpicStatusLaneAdapter(
           kind: "cloud-sync-status",
           status: frame.cloudSyncStatus,
           observedAtMs: environment.clock.now(),
+          durability: durabilityLegsOf(frame, peerServesDurabilityLegs),
         });
         // Emitted only when ESTABLISHED - see the module doc. `null` is the
         // host stating it cannot answer yet, and there is no event for that.
@@ -311,7 +348,10 @@ export function createEpicStatusLaneAdapter(
           });
         }
       },
-      onTransition: (frame: EpicStatusTransitionFrame) => {
+      onTransition: (
+        frame: EpicStatusTransitionFrame,
+        peerServesDurabilityLegs: boolean,
+      ) => {
         if (!accepts(generation)) return;
         foldAuthorityEpoch(frame.authorityEpoch);
         switch (frame.kind) {
@@ -340,6 +380,7 @@ export function createEpicStatusLaneAdapter(
               kind: "cloud-sync-status",
               status: frame.status,
               observedAtMs: environment.clock.now(),
+              durability: durabilityLegsOf(frame, peerServesDurabilityLegs),
             });
             return;
           }
