@@ -1339,7 +1339,9 @@ describe("NotificationsPopover", () => {
     // version filtered the recorder with no such join, and because the recorder
     // was a hoisted array with no per-case reset, the preceding cloud-confirm
     // case's record satisfied it: an assertion that could pass while this case
-    // dispatched nothing at all.
+    // dispatched nothing FLOORED. (Dispatching nothing at all was never what
+    // this catches - the `hostBeforeUpdatedAtCallParams` wait above throws on
+    // zero clearAll calls before execution ever reaches here.)
     //
     // The join is by CARDINALITY, not identity - sound here rather than merely
     // convenient. The floored stub forwards to `hostRequestMock`, so EVERY
@@ -1353,19 +1355,24 @@ describe("NotificationsPopover", () => {
     // The record is matched COMPLETE, never on `minor` alone - `minor === 1`
     // is equally true of `@2.1`, which is a different major and not this floor.
     //
-    // The count is deliberately not pinned. An earlier version of this
-    // assertion was shaped around having seen two dispatches, but that
-    // observation predates the per-case reset and may have been one record from
-    // the preceding cloud-confirmation case plus one from this gesture - an
-    // unmeasured number, and not a fact to build an assertion on.
+    // The count is deliberately not pinned, and the reason is measured rather
+    // than suspected. An earlier version of this assertion was shaped around
+    // having seen two dispatches; instrumenting the assertion to print what it
+    // actually sees gave 2 whole-file pre-fix, 1 for the case in isolation, and
+    // 1 whole-file post-fix. So this gesture dispatches ONCE, and the second
+    // record belonged to the preceding cloud-confirmation case. The residue did
+    // not only make the old assertion borrowable - it supplied the number that
+    // argued for loosening it.
     const clearAllDispatches = hostRequestMock.mock.calls.filter(
       (entry) => entry[0] === "host.notifications.clearAll",
     );
     const clearAllFloors = floorsRequested.calls.filter(
       (call) => call.method === "host.notifications.clearAll",
     );
-    // Empty-refusing: a case that dispatched nothing fails HERE, rather than
-    // satisfying the comparison below with two empty arrays.
+    // Belt-and-braces only: the wait above has already established that a
+    // clearAll went out, so this cannot be the thing that catches a silent
+    // case. It is kept so the comparison below can never be satisfied by two
+    // empty arrays should that wait ever move or soften.
     expect(clearAllDispatches.length).toBeGreaterThan(0);
     expect(clearAllFloors).toEqual(
       clearAllDispatches.map(() => ({
