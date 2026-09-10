@@ -1,41 +1,51 @@
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderHook, waitFor } from "@testing-library/react";
+import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import type {
   ListTaskLight,
+  ListTasksRequest,
   ListTasksResponse,
 } from "@traycer/protocol/host/epic/unary-schemas";
 
 /**
  * R1 - a COLD unverified tab obtains a pin reading.
  *
- * The defect this pins: pin state for the tab strip came only from
+ * The defect: pin state for the tab strip came only from
  * `epic.getTaskContexts`, which is gated on the cloud verdict, so an
  * `unverified` session got no answer at all - and since `epic.setPinned@1.1`
  * made a local-homed row pinnable, "no answer" became a rendered "Pin" for an
- * epic that may already be pinned, inverted by the click. The fix reads the pin
- * off the host's own `epic.listTasks` local rows, the line that same session is
- * already admitted on.
+ * epic that may already be pinned, inverted by the click.
  *
- * This is the REAL hook: its gating (`enabled: true` on the pin-reading
- * queries, deliberately not `cloudAuthorized`), the real
- * `epicPinReadingListQueryOptions`, real TanStack `useQueries` + `combine`, and
- * the real overlay. Stubbed are exactly two seams - the transport
- * (`fetchCloudEpicTasksFirstPageByHostId`) and the session registry that says
- * which open epics are local-homed and on which host. Both are inputs to the
- * behaviour under test, not part of it.
+ * **This probe drives the REAL fetch path.** The first version of this file
+ * mocked `fetchCloudEpicTasksFirstPageByHostId`, and that is exactly why it was
+ * green over two runtime failures a real dispatch hits:
  *
- * `unverified` is the subject; `verified` is the control that the same read
- * works when a verdict exists (so a red unverified row means the GATE, not a
- * broken fixture); and a cloud-homed row is the control that stays unknown -
- * nothing answered for it, and `pinnedKnown: false` says so.
+ *  1. the reading dispatched with `localFirstPhase: undefined`, which
+ *     `cloudLegAdmittedAtDispatch` REFUSES outright under an unverified verdict
+ *     (a page with no local-first directive is an ordinary cloud call) - so the
+ *     one cohort this query exists for got no RPC at all;
+ *  2. nothing registered the OWNING host's client in the list module's
+ *     by-host-id registry, so even a verified fetch rejected with
+ *     `No host client registered for <owner>` before touching a transport.
+ *
+ * So the seam moved DOWN: the fake here is the host client itself (the
+ * transport), reached through a `useHostBinding` whose `createRequesterForHostId`
+ * answers for the owner. Everything above it is real - the registry, the
+ * admission, the request construction, the version floor, `useQueries` +
+ * `combine`, and the overlay.
  */
 
 const EPIC_LOCAL = "epic-local";
 const EPIC_CLOUD = "epic-cloud";
-const OWNING_HOST_ID = "host-owning";
+const OWNER_HOST_ID = "host-owner";
+const WINDOW_HOST_ID = "host-window";
 const USER_ID = "user-1";
+
+interface DispatchedRequest {
+  readonly params: ListTasksRequest;
+  readonly withVersionFloor: boolean;
+}
 
 const registryState = vi.hoisted(() => {
   const state: {
@@ -45,44 +55,80 @@ const registryState = vi.hoisted(() => {
   return state;
 });
 
-const fetchFirstPage = vi.hoisted(() => vi.fn());
+const transport = vi.hoisted(() => {
+  const state: {
+    dispatched: Array<{
+      hostId: string;
+      params: unknown;
+      withVersionFloor: boolean;
+    }>;
+    responseByHostId: Map<string, unknown>;
+    /** Host ids the binding is willing to build a requester for. */
+    resolvableHostIds: Set<string>;
+  } = {
+    dispatched: [],
+    responseByHostId: new Map(),
+    resolvableHostIds: new Set(),
+  };
+  return state;
+});
 
 vi.mock("@/lib/registries/epic-session-registry", () => ({
   useLocalHomedOpenEpicIds: () => registryState.localHomedEpicIds,
   useLocalHomedOpenEpicHostIds: () => registryState.localHomedByHost,
 }));
 
-vi.mock("@/lib/cloud-epic-tasks-query/query", () => ({
-  fetchCloudEpicTasksFirstPageByHostId: fetchFirstPage,
-  // `epicPinReadingListQueryOptions` is the real one, and it imports this
-  // module's request constant alongside the fetcher.
-  LIST_CLOUD_TASKS_REQUEST: {
-    limit: 25,
-    filters: { taskType: "epic" as const },
-    extensionPhaseVersion: "1",
-    extensionEpicVersion: "1",
-  },
-}));
-
 // The cloud batch. Under an unverified session the hook must not dispatch it at
-// all; this records whether it was enabled so the probe can say so.
+// all; this records whether it was enabled so the probe can assert that too.
 const hostQueriesCalls: Array<{ enabled: boolean }> = [];
 
-vi.mock("@/hooks/host/use-host-query", () => ({
+vi.mock("@/hooks/host/use-host-queries", () => ({
   useHostQueries: (args: { options: { enabled: boolean } }) => {
     hostQueriesCalls.push({ enabled: args.options.enabled });
     return new Map();
   },
 }));
 
-vi.mock("@/lib/host/runtime", () => ({
-  useHostClient: () => ({
-    getActiveHostId: () => "host-window",
+function makeClient(hostId: string) {
+  return {
+    getActiveHostId: () => hostId,
     getRequestContextUserId: () => USER_ID,
-  }),
-}));
+    onChange: () => () => undefined,
+    requestWithSignal: (_method: string, params: unknown) => {
+      transport.dispatched.push({ hostId, params, withVersionFloor: false });
+      return Promise.resolve(transport.responseByHostId.get(hostId));
+    },
+    requestWithSignalRequiringHostMethodVersion: (
+      _method: string,
+      params: unknown,
+    ) => {
+      transport.dispatched.push({ hostId, params, withVersionFloor: true });
+      return Promise.resolve(transport.responseByHostId.get(hostId));
+    },
+  };
+}
+
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    useHostClient: () => makeClient(WINDOW_HOST_ID),
+    useHostBinding: () => ({
+      hostId: WINDOW_HOST_ID,
+      hostClient: {
+        ...makeClient(WINDOW_HOST_ID),
+        // The binding resolves a requester per host id - and refuses the ones
+        // this case says are not resolvable, which is how "only the owner is
+        // reachable" and "the owner is NOT reachable" are both expressible.
+        createRequesterForHostId: (hostId: string) =>
+          transport.resolvableHostIds.has(hostId) ? makeClient(hostId) : null,
+      },
+    }),
+  };
+});
 
 import { useEpicTaskPinnedStates } from "@/hooks/epic/use-epic-task-pinned-states-query";
+import { __resetCloudEpicTasksClientsForTests } from "@/lib/cloud-epic-tasks-query";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 const PROFILE = { userId: USER_ID, userName: "U", email: "u@example.com" };
@@ -135,25 +181,52 @@ function renderPinnedStates(epicIds: ReadonlyArray<string>) {
   });
 }
 
+function ownerDispatches(): ReadonlyArray<DispatchedRequest> {
+  return transport.dispatched
+    .filter((call) => call.hostId === OWNER_HOST_ID)
+    .map((call) => ({
+      params: call.params as ListTasksRequest,
+      withVersionFloor: call.withVersionFloor,
+    }));
+}
+
 describe("useEpicTaskPinnedStates - the unverified pin reading (R1)", () => {
   beforeEach(() => {
     hostQueriesCalls.length = 0;
-    fetchFirstPage.mockReset();
-    // The session knows this epic is local-homed on the owning host; it is the
-    // epic's own stream that says so, independent of any cloud read.
+    transport.dispatched.length = 0;
+    transport.responseByHostId.clear();
+    transport.resolvableHostIds.clear();
+    // The by-host-id client registry is MODULE-global, so a registration from an
+    // earlier case outlives it - which silently made the "owner not reachable"
+    // control below dispatch anyway the first time it was written.
+    __resetCloudEpicTasksClientsForTests();
+    // Only the OWNER is resolvable. The window's host is deliberately NOT
+    // registered for the reading path, so a dispatch that fell back to it would
+    // reject rather than quietly answering from the wrong machine.
+    transport.resolvableHostIds.add(OWNER_HOST_ID);
+    transport.responseByHostId.set(
+      OWNER_HOST_ID,
+      page([localRow(EPIC_LOCAL, true)]),
+    );
     registryState.localHomedEpicIds = new Set([EPIC_LOCAL]);
-    registryState.localHomedByHost = new Map([[EPIC_LOCAL, OWNING_HOST_ID]]);
-    fetchFirstPage.mockResolvedValue(page([localRow(EPIC_LOCAL, true)]));
+    registryState.localHomedByHost = new Map([[EPIC_LOCAL, OWNER_HOST_ID]]);
     // `contextMetadata.userId` is present under BOTH statuses - it admits the
     // local plane and is deliberately not the spend gate.
     useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
   });
 
   afterEach(() => {
+    // EXPLICIT, because this project runs vitest with `globals: false` - RTL's
+    // automatic cleanup never registers, so without this every earlier case's
+    // hook stays mounted and keeps re-rendering into later ones. That is not
+    // hypothetical here: the un-unmounted trees re-ran this hook's render-time
+    // client registration and produced a dispatch in the one case asserting
+    // there could be none.
+    cleanup();
     useAuthStore.getState().setSignedOut();
   });
 
-  it("reads the pin off the owning host's local rows under an unverified session", async () => {
+  it("dispatches to the OWNER with the local-first directive and the version floor", async () => {
     useAuthStore.setState({ status: "unverified" });
 
     const { result } = renderPinnedStates([EPIC_LOCAL]);
@@ -164,20 +237,64 @@ describe("useEpicTaskPinnedStates - the unverified pin reading (R1)", () => {
     expect(result.current.get(EPIC_LOCAL)).toEqual({
       pinned: true,
       home: "local",
-      hostId: OWNING_HOST_ID,
+      hostId: OWNER_HOST_ID,
       pinnedKnown: true,
     });
-    // The reading came off the OWNING host, not the window's.
-    expect(fetchFirstPage.mock.calls[0]?.[0]).toBe(OWNING_HOST_ID);
-    expect(fetchFirstPage.mock.calls[0]?.[1]).toBe(USER_ID);
-    // And the cloud batch stayed shut the whole time - this read spends no
-    // cloud capability, which is why it is admissible with no verdict.
+
+    const dispatches = ownerDispatches();
+    expect(dispatches).toHaveLength(1);
+    // R1 failure 1: `undefined` here is REFUSED before any transport call, so a
+    // reading that does not carry the directive never reaches the host at all.
+    expect(dispatches[0]?.params.localFirstPhase).toBe("initial");
+    // ...and an unverified dispatch must carry the `@1.6` floor, so a host that
+    // restarted below it refuses rather than running the released cloud list on
+    // a retained credential.
+    expect(dispatches[0]?.withVersionFloor).toBe(true);
+    expect(dispatches[0]?.params.cursor).toBeUndefined();
+    // Nothing went to the window's host.
+    expect(transport.dispatched.every((c) => c.hostId === OWNER_HOST_ID)).toBe(
+      true,
+    );
+    // And the cloud batch stayed shut throughout.
     expect(hostQueriesCalls.every((call) => !call.enabled)).toBe(true);
+  });
+
+  it("resolves with ONLY the owner's client reachable - R1 failure 2", async () => {
+    useAuthStore.setState({ status: "unverified" });
+
+    // `beforeEach` made the owner the only resolvable host. Before the fix
+    // nothing registered it at all, and the fetch rejected with
+    // `No host client registered for host-owner` without dispatching.
+    const { result } = renderPinnedStates([EPIC_LOCAL]);
+
+    await waitFor(() => {
+      expect(result.current.get(EPIC_LOCAL)?.pinnedKnown).toBe(true);
+    });
+    expect(ownerDispatches()).toHaveLength(1);
+  });
+
+  it("stays unknown when the owner's client cannot be resolved", async () => {
+    useAuthStore.setState({ status: "unverified" });
+    // The negative of the row above, so that row cannot pass by the registry
+    // being populated some other way: with no resolvable owner there is no
+    // dispatch and no reading, and `pinnedKnown` stays false.
+    transport.resolvableHostIds.clear();
+
+    const { result } = renderPinnedStates([EPIC_LOCAL]);
+
+    await waitFor(() => {
+      expect(result.current.get(EPIC_LOCAL)?.home).toBe("local");
+    });
+    expect(ownerDispatches()).toHaveLength(0);
+    expect(result.current.get(EPIC_LOCAL)?.pinnedKnown).toBe(false);
   });
 
   it("reads an UNPINNED local row as a real `false`, not as filler", async () => {
     useAuthStore.setState({ status: "unverified" });
-    fetchFirstPage.mockResolvedValue(page([localRow(EPIC_LOCAL, false)]));
+    transport.responseByHostId.set(
+      OWNER_HOST_ID,
+      page([localRow(EPIC_LOCAL, false)]),
+    );
 
     const { result } = renderPinnedStates([EPIC_LOCAL]);
 
@@ -194,37 +311,40 @@ describe("useEpicTaskPinnedStates - the unverified pin reading (R1)", () => {
       expect(result.current.get(EPIC_LOCAL)?.pinnedKnown).toBe(true);
     });
     expect(result.current.get(EPIC_LOCAL)?.pinned).toBe(true);
+    // A verified dispatch is `authorized`, so it needs no floor - the directive
+    // still rides along, which is what keeps one code path for both verdicts.
+    expect(ownerDispatches()[0]?.withVersionFloor).toBe(false);
+    expect(ownerDispatches()[0]?.params.localFirstPhase).toBe("initial");
   });
 
   it("control - a cloud-homed row stays unknown, with no host named", async () => {
     useAuthStore.setState({ status: "unverified" });
-    // No session reports this epic local-homed, and the owning host's page
-    // carries no row for it either.
     registryState.localHomedEpicIds = new Set();
     registryState.localHomedByHost = new Map();
 
     const { result } = renderPinnedStates([EPIC_CLOUD]);
 
-    // Nothing can answer: the cloud batch is shut and there is no local row.
     await waitFor(() => {
-      expect(fetchFirstPage).not.toHaveBeenCalled();
+      expect(transport.dispatched).toHaveLength(0);
     });
     expect(result.current.get(EPIC_CLOUD)).toBeUndefined();
   });
 
   it("control - a local-homed row the host's page omits stays unknown", async () => {
     useAuthStore.setState({ status: "unverified" });
-    // Two local-homed tabs on the one host, and the host's page carries a row
-    // for only ONE of them. The answered epic is the settle signal - asserting
-    // it in the SAME rendered state is what makes "still unknown" mean "the
-    // query resolved and said nothing about this row", rather than "the query
-    // had not come back yet", which is the way this control goes vacuous.
+    // Two local-homed tabs on the one host, and the page carries a row for only
+    // ONE of them. The answered epic is the settle signal - asserting it in the
+    // SAME rendered state is what makes "still unknown" mean "the query resolved
+    // and said nothing about this row" rather than "it had not come back yet".
     registryState.localHomedEpicIds = new Set([EPIC_LOCAL, "epic-answered"]);
     registryState.localHomedByHost = new Map([
-      [EPIC_LOCAL, OWNING_HOST_ID],
-      ["epic-answered", OWNING_HOST_ID],
+      [EPIC_LOCAL, OWNER_HOST_ID],
+      ["epic-answered", OWNER_HOST_ID],
     ]);
-    fetchFirstPage.mockResolvedValue(page([localRow("epic-answered", true)]));
+    transport.responseByHostId.set(
+      OWNER_HOST_ID,
+      page([localRow("epic-answered", true)]),
+    );
 
     const { result } = renderPinnedStates([EPIC_LOCAL, "epic-answered"]);
 
@@ -234,7 +354,7 @@ describe("useEpicTaskPinnedStates - the unverified pin reading (R1)", () => {
     expect(result.current.get(EPIC_LOCAL)).toEqual({
       pinned: false,
       home: "local",
-      hostId: OWNING_HOST_ID,
+      hostId: OWNER_HOST_ID,
       pinnedKnown: false,
     });
   });

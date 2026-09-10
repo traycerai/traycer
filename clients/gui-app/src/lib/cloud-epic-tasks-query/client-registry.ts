@@ -21,3 +21,15 @@ export function getCloudEpicTasksClient(
 ): HostClient<HostRpcRegistry> | null {
   return clientsByHostId.get(hostId) ?? null;
 }
+
+/**
+ * Drops every registration. The registry is MODULE-global and a host client is
+ * stable for a host's life, so production never needs this - but a suite that
+ * wants to assert "the owner's client is NOT reachable" cannot express it while
+ * an earlier case's registration survives, and a negative control reading
+ * cross-test state is not a control at all (this was found that way: the case
+ * passed a dispatch it was asserting could not happen).
+ */
+export function __resetCloudEpicTasksClientsForTests(): void {
+  clientsByHostId.clear();
+}

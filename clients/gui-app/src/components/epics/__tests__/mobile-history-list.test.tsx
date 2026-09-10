@@ -672,7 +672,6 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
         historyItem({
           title: "Local only epic",
           isLocalHome: true,
-          hostId: null,
         }),
       ];
       renderPanel("embedded", "/");

@@ -830,7 +830,6 @@ describe("<EpicsListPanel />", () => {
       historyItem({
         title: "Local only epic",
         isLocalHome: true,
-        hostId: null,
         isPinned: false,
       }),
     ];
@@ -865,7 +864,6 @@ describe("<EpicsListPanel />", () => {
       historyItem({
         title: "Orphaned epic",
         isLocalHome: false,
-        hostId: null,
         isPreservedOrphan: true,
         isPinned: false,
       }),
@@ -1428,7 +1426,6 @@ describe("<EpicsListPanel />", () => {
         epicId: "epic-local",
         title: "Local-home item",
         isLocalHome: true,
-        hostId: null,
       }),
     ];
     renderPanel("embedded", "/");
