@@ -840,13 +840,18 @@ function indicatorFor(
         containerClassName:
           "rounded-md bg-destructive/10 px-2 py-0.5 text-destructive",
         dotClassName: "bg-destructive",
-        label: "Offline — changes not saved",
+        // Prospective in all three strings, on purpose: this state is reached
+        // on protection alone (`epic-sync-pill-state.ts` consults no dirty
+        // bit for it), so a freshly opened task with nothing typed is in it,
+        // and "changes not saved" / "recent changes are only in this window"
+        // would be a data-loss alarm about edits that do not exist.
+        label: "Offline — not backed up",
         showAgentSpinner: false,
         pulse: null,
         tooltip:
           "Offline and not backed up: anything you edit now exists only in this window. Reconnect, or copy anything you cannot lose.",
         ariaLabel:
-          "Offline and unprotected. Recent changes are only in this window and will be lost if it closes.",
+          "Offline and not backed up. Anything you edit now exists only in this window and is lost if it closes.",
       };
     // The stream is up but this cycle has not supplied enough evidence for a
     // cloud/durability claim. Keep the copy factual and intentionally avoid

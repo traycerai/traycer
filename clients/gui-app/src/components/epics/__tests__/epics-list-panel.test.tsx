@@ -42,6 +42,7 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useHistorySearchStore } from "@/stores/home/history-search-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useImportedUnseenStore } from "@/stores/session-import/imported-unseen-store";
+import { harnessDisplayName } from "@/components/session-import/session-import-model";
 import { DEFAULT_HISTORY_SEARCH } from "@/lib/history-search";
 import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
 import { setDesktopEpicOwnershipBridge } from "@/lib/windows/desktop-epic-ownership";
@@ -1422,6 +1423,123 @@ describe("<EpicsListPanel />", () => {
 
     act(() => {
       toggle.blur();
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
+  });
+
+  it("reads the next keyboard focus correctly after a press that started on the row was released outside it", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    renderPanel("embedded", "/");
+
+    const glyph = await screen.findByTestId(
+      "epics-list-row-provenance-local-only-epic-from-history",
+    );
+    const expectedTooltip = glyph.getAttribute("aria-label");
+    expect(expectedTooltip).not.toBeNull();
+
+    const card = await screen.findByTestId("epics-list-row-card");
+    const link = await screen.findByRole("link", {
+      name: "Open task Local only epic",
+    });
+
+    // A press that starts on the row but releases OUTSIDE it (not on the
+    // card) must still be forgotten - the release listener lives on the
+    // card's `ownerDocument`, not the card element itself, so a release
+    // anywhere in the document is what forgets the press.
+    fireEvent.pointerDown(card);
+    fireEvent.pointerUp(document.body);
+
+    act(() => {
+      link.focus();
+    });
+
+    const tooltips = await screen.findAllByRole("tooltip");
+    expect(
+      tooltips.some((tooltip) => tooltip.textContent === expectedTooltip),
+    ).toBe(true);
+  });
+
+  it("consumes the pointer press on the focus that reads it, so a lost release cannot suppress the next keyboard focus", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    renderPanel("embedded", "/");
+
+    const glyph = await screen.findByTestId(
+      "epics-list-row-provenance-local-only-epic-from-history",
+    );
+    const expectedTooltip = glyph.getAttribute("aria-label");
+    expect(expectedTooltip).not.toBeNull();
+
+    const card = await screen.findByTestId("epics-list-row-card");
+    const link = await screen.findByRole("link", {
+      name: "Open task Local only epic",
+    });
+
+    fireEvent.pointerDown(card);
+    act(() => {
+      link.focus();
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
+
+    // No pointerup/pointercancel ever fires here - the earlier focus already
+    // consumed the press on read, so this next focus (with nothing left to
+    // release) must not be misread as pointer-driven again.
+    act(() => {
+      link.blur();
+    });
+    act(() => {
+      link.focus();
+    });
+
+    const tooltips = await screen.findAllByRole("tooltip");
+    expect(
+      tooltips.some((tooltip) => tooltip.textContent === expectedTooltip),
+    ).toBe(true);
+  });
+
+  it("opens the imported-unseen dot's tooltip when the row's overlay link gets keyboard focus", async () => {
+    act(() => {
+      useImportedUnseenStore
+        .getState()
+        .markImported("epic-from-history", "claude");
+    });
+    renderPanel("embedded", "/");
+
+    expect(await screen.findByTestId("imported-unseen-dot")).not.toBeNull();
+
+    const link = await screen.findByRole("link", {
+      name: "Open task Open from landing",
+    });
+    const expectedTooltip = `Imported from ${harnessDisplayName("claude")} - not opened yet`;
+
+    expect(screen.queryByRole("tooltip")).toBeNull();
+
+    act(() => {
+      link.focus();
+    });
+
+    const tooltips = await screen.findAllByRole("tooltip");
+    expect(
+      tooltips.some((tooltip) => tooltip.textContent === expectedTooltip),
+    ).toBe(true);
+
+    act(() => {
+      link.blur();
     });
 
     await waitFor(() => {

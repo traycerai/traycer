@@ -1698,15 +1698,30 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
   const pointerPressRef = useRef(false);
   const [rowTargetKeyboardFocused, setRowTargetKeyboardFocused] =
     useState(false);
-  const rememberPointerPress = useCallback(() => {
-    pointerPressRef.current = true;
-  }, []);
-  const forgetPointerPress = useCallback(() => {
-    pointerPressRef.current = false;
-  }, []);
+  // The press is forgotten on release ANYWHERE, not only over the row: a
+  // press that starts here and ends outside fires no row handler, and a ref
+  // left `true` would classify the next keyboard focus as a click. The focus
+  // that reads the ref also consumes it, for the release that never arrives
+  // at the document either (a pointer let go over a webview guest).
+  const rememberPointerPress = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      pointerPressRef.current = true;
+      const ownerDocument = event.currentTarget.ownerDocument;
+      const forgetPointerPress = () => {
+        pointerPressRef.current = false;
+        ownerDocument.removeEventListener("pointerup", forgetPointerPress);
+        ownerDocument.removeEventListener("pointercancel", forgetPointerPress);
+      };
+      ownerDocument.addEventListener("pointerup", forgetPointerPress);
+      ownerDocument.addEventListener("pointercancel", forgetPointerPress);
+    },
+    [],
+  );
   const onRowFocus = useCallback((event: FocusEvent<HTMLDivElement>) => {
+    const byPointer = pointerPressRef.current;
+    pointerPressRef.current = false;
     setRowTargetKeyboardFocused(
-      !pointerPressRef.current && event.target.matches(ROW_TARGET_SELECTOR),
+      !byPointer && event.target.matches(ROW_TARGET_SELECTOR),
     );
   }, []);
   const onRowBlur = useCallback(() => {
@@ -1827,8 +1842,6 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
       data-testid="epics-list-row-card"
       data-selection-disabled={selectionDisabled ? "true" : undefined}
       onPointerDown={rememberPointerPress}
-      onPointerUp={forgetPointerPress}
-      onPointerCancel={forgetPointerPress}
       onFocus={onRowFocus}
       onBlur={onRowBlur}
       className={historyRowCardClassName({

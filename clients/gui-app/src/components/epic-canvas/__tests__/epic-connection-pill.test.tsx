@@ -709,6 +709,43 @@ describe("<EpicConnectionPill />", () => {
     );
   });
 
+  it("keeps every unprotected string prospective — the state is reached with nothing typed", async () => {
+    // `unprotected` derives on protection alone - `epic-sync-pill-state.ts`
+    // consults no dirty bit for it - so a freshly opened task with nothing
+    // typed can be in this state. All three strings must stay prospective
+    // ("anything you edit") rather than claim edits already exist ("recent
+    // changes", "changes not saved", "changes are"): that shape is a false
+    // data-loss alarm about work that was never done. A reviewer caught the
+    // tooltip drifting prospective while the aria-label still claimed
+    // existing edits; this pins all three so it cannot slip again.
+    vi.useFakeTimers();
+    renderPill("unprotected");
+    vi.useRealTimers();
+
+    expect(screen.getByText("Offline — not backed up")).not.toBeNull();
+
+    const unprotectedLabel = screen
+      .getByTestId("epic-connection-pill")
+      .getAttribute("aria-label");
+    expect(unprotectedLabel).toBe(
+      "Offline and not backed up. Anything you edit now exists only in this window and is lost if it closes.",
+    );
+
+    const unprotectedTooltip =
+      "Offline and not backed up: anything you edit now exists only in this window. Reconnect, or copy anything you cannot lose.";
+    await expectTooltip(unprotectedTooltip);
+
+    expect(unprotectedLabel).not.toContain("Recent changes");
+    expect(unprotectedLabel).not.toContain("changes not saved");
+    expect(unprotectedLabel).not.toContain("changes are");
+    expect(unprotectedTooltip).not.toContain("Recent changes");
+    expect(unprotectedTooltip).not.toContain("changes not saved");
+    expect(unprotectedTooltip).not.toContain("changes are");
+    expect("Offline — not backed up").not.toContain("Recent changes");
+    expect("Offline — not backed up").not.toContain("changes not saved");
+    expect("Offline — not backed up").not.toContain("changes are");
+  });
+
   it("preserves keyboard focus when a quiet save becomes an offline warning", () => {
     const { rerender } = renderPill("syncing");
     const before = screen.getByTestId("epic-connection-pill");
