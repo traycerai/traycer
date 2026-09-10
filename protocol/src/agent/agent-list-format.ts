@@ -12,6 +12,7 @@ export function formatAgentListResponse(response: ListAgentsResponse): string {
   // than on any row being archived - see `hasArchiveEnrichment`.
   const showArchived = agents.some(hasArchiveEnrichment);
   const showRunConfig = agents.some(hasRunConfigEnrichment);
+  const showOwnerHostConnectivity = agents.some(hasConnectivityEnrichment);
   const body =
     agents.length === 0
       ? `No agents found for scope '${response.scope}'.`
@@ -19,7 +20,12 @@ export function formatAgentListResponse(response: ListAgentsResponse): string {
   return `Agents in epic (relative to you):
 ${body}
 
-${formatAgentListLegend(showSend, showArchived, showRunConfig)}`;
+${formatAgentListLegend(
+  showSend,
+  showArchived,
+  showRunConfig,
+  showOwnerHostConnectivity,
+)}`;
 }
 
 export function formatAgentSelf(agent: AgentSummary | null): string {
@@ -271,7 +277,56 @@ function formatAgentListLine(agent: AgentSummary, showSend: boolean): string {
   }
   const location = formatAgentLocation(agent);
   if (location.length > 0) parts.push(location);
+  const ownerHost = formatOwnerHostToken(agent);
+  if (ownerHost.length > 0) parts.push(ownerHost);
   return parts.join(" ");
+}
+
+/**
+ * The three words the host may attach to a row, in the order a reader is most
+ * likely to care about. Kept as a value, not only a type, so the runtime
+ * narrowing below has something to check an unknown property against.
+ */
+const OWNER_HOST_CONNECTIVITY_WORDS = [
+  "connectable",
+  "offline",
+  "unknown",
+] as const;
+
+type OwnerHostConnectivityWord = (typeof OWNER_HOST_CONNECTIVITY_WORDS)[number];
+
+/**
+ * `ownerHostConnectivity` off a row, or `null` when the row does not carry it.
+ *
+ * Narrowed at RUNTIME rather than typed, for the same reason `archived` is: the
+ * released `AgentSummary` has no such property, so a listing that has been
+ * through the wire schema has had it stripped, and this formatter renders both
+ * shapes. An unrecognised value reads as absent rather than being printed
+ * verbatim - a newer host inventing a fourth word must not put an unexplained
+ * token in front of a model whose legend cannot describe it.
+ */
+function readOwnerHostConnectivity(
+  agent: AgentSummary,
+): OwnerHostConnectivityWord | null {
+  if (!("ownerHostConnectivity" in agent)) return null;
+  const value = agent.ownerHostConnectivity;
+  return OWNER_HOST_CONNECTIVITY_WORDS.find((word) => word === value) ?? null;
+}
+
+function hasConnectivityEnrichment(agent: AgentSummary): boolean {
+  return readOwnerHostConnectivity(agent) !== null;
+}
+
+/**
+ * Rendered on every enriched row, including `connectable` ones. A field that
+ * appears only when something is wrong reads as noise-free until the day it
+ * matters, and then a reader cannot tell "reachable" from "this build does not
+ * report it" - which is exactly the distinction an agent deciding whether to
+ * address a remote peer needs.
+ */
+function formatOwnerHostToken(agent: AgentSummary): string {
+  const connectivity = readOwnerHostConnectivity(agent);
+  return connectivity === null ? "" : `owner host: ${connectivity}`;
 }
 
 // Quoted title placed right after the id (and [self] marker) so the agent can
@@ -322,12 +377,20 @@ function formatAgentListLegend(
   showSend: boolean,
   showArchived: boolean,
   showRunConfig: boolean,
+  showOwnerHostConnectivity: boolean,
 ): string {
   const archived = showArchived
     ? "\n[archived]: the agent/chat is archived and treated as inactive until its next user or A2A message"
     : "";
   const runConfig = showRunConfig
     ? "\nmodel: <slug>: the configured model (provider default means the TUI provider resolves it)\neffort: <level>: the configured reasoning effort; omitted when absent\nfast: fast mode is enabled"
+    : "";
+  // The caveat is not optional politeness: without it `unknown` reads as
+  // "probably down", and it is the value EVERY row belonging to another user
+  // carries - the host directory lists only the machines on your own account,
+  // so another person's host cannot appear in it at all.
+  const ownerHost = showOwnerHostConnectivity
+    ? "\nowner host: <state>: whether the machine running the agent is reachable - connectable, offline, or unknown. It is a real answer only for your OWN hosts; a row owned by another user is always unknown, because the host directory lists only your own machines - unknown there means not observable, not down"
     : "";
   if (!showSend) {
     return `Legend:
@@ -336,7 +399,7 @@ function formatAgentListLegend(
 R: the agent has a readable transcript
 -: the agent has no readable transcript
 dir: <path>: the working directory the agent runs in
-worktree: <path>: the agent runs in a dedicated git worktree${runConfig}
+worktree: <path>: the agent runs in a dedicated git worktree${runConfig}${ownerHost}
 Sending is unavailable in this session`;
   }
   return `Legend:
@@ -347,7 +410,7 @@ S: the agent can be sent messages to
 R/S: the agent has a readable transcript and can be sent messages to
 -: no available action
 dir: <path>: the working directory the agent runs in
-worktree: <path>: the agent runs in a dedicated git worktree${runConfig}`;
+worktree: <path>: the agent runs in a dedicated git worktree${runConfig}${ownerHost}`;
 }
 
 function hasRunConfigEnrichment(agent: AgentSummary): boolean {

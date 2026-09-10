@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
+  readonly VITE_APP_BUILD_REVISION: string | undefined;
   readonly VITE_APP_VERSION: string | undefined;
   readonly VITE_TRAYCER_OSS_REPO: string | undefined;
   readonly VITE_POSTHOG_KEY: string | undefined;

@@ -632,7 +632,19 @@ export interface ChatMessage {
   settings: ChatRunSettings | null;
   createdAt: number;
   /**
-   * Wall-clock start used by the assistant elapsed timer. Defaults to
+   * Wall-clock time this row's event actually happened, which is what the
+   * transcript stamp reads. Defaults to `createdAt`.
+   *
+   * The two differ wherever a row's `createdAt` has been moved to keep the
+   * transcript in order: `createdAt` is the canonical SORT key, so a nested
+   * steer bubble is re-anchored to its turn's start to stay contiguous with
+   * the slices around it. That anchor is not when the person sent the steer,
+   * and rendering it as one would silently report the wrong time.
+   */
+  sentAt?: number;
+  /**
+   * Wall-clock start of the assistant turn: the elapsed timer measures from
+   * it, and the footer's hover card reports it as `Started`. Defaults to
    * `createdAt`; differs when a persisted notification is adopted by a later
    * provider run but must keep its original transcript position.
    */
