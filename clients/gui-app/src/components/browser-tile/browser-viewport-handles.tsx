@@ -5,6 +5,7 @@ import {
 } from "@traycer/protocol/host/browser/viewport";
 import type { BrowserViewportController } from "./use-browser-viewport";
 import { cn } from "@/lib/utils";
+import { useAnimationFrameThrottle } from "@/hooks/use-animation-frame-throttle";
 
 interface ResizeDrag {
   readonly x: number;
@@ -12,6 +13,7 @@ interface ResizeDrag {
   readonly width: number;
   readonly height: number;
   readonly scale: number;
+  pending: { readonly width: number; readonly height: number } | null;
 }
 
 export function BrowserViewportHandles({
@@ -20,6 +22,21 @@ export function BrowserViewportHandles({
   readonly controller: BrowserViewportController | null;
 }) {
   const drag = useRef<ResizeDrag | null>(null);
+  const applyPending = (current: ResizeDrag): void => {
+    const size = current.pending;
+    current.pending = null;
+    if (
+      size === null ||
+      controller === null ||
+      controller.disabled ||
+      !controller.expanded
+    )
+      return;
+    void controller.resize(size.width, size.height).catch(() => undefined);
+  };
+  const resize = useAnimationFrameThrottle((current: ResizeDrag) => {
+    if (drag.current === current) applyPending(current);
+  });
   if (
     controller === null ||
     !controller.expanded ||
@@ -31,6 +48,7 @@ export function BrowserViewportHandles({
     if (event.button !== 0 || controller.size === null) return;
     event.preventDefault();
     event.stopPropagation();
+    event.currentTarget.focus();
     event.currentTarget.setPointerCapture(event.pointerId);
     controller.claim();
     drag.current = {
@@ -38,6 +56,7 @@ export function BrowserViewportHandles({
       y: event.clientY,
       ...controller.size,
       scale: controller.resizeScale,
+      pending: null,
     };
   };
   const move = (
@@ -55,7 +74,8 @@ export function BrowserViewportHandles({
       if (axis === "width") height = Math.round(width / controller.ratio);
       else width = Math.round(height * controller.ratio);
     }
-    void controller.resize(width, height).catch(() => undefined);
+    initial.pending = { width, height };
+    resize(initial);
   };
   return (
     <>
@@ -63,6 +83,7 @@ export function BrowserViewportHandles({
         <div
           key={axis}
           role="separator"
+          data-viewport-action
           aria-label={`Resize viewport ${axis}`}
           aria-orientation={axis === "width" ? "vertical" : "horizontal"}
           aria-valuenow={controller.size?.[axis]}
@@ -78,7 +99,9 @@ export function BrowserViewportHandles({
           onPointerDown={start}
           onPointerMove={(event) => move(event, axis)}
           onPointerUp={() => {
+            const current = drag.current;
             drag.current = null;
+            if (current !== null) applyPending(current);
           }}
           onPointerCancel={() => {
             drag.current = null;
@@ -97,6 +120,7 @@ export function BrowserViewportHandles({
                 ? event.key === "ArrowLeft"
                 : event.key === "ArrowUp";
             if (!increase && !decrease) return;
+            drag.current = null;
             event.preventDefault();
             const amount = (increase ? 1 : -1) * (event.shiftKey ? 10 : 1);
             const next = {

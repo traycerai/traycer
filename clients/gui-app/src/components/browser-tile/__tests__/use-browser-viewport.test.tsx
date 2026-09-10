@@ -18,11 +18,28 @@ import {
 import { useBrowserViewport } from "../use-browser-viewport";
 
 const desktopWindowId = vi.hoisted(() => ({ value: "window-a" }));
+const coordinatorSnapshot = vi.hoisted(() => ({
+  value: null as BrowserSessionsState | null,
+}));
 
 vi.mock("@/lib/windows/desktop-window-id", () => ({
   useDesktopWindowId: () => desktopWindowId.value,
   readDesktopWindowId: () => desktopWindowId.value,
 }));
+
+vi.mock(
+  "@/lib/browser-view/sessions/browser-sessions-coordinator",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/lib/browser-view/sessions/browser-sessions-coordinator")
+      >();
+    return {
+      ...actual,
+      browserSessionsCoordinatorState: () => coordinatorSnapshot.value,
+    };
+  },
+);
 
 function viewportState(): BrowserViewportState {
   return {
@@ -36,13 +53,22 @@ function viewportState(): BrowserViewportState {
   };
 }
 
+function readOnlyViewportState(): BrowserViewportState {
+  return {
+    ...viewportState(),
+    applied: { width: 390, height: 312, dpr: 1 },
+  };
+}
+
 function sessionsState(
   setViewport: BrowserSessionsState["setViewport"],
+  viewport: BrowserViewportState,
+  reportViewport: BrowserSessionsState["reportViewport"],
 ): BrowserSessionsState {
   return {
-    viewports: { "tab-1": viewportState() },
+    viewports: { "tab-1": viewport },
     setViewport,
-    reportViewport: () => undefined,
+    reportViewport,
     hostId: "host-1",
     lifecycle: "live",
     inventoryReady: true,
@@ -90,6 +116,12 @@ function ViewportProbe(): ReactElement {
       >
         Invalid viewport
       </button>
+      <button
+        type="button"
+        onClick={() => void controller.resize(640, 480).catch(() => undefined)}
+      >
+        Resize viewport
+      </button>
       <output data-testid="expanded">
         {controller.expanded ? "expanded" : "collapsed"}
       </output>
@@ -107,8 +139,79 @@ function renderProbe(setViewport: BrowserSessionsState["setViewport"]): void {
   });
   render(
     <QueryClientProvider client={queryClient}>
-      <BrowserSessionsContext.Provider value={sessionsState(setViewport)}>
+      <BrowserSessionsContext.Provider
+        value={sessionsState(setViewport, viewportState(), () => undefined)}
+      >
         <ViewportProbe />
+      </BrowserSessionsContext.Provider>
+    </QueryClientProvider>,
+  );
+}
+
+function ReadOnlyViewportProbe(): ReactElement {
+  const { areaRef, controller, paintedSize } = useBrowserViewport({
+    hostId: "host-1",
+    sessionId: "session-1",
+    tabId: "tab-1",
+    instanceId: "instance-1",
+    visible: true,
+    disabled: true,
+    pageZoom: 1,
+    native: false,
+  });
+  if (controller === null) {
+    return <output data-testid="missing">missing</output>;
+  }
+  return (
+    <>
+      <div data-testid="measurement-area" ref={areaRef} />
+      <button type="button" onClick={controller.open}>
+        Open viewport
+      </button>
+      <button
+        type="button"
+        onClick={() => void controller.reset().catch(() => undefined)}
+      >
+        Reset viewport
+      </button>
+      <button
+        type="button"
+        onClick={() => void controller.resize(640, 480).catch(() => undefined)}
+      >
+        Resize viewport
+      </button>
+      <button type="button" onClick={controller.claim}>
+        Claim viewport
+      </button>
+      <output data-testid="disabled">{String(controller.disabled)}</output>
+      <output data-testid="painted-width">
+        {paintedSize?.width ?? "none"}
+      </output>
+      <output data-testid="error">{controller.error ?? ""}</output>
+    </>
+  );
+}
+
+function renderReadOnlyProbe(
+  setViewport: BrowserSessionsState["setViewport"],
+  reportViewport: BrowserSessionsState["reportViewport"],
+): void {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <BrowserSessionsContext.Provider
+        value={sessionsState(
+          setViewport,
+          readOnlyViewportState(),
+          reportViewport,
+        )}
+      >
+        <ReadOnlyViewportProbe />
       </BrowserSessionsContext.Provider>
     </QueryClientProvider>,
   );
@@ -116,6 +219,8 @@ function renderProbe(setViewport: BrowserSessionsState["setViewport"]): void {
 
 afterEach(() => {
   cleanup();
+  coordinatorSnapshot.value = null;
+  vi.restoreAllMocks();
 });
 
 describe("useBrowserViewport", () => {
@@ -179,5 +284,114 @@ describe("useBrowserViewport", () => {
       expect(screen.getByTestId("error").textContent).not.toBe("");
     });
     expect(setViewport).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows a host failure at its rollback revision and hides it after a later update", async () => {
+    const rejection = Promise.withResolvers<void>();
+    const setViewport = vi.fn<BrowserSessionsState["setViewport"]>(
+      () => rejection.promise,
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const initial = viewportState();
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <BrowserSessionsContext.Provider
+          value={sessionsState(setViewport, initial, () => undefined)}
+        >
+          <ViewportProbe />
+        </BrowserSessionsContext.Provider>
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Resize viewport" }));
+    await waitFor(() => {
+      expect(setViewport).toHaveBeenCalledWith("session-1", "tab-1", {
+        mode: "fixed",
+        width: 640,
+        height: 480,
+      });
+    });
+
+    const rollback = {
+      ...initial,
+      revision: 2,
+      applied: { width: 390, height: 844, dpr: 1 },
+    } satisfies BrowserViewportState;
+    coordinatorSnapshot.value = sessionsState(
+      setViewport,
+      rollback,
+      () => undefined,
+    );
+    view.rerender(
+      <QueryClientProvider client={queryClient}>
+        <BrowserSessionsContext.Provider
+          value={sessionsState(setViewport, rollback, () => undefined)}
+        >
+          <ViewportProbe />
+        </BrowserSessionsContext.Provider>
+      </QueryClientProvider>,
+    );
+
+    await act(async () => {
+      rejection.reject(new Error("viewport was rolled back"));
+      await rejection.promise.catch(() => undefined);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("error").textContent).toContain(
+        "viewport was rolled back",
+      );
+    });
+
+    const later = { ...rollback, revision: 3 } satisfies BrowserViewportState;
+    coordinatorSnapshot.value = sessionsState(
+      setViewport,
+      later,
+      () => undefined,
+    );
+    view.rerender(
+      <QueryClientProvider client={queryClient}>
+        <BrowserSessionsContext.Provider
+          value={sessionsState(setViewport, later, () => undefined)}
+        >
+          <ViewportProbe />
+        </BrowserSessionsContext.Provider>
+      </QueryClientProvider>,
+    );
+    expect(screen.getByTestId("error").textContent).toBe("");
+  });
+
+  it("keeps local measurement while read-only controls cannot report, claim, or mutate", async () => {
+    const setViewport = vi.fn<BrowserSessionsState["setViewport"]>(() =>
+      Promise.resolve(),
+    );
+    const reportViewport = vi.fn<BrowserSessionsState["reportViewport"]>();
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(640);
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(480);
+
+    renderReadOnlyProbe(setViewport, reportViewport);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("painted-width").textContent).toBe("390");
+    });
+    expect(screen.getByTestId("disabled").textContent).toBe("true");
+    expect(reportViewport).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Claim viewport" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open viewport" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reset viewport" }));
+    fireEvent.click(screen.getByRole("button", { name: "Resize viewport" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("error").textContent).toContain(
+        "Viewport controls are unavailable",
+      );
+    });
+    expect(setViewport).not.toHaveBeenCalled();
+    expect(reportViewport).not.toHaveBeenCalled();
   });
 });

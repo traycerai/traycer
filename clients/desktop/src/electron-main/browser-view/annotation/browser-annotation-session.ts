@@ -137,6 +137,9 @@ export class BrowserAnnotationSession {
       false,
     );
     const request = sanitizeAttachRequest(readEvaluateValue(evaluation));
+    if (request === null && this.captureInFlight === null && this.isActive()) {
+      await this.captureFailed();
+    }
     if (request === null || !(await this.captureAttach(request))) {
       throw new Error(
         "Couldn't save the annotation to a chat draft. Choose a chat and check the marks before resizing.",

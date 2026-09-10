@@ -192,6 +192,7 @@ vi.mock("sonner", () => ({
 vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
   useBrowserSessionsContext: () => sessionsContextValue(),
   useMaybeBrowserSessionsContext: () => sessionsContextValue(),
+  useMaybeBrowserSessionsCoordinatorKey: () => null,
 }));
 // Both exports, for the reason the sibling `use-runner-host` mock in
 // `tile-render-browser-link-host.test.tsx` documents: a factory REPLACES the

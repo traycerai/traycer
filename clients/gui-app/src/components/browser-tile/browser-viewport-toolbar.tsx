@@ -52,7 +52,6 @@ export function BrowserViewportToolbar({
   readonly controller: BrowserViewportController | null;
 }) {
   const [draft, setDraft] = useState<DimensionDraft | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const cancelled = useRef(false);
   const generation = useRef(0);
   const inputFocused = useRef(false);
@@ -62,20 +61,14 @@ export function BrowserViewportToolbar({
   const action = (run: () => Promise<void>): void => {
     cancelled.current = true;
     generation.current += 1;
-    const ownGeneration = generation.current;
     setDraft(null);
-    setError(null);
-    void run().catch((cause: unknown) => {
-      if (generation.current === ownGeneration)
-        setError(
-          cause instanceof Error ? cause.message : "Couldn't change viewport.",
-        );
-    });
+    controller.dismissError();
+    void run().catch(() => undefined);
   };
   const commit = (next: DimensionDraft): void => {
     generation.current += 1;
     const ownGeneration = generation.current;
-    setError(null);
+    controller.dismissError();
     setDraft({ ...next, dirty: false });
     void controller
       .resize(Number(next.width), Number(next.height))
@@ -83,13 +76,8 @@ export function BrowserViewportToolbar({
         if (generation.current === ownGeneration && !inputFocused.current)
           setDraft(null);
       })
-      .catch((cause: unknown) => {
+      .catch(() => {
         if (generation.current === ownGeneration) {
-          setError(
-            cause instanceof Error
-              ? cause.message
-              : "Couldn't change viewport.",
-          );
           setDraft({ ...next, dirty: true });
         }
       });
@@ -112,7 +100,7 @@ export function BrowserViewportToolbar({
       cancelled.current = true;
       generation.current += 1;
       setDraft(null);
-      setError(null);
+      controller.dismissError();
       event.currentTarget.blur();
     } else if (event.key === "Enter") {
       event.preventDefault();
@@ -136,7 +124,7 @@ export function BrowserViewportToolbar({
     if (generation.current === ownGeneration)
       controller.setRatio(width / height);
   };
-  const message = error ?? controller.error;
+  const message = controller.error;
   return (
     <div
       className="@container/viewport shrink-0 border-b border-border bg-canvas"
@@ -179,7 +167,7 @@ export function BrowserViewportToolbar({
               onChange={(event) => {
                 cancelled.current = false;
                 generation.current += 1;
-                setError(null);
+                controller.dismissError();
                 setDraft(changeDimension(axis, event.target.value));
               }}
               onKeyDown={(event) => keyDown(event, axis)}
@@ -188,8 +176,12 @@ export function BrowserViewportToolbar({
                 if (
                   event.relatedTarget instanceof Element &&
                   event.relatedTarget.closest("[data-viewport-action]") !== null
-                )
+                ) {
+                  generation.current += 1;
+                  setDraft(null);
+                  controller.dismissError();
                   return;
+                }
                 if (!cancelled.current && draft?.dirty === true) commit(draft);
                 else setDraft(null);
                 cancelled.current = false;

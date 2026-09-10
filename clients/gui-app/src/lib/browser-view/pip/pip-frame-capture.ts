@@ -52,22 +52,30 @@ interface OwnedPipFrame {
 interface PipFrameMeta {
   readonly selectionId: string;
   readonly frameSize: ScreencastFrameSize | null;
+  readonly logicalViewport: ScreencastFrameSize | null;
   readonly cursor: AgentCursorPosition | null;
 }
 
 /**
- * A patch over {@link PipFrameMeta}: exactly one field is non-null per frame,
- * and the cursor's id is minted here (the overlay restarts its linger on a new
- * id) rather than by a counter of its own.
+ * A patch over {@link PipFrameMeta}. Physical capture geometry stays separate
+ * from logical viewport geometry because the PiP JPEG can be capped while the
+ * borrowed video track paints the full logical viewport. `undefined` leaves
+ * the logical geometry unchanged; a selection change resets it. Physical
+ * started/resized frames deliberately leave it intact because a resize can
+ * race a viewport epoch for the borrowed video track.
+ * The cursor's id is minted here (the overlay restarts its linger on a new id)
+ * rather than by a counter of its own.
  */
 interface PipMetaPatch {
   readonly frameSize: ScreencastFrameSize | null;
+  readonly logicalViewport: ScreencastFrameSize | null | undefined;
   readonly cursor: Omit<AgentCursorPosition, "id"> | null;
 }
 
 export interface PipPreview {
   readonly src: string | null;
   readonly frameSize: ScreencastFrameSize | null;
+  readonly logicalViewport: ScreencastFrameSize | null;
   readonly cursor: AgentCursorPosition | null;
 }
 
@@ -118,10 +126,19 @@ export function usePipOwnedFrame(
         const base: PipFrameMeta =
           previous?.selectionId === selectionId
             ? previous
-            : { selectionId, frameSize: null, cursor: null };
+            : {
+                selectionId,
+                frameSize: null,
+                logicalViewport: null,
+                cursor: null,
+              };
         return {
           selectionId,
           frameSize: patch.frameSize ?? base.frameSize,
+          logicalViewport:
+            patch.logicalViewport === undefined
+              ? base.logicalViewport
+              : patch.logicalViewport,
           cursor:
             patch.cursor === null
               ? base.cursor
@@ -168,6 +185,7 @@ export function usePipOwnedFrame(
   return {
     src: frameSrcFor(owned, displayedSelectionId),
     frameSize: scoped?.frameSize ?? null,
+    logicalViewport: scoped?.logicalViewport ?? null,
     cursor: scoped?.cursor ?? null,
   };
 }
@@ -330,11 +348,12 @@ function applyCaptureFrame(input: {
   readonly onMeta: (patch: PipMetaPatch) => void;
   readonly onUrl: (url: string) => void;
 }): void {
-  if (
-    input.frame.kind === "viewportEpoch" &&
-    input.frame.logicalViewport !== null
-  ) {
-    input.onMeta({ frameSize: input.frame.logicalViewport, cursor: null });
+  if (input.frame.kind === "viewportEpoch") {
+    input.onMeta({
+      frameSize: null,
+      logicalViewport: input.frame.logicalViewport,
+      cursor: null,
+    });
     return;
   }
   if (input.frame.kind === "started" || input.frame.kind === "resized") {
@@ -343,6 +362,7 @@ function applyCaptureFrame(input: {
         width: input.frame.frameWidth,
         height: input.frame.frameHeight,
       },
+      logicalViewport: undefined,
       cursor: null,
     });
     return;
@@ -350,6 +370,7 @@ function applyCaptureFrame(input: {
   if (input.frame.kind === "agentCursor") {
     input.onMeta({
       frameSize: null,
+      logicalViewport: undefined,
       cursor: {
         type: input.frame.type,
         normalizedX: input.frame.normalizedX,

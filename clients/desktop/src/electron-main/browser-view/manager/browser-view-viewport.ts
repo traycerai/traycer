@@ -123,13 +123,15 @@ export class BrowserViewViewport {
     return work;
   }
 
-  refreshAfterNavigation(entry: BrowserViewEntry): Promise<void> {
+  /** Whether recovery changed page zoom after navigation published status. */
+  refreshAfterNavigation(entry: BrowserViewEntry): Promise<boolean> {
     const state = this.states.get(entry);
-    if (state === undefined) return Promise.resolve();
+    if (state === undefined) return Promise.resolve(false);
     const work = state.work.then(async () => {
       const previousZoom = state.confirmedZoom;
       try {
         await this.refreshConfirmed(entry, state);
+        return false;
       } catch (error) {
         if (
           !(error instanceof UnrepresentableViewportError) ||
@@ -139,11 +141,16 @@ export class BrowserViewViewport {
         }
         // Electron can choose a saved origin zoom on navigation. Keep the
         // tab's last working zoom if that origin cannot represent its size.
+        const originZoom = entry.webContents.getZoomFactor();
         entry.webContents.setZoomFactor(previousZoom);
         await this.refreshConfirmed(entry, state);
+        return entry.webContents.getZoomFactor() !== originZoom;
       }
     });
-    state.work = work.catch(() => undefined);
+    state.work = work.then(
+      () => undefined,
+      () => undefined,
+    );
     return work;
   }
 
@@ -285,12 +292,10 @@ export class BrowserViewViewport {
     entry: BrowserViewEntry,
   ): Promise<BrowserViewportGeometry> {
     return withinViewportDeadline(async (signal) => {
-      const value = await entry.webContents
-        .executeJavaScript(
-          "({width:innerWidth,height:innerHeight,dpr:Math.round(devicePixelRatio*1000000)/1000000})",
-          false,
-        )
-        .catch(() => null);
+      const value = await entry.webContents.executeJavaScript(
+        "({width:innerWidth,height:innerHeight,dpr:Math.round(devicePixelRatio*1000000)/1000000})",
+        false,
+      );
       signal.throwIfAborted();
       const parsed = browserViewportGeometrySchema.safeParse(value);
       if (!parsed.success)

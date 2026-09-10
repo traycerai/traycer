@@ -284,8 +284,8 @@ export class BrowserViewManager {
       refreshViewport: (entry) => {
         void this.viewport
           .refreshAfterNavigation(entry)
-          .then(() => {
-            this.emitStatus(entry);
+          .then((zoomChanged) => {
+            if (zoomChanged) this.emitStatus(entry);
           })
           .catch((error: unknown) => {
             log.warn(

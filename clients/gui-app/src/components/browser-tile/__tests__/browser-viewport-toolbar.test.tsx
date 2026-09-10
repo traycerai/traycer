@@ -8,6 +8,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BrowserViewportState } from "@traycer/protocol/host/browser/viewport";
+import { BrowserViewportHandles } from "@/components/browser-tile/browser-viewport-handles";
 import { BrowserViewportToolbar } from "@/components/browser-tile/browser-viewport-toolbar";
 import type { BrowserViewportController } from "@/components/browser-tile/use-browser-viewport";
 
@@ -38,6 +39,7 @@ function makeController(
     pending: false,
     disabled: false,
     error: null,
+    dismissError: vi.fn(),
     previewScale: 1,
     ratioLocked: false,
     ratio: null,
@@ -66,7 +68,10 @@ function dimensionInput(axis: "width" | "height"): HTMLInputElement {
   return input;
 }
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 describe("BrowserViewportToolbar", () => {
   it("keeps a focused draft while an agent update replaces the host state", () => {
@@ -198,5 +203,256 @@ describe("BrowserViewportToolbar", () => {
       await Promise.resolve();
     });
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("coalesces handle moves and abandons the focused draft before dragging", () => {
+    let flushFrame: ((time: number) => void) | null = null;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      flushFrame = callback;
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(
+      () => undefined,
+    );
+    const resize = vi.fn<BrowserViewportController["resize"]>(() =>
+      Promise.resolve(),
+    );
+    const controller = makeController({ resize, resizeScale: 2 });
+    render(
+      <>
+        <BrowserViewportToolbar controller={controller} />
+        <BrowserViewportHandles controller={controller} />
+      </>,
+    );
+
+    const width = dimensionInput("width");
+    fireEvent.focus(width);
+    fireEvent.change(width, { target: { value: "500" } });
+    const handle = screen.getByRole("separator", {
+      name: "Resize viewport width",
+    });
+    fireEvent.pointerDown(handle, {
+      button: 0,
+      pointerId: 1,
+      clientX: 10,
+      clientY: 10,
+    });
+    fireEvent.pointerMove(handle, {
+      pointerId: 1,
+      clientX: 20,
+      clientY: 10,
+    });
+    fireEvent.pointerMove(handle, {
+      pointerId: 1,
+      clientX: 30,
+      clientY: 10,
+    });
+
+    expect(resize).not.toHaveBeenCalledWith(500, 844);
+    expect(resize).not.toHaveBeenCalled();
+    act(() => {
+      flushFrame?.(0);
+    });
+    expect(resize).toHaveBeenCalledOnce();
+    expect(resize).toHaveBeenCalledWith(410, 844);
+  });
+
+  it("flushes the final pointer move on pointerup and ignores its queued frame", () => {
+    let flushFrame: ((time: number) => void) | null = null;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      flushFrame = callback;
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(
+      () => undefined,
+    );
+    const resize = vi.fn<BrowserViewportController["resize"]>(() =>
+      Promise.resolve(),
+    );
+    const controller = makeController({ resize, resizeScale: 2 });
+    render(<BrowserViewportHandles controller={controller} />);
+    const handle = screen.getByRole("separator", {
+      name: "Resize viewport width",
+    });
+
+    fireEvent.pointerDown(handle, {
+      button: 0,
+      pointerId: 1,
+      clientX: 10,
+      clientY: 10,
+    });
+    fireEvent.pointerMove(handle, {
+      pointerId: 1,
+      clientX: 30,
+      clientY: 10,
+    });
+    fireEvent.pointerUp(handle, { pointerId: 1 });
+
+    expect(resize).toHaveBeenCalledOnce();
+    expect(resize).toHaveBeenCalledWith(410, 844);
+    act(() => {
+      flushFrame?.(0);
+    });
+    expect(resize).toHaveBeenCalledOnce();
+  });
+
+  it("does not replay a pointer move after pointerup and a newer reset", () => {
+    let flushFrame: ((time: number) => void) | null = null;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      flushFrame = callback;
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(
+      () => undefined,
+    );
+    const resize = vi.fn<BrowserViewportController["resize"]>(() =>
+      Promise.resolve(),
+    );
+    const reset = vi.fn<BrowserViewportController["reset"]>(() =>
+      Promise.resolve(),
+    );
+    const controller = makeController({ resize, reset, resizeScale: 2 });
+    render(
+      <>
+        <BrowserViewportToolbar controller={controller} />
+        <BrowserViewportHandles controller={controller} />
+      </>,
+    );
+    const handle = screen.getByRole("separator", {
+      name: "Resize viewport width",
+    });
+
+    fireEvent.pointerDown(handle, {
+      button: 0,
+      pointerId: 1,
+      clientX: 10,
+      clientY: 10,
+    });
+    fireEvent.pointerMove(handle, {
+      pointerId: 1,
+      clientX: 30,
+      clientY: 10,
+    });
+    fireEvent.pointerUp(handle, { pointerId: 1 });
+    fireEvent.click(screen.getByRole("button", { name: "Reset to Fit" }));
+    act(() => {
+      flushFrame?.(0);
+    });
+
+    expect(reset).toHaveBeenCalledOnce();
+    expect(resize).toHaveBeenCalledOnce();
+    expect(resize).toHaveBeenCalledWith(410, 844);
+  });
+
+  it("drops a queued move on pointercancel", () => {
+    let flushFrame: ((time: number) => void) | null = null;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      flushFrame = callback;
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(
+      () => undefined,
+    );
+    const resize = vi.fn<BrowserViewportController["resize"]>(() =>
+      Promise.resolve(),
+    );
+    const controller = makeController({ resize, resizeScale: 2 });
+    render(<BrowserViewportHandles controller={controller} />);
+    const handle = screen.getByRole("separator", {
+      name: "Resize viewport width",
+    });
+
+    fireEvent.pointerDown(handle, {
+      button: 0,
+      pointerId: 1,
+      clientX: 10,
+      clientY: 10,
+    });
+    fireEvent.pointerMove(handle, {
+      pointerId: 1,
+      clientX: 30,
+      clientY: 10,
+    });
+    fireEvent.pointerCancel(handle, { pointerId: 1 });
+    act(() => {
+      flushFrame?.(0);
+    });
+
+    expect(resize).not.toHaveBeenCalled();
+  });
+
+  it("drops a queued move when pointer capture is lost", () => {
+    let flushFrame: ((time: number) => void) | null = null;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      flushFrame = callback;
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(
+      () => undefined,
+    );
+    const resize = vi.fn<BrowserViewportController["resize"]>(() =>
+      Promise.resolve(),
+    );
+    const controller = makeController({ resize, resizeScale: 2 });
+    render(<BrowserViewportHandles controller={controller} />);
+    const handle = screen.getByRole("separator", {
+      name: "Resize viewport width",
+    });
+
+    fireEvent.pointerDown(handle, {
+      button: 0,
+      pointerId: 1,
+      clientX: 10,
+      clientY: 10,
+    });
+    fireEvent.pointerMove(handle, {
+      pointerId: 1,
+      clientX: 30,
+      clientY: 10,
+    });
+    fireEvent.lostPointerCapture(handle, { pointerId: 1 });
+    act(() => {
+      flushFrame?.(0);
+    });
+
+    expect(resize).not.toHaveBeenCalled();
+  });
+
+  it("cancels a queued drag before sending a keyboard step", () => {
+    let flushFrame: ((time: number) => void) | null = null;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      flushFrame = callback;
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(
+      () => undefined,
+    );
+    const resize = vi.fn<BrowserViewportController["resize"]>(() =>
+      Promise.resolve(),
+    );
+    const controller = makeController({ resize, resizeScale: 2 });
+    render(<BrowserViewportHandles controller={controller} />);
+    const handle = screen.getByRole("separator", {
+      name: "Resize viewport width",
+    });
+
+    fireEvent.pointerDown(handle, {
+      button: 0,
+      pointerId: 1,
+      clientX: 10,
+      clientY: 10,
+    });
+    fireEvent.pointerMove(handle, {
+      pointerId: 1,
+      clientX: 30,
+      clientY: 10,
+    });
+    fireEvent.keyDown(handle, { key: "ArrowRight" });
+    act(() => {
+      flushFrame?.(0);
+    });
+
+    expect(resize).toHaveBeenCalledOnce();
+    expect(resize).toHaveBeenCalledWith(391, 844);
   });
 });

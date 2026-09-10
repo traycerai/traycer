@@ -14,7 +14,11 @@ import {
   type BrowserViewportIntent,
   type BrowserViewportState,
 } from "@traycer/protocol/host/browser/viewport";
-import { useMaybeBrowserSessionsContext } from "@/components/epic-canvas/renderers/browser-sessions-context";
+import {
+  useMaybeBrowserSessionsContext,
+  useMaybeBrowserSessionsCoordinatorKey,
+} from "@/components/epic-canvas/renderers/browser-sessions-context";
+import { browserSessionsCoordinatorState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import { browserMutationKeys } from "@/lib/query-keys/browser-mutation-keys";
 import {
   browserTabId,
@@ -30,6 +34,7 @@ export interface BrowserViewportController {
   readonly pending: boolean;
   readonly disabled: boolean;
   readonly error: string | null;
+  readonly dismissError: () => void;
   readonly previewScale: number;
   readonly ratioLocked: boolean;
   readonly ratio: number | null;
@@ -71,6 +76,7 @@ export function useBrowserViewport(input: {
   readonly native: boolean;
 }): BrowserViewportPresentation {
   const sessions = useMaybeBrowserSessionsContext();
+  const coordinatorKey = useMaybeBrowserSessionsCoordinatorKey();
   const observed = sessions?.viewports[input.tabId];
   const state = observed?.sessionId === input.sessionId ? observed : null;
   const desktopWindowId = useDesktopWindowId();
@@ -84,6 +90,11 @@ export function useBrowserViewport(input: {
   const [opened, setOpened] = useState(false);
   const [ratio, setRatio] = useState<number | null>(null);
   const [area, setArea] = useState({ width: 0, height: 0 });
+  const [failure, setFailure] = useState<{
+    error: Error;
+    revision: number;
+    connectionGeneration: number;
+  } | null>(null);
   const areaRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const geometryRef = useRef<BrowserViewportGeometry | null>(null);
@@ -92,11 +103,15 @@ export function useBrowserViewport(input: {
   const supported = state !== null;
   const connectionGeneration = sessions?.connectionGeneration;
   const lifecycle = sessions?.lifecycle;
+  const canChange = !input.disabled && lifecycle === "live";
   const expanded = opened || state?.intent.mode === "fixed";
 
   useEffect(() => {
     const element = areaRef.current;
     if (element === null || !input.visible) return;
+    // Local to this subscription: reconnect and ownership/lifecycle changes
+    // still resend, but ResizeObserver's initial delivery need not repeat it.
+    let lastReported: BrowserViewportGeometry | null = null;
     const measure = (): void => {
       const width = element.clientWidth - (expanded ? 48 : 0);
       const height = element.clientHeight - (expanded ? 48 : 0);
@@ -112,7 +127,14 @@ export function useBrowserViewport(input: {
         dpr: Math.min(8, window.devicePixelRatio),
       };
       geometryRef.current = geometry;
-      if (supported)
+      if (
+        supported &&
+        canChange &&
+        (lastReported?.width !== geometry.width ||
+          lastReported.height !== geometry.height ||
+          lastReported.dpr !== geometry.dpr)
+      ) {
+        lastReported = geometry;
         report?.({
           sessionId: input.sessionId,
           tabId: input.tabId,
@@ -120,6 +142,7 @@ export function useBrowserViewport(input: {
           geometry,
           claim: false,
         });
+      }
     };
     const observer = new ResizeObserver(measure);
     observer.observe(element);
@@ -134,13 +157,13 @@ export function useBrowserViewport(input: {
     supported,
     viewerId,
     connectionGeneration,
-    lifecycle,
+    canChange,
     expanded,
   ]);
 
   const claim = useCallback(() => {
     const geometry = geometryRef.current;
-    if (!supported || geometry === null || !input.visible) return;
+    if (!supported || !canChange || geometry === null || !input.visible) return;
     report?.({
       sessionId: input.sessionId,
       tabId: input.tabId,
@@ -154,6 +177,7 @@ export function useBrowserViewport(input: {
     input.visible,
     report,
     supported,
+    canChange,
     viewerId,
   ]);
 
@@ -165,6 +189,10 @@ export function useBrowserViewport(input: {
     ),
     retry: false,
     mutationFn: async (intent: BrowserViewportIntent): Promise<void> => {
+      if (!canChange)
+        throw new Error(
+          "Viewport controls are unavailable for this browser view.",
+        );
       if (sessions === null || !supported)
         throw new Error("Update this host to change browser dimensions.");
       if (intent.mode === "fixed") {
@@ -181,6 +209,15 @@ export function useBrowserViewport(input: {
       await sessions.setViewport(input.sessionId, input.tabId, intent);
     },
     onError: (error) => {
+      // Rollback can publish before the RPC rejects. Anchor the failure to
+      // that confirmed state, rather than hiding it against its own rollback.
+      const current =
+        browserSessionsCoordinatorState(coordinatorKey) ?? sessions;
+      setFailure({
+        error,
+        revision: current?.viewports[input.tabId]?.revision ?? 0,
+        connectionGeneration: current?.connectionGeneration ?? 0,
+      });
       if (!expanded)
         toastFromHostError(
           toHostRpcError(error, "browser.sessions"),
@@ -202,7 +239,7 @@ export function useBrowserViewport(input: {
     triggerRef.current?.focus();
   };
   const open = (): void => {
-    if (state === null || expanded) return;
+    if (state === null || expanded || !canChange) return;
     const revision = ++actionRevision.current;
     claim();
     // The native apply path preserves annotations before the row can reflow Fit.
@@ -240,8 +277,15 @@ export function useBrowserViewport(input: {
       size,
       expanded,
       pending: mutation.isPending,
-      disabled: input.disabled || lifecycle !== "live",
-      error: mutation.error?.message ?? null,
+      disabled: !canChange,
+      error:
+        failure !== null &&
+        failure.error === mutation.error &&
+        failure.revision === state.revision &&
+        failure.connectionGeneration === connectionGeneration
+          ? failure.error.message
+          : null,
+      dismissError: () => setFailure(null),
       previewScale: scale,
       ratioLocked: ratio !== null,
       ratio,

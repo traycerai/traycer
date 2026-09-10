@@ -139,17 +139,6 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
   const hostEntry = useHostDirectoryEntry(node.hostId);
   const auth = useStreamAuthRevalidator();
   const client = useHostStreamClientFor(hostEntry, auth);
-  const viewport = useBrowserViewport({
-    hostId: node.hostId,
-    sessionId: node.sessionId,
-    tabId: node.tabId,
-    instanceId: node.instanceId,
-    visible,
-    disabled: client === null,
-    pageZoom: 1,
-    native: false,
-  });
-  const { areaRef } = viewport;
   useRegisterVisibleBrowserTile({
     hostId: node.hostId,
     sessionId: node.sessionId,
@@ -177,6 +166,17 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
     browserSessions?.items.find((item) => item.sessionId === node.sessionId)
       ?.profile ?? "primary";
   const { image, navState, armedEpoch, dialog, readOnly } = session;
+  const viewport = useBrowserViewport({
+    hostId: node.hostId,
+    sessionId: node.sessionId,
+    tabId: node.tabId,
+    instanceId: node.instanceId,
+    visible,
+    disabled: client === null || readOnly,
+    pageZoom: 1,
+    native: false,
+  });
+  const { areaRef } = viewport;
   const { tileRef, viewportRef } = session.refs;
   useRetainLastBrowserPeekFrame(frameCacheKey, image);
   const inputOwnerId =
