@@ -253,10 +253,16 @@ describe("useLandingComposerActions", () => {
     //
     // No false pass was measured here, and the assertion this feeds is an
     // exact-array `toEqual`, which is already empty-refusing and already pins
-    // the count - so unlike the popover's, that assertion needs no change. The
-    // untreated hazard was the mirror image: a LATER sibling case dispatching a
-    // floored create would leave a second element and redden THIS case, which
-    // is a false failure pointing at innocent code.
+    // the count - so unlike the popover's, that assertion needs no change.
+    //
+    // Its untreated hazard was still the mirror image of the popover's, and
+    // runs in the direction execution does: an EARLIER sibling dispatching a
+    // floored create leaves a record this case then reads, so its exact-array
+    // `toEqual` sees two elements and reddens - a false FAILURE pointing at
+    // innocent code, rather than the popover's false pass. (The same residue
+    // the other way is this case contaminating a LATER sibling that grows its
+    // own exact-array assertion.) A later case cannot reach back and change an
+    // assertion that has already run; only what precedes it can.
     landingMocks.floorsRequested.length = 0;
     landingMocks.request.mockResolvedValue({ roomInfo: null });
     landingMocks.createTerminalAgent.mockResolvedValue(undefined);
