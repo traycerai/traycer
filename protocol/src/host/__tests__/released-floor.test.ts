@@ -38,7 +38,11 @@ describe("released floor production module", () => {
       "host.notifications.markRead": { major: 1, minor: 0 },
       "host.notifications.resolve": { major: 1, minor: 0 },
       "host.notifications.markAllRead": { major: 1, minor: 1 },
-      "host.notifications.clearAll": { major: 1, minor: 0 },
+      // `@1.1` alongside `markAllRead@1.1`: the two destructive bulk actions
+      // now carry the SAME `home: "local"` partition selector. They shipped a
+      // minor apart, and that gap is what let a mixed-plane clear reach the
+      // whole origin.
+      "host.notifications.clearAll": { major: 1, minor: 1 },
       "host.notifications.getConfig": { major: 1, minor: 0 },
       "host.notifications.setConfig": { major: 1, minor: 0 },
       "host.notifications.indicatorState": { major: 1, minor: 1 },

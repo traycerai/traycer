@@ -144,6 +144,99 @@ describe("indicatorRequests", () => {
 });
 
 describe("useHostNotificationIndicators recovery", () => {
+  it("carries a dispatch floor on a partitioned indicator read and none on a whole-origin one", async () => {
+    const queryClient = createAppQueryClient();
+    queryClient.setDefaultOptions({
+      queries: { ...queryClient.getDefaultOptions().queries, retry: false },
+    });
+    const messenger = new MockHostMessenger<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      requestId: () => "request-floor",
+      handlers: {
+        "host.notifications.indicatorState": () => ({ epics: {}, chats: {} }),
+      },
+    });
+    const spine = new HostClient<HostRpcRegistry>({
+      registry: hostRpcRegistry,
+      invalidator: createHostQueryInvalidator(queryClient),
+      findHostById: (hostId) =>
+        hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
+      messenger,
+    });
+    spine.setRequestContext(
+      createRequestContextFixture({ origin: "renderer", bearerToken: "token" }),
+    );
+    hostClient = spine.createRequester(mockLocalHostEntry);
+    useAuthStore.setState({
+      contextMetadata: { userId: "user-a", username: "user-a" },
+    });
+    const wrapper = (props: { readonly children: ReactNode }): ReactNode =>
+      createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        props.children,
+      );
+
+    // A partitioned read: `home` is on the request, so an older peer would
+    // STRIP it and answer 200 with whole-origin flags. The floor rides the
+    // frame so that peer refuses instead.
+    renderHook(
+      () =>
+        useHostNotificationIndicators({
+          hostId: mockLocalHostEntry.hostId,
+          epicIds: ["epic-a"],
+          chatIds: [],
+          enabled: true,
+          home: "local",
+        }),
+      { wrapper },
+    );
+    await act(async () => {
+      await flushQueryNotifications();
+    });
+    expect(messenger.calls).toHaveLength(1);
+    expect(messenger.calls[0]?.requiredHostMethodVersion).toEqual({
+      method: "host.notifications.indicatorState",
+      version: { major: 1, minor: 1 },
+    });
+
+    // The control, differing in exactly one variable: no `home`, so there is
+    // no selector for an older peer to strip and no floor is owed. Without
+    // this, "a floor is attached" could equally be an unconditional floor that
+    // breaks the indicator against every host that never needed the minor.
+    cleanup();
+    const wholeOriginQueryClient = createAppQueryClient();
+    wholeOriginQueryClient.setDefaultOptions({
+      queries: {
+        ...wholeOriginQueryClient.getDefaultOptions().queries,
+        retry: false,
+      },
+    });
+    const wholeOriginWrapper = (props: {
+      readonly children: ReactNode;
+    }): ReactNode =>
+      createElement(
+        QueryClientProvider,
+        { client: wholeOriginQueryClient },
+        props.children,
+      );
+    renderHook(
+      () =>
+        useHostNotificationIndicators({
+          hostId: mockLocalHostEntry.hostId,
+          epicIds: ["epic-b"],
+          chatIds: [],
+          enabled: true,
+        }),
+      { wrapper: wholeOriginWrapper },
+    );
+    await act(async () => {
+      await flushQueryNotifications();
+    });
+    expect(messenger.calls).toHaveLength(2);
+    expect(messenger.calls[1]?.requiredHostMethodVersion).toBeNull();
+  });
+
   it("self-heals stale indicator data after a transport-exhausted refetch", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const queryClient = createAppQueryClient();

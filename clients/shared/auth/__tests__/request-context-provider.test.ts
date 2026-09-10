@@ -615,6 +615,145 @@ describe("DefaultRequestContextProvider - session verified announcement", () => 
   });
 });
 
+/**
+ * `announceCloudVerdictChanged()` / `onCloudVerdictChanged(...)`.
+ *
+ * Same driven-by-the-auth-boundary contract as `announceSessionVerified`
+ * above: none of `setSignedIn` / `setUnverified` / `rotateCurrentBearer` call
+ * this internally, so every test drives it directly.
+ */
+describe("DefaultRequestContextProvider - cloud verdict change announcement", () => {
+  it("invokes a registered listener when announced", () => {
+    const provider = createProvider();
+    const user = createAuthenticatedUserFixture({});
+    (user.user as { id: string }).id = "user-verdict";
+    provider.setSignedIn({
+      user,
+      bearerToken: "bearer-1",
+      operationId: undefined,
+      externalAbortSignal: undefined,
+    });
+
+    let callCount = 0;
+    provider.onCloudVerdictChanged(() => {
+      callCount += 1;
+    });
+
+    provider.announceCloudVerdictChanged();
+
+    expect(callCount).toBe(1);
+  });
+
+  it("is a no-op while signed out: no listener call with no prior setSignedIn", () => {
+    const provider = createProvider();
+    let called = false;
+    provider.onCloudVerdictChanged(() => {
+      called = true;
+    });
+
+    provider.announceCloudVerdictChanged();
+
+    expect(called).toBe(false);
+  });
+
+  /**
+   * THE DISCRIMINATING CASE. `setSignedIn` / `setUnverified` replace the
+   * context and emit `onChange`; a rebuilt transport asserts the verdict on
+   * its own fresh `open` frame, so announcing the verdict edge TOO on a mint
+   * would push a redundant (and, on `setUnverified`, premature) control frame
+   * onto a connection about to be replaced. Only the boundary's own explicit
+   * call may fire this signal.
+   */
+  it("a minted context (setSignedIn) does NOT itself announce the cloud verdict", () => {
+    const provider = createProvider();
+    let called = false;
+    provider.onCloudVerdictChanged(() => {
+      called = true;
+    });
+
+    const user = createAuthenticatedUserFixture({});
+    provider.setSignedIn({
+      user,
+      bearerToken: "bearer-1",
+      operationId: undefined,
+      externalAbortSignal: undefined,
+    });
+
+    expect(called).toBe(false);
+  });
+
+  it("the returned disposer removes the listener from future announcements", () => {
+    const provider = createProvider();
+    const user = createAuthenticatedUserFixture({});
+    provider.setSignedIn({
+      user,
+      bearerToken: "bearer-1",
+      operationId: undefined,
+      externalAbortSignal: undefined,
+    });
+
+    let callCount = 0;
+    const dispose = provider.onCloudVerdictChanged(() => {
+      callCount += 1;
+    });
+
+    dispose();
+    provider.announceCloudVerdictChanged();
+
+    expect(callCount).toBe(0);
+  });
+
+  it("throws when called after dispose(), matching every other imperative transition", () => {
+    const provider = createProvider();
+    const user = createAuthenticatedUserFixture({});
+    provider.setSignedIn({
+      user,
+      bearerToken: "bearer-1",
+      operationId: undefined,
+      externalAbortSignal: undefined,
+    });
+
+    let callCount = 0;
+    provider.onCloudVerdictChanged(() => {
+      callCount += 1;
+    });
+
+    provider.dispose();
+
+    expect(() => provider.announceCloudVerdictChanged()).toThrow(
+      /has been disposed/,
+    );
+    expect(callCount).toBe(0);
+  });
+
+  it("dispose() clears onCloudVerdictChanged subscribers registered before it", () => {
+    const provider = createProvider();
+    const user = createAuthenticatedUserFixture({});
+    provider.setSignedIn({
+      user,
+      bearerToken: "bearer-1",
+      operationId: undefined,
+      externalAbortSignal: undefined,
+    });
+
+    let called = false;
+    provider.onCloudVerdictChanged(() => {
+      called = true;
+    });
+
+    provider.dispose();
+
+    let calledAfterDisposeRegistration = false;
+    const dispose = provider.onCloudVerdictChanged(() => {
+      calledAfterDisposeRegistration = true;
+    });
+    dispose();
+
+    expect(called).toBe(false);
+    expect(calledAfterDisposeRegistration).toBe(false);
+  });
+});
+
 describe("RequestContextProvider - provider contract is raw-token-free (static guard)", () => {
   type ForbiddenRawTokenKeys =
     | "getToken"

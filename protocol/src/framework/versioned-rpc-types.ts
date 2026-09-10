@@ -42,6 +42,27 @@ export const RPC_ERROR_CODES = [
   // The caller's OWN agent lives on another host; the message names it, so
   // telling the caller where to go discloses nothing across accounts.
   "E_AGENT_NOT_LOCAL",
+  // A HOME-partitioned request (`clearAll@1.1`'s `home: "local"`) arrived
+  // while this host could not read local-home membership. RETRYABLE (503) and
+  // deliberately NOT collapsed into a generic failure: the alternative to
+  // refusing is guessing, and for a destructive clear the guess that matches
+  // the read path's fallback would widen "clear my local partition" into
+  // "clear the whole origin". The client shows a retry, not a failure.
+  "E_LOCAL_HOME_MEMBERSHIP_UNKNOWN",
+  // The caller's cloud verdict was withdrawn BETWEEN a resolver's pre-check
+  // and the wire. `BaseHTTPClient` resolves the caller's header reader after
+  // its own proxy-authorization await and refuses the send when it answers
+  // null, so nothing was sent - this is neither a server fault (500) nor a
+  // sign-out (401), and the same additive degrade story as
+  // E_INVALID_ARGUMENT applies.
+  //
+  // It exists as its own code because a CACHE has to name it. The host's
+  // idempotency cache retains every non-2xx so a retry cannot re-run a
+  // mutation that may have landed; a withdrawn credential is the case where
+  // the mutation demonstrably did NOT land, and without a distinct code the
+  // cache would have to guess from the 503 status, which several unrelated
+  // outcomes also carry.
+  "E_CLOUD_CREDENTIAL_WITHDRAWN",
   // A claim held by ANOTHER of the caller's own agents - a real authorization
   // error with role-specific copy, distinct from the generic epic-access
   // FORBIDDEN whose "check Task access" guidance would mislead here.

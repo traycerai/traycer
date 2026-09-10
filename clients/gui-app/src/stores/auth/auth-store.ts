@@ -96,6 +96,51 @@ export function admitsLocalPlane(status: AuthStatus): boolean {
 }
 
 /**
+ * {@link admitsLocalPlane} with the SHELL taken into account - the predicate a
+ * surface that decides where a person lands should read.
+ *
+ * `admitsLocalPlane` answers a question about the STATUS alone, and its
+ * `unverified` arm rests on a premise it cannot check: "the epics it would
+ * show are served from this machine's disk and need no network at all". That
+ * premise is false on a relay-only shell. A phone or a browser window has no
+ * local host, so every epic it can reach is served over the relay, and the
+ * relay is reached with a CLOUD credential (`authorizesCloudCapability`) that
+ * `unverified` by definition does not have. There is no local disk to fall
+ * back to and no remote host to attach to.
+ *
+ * Admitting that session put it in a workspace nothing could serve, and - the
+ * part that made it worse than a wrong screen - SILENTLY: the host directory's
+ * cardinality reads `unknown` rather than `zero` while the registry listing
+ * has never been fetched (deliberately, so a failed poll never tells a user
+ * with a live Mac to go connect a host), so the no-host guidance surface does
+ * not fire either, and the window narrator holds its tongue awaiting
+ * discovery. An empty page with no sentence on it.
+ *
+ * So the relay-only shell goes back to the auth surface, which is the one
+ * place that can say why and offer the only action that helps. A shell WITH a
+ * local host is unaffected: its premise still holds, and that is the case
+ * `unverified` was added for.
+ *
+ * Not a replacement for {@link admitsLocalPlane}: every surface that merely
+ * asks "may I render local-plane data" keeps reading that one, and stays
+ * mounted under `unverified` exactly as before. This is the narrower
+ * ADMISSION question - "is there a plane here at all" - and only the route
+ * bodies and the root layout ask it.
+ */
+export function admitsLocalPlaneOnShell(input: {
+  readonly status: AuthStatus;
+  readonly hasLocalHost: boolean;
+}): boolean {
+  if (!admitsLocalPlane(input.status)) return false;
+  // Positive statements, not a negation of the other arm: `signed-in` is
+  // admitted on any shell because it can mint the relay credential, and a new
+  // `AuthStatus` member has to be classified here rather than inheriting an
+  // answer from whichever branch it happens to miss.
+  if (input.status === "signed-in") return true;
+  return input.hasLocalHost;
+}
+
+/**
  * Whether this session may spend a CLOUD CAPABILITY - ask the account's servers
  * to issue something, or act on the account.
  *

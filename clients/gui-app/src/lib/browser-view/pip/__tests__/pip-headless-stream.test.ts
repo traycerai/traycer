@@ -72,6 +72,7 @@ function createScreencastClientHarness(): {
     isClosed: () => false,
     isReady: () => true,
     notifyBearerRotated() {},
+    notifyCloudVerdictChanged() {},
     reconnectAll() {},
     getMethodSupport: () => "unknown",
     subscribeMethodSupport: () => () => {},

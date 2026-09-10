@@ -404,6 +404,7 @@ function fakeRemoteSession(): FakeRemoteSession {
       throw new Error("not exercised by this test");
     }),
     notifyBearerRotated: vi.fn(),
+    notifyCloudVerdictChanged: vi.fn(),
     wake: vi.fn(),
     forceReconnect: vi.fn(),
     onClosed: () => () => undefined,
