@@ -618,6 +618,23 @@ interface ActiveConnection {
  */
 let nextRemoteEvidenceScope = 0;
 
+type StreamMethodCapability = {
+  readonly support: StreamMethodSupport;
+  readonly schemaVersion: SchemaVersion | null;
+};
+
+// Module constants, not literals at the return sites: the verdict is read as
+// a `useSyncExternalStore` snapshot, so even the "nothing known" answers must
+// keep one identity across reads.
+const UNKNOWN_STREAM_METHOD_CAPABILITY: StreamMethodCapability = {
+  support: "unknown",
+  schemaVersion: null,
+};
+const UNSUPPORTED_STREAM_METHOD_CAPABILITY: StreamMethodCapability = {
+  support: "unsupported",
+  schemaVersion: null,
+};
+
 export class RemoteSession<
   RpcRegistry extends VersionedRpcRegistry,
   StreamRegistry extends VersionedStreamRpcRegistry,
@@ -626,6 +643,20 @@ export class RemoteSession<
 {
   private readonly options: RemoteSessionOptions<RpcRegistry, StreamRegistry>;
   private readonly clientManifests: SessionManifests;
+  /**
+   * Per-method verdicts of {@link streamMethodCapability}, keyed on the host
+   * manifest object they were derived from. Everything else the verdict
+   * reads (`options.streamRegistry`, `clientManifests`) is fixed for the
+   * session's life, so the manifest object is the whole input. It is also
+   * the same clock the method-support listeners run on: `handleOpenAck`
+   * installs a new manifest and notifies, `teardownConnection` drops it and
+   * notifies - so a cached verdict can only change when a listener is told
+   * it changed. No explicit invalidation: a new manifest misses the cache.
+   */
+  private streamMethodCapabilityCache: {
+    readonly hostManifest: SessionManifests;
+    readonly byMethod: Map<string, StreamMethodCapability>;
+  } | null = null;
   /** `clientManifests.rpc` + `.optionalRpc` merged - the dispatch view. */
   private readonly clientRpcMerged: ConnectionManifest;
   /**
@@ -2877,15 +2908,42 @@ export class RemoteSession<
    * without opening a stream. A remote session has one peer manifest, so this
    * is the exact answer a fresh subscription would reach on its current
    * connection.
+   *
+   * Answered from {@link streamMethodCapabilityCache}, and the cache is for
+   * IDENTITY, not speed. `getMethodSupport` / `getMethodSchemaVersion` are
+   * read as `useSyncExternalStore` snapshots (gui-app's
+   * `useStreamMethodValueForClient`), and a snapshot has to hold one identity
+   * between notifications: React re-reads it after every commit, treats a
+   * fresh object as a change, commits again and reads again - fifty deep and
+   * it throws #185. `selectConnectionManifestForPeer` builds a new entry per
+   * call, so the client-canonical half of the answer below was a new object on
+   * every read whenever it won the minor comparison, which is whenever the
+   * host is at least as new as this client. The Start Page renders one such
+   * reader per remote host and crashed on open.
    */
-  private streamMethodCapability(method: string): {
-    readonly support: StreamMethodSupport;
-    readonly schemaVersion: SchemaVersion | null;
-  } {
+  private streamMethodCapability(method: string): StreamMethodCapability {
     const hostManifest = this.connection?.hostManifest;
     if (hostManifest === null || hostManifest === undefined) {
-      return { support: "unknown", schemaVersion: null };
+      return UNKNOWN_STREAM_METHOD_CAPABILITY;
     }
+    let cache = this.streamMethodCapabilityCache;
+    if (cache === null || cache.hostManifest !== hostManifest) {
+      cache = { hostManifest, byMethod: new Map() };
+      this.streamMethodCapabilityCache = cache;
+    }
+    const cached = cache.byMethod.get(method);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const computed = this.computeStreamMethodCapability(hostManifest, method);
+    cache.byMethod.set(method, computed);
+    return computed;
+  }
+
+  private computeStreamMethodCapability(
+    hostManifest: SessionManifests,
+    method: string,
+  ): StreamMethodCapability {
     const selectedClientManifest = selectConnectionManifestForPeer(
       this.options.streamRegistry,
       this.clientManifests.stream,
@@ -2894,7 +2952,7 @@ export class RemoteSession<
     const clientCanonical = selectedClientManifest[method];
     const hostCanonical = hostManifest.stream[method];
     if (clientCanonical === undefined || hostCanonical === undefined) {
-      return { support: "unsupported", schemaVersion: null };
+      return UNSUPPORTED_STREAM_METHOD_CAPABILITY;
     }
     const compatibility = checkStreamMethodCompatibility(
       this.options.streamRegistry,
@@ -2904,7 +2962,7 @@ export class RemoteSession<
       method,
     );
     if (!compatibility.ok) {
-      return { support: "unsupported", schemaVersion: null };
+      return UNSUPPORTED_STREAM_METHOD_CAPABILITY;
     }
     // `prepareStreamSubscribeRequest` declares the older same-major minor.
     // Compatibility above proved that either canonical can be selected safely;
