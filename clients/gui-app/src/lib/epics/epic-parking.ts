@@ -20,12 +20,37 @@
  *
  * ## Why the debounce is per EPIC, not per tab
  *
- * Decision C6: an epic shown in a second window (or a duplicated header view
- * in this one) is foreground, and one visible pane anywhere is enough. The
- * visible-view registry in `lib/browser-view/tiles/surface-host-opened-tab.ts`
- * already answers exactly that question - it is keyed by epic and view tab and
- * is already visible-if-any - so this module is its roll-up plus a clock, not
- * a second source of truth about visibility.
+ * Decision C6: an epic shown in a second pane is foreground, and one visible
+ * pane anywhere is enough. The visible-view registry in
+ * `lib/browser-view/tiles/surface-host-opened-tab.ts` answers exactly that
+ * question - it is keyed by epic and view tab and is already visible-if-any -
+ * so this module is its roll-up plus a clock, not a second source of truth
+ * about visibility.
+ *
+ * ## The roll-up spans VIEWS, not desktop windows - a known limitation
+ *
+ * C6 says "no visible pane for that epic in ANY window", and this reaches only
+ * the panes of ONE renderer. The visible-view registry is module state, each
+ * Electron `BrowserWindow` is its own renderer, and desktop epic ownership
+ * does NOT make that difference unobservable: `EpicWindowOwnership.claim`
+ * keys on `tabId`, not `epicId` (`getOwnerForEpic` exists and the claim path
+ * does not consult it), so two windows can hold live sessions for one epic at
+ * the same time. Window A can therefore park an epic that window B is showing.
+ *
+ * What that costs is bounded, and it is not the thing this plan exists to fix.
+ * Parking releases only the PARKING window's own subscriptions; window B keeps
+ * its session, its visible lease and therefore the host's slot, so no memory
+ * claim in plan C depends on A and B agreeing. The cost is that switching back
+ * to A re-establishes - against a host slot B is holding warm, which is the
+ * sub-second seed-hydrate path decision C5 already accepts.
+ *
+ * Closing it properly means propagating the roll-up through the desktop main
+ * process, which is a `clients/desktop` change (main-process state, an IPC
+ * channel, a preload bridge, and a browser fallback) and deliberately outside
+ * this ticket. Do not "fix" it by reading `ownership.snapshot()` here: that is
+ * async and reports every tab for the epic, hidden ones included, so it would
+ * turn "another window is SHOWING this" into "another window has it OPEN" and
+ * disable parking for the whole multi-window case.
  *
  * ## Why THIS module decides, and the provider only reacts
  *
@@ -142,18 +167,30 @@ function parkWindowElapsed(epicId: string, entry: EpicParkingEntry): void {
   const hiddenSinceMs = entry.hiddenSinceMs;
   if (hiddenSinceMs === null) return;
   if (isEpicSurfaceVisible(epicId)) return;
+  const nowMs = environment.clock.now();
+  const elapsedMs = nowMs - hiddenSinceMs;
+  // A clock that stepped BACKWARD - an NTP correction, a resume from sleep,
+  // the user setting the clock - leaves a baseline in the future. Re-base it
+  // and start a fresh window from the corrected clock.
+  //
+  // The shared session registry clamps this case instead (`Math.max(0, …)` on
+  // its own remainder) and this deliberately does not, because the clamp only
+  // bounds ONE re-arm: the baseline stays in the future, so the next callback
+  // reads a negative elapsed again and arms another full window, and another,
+  // until the clock catches up. A one-hour backward step therefore delays a
+  // park by about an hour in five-minute rounds, where re-basing delays it by
+  // one window. The registry's clamp is sound for a ten-minute TTL that also
+  // re-arms from a demand transition; nothing re-arms this one but the clock.
+  if (elapsedMs < 0) {
+    entry.hiddenSinceMs = nowMs;
+    scheduleParkCheck(epicId, entry, PARK_HIDDEN_EPIC_AFTER_MS);
+    return;
+  }
   // The remainder, never a fresh window: a background tab's throttled timer
   // fires late as often as early, and re-arming the full window on an early
-  // fire would double the time an unwatched epic stays resident. `Math.max`
-  // bounds a clock that stepped backward, which would otherwise produce a
-  // remainder longer than the window the epic was promised.
-  const elapsedMs = environment.clock.now() - hiddenSinceMs;
+  // fire would double the time an unwatched epic stays resident.
   if (elapsedMs < PARK_HIDDEN_EPIC_AFTER_MS) {
-    scheduleParkCheck(
-      epicId,
-      entry,
-      PARK_HIDDEN_EPIC_AFTER_MS - Math.max(0, elapsedMs),
-    );
+    scheduleParkCheck(epicId, entry, PARK_HIDDEN_EPIC_AFTER_MS - elapsedMs);
     return;
   }
   attemptPark(epicId, entry);

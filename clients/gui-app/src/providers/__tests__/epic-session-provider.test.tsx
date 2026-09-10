@@ -3554,6 +3554,11 @@ describe("<EpicSessionProvider />", () => {
     unsubscribeParkingSurface = null;
     __resetEpicParkingForTests();
     __resetAgentActivityStoreForTests();
+    // Both parking tests install fake timers and nothing else in this file or
+    // its setup restores them - every other fake-timer test here does it
+    // inline. Without this the two leak `shouldAdvanceTime` fakes into every
+    // test that runs after them.
+    vi.useRealTimers();
   });
 
   it("parks a mounted session (dropping the handle, closing the stream) and re-acquires a genuinely NEW one on show", async () => {

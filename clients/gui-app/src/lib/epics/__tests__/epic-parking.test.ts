@@ -136,6 +136,39 @@ describe("epic-parking - visibility roll-up (C6)", () => {
     }
   });
 
+  it("re-bases the window on a backward clock step instead of restarting it forever", () => {
+    // `Date.now()` moves backward on an NTP correction, a resume from sleep, or
+    // a user setting the clock. That leaves the hidden-since baseline in the
+    // FUTURE, so every later callback reads a negative elapsed. Clamping the
+    // remainder (what the shared session registry does) bounds one re-arm and
+    // not the sequence: the baseline never moves, so the epic re-arms a whole
+    // window per callback until the clock catches up - about an hour of
+    // five-minute rounds for an hour-long step. Re-basing costs one window.
+    const EPIC = "epic-park-backward-clock";
+    const unsub = trackEpicParkingSurface(EPIC, "view-clock");
+    try {
+      setEpicSurfaceVisibility(EPIC, "view-clock", false);
+      vi.advanceTimersByTime(60_000);
+      expect(isEpicParked(EPIC)).toBe(false);
+
+      // An hour backward, one minute into the window.
+      vi.setSystemTime(Date.now() - 60 * 60_000);
+
+      // The armed callback lands: elapsed reads about -55 minutes, so the
+      // baseline is re-based to now and ONE fresh window is armed.
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS - 60_000);
+      expect(isEpicParked(EPIC)).toBe(false);
+
+      // That one window is all it costs. Under the clamped-remainder version
+      // the baseline would still be an hour ahead here and this would arm yet
+      // another window instead of parking.
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS);
+      expect(isEpicParked(EPIC)).toBe(true);
+    } finally {
+      unsub();
+    }
+  });
+
   it("parks once the LAST visible window of the epic goes hidden", () => {
     const EPIC = "epic-park-second-window-b";
     const viewA = "view-a-last";
