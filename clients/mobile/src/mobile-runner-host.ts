@@ -109,6 +109,7 @@ import {
 } from "@traycer-clients/shared/host-selection/selection-authority-engine";
 import type { SelectionAuthorityClient } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
+import type { MobileAuthSheet } from "./auth-sheet";
 import type { MobilePushRegistration } from "./push-registration";
 
 export interface MobileRunnerHostOptions {
@@ -142,6 +143,13 @@ export interface MobileRunnerHostOptions {
    * would launch an installed production app instead.
    */
   readonly returnScheme: string | null;
+  /**
+   * The in-app sign-in sheet (see `auth-sheet.ts`), or `null` where no
+   * scheme is registered for it to intercept - the same cases as
+   * `returnScheme`. Constructed by the entry point so the plugin import stays
+   * out of this module's web-safe dependency set.
+   */
+  readonly authSheet: MobileAuthSheet | null;
   /**
    * Overrides where the selection authority's fleet membership comes from, or
    * `null` for the production answer (the registry list under the stored
@@ -252,7 +260,8 @@ export class MobileRunnerHost implements IRunnerHost {
   readonly linkCodeScanner: ILinkCodeScanner | null;
   readonly deviceDescriber: IDeviceDescriber | null;
   readonly linkLoginDeepLinks: ILinkLoginDeepLinkSource | null;
-  readonly deviceFlow: IDeviceFlowHost;
+  readonly deviceFlow: MobileDeviceFlowHost;
+  private readonly authSheet: MobileAuthSheet | null;
   /**
    * The phone's own notification switch. `null` wherever this shell cannot
    * both read the permission AND open the OS page to repair it (the dev web
@@ -305,6 +314,7 @@ export class MobileRunnerHost implements IRunnerHost {
     this.fileSave = options.fileSave;
     this.canCopyImages = options.canCopyImages;
     this.systemBack = options.systemBack;
+    this.authSheet = options.authSheet;
     this.notifications = buildNotifications(options.pushRegistration);
     this.pushPermission = buildPushPermission(
       options.pushRegistration,
@@ -319,6 +329,7 @@ export class MobileRunnerHost implements IRunnerHost {
       options.authnBaseUrl,
       options.hostLabel,
       options.returnScheme,
+      options.authSheet,
     );
     this.selectionAuthorityMount = createInProcessSelectionAuthority({
       fleet: this.selectionFleet,
@@ -608,12 +619,22 @@ export class MobileRunnerHost implements IRunnerHost {
   }
 
   async openExternalLink(url: string): Promise<void> {
-    // The system default browser, NOT an in-app SFSafariViewController sheet:
-    // since iOS 11 the sheet gets an app-isolated cookie jar, so the user's
-    // real Google/GitHub sessions never appear in it and every install
-    // re-authenticates from scratch. The device-flow sign-in has no redirect
-    // leg (the app polls), so leaving the app costs nothing - and the user's
-    // own browser brings their sessions, password manager and passkeys.
+    // The sign-in approval page goes to the in-app auth sheet (see
+    // `auth-sheet.ts`): the OS web-auth surface that shares the browser's
+    // cookies, password manager and passkeys and intercepts the return link
+    // itself. It is recognised by URL because the shared AuthService opens it
+    // through this same method, and the device-flow host owns the live
+    // attempt's URL - nothing in gui-app has to know the phone does this.
+    if (this.authSheet !== null && this.deviceFlow.isLiveVerificationUrl(url)) {
+      if (await this.authSheet.open(url)) {
+        return;
+      }
+      // The OS refused to present the sheet; the browser app still works.
+    }
+    // Every other link opens in the system default browser, NOT an in-app
+    // SFSafariViewController sheet: since iOS 11 that sheet gets an
+    // app-isolated cookie jar, so a GitHub or Google link there opens signed
+    // out. The user's own browser brings their sessions.
     await AppLauncher.openUrl({ url });
   }
 
@@ -637,21 +658,27 @@ export class MobileRunnerHost implements IRunnerHost {
   }
 
   onAuthCallback(handler: () => void): Disposable {
-    // The browser-return signal is the app coming back to the FOREGROUND, not
-    // a parsed callback URL. The `traycer://auth/callback` deep link the
-    // approval page fires exists only to make the OS switch back to this app -
-    // it carries no payload (see `IRunnerHost.onAuthCallback`), and once the
-    // WebView resumes, the shell's foreground edge (DOM visibility or native
-    // app-state, whichever reports first) is the same "the browser returned"
-    // fact. Resume, and not the App plugin's `appUrlOpen`, because
-    // resume ALSO covers the manual return - the user switching back by hand
-    // after the manual-code page, where no deep link is fired at all. (The
-    // App plugin's `appUrlOpen` still has nothing to add here, where the URL
-    // is payload-free by design; see `link-login-deep-links.ts` for the deep
-    // link that does carry one.)
-    // A resume with no in-flight attempt is a no-op in the consumer
-    // (`AuthService.handleReturnSignal` only collapses an active poll wait).
-    return this.systemResume.subscribe(handler);
+    // The browser-return signal is payload-free (see
+    // `IRunnerHost.onAuthCallback`): the `traycer://auth/callback` link the
+    // approval page fires carries nothing, and the token always arrives
+    // through the device-flow poll. Two sources feed it here. The
+    // foreground-resume edge covers the browser-app round trip and the manual
+    // return - the user switching back by hand after the manual-code page,
+    // where no link fires at all. The auth sheet adds its own edges, because
+    // under it the app never backgrounds: its completion on iOS, and the
+    // return link's `appUrlOpen` on Android - see `MobileAuthSheet.onReturn`.
+    // (The link-login deep link, which DOES carry a payload, is
+    // `link-login-deep-links.ts`.) A signal with no in-flight attempt is a
+    // no-op in the consumer (`AuthService.handleReturnSignal` only collapses
+    // an active poll wait).
+    const resume = this.systemResume.subscribe(handler);
+    const sheet = this.authSheet?.onReturn(handler) ?? null;
+    return {
+      dispose: () => {
+        resume.dispose();
+        sheet?.dispose();
+      },
+    };
   }
 
   onLocalHostChange(
@@ -688,10 +715,13 @@ export class MobileRunnerHost implements IRunnerHost {
 const DEVICE_FLOW_CLIENT_ID: DeviceClientId = "mobile";
 
 class MobileDeviceFlowHost implements IDeviceFlowHost {
+  private liveSession: MobileDeviceFlowSession | null = null;
+
   constructor(
     private readonly authnBaseUrl: string,
     private readonly hostLabel: string,
     private readonly returnScheme: string | null,
+    private readonly authSheet: MobileAuthSheet | null,
   ) {}
 
   async start(): Promise<DeviceFlowSession | null> {
@@ -703,11 +733,24 @@ class MobileDeviceFlowHost implements IDeviceFlowHost {
     if (authorization.kind !== "started") {
       return null;
     }
-    return new MobileDeviceFlowSession(
+    const session = new MobileDeviceFlowSession(
       this.authnBaseUrl,
       authorization,
       this.returnScheme,
+      this.authSheet,
     );
+    this.liveSession = session;
+    return session;
+  }
+
+  /**
+   * Whether `url` is the pre-filled approval page of the attempt in flight -
+   * the one URL that belongs in the in-app auth sheet. The GUI opens it once
+   * at sign-in and again from its "Open approval page" button, both through
+   * `openExternalLink`.
+   */
+  isLiveVerificationUrl(url: string): boolean {
+    return url === this.liveSession?.authorization.verificationUriComplete;
   }
 }
 
@@ -725,6 +768,7 @@ class MobileDeviceFlowSession implements DeviceFlowSession {
       { kind: "started" }
     >,
     returnScheme: string | null,
+    private readonly authSheet: MobileAuthSheet | null,
   ) {
     this.authorization = {
       userCode: started.userCode,
@@ -762,6 +806,9 @@ class MobileDeviceFlowSession implements DeviceFlowSession {
     this.abortController.abort();
     this.wakePoll?.();
     this.handlers.clear();
+    // The attempt is over (superseded, timed out, or signed out); a sheet
+    // left up would cover an app that has already moved on.
+    this.authSheet?.close();
   }
 
   private async run(): Promise<void> {
@@ -848,8 +895,12 @@ class MobileDeviceFlowSession implements DeviceFlowSession {
       handler(result);
     }
     this.handlers.clear();
-    // Nothing to dismiss here: the verification page lives in the system
-    // browser (see `openExternalLink`), outside this app's control.
+    // A sheet still up over a settled attempt has nothing left to show: the
+    // approval was observed by the poll, or the code it displays is dead. A
+    // denial stays - that page is where the user reads what happened.
+    if (result.kind === "authorized" || result.kind === "expired") {
+      this.authSheet?.close();
+    }
   }
 }
 
