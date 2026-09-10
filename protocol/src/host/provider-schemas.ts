@@ -404,9 +404,12 @@ export type ProviderManagedInstallErrorReason = z.infer<
  * observer reports `downloading` with no percent and the renderer shows an
  * indeterminate indicator. Every percent consumer must handle null.
  *
- * The `error` arm and the nullable percent are ADDITIVE ON THE UNRELEASED 6.0
- * LINE. No released tag (`host-v*`/`cli-v*`/`desktop-v*` through 1.1.8) ships
- * `providers.list@6.0`, which is what makes growing this union legal at all;
+ * The `error` arm and the nullable percent were ADDITIVE ON THE THEN-UNRELEASED
+ * 6.0 LINE. No released tag through 1.1.8 shipped `providers.list@6.0`, which
+ * is what made growing this union legal AT THE TIME. It no longer is:
+ * `released-baseline-surface.json` carries `providers.list` at canonical 8.0
+ * with every major from 1 through 8 installed, so 6.0 is frozen like the rest
+ * and a further arm opens a new major.
  * the released 5.0 and earlier lines are frozen and their downgrade bridges
  * strip the field wholesale. Accepted, stated plainly: a client old enough to
  * negotiate 6.0 but predating the `error` arm normalizes it to `null` through
@@ -1327,8 +1330,10 @@ export const providerProfileSchema = z.object({
   apiKey: providerProfileApiKeyStateSchema.nullable().catch(null).optional(),
   // Copyable command for opening this managed account directly in its CLI.
   // The host owns the absolute config path and shell quoting; ambient rows and
-  // hosts that predate this field omit it. Kept inside v8.0 because that line
-  // is still the unreleased live head opened by profile eligibility.
+  // hosts that predate this field omit it. Landed inside v8.0 while that line
+  // was the unreleased live head opened by profile eligibility; the baseline
+  // now carries `providers.list` at canonical 8.0, so it is the released head
+  // and the next field here opens v9.0 rather than widening this one.
   launchCommand: z
     .object({
       command: z.string(),

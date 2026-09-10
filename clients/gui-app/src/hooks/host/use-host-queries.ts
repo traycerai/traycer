@@ -61,6 +61,16 @@ export interface UseHostQueriesOptions<
    * refuses that dispatch as a `HostRpcError` with nothing sent.
    */
   readonly preflight?: () => void;
+  /**
+   * See `UseHostQueriesWithResponseMapOptions.requiredHostMethodVersion`.
+   *
+   * Declared on the PUBLIC option shape as well as on the implementation's,
+   * because these are the types the overloads actually accept - adding it only
+   * where the option is read left every caller of `useHostQueries` unable to
+   * pass it, which vitest cannot see and the compile rejects. Inherited by
+   * `UseHostQueriesWithCombineOptions`, so both overloads are covered here.
+   */
+  readonly requiredHostMethodVersion?: () => RequiredHostMethodVersion | null;
 }
 
 export interface UseHostQueriesWithCombineOptions<

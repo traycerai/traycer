@@ -5055,4 +5055,94 @@ describe("<NotificationsSessionProvider />", () => {
       expect(resetSpy).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe("retained-principal signing-in interruption (openActivityLane dependency binding)", () => {
+    it("reopens agent activity after a same-account signing-in interruption that leaves every other input to openForCurrentUser unchanged", async () => {
+      // The RETAINED PRINCIPAL: signed in, then interrupted by a device-flow
+      // re-auth for the SAME account, established BEFORE mount.
+      // `useAuthStore.setSigningIn` (auth-store.ts) merges into the store
+      // rather than replacing it, so `profile` / `contextMetadata` - and
+      // therefore `userId` - survive the flip untouched.
+      //
+      // This is deliberately the transition that changes NONE of
+      // `openForCurrentUser`'s other captured inputs across the interruption:
+      // the host (`hostState.id`), the stream client (`streamState.client`,
+      // one `MockWsStreamClient` instance for the whole test - never
+      // reassigned), and every unary/stream negotiation
+      // (`stageNotificationPartitionFloors()` in `beforeEach` already staged
+      // this host's floors and nothing here disturbs them) all stay put. The
+      // only thing that moves is `status`, which sits in `openActivityLane`'s
+      // OWN dependency list but must also be threaded through
+      // `openForCurrentUser`'s - a caller that reads status only through the
+      // lane opener, never directly.
+      const queryClient = new QueryClient();
+      const streamClient = new MockWsStreamClient();
+      hostState.id = mockLocalHostEntry.hostId;
+      streamState.client = streamClient;
+      streamState.cloudFeedSupport = "supported";
+      // `@/hooks/host/use-host-client-for`'s mock (top of this file) calls
+      // `hostState.client.createRequester(target)` fresh on EVERY render,
+      // unlike the real `useHostClientFor`, which memoizes. That per-render
+      // identity change flows into `onFeedFrame`'s own deps
+      // (`servingHostClient`), so `onFeedFrame` - and, through it,
+      // `openForCurrentUser` - would be rebuilt on every render regardless of
+      // `openActivityLane`, masking exactly the staleness this case exists to
+      // catch. Pin `createRequester` to one stable instance so nothing but
+      // the auth transition below can invalidate `openForCurrentUser`.
+      // Narrowed into a local before use: `hostState.client` is nullable, and
+      // `vi.spyOn` on a possibly-null target is a type error rather than a
+      // runtime one - invisible to the runner, caught by the compile.
+      const spineClient = hostState.client;
+      if (spineClient === null) {
+        throw new Error("expected a bound host client for this case");
+      }
+      const stableServingHostClient =
+        spineClient.createRequester(mockLocalHostEntry);
+      vi.spyOn(spineClient, "createRequester").mockReturnValue(
+        stableServingHostClient,
+      );
+
+      act(() => {
+        resetAuth("signed-in", "alice@example.com", "alice@example.com");
+        useAuthStore.getState().setSigningIn("device");
+      });
+
+      render(
+        <QueryClientProvider client={queryClient}>
+          <NotificationsSessionProvider>
+            <div />
+          </NotificationsSessionProvider>
+        </QueryClientProvider>,
+      );
+
+      // Suspended for signing-in: `admitsLocalPlane` is false for that status,
+      // so the mount pass tears down (a no-op - nothing was open yet) and
+      // opens nothing at all.
+      expect(streamClient.subscribedMethods).toEqual([]);
+
+      act(() => {
+        resetAuth("signed-in", "alice@example.com", "alice@example.com");
+      });
+
+      // Positive premise first: the ordinary lanes reopen regardless of the
+      // bug under test - the host feed is not gated on `openActivityLane` at
+      // all, so a suite that only checked this would pass whether or not the
+      // fix is present.
+      await waitFor(() => {
+        expect(streamClient.subscribedMethods).toContain(
+          "host.notifications.feed.subscribe",
+        );
+      });
+      // The actual regression: with either dependency array missing
+      // `openActivityLane`, the reopen above runs through a STALE
+      // `openForCurrentUser` closure that still calls the `openActivityLane`
+      // captured while `status` was "signing-in" - which refuses on
+      // `!admitsLocalPlane("signing-in")` even though the account is signed
+      // in again right now - so agent activity silently never comes back for
+      // this session.
+      expect(streamClient.subscribedMethods).toContain(
+        "agent.activity.subscribe",
+      );
+    });
+  });
 });

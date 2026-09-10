@@ -1027,8 +1027,11 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
     // the renderer can observe; only a dispatch-bound floor closes the one
     // between a settled render and the frame being written.
     //
-    // Its sibling `list` is deliberately NOT here: `@2.2` REFUSES a
-    // downgrade carrying `home`, so that peer already fails loudly.
+    // Its sibling `list` carries the same floor, three pagers down. It was
+    // briefly excluded here on the grounds that `@2.2` REFUSES a downgrade
+    // carrying `home`, which is true and irrelevant: a downgrade path bridges
+    // MAJORS, and a rollback to `@2.1` never reaches one. Left as written,
+    // that sentence would have contradicted the floors two functions away.
     requiredHostMethodVersion: () =>
       sendsHomeSelector
         ? {

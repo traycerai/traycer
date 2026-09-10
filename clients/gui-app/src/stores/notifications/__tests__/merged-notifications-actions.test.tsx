@@ -1351,7 +1351,14 @@ describe("useMergedNotificationsActions indicator invalidation", () => {
       attention: { entries: [], nextCursor: null },
       recent: {
         entries: [hostDone("list-floor-entry", 1, null)],
-        nextCursor: "cursor-1",
+        // The real cursor SHAPE, not a placeholder string: the mocked
+        // transport never parses it, so a bare `"cursor-1"` runs green here
+        // and is rejected only by the compile.
+        nextCursor: {
+          kind: "chronological",
+          updatedAt: 1,
+          id: "list-floor-entry",
+        },
       },
       summary: { unreadCount: 1, attentionCount: 0 },
     });
