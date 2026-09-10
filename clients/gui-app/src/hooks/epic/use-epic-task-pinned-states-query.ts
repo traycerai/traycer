@@ -145,18 +145,37 @@ export function useEpicTaskPinnedStates(
     combine: combineTaskPinnedStateResults,
   });
 
-  // One cursorless `epic.listTasks` per host that owns a local-homed open tab.
-  // Usually one host, often zero; the hosts come from the epics' own sessions,
-  // so this never fans out across the whole directory the way the tab
-  // reconciler deliberately does.
+  // One cursorless `epic.listTasks` per host that owns a local-homed open tab,
+  // re-asked when that host's local-homed population changes. Usually one host,
+  // often zero; the hosts come from the epics' own sessions, so this never fans
+  // out across the whole directory the way the tab reconciler deliberately does.
   const localHomedByHost = useLocalHomedOpenEpicHostIds(epicIds);
-  const pinReadingHostIds = useMemo(
-    () =>
-      [...new Set(localHomedByHost.values())].sort((left, right) =>
-        left.localeCompare(right),
-      ),
-    [localHomedByHost],
-  );
+  // Each host's reading is keyed by the POPULATION it has to answer for, not by
+  // the host alone, and that is R8: the params are constant and
+  // `staleTime: Infinity`, so one key per host meant exactly one list RPC per
+  // host for the life of the session. A local-homed epic that appeared after
+  // that page - created here, created in another window, or simply learned from
+  // another session - was absent from the cached response forever, and absent is
+  // what `pinnedKnown: false` reports. The tab was stuck claiming nobody had
+  // answered until something invalidated the cache by hand.
+  //
+  // Keyed on MEMBERSHIP and never on missingness, which is the distinction that
+  // keeps this terminating. An epic entering the population changes the key once
+  // and costs one fetch; a row the host genuinely omits (it is not that host's,
+  // or it has no durable pin) is then still absent and nothing asks again,
+  // because the population has not changed. A policy of "refetch while some open
+  // epic has no reading" would read its own output and never stop.
+  const pinReadingPopulations = useMemo(() => {
+    const byHost = new Map<string, Array<string>>();
+    for (const [epicId, hostId] of localHomedByHost) {
+      const population = byHost.get(hostId);
+      if (population === undefined) byHost.set(hostId, [epicId]);
+      else population.push(epicId);
+    }
+    return [...byHost.entries()]
+      .map(([hostId, population]) => ({ hostId, population }))
+      .sort((left, right) => left.hostId.localeCompare(right.hostId));
+  }, [localHomedByHost]);
   const pinReadingParams = useMemo(
     () => ({
       limit: LOCAL_HOME_PIN_READING_LIMIT,
@@ -182,7 +201,7 @@ export function useEpicTaskPinnedStates(
   // `resolveNamedHostClient` is the sanctioned binding resolver (AGENTS.md) and
   // is a plain function, which is what lets this run per host rather than one
   // `useHostClientForHostId` per component.
-  for (const hostId of pinReadingHostIds) {
+  for (const { hostId } of pinReadingPopulations) {
     const ownerClient = resolveNamedHostClient(binding, hostId);
     if (ownerClient !== null) {
       registerCloudEpicTasksClient(hostId, ownerClient);
@@ -192,11 +211,16 @@ export function useEpicTaskPinnedStates(
     queries:
       userId === null
         ? []
-        : pinReadingHostIds.map((hostId) => ({
+        : pinReadingPopulations.map(({ hostId, population }) => ({
             ...epicPinReadingListQueryOptions({
               hostId,
               userId,
               params: pinReadingParams,
+              // THIS host's local-homed epics only. A population built from every
+              // host would re-key - and so re-fetch - each host's reading
+              // whenever any other host's tabs changed, which is a fan-out the
+              // per-host shape exists to avoid.
+              population,
             }),
             // NOT gated on the cloud verdict, and that is the point of using
             // this line: the local rows are synthesized from the host's own

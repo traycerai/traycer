@@ -38,7 +38,12 @@ import type {
 
 const EPIC_LOCAL = "epic-local";
 const EPIC_CLOUD = "epic-cloud";
+/** A local-homed epic that appears AFTER the owner's page was fetched (R8). */
+const EPIC_DISCOVERED = "epic-discovered";
+/** A local-homed epic on a second host, for the cross-host isolation control. */
+const EPIC_ON_OTHER_HOST = "epic-other-host";
 const OWNER_HOST_ID = "host-owner";
+const OTHER_HOST_ID = "host-other-owner";
 const WINDOW_HOST_ID = "host-window";
 const USER_ID = "user-1";
 
@@ -74,6 +79,15 @@ const transport = vi.hoisted(() => {
     listenersByHostId: Map<string, Set<() => void>>;
     /** `epic.setPinned` dispatches, so Undo can be shown to reach the owner. */
     mutations: Array<{ hostId: string; params: unknown }>;
+    /**
+     * Hosts whose list dispatches PARK instead of answering, until
+     * `releaseDispatches`. Without this the fake answers inside the same `act()`
+     * that triggered it, so an in-flight state has no window to be observed in -
+     * and a "while it is loading" assertion would pass or fail on scheduling
+     * rather than on behaviour.
+     */
+    heldHostIds: Set<string>;
+    parkedByHostId: Map<string, Array<(response: unknown) => void>>;
   } = {
     dispatched: [],
     responseByHostId: new Map(),
@@ -81,6 +95,8 @@ const transport = vi.hoisted(() => {
     contextUserByHostId: new Map(),
     listenersByHostId: new Map(),
     mutations: [],
+    heldHostIds: new Set(),
+    parkedByHostId: new Map(),
   };
   return state;
 });
@@ -109,6 +125,31 @@ function arriveRequestContext(hostId: string, userId: string | null): void {
   }
 }
 
+/**
+ * The host's answer to a list dispatch - immediate, or parked until the test
+ * releases it. A parked dispatch is answered with the host's page as it stands AT
+ * RELEASE, which is what a host that learns about an epic mid-flight does.
+ */
+function listResponseFor(hostId: string): Promise<unknown> {
+  if (!transport.heldHostIds.has(hostId)) {
+    return Promise.resolve(transport.responseByHostId.get(hostId));
+  }
+  return new Promise((resolve) => {
+    const parked = transport.parkedByHostId.get(hostId) ?? [];
+    parked.push(resolve);
+    transport.parkedByHostId.set(hostId, parked);
+  });
+}
+
+/** Answers every parked list dispatch for `hostId` with its current page. */
+function releaseDispatches(hostId: string): void {
+  const parked = transport.parkedByHostId.get(hostId) ?? [];
+  transport.parkedByHostId.set(hostId, []);
+  for (const resolve of parked) {
+    resolve(transport.responseByHostId.get(hostId));
+  }
+}
+
 function makeClient(hostId: string) {
   return {
     getActiveHostId: () => hostId,
@@ -127,7 +168,7 @@ function makeClient(hostId: string) {
     },
     requestWithSignal: (_method: string, params: unknown) => {
       transport.dispatched.push({ hostId, params, withVersionFloor: false });
-      return Promise.resolve(transport.responseByHostId.get(hostId));
+      return listResponseFor(hostId);
     },
     // The real `useHostMutation` dispatches here when no version requirement is
     // attached, which is the case for `epic.setPinned`.
@@ -158,7 +199,7 @@ function makeClient(hostId: string) {
       params: unknown,
     ) => {
       transport.dispatched.push({ hostId, params, withVersionFloor: true });
-      return Promise.resolve(transport.responseByHostId.get(hostId));
+      return listResponseFor(hostId);
     },
   };
 }
@@ -237,13 +278,17 @@ function renderPinnedStates(epicIds: ReadonlyArray<string>) {
   });
 }
 
-function ownerDispatches(): ReadonlyArray<DispatchedRequest> {
+function dispatchesTo(hostId: string): ReadonlyArray<DispatchedRequest> {
   return transport.dispatched
-    .filter((call) => call.hostId === OWNER_HOST_ID)
+    .filter((call) => call.hostId === hostId)
     .map((call) => ({
       params: call.params as ListTasksRequest,
       withVersionFloor: call.withVersionFloor,
     }));
+}
+
+function ownerDispatches(): ReadonlyArray<DispatchedRequest> {
+  return dispatchesTo(OWNER_HOST_ID);
 }
 
 /**
@@ -278,6 +323,8 @@ describe("the pin write and its Undo reach the real reading", () => {
     transport.resolvableHostIds.clear();
     transport.contextUserByHostId.clear();
     transport.listenersByHostId.clear();
+    transport.heldHostIds.clear();
+    transport.parkedByHostId.clear();
     __resetCloudEpicTasksClientsForTests();
     transport.resolvableHostIds.add(OWNER_HOST_ID);
     transport.responseByHostId.set(
@@ -339,6 +386,204 @@ describe("the pin write and its Undo reach the real reading", () => {
   });
 });
 
+/**
+ * R8 - a local-homed epic that appears AFTER this host's page was fetched.
+ *
+ * The defect: the key was `(host, user, params)` with constant params and
+ * `staleTime: Infinity`, so exactly one list RPC per host happened for the life of
+ * the session. An epic that became local-homed later was absent from the cached
+ * response, and absent is what `pinnedKnown: false` reports - permanently, until
+ * something invalidated the cache by hand. The tab strip offered Pin for an epic
+ * that was already pinned, which is the R1 symptom re-entering through staleness.
+ *
+ * The arrival here is DISCOVERY, not a local create: nothing in these cases calls
+ * `epic.create`, and `epic.create`'s own cache patch could not fix this anyway
+ * (see `cache.ts` - a `TaskLight` has nowhere to carry `home`, and a fabricated
+ * `pinned: false` presented as a reading is the defect `pinnedKnown` exists to
+ * prevent). The session registry learning of the epic is the signal, which is what
+ * makes another window's create, a reconnect, and a fresh local-home verdict all
+ * the same case.
+ */
+describe("the pin reading follows the local-homed population (R8)", () => {
+  function renderForIds(initialIds: ReadonlyArray<string>) {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    return renderHook(
+      (ids: ReadonlyArray<string>) => useEpicTaskPinnedStates(ids),
+      { initialProps: initialIds, wrapper: makeWrapper(queryClient) },
+    );
+  }
+
+  /** The registry learns that `hostId` holds `epicIds`, as a live session would. */
+  function registryReports(
+    pairs: ReadonlyArray<readonly [string, string]>,
+  ): void {
+    registryState.localHomedEpicIds = new Set(pairs.map(([epicId]) => epicId));
+    registryState.localHomedByHost = new Map(pairs);
+  }
+
+  beforeEach(() => {
+    hostQueriesCalls.length = 0;
+    transport.dispatched.length = 0;
+    transport.mutations.length = 0;
+    transport.responseByHostId.clear();
+    transport.resolvableHostIds.clear();
+    transport.contextUserByHostId.clear();
+    transport.listenersByHostId.clear();
+    transport.heldHostIds.clear();
+    transport.parkedByHostId.clear();
+    __resetCloudEpicTasksClientsForTests();
+    transport.resolvableHostIds.add(OWNER_HOST_ID);
+    transport.responseByHostId.set(
+      OWNER_HOST_ID,
+      page([localRow(EPIC_LOCAL, true)]),
+    );
+    registryReports([[EPIC_LOCAL, OWNER_HOST_ID]]);
+    useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
+  });
+
+  afterEach(() => {
+    cleanup();
+    useAuthStore.getState().setSignedOut();
+  });
+
+  it("reads an epic DISCOVERED after the page, with no manual refresh", async () => {
+    useAuthStore.setState({ status: "unverified" });
+
+    const { result, rerender } = renderForIds([EPIC_LOCAL]);
+    await waitFor(() => {
+      expect(result.current.get(EPIC_LOCAL)?.pinnedKnown).toBe(true);
+    });
+    expect(ownerDispatches()).toHaveLength(1);
+
+    // The host now holds a second local-homed epic, and it is PINNED - so the
+    // pre-fix state is not merely incomplete, it renders "Pin" for an epic that is
+    // already pinned and inverts it on click.
+    transport.responseByHostId.set(
+      OWNER_HOST_ID,
+      page([localRow(EPIC_LOCAL, true), localRow(EPIC_DISCOVERED, true)]),
+    );
+    registryReports([
+      [EPIC_LOCAL, OWNER_HOST_ID],
+      [EPIC_DISCOVERED, OWNER_HOST_ID],
+    ]);
+    rerender([EPIC_LOCAL, EPIC_DISCOVERED]);
+
+    // Nothing below invalidates, refetches or remounts anything: the population is
+    // part of the key, so the question itself changed and TanStack asks it.
+    await waitFor(() => {
+      expect(result.current.get(EPIC_DISCOVERED)?.pinnedKnown).toBe(true);
+    });
+    expect(result.current.get(EPIC_DISCOVERED)?.pinned).toBe(true);
+    // ...and the row that was already answered is answered again by the wider
+    // page, so the arrival costs knowledge only while the read is in flight (the
+    // case below pins that window).
+    expect(result.current.get(EPIC_LOCAL)?.pinned).toBe(true);
+    expect(result.current.get(EPIC_LOCAL)?.pinnedKnown).toBe(true);
+    expect(ownerDispatches()).toHaveLength(2);
+  });
+
+  /**
+   * The COST of keying on the population, pinned rather than left to be
+   * rediscovered: a new population is a new cache entry, so for the duration of
+   * one local list read the rows this host had already answered report
+   * `pinnedKnown: false` again.
+   *
+   * It is not fixable with `placeholderData: (previous) => previous` - that idiom
+   * needs the observer to outlive the key change, and `QueriesObserver` matches
+   * observers by `queryHash` alone, so a changed key constructs a fresh observer
+   * with no previous data to hand the placeholder function. This case was written
+   * asserting the opposite first and failed, which is how that was established.
+   *
+   * Unknown is the conservative direction anyway: it WITHHOLDS the pin action for
+   * a moment, where carrying one population's page into another's entry would be
+   * presenting an answer that population never gave.
+   */
+  it("returns an answered row to unknown while the wider page is in flight, and recovers when it lands", async () => {
+    useAuthStore.setState({ status: "unverified" });
+
+    const { result, rerender } = renderForIds([EPIC_LOCAL]);
+    await waitFor(() => {
+      expect(result.current.get(EPIC_LOCAL)?.pinnedKnown).toBe(true);
+    });
+
+    // Park the second dispatch, so "while it is in flight" is a state this can
+    // assert in rather than a race with the fake's own microtask.
+    transport.heldHostIds.add(OWNER_HOST_ID);
+    transport.responseByHostId.set(
+      OWNER_HOST_ID,
+      page([localRow(EPIC_LOCAL, true), localRow(EPIC_DISCOVERED, true)]),
+    );
+    registryReports([
+      [EPIC_LOCAL, OWNER_HOST_ID],
+      [EPIC_DISCOVERED, OWNER_HOST_ID],
+    ]);
+    rerender([EPIC_LOCAL, EPIC_DISCOVERED]);
+
+    await waitFor(() => {
+      expect(ownerDispatches()).toHaveLength(2);
+    });
+    // Both rows are unknown while the page the wider question needs is in flight
+    // - and `pinned` falls back to the filler `false`, which `pinnedKnown: false`
+    // is what marks as filler.
+    expect(result.current.get(EPIC_LOCAL)?.pinnedKnown).toBe(false);
+    expect(result.current.get(EPIC_DISCOVERED)?.pinnedKnown).toBe(false);
+    // The window is bounded by that one read, not by anything the user has to do.
+    await act(async () => {
+      releaseDispatches(OWNER_HOST_ID);
+    });
+    await waitFor(() => {
+      expect(result.current.get(EPIC_DISCOVERED)?.pinnedKnown).toBe(true);
+    });
+    expect(result.current.get(EPIC_LOCAL)?.pinnedKnown).toBe(true);
+    expect(result.current.get(EPIC_LOCAL)?.pinned).toBe(true);
+  });
+
+  it("control - another host's population change does not re-ask this host", async () => {
+    useAuthStore.setState({ status: "unverified" });
+    transport.resolvableHostIds.add(OTHER_HOST_ID);
+    transport.responseByHostId.set(
+      OTHER_HOST_ID,
+      page([localRow(EPIC_ON_OTHER_HOST, true)]),
+    );
+    registryReports([
+      [EPIC_LOCAL, OWNER_HOST_ID],
+      [EPIC_ON_OTHER_HOST, OTHER_HOST_ID],
+    ]);
+
+    const { result, rerender } = renderForIds([EPIC_LOCAL, EPIC_ON_OTHER_HOST]);
+    await waitFor(() => {
+      expect(result.current.get(EPIC_LOCAL)?.pinnedKnown).toBe(true);
+      expect(result.current.get(EPIC_ON_OTHER_HOST)?.pinnedKnown).toBe(true);
+    });
+    expect(ownerDispatches()).toHaveLength(1);
+    expect(dispatchesTo(OTHER_HOST_ID)).toHaveLength(1);
+
+    // A third local-homed epic appears on the OTHER host only.
+    transport.responseByHostId.set(
+      OTHER_HOST_ID,
+      page([localRow(EPIC_ON_OTHER_HOST, true), localRow(EPIC_DISCOVERED, true)]),
+    );
+    registryReports([
+      [EPIC_LOCAL, OWNER_HOST_ID],
+      [EPIC_ON_OTHER_HOST, OTHER_HOST_ID],
+      [EPIC_DISCOVERED, OTHER_HOST_ID],
+    ]);
+    rerender([EPIC_LOCAL, EPIC_ON_OTHER_HOST, EPIC_DISCOVERED]);
+
+    await waitFor(() => {
+      expect(result.current.get(EPIC_DISCOVERED)?.pinnedKnown).toBe(true);
+    });
+    // The host whose population changed re-asked; the other host did NOT. A
+    // population built from every host - or a blanket invalidation of the reading
+    // family - would have re-fetched both, which is the fan-out the per-host key
+    // exists to avoid.
+    expect(dispatchesTo(OTHER_HOST_ID)).toHaveLength(2);
+    expect(ownerDispatches()).toHaveLength(1);
+  });
+});
+
 describe("useEpicTaskPinnedStates - the unverified pin reading (R1)", () => {
   beforeEach(() => {
     hostQueriesCalls.length = 0;
@@ -348,6 +593,8 @@ describe("useEpicTaskPinnedStates - the unverified pin reading (R1)", () => {
     transport.contextUserByHostId.clear();
     transport.listenersByHostId.clear();
     transport.mutations.length = 0;
+    transport.heldHostIds.clear();
+    transport.parkedByHostId.clear();
     // The by-host-id client registry is MODULE-global, so a registration from an
     // earlier case outlives it - which silently made the "owner not reachable"
     // control below dispatch anyway the first time it was written.

@@ -53,11 +53,33 @@ export const cloudQueryKeys = {
    * reset/replaced as a paged list, and sharing its key would tie a tab-strip
    * glyph to that lifecycle. The trailing marker is what keeps the two apart
    * under `hostMethod`, which both would otherwise share.
+   *
+   * `population` is the local-homed OPEN epic ids this reading has to cover on
+   * this host, and it is part of the key because the consumer reads MEMBERSHIP
+   * out of the response, not just field values. The request is identical for
+   * every population - the host injects its whole local-homed set on the
+   * cursorless page - but a page fetched while the population was `{A}` is not an
+   * ANSWER for `{A, B}`: B is absent from it, and absent is reported as
+   * `pinnedKnown: false`. With `staleTime: Infinity` and one stable key that
+   * state was permanent until a manual refresh (R8).
+   *
+   * Sorted HERE rather than at the caller, so two callers holding the same set in
+   * different orders cannot fork it into two cache entries and two RPCs - tab
+   * order is not a fact about the question being asked. Plain `.sort()` and
+   * deliberately NOT `localeCompare`: collation depends on the runtime's locale
+   * data, and a cache key may not.
+   *
+   * Position matters and is load-bearing for two existing predicates:
+   * `userId` stays at index 4 (`epicPinReadingQueryKeyMatchesScope`) and the
+   * marker stays last (`isEpicPinReadingQueryKey`), so the pin WRITE keeps
+   * matching every population variant for a host/user - which is what makes a
+   * key this hook returns to later already correct rather than stale.
    */
   epicPinReading: (
     hostId: string,
     userId: string,
     request: Omit<ListTasksRequest, "cursor">,
+    population: ReadonlyArray<string>,
   ): readonly unknown[] => [
     ...hostQueryKeys.method<HostRpcRegistry, "epic.listTasks">(
       hostId,
@@ -65,6 +87,7 @@ export const cloudQueryKeys = {
       request,
     ),
     userId,
+    [...population].sort(),
     EPIC_PIN_READING_DISCRIMINATOR,
   ],
 };
