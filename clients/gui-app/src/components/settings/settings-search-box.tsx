@@ -1,4 +1,4 @@
-import { useId, useMemo, useState, type ReactNode } from "react";
+import { useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { ChevronRight, Search, X } from "lucide-react";
 import {
   InputGroup,
@@ -46,6 +46,7 @@ export function SettingsSearch(props: SettingsSearchProps): ReactNode {
   // Reset to the top on every query change, because result 3 of the previous
   // query has nothing to do with result 3 of this one.
   const [highlighted, setHighlighted] = useState(0);
+  const inputRef = useRef<HTMLInputElement | null>(null);
   // The input owns focus the whole time, so the highlighted option is exposed
   // to assistive tech through `aria-activedescendant` — which needs the list
   // and every option to have an id the input can point at.
@@ -110,6 +111,7 @@ export function SettingsSearch(props: SettingsSearchProps): ReactNode {
           <Search className="size-3.5" aria-hidden />
         </InputGroupAddon>
         <InputGroupInput
+          ref={inputRef}
           type="text"
           value={query}
           onChange={(event) => {
@@ -169,13 +171,17 @@ export function SettingsSearch(props: SettingsSearchProps): ReactNode {
               type="button"
               size="icon-xs"
               aria-label="Clear settings search"
-              // Clearing unmounts this button, so if it took focus on press,
-              // focus would fall to the document and the next keystroke would
-              // search nothing. It never takes it: the input keeps focus.
+              // Clearing unmounts this button, so if it held focus, focus
+              // would fall to the document and the next keystroke would
+              // search nothing. Two routes reach it: a pointer press, which
+              // never takes focus from the input, and a keyboard activation
+              // (Tab, then Enter or Space), which already has it — so the
+              // click hands focus back to the input explicitly as well.
               onMouseDown={(event) => event.preventDefault()}
               onClick={() => {
                 onQueryChange("");
                 setHighlighted(0);
+                inputRef.current?.focus();
               }}
             >
               <X className="size-3.5" aria-hidden />

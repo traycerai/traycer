@@ -133,6 +133,26 @@ describe("<SettingsSearch /> focus under the pointer", () => {
     await user.keyboard("zoom");
     expect(combobox()).toHaveProperty("value", "zoom");
   });
+
+  it("returns focus to the combobox after the clear button is activated by keyboard", async () => {
+    // A keyboard user reaches the button by Tab, so it DOES hold focus when
+    // it clears — and clearing unmounts it. Pointer-only handling would let
+    // focus fall to the document here.
+    const user = userEvent.setup();
+    render(<Harness />);
+    await user.type(combobox(), "theme");
+
+    await user.tab();
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Clear settings search" }),
+    );
+    await user.keyboard("{Enter}");
+
+    expect(combobox()).toHaveProperty("value", "");
+    expect(document.activeElement).toBe(combobox());
+    await user.keyboard("zoom");
+    expect(combobox()).toHaveProperty("value", "zoom");
+  });
 });
 
 describe("<SettingsSearch /> selection", () => {
