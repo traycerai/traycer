@@ -9,6 +9,7 @@ import {
 } from "@traycer-clients/shared/replica-runtime";
 import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
 import { appLogger } from "@/lib/logger";
+import { epicHoldsUnsavedDraft } from "@/lib/epics/epic-draft-guard";
 import { useSyncExternalStore } from "react";
 import {
   agentActivityPlaneAnswers,
@@ -338,9 +339,51 @@ function holdsNothingToLose(state: OpenEpicState): boolean {
  * checked, open transport or not.
  */
 function epicIsBusy(epicId: string, hostId: string): boolean {
+  return epicIsBusyAcrossHosts(epicId, [hostId]);
+}
+
+/**
+ * {@link epicIsBusy} over every host an Epic has live state on, not just the
+ * one its own session is bound to. A park disposes the chat plane too, and a
+ * chat can be served from a different host - coverage is per host, so checking
+ * only the epic's host can pass while the plane is blind to the host whose
+ * chats are about to go.
+ */
+function epicIsBusyAcrossHosts(
+  epicId: string,
+  hostIds: Iterable<string>,
+): boolean {
   if (!agentActivityPlaneAnswers()) return true;
   if (hasActiveAgentWork(epicId)) return true;
-  return !agentActivityPlaneCoversHost(hostId);
+  for (const hostId of hostIds) {
+    if (!agentActivityPlaneCoversHost(hostId)) return true;
+  }
+  return false;
+}
+
+/**
+ * The chat plane's half of the park verdict, injected rather than imported.
+ *
+ * The dependency has to run this way round: `lib/registries/chat-session-registry.ts`
+ * imports `lib/epics/epic-parking.ts`, which imports THIS module, so importing
+ * the chat registry here would close a cycle - and a cycle through a module
+ * with import-time subscriptions is how ten unrelated suites died at module
+ * load last round. The downstream module registers the probe instead.
+ *
+ * Absent probe answers "no chat state", which is the correct reading anywhere
+ * the chat plane is not wired up at all (tests, the TUI shell).
+ */
+export interface EpicChatWorkProbe {
+  (epicId: string): {
+    readonly unsettled: boolean;
+    readonly hostIds: readonly string[];
+  };
+}
+
+let chatWorkProbe: EpicChatWorkProbe | null = null;
+
+export function setEpicChatWorkProbe(probe: EpicChatWorkProbe | null): void {
+  chatWorkProbe = probe;
 }
 
 /**
@@ -829,13 +872,49 @@ export class OpenEpicSessionRegistry {
    * demand-must-be-zero check would refuse the second.
    */
   canPark(epicId: string): boolean {
+    // THE GATE THAT IS NOT ABOUT THE SESSION, and it goes first because it is
+    // the cheapest and the least conditional: an editor inside the subtree this
+    // park would UNMOUNT is holding text that exists nowhere else
+    // (`lib/epics/epic-draft-guard.ts`). A comment composer writes nothing
+    // outside its Tiptap instance until Submit, and a chat inline edit lives in
+    // the tile's own reducer, so both leave the epic store perfectly clean and
+    // every other gate here reads yes. Plan C's contract is that a parked tab
+    // keeps its UI state, and losing typed text is the loudest way to break it.
+    //
+    // It protects what is MOUNTED, which is the whole of what it can protect: a
+    // surface the retention cap already unmounted has lost that text before any
+    // park is considered. See the boundary section in `epic-draft-guard.ts`.
+    //
+    // `lib/epics/epic-parking.ts` watches this signal too, so a park refused
+    // for a draft re-attempts the moment the draft is submitted or cleared,
+    // rather than waiting for a fresh hide edge that may never come.
+    if (epicHoldsUnsavedDraft(epicId)) return false;
     const entry = this.sessions.peekEntry(epicId);
-    if (entry === null) return true;
-    const handle = entry.session.handle;
-    return (
-      holdsNothingToLose(handle.store.getState()) &&
-      !epicIsBusy(epicId, handle.hostId)
-    );
+    const chat = chatWorkProbe?.(epicId) ?? {
+      unsettled: false,
+      hostIds: [] as readonly string[],
+    };
+    // The chat plane is part of the ONE verdict, taken before any plane is
+    // released. A park disposes every chat under the epic, so a chat still
+    // holding work has to be able to refuse it here - after the release there
+    // is nothing left to ask.
+    if (chat.unsettled) return false;
+    const hostIds = new Set<string>(chat.hostIds);
+    if (entry !== null) {
+      const handle = entry.session.handle;
+      if (!holdsNothingToLose(handle.store.getState())) return false;
+      hostIds.add(handle.hostId);
+    }
+    // A MISSING ENTRY IS NOT A YES, and used to be: this returned true the
+    // moment the epic had no session, which skipped the busy check and the
+    // coverage check wholesale. An epic pruned from the warm pool routinely
+    // still has chats under their own 10-minute TTL, so the early yes let a
+    // park force-dispose live chats for an epic with a working agent, and let
+    // it do so while the activity plane was unanswered. With no session and no
+    // chats there genuinely is nothing to lose or release, which is the only
+    // case that still short-circuits.
+    if (hostIds.size === 0) return !hasActiveAgentWork(epicId);
+    return !epicIsBusyAcrossHosts(epicId, hostIds);
   }
 
   /**
@@ -871,9 +950,12 @@ export class OpenEpicSessionRegistry {
    */
   park(epicId: string): boolean {
     return this.sessions.transact(() => {
+      // The verdict FIRST, unconditionally. Reading the entry first and
+      // answering `true` for a missing one skipped the verdict entirely for
+      // exactly the epics that still had chats to lose - see `canPark`.
+      if (!this.canPark(epicId)) return false;
       const entry = this.sessions.peekEntry(epicId);
       if (entry === null) return true;
-      if (!this.canPark(epicId)) return false;
       // Stated rather than defaulted, as `retireIfDead` states it: a park only
       // ever runs on a session with nothing to lose, so there is no retention
       // question to answer and a stale answer from an earlier call must not be

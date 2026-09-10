@@ -88,6 +88,13 @@
  * reclaimed for its duration - the pre-parking behaviour, and recoverable -
  * where the cost of guessing wrong the other way is not.
  *
+ * The one input to that verdict this window owns rather than the host is
+ * `lib/epics/epic-draft-guard.ts`: unsaved user-typed text in an editor the
+ * release would UNMOUNT. It is still not a second opinion - `canPark` reads it
+ * as one more gate, and this module only WATCHES it, exactly as it watches the
+ * registry's own eligibility edge, because a park refused for a draft has to
+ * re-attempt when that draft settles.
+ *
  * ## What parking does NOT have to release
  *
  * `BrowserSessionsProvider` sits outside the session gate in
@@ -102,6 +109,7 @@ import {
   isEpicSurfaceVisible,
   subscribeEpicSurfaceVisibility,
 } from "@/lib/browser-view/tiles/surface-host-opened-tab";
+import { subscribeEpicDraftGuard } from "@/lib/epics/epic-draft-guard";
 import {
   isEpicVisibleInAnotherWindow,
   subscribeCrossWindowEpicVisibility,
@@ -250,18 +258,80 @@ function attemptPark(epicId: string, entry: EpicParkingEntry): void {
 }
 
 /**
- * The window has elapsed and the epic still holds work. Wait for the registry
- * to say it has settled rather than re-arming a clock: the registry already
- * emits on exactly the two facts `canPark` reads, so a timer here would be a
- * second, slower way of learning something we are told.
+ * The window has elapsed and the epic still holds work. Wait to be told it has
+ * settled rather than re-arming a clock: both sources below emit on exactly
+ * the facts `canPark` reads, so a timer here would be a second, slower way of
+ * learning something we are told.
+ *
+ * TWO sources for one verdict, because `canPark` has two kinds of input. The
+ * registry emits on the session's own work - unsynced edits, an agent's turn.
+ * The draft guard emits on the RENDERER's: text sitting in a composer that
+ * this park would unmount out of existence (`lib/epics/epic-draft-guard.ts`),
+ * which the epic store never hears about and the registry therefore cannot
+ * announce. A park deferred for a draft has to re-attempt when that draft is
+ * submitted or cleared, and nothing else would ever wake it: the hide edge
+ * that armed the window has already happened and may never happen again.
  */
 function waitForEligibility(epicId: string, entry: EpicParkingEntry): void {
   if (entry.unwatchEligibility !== null) return;
-  entry.unwatchEligibility = getOpenEpicRegistry().subscribe(() => {
+  const retry = (): void => {
     if (entry.parked) return;
     if (isEpicVisibleAnywhere(epicId)) return;
     attemptPark(epicId, entry);
+  };
+  const unwatchRegistry = getOpenEpicRegistry().subscribe(retry);
+  const unwatchDrafts = subscribeEpicDraftGuard((changedEpicId) => {
+    if (changedEpicId !== epicId) return;
+    retry();
   });
+  entry.unwatchEligibility = () => {
+    unwatchRegistry();
+    unwatchDrafts();
+  };
+}
+
+/**
+ * Re-attempt every park this window deferred for want of eligibility.
+ *
+ * The watch above listens to the OPEN-EPIC registry, which emits off a
+ * per-session eligibility key - so it is silent for precisely the case that
+ * needs it most: an epic with no session entry of its own, whose park was
+ * refused because its CHATS still held work. Nothing about that epic will ever
+ * move the open-epic registry, and the park window has already elapsed, so
+ * without this the deferral is permanent and the epic is never reclaimed.
+ *
+ * Called by the plane that just settled, from
+ * `lib/registries/chat-session-registry.ts` - which owns the cross-plane wiring
+ * because it is downstream of both and can import either without closing a
+ * cycle.
+ */
+let retryingDeferredParks = false;
+
+export function retryDeferredEpicParks(): void {
+  // RE-ENTRANT BY CONSTRUCTION, and guarded rather than reasoned about: this
+  // runs on the chat registry's change signal, and a park that SUCCEEDS here
+  // disposes that epic's chats, which makes the chat registry emit again from
+  // inside this very loop. The recursion terminates on its own - a parked entry
+  // short-circuits and there are finitely many - but the cost of being wrong
+  // about that is a hung renderer, and the cost of the guard is a boolean.
+  if (retryingDeferredParks) return;
+  retryingDeferredParks = true;
+  try {
+    retryDeferredEpicParksOnce();
+  } finally {
+    retryingDeferredParks = false;
+  }
+}
+
+function retryDeferredEpicParksOnce(): void {
+  for (const [epicId, entry] of Array.from(entries)) {
+    // Only epics whose window has already elapsed and whose park was refused;
+    // an entry still counting down keeps its timer.
+    if (entry.unwatchEligibility === null) continue;
+    if (entry.parked) continue;
+    if (isEpicVisibleAnywhere(epicId)) continue;
+    attemptPark(epicId, entry);
+  }
 }
 
 /**

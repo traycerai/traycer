@@ -19,7 +19,11 @@ import {
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
 import { openOwnedDurableStreamClient } from "@/lib/host/owned-durable-stream-client";
 import { useOpenEpicId } from "@/lib/epic-selectors";
-import { isEpicParked, subscribeEpicParking } from "@/lib/epics/epic-parking";
+import {
+  isEpicParked,
+  retryDeferredEpicParks,
+  subscribeEpicParking,
+} from "@/lib/epics/epic-parking";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
@@ -36,6 +40,7 @@ import {
   createStreamFlushCoordinator,
 } from "@/stores/chats/stream-flush-coordinator";
 import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
+import { setEpicChatWorkProbe } from "@/stores/epics/open-epic/session-registry";
 import { getRetentionProfile } from "@/stores/replica-memory/retention-profile";
 
 const registry = new ChatSessionRegistry({
@@ -85,6 +90,22 @@ export function __getChatSessionRegistryForTests(): ChatSessionRegistry {
 export function getChatSessionRegistry(): ChatSessionRegistry {
   return registry;
 }
+
+// The cross-plane wiring for a park verdict, both halves anchored HERE because
+// this module is downstream of both: it already imports `epic-parking`, which
+// imports the open-epic registry, so it can reach either without closing a
+// cycle - and neither of them can reach the chat registry without one.
+//
+// Registering the probe is what lets `canPark` see a chat holding work before
+// the epic-level decision force-disposes it; the subscription is the other half
+// and is not optional. A park refused for chat work waits on the OPEN-EPIC
+// registry's signal, which an epic with no session entry never emits, so
+// without this the refusal is permanent for exactly the epics whose chats
+// caused it.
+setEpicChatWorkProbe((epicId) => registry.unsettledWorkForEpic(epicId));
+registry.subscribe(() => {
+  retryDeferredEpicParks();
+});
 
 export function getChatSessionHandleHostId(
   handle: ChatSessionStoreHandle,

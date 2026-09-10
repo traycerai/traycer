@@ -16,6 +16,7 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import type { HostRpcRegistry } from "@/lib/host";
+import { useEpicDraftGuard } from "@/lib/epics/use-epic-draft-guard";
 import { useMentionCollaboratorsForClient } from "@/hooks/comments/use-mention-collaborators";
 import {
   MentionSuggestionList,
@@ -127,6 +128,20 @@ export function CommentComposer(props: CommentComposerProps) {
   const [suggestionState, setSuggestionState] =
     useState<SuggestionRenderState | null>(null);
   const [isEmpty, setIsEmpty] = useState(initialContent === null);
+  // "The user has changed this document", which is NOT "the document is
+  // non-empty": an edit composer opens holding a saved comment, and closing it
+  // untouched loses nothing. Tiptap fires `onUpdate` only for a transaction
+  // that actually changed the doc - never for the initial `content`, and never
+  // for a caret move - so the first call IS the first user edit.
+  const [hasUserEdits, setHasUserEdits] = useState(false);
+  // The park veto (`lib/epics/epic-draft-guard.ts`). This editor is the only
+  // place its text exists until Submit fires the host RPC, and every one of
+  // this composer's mount points sits inside the subtree a park unmounts - the
+  // sidebar's thread cards, the collab tile's floating draft popover. Both
+  // clauses are load-bearing: without `hasUserEdits` a pristine edit composer
+  // would veto forever, and without `!isEmpty` an editor the user emptied
+  // would too, though there is no longer any text to lose.
+  useEpicDraftGuard(epicId, hasUserEdits && !isEmpty);
 
   // Stable refs so closures inside `useEditor`'s deps-`[]` capture do not
   // see a stale callback once the parent re-renders with new handlers.
@@ -249,6 +264,7 @@ export function CommentComposer(props: CommentComposerProps) {
       },
       onUpdate({ editor: e }) {
         setIsEmpty(e.isEmpty);
+        setHasUserEdits(true);
       },
     },
     // Editor identity is intentionally tile-stable: rebuilding would lose
@@ -277,6 +293,13 @@ export function CommentComposer(props: CommentComposerProps) {
         if (editor === null) return;
         editor.commands.clearContent();
         setIsEmpty(true);
+        // AFTER the command, for the same reason `setIsEmpty` is: whether
+        // `clearContent` emits an update is Tiptap's business, and if it does,
+        // its `onUpdate` has already latched `hasUserEdits` by the time this
+        // line runs. Stating the post-reset answer here is what makes the
+        // caller's success path withdraw the park veto rather than hold it
+        // over an editor that is now empty.
+        setHasUserEdits(false);
       },
       focus() {
         editor?.commands.focus("end");

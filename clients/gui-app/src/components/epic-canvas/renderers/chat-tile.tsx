@@ -117,6 +117,7 @@ import {
 } from "@/hooks/composer/use-workspace-mention-roots";
 import { useChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { useEpicParked } from "@/lib/epics/epic-parking";
+import { useEpicDraftGuard } from "@/lib/epics/use-epic-draft-guard";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import {
@@ -2047,6 +2048,17 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     uiState.inlineEdit,
     state,
   );
+  // The park veto (`lib/epics/epic-draft-guard.ts`). An inline edit's
+  // `currentContent` lives in this tile's own `chatTileUiReducer` state and is
+  // written nowhere else until Submit, so a park - which unmounts this tile
+  // with the rest of the canvas - would take it with it. The composer's own
+  // draft needs no such guard: it snapshots into `composer-draft-store` on
+  // every document change and outlives the unmount.
+  //
+  // `dirty` and not merely "an edit is open": opening one seeds
+  // `currentContent` from the saved message, so a pristine edit loses nothing
+  // and must not hold the epic resident.
+  useEpicDraftGuard(currentEpicId, activeInlineEdit?.dirty ?? false);
 
   const displayedMessages = useMemo(() => {
     if (activeInlineEdit === null) return renderedMessages;

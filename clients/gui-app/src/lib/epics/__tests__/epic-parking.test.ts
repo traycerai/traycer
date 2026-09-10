@@ -18,7 +18,9 @@ import {
 import {
   __resetAgentActivityStoreForTests,
   __setAgentActivityPlaneAnsweringForTests,
+  __setHostAgentActivityHealthForTests,
 } from "@/stores/agent-activity-store";
+import { __resetEpicDraftGuardForTests } from "@/lib/epics/epic-draft-guard";
 import {
   publishAgentActivity,
   resetAgentActivity,
@@ -29,7 +31,11 @@ import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { TabRef } from "@/stores/tabs/types";
-import { createChatSessionStore } from "@/stores/chats/chat-session-store";
+import {
+  createChatSessionStore,
+  type ChatSessionStoreHandle,
+  type PendingChatAction,
+} from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 import {
@@ -135,6 +141,99 @@ function markAgentWorking(epicId: string, agentId: string): void {
       byEpic: { [epicId]: { working: [agentId], turn: [agentId] } },
     },
   ]);
+}
+
+// ── Chat-plane fixtures for the canPark/park chat-gating pins ──────────────
+//
+// `unsettledWorkForEpic` is exercised through the REAL production wiring
+// here (`chat-session-registry.ts`'s module-scope `setEpicChatWorkProbe` +
+// `registry.subscribe(() => retryDeferredEpicParks())`), not a fake probe -
+// this file already imports that module for `__getChatSessionRegistryForTests`
+// / `disposeAllChatSessions`, which is what installs it at import time.
+
+function noopChatStreamClientFactory() {
+  return {
+    sendAction: () => undefined,
+    sameTurnSteeringProtocolSupported: () => true,
+    requestTranscriptRange: () => undefined,
+    requestResnapshot: () => undefined,
+    close: () => undefined,
+  };
+}
+
+function buildTestChatHandle(epicId: string, chatId: string, hostId: string) {
+  return createChatSessionStore({
+    environment: CHAT_STORE_TEST_ENVIRONMENT,
+    hostId,
+    epicId,
+    chatId,
+    userId: null,
+    onAuthError: null,
+    onProviderAuthError: null,
+    // Required since #1815's syncing bar; this fixture never redials.
+    wakeTransport: null,
+    streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
+    streamClientFactory: noopChatStreamClientFactory,
+  });
+}
+
+/** Minimal valid `PendingChatAction`, matching `chat-queue-reconciler.test.ts`'s own fixture. */
+function pendingChatActionFixture(clientActionId: string): PendingChatAction {
+  return {
+    clientActionId,
+    action: "send",
+    queueItemId: null,
+    interviewBlockId: null,
+    interviewDeliveryRetry: null,
+    messageId: "msg-1",
+    restore: {
+      content: {
+        type: "doc",
+        content: [
+          { type: "paragraph", content: [{ type: "text", text: "Hello" }] },
+        ],
+      },
+      browserAnnotations: [],
+    },
+    sender: { type: "user", userId: "user-1" },
+    settings: {
+      harnessId: "codex",
+      model: "gpt-5-codex",
+      permissionMode: "supervised",
+      reasoningEffort: "high",
+      serviceTier: null,
+      agentMode: "epic",
+      profileId: null,
+    },
+    restoreWorktreeIntent: null,
+    displayWorktreeIntent: null,
+    messageConfirmedByHost: false,
+    accountContext: null,
+    deliveryPolicy: null,
+    createdAt: 1000,
+    connectionEpoch: 0,
+  };
+}
+
+/** The `activeTurn` shape `hasActiveChatWork` reads, matching the chats' own fixture. */
+function markChatActiveTurn(handle: ChatSessionStoreHandle): void {
+  handle.store.setState({
+    runStatus: "running",
+    activeTurn: {
+      agentMode: "regular",
+      sameTurnSteeringSupported: false,
+      turnId: "turn-1",
+      status: "running",
+      harnessId: "codex",
+      model: "gpt-5-codex",
+      profileId: null,
+      userMessageId: "message-1",
+      startedAt: 1,
+      updatedAt: 1,
+      reasoningEffort: null,
+      serviceTier: null,
+    },
+  });
 }
 
 describe("epic-parking - visibility roll-up (C6)", () => {
@@ -800,6 +899,398 @@ describe("epic-parking - B2: cross-window visibility", () => {
     } finally {
       closeEpicTab(TAB);
       uninstall();
+    }
+  });
+});
+
+// ── Codex review pins 1-4: canPark/park now consult the chat plane, and a
+// missing OpenEpicSessionRegistry entry no longer short-circuits to "yes" ──
+//
+// Before this fix, `canPark` read only the epic store (`holdsNothingToLose`)
+// and the agent-activity plane (`epicIsBusy`); `park`/`canPark` both answered
+// `true` the instant an epic had no live open-epic session, skipping every
+// gate. Parking then force-disposes every chat under the epic through
+// `ChatSessionRegistry.disposeForEpic`, so either gap destroyed a chat
+// holding unacknowledged work. These pins drive the REAL production wiring
+// (`setEpicChatWorkProbe` / `unsettledWorkForEpic`, installed at import time
+// by `lib/registries/chat-session-registry.ts`, which this file already
+// imports for `__getChatSessionRegistryForTests`), not a fake probe.
+describe("epic-parking - chat plane gating & missing-entry safeguard (Codex review pins 1-4)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    __setAgentActivityPlaneAnsweringForTests();
+    // These pins are about the CHAT plane's gate specifically; a stray held
+    // draft from another suite (or a future third `canPark` gate ahead of the
+    // chat check) must not be what refuses the park here.
+    __resetEpicDraftGuardForTests();
+  });
+
+  afterEach(() => {
+    __resetEpicParkingForTests();
+    __getOpenEpicRegistryForTests().disposeAll();
+    disposeAllChatSessions();
+    __resetAgentActivityStoreForTests();
+    __resetEpicDraftGuardForTests();
+    resetCanvasStore();
+    vi.useRealTimers();
+  });
+
+  // Pin 1, positive arm: a chat's `pendingActions` entry blocks the park.
+  // THE ARM THAT MATTERS is the chat surviving - the bug destroyed it via
+  // `disposeForEpic` before this line was ever consulted.
+  it("does not park while a chat holds a pending action, and the chat survives (pin 1)", () => {
+    const EPIC = "epic-park-chat-pending-action-pin1";
+    const TAB = "tab-park-chat-pending-action-pin1";
+    const CHAT_ID = "chat-pending-action-pin1";
+    const HOST_ID = "test-host";
+    const chatRegistry = __getChatSessionRegistryForTests();
+    const epicHandle = buildParkableEpicHandle(EPIC, false);
+    __getOpenEpicRegistryForTests().acquireMounted(
+      EPIC,
+      () => epicHandle.handle,
+    );
+
+    const chatHandle = buildTestChatHandle(EPIC, CHAT_ID, HOST_ID);
+    chatRegistry.acquire(
+      {
+        epicId: EPIC,
+        chatId: CHAT_ID,
+        hostId: HOST_ID,
+        scopeKey: "pin1-scope",
+      },
+      () => chatHandle,
+    );
+    chatHandle.store.setState({
+      pendingActions: { "action-1": pendingChatActionFixture("action-1") },
+    });
+
+    openEpicTab(TAB, EPIC);
+    try {
+      setEpicSurfaceVisibility(EPIC, "view-pin1", false);
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS * 3);
+
+      expect(isEpicParked(EPIC)).toBe(false);
+      expect(epicHandle.disposed).toBe(false);
+      expect(chatRegistry.peek(EPIC, CHAT_ID, HOST_ID)).not.toBeNull();
+    } finally {
+      closeEpicTab(TAB);
+    }
+  });
+
+  // Pin 1, control arm: the same shape with NO pending action parks
+  // normally, proving the refusal above is about the pending action and not
+  // some unrelated property of the fixture.
+  it("parks normally once a chat has no pending action (pin 1 control)", () => {
+    const EPIC = "epic-park-chat-no-pending-action-pin1";
+    const TAB = "tab-park-chat-no-pending-action-pin1";
+    const CHAT_ID = "chat-no-pending-action-pin1";
+    const HOST_ID = "test-host";
+    const chatRegistry = __getChatSessionRegistryForTests();
+    const epicHandle = buildParkableEpicHandle(EPIC, false);
+    __getOpenEpicRegistryForTests().acquireMounted(
+      EPIC,
+      () => epicHandle.handle,
+    );
+
+    const chatHandle = buildTestChatHandle(EPIC, CHAT_ID, HOST_ID);
+    chatRegistry.acquire(
+      {
+        epicId: EPIC,
+        chatId: CHAT_ID,
+        hostId: HOST_ID,
+        scopeKey: "pin1-control-scope",
+      },
+      () => chatHandle,
+    );
+
+    openEpicTab(TAB, EPIC);
+    try {
+      setEpicSurfaceVisibility(EPIC, "view-pin1-control", false);
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS * 3);
+
+      expect(isEpicParked(EPIC)).toBe(true);
+      expect(epicHandle.disposed).toBe(true);
+      expect(chatRegistry.peek(EPIC, CHAT_ID, HOST_ID)).toBeNull();
+    } finally {
+      closeEpicTab(TAB);
+    }
+  });
+
+  // Pin 2: `hasActiveChatWork` states (activeTurn / runStatus / pendingApprovals
+  // / pendingFileEditApprovals / pendingInterviews) gate the park too, not only
+  // `pendingActions` - pinning that `unsettledWorkForEpic` covers both
+  // predicates behind `hasUnsettledChatWork`.
+  it("does not park while a chat has an active turn (hasActiveChatWork), not only a pending action (pin 2)", () => {
+    const EPIC = "epic-park-chat-active-turn-pin2";
+    const TAB = "tab-park-chat-active-turn-pin2";
+    const CHAT_ID = "chat-active-turn-pin2";
+    const HOST_ID = "test-host";
+    const chatRegistry = __getChatSessionRegistryForTests();
+    const epicHandle = buildParkableEpicHandle(EPIC, false);
+    __getOpenEpicRegistryForTests().acquireMounted(
+      EPIC,
+      () => epicHandle.handle,
+    );
+
+    const chatHandle = buildTestChatHandle(EPIC, CHAT_ID, HOST_ID);
+    chatRegistry.acquire(
+      {
+        epicId: EPIC,
+        chatId: CHAT_ID,
+        hostId: HOST_ID,
+        scopeKey: "pin2-scope",
+      },
+      () => chatHandle,
+    );
+    markChatActiveTurn(chatHandle);
+
+    openEpicTab(TAB, EPIC);
+    try {
+      setEpicSurfaceVisibility(EPIC, "view-pin2", false);
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS * 3);
+
+      expect(isEpicParked(EPIC)).toBe(false);
+      expect(epicHandle.disposed).toBe(false);
+      expect(chatRegistry.peek(EPIC, CHAT_ID, HOST_ID)).not.toBeNull();
+    } finally {
+      closeEpicTab(TAB);
+    }
+  });
+
+  // Pin 3a: a missing OpenEpicSessionRegistry entry used to answer `true`
+  // immediately, skipping the chat check wholesale. A live chat holding work
+  // must still refuse the park, and survive, with NO epic session at all.
+  it("refuses a park with no epic session entry while a chat still holds work, and the chat survives (pin 3a)", () => {
+    const EPIC = "epic-park-missing-entry-chat-pin3a";
+    const TAB = "tab-park-missing-entry-chat-pin3a";
+    const CHAT_ID = "chat-missing-entry-pin3a";
+    const HOST_ID = "host-missing-entry-pin3a";
+    const chatRegistry = __getChatSessionRegistryForTests();
+
+    const chatHandle = buildTestChatHandle(EPIC, CHAT_ID, HOST_ID);
+    chatRegistry.acquire(
+      {
+        epicId: EPIC,
+        chatId: CHAT_ID,
+        hostId: HOST_ID,
+        scopeKey: "pin3a-scope",
+      },
+      () => chatHandle,
+    );
+    chatHandle.store.setState({
+      pendingActions: { "action-1": pendingChatActionFixture("action-1") },
+    });
+
+    openEpicTab(TAB, EPIC);
+    try {
+      // Sanity: genuinely no open-epic session for this epic.
+      expect(__getOpenEpicRegistryForTests().get(EPIC)).toBeNull();
+
+      setEpicSurfaceVisibility(EPIC, "view-pin3a", false);
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS * 3);
+
+      expect(isEpicParked(EPIC)).toBe(false);
+      expect(chatRegistry.peek(EPIC, CHAT_ID, HOST_ID)).not.toBeNull();
+    } finally {
+      closeEpicTab(TAB);
+    }
+  });
+
+  // Pin 3b: the SAME missing-entry shape, but the chat itself has already
+  // settled - the refusal here has to come from the activity plane failing
+  // CLOSED (`epicIsBusyAcrossHosts` reading `agentActivityPlaneAnswers()` as
+  // false) over the chat's own host, which only reaches the verdict through
+  // `hostIds` because there is no session to supply one.
+  it("refuses a park with no epic session entry while the activity plane cannot vouch, even though the chat has settled (pin 3b)", () => {
+    __resetAgentActivityStoreForTests();
+    const EPIC = "epic-park-missing-entry-blind-plane-pin3b";
+    const TAB = "tab-park-missing-entry-blind-plane-pin3b";
+    const CHAT_ID = "chat-missing-entry-blind-plane-pin3b";
+    const HOST_ID = "host-missing-entry-blind-plane-pin3b";
+    const chatRegistry = __getChatSessionRegistryForTests();
+
+    // Settled by construction - no pending action, no active turn.
+    const chatHandle = buildTestChatHandle(EPIC, CHAT_ID, HOST_ID);
+    chatRegistry.acquire(
+      {
+        epicId: EPIC,
+        chatId: CHAT_ID,
+        hostId: HOST_ID,
+        scopeKey: "pin3b-scope",
+      },
+      () => chatHandle,
+    );
+
+    openEpicTab(TAB, EPIC);
+    try {
+      expect(__getOpenEpicRegistryForTests().get(EPIC)).toBeNull();
+
+      setEpicSurfaceVisibility(EPIC, "view-pin3b", false);
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS * 3);
+
+      expect(isEpicParked(EPIC)).toBe(false);
+      expect(chatRegistry.peek(EPIC, CHAT_ID, HOST_ID)).not.toBeNull();
+    } finally {
+      closeEpicTab(TAB);
+    }
+  });
+
+  // Pin 3c: with NEITHER a session NOR any chats, there is genuinely nothing
+  // to lose or release - the one case that still short-circuits. This is the
+  // arm that would catch a guard broad enough to never let anything park
+  // again (e.g. deleting the `hostIds.size === 0` branch entirely).
+  it("parks with no session and no chats at all (pin 3c)", () => {
+    const EPIC = "epic-park-missing-entry-empty-pin3c";
+    const TAB = "tab-park-missing-entry-empty-pin3c";
+
+    openEpicTab(TAB, EPIC);
+    try {
+      expect(__getOpenEpicRegistryForTests().get(EPIC)).toBeNull();
+
+      setEpicSurfaceVisibility(EPIC, "view-pin3c", false);
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS * 3);
+
+      expect(isEpicParked(EPIC)).toBe(true);
+    } finally {
+      closeEpicTab(TAB);
+    }
+  });
+
+  // Pin 4: a chat served from a host OUTSIDE the activity plane's narrow
+  // union blocks the park even though the epic's OWN session host is
+  // covered - the reason `unsettledWorkForEpic` returns `hostIds` at all,
+  // and the case a per-session-only coverage check would miss entirely.
+  it("blocks a park when a chat's host lies outside the activity plane's narrow union, even though the epic's own session host is covered (pin 4)", () => {
+    __resetAgentActivityStoreForTests();
+    // Narrow union: covers ONLY the epic session's own host ("test-host",
+    // `openStoreForTest`'s fixed default), not the chat's host below.
+    __setHostAgentActivityHealthForTests("test-host", {
+      connectionStatus: "open",
+      servedBy: "local",
+      stateFrameSeenThisEpoch: true,
+      cloudSyncStatus: null,
+    });
+    const EPIC = "epic-park-cross-host-pin4";
+    const TAB = "tab-park-cross-host-pin4";
+    const CHAT_ID = "chat-cross-host-pin4";
+    const CHAT_HOST = "host-chat-uncovered-pin4";
+    const chatRegistry = __getChatSessionRegistryForTests();
+    const epicHandle = buildParkableEpicHandle(EPIC, false);
+    __getOpenEpicRegistryForTests().acquireMounted(
+      EPIC,
+      () => epicHandle.handle,
+    );
+
+    // Settled: only the HOST is the point of this pin, not chat work.
+    const chatHandle = buildTestChatHandle(EPIC, CHAT_ID, CHAT_HOST);
+    chatRegistry.acquire(
+      {
+        epicId: EPIC,
+        chatId: CHAT_ID,
+        hostId: CHAT_HOST,
+        scopeKey: "pin4-scope",
+      },
+      () => chatHandle,
+    );
+
+    openEpicTab(TAB, EPIC);
+    try {
+      setEpicSurfaceVisibility(EPIC, "view-pin4", false);
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS * 3);
+
+      expect(isEpicParked(EPIC)).toBe(false);
+      expect(epicHandle.disposed).toBe(false);
+      expect(chatRegistry.peek(EPIC, CHAT_ID, CHAT_HOST)).not.toBeNull();
+    } finally {
+      closeEpicTab(TAB);
+    }
+  });
+});
+
+// ── Codex review pin 5: the deferred-park retry actually fires ─────────────
+//
+// `waitForEligibility`'s watch listens to the OPEN-EPIC registry, which is
+// silent for an epic with no session entry - exactly the population whose
+// park was refused for CHAT work. `retryDeferredEpicParks`, wired from
+// `lib/registries/chat-session-registry.ts`'s `registry.subscribe(() => ...)`,
+// is the only thing that ever re-attempts that park. Falsify by cutting that
+// one wiring line; predicted result: this test reddens, because nothing then
+// calls `retryDeferredEpicParks` when the chat plane changes and the epic
+// stays parked=false forever.
+describe("epic-parking - retryDeferredEpicParks wiring (Codex review pin 5)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    __setAgentActivityPlaneAnsweringForTests();
+    __resetEpicDraftGuardForTests();
+  });
+
+  afterEach(() => {
+    __resetEpicParkingForTests();
+    __getOpenEpicRegistryForTests().disposeAll();
+    disposeAllChatSessions();
+    __resetAgentActivityStoreForTests();
+    __resetEpicDraftGuardForTests();
+    resetCanvasStore();
+    vi.useRealTimers();
+  });
+
+  it("retries and succeeds once the chat settles, driven by the chat registry's own emission - no session, no new hide edge, no timer (pin 5)", () => {
+    const EPIC = "epic-park-retry-pin5";
+    const TAB = "tab-park-retry-pin5";
+    const CHAT_ID = "chat-park-retry-pin5";
+    const HOST_ID = "host-park-retry-pin5";
+    const chatRegistry = __getChatSessionRegistryForTests();
+
+    const chatHandle = buildTestChatHandle(EPIC, CHAT_ID, HOST_ID);
+    chatRegistry.acquire(
+      {
+        epicId: EPIC,
+        chatId: CHAT_ID,
+        hostId: HOST_ID,
+        scopeKey: "pin5-scope",
+      },
+      () => chatHandle,
+    );
+    chatHandle.store.setState({
+      pendingActions: { "action-1": pendingChatActionFixture("action-1") },
+    });
+
+    openEpicTab(TAB, EPIC);
+    try {
+      // No session entry at all - the exact case `waitForEligibility`'s watch
+      // on the open-epic registry can never see settle.
+      expect(__getOpenEpicRegistryForTests().get(EPIC)).toBeNull();
+
+      setEpicSurfaceVisibility(EPIC, "view-pin5", false);
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS * 3);
+      expect(isEpicParked(EPIC)).toBe(false);
+
+      // The chat settles - not a visibility edge, not a fresh timer.
+      chatHandle.store.setState({ pendingActions: {} });
+      // Still refused: settling the STATE alone tells nobody to look again.
+      expect(isEpicParked(EPIC)).toBe(false);
+
+      // An UNRELATED chat registry structural change - what actually fires
+      // `registry.subscribe(() => retryDeferredEpicParks())` in production,
+      // since the wiring is registry-wide, not scoped to this epic's chat.
+      const unrelatedChat = buildTestChatHandle(
+        "epic-unrelated-pin5",
+        "chat-unrelated-pin5",
+        "host-unrelated-pin5",
+      );
+      chatRegistry.acquire(
+        {
+          epicId: "epic-unrelated-pin5",
+          chatId: "chat-unrelated-pin5",
+          hostId: "host-unrelated-pin5",
+          scopeKey: "pin5-unrelated-scope",
+        },
+        () => unrelatedChat,
+      );
+
+      expect(isEpicParked(EPIC)).toBe(true);
+    } finally {
+      closeEpicTab(TAB);
     }
   });
 });

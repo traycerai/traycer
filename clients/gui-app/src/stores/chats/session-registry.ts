@@ -206,6 +206,38 @@ export class ChatSessionRegistry {
     return ids;
   }
 
+  /**
+   * The chat plane's half of a park verdict for one Epic: whether any of its
+   * chats still holds work, and which hosts those chats are served from.
+   *
+   * Parking decides ONCE, at the epic, and then force-disposes every chat under
+   * it through {@link disposeForEpic}. Before this existed the epic-side gates
+   * read the epic store and the agent-activity plane and nothing else, so a
+   * chat holding an unacknowledged queue action was destroyed by a decision
+   * that never looked at it. The hosts come back with the answer because the
+   * activity plane's COVERAGE is per host, and a chat can be served from a host
+   * the epic's own session is not - so an epic-only coverage check can be
+   * satisfied while the plane is blind to exactly the host whose chat is about
+   * to be thrown away.
+   */
+  unsettledWorkForEpic(epicId: string): {
+    readonly unsettled: boolean;
+    readonly hostIds: readonly string[];
+  } {
+    const hostIds = new Set<string>();
+    let unsettled = false;
+    for (const entry of this.sessions.entries()) {
+      const handle = entry.session;
+      if (handle.epicId !== epicId) continue;
+      // Off the KEY, not the handle: the host is part of a chat session's
+      // identity rather than a field on it, which is why `listHandlesForHost`
+      // reads it the same way.
+      hostIds.add(chatSessionKeyHostId(entry.key));
+      if (hasUnsettledChatWork(handle)) unsettled = true;
+    }
+    return { unsettled, hostIds: Array.from(hostIds) };
+  }
+
   subscribe(listener: () => void): () => void {
     return this.sessions.subscribe(listener);
   }
@@ -309,6 +341,26 @@ function chatSessionKey(
 function chatSessionKeyHostId(key: SessionKey): string {
   return sessionKeyPartsOf(key)[2] ?? "";
 }
+/**
+ * {@link hasActiveChatWork} plus the actions the user has issued and the host
+ * has not yet acknowledged - a pause, a queue edit, a checkpoint restore, an
+ * approval response.
+ *
+ * SEPARATE from `hasActiveChatWork`, and deliberately so. That predicate
+ * governs whether the idle TTL and the warm-overflow cap may reclaim a session
+ * on their own schedule, and those two are allowed to reclaim a chat whose only
+ * outstanding item is an unacknowledged action: re-opening re-subscribes and
+ * the reconciler replays from the host's answer. A PARK is not that. It is a
+ * decision taken at the epic that force-disposes every chat beneath it at once,
+ * so it has to see the action that a TTL is entitled to ignore. Widening
+ * `hasActiveChatWork` itself would silently change the TTL and cap behaviour
+ * for a reason that belongs only to parking.
+ */
+function hasUnsettledChatWork(handle: ChatSessionStoreHandle): boolean {
+  if (hasActiveChatWork(handle)) return true;
+  return Object.keys(handle.store.getState().pendingActions).length > 0;
+}
+
 function hasActiveChatWork(handle: ChatSessionStoreHandle): boolean {
   const state = handle.store.getState();
   // A chat parked on a human gate (interview / command approval / file-edit
