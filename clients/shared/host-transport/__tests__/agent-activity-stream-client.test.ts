@@ -110,6 +110,11 @@ function makeTransportWithoutVersionPin(): IHostStreamClient<
     onClosed: () => () => undefined,
     instanceId: "stub-transport-no-version-pin",
     notifyBearerRotated: () => undefined,
+    // Arrived with another lane's cloud-capability verdict work, which added
+    // it as a REQUIRED member of `IHostStreamClient` after this literal was
+    // written. Neither lane's compile could see the break: this fixture
+    // post-dates their interface read, and their widening post-dates ours.
+    notifyCloudVerdictChanged: () => undefined,
     reconnectAll: () => undefined,
     isReady: () => true,
     getMethodSupport: () => "unknown",

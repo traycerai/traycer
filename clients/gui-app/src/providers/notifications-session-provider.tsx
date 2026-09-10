@@ -310,6 +310,17 @@ function NotificationsSessionBody(
   const activityDisposerRef = useRef<(() => void) | null>(null);
   /** The host whose lane `activityDisposerRef` holds - the slice a verdict loss clears. */
   const activityStreamHostIdRef = useRef<string | null>(null);
+  /**
+   * Whether the lane `activityDisposerRef` holds was admitted by
+   * `activityServesLocalOnly` - i.e. opened with `plane: "local-only"`, PINNED
+   * at `agent.activity.subscribe@1.2`.
+   *
+   * A property of the SUBSCRIPTION, not of the method, exactly as
+   * `tearDownCloudLanes` says of cloud membership: a verdict holder's lane
+   * leaves the plane to the host and pins nothing, so it survives a capability
+   * reading this one cannot.
+   */
+  const activityLanePinnedLocalOnlyRef = useRef(false);
   const hostDisposerRef = useRef<(() => void) | null>(null);
   const cloudDisposerRef = useRef<(() => void) | null>(null);
   // Set when a cloud-verdict loss closed the cloud lanes while the host lanes
@@ -621,6 +632,7 @@ function NotificationsSessionBody(
       disposer();
     }
     activityStreamHostIdRef.current = null;
+    activityLanePinnedLocalOnlyRef.current = false;
     if (hostDisposerRef.current !== null) {
       const disposer = hostDisposerRef.current;
       hostDisposerRef.current = null;
@@ -677,6 +689,7 @@ function NotificationsSessionBody(
     // reopens it and the new epoch's frame repopulates it.
     const activityHostId = activityStreamHostIdRef.current;
     activityStreamHostIdRef.current = null;
+    activityLanePinnedLocalOnlyRef.current = false;
     if (activityHostId !== null) {
       useAgentActivityStore.getState().resetHost(activityHostId);
     }
@@ -741,6 +754,7 @@ function NotificationsSessionBody(
         cloudAuthorized ? null : "local-only",
       );
       activityStreamHostIdRef.current = streamHostId;
+      activityLanePinnedLocalOnlyRef.current = !cloudAuthorized;
     },
     [
       activityServesLocalOnly,
@@ -750,6 +764,58 @@ function NotificationsSessionBody(
       status,
     ],
   );
+
+  /**
+   * THE wake edge for a pinned activity lane whose capability went away and
+   * came back - the same-client, same-principal recovery the R2 dispatch class
+   * left open on this one surface.
+   *
+   * A local-only lane is pinned at `agent.activity.subscribe@1.2`. The
+   * capability that admits it is read at RENDER, from this connection's
+   * negotiated manifest, and the host PROCESS behind a stable host id can be
+   * replaced between that read and the frame. When it is replaced by a build
+   * without the minor, the pinned session is refused `INCOMPATIBLE` - and it
+   * is correctly never retried on a timer (`isReopenableHostStreamClose`
+   * excludes it, because a version skew does not heal on a clock).
+   *
+   * What it DOES heal on is the capability coming back, and nothing acted on
+   * that: the lane's disposer stayed non-null, `openActivityLane`'s idempotence
+   * guard refused every later reopen, and agent activity was gone for the life
+   * of the session even after the host was serving `@1.2` again.
+   *
+   * So the intent is retained rather than the handle: when the admission this
+   * lane was opened under is no longer true, close THIS lane and clear its
+   * handle, which puts the ordinary opener back in charge - it fires from the
+   * main effect the moment `activityServesLocalOnly` flips back, because that
+   * value is one of `openActivityLane`'s own dependencies.
+   *
+   * Three things it deliberately does NOT do:
+   *  - it does not touch the host or cloud lanes. This is one method's version
+   *    verdict, not a session event, and tearing the sibling feed down would
+   *    make a recoverable skew look like a disconnect.
+   *  - it does not reset the activity slice. Unlike the verdict-loss close in
+   *    `tearDownCloudLanes`, this lane is expected back, and its next epoch's
+   *    first frame reconciles `byEpic` the way a reconnect's does. Blanking it
+   *    here would spin every running agent for the length of the skew.
+   *  - it does not schedule anything. There is no timer here by design; the
+   *    manifest read is the signal.
+   *
+   * Scoped to the lane actually held: a verdict holder's lane pins no minor and
+   * is not this one (`activityLanePinnedLocalOnlyRef`), and a lane belonging to
+   * a host this render no longer serves is the host-switch teardown's business,
+   * not this edge's.
+   */
+  useEffect(() => {
+    if (activityDisposerRef.current === null) return;
+    if (!activityLanePinnedLocalOnlyRef.current) return;
+    if (activityStreamHostIdRef.current !== servingHostId) return;
+    if (activityServesLocalOnly) return;
+    const disposer = activityDisposerRef.current;
+    activityDisposerRef.current = null;
+    activityStreamHostIdRef.current = null;
+    activityLanePinnedLocalOnlyRef.current = false;
+    disposer();
+  }, [activityServesLocalOnly, servingHostId]);
 
   // The relay session's rows and its view-consumption bookkeeping are one
   // unit of ownership: the driver holds an in-flight claim and a retry timer
