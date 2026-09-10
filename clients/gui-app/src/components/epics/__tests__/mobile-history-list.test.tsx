@@ -106,6 +106,10 @@ interface RenameEpicTitleVariables {
 }
 
 interface SetEpicPinnedVariables {
+  // Mirrors production's dispatch-side host. Declared locally here, which is
+  // exactly why the compile cannot flag a drift - the assertions below are the
+  // only thing that can, and only if they name the key.
+  readonly hostId: string | null;
   readonly epicId: string;
   readonly pinned: boolean;
 }
@@ -659,6 +663,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
         epicId: "epic-from-history",
         pinned: true,
         isLocalHome: false,
+        hostId: null,
       });
     });
 
@@ -667,6 +672,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
         historyItem({
           title: "Local only epic",
           isLocalHome: true,
+          hostId: null,
         }),
       ];
       renderPanel("embedded", "/");

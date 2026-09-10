@@ -32,10 +32,27 @@ const testState = vi.hoisted(() => {
   return state;
 });
 
+const mockClient = {
+  getActiveHostId: () => testState.activeHostId,
+  getRequestContextUserId: () => testState.userId,
+};
+
+// `useHostBinding` is mocked alongside `useHostClient` because the hook resolves
+// its client PER DISPATCH now (`variables.hostId`), and a named host's requester
+// is built from the binding. The requester reports the host it was asked for, so
+// a dispatch that ignored `variables.hostId` and fell back to the window's
+// client is observable: `getActiveHostId()` answers the wrong machine.
 vi.mock("@/lib/host/runtime", () => ({
-  useHostClient: () => ({
-    getActiveHostId: () => testState.activeHostId,
-    getRequestContextUserId: () => testState.userId,
+  useHostClient: () => mockClient,
+  useHostBinding: () => ({
+    hostId: testState.activeHostId,
+    hostClient: {
+      ...mockClient,
+      createRequesterForHostId: (hostId: string) => ({
+        ...mockClient,
+        getActiveHostId: () => hostId,
+      }),
+    },
   }),
 }));
 
@@ -44,27 +61,60 @@ interface MutationContext {
   readonly userId: string | null;
 }
 
+/**
+ * The dispatch-side variables shape, stated once. Every production caller
+ * supplies `hostId` - the epic's own host, or `null` for "follow the window" -
+ * so a fixture that omits it models variables the real callers never produce,
+ * and resolves its client down the NAMED-host arm with `undefined`.
+ */
+interface DispatchVariables {
+  readonly epicId: string;
+  readonly pinned: boolean;
+  readonly isLocalHome: boolean;
+  readonly hostId: string | null;
+}
+
+/** A cloud-homed row's variables: no host named, so the window is followed. */
+function followingVars(epicId: string, pinned: boolean): DispatchVariables {
+  return { epicId, pinned, isLocalHome: false, hostId: null };
+}
+
+interface CapturedClient {
+  readonly getActiveHostId: () => string | null;
+  readonly getRequestContextUserId: () => string | null;
+}
+
 let capturedOptions: {
-  onMutate?: (variables: {
-    epicId: string;
-    pinned: boolean;
-    isLocalHome: boolean;
-  }) => MutationContext;
+  onMutate?: (variables: DispatchVariables) => MutationContext;
   onSuccess?: (
     response: { pinned: boolean },
-    variables: { epicId: string; pinned: boolean; isLocalHome: boolean },
+    variables: DispatchVariables,
     context: MutationContext,
   ) => Promise<void>;
   onError?: (
     error: unknown,
-    variables: { epicId: string; pinned: boolean; isLocalHome: boolean },
+    variables: DispatchVariables,
     context: MutationContext | undefined,
   ) => void;
 } = {};
 
+/**
+ * The `client` argument, which the hook passes as a FUNCTION of the variables.
+ * Captured separately from `options` because it is the dispatch half of the
+ * per-row host: `options.onMutate` decides admission and scope, and this
+ * decides which machine the request leaves on.
+ */
+let capturedClientResolver:
+  | ((variables: DispatchVariables) => CapturedClient | null)
+  | null = null;
+
 vi.mock("@/hooks/host/use-host-query", () => ({
-  useHostMutation: (args: { options: typeof capturedOptions }) => {
+  useHostMutation: (args: {
+    options: typeof capturedOptions;
+    client: (variables: DispatchVariables) => CapturedClient | null;
+  }) => {
     capturedOptions = args.options;
+    capturedClientResolver = args.client;
     return { mutate: vi.fn(), isPending: false };
   },
 }));
@@ -138,6 +188,7 @@ function makeWrapper(
 describe("useEpicSetPinned", () => {
   beforeEach(() => {
     capturedOptions = {};
+    capturedClientResolver = null;
     vi.clearAllMocks();
     testState.activeHostId = "host-1";
     testState.userId = "user-1";
@@ -191,11 +242,7 @@ describe("useEpicSetPinned", () => {
       wrapper: makeWrapper(queryClient),
     });
 
-    const context = capturedOptions.onMutate?.({
-      epicId: "epic-1",
-      pinned: true,
-      isLocalHome: false,
-    });
+    const context = capturedOptions.onMutate?.(followingVars("epic-1", true));
 
     expect(context).toEqual({ hostId: "host-1", userId: "user-1" });
     expect(pinnedById(queryClient.getQueryData(scopedQueryKey))).toEqual({
@@ -238,18 +285,14 @@ describe("useEpicSetPinned", () => {
       wrapper: makeWrapper(queryClient),
     });
 
-    const context = capturedOptions.onMutate?.({
-      epicId: "epic-1",
-      pinned: true,
-      isLocalHome: false,
-    });
+    const context = capturedOptions.onMutate?.(followingVars("epic-1", true));
     expect(pinnedById(queryClient.getQueryData(scopedQueryKey))).toEqual({
       "epic-1": true,
     });
 
     capturedOptions.onError?.(
       { code: "RPC_ERROR", message: "test", fatalDetails: null },
-      { epicId: "epic-1", pinned: true, isLocalHome: false },
+      followingVars("epic-1", true),
       context,
     );
 
@@ -287,7 +330,7 @@ describe("useEpicSetPinned", () => {
     useAuthStore.getState().setUnverifiedSession(PROFILE, CONTEXT);
 
     expect(() =>
-      capturedOptions.onMutate?.({ epicId: "epic-1", pinned: true, isLocalHome: false }),
+      capturedOptions.onMutate?.(followingVars("epic-1", true)),
     ).toThrow(EPIC_PIN_UNAUTHORIZED_MESSAGE);
     expect(pinnedById(queryClient.getQueryData(scopedQueryKey))).toEqual({
       "epic-1": false,
@@ -295,7 +338,7 @@ describe("useEpicSetPinned", () => {
 
     // Non-vacuity: the verdict returning is what admits the same dispatch.
     useAuthStore.getState().setSignedIn(PROFILE, CONTEXT, []);
-    capturedOptions.onMutate?.({ epicId: "epic-1", pinned: true, isLocalHome: false });
+    capturedOptions.onMutate?.(followingVars("epic-1", true));
     expect(pinnedById(queryClient.getQueryData(scopedQueryKey))).toEqual({
       "epic-1": true,
     });
@@ -322,7 +365,7 @@ describe("useEpicSetPinned", () => {
         message: EPIC_PIN_UNAUTHORIZED_MESSAGE,
         fatalDetails: null,
       },
-      { epicId: "epic-1", pinned: true, isLocalHome: false },
+      followingVars("epic-1", true),
       undefined,
     );
 
@@ -356,11 +399,7 @@ describe("useEpicSetPinned", () => {
       wrapper: makeWrapper(queryClient),
     });
 
-    const context = capturedOptions.onMutate?.({
-      epicId: "epic-1",
-      pinned: true,
-      isLocalHome: false,
-    });
+    const context = capturedOptions.onMutate?.(followingVars("epic-1", true));
     expect(context).toEqual({ hostId: null, userId: "user-1" });
     expect(pinnedById(queryClient.getQueryData(scopedQueryKey))).toEqual({
       "epic-1": false,
@@ -368,7 +407,7 @@ describe("useEpicSetPinned", () => {
 
     await capturedOptions.onSuccess?.(
       { pinned: true },
-      { epicId: "epic-1", pinned: true, isLocalHome: false },
+      followingVars("epic-1", true),
       { hostId: null, userId: null },
     );
     expect(removeQueries).not.toHaveBeenCalled();
@@ -376,13 +415,81 @@ describe("useEpicSetPinned", () => {
 
     capturedOptions.onError?.(
       { code: "RPC_ERROR", message: "test", fatalDetails: null },
-      { epicId: "epic-1", pinned: true, isLocalHome: false },
+      followingVars("epic-1", true),
       context,
     );
     expect(pinnedById(queryClient.getQueryData(scopedQueryKey))).toEqual({
       "epic-1": false,
     });
     expect(toast.error).toHaveBeenCalledWith("Couldn't update pinned task.");
+  });
+
+  /**
+   * The per-row host, dispatch half. A local-homed epic is served off the
+   * OWNING host's disk, so the write has to leave on that host's requester -
+   * and `useHostMutation` takes a function of the variables precisely so one
+   * hook instance can serve rows on different machines. Named host wins;
+   * `null` follows the window.
+   */
+  it("dispatches a named host's row on that host's requester, and a hostless row on the window's", () => {
+    const queryClient = new QueryClient();
+    renderHook(() => useEpicSetPinned(), {
+      wrapper: makeWrapper(queryClient),
+    });
+
+    expect(
+      capturedClientResolver?.({
+        epicId: "epic-1",
+        pinned: true,
+        isLocalHome: true,
+        hostId: "host-owning",
+      })?.getActiveHostId(),
+    ).toBe("host-owning");
+    expect(
+      capturedClientResolver?.(followingVars("epic-1", true))?.getActiveHostId(),
+    ).toBe("host-1");
+  });
+
+  /**
+   * And the consequence the gate and the cache both have to agree with: the
+   * optimistic patch is scoped to the host the request is actually going to.
+   * Patching the window's scope instead would flip a row in a list the write
+   * never touches, and leave the owning host's list showing the old bit.
+   */
+  it("scopes the optimistic patch to the named host, not the window's", () => {
+    const queryClient = new QueryClient();
+    const owningKey = cloudEpicTasksQueryKey(
+      "host-owning",
+      "user-1",
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    const windowKey = cloudEpicTasksQueryKey(
+      "host-1",
+      "user-1",
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    queryClient.setQueryData(owningKey, pageWith([epicTask("epic-1", false)]));
+    queryClient.setQueryData(windowKey, pageWith([epicTask("epic-1", false)]));
+    // The session holds a verdict here (`beforeEach`), so admission is not what
+    // this case is about - the SCOPE is.
+    renderHook(() => useEpicSetPinned(), {
+      wrapper: makeWrapper(queryClient),
+    });
+
+    const context = capturedOptions.onMutate?.({
+      epicId: "epic-1",
+      pinned: true,
+      isLocalHome: true,
+      hostId: "host-owning",
+    });
+
+    expect(context).toEqual({ hostId: "host-owning", userId: "user-1" });
+    expect(pinnedById(queryClient.getQueryData(owningKey))).toEqual({
+      "epic-1": true,
+    });
+    expect(pinnedById(queryClient.getQueryData(windowKey))).toEqual({
+      "epic-1": false,
+    });
   });
 
   it("resets the scope's pagination and refreshes the first page on success", async () => {
@@ -430,7 +537,7 @@ describe("useEpicSetPinned", () => {
 
     await capturedOptions.onSuccess?.(
       { pinned: true },
-      { epicId: "epic-1", pinned: true, isLocalHome: false },
+      followingVars("epic-1", true),
       { hostId: "host-1", userId: "user-1" },
     );
 
@@ -455,7 +562,7 @@ describe("useEpicSetPinned", () => {
 
     capturedOptions.onError?.(
       { code: "RPC_ERROR", message: "test", fatalDetails: null },
-      { epicId: "epic-1", pinned: true, isLocalHome: false },
+      followingVars("epic-1", true),
       undefined,
     );
 

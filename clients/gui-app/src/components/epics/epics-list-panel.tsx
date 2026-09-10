@@ -423,7 +423,21 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
       // control) reads cloud-homed, which lands on the verdict gate.
       const isLocalHome =
         items.find((item) => item.epicId === epicId)?.isLocalHome === true;
-      setPinned({ epicId, pinned, isLocalHome });
+      // `hostId: null` - follow the window - and here that is CORRECT by
+      // construction rather than a shortfall. History takes `isLocalHome` from
+      // `useEpicGetTaskContexts`, which dispatches on a SINGLE client
+      // (`useHostClient()`, the window's host) and merges `localHomedTaskIds`
+      // only across that host's own request chunks. So every id in that set is
+      // local-homed ON THE WINDOW'S HOST, and following the window sends the
+      // write to exactly the host that reported the row local-homed.
+      //
+      // An epic local-homed on a DIFFERENT host cannot arrive here down this
+      // arm at all: the window's host does not own it, so it never enters
+      // `localHomedTaskIds`, `isLocalHome` is false, and the row takes the
+      // cloud path every host proxies. The tab strip needs an explicit host
+      // because its readings DO span hosts (one per open tab's session); this
+      // surface's do not.
+      setPinned({ epicId, pinned, isLocalHome, hostId: null });
     },
     [items, setPinned],
   );
@@ -1962,7 +1976,11 @@ function HistoryPinControl(props: {
     authorizesCloudCapability(state.status),
   );
   // Also ahead of the early return, and for the same reason.
-  const localHomePinSupported = useEpicPinLocalHomeSupported();
+  //
+  // `null` - the window's host - which is the host this surface's local-home
+  // readings come from in the first place; see the dispatch handler above for
+  // why that makes gate and dispatch name the same machine here.
+  const localHomePinSupported = useEpicPinLocalHomeSupported(null);
   if (props.selectionMode || props.item.taskType === "phase") return null;
   const displayTitle = historyItemDisplayTitle(props.item);
   const unavailableReason = historyPinUnavailableReason(

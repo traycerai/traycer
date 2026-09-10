@@ -171,8 +171,16 @@ function TabStripBody() {
       // to disagree. A local-homed epic on a `@1.1` host is served off that
       // host's disk and spends no cloud capability, so it is admissible with
       // no verdict; everything else still needs one.
-      const isLocalHome = taskPinnedStates.get(epicId)?.home === "local";
-      const variables = { epicId, pinned, isLocalHome };
+      const reading = taskPinnedStates.get(epicId);
+      const isLocalHome = reading?.home === "local";
+      // The epic's host, from that SAME reading. A local-homed pin is served
+      // off the owning host's disk, so the write has to go there: sent to the
+      // window's host instead, `epicHomeVerdict` answers not-local and the
+      // request falls through to a cloud write for an epic the cloud has no row
+      // for. `null` for a cloud-homed row means "follow the window", which is
+      // right - any host proxies a cloud pin.
+      const hostId = reading?.hostId ?? null;
+      const variables = { epicId, pinned, isLocalHome, hostId };
       // Fail closed on the CAPABILITY, not just in the menu. This is the one
       // dispatch site for the whole tab tree, and the Undo action below is a
       // second entry into it that no menu gate can reach: the toast outlives
@@ -190,7 +198,11 @@ function TabStripBody() {
             action: {
               label: "Undo",
               onClick: () => {
-                const undo = { epicId, pinned: !pinned, isLocalHome };
+                // `hostId` rides the closure exactly as `isLocalHome` does,
+                // and that is what lets the pin host be per-dispatch at all:
+                // this toast outlives the row's menu, so a host resolved from a
+                // mounted row would be gone by now.
+                const undo = { epicId, pinned: !pinned, isLocalHome, hostId };
                 if (
                   !epicPinDispatchAdmitted(undo, hostClient.getActiveHostId())
                 ) {

@@ -5,7 +5,9 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 import { useHostMutation } from "@/hooks/host/use-host-query";
-import { useHostClient, type HostRpcRegistry } from "@/lib/host";
+import { useHostBinding, useHostClient, type HostRpcRegistry } from "@/lib/host";
+import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
+import { useCallback } from "react";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import {
   cloudEpicTasksQueryKeyMatchesScope,
@@ -60,6 +62,26 @@ export interface SetEpicPinnedVariables {
   readonly epicId: string;
   readonly pinned: boolean;
   /**
+   * The host to dispatch on: the EPIC's host for a local-homed epic, `null` to
+   * follow the window's.
+   *
+   * It has to be here, in the variables, rather than a parameter of the hook.
+   * The pin is dispatched from surfaces that hold several epics on several hosts
+   * behind ONE hook instance - the tab strip's menu, and the Undo action on the
+   * toast that outlives the row's menu entirely - so a host bound at hook level
+   * would be one machine's answer for all of them, and moving the hook per-row
+   * would take Undo down with the row. `useHostMutation` accepts a function for
+   * `client`, so the host can be resolved per dispatch from this field, and the
+   * Undo closure carries it the same way it already carries `isLocalHome`.
+   *
+   * Why it must be the epic's host and not any host: the resolver's local arm
+   * asks `epicHomeVerdict(epicId)` on WHICHEVER host receives the call. Sent
+   * elsewhere, that host has no such local epic, the verdict is not local, and
+   * the request falls to the cloud arm - a cloud write for an epic the cloud has
+   * no row for. Stripped by `mapVariables`; never reaches the wire.
+   */
+  readonly hostId: string | null;
+  /**
    * Whether this epic is durable on the serving host's disk rather than in the
    * cloud - the caller's own reading, from the same `HistoryItem` /
    * `TaskPinnedState` the control rendered from.
@@ -93,8 +115,20 @@ export interface SetEpicPinnedVariables {
  * while the optimistic state keeps rendering.
  */
 export function useEpicSetPinned() {
-  const client = useHostClient();
+  const followingClient = useHostClient();
+  const binding = useHostBinding();
   const queryClient = useQueryClient();
+  // Resolved PER DISPATCH from `variables.hostId`. `useHostMutation` takes
+  // either a client or a function of the variables, which is what lets one hook
+  // instance serve rows on different machines - see the field's own doc for why
+  // binding a host at hook level cannot work here.
+  const clientForVariables = useCallback(
+    (variables: SetEpicPinnedVariables) =>
+      variables.hostId === null
+        ? followingClient
+        : resolveNamedHostClient(binding, variables.hostId),
+    [binding, followingClient],
+  );
   // Generics spelled out because `SetEpicPinnedVariables` is WIDER than the
   // request schema - `isLocalHome` is a dispatch-side fact `mapVariables`
   // strips. `TVariables` otherwise defaults to the request shape, and the
@@ -106,7 +140,7 @@ export function useEpicSetPinned() {
     SetEpicPinnedMutationContext,
     SetEpicPinnedVariables
   >({
-    client,
+    client: clientForVariables,
     method: "epic.setPinned",
     // `isLocalHome` is a DISPATCH-side fact, not a request field: the wire
     // shape stays `{ epicId, pinned }` exactly as the schema declares it.
@@ -116,13 +150,22 @@ export function useEpicSetPinned() {
       onMutate: (
         variables: SetEpicPinnedVariables,
       ): SetEpicPinnedMutationContext => {
-        const hostId = client.getActiveHostId();
+        // The host the request is ACTUALLY going to, resolved through the same
+        // function the dispatch resolves it with. That is the point of doing it
+        // here rather than reading the window's active host: the admission gate,
+        // the optimistic patch's scope and the request now cannot disagree about
+        // which machine they mean. Before this they could, and the gate was the
+        // one that mattered - it asked whether the WINDOW's host negotiated
+        // `@1.1` and then admitted a write that went to it for an epic it did
+        // not own.
+        const dispatchClient = clientForVariables(variables);
+        const hostId = dispatchClient?.getActiveHostId() ?? null;
         // Before the optimistic patch: a refused dispatch reaches `onError`
         // with no context, and the inverse patch must have nothing to undo.
         if (!epicPinDispatchAdmitted(variables, hostId)) {
           throw new Error(EPIC_PIN_UNAUTHORIZED_MESSAGE);
         }
-        const userId = client.getRequestContextUserId();
+        const userId = dispatchClient?.getRequestContextUserId() ?? null;
         if (hostId !== null && userId !== null) {
           applyPinnedPatch(
             queryClient,
@@ -187,16 +230,29 @@ export function useEpicSetPinned() {
  * disagreement here is silent (a control that fires and does nothing, or a
  * refusal for a write the host would have served).
  *
- * `hostId` is the ACTIVE host of the client the mutation dispatches on
- * (`useHostClient()` in both places). A caller reading a different host's
- * negotiation would be answering about a machine that is not going to serve
- * the write.
+ * `hostId` must be the host the write is DISPATCHED to, which is now
+ * `variables.hostId` resolved through the same function the request uses - the
+ * epic's own host for a local-homed row, the window's for everything else.
+ *
+ * This paragraph used to say it was `useHostClient()` "in both places", and that
+ * consistency was the defect rather than the safeguard: the gate asked whether
+ * the WINDOW's host negotiated `@1.1`, the answer was frequently yes, and the
+ * write then went to that host for an epic living on another one - where
+ * `epicHomeVerdict` is not local, so it fell through to a cloud write for an
+ * epic with no cloud row. Two doors agreeing about the wrong machine.
  */
 export function epicPinDispatchAdmitted(
   variables: SetEpicPinnedVariables,
-  hostId: string | null,
+  followingHostId: string | null,
 ): boolean {
-  if (isLocalHomePinExempt(variables, hostId)) return true;
+  // The ONLY place the promotion "the epic's host, else the window's" is
+  // written. Every door passes the host it happens to know - the tab strip the
+  // window's, `onMutate` the dispatch client's own answer - and the promotion
+  // here makes those agree. A second copy at a call site would be the shape
+  // this function exists to prevent (its own doc: two doors making one decision
+  // come to disagree), so there is no exported helper for it either.
+  const dispatchHostId = variables.hostId ?? followingHostId;
+  if (isLocalHomePinExempt(variables, dispatchHostId)) return true;
   return authorizesCloudCapability(useAuthStore.getState().status);
 }
 
