@@ -16,13 +16,19 @@ import { NotificationFocusBridge } from "@/components/layout/bridges/notificatio
 import { SystemTabModalHost } from "@/components/layout/dialogs/system-tab-modal-host";
 import { NotificationsMobileSheet } from "@/components/notifications/notifications-mobile-sheet";
 import { WindowHostModalHost } from "@/components/layout/dialogs/window-host-modal-host";
+import { LocalStoreRepairDialogHost } from "@/components/local-store/local-store-repair-dialog-host";
 import { TabNavigationRouteBridge } from "@/components/layout/bridges/tab-navigation-route-bridge";
 import { TrayOpenEpicBridge } from "@/components/layout/bridges/tray-open-epic-bridge";
 import { ProviderProfileAddFlowHost } from "@/components/providers/provider-profile-add-flow-host";
 import { EpicAccessCoordinator } from "@/providers/epic-access-coordinator";
 import { OnboardingPage } from "@/components/onboarding/onboarding-page";
 import { TabDetachOwner } from "@/components/layout/tabs/tab-detach-owner";
-import { admitsLocalPlane, useAuthStore } from "@/stores/auth/auth-store";
+import { AuthLandingPage } from "@/components/auth/auth-landing-page";
+import {
+  useShellLocalPlaneAdmission,
+  type ShellAdmissionRefusal,
+} from "@/hooks/auth/use-shell-local-plane-admission";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 
 export function RootComponent() {
@@ -52,9 +58,12 @@ export function RootComponent() {
   // Sign-in and the tour render bare, without the app shell. This is the
   // structural half of renderer admission - `RootLandingPage` decides what the
   // route BODY renders, this decides whether the shell exists around it at all
-  // - so it has to admit `unverified` for the same reason.
+  // - so it reads the SAME predicate, which admits `unverified` for the same
+  // reason and refuses it on a shell with no local host (see
+  // `admitsLocalPlaneOnShell`).
+  const admission = useShellLocalPlaneAdmission();
   const isStandalone =
-    !admitsLocalPlane(authStatus) || showOnboarding || isOnboardingRoute;
+    !admission.admitted || showOnboarding || isOnboardingRoute;
 
   return (
     <>
@@ -90,15 +99,22 @@ export function RootComponent() {
           than it buys: from up there it also sees the transient `/` that a cold
           launch redirects ITSELF to (`requireSignedIn` fires while stored
           tokens are still validating), which is not user intent. */}
-      {admitsLocalPlane(authStatus) ? <TabNavigationRouteBridge /> : null}
+      {admission.admitted ? <TabNavigationRouteBridge /> : null}
       {/* The window narrator (D10). It MUST be outside HostReadyGate: the gate
           replaces its children during cold start, so a modal mounted inside it
           could never narrate the cold start it exists for. Signed-in only -
           which is also what resets its "this window has been served" latch,
           since signing out unmounts it. */}
-      {admitsLocalPlane(authStatus) ? (
+      {admission.admitted ? (
         <WindowHostModalHost bypassed={isHostIndependentRoute} />
       ) : null}
+      {/* The local-store repair. Mounted BESIDE the window narrator rather
+          than inside any composer: it answers a refused `epic.create`, and the
+          population it exists for is a user with no openable epic - the only
+          other route to the rebind hangs off `SnapshotErrorBanner`, which
+          requires opening an epic that fails to load. Signed-in only, like its
+          neighbour; an unadmitted shell has no create to refuse. */}
+      {admission.admitted ? <LocalStoreRepairDialogHost /> : null}
       <ChatSessionWakeRetryController />
       {/* Everything host-dependent stays BEHIND the gate, preserving the exact
           mount timing it had when the gate wrapped the whole RouterProvider -
@@ -119,6 +135,7 @@ export function RootComponent() {
         <RootSurface
           showOnboarding={showOnboarding}
           isStandalone={isStandalone}
+          admissionRefusal={admission.refusal}
         />
         {isStandalone ? null : (
           <>
@@ -136,6 +153,21 @@ export function RootComponent() {
 function RootSurface(props: {
   readonly showOnboarding: boolean;
   readonly isStandalone: boolean;
+  /**
+   * Set when the SHELL turned away a session the status would have admitted -
+   * today, `unverified` on a shell with no local host.
+   *
+   * It is handled here rather than left to the route bodies because it has to
+   * hold for EVERY route, and only `/`, `/draft` and `/settings` render
+   * `RootLandingPage` at all. Without this arm an `unverified` phone deep-linked
+   * into `/epics/…` sat in a standalone shell rendering an epic route that no
+   * host could serve - the same empty screen, minus even the app chrome.
+   *
+   * `null` covers signed-out and signing-in, which reach the standalone shell
+   * for the ordinary reason and whose route bodies already answer for
+   * themselves. That path is unchanged.
+   */
+  readonly admissionRefusal: ShellAdmissionRefusal | null;
 }) {
   if (!props.isStandalone) {
     return (
@@ -160,9 +192,29 @@ function RootSurface(props: {
   // strip - instead of floating a chip over the artwork.
   return (
     <StandaloneShell>
-      {props.showOnboarding ? <OnboardingPage replay={false} /> : <Outlet />}
+      <StandaloneBody
+        showOnboarding={props.showOnboarding}
+        admissionRefusal={props.admissionRefusal}
+      />
     </StandaloneShell>
   );
+}
+
+/**
+ * Which of the three standalone bodies this is, in precedence order: the tour
+ * (a `signed-in` user, so no refusal can coexist with it), a shell refusal,
+ * and otherwise the route's own body - which for a signed-out user is
+ * `RootLandingPage` and its `AuthLandingPage`.
+ */
+function StandaloneBody(props: {
+  readonly showOnboarding: boolean;
+  readonly admissionRefusal: ShellAdmissionRefusal | null;
+}) {
+  if (props.showOnboarding) return <OnboardingPage replay={false} />;
+  if (props.admissionRefusal !== null) {
+    return <AuthLandingPage refusal={props.admissionRefusal} />;
+  }
+  return <Outlet />;
 }
 
 // `-webkit-app-region` isn't in the standard CSSProperties typings (mirrors

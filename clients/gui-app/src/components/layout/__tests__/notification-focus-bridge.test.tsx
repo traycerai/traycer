@@ -87,10 +87,20 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   },
 }));
 
-vi.mock("@/lib/notifications/notification-feed-mode", () => ({
-  useNotificationFeedMode: () => notificationFeedModeRef.value,
-  useNotificationFeedModeSettling: () => false,
-}));
+vi.mock("@/lib/notifications/notification-feed-mode", async (importActual) => {
+  // Spread the real module: production reads the PARTITIONED_* floor constants
+  // from here, and a factory that returns only the two hooks makes every one of
+  // them a missing export - which surfaces as a failed RPC, not as a mock error.
+  const actual =
+    await importActual<
+      typeof import("@/lib/notifications/notification-feed-mode")
+    >();
+  return {
+    ...actual,
+    useNotificationFeedMode: () => notificationFeedModeRef.value,
+    useNotificationFeedModeSettling: () => false,
+  };
+});
 
 import { NotificationFocusBridge } from "@/components/layout/bridges/notification-focus-bridge";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";

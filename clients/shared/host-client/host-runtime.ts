@@ -119,6 +119,7 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
   private readonly disposables: Disposable[] = [];
   private contextUnsubscribe: (() => void) | null = null;
   private bearerRotationUnsubscribe: (() => void) | null = null;
+  private cloudVerdictUnsubscribe: (() => void) | null = null;
   private sessionVerifiedUnsubscribe: (() => void) | null = null;
 
   constructor(options: HostRuntimeOptions<Registry>) {
@@ -197,6 +198,18 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
     // Same-user token refresh rotates the lease in place (silent on `onChange`);
     // forward it so stream transports can push the fresh credential onto open
     // connections without a reconnect.
+    // The verdict counterpart of the rotation forward below. It is a SEPARATE
+    // subscription rather than extra work inside that one because the two
+    // events do not coincide: a demotion rotates and withdraws together, but a
+    // promotion can assert a verdict on a bearer that did not move, and every
+    // ordinary refresh rotates with the verdict untouched. Folding them would
+    // make each refresh push a redundant verdict frame and still miss the
+    // rotation-free changes.
+    this.cloudVerdictUnsubscribe =
+      this.requestContextProvider.onCloudVerdictChanged(() => {
+        this.hostClient.notifyCloudVerdictChanged();
+      });
+
     this.bearerRotationUnsubscribe =
       this.requestContextProvider.onBearerRotated(() => {
         // A rotation is invisible to a user-id fence — same account, new
@@ -255,6 +268,10 @@ export class HostRuntime<Registry extends VersionedRpcRegistry> {
     if (this.bearerRotationUnsubscribe !== null) {
       this.bearerRotationUnsubscribe();
       this.bearerRotationUnsubscribe = null;
+    }
+    if (this.cloudVerdictUnsubscribe !== null) {
+      this.cloudVerdictUnsubscribe();
+      this.cloudVerdictUnsubscribe = null;
     }
     if (this.sessionVerifiedUnsubscribe !== null) {
       this.sessionVerifiedUnsubscribe();

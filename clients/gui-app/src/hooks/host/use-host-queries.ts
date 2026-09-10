@@ -12,6 +12,7 @@ import {
   toHostRpcError,
   type HostRpcError,
   type RequestOfMethod,
+  type RequiredHostMethodVersion,
   type ResponseOfMethod,
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -60,6 +61,16 @@ export interface UseHostQueriesOptions<
    * refuses that dispatch as a `HostRpcError` with nothing sent.
    */
   readonly preflight?: () => void;
+  /**
+   * See `UseHostQueriesWithResponseMapOptions.requiredHostMethodVersion`.
+   *
+   * Declared on the PUBLIC option shape as well as on the implementation's,
+   * because these are the types the overloads actually accept - adding it only
+   * where the option is read left every caller of `useHostQueries` unable to
+   * pass it, which vitest cannot see and the compile rejects. Inherited by
+   * `UseHostQueriesWithCombineOptions`, so both overloads are covered here.
+   */
+  readonly requiredHostMethodVersion?: () => RequiredHostMethodVersion | null;
 }
 
 export interface UseHostQueriesWithCombineOptions<
@@ -114,6 +125,24 @@ export interface UseHostQueriesWithResponseMapOptions<
   readonly options: HostQueryTanstackOptions<Method, TData> | null;
   /** See `UseHostQueriesOptions.preflight`. */
   readonly preflight?: () => void;
+  /**
+   * A version floor each request in this batch must clear, enforced against
+   * the handshake of the connection carrying the frame - the read-side twin of
+   * `UseHostMutationOptions.requiredHostMethodVersion`, and there for the same
+   * reason: a capability read at render describes a host PROCESS that can be
+   * replaced before the frame is written.
+   *
+   * Worth having on a READ even though a read destroys nothing, because of
+   * what the failure looks like on each side. A stripped partition selector
+   * answers 200 with facts about rows the caller was never shown, and the
+   * query caches that as truth; a refusal leaves the last good data in place
+   * and retries. Stale-but-correct is the better of the two, which is the
+   * whole argument for spending a floor here.
+   *
+   * Returning `null` dispatches with no floor, so an unselected request pays
+   * nothing.
+   */
+  readonly requiredHostMethodVersion?: () => RequiredHostMethodVersion | null;
   /**
    * Same role as `UseHostQueryWithResponseMapOptions.mapResponse` in
    * `use-host-query.ts` (see that doc comment), applied per-request here -
@@ -201,11 +230,20 @@ export function useHostQueriesWithResponseMap<
           );
         }
         args.preflight?.();
-        const response = await client.requestWithSignal(
-          request.method,
-          request.params,
-          signal,
-        );
+        const requirement = args.requiredHostMethodVersion?.() ?? null;
+        const response =
+          requirement === null
+            ? await client.requestWithSignal(
+                request.method,
+                request.params,
+                signal,
+              )
+            : await client.requestWithSignalRequiringHostMethodVersion(
+                request.method,
+                request.params,
+                signal,
+                requirement,
+              );
         return mapResponse({ response, queryClient, queryKey });
       });
     const pollPolicy = HOST_METHOD_POLL_TABLE[request.method].poll;

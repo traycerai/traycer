@@ -375,6 +375,14 @@ export class WsRpcClient<
         optionalManifest: clientManifest.optionalManifest,
         capabilities: [CLIENT_CAPABILITY_EPIC_WRITE_PATH_V1],
         clientIdentity: this.clientIdentity,
+        // Additive and needs no negotiation to send: an older host's copy of
+        // the open-frame schema strips the key (zod objects are non-strict) and
+        // behaves exactly as it does today. `undefined` travels as an absent
+        // key, which is the same "does not speak verdicts" signal a released
+        // client sends - so an authority built before this existed is
+        // indistinguishable on the wire from a client that predates it, which
+        // is the correct reading of both.
+        cloudAuthorized: authority.cloudAuthorized?.(),
       });
 
       // Handshake stays on the transport default even when the caller

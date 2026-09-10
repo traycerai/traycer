@@ -15,6 +15,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { cn } from "@/lib/utils";
 import { ShortcutHint } from "@/components/ui/shortcut-hint";
 import type { TaskPinnedState } from "@/hooks/epic/use-epic-task-pinned-states-query";
+import { useEpicPinLocalHomeSupported } from "@/hooks/epic/use-epic-pin-local-home-support";
 import {
   authorizesCloudCapability,
   useAuthStore,
@@ -58,16 +59,35 @@ interface TabContextMenuContentProps {
  * Why the tab's History pin is unavailable, or `null` when it is not.
  *
  * The row reasons win over the session one: `local-home` / preserved-orphan are
- * permanent facts about the epic, while a withdrawn cloud verdict is a
- * condition the user can recover from - and naming the recoverable one for a
- * row that could never be pinned would point them at the wrong problem. Same
- * ordering, and the same reasoning, as `historyPinUnavailableReason`.
+ * facts about the epic, while a withdrawn cloud verdict is a condition the user
+ * can recover from - and naming the recoverable one for a row that could never
+ * be pinned would point them at the wrong problem. Same ordering, same
+ * carve-out, and the same reasoning as `historyPinUnavailableReason`; the two
+ * are the desktop-History and tab-strip halves of one rule and must not drift.
  */
 function tabPinUnavailableReason(input: {
-  readonly rowUnavailable: boolean;
+  readonly localOnly: boolean;
+  readonly preservedOrphan: boolean;
   readonly cloudAuthorized: boolean;
-}): "row" | "unverified-session" | null {
-  if (input.rowUnavailable) return "row";
+  /** `epic.setPinned@1.1` negotiated - see `useEpicPinLocalHomeSupported`. */
+  readonly localHomePinSupported: boolean;
+}): "local-home" | "preserved-orphan" | "unverified-session" | null {
+  // The two row reasons are SPLIT rather than one `"row"` verdict, and that is
+  // no longer cosmetic. They were collapsed while both were permanent and both
+  // wore the same label; `local-home` is now conditional on the host, so a
+  // single verdict would have to pick one of two sentences for two states that
+  // have stopped coinciding - and the surviving one, preserved-orphan, is the
+  // one whose epic is NOT merely local ("its cloud copy was deleted").
+  if (input.preservedOrphan) return "preserved-orphan";
+  // A local-homed tab RETURNS from here either way and never reaches the
+  // session check. The `@1.1` host serves this pin off its own disk - its
+  // resolver admits on the local `epicHomeVerdict` and returns before any
+  // cloud header is built - so no cloud capability is spent and a withdrawn
+  // verdict is not a reason to refuse. `useEpicSetPinned` carries the same
+  // exemption at dispatch.
+  if (input.localOnly) {
+    return input.localHomePinSupported ? null : "local-home";
+  }
   if (!input.cloudAuthorized) return "unverified-session";
   return null;
 }
@@ -79,15 +99,27 @@ function tabPinUnavailableReason(input: {
  * already in the cloud.
  */
 function pinActionLabel(
-  unavailableReason: "row" | "unverified-session" | null,
+  unavailableReason:
+    | "local-home"
+    | "preserved-orphan"
+    | "unverified-session"
+    | null,
   taskPinned: boolean | null,
 ): string {
-  // Two different unavailabilities, and one label cannot honestly cover both:
-  // "stored on this device" is a fact about the ROW, and stating it for a
-  // cloud-backed row whose session merely lost its verdict would be a false
-  // statement about where the epic lives.
-  if (unavailableReason === "row") {
-    return "Pin Task in History \u2014 stored on this device";
+  // Three different unavailabilities, and one label cannot honestly cover any
+  // two of them: "stored on the connected device" is a fact about where the
+  // epic LIVES, and stating it for a cloud-backed row whose session merely lost
+  // its verdict - or whose cloud copy was deleted - is a false statement about
+  // that.
+  //
+  // "the connected device" rather than "this device": the epic lives on the
+  // HOST serving it, which on a phone or a relay-only shell is not the machine
+  // rendering this menu. See `history-pin-availability.ts` for the rule.
+  if (unavailableReason === "local-home") {
+    return "Pin Task in History \u2014 stored on the connected device";
+  }
+  if (unavailableReason === "preserved-orphan") {
+    return "Pin Task in History \u2014 cloud copy deleted";
   }
   if (unavailableReason === "unverified-session") {
     return "Pin Task in History \u2014 sign-in not confirmed";
@@ -110,20 +142,47 @@ function EpicTabMenuItems(props: {
   readonly taskPinned: boolean | null;
   readonly isTaskPinPending: boolean;
   readonly localOnly: boolean;
+  /** See `TaskPinnedState.pinnedKnown`. */
+  readonly pinReadingKnown: boolean;
+  /**
+   * The host a pin for THIS row would be dispatched to (`TaskPinnedState.hostId`),
+   * `null` to follow the window. Threaded as a prop rather than read here
+   * because it is a fact about the tab, not about the strip.
+   */
+  readonly pinDispatchHostId: string | null;
   readonly preservedOrphan: boolean;
   readonly onEditTitle: () => void;
   readonly onSetTaskPinned: (pinned: boolean) => void;
 }): React.ReactNode {
-  const { tabId, taskPinned, localOnly, preservedOrphan } = props;
+  const {
+    tabId,
+    taskPinned,
+    localOnly,
+    pinReadingKnown,
+    pinDispatchHostId,
+    preservedOrphan,
+  } = props;
   // Read here rather than threaded as a prop: the two row-intrinsic reasons
   // above are facts about the TAB and belong to its owner, while this is a fact
   // about the session, identical for every tab in the strip.
   const cloudAuthorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
+  // NOT read for the window, and NOT "identical for every tab in the strip",
+  // which is what this comment used to say. A local-homed row is dispatched to
+  // the host that owns the epic, so the negotiation that decides whether the
+  // control can be offered is that host's - and two tabs in one strip can
+  // answer differently. Asking the window instead offered the item for an epic
+  // whose own host never negotiated `@1.1`, and the dispatch gate then refused
+  // the click in silence.
+  const localHomePinSupported = useEpicPinLocalHomeSupported(pinDispatchHostId);
   const pinUnavailableReason = tabPinUnavailableReason({
-    rowUnavailable: localOnly || preservedOrphan,
+    localOnly,
+    preservedOrphan,
     cloudAuthorized,
+    // A negotiated `@1.1` only enables the control where there is a real pin
+    // reading to toggle; see `pinReadingKnown` at the call site.
+    localHomePinSupported: localHomePinSupported && pinReadingKnown,
   });
   const pinUnavailable = pinUnavailableReason !== null;
   return (
@@ -154,8 +213,17 @@ function EpicTabMenuItems(props: {
         disabled={taskPinned === null || props.isTaskPinPending}
         aria-disabled={pinUnavailable || undefined}
         className={cn(pinUnavailable && "opacity-50")}
-        data-local-home-pin-unavailable={localOnly || undefined}
-        data-preserved-orphan-pin-unavailable={preservedOrphan || undefined}
+        // The REASON, not the raw row fact. `localOnly` no longer implies the
+        // pin is unavailable - a `@1.1` host pins a local-homed epic - so an
+        // attribute keyed on the row would keep marking an ENABLED item as
+        // unavailable, which is both a lie to a reader and a test pinning the
+        // wrong thing.
+        data-local-home-pin-unavailable={
+          pinUnavailableReason === "local-home" || undefined
+        }
+        data-preserved-orphan-pin-unavailable={
+          pinUnavailableReason === "preserved-orphan" || undefined
+        }
         onSelect={(event) => {
           if (pinUnavailable || taskPinned === null) {
             event.preventDefault();
@@ -203,6 +271,13 @@ export function TabContextMenuContent(
   // cloud-or-unknown and keeps exactly today's behaviour.
   const taskPinned = taskPinnedState === null ? null : taskPinnedState.pinned;
   const localOnly = taskPinnedState?.home === "local";
+  // A local-homed epic that only a LIVE SESSION knows about carries a filler
+  // `pinned` (see `TaskPinnedState.pinnedKnown`): the app-wide host never
+  // resolved it, because it does not own it. `@1.1` must not turn that into an
+  // offer - the label would guess a pin state and the click would invert the
+  // guess, on a host that cannot serve the epic anyway. Such a row keeps the
+  // unavailable state it has today, with the corrected copy.
+  const pinReadingKnown = taskPinnedState?.pinnedKnown === true;
   const preservedOrphan = usePreservedOrphanSession(tab);
 
   const showDuplicate = tab.canDuplicate;
@@ -217,6 +292,8 @@ export function TabContextMenuContent(
           taskPinned={taskPinned}
           isTaskPinPending={isTaskPinPending}
           localOnly={localOnly}
+          pinReadingKnown={pinReadingKnown}
+          pinDispatchHostId={taskPinnedState?.hostId ?? null}
           preservedOrphan={preservedOrphan}
           onEditTitle={onEditTitle}
           onSetTaskPinned={onSetTaskPinned}
