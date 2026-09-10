@@ -246,6 +246,18 @@ describe("useLandingComposerActions", () => {
     landingMocks.request.mockReset();
     landingMocks.createTerminalAgent.mockReset();
     landingMocks.navigate.mockReset();
+    // Beside its siblings, for the same reason as the popover's recorder: this
+    // one lives in the SAME object as the mocks reset here and was the single
+    // member skipped, which is how a recorder drifts out of the reset
+    // discipline the rest of the fixture already follows.
+    //
+    // No false pass was measured here, and the assertion this feeds is an
+    // exact-array `toEqual`, which is already empty-refusing and already pins
+    // the count - so unlike the popover's, that assertion needs no change. The
+    // untreated hazard was the mirror image: a LATER sibling case dispatching a
+    // floored create would leave a second element and redden THIS case, which
+    // is a false failure pointing at innocent code.
+    landingMocks.floorsRequested.length = 0;
     landingMocks.request.mockResolvedValue({ roomInfo: null });
     landingMocks.createTerminalAgent.mockResolvedValue(undefined);
     landingMocks.getActiveHostId.mockReset();
