@@ -100,6 +100,7 @@ export function installManagedCommandChatSession(args: {
         streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
         onAuthError: null,
         onProviderAuthError: null,
+        wakeTransport: null,
       }),
   );
 

@@ -1,23 +1,6 @@
 import { useEffect, useState } from "react";
 import type { EpicSyncPillState } from "@/lib/epic-sync-pill-state";
-
-/**
- * How long the renderer↔host link may stay down before the pill escalates its
- * copy from "Reconnecting…" to "Still reconnecting…".
- *
- * Needed because a stream failure the host cannot classify now closes
- * RETRYABLE and the client reconnects forever - deliberately, so a blip can
- * never strand a surface. The cost is that "Reconnecting…" no longer implies
- * "back in a moment": a workspace that was actually deleted, or a host that is
- * off, produces the same word indefinitely. A minute is long enough that no
- * ordinary drop, wake, or host restart reaches it, and short enough that a
- * user who is waiting learns the retry is not converging.
- *
- * Escalation changes only the WORDS - same amber, same severity. The link
- * genuinely is retrying, and there is nothing for the user to do; presenting
- * that as an error would be a false alarm.
- */
-const LINK_DOWN_ESCALATION_MS = 60_000;
+import { LINK_DOWN_ESCALATION_MS } from "@/lib/link-down-escalation";
 
 /**
  * Whether the renderer↔host link has been down long enough to say so.
