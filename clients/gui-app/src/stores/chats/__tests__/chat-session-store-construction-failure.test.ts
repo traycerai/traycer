@@ -42,6 +42,7 @@ function constructWithThrowingFactory(): void {
       userId: "user-1",
       onAuthError: null,
       onProviderAuthError: null,
+      wakeTransport: null,
       streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
       streamClientFactory: () => {
         throw new Error("transport failed to construct");

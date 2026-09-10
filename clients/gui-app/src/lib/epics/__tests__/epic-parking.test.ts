@@ -66,11 +66,11 @@ function resetCanvasStore(): void {
 
 function openEpicTab(tabId: string, epicId: string): void {
   useEpicCanvasStore.getState().openEpicTabWithId(tabId, epicId, epicId);
-  // The store's own module-scope subscription (`useEpicCanvasStore.subscribe(
-  // syncOpenEpics)`) re-derives parking's entries synchronously on every
-  // `setState`, so this call is usually redundant. It is made explicit here
-  // anyway, matching the test seam's stated purpose, and is a guaranteed
-  // no-op when the subscription has already done the work.
+  // `epic-parking-open-tabs.ts`'s module-scope `useEpicCanvasStore.subscribe`
+  // re-derives parking's entries synchronously on every `setState`, so this
+  // call is usually redundant. It is made explicit here anyway, matching the
+  // test seam's stated purpose, and is a guaranteed no-op when the
+  // subscription has already done the work.
   __syncEpicParkingOpenTabsForTests();
 }
 
@@ -409,6 +409,8 @@ describe("epic-parking - B1: retention-pool / warm-session key", () => {
       userId: null,
       onAuthError: null,
       onProviderAuthError: null,
+      // Required since #1815's syncing bar; this fixture never redials.
+      wakeTransport: null,
       streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
       streamClientFactory: () => ({
         sendAction: () => undefined,

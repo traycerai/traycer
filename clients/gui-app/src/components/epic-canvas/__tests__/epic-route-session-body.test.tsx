@@ -245,6 +245,8 @@ describe("<EpicRouteSessionBody /> - renderer parking (plan C, C1)", () => {
       userId: null,
       onAuthError: null,
       onProviderAuthError: null,
+      // Required since #1815's syncing bar; this fixture never redials.
+      wakeTransport: null,
       streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
       streamClientFactory: () => ({
         sendAction: () => undefined,

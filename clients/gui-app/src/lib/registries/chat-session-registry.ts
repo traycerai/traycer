@@ -7,6 +7,8 @@ import {
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ChatStreamClient } from "@traycer-clients/shared/host-transport/chat-stream-client";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
+import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { useAuthService, useHostClient } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
@@ -57,6 +59,9 @@ const STREAM_FLUSH_COORDINATOR = createStreamFlushCoordinator(
   BROWSER_STREAM_FLUSH_TIMERS,
 );
 const CHAT_SESSION_SCOPE_SEPARATOR = "\u0000";
+
+/** Passed to `reconnectAll` so a hand-driven wake is distinguishable in logs. */
+const CHAT_SESSION_WAKE_REASON = "user-retry";
 
 const handleHostIds = new WeakMap<ChatSessionStoreHandle, string | null>();
 
@@ -200,6 +205,14 @@ export function useChatSessionHandle(
     // revived session is never handed a dead transport. `retry()` re-invokes
     // this factory, rebuilding the transport with live deps.
     let acquiredHandle: ChatSessionStoreHandle | null = null;
+    // The socket THIS chat's stream rides, captured as the transport is built.
+    // A mutable slot rather than a value because `retry()` re-invokes the
+    // factory and builds a new one: a wake must reach whichever socket is
+    // current, not the one that existed when the session was first opened.
+    // `null` until the first build, and on the override path, where no
+    // transport of ours exists to wake.
+    let boundStreamClient: IHostStreamClient<HostStreamRpcRegistry> | null =
+      null;
     const factory: ChatStreamClientFactory = (
       factoryEpicId,
       factoryChatId,
@@ -219,13 +232,15 @@ export function useChatSessionHandle(
       const result = openOwnedDurableStreamClient(
         openTransport,
         hostId,
-        (ws) =>
-          new ChatStreamClient({
+        (ws) => {
+          boundStreamClient = ws;
+          return new ChatStreamClient({
             wsStreamClient: ws,
             epicId: factoryEpicId,
             chatId: factoryChatId,
             callbacks,
-          }),
+          });
+        },
         () => acquiredHandle?.store.getState().retry(),
       );
       return {
@@ -269,6 +284,19 @@ export function useChatSessionHandle(
           streamFlushCoordinator: STREAM_FLUSH_COORDINATOR,
           onAuthError,
           onProviderAuthError,
+          // THIS chat's socket, never the app-wide one. Each chat session owns
+          // its own transport, so a wake resolved from `useWsStreamClient()`
+          // would collapse the backoff on a different connection and leave
+          // this one sitting out its delay - a button that appears to work and
+          // does nothing. `probeFirst: false` because a person pressing it is
+          // demanding a re-dial, and the probe-first flavour answers a
+          // live-but-stuck socket with nothing.
+          wakeTransport: () => {
+            boundStreamClient?.reconnectAll(CHAT_SESSION_WAKE_REASON, {
+              probeFirst: false,
+              wakeProbe: null,
+            });
+          },
         }),
     );
     acquiredHandle = next;
