@@ -8,15 +8,15 @@ import {
 } from "@/components/auth/auth-brand-splash";
 
 /**
- * These run COMPILED. `auth-brand-splash` is listed in
- * `REACT_COMPILER_REGRESSION_FILES` (vitest.config.ts) for the reason recorded
- * there: the previous launch surface derived its phase from other flags, the
- * React Compiler memoized that derivation on inputs the timer never touched,
- * and the cached value outlived the timer - a sign-in screen that never left,
- * on a device, while an uncompiled suite stayed green.
+ * These run COMPILED - `auth-brand-splash` is listed in
+ * `REACT_COMPILER_REGRESSION_FILES` (vitest.config.ts), and that is what makes
+ * them meaningful. The compiler can cache a value derived from other state past
+ * the timer meant to retire it, so a surface that retires itself on a timeout
+ * has to be tested as the compiler emits it. Uncompiled, these tests would pass
+ * against code that cannot ship.
  *
- * So the assertion that matters here is not "the boolean flips" but "the
- * splash is GONE after the ceiling, under compilation".
+ * The assertion that matters is therefore not "the boolean flips" but "the
+ * splash is GONE after the span, under compilation".
  */
 function stubReducedMotion(reduced: boolean): void {
   vi.stubGlobal("matchMedia", (query: string) => ({

@@ -3,6 +3,7 @@ import {
   AuthBrandSplash,
 } from "@/components/auth/auth-brand-splash";
 import { BrandEntrance } from "@/components/auth/brand-entrance";
+import { BRAND_DARK_GROUND_CLASS } from "@/components/auth/brand-surface";
 import { PhotoBloom } from "@/components/auth/cinematic-backdrop";
 import { SignInButton } from "@/components/layout/header/sign-in-button";
 import { getClientAppVersionLabel } from "@/lib/app-version";
@@ -54,7 +55,12 @@ export function AuthLandingPage(props: {
   return (
     // min-h-full, not min-h-svh: the standalone shell owns the viewport
     // height and reserves the Windows title-bar band above this page.
-    <main className="relative isolate flex min-h-full flex-1 overflow-hidden bg-zinc-950 text-white">
+    <main
+      className={cn(
+        "relative isolate flex min-h-full flex-1 overflow-hidden text-white",
+        BRAND_DARK_GROUND_CLASS,
+      )}
+    >
       <div className="auth-arrival-backdrop pointer-events-none absolute inset-0">
         <PhotoBloom />
       </div>

@@ -62,27 +62,21 @@
   }
 }
 
-/* Variant A - draw. The mark's paths are FILLED shapes, so drawing them means
-   borrowing them as outlines first: no fill, a stroke that runs its own length,
-   then the fill arrives under the finished outline. `stroke-dasharray` is a
-   generous over-estimate of the longest path rather than a measured length -
-   an over-estimate simply starts the reveal a little later, where an
-   under-estimate would leave a segment permanently drawn. */
-@keyframes auth-mark-draw {
+/* Variant A - sweep. The mark is revealed by a diagonal mask edge travelling
+   across it, so the finished shape is always what is on screen - just not all
+   of it yet. A stroke-based "draw" was tried and is not viable here: these
+   paths are filled outlines, so drawing them needs each path's real length,
+   and a guessed `stroke-dasharray` leaves the mark invisible for most of its
+   run. An oversized gradient moved by `mask-position` needs no measurement at
+   all. */
+@keyframes auth-mark-sweep {
   from {
-    stroke-dashoffset: 1200;
+    mask-position: 100% 100%;
+    -webkit-mask-position: 100% 100%;
   }
   to {
-    stroke-dashoffset: 0;
-  }
-}
-
-@keyframes auth-mark-ink {
-  from {
-    fill-opacity: 0;
-  }
-  to {
-    fill-opacity: 1;
+    mask-position: 0% 0%;
+    -webkit-mask-position: 0% 0%;
   }
 }
 
@@ -192,26 +186,16 @@
     animation: none;
   }
 
-  .auth-splash--draw .brand-entrance-mark g > path {
-    fill-opacity: 0;
-    stroke: #fff;
-    stroke-width: 3;
-    stroke-dasharray: 1200;
+  .auth-splash--sweep .brand-entrance-mark {
+    mask-image: linear-gradient(135deg, #000 45%, transparent 55%);
+    mask-size: 300% 300%;
+    mask-repeat: no-repeat;
+    -webkit-mask-image: linear-gradient(135deg, #000 45%, transparent 55%);
+    -webkit-mask-size: 300% 300%;
+    -webkit-mask-repeat: no-repeat;
     animation:
-      auth-mark-draw 2400ms cubic-bezier(0.65, 0, 0.35, 1) both,
-      auth-mark-ink 700ms 2350ms ease-out both;
-  }
-
-  .auth-splash--draw .brand-entrance-mark g > path:nth-child(2) {
-    animation-delay: 260ms, 2350ms;
-  }
-
-  .auth-splash--draw .brand-entrance-mark g > path:nth-child(3) {
-    animation-delay: 130ms, 2350ms;
-  }
-
-  .auth-splash--draw .brand-entrance-mark g > path:nth-child(4) {
-    animation-delay: 390ms, 2350ms;
+      auth-mark-sweep 2000ms cubic-bezier(0.65, 0, 0.35, 1) both,
+      auth-mark-settle 3200ms cubic-bezier(0.22, 1, 0.36, 1) both;
   }
 
   .auth-splash--assemble .brand-entrance-mark g > path {

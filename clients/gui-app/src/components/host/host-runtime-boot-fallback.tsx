@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { HostBootSurface } from "@/components/host/host-boot-surface";
 import { APP_HEADER_HEIGHT_CLASS } from "@/components/layout/header/app-header-height";
 import { cn } from "@/lib/utils";
+import { BRAND_DARK_GROUND_CLASS } from "@/components/auth/brand-surface";
 import { isMobileApp } from "@/lib/mobile-app";
 
 /**
@@ -28,8 +29,7 @@ export function HostRuntimeBootFallback(props: {
   // start: there is no bundled local host to install or boot (`onLocalHostChange`
   // emits `null` and never transitions), and the bootstrap-log disclosure
   // self-hides for want of a CLI. So the card's "Starting Traycer…" describes
-  // work that is not happening, which is the sentence a signed-out user
-  // reported seeing on launch. A plain dark surface says nothing instead, on
+  // work that is not happening. A plain dark surface says nothing instead, on
   // the same ground as the native launch image so the handoff is invisible.
   //
   // Desktop is untouched: there the same window really is a host starting, and
@@ -38,7 +38,10 @@ export function HostRuntimeBootFallback(props: {
   if (isMobileApp()) {
     return (
       <div
-        className="flex min-h-safe-svh w-full flex-col bg-zinc-950"
+        className={cn(
+          "flex min-h-safe-svh w-full flex-col",
+          BRAND_DARK_GROUND_CLASS,
+        )}
         data-testid="host-runtime-boot-fallback"
       />
     );
