@@ -33,6 +33,16 @@ const fixtureUrlPath = "/src/__tests__/browser/toast-close-button-touch.html";
 const chromePath = await findChrome("the toast close-button touch regression");
 const vitePort = await freePort();
 const TOUCH_QUERY = "(pointer: coarse)";
+// The desktop arms need a mouse, and headless Chrome otherwise reports
+// whatever input devices the host has: a CI runner with none reports
+// `hover: none` / `pointer: none`, under which Tailwind's `group-hover:`
+// never applies and the hover arm can only fail. Pin a fine, hovering
+// pointer so the premise belongs to this driver, not to the runner. (Blink's
+// hover/pointer enums: hover 2 = hover; pointer 4 = fine.) Touch emulation
+// still overrides these while it is on.
+const MOUSE_INPUT_ARGS = [
+  "--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4",
+];
 const CLOSE_BUTTON =
   '[data-sonner-toast][data-mounted="true"][data-front="true"] [data-close-button]';
 // The header's icon buttons get a 44px hit area on touch
@@ -79,6 +89,7 @@ try {
   const launched = await launchChromeWithDevTools(
     chromePath,
     "traycer-toast-touch-",
+    MOUSE_INPUT_ARGS,
   );
   chrome = launched.chrome;
   chromeProfilePath = launched.profilePath;
@@ -113,6 +124,11 @@ try {
   // --- Desktop: hidden until hover, exactly as before. ---
   await moveMouse(client, 5, 5);
   const desktop = await readCloseButton(client);
+  assert.equal(
+    desktop.hoverQuery,
+    true,
+    "desktop arm premise: Chrome must report a hovering pointer",
+  );
   assert.equal(
     desktop.touchQuery,
     false,
@@ -223,7 +239,7 @@ try {
       deviceScaleFactor: 1,
       mobile: true,
     });
-    await client.send("Page.navigate", { url: `${pageUrl}?mobile-app=1` });
+    await navigate(client, `${pageUrl}?mobile-app=1`);
     await waitForToast(client);
     const mobile = await readCloseButton(client);
     const label = `${viewport.width}x${viewport.height}`;
@@ -344,6 +360,39 @@ async function assertCollapsedStackInert(client, label) {
   return "collapsed stack inert";
 }
 
+/**
+ * Navigates and returns once the NEW document is the one being evaluated.
+ * `Page.navigate` answers before the old document is gone, and both documents
+ * show a toast, so polling for the toast alone could read the old one - or
+ * lose its context mid-read. The old document carries a marker the new one
+ * cannot have, and a context destroyed by the navigation is retried.
+ */
+async function navigate(client, url) {
+  await evaluate(client, "window.__probeStaleDocument = true");
+  await client.send("Page.navigate", { url });
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    try {
+      const ready = await evaluate(
+        client,
+        `window.__probeStaleDocument !== true && document.readyState === "complete"`,
+      );
+      if (ready) return;
+    } catch (error) {
+      if (!isNavigationContextError(error)) throw error;
+    }
+    await delay(50);
+  }
+  throw new Error(`Timed out waiting for the navigation to ${url}`);
+}
+
+function isNavigationContextError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /context was destroyed|Cannot find context|Inspected target navigated/i.test(
+    message,
+  );
+}
+
 async function waitForToast(client) {
   await waitFor(
     client,
@@ -378,6 +427,7 @@ async function readCloseButton(client) {
        const probe = document.elementFromPoint(centerX + 18, centerY + 18);
        return {
          touchQuery: matchMedia(${JSON.stringify(TOUCH_QUERY)}).matches,
+         hoverQuery: matchMedia("(hover: hover)").matches,
          position: toaster.dataset.yPosition + "-" + toaster.dataset.xPosition,
          opacity: style.opacity,
          pointerEvents: style.pointerEvents,
@@ -436,12 +486,27 @@ function connectCdp(url) {
     const socket = new WebSocket(url);
     const pending = new Map();
     let nextId = 0;
+    let closedReason = null;
     const connectTimer = setTimeout(
       () => reject(new Error("CDP connect timed out")),
       15_000,
     );
+    // A socket that errors or closes mid-run must fail every outstanding
+    // request: `run-tests.ts` spawns this script without a timeout, so a
+    // request left unsettled would hold the CI job until its own timeout
+    // and hide the real error.
+    const fail = (reason) => {
+      closedReason = reason;
+      clearTimeout(connectTimer);
+      for (const request of pending.values()) request.reject(reason);
+      pending.clear();
+      reject(reason);
+    };
     socket.addEventListener("error", (event) =>
-      reject(new Error(String(event))),
+      fail(new Error(`CDP socket error: ${String(event)}`)),
+    );
+    socket.addEventListener("close", () =>
+      fail(new Error("CDP socket closed before the run finished")),
     );
     socket.addEventListener("message", (event) => {
       const message = JSON.parse(String(event.data));
@@ -456,9 +521,23 @@ function connectCdp(url) {
       clearTimeout(connectTimer);
       resolve({
         send(method, params = {}) {
+          if (closedReason !== null) return Promise.reject(closedReason);
           return new Promise((requestResolve, requestReject) => {
             const id = ++nextId;
-            pending.set(id, { resolve: requestResolve, reject: requestReject });
+            const timer = setTimeout(() => {
+              pending.delete(id);
+              requestReject(new Error(`CDP ${method} timed out`));
+            }, 30_000);
+            pending.set(id, {
+              resolve: (result) => {
+                clearTimeout(timer);
+                requestResolve(result);
+              },
+              reject: (reason) => {
+                clearTimeout(timer);
+                requestReject(reason);
+              },
+            });
             socket.send(JSON.stringify({ id, method, params }));
           });
         },
