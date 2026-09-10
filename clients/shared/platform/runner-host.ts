@@ -698,7 +698,7 @@ export type PushPermissionState = "prompt" | "granted" | "denied";
 
 /**
  * Read/repair surface for the device's OS push permission, backing the
- * Settings → Notifications "this phone" row. Only reachable where
+ * Settings → Sounds "this phone" row. Only reachable where
  * `IRunnerHost.pushPermission` is non-null.
  */
 export interface IPushPermissionHost {

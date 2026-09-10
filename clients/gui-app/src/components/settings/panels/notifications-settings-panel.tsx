@@ -181,7 +181,7 @@ function NotificationsSettingsPanelContent(props: {
   return (
     <SettingsPanelShell
       title="Notifications"
-      description="What this host surfaces, and what its automation receives."
+      description="Which events this host surfaces, and what its automation receives. Choose chimes under Application → Sounds; manage banners in your operating system's notification settings."
       fillHeight
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
       // The header named the scoped host until the sidebar started doing it a
