@@ -1,7 +1,4 @@
-import {
-  AUTH_SPLASH_DEFAULT_VARIANT,
-  AuthBrandSplash,
-} from "@/components/auth/auth-brand-splash";
+import { AuthBrandSplash } from "@/components/auth/auth-brand-splash";
 import { BrandEntrance } from "@/components/auth/brand-entrance";
 import { BRAND_DARK_GROUND_CLASS } from "@/components/auth/brand-surface";
 import { PhotoBloom } from "@/components/auth/cinematic-backdrop";
@@ -112,9 +109,7 @@ export function AuthLandingPage(props: {
           arrival gets it: a refused shell is on this page to READ something,
           and an animation in front of that sentence delays the one thing the
           screen exists to say. */}
-      {props.refusal === null ? (
-        <AuthBrandSplash variant={AUTH_SPLASH_DEFAULT_VARIANT} />
-      ) : null}
+      {props.refusal === null ? <AuthBrandSplash /> : null}
 
       <footer className="pointer-events-none absolute right-0 bottom-0 z-10 flex items-center justify-end px-[clamp(1.25rem,4vw,4rem)] pr-[max(clamp(1.25rem,4vw,4rem),var(--safe-area-inset-right))] pb-[max(clamp(1rem,3vh,2rem),var(--safe-area-inset-bottom))] font-mono text-overline text-white/[0.42]">
         <span>{getClientAppVersionLabel()}</span>

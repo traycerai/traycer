@@ -2,7 +2,6 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { act } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  AUTH_SPLASH_DEFAULT_VARIANT,
   AUTH_SPLASH_MS,
   AuthBrandSplash,
 } from "@/components/auth/auth-brand-splash";
@@ -36,7 +35,7 @@ describe("<AuthBrandSplash />", () => {
     vi.useFakeTimers();
     stubReducedMotion(false);
 
-    render(<AuthBrandSplash variant={AUTH_SPLASH_DEFAULT_VARIANT} />);
+    render(<AuthBrandSplash />);
     expect(screen.queryByTestId("auth-brand-splash")).not.toBeNull();
 
     act(() => {
@@ -53,7 +52,7 @@ describe("<AuthBrandSplash />", () => {
     vi.useFakeTimers();
     stubReducedMotion(false);
 
-    render(<AuthBrandSplash variant={AUTH_SPLASH_DEFAULT_VARIANT} />);
+    render(<AuthBrandSplash />);
     act(() => {
       vi.advanceTimersByTime(AUTH_SPLASH_MS - 1);
     });
@@ -64,7 +63,7 @@ describe("<AuthBrandSplash />", () => {
     vi.useFakeTimers();
     stubReducedMotion(true);
 
-    render(<AuthBrandSplash variant={AUTH_SPLASH_DEFAULT_VARIANT} />);
+    render(<AuthBrandSplash />);
     expect(screen.queryByTestId("auth-brand-splash")).toBeNull();
   });
 
@@ -72,7 +71,7 @@ describe("<AuthBrandSplash />", () => {
     vi.useFakeTimers();
     stubReducedMotion(false);
 
-    render(<AuthBrandSplash variant={AUTH_SPLASH_DEFAULT_VARIANT} />);
+    render(<AuthBrandSplash />);
     const splash = screen.getByTestId("auth-brand-splash");
 
     // `fixed inset-0` is reserved for `StandaloneShell`, and a contract test

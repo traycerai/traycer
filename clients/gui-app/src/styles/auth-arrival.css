@@ -62,59 +62,11 @@
   }
 }
 
-/* Variant A - sweep. The mark is revealed by a diagonal mask edge travelling
-   across it, so the finished shape is always what is on screen - just not all
-   of it yet. A stroke-based "draw" was tried and is not viable here: these
-   paths are filled outlines, so drawing them needs each path's real length,
-   and a guessed `stroke-dasharray` leaves the mark invisible for most of its
-   run. An oversized gradient moved by `mask-position` needs no measurement at
-   all. */
-@keyframes auth-mark-sweep {
-  from {
-    mask-position: 100% 100%;
-    -webkit-mask-position: 100% 100%;
-  }
-  to {
-    mask-position: 0% 0%;
-    -webkit-mask-position: 0% 0%;
-  }
-}
-
-/* Variant C - scale and glow. The glow is a drop-shadow on the mark itself, so
-   it never paints a box; it swells as the mark lands and then dissipates. */
-@keyframes auth-mark-swell {
-  0% {
-    opacity: 0;
-    transform: scale(0.6);
-  }
-  55% {
-    opacity: 1;
-  }
-  70% {
-    transform: scale(1.03);
-  }
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-@keyframes auth-mark-glow {
-  0% {
-    filter: drop-shadow(0 0 0 rgb(255 255 255 / 0));
-  }
-  60% {
-    filter: drop-shadow(0 0 2.5rem rgb(255 255 255 / 0.34));
-  }
-  100% {
-    filter: drop-shadow(0 0 0 rgb(255 255 255 / 0));
-  }
-}
-
-/* Variant B - assemble. The four pieces travel in from their own offsets and
-   the whole mark settles once. Longer than the original 560ms per piece so the
-   motion fills the surface's life instead of finishing in the first second and
-   leaving it frozen. */
+/* The four pieces travel in from their own offsets and the whole mark settles
+   once. The FIRST piece starts on the splash's first frame - a leading delay
+   here is indistinguishable from a slow launch, because the surface is already
+   on screen and nothing is moving on it. The stagger between pieces is what
+   reads as sequence, so it stays; the wait before any of it does not. */
 @keyframes auth-mark-settle {
   0% {
     transform: scale(1.04);
@@ -178,68 +130,46 @@
     animation: auth-splash-play 3500ms linear both;
   }
 
-  /* Each variant OWNS the mark's motion, so the shared per-piece assembly that
-     `BrandEntrance` applies elsewhere is cleared first. Without this the
-     draw and swell variants would run on top of pieces that were still
-     travelling from the shared keyframes. */
+  /* The splash restates the per-piece animation rather than inheriting the
+     shorter one `BrandEntrance` applies elsewhere: on this surface the motion
+     has a whole launch to fill, and the same mark on the sign-in page behind it
+     keeps its own quicker arrival. */
   .auth-splash .brand-entrance-mark g > path {
-    animation: none;
-  }
-
-  .auth-splash--sweep .brand-entrance-mark {
-    mask-image: linear-gradient(135deg, #000 45%, transparent 55%);
-    mask-size: 300% 300%;
-    mask-repeat: no-repeat;
-    -webkit-mask-image: linear-gradient(135deg, #000 45%, transparent 55%);
-    -webkit-mask-size: 300% 300%;
-    -webkit-mask-repeat: no-repeat;
-    animation:
-      auth-mark-sweep 2000ms cubic-bezier(0.65, 0, 0.35, 1) both,
-      auth-mark-settle 3200ms cubic-bezier(0.22, 1, 0.36, 1) both;
-  }
-
-  .auth-splash--assemble .brand-entrance-mark g > path {
     transform-box: fill-box;
     transform-origin: center;
-    animation: brand-mark-arrive 1600ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    animation: brand-mark-arrive 1500ms cubic-bezier(0.22, 1, 0.36, 1) both;
   }
 
-  .auth-splash--assemble .brand-entrance-mark g > path:nth-child(1) {
+  .auth-splash .brand-entrance-mark g > path:nth-child(1) {
     --mark-arrival-x: -55%;
     --mark-arrival-y: 55%;
 
-    animation-delay: 620ms;
+    animation-delay: 180ms;
   }
 
-  .auth-splash--assemble .brand-entrance-mark g > path:nth-child(2) {
+  .auth-splash .brand-entrance-mark g > path:nth-child(2) {
     --mark-arrival-x: 30%;
     --mark-arrival-y: -30%;
 
-    animation-delay: 420ms;
+    animation-delay: 90ms;
   }
 
-  .auth-splash--assemble .brand-entrance-mark g > path:nth-child(3) {
+  .auth-splash .brand-entrance-mark g > path:nth-child(3) {
     --mark-arrival-x: -18%;
     --mark-arrival-y: -18%;
 
-    animation-delay: 200ms;
+    animation-delay: 0ms;
   }
 
-  .auth-splash--assemble .brand-entrance-mark g > path:nth-child(4) {
+  .auth-splash .brand-entrance-mark g > path:nth-child(4) {
     --mark-arrival-x: -30%;
     --mark-arrival-y: 30%;
 
-    animation-delay: 820ms;
+    animation-delay: 270ms;
   }
 
-  .auth-splash--assemble .brand-entrance-mark {
-    animation: auth-mark-settle 3200ms cubic-bezier(0.22, 1, 0.36, 1) both;
-  }
-
-  .auth-splash--scale .brand-entrance-mark {
-    animation:
-      auth-mark-swell 2600ms cubic-bezier(0.22, 1, 0.36, 1) both,
-      auth-mark-glow 3200ms ease-in-out both;
+  .auth-splash .brand-entrance-mark {
+    animation: auth-mark-settle 3260ms cubic-bezier(0.22, 1, 0.36, 1) both;
   }
 
   .auth-arrival-actions {
