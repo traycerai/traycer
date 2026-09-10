@@ -29,6 +29,25 @@ export type OwnershipClaimResult =
   | { readonly ok: true }
   | { readonly ok: false; readonly currentOwner: string };
 
+/**
+ * Which Epics one window currently has a VISIBLE pane of - the cross-window
+ * half of renderer parking (plan C, decision C6).
+ *
+ * Deliberately not `OwnershipEntry`, which answers a different question.
+ * Ownership is per TAB and says which window may serve an Epic at all; it
+ * counts a hidden tab exactly like a shown one, so reading it as visibility
+ * would disable parking for every multi-window case. This says only "a pane of
+ * this Epic is on screen in that window right now", which is the fact the park
+ * window measures.
+ *
+ * Live state, never persisted: a stale entry restored from a previous run
+ * would suppress parking for an Epic no window is showing.
+ */
+export interface EpicVisibilityEntry {
+  readonly windowId: string;
+  readonly epicIds: readonly string[];
+}
+
 export interface PerWindowEpicViewTab {
   readonly id: string;
   readonly epicId: string;

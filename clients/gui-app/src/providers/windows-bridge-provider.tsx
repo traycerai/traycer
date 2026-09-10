@@ -18,6 +18,7 @@ import {
 } from "@/stores/home/landing-draft-store";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { setDesktopEpicOwnershipBridge } from "@/lib/windows/desktop-epic-ownership";
+import { installCrossWindowEpicVisibility } from "@/lib/epics/cross-window-epic-visibility";
 import {
   createDebouncedDesktopPerWindowProjectionBridge,
   DESKTOP_PER_WINDOW_PROJECTION_DEBOUNCE_MS,
@@ -226,6 +227,13 @@ function installDesktopWindowsBridge(
     void fileEditRuntimeRegistry.flushRecovery().catch(() => undefined);
   };
   setDesktopEpicOwnershipBridge(bridge);
+  // Renderer parking's cross-window arm (plan C, C6). Installed beside the
+  // ownership bridge because it has the same lifetime and the same degradation
+  // story, and torn down in this effect's cleanup rather than in
+  // `clearDesktopWindowsBridge` - that helper also runs on the NO-bridge path,
+  // where nothing was installed to undo.
+  const uninstallCrossWindowVisibility =
+    installCrossWindowEpicVisibility(bridge);
   setActiveDesktopPerWindowProjectionBridge(projectionBridge);
   setEpicCanvasDesktopProjectionBridge(projectionBridge);
   setLandingDraftDesktopProjectionBridge(projectionBridge);
@@ -309,6 +317,7 @@ function installDesktopWindowsBridge(
 
   return () => {
     lifecycle.cancelled = true;
+    uninstallCrossWindowVisibility();
     perWindowSubscription.dispose();
     if (typeof window !== "undefined") {
       window.removeEventListener("pagehide", flushProjection);

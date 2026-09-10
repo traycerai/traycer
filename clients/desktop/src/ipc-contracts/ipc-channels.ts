@@ -130,6 +130,8 @@ export const RunnerHostInvoke = {
   ownershipSnapshot: "runnerHost:windows:ownership:snapshot",
   ownershipClaim: "runnerHost:windows:ownership:claim",
   ownershipRelease: "runnerHost:windows:ownership:release",
+  epicVisibilitySnapshot: "runnerHost:windows:epicVisibility:snapshot",
+  epicVisibilityReport: "runnerHost:windows:epicVisibility:report",
   perWindowStateGet: "runnerHost:windows:perWindowState:get",
   perWindowStateCapabilities: "runnerHost:windows:perWindowState:capabilities",
   perWindowStateUpdate: "runnerHost:windows:perWindowState:update",
@@ -411,6 +413,7 @@ export const RunnerHostEvent = {
   getFreshUnsyncedSnapshot: "runnerHost:event:getFreshUnsyncedSnapshot",
   windowsChange: "runnerHost:event:windows:change",
   ownershipChange: "runnerHost:event:windows:ownership:change",
+  epicVisibilityChange: "runnerHost:event:windows:epicVisibility:change",
   perWindowStateChange: "runnerHost:event:windows:perWindowState:change",
   authSessionChange: "runnerHost:event:windows:authSession:change",
   /**

@@ -820,9 +820,13 @@ export class OpenEpicSessionRegistry {
    * polls, the chat tiles) must go quiet whether or not a session happened to
    * be resident at the moment the window elapsed.
    *
-   * Deliberately NOT consulting demand. A parked epic's tabs are mounted BY
-   * DEFINITION - parking is what happens to an open tab nobody is looking at -
-   * so a demand check would refuse every park there is.
+   * Deliberately NOT consulting demand, and that is load-bearing rather than an
+   * omission: parking is what happens to an OPEN TAB nobody is looking at, and
+   * such a tab may hold any demand at all. A retained surface holds one; a tab
+   * past `retainedTopLevelSurfaces` holds NONE and its session is sitting warm
+   * with `epic.subscribe` open, which is the single largest thing parking is
+   * for. A demand check would refuse the first case and a
+   * demand-must-be-zero check would refuse the second.
    */
   canPark(epicId: string): boolean {
     const entry = this.sessions.peekEntry(epicId);
@@ -835,8 +839,16 @@ export class OpenEpicSessionRegistry {
   }
 
   /**
-   * Release this epic's live session because nothing is watching it, leaving
-   * its tabs open. Answers whether the epic is now subscription-free.
+   * Release this epic's session because nothing is watching it, leaving its
+   * tabs open. Answers whether the epic is now subscription-free.
+   *
+   * MOUNTED OR WARM, and the name says only `park` for that reason. The entry
+   * is read through `peekEntry`, which answers for a session at any demand, so
+   * this reaches the warm session of a tab whose surface the retention pool
+   * unmounted just as it reaches a mounted one. That case is not incidental -
+   * it is up to `maxLiveEpics` sessions holding `epic.subscribe` for tabs with
+   * no surface at all, and a version of this keyed on a mounted provider could
+   * not see any of them.
    *
    * `discard` minus the tab close, which is the shape plan C names: the stream,
    * the runtime worker and everything the session owns (its artifact rooms and
@@ -857,7 +869,7 @@ export class OpenEpicSessionRegistry {
    * is decision C5 ("the existing establishing presentation, as after a host
    * reconnect").
    */
-  parkMounted(epicId: string): boolean {
+  park(epicId: string): boolean {
     return this.sessions.transact(() => {
       const entry = this.sessions.peekEntry(epicId);
       if (entry === null) return true;

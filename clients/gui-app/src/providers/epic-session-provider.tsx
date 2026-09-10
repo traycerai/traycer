@@ -244,7 +244,7 @@ function requireConstructionHostStamp(handle: OpenEpicStoreHandle): string {
  * the parking module, which watches the registry's own eligibility edge.
  */
 function releaseParkedEpicSession(epicId: string): boolean {
-  if (getOpenEpicRegistry().parkMounted(epicId)) return true;
+  if (getOpenEpicRegistry().park(epicId)) return true;
   reportEpicParkRefused(epicId);
   return false;
 }

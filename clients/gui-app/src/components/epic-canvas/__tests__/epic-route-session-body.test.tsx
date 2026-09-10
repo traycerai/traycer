@@ -6,8 +6,8 @@ import { EpicRouteSessionBody } from "@/components/epic-canvas/epic-route-sessio
 import {
   __resetEpicParkingForTests,
   isEpicParked,
-  trackEpicParkingSurface,
 } from "@/lib/epics/epic-parking";
+import { __syncEpicParkingOpenTabsForTests } from "@/lib/epics/epic-parking-open-tabs";
 import { setEpicSurfaceVisibility } from "@/lib/browser-view/tiles/surface-host-opened-tab";
 import { PARK_HIDDEN_EPIC_AFTER_MS } from "@/stores/replica-memory/retention-profile";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
@@ -25,6 +25,7 @@ import type { EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import { createChatSessionStore } from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 
 const useInitialChatHandoffMock = vi.hoisted(() => vi.fn());
 const useEpicRouteSynchronizationMock = vi.hoisted(() => vi.fn());
@@ -145,7 +146,7 @@ describe("<EpicRouteSessionBody />", () => {
 // `useEpicParked` is the REAL hook here - only `EpicShell` and friends are
 // mocked above, `EpicSessionGate` is a passthrough, and neither reads or
 // writes parking state - so driving the real `epic-parking` module's clock
-// through `trackEpicParkingSurface` + `setEpicSurfaceVisibility` exercises
+// through opening a real canvas tab + `setEpicSurfaceVisibility` exercises
 // the genuine park/unpark transition this component reacts to, with no fake
 // standing in for the decision itself.
 //
@@ -205,10 +206,10 @@ function buildParkableEpicHandle(epicId: string) {
 
 describe("<EpicRouteSessionBody /> - renderer parking (plan C, C1)", () => {
   const PARK_EPIC_ID = "epic-park-1";
+  const PARK_TAB_ID = "tab-park-1";
   const PARK_VIEW_TAB_ID = "view-park-1";
   const PARK_HOST_ID = "host-park-1";
   const PARK_CHAT_ID = "chat-park-1";
-  let unsubscribeSurface: (() => void) | null = null;
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -217,8 +218,8 @@ describe("<EpicRouteSessionBody /> - renderer parking (plan C, C1)", () => {
 
   afterEach(() => {
     cleanup();
-    unsubscribeSurface?.();
-    unsubscribeSurface = null;
+    useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+    __syncEpicParkingOpenTabsForTests();
     __resetEpicParkingForTests();
     __getOpenEpicRegistryForTests().disposeAll();
     disposeAllChatSessions();
@@ -269,10 +270,10 @@ describe("<EpicRouteSessionBody /> - renderer parking (plan C, C1)", () => {
     const callsBeforeHidden = useEpicSyncChatRecordsMock.mock.calls.length;
 
     act(() => {
-      unsubscribeSurface = trackEpicParkingSurface(
-        PARK_EPIC_ID,
-        PARK_VIEW_TAB_ID,
-      );
+      useEpicCanvasStore
+        .getState()
+        .openEpicTabWithId(PARK_TAB_ID, PARK_EPIC_ID, PARK_EPIC_ID);
+      __syncEpicParkingOpenTabsForTests();
     });
     act(() => {
       setEpicSurfaceVisibility(PARK_EPIC_ID, PARK_VIEW_TAB_ID, false);
@@ -319,10 +320,10 @@ describe("<EpicRouteSessionBody /> - renderer parking (plan C, C1)", () => {
     expect(initialCalls).toBeGreaterThan(0);
 
     act(() => {
-      unsubscribeSurface = trackEpicParkingSurface(
-        PARK_EPIC_ID,
-        PARK_VIEW_TAB_ID,
-      );
+      useEpicCanvasStore
+        .getState()
+        .openEpicTabWithId(PARK_TAB_ID, PARK_EPIC_ID, PARK_EPIC_ID);
+      __syncEpicParkingOpenTabsForTests();
     });
     act(() => {
       setEpicSurfaceVisibility(PARK_EPIC_ID, PARK_VIEW_TAB_ID, false);

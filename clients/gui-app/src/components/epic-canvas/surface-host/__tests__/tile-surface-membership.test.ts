@@ -10,8 +10,12 @@ import {
 import {
   __resetEpicParkingForTests,
   isEpicParked,
-  trackEpicParkingSurface,
 } from "@/lib/epics/epic-parking";
+// Side-effect import: installs the canvas-store -> parking mirror this file's
+// `useEpicCanvasStore.setState` calls rely on. In production that mirror is
+// wired by `top-level-tab-host.tsx`; here nothing else in this file imports
+// it, so without this the tab opened below would never register with parking.
+import "@/lib/epics/epic-parking-open-tabs";
 import { setEpicSurfaceVisibility } from "@/lib/browser-view/tiles/surface-host-opened-tab";
 import { PARK_HIDDEN_EPIC_AFTER_MS } from "@/stores/replica-memory/retention-profile";
 import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-registry";
@@ -1071,8 +1075,10 @@ describe("renderer parking (plan C, C1): a parked epic keeps no hosted surface",
     expect(getTileSurfaceMembership().has("chat-1")).toBe(true);
     expect(getTileSurfaceEnvironment("chat-1")).not.toBeNull();
 
-    const unsubscribe = trackEpicParkingSurface(EPIC, "tab-1");
-    onTestFinished(unsubscribe);
+    // The tab already opened above (`useEpicCanvasStore.setState`) is what
+    // gives this epic a parking entry - entries are keyed on the OPEN TAB,
+    // not a tracked surface, and the store's own module-scope subscription
+    // already re-derived them synchronously.
     setEpicSurfaceVisibility(EPIC, "tab-1", false);
 
     // One second short of the window: the epic is hidden, not parked, and its

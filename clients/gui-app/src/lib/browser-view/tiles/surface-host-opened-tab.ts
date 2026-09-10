@@ -138,6 +138,20 @@ export function isEpicSurfaceVisible(epicId: string): boolean {
   return (visibleEpicSurfaces.get(epicId)?.size ?? 0) > 0;
 }
 
+/**
+ * Every Epic with at least one visible pane in THIS window - the roll-up
+ * {@link isEpicSurfaceVisible} answers one epic at a time.
+ *
+ * Exists for the cross-window report (plan C, decision C6): main holds one set
+ * per window, so the renderer has to hand over the whole set rather than a
+ * stream of per-epic edges. Derived on demand rather than maintained as a
+ * second collection - the map above is already exactly this, minus the empty
+ * buckets `setEpicSurfaceVisibility` deletes as it goes.
+ */
+export function visibleEpicIds(): readonly string[] {
+  return Array.from(visibleEpicSurfaces.keys());
+}
+
 /** A manual (user-initiated) conversion must never be stomped by the agent. */
 export function isManualPipActive(epicId: string): boolean {
   const snapshot = getPipSnapshot(epicId);

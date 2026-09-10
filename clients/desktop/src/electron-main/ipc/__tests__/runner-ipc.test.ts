@@ -618,6 +618,8 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.ownershipSnapshot,
           RunnerHostInvoke.ownershipClaim,
           RunnerHostInvoke.ownershipRelease,
+          RunnerHostInvoke.epicVisibilitySnapshot,
+          RunnerHostInvoke.epicVisibilityReport,
           RunnerHostInvoke.perWindowStateGet,
           RunnerHostInvoke.perWindowStateCapabilities,
           RunnerHostInvoke.perWindowStateUpdate,
@@ -1120,6 +1122,78 @@ describe("RunnerIpcBridge", () => {
       channel: RunnerHostEvent.ownershipChange,
       payload: [],
     });
+    bridge.dispose();
+  });
+
+  it("attributes an epic-visibility report to its sender window and fans the map to every window", async () => {
+    // Plan C, decision C6. The renderer half of this can only be right if main
+    // (a) keys the report on the SENDER rather than anything in the payload,
+    // and (b) fans the WHOLE per-window map, since the receiving window has to
+    // be able to exclude its own row.
+    const mod = await import("../register-runner-ipc");
+    const registry = new FakeWindowRegistry();
+    const windowA = buildWindow();
+    const windowB = buildWindow();
+    registry.add("window-a", 101, windowA);
+    registry.add("window-b", 202, windowB);
+    const bridge = new mod.RunnerIpcBridge({
+      host: new FakeHost(),
+      hostController: new FakeHostController(),
+      authnBaseUrl: "http://localhost:5005",
+      authRedirectUri: null,
+      tray: null,
+      zoomController: undefined,
+      authTokenStore: undefined,
+      windowRegistry: registry,
+      ownership: new EpicWindowOwnership(null),
+      perWindowState: new PerWindowState(null),
+      authSession: new DesktopAuthSession(),
+      quitState: undefined,
+    });
+    bridge.install();
+    windowA.sentMessages.length = 0;
+    windowB.sentMessages.length = 0;
+
+    const reportHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.epicVisibilityReport,
+    );
+    const snapshotHandler = ipcMainState.handlers.get(
+      RunnerHostInvoke.epicVisibilitySnapshot,
+    );
+    if (reportHandler === undefined || snapshotHandler === undefined) {
+      throw new Error("epic visibility handlers missing");
+    }
+
+    // Non-strings are dropped rather than failing the invoke: a refused report
+    // leaves the sender's PREVIOUS set standing, which claims a pane is visible
+    // that may not be - the direction that suppresses parking.
+    await Promise.resolve(
+      reportHandler(sender(101), ["epic-a", 7, "", null, "epic-b"]),
+    );
+    expect(await Promise.resolve(snapshotHandler(sender(101)))).toEqual([
+      { windowId: "window-a", epicIds: ["epic-a", "epic-b"] },
+    ]);
+    for (const target of [windowA, windowB]) {
+      expect(target.sentMessages).toContainEqual({
+        channel: RunnerHostEvent.epicVisibilityChange,
+        payload: [{ windowId: "window-a", epicIds: ["epic-a", "epic-b"] }],
+      });
+    }
+
+    // An unchanged report is not an event. The renderer sends its whole
+    // roll-up on every visibility edge, and most edges do not move the set.
+    windowB.sentMessages.length = 0;
+    await Promise.resolve(reportHandler(sender(101), ["epic-b", "epic-a"]));
+    expect(windowB.sentMessages).toEqual([]);
+
+    // An empty report removes the row rather than parking an empty one, so
+    // `retainWindows`' prune-by-key and this agree on what "shows nothing"
+    // looks like.
+    await Promise.resolve(reportHandler(sender(202), ["epic-a"]));
+    await Promise.resolve(reportHandler(sender(101), []));
+    expect(await Promise.resolve(snapshotHandler(sender(202)))).toEqual([
+      { windowId: "window-b", epicIds: ["epic-a"] },
+    ]);
     bridge.dispose();
   });
 
@@ -3672,6 +3746,10 @@ describe("RunnerIpcBridge", () => {
         ],
       },
       { channel: RunnerHostEvent.ownershipChange, payload: [] },
+      // Replayed for the same reason ownership is: a window joining mid-session
+      // has to learn what the OTHERS are showing, and the cross-window
+      // visibility fan-out only carries changes (plan C, decision C6).
+      { channel: RunnerHostEvent.epicVisibilityChange, payload: [] },
       {
         channel: RunnerHostEvent.perWindowStateChange,
         payload: {

@@ -74,6 +74,8 @@ import { registerDeviceFlowIpc } from "./device-flow-ipc";
 import { registerTrayIpc } from "./tray-ipc";
 import { registerWindowsIpc } from "./windows-ipc";
 import { registerOwnershipIpc } from "./ownership-ipc";
+import { registerEpicVisibilityIpc } from "./epic-visibility-ipc";
+import { EpicWindowVisibility } from "../windows/epic-window-visibility";
 import { registerPerWindowStateIpc } from "./per-window-state-ipc";
 import { registerHostIpc } from "./host-ipc";
 import { registerHostManagementIpc } from "./host-management-ipc";
@@ -520,6 +522,16 @@ export class RunnerIpcBridge {
   readonly options: RunnerIpcBridgeOptions;
   readonly windowRegistry: IpcWindowRegistry;
   readonly ownership: IpcEpicWindowOwnership;
+  /**
+   * Live per-window visible-Epic state (plan C, decision C6).
+   *
+   * CONSTRUCTED here rather than injected like `ownership`, because unlike
+   * every other collaborator on this bridge it has no second owner and no
+   * durable side: nothing persists it, nothing restores it, and no startup path
+   * seeds it. Injecting it would be a parameter every construction site has to
+   * carry to say the same thing this line says.
+   */
+  readonly epicVisibility = new EpicWindowVisibility();
   readonly perWindowState: IpcPerWindowState;
   readonly authSession: IpcDesktopAuthSession;
   readonly authTokenStore: IpcAuthTokenStore;
@@ -581,6 +593,7 @@ export class RunnerIpcBridge {
     registerLifecycleIpc(this);
     registerWindowsIpc(this);
     registerOwnershipIpc(this);
+    registerEpicVisibilityIpc(this);
     registerPerWindowStateIpc(this);
     registerSupportIpc(this);
     registerHostIpc(this);
@@ -1208,6 +1221,14 @@ export class RunnerIpcBridge {
       RunnerHostEvent.ownershipChange,
       this.ownership.snapshot(),
     );
+    // A window that joins mid-session has to learn what the OTHERS are showing;
+    // the fan-out only carries changes, and a window whose visible set has been
+    // stable since before this one existed emits nothing to catch it up.
+    this.safeSendToWindow(
+      windowId,
+      RunnerHostEvent.epicVisibilityChange,
+      this.epicVisibility.snapshot(),
+    );
     this.safeSendToWindow(
       windowId,
       RunnerHostEvent.perWindowStateChange,
@@ -1318,6 +1339,11 @@ export class RunnerIpcBridge {
     // lifecycle owner for the native tabs that window held, so one left open
     // would hold their placement against a window that is gone.
     this.browserSessions?.retainWindows(liveWindowIds);
+    // A closed window's last visible-Epic report would otherwise stand for
+    // ever - it is live state with no expiry, and the renderer that would have
+    // corrected it is destroyed. Every surviving window would read that Epic as
+    // shown somewhere and never park it.
+    this.epicVisibility.retainWindows(liveWindowIds);
   }
 
   removeQuitDecisionWaiter(requestId: string): QuitDecisionWaiter | null {

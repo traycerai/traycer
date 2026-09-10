@@ -4,53 +4,58 @@
  *
  * ## What parking is
  *
- * An epic tab that is not in front stays MOUNTED - that is what makes coming
- * back to it instant - and a mounted tab holds `epic.subscribe`, a
- * `chat.subscribe` per chat tile, artifact-body leases, and two 20 s record
- * polls. Every one of those claims a VISIBLE lease on the epic's slot on the
- * host, and a slot with any visible lease is never evictable. So a hidden tab
- * pins its epic - its artifact rooms, its cloud connection, its file sync -
- * for as long as the tab exists, which on staging was 210 MB of rooms resident
- * for epics nobody had looked at.
+ * An epic tab that is not in front stays OPEN - that is what makes coming back
+ * to it instant - and an open tab holds `epic.subscribe`, a `chat.subscribe`
+ * per chat tile, artifact-body leases, and two 20 s record polls. Every one of
+ * those claims a VISIBLE lease on the epic's slot on the host, and a slot with
+ * any visible lease is never evictable. So a hidden tab pins its epic - its
+ * artifact rooms, its cloud connection, its file sync - for as long as the tab
+ * exists, which on staging was 210 MB of rooms resident for epics nobody had
+ * looked at.
  *
  * Parking releases all of it and keeps the tab. The tab strip, the canvas
  * layout, the tile set, the drafts - everything the canvas store holds - are
  * untouched, because none of them are subscriptions. What ends is the session,
  * and with it the runtime worker and the replica this window was holding.
  *
+ * ## The key is the OPEN TAB, not a mounted surface
+ *
+ * This module used to be driven by `EpicSurface` mounting and unmounting, and
+ * that key silently exempted the population it most needed to reach.
+ * `TopLevelTabHost` keeps at most `retainedTopLevelSurfaces` (5) surfaces
+ * mounted; a hidden tab past that is UNMOUNTED, its provider's `releaseMounted`
+ * drops demand to zero, and its session goes WARM with `epic.subscribe` still
+ * open - up to `maxLiveEpics` (5) such sessions. That stream is a visible lease
+ * the host's own idle sweep can never reach, and a decider keyed on a mounted
+ * provider had no entry for it at all. It is also the wrong key on its face: a
+ * tab whose surface was unmounted for lack of retention is hidden BY
+ * DEFINITION.
+ *
+ * So the entries here mirror the open epic tabs of this window - the canvas
+ * store's `openTabOrder`, the same projection `releaseOpenEpicSessionIfUnused`
+ * reads, fed in by `lib/epics/epic-parking-open-tabs.ts` - and a park releases
+ * the session whether it was mounted or warm. A tab that is CLOSED is not
+ * parked: it is closed, and its session is the tab-close path's to release.
+ *
  * ## Why the debounce is per EPIC, not per tab
  *
  * Decision C6: an epic shown in a second pane is foreground, and one visible
- * pane anywhere is enough. The visible-view registry in
- * `lib/browser-view/tiles/surface-host-opened-tab.ts` answers exactly that
- * question - it is keyed by epic and view tab and is already visible-if-any -
- * so this module is its roll-up plus a clock, not a second source of truth
- * about visibility.
+ * pane anywhere is enough. Two sources answer that, and this module ORs them:
+ * the visible-view registry in
+ * `lib/browser-view/tiles/surface-host-opened-tab.ts` for this window's own
+ * panes, and `lib/epics/cross-window-epic-visibility.ts` for every other
+ * window's. Both are keyed by epic and already visible-if-any, so this module
+ * is their roll-up plus a clock, not a third source of truth about visibility.
  *
- * ## The roll-up spans VIEWS, not desktop windows - a known limitation
- *
- * C6 says "no visible pane for that epic in ANY window", and this reaches only
- * the panes of ONE renderer. The visible-view registry is module state, each
- * Electron `BrowserWindow` is its own renderer, and desktop epic ownership
- * does NOT make that difference unobservable: `EpicWindowOwnership.claim`
- * keys on `tabId`, not `epicId` (`getOwnerForEpic` exists and the claim path
- * does not consult it), so two windows can hold live sessions for one epic at
- * the same time. Window A can therefore park an epic that window B is showing.
- *
- * What that costs is bounded, and it is not the thing this plan exists to fix.
- * Parking releases only the PARKING window's own subscriptions; window B keeps
- * its session, its visible lease and therefore the host's slot, so no memory
- * claim in plan C depends on A and B agreeing. The cost is that switching back
- * to A re-establishes - against a host slot B is holding warm, which is the
- * sub-second seed-hydrate path decision C5 already accepts.
- *
- * Closing it properly means propagating the roll-up through the desktop main
- * process, which is a `clients/desktop` change (main-process state, an IPC
- * channel, a preload bridge, and a browser fallback) and deliberately outside
- * this ticket. Do not "fix" it by reading `ownership.snapshot()` here: that is
- * async and reports every tab for the epic, hidden ones included, so it would
- * turn "another window is SHOWING this" into "another window has it OPEN" and
- * disable parking for the whole multi-window case.
+ * The cross-window arm is a real channel (main-process state fed by each
+ * renderer's own roll-up over IPC), deliberately NOT `ownership.snapshot()`:
+ * ownership is async, keys on `tabId`, and reports every tab for the epic
+ * including hidden ones, so reading it as visibility would turn "another window
+ * is SHOWING this" into "another window has it OPEN" and disable parking for
+ * the whole multi-window case. Off the desktop shell - a browser, or a preload
+ * built before the channel existed - that arm answers `false` and the decision
+ * degrades to this window's panes, which is the right answer where there is no
+ * second window.
  *
  * ## Why THIS module decides, and the provider only reacts
  *
@@ -59,23 +64,48 @@
  * its own timer and its own eligibility check they would disagree during the
  * window where one has parked and another has not, and the gates that read
  * "is this epic parked" - the record polls, the chat tiles, the hosted-surface
- * membership - would see a per-provider answer to a per-epic question. So the
- * decision lives here: this module runs the clock, asks the session registry
- * whether the epic MAY be parked, performs the release, and publishes one
- * boolean. Providers observe it and drop their own references.
+ * membership - would see a per-provider answer to a per-epic question. A warm
+ * session has no provider at all, which settles it: the decision lives here,
+ * this module runs the clock, asks the session registry whether the epic MAY be
+ * parked, performs the release, and publishes one boolean. Providers observe it
+ * and drop their own references.
  *
  * ## Eligibility is the registry's, not a second opinion
  *
  * "A tab with unsynced edits or an in-progress action is not parked. The
- * renderer's own prune already skips dirty and active entries; parking uses
- * the same eligibility." `OpenEpicSessionRegistry.parkMounted` is the one
- * predicate; a refusal here is not a failure, it is "not yet", and the epic is
- * parked as soon as the registry says the work has settled.
+ * renderer's own prune already skips dirty and active entries; parking uses the
+ * same eligibility." `OpenEpicSessionRegistry.park` is the one predicate; a
+ * refusal here is not a failure, it is "not yet", and the epic is parked as
+ * soon as the registry says the work has settled.
+ *
+ * That eligibility FAILS CLOSED on the agent-activity plane: `epicIsBusy` reads
+ * every epic as busy while the plane cannot answer (the stream is closed, or
+ * its union does not reach the session's host), so an activity-plane outage
+ * defers ALL parking until it recovers. Accepted deliberately, and not softened
+ * here: it is the identical gate the prune walk applies, and a second opinion
+ * about "is an agent working" is exactly the drift that would let a park
+ * destroy a turn in progress. The cost of an outage is that memory is not
+ * reclaimed for its duration - the pre-parking behaviour, and recoverable -
+ * where the cost of guessing wrong the other way is not.
+ *
+ * ## What parking does NOT have to release
+ *
+ * `BrowserSessionsProvider` sits outside the session gate in
+ * `epic-surface.tsx` and keeps its epic-scoped `browser.sessions` stream open
+ * through a park. That is fine: on the host side the browser stream resolver
+ * takes NO epic lease of any kind - its dependencies are the browser session
+ * manager and a logger, and the epic scope is a pure FILTER over which sessions
+ * a subscriber is shown (`host-resource-scope-match.ts`), with nothing reaching
+ * `EpicMemoryManager`. So it pins no slot and there is nothing here to release.
  */
 import {
   isEpicSurfaceVisible,
   subscribeEpicSurfaceVisibility,
 } from "@/lib/browser-view/tiles/surface-host-opened-tab";
+import {
+  isEpicVisibleInAnotherWindow,
+  subscribeCrossWindowEpicVisibility,
+} from "@/lib/epics/cross-window-epic-visibility";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
 import { PARK_HIDDEN_EPIC_AFTER_MS } from "@/stores/replica-memory/retention-profile";
@@ -94,18 +124,6 @@ import type { RuntimeTimer } from "@traycer-clients/shared/replica-runtime";
 const environment = createRendererRuntimeEnvironment();
 
 interface EpicParkingEntry {
-  /**
-   * View tabs currently mounting a surface for this epic, in ANY window of
-   * this renderer.
-   *
-   * Tracked separately from the visible-view set because the two answer
-   * different questions and only this one bounds the entry's life: a hidden
-   * surface is absent from the visible set and present here, so "no visible
-   * pane" and "no pane at all" would be the same reading if this module tried
-   * to derive both from visibility. An epic whose last surface unmounts is
-   * CLOSED, not parked, and its entry is forgotten.
-   */
-  readonly surfaces: Set<string>;
   /**
    * When the current hidden window started, or `null` when no window is in
    * progress (the epic is visible, or it is already parked).
@@ -126,6 +144,11 @@ interface EpicParkingEntry {
   parked: boolean;
 }
 
+/**
+ * One entry per OPEN epic tab of this window, keyed by epic. Mirrored from the
+ * canvas store by {@link syncOpenEpics}; an epic with no open tab has no entry,
+ * because it is closed rather than parked.
+ */
 const entries = new Map<string, EpicParkingEntry>();
 const listeners = new Set<(epicId: string) => void>();
 
@@ -133,6 +156,15 @@ function notify(epicId: string): void {
   for (const listener of Array.from(listeners)) {
     listener(epicId);
   }
+}
+
+/**
+ * Decision C6's visible-if-any, over both windows and panes. Either arm alone
+ * is a partial answer: the local registry cannot see another renderer, and the
+ * cross-window map deliberately excludes this window's own row.
+ */
+function isEpicVisibleAnywhere(epicId: string): boolean {
+  return isEpicSurfaceVisible(epicId) || isEpicVisibleInAnotherWindow(epicId);
 }
 
 function cancelParkWindow(entry: EpicParkingEntry): void {
@@ -166,7 +198,7 @@ function armParkWindow(epicId: string, entry: EpicParkingEntry): void {
 function parkWindowElapsed(epicId: string, entry: EpicParkingEntry): void {
   const hiddenSinceMs = entry.hiddenSinceMs;
   if (hiddenSinceMs === null) return;
-  if (isEpicSurfaceVisible(epicId)) return;
+  if (isEpicVisibleAnywhere(epicId)) return;
   const nowMs = environment.clock.now();
   const elapsedMs = nowMs - hiddenSinceMs;
   // A clock that stepped BACKWARD - an NTP correction, a resume from sleep,
@@ -201,13 +233,13 @@ function parkWindowElapsed(epicId: string, entry: EpicParkingEntry): void {
  * is holding to settle.
  *
  * The eligibility watch is dropped BEFORE the attempt rather than after it:
- * `parkMounted` notifies the registry's subscribers from inside its own
- * transaction, so a watch still installed would re-enter this function while
- * the successful park is still unwinding.
+ * `park` notifies the registry's subscribers from inside its own transaction,
+ * so a watch still installed would re-enter this function while the successful
+ * park is still unwinding.
  */
 function attemptPark(epicId: string, entry: EpicParkingEntry): void {
   stopWatchingEligibility(entry);
-  if (!getOpenEpicRegistry().parkMounted(epicId)) {
+  if (!getOpenEpicRegistry().park(epicId)) {
     waitForEligibility(epicId, entry);
     return;
   }
@@ -227,7 +259,7 @@ function waitForEligibility(epicId: string, entry: EpicParkingEntry): void {
   if (entry.unwatchEligibility !== null) return;
   entry.unwatchEligibility = getOpenEpicRegistry().subscribe(() => {
     if (entry.parked) return;
-    if (isEpicSurfaceVisible(epicId)) return;
+    if (isEpicVisibleAnywhere(epicId)) return;
     attemptPark(epicId, entry);
   });
 }
@@ -265,68 +297,67 @@ function unpark(epicId: string, entry: EpicParkingEntry): void {
   notify(epicId);
 }
 
-function epicSurfaceVisibilityChanged(epicId: string): void {
+function epicVisibilityChanged(epicId: string): void {
   const entry = entries.get(epicId);
   if (entry === undefined) return;
-  if (isEpicSurfaceVisible(epicId)) {
+  if (isEpicVisibleAnywhere(epicId)) {
     unpark(epicId, entry);
     return;
   }
   if (entry.parked) return;
+  // Already counting: a second hidden edge (this window's last pane hid, and
+  // moments later the other window's did too) must not restart the window the
+  // first one armed.
+  if (entry.hiddenSinceMs !== null) return;
   armParkWindow(epicId, entry);
 }
 
 /**
- * Register a mounted epic surface (one `EpicSurface`, i.e. one view tab of one
- * epic) for the life of that surface. Returns the deregistration.
+ * Bring the entry set in line with the open tabs: arm a window for an epic that
+ * just opened hidden, and forget one whose last tab closed.
  *
- * This is what starts the clock for a tab that is hidden FROM BIRTH - a task
- * opened into a background tab, or restored behind the front one. Visibility
- * notifications only fire on a change, and such a surface never has one: it
- * reports `false` at mount and the epic's roll-up was already `false`. Without
- * an arm here those epics would be the only ones that never park, which is
- * precisely the population parking exists for.
+ * TOLD the set rather than reading it, which is what keeps this module a leaf.
+ * `lib/epics/epic-parking-open-tabs.ts` owns the canvas-store projection and
+ * calls this; the split is not cosmetic, because the release side of parking
+ * (`lib/registries/chat-session-registry.ts`) imports THIS module at module
+ * scope, and that import is reached from anything that touches a chat. Reading
+ * the canvas store here would put a large store into that graph at import time.
+ *
+ * The hidden-from-birth arm is not an optimisation. Visibility notifications
+ * only fire on a CHANGE, and a tab opened in the background never has one - it
+ * reports `false` at mount and the epic's roll-up was already `false` - so
+ * without an arm here those epics would be the only ones that never park,
+ * which is precisely the population parking exists for. The same is true of a
+ * tab restored behind the front one, and of every tab past the retention pool
+ * on a cold restore.
  */
-export function trackEpicParkingSurface(
-  epicId: string,
-  viewTabId: string,
-): () => void {
-  let entry = entries.get(epicId);
-  if (entry === undefined) {
-    entry = {
-      surfaces: new Set<string>(),
+export function syncEpicParkingOpenTabs(open: ReadonlySet<string>): void {
+  for (const epicId of open) {
+    if (entries.has(epicId)) continue;
+    const entry: EpicParkingEntry = {
       hiddenSinceMs: null,
       timer: null,
       unwatchEligibility: null,
       parked: false,
     };
     entries.set(epicId, entry);
+    if (isEpicVisibleAnywhere(epicId)) continue;
+    armParkWindow(epicId, entry);
   }
-  const tracked = entry;
-  tracked.surfaces.add(viewTabId);
-  if (
-    !tracked.parked &&
-    tracked.hiddenSinceMs === null &&
-    !isEpicSurfaceVisible(epicId)
-  ) {
-    armParkWindow(epicId, tracked);
-  }
-  return () => {
-    if (entries.get(epicId) !== tracked) return;
-    tracked.surfaces.delete(viewTabId);
-    if (tracked.surfaces.size > 0) return;
+  for (const [epicId, entry] of Array.from(entries)) {
+    if (open.has(epicId)) continue;
     // The epic is CLOSED, not parked: its session is the tab-close path's to
     // release (`releaseOpenEpicSessionIfUnused`), and leaving a parked flag
     // behind would answer for an epic that is no longer open at all - and
-    // would be read as parked by the next surface to mount for it, before any
-    // window had elapsed.
+    // would be read as parked by the next tab opened for it, before any window
+    // had elapsed.
     entries.delete(epicId);
-    cancelParkWindow(tracked);
-    stopWatchingEligibility(tracked);
-    if (!tracked.parked) return;
-    tracked.parked = false;
+    cancelParkWindow(entry);
+    stopWatchingEligibility(entry);
+    if (!entry.parked) continue;
+    entry.parked = false;
     notify(epicId);
-  };
+  }
 }
 
 /** Whether this epic's subscriptions are currently released. */
@@ -380,4 +411,5 @@ export function __resetEpicParkingForTests(): void {
   entries.clear();
 }
 
-subscribeEpicSurfaceVisibility(epicSurfaceVisibilityChanged);
+subscribeEpicSurfaceVisibility(epicVisibilityChanged);
+subscribeCrossWindowEpicVisibility(epicVisibilityChanged);

@@ -244,8 +244,8 @@ import { createEpicSessionFixture } from "./epic-session-fixture";
 import {
   __resetEpicParkingForTests,
   isEpicParked,
-  trackEpicParkingSurface,
 } from "@/lib/epics/epic-parking";
+import { __syncEpicParkingOpenTabsForTests } from "@/lib/epics/epic-parking-open-tabs";
 import { setEpicSurfaceVisibility } from "@/lib/browser-view/tiles/surface-host-opened-tab";
 import { PARK_HIDDEN_EPIC_AFTER_MS } from "@/stores/replica-memory/retention-profile";
 import { EpicSessionGate } from "@/providers/epic-session-gate";
@@ -3538,7 +3538,10 @@ describe("<EpicSessionProvider />", () => {
   // store's `ingestFenceIdentity`) is pinned beside `<EpicRouteSessionBody />`
   // in `epic-route-session-body.test.tsx`, where that hook's call count is
   // already observable.
-  let unsubscribeParkingSurface: (() => void) | null = null;
+  const PARKING_TAB_CLEANUP_IDS = [
+    "epic-parking-reacquire",
+    "epic-parking-comments",
+  ];
 
   beforeEach(() => {
     // `canPark` reads `epicIsBusy`, which fails CLOSED until the agent
@@ -3550,8 +3553,10 @@ describe("<EpicSessionProvider />", () => {
   });
 
   afterEach(() => {
-    unsubscribeParkingSurface?.();
-    unsubscribeParkingSurface = null;
+    for (const tabId of PARKING_TAB_CLEANUP_IDS) {
+      useEpicCanvasStore.getState().closeTab(tabId);
+    }
+    __syncEpicParkingOpenTabsForTests();
     __resetEpicParkingForTests();
     __resetAgentActivityStoreForTests();
     // Both parking tests install fake timers and nothing else in this file or
@@ -3595,7 +3600,10 @@ describe("<EpicSessionProvider />", () => {
     expect(streams).toHaveLength(1);
 
     act(() => {
-      unsubscribeParkingSurface = trackEpicParkingSurface(EPIC_ID, EPIC_ID);
+      useEpicCanvasStore
+        .getState()
+        .openEpicTabWithId(EPIC_ID, EPIC_ID, EPIC_ID);
+      __syncEpicParkingOpenTabsForTests();
     });
     act(() => {
       setEpicSurfaceVisibility(EPIC_ID, EPIC_ID, false);
@@ -3726,7 +3734,10 @@ describe("<EpicSessionProvider />", () => {
     expect(requestCount.value).toBeGreaterThan(beforeParkCount);
 
     act(() => {
-      unsubscribeParkingSurface = trackEpicParkingSurface(EPIC_ID, EPIC_ID);
+      useEpicCanvasStore
+        .getState()
+        .openEpicTabWithId(EPIC_ID, EPIC_ID, EPIC_ID);
+      __syncEpicParkingOpenTabsForTests();
     });
     act(() => {
       setEpicSurfaceVisibility(EPIC_ID, EPIC_ID, false);
