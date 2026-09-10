@@ -120,6 +120,7 @@ function TabLeadingIcon(props: { readonly tab: HeaderTab }) {
     <NotificationIndicatorIcon
       state={indicatorState}
       running={activityStatus === "idle" ? false : activityStatus}
+      activityCoverage="indeterminate"
       subjectId={tab.id}
       testIdPrefix="header-tab"
       className="text-muted-foreground"

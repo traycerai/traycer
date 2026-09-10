@@ -8,6 +8,7 @@ import type {
   BrowserSessionsUxClientFrame,
   BrowserSessionsUxServerFrame,
 } from "@traycer/protocol/host/browser/contracts";
+import type { HostResourceScope } from "@traycer/protocol/host/resource-scope";
 import type {
   BrowserAnnotationAttachResultInput,
   BrowserAnnotationAttachedIpcEvent,
@@ -589,6 +590,36 @@ export function browserSessionsRefusal(
 }
 
 /**
+ * What main answers an open with when the window already holds its allowance
+ * of `browser.sessions` streams.
+ *
+ * Shared rather than a literal in main, because the renderer has to tell this
+ * `failed` apart from every other one and the difference decides what a
+ * failure MEANS for the window's capacity. A cap refusal is answered before a
+ * stream is created, so it can never have freed anything; a failure to OPEN is
+ * reported by a stream main admitted and is dropping, which hands its place
+ * back to the window. The renderer re-asks the refused on the second and must
+ * not on the first - re-asking on a refusal that freed nothing is a spin
+ * between two coordinators that can only refuse each other.
+ *
+ * It is a sufficient condition and not an exact one, deliberately: a fatal the
+ * HOST closed the stream with also reads as "not a cap refusal" while main
+ * still holds the registration. That costs one open per failure and cannot
+ * spin, because the refusal it produces is this message again - which sweeps
+ * nothing. The reverse mistake could not be made safe, so this is the side to
+ * be imprecise on.
+ */
+export const BROWSER_SESSIONS_WINDOW_CAP_MESSAGE =
+  "This window has too many browser sessions open.";
+
+/** Was this `failed` the per-window stream cap turning an open away? */
+export function isBrowserSessionsWindowCapRefusal(
+  errorMessage: string | null,
+): boolean {
+  return errorMessage === BROWSER_SESSIONS_WINDOW_CAP_MESSAGE;
+}
+
+/**
  * The renderer's name for one stream. Main keys its own streams by this plus
  * the sender's window id, and never dedupes across windows: one subscriber is
  * one Electron lifecycle owner, so collapsing two windows onto one would put
@@ -600,13 +631,36 @@ export function browserSessionsRefusal(
  * main's jar stream at a host it controls.
  */
 export interface BrowserSessionsStreamKey {
-  readonly epicId: string;
+  /**
+   * Which inventory this stream speaks for: one epic's, or the device's
+   * epic-less `independent` one. It is the stream's whole authorization scope
+   * on the host, so two scopes are two streams even on one host and identity.
+   */
+  readonly scope: HostResourceScope;
   readonly hostId: string;
   /**
    * The signed-in owner identity the renderer keys its coordinator by. Opaque
    * to main, which only uses it to keep two identities' streams apart.
    */
   readonly identityKey: string;
+}
+
+/**
+ * The scope's contribution to a map key, as a fixed-arity tuple rather than the
+ * scope object itself.
+ *
+ * `JSON.stringify` preserves INSERTION order, so `{ kind, epicId }` and
+ * `{ epicId, kind }` - the same scope, written by two call sites - would encode
+ * to two different keys, and the refcounted coordinator would open a second
+ * stream for an inventory it already had. Flattening to `[kind, epicId|null]`
+ * takes the field order out of the encoding.
+ */
+export function browserSessionsScopeKeyParts(
+  scope: HostResourceScope,
+): readonly [string, string | null] {
+  return scope.kind === "epic"
+    ? [scope.kind, scope.epicId]
+    : [scope.kind, null];
 }
 
 /**
@@ -620,7 +674,11 @@ export interface BrowserSessionsStreamKey {
 export function browserSessionsStreamKeyId(
   key: BrowserSessionsStreamKey,
 ): string {
-  return JSON.stringify([key.epicId, key.hostId, key.identityKey]);
+  return JSON.stringify([
+    ...browserSessionsScopeKeyParts(key.scope),
+    key.hostId,
+    key.identityKey,
+  ]);
 }
 
 export function browserViewNativeTabKeyId(

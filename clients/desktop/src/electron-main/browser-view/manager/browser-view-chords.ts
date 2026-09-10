@@ -1,5 +1,6 @@
 import {
   isValidChordString,
+  normalizeCode,
   parseChordString,
   type ChordParts,
 } from "@traycer-clients/shared/keybindings/chord-core";
@@ -45,6 +46,17 @@ export type HostPlatform = "darwin" | "other";
  */
 export interface BrowserViewKeyInput {
   readonly key: string;
+  /**
+   * The PHYSICAL key, and the field a chord token is derived from.
+   *
+   * REQUIRED, and `undefined` is a value rather than an omission: every caller
+   * must say what the physical key was, and `undefined` is how one says there
+   * was none. Electron's `Input` always carries a real one, which is why the
+   * sole non-test caller can pass it straight through; a synthetic input with
+   * no physical key states that explicitly and takes the `key` fallback in
+   * `chordKeyFromInput`.
+   */
+  readonly code: string | undefined;
   readonly control: boolean;
   readonly meta: boolean;
   readonly shift: boolean;
@@ -110,12 +122,39 @@ export function hostSendKeyCodeForToken(key: string): string | null {
   return KEY_TO_SEND_CODE[key] ?? null;
 }
 
+/**
+ * The canonical key token for one guest keystroke.
+ *
+ * From `code` FIRST, through the same `normalizeCode` the renderer uses. A
+ * chord token names a PHYSICAL key, and `input.key` is the character that key
+ * produces under the reader's layout - so deriving from it made the two halves
+ * of this policy disagree about the very thing the shared table is supposed to
+ * make single. On AZERTY the physical `1` arrives as `key: "&"` and the
+ * physical `W` as `key: "z"`, so `mod+1` and `mod+w` both failed here while
+ * the renderer had reserved them - the app-forwarded rows were lost and the
+ * browser-scoped rows went to the guest instead of closing its tab.
+ *
+ * `key` remains the fallback for anything `normalizeCode` does not recognise,
+ * and for a caller with no `code` at all, which is exactly today's behaviour
+ * for those inputs rather than a new refusal.
+ */
+function chordKeyFromInput(input: BrowserViewKeyInput): string | null {
+  const code = input.code;
+  if (code !== undefined && code.length > 0) {
+    const normalized = normalizeCode(code);
+    if (normalized !== null) return normalized;
+  }
+  const key = input.key.trim().toLowerCase();
+  if (key.length === 0 || BARE_MODIFIER_KEYS.has(key)) return null;
+  return key;
+}
+
 function chordFromKeyEvent(
   input: BrowserViewKeyInput,
   platform: HostPlatform,
 ): ChordParts | null {
-  const key = input.key.trim().toLowerCase();
-  if (key.length === 0 || BARE_MODIFIER_KEYS.has(key)) return null;
+  const key = chordKeyFromInput(input);
+  if (key === null) return null;
   return {
     key,
     mod: platform === "darwin" ? input.meta : input.control,
@@ -171,7 +210,22 @@ export class BrowserViewChords {
   private readonly getWindow: (windowId: string) => BrowserViewWindow | null;
   private readonly hostPlatform: HostPlatform;
   private readonly send: BrowserViewSend;
-  private chords: readonly MatchedReservedChord[] = [];
+  /**
+   * PER WINDOW, because the table is not a property of the app.
+   *
+   * Each renderer derives its own set from its own surface state - a window
+   * showing a Start Page browser reserves the panel's three extra chords, one
+   * showing a canvas does not - and there is one manager for every window. Held
+   * as a single array, the last window to register decided the policy for all
+   * of them, and nothing re-registered on OS focus: focusing a Start Page
+   * window whose tab state had not changed left it matching the canvas
+   * window's table, so ⌘J and the digit shortcuts fell through to the guest,
+   * while the canvas window swallowed landing-only keys into nothing.
+   */
+  private readonly chordsByWindow = new Map<
+    string,
+    readonly MatchedReservedChord[]
+  >();
 
   constructor(options: BrowserViewChordsOptions) {
     this.getWindow = options.getWindow;
@@ -179,8 +233,18 @@ export class BrowserViewChords {
     this.send = options.send;
   }
 
-  /** BT-303 wire-in: replace the registered policy table at runtime. */
-  setReservedChords(reserved: readonly BrowserViewReservedChord[]): void {
+  /**
+   * BT-303 wire-in: replace the registered policy table for ONE window.
+   *
+   * Tables for windows that have since gone are dropped here rather than
+   * through a teardown hook: a closed window never registers again, so a
+   * registration from any surviving window is the last moment this map can be
+   * pruned without inventing a lifecycle it does not have.
+   */
+  setReservedChords(
+    windowId: string,
+    reserved: readonly BrowserViewReservedChord[],
+  ): void {
     const parsed: MatchedReservedChord[] = [];
     for (const { token, command } of reserved) {
       if (!isValidChordString(token)) continue;
@@ -199,9 +263,16 @@ export class BrowserViewChords {
         command,
       });
     }
-    this.chords = parsed;
+    this.chordsByWindow.set(windowId, parsed);
+    for (const known of [...this.chordsByWindow.keys()]) {
+      if (known !== windowId && this.getWindow(known) === null) {
+        this.chordsByWindow.delete(known);
+      }
+    }
     log.info("[browser-view] reserved chords updated", {
+      window: windowId,
       count: parsed.length,
+      windows: this.chordsByWindow.size,
       tokens: reserved.map((entry) => entry.token),
     });
   }
@@ -215,11 +286,21 @@ export class BrowserViewChords {
    * `handleBeforeInputEvent`, which suppresses it because every reserved
    * chord is one-shot.
    */
-  match(input: BrowserViewKeyInput): MatchedReservedChord | null {
-    if (this.chords.length === 0) return null;
+  match(
+    windowId: string | null,
+    input: BrowserViewKeyInput,
+  ): MatchedReservedChord | null {
+    // A guest with no window of its own claims nothing. Falling back to some
+    // other window's table is exactly the defect this signature exists to
+    // prevent, and letting the key reach the page is the safe direction: an
+    // unclaimed chord is a shortcut that did not fire, a wrongly claimed one is
+    // a keystroke the reader typed that vanished.
+    if (windowId === null) return null;
+    const chords = this.chordsByWindow.get(windowId) ?? [];
+    if (chords.length === 0) return null;
     const event = chordFromKeyEvent(input, this.hostPlatform);
     if (event === null) return null;
-    return this.chords.find((chord) => chordsEqual(chord, event)) ?? null;
+    return chords.find((chord) => chordsEqual(chord, event)) ?? null;
   }
 
   /**

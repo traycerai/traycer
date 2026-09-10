@@ -21,6 +21,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import * as Y from "yjs";
+import { NO_CLOUD_SYNC_DURABILITY } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type {
   ArtifactStreamClientFactory,
   EpicStateStreamClientFactory,
@@ -147,7 +148,10 @@ function createLegacyRig(): LegacyRig {
   return {
     factory,
     openCount: () => opens,
-    open: () => requireLive().onConnectionStatus("open", null),
+    // `false`: this fixture drives the LEGACY adapter, whose peer cannot
+    // report durability - the same value `legacy-epic-stream-adapter` forwards
+    // for a pre-durability `epic.subscribe` schema.
+    open: () => requireLive().onConnectionStatus("open", null, false),
     deliverRootSnapshot(): void {
       const source = new Y.Doc();
       source.getMap("epic").set("title", "Legacy fallback epic");
@@ -161,7 +165,7 @@ function createLegacyRig(): LegacyRig {
       const update = Y.encodeStateAsUpdate(source);
       source.destroy();
       requireLive().onUpdate(update);
-      requireLive().onCloudSyncStatus("connected");
+      requireLive().onCloudSyncStatus("connected", NO_CLOUD_SYNC_DURABILITY);
     },
   };
 }

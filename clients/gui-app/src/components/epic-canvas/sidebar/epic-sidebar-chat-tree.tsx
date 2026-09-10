@@ -122,7 +122,9 @@ import {
 import {
   isDefaultSort,
   makeNodeComparator,
+  sortNodeIdsWithClock,
   type NodeComparator,
+  type NodeSortClock,
 } from "@/lib/epic-sort";
 import {
   findOpenTileInTab,
@@ -165,12 +167,18 @@ import {
   useCloudChatList,
 } from "@/hooks/chats/use-cloud-chat-queries";
 import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
+import {
   publicationTargetMap,
   useChatPublicationTargets,
 } from "@/hooks/chats/use-chat-publication-targets";
 import {
+  chatListLastActiveAtByKey,
   chatRowLastActiveAt,
   indexOwnCloudChatsByLocalId,
+  localChatLastActiveAtById,
   mergeChatListEntries,
   selectUnfoldedCloudChats,
 } from "@/lib/chats/unified-chat-list";
@@ -233,6 +241,7 @@ import {
   isTypeToFilterKey,
   mergeForcedExpanded,
   SidebarFilterVisibilityContext,
+  SidebarSortClockContext,
   SidebarSortContext,
   useFilteredPanelChildIds,
   useSidebarVisibleIds,
@@ -279,6 +288,8 @@ import {
 import { resolveProfileAccentDot } from "@/components/worktree/worktree-owner-settings-model";
 import { harnessProfiles } from "@/components/worktree/worktree-owner-settings-profiles";
 import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
+import { useEpicChatRecordHead } from "@/hooks/chats/use-epic-chat-record-head";
+import type { ChatRecordHeadStamp } from "@traycer/protocol/host/epic/chat-records";
 import {
   SidebarContextMenuItems,
   SidebarDropdownMenuItems,
@@ -568,10 +579,22 @@ function usePanelRootIds(
     // `parentId` to its sender) are nested through `useChildIds` off
     // `childrenByParent` and are absent from `rootIds`, so they correctly
     // never appear here.
+    // No clock HERE, deliberately, and not an oversight: these roots are not
+    // the rendered order. `mergeChatListEntries` re-orders them downstream
+    // against `chatListLastActiveAtByKey` - the same clock re-keyed for the
+    // interleave with the cloud-only rows - so the panel's rows already
+    // follow a publication, and clocking here would only move where that is
+    // decided. The picker, which has no interleave to run, clocks its own
+    // roots instead.
+    //
+    // The one other consumer, the `selectableIds` walk below, re-sorts these
+    // roots with the clock itself before traversing, so the bulk-selection
+    // order follows a publication the same way the rendered rows do.
     return sidebarTreeRootIds({
       tree,
       treeFilter: CHATS_TREE_FILTER,
       comparator,
+      clock: null,
     });
   }, [panelId, tree, comparator]);
 }
@@ -743,8 +766,20 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   // shared-with-task glyph must reflect the tab's owning host, not whichever
   // host the app is active on.
   const sessionHostClient = useEpicSessionHostClient();
+  // `epic.listCollaborators` is a cloud read, so it waits on a verdict. The
+  // glyph this feeds degrades to HIDDEN, not to a "not shared" claim:
+  // `taskHasCollaborators` already reads `undefined` as solo so the indicator
+  // cannot flash during load, and `shouldShowSharedWithTaskIndicator` only ever
+  // ADDS a glyph - an unauthorized session shows one fewer badge and asserts
+  // nothing about who has access. "Hidden" holds after a DEMOTION too: the
+  // hook withholds `data` while `enabled` is false, whatever TanStack still
+  // caches, so a glyph loaded under a verdict goes away with it.
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
   const collaboratorsQuery = useEpicCollaboratorsQuery(epicId, {
     client: sessionHostClient,
+    enabled: cloudAuthorized,
     poll: undefined,
     staleTime: undefined,
   });
@@ -768,6 +803,15 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
         )
         .sort(),
     [tree, filterVisibleIds],
+  );
+  // Every chat in this tree belongs to THIS epic, and mixed mode's host leg
+  // asks for the `home: local` partition per chat - which the host can only
+  // resolve with the chat's owning epic. Without the map those chats fall out
+  // of the local partition and their indicators silently read as clear.
+  const indicatorChatEpicIds = useMemo(
+    () =>
+      Object.fromEntries(indicatorChatIds.map((chatId) => [chatId, epicId])),
+    [indicatorChatIds, epicId],
   );
   const epicSessionHostId = useEpicSessionHostId();
   const indicatorChatHostIds = useEpicNodeHostIds(indicatorChatIds);
@@ -1022,6 +1066,36 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     () => ({ expandedIds, toggleExpanded, ensureExpanded }),
     [expandedIds, toggleExpanded, ensureExpanded],
   );
+  // The content clock each LOCAL chat sorts by - the same value its idle-time
+  // chip renders, so the order and the chip cannot disagree (see
+  // `localChatLastActiveAtById`). Computed once for the whole projection,
+  // nested children included, and published through `SidebarSortClockContext`
+  // so every child list sorts by it; the root list and the selection walk
+  // below read it directly. The record heads are the epic session's
+  // `chatRecordHeads`, pushed as owners publish.
+  //
+  // Subscribed to the DERIVED clock, not to `chats.byId`. The projector
+  // re-mints that map on every record change (`projectTreeSlice` stamps each
+  // node's `updatedAt`), so a raw subscription re-renders this panel - and
+  // through the context value's identity, every row that sorts children - on
+  // activity nothing here displays. That is the exact churn class
+  // `sidebar-chat-row-node-churn.test.tsx` pins. `useShallow` compares the
+  // clock entry by entry and hands back the PREVIOUS object when they agree,
+  // so a stamp that moves no chat's content time publishes nothing.
+  // The raw head table, for the cloud-only rows below. Safe to subscribe to
+  // directly, unlike `chats.byId`: it changes identity only when a
+  // publication actually advances, never on a projection stamp.
+  const recordHeads = useEpicStore((s) => s.chatRecordHeads);
+  const sortClock = useEpicStore(
+    useShallow((state: OpenEpicState): NodeSortClock =>
+      localChatLastActiveAtById({
+        chatsById: state.chats.byId,
+        recordHeads: state.chatRecordHeads,
+        sessionHostId: epicSessionHostId,
+        ownCloudChatByLocalId,
+      }),
+    ),
+  );
   // Same hygiene fix as the artifact panel: `tree` is a direct input, so this
   // recomputed per record change and handed the effect below a fresh array.
   // The store write was already a no-op (`setSelectableSidebarIds` guards with
@@ -1030,13 +1104,23 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   const selectableIds = useEpicStore(
     useShallow((state: OpenEpicState): readonly string[] =>
       collectVisibleSidebarTreeIds({
-        rootIds,
+        // `rootIds` come from `useChatRootIds` unclocked (see its note); the
+        // traversal visits roots in the order given, so a foreign root whose
+        // head advanced would otherwise render ahead while bulk selection
+        // kept the projection order. Sorting here keeps the two in step.
+        rootIds: sortNodeIdsWithClock(
+          rootIds,
+          state.tree.nodeById,
+          comparator,
+          sortClock,
+        ),
         expandedIds,
         tree: state.tree,
         treeFilter: CHATS_TREE_FILTER,
         emitFilter: CHATS_TREE_FILTER,
         visibleIds,
         comparator,
+        clock: sortClock,
       }),
     ),
   );
@@ -1070,6 +1154,17 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
       preAckRootCreates: renderedPreAckRootCreates,
       visiblePendingRootCreates: renderedPendingRootCreates,
     }) && filterMatchingCloudChats.length === 0;
+  // The same clock re-keyed for the interleaved root list, plus the cloud-only
+  // rows' record heads (see `chatListLastActiveAtByKey`).
+  const lastActiveAtByKey = useMemo(
+    () =>
+      chatListLastActiveAtByKey({
+        localLastActiveAtById: sortClock,
+        recordHeads,
+        cloudChats: visibleCloudChats,
+      }),
+    [recordHeads, sortClock, visibleCloudChats],
+  );
   // One list: local roots and unreachable-host rows, interleaved. Nested local
   // children still render under their parents through `ChatNode`; only ROOTS
   // take part in the interleave, and a cloud row is always a leaf.
@@ -1080,8 +1175,9 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
         nodeById: tree.nodeById,
         cloudChats: visibleCloudChats,
         comparator,
+        lastActiveAtByKey,
       }),
-    [rootIds, tree.nodeById, visibleCloudChats, comparator],
+    [rootIds, tree.nodeById, visibleCloudChats, comparator, lastActiveAtByKey],
   );
   // What the live region announces. Counted from the MATCHES, not `listEntries`:
   // that list holds only local roots (nested matches render recursively beneath
@@ -1110,7 +1206,20 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     filterVisibleIds === null &&
     allRootIds.length === 0 &&
     unfoldedCloudChats.length === 0 &&
-    isCloudChatListSettled(cloudChats) &&
+    isCloudChatListSettled(cloudChats, cloudAuthorized) &&
+    !hasPendingRootRows;
+  // The unauthorized TWIN of the arm above, and it is a separate state rather
+  // than a suppression of that one. "No agents yet." is a claim about the TASK,
+  // and an unverified session has no basis for it: the cloud list was never
+  // asked, so a task whose agents all live on other devices looks identical to
+  // an empty one. Going silent instead would be the other failure - this panel
+  // is where a user starts their first agent, and the onboarding line is the
+  // only thing telling them how.
+  const showCloudUncheckedEmptyState =
+    filterVisibleIds === null &&
+    allRootIds.length === 0 &&
+    unfoldedCloudChats.length === 0 &&
+    !cloudAuthorized &&
     !hasPendingRootRows;
   // Rows exist and survive the interface/ownership filters, yet archiving hid
   // every one of them. Distinct from both other arms: the tree is neither empty
@@ -1135,6 +1244,15 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
         title="No agents yet."
         description="Add an agent and choose a Chat or Terminal interface."
         testId="epic-chat-sidebar-empty"
+      />
+    );
+  } else if (showCloudUncheckedEmptyState) {
+    panelContent = (
+      <SidebarPanelEmptyState
+        icon={MessagesSquare}
+        title="No agents on this device."
+        description="Agents on your other devices can't be checked until your sign-in is confirmed. Add an agent to start one here."
+        testId="epic-chat-sidebar-cloud-unchecked-empty"
       />
     );
   } else if (filteredTreeEmpty && searchActive) {
@@ -1264,30 +1382,35 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
   }
 
   return (
-    <ChatIndicatorHostScopes scopes={indicatorScopes}>
+    <ChatIndicatorHostScopes
+      scopes={indicatorScopes}
+      chatEpicIds={indicatorChatEpicIds}
+    >
       <NotificationIndicatorSnapshot onChange={setNotificationIndicators} />
       <SidebarChatSharingContext.Provider value={chatSharingValue}>
         <SidebarViewerContext.Provider value={isViewer}>
           <SidebarSortContext.Provider value={comparator}>
-            <SidebarFilterVisibilityContext.Provider value={visibleIds}>
-              {searchOpen && !selectionMode && surfaceSearchQuery === null ? (
-                <ChatSearchHeaderInput
-                  tabId={tabId}
-                  resultCount={searchResultCount}
-                />
-              ) : null}
-              <SidebarContent className="gap-0">
-                <SidebarGroup className="min-h-0 flex-1 px-2 py-1">
-                  <SidebarGroupContent
-                    ref={treeRegionRef}
-                    className="flex min-h-0 flex-1 flex-col"
-                    data-testid="epic-chat-tree-region"
-                  >
-                    {panelContent}
-                  </SidebarGroupContent>
-                </SidebarGroup>
-              </SidebarContent>
-            </SidebarFilterVisibilityContext.Provider>
+            <SidebarSortClockContext.Provider value={sortClock}>
+              <SidebarFilterVisibilityContext.Provider value={visibleIds}>
+                {searchOpen && !selectionMode && surfaceSearchQuery === null ? (
+                  <ChatSearchHeaderInput
+                    tabId={tabId}
+                    resultCount={searchResultCount}
+                  />
+                ) : null}
+                <SidebarContent className="gap-0">
+                  <SidebarGroup className="min-h-0 flex-1 px-2 py-1">
+                    <SidebarGroupContent
+                      ref={treeRegionRef}
+                      className="flex min-h-0 flex-1 flex-col"
+                      data-testid="epic-chat-tree-region"
+                    >
+                      {panelContent}
+                    </SidebarGroupContent>
+                  </SidebarGroup>
+                </SidebarContent>
+              </SidebarFilterVisibilityContext.Provider>
+            </SidebarSortClockContext.Provider>
           </SidebarSortContext.Provider>
         </SidebarViewerContext.Provider>
       </SidebarChatSharingContext.Provider>
@@ -1386,6 +1509,7 @@ function localTreeNodeLastActiveAt(input: {
   readonly ownerHostId: string | null;
   readonly sessionHostId: string | null;
   readonly cloudChat: CloudChatSummary | null;
+  readonly recordHead: ChatRecordHeadStamp | null;
 }): number {
   if (!input.isChat) return input.recordUpdatedAt;
   return chatRowLastActiveAt({
@@ -1393,6 +1517,7 @@ function localTreeNodeLastActiveAt(input: {
     ownerHostId: input.ownerHostId,
     sessionHostId: input.sessionHostId,
     cloudChat: input.cloudChat,
+    recordHeadPublishedAt: input.recordHead?.publishedAt ?? null,
   });
 }
 
@@ -1537,16 +1662,27 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   // for a row that carries no owner is the Epic SESSION's host - the host
   // that projected the row - never the app-wide one, which during a re-point
   // is a different machine from the one this tree is showing.
+  // Declared HERE rather than beside `openRef` below, which is the only other
+  // thing that reads it: the record-head lookup is keyed on the record
+  // identity `(ownerUserId, chatId)`, and the content clock beneath it needs
+  // the head.
+  const ownerUserId = useEpicNodeOwnerUserId(nodeId);
+  // The record row's publication head, pushed as the owner publishes. For a
+  // foreign row it is the freshest content clock there is - fresher than the
+  // polled cloud list's `publishedAt` by up to that list's stale window.
+  const recordHead = useEpicChatRecordHead(epicId, ownerUserId, nodeId);
   // Own-host rows read the chat store's real activity timestamp. A row owned
-  // elsewhere is a metadata replica, so its matching cloud publication head
-  // supplies the content clock instead. Terminal agents have no cloud content
-  // plane and keep their record timestamp.
+  // elsewhere is a metadata replica, so its publication clock - the record
+  // head first, then the matching cloud row - supplies the content clock
+  // instead. Terminal agents have no cloud content plane and keep their
+  // record timestamp.
   const updatedAt = localTreeNodeLastActiveAt({
     isChat: artifactType === "chat",
     recordUpdatedAt,
     ownerHostId,
     sessionHostId,
     cloudChat,
+    recordHead,
   });
   const openHostId = ownerHostId ?? sessionHostId ?? UNKNOWN_HOST_PLACEHOLDER;
   // The host that SERVES a published copy's read (the owner is unreachable by
@@ -1565,7 +1701,9 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   // is older than this epic's store. Same source `ChatRowButton`'s lock reads,
   // so the row never promises a published copy the click will not open.
   const ownerRefusesStore = useHostRefusesEpicStore(ownerHostId, epicId);
-  const ownerUserId = useEpicNodeOwnerUserId(nodeId);
+  // `ownerUserId` is declared ABOVE, beside the record-head read that keys on
+  // it - see the content-clock block. Main declared it here; our branch needed
+  // it earlier, so this is the same binding, not a dropped one.
   const openRef = useCallback(
     () =>
       openableType === "chat"
@@ -3739,17 +3877,25 @@ function useChatRowSharing(
   const sharingInFlight = useChatSharingInFlight(epicId);
   const cloudChat = sharing.ownCloudChatByLocalId.get(nodeId);
   const visibility = cloudChat?.visibility ?? null;
+  // A visibility flip is a CLOUD write. The cached cloud-chat rows survive a
+  // demotion to `unverified` (TanStack retains the last success), so the
+  // row's own verdict has to gate the control - the retained data is not
+  // permission to spend. The mutation re-reads the verdict at dispatch too.
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
+  const mayMutate = canMutate && cloudAuthorized;
   return {
     entry: decideChatSharingMenuEntry({
       supported: sharing.visibilitySupported,
       isChat: artifactType === "chat",
-      canMutate,
+      canMutate: mayMutate,
       visibility,
       pending: sharingInFlight,
     }),
     onToggle: () => {
       if (
-        !canMutate ||
+        !mayMutate ||
         !sharing.visibilitySupported ||
         sharingInFlight ||
         cloudChat === undefined

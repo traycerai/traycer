@@ -35,6 +35,23 @@ import {
 export type CloudChatTranscriptState =
   /** Still resolving, downloading, or waiting on the payload list. */
   | { readonly kind: "loading" }
+  /**
+   * The reads were WITHHELD: this session holds no cloud verdict, so both
+   * transcript queries are gated off before they dispatch.
+   *
+   * Its own kind because the alternative was indistinguishable from
+   * `loading` - the queries never run, so `data` stays undefined and `error`
+   * stays null forever. `PublishedChatTile` fed that into `useBoundedHostLoad`,
+   * which bounds the wait and then names the SERVING HOST as the thing that
+   * failed to answer. The host is fine and may well be answering local work in
+   * the same tile; nothing was ever asked of it. A state that says "not
+   * loading, not failed, not permitted" is what stops a correct component from
+   * drawing a false conclusion.
+   *
+   * Never reached when a cached transcript exists: the composition settles on
+   * its own data and this arm is only taken in place of `loading`.
+   */
+  | { readonly kind: "unauthorized" }
   /** The host predates the cloud-chat surface. Not an error - a capability gap. */
   | { readonly kind: "unsupported" }
   /** A genuine transport failure. The only arm a retry could change. */

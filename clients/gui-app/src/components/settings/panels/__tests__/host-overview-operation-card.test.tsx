@@ -194,6 +194,7 @@ function statusWith(
     updateOperation: operation,
     updateTransaction: { recordSchemaVersion: 2, authority: "attempt" },
     storeFormats: null,
+    install: null,
   };
 }
 
@@ -261,6 +262,7 @@ function statusWithBusy(
     updateOperation: operation,
     updateTransaction: { recordSchemaVersion: 2, authority: "attempt" },
     storeFormats: null,
+    install: null,
   };
 }
 
@@ -281,6 +283,7 @@ function statusOperationNull(
     updateOperation: null,
     updateTransaction: null,
     storeFormats: null,
+    install: null,
   };
 }
 

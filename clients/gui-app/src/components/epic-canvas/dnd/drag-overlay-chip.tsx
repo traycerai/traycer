@@ -1,3 +1,4 @@
+import { ChatIndicatorHostScopes } from "@/components/notifications/chat-indicator-host-scopes";
 /**
  * Drag previews mount at the app shell, outside epic session providers.
  * Header tabs share the strip's registry-backed titles and indicators; canvas
@@ -189,24 +190,28 @@ function HeaderTabOverlayChip(props: {
   readonly width: number | null;
 }) {
   const item = useHeaderStripItem(props.tab.stripItemId);
+  const tearOff = useEpicDndStore((state) => state.headerTearOffPreview);
   const isActive = useTabsStore(
     (state) => state.activeItemId === props.tab.stripItemId,
   );
   const tabs = useHeaderTabs();
-  const { indicators } = useHeaderTabIndicators(tabs);
+  const { indicators, chatEpicIds, chatScopes } = useHeaderTabIndicators(tabs);
   if (item === null) return null;
   return (
     <NotificationIndicatorsProvider indicators={indicators}>
-      {item.kind === "split" ? (
-        <SplitTabDragOverlay
-          item={item}
-          width={props.width}
-          source={props.tab}
-          isActive={isActive}
-        />
-      ) : (
-        <HeaderTabDragOverlay tab={item.tab} width={props.width} />
-      )}
+      <ChatIndicatorHostScopes scopes={chatScopes} chatEpicIds={chatEpicIds}>
+        {item.kind === "split" ? (
+          <SplitTabDragOverlay
+            item={item}
+            width={props.width}
+            source={props.tab}
+            isActive={isActive}
+            tearOff={tearOff}
+          />
+        ) : (
+          <HeaderTabDragOverlay tab={item.tab} width={props.width} />
+        )}
+      </ChatIndicatorHostScopes>
     </NotificationIndicatorsProvider>
   );
 }

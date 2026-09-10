@@ -63,10 +63,16 @@ function fakeSession(): FakeSession {
       throw new Error("not exercised by this test");
     }),
     notifyBearerRotated: vi.fn(),
+    notifyCloudVerdictChanged: vi.fn(),
     wake: vi.fn(),
     onClosed: () => () => undefined,
     subscribeAvailabilityRecovered: () => () => undefined,
     subscribeReadinessLost: () => () => undefined,
+    // This suite reads `host.status` through the borrow surface and never
+    // negotiates a method, so the capability accessors answer inert defaults.
+    getMethodSupport: () => "supported",
+    getMethodSchemaVersion: () => ({ major: 1, minor: 0 }),
+    subscribeMethodSupport: () => () => undefined,
     terminalFatal: () => null,
     close: () => undefined,
   };
@@ -102,6 +108,7 @@ function idleStatus(version: string) {
     updateOperation: { kind: "none" },
     updateTransaction: { recordSchemaVersion: 2, authority: "attempt" },
     storeFormats: null,
+    install: null,
   };
 }
 

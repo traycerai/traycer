@@ -1,14 +1,39 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  type RenderResult,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
-import type { CloudChatRead } from "@traycer-clients/shared/cloud-chat/cloud-chat-reader";
+import {
+  readCloudChat,
+  type CloudChatRead,
+} from "@traycer-clients/shared/cloud-chat/cloud-chat-reader";
+import { InMemoryChatPartCache } from "@traycer-clients/shared/cloud-chat/part-cache";
+import { webCryptoSha256Hex } from "@traycer-clients/shared/cloud-chat/bytes";
+import type { JsonObject } from "@traycer/protocol/persistence/chat-sync/json";
+import {
+  DEFAULT_PUBLISH,
+  FIRST_COHORT,
+  IDENTITY,
+  SECOND_COHORT,
+  publishCloudChat,
+  recordingPort,
+  servingBehaviour,
+} from "@traycer-clients/shared/cloud-chat/__tests__/__fixtures__/published-cloud-chat";
 import type { ChatReplicaReadResponse } from "@traycer/protocol/host/epic/chat-replica-read";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { RpcErrorCode } from "@traycer/protocol/framework/index";
 import { TILE_KIND_PUBLISHED_CHAT } from "@/stores/epics/canvas/tile-kinds";
 import type { PublishedChatTileRef } from "@/stores/epics/canvas/types";
-import type { CloudChatTranscriptState } from "@/lib/chats/cloud-chat-transcript-state";
+import {
+  composeCloudChatTranscriptState,
+  type CloudChatTranscriptState,
+} from "@/lib/chats/cloud-chat-transcript-state";
 import type { ChatDeadTileBannerReason } from "@/components/epic-canvas/renderers/dead-tile-banner";
+import type { PublishedChatSessionHandle } from "@/lib/chats/published-chat-session";
 import { PublishedChatTile } from "@/components/epic-canvas/renderers/published-chat-tile";
 
 // A narrow stand-in for `UseQueryResult`, not the real thing: the tile only
@@ -28,6 +53,8 @@ interface MockReplicaQueryResult {
 interface MockHostReachability {
   readonly status: "reachable" | "unreachable";
   readonly hostLabel: string;
+  /** Absent on most fixtures, like the real hook's `null`. */
+  readonly unavailability?: "offline" | "plan-restricted";
 }
 
 /**
@@ -50,6 +77,17 @@ interface DeadTileBannerContainerProps {
 }
 
 const deadTileBannerContainerProps: DeadTileBannerContainerProps[] = [];
+
+/**
+ * Every `ChatTileSessionView` render, recording the `handle` prop it
+ * received - the head-keyed refresh suite's whole assertion is that a LATER
+ * ready state hands the same `handle` object back rather than a fresh one.
+ */
+interface ChatTileSessionViewProps {
+  readonly readOnlyNotice: string | null;
+  readonly handle: PublishedChatSessionHandle;
+}
+const chatTileSessionViewCalls: ChatTileSessionViewProps[] = [];
 
 const mockUseCloudChatTranscript = vi.fn<() => CloudChatTranscriptState>();
 const mockUseChatReplicaRead =
@@ -88,11 +126,12 @@ vi.mock("@/components/epic-canvas/renderers/chat-tile", async () => {
     typeof import("@/components/epic-canvas/renderers/dead-tile-banner")
   >("@/components/epic-canvas/renderers/dead-tile-banner");
   return {
-    ChatTileSessionView: (props: {
-      readonly readOnlyNotice: string | null;
-    }) => (
-      <div data-testid="chat-tile-session-view">{props.readOnlyNotice}</div>
-    ),
+    ChatTileSessionView: (props: ChatTileSessionViewProps) => {
+      chatTileSessionViewCalls.push(props);
+      return (
+        <div data-testid="chat-tile-session-view">{props.readOnlyNotice}</div>
+      );
+    },
     // Stubbed at the container boundary - the real container runs the clone
     // offer's host-runtime subscription and the owner lookup's cloud query,
     // neither of which this suite mounts providers for. It records the props
@@ -291,6 +330,7 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   deadTileBannerContainerProps.length = 0;
+  chatTileSessionViewCalls.length = 0;
 });
 
 describe("PublishedChatTile - doc-replica fallback", () => {
@@ -620,9 +660,10 @@ describe("PublishedChatTile - dead-tile clone banner", () => {
     expect(screen.getByTestId("chat-tile-session-view")).not.toBeNull();
   });
 
-  it("mounts no banner when the copy's owner IS the serving host, even while unreachable", () => {
-    // The canvas-substitution case: `tab-group-view` already mounts its own
-    // banner above this tile there, so a second one here would double it.
+  it("mounts the banner when the copy's owner IS the serving host, too", () => {
+    // The canvas-substitution case. This tile owns the unreachable-owner
+    // banner in every mount; `tab-group-view` draws one above it only for a
+    // REACHABLE host's "not here" answer, so nothing doubles.
     mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
     mockUseChatReplicaRead.mockReturnValue(replicaOk());
 
@@ -636,7 +677,262 @@ describe("PublishedChatTile - dead-tile clone banner", () => {
       />,
     );
 
-    expect(screen.queryByTestId("published-chat-dead-tile-chat-1")).toBeNull();
+    expect(
+      screen.getByTestId("published-chat-dead-tile-chat-1"),
+    ).not.toBeNull();
     expect(screen.getByTestId("chat-tile-session-view")).not.toBeNull();
+  });
+
+  // The canvas no longer draws a banner over this tile for an unreachable
+  // owner, so the tile's own has to be there on every branch - a reader
+  // stuck on the load state or a refused read still needs the host sentence
+  // and the Clone way out (PR #1818 review). Neither branch has a copy on
+  // screen, so neither may claim one.
+  it("keeps the banner above the load state before the first copy", () => {
+    mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
+    mockUseChatReplicaRead.mockReturnValue(replicaNotFetched());
+
+    render(
+      <PublishedChatTile
+        node={NODE}
+        viewTabId="tab-1"
+        tileId="pane-1"
+        isActive
+        epicId="epic-1"
+      />,
+    );
+
+    expect(
+      screen.queryByTestId(`published-chat-tile-load-${NODE.id}`),
+    ).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Clone agent" })).toBeTruthy();
+    expect(deadTileBannerContainerProps).toHaveLength(1);
+    expect(deadTileBannerContainerProps[0]?.showsPublishedCopy).toBe(false);
+  });
+
+  it("keeps the banner above the notice when no copy could be read", () => {
+    mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
+    mockUseChatReplicaRead.mockReturnValue(replicaAbsent());
+
+    render(
+      <PublishedChatTile
+        node={NODE}
+        viewTabId="tab-1"
+        tileId="pane-1"
+        isActive
+        epicId="epic-1"
+      />,
+    );
+
+    expect(screen.queryByTestId("published-chat-notice")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Clone agent" })).toBeTruthy();
+    expect(deadTileBannerContainerProps).toHaveLength(1);
+    expect(deadTileBannerContainerProps[0]?.showsPublishedCopy).toBe(false);
+  });
+
+  it("names the plan restriction, not an outage, when that is why the owner is unreachable", () => {
+    mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
+    mockUseChatReplicaRead.mockReturnValue(replicaOk());
+    mockUseHostReachability.mockReturnValue({
+      status: "unreachable",
+      hostLabel: "Ada's Mac",
+      unavailability: "plan-restricted",
+    });
+
+    render(
+      <PublishedChatTile
+        node={NODE}
+        viewTabId="tab-1"
+        tileId="pane-1"
+        isActive
+        epicId="epic-1"
+      />,
+    );
+
+    expect(deadTileBannerContainerProps).toHaveLength(1);
+    expect(deadTileBannerContainerProps[0]?.reason).toBe(
+      "host-plan-restricted",
+    );
+  });
+});
+
+/**
+ * The head-keyed refresh: once a copy has been shown, a LATER read for a
+ * newer record head is applied INTO the same store (`applyConversion`)
+ * rather than by remounting the surface - see `published-chat-tile.tsx`'s
+ * own doc comment ("The copy FOLLOWS the owner's publications, in place").
+ * These build the `ready` state through the REAL pipeline
+ * (`publishCloudChat` -> `readCloudChat` -> `composeCloudChatTranscriptState`)
+ * rather than hand-rolling a `PresentedChat`, so the conversion each `ready`
+ * state carries is exactly what production would produce.
+ *
+ * Ablation each test guards against: gate the store creation on anything
+ * other than "no store yet" (e.g. re-create per read) and the SAME-handle
+ * assertions below fail - `ChatTileSessionView` would receive a fresh
+ * `handle` on every publication, dropping every subscription the rendered
+ * surface (scroll, memoized rows) held on the old one.
+ */
+describe("PublishedChatTile - head-keyed refresh", () => {
+  async function readyState(
+    cohorts: readonly (readonly JsonObject[])[],
+  ): Promise<CloudChatTranscriptState> {
+    const published = await publishCloudChat({
+      ...DEFAULT_PUBLISH,
+      cohorts,
+    });
+    const read = await readCloudChat({
+      identity: IDENTITY,
+      port: recordingPort(servingBehaviour(published)),
+      cache: new InMemoryChatPartCache(),
+      sha256Hex: webCryptoSha256Hex,
+    });
+    return composeCloudChatTranscriptState({
+      read,
+      readError: null,
+      payloadsOutcome: undefined,
+      payloadsSettled: true,
+    });
+  }
+
+  function renderTile(): RenderResult {
+    return render(
+      <PublishedChatTile
+        node={NODE}
+        viewTabId="tab-1"
+        tileId="pane-1"
+        isActive
+        epicId="epic-1"
+      />,
+    );
+  }
+
+  function rerenderTile(rerender: (ui: ReactNode) => void): void {
+    rerender(
+      <PublishedChatTile
+        node={NODE}
+        viewTabId="tab-1"
+        tileId="pane-1"
+        isActive
+        epicId="epic-1"
+      />,
+    );
+  }
+
+  it("renders the bounded load state, never the notice, for a loading or not-yet-applied ready transcript before the first copy", async () => {
+    mockUseChatReplicaRead.mockReturnValue(replicaNotFetched());
+    mockUseCloudChatTranscript.mockReturnValue({ kind: "loading" });
+
+    const { unmount } = renderTile();
+    expect(
+      screen.queryByTestId(`published-chat-tile-load-${NODE.id}`),
+    ).not.toBeNull();
+    expect(screen.queryByTestId("published-chat-notice")).toBeNull();
+    expect(screen.queryByTestId("chat-tile-session-view")).toBeNull();
+    unmount();
+
+    // A `ready` state the effect has not yet applied is the SAME gate, not
+    // the notice branch - the notice would flash "not published yet" for a
+    // chat that is, in fact, about to render.
+    const v1 = await readyState([FIRST_COHORT]);
+    mockUseCloudChatTranscript.mockReturnValue(v1);
+    renderTile();
+    expect(screen.queryByTestId("published-chat-notice")).toBeNull();
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-tile-session-view")).not.toBeNull();
+    });
+    expect(screen.queryByTestId("published-chat-notice")).toBeNull();
+  });
+
+  it("keeps rendering the session view through a loading refresh, and hands the SAME handle back once the next read is applied", async () => {
+    mockUseChatReplicaRead.mockReturnValue(replicaNotFetched());
+    const v1 = await readyState([FIRST_COHORT]);
+    mockUseCloudChatTranscript.mockReturnValue(v1);
+
+    const { rerender } = renderTile();
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-tile-session-view")).not.toBeNull();
+    });
+    expect(chatTileSessionViewCalls).toHaveLength(1);
+    const firstHandle = chatTileSessionViewCalls[0].handle;
+    const firstMessageCount = firstHandle.store.getState().messages.length;
+    expect(firstMessageCount).toBeGreaterThan(0);
+
+    // A re-read for a newer head is in flight: the previous transcript stays
+    // on screen, and the footer says so instead of a load gate or a notice.
+    mockUseCloudChatTranscript.mockReturnValue({ kind: "loading" });
+    rerenderTile(rerender);
+
+    const loadingView = screen.getByTestId("chat-tile-session-view");
+    expect(loadingView).not.toBeNull();
+    expect(screen.queryByTestId("published-chat-notice")).toBeNull();
+    expect(loadingView.textContent).toContain("A newer copy is being fetched.");
+
+    // The re-read lands: applied into the SAME handle, never a fresh one.
+    const v2 = await readyState([FIRST_COHORT, SECOND_COHORT]);
+    mockUseCloudChatTranscript.mockReturnValue(v2);
+    rerenderTile(rerender);
+
+    await waitFor(() => {
+      const last =
+        chatTileSessionViewCalls[chatTileSessionViewCalls.length - 1];
+      expect(last.handle.store.getState().messages.length).toBeGreaterThan(
+        firstMessageCount,
+      );
+    });
+    const laterHandle =
+      chatTileSessionViewCalls[chatTileSessionViewCalls.length - 1].handle;
+    expect(laterHandle).toBe(firstHandle);
+  });
+
+  it("keeps the session view after a copy has been shown, and states the retry story when the re-read FAILED", async () => {
+    mockUseChatReplicaRead.mockReturnValue(replicaNotFetched());
+    const v1 = await readyState([FIRST_COHORT]);
+    mockUseCloudChatTranscript.mockReturnValue(v1);
+
+    const { rerender } = renderTile();
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-tile-session-view")).not.toBeNull();
+    });
+
+    mockUseCloudChatTranscript.mockReturnValue({
+      kind: "failed",
+      error: new HostRpcError({
+        code: "RPC_ERROR",
+        message: "boom",
+        requestId: "r",
+        method: "epic.resolveCloudChatHead",
+        fatalDetails: null,
+      }),
+    });
+    rerenderTile(rerender);
+
+    const view = screen.getByTestId("chat-tile-session-view");
+    expect(view).not.toBeNull();
+    expect(view.textContent).toContain("could not be fetched");
+    expect(screen.queryByTestId("published-chat-notice")).toBeNull();
+  });
+
+  it("keeps the session view after a copy has been shown, states the refusal, and does not fall back to the replica read", async () => {
+    mockUseChatReplicaRead.mockReturnValue(replicaNotFetched());
+    const v1 = await readyState([FIRST_COHORT]);
+    mockUseCloudChatTranscript.mockReturnValue(v1);
+
+    const { rerender } = renderTile();
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-tile-session-view")).not.toBeNull();
+    });
+
+    mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());
+    rerenderTile(rerender);
+
+    const view = screen.getByTestId("chat-tile-session-view");
+    expect(view).not.toBeNull();
+    expect(view.textContent).toContain("A newer copy could not be read");
+    expect(screen.queryByTestId("published-chat-notice")).toBeNull();
+    // A copy is already on screen, so the replica fallback - which exists
+    // only for the BEFORE-first-copy case - must stay disabled.
+    expect(mockUseChatReplicaRead).toHaveBeenLastCalledWith(
+      expect.objectContaining({ enabled: false }),
+    );
   });
 });

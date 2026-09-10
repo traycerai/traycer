@@ -637,6 +637,120 @@ describe("<EpicRootDragOverlayContent />", () => {
       expect(rightUnderline.className).not.toContain("bg-primary");
       expect(within(overlay).getByTestId("tab-chrome-center")).toBeTruthy();
     });
+
+    (
+      [
+        { side: "left", origin: 100, groupOffset: 0 },
+        { side: "right", origin: 340, groupOffset: -240 },
+      ] as const
+    ).forEach(({ side, origin, groupOffset }) => {
+      it(`switches to just the grabbed ${side} member at its measured width on tear-off, and restores the full group on reentry`, () => {
+        seedSplitGroup("right", { kind: "tab" });
+        const draggedId = side === "left" ? "epic-left" : "epic-right";
+        const draggedTitle = side === "left" ? "Left Epic" : "Right Epic";
+        const otherTitle = side === "left" ? "Right Epic" : "Left Epic";
+
+        const frame = document.createElement("div");
+        frame.setAttribute("data-strip-item-id", "split-1");
+        const member = document.createElement("div");
+        member.setAttribute("data-tab-kind", "epic");
+        member.setAttribute("data-testid", `tab-epic-${draggedId}`);
+        frame.appendChild(member);
+        document.body.appendChild(frame);
+        const frameRectSpy = vi
+          .spyOn(frame, "getBoundingClientRect")
+          .mockReturnValue(rect(100, 0, 101, 40));
+        const memberRectSpy = vi
+          .spyOn(member, "getBoundingClientRect")
+          .mockReturnValue(rect(origin, 0, origin + 190, 40));
+
+        try {
+          useEpicDndStore.getState().headerTabDragStarted(
+            {
+              kind: "header-tab",
+              stripItemId: "split-1",
+              tabKind: "epic",
+              tabId: draggedId,
+              index: 0,
+            },
+            480,
+          );
+          renderOverlay();
+          const overlay = screen.getByTestId("header-tab-drag-overlay");
+
+          expect(within(overlay).getByText("Left Epic")).toBeTruthy();
+          expect(within(overlay).getByText("Right Epic")).toBeTruthy();
+          expect(overlay.style.transform).toBe(`translateX(${groupOffset}px)`);
+          expect(overlay.style.width).toBe("480px");
+
+          act(() => {
+            useEpicDndStore.getState().headerTearOffPreviewChanged(true);
+          });
+
+          expect(within(overlay).getByText(draggedTitle)).toBeTruthy();
+          expect(within(overlay).queryByText(otherTitle)).toBeNull();
+          expect(overlay.style.transform).toBe("translateX(0px)");
+          expect(overlay.style.width).toBe("190px");
+
+          // Captured once: re-mocking the rects after the first measurement
+          // must not move either number in either direction below.
+          frameRectSpy.mockReturnValue(rect(999, 0, 1000, 40));
+          memberRectSpy.mockReturnValue(rect(2000, 0, 2500, 40));
+
+          act(() => {
+            useEpicDndStore.getState().headerTearOffPreviewChanged(false);
+          });
+          expect(within(overlay).getByText("Left Epic")).toBeTruthy();
+          expect(within(overlay).getByText("Right Epic")).toBeTruthy();
+          expect(overlay.style.transform).toBe(`translateX(${groupOffset}px)`);
+          expect(overlay.style.width).toBe("480px");
+
+          act(() => {
+            useEpicDndStore.getState().headerTearOffPreviewChanged(true);
+          });
+          expect(overlay.style.transform).toBe("translateX(0px)");
+          expect(overlay.style.width).toBe("190px");
+        } finally {
+          frameRectSpy.mockRestore();
+          memberRectSpy.mockRestore();
+          frame.remove();
+        }
+      });
+    });
+
+    it("resets headerTearOffPreview when a new drag starts or the current one ends", () => {
+      seedSplitGroup("right", { kind: "tab" });
+      useEpicDndStore.getState().headerTabDragStarted(
+        {
+          kind: "header-tab",
+          stripItemId: "split-1",
+          tabKind: "epic",
+          tabId: "epic-right",
+          index: 0,
+        },
+        480,
+      );
+      useEpicDndStore.getState().headerTearOffPreviewChanged(true);
+      expect(useEpicDndStore.getState().headerTearOffPreview).toBe(true);
+
+      useEpicDndStore.getState().headerTabDragStarted(
+        {
+          kind: "header-tab",
+          stripItemId: "split-1",
+          tabKind: "epic",
+          tabId: "epic-left",
+          index: 0,
+        },
+        480,
+      );
+      expect(useEpicDndStore.getState().headerTearOffPreview).toBe(false);
+
+      useEpicDndStore.getState().headerTearOffPreviewChanged(true);
+      expect(useEpicDndStore.getState().headerTearOffPreview).toBe(true);
+
+      useEpicDndStore.getState().dragEnded();
+      expect(useEpicDndStore.getState().headerTearOffPreview).toBe(false);
+    });
   });
 
   describe("header-tab overlay shares the strip's live visual", () => {

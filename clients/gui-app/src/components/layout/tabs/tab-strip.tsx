@@ -34,6 +34,7 @@ import {
   useHeaderTabs,
 } from "@/stores/tabs/use-header-tabs";
 import { useTabsStore } from "@/stores/tabs/store";
+import { useHostClient } from "@/lib/host";
 import { tabDuplicate, tabResolveIntent } from "@/stores/tabs/registry";
 import type { HeaderTab } from "@/stores/tabs/types";
 import type { TabRef } from "@/stores/tabs/types";
@@ -48,6 +49,7 @@ import { TabStripNewButton } from "@/components/layout/tabs/tab-strip-new-button
 import { useHorizontalWheelScroll } from "@/hooks/use-horizontal-wheel-scroll";
 import { useHeaderTabIndicators } from "./header-tab-presentation";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
+import { ChatIndicatorHostScopes } from "@/components/notifications/chat-indicator-host-scopes";
 import {
   executeTabSplitCommand,
   preparePairTabsCommand,
@@ -57,10 +59,14 @@ import {
 import { activatePreparedPairTabIntent } from "@/lib/tab-navigation";
 import type { StripItem } from "@/stores/tabs/layout";
 import {
+  epicPinDispatchAdmitted,
   useEpicSetPinned,
   usePendingSetPinnedEpicIds,
 } from "@/hooks/epic/use-epic-set-pinned-mutation";
-import { useEpicTaskPinnedStates } from "@/hooks/epic/use-epic-task-pinned-states-query";
+import {
+  useEpicTaskPinnedStates,
+  type TaskPinnedState,
+} from "@/hooks/epic/use-epic-task-pinned-states-query";
 
 export function TabStrip() {
   const hasHydrated = useWindowsBridgeHydrated();
@@ -102,30 +108,68 @@ function TabStripBody() {
   });
 
   const isLandingPage = activePathname === "/";
-  const { epicIds: indicatorEpicIds, indicators: notificationIndicators } =
-    useHeaderTabIndicators(allTabs);
+  const {
+    epicIds: indicatorEpicIds,
+    indicators: notificationIndicators,
+    chatEpicIds: indicatorChatEpicIds,
+    chatScopes: indicatorChatScopes,
+  } = useHeaderTabIndicators(allTabs);
   const taskPinnedStates = useEpicTaskPinnedStates(indicatorEpicIds);
   const pendingSetPinnedEpicIds = usePendingSetPinnedEpicIds();
   const { mutate: setEpicPinned } = useEpicSetPinned();
+  const hostClient = useHostClient();
   const handleSetTaskPinned = useCallback(
     (epicId: string, pinned: boolean, displayName: string) => {
-      setEpicPinned(
-        { epicId, pinned },
-        {
-          onSuccess: () => {
-            toast.success(pinConfirmationMessage(displayName, pinned), {
-              action: {
-                label: "Undo",
-                onClick: () => {
-                  setEpicPinned({ epicId, pinned: !pinned });
-                },
+      // The same reading the menu rendered its label and availability from -
+      // NOT a second derivation, which is how a control and its dispatch come
+      // to disagree. A local-homed epic on a `@1.1` host is served off that
+      // host's disk and spends no cloud capability, so it is admissible with
+      // no verdict; everything else still needs one.
+      const reading = taskPinnedStates.get(epicId);
+      const isLocalHome = reading?.home === "local";
+      // The epic's host, from that SAME reading. A local-homed pin is served
+      // off the owning host's disk, so the write has to go there: sent to the
+      // window's host instead, `epicHomeVerdict` answers not-local and the
+      // request falls through to a cloud write for an epic the cloud has no row
+      // for. `null` for a cloud-homed row means "follow the window", which is
+      // right - any host proxies a cloud pin.
+      const hostId = reading?.hostId ?? null;
+      const variables = { epicId, pinned, isLocalHome, hostId };
+      // Fail closed on the CAPABILITY, not just in the menu. This is the one
+      // dispatch site for the whole tab tree, and the Undo action below is a
+      // second entry into it that no menu gate can reach: the toast outlives
+      // the click, so a verdict withdrawn - or a host rolled back to `@1.0` -
+      // in between would let Undo spend a cloud capability the session no
+      // longer holds. `epicPinDispatchAdmitted` is the mutation's own gate, so
+      // this edge and `onMutate` cannot answer differently; it re-reads both
+      // the verdict and the negotiation rather than closing over either.
+      if (!epicPinDispatchAdmitted(variables, hostClient.getActiveHostId())) {
+        return;
+      }
+      setEpicPinned(variables, {
+        onSuccess: () => {
+          toast.success(pinConfirmationMessage(displayName, pinned), {
+            action: {
+              label: "Undo",
+              onClick: () => {
+                // `hostId` rides the closure exactly as `isLocalHome` does,
+                // and that is what lets the pin host be per-dispatch at all:
+                // this toast outlives the row's menu, so a host resolved from a
+                // mounted row would be gone by now.
+                const undo = { epicId, pinned: !pinned, isLocalHome, hostId };
+                if (
+                  !epicPinDispatchAdmitted(undo, hostClient.getActiveHostId())
+                ) {
+                  return;
+                }
+                setEpicPinned(undo);
               },
-            });
-          },
+            },
+          });
         },
-      );
+      });
     },
-    [setEpicPinned],
+    [hostClient, setEpicPinned, taskPinnedStates],
   );
 
   // Trailing slot: the strip's empty space after the last tab accepts drops
@@ -267,22 +311,25 @@ function TabStripBody() {
 
   return (
     <NotificationIndicatorsProvider indicators={notificationIndicators}>
-      <div
-        role="tablist"
-        aria-label="Open tabs"
-        data-testid="tab-strip"
-        className="relative flex min-w-0 flex-1 items-end"
+      <ChatIndicatorHostScopes
+        scopes={indicatorChatScopes}
+        chatEpicIds={indicatorChatEpicIds}
       >
-        <div className="relative flex min-w-0 max-w-full flex-[0_1_auto] items-end">
-          <LayoutGroup id="header-tabs">
-            <div
-              ref={trailingSlotRef}
-              data-testid="header-tab-strip-scroll"
-              onWheel={handleWheel}
-              className="no-scrollbar flex min-w-0 max-w-full flex-[0_1_auto] touch-pan-x items-end overflow-x-auto overscroll-x-contain [-webkit-app-region:no-drag]"
-            >
-              {headerItemIds.map((itemId, index) => {
-                return (
+        <div
+          role="tablist"
+          aria-label="Open tabs"
+          data-testid="tab-strip"
+          className="relative flex min-w-0 flex-1 items-end"
+        >
+          <div className="relative flex min-w-0 max-w-full flex-[0_1_auto] items-end">
+            <LayoutGroup id="header-tabs">
+              <div
+                ref={trailingSlotRef}
+                data-testid="header-tab-strip-scroll"
+                onWheel={handleWheel}
+                className="no-scrollbar flex min-w-0 max-w-full flex-[0_1_auto] touch-pan-x items-end overflow-x-auto overscroll-x-contain [-webkit-app-region:no-drag]"
+              >
+                {headerItemIds.map((itemId, index) => (
                   <HeaderStripItemRenderer
                     key={itemId}
                     itemId={itemId}
@@ -309,15 +356,15 @@ function TabStripBody() {
                     pendingSetPinnedEpicIds={pendingSetPinnedEpicIds}
                     onSetTaskPinned={handleSetTaskPinned}
                   />
-                );
-              })}
-            </div>
-          </LayoutGroup>
-          <TabStripNewButton onNewTab={handleNewTab} />
+                ))}
+              </div>
+            </LayoutGroup>
+            <TabStripNewButton onNewTab={handleNewTab} />
+          </div>
+          {closeTabFlow.unsyncedDialog}
+          <UnsyncedEpicMoveDialog flow={openInNewWindowFlow.epicFlow} />
         </div>
-        {closeTabFlow.unsyncedDialog}
-        <UnsyncedEpicMoveDialog flow={openInNewWindowFlow.epicFlow} />
-      </div>
+      </ChatIndicatorHostScopes>
     </NotificationIndicatorsProvider>
   );
 }
@@ -344,7 +391,7 @@ interface HeaderStripItemRendererProps {
   readonly onOpenInNewWindow: (tab: HeaderTab) => void;
   readonly canOpenInNewWindow: boolean;
   readonly onSplitCommand: (id: TabSplitCommandId, tab: HeaderTab) => void;
-  readonly taskPinnedStates: ReadonlyMap<string, boolean>;
+  readonly taskPinnedStates: ReadonlyMap<string, TaskPinnedState>;
   readonly pendingSetPinnedEpicIds: ReadonlySet<string>;
   readonly onSetTaskPinned: (
     epicId: string,
@@ -439,7 +486,7 @@ const HeaderStripTabItem = memo(function HeaderStripTabItem(props: {
   readonly onOpenInNewWindow: (tab: HeaderTab) => void;
   readonly canOpenInNewWindow: boolean;
   readonly onSplitCommand: (id: TabSplitCommandId, tab: HeaderTab) => void;
-  readonly taskPinnedStates: ReadonlyMap<string, boolean>;
+  readonly taskPinnedStates: ReadonlyMap<string, TaskPinnedState>;
   readonly pendingSetPinnedEpicIds: ReadonlySet<string>;
   readonly onSetTaskPinned: (
     epicId: string,
@@ -474,7 +521,7 @@ const HeaderStripTabItem = memo(function HeaderStripTabItem(props: {
       onOpenInNewWindow={props.onOpenInNewWindow}
       canOpenInNewWindow={props.canOpenInNewWindow}
       onSplitCommand={props.onSplitCommand}
-      taskPinned={
+      taskPinnedState={
         props.tab.kind === "epic"
           ? (props.taskPinnedStates.get(props.tab.epicId) ?? null)
           : null

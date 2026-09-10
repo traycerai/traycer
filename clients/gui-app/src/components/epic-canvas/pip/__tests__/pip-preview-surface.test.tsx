@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { PipPreviewSurface } from "@/components/epic-canvas/pip/pip-preview-surface";
 import type { PipPreview } from "@/lib/browser-view/pip/pip-frame-capture";
-import { fakeMediaStream as fakeStream } from "@/components/epic-canvas/renderers/__tests__/browser-peek-tile-stream-fixture";
+import { fakeMediaStream as fakeStream } from "@/components/browser-tile/__tests__/browser-peek-tile-stream-fixture";
 
 const jpegPreview: PipPreview = {
   src: "blob:pip-frame",

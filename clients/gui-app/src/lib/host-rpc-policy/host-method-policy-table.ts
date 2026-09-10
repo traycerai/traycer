@@ -451,6 +451,18 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "host.getRuntimeCapabilities": { ...LATEST_SCHEDULING, poll: null },
+  // Explicit, state-changing local-store repair. Unusually for this table the
+  // cross-queue caveat does not apply: the request is
+  // `{ confirmOldHostStopped: true }` and nothing else (`local-store/schemas.ts`),
+  // so every confirmation click on one host shares all four key components and
+  // they really are one queue. `fifo` is what that queue needs — under `latest`
+  // a second click arriving while the first is still QUEUED folds into it, and
+  // two deliberate confirmations of a destructive repair reach the host as one.
+  "host.rebindLocalStore": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // The provider-pull branch spawns a CLI subprocess on the host whose probe
   // can legitimately outlast the transport's 30s default frame timeout (a
   // Claude refresh-safe probe alone is budgeted 90s). The ephemeral fetch
@@ -987,9 +999,11 @@ export const HOST_METHOD_POLL_TABLE = {
   // Updating the epic title persists user intent.
   "epic.updateTitle": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Re-running an interrupted major migration. `fifo`, not `latest`, because it
-  // is an ACTION with host-side effects and not a read: `latest` would let a
-  // second press supersede an in-flight retry, dropping a user-initiated
-  // recovery attempt. Never polled - the modal's Retry button is the only
+  // is an ACTION with host-side effects and not a read: under `latest` a press
+  // arriving while an earlier one is still queued folds into it, so two
+  // user-initiated recovery attempts reach the host as one. (It could not drop
+  // the in-flight attempt - `latest` only ever reuses a QUEUED job, never the
+  // active one.) Never polled - the modal's Retry button is the only
   // caller. Replaces the client frame the monolith carried; no GUI caller
   // exists yet (the read cutover wires it), and this entry is here because the
   // table must exactly match the registry.
@@ -1074,18 +1088,28 @@ export const HOST_METHOD_POLL_TABLE = {
   // the table must exactly match the registry, and the method landed there with
   // the protocol lane contracts.
   "epic.getWorkspaceContext": { ...LATEST_SCHEDULING, poll: null },
-  // The cloud-chat READ surface. All five are reads, so `latest` - and the two
-  // properties that follow from the coordinator keying on PARAMS are exactly
-  // what this fan-out wants: a read of part A never supersedes a concurrent
-  // read of part B (different params, different queue), while two readers
-  // asking for the SAME digest at the same time coalesce onto one request.
-  // `fifo` would serialize a p99 chat's ~165 parts behind each other for no
-  // property gained, since none of these writes anything.
+  // The cloud-chat READ surface. All five are reads, so `latest` - and the
+  // property that follows from the coordinator keying on PARAMS is what this
+  // fan-out wants: a read of part A never supersedes a concurrent read of part
+  // B, because different params are different queues. That is equally why
+  // `fifo` would NOT serialize a p99 chat's ~165 parts behind each other; they
+  // never share a queue either. What the mode picks is what happens WITHIN one
+  // part's queue, and there `latest` folds a redundant repeat onto the one
+  // already waiting instead of spending another request. Not onto the ACTIVE
+  // read - `latest` only ever reuses a QUEUED job - so two simultaneous reads
+  // of the same digest are still two requests; any dedupe tighter than that is
+  // Query's, above this layer.
   //
   // No polling. A published head changes only when its owning host publishes
-  // again, and this reader has no signal for that; an interval would spend
-  // requests on an answer that is almost always identical. A newer head is
-  // picked up by reopening.
+  // again, and the reader HAS a signal for that: the chat record row carries
+  // the cloud head stamp (`epic.listChatRecords@1.2` /
+  // `host.chatRecords.subscribe@1.3`), pushed by the record stream and
+  // repaired by that list's own 20s poll. The published-copy read keys on the
+  // record head's digest (`cloudChatQueryKeys.read`), so a new publication is
+  // a new key and re-resolves on its own; an interval here would spend
+  // requests re-learning an answer the record plane already delivered. A
+  // reader whose record row carries no head (an older owner host) is back to
+  // one read per open, picked up by reopening.
   "epic.listCloudChats": { ...LATEST_SCHEDULING, poll: null },
   "epic.resolveCloudChatHead": { ...LATEST_SCHEDULING, poll: null },
   "epic.readCloudChatPart": { ...LATEST_SCHEDULING, poll: null },
@@ -1225,9 +1249,11 @@ export const HOST_METHOD_POLL_TABLE = {
   // explicitly (open, refresh click, filter change), so there is no cadence
   // to keep - and a superseded read has nothing worth waiting for.
   "mention.githubCatalog": { ...LATEST_SCHEDULING, poll: null },
-  // Latest-wins is load-bearing here rather than incidental: the section
-  // searches as the user types, and a queued query that has already been
-  // retyped past must not be the one that lands.
+  // A read, so `latest`. That is NOT what discards a query the user has typed
+  // past: `query` is in the request params and so in the queue key, so an old
+  // query and a new one sit in different queues and this mode never compares
+  // them - Query owns which result is current. What `latest` does here is fold
+  // a repeat of the SAME query onto the one already waiting.
   "mention.githubSearch": { ...LATEST_SCHEDULING, poll: null },
   // Creating a terminal allocates a host PTY session.
   "terminal.create": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
@@ -1241,9 +1267,13 @@ export const HOST_METHOD_POLL_TABLE = {
   // Renaming a terminal persists its display name.
   "terminal.rename": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   // Durable plain-terminal authority. The list is snapshot seeding only; the
-  // stream owns subsequent convergence. Every write is FIFO so rapid user
-  // actions reach the host in order, while revision guards still protect the
-  // client cache from independently delayed stream frames.
+  // stream owns subsequent convergence. Every write is FIFO so an identical
+  // repeat is delivered on its own - `selectJob` refuses to coalesce a fifo
+  // job. Not so that writes reach the host in a global order, which this layer
+  // does not give: queues are keyed by [hostId, userId, method, params], so two
+  // renames carrying different titles do not share one, nor does a rename share
+  // one with a close. What holds the client cache together across
+  // independently delayed stream frames is the revision guards, not this mode.
   "terminal.plain.create": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -1463,6 +1493,26 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // The per-profile pair. `fifo` for the same reason as the provider-wide pair
+  // above: these mutate persisted credentials, so an identical repeat has to
+  // be delivered on its own - `selectJob` refuses to coalesce a fifo job.
+  //
+  // (Not for ordering, in either direction. The coordinator keys queues by
+  // [hostId, userId, method, params], so a set and a clear never share one -
+  // nor do two sets carrying different keys. The set-against-clear ordering
+  // this pair does need lives one layer up, in the TanStack mutation scope
+  // `PROFILE_API_KEY_MUTATION_SCOPE` (`hooks/providers/invalidations.ts`),
+  // whose note records what that reaches and what it cannot.)
+  "providers.setProfileApiKey": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "providers.clearProfileApiKey": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // Updating terminal args changes persisted provider configuration.
   "providers.setTerminalAgentArgs": {
     mode: "fifo",
@@ -1494,8 +1544,10 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   // Native MCP/plugins/skills mutations write provider config files, so they
-  // are `fifo` for the same reason as the classic provider mutations above:
-  // two rapid toggles must both land, in order, not be coalesced into one.
+  // are `fifo` for the same reason as the classic provider mutations above: an
+  // identical repeat must be delivered on its own, not coalesced. It does not
+  // order an enable against a disable - `action` and `enabled` are request
+  // params and so part of the queue key, which puts them in separate queues.
   "providers.nativeMutate": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -1528,8 +1580,10 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   // Upstream credential writes (connect / start OAuth / submit code /
-  // disconnect) - `fifo` for the same reason as `providers.mcpAuth`: two rapid
-  // actions must both land, in order, not be coalesced into one.
+  // disconnect) - `fifo` for the same reason as `providers.mcpAuth`: an
+  // identical repeat must be delivered on its own, not coalesced. Those four
+  // are `action` values in the request params, so they are four separate
+  // queues and this mode never orders one of them against another.
   "providers.modelProviderAuth": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -1651,8 +1705,11 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
-  // Config reads and bounded diagnostics reads can coalesce safely; config
-  // writes are ordered so rapid user changes are all persisted in sequence.
+  // Config reads and bounded diagnostics reads can coalesce safely. Config
+  // writes are `fifo` so an identical repeat is persisted rather than coalesced
+  // onto the one already waiting - not to sequence DIFFERENT writes, which this
+  // layer does not do: `set` and `reset` are different methods, and two sets
+  // naming different shells are different params, so none share a queue.
   "config.shell.get": { ...LATEST_SCHEDULING, poll: null },
   "config.shell.set": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "config.shell.reset": {

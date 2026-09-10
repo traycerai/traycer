@@ -277,6 +277,7 @@ function attemptStatus(
     updateOperation: operation,
     updateTransaction: { recordSchemaVersion: 2, authority: "attempt" },
     storeFormats: null,
+    install: null,
   };
 }
 
@@ -768,6 +769,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
                 updateOperation: null,
                 updateTransaction: null,
                 storeFormats: null,
+                install: null,
               }
             : { ...attemptStatus(operation), updateProgress },
       });

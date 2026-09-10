@@ -129,6 +129,7 @@ function hostStatusResponse() {
     updateOperation: null,
     updateTransaction: null,
     storeFormats: null,
+    install: null,
   };
 }
 

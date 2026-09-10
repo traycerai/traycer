@@ -203,7 +203,10 @@ async function migrateOntoAbsentFile(args: {
   switch (result.outcome) {
     case "applied":
       return "committed";
-    case "refresh-rejected":
+    // Terminal-dead either way: migration is deciding whether a LEGACY pair
+    // can be carried forward, and neither a dead token nor a dead account can.
+    case "refresh-rejected-credential":
+    case "refresh-rejected-account":
       // The explicit rejection §6 requires for terminal-dead. Nothing committed;
       // a present-but-invalid F is left for start() to revive on its own token.
       return "terminal-dead";
@@ -273,7 +276,8 @@ async function reconcileLiveFile(args: {
         kind: "outcome",
         outcome: spendLegacy ? "committed" : "fallback-file-validated",
       };
-    case "refresh-rejected":
+    case "refresh-rejected-credential":
+    case "refresh-rejected-account":
       if (spendLegacy) {
         // L's token is dead: release the lock and re-enter for the F-own attempt.
         return { kind: "legacy-dead-retry" };

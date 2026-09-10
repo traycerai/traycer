@@ -1041,6 +1041,8 @@
   .header-tab-title-text {
     display: block;
     overflow: hidden;
+    -webkit-user-select: none;
+    user-select: none;
     white-space: nowrap;
     mask-image: linear-gradient(
       to right,

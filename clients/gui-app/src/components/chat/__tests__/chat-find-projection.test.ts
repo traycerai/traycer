@@ -68,6 +68,7 @@ describe("chat find projection", () => {
           header: null,
           options: [],
           multiSelect: false,
+          allowsCustomAnswer: null,
         },
         {
           questionId: "q2",
@@ -75,6 +76,7 @@ describe("chat find projection", () => {
           header: null,
           options: [],
           multiSelect: false,
+          allowsCustomAnswer: null,
         },
       ],
       answers: [
@@ -136,6 +138,7 @@ describe("chat find projection", () => {
             },
           ],
           multiSelect: false,
+          allowsCustomAnswer: null,
         },
         {
           questionId: "q-text",
@@ -143,6 +146,7 @@ describe("chat find projection", () => {
           header: null,
           options: [],
           multiSelect: false,
+          allowsCustomAnswer: null,
         },
         {
           questionId: "q-draft",
@@ -150,6 +154,7 @@ describe("chat find projection", () => {
           header: null,
           options: [],
           multiSelect: false,
+          allowsCustomAnswer: null,
         },
       ],
       answers: [
@@ -1230,6 +1235,7 @@ function interviewSegment(
         header: null,
         options: [],
         multiSelect: false,
+        allowsCustomAnswer: null,
       },
     ],
     answers:
