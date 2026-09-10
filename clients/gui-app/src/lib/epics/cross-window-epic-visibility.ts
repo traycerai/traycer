@@ -55,6 +55,65 @@ import { appLogger } from "@/lib/logger";
 let epicsVisibleElsewhere: ReadonlySet<string> = new Set<string>();
 const listeners = new Set<(epicId: string) => void>();
 
+/**
+ * Backoff for a failed leg of the channel, and the length of the array IS the
+ * budget - see {@link installCrossWindowEpicVisibility}.
+ */
+const RETRY_DELAYS_MS: readonly number[] = [250, 1_000, 4_000];
+
+interface BoundedRetry {
+  /** Cancel anything pending, reset the budget, and attempt again now. */
+  restart(): void;
+  cancel(): void;
+}
+
+/**
+ * Run `attempt` until it resolves, at most {@link RETRY_DELAYS_MS} times.
+ *
+ * Bounded because a channel that is broken rather than blipping must not spin
+ * forever. Giving up restores the pre-retry behaviour for that leg rather than
+ * anything worse, and the budget resets on the next `restart`.
+ */
+function createBoundedRetry(
+  label: string,
+  attempt: () => Promise<void>,
+): BoundedRetry {
+  let timer: number | null = null;
+  let failures = 0;
+  const cancel = (): void => {
+    if (timer === null) return;
+    window.clearTimeout(timer);
+    timer = null;
+  };
+  const run = (): void => {
+    void attempt()
+      .then(() => {
+        failures = 0;
+      })
+      .catch((error: unknown) => {
+        appLogger.warn(`[epic-visibility] cross-window ${label} failed`, {
+          error: error instanceof Error ? error.message : "unknown error",
+          attempt: failures,
+        });
+        if (failures >= RETRY_DELAYS_MS.length) return;
+        const delayMs = RETRY_DELAYS_MS[failures];
+        failures += 1;
+        timer = window.setTimeout(() => {
+          timer = null;
+          run();
+        }, delayMs);
+      });
+  };
+  return {
+    restart: (): void => {
+      cancel();
+      failures = 0;
+      run();
+    },
+    cancel,
+  };
+}
+
 export function isEpicVisibleInAnotherWindow(epicId: string): boolean {
   return epicsVisibleElsewhere.has(epicId);
 }
@@ -119,18 +178,61 @@ export function installCrossWindowEpicVisibility(
   // nothing else.
   if (channel === undefined) return () => undefined;
   const ownWindowId = bridge.windowId;
-  const report = (): void => {
-    void channel.report(visibleEpicIds()).catch((error: unknown) => {
-      // Best effort by construction: a dropped report leaves main holding this
-      // window's previous set, which errs toward "still visible" and therefore
-      // toward NOT parking - the safe direction, and self-correcting on the
-      // next visibility edge.
-      appLogger.warn("[epic-visibility] cross-window report failed", {
-        error: error instanceof Error ? error.message : "unknown error",
-      });
-    });
-  };
   const lifecycle = { cancelled: false, fanOutSeen: false };
+  // BOTH legs of this channel retry, and they are one defect rather than two.
+  // Each is a fire-and-forget promise carrying a fact the cross-window answer
+  // depends on, and the reasoning that let them drop it was wrong in the same
+  // way: it assumed some later event would carry the fact again.
+  //
+  // Outbound, "main keeps this window's previous set" is only benign on a
+  // visible->hidden edge, where the stale row over-reports and merely defers a
+  // park. On a HIDDEN->VISIBLE edge the stale row says this window shows
+  // nothing and another window will park an Epic that is on screen here - and
+  // the correction was supposed to arrive on "the next visibility edge", which
+  // a pane that is simply left open never produces.
+  //
+  // Inbound is worse, because the startup read has no self-correcting edge at
+  // all: what it is missing is what OTHER windows show, and that only arrives
+  // when one of THEM changes. A window B sitting still on an Epic is exactly
+  // the case where nothing ever arrives, so a dropped snapshot leaves window A
+  // parking an Epic that is on screen for as long as B holds still.
+  const reportLeg = createBoundedRetry("report", () =>
+    // Re-read per attempt rather than resending a captured array: by the time a
+    // retry fires, what this window shows may have changed, and the truth at
+    // send time is the only thing worth sending.
+    channel.report(visibleEpicIds()),
+  );
+  // Behind a call rather than read inline, and not for tidiness: TypeScript
+  // narrows both flags to `false` at the first guard and does NOT widen that
+  // narrowing across the `await`, so an inline second guard type-checks as dead
+  // code and the type-aware lint rejects it. The flags genuinely do change
+  // while the snapshot is in flight - that is the entire point of the second
+  // check - so the answer has to be re-derived by a call the compiler cannot
+  // narrow through.
+  const snapshotSuperseded = (): boolean =>
+    lifecycle.cancelled || lifecycle.fanOutSeen;
+  const snapshotLeg = createBoundedRetry("snapshot", async () => {
+    // Re-checked on BOTH sides of the await: a fan-out that lands while the
+    // snapshot is in flight is newer, and applying the resolved map after it
+    // would put the older answer back. Resolving without publishing also ends
+    // the retries, which is right - the fact arrived by the better route.
+    if (snapshotSuperseded()) return;
+    const entries = await channel.snapshot();
+    if (snapshotSuperseded()) return;
+    publish(foreignVisibleEpics(entries, ownWindowId));
+  });
+  const report = (): void => {
+    // A fresh edge supersedes whatever the pending attempt was carrying, and
+    // restarts the budget: this is a new fact, not a continuation of the failed
+    // one.
+    //
+    // A slow rejection from a SUPERSEDED attempt can still land after this and
+    // arm one redundant retry. That is harmless and not worth sequencing away:
+    // the retry re-reads the visible set like every other attempt, so it sends
+    // the truth, and `EpicWindowVisibility.report` is change-gated, so an
+    // unchanged set emits nothing.
+    reportLeg.restart();
+  };
   const subscription = channel.onChange((entries) => {
     lifecycle.fanOutSeen = true;
     publish(foreignVisibleEpics(entries, ownWindowId));
@@ -146,22 +248,11 @@ export function installCrossWindowEpicVisibility(
   // when some window's set CHANGES. Without this a freshly opened window
   // starts believing no other window shows anything, and could park an epic
   // one of them has on screen.
-  //
-  // Applied only if no fan-out has landed in the meantime: a snapshot resolved
-  // after a live change would put the older map back.
-  void channel
-    .snapshot()
-    .then((entries) => {
-      if (lifecycle.cancelled || lifecycle.fanOutSeen) return;
-      publish(foreignVisibleEpics(entries, ownWindowId));
-    })
-    .catch((error: unknown) => {
-      appLogger.warn("[epic-visibility] cross-window snapshot failed", {
-        error: error instanceof Error ? error.message : "unknown error",
-      });
-    });
+  snapshotLeg.restart();
   return () => {
     lifecycle.cancelled = true;
+    reportLeg.cancel();
+    snapshotLeg.cancel();
     unsubscribeLocal();
     subscription.dispose();
     publish(new Set<string>());

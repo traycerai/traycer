@@ -512,6 +512,27 @@ function HandleProbe(props: {
   );
 }
 
+/**
+ * Records the handle at every render commit, in the render body itself
+ * rather than an effect. Fixup 2, item 4's pin needs this: an effect only
+ * runs AFTER a commit, and a spy checked once after an `await` would miss a
+ * handle that was published for exactly one render and then corrected -
+ * which is precisely the shape of the bug it pins.
+ */
+function RenderCapturingHandleProbe(props: {
+  onRender: (handle: OpenEpicStoreHandle | null) => void;
+}) {
+  const { onRender } = props;
+  const handle = useMaybeOpenEpicHandle();
+  onRender(handle);
+  return (
+    <div
+      data-testid="handle-probe"
+      data-ready={handle === null ? "false" : "true"}
+    />
+  );
+}
+
 function SessionHostClientProbe(props: {
   onClient: (client: unknown) => void;
 }) {
@@ -3541,6 +3562,7 @@ describe("<EpicSessionProvider />", () => {
   const PARKING_TAB_CLEANUP_IDS = [
     "epic-parking-reacquire",
     "epic-parking-comments",
+    "epic-parking-sync-clear",
   ];
 
   beforeEach(() => {
@@ -3650,6 +3672,95 @@ describe("<EpicSessionProvider />", () => {
     // a fence this store minted, never the disposed one's.
     expect(secondHandle.store).not.toBe(firstHandle.store);
     expect(streams[1].closeCount).toBe(0);
+  });
+
+  // Fixup 2, item 4: the park effect's `setSession(null)` is now SYNCHRONOUS
+  // (`epic-session-provider.tsx`, ~1707), not deferred to a `queueMicrotask`
+  // with a cancel-on-cleanup guard. The old deferred shape had a race: an
+  // unpark landing before that microtask fired ran the effect's cleanup
+  // first, so the guarded `setSession(null)` never arrived, and the render
+  // that observed `parked === false` again republished the DISPOSED handle
+  // through `publishedSessionHandle` - the render guard cannot close that
+  // one, because in that render `parked` is already false. The fix makes the
+  // clear land in the SAME synchronous turn as the park, so there is nothing
+  // left standing for a synchronous unpark to race against.
+  it("an unpark landing before microtasks drain never publishes the disposed handle (fixup 2, item 4)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const EPIC_ID = "epic-parking-sync-clear";
+    installStreamFactory((_epicId, _callbacks) => ({
+      applyUpdate: () => undefined,
+      awareness: () => undefined,
+      applyArtifactRoomUpdate: () => undefined,
+      artifactRoomAwareness: () => undefined,
+      retryMigration: () => undefined,
+      close: () => undefined,
+    }));
+
+    const renderedHandles: Array<OpenEpicStoreHandle | null> = [];
+    render(
+      <EpicSessionProvider epicId={EPIC_ID} tabId={EPIC_ID}>
+        <RenderCapturingHandleProbe
+          onRender={(handle) => renderedHandles.push(handle)}
+        />
+      </EpicSessionProvider>,
+    );
+
+    await waitFor(() => {
+      expect(renderedHandles.some((handle) => handle !== null)).toBe(true);
+    });
+    const firstHandle = renderedHandles.find((handle) => handle !== null);
+    if (firstHandle === undefined) throw new Error("expected initial handle");
+
+    act(() => {
+      useEpicCanvasStore
+        .getState()
+        .openEpicTabWithId(EPIC_ID, EPIC_ID, EPIC_ID);
+      __syncEpicParkingOpenTabsForTests();
+    });
+    act(() => {
+      setEpicSurfaceVisibility(EPIC_ID, EPIC_ID, false);
+    });
+
+    // Only renders from here on matter for the race.
+    renderedHandles.length = 0;
+
+    // The race, staged with NO `await` anywhere in this block: advancing the
+    // timer SYNCHRONOUSLY (`vi.advanceTimersByTime`, not the async variant)
+    // fires the park window's `setTimeout` callback in-line, which flips
+    // `parked` and runs the provider's park effect synchronously inside this
+    // `act`. The very next statement - still perfectly synchronous, nothing
+    // has returned to the microtask queue in between - flips visibility back
+    // on and unparks. A `queueMicrotask` scheduled by the park effect (the
+    // pre-fix shape) would still be sitting unflushed at this exact point,
+    // which is what makes this the race the ticket describes; the fix's
+    // synchronous `setSession(null)` has nothing left for the unpark to beat.
+    act(() => {
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS);
+    });
+    expect(isEpicParked(EPIC_ID)).toBe(true);
+    expect(__getOpenEpicRegistryForTests().get(EPIC_ID)).toBeNull();
+
+    act(() => {
+      setEpicSurfaceVisibility(EPIC_ID, EPIC_ID, true);
+    });
+    expect(isEpicParked(EPIC_ID)).toBe(false);
+
+    // The arm that matters: no render published the disposed handle. A
+    // one-shot check after an `await` would miss a handle shown for exactly
+    // one render and then corrected, so every recorded render is checked.
+    expect(renderedHandles).not.toContain(firstHandle);
+    for (const handle of renderedHandles) {
+      if (handle === null) continue;
+      expect(handle).not.toBe(firstHandle);
+    }
+
+    // The positive arm: re-acquisition genuinely happens - a NEW handle,
+    // never null forever.
+    await waitFor(() => {
+      const latest = renderedHandles.at(-1);
+      expect(latest).not.toBeNull();
+      expect(latest).not.toBe(firstHandle);
+    });
   });
 
   // Pin: "comment-thread polling is not running for a parked epic." All three

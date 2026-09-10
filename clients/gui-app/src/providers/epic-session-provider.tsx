@@ -690,22 +690,25 @@ export function EpicSessionProvider(
     if (!parked) return;
     if (!releaseParkedEpicSession(epicId)) return;
     sessionRef.current = null;
-    const lifecycle = { cancelled: false };
-    // On a microtask, as every other session publish in this provider is - see
-    // the acquire arm's own note. Safe to defer precisely because the render
-    // guard, not this write, is what hides the handle.
-    queueMicrotask(() => {
-      if (lifecycle.cancelled) return;
-      setSession(null);
-    });
+    // SYNCHRONOUSLY, unlike every other session publish in this provider, and
+    // the difference is one of kind rather than taste: the others hand over a
+    // LIVE session, where a cancelled publish simply means the effect re-runs
+    // and rebuilds, while this one RETRACTS a destroyed one, where a cancelled
+    // publish leaves the destroyed tuple in state as the thing consumers read.
+    //
+    // Deferred to a microtask, this write was cancelled by the very edge it
+    // exists for: an unpark landing inside that window runs this effect's
+    // cleanup first, so `setSession(null)` never arrived, and the render that
+    // observed `parked === false` republished the disposed tuple through
+    // `publishedSessionHandle`. The render guard cannot close that one either,
+    // because in that render `parked` is already false - which is precisely
+    // the "one render on unpark" the note above describes.
+    setSession(null);
     presentSession({
       kind: "establishing",
       targetHostId,
       originalHostId: originalHostIdRef.current,
     });
-    return () => {
-      lifecycle.cancelled = true;
-    };
   }, [epicId, parked, presentSession, targetHostId]);
 
   useEffect(() => {
