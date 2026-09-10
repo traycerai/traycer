@@ -140,6 +140,12 @@ if (runsFirstShard) {
     // `onClick` turns this red (0 activations) while its ordinary-click
     // premise stays green.
     runBrowserRegression("scripts/boot-escape-hatch-press-browser.mjs");
+    // Same gate: the toast close button's touch visibility is a MEDIA-QUERY
+    // question and jsdom evaluates none, so a jsdom test sees identical class
+    // names on a phone and a desktop. Ablated before wiring: an unscoped
+    // hide, a missing hit area and a missing mobile-app offset each turn it
+    // red.
+    runBrowserRegression("scripts/toast-close-button-touch-browser.mjs");
     // NOT here, deliberately, and each for its own reason:
     // - `scripts/window-host-modal-alignment-browser.mjs` measures the
     //   local-bootstrap body against ONE LEFT EDGE (A1/A2/A5/PC4) - the design
