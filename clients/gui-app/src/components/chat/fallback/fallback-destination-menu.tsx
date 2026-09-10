@@ -199,7 +199,14 @@ export function FallbackDestinationMenu({
         // one thing that must be heard before the rows are.
         aria-label={DESTINATION_MENU_DIALOG_LABEL}
         aria-describedby={header === null ? undefined : headerId}
-        className="flex w-full max-w-[min(90vw,26rem)] flex-col gap-2 p-2 text-ui-sm"
+        // `w-full` here resolved to the popover's shrink-to-fit width (335px
+        // measured on the dev desktop), never to the 26rem the cap allows - so
+        // the cap was decoration and the rows were squeezed into a box narrower
+        // than their content. A row carrying a usage meter lost the fight: its
+        // title had 84px for 151px of text and rendered as "Codex · gpt-…",
+        // clipping the one thing the row exists to tell you. Sized to the clamp
+        // itself so the surface actually takes the width it is allowed.
+        className="flex w-[min(90vw,26rem)] flex-col gap-2 p-2 text-ui-sm"
       >
         {header === null ? null : (
           <div id={headerId} className="px-1 text-ui-xs text-muted-foreground">
@@ -734,8 +741,13 @@ function TargetRow({
          * Text first, bar second. The bar is `aria-hidden` decoration; this
          * span is what the row actually says about its headroom, so it is part
          * of the button's accessible name rather than a tooltip or a colour.
+         *
+         * `whitespace-nowrap`: the status is a phrase, not prose. Without it a
+         * squeezed row broke "Healthy · 28% used" over three lines and left the
+         * bar beside the stack - and the squeeze is not hypothetical, it is
+         * what the popover's own width bug produced before the fix above.
          */}
-        <span className="shrink-0 text-ui-xs tabular-nums text-muted-foreground">
+        <span className="shrink-0 whitespace-nowrap text-ui-xs tabular-nums text-muted-foreground">
           {usageStatusText(severity, usedPercent)}
         </span>
         <UsageMeter severity={severity} usedPercent={usedPercent} />
