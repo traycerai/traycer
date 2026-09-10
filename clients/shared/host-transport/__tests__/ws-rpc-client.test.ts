@@ -747,6 +747,149 @@ describe("WsRpcClient", () => {
     expect(stub.closed).toEqual({ code: 1000, reason: "ok" });
   });
 
+  describe("cloud verdict wire (lane 5, F1 unary carrier + F2 queued unary)", () => {
+    function authorityWithVerdict(
+      token: string,
+      verdictRef: { value: boolean },
+    ): HostRequestAuthority {
+      return {
+        ...authorityForToken(token),
+        cloudAuthorized: () => verdictRef.value,
+      };
+    }
+
+    /**
+     * `host-messenger.ts`'s `cloudAuthorized` doc comment requires a LIVE read
+     * at send time, not a value captured when the request was issued -
+     * `WsRpcClient` reads it inline at `session.send({kind:"open", ...})`,
+     * which is after `await session.dial()`. This request sits "queued"
+     * behind its own dial (the stub socket has not fired `open` yet, so
+     * nothing has gone out) while the authority is demoted - the same window
+     * F2 names. If the read were hoisted above the dial (captured into a local
+     * before `session.dial()`), the open frame would carry the pre-demotion
+     * `true` instead.
+     */
+    it("the open frame carries the verdict as it stands at dial completion, not as it stood when the request was issued", async () => {
+      const { factory, sockets } = makeFactory();
+      const inner = new WsRpcClient<typeof testRegistry>({
+        clientIdentity: TEST_CLIENT_IDENTITY,
+        registry: testRegistry,
+        requestId: () => "req-verdict-1",
+        webSocketFactory: factory,
+        dialTimeoutMs: 1_000,
+        frameTimeoutMs: 1_000,
+        hostAttestationWindowMs: 0,
+        evidence: NO_TRANSPORT_EVIDENCE,
+      });
+      const verdict = { value: true };
+      const authority = authorityWithVerdict("token-abc", verdict);
+
+      const pending = inner.request(
+        "host.status",
+        {},
+        {
+          idempotencyKey: null,
+          authority,
+          replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
+        },
+      );
+      await flush();
+
+      expect(sockets).toHaveLength(1);
+      // Queued behind its own dial: the stub has not fired `open`, so no
+      // frame has gone out yet. Demote here, while the request waits.
+      expect(sockets[0].sent).toHaveLength(0);
+      verdict.value = false;
+
+      sockets[0].socket.fireOpen();
+      await flush();
+
+      const openFrame = expectOpenFrame(sockets[0].sent[0]);
+      expect(openFrame.cloudAuthorized).toBe(false);
+
+      sockets[0].socket.fireMessage({
+        kind: "openAck",
+        manifest: { "host.status": { major: 1, minor: 0 } },
+      });
+      await flush();
+      sockets[0].socket.fireMessage({
+        kind: "response",
+        requestId: "req-verdict-1",
+        method: "host.status",
+        schemaVersion: { major: 1, minor: 0 },
+        result: { ready: true },
+        error: null,
+      });
+      await expect(pending).resolves.toEqual({ ready: true });
+    });
+
+    it("positive control: an authority with no demotion in the queued window sends the value it started with, unchanged", async () => {
+      const { factory, sockets } = makeFactory();
+      const inner = new WsRpcClient<typeof testRegistry>({
+        clientIdentity: TEST_CLIENT_IDENTITY,
+        registry: testRegistry,
+        requestId: () => "req-verdict-2",
+        webSocketFactory: factory,
+        dialTimeoutMs: 1_000,
+        frameTimeoutMs: 1_000,
+        hostAttestationWindowMs: 0,
+        evidence: NO_TRANSPORT_EVIDENCE,
+      });
+      const verdict = { value: true };
+      const authority = authorityWithVerdict("token-abc", verdict);
+
+      void inner.request(
+        "host.status",
+        {},
+        {
+          idempotencyKey: null,
+          authority,
+          replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
+        },
+      );
+      await flush();
+      sockets[0].socket.fireOpen();
+      await flush();
+
+      const openFrame = expectOpenFrame(sockets[0].sent[0]);
+      expect(openFrame.cloudAuthorized).toBe(true);
+    });
+
+    it("an authority built with no `cloudAuthorized` source omits the key rather than sending a default", async () => {
+      const { factory, sockets } = makeFactory();
+      const inner = new WsRpcClient<typeof testRegistry>({
+        clientIdentity: TEST_CLIENT_IDENTITY,
+        registry: testRegistry,
+        requestId: () => "req-verdict-3",
+        webSocketFactory: factory,
+        dialTimeoutMs: 1_000,
+        frameTimeoutMs: 1_000,
+        hostAttestationWindowMs: 0,
+        evidence: NO_TRANSPORT_EVIDENCE,
+      });
+      const authority = authorityForToken("token-abc");
+
+      void inner.request(
+        "host.status",
+        {},
+        {
+          idempotencyKey: null,
+          authority,
+          replayMustBeKeyed: false,
+          requiredHostMethodVersion: null,
+        },
+      );
+      await flush();
+      sockets[0].socket.fireOpen();
+      await flush();
+
+      const openFrame = expectOpenFrame(sockets[0].sent[0]);
+      expect(openFrame).not.toHaveProperty("cloudAuthorized");
+    });
+  });
+
   /**
    * A caller's version floor has to be answered by the handshake of the
    * connection that carries its request, because that is the only connection

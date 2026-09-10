@@ -85,6 +85,22 @@ vi.mock("@/hooks/epic/use-epic-record-viewed-mutation", () => ({
   useEpicRecordViewed: () => ({ mutate: recordViewed }),
 }));
 
+/**
+ * `useEpicPinLocalHomeSupported` and `tab-strip.tsx`'s own `useHostClient()`
+ * (for the Undo dispatch's `epicPinDispatchAdmitted` re-check) both need a
+ * `<HostRuntimeProvider>` this tree does not build.
+ */
+vi.mock("@/hooks/epic/use-epic-pin-local-home-support", () => ({
+  useEpicPinLocalHomeSupported: () => false,
+}));
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useHostClient: () => ({ getActiveHostId: () => null }),
+  };
+});
+
 vi.mock("@/components/layout/bridges/tray-open-epic-bridge", () => ({
   TrayOpenEpicBridge: () => null,
 }));

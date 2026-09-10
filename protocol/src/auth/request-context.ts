@@ -148,11 +148,16 @@ export interface RequestContext {
    * that does not speak verdicts reads `true` forever, because such a peer has
    * no state to be unauthorized in.
    *
-   * No negotiated frame carries this across a connection yet, so today the
-   * only site that asserts a verdict is the renderer's own context provider,
-   * in-process. Host-side connection boundaries pass `undefined` until that
-   * capability exists; the field is the seam it will land on, not evidence
-   * that it already has.
+   * It DOES cross connections. The client asserts its verdict on the `open`
+   * frame of all three carriers (`/rpc`, `/stream`, and the mux session
+   * payload), and revises it afterwards with a sibling control frame -
+   * `cloudVerdictUpdate` on the stream, `CLOUD_VERDICT_UPDATE` on the mux -
+   * because what a token IS and what it may BUY change independently, in both
+   * directions. Each host-side boundary passes the parsed value here.
+   *
+   * A peer that sends no field at all is authorized, which is the same rule as
+   * the paragraph above and not a separate compatibility hack: absence is how
+   * a peer with no verdict to state says so.
    *
    * `host-background` contexts are always `true`. They are the host acting on
    * its own credential rather than for a caller, which is a separate authority
@@ -328,10 +333,9 @@ class RequestContextImpl implements RequestContext {
     // A caller that says nothing gets `true`, which is the compatible answer
     // and not a lax one: every peer that predates the verdict has no
     // `unverified` state to be in, so it is always authorized in fact. The
-    // fail-closed half of the rule belongs one level up - a peer that DID
-    // declare the capability having to assert its verdict on the open frame -
-    // and that negotiation does not exist yet, so no construction site can
-    // reach it today.
+    // fail-closed half of the rule lives one level up, at the peer boundaries
+    // that parse an `open` frame: a peer that states a verdict is held to it,
+    // and the default here answers only for the peers that state none.
     this.cloudAuthorizedState = options.cloudAuthorized ?? true;
     this.credentials = new CredentialLeaseImpl(
       options.identity,

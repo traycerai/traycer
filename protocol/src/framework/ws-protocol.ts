@@ -216,6 +216,19 @@ export type ClientOpenFrame = {
    * legacy-epoch verdict instead of a generic parse failure.
    */
   readonly clientIdentity?: ClientHandshakeIdentity;
+  /**
+   * Whether this connection may spend a CLOUD CAPABILITY on the account behind
+   * `token`. Same contract as the stream `open` frame's field of the same name -
+   * presence is the declaration, absence is a peer that predates the capability
+   * and is therefore authorized in fact.
+   *
+   * There is deliberately NO control frame on this carrier and no capability tag
+   * for one. A `/rpc` socket carries a single request and closes, so its verdict
+   * cannot go stale mid-connection: the next call opens a new socket and asserts
+   * the verdict again. Only the long-lived carriers (`/stream`, the mux session)
+   * need `cloudVerdictUpdate`.
+   */
+  readonly cloudAuthorized?: boolean;
 };
 
 /**
@@ -411,6 +424,11 @@ export const clientOpenFrameSchema = z.object({
   // client omits it (so a new host sees "no identity" and applies its legacy
   // epoch rule rather than rejecting the frame as malformed).
   clientIdentity: clientHandshakeIdentitySchema.optional(),
+  // `.optional()` and not `.default(true)`, for the reason spelled out on the
+  // stream open frame's copy: absence and an asserted `true` are different
+  // facts about the peer, and the parse boundary is where the difference is
+  // still there to keep.
+  cloudAuthorized: z.boolean().optional(),
 });
 
 /** Canonical schema for the client `request` frame. */

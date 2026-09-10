@@ -180,6 +180,7 @@ import {
 import {
   agentActivitySubscribeV10,
   agentActivitySubscribeV11,
+  agentActivitySubscribeV12,
 } from "@traycer/protocol/host/agent/activity";
 import {
   agentRolesClaimUpgradeV10ToV11,
@@ -395,7 +396,12 @@ import {
   chatLocateRowV10,
   chatReadAccumulatedFileChangeV10,
 } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
-import { hostUsageSummaryV10 } from "@traycer/protocol/host/usage-analytics/contracts";
+import {
+  hostUsageSummaryDowngradeV20ToV10,
+  hostUsageSummaryUpgradeV10ToV20,
+  hostUsageSummaryV10,
+  hostUsageSummaryV20,
+} from "@traycer/protocol/host/usage-analytics/contracts";
 import {
   hostGetRateLimitUsageV10,
   hostGetRateLimitUsageV11,
@@ -423,7 +429,9 @@ import {
   providersRefreshProfileStatusDowngradeV20ToV10,
 } from "@traycer/protocol/host/rate-limit/contracts";
 import {
+  epicBatchDeleteUpgradeV10ToV11,
   epicBatchDeleteV10,
+  epicBatchDeleteV11,
   epicBatchUpdateRolesV10,
   epicCreateArtifactV10,
   epicCreateChatUpgradeV10ToV11,
@@ -433,6 +441,8 @@ import {
   epicCreateTuiAgentV10,
   epicCreateTuiAgentV11,
   epicCreateV10,
+  epicCreateV11,
+  epicCreateUpgradeV10ToV11,
   epicDeleteArtifactV10,
   epicDeleteChatV10,
   epicDeleteCommentThreadV10,
@@ -469,7 +479,9 @@ import {
   epicListCloudChatsV10,
   epicListCollaboratorsV10,
   epicListCommentThreadsV10,
+  epicReadChatAttachmentUpgradeV10ToV11,
   epicReadChatAttachmentV10,
+  epicReadChatAttachmentV11,
   epicReadCloudChatPartV10,
   epicReadCloudChatPayloadV10,
   epicResolveCloudChatHeadV10,
@@ -512,7 +524,9 @@ import {
   epicSetChatSharingDefaultV10,
   epicSetCloudChatVisibilityV10,
   epicSetCommentThreadResolvedV10,
+  epicSetPinnedUpgradeV10ToV11,
   epicSetPinnedV10,
+  epicSetPinnedV11,
   epicSubscribeV10,
   epicSubscribeV11,
   epicSubscribeV12,
@@ -643,6 +657,8 @@ import {
   hostNotificationHooksStatus,
   hostNotificationHooksTest,
   hostNotificationsClearAll,
+  hostNotificationsClearAllUpgradeV10ToV11,
+  hostNotificationsClearAllV11,
   hostNotificationsGetConfig,
   hostNotificationsIndicatorStateUpgradeV10ToV11,
   hostNotificationsIndicatorStateV10,
@@ -973,7 +989,7 @@ import {
 export { hostGetRuntimeCapabilitiesV10 };
 export { hostRebindLocalStoreV10 };
 export { hostGetRateLimitUsageV10 };
-export { hostUsageSummaryV10 };
+export { hostUsageSummaryV10, hostUsageSummaryV20 };
 
 /**
  * Traycer 3.0 host RPC protocol.
@@ -3482,9 +3498,12 @@ export const providersCancelModelProviderAuthV10 = defineRpcContract({
 });
 
 /**
- * Brand-new v1.0 method (not part of `RELEASED_FLOOR_METHOD_NAMES` - this
- * whole code-paste surface is unreleased), registered below with
- * `degrade: { kind: "unsupported" }`: an old host simply lacks it, and
+ * Optional v1.0 method, off `RELEASED_FLOOR_METHOD_NAMES` because it is
+ * optional - NOT because it is unreleased. `providers.submitLoginCode` and
+ * `providers.touchLogin` are both in `released-baseline-surface.json`, so
+ * their `@1.0` lines are frozen. (This said "this whole code-paste surface is
+ * unreleased" until the release that captured the baseline.) Registered below
+ * with `degrade: { kind: "unsupported" }`: an old host simply lacks it, and
  * callers get per-call upgrade guidance instead of a fatal handshake
  * mismatch (see `agent/profiles.ts`'s note on the same pattern).
  */
@@ -3646,8 +3665,11 @@ export const providersSetEnabledUpgradeV1ToV2 = defineUpgradePath<
 // the CLI-path (`setSelection`/`addCustomPath`), credential
 // (`setApiKey`/`clearApiKey`), and login-lifecycle (`startLogin`/
 // `awaitLogin`/`cancelLogin`) methods all have narrower, unrelated
-// semantics. `recolor` rides the same unreleased profile-management surface
-// because profile colors are host-owned profile metadata. `profileAction:
+// semantics. `recolor` rides the same profile-management surface because
+// profile colors are host-owned profile metadata. That surface is no longer
+// unreleased - `providers.setEnabled` and `providers.setProfileEnabled` are
+// both in `released-baseline-surface.json` - so it grows by new minors,
+// never in place. `profileAction:
 // null` is byte-identical to today's plain enable/disable request, so a v2.0
 // client is unaffected.
 export const providersSetEnabledV21 = defineRpcContract({
@@ -4422,9 +4444,12 @@ export const epicCreateTuiAgentUpgradeV10ToV11 = defineUpgradePath<
 const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "browser.savedLoginSites": {
     // Settings > Browser's "Sites with saved logins" list (keychain refactor
-    // ticket 10). Brand-new v1.0 and not part of `RELEASED_FLOOR_METHOD_NAMES`
-    // - the whole saved-logins surface is unreleased - so it rides the
-    // optional-capability channel: a host that predates it advertises nothing,
+    // ticket 10). Off `RELEASED_FLOOR_METHOD_NAMES` because it is OPTIONAL,
+    // not because it is unreleased: `browser.savedLoginSites` is in
+    // `released-baseline-surface.json`, so `@1.0` is frozen. (This said "the
+    // whole saved-logins surface is unreleased" until that release.) It rides
+    // the optional-capability channel: a host that predates it advertises
+    // nothing,
     // and the client renders the group without the list rather than failing the
     // connection. Read-only and names-only; the clearing half is the
     // `clearSite` frame on `browser.sessions`, which needs the elected-desktop
@@ -4935,11 +4960,18 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
     },
   },
   "host.usage.summary": {
-    // Brand-new v1.0 method (not part of `RELEASED_FLOOR_METHOD_NAMES` -
-    // this whole usage-summary surface is unreleased), registered like
+    // Off `RELEASED_FLOOR_METHOD_NAMES` because it is OPTIONAL, not because
+    // it is unreleased: `host.usage.summary` is in
+    // `released-baseline-surface.json`, so `@1.0` is frozen. (This said
+    // "brand-new v1.0 method ... this whole usage-summary surface is
+    // unreleased" until `@2.0` needed the truth.) Registered like
     // `snapshots.getLocalStorageSize` above: an old host simply lacks it,
     // and the client feature-detects at handshake and hides the usage
     // surface instead of hitting a fatal mismatch.
+    //
+    // Two majors, because `@1.0`'s request is `.strict()` and could not grow
+    // the `plane` selector within its line - see `usage-analytics/contracts.ts`
+    // and the refusing `2 -> 1` downgrade registered below.
     degrade: { kind: "unsupported" },
     1: {
       latestMinor: 0,
@@ -4950,6 +4982,25 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         },
       },
       downgradePathsFromLatest: {},
+    },
+    // A MAJOR rather than a minor, forced by `@1.0`'s request being
+    // `.strict()`: an older peer REJECTS an unknown key instead of stripping
+    // it, so the additivity gate refuses `plane` as a minor. The `2 -> 1`
+    // downgrade REFUSES a request that carries the selector rather than
+    // dropping it - dropping would restore the cloud round trip the selector
+    // exists to prevent, and the answer would be indistinguishable from a
+    // real one.
+    2: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: hostUsageSummaryV20,
+          upgradeFromPreviousVersion: hostUsageSummaryUpgradeV10ToV20,
+        },
+      },
+      downgradePathsFromLatest: {
+        1: hostUsageSummaryDowngradeV20ToV10,
+      },
     },
   },
   "lifecycle.claimShutdown": {
@@ -5227,14 +5278,24 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  // `@1.1` adds the `home: "local"` partition selector, completing the set a
+  // mixed-plane renderer needs: `list@2.2`, `markAllRead@1.1`,
+  // `indicatorState@1.1` and now this. The gap mattered because an `@1.0`
+  // peer STRIPS the selector and answers plausibly - a clear the caller
+  // scoped to the local partition reached the whole origin, and unlike the
+  // other three there is nothing to re-read afterwards.
   "host.notifications.clearAll": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: hostNotificationsClearAll,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: hostNotificationsClearAllV11,
+          upgradeFromPreviousVersion: hostNotificationsClearAllUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -6234,11 +6295,20 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "epic.setPinned": {
     1: {
-      latestMinor: 0,
+      // `@1.1`'s `home` is an ADDED OPTIONAL KEY, not value growth over a
+      // released enum, so a `@1.0` peer's frozen response schema strips it at
+      // parse time and the minor needs no `responseGrowthProjectionGated`.
+      // The host still gates emission on the negotiated minor rather than
+      // trusting the strip - same discipline as `epic.listTasks@1.5`.
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicSetPinnedV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: epicSetPinnedV11,
+          upgradeFromPreviousVersion: epicSetPinnedUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -6291,25 +6361,42 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
     },
     degrade: { kind: "unsupported" },
   },
+  // `@1.1` carries the local-store create refusal as DATA (`refusal`: kind +
+  // message + remedy) instead of throwing it as an `RPC_ERROR` string the
+  // client cannot branch on. Added optional KEY, so a `@1.0` peer's frozen
+  // response schema strips it - and because a stripped refusal would read as
+  // a successful create with a null room, the host gates EMISSION on the
+  // negotiated minor and still throws below `@1.1`.
   "epic.create": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicCreateV10,
           upgradeFromPreviousVersion: null,
         },
+        1: {
+          contract: epicCreateV11,
+          upgradeFromPreviousVersion: epicCreateUpgradeV10ToV11,
+        },
       },
       downgradePathsFromLatest: {},
     },
   },
+  // `@1.1` adds the per-id `home` marker so a client can scope each
+  // tombstone the way the deletion was actually scoped. Added optional KEY,
+  // not value growth, so a `@1.0` peer's frozen row strips it at parse time.
   "epic.batchDelete": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicBatchDeleteV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: epicBatchDeleteV11,
+          upgradeFromPreviousVersion: epicBatchDeleteUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -7344,13 +7431,20 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   // epic doc, and the client's doc-replica fallback is exactly what it already
   // did. `chatId` rides the request so a LOCAL hit can be gated by the same
   // per-chat visibility rule as live viewing; see `epic/chat-attachment.ts`.
+  // `@1.1` adds the `plane: "local-only"` request selector. Request-only
+  // growth: a `@1.0` peer's frozen request schema strips it and runs the
+  // released disk-then-cloud chain, which is what that host would do anyway.
   "epic.readChatAttachment": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicReadChatAttachmentV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: epicReadChatAttachmentV11,
+          upgradeFromPreviousVersion: epicReadChatAttachmentUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -10187,21 +10281,33 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
   },
-  // One activity capability, with its read plane selected by the host. Current
-  // production wiring selects cloud everywhere; local remains dormant until an
-  // explicit host mode exists. State frames report the selected plane, while
-  // renderers never choose a different RPC from entitlement state.
-  // `1.1` stamps `cloudSyncStatus` on cloud-served `state` frames. `1.0` stays
-  // registered verbatim so a `1.1` client bridges down to a `1.0` host.
+  // One activity capability. Which plane serves it is the HOST's call, and
+  // state frames report the plane that answered - renderers never choose a
+  // different RPC from entitlement state.
+  //
+  // Deliberately says nothing about which plane a given release wires: this
+  // comment used to assert "cloud everywhere", the host tree moved to local,
+  // and the stale sentence was still being cited on the client as the reason
+  // to withhold the stream from an unverified session.
+  //
+  // `1.1` stamps `cloudSyncStatus` on cloud-served `state` frames. `1.2` adds
+  // the `plane: "local-only"` open-request selector, which is a REQUEST-only
+  // growth: a subscriber holding no cloud verdict can ask for the plane that
+  // needs none, instead of choosing between a cloud room acquired on a
+  // withdrawn bearer and no activity at all. Each earlier line stays
+  // registered verbatim so a newer client bridges down to an older host.
   "agent.activity.subscribe": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: agentActivitySubscribeV10,
         },
         1: {
           contract: agentActivitySubscribeV11,
+        },
+        2: {
+          contract: agentActivitySubscribeV12,
         },
       },
     },

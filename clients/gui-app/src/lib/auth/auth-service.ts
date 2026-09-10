@@ -2361,6 +2361,15 @@ export class AuthService {
       if (!heldVerdict) {
         this.contextProvider.announceSessionVerified();
       }
+      // The verdict this branch RESTORED, announced to the transports so an
+      // already-open connection stops being refused by the host. Separate from
+      // the promotion-only announcement above and unconditional like the
+      // `setCloudAuthorized` it reports: `announceSessionVerified` is a
+      // directory-refresh signal keyed on a transition, while this states what
+      // the live context now permits. Announced LAST, after the store commit,
+      // because the stream clients read the verdict they put on the wire from
+      // that store.
+      this.contextProvider.announceCloudVerdictChanged();
       return;
     }
     this.applySignedIn(session.token, session.user, session.profile);
@@ -4450,6 +4459,16 @@ export class AuthService {
     if (!heldVerdict) {
       this.contextProvider.announceSessionVerified();
     }
+    // The verdict edge, announced UNCONDITIONALLY where the one above is gated,
+    // and the asymmetry mirrors what each signal means. `announceSessionVerified`
+    // reports a TRANSITION, so re-announcing it for a session that was already
+    // signed-in would drive a refresh nothing was waiting for. This reports the
+    // live context's STANDING permission, which the rotate branch asserts
+    // unconditionally (`setCloudAuthorized(true)`, "arriving here means a
+    // validated `AuthenticatedUser`, which IS the verdict"), and which is
+    // idempotent on the wire: the host compares against the verdict it holds and
+    // announces nothing when the value has not moved.
+    this.contextProvider.announceCloudVerdictChanged();
   }
 
   /**
@@ -5102,6 +5121,16 @@ export class AuthService {
       username: identity.username,
     });
     this.emitSessionSnapshot();
+    // THE WITHDRAWAL, ON THE WIRE. The in-place branch above deliberately does
+    // not mint or abort a context, so nothing tears down and nothing redials -
+    // which is what keeps local work alive across a demotion, and is also why
+    // the host would otherwise never hear about it. The bearer rotation that
+    // rode along carries the token only; a host reading it re-leases the same
+    // credential and keeps the `true` it was signed in with.
+    //
+    // Announced after the store commit, per the provider's own contract: the
+    // frame this drives reads the verdict from that store.
+    this.contextProvider.announceCloudVerdictChanged();
     appLogger.info("[auth] local plane admitted on an unverified session", {
       userId: session.user.id,
     });

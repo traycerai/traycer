@@ -395,6 +395,7 @@ function createHarness(): Harness {
     userId: OWNER_ID,
     onAuthError: null,
     onProviderAuthError: null,
+    wakeTransport: null,
     streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
     streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
       callbacks = nextCallbacks;
@@ -432,6 +433,7 @@ function createProtocolChainHarness(
     userId: OWNER_ID,
     onAuthError: null,
     onProviderAuthError: null,
+    wakeTransport: null,
     streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
     streamClientFactory: (epicId, chatId, nextCallbacks) => {
       const client = new ChatStreamClient({
@@ -1124,6 +1126,7 @@ describe("createChatSessionStore", () => {
       userId: OWNER_ID,
       onAuthError: null,
       onProviderAuthError: null,
+      wakeTransport: null,
       streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
       streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
         factoryCalls += 1;
@@ -1179,6 +1182,7 @@ describe("createChatSessionStore", () => {
       userId: OWNER_ID,
       onAuthError: null,
       onProviderAuthError: null,
+      wakeTransport: null,
       streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
       streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
         lastCallbacks = nextCallbacks;
@@ -11829,6 +11833,7 @@ function createCoalesceHarness(): CoalesceHarness {
     userId: OWNER_ID,
     onAuthError: null,
     onProviderAuthError: null,
+    wakeTransport: null,
     streamFlushCoordinator: manual.coordinator,
     streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
       callbacks = nextCallbacks;
@@ -12229,6 +12234,7 @@ describe("surface visibility rollup", () => {
       userId: OWNER_ID,
       onAuthError: null,
       onProviderAuthError: null,
+      wakeTransport: null,
       streamFlushCoordinator: coordinator,
       streamClientFactory: () => ({
         sendAction: () => undefined,
@@ -12690,6 +12696,7 @@ describe("createChatSessionStore - persisted auth-error provider nudge", () => {
       onProviderAuthError: () => {
         nudges += 1;
       },
+      wakeTransport: null,
       streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
       streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
         callbacks = nextCallbacks;

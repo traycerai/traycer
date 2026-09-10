@@ -358,6 +358,7 @@ function createHarness(): Harness {
     userId: OWNER_ID,
     onAuthError: null,
     onProviderAuthError: null,
+    wakeTransport: null,
     streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
     streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
       callbacks = nextCallbacks;
@@ -404,6 +405,7 @@ function createWindowedHarness(): WindowedHarness {
     userId: OWNER_ID,
     onAuthError: null,
     onProviderAuthError: null,
+    wakeTransport: null,
     streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
     streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
       callbacks = nextCallbacks;

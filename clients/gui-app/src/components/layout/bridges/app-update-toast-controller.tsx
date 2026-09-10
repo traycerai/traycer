@@ -24,7 +24,7 @@ import {
   useSurfaceReadiness,
   windowNarratorOwns,
 } from "@/components/layout/host-readiness-controller-context";
-import { admitsLocalPlane, useAuthStore } from "@/stores/auth/auth-store";
+import { useShellLocalPlaneAdmission } from "@/hooks/auth/use-shell-local-plane-admission";
 
 const APP_UPDATE_TOAST_ID = "traycer-app-update";
 const APP_UPDATE_TRANSIENT_TOAST_DURATION_MS = 4000;
@@ -90,20 +90,22 @@ export function AppUpdateToastController(): null {
   // dialog exists for this toast to be dead behind.
   const readiness = useSurfaceReadiness("default-host", null);
   const { hasBeenDefaultHostReady } = useHostReadinessController();
-  const authStatus = useAuthStore((state) => state.status);
+  const shellAdmission = useShellLocalPlaneAdmission();
   const narrated =
     windowNarratorOwns(readiness) &&
     !gateBlocksApp({
       readiness,
       hasBeenReady: hasBeenDefaultHostReady,
-      // `admitsLocalPlane`, matching `HostReadyGate` and
+      // SHELL admission, matching `HostReadyGate` and
       // `NarratingWindowHostModal` exactly. The comment above promises these
       // cannot disagree about whether a dialog exists for this toast to be
       // dead behind, and a private `status === "signed-in"` copy here would
       // break that promise the moment an `unverified` session renders the app:
       // the gate would be narrating a host while this controller believed
-      // nobody was signed in.
-      signedIn: admitsLocalPlane(authStatus),
+      // nobody was signed in. The status-only `admitsLocalPlane` now breaks it
+      // in the other direction - a relay-only `unverified` shell is on the auth
+      // surface with no gate behind it at all.
+      signedIn: shellAdmission.admitted,
       bypassed: false,
     });
   const handledSequenceRef = useRef(0);

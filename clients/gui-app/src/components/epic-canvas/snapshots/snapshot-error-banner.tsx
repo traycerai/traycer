@@ -112,7 +112,12 @@ export function SnapshotErrorBanner(props: SnapshotErrorBannerProps) {
 
 function LocalStoreRepair(props: { readonly error: SnapshotFetchError }) {
   const requestFreshSnapshot = useEpicRequestFreshSnapshot();
-  const rebindLocalStore = useLocalStoreRebindMutation();
+  // The refusing store is the one this epic was being served from, so the
+  // session host is the machine to repair. Passed rather than read inside the
+  // hook: a create-refusal surface has no session and must name its placement
+  // host instead, and one hook reading one context could not serve both.
+  const sessionHostId = useEpicSessionHostId();
+  const rebindLocalStore = useLocalStoreRebindMutation(sessionHostId);
   // `host.rebindLocalStore` is an OPTIONAL unary, negotiated independently of
   // the stream that produced this error: a host can emit
   // `LOCAL_STORE_UNAVAILABLE` through `epic.subscribe` and still not carry the
@@ -123,7 +128,6 @@ function LocalStoreRepair(props: { readonly error: SnapshotFetchError }) {
   // closed (`null` reads as absent) and self-corrects: the directory poll
   // keeps talking to the session host, so a handshake that has not landed
   // yet fills in on its own.
-  const sessionHostId = useEpicSessionHostId();
   const rebindSupported = useHostSupportsMethod(
     sessionHostId,
     "host.rebindLocalStore",

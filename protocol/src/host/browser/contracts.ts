@@ -459,10 +459,13 @@ export type BrowserForgetLedgerDomain = z.infer<
  * `forgetAllAt` is null both when the user has never forgotten everything AND
  * when this host has already acked the revision that carried it - the two are
  * the same instruction-set fact, "no forget-all for you in this digest". It is
- * required and explicitly nullable rather than defaulted: the frame is new on
- * an unreleased contract, so no peer can omit it, and a default would quietly
- * absorb a producer bug into "nothing was ever forgotten" - the one wrong
- * direction for this field. `domains` is bounded by
+ * required and explicitly nullable rather than defaulted: the frame carried it
+ * as required from its first released version, so every peer on this line
+ * sends it, and a default would quietly absorb a producer bug into "nothing
+ * was ever forgotten" - the one wrong direction for this field. The original
+ * note here rested the same conclusion on the contract being UNRELEASED,
+ * which stopped being true; the field stays required because the line shipped
+ * that way, not because nothing had shipped yet. `domains` is bounded by
  * {@link BROWSER_FORGET_LEDGER_MAX_DOMAINS}.
  */
 export const browserForgetLedgerSchema = z

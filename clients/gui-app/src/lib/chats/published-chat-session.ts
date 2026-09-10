@@ -401,6 +401,7 @@ export function publishedChatSessionState(
     // perfectly well go on reading.
     refreshMissingWorktreePaths: () => undefined,
     retry: () => undefined,
+    wake: () => undefined,
     // A published copy is complete: every ordinal is hydrated by construction,
     // so a viewport report has nothing to request.
     reportVisibleTranscriptRange: () => undefined,

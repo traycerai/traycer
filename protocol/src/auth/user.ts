@@ -116,6 +116,8 @@ export interface AuthenticatedUserBase {
    * field (old authn, or evaluate fail-soft) stay valid.
    */
   cloudSyncAllowed?: boolean;
+  /** Server evaluation instant, preserved across cache reads; absent on older payloads. */
+  cloudSyncObservedAt?: string;
   /**
    * ISO instant when free/pending tiers flip from allowed to denied — same
    * wall clock `cloudSyncAllowed` compares against. Optional for the same
