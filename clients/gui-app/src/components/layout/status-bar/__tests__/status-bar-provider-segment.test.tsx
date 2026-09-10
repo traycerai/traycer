@@ -138,6 +138,50 @@ describe("<StatusBarProviderSegment />", () => {
         screen.getByTestId("status-bar-window-codex:primary").textContent,
       ).toBe("33% remaining 5h");
     });
+
+    // Nothing upstream clamps for the text: `windowProjection` passes the
+    // host's `usedPercent` through verbatim, and `openRouterCreditProjection`
+    // derives one from a `limitRemaining` that goes negative on an overdrawn
+    // account. Unclamped, `remaining` prints `-4%`, which reads as a bug in the
+    // app rather than as an account past its limit.
+    it("clamps a percentage above 100, so remaining never goes negative", () => {
+      const segment = segmentFixture({
+        windows: [
+          windowFixture({ windowKey: "codex:primary", usedPercent: 104 }),
+        ],
+      });
+      renderSegment({ segment, percentMode: "used" });
+      expect(
+        screen.getByTestId("status-bar-window-codex:primary").textContent,
+      ).toBe("100% used 5h");
+      cleanup();
+
+      renderSegment({ segment, percentMode: "remaining" });
+      expect(
+        screen.getByTestId("status-bar-window-codex:primary").textContent,
+      ).toBe("0% remaining 5h");
+    });
+
+    // The other end of the same clamp. A negative reading is the rarer wire
+    // shape, but `100 - used` would print `103% remaining` from it - a number
+    // that cannot be true of any window.
+    it("clamps a percentage below 0, so used never goes negative and remaining never exceeds 100", () => {
+      const segment = segmentFixture({
+        windows: [
+          windowFixture({ windowKey: "codex:primary", usedPercent: -3 }),
+        ],
+      });
+      renderSegment({ segment, percentMode: "used" });
+      expect(
+        screen.getByTestId("status-bar-window-codex:primary").textContent,
+      ).toBe("0% used 5h");
+      cleanup();
+
+      renderSegment({ segment, percentMode: "remaining" });
+      expect(
+        screen.getByTestId("status-bar-window-codex:primary").textContent,
+      ).toBe("100% remaining 5h");
+    });
   });
 
   describe("timer", () => {

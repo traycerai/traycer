@@ -80,6 +80,13 @@ function views(input: {
   readonly watchedHostId?: string | null;
   readonly hasExplicitPick?: boolean;
   readonly desktopApp?: DesktopAppResourceUsage | null;
+  /**
+   * Defaults to the BROWSER build, so every case that says nothing about the
+   * bridge is asking about one that is genuinely absent. A desktop build with a
+   * reading still in flight has to opt in, which is the point: the two are
+   * indistinguishable from `desktopApp` alone.
+   */
+  readonly desktopBridgePresent?: boolean;
   readonly globalStreamUnsupported?: boolean;
 }) {
   return statusBarResourceMetricViews({
@@ -89,6 +96,7 @@ function views(input: {
     watchedHostId: input.watchedHostId ?? null,
     hasExplicitPick: input.hasExplicitPick ?? false,
     desktopApp: input.desktopApp ?? null,
+    desktopBridgePresent: input.desktopBridgePresent ?? false,
     globalStreamUnsupported: input.globalStreamUnsupported ?? false,
     hostLabel: "Office Linux",
   });
@@ -248,7 +256,11 @@ describe("statusBarResourceMetricViews", () => {
   });
 
   it("says 'desktop app only' for every metric in a build with no shell bridge", () => {
-    const rendered = views({ scope: "desktop-app", desktopApp: null });
+    const rendered = views({
+      scope: "desktop-app",
+      desktopApp: null,
+      desktopBridgePresent: false,
+    });
 
     expect(rendered.every((view) => view.value === null)).toBe(true);
     for (const view of rendered) {
@@ -259,6 +271,27 @@ describe("statusBarResourceMetricViews", () => {
     // denominator there would explain the wrong thing.
     const share = rendered.find((view) => view.metric === "ramShare");
     expect(share?.unavailableReason).not.toContain("total-memory reading");
+  });
+
+  // The same `null` reading, and the opposite sentence. `useDesktopAppResourceUsage`
+  // answers `null` before its first `getMetrics()` round trip returns and again
+  // whenever one rejects, so the reading cannot tell "no shell" from "not yet" -
+  // only the bridge can, which is why it is threaded in beside the reading.
+  it("waits, rather than denying the shell, when the bridge is there but the sample is not", () => {
+    const rendered = views({
+      scope: "desktop-app",
+      desktopApp: null,
+      desktopBridgePresent: true,
+    });
+
+    expect(rendered.every((view) => view.value === null)).toBe(true);
+    for (const view of rendered) {
+      expect(view.unavailableReason).toBe("Waiting for resource data.");
+      // The sentence reserved for a build that HAS no desktop shell must not
+      // appear in one that does - it is flatly false there, on the surface
+      // whose whole job is telling identical dashes apart.
+      expect(view.unavailableReason).not.toContain("Desktop app only");
+    }
   });
 
   it("names the host's age when it cannot serve a global stream", () => {

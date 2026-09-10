@@ -67,6 +67,15 @@ function subscribeDesktopAppResourceUsage(listener: () => void): () => void {
     ) {
       window.clearInterval(desktopAppResourceTimer);
       desktopAppResourceTimer = null;
+      // The snapshot dies with the sampler, and that is the same promise the
+      // `enabled` gate above makes: a reading nothing is refreshing is not a
+      // reading. Kept, it would be handed to the NEXT subscriber synchronously
+      // on mount - the first sample is an IPC round trip away - so a strip
+      // reopened after an hour would spend that round trip showing an hour-old
+      // figure with nothing to mark it stale. Assigned rather than published
+      // through `setDesktopAppResourceSnapshot`, because by here there is no
+      // one left to notify.
+      desktopAppResourceSnapshot = null;
     }
   };
 }

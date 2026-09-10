@@ -40,6 +40,9 @@ describe("useDesktopAppResourceUsage", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     bridgeMock.getMetrics.mockClear();
+    // Restored per test, not just cleared: a case that swaps in its own metrics
+    // would otherwise leave them as the next case's first sample.
+    bridgeMock.getMetrics.mockResolvedValue({ appMetrics: [] });
   });
 
   afterEach(() => {
@@ -75,5 +78,39 @@ describe("useDesktopAppResourceUsage", () => {
     expect(bridgeMock.getMetrics).toHaveBeenCalledTimes(3);
 
     unmount();
+  });
+
+  it("drops the snapshot with the last subscriber, so the next one reads null until its own sample lands", async () => {
+    bridgeMock.getMetrics.mockResolvedValue({
+      appMetrics: [
+        {
+          pid: 1,
+          type: "Browser",
+          cpu: { percentCPUUsage: 7 },
+          memory: { workingSetSize: 512 * 1024 },
+        },
+      ],
+    });
+
+    const first = renderHook(() => useDesktopAppResourceUsage(true));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(first.result.current?.cpuPercent).toBe(7);
+
+    // The interval stops with the last subscriber, so the reading it was
+    // refreshing has to stop with it.
+    first.unmount();
+
+    const second = renderHook(() => useDesktopAppResourceUsage(true));
+
+    // This is the whole window the fix is about: the new subscriber's own
+    // `getMetrics()` is an IPC round trip away, and a retained snapshot would
+    // be rendered for the length of it - a figure nothing has refreshed since
+    // the last surface closed, with nothing on screen marking it stale.
+    expect(second.result.current).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(second.result.current?.cpuPercent).toBe(7);
+
+    second.unmount();
   });
 });

@@ -11,6 +11,7 @@ import type {
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent,
   PointerEvent,
+  ReactElement,
   ReactNode,
 } from "react";
 import {
@@ -237,9 +238,13 @@ export type ResourceMonitorPopoverTrigger =
       readonly trigger: "custom";
       /**
        * Rendered through `PopoverTrigger asChild`, so it must be a single
-       * element that forwards props and a ref to a real DOM node.
+       * element that forwards props and a ref to a real DOM node. `ReactElement`
+       * rather than `ReactNode` because that is the whole of Radix's Slot
+       * contract: a fragment, a string, an array or a `null` all typecheck as a
+       * node and all fail at render, where the type is the only place the
+       * requirement can be stated once for every caller.
        */
-      readonly triggerNode: ReactNode;
+      readonly triggerNode: ReactElement;
       readonly contentSide: "top" | "bottom";
     };
 

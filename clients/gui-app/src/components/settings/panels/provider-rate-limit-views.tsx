@@ -168,7 +168,11 @@ function formatWindowDuration(minutes: number | null): string {
     case "month":
       return "Monthly";
     case "day":
-      return `${minutes / MINUTES_PER_DAY}d`;
+      // `namedCadenceForDuration` answers `day` at EXACTLY one day, so this is
+      // the daily cadence itself and takes the page's word for it. A 2- or
+      // 14-day period names no cadence, falls past this switch, and keeps the
+      // plain `Nd` count below - `2 days` is a length, not a rhythm.
+      return "Daily";
     case "hours":
       return `${minutes / MINUTES_PER_HOUR}h`;
     case null:

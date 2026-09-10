@@ -146,6 +146,13 @@ export function statusBarResourceMetricViews(input: {
   readonly watchedHostId: string | null;
   readonly hasExplicitPick: boolean;
   readonly desktopApp: DesktopAppResourceUsage | null;
+  /**
+   * Whether this build HAS an Electron diagnostics bridge, which is a different
+   * question from whether it has produced a reading yet — see
+   * `unavailableReason`. Passed in rather than read here, so this stays a pure
+   * function of its arguments and a test can state both answers.
+   */
+  readonly desktopBridgePresent: boolean;
   /** The watched host cannot serve a global `resources.subscribe` at all. */
   readonly globalStreamUnsupported: boolean;
   readonly hostLabel: string;
@@ -183,6 +190,7 @@ export function statusBarResourceMetricViews(input: {
               metric,
               scope: input.scope,
               desktopApp: input.desktopApp,
+              desktopBridgePresent: input.desktopBridgePresent,
               globalStreamUnsupported: input.globalStreamUnsupported,
               // A sample from the watched host DID arrive; this one field is
               // not in it. Attributed, so a foreign projection cannot pass for
@@ -245,13 +253,24 @@ const METRIC_SUBJECTS: Record<ResourceMetric, string> = {
  * every desktop-app metric is missing for the same reason, and naming RAM
  * share's own limitation there would explain the wrong thing.
  *
- * "Waiting" is reserved for a projection that has NOT arrived. A sample can
- * land with one field missing — `rssBytes` is nullable on the wire from @1.5
- * on, and `hostTotalMemoryBytes` is `0` on a host that never reported a total —
- * and `hostTreeReading` resolves the fields independently precisely so the two
- * that did arrive still show. Telling someone to wait for data, beside two
- * numbers from the sample that already came, names the one cause that is
- * certainly not it.
+ * "Waiting" is reserved for a reading that has NOT arrived — which is a
+ * different claim from one that never will, and the desktop-app scope is where
+ * the two are easiest to confuse. `useDesktopAppResourceUsage` answers `null`
+ * in THREE states that look identical from here: no bridge (a browser build),
+ * a bridge whose first `getMetrics()` round trip is still in flight, and a
+ * bridge whose call rejected. Only the first is "this build has none of" — and
+ * said in the other two it is flatly false, on a surface whose whole job is
+ * telling three indistinguishable dashes apart. So the BRIDGE decides that
+ * sentence and the SAMPLE decides "waiting": a build that has the bridge is
+ * always waiting for the next second's sample, including after a rejection,
+ * where the 1 Hz sampler retries and "waiting" comes true on its own.
+ *
+ * On the host-tree side a sample can land with one field missing — `rssBytes`
+ * is nullable on the wire from @1.5 on, and `hostTotalMemoryBytes` is `0` on a
+ * host that never reported a total — and `hostTreeReading` resolves the fields
+ * independently precisely so the two that did arrive still show. Telling
+ * someone to wait for data, beside two numbers from the sample that already
+ * came, names the one cause that is certainly not it.
  *
  * Those two missing fields are not the same KIND of missing, either. A null
  * `rssBytes` is this sample's; a zero `hostTotalMemoryBytes` is the host's, and
@@ -262,6 +281,8 @@ function unavailableReason(input: {
   readonly metric: ResourceMetric;
   readonly scope: ResourceScope;
   readonly desktopApp: DesktopAppResourceUsage | null;
+  /** This build has the Electron diagnostics bridge, sample or no sample. */
+  readonly desktopBridgePresent: boolean;
   readonly globalStreamUnsupported: boolean;
   /** A projection attributed to the watched host exists. */
   readonly hasSample: boolean;
@@ -271,7 +292,9 @@ function unavailableReason(input: {
 }): string {
   if (input.scope === "desktop-app") {
     if (input.desktopApp === null) {
-      return "Desktop app only — this reading comes from the Traycer desktop shell, which this build has none of.";
+      return input.desktopBridgePresent
+        ? "Waiting for resource data."
+        : "Desktop app only — this reading comes from the Traycer desktop shell, which this build has none of.";
     }
     return "RAM share needs a total-memory reading for this machine, and the desktop app scope has none — the watched host's total would be the wrong denominator.";
   }

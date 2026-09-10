@@ -28,12 +28,21 @@ export function windowPercentText(
  * also the part that carries the severity color: the two are one span and the
  * mode word is another, so a reader still sees one string while only the
  * percentage is tinted.
+ *
+ * CLAMPED TO 0-100 HERE, because nothing upstream does it for the text.
+ * `usedPercent` reaches this straight off the wire for most providers, and
+ * `openRouterCreditProjection` computes one from a `limitRemaining` that goes
+ * negative on an overdrawn account - so 104% used is reachable, and in
+ * `remaining` mode its complement is `-4%`, which reads as a bug in the app
+ * rather than as an account over its limit. The fill bar has always clamped
+ * (`rateLimitWindowFillPercent`); this is the same clamp on the words beside
+ * it, so a full bar and its number can no longer disagree.
  */
 export function windowPercentValueText(
   usedPercent: number,
   percentMode: PercentMode,
 ): string {
-  const used = Math.round(usedPercent);
+  const used = Math.min(100, Math.max(0, Math.round(usedPercent)));
   return `${percentMode === "used" ? used : 100 - used}%`;
 }
 

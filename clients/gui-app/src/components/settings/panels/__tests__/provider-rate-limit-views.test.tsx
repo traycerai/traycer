@@ -851,6 +851,51 @@ describe("GrokRateLimitView", () => {
     expect(screen.getByText("Monthly")).toBeTruthy();
   });
 
+  // A MEASURED day names its own cadence, so the duration wins over the type
+  // table - and it has to win in the page's vocabulary. `1d` is the compact
+  // strip's word, and it read as a stray abbreviation in a column of
+  // "Weekly" / "Monthly" / "Current session".
+  it("names a measured one-day period 'Daily', not '1d'", () => {
+    render(
+      <GrokRateLimitView
+        data={{
+          ...grokWithPeriod,
+          // Deliberately disagreeing with the duration: the measurement is the
+          // more trustworthy source, and this asserts the row takes it.
+          periodType: "USAGE_PERIOD_TYPE_WEEKLY",
+          period: {
+            usedPercent: 44,
+            resetsAt: periodEnd,
+            durationMinutes: 1440,
+          },
+        }}
+        variant="settings"
+      />,
+    );
+    expect(screen.getByText("Daily")).toBeTruthy();
+    expect(screen.queryByText("1d")).toBeNull();
+    expect(screen.queryByText("Weekly")).toBeNull();
+  });
+
+  // Two days name no cadence at all, so the plain count survives this change.
+  it("keeps the plain day count for a multi-day period that names no cadence", () => {
+    render(
+      <GrokRateLimitView
+        data={{
+          ...grokWithPeriod,
+          periodType: null,
+          period: {
+            usedPercent: 44,
+            resetsAt: periodEnd,
+            durationMinutes: 2 * 1440,
+          },
+        }}
+        variant="settings"
+      />,
+    );
+    expect(screen.getByText("2d")).toBeTruthy();
+  });
+
   it("falls back to 'Usage' for a period with neither a duration nor a known type", () => {
     render(
       <GrokRateLimitView
