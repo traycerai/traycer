@@ -1096,7 +1096,7 @@ describe("<EpicConnectionPill />", () => {
   describe("durability plane", () => {
     it("selects a warning durability plane over a synced artifact leg, dot-only with its sentence as the tooltip and aria-label", async () => {
       const sentence =
-        "Offline — sync paused · Recent changes only in this window";
+        "Offline — sync paused · New edits only in this window until synced";
       mocks.durability = { severity: "warning", sentence };
       renderPill("synced");
 
@@ -1135,7 +1135,7 @@ describe("<EpicConnectionPill />", () => {
       // neutral reading until `CLOUD_LINK_GRACE_MS` passes.
       vi.useFakeTimers();
       const sentence =
-        "Offline — sync paused · Recent changes only in this window";
+        "Offline — sync paused · New edits only in this window until synced";
       mocks.durability = { severity: "warning", sentence };
       renderPill("offlineChangesSavedLocally");
 

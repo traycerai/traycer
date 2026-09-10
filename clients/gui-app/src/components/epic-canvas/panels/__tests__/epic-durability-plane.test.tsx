@@ -187,7 +187,7 @@ describe("deriveEpicDurabilityPlane", () => {
     ).toEqual({ severity: "warning", sentence: "Storage status unknown" });
   });
 
-  it("shows 'Recent changes only in this window' beside a stated status, not instead of it", () => {
+  it("shows 'New edits only in this window until synced' beside a stated status, not instead of it", () => {
     expect(
       planeFor({
         status: "offline",
@@ -199,11 +199,12 @@ describe("deriveEpicDurabilityPlane", () => {
       }),
     ).toEqual({
       severity: "danger",
-      sentence: "Offline — sync paused · Recent changes only in this window",
+      sentence:
+        "Offline — sync paused · New edits only in this window until synced",
     });
   });
 
-  it("shows 'Recent changes only in this window' on an otherwise-calm cloud-durable epic", () => {
+  it("shows 'New edits only in this window until synced' on an otherwise-calm cloud-durable epic", () => {
     expect(
       planeFor({
         status: "cloud",
@@ -215,7 +216,7 @@ describe("deriveEpicDurabilityPlane", () => {
       }),
     ).toEqual({
       severity: "danger",
-      sentence: "Recent changes only in this window",
+      sentence: "New edits only in this window until synced",
     });
   });
 
@@ -231,7 +232,23 @@ describe("deriveEpicDurabilityPlane", () => {
       }),
     ).toEqual({
       severity: "warning",
-      sentence: "Not synced yet · Backup status unknown",
+      sentence: "Not synced yet · New edits — backup status unknown",
+    });
+  });
+
+  it("reads unknown protection on an otherwise-calm cloud-durable epic as 'New edits — backup status unknown'", () => {
+    expect(
+      planeFor({
+        status: "cloud",
+        protection: "unknown",
+        peerSpeaksDurabilityLegs: true,
+        cloudFreshness: null,
+        pauseReason: null,
+        promotionState: null,
+      }),
+    ).toEqual({
+      severity: "warning",
+      sentence: "New edits — backup status unknown",
     });
   });
 
@@ -388,7 +405,7 @@ describe("deriveEpicDurabilityPlane", () => {
     ).toEqual({
       severity: "danger",
       sentence:
-        "Not synced yet · Recent changes only in this window · Saved copy — may be out of date · never synced",
+        "Not synced yet · New edits only in this window until synced · Saved copy — may be out of date · never synced",
     });
   });
 

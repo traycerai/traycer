@@ -844,7 +844,7 @@ function indicatorFor(
         showAgentSpinner: false,
         pulse: null,
         tooltip:
-          "Offline and not backed up, so recent changes are only in this window. Reconnect, or copy anything you cannot lose.",
+          "Offline and not backed up: anything you edit now exists only in this window. Reconnect, or copy anything you cannot lose.",
         ariaLabel:
           "Offline and unprotected. Recent changes are only in this window and will be lost if it closes.",
       };

@@ -307,12 +307,19 @@ interface DurabilityClause {
  */
 function durabilityRiskCopy(view: EpicDurabilityView): DurabilityClause | null {
   if (view.kind !== "stated" && view.kind !== "cloudDurable") return null;
-  // Scoped to THIS SESSION's edits on purpose: beside `cloudDurable` the task
-  // itself is backed up, and only what is typed here while the WAL is unarmed
-  // lives nowhere but this window. "Not backed up" without a subject read as
-  // a claim about the whole task.
+  // Scoped to NEW edits, and prospective, on purpose. Beside `cloudDurable`
+  // the task itself is backed up, and only what is typed here while the WAL
+  // is unarmed lives nowhere but this window until it syncs - so "Not backed
+  // up" without a subject read as a claim about the whole task, and "Recent
+  // changes only in this window" claimed edits this plane cannot see exist
+  // (it receives no dirty signal; a read-only or freshly opened task is in
+  // this state with nothing typed). The clause names the risk to what WILL be
+  // typed, which is what the protocol value actually states.
   if (view.protection === "unavailable") {
-    return { label: "Recent changes only in this window", severity: "danger" };
+    return {
+      label: "New edits only in this window until synced",
+      severity: "danger",
+    };
   }
   // The `stated` sibling of `statusCopy`'s cloudDurable unknown arm, and the
   // reason that arm was not enough on its own: a stated status answers WHERE
@@ -322,8 +329,11 @@ function durabilityRiskCopy(view: EpicDurabilityView): DurabilityClause | null {
   // reader their work is safely held when no WAL is known to hold it.
   // `cloudDurable` is excluded because `statusCopy` names it there already,
   // and one sentence saying it twice is worse than saying it once.
+  // Same subject as the arm above: it is the protection of NEW edits that is
+  // unknown, never the task's copy - which a stated status beside this clause
+  // has already described.
   if (view.kind === "stated" && view.protection === "unknown") {
-    return { label: "Backup status unknown", severity: "warning" };
+    return { label: "New edits — backup status unknown", severity: "warning" };
   }
   return null;
 }
@@ -351,21 +361,26 @@ function statusCopy(
     // asked and contradict the `"cloud"` the host sent.
     //
     // Except when the PROTECTION leg is the unknown one. The label names that
-    // axis specifically rather than reusing "Storage status unknown", which
-    // would read as doubt about the durability statement the host just made.
-    // `unavailable` is not here because it is already the risk copy's job.
+    // axis specifically - and its subject, NEW edits - rather than reusing
+    // "Storage status unknown" or an unqualified "Backup status unknown",
+    // either of which would read as doubt about the durable copy the host
+    // just positively reported. `unavailable` is not here because it is
+    // already the risk copy's job.
     return view.protection === "unknown"
-      ? { label: "Backup status unknown", severity: "warning" }
+      ? { label: "New edits — backup status unknown", severity: "warning" }
       : null;
   }
   if (view.kind === "indeterminate") {
     // `unavailable` is a stated FACT about risk, not an absence, so it gets
     // the stronger treatment and names the consequence rather than the
-    // mechanism - "recent changes only in this window" is what a person can
-    // act on; "the WAL is unarmed" is not. Same subject as the risk clause
-    // below: the session's edits, never the task.
+    // mechanism - "new edits only in this window" is what a person can act
+    // on; "the WAL is unarmed" is not. Same subject and tense as the risk
+    // clause below: what will be typed, never the task.
     return view.protection === "unavailable"
-      ? { label: "Recent changes only in this window", severity: "danger" }
+      ? {
+          label: "New edits only in this window until synced",
+          severity: "danger",
+        }
       : { label: "Storage status unknown", severity: "warning" };
   }
   const status = viewStatus(view);
