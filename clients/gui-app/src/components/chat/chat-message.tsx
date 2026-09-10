@@ -1,4 +1,5 @@
 import { memo, type ReactElement } from "react";
+import { hasRenderableMessageTime } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import type { JsonContent } from "@traycer/protocol/common/registry";
@@ -209,15 +210,18 @@ function ChatMessageImpl(props: ChatMessageProps) {
   // `statusLabel` means exactly that here - the other two labels ("Streaming",
   // "Completed") are applied under a `role === "assistant"` guard, and an
   // assistant row returns above without ever reaching this overline.
+  // The separator is drawn here but the stamp decides whether it renders, so
+  // both hang off the same predicate: a persisted row can carry an instant a
+  // `Date` cannot represent, and a lone " · " after the label is worse than no
+  // stamp at all.
+  const sentAt = message.sentAt ?? message.createdAt;
   const sender = (
     <span className="text-overline font-medium text-muted-foreground/60">
       <span className="uppercase">{label}</span>
-      {message.statusLabel === null ? (
+      {message.statusLabel === null && hasRenderableMessageTime(sentAt) ? (
         <>
           <span aria-hidden> · </span>
-          <ChatMessageTimestamp
-            timestamp={message.sentAt ?? message.createdAt}
-          />
+          <ChatMessageTimestamp timestamp={sentAt} />
         </>
       ) : null}
     </span>

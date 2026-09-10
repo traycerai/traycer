@@ -1682,17 +1682,34 @@ describe("<ChatMessage /> sender overline timestamp", () => {
   // fixture, `createdAt` flipped to an instant `Date` itself rejects.
   // `ChatMessageTimestamp` renders nothing rather than crash the row on
   // `toISOString()`, which throws instead of producing "Invalid Date".
-  it("renders no timestamp element for an instant Date itself rejects", () => {
-    render(
-      <ChatMessage
-        message={{ ...plainUserMessage("Status?"), createdAt: Number.NaN }}
-        actions={null}
-        backgroundToolBlockIds={EMPTY_BACKGROUND_TOOL_BLOCK_IDS}
-        nextStepActions={null}
-      />,
-    );
+  //
+  // Both input classes are covered because they fail differently on the way
+  // in: `NaN` is never a time, while 8.64e15 + 1 is a perfectly finite number
+  // that a `Date` still cannot represent - so a guard written as
+  // `Number.isFinite` would let the second one through to the throw.
+  it.each([
+    ["NaN", Number.NaN],
+    ["one millisecond past the maximum representable instant", 8.64e15 + 1],
+  ])(
+    "renders no timestamp element, and no orphaned separator, for %s",
+    (_label, createdAt) => {
+      render(
+        <ChatMessage
+          message={{ ...plainUserMessage("Status?"), createdAt }}
+          actions={null}
+          backgroundToolBlockIds={EMPTY_BACKGROUND_TOOL_BLOCK_IDS}
+          nextStepActions={null}
+        />,
+      );
 
-    screen.getByText("You");
-    expect(screen.queryByTestId("chat-message-timestamp")).toBeNull();
-  });
+      expect(screen.queryByTestId("chat-message-timestamp")).toBeNull();
+      // The separator is drawn by `chat-message.tsx`, NOT by the stamp, so a
+      // component that renders `null` leaves the dot stranded unless the call
+      // site drops it too. Asserting only the label's own text would miss
+      // that - it lives in a sibling span - so read the whole overline: it
+      // must be "You", never "You · ".
+      const overline = screen.getByText("You").parentElement;
+      expect(overline?.textContent).toBe("You");
+    },
+  );
 });

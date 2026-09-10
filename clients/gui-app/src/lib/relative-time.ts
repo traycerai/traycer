@@ -337,6 +337,22 @@ export function formatMessageTimeWithSeconds(
 }
 
 /**
+ * Whether `timestamp` names an instant a message stamp can render at all.
+ *
+ * A persisted row can carry a number no `Date` represents - `8.64e15 + 1` is
+ * perfectly finite and still out of range - and `toISOString()` THROWS on one
+ * rather than producing "Invalid Date", so the stamp renders nothing for it.
+ * That decision has to be readable from outside the component: a call site
+ * drawing its own separator beside the stamp cannot see a `null` return, and
+ * would otherwise leave a lone " · " after the sender label. Exported so the
+ * separator and the stamp are decided by one predicate instead of two that
+ * can drift.
+ */
+export function hasRenderableMessageTime(timestamp: number): boolean {
+  return !Number.isNaN(new Date(timestamp).getTime());
+}
+
+/**
  * The unabridged form of a message stamp - weekday, full date, year and time
  * to the second - for the hover label behind {@link formatMessageTime}'s
  * day-scoped one.

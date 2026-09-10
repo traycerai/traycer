@@ -1,5 +1,9 @@
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import { formatFullTimestamp, useMessageTime } from "@/lib/relative-time";
+import {
+  formatFullTimestamp,
+  hasRenderableMessageTime,
+  useMessageTime,
+} from "@/lib/relative-time";
 
 /**
  * The clock time a transcript row was sent, rendered beside its sender label.
@@ -36,10 +40,11 @@ export function ChatMessageTimestamp({
   // message row down with it. The test has to be the Date's own validity, not
   // `Number.isFinite` on the input: 8.64e15 + 1 is a perfectly finite number
   // and still out of range for a Date. Nothing to print is the honest answer
-  // for a stamp that names no time.
-  const date = new Date(timestamp);
-  const iso = Number.isNaN(date.getTime()) ? null : date.toISOString();
-  if (iso === null) return null;
+  // for a stamp that names no time. Guarding through the exported predicate
+  // keeps this decision and the caller's separator on one rule; past it,
+  // `toISOString()` cannot throw.
+  if (!hasRenderableMessageTime(timestamp)) return null;
+  const iso = new Date(timestamp).toISOString();
   return (
     <TooltipWrapper
       label={formatFullTimestamp(timestamp)}

@@ -253,7 +253,7 @@ describe("formatFullTimestamp", () => {
 
     const result = formatFullTimestamp(timestamp);
 
-    const expected = new Date(timestamp).toLocaleString(undefined, {
+    const options: Intl.DateTimeFormatOptions = {
       weekday: "short",
       month: "short",
       day: "numeric",
@@ -261,9 +261,23 @@ describe("formatFullTimestamp", () => {
       hour: "numeric",
       minute: "2-digit",
       second: "2-digit",
-    });
+    };
+    const expected = new Date(timestamp).toLocaleString(undefined, options);
     expect(result).toBe(expected);
-    expect(result).toContain("2026");
+    // The equality above still passes if the source and this fixture ever
+    // drift to the same wrong options, so anchor the year independently - it
+    // is the part this format exists to restore. It has to be read out of the
+    // formatter rather than written as "2026": per the note above the suite,
+    // no locale is pinned, and under one with non-Latin digits (ar-EG) or a
+    // non-Gregorian calendar (th-TH renders the Buddhist year 2569) the ASCII
+    // Gregorian year appears nowhere in `result`.
+    const yearPart = new Intl.DateTimeFormat(undefined, options)
+      .formatToParts(new Date(timestamp))
+      .find((part) => part.type === "year");
+    if (yearPart === undefined) {
+      throw new Error("the full format produced no year part to anchor on");
+    }
+    expect(result).toContain(yearPart.value);
     // A day-scoped, same-day render of the same instant never carries a year
     // - this is the "unabridged" form that restores it unconditionally.
     expect(result).not.toBe(formatMessageTime(timestamp, timestamp));
