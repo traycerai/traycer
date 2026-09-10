@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import {
   DndContext,
   PointerSensor,
@@ -45,7 +45,14 @@ export interface FallbackLadderEditorProps {
  * optional: a pointer drag is unreachable from a keyboard and awkward on touch,
  * and this list is the whole configuration of the feature. The buttons are the
  * keyboard and touch path, so no `KeyboardSensor` is registered; two competing
- * keyboard gestures over one list would be worse than one that is announced.
+ * keyboard gestures over one list would be worse than one.
+ *
+ * That decision has a consequence the handle has to carry: since the drag is
+ * POINTER ONLY, the handle is hidden from assistive technology and is not in
+ * the tab order, and the list's own instruction paragraph names the buttons as
+ * the way to reorder. dnd-kit's default handle attributes say the opposite -
+ * they promise a space-bar-and-arrows gesture nothing implements - so they are
+ * not spread. See the handle itself.
  *
  * `notify` never moves. It has no handle and no arrows because it is the step
  * that runs when nothing else worked, and the panel offers no way to place it
@@ -58,6 +65,8 @@ export function FallbackLadderEditor(
   props: FallbackLadderEditorProps,
 ): ReactNode {
   const { displayOrder, enabled, onToggle, onMove, profileStepHint } = props;
+  const headingId = useId();
+  const instructionsId = useId();
   const movable = displayOrder.filter((rung) => rung !== "notify");
   // How many movable rows sit above the fixed step. `movable.length` for every
   // ladder this panel writes, since `notify` is last there and nothing is below
@@ -81,7 +90,10 @@ export function FallbackLadderEditor(
 
   return (
     <div className="space-y-1.5">
-      <div className="font-medium text-ui-xs text-muted-foreground">
+      <div
+        id={headingId}
+        className="font-medium text-ui-xs text-muted-foreground"
+      >
         Try these in order
       </div>
       <DndContext
@@ -93,7 +105,17 @@ export function FallbackLadderEditor(
           items={[...movable]}
           strategy={verticalListSortingStrategy}
         >
-          <ul className="flex flex-col gap-1.5">
+          {/* Named and described, which is what makes the hidden drag handle
+              honest rather than merely silent: entering this list says what it
+              is and how to reorder it, and the "how" names the buttons that
+              actually work. The instruction paragraph is the visible one below
+              - one sentence, not a second copy for screen readers, so the two
+              cannot drift. */}
+          <ul
+            className="flex flex-col gap-1.5"
+            aria-labelledby={headingId}
+            aria-describedby={instructionsId}
+          >
             {displayOrder.map((rung) => {
               // `movableIndexOf`, not `movable.indexOf(rung)`: TS infers a type
               // predicate for the `!== "notify"` filter above, so `movable` is
@@ -121,10 +143,14 @@ export function FallbackLadderEditor(
           </ul>
         </SortableContext>
       </DndContext>
-      <p className="text-ui-xs text-muted-foreground">
-        Turning a step off keeps it here, and turning it back on puts it back
-        where it was. Only its saved position is lost: next time you open this
-        page a step that is off sits just above &ldquo;
+      <p id={instructionsId} className="text-ui-xs text-muted-foreground">
+        {/* First sentence added for AX7: the drag handle is a mouse
+            affordance and says nothing to a screen reader, so the way to
+            reorder has to be stated where entering the list will reach it. */}
+        Use each step&apos;s Move up and Move down buttons to reorder, or drag
+        it by its handle. Turning a step off keeps it here, and turning it back
+        on puts it back where it was. Only its saved position is lost: next time
+        you open this page a step that is off sits just above &ldquo;
         {FALLBACK_RUNG_COPY.notify.label}&rdquo; - never below it, where turning
         it on again would leave it unable to run.
       </p>
@@ -169,8 +195,10 @@ function FallbackLadderRow(props: {
   } = props;
   const copy = FALLBACK_RUNG_COPY[rung];
   const fixed = movableIndex === -1;
+  // `attributes` is deliberately not taken. It is the half of `useSortable`
+  // that advertises a keyboard drag, and this editor registers no
+  // `KeyboardSensor` - see the handle below.
   const {
-    attributes,
     listeners,
     setNodeRef,
     setActivatorNodeRef,
@@ -204,12 +232,30 @@ function FallbackLadderRow(props: {
           // cannot move.
           <span aria-hidden className="inline-block size-6" />
         ) : (
+          // POINTER ONLY, and hidden from assistive technology for that
+          // reason - the AX7 finding. `{...attributes}` is what is missing
+          // here rather than what was added: dnd-kit's defaults put
+          // `role="button"`, `tabIndex={0}`, `aria-roledescription="sortable"`
+          // and an `aria-describedby` pointing at its own screen-reader
+          // instructions on this span. Those instructions say to press the
+          // space bar and use the arrow keys, and no `KeyboardSensor` is
+          // registered to implement them - deliberately, see this editor's own
+          // doc block: the ▲▼ buttons are the keyboard and touch path, and two
+          // competing keyboard gestures over one list would be worse than one.
+          //
+          // So the handle advertised a gesture that does nothing, to exactly
+          // the users who cannot use the gesture it does have. Spreading only
+          // `listeners` keeps the pointer drag (PointerSensor's
+          // `onPointerDown`) and drops every promise. `aria-hidden` with no
+          // label completes it: this is a grip affordance for a mouse, the
+          // real control is the pair of buttons beside it, and the list's
+          // instruction paragraph below says so where an AT user will reach
+          // it.
           <span
             ref={setActivatorNodeRef}
-            {...attributes}
             {...listeners}
+            aria-hidden
             className="inline-flex size-6 cursor-grab items-center justify-center rounded text-muted-foreground/70 hover:text-foreground"
-            aria-label={`Reorder ${copy.label}`}
           >
             <GripVertical className="size-3.5" />
           </span>

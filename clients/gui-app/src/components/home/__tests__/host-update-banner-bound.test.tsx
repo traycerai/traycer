@@ -99,7 +99,7 @@ vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   }),
 }));
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import {
   cleanup,
   fireEvent,
@@ -1208,17 +1208,29 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
 
   // 10. Operation-lane Retry routes on intent like every other retry here.
   describe("operation Retry routing", () => {
+    type ApplyStaged = () => Promise<{
+      readonly kind: "ok";
+      readonly value: {
+        readonly appliedVersion: string;
+        readonly runningActivated: boolean;
+      };
+    }>;
+    type ActivateInstalled = () => Promise<{
+      readonly kind: "ok";
+      readonly value: { readonly activated: boolean };
+    }>;
+
     function failedAttemptWithControllerStatus(status: HostControllerStatus): {
-      readonly applyStaged: ReturnType<typeof vi.fn>;
-      readonly activateInstalled: ReturnType<typeof vi.fn>;
+      readonly applyStaged: Mock<ApplyStaged>;
+      readonly activateInstalled: Mock<ActivateInstalled>;
     } {
-      const applyStaged = vi.fn(() =>
+      const applyStaged = vi.fn<ApplyStaged>(() =>
         Promise.resolve({
           kind: "ok" as const,
           value: { appliedVersion: "2.1.0", runningActivated: true },
         }),
       );
-      const activateInstalled = vi.fn(() =>
+      const activateInstalled = vi.fn<ActivateInstalled>(() =>
         Promise.resolve({
           kind: "ok" as const,
           value: { activated: true },

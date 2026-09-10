@@ -4,13 +4,17 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import type { PendingReturn } from "@traycer/protocol/host/agent/gui/subscribe";
 import { Button } from "@/components/ui/button";
 import type { HostRpcRegistry } from "@/lib/host";
-import { queuedMessagesReturningText } from "./fallback-copy";
+import {
+  fallbackLowUsageClause,
+  queuedMessagesReturningText,
+} from "./fallback-copy";
 import {
   TERMINAL_ACCOUNT_LABEL,
   fallbackTupleIdentity,
   useFallbackProfileLabels,
   type FallbackTupleIdentity,
 } from "./fallback-identity";
+import type { FallbackReturnLowUsage } from "./fallback-return-low-usage";
 import { useFallbackReturnToPreferred } from "./use-fallback-actions";
 
 /**
@@ -28,15 +32,32 @@ import { useFallbackReturnToPreferred } from "./use-fallback-actions";
  * routes to the preferred account would interleave two providers in one chat
  * with nobody told - the worst available outcome, and the reason the count is on
  * the wire at all.
+ *
+ * The second rule is {@link lowUsage}. This banner OUTRANKS the rate-limit
+ * advisory in the composer's one-at-a-time chain, so when the account the chat
+ * is on now is itself running low, taking the slot without the sentence would
+ * delete the one fact that argues against "Stay". UX §2: one banner, both
+ * facts.
  */
 export function FallbackReturnBanner({
   offer,
+  lowUsage,
   client,
   chatId,
   epicId,
   canAct,
 }: {
   readonly offer: PendingReturn;
+  /**
+   * The absorbed advisory, or `null` when the current account is not running
+   * low.
+   *
+   * Already narrowed to the account this chat is on: `returnBannerLowUsage`
+   * checks the advisory against the offer's `fallbackTuple` before it gets
+   * here, so "the current account" is a settled fact rather than something this
+   * component re-derives from a second reader.
+   */
+  readonly lowUsage: FallbackReturnLowUsage | null;
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly chatId: string;
   readonly epicId: string;
@@ -71,7 +92,13 @@ export function FallbackReturnBanner({
     >
       <div className="flex items-center gap-2 text-ui-sm font-medium text-emerald-700 dark:text-emerald-300">
         <CheckCircle2 className="size-3.5 shrink-0" aria-hidden />
-        <span className="min-w-0">{resetHeadline(preferred)}</span>
+        <span className="min-w-0">
+          {combinedHeadline(
+            resetHeadline(preferred),
+            destinationName(fallback, preferred),
+            lowUsage,
+          )}
+        </span>
       </div>
       <div className="text-ui-sm">
         Switch back from{" "}
@@ -114,6 +141,32 @@ export function FallbackReturnBanner({
       </div>
     </div>
   );
+}
+
+/**
+ * "personal-account's limit has reset and work-account is running low".
+ *
+ * One sentence rather than a second line, because the two facts are one
+ * situation: the account that failed is back, and the one carrying the chat in
+ * its place is running out. Split across two elements they read as two
+ * unrelated notices - which is exactly the collision UX §2 rules out - and the
+ * "and" is what makes the offer's stakes legible in one pass.
+ *
+ * `null` low usage leaves the shipped headline byte-identical, which is the
+ * point: the combined form is an ADDITION for one state, not a rewrite of the
+ * ordinary one.
+ */
+function combinedHeadline(
+  reset: string,
+  currentAccountName: string,
+  lowUsage: FallbackReturnLowUsage | null,
+): string {
+  if (lowUsage === null) return reset;
+  return `${reset} and ${fallbackLowUsageClause({
+    accountName: currentAccountName,
+    severity: lowUsage.severity,
+    limitedFamilies: lowUsage.limitedFamilies,
+  })}`;
 }
 
 /**

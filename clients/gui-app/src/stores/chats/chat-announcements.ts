@@ -14,6 +14,7 @@ import {
   queuedMessagesMovingText,
   queuedMessagesReturningText,
 } from "@/components/chat/fallback/fallback-copy";
+import { isFallbackNoticeKind } from "@/components/chat/fallback/fallback-notice-kinds";
 import { formatClockTime } from "@/lib/relative-time";
 
 /**
@@ -513,11 +514,21 @@ export function fallbackNoticeAnnouncements(
       ) {
         continue;
       }
-      if (
-        segment.noticeKind !== "fallback_applied" &&
-        segment.noticeKind !== "fallback_settled" &&
-        segment.noticeKind !== "fallback_wait_resumed"
-      ) {
+      // ONE list, shared with the transcript's settings-link gate rather than
+      // restated here. These were two hand-maintained enumerations of the same
+      // five kinds, and nothing made a sixth kind added to one of them show up
+      // in the other - the failure mode being a new fallback notice that draws
+      // its affordance in the transcript and is silently never announced, or
+      // the reverse. `FALLBACK_NOTICE_KINDS` is the single definition and its
+      // own suite pins it exhaustively against `providerNoticeKindSchema`.
+      //
+      // The return's two endings are in that set (row #4 split
+      // `fallback_applied` into the forward hop and these). Both are spoken,
+      // and the "stayed put" one is not an exception: a chat that did NOT move
+      // when it offered to is exactly as much news as one that did, and the
+      // host's own "Staying on" detail - already allowlisted in
+      // `fallbackNoticeText` ABOVE - is what says which.
+      if (!isFallbackNoticeKind(segment.noticeKind)) {
         continue;
       }
       notices.push({
@@ -548,6 +559,16 @@ export interface FallbackAnnouncementsInput {
   readonly notices: ReadonlyArray<FallbackNoticeAnnouncement>;
   /** A confirmed manual result, correlated to this host, chat and attempt. */
   readonly manualOutcome: FallbackAnnouncement | null;
+  /**
+   * An outcome whose initiating surface had already gone (MF11).
+   *
+   * A separate slot from {@link manualOutcome} rather than the same one, and
+   * not for tidiness: the two are produced independently and can be published
+   * in the same observation, so one slot would silently drop whichever arrived
+   * second. They also mean opposite things - one is a confirmed action, the
+   * other is the answer nobody was left to hear.
+   */
+  readonly unattendedOutcome: FallbackAnnouncement | null;
 }
 
 export interface FallbackAnnouncementObserver {
@@ -582,6 +603,7 @@ export function createFallbackAnnouncementObserver(): FallbackAnnouncementObserv
   // baselines across row replacement, hydration and reconnect.
   const consumedNotices = new Set<string>();
   const seenManualOutcomes = new Set<string>();
+  const seenUnattendedOutcomes = new Set<string>();
 
   return {
     observe: (input) => {
@@ -652,11 +674,24 @@ export function createFallbackAnnouncementObserver(): FallbackAnnouncementObserv
         announcements.push({ key: notice.key, text: notice.text });
       }
 
-      const outcome = input.manualOutcome;
-      if (outcome !== null && !seenManualOutcomes.has(outcome.key)) {
-        seenManualOutcomes.add(outcome.key);
+      // The two direct outcome slots. One rule, written once and applied
+      // twice: remember the key whether or not it is spoken (so a replay is
+      // silent either way), and speak it unless this observation is absorbing
+      // - a record already in the store when the observer took its baseline is
+      // history, and a reconnect is a change of provenance, not a second
+      // event. Their seen-sets stay SEPARATE: the keys are namespaced by
+      // producer and sharing one set would let a confirmed action suppress an
+      // unattended answer that happened to collide.
+      const deliverDirectOutcome = (
+        seen: Set<string>,
+        outcome: FallbackAnnouncement | null,
+      ): void => {
+        if (outcome === null || seen.has(outcome.key)) return;
+        seen.add(outcome.key);
         if (!absorb) announcements.push(outcome);
-      }
+      };
+      deliverDirectOutcome(seenManualOutcomes, input.manualOutcome);
+      deliverDirectOutcome(seenUnattendedOutcomes, input.unattendedOutcome);
       return announcements;
     },
   };

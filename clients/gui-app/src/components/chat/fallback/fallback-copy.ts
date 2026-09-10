@@ -4,6 +4,8 @@ import type {
 } from "@traycer/protocol/host/chat-fallback";
 import type { FallbackWaitDisposition } from "@traycer/protocol/host/agent/gui/subscribe";
 import { FALLBACK_REASON_LABELS } from "@traycer/protocol/host/notifications/presentation";
+import { limitedFamilyQualifier } from "@/lib/rate-limits/rate-limit-copy";
+import type { ProfileRateLimitSeverity } from "@/lib/rate-limits/rate-limit-scope-match";
 
 /**
  * User-facing copy for the provider-fallback chat surfaces.
@@ -161,6 +163,42 @@ export function queuedMessagesReturningText(count: number): string | null {
   return count === 1
     ? " and moves 1 queued message back"
     : ` and moves ${count} queued messages back`;
+}
+
+/**
+ * "work-account is running low on Fable usage" - the advisory clause the return
+ * banner absorbs.
+ *
+ * The banner outranks the rate-limit advisory in the composer's one-at-a-time
+ * chain, so without this the user answering "Stay" lost the one fact that
+ * argues against staying: the account they would be staying on is itself
+ * running out. Taking the SLOT and dropping the SENTENCE is what MF09 found;
+ * UX §2 asks for one banner carrying both facts, not a collision resolved by
+ * silence.
+ *
+ * The wording is the advisory banner's own, deliberately
+ * (`profile-rate-limit-switch-banner.tsx` renders the same two arms with the
+ * same family qualifier): the user may see this clause here and the full
+ * advisory a message later, and two wordings for one reading would read as two
+ * different findings. A CLAUSE rather than a sentence - the headline joins it
+ * to the reset with "and", which is the shape UX §2 spells out.
+ *
+ * `limitedFamilies` is empty when the triggering limit is shared or per-scope
+ * data is unavailable; the copy is then profile-wide, exactly as the advisory's
+ * is.
+ */
+export function fallbackLowUsageClause(input: {
+  readonly accountName: string;
+  readonly severity: ProfileRateLimitSeverity;
+  readonly limitedFamilies: ReadonlyArray<string>;
+}): string {
+  // The SAME qualifier the composer's advisory builds, from one module, so the
+  // absorbed clause and the full advisory cannot drift into two wordings of one
+  // finding.
+  const qualifier = limitedFamilyQualifier(input.limitedFamilies);
+  return input.severity === "hard_limit"
+    ? `${input.accountName} has reached its ${qualifier}rate limit`
+    : `${input.accountName} is running low on ${qualifier}usage`;
 }
 
 /**

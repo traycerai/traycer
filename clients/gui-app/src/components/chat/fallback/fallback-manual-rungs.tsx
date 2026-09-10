@@ -3,7 +3,9 @@ import type {
   ChatRunSettings,
   LastFailedAttempt,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { Button } from "@/components/ui/button";
+import type { HostRpcRegistry } from "@/lib/host";
 import { useMaybeChatTranscript } from "@/components/chat/chat-transcript-context";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
@@ -16,12 +18,10 @@ import {
 } from "./fallback-copy";
 import { FallbackDestinationMenu } from "./fallback-destination-menu";
 import { FallbackNoticeSettingsLink } from "./fallback-notice-attribution";
-import {
-  toastFallbackOutcome,
-  useFallbackRunManualRung,
-} from "./use-fallback-actions";
+import { useFallbackRunManualRung } from "./use-fallback-actions";
 import { useChatLastFailedAttempt } from "./use-last-failed-attempt";
 import { usePublishConfirmedManualFallbackAction } from "./use-confirmed-manual-action";
+import { usePublishUnattendedFallbackOutcome } from "./use-unattended-fallback-outcome";
 
 /**
  * The error row's manual affordances: Retry, Switch…, and "Wait until <time>".
@@ -100,44 +100,116 @@ function ManualRungActions({
 }) {
   const client = useHostClientForHostId(hostId);
   const attempt = useChatLastFailedAttempt({ epicId, chatId, hostId });
+
+  if (attempt === undefined) return null;
+  // The row must be the one the host is describing. A transcript holding three
+  // failed attempts offers these once, not three times - and a legacy record
+  // (no turn identity, so no `turnId` prop) never reaches this component at
+  // all, which is the correct answer rather than a missing one.
+  if (attempt.turnId !== turnId) return null;
+  // `auth` is the ticket's link-only case and stays link-only whatever
+  // `eligibleRungs` says, so the two rules can never disagree. Checked first
+  // for that reason. The re-auth banner is the way back in; a retry here would
+  // send the same request to the same signed-out account.
+  if (attempt.failure.reason === "auth") return null;
+
+  return (
+    <ManualRungAffordances
+      attempt={attempt}
+      client={client}
+      epicId={epicId}
+      chatId={chatId}
+      hostId={hostId}
+    />
+  );
+}
+
+/**
+ * The affordances themselves, and the pick's in-flight state with them.
+ *
+ * ## Why this is a THIRD component
+ *
+ * The same reason the file already gives for the first split, applied to the
+ * gate above: *"gating with an early `return null` inside one component would
+ * not do"*. That doc was written about the host hooks; it is just as true of
+ * the reporting state, and this component exists because the second gate was
+ * originally the early return it warns against.
+ *
+ * The error row is NOT a stable surface for a delayed answer. `ErrorSegment`
+ * renders `FallbackManualRungActions` for any row carrying a `turnId`, and
+ * nothing about that changes when the attempt does - so the identity gate above
+ * turning `false` used to leave this component **mounted and rendering
+ * nothing**, with `menuOpen` still `true` from before and the per-render layout
+ * effect in `useFallbackOutcomeReporting` still republishing
+ * `inlineMenuOpen: true` on every null render.
+ *
+ * That is precisely the state MF11 exists to remove. The sequence: the menu is
+ * open, the user picks, the frame carrying the newer turn arrives first (which
+ * is what `attempt_not_latest` MEANS), the popover and its inline
+ * `role="status"` line unmount with the gate - and then the host's answer finds
+ * `inlineMenuOpen` still `true`, so the hook defers to an inline line that is no
+ * longer rendering and the refusal is delivered **nowhere**.
+ *
+ * Splitting is what fixes it, rather than a cleverer predicate: unmounting runs
+ * the reporting hook's cleanup, and destroys `menuOpen` and `refusal` with it,
+ * so a returning attempt cannot reopen a menu onto a stale refusal either.
+ * Losing the in-flight mutation costs nothing - the Mutation lives in the query
+ * cache and its hook-level `onSuccess` runs whether or not this subtree is
+ * still here, which is exactly how {@link FallbackWaitingMenu} already gets
+ * this right.
+ */
+function ManualRungAffordances({
+  attempt,
+  client,
+  epicId,
+  chatId,
+  hostId,
+}: {
+  readonly attempt: LastFailedAttempt;
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly epicId: string;
+  readonly chatId: string;
+  readonly hostId: string;
+}) {
   const publishConfirmed = usePublishConfirmedManualFallbackAction({
     epicId,
     chatId,
     hostId,
   });
+  const publishUnattended = usePublishUnattendedFallbackOutcome({
+    epicId,
+    chatId,
+    hostId,
+  });
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [refusal, setRefusal] = useState<string | null>(null);
   const runManualRung = useFallbackRunManualRung(
     client,
     chatId,
     publishConfirmed,
+    { inlineMenuOpen: menuOpen, publishUnattended },
   );
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [refusal, setRefusal] = useState<string | null>(null);
 
   const run = useCallback(
     (rung: "retry" | "wait_once") => {
-      if (attempt === undefined) return;
-      runManualRung.mutate(
-        {
-          epicId,
-          chatId,
-          rung,
-          // Null for both rungs this arm sends. `retry` is the same tuple again
-          // by definition, and `wait_once` parks on the tuple that failed -
-          // which is what the wait is FOR. Only `switch` carries a target, and
-          // that one comes from the destination menu below.
-          target: null,
-          userMessageId: attempt.userMessageId,
-          turnId: attempt.turnId,
-        },
-        {
-          // TOAST, because these two are bare buttons: press Retry, the row
-          // does not change, and there is nowhere on it to write "that isn't
-          // available any more". The verb reports at the call site rather than
-          // in the hook precisely so the menu below can choose differently -
-          // see `toastFallbackOutcome`.
-          onSuccess: toastFallbackOutcome,
-        },
-      );
+      // No per-call handler at all now. These two rungs are TOASTED, because
+      // they are bare buttons: press Retry, the row does not change, and there
+      // is nowhere on it to write "that isn't available any more". That toast
+      // used to be passed here, which meant TanStack dropped it in the one case
+      // it exists for - an answer arriving after this row went away. The hook
+      // branches on `variables.rung` instead, and outlives us.
+      runManualRung.mutate({
+        epicId,
+        chatId,
+        rung,
+        // Null for both rungs this arm sends. `retry` is the same tuple again
+        // by definition, and `wait_once` parks on the tuple that failed -
+        // which is what the wait is FOR. Only `switch` carries a target, and
+        // that one comes from the destination menu below.
+        target: null,
+        userMessageId: attempt.userMessageId,
+        turnId: attempt.turnId,
+      });
     },
     [attempt, chatId, epicId, runManualRung],
   );
@@ -149,7 +221,6 @@ function ManualRungActions({
 
   const onPickTarget = useCallback(
     (target: ChatRunSettings) => {
-      if (attempt === undefined) return;
       runManualRung.mutate(
         {
           epicId,
@@ -168,6 +239,12 @@ function ManualRungActions({
           // The menu is still open and is the surface the click came from, so
           // it is the honest place to answer - and a toast beside it would
           // report one refusal twice.
+          //
+          // This handler is the OPEN-menu branch of the hook's rule, not a
+          // second channel beside it: the hook returns without reporting while
+          // `inlineMenuOpen`, and takes over the moment this popover closes or
+          // this row goes. Both facts have to stay true together - a per-call
+          // handler that ran when the hook also reported would say it twice.
           onSuccess: (response) => {
             const message = describeFallbackOutcome(response.outcome);
             if (message === null) {
@@ -184,18 +261,6 @@ function ManualRungActions({
     },
     [attempt, chatId, epicId, runManualRung],
   );
-
-  if (attempt === undefined) return null;
-  // The row must be the one the host is describing. A transcript holding three
-  // failed attempts offers these once, not three times - and a legacy record
-  // (no turn identity, so no `turnId` prop) never reaches this component at
-  // all, which is the correct answer rather than a missing one.
-  if (attempt.turnId !== turnId) return null;
-  // `auth` is the ticket's link-only case and stays link-only whatever
-  // `eligibleRungs` says, so the two rules can never disagree. Checked first
-  // for that reason. The re-auth banner is the way back in; a retry here would
-  // send the same request to the same signed-out account.
-  if (attempt.failure.reason === "auth") return null;
 
   const rungs = attempt.eligibleRungs;
   const waitUntil = waitUntilLabel(attempt);

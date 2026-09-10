@@ -45,6 +45,7 @@ import {
 } from "@/lib/chats/resolve-steer-submit";
 import { resolveComposerTopBannerKind } from "./chat-composer-top-banner";
 import { ChatComposerFallbackBanners } from "@/components/chat/fallback/chat-composer-fallback-banners";
+import { composerRateLimitAdvisory } from "@/components/chat/fallback/fallback-return-low-usage";
 import {
   fallbackComposerCardVisible,
   type ChatProviderFallbackState,
@@ -639,6 +640,13 @@ function ChatComposerImpl(props: ChatComposerProps) {
       <ChatComposerFallbackBanners
         topBannerKind={topBannerKind}
         fallback={providerFallback}
+        // The return banner OUTRANKS the advisory in the chain above, so it
+        // absorbs its sentence rather than silencing it (MF09, UX §2). Same
+        // suppression as `rateLimitVisible`, from one helper.
+        rateLimitAdvisory={composerRateLimitAdvisory(
+          rateLimitPrompt,
+          reauthGate.signedOut,
+        )}
         client={hostClient}
         chatId={taskId}
         epicId={currentEpicId}

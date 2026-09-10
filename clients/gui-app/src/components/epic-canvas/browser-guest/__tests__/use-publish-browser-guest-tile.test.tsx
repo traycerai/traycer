@@ -98,7 +98,7 @@ afterEach(() => {
 
 describe("usePublishBrowserGuestTile", () => {
   it("keeps the registration-id anchor-name on the tile surface across pane and presentation changes", () => {
-    const bridge = new FakeBrowserViewBridge();
+    const bridge = new FakeBrowserViewBridge({});
     startHost(bridge);
     bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
 
@@ -129,7 +129,7 @@ describe("usePublishBrowserGuestTile", () => {
   });
 
   it("registers the surface in the tile-rect registry and unregisters on unmount", () => {
-    const bridge = new FakeBrowserViewBridge();
+    const bridge = new FakeBrowserViewBridge({});
     startHost(bridge);
     bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
 
@@ -150,7 +150,7 @@ describe("usePublishBrowserGuestTile", () => {
   });
 
   it("clears only that owner's placement on unmount", () => {
-    const bridge = new FakeBrowserViewBridge();
+    const bridge = new FakeBrowserViewBridge({});
     startHost(bridge);
     bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
     bridge.emitGuestMountRequested(mountRequest(REGISTRATION_B, PARTITION_B));

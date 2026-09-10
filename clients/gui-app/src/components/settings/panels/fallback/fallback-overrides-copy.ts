@@ -143,3 +143,7 @@ export const REASON_ROW_NOTES: Readonly<
   missing_terminal_event: null,
   background_work_failed: null,
 };
+
+/** D142/D146: the matrix authors rung choices, not every wire policy value. */
+export const FALLBACK_OVERRIDES_DISCLOSURE =
+  "Turning every chip off preserves that failure’s pre-retry/hold behavior and terminal Notify; this editor does not author the wire’s per-reason off value, and Notify stays last.";

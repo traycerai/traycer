@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
 import { StrictMode } from "react";
 import {
   afterEach,
@@ -108,8 +108,12 @@ vi.mock(
       fallbackMocks.optionsByHarness.get(harnessId) ?? [],
   }),
 );
+vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
+  useGuiHarnessModelsQuery: () => ({ data: undefined }),
+}));
 
 import { FallbackSettingsPanel } from "@/components/settings/panels/fallback-settings-panel";
+import { renderWithFallbackQueryClient } from "@/components/settings/panels/__tests__/fallback-settings-panel-test-support";
 
 function policy(overrides: Partial<FallbackPolicy>): FallbackPolicy {
   return { ...createDefaultFallbackPolicy(), enabled: true, ...overrides };
@@ -126,7 +130,7 @@ function respond(
 }
 
 function renderPanel() {
-  return render(
+  return renderWithFallbackQueryClient(
     <StrictMode>
       <FallbackSettingsPanel />
     </StrictMode>,

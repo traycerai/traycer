@@ -8,7 +8,6 @@ import {
 import {
   closestCenter,
   type CollisionDetection,
-  type DraggableAttributes,
   type DraggableSyntheticListeners,
   type DragEndEvent,
   type DragMoveEvent,
@@ -121,7 +120,19 @@ interface UseQueuedMessageRowSortableOptions {
 interface UseQueuedMessageRowSortableReturn {
   readonly setNodeRef: (element: HTMLElement | null) => void;
   readonly setActivatorNodeRef: (element: HTMLElement | null) => void;
-  readonly attributes: DraggableAttributes;
+  // No `attributes` here, deliberately. dnd-kit's `useSortable` returns them and
+  // this hook used to pass them through, but they advertise a keyboard drag
+  // (`role="button"`, `tabIndex={0}`, `aria-roledescription="sortable"`, an
+  // `aria-describedby` naming the space bar) that this surface does not
+  // implement: `useSensors` registers `PointerSensor` only, a keyboard drag
+  // carries no `pointerCoordinates`, `resolveDropPreviewFromEvent` therefore
+  // resolves no preview, and `handleDragEnd` reorders only when a preview
+  // exists. AX7 took the spread off the handle; withholding the value is the
+  // other half, so re-introducing the defect has to start by re-adding a field
+  // rather than by spreading one that is already in reach.
+  //
+  // If a keyboard reorder path is ever built (an index-based preview replacing
+  // the pointer-midline math), add this back WITH that path, not before it.
   readonly listeners: DraggableSyntheticListeners;
   readonly style: CSSProperties;
   readonly isDragSource: boolean;
@@ -355,7 +366,6 @@ export function useQueuedMessageRowSortable(
   const {
     setNodeRef,
     setActivatorNodeRef,
-    attributes,
     listeners,
     transform,
     transition,
@@ -378,7 +388,6 @@ export function useQueuedMessageRowSortable(
   return {
     setNodeRef,
     setActivatorNodeRef,
-    attributes,
     listeners,
     style,
     isDragSource: isDragging,

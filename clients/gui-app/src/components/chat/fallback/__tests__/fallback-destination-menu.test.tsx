@@ -2044,6 +2044,7 @@ describe("FallbackWaitingMenu", () => {
           client={null}
           epicId={EPIC_ID}
           chatId={CHAT_ID}
+          hostId={HOST_ID}
           canAct
         />
       </TabHostProvider>,
@@ -2079,6 +2080,7 @@ describe("FallbackWaitingMenu", () => {
           client={null}
           epicId={EPIC_ID}
           chatId={CHAT_ID}
+          hostId={HOST_ID}
           canAct
         />
       </TabHostProvider>,
@@ -2115,6 +2117,7 @@ describe("FallbackWaitingMenu", () => {
           client={null}
           epicId={EPIC_ID}
           chatId={CHAT_ID}
+          hostId={HOST_ID}
           canAct
         />
       </TabHostProvider>,
@@ -2138,6 +2141,7 @@ describe("FallbackWaitingMenu", () => {
           client={null}
           epicId={EPIC_ID}
           chatId={CHAT_ID}
+          hostId={HOST_ID}
           canAct
         />
       </TabHostProvider>,

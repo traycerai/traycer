@@ -749,6 +749,59 @@ describe("fallbackNoticeAnnouncements", () => {
     expect(waitResumed.text).toContain(FAILED_IDENTITY);
     expect(settled.text).toContain(TARGET_IDENTITY);
   });
+
+  it("speaks a fallback_returned and a fallback_return_blocked notice - the return's two endings - while a model_rerouted notice of the same shape stays silent", () => {
+    const messages: ReadonlyArray<ChatMessage> = [
+      assistantMessage({
+        id: "m1",
+        segments: [
+          providerNoticeSegment({
+            id: "seg-returned",
+            noticeKind: "fallback_returned",
+            status: "completed",
+            parentId: null,
+            title: "Switched back",
+            message: null,
+            details: [{ label: "To", value: PREFERRED_IDENTITY }],
+          }),
+          providerNoticeSegment({
+            id: "seg-return-blocked",
+            noticeKind: "fallback_return_blocked",
+            status: "completed",
+            parentId: null,
+            title: "Stayed on the current provider",
+            message: null,
+            details: [{ label: "Staying on", value: TARGET_IDENTITY }],
+          }),
+          // Falsification: drop the `noticeKind !==` checks for these two
+          // kinds from `fallbackNoticeAnnouncements` and this notice (a
+          // DIFFERENT kind, same segment shape) would prove nothing either
+          // way - it must stay silent regardless.
+          providerNoticeSegment({
+            id: "seg-reroute",
+            noticeKind: "model_rerouted",
+            status: "completed",
+            parentId: null,
+            title: "Model rerouted",
+            message: null,
+            details: [{ label: "To", value: TARGET_IDENTITY }],
+          }),
+        ],
+      }),
+    ];
+    const notices = fallbackNoticeAnnouncements(messages);
+    expect(notices).toHaveLength(2);
+    const [returned, returnBlocked] = notices;
+    expect(returned.text).toBe(`Switched back. To: ${PREFERRED_IDENTITY}`);
+    expect(returnBlocked.text).toBe(
+      `Stayed on the current provider. Staying on: ${TARGET_IDENTITY}`,
+    );
+    // Falsification: remove the `fallback_returned`/`fallback_return_blocked`
+    // arms from the allowlist switch and THIS assertion must go red.
+    expect(notices.some((notice) => notice.key === "notice:seg-reroute")).toBe(
+      false,
+    );
+  });
 });
 
 // D215: confirmed host outcome metadata reaches the announcer independent of
@@ -880,6 +933,10 @@ describe("createFallbackAnnouncementObserver", () => {
       liveOutcome: null,
       notices: [],
       manualOutcome: null,
+      // MF11: an outcome whose initiating surface had already gone. Its own
+      // seen-set, subject to the same `absorb` rule as manualOutcome -
+      // defaulted here; the dedicated tests below override it explicitly.
+      unattendedOutcome: null,
     };
     return { ...base, ...overrides };
   }
@@ -1348,6 +1405,111 @@ describe("createFallbackAnnouncementObserver", () => {
       input({ baselineEpoch: 1, manualOutcome: secondConfirmed }),
     );
     expect(spoken2).toEqual([secondConfirmed]);
+  });
+
+  describe("unattendedOutcome (MF11: an outcome whose initiating surface had already gone)", () => {
+    it("is emitted once and the SAME key replayed afterward is silent", () => {
+      const observer = createFallbackAnnouncementObserver();
+      observer.observe(input({ baselineEpoch: 1 })); // absorbed baseline
+
+      const outcome: FallbackAnnouncement = {
+        key: "unattended:seq-1",
+        text: "That destination isn't available right now.",
+      };
+      const spoken = observer.observe(
+        input({ baselineEpoch: 1, unattendedOutcome: outcome }),
+      );
+      expect(spoken).toEqual([outcome]);
+
+      // Falsification: dedupe unattended outcomes on `text` instead of a
+      // dedicated `seenUnattendedOutcomes` key set (or share `manualOutcome`'s
+      // set - see the sibling test below) and this replay would speak again.
+      const replay = observer.observe(
+        input({ baselineEpoch: 1, unattendedOutcome: outcome }),
+      );
+      expect(replay).toEqual([]);
+    });
+
+    it("absorbs an unattendedOutcome present during the first observation, while not-ready, and across a changed baselineEpoch - mirroring manualOutcome", () => {
+      const observer = createFallbackAnnouncementObserver();
+      const outcome: FallbackAnnouncement = {
+        key: "unattended:seq-baseline",
+        text: "This chat already resumed.",
+      };
+
+      // First observation ever: absorbed regardless of what's in it.
+      expect(
+        observer.observe(
+          input({ baselineEpoch: 1, unattendedOutcome: outcome }),
+        ),
+      ).toEqual([]);
+      // Replaying that SAME baseline-cached key once ready changes nothing.
+      expect(
+        observer.observe(
+          input({ baselineEpoch: 1, unattendedOutcome: outcome }),
+        ),
+      ).toEqual([]);
+
+      const notReady: FallbackAnnouncement = {
+        key: "unattended:seq-not-ready",
+        text: "Couldn't switch this chat.",
+      };
+      // Not-yet-ready: absorbed even though the key is genuinely new.
+      expect(
+        observer.observe(
+          input({
+            baselineEpoch: 1,
+            ready: false,
+            unattendedOutcome: notReady,
+          }),
+        ),
+      ).toEqual([]);
+      // Falsification: skip marking `notReady`'s key as seen in the `absorb`
+      // branch - a later ready observation of the SAME key would then speak
+      // it, when it must instead have been consumed by the not-ready frame.
+      expect(
+        observer.observe(
+          input({ baselineEpoch: 1, unattendedOutcome: notReady }),
+        ),
+      ).toEqual([]);
+
+      // A changed baselineEpoch (reconnect) also absorbs a genuinely new key.
+      const afterReconnect: FallbackAnnouncement = {
+        key: "unattended:seq-reconnect",
+        text: "The menu is out of date — reopen it to choose.",
+      };
+      expect(
+        observer.observe(
+          input({ baselineEpoch: 2, unattendedOutcome: afterReconnect }),
+        ),
+      ).toEqual([]);
+    });
+
+    it("a manualOutcome AND an unattendedOutcome present in the SAME observation both come out - two independent slots, not one shared one", () => {
+      const observer = createFallbackAnnouncementObserver();
+      observer.observe(input({ baselineEpoch: 1 })); // absorbed baseline
+
+      const manual: FallbackAnnouncement = {
+        key: "manual:seq-both-1",
+        text: "Switched this chat to Astra Mini Codex (acct-south).",
+      };
+      const unattended: FallbackAnnouncement = {
+        key: "unattended:seq-both-1",
+        text: "That's already been decided for this chat.",
+      };
+      // Falsification: route unattendedOutcome through the manualOutcome slot
+      // (reuse `outcome`/`seenManualOutcomes` for both) - one of the two would
+      // be silently dropped here since a single slot can hold only one value
+      // per observation.
+      const events = observer.observe(
+        input({
+          baselineEpoch: 1,
+          manualOutcome: manual,
+          unattendedOutcome: unattended,
+        }),
+      );
+      expect(events).toEqual([manual, unattended]);
+    });
   });
 
   it("combines a traversal transition and a notice in the same frame into a speech-like ordered sequence", () => {

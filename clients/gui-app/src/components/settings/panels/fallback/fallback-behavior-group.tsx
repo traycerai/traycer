@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import type { FallbackPolicy } from "@traycer/protocol/host/fallback-policy";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
@@ -153,6 +153,12 @@ interface ReturnToPreferredRowProps {
  */
 function ReturnToPreferredRow(props: ReturnToPreferredRowProps): ReactNode {
   const { policy, onChange } = props;
+  // This row is hand-built rather than a `SettingsRow`, so it does not get the
+  // label/description ids that primitive publishes - which is exactly why it
+  // was the one row on the page with none of the relationships (AX8). The two
+  // ids below are the same two `SettingsRow` would have provided.
+  const headingId = useId();
+  const descriptionId = useId();
   return (
     <div
       className={cn(
@@ -163,17 +169,27 @@ function ReturnToPreferredRow(props: ReturnToPreferredRowProps): ReactNode {
       <div
         className={cn("min-w-[50%] flex-1 space-y-1", SETTINGS_ROW_STACK.label)}
       >
-        <div className="font-medium text-foreground">
+        <div id={headingId} className="font-medium text-foreground">
           When the original provider&apos;s limit resets
         </div>
-        <p className="max-w-[72ch] text-pretty text-ui-sm text-muted-foreground">
+        <p
+          id={descriptionId}
+          className="max-w-[72ch] text-pretty text-ui-sm text-muted-foreground"
+        >
           Switching back costs a fresh session too, so this is a choice rather
           than a default.
         </p>
       </div>
       <div className={cn("ml-auto", SETTINGS_ROW_STACK.control)}>
+        {/* The radio group carries the SETTING's name and its caveat. Without
+            these two the group had no name at all: each radio said "Ask me" or
+            "Stay on the fallback" with nothing to say what question it was
+            answering, which for the keyboard is three unexplained choices in
+            the middle of a page of switches. */}
         <RadioGroup
           value={policy.returnToPreferred}
+          aria-labelledby={headingId}
+          aria-describedby={descriptionId}
           onValueChange={(value) => {
             const next = returnToPreferredValue(value);
             if (next === null) return;
@@ -186,6 +202,20 @@ function ReturnToPreferredRow(props: ReturnToPreferredRowProps): ReactNode {
               <RadioGroupItem
                 value={value}
                 id={`fallback-return-${value}`}
+                // The option's own consequence, where it has one - which in
+                // practice is `auto`, the arm whose cost ("Starts a fresh
+                // session and moves queued messages back") is the whole reason
+                // this row is radios instead of a Select: it has to be
+                // readable BEFORE the choice is made, and a paragraph sitting
+                // visually beside the radio is not readable before the choice
+                // by anyone navigating by control. Dropped where an option has
+                // no consequence paragraph rather than pointing at an element
+                // that is not rendered.
+                aria-describedby={
+                  copy.description === null
+                    ? undefined
+                    : `fallback-return-${value}-description`
+                }
                 className="mt-0.5"
               />
               <div className="space-y-0.5">
@@ -196,7 +226,15 @@ function ReturnToPreferredRow(props: ReturnToPreferredRowProps): ReactNode {
                   {copy.label}
                 </Label>
                 {copy.description === null ? null : (
-                  <p className="text-ui-sm text-muted-foreground">
+                  // The id is derived from the option's own value rather than
+                  // from `useId`, matching the radio's `id` two lines up: both
+                  // are inside a `map`, where a hook cannot go, and the copy
+                  // map's keys are the wire union so they are unique by
+                  // construction.
+                  <p
+                    id={`fallback-return-${value}-description`}
+                    className="text-ui-sm text-muted-foreground"
+                  >
                     {copy.description}
                   </p>
                 )}

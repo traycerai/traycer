@@ -2,7 +2,6 @@ import {
   act,
   cleanup,
   fireEvent,
-  render,
   screen,
   waitFor,
   within,
@@ -274,7 +273,17 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersList: () => ({ data: undefined }),
 }));
 
+// R6: the card's Model family field is `FallbackModelFamilyInput`, which
+// queries the harness catalog via `useHostClient()` - unreachable outside a
+// `<HostRuntimeProvider>`, same as the mocks above. `data: undefined` is "no
+// cached catalog", under which the component renders a plain textbox with no
+// datalist, so every existing family-input query in this suite is unaffected.
+vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
+  useGuiHarnessModelsQuery: () => ({ data: undefined }),
+}));
+
 import { FallbackSettingsPanel } from "@/components/settings/panels/fallback-settings-panel";
+import { renderWithFallbackQueryClient } from "@/components/settings/panels/__tests__/fallback-settings-panel-test-support";
 
 function policy(overrides: Partial<FallbackPolicy>): FallbackPolicy {
   return { ...createDefaultFallbackPolicy(), enabled: true, ...overrides };
@@ -291,14 +300,13 @@ function respond(
 }
 
 function renderPanel() {
-  return render(
+  return renderWithFallbackQueryClient(
     <StrictMode>
       <FallbackSettingsPanel />
     </StrictMode>,
   );
 }
 
-/** Radix's select: open with the keyboard, then commit the named option. */
 /**
  * Let a reply that was just settled reach the reducer and the DOM.
  *
@@ -319,12 +327,35 @@ async function flushHostReplies(): Promise<void> {
   });
 }
 
+/** Radix's select: open with the keyboard, then commit the named option. */
 function openCombobox(name: string): void {
   fireEvent.keyDown(screen.getByRole("combobox", { name }), {
     key: "ArrowDown",
   });
 }
 
+/**
+ * Commit the named option. Radix closes its own portal on this keydown.
+ *
+ * ## #15, and why there is no Escape here
+ *
+ * The filed row said this helper leaves the Select portal open, with a
+ * measurement behind it: a `findByRole` after a `chooseOption` retrying to the
+ * full timeout over a body still carrying `data-scroll-locked="1"`, a
+ * `data-radix-focus-guard` span, and `data-aria-hidden="true"` across the panel
+ * subtree. That mattered because every call site in this file BUT the pin
+ * below queries by TESTID afterwards - fifteen of the sixteen - and testid
+ * queries never consult the accessibility tree, so an open portal could not
+ * announce itself through any query anybody used.
+ *
+ * **It does not reproduce.** An idempotent `Escape` was added here and then
+ * ablated away: with it removed, every assertion in the pin below still passes,
+ * including the three artefacts named in that measurement. So Radix's own Enter
+ * handling does unmount the portal in this environment, the Escape was inert,
+ * and it is gone rather than left in as an unfalsifiable guard. The pin stays -
+ * it is the standing check, and if a future Radix or jsdom reintroduces the
+ * leak it reddens and the one-line close comes back with a live reason.
+ */
 function chooseOption(name: string): void {
   const item = screen.getByRole("option", { name });
   fireEvent.focus(item);
@@ -537,7 +568,14 @@ describe("FallbackSettingsPanel - a refused reset reports under the danger zone"
     const dangerError = await within(dangerZone).findByTestId(
       "fallback-host-error",
     );
-    expect(dangerError.textContent).toContain("Couldn't save: reset refused");
+    expect(dangerError.textContent).toContain(
+      "Couldn't reset these settings: reset refused",
+    );
+    // Row #16: a refused RESET must not be reported in the vocabulary of an
+    // ordinary save. Falsification: hard-code `refusalPrefix` to always
+    // return "Couldn't save" - this assertion catches it even though the
+    // `toContain` above would still pass on a longer, still-wrong string.
+    expect(dangerError.textContent).not.toContain("Couldn't save");
 
     // The stale "behavior" error from before the reset must not remain
     // rendered anywhere - only one status line is ever active at a time, and
@@ -594,7 +632,11 @@ describe("FallbackSettingsPanel - a refused reset reports under the danger zone"
     expect(
       (await within(dangerZone).findByTestId("fallback-host-error"))
         .textContent,
-    ).toContain("Couldn't save: reset refused");
+    ).toContain("Couldn't reset these settings: reset refused");
+    expect(
+      (await within(dangerZone).findByTestId("fallback-host-error"))
+        .textContent,
+    ).not.toContain("Couldn't save");
 
     // Falsification: delete the second `useEffect` in `fallback-danger-zone.tsx`
     // (the one keyed on `isPending`). Nothing then moves focus after the
@@ -1257,21 +1299,18 @@ describe("FallbackSettingsPanel - F18 Undo restores exactly the deleted row on t
     // The revert restored it.
     expect(screen.getByTestId("fallback-tier-group-fast")).toBeDefined();
 
-    // Falsification: drop the `group.id === inverse.group.id` half of the
-    // guard in `applyGroupsInverse` (`fallback-tier-group-keys.ts`). The stale
-    // `draftKey` no longer matches anything, so the inverse inserts a SECOND
-    // "fast": the draft becomes two groups with one name, the commit is
-    // refused by local validation, and the user is left with a duplicate row
-    // for pressing Undo on a deletion that had already been undone.
+    // Falsification: drop BOTH halves of the guard in `applyGroupsInverse`
+    // (`fallback-tier-group-keys.ts`) - the `inverse.generation !==
+    // identityGeneration` check AND the `group.id === inverse.group.id`
+    // check. In THIS sequence the generation guard alone already refuses:
+    // `revertKeyedGroups` re-seeds every identity here (the list changed
+    // SHAPE - one group vanished and came back), so the inverse's stamped
+    // generation is already stale by the time Undo is pressed, and the id
+    // check never runs. Dropping only the id check leaves this cell green;
+    // the id check is what the #10 cell below isolates (a RENAME defeats it
+    // without ever touching the generation).
     toastSuccess.mock.calls[0][1].action.onClick();
 
-    // Known open case, NOT covered here and tracked as followups row 10: if the
-    // user RENAMES the restored group before pressing Undo, neither the stale
-    // `draftKey` nor the id matches and the group is inserted again. Closing
-    // that needs the inverse to be invalidated when its deletion is rolled
-    // back - a generation on the keyed list - which is a new mechanism rather
-    // than a guard, and was deliberately not taken in this pass.
-    //
     // Nothing to put back, so nothing is sent: the only call is the refused
     // deletion itself.
     await waitFor(() => {
@@ -1283,6 +1322,80 @@ describe("FallbackSettingsPanel - F18 Undo restores exactly the deleted row on t
         .getAllByTestId(/^fallback-tier-group-/)
         .map((node) => node.getAttribute("data-testid")),
     ).toEqual(["fallback-tier-group-fast", "fallback-tier-group-cheap"]);
+  });
+
+  it("#10: Undo after a REFUSED deletion and a RENAME of the restored group does not add a third group", async () => {
+    // The case the R4 cell above deliberately did not cover: a RENAME between
+    // the revert and the Undo. `revertKeyedGroups` already re-seeded every
+    // identity once (the delete's revert changed shape), so the toast's
+    // inverse is stale by generation alone - but this cell is what proves
+    // that matters, because the rename ALSO defeats the id check on its own:
+    // after renaming "fast" to "fastest", no group on screen has id "fast"
+    // any more, so `group.id === inverse.group.id` cannot catch the
+    // re-insertion either. Only the generation guard is left standing.
+    fallbackMocks.queryData = respond(
+      policy({
+        tierGroups: [
+          { id: "fast", candidates: [] },
+          { id: "cheap", candidates: [] },
+        ],
+      }),
+    );
+    fallbackMocks.setMutateAsync
+      .mockRejectedValueOnce(
+        new HostRpcError({
+          code: "RPC_ERROR",
+          message: "groups are locked",
+          requestId: "req-10a",
+          method: "providers.fallbackPolicy.set",
+          fatalDetails: null,
+        }),
+      )
+      .mockImplementation((input) => Promise.resolve({ policy: input.policy }));
+    renderPanel();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Delete group" })[0]);
+    await screen.findByTestId("fallback-host-error");
+    expect(screen.getByTestId("fallback-tier-group-fast")).toBeDefined();
+
+    // Rename the restored group. The commit-on-blur rule (R6, above) means
+    // this is a SECOND, successful save - distinct from the refused deletion.
+    const nameInput =
+      screen.getAllByLabelText<HTMLInputElement>("Group name")[0];
+    fireEvent.change(nameInput, { target: { value: "fastest" } });
+    fireEvent.blur(nameInput);
+    await waitFor(() => {
+      expect(fallbackMocks.setMutateAsync).toHaveBeenCalledTimes(2);
+    });
+    expect(screen.queryByTestId("fallback-tier-group-fast")).toBeNull();
+    expect(screen.getByTestId("fallback-tier-group-fastest")).toBeDefined();
+
+    // Falsification: drop the `inverse.generation !== identityGeneration`
+    // guard from `applyGroupsInverse`. Neither the stale `draftKey` nor the
+    // old "fast" id matches anything in the current list (it is "fastest"
+    // now), so the inverse inserts a THIRD group named "fast" - two groups
+    // survive validation (the names are all distinct), the insertion is NOT
+    // refused, and a THIRD save goes out.
+    toastSuccess.mock.calls[0][1].action.onClick();
+
+    // No new commit: the guard refuses the stale inverse outright, so
+    // `applyGroupsInverse` returns the same reference and `undoGroupsChange`
+    // never calls `commit`.
+    //
+    // FLUSH first, then assert. `waitFor(() => expect(…).toHaveBeenCalledTimes(2))`
+    // was the obvious spelling and it is vacuous here: the count is already 2
+    // when Undo is pressed, so the poll succeeds on its first tick and returns
+    // before a third call could ever be queued - the assertion would hold
+    // whether or not the guard worked. An explicit flush gives the update its
+    // chance to land and only then asks.
+    await flushHostReplies();
+    expect(fallbackMocks.setMutateAsync).toHaveBeenCalledTimes(2);
+    expect(screen.queryByTestId("fallback-local-error")).toBeNull();
+    expect(
+      screen
+        .getAllByTestId(/^fallback-tier-group-/)
+        .map((node) => node.getAttribute("data-testid")),
+    ).toEqual(["fallback-tier-group-fastest", "fallback-tier-group-cheap"]);
   });
 });
 
@@ -2242,7 +2355,7 @@ describe("FallbackSettingsPanel - R9/R10 what the page SAYS when two obligations
     });
     expect(
       (await screen.findByTestId("fallback-local-error")).textContent,
-    ).toContain("A model needs a family name.");
+    ).toContain("Model 1 in “fast” needs a family name.");
 
     // A's reply is lost. It carried revision 1 and has never seen the empty
     // family field, so it has judged nothing the user is looking at.
@@ -2254,7 +2367,7 @@ describe("FallbackSettingsPanel - R9/R10 what the page SAYS when two obligations
     // field with nothing beside it and reads as accepted.
     expect(
       (await screen.findByTestId("fallback-local-error")).textContent,
-    ).toContain("A model needs a family name.");
+    ).toContain("Model 1 in “fast” needs a family name.");
     expect(screen.getByLabelText<HTMLInputElement>("Model family").value).toBe(
       "",
     );
@@ -3253,7 +3366,7 @@ describe("FallbackSettingsPanel - eighth pass: a sentence describes the thing it
     });
     expect(
       (await screen.findByTestId("fallback-local-error")).textContent,
-    ).toContain("A model needs a family name.");
+    ).toContain("Model 1 in “fast” needs a family name.");
 
     fallbackMocks.resetMutateAsync.mockRejectedValueOnce(lostTheReply());
     fallbackMocks.refetchMock.mockResolvedValue({
@@ -3326,6 +3439,39 @@ describe("FallbackSettingsPanel - eighth pass: a sentence describes the thing it
     expect(notice.textContent).toContain("what was loaded");
     expect(notice.textContent).toContain("nothing has been changed since");
     expect(notice.textContent).not.toContain("a newer edit");
+  });
+
+  it("#16: a refused RESTORE reports 'Couldn't restore the default groups', not 'Couldn't save'", async () => {
+    // Same empty-groups setup as the lost-reply RESTORE pin above, but the
+    // host actually ANSWERS and refuses this time - `refusalPrefix("restore")`
+    // rather than the unknown-outcome sentence.
+    fallbackMocks.queryData = respond(
+      policy({ enabled: false, graceWindowSeconds: 15, tierGroups: [] }),
+    );
+    renderPanel();
+
+    fallbackMocks.restoreMutateAsync.mockRejectedValueOnce(
+      new HostRpcError({
+        code: "RPC_ERROR",
+        message: "restore refused",
+        requestId: "req-restore-refused",
+        method: "providers.fallbackPolicy.restoreTierGroups",
+        fatalDetails: null,
+      }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Restore the default groups" }),
+    );
+    await flushHostReplies();
+
+    const notice = await screen.findByTestId("fallback-host-error");
+    // Falsification: hard-code `refusalPrefix` to always return "Couldn't
+    // save" - this assertion catches it even though the plain reason text
+    // ("restore refused") would still appear in a longer, still-wrong string.
+    expect(notice.textContent).toContain(
+      "Couldn't restore the default groups: restore refused",
+    );
+    expect(notice.textContent).not.toContain("Couldn't save");
   });
 });
 
@@ -3450,7 +3596,7 @@ describe("FallbackSettingsPanel - ninth pass: every sentence derives from the ma
     });
     expect(
       (await screen.findByTestId("fallback-local-error")).textContent,
-    ).toContain("A model needs a family name.");
+    ).toContain("Model 1 in “fast” needs a family name.");
 
     fallbackMocks.resetMutateAsync.mockRejectedValueOnce(lostTheReply());
     fallbackMocks.refetchMock.mockResolvedValue({
@@ -3475,7 +3621,7 @@ describe("FallbackSettingsPanel - ninth pass: every sentence derives from the ma
     // BOTH alerts, asserted together: the eighth-pass reset pin checked the
     // local one only BEFORE the reset, which is why this survived it.
     expect(screen.getByTestId("fallback-local-error").textContent).toContain(
-      "A model needs a family name.",
+      "Model 1 in “fast” needs a family name.",
     );
     expect(screen.getByLabelText<HTMLInputElement>("Model family").value).toBe(
       "",
@@ -3739,7 +3885,7 @@ describe("FallbackSettingsPanel - tenth pass: the state model's last three gaps"
     fireEvent.click(screen.getByRole("button", { name: "Add a model" }));
     expect(
       (await screen.findByTestId("fallback-local-error")).textContent,
-    ).toContain("A model needs a family name.");
+    ).toContain("Model 2 in “fast” needs a family name.");
 
     // The reset is refused. It carried defaults; it never carried C.
     fallbackMocks.resetMutateAsync.mockRejectedValueOnce(
@@ -3765,7 +3911,7 @@ describe("FallbackSettingsPanel - tenth pass: the state model's last three gaps"
       screen.getAllByLabelText<HTMLInputElement>("Model family").length,
     ).toBeGreaterThan(1);
     expect(screen.getByTestId("fallback-local-error").textContent).toContain(
-      "A model needs a family name.",
+      "Model 2 in “fast” needs a family name.",
     );
   });
 
@@ -3880,4 +4026,337 @@ describe("FallbackSettingsPanel - tenth pass: the state model's last three gaps"
       "What's on screen is a different change the host has confirmed, and it is in force.",
     );
   });
+});
+
+describe("FallbackSettingsPanel - #15 chooseOption leaves the page queryable by role", () => {
+  it("a ROLE query for controls OUTSIDE the Select resolves after choosing an option", async () => {
+    fallbackMocks.queryData = respond(policy({ maxWaitMinutes: 360 }));
+    fallbackMocks.setMutateAsync.mockImplementation((input) =>
+      Promise.resolve({ policy: input.policy }),
+    );
+    renderPanel();
+
+    openCombobox("Longest wait for a reset");
+    chooseOption("1 day");
+    await flushHostReplies();
+
+    // The load-bearing queries: by ROLE, for two controls that live outside
+    // the Select's portal. An open portal marks the rest of the document
+    // `aria-hidden`, and `getByRole` skips hidden subtrees by default, so both
+    // of these would throw while the `getByTestId` calls the other fifteen
+    // sites use kept working. That asymmetry is the whole finding.
+    expect(
+      screen.getByRole("switch", { name: "Automatic fallback" }),
+    ).toBeDefined();
+    expect(screen.getByRole("button", { name: "Reset" })).toBeDefined();
+    // And the list is really unmounted, not merely still reachable.
+    expect(screen.queryByRole("option", { name: "1 day" })).toBeNull();
+    // The three artefacts the filed row's own measurement printed, asserted
+    // directly. Its evidence was a `findByRole` retrying to the full timeout
+    // over a body that still carried `data-scroll-locked="1"`, a
+    // `data-radix-focus-guard` span, and `data-aria-hidden="true"` on the whole
+    // panel subtree. Checking them by name is a stronger statement than the
+    // role queries above, which only prove SOME accessible path exists: these
+    // say the scroll lock was released and no aria-hidden veil is left over the
+    // page.
+    expect(document.body.hasAttribute("data-scroll-locked")).toBe(false);
+    expect(document.querySelector("[data-radix-focus-guard]")).toBeNull();
+    expect(document.querySelector('[data-aria-hidden="true"]')).toBeNull();
+    // The value was committed, so this is not a cell that passes by never
+    // having opened the Select at all.
+    expect(
+      screen.getByRole("combobox", { name: "Longest wait for a reset" })
+        .textContent,
+    ).toContain("1 day");
+
+    // This cell is a STANDING check, not a falsifier for a fix - there is no
+    // fix left to falsify. `chooseOption` briefly carried an idempotent Escape
+    // to force the portal shut; ablating it away changed nothing here, so the
+    // portal was already closing and the Escape came out. See `chooseOption`.
+    //
+    // What would redden this: a Radix or jsdom upgrade that defers the portal's
+    // unmount past the next query, which is the state the filed row described
+    // and this environment no longer produces. The three attribute assertions
+    // above are the ones that would catch it first, because they name the leak
+    // itself rather than a consequence of it.
+    //
+    // Do NOT convert this cell to testid queries. Its whole value is that it
+    // asks by role, which is the only kind of query the leak was ever visible
+    // to - the other fifteen `chooseOption` call sites in this file use testid
+    // and would stay green through a total regression.
+  });
+});
+
+describe("FallbackSettingsPanel - #17 a refusal consequence takes the SAME authority input as the display", () => {
+  function lostTheReply(): HostTransportFailureError {
+    return new HostTransportFailureError({
+      code: "RPC_ERROR",
+      message: "lost the connection",
+      requestId: "req-17-unknown",
+      method: "providers.fallbackPolicy.set",
+      fatalDetails: null,
+    });
+  }
+
+  function refusedByHost(message: string): HostRpcError {
+    return new HostRpcError({
+      code: "RPC_ERROR",
+      message,
+      requestId: "req-17-refused",
+      method: "providers.fallbackPolicy.set",
+      fatalDetails: null,
+    });
+  }
+
+  function deferred(): {
+    readonly promise: Promise<ProvidersFallbackPolicySetResponse>;
+    resolveWith: (value: FallbackPolicy) => void;
+    rejectWith: (error: Error) => void;
+  } {
+    let resolveWith = (_value: FallbackPolicy): void => {};
+    let rejectWith = (_error: Error): void => {};
+    const promise = new Promise<ProvidersFallbackPolicySetResponse>(
+      (resolve, reject) => {
+        resolveWith = (value) => resolve({ policy: value });
+        rejectWith = reject;
+      },
+    );
+    promise.catch(() => {});
+    return { promise, resolveWith, rejectWith };
+  }
+
+  function automaticFallback(): HTMLElement {
+    return screen.getByRole("switch", { name: "Automatic fallback" });
+  }
+
+  /**
+   * The four steps that put `unverifiedHostRow` on while `persistedUnverified`
+   * is OFF - the state both cells below need, and the reason #17 exists.
+   *
+   * `persistedUnverified` is the narrower loss of authority: a reset the host
+   * CONFIRMED whose read-back failed. Here the reset's own REPLY is lost, so
+   * nothing ever confirmed it, `unrefreshedReset` stays null and
+   * `persistedUnverified` is false - while the host's row is every bit as
+   * unknown, because the reset may have landed anyway. The refusal consequences
+   * read only `persistedUnverified` for a whole pass, which is why they claimed
+   * "still in force" over a row nobody had read.
+   *
+   * The successful draft save is load-bearing, not scenery: it discharges the
+   * `unknownSave` ticket (so the notice below is a REFUSAL rather than an
+   * `unknown`) while deliberately NOT discharging the row obligation, since a
+   * save dispatched after a lost reset can still have been overwritten by it.
+   */
+  async function resetReplyLostThenOneGoodSave(): Promise<void> {
+    fallbackMocks.resetMutateAsync.mockRejectedValueOnce(lostTheReply());
+    // The read-back FAILS, which is what keeps `persistedUnverified` false.
+    fallbackMocks.refetchMock.mockResolvedValue({
+      isSuccess: false,
+      data: fallbackMocks.queryData,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+    await flushHostReplies();
+
+    const good = deferred();
+    fallbackMocks.setMutateAsync.mockImplementationOnce(() => good.promise);
+    fireEvent.click(automaticFallback());
+    good.resolveWith(policy({ enabled: true, graceWindowSeconds: 15 }));
+    await flushHostReplies();
+  }
+
+  it("refused-reverted: the revert does not call the restored values 'in force' while a reset's outcome is unknown", async () => {
+    fallbackMocks.queryData = respond(
+      policy({ enabled: false, graceWindowSeconds: 15 }),
+    );
+    renderPanel();
+    await resetReplyLostThenOneGoodSave();
+
+    // A third save, refused on its OWN revision with no edit after it, so the
+    // reducer REVERTS to `persisted` and the outcome is `refused-reverted`.
+    const refused = deferred();
+    fallbackMocks.setMutateAsync.mockImplementationOnce(() => refused.promise);
+    fireEvent.click(automaticFallback());
+    refused.rejectWith(
+      refusedByHost("automatic fallback can't be enabled here"),
+    );
+    await flushHostReplies();
+
+    const notice = await screen.findByTestId("fallback-host-error");
+    // Falsification: drop the `status.authorityInvalidated !== null` branch
+    // from `saveNoticeConsequence`'s `refused-reverted` arm. The arm falls
+    // through to "Your last saved settings are back on screen and still in
+    // force." - a claim about the host's row made while an unanswered reset may
+    // already have replaced it, and with no staleness banner to contradict it
+    // (that banner needs a CONFIRMED reset, which this sequence never had).
+    expect(notice.textContent).toContain(
+      "Your last saved settings are back on screen; a reset is also outstanding whose result is unknown, so what the host has now hasn't been re-read.",
+    );
+    expect(notice.textContent).not.toContain("still in force");
+    // The account is ORDER-FREE. A lost reply is not dated: this state knows a
+    // refusal happened and knows a reset is outstanding, and cannot know which
+    // the host applied first. Both orderings were written and both were false
+    // in some reachable sequence, so neither wording may appear.
+    expect(notice.textContent).not.toContain("before the");
+    expect(notice.textContent).not.toContain("since then");
+    // Not the NARROWER sibling: `persistedUnverified` is false here, so the
+    // pre-reset rollback account must not be what fires.
+    expect(notice.textContent).not.toContain(
+      "still the settings from before the reset",
+    );
+    expect(screen.queryByTestId("fallback-reset-unrefreshed")).toBeNull();
+  });
+
+  it("refused-kept: a confirmed display is not called 'in force' either, on the same evidence", async () => {
+    // The second consequence arm, reached independently of the first. Both had
+    // to be fixed and each needs its own sequence: `refused-reverted` is a
+    // refusal on the DISPLAY's revision, this one is a refusal on an older one
+    // whose values the host has since confirmed.
+    fallbackMocks.queryData = respond(
+      policy({ enabled: false, graceWindowSeconds: 15 }),
+    );
+    renderPanel();
+    await resetReplyLostThenOneGoodSave();
+
+    // An older save is left in flight...
+    const older = deferred();
+    fallbackMocks.setMutateAsync.mockImplementationOnce(() => older.promise);
+    fireEvent.click(automaticFallback());
+    await flushHostReplies();
+    // ...and the user puts the switch back, which sends a NEWER save that the
+    // host confirms. The display is now equal to `persisted` again, so
+    // `draftConfirmed` holds while the older request is still outstanding.
+    const back = deferred();
+    fallbackMocks.setMutateAsync.mockImplementationOnce(() => back.promise);
+    fireEvent.click(automaticFallback());
+    back.resolveWith(policy({ enabled: true, graceWindowSeconds: 15 }));
+    await flushHostReplies();
+
+    // The older refusal arrives last, judging a draft two edits old, so the
+    // reducer KEEPS what is on screen.
+    older.rejectWith(refusedByHost("automatic fallback can't be enabled here"));
+    await flushHostReplies();
+
+    const notice = await screen.findByTestId("fallback-host-error");
+    // Falsification: drop the `status.authorityInvalidated !== null` branch
+    // from the `draftConfirmed` half of `saveNoticeConsequence`'s
+    // `refused-kept` arm. It then ends "...and it is in force." over the same
+    // unread row. Note the two branches are separate edits to separate arms:
+    // dropping only the `refused-reverted` one leaves THIS cell green, which is
+    // why both cells exist rather than one.
+    expect(notice.textContent).toContain("This change wasn't saved.");
+    expect(notice.textContent).toContain(
+      "What's on screen is a different change the host has confirmed; a reset is also outstanding whose result is unknown, so what the host has now hasn't been re-read.",
+    );
+    expect(notice.textContent).not.toContain("and it is in force");
+    expect(notice.textContent).not.toContain(
+      "still the settings from before the reset",
+    );
+  });
+});
+
+describe("FallbackSettingsPanel - AX8: the master switch names its own consequence", () => {
+  it("the 'Automatic fallback' switch has an accessible description containing the in-flight-chats caveat", async () => {
+    fallbackMocks.queryData = respond(policy({}));
+    renderPanel();
+    const toggle = await screen.findByRole("switch", {
+      name: "Automatic fallback",
+    });
+    const describedBy = toggle.getAttribute("aria-describedby");
+    // Falsification: replace `<MasterFallbackToggle>` with a bare `<Switch>`
+    // carrying no `aria-describedby` - `describedBy` would then be `null` and
+    // the lookup below finds nothing.
+    expect(describedBy).not.toBeNull();
+    const description =
+      describedBy === null ? null : document.getElementById(describedBy);
+    expect(description?.textContent ?? "").toContain(
+      "Chats already waiting or switching finish on their own",
+    );
+  });
+});
+
+describe("FallbackSettingsPanel - R-OSS-2: reset completion must not steal focus mid-edit or save a half-typed draft", () => {
+  it("a Model family input focused while Reset is pending keeps its focus, and no draft save fires, when the reset is refused", async () => {
+    fallbackMocks.queryData = respond(
+      policy({
+        enabled: false,
+        graceWindowSeconds: 15,
+        tierGroups: [
+          {
+            id: "fast",
+            candidates: [
+              {
+                harnessId: "claude",
+                modelFamily: "sonnet",
+                reasoningEffort: null,
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    let rejectReset: (error: Error) => void = () => {};
+    fallbackMocks.resetMutateAsync.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectReset = reject;
+        }),
+    );
+    renderPanel();
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+    fireEvent.click(screen.getByTestId("confirm-action"));
+
+    // Let Radix's deferred `onCloseAutoFocus` run FIRST, so the user's move to
+    // the field happens after the dialog has spent its restoration attempt on
+    // the now-disabled Reset button. Focusing before it fires would leave the
+    // cell asserting against whatever that deferred callback did last.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    // Reset is now pending, and the rest of the editor stays interactive.
+    // Focus the family field and type an incomplete (half-finished) value,
+    // but do NOT blur it - the user is still mid-edit.
+    //
+    // `familyInput.focus()`, NOT `fireEvent.focus(familyInput)`. The latter
+    // dispatches a focus EVENT without moving `document.activeElement` - jsdom
+    // only reassigns the active element for the real DOM method - so the
+    // original spelling left focus on `document.body` and the assertion below
+    // failed on the fixture rather than on the behaviour. Worse, had that
+    // assertion not been there the cell would have gone on to "prove" that the
+    // guard preserved a focus the test never established.
+    const familyInput = screen.getByLabelText<HTMLInputElement>("Model family");
+    familyInput.focus();
+    fireEvent.change(familyInput, { target: { value: "son" } });
+    expect(document.activeElement).toBe(familyInput);
+
+    rejectReset(
+      new HostRpcError({
+        code: "RPC_ERROR",
+        message: "reset refused",
+        requestId: "req-oss2",
+        method: "providers.fallbackPolicy.reset",
+        fatalDetails: null,
+      }),
+    );
+    await flushHostReplies();
+
+    // Falsification: delete the `active !== null && active !== document.body`
+    // guard in `fallback-danger-zone.tsx`'s settle effect. The unconditional
+    // `resetButtonRef.current?.focus()` then forces a blur on the family
+    // field, which fires `CandidateRow`'s commit-on-leave and dispatches a
+    // draft save carrying the half-typed "son" - both assertions below fail
+    // together.
+    expect(document.activeElement).toBe(familyInput);
+    expect(fallbackMocks.setMutateAsync).not.toHaveBeenCalled();
+  });
+
+  // The existing "R3" cell at describe("FallbackSettingsPanel - a refused
+  // reset reports under the danger zone") - "a reset refused AFTER the
+  // dialog has closed leaves the keyboard on the enabled Reset button, not
+  // on the body" - is the body -> Reset RECOVERY case this guard's OTHER
+  // branch exists for (focus on `document.body`, the shared dialog's own
+  // silent no-op, when the refusal lands). Checked: it is unchanged by this
+  // fix and stays green, since its focus is on `document.body` when the
+  // refusal lands - the one state the guard still restores from.
 });

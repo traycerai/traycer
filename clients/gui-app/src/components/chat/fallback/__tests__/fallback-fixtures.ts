@@ -14,6 +14,10 @@ import type {
   FallbackTargetSkip,
 } from "@traycer/protocol/host/chat-fallback";
 import type { AgentFailure } from "@traycer/protocol/persistence/epic/content-blocks";
+import type {
+  ProviderProfile,
+  ProviderProfileRateLimitStatus,
+} from "@traycer/protocol/host/provider-schemas";
 
 /**
  * Fixture builders for provider-fallback GUI tests.
@@ -238,6 +242,42 @@ export function fallbackModelTarget(input: {
     warnings: [...input.warnings],
     selectable: input.selectable,
     skip: input.skip,
+  };
+}
+
+/**
+ * A `ProviderProfile`, for surfaces that need a real one rather than a cast.
+ *
+ * Mirrors the builder in `use-profile-rate-limit-switch-prompt.test.tsx`: the
+ * two optional v8.0 fields (`launchCommand`, `reusedTombstone`) are left off
+ * rather than defaulted, matching what an old host build omits.
+ */
+export function providerProfile(input: {
+  readonly profileId: string;
+  readonly kind: "ambient" | "managed";
+  readonly label: string;
+  readonly authenticated: boolean;
+}): ProviderProfile {
+  const rateLimitStatus: ProviderProfileRateLimitStatus = "unknown";
+  return {
+    profileId: input.profileId,
+    enabled: true,
+    kind: input.kind,
+    authType: "oauth",
+    label: input.label,
+    auth: {
+      status: input.authenticated ? "authenticated" : "unauthenticated",
+      badgeText: null,
+      label: null,
+      detail: null,
+    },
+    identity: null,
+    usageUpdatedAt: null,
+    rateLimitStatus,
+    rateLimitLimitedScopes: null,
+    duplicateOfProfileId: null,
+    accentColor: null,
+    ambientDriftNotice: null,
   };
 }
 

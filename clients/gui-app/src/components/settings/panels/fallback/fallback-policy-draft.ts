@@ -346,6 +346,85 @@ export interface FallbackPolicyDraftState {
    * been overwritten by it.
    */
   readonly unverifiedHostRow: FallbackSaveCarries | null;
+  /**
+   * The revision at which this reducer put an AUTHORITATIVE HOST POLICY in the
+   * controls, or `null`.
+   *
+   * The other way the display can be a value the user did not author, beside
+   * {@link FallbackPolicyDraftState.refusedDraft} - and the two are read
+   * together, never apart, through {@link draftIsNotUserAuthored}. A rollback
+   * is a value this reducer put back; an ADOPTION is a value this reducer took
+   * from the host. Both are screens nobody typed, and every arm that asks "may
+   * I replace what is on screen with the row the host has just told me about?"
+   * has to answer yes to both.
+   *
+   * It exists because `refusedDraft` was carrying that question alone and is
+   * cleared by the very branch that adopts. The correcting rollback clears the
+   * refusal marker (correctly - the value on screen is no longer the refused
+   * one) and left nothing in its place, so a SECOND newer reply saw an
+   * unmarked display, read it as the user's own edit, and took the moved-on
+   * arm: `persisted` advanced to that reply's policy while the controls kept
+   * the first one, and `confirmedViewRevision` - stamped by the first adoption
+   * and never moved - went on certifying the display as the host's row. The
+   * page then said the stale controls were in force, with no reset, failed read
+   * or lost reply anywhere in the sequence.
+   *
+   * Written at ONE site: the correcting-rollback branch of
+   * {@link applySaveSucceeded}. The ordinary matching-revision echo
+   * deliberately does not write it - what that puts on screen is the user's own
+   * committed value, confirmed, which is a different thing from a policy
+   * adopted over what they were looking at.
+   *
+   * ## `applyReconciled`'s adopting arm also adopts, and is deliberately unmarked
+   *
+   * That arm writes the read-back's policy into the controls too, so the
+   * symmetry argument says it should stamp this field. It does not, and it does
+   * not need to, because it sets `persistedRevision` to `state.revision` in the
+   * same return. For any later `save-succeeded` to reach the branch that
+   * consults {@link draftIsNotUserAuthored} it needs BOTH
+   * `pending.revision !== state.revision` and
+   * `pending.revision >= state.persistedRevision` - which after that arm means
+   * `pending.revision > state.revision`. A pending save's revision is stamped
+   * at `save-started` and the revision only ever increases, so no outstanding
+   * reply can carry a higher one; every later reply lands on the
+   * matching-revision echo path instead. The one action that does move the
+   * revision is `edited`, and that is also the action that makes the display
+   * the user's own and clears this field. So the adopted-but-unmarked display
+   * cannot be overwritten.
+   *
+   * That protection is supplied by `persistedRevision`, in a different function,
+   * and this paragraph is the only place it is written down - which makes the
+   * next change to how that arm stamps `persistedRevision` load-bearing on
+   * this field. **A second write here was considered and declined:** no recipe
+   * could redden it, and an unfalsifiable write is what this file already
+   * refused when it declined a defensive `confirmedViewRevision` clear on the
+   * moved-on branch. The symmetry is worth less than the honesty about which
+   * mechanism is doing the work.
+   *
+   * Cleared by `edited` and by nothing else. Note the clear is belt-and-braces
+   * rather than load-bearing: {@link adoptedViewOnScreen} keys on the revision,
+   * and `edited` bumps the revision on both of its returns, so the marker goes
+   * stale on any edit whether or not it is nulled. Both mechanisms have to be
+   * removed together before the CONTROL cell in `fallback-policy-draft.test.ts`
+   * reddens - measured, as recipe 9c. The explicit clear stays because
+   * `refusedDraft: null` sits beside it doing the identical job for the
+   * identical reason, and that one is pre-existing: this is the file's idiom for
+   * "an edit revokes what the reducer put there", not a defensive habit.
+   */
+  readonly adoptedView: FallbackAdoptedView | null;
+}
+
+/**
+ * A host policy this reducer installed into the controls.
+ *
+ * A record with one field rather than a bare `number | null`, matching
+ * {@link FallbackRefusedDraft} beside it: the two are read as a pair and a
+ * shared shape keeps {@link adoptedViewOnScreen} and
+ * {@link refusedDraftOnScreen} answering the same question the same way.
+ */
+export interface FallbackAdoptedView {
+  /** The revision the adopted values sit at. */
+  readonly revision: number;
 }
 
 /**
@@ -536,12 +615,20 @@ export type FallbackSaveFailureOutcome = "refused" | "unknown";
  * to maintain it, which is the failure this batch has now produced four times.
  * Comparing the values cannot drift from the sentence it licenses.
  *
- * Field-by-field rather than a generic deep equal: the policy is seven fields
+ * Field-by-field rather than a generic deep equal: the policy is eight fields
  * of known shape, and a structural walk would have to decide what to do about
  * key order and `undefined` on its own. `reasonOverrides` absent and
  * `reasonOverrides` empty both mean "no per-reason overrides" and compare
  * EQUAL here, because they render identically and the user cannot tell them
  * apart.
+ *
+ * The cost of enumerating is that a NEW policy field is equal to itself by
+ * omission until someone adds it here, and every sentence this function
+ * licenses is then false about an edit to that field alone: it would compare
+ * equal to `persisted`, so `draftConfirmed` would call an unsaved change
+ * stored, and `displayDispatchState` would call it `loaded-unchanged`. Eight is
+ * the count as of `destinationExclusions`; if that number and the comparisons
+ * below disagree, the comparisons are what is wrong.
  */
 export function fallbackPolicyValuesEqual(
   a: FallbackPolicy,
@@ -557,7 +644,39 @@ export function fallbackPolicyValuesEqual(
   }
   if (!sameRungOrder(a.ladder, b.ladder)) return false;
   if (!sameTierGroups(a.tierGroups, b.tierGroups)) return false;
+  if (
+    !sameDestinationExclusions(a.destinationExclusions, b.destinationExclusions)
+  ) {
+    return false;
+  }
   return sameReasonOverrides(a.reasonOverrides, b.reasonOverrides);
+}
+
+/**
+ * Whether two policies exclude the same destinations.
+ *
+ * As a SET, unlike `ladder` beside it, and the difference is what the field
+ * means rather than a shortcut: the ladder's order is the order the engine
+ * walks, while an exclusion list is a membership test. Two lists naming the
+ * same providers in a different order render the same checkboxes and behave
+ * identically, so calling them different would report an edit nobody made -
+ * and the editor writes through a `Set`, which does not promise an order.
+ *
+ * Duplicates collapse for the same reason. They cannot be authored here, but a
+ * policy written elsewhere can carry them and the second copy changes nothing
+ * a user can see.
+ */
+function sameDestinationExclusions(
+  a: FallbackPolicy["destinationExclusions"],
+  b: FallbackPolicy["destinationExclusions"],
+): boolean {
+  const left = new Set(a);
+  const right = new Set(b);
+  if (left.size !== right.size) return false;
+  for (const harnessId of left) {
+    if (!right.has(harnessId)) return false;
+  }
+  return true;
 }
 
 function sameRungOrder(
@@ -985,25 +1104,41 @@ export function validateFallbackPolicyDraft(
   const parsed = fallbackPolicySchema.safeParse(draft);
   if (parsed.success) return { kind: "valid" };
   const issue = parsed.error.issues[0];
-  return { kind: "invalid", message: draftIssueMessage(issue.path) };
+  return { kind: "invalid", message: draftIssueMessage(issue.path, draft) };
 }
 
 /**
- * One sentence per constraint the user can actually violate.
+ * One sentence per constraint the user can actually violate, NAMING THE ROW it
+ * is about.
  *
  * Keyed on the failing path rather than on zod's own message, which names
  * fields and bounds in schema vocabulary ("Fallback rungs must be unique") that
  * this surface deliberately does not use.
+ *
+ * The row identity is AX8's half. Validation is whole-policy - one blank family
+ * name blocks every commit on the page, including the master switch - so the
+ * one error line a user gets has to say WHICH of a dozen rows is holding the
+ * page, and "A model needs a family name" does not. That is worst for the
+ * keyboard: the row is identifiable visually by where the error sits relative
+ * to the fields, and not at all by anything read aloud.
+ *
+ * The path carries the indices, so `draft` is the second argument - the names
+ * live in the policy, not in the issue.
  */
-function draftIssueMessage(path: ReadonlyArray<PropertyKey>): string {
-  const [head, , third, , fifth] = path;
+function draftIssueMessage(
+  path: ReadonlyArray<PropertyKey>,
+  draft: FallbackPolicy,
+): string {
+  const [head, second, third, fourth, fifth] = path;
   if (head === "tierGroups") {
-    if (fifth === "modelFamily") return "A model needs a family name.";
-    if (fifth === "reasoningEffort") {
-      return "An effort level can't be blank - pick one or leave it unset.";
+    if (fifth === "modelFamily") {
+      return `${candidateSubject(draft, second, fourth)} needs a family name.`;
     }
-    if (third === "id") return "A model group needs a name.";
-    return "Two model groups have the same name.";
+    if (fifth === "reasoningEffort") {
+      return `${candidateSubject(draft, second, fourth)} has a blank effort level - pick one, or leave it unset.`;
+    }
+    if (third === "id") return `${groupPosition(second)} needs a name.`;
+    return groupListIssueMessage(draft);
   }
   if (head === "ladder") return "Each step can be listed only once.";
   if (head === "reasonOverrides") {
@@ -1019,6 +1154,85 @@ function draftIssueMessage(path: ReadonlyArray<PropertyKey>): string {
   // wrong TYPE - but a sentence beats rendering a zod issue at a person if a
   // future control finds a way.
   return "That value can't be saved.";
+}
+
+/**
+ * The row an error is about, as a sentence subject: "Model 2 in “fast”".
+ *
+ * Position for the row and NAME for the group, which is not an inconsistency:
+ * a group has an editable name the user chose and can find on screen, while a
+ * candidate row has nothing but its provider and family - and the family is
+ * the field that is blank in the case this exists for, so naming the row by it
+ * would produce "The model called “” needs a family name".
+ *
+ * Positions are 1-based, because they are being read by a person counting rows
+ * rather than indexing an array.
+ */
+function candidateSubject(
+  draft: FallbackPolicy,
+  groupIndex: PropertyKey | undefined,
+  candidateIndex: PropertyKey | undefined,
+): string {
+  const row =
+    typeof candidateIndex === "number"
+      ? `Model ${candidateIndex + 1}`
+      : "A model";
+  const group = groupName(draft, groupIndex);
+  return group === null ? row : `${row} in ${group}`;
+}
+
+/**
+ * The group as the copy names it - its own name in quotes, or its POSITION
+ * when it has none to print.
+ *
+ * `null` rather than a sentence fragment when the index is not a number or is
+ * off the end of the list, so the caller drops the clause instead of writing
+ * "in group NaN". The range test is explicit rather than an `=== undefined`
+ * comparison for the reason this file states twice elsewhere:
+ * `noUncheckedIndexedAccess` is off, so an index read is typed as the element
+ * and that comparison reads as a test between types that cannot overlap.
+ */
+function groupName(
+  draft: FallbackPolicy,
+  index: PropertyKey | undefined,
+): string | null {
+  if (typeof index !== "number") return null;
+  if (index < 0 || index >= draft.tierGroups.length) return null;
+  const id = draft.tierGroups[index].id.trim();
+  return id === "" ? `group ${index + 1}` : `“${id}”`;
+}
+
+/**
+ * The blank-group-name case, which can only be named by POSITION - the name is
+ * the thing that is missing.
+ */
+function groupPosition(index: PropertyKey | undefined): string {
+  return typeof index === "number" ? `Group ${index + 1}` : "A model group";
+}
+
+/**
+ * A failure the schema reports against the tierGroups ARRAY rather than
+ * against one row.
+ *
+ * The uniqueness refine is the one a user reaches, and it is nameable: the
+ * refine carries no index, so the duplicate is found by walking the draft.
+ * Trimmed, because the refine runs on the PARSED groups whose ids are already
+ * trimmed, so " fast" and "fast" collide there and would not collide in an
+ * untrimmed walk here.
+ *
+ * The generic sentence is not dead code and is not the uniqueness case: this
+ * function is the fallthrough for every `tierGroups` path that is not one of
+ * the three named rows above, so a failure on a candidate field this copy has
+ * no sentence for lands here too.
+ */
+function groupListIssueMessage(draft: FallbackPolicy): string {
+  const seen = new Set<string>();
+  for (const group of draft.tierGroups) {
+    const id = group.id.trim();
+    if (seen.has(id)) return `Two model groups are both called “${id}”.`;
+    seen.add(id);
+  }
+  return "Two model groups have the same name.";
 }
 
 export function createFallbackPolicyDraftState(
@@ -1050,6 +1264,10 @@ export function createFallbackPolicyDraftState(
     // discharges the obligation: that read remounts the editor, so it arrives
     // here rather than as a transition.
     unverifiedHostRow: null,
+    // A fresh editor has adopted nothing: the values it holds came from its
+    // seed read, which `confirmedViewRevision` does not claim either. The
+    // marker is about a policy installed OVER something else.
+    adoptedView: null,
   };
 }
 
@@ -1147,13 +1365,22 @@ function applySaveSucceeded(
   // The echo answers a draft that has since moved on.
   if (pending.revision !== state.revision) {
     // ...unless what is on screen is not a draft the user moved on to, but a
-    // rollback this reducer performed when a DIFFERENT save was refused. That
-    // refusal reverted to `persisted` and said it was in force; this reply
-    // proves `persisted` was stale, so the rollback is showing a value the
-    // host does not have. Correct it, and the refusal notice becomes true
-    // again rather than being quietly dropped - the save really was refused,
-    // and the control really is showing what is stored.
-    if (outranksPersisted && draftIsRefused(state)) {
+    // value this reducer put there: a rollback it performed when a DIFFERENT
+    // save was refused, or a host policy it has already adopted. That refusal
+    // reverted to `persisted` and said it was in force; this reply proves
+    // `persisted` was stale, so the rollback is showing a value the host does
+    // not have. Correct it, and the refusal notice becomes true again rather
+    // than being quietly dropped - the save really was refused, and the
+    // control really is showing what is stored.
+    //
+    // The ADOPTED half is why this asks `draftIsNotUserAuthored` rather than
+    // `draftIsRefused`. This branch clears `refusedDraft` below, so the FIRST
+    // correction left the display unmarked and a second, newer reply fell
+    // through to the moved-on arm - advancing `persisted` past a display it
+    // had itself installed, while `confirmedViewRevision` went on certifying
+    // that display. Marking the adoption keeps the correction available for as
+    // long as the display is still not the user's, which is until they edit.
+    if (outranksPersisted && draftIsNotUserAuthored(state)) {
       return {
         ...state,
         ...persisted,
@@ -1169,6 +1396,11 @@ function applySaveSucceeded(
         hostError: hostErrorAfterDischarge,
         ...adoptPolicyIntoView(state, action.policy),
         refusedDraft: null,
+        // The display is STILL not the user's - it is this reply's policy now
+        // instead of the rollback - so the marker moves rather than going out
+        // with `refusedDraft`. Without this, one correction disarmed the
+        // branch that performed it.
+        adoptedView: { revision: state.revision },
         // Cleared HERE and not on the ordinary sibling below, which is the
         // split the walk's "already right" note missed. That note was about the
         // host holding an OLDER draft than the screen - true of the ordinary
@@ -1227,6 +1459,12 @@ function applySaveSucceeded(
     hostError: null,
     activeField: null,
     refusedDraft: null,
+    // `adoptedView` is deliberately left alone rather than cleared. This arm
+    // is only reachable with a marker standing when the request carried NO
+    // draft - a draft save needs an `edited`, which clears it - so what lands
+    // here is a reset or restore echo, which is as much a host policy this
+    // reducer installed as an adoption is. Clearing it would tell a later
+    // authoritative reply that the defaults on screen are the user's own work.
     lastConfirmedRequestId,
     // The echo is written to the controls just above, so the display and the
     // host's row agree at this revision.
@@ -1457,6 +1695,60 @@ export function refusedDraftOnScreen(
 }
 
 /**
+ * The adoption record IF it describes what the controls are showing right now.
+ *
+ * The same shape as {@link refusedDraftOnScreen} and for the same reason: a
+ * marker is about a revision, and an `edited` moves the revision, so "still on
+ * screen" is a comparison rather than a flag. Returns the record rather than a
+ * boolean so a later consumer that needs the revision does not have to read
+ * the field it came from.
+ */
+export function adoptedViewOnScreen(
+  state: FallbackPolicyDraftState,
+): FallbackAdoptedView | null {
+  if (state.adoptedView === null) return null;
+  return state.adoptedView.revision === state.revision
+    ? state.adoptedView
+    : null;
+}
+
+/**
+ * Whether the controls are showing something the USER DID NOT AUTHOR.
+ *
+ * The question every arm that installs an authoritative policy over the
+ * display actually asks, and the reason it is one function rather than a
+ * condition spelled out per branch. There are two ways to satisfy it - a
+ * refusal this reducer rolled back or left standing, and a host policy this
+ * reducer adopted - and while only ONE of them existed the two consumers
+ * looked identical; the moment the second arrived, a site that had not been
+ * updated would silently keep answering the narrower question.
+ *
+ * That is not hypothetical for either consumer:
+ *
+ *  - {@link applySaveSucceeded}'s correcting branch clears the refusal marker
+ *    when it adopts, so a SECOND newer reply saw an unmarked display and
+ *    advanced `persisted` past controls it had itself installed (the OSS
+ *    review's first P2);
+ *  - `reconciled`'s adopt gate is reachable with an ADOPTED display and no
+ *    refusal: a save's reply is lost at revision 2, an edit moves to revision
+ *    3, a later save is refused there, an OLDER save then succeeds and takes
+ *    the correcting branch - which adopts and clears `refusedDraft` while the
+ *    revision-2 ticket is still outstanding, because its own request id is
+ *    lower than the unanswered one. The read-back that follows finds revision
+ *    3 ≠ revision 2 and no refusal, so the narrower predicate sends it to the
+ *    moved-on arm, which stamps `persistedRevision` over an adopted display
+ *    and leaves `confirmedViewRevision` certifying values the host does not
+ *    hold.
+ */
+export function draftIsNotUserAuthored(
+  state: FallbackPolicyDraftState,
+): boolean {
+  return (
+    refusedDraftOnScreen(state) !== null || adoptedViewOnScreen(state) !== null
+  );
+}
+
+/**
  * The three view fields that follow an authoritative policy onto the screen.
  *
  * `revertKeyedGroups` and not `reconcileKeyedGroups`: this installs a list the
@@ -1574,6 +1866,10 @@ function applyEdited(
       // The user has typed: whatever was refused is no longer what is on
       // screen, so the refusal no longer describes it.
       refusedDraft: null,
+      // Same event, the other marker: an adopted policy the user has now
+      // typed over is their draft, and this is the ONE thing that clears it.
+      // It is what keeps a real intervening edit safe from a later reply.
+      adoptedView: null,
     };
   }
   return {
@@ -1585,6 +1881,7 @@ function applyEdited(
     localError: null,
     activeField: action.field,
     refusedDraft: null,
+    adoptedView: null,
   };
 }
 
@@ -1749,17 +2046,24 @@ function applyReconciled(
   // the panel is no longer making an unverified claim: `persisted` is now
   // authoritative, and their next commit settles the rest.
   //
-  // `draftIsRefused` is the exception, and without it this arm is where the
-  // read-back's answer goes to die. A later save can be REFUSED while this
-  // read is in flight, and neither of the two things that follow moves the
-  // revision: a rollback puts the then-`persisted` value on screen, and a
-  // refusal that keeps the draft (because this very ticket is outstanding)
-  // leaves the refused value on screen. Either way the revision check above
-  // reads "the user has moved on" about a screen the user did not author,
-  // and the read-back would then update `persisted` and clear the notice
-  // while leaving that display standing - no notice, and a control
+  // `draftIsNotUserAuthored` is the exception, and without it this arm is
+  // where the read-back's answer goes to die. A later save can be REFUSED
+  // while this read is in flight, and neither of the two things that follow
+  // moves the revision: a rollback puts the then-`persisted` value on screen,
+  // and a refusal that keeps the draft (because this very ticket is
+  // outstanding) leaves the refused value on screen. Either way the revision
+  // check above reads "the user has moved on" about a screen the user did not
+  // author, and the read-back would then update `persisted` and clear the
+  // notice while leaving that display standing - no notice, and a control
   // contradicting the row this very read just returned.
-  if (state.revision !== state.unknownSave.revision && !draftIsRefused(state)) {
+  //
+  // The ADOPTED case is the same defect one door over and is reachable
+  // independently - see {@link draftIsNotUserAuthored} for the sequence. Both
+  // sites ask through that one predicate so they cannot answer differently.
+  if (
+    state.revision !== state.unknownSave.revision &&
+    !draftIsNotUserAuthored(state)
+  ) {
     // No `confirmedViewRevision` here, and that is the distinction D330's
     // reducer pin holds: `persistedRevision` IS stamped just above, over a
     // draft the user is still typing and this editor never dispatched.

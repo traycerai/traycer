@@ -131,7 +131,7 @@ describe("TeardownDisclosure", () => {
       <TeardownDisclosure
         holders={[shell]}
         failures={{
-          [teardownHolderKey(shell)]: "shell still running",
+          [teardownHolderKey(shell, undefined)]: "shell still running",
         }}
         agentNames={undefined}
       />,

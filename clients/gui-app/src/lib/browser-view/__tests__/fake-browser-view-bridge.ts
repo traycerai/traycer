@@ -61,7 +61,7 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
     (change: BrowserViewSnapshotInvalidatedChange) => void
   >();
 
-  constructor(input?: { readonly saveLogins?: boolean }) {
+  constructor(input: { readonly saveLogins?: boolean } | undefined) {
     this.saveLoginsValue = input?.saveLogins ?? true;
   }
 

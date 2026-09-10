@@ -397,8 +397,8 @@ function BoundSurfaceTree(props: {
 function renderBoundSurface(
   kind: "chat" | "terminal-agent",
   bindingResolved: boolean,
-  onBindingCommitted: ((paths: ReadonlyArray<string>) => void) | null = null,
-  binding: WorktreeBinding = BINDING,
+  onBindingCommitted: ((paths: ReadonlyArray<string>) => void) | null,
+  binding: WorktreeBinding,
 ): { rerenderSurface: () => void } {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -464,7 +464,7 @@ it("keeps a dispatched new-worktree branch visible while the binding is unchange
     entries: [newWorktreeIntent("/repo/alpha", "feat-replacement")],
   };
 
-  renderBoundSurface("chat", true);
+  renderBoundSurface("chat", true, null, BINDING);
   fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
   const alphaRow = (await screen.findAllByTestId("folder-row")).find(
     (row) => row.getAttribute("data-path") === "/repo/alpha",
@@ -489,7 +489,7 @@ it("merges a one-folder re-pick over a multi-folder dispatched intent", async ()
     entries: [newWorktreeIntent("/repo/alpha", "feat-alpha-repicked")],
   });
 
-  renderBoundSurface("chat", true);
+  renderBoundSurface("chat", true, null, BINDING);
   fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
   const rows = await screen.findAllByTestId("folder-row");
   const branchFor = (workspacePath: string): string | null => {
@@ -509,7 +509,7 @@ describe.each(["chat", "terminal-agent"] as const)(
   "InEpicSurface (%s owner)",
   (kind) => {
     it("renders the primary pin read-only and offers NO Set-as-primary action on any bound row", async () => {
-      renderBoundSurface(kind, true);
+      renderBoundSurface(kind, true, null, BINDING);
 
       // Open the folder-rows popover from the collapsed summary.
       fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
@@ -535,7 +535,7 @@ describe.each(["chat", "terminal-agent"] as const)(
 );
 
 it("explains why a terminal agent's host selector is locked", async () => {
-  renderBoundSurface("terminal-agent", true);
+  renderBoundSurface("terminal-agent", true, null, BINDING);
 
   const switcher = screen.getByRole("button", { name: "Host: Test host" });
   expect(switcher.getAttribute("aria-disabled")).toBe("true");
@@ -548,7 +548,7 @@ it("explains why a terminal agent's host selector is locked", async () => {
 });
 
 it("uses the shared host switcher for a live chat", () => {
-  renderBoundSurface("chat", true);
+  renderBoundSurface("chat", true, null, BINDING);
 
   const switcher = screen.getByRole("button", { name: "Host: Test host" });
   const switcherSlot = switcher.parentElement?.parentElement;
@@ -563,14 +563,14 @@ it("uses the shared host switcher for a live chat", () => {
 });
 
 it("shows Recent folders in a live chat picker but not a terminal-agent binding", async () => {
-  renderBoundSurface("chat", true);
+  renderBoundSurface("chat", true, null, BINDING);
   fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
   expect(
     await screen.findByRole("button", { name: "Recent folders, 1" }),
   ).toBeTruthy();
 
   cleanup();
-  renderBoundSurface("terminal-agent", true);
+  renderBoundSurface("terminal-agent", true, null, BINDING);
   fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
   expect(
     screen.queryByRole("button", { name: "Recent folders, 1" }),
@@ -578,7 +578,7 @@ it("shows Recent folders in a live chat picker but not a terminal-agent binding"
 });
 
 it("keeps Recent unavailable until a chat binding snapshot resolves", () => {
-  renderBoundSurface("chat", false);
+  renderBoundSurface("chat", false, null, BINDING);
   fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
 
   expect(
@@ -588,7 +588,7 @@ it("keeps Recent unavailable until a chat binding snapshot resolves", () => {
 
 it("adds a Recent folder through the chat owner binding", async () => {
   mutationMocks.addBindingFolder.mockResolvedValue({});
-  renderBoundSurface("chat", true);
+  renderBoundSurface("chat", true, null, BINDING);
   fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
   fireEvent.click(
     await screen.findByRole("button", { name: "Recent folders, 1" }),
@@ -608,7 +608,7 @@ it("adds a Recent folder through the chat owner binding", async () => {
 });
 
 it("removes a chat folder only after moving it to Recent succeeds", async () => {
-  renderBoundSurface("chat", true);
+  renderBoundSurface("chat", true, null, BINDING);
   fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
   fireEvent.click(
     (
@@ -630,7 +630,7 @@ it("removes a chat folder only after moving it to Recent succeeds", async () => 
   cleanup();
   recentMocks.recordRecentAsync.mockRejectedValueOnce(new Error("nope"));
   mutationMocks.removeBindingFolder.mockClear();
-  renderBoundSurface("chat", true);
+  renderBoundSurface("chat", true, null, BINDING);
   fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
   fireEvent.click(
     (
@@ -676,7 +676,7 @@ it("refuses terminal Update when metadata regresses to unresolved", async () => 
     ],
   });
 
-  renderBoundSurface("terminal-agent", true);
+  renderBoundSurface("terminal-agent", true, null, BINDING);
   fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
   const update = await screen.findByRole("button", { name: "Update" });
   fireEvent.click(update);
@@ -706,7 +706,7 @@ const CHAT_STAGING_KEY = {
 
 function shellHolder(
   label: string,
-  ownerKind: WorktreeBusyHolder["ownerRef"]["ownerKind"] = "terminal-agent",
+  ownerKind: WorktreeBusyHolder["ownerRef"]["ownerKind"],
 ): WorktreeBusyHolder {
   return {
     ownerRef: {
@@ -735,17 +735,17 @@ function chatTurnHolder(label: string): WorktreeBusyHolder {
 
 function shellSnapshot(
   label: string,
-  commandId = "sh-1",
-  ownerKind: WorktreeBusyHolder["ownerRef"]["ownerKind"] = "terminal-agent",
+  commandId: string,
+  ownerKind: WorktreeBusyHolder["ownerRef"]["ownerKind"],
 ): OwnerTeardownSnapshot {
   const holder = shellHolder(label, ownerKind);
   return {
-    holders: [{ ...holder, holderKey: teardownHolderKey(holder) }],
+    holders: [{ ...holder, holderKey: teardownHolderKey(holder, undefined) }],
     stopTargets: [
       {
         kind: "supervised-shell",
         commandId,
-        holderKey: teardownHolderKey(holder),
+        holderKey: teardownHolderKey(holder, undefined),
       },
     ],
   };
@@ -802,7 +802,7 @@ function seedResolvedBindingMetadata(): void {
 async function openTerminalFolderPopover(): Promise<{
   rerenderSurface: () => void;
 }> {
-  const view = renderBoundSurface("terminal-agent", true);
+  const view = renderBoundSurface("terminal-agent", true, null, BINDING);
   fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
   await screen.findAllByTestId("folder-row");
   return view;
@@ -811,7 +811,7 @@ async function openTerminalFolderPopover(): Promise<{
 it("stages a TUI folder removal and discloses a shell under it on Update", async () => {
   teardownMocks.snapshot.mockImplementation((dropped: readonly string[]) =>
     dropped.includes("/repo/alpha")
-      ? shellSnapshot("npm run dev")
+      ? shellSnapshot("npm run dev", "sh-1", "terminal-agent")
       : { holders: [], stopTargets: [] },
   );
 
@@ -846,7 +846,9 @@ it("stages a TUI folder removal and discloses a shell under it on Update", async
 
 it("re-discloses when TUI staging mutates under an open confirmation", async () => {
   seedResolvedBindingMetadata();
-  teardownMocks.snapshot.mockImplementation(() => shellSnapshot("npm run dev"));
+  teardownMocks.snapshot.mockImplementation(() =>
+    shellSnapshot("npm run dev", "sh-1", "terminal-agent"),
+  );
   useWorktreeIntentStagingStore.getState().stageIntent(TERMINAL_STAGING_KEY, {
     entries: [newWorktreeIntent("/repo/alpha", "feat-a")],
   });
@@ -881,7 +883,9 @@ it("re-discloses when TUI staging mutates under an open confirmation", async () 
 
 it("commits the disclosed TUI draft when staging is unchanged", async () => {
   seedResolvedBindingMetadata();
-  teardownMocks.snapshot.mockImplementation(() => shellSnapshot("npm run dev"));
+  teardownMocks.snapshot.mockImplementation(() =>
+    shellSnapshot("npm run dev", "sh-1", "terminal-agent"),
+  );
   useWorktreeIntentStagingStore.getState().stageIntent(TERMINAL_STAGING_KEY, {
     entries: [newWorktreeIntent("/repo/alpha", "feat-a")],
   });
@@ -924,7 +928,9 @@ async function drainMicrotasks(): Promise<void> {
 
 it("awaits a disclosed shell stop before worktree.create", async () => {
   seedResolvedBindingMetadata();
-  teardownMocks.snapshot.mockImplementation(() => shellSnapshot("npm run dev"));
+  teardownMocks.snapshot.mockImplementation(() =>
+    shellSnapshot("npm run dev", "sh-1", "terminal-agent"),
+  );
   useWorktreeIntentStagingStore.getState().stageIntent(TERMINAL_STAGING_KEY, {
     entries: [newWorktreeIntent("/repo/alpha", "feat-a")],
   });
@@ -954,7 +960,9 @@ it("awaits a disclosed shell stop before worktree.create", async () => {
 
 it("keeps the dialog open and skips create when a disclosed stop fails", async () => {
   seedResolvedBindingMetadata();
-  teardownMocks.snapshot.mockImplementation(() => shellSnapshot("npm run dev"));
+  teardownMocks.snapshot.mockImplementation(() =>
+    shellSnapshot("npm run dev", "sh-1", "terminal-agent"),
+  );
   useWorktreeIntentStagingStore.getState().stageIntent(TERMINAL_STAGING_KEY, {
     entries: [newWorktreeIntent("/repo/alpha", "feat-a")],
   });
@@ -979,7 +987,7 @@ it("discloses idle-chat folder removal when a live shell is under the folder", a
       : { holders: [], stopTargets: [] },
   );
 
-  renderBoundSurface("chat", true);
+  renderBoundSurface("chat", true, null, BINDING);
   fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
   fireEvent.click(
     (
@@ -1064,13 +1072,13 @@ it("stops a chat turn once and does not re-stop expanded agent.stop-consequence 
   const shell = shellHolder("sleep 1", "chat");
   teardownMocks.snapshot.mockImplementation(() => ({
     holders: [
-      { ...turn, holderKey: teardownHolderKey(turn) },
-      { ...shell, holderKey: teardownHolderKey(shell) },
+      { ...turn, holderKey: teardownHolderKey(turn, undefined) },
+      { ...shell, holderKey: teardownHolderKey(shell, undefined) },
     ],
     stopTargets: [
       {
         kind: "chat-turn",
-        holderKey: teardownHolderKey(turn),
+        holderKey: teardownHolderKey(turn, undefined),
       },
     ],
   }));
@@ -1097,7 +1105,9 @@ it("stops a chat turn once and does not re-stop expanded agent.stop-consequence 
 
 it("does not apply a cancelled teardown after a newer confirm starts", async () => {
   seedResolvedBindingMetadata();
-  teardownMocks.snapshot.mockImplementation(() => shellSnapshot("npm run dev"));
+  teardownMocks.snapshot.mockImplementation(() =>
+    shellSnapshot("npm run dev", "sh-1", "terminal-agent"),
+  );
   useWorktreeIntentStagingStore.getState().stageIntent(TERMINAL_STAGING_KEY, {
     entries: [newWorktreeIntent("/repo/alpha", "feat-a")],
   });
@@ -1150,7 +1160,9 @@ it("does not apply a cancelled teardown after a newer confirm starts", async () 
 
 it("does not stop holders when a staged create cannot apply after confirm", async () => {
   seedResolvedBindingMetadata();
-  teardownMocks.snapshot.mockImplementation(() => shellSnapshot("npm run dev"));
+  teardownMocks.snapshot.mockImplementation(() =>
+    shellSnapshot("npm run dev", "sh-1", "terminal-agent"),
+  );
   useWorktreeIntentStagingStore.getState().stageIntent(TERMINAL_STAGING_KEY, {
     entries: [newWorktreeIntent("/repo/alpha", "feat-a")],
   });
@@ -1172,7 +1184,9 @@ it("does not stop holders when a staged create cannot apply after confirm", asyn
 
 it("does not apply remove or create if the user cancels during in-flight teardown", async () => {
   seedResolvedBindingMetadata();
-  teardownMocks.snapshot.mockImplementation(() => shellSnapshot("npm run dev"));
+  teardownMocks.snapshot.mockImplementation(() =>
+    shellSnapshot("npm run dev", "sh-1", "terminal-agent"),
+  );
   useWorktreeIntentStagingStore.getState().stageIntent(TERMINAL_STAGING_KEY, {
     entries: [newWorktreeIntent("/repo/alpha", "feat-a")],
   });
@@ -1209,7 +1223,7 @@ it("applies only the disclosed folder removal and leaves a staged draft intact",
     entries: [newWorktreeIntent("/repo/alpha", "feat-a")],
   });
 
-  renderBoundSurface("chat", true);
+  renderBoundSurface("chat", true, null, BINDING);
   fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
   fireEvent.click(
     (
@@ -1250,7 +1264,7 @@ it("restores a same-folder draft when a removal disclosure is dismissed", async 
     entries: [newWorktreeIntent("/repo/alpha", "feat-a")],
   });
 
-  renderBoundSurface("chat", true);
+  renderBoundSurface("chat", true, null, BINDING);
   fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
   fireEvent.click(
     (
@@ -1349,7 +1363,7 @@ it("acknowledges a captured create that committed after Discard cancelled the ru
   useWorktreeIntentStagingStore.getState().stageIntent(TERMINAL_STAGING_KEY, {
     entries: [newWorktreeIntent("/repo/alpha", "feat-a")],
   });
-  renderBoundSurface("terminal-agent", true, onBindingCommitted);
+  renderBoundSurface("terminal-agent", true, onBindingCommitted, BINDING);
   fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
   fireEvent.click(await screen.findByRole("button", { name: "Update" }));
   await waitFor(() => {
@@ -1399,7 +1413,7 @@ it("acknowledges a host-committed folder removal even if Discard cancelled the r
         releaseRemove = resolve;
       }),
   );
-  renderBoundSurface("terminal-agent", true, onBindingCommitted);
+  renderBoundSurface("terminal-agent", true, onBindingCommitted, BINDING);
   fireEvent.click(screen.getByRole("button", { name: /^beta/ }));
   fireEvent.click(await screen.findByRole("button", { name: "Remove alpha" }));
   fireEvent.click(await screen.findByRole("button", { name: "Update" }));
@@ -1508,7 +1522,7 @@ it("discards a staged folder removal without a host RPC", async () => {
 });
 
 async function openThreeFolderTerminalPopover(
-  onBindingCommitted: ((paths: ReadonlyArray<string>) => void) | null = null,
+  onBindingCommitted: ((paths: ReadonlyArray<string>) => void) | null,
 ): Promise<void> {
   renderBoundSurface(
     "terminal-agent",

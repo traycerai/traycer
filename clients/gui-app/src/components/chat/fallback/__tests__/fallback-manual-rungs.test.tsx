@@ -45,6 +45,14 @@ const harness = vi.hoisted(() => {
   // The published confirmed actions, in order. The announcer reads this slot
   // for real; here it is a recorder so a case can assert what was published.
   const publishedActions: unknown[] = [];
+  // Same idea for MF11's unattended-outcome channel: `useFallbackRunManualRung`
+  // reaches `publishUnattended` through the reporting object built from this
+  // slice's own `usePublishUnattendedFallbackOutcome`, which in turn resolves
+  // through `useExistingChatSessionHandle` -> `handle.store.getState()`. A
+  // slice omitting this member fails the same way the comment below warns
+  // about for `publishConfirmedManualFallbackAction`: a production stack trace
+  // inside `use-unattended-fallback-outcome.ts` wearing a fixture gap.
+  const publishedUnattended: unknown[] = [];
   // `publishConfirmedManualFallbackAction` is part of the slice, not an extra
   // on the double: the component reaches it through
   // `handle.store.getState()`, so a slice that omits it fails as
@@ -55,11 +63,15 @@ const harness = vi.hoisted(() => {
   type Slice = {
     lastFailedAttempt: LastFailedAttempt | undefined;
     publishConfirmedManualFallbackAction: (input: unknown) => void;
+    publishUnattendedFallbackOutcome: (input: unknown) => void;
   };
   const initialSlice = (): Slice => ({
     lastFailedAttempt: undefined,
     publishConfirmedManualFallbackAction: (input: unknown): void => {
       publishedActions.push(input);
+    },
+    publishUnattendedFallbackOutcome: (input: unknown): void => {
+      publishedUnattended.push(input);
     },
   });
   let state: Slice = initialSlice();
@@ -91,12 +103,21 @@ const harness = vi.hoisted(() => {
     toast: vi.fn(),
     store,
     publishedActions,
+    publishedUnattended,
     listCalls: [] as Array<{
       readonly enabled: boolean;
       readonly selector: unknown;
     }>,
     listData: undefined as ChatFallbackListTargetsResponse | undefined,
     mutationResult: null as { readonly outcome: string } | null,
+    // Deferred mode, for the ONE thing a synchronous double cannot express:
+    // the ORDER of the newer-turn frame and the host's answer. Every other case
+    // here resolves inside `mutate`, which fixes that order to "answer first"
+    // and therefore cannot reach MF11's failing sequence at all.
+    deferResponses: false,
+    pendingResponses: [] as Array<
+      (result: { readonly outcome: string }) => void
+    >,
   };
 });
 
@@ -160,8 +181,6 @@ vi.mock("@/hooks/host/use-host-scoped-mutation", () => ({
         | undefined,
     ) => {
       harness.mutate(vars);
-      const result = harness.mutationResult;
-      if (result === null) return;
       // TanStack runs the hook-level onSuccess in addition to the per-call
       // one. The Switch-vs-toast pin depends on both firing.
       //
@@ -176,12 +195,26 @@ vi.mock("@/hooks/host/use-host-scoped-mutation", () => ({
       // 'rung')` thrown INSIDE `use-fallback-actions.ts`, which reads as a
       // production bug rather than a fixture gap. Model the full signature even
       // where a parameter is currently unread.
-      if (args.onSuccess !== undefined) {
-        args.onSuccess(result, vars);
+      const deliver = (result: { readonly outcome: string }): void => {
+        if (args.onSuccess !== undefined) {
+          args.onSuccess(result, vars);
+        }
+        // Deliberately delivered even when the initiating subtree has since
+        // unmounted, where real TanStack would SKIP this one. The double is
+        // conservative in the safe direction: if the per-call handler ever
+        // became a second reporting channel, a duplicate-publication pin would
+        // catch it here rather than be hidden by a faithful skip.
+        if (opts !== undefined && opts.onSuccess !== undefined) {
+          opts.onSuccess(result, vars);
+        }
+      };
+      if (harness.deferResponses) {
+        harness.pendingResponses.push(deliver);
+        return;
       }
-      if (opts !== undefined && opts.onSuccess !== undefined) {
-        opts.onSuccess(result, vars);
-      }
+      const result = harness.mutationResult;
+      if (result === null) return;
+      deliver(result);
     },
     isPending: false,
   }),
@@ -247,6 +280,9 @@ describe("FallbackManualRungActions", () => {
     // the slice was built, so a fresh array here would be written to by
     // nothing and every later assertion would read an empty list.
     harness.publishedActions.length = 0;
+    harness.publishedUnattended.length = 0;
+    harness.deferResponses = false;
+    harness.pendingResponses.length = 0;
     seedAttempt(undefined);
   });
 
@@ -786,6 +822,155 @@ describe("FallbackManualRungActions", () => {
     expect(harness.toast).not.toHaveBeenCalled();
   });
 
+  it("a refused switch picked while the menu is OPEN reports inline only - no toast, and no unattended publication (no duplicate channel)", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    harness.listData = listTargetsResponse({
+      outcome: "listed",
+      failedTuple: FAILED_CLAUDE_TUPLE,
+      profileTargets: [],
+      modelTargets: [
+        fallbackModelTarget({
+          groupId: "grp-internal-secret-xyz",
+          harnessId: "codex",
+          modelFamily: "gpt-5",
+          model: "gpt-5",
+          reasoningEffort: null,
+          profileId: TARGET_CODEX_TUPLE.profileId,
+          severity: "ok",
+          usedPercent: 10,
+          target: TARGET_CODEX_TUPLE,
+          warnings: [],
+          selectable: true,
+          skip: null,
+        }),
+      ],
+      modelTargetsSkip: null,
+    });
+    harness.mutationResult = { outcome: "rung_unavailable" };
+    renderActions(TURN_ID);
+    fireEvent.click(screen.getByRole("button", { name: "Switch…" }));
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: /Codex · gpt-5/ }));
+    });
+    expect(screen.getByText(RUNG_UNAVAILABLE_LABEL)).toBeDefined();
+    expect(harness.toast).not.toHaveBeenCalled();
+    // Falsification: drop the `reportingRef.current.inlineMenuOpen` early
+    // return in `useFallbackRunManualRung`'s hook-level onSuccess (so the
+    // hook always publishes to the announcer regardless of the open menu) and
+    // THIS assertion must go red - the refusal would be reported twice, once
+    // inline and once through the announcer.
+    expect(harness.publishedUnattended).toEqual([]);
+  });
+
+  /**
+   * The P1 case, and the falsifier the `runManualRung` widening was missing.
+   *
+   * Every other switch case here resolves the mutation INSIDE `mutate`, which
+   * fixes the order to "host answers, then the frame lands" - the order in
+   * which nothing is wrong. `attempt_not_latest` means the opposite order: a
+   * newer turn already exists, so the frame that carries it arrives FIRST and
+   * takes the menu with it. That is the sequence this case drives, and until
+   * the affordances became their own component it delivered the refusal to
+   * nobody: the gate returned `null` while `ManualRungAffordances`' predecessor
+   * stayed MOUNTED, so `menuOpen` was still `true`, the per-render layout effect
+   * kept republishing `inlineMenuOpen: true` from a subtree rendering nothing,
+   * and the hook deferred to an inline line that no longer existed.
+   */
+  it("a switch refused AFTER a newer turn replaces the attempt reaches the announcer - the surface it was picked from is gone", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    harness.listData = listTargetsResponse({
+      outcome: "listed",
+      failedTuple: FAILED_CLAUDE_TUPLE,
+      profileTargets: [],
+      modelTargets: [
+        fallbackModelTarget({
+          groupId: "grp-internal-secret-xyz",
+          harnessId: "codex",
+          modelFamily: "gpt-5",
+          model: "gpt-5",
+          reasoningEffort: null,
+          profileId: TARGET_CODEX_TUPLE.profileId,
+          severity: "ok",
+          usedPercent: 10,
+          target: TARGET_CODEX_TUPLE,
+          warnings: [],
+          selectable: true,
+          skip: null,
+        }),
+      ],
+      modelTargetsSkip: null,
+    });
+    harness.deferResponses = true;
+    renderActions(TURN_ID);
+    fireEvent.click(screen.getByRole("button", { name: "Switch…" }));
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: /Codex · gpt-5/ }));
+    });
+    expect(harness.pendingResponses).toHaveLength(1);
+
+    // The newer turn lands while the pick is still in flight. This is the real
+    // production transition - the host reassigns `lastFailedAttempt` by value -
+    // not a test-driven unmount of the component under test.
+    act(() => {
+      seedAttempt(
+        positiveAttempt({
+          userMessageId: "user-msg-later",
+          turnId: "turn-later",
+          reason: "rate_limit",
+          eligibleRungs: ALL_RUNGS,
+          resetsAt: RESETS_AT,
+          waitDisposition: "eligible",
+        }),
+      );
+    });
+    // The whole surface the pick came from is gone: no trigger, no rows, and
+    // no inline refusal line to write into.
+    expect(screen.queryByRole("button", { name: "Switch…" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Codex · gpt-5/ })).toBeNull();
+
+    // ONLY NOW does the host answer.
+    act(() => {
+      harness.pendingResponses[0]({ outcome: "attempt_not_latest" });
+    });
+
+    // Written literally, like `RUNG_UNAVAILABLE_LABEL` above and for the same
+    // reason - `CHAT_MOVED_ON_LABEL` is module-private to `fallback-copy.ts`.
+    //
+    // Falsification: move `menuOpen`/`refusal`/`useFallbackRunManualRung` back
+    // up into `ManualRungActions` (i.e. undo the split, so the gate becomes an
+    // early `return null` inside the mounted component again) and THIS must go
+    // red at zero entries - the hook reads a stale `inlineMenuOpen: true` and
+    // defers to an inline line that is not rendering.
+    expect(harness.publishedUnattended).toHaveLength(1);
+    expect(harness.publishedUnattended[0]).toMatchObject({
+      chatId: CHAT_ID,
+      epicId: EPIC_ID,
+      hostId: HOST_ID,
+      text: "This chat has moved on since that message.",
+    });
+    // One channel, not two: a bare rung would have toasted, a live menu would
+    // have answered inline. This surface has neither.
+    expect(harness.toast).not.toHaveBeenCalled();
+  });
+
   it("closes the Switch menu on applied and still does not toast", () => {
     seedAttempt(
       positiveAttempt({
@@ -848,8 +1033,39 @@ describe("FallbackManualRungActions", () => {
     harness.mutationResult = { outcome: "rung_unavailable" };
     renderActions(TURN_ID);
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    // Falsification: drop the per-call onSuccess from the run() call site and this must go red.
+    // Falsification: delete the `toast(message)` line from the
+    // `variables.rung !== "switch"` branch of `useFallbackRunManualRung`'s
+    // hook-level onSuccess (use-fallback-actions.ts) and this must go red.
+    //
+    // The falsifier this comment used to name - "drop the per-call onSuccess
+    // from the run() call site" - no longer exists: MF11 moved a bare rung's
+    // refusal off the per-call handler, which TanStack skips once the row's
+    // observer is gone, onto the hook-level one that outlives it. `run()`'s
+    // `mutate()` now passes no options object at all.
     expect(harness.toast).toHaveBeenCalledWith(RUNG_UNAVAILABLE_LABEL);
+  });
+
+  it("a refused Retry (bare button) toasts once with the literal refusal sentence and publishes nothing to the announcer", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    harness.mutationResult = { outcome: "rung_unavailable" };
+    renderActions(TURN_ID);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(harness.toast).toHaveBeenCalledTimes(1);
+    expect(harness.toast).toHaveBeenCalledWith(RUNG_UNAVAILABLE_LABEL);
+    // Falsification: route the `rung !== "switch"` branch in
+    // `useFallbackRunManualRung`'s onSuccess through `publishUnattended`
+    // instead of (or in addition to) `toast`, and THIS assertion must go red -
+    // a bare rung's refusal has exactly one channel, the toast.
+    expect(harness.publishedUnattended).toEqual([]);
   });
 
   it("toasts a Wait-until refusal too", () => {

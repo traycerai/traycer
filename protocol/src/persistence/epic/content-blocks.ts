@@ -109,15 +109,27 @@ const artifactKindSchema = getRecordSchema(
 // prompt, and whatever else that channel grows). It is deliberately
 // metadata-less; the other three name a specific provider behaviour and each
 // has a `providerNoticeNormalizedMetadataSchema` variant.
-// `fallback_applied` / `fallback_wait_resumed` / `fallback_settled` are the
-// provider-fallback attribution arms: the durable transcript record that the
-// host moved this chat onto another profile/tuple after a failed turn, that a
-// turn parked on a rate-limit reset has resumed, and that a traversal ENDED -
-// what was tried, why it stopped, and where the chat was left. Metadata-less
-// like `harness_message` - their facts (rung, from -> to tuple, reason,
-// resetsAt, settlement code/cause/hops) are ordinary `details` label/value
-// pairs, which need no `providerNoticeNormalizedMetadataSchema` variant and
-// therefore no growth of that discriminated union.
+// `fallback_applied` / `fallback_returned` / `fallback_return_blocked` /
+// `fallback_wait_resumed` / `fallback_settled` are the provider-fallback
+// attribution arms: the durable transcript record that the host moved this chat
+// onto another profile/tuple after a failed turn, that it moved the chat BACK
+// to its preferred tuple, that a return ended with the chat staying where it
+// was, that a turn parked on a rate-limit reset has resumed, and that a
+// traversal ENDED - what was tried, why it stopped, and where the chat was
+// left. Metadata-less like `harness_message` - their facts (rung, from -> to
+// tuple, reason, resetsAt, settlement code/cause/hops) are ordinary `details`
+// label/value pairs, which need no `providerNoticeNormalizedMetadataSchema`
+// variant and therefore no growth of that discriminated union.
+//
+// The three MOVE arms are three kinds rather than one because they are three
+// different claims about the chat: it left its preferred tuple, it came back to
+// it, or it tried to come back and did not. They shared `fallback_applied`
+// until the audit found that a reader given only the kind could not tell a hop
+// from a switch-back - and a blocked return, where nothing moved at all, was
+// being announced under a kind whose name asserts that something did. The host
+// has always distinguished them (`FallbackOutcomeRecord["kind"]`), but that
+// vocabulary rides the separate last-outcome SLOT, which holds only the most
+// recent one; the transcript rows themselves carried no discriminator.
 //
 // `fallback_settled` exists because the settlement receipt reached only the
 // NOTIFICATION: the transcript's only settlement row was the queue-paused
@@ -131,6 +143,8 @@ export const providerNoticeKindSchema = z.enum([
   "safety_buffering",
   "harness_message",
   "fallback_applied",
+  "fallback_returned",
+  "fallback_return_blocked",
   "fallback_wait_resumed",
   "fallback_settled",
 ]);
@@ -178,7 +192,8 @@ export const providerNoticeKindSchemaPreHarnessMessage = z.enum([
  * protocol commit), so they get a peer population the moment that tag lands,
  * and an enum VALUE addition is the growth their frozen `z.object` copies
  * cannot absorb on their own - same as `providerNoticeKindSchemaPreHarnessMessage`
- * above. `1.9` is the only line that admits `fallback_applied`,
+ * above. `1.9` is the only line that admits any fallback attribution kind -
+ * `fallback_applied`, `fallback_returned`, `fallback_return_blocked`,
  * `fallback_wait_resumed` or `fallback_settled`.
  *
  * Derived with `.extract()` off the live enum rather than re-spelled, so this
@@ -187,7 +202,9 @@ export const providerNoticeKindSchemaPreHarnessMessage = z.enum([
  * unchanged, which is the CORRECT default (a new kind is born unreleased and
  * must stay off these lines) but means the freeze story for a new kind is a
  * decision to make, not a compile error to wait for. `fallback_settled` was
- * added under exactly that rule and deliberately left out here.
+ * added under exactly that rule and deliberately left out here, and so were
+ * `fallback_returned` / `fallback_return_blocked` when the three move arms were
+ * split apart.
  * Do NOT add new kinds.
  */
 export const providerNoticeKindSchemaPreFallback =

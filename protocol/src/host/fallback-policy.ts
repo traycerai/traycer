@@ -84,6 +84,7 @@ export const TIER_RUNG_SKIP_REASONS = [
   "harness-not-gui",
   "provider-unknown",
   "provider-unavailable",
+  "destination-excluded",
   "profile-signed-out",
   "catalog-unreadable",
   "family-unmatched",
@@ -97,6 +98,9 @@ export type TierRungSkipReason = z.infer<typeof tierRungSkipReasonSchema>;
 
 export const fallbackPolicySchema = z.object({
   enabled: z.boolean(),
+  // Excluded providers remain group members and valid sources; never switch TO them.
+  // This unreleased policy accepts stored rows from before the field existed.
+  destinationExclusions: z.array(harnessIdSchema).readonly().default([]),
   // Empty is valid: exhaustion always notifies, even without an explicit rung.
   ladder: fallbackLadderSchema,
   reasonOverrides: z
@@ -130,6 +134,7 @@ export type FallbackPolicy = z.infer<typeof fallbackPolicySchema>;
 export function createDefaultFallbackPolicy(): FallbackPolicy {
   return {
     enabled: false,
+    destinationExclusions: [],
     ladder: ["profile", "tier", "wait", "notify"],
     graceWindowSeconds: 15,
     maxWaitMinutes: 360,

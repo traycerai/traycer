@@ -168,7 +168,7 @@ describe("browserGuestCssAnchorName", () => {
 describe("persistent browser guest host", () => {
   describe("guest identity", () => {
     it("keeps the same wrapper parent, webview node, and partition across placement and pane changes", () => {
-      const bridge = new FakeBrowserViewBridge();
+      const bridge = new FakeBrowserViewBridge({});
       const first = recordingActivate();
       startHost(bridge, first.activate);
       bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
@@ -243,7 +243,7 @@ describe("persistent browser guest host", () => {
     });
 
     it("applies a placement that arrived before the matching mount without recreating later", () => {
-      const bridge = new FakeBrowserViewBridge();
+      const bridge = new FakeBrowserViewBridge({});
       startHost(bridge, NOOP_ACTIVATE);
       const owner = Symbol("tile");
       setOwnedPlacement(owner, {
@@ -276,7 +276,7 @@ describe("persistent browser guest host", () => {
 
   describe("mount and release incarnation", () => {
     it("treats a duplicate mount of the same registrationId as a no-op", () => {
-      const bridge = new FakeBrowserViewBridge();
+      const bridge = new FakeBrowserViewBridge({});
       startHost(bridge, NOOP_ACTIVATE);
       bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
       const first = guestNodes(REGISTRATION_A);
@@ -290,7 +290,7 @@ describe("persistent browser guest host", () => {
     });
 
     it("releases only the matching registration and ignores a stale unknown id", () => {
-      const bridge = new FakeBrowserViewBridge();
+      const bridge = new FakeBrowserViewBridge({});
       startHost(bridge, NOOP_ACTIVATE);
       bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
       bridge.emitGuestMountRequested(mountRequest(REGISTRATION_B, PARTITION_B));
@@ -316,7 +316,7 @@ describe("persistent browser guest host", () => {
     });
 
     it("blurs a focused presented guest through presentation-loss on matching release", () => {
-      const bridge = new FakeBrowserViewBridge();
+      const bridge = new FakeBrowserViewBridge({});
       startHost(bridge, NOOP_ACTIVATE);
       bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
       const { webview } = guestNodes(REGISTRATION_A);
@@ -345,7 +345,7 @@ describe("persistent browser guest host", () => {
     });
 
     it("keeps a live placement across stop and start so remount is presented", () => {
-      const bridge = new FakeBrowserViewBridge();
+      const bridge = new FakeBrowserViewBridge({});
       const stop = startHost(bridge, NOOP_ACTIVATE);
       const owner = Symbol("tile");
       setOwnedPlacement(owner, {
@@ -375,7 +375,7 @@ describe("persistent browser guest host", () => {
     });
 
     it("ignores a superseded host's disposer", () => {
-      const bridge = new FakeBrowserViewBridge();
+      const bridge = new FakeBrowserViewBridge({});
       const stale = startHost(bridge, NOOP_ACTIVATE);
       // The superseded host element is unreachable once replaced; drop it so
       // `queryHost` names exactly the live one.
@@ -391,7 +391,7 @@ describe("persistent browser guest host", () => {
 
   describe("presentation states", () => {
     it("maps presented, retained, and unbound onto visibility and interactivity", () => {
-      const bridge = new FakeBrowserViewBridge();
+      const bridge = new FakeBrowserViewBridge({});
       startHost(bridge, NOOP_ACTIVATE);
       bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
       const { wrapper } = guestNodes(REGISTRATION_A);
@@ -474,7 +474,7 @@ describe("persistent browser guest host", () => {
     });
 
     it("blurs an active guest through presentation-loss before leaving presented", () => {
-      const bridge = new FakeBrowserViewBridge();
+      const bridge = new FakeBrowserViewBridge({});
       startHost(bridge, NOOP_ACTIVATE);
       bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
       const { wrapper, webview } = guestNodes(REGISTRATION_A);
@@ -512,7 +512,7 @@ describe("persistent browser guest host", () => {
 
   describe("pane activation", () => {
     it("routes pointerdown only to pointerDown and capture-phase focus only to focus while presented", () => {
-      const bridge = new FakeBrowserViewBridge();
+      const bridge = new FakeBrowserViewBridge({});
       const recorded = recordingActivate();
       startHost(bridge, recorded.activate);
       bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));

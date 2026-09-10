@@ -890,8 +890,12 @@ const providerNoticeUpsertEventSchemaPreReasonix = z.object({
 
 // Wire-freeze copy bound to the released `chat.subscribe@1.7`/`@1.8`
 // blockDelta frames. Those minors ship the full live event shape and hold back
-// exactly one thing: the notice KIND enum, which grew the two
-// provider-fallback attribution arms on `1.9`. Freezing the schema is again
+// exactly one thing: the notice KIND enum, which grew the provider-fallback
+// attribution arms on `1.9`. Unnumbered deliberately - it said "the two" and
+// was stale at `fallback_settled`, then staler again when the move arms split
+// into `fallback_applied` / `fallback_returned` / `fallback_return_blocked`,
+// while the freeze below never had to move because it names a frozen SCHEMA
+// rather than a list of kinds. Freezing the schema is again
 // only half of it - `chat-frame-projection.ts` is what stops the host EMITTING
 // a kind a negotiated line cannot decode, on live upserts, persisted snapshot
 // bodies, and the windowed tail/range bodies alike.
@@ -1781,8 +1785,11 @@ export const runtimeEventSchemaPreSettlement = z.discriminatedUnion("type", [
 
 // Wire-freeze copy of the runtime-event union as `chat.subscribe@1.7`/`@1.8`
 // ship it: every live member, with `provider_notice.upsert` swapped for its
-// pre-fallback freeze so neither line can observe `fallback_applied` /
-// `fallback_wait_resumed`. Explicitly listed rather than derived from the live
+// pre-fallback freeze so neither line can observe ANY provider-fallback
+// attribution kind - the swap is against `providerNoticeKindSchemaPreFallback`,
+// which is a frozen four-kind list, so a kind added to the live enum later
+// (`fallback_settled`, then `fallback_returned` / `fallback_return_blocked`) is
+// held off these lines with no edit here. Explicitly listed rather than derived from the live
 // union, for the same reason `runtimeEventSchemaPreImage` is: a future event
 // must not silently join a line that has shipped peers.
 export const runtimeEventSchemaPreFallback = z.discriminatedUnion("type", [

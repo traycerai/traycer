@@ -3777,10 +3777,13 @@ export const chatSubscribeV18 = defineStreamRpcContract({
 //     `backgroundItems` rather than sending;
 //   - the `fallback.holdForChoice` / `fallback.releaseChoice` stream actions
 //     and the lease `token` they ack with;
-//   - the `fallback_applied` / `fallback_wait_resumed` provider-notice kinds,
-//     which `chat-frame-projection.ts` strips for any peer whose negotiated
-//     minor does not bind them - on live upserts, on persisted snapshot
-//     bodies, and on the windowed tail/range bodies;
+//   - every provider-fallback attribution notice kind (`fallback_applied`,
+//     `fallback_returned`, `fallback_return_blocked`, `fallback_wait_resumed`,
+//     `fallback_settled`), which `chat-frame-projection.ts` strips for any peer
+//     whose negotiated minor does not bind them - on live upserts, on persisted
+//     snapshot bodies, and on the windowed tail/range bodies. The strip is
+//     written as an allow-list read off the frozen enums, so a kind added after
+//     this line was written is covered without editing it;
 //   - the `pendingFallback` and `pendingReturn` DTOs on both snapshot shapes
 //     and on `turnStateChanged`, stripped as whole KEYS by the same
 //     projection - both funnels, since the windowed snapshot has its own

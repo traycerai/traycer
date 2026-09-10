@@ -63,11 +63,8 @@ export const imageAttachmentLabelPluginKey =
 declare module "@tiptap/core" {
   interface Commands<ReturnType> {
     imageAttachment: {
-      // oxlint-disable-next-line traycer/no-restricted-syntax
       insertImageAttachment: (attrs: ImageAttachmentAttrs) => ReturnType;
-      // oxlint-disable-next-line traycer/no-restricted-syntax
       removeImageAttachmentById: (id: string) => ReturnType;
-      // oxlint-disable-next-line traycer/no-restricted-syntax
       rewriteImageAttachmentHashById: (id: string, hash: string) => ReturnType;
     };
   }

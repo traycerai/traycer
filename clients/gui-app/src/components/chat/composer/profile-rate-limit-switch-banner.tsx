@@ -39,6 +39,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useProfileUsagePresentation } from "@/hooks/rate-limits/use-profile-usage-presentation";
+import { limitedFamilyQualifier } from "@/lib/rate-limits/rate-limit-copy";
 import { cn } from "@/lib/utils";
 import {
   initialPreviewProfileId,
@@ -122,12 +123,6 @@ const PREVIEW_NAVIGATION_KEYS = new Set([
 
 function switchLabel(profile: ProviderProfile): string {
   return `Switch to ${profileDisplayLabel(profile)}`;
-}
-
-/** "Fable " / "Fable, Opus " qualifier for the banner line; empty when the
- * warning is profile-wide. Trailing space keeps the caller's template flat. */
-function familyQualifier(limitedFamilies: ReadonlyArray<string>): string {
-  return limitedFamilies.length === 0 ? "" : `${limitedFamilies.join(", ")} `;
 }
 
 function profileMenuRows(
@@ -297,8 +292,8 @@ export function ProfileRateLimitSwitchBanner(
             />
             <span>
               {props.severity === "hard_limit"
-                ? `has reached its ${familyQualifier(props.limitedFamilies)}rate limit.`
-                : `is running low on ${familyQualifier(props.limitedFamilies)}usage.`}
+                ? `has reached its ${limitedFamilyQualifier(props.limitedFamilies)}rate limit.`
+                : `is running low on ${limitedFamilyQualifier(props.limitedFamilies)}usage.`}
             </span>
             {readOnly ? (
               <span className="text-muted-foreground">

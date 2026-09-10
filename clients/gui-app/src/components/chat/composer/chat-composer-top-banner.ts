@@ -29,6 +29,12 @@ export type ComposerTopBannerKind =
  * the rate-limit advisory case: when the preferred profile has reset and the
  * current one is also running low, that is one situation and gets one banner,
  * not a collision between two.
+ *
+ * "Absorbs" is a claim about the SENTENCE, not just the slot, and this chain
+ * cannot keep it - winning here only silences the advisory. The other half is
+ * `chat/fallback/fallback-return-low-usage.ts`, which carries the advisory's
+ * own words into the offer. Reorder this chain without moving that and the
+ * paragraph above becomes false again (MF09).
  */
 export function resolveComposerTopBannerKind({
   fallbackVisible,

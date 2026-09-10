@@ -275,6 +275,9 @@ export function publishedChatSessionState(
     // Never acted, so nothing was ever confirmed. Distinct from "an action
     // happened and we lost the record": there is no action path here at all.
     confirmedManualFallbackAction: null,
+    // Same reason, one step further: no action was sent, so no answer to one
+    // can have arrived with nowhere to land.
+    unattendedFallbackOutcome: null,
     // Frozen, so nothing hydrates and this never moves.
     transcriptHydrationSequence: 0,
     transcriptRowContext: {},
@@ -409,6 +412,9 @@ export function publishedChatSessionState(
     // run a manual rung, so nothing can ever confirm one. The announcer reads
     // `confirmedManualFallbackAction` (null below) and stays silent.
     publishConfirmedManualFallbackAction: () => undefined,
+    // Likewise. A published copy sends no fallback verb, so there is no
+    // outcome to deliver and no surface that could have gone missing.
+    publishUnattendedFallbackOutcome: () => undefined,
     stopBackgroundItem: () => null,
     stopAllBackgroundItems: () => null,
     stopBackgroundSession: () => null,

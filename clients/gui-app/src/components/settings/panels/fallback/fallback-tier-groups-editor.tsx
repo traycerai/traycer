@@ -7,6 +7,7 @@ import type {
 } from "@traycer/protocol/host/fallback-policy";
 import {
   keyedGroup,
+  tierGroupIdentityGeneration,
   withTierGroups,
   type FallbackGroupsInverse,
   type KeyedGroup,
@@ -63,6 +64,28 @@ export interface FallbackTierGroupsEditorProps {
   /** The effort levels each row's harness advertises; see `fallback-effort-options.ts`. */
   readonly effortOptions: FallbackEffortOptions;
   readonly previewPending: boolean;
+  /**
+   * The preview request FAILED, as opposed to having no answer yet.
+   *
+   * The two are indistinguishable in {@link FallbackTierGroupsEditorProps.preview}
+   * by construction - it is `data-or-null`, and a null renders no verdict line -
+   * so a failed check looked exactly like a host that had never been asked. The
+   * user got no answer and no way to ask again, on the one surface whose job is
+   * to say what a row will do. D159 accepts the null OMISSION as a fidelity
+   * rule (never guess a verdict in the client); this is the usability half on
+   * top of it, and it deliberately does not put an error on any ROW - the
+   * failure is one request covering every row, so it is stated once for the
+   * editor.
+   *
+   * Scope, stated rather than left to be discovered: this is the request
+   * failing. A host that does not ADVERTISE the preview method at all still
+   * renders nothing and offers no retry, because there is nothing to retry -
+   * that host will never answer, and a "try again" for it would be a control
+   * with nothing behind it.
+   */
+  readonly previewUnavailable: boolean;
+  /** Re-asks the failed preview. Only reachable while `previewUnavailable`. */
+  readonly onRetryPreview: () => void;
   /**
    * A draft move that is NOT saved: a keystroke in the group-name or model-family
    * field. The value on screen follows it and so does the inline validation
@@ -123,6 +146,8 @@ export function FallbackTierGroupsEditor(
     labelFor,
     effortOptions,
     previewPending,
+    previewUnavailable,
+    onRetryPreview,
     onChange,
     onCommit,
     onUndo,
@@ -203,6 +228,14 @@ export function FallbackTierGroupsEditor(
                     ...groupDeleteSelectors(groups, index),
                     `[${FALLBACK_ADD_GROUP_ATTRIBUTE}]`,
                   ]);
+                  // Read BEFORE the commit, which is what makes the stamp
+                  // mean "the generation this row was removed from". `emit`
+                  // dispatches synchronously and a refusal later in the same
+                  // episode re-seeds, so a generation read inside the toast's
+                  // own callback would be the generation at UNDO time and
+                  // would always compare equal - the guard would be there and
+                  // decide nothing.
+                  const generation = tierGroupIdentityGeneration();
                   emit(groups.filter((_, at) => at !== index));
                   // The INVERSE of this one deletion, not the list as it stands
                   // now: the toast outlives this render, and re-submitting a
@@ -216,7 +249,7 @@ export function FallbackTierGroupsEditor(
                     action: {
                       label: "Undo",
                       onClick: () => {
-                        onUndo({ kind: "group", group, index });
+                        onUndo({ kind: "group", group, index, generation });
                       },
                     },
                   });
@@ -242,20 +275,101 @@ export function FallbackTierGroupsEditor(
           >
             Add a group
           </Button>
-          {previewPending ? (
-            <span className="flex items-center gap-2 text-ui-xs text-muted-foreground">
-              <AgentSpinningDots
-                className={undefined}
-                testId={undefined}
-                variant="orbit"
-              />
-              Checking what these resolve to…
-            </span>
-          ) : null}
+          <PreviewFooterStatus
+            previewPending={previewPending}
+            previewUnavailable={previewUnavailable}
+            onRetryPreview={onRetryPreview}
+          />
         </div>
         {status}
       </div>
     </SettingsGroup>
+  );
+}
+
+/**
+ * What the editor says about the per-row preview AS A WHOLE - one line beside
+ * "Add a group", never one per row.
+ *
+ * Two states in one component, made mutually exclusive by the `!previewPending`
+ * term in `failed` below: a retry that is RUNNING is an answer on its way, and
+ * printing "couldn't check" beside its own spinner would be describing the
+ * state before the button was pressed. `previewPending` is the query's
+ * `isFetching`, which covers the retry, so this remains the single pending
+ * indicator D159 asks for.
+ *
+ * That exclusion used to be the ORDER of two early returns, which is why the
+ * older wording here claimed it held "by construction rather than by a second
+ * condition". It is now exactly a second condition, and deliberately so — the
+ * live region has to mount on every path (see the block comment below), which
+ * an early return cannot do. Stated because the two mechanisms fail
+ * differently: an ordering is broken by moving a return, this one by deleting
+ * a term, and a falsifier written for the first is inert against the second.
+ *
+ * A component rather than a nested ternary in the JSX above, which is what this
+ * started as: the two arms are one decision with one reason, and reading them
+ * as a unit is the point.
+ */
+function PreviewFooterStatus(props: {
+  readonly previewPending: boolean;
+  readonly previewUnavailable: boolean;
+  readonly onRetryPreview: () => void;
+}): ReactNode {
+  const { previewPending, previewUnavailable, onRetryPreview } = props;
+  // Mutually exclusive, and pending WINS: a retry already in flight is the
+  // newer fact, and showing the old failure beside its own retry spinner
+  // invites a second click. Derived once here rather than as two early returns,
+  // because the live region below has to render on every path - see the block
+  // comment on this component.
+  const failed = !previewPending && previewUnavailable;
+  return (
+    <span className="flex items-center gap-1 text-ui-xs text-muted-foreground">
+      {/* The live region is mounted ALWAYS, empty included, and only its TEXT
+          swaps. A `role="status"` inserted into the tree together with its
+          content is announced unreliably - NVDA and JAWS generally need the
+          region present before the content changes - and for FC9 the
+          announcement is the whole difference: a screen-reader user who is
+          never told the check failed is back to "failed" and "absent" being
+          indistinguishable, which is the row. So the region outlives its
+          contents.
+
+          `role="status"`, not `role="alert"`: nothing the user did failed and
+          no policy is at risk - the rows are still editable and still savable,
+          and the verdict is an advisory the page works without. An alert would
+          interrupt for a missing hint.
+
+          The retry Button is deliberately OUTSIDE the region. It is a control,
+          not status text, and inside it would be read out as part of the
+          announcement on every swap. */}
+      <span role="status" className="flex items-center gap-2">
+        {previewPending ? (
+          <>
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant="orbit"
+            />
+            Checking what these resolve to…
+          </>
+        ) : null}
+        {failed ? (
+          <span data-testid="fallback-tier-preview-unavailable">
+            Couldn&apos;t check what these models resolve to.
+          </span>
+        ) : null}
+      </span>
+      {failed ? (
+        <Button
+          type="button"
+          variant="link"
+          className="h-auto p-0 text-ui-xs"
+          onClick={onRetryPreview}
+          data-testid="fallback-tier-preview-retry"
+        >
+          Try again
+        </Button>
+      ) : null}
+    </span>
   );
 }
 

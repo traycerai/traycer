@@ -7,6 +7,10 @@ import { FallbackGraceMenu, FallbackWaitingMenu } from "./fallback-card-menus";
 import { FallbackGraceCard } from "./fallback-grace-card";
 import { FallbackReturnBanner } from "./fallback-return-banner";
 import {
+  returnBannerLowUsage,
+  type ComposerRateLimitAdvisory,
+} from "./fallback-return-low-usage";
+import {
   fallbackGraceCardVisible,
   fallbackWaitingCardVisible,
   type ChatProviderFallbackState,
@@ -35,6 +39,7 @@ import { FallbackWaitingCard } from "./fallback-waiting-card";
 export function ChatComposerFallbackBanners({
   topBannerKind,
   fallback,
+  rateLimitAdvisory,
   client,
   chatId,
   epicId,
@@ -43,6 +48,17 @@ export function ChatComposerFallbackBanners({
 }: {
   readonly topBannerKind: ComposerTopBannerKind;
   readonly fallback: ChatProviderFallbackState;
+  /**
+   * The composer's rate-limit advisory, or `null` when there is none to show.
+   *
+   * Built by `composerRateLimitAdvisory` at the mount point, so the advisory
+   * this banner absorbs and the advisory the composer would have RENDERED come
+   * from one predicate rather than two that can disagree. The narrower question
+   * the composer cannot answer - whether the advisory names the account this
+   * chat is running on NOW - is `returnBannerLowUsage`, applied below where the
+   * offer is in hand. Both live in `./fallback-return-low-usage`.
+   */
+  readonly rateLimitAdvisory: ComposerRateLimitAdvisory | null;
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly chatId: string;
   /**
@@ -69,6 +85,7 @@ export function ChatComposerFallbackBanners({
       <FallbackReturnBannerSlot
         visible={topBannerKind === "fallback-return"}
         offer={fallback.pendingReturn}
+        rateLimitAdvisory={rateLimitAdvisory}
         client={client}
         chatId={chatId}
         epicId={epicId}
@@ -119,6 +136,7 @@ function FallbackPendingBanner({
               client={client}
               epicId={epicId}
               chatId={chatId}
+              hostId={hostId}
               canAct={canAct}
             />
           }
@@ -156,6 +174,7 @@ function FallbackPendingBanner({
 function FallbackReturnBannerSlot({
   visible,
   offer,
+  rateLimitAdvisory,
   client,
   chatId,
   epicId,
@@ -163,6 +182,7 @@ function FallbackReturnBannerSlot({
 }: {
   readonly visible: boolean;
   readonly offer: ChatProviderFallbackState["pendingReturn"];
+  readonly rateLimitAdvisory: ComposerRateLimitAdvisory | null;
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly chatId: string;
   readonly epicId: string;
@@ -173,6 +193,7 @@ function FallbackReturnBannerSlot({
     <FallbackBannerSlot>
       <FallbackReturnBanner
         offer={offer}
+        lowUsage={returnBannerLowUsage(rateLimitAdvisory, offer.fallbackTuple)}
         client={client}
         chatId={chatId}
         epicId={epicId}

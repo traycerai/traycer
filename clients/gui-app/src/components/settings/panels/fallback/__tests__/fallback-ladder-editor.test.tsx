@@ -1,4 +1,10 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FallbackRungKind } from "@traycer/protocol/host/fallback-policy";
 import { FallbackLadderEditor } from "@/components/settings/panels/fallback/fallback-ladder-editor";
@@ -55,19 +61,63 @@ describe("FallbackLadderEditor", () => {
     expect(labels[1]).toContain(FALLBACK_RUNG_COPY.notify.label);
   });
 
-  it("gives `notify` no drag handle - the reserved gutter renders instead", () => {
+  it("AX7: the drag handle is hidden from assistive technology and out of the tab order, for EVERY row - not just `notify`", () => {
+    // R4/AX7 rewrite. The handle used to be exposed to AT for movable rows and
+    // only withheld from `notify` (the "Reorder <label>" label this cell used
+    // to assert). That is gone now: dnd-kit's default handle attributes
+    // promise a space-bar-and-arrows keyboard gesture this editor does not
+    // implement (no `KeyboardSensor` is registered - the ▲▼ buttons are the
+    // keyboard/touch path), so `{...attributes}` is never spread on ANY row,
+    // and the handle span is `aria-hidden` with no accessible name at all.
+    //
+    // Falsification: re-add `{...attributes}` to the handle span in
+    // `fallback-ladder-editor.tsx` - the queries below would then resolve
+    // dnd-kit's default handle affordances again.
     renderLadder(vi.fn(), vi.fn());
-    // Every movable row exposes "Reorder <label>"; `notify` never has this
-    // element at all (not merely a disabled one), because it renders the
-    // reserved empty gutter span in its place.
     expect(
       screen.queryByLabelText(`Reorder ${FALLBACK_RUNG_COPY.notify.label}`),
     ).toBeNull();
-    // Positive control: a movable row DOES have one, proving the query above
-    // would find a handle if the fixed row rendered one too.
     expect(
-      screen.getByLabelText(`Reorder ${FALLBACK_RUNG_COPY.profile.label}`),
-    ).not.toBeNull();
+      screen.queryByLabelText(`Reorder ${FALLBACK_RUNG_COPY.profile.label}`),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: /Reorder/ })).toBeNull();
+    // dnd-kit's default handle attributes are `role="button"`,
+    // `tabIndex={0}` and `aria-roledescription="sortable"` - none of them are
+    // spread, so no element in any row carries them. Scoped to the "profile"
+    // row (the first `listitem`, per DISPLAY_ORDER) rather than the whole
+    // document: a document-wide query can redden on an unrelated element
+    // (any other Radix primitive setting an explicit tabindex) and says
+    // nothing about the HANDLE specifically.
+    const profileRow = screen.getAllByRole("listitem")[0];
+    expect(
+      within(profileRow).queryByRole("button", { name: /Reorder/ }),
+    ).toBeNull();
+    expect(
+      profileRow.querySelector('[aria-roledescription="sortable"]'),
+    ).toBeNull();
+    expect(profileRow.querySelector('[tabindex="0"]')).toBeNull();
+
+    // The replacement affordance: every movable row exposes "Move <label> up"
+    // / "Move <label> down" buttons (pinned individually elsewhere in this
+    // file), and the list itself is named and describes how to reorder it for
+    // a reader who cannot see the hidden handle.
+    //
+    // jest-dom matchers (`toHaveAccessibleName`/`toHaveAccessibleDescription`)
+    // are not wired into this repo's vitest setup (see the sibling comments in
+    // `host-switcher-surface-refusal.test.tsx` and `pr-detail-files-tab.test.tsx`),
+    // so the name/description are resolved by hand through `aria-labelledby` /
+    // `aria-describedby` rather than asserted with those matchers.
+    const list = screen.getByRole("list");
+    const labelledBy = list.getAttribute("aria-labelledby");
+    const label =
+      labelledBy === null ? null : document.getElementById(labelledBy);
+    expect(label?.textContent).toBe("Try these in order");
+    const describedBy = list.getAttribute("aria-describedby");
+    const description =
+      describedBy === null ? null : document.getElementById(describedBy);
+    expect(description?.textContent ?? "").toContain(
+      "Move up and Move down buttons",
+    );
   });
 
   it("renders no up/down controls at all for `notify` - absent, not merely disabled", () => {

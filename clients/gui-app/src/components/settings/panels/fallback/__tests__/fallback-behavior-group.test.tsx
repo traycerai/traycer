@@ -108,3 +108,79 @@ describe("FallbackBehaviorGroup - selecting a value", () => {
     expect(onChange).toHaveBeenCalledWith(policy({ graceWindowSeconds: 11 }));
   });
 });
+
+describe("FallbackBehaviorGroup - AX8: the return-to-preferred radiogroup is named and described", () => {
+  // jest-dom's `toHaveAccessibleName`/`toHaveAccessibleDescription` are not
+  // wired into this repo's vitest setup (`vitest.config.ts`'s `setupFiles`
+  // registers only `@testing-library/react`'s `configure`, and
+  // `@testing-library/jest-dom` is not a dependency of any package.json in
+  // this repo), so the name/description are resolved by hand through
+  // `aria-labelledby`/`aria-describedby` - the same pattern as the AX7 cell
+  // in `fallback-ladder-editor.test.tsx`.
+  function textOf(id: string | null): string | undefined {
+    if (id === null) return undefined;
+    return document.getElementById(id)?.textContent;
+  }
+
+  it("the radiogroup's accessible name is the setting's own heading, and its description carries the switching-back cost", () => {
+    render(
+      <FallbackBehaviorGroup
+        policy={policy({ returnToPreferred: "prompt" })}
+        onChange={vi.fn()}
+        status={null}
+      />,
+    );
+    const group = screen.getByRole("radiogroup");
+    // Falsification: drop `aria-labelledby`/`aria-describedby` from the
+    // `<RadioGroup>` in `fallback-behavior-group.tsx` - both lookups below
+    // then resolve `undefined`.
+    //
+    // The apostrophe is ASCII U+0027, not the typographic U+2019. This was
+    // asserted the other way round first, on the assumption that JSX's
+    // `&apos;` yields a curly quote - it does not: `&apos;` IS the ASCII
+    // apostrophe entity (U+2019 would be `&rsquo;`), and the JSX transform
+    // resolves it to U+0027 in the rendered text node. The copy in
+    // `fallback-behavior-group.tsx` predates this wave and is unchanged; only
+    // the expectation was wrong. Compared with `toBe` rather than `toContain`
+    // deliberately, so a future copy change to a real curly quote fails here
+    // instead of passing on a substring.
+    expect(textOf(group.getAttribute("aria-labelledby"))).toBe(
+      "When the original provider's limit resets",
+    );
+    expect(textOf(group.getAttribute("aria-describedby"))).toContain(
+      "Switching back costs a fresh session",
+    );
+  });
+
+  it("the 'Switch back automatically' radio carries its own consequence as an accessible description", () => {
+    render(
+      <FallbackBehaviorGroup
+        policy={policy({ returnToPreferred: "prompt" })}
+        onChange={vi.fn()}
+        status={null}
+      />,
+    );
+    const auto = screen.getByRole("radio", {
+      name: "Switch back automatically",
+    });
+    expect(textOf(auto.getAttribute("aria-describedby"))).toContain(
+      "Starts a fresh session and moves queued messages back",
+    );
+  });
+
+  it("the 'Ask me' radio has NO description - it has no consequence to read out", () => {
+    render(
+      <FallbackBehaviorGroup
+        policy={policy({ returnToPreferred: "prompt" })}
+        onChange={vi.fn()}
+        status={null}
+      />,
+    );
+    const askMe = screen.getByRole("radio", { name: "Ask me" });
+    // Falsification: point every option's radio at a description element
+    // unconditionally (drop the `copy.description === null ? undefined : ...`
+    // branch) - this radio would then pick up SOME id, even though "Ask me"
+    // renders no consequence paragraph.
+    expect(askMe.getAttribute("aria-describedby")).toBeNull();
+  });
+});

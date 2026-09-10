@@ -303,6 +303,44 @@ export interface ConfirmedManualFallbackAction {
   readonly sequence: number;
 }
 
+/**
+ * A fallback action's answer that arrived with nowhere to render it.
+ *
+ * The sibling case to {@link ConfirmedManualFallbackAction}, and the one MF11
+ * found. A destination pick is answered by the host asynchronously, and the
+ * surface that sent it is a POPOVER on a card the traversal's own next
+ * transition removes: `waiting -> switching` replaces the waiting subtree
+ * wholesale, so a losing pick's refusal can land with the menu, its inline
+ * refusal line and its live region all gone. TanStack skips a per-call
+ * `mutate(vars, { onSuccess })` handler once its observer has no listeners, so
+ * that refusal was not merely invisible - it was never delivered anywhere.
+ *
+ * `text` is the already-rendered sentence rather than the raw outcome, and
+ * deliberately: the wording is the chat surfaces' (`describeFallbackOutcome`),
+ * and re-deriving it in the announcer would be a second copy table for one set
+ * of facts - which is exactly how the two would come to disagree.
+ *
+ * Only outcomes NO mounted surface will report reach this record. A menu that
+ * is still open answers inline, where the user is looking; this is the
+ * fallback for when there is nowhere left to look. An `applied` outcome never
+ * reaches it at all - the frame that follows, and the host's own durable
+ * notice, are that outcome's feedback, and a second announcement would be the
+ * duplicate the finding rules out.
+ */
+export interface UnattendedFallbackOutcome {
+  readonly hostId: string | null;
+  readonly epicId: string;
+  readonly chatId: string;
+  /** The sentence to speak, already resolved by the surface's copy table. */
+  readonly text: string;
+  /**
+   * Monotonic per store instance - the consumer's dedupe key, for the same
+   * reason {@link ConfirmedManualFallbackAction.sequence} is one: two refusals
+   * of the same pick are distinguishable only by this counter.
+   */
+  readonly sequence: number;
+}
+
 type ChatSnapshotFrame = Parameters<ChatStreamCallbacks["onSnapshot"]>[0];
 type ChatWindowedSnapshotFrame = Parameters<
   ChatStreamCallbacks["onWindowedSnapshot"]
@@ -1175,6 +1213,14 @@ export interface ChatSessionState {
    * `sequence`. See {@link ConfirmedManualFallbackAction}.
    */
   readonly confirmedManualFallbackAction: ConfirmedManualFallbackAction | null;
+  /**
+   * A fallback action outcome that reached no surface, or `null`.
+   *
+   * The same kind of EVENT record as {@link confirmedManualFallbackAction}
+   * above and cleared by nothing, for the same reason. See
+   * {@link UnattendedFallbackOutcome}.
+   */
+  readonly unattendedFallbackOutcome: UnattendedFallbackOutcome | null;
   readonly restore: ChatRestoreSlot | null;
   readonly pendingActions: Readonly<Record<string, PendingChatAction>>;
   readonly acceptedActions: Readonly<Record<string, AcceptedChatAction>>;
@@ -1355,6 +1401,16 @@ export interface ChatSessionState {
    */
   publishConfirmedManualFallbackAction: (
     input: Omit<ConfirmedManualFallbackAction, "sequence">,
+  ) => void;
+  /**
+   * Record a fallback outcome whose initiating surface had already gone.
+   *
+   * The same mailbox contract as the action above: the CALLER decides that no
+   * mounted surface will report this one, and supplies the sentence. The store
+   * stamps a sequence and holds the last.
+   */
+  publishUnattendedFallbackOutcome: (
+    input: Omit<UnattendedFallbackOutcome, "sequence">,
   ) => void;
   stopBackgroundItem: (taskId: string) => string | null;
   stopAllBackgroundItems: () => string | null;
@@ -6042,6 +6098,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       heldUpdates: [],
       fallbackChoiceLease: null,
       confirmedManualFallbackAction: null,
+      unattendedFallbackOutcome: null,
       pendingBackgroundStops: {},
       pendingBackgroundStopAll: null,
       pendingBackgroundSessionStop: null,
@@ -6618,6 +6675,15 @@ export function createChatSessionStoreWithNotificationDependencies(
             // number is a property of the sequence itself and cannot drift out
             // of step with what is stored.
             sequence: (state.confirmedManualFallbackAction?.sequence ?? 0) + 1,
+          },
+        }));
+      },
+      publishUnattendedFallbackOutcome: (input) => {
+        if (disposed) return;
+        set((state) => ({
+          unattendedFallbackOutcome: {
+            ...input,
+            sequence: (state.unattendedFallbackOutcome?.sequence ?? 0) + 1,
           },
         }));
       },

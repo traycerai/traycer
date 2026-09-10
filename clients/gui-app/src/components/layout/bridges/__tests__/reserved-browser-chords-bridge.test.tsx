@@ -13,7 +13,7 @@ afterEach(() => {
 
 describe("<ReservedBrowserChordsBridge />", () => {
   it("pushes the reserved-chord table into main when a browserView exists", () => {
-    const bridge = new FakeBrowserViewBridge();
+    const bridge = new FakeBrowserViewBridge({});
     render(
       <RunnerHostProvider
         runnerHost={createFakeRunnerHost({ browserView: bridge })}

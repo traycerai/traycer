@@ -16,6 +16,7 @@ import {
 import { FallbackDestinationMenu } from "./fallback-destination-menu";
 import { useFallbackChooseTarget } from "./use-fallback-actions";
 import { useFallbackChoiceLease } from "./use-fallback-choice-lease";
+import { usePublishUnattendedFallbackOutcome } from "./use-unattended-fallback-outcome";
 
 /**
  * "Choose differently…" — the grace card's menu, which FREEZES the window.
@@ -86,8 +87,19 @@ export function FallbackGraceMenu({
     chatId,
     hostId,
   });
-  const chooseTarget = useFallbackChooseTarget(client, chatId);
+  // The menu's inline line is the channel while the popover is open; once it
+  // closes - or once the card goes with the traversal's next transition - the
+  // answer is owed to the chat's persistent announcer instead (MF11).
+  const publishUnattended = usePublishUnattendedFallbackOutcome({
+    epicId,
+    chatId,
+    hostId,
+  });
   const [refusal, setRefusal] = useState<string | null>(null);
+  const chooseTarget = useFallbackChooseTarget(client, chatId, {
+    inlineMenuOpen: open,
+    publishUnattended,
+  });
 
   const onOpenChange = useCallback(
     (next: boolean) => {
@@ -282,17 +294,35 @@ export function FallbackWaitingMenu({
   client,
   epicId,
   chatId,
+  hostId,
   canAct,
 }: {
   readonly pending: PendingFallback;
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly epicId: string;
   readonly chatId: string;
+  /**
+   * Not for a lease - this menu freezes nothing - but for the announcer: the
+   * chat session this refusal has to reach is keyed by the whole triple.
+   */
+  readonly hostId: string;
   readonly canAct: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
-  const chooseTarget = useFallbackChooseTarget(client, chatId);
+  // The transition this menu is MOST likely to lose its surface to is its own
+  // card's: `waiting -> switching` replaces the waiting subtree wholesale, so a
+  // losing pick answered a beat later finds no menu, no inline line and no live
+  // region. That is the MF11 case, and this is where its answer goes.
+  const publishUnattended = usePublishUnattendedFallbackOutcome({
+    epicId,
+    chatId,
+    hostId,
+  });
+  const chooseTarget = useFallbackChooseTarget(client, chatId, {
+    inlineMenuOpen: open,
+    publishUnattended,
+  });
 
   const onOpenChange = useCallback((next: boolean) => {
     setOpen(next);

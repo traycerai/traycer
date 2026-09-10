@@ -1876,14 +1876,38 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     (through `carryViewedHostIntoSettingsScope`), which is precisely when a
     panel that said nothing would be editing the wrong machine.
   - **Groups**: Fallback (the `Automatic fallback` master switch, off by
-    default, and the `Try these in order` step editor), Behavior, Equivalent
-    models, Advanced per-failure overrides, and a Danger Zone.
+    default, and the `Try these in order` step editor), Behavior, Allowed
+    destinations, Equivalent models, Advanced per-failure overrides, and a
+    Danger Zone. `Allowed destinations` (FC8, lane G3) edits
+    `destinationExclusions` and nothing else - it is mounted between Behavior
+    and Equivalent models and never adds, removes or reorders a candidate row,
+    which is why the panel commits it with `null` identities. That field is also
+    the eighth thing `fallbackPolicyValuesEqual` compares, as a SET (order and
+    duplicates are not user-visible); a policy field missing from that function
+    is equal to itself by omission, so an edit to it alone would compare equal
+    to `persisted` and the notice would call an unsaved change stored.
   - **The step editor is the only drag surface in Settings**, so it carries ▲▼
     buttons as well: a pointer drag is unreachable from a keyboard and awkward
     on touch, and this list is the feature's whole configuration. Only
     `PointerSensor` is registered - the buttons are the keyboard and touch
     path, and two competing keyboard gestures over one list would be worse than
-    one that is announced. `Notify me` has neither handle nor arrows.
+    one. `Notify me` has neither handle nor arrows.
+    **The handle is therefore hidden from assistive technology, not merely
+    silent (follow-up AX7).** dnd-kit's `attributes` put `role="button"`,
+    `tabIndex={0}`, `aria-roledescription="sortable"` and an `aria-describedby`
+    pointing at its own instructions - "press the space bar, use the arrow
+    keys" - on the handle span, and with no `KeyboardSensor` nothing implements
+    that gesture. So the handle was promising a gesture that does nothing, to
+    exactly the users who cannot use the gesture it does have. Only `listeners`
+    are spread now, which keeps the pointer drag and drops every promise, and
+    the span is `aria-hidden` with no label: it is a grip affordance for a
+    mouse. What replaces the promise is real - the `<ul>` is `aria-labelledby`
+    the "Try these in order" heading and `aria-describedby` the instruction
+    paragraph below it, whose first sentence names the Move up and Move down
+    buttons as the way to reorder. One paragraph, the visible one, rather than a
+    screen-reader copy that could drift from it. The alternative -
+    registering a working `KeyboardSensor` - was available and rejected for the
+    reason above: it would put two keyboard gestures on one list.
   - **`Notify me` has no switch either.** It used to carry the same `Switch` as
     every other row, beside copy saying "Always runs when nothing else worked" -
     two statements that cannot both be true, and the one a first-time user
@@ -1955,6 +1979,16 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     that failure. The five excluded reasons collapse into one read-only line -
     exclusion is not a preference - and `Reset overrides only` clears
     `reasonOverrides` alone, leaving the ladder and Behavior untouched.
+    **What the matrix cannot express, disclosed rather than left to be
+    discovered (RF5, D142/D146).** Turning every override chip off preserves
+    that failure's pre-retry/hold behavior and terminal Notify; Settings does
+    not author the wire's per-reason `off` value, and Notify stays last. The
+    wire schema permits both - `reasonOverrides` accepts the literal `"off"`,
+    and `fallbackLadderSchema` checks length and uniqueness only, so an early
+    `notify` is a valid stored ladder - and the panel deliberately writes
+    neither. D142 and D146 settled that (the user fixed both); the sentence
+    above is the disclosure obligation those decisions carry, and it lives in
+    the panel's own help copy as well as here.
   - **Equivalent models** is the user's statement about which models are
     interchangeable, and the only thing that makes the "equivalent model" step
     possible - the host will not move a chat between a standard and a frontier
@@ -2046,6 +2080,27 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     rejected removal) has no correspondence left and re-seeds. The echo path
     still uses the strict comparison: a restore replaces the rows wholesale and
     is not a list this editor produced.
+    **A re-seed INVALIDATES a removal's Undo, and that needs a generation
+    rather than an address (follow-up #10).** A removal toast carries the
+    inverse of its own operation, addressed by `draftKey` - and a re-seed
+    replaces every one of those keys, so afterwards the inverse holds an address
+    that names nothing, which is indistinguishable from "the row really is still
+    missing". Delete `g1` from `[g1, g2]`, let the save be REFUSED (the revert's
+    shape mismatch re-seeds every group), rename the restored group to `g3`,
+    then press the still-open toast's Undo: neither the stale `draftKey` nor the
+    id matches, `g1` is inserted, and one gesture undoes the deletion twice. The
+    id check alone got the un-renamed case only, and only because two groups
+    with one name is not a valid policy - it answers "would this produce a
+    policy the schema rejects", not "is this inverse still applicable".
+    `toKeyedGroups` - the single re-seed site, reached by hydration,
+    `reconcileKeyedGroups`' foreign list and `revertKeyedGroups`' shape change -
+    bumps a module generation, each inverse is stamped with the generation it
+    was minted AT (read before the commit that removes the row, never inside the
+    Undo callback, where it would sample the generation at Undo time and always
+    compare equal), and `applyGroupsInverse` refuses a stamp that has moved. One
+    guard for both arms: the candidate arm already failed SAFE for the same
+    underlying reason, so the guard makes its reason explicit instead of
+    incidental.
   - **When an edit is SAVED depends on the control kind.** Switches, selects,
     ▲▼ and buttons produce a complete value per interaction and commit
     immediately. **Text fields (group name, model family, and the effort input
@@ -2143,6 +2198,36 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     because a row describing an account still has to name it. `profileId: null`
     omits the clause entirely - distinct from the chat cards, where `null` is a
     terminal agent and is NAMED "Terminal account".
+    **A FAILED preview is not an absent one, and the editor now says which
+    (follow-up FC9).** `preview` is data-or-null and a null renders no line, so a
+    failed check looked exactly like a host that had never been asked: no
+    answer, no explanation, no way to ask again. D159 accepts the null OMISSION
+    as a fidelity rule - never guess a verdict in the client - and this is the
+    usability half on top of it, not a reversal. ONE editor-level line beside
+    "Add a group", never one per row, because the failure is one request
+    covering every row: "Couldn't check what these models resolve to." with a
+    **Try again**. It is `role="status"`, not `role="alert"` - the rows stay
+    editable and savable, and a verdict is an advisory the page works without.
+    Keyed on the query's `isError` and nothing else, which is exactly "we asked
+    and it failed": both reasons this query deliberately answers nothing leave
+    it false, since a closed gate leaves the query disabled and `pending`, and a
+    host that does not ADVERTISE the method never runs it. That last case
+    therefore still renders nothing and offers no retry, which is the stated
+    limit: that host will never answer, and a Try again for it would be a
+    control with nothing behind it. Pending wins over unavailable by the
+    `!previewPending` term in the footer's `failed` - a retry in flight is an
+    answer on its way - so this remains the single pending indicator D159 asks
+    for. The `role="status"` region is **mounted on every path, empty
+    included**, and only its TEXT swaps: a live region inserted into the tree
+    together with its content is announced unreliably, and for this row the
+    announcement IS the difference between a failed check and an absent one, so
+    a screen-reader user who is never told would be back to the two being
+    indistinguishable. That is why the exclusion is a condition rather than the
+    early return it used to be - an early return cannot keep the region
+    mounted. Stale
+    verdicts against an edited row need nothing new: the request's own groups
+    are the query key, so a changed list is a different cache entry and there is
+    no `placeholderData`.
   - **Danger Zone** holds one action, `Reset all fallback settings`, and its
     confirm body names its scope because every part of that scope is guessable
     wrong: what it touches (steps, both timings, model groups, overrides - not
@@ -2212,6 +2297,70 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     replacement was a reset and the new Danger Zone takes focus onto its Reset
     button as it mounts, then clears the intent so a later remount for another
     reason (a host switch) does not steal focus onto a button nobody pressed.
+    A REFUSED reset has a third path and it restores focus **only from an
+    unclaimed one** (OSS review P2 / R-OSS-2). Confirming closes the dialog and
+    starts the request in one gesture, so by the time Radix runs its deferred
+    `onCloseAutoFocus` the opener is mounted but `disabled={isPending}` - the
+    dialog takes the live-opener branch, prevents Radix's own restoration, calls
+    `.focus()` on a disabled button, and focus lands on `document.body` and
+    stays there. The Danger Zone repairs that when `isPending` falls. It used to
+    do so unconditionally, and the rest of the editor stays interactive while a
+    reset is pending, so a user who had moved to a Model family field was pulled
+    off it - and the forced blur ran `CandidateRow`'s commit-on-leave, SAVING a
+    half-typed family and replacing the reset's own refusal notice with an
+    unintended save. So the restoration is gated on `document.activeElement`
+    being `document.body` (or null), which is exactly the state it exists to
+    repair; anything else holding focus is a deliberate move and outranks a
+    deferred restoration. Checked at settle time rather than by subscribing to
+    focus changes: there is no window between the two where the answer differs.
+  - **Form RELATIONSHIPS, not just names (follow-up AX8).** Every control on
+    this page already had an accessible name; what was missing was what each
+    name belongs to, and the names are the problem - "Provider", "Model
+    family", "Effort", "Move up" repeat across every candidate row of every
+    group, so with two groups on screen the names alone cannot say which group
+    is being changed, and with two rows in one group they cannot say which row.
+    Four fixes, and the first one is why the others are small:
+    - **Named CONTAINERS rather than qualified labels.** Each group card is a
+      `role="group"` labelled `Model group <name>` (or `Unnamed model group`,
+      a state the user can reach and hold), and each candidate row is a nested
+      `role="group"` labelled `Model <n>`. Group context is announced on entry
+      and then stays out of the way, where "Model family, row 2, group fast"
+      would be read on every field - and it leaves every existing
+      accessible-name query in the tree working. `aria-label` and not
+      `aria-labelledby` pointing at the name field, because the group's name is
+      an editable INPUT and an input is not a label; computed from the current
+      value, so it follows a rename.
+    - **The master switch consumes its row's description.** `SettingsRow`
+      publishes its description id through `SettingsRowDescriptionContext`, and
+      only something rendered inside the `control` slot is below that provider -
+      which an inline `<Switch>` built one component up was not. So the
+      paragraph explaining what turning fallback off does, including the live
+      "N in progress right now" count that is the fact the decision turns on,
+      had no programmatic relationship to the control it explains. It is a
+      component now (`MasterFallbackToggle`), which is what the two Behavior
+      timings already were.
+    - **The return-to-preferred radios get a group name and per-option
+      descriptions.** That row is hand-built rather than a `SettingsRow`, which
+      is exactly why it had neither: the `radiogroup` is `aria-labelledby` the
+      "When the original provider's limit resets" heading and
+      `aria-describedby` its caveat, and the `auto` option is
+      `aria-describedby` its own consequence paragraph - the fresh session and
+      the queued messages moving back, which is the whole reason this row is
+      radios instead of a select. Options with no consequence get no
+      description rather than a dangling id.
+    - **Verdicts describe their field, and the validation error names its
+      row.** A row's preview line is the Model family field's
+      `aria-describedby` (dropped when there is no verdict, since the absence is
+      itself meaningful under D159), a blank family carries `aria-invalid`
+      because the wire schema rejects it and it blocks every commit on the page,
+      and `draftIssueMessage` now says `Model 2 in “fast” needs a family name.`
+      rather than `A model needs a family name.` Validation is whole-policy, so
+      one blank field holds the master switch too - and the one error line a
+      user gets has to say which of a dozen rows is holding it. The row is
+      identifiable visually by where the message sits; it was not identifiable
+      at all by anything read aloud. The container label and the message use the
+      same words for a row (`Model <n>`, and the group by name) so the two agree
+      about what to call it.
   - **The failure outcomes are decided once** in
     `fallback/fallback-policy-draft.ts` rather than per control. A **local
     validation failure** keeps the draft in the control, shows the error and
@@ -3065,11 +3214,40 @@ factorises:
   sentence instead), and only two carry a second account — `confirmed` under
   `unverifiedHostRow`, `rollback` under `persistedUnverified`. Those are two DIFFERENT
   inputs, which is why the second column below is headed by the condition rather than by a
-  single "authority" flag, and it is what follow-up #17 is about.
+  single "authority" flag. Follow-up #17 was the discovery that a THIRD consumer — the
+  off-axis refusal consequences — read only one of the two; it is fixed, and both are now
+  read through `persistedUnverified || unverifiedHostRow !== null` wherever a sentence
+  claims what the host holds.
 
 **21 derivations cover all 96 cells** — of the notice's two sentences. Composing them
 per-case is what produced eight passes of whack-a-mole; a cell is now wrong only if one of
 the 21 is wrong.
+
+**Count re-stated after the follow-up wave (#16, #17). The 21 is unchanged, and what
+changed underneath it is worth writing down, because "unchanged" is the answer that hides
+things:**
+
+- **#16 did not move the count and did make three of the 12 real.** The REQUEST axis was
+  always 3 × 4, but its `refused` row held ONE string served to all three operations, so
+  three of the twelve derivations were nominal — the same sentence counted three times. They
+  are now distinct. A count over a factorisation says how many INDEPENDENT answers the
+  space needs, not how many have been written, and the gap between those two is exactly
+  where an audit finds copy that names the wrong thing.
+- **#17 did not touch the axes at all**, and that is the whole finding. The refusal
+  consequences are an OFF-AXIS sentence (the P3 table above), so widening their inputs
+  changes nothing here — which is precisely how they came to be the third consumer of
+  display authority while only the other two knew the rule. Their own derivation count went
+  from **6 to 8**: `refused-reverted` 2 → 3, `refused-kept`'s `draftConfirmed` branch 2 → 3
+  (its non-confirmed branch stays 1), `refused-unverified` 1. The two new arms are the
+  `unverifiedHostRow` case, which `persistedUnverified` does not cover because a reset whose
+  own reply was LOST never confirms anything, so `unrefreshedReset` stays null while the
+  host's row is every bit as unknown.
+
+The lesson the count carries: **being off-axis is not the same as being out of scope.** The
+P3 table lists four sentences the 21 do not govern, and each of them still reads state this
+matrix has an opinion about. #17 was the second of the four to be audited; the other two
+(the staleness banner, the validation alert) make no host claim, which is why they are
+safe — not because they are listed.
 
 **What the 21 govern, stated exactly (P3).** They govern the notice's TWO sentences — the
 request account and the display account — and nothing else. The status place renders four
@@ -3077,12 +3255,12 @@ further strings, each deriving from a field this matrix has no axis for. They ar
 rather than swallowed into it, because widening the axes to fit them would turn the
 factorisation into a claim about a bigger space than anything has tested:
 
-| Other sentence                                                                        | Derives from                                                   | Why it is not on an axis                                                                                                              |
-| ------------------------------------------------------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| the `unknown` arm's COMBINED sentence                                                 | `unknownCarries` and `displayDispatch` together                | the one place the two accounts are composed rather than concatenated, so it is a single 3 × 8 cell and not a pair of independent ones |
-| the refusal consequences (`refused-reverted` / `refused-kept` / `refused-unverified`) | `hostError.outcome` × `persistedUnverified` × `draftConfirmed` | the notice outcome is FINER than the operation axis: one wire refusal becomes three outcomes, decided by what else was outstanding    |
-| the staleness banner                                                                  | `unrefreshedReset` + `unrefreshedResetSubject`                 | a different surface with a different owner (D327): the banner owns the reset's unread state, the notice owns display provenance       |
-| the validation alert                                                                  | `localError`                                                   | about the draft's SHAPE, and rendered whether or not any request exists                                                               |
+| Other sentence                                                                        | Derives from                                                                         | Why it is not on an axis                                                                                                              |
+| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| the `unknown` arm's COMBINED sentence                                                 | `unknownCarries` and `displayDispatch` together                                      | the one place the two accounts are composed rather than concatenated, so it is a single 3 × 8 cell and not a pair of independent ones |
+| the refusal consequences (`refused-reverted` / `refused-kept` / `refused-unverified`) | `hostError.outcome` × `persistedUnverified` × `unverifiedHostRow` × `draftConfirmed` | the notice outcome is FINER than the operation axis: one wire refusal becomes three outcomes, decided by what else was outstanding    |
+| the staleness banner                                                                  | `unrefreshedReset` + `unrefreshedResetSubject`                                       | a different surface with a different owner (D327): the banner owns the reset's unread state, the notice owns display provenance       |
+| the validation alert                                                                  | `localError`                                                                         | about the draft's SHAPE, and rendered whether or not any request exists                                                               |
 
 ### Axis 1 — the DISPLAY account (8 states × authority)
 
@@ -3116,6 +3294,35 @@ cannot settle. The rule as written needs no ORDERING field — it does need a fi
 **Only `confirmed` and `refused-rollback` make host claims, so only those two have a second
 column.** That is the matrix's own answer to "which sentences need the authority rule",
 and it is why the rule is stated once rather than per cell.
+
+Read that as scoped to THIS AXIS, which is what #17 cost a pass to learn. It answers which
+DISPLAY-ACCOUNT sentences need the rule; it is not a census of which sentences in the panel
+make host claims. Two of the off-axis refusal consequences do — "still in force" and "it is
+in force" — and they were outside this table's field of view while being governed by its
+rule. When a new sentence is written anywhere in the status place, the question to ask is
+"does it say what the host holds", not "is it on an axis".
+
+**What makes `confirmed` TRUE, and the second marker it needed (OSS review P2 /
+R-OSS-1).** `confirmedViewRevision === revision` is a claim about VALUES, so it has to stop
+holding the moment `persisted` moves away from what is displayed. It did not. The
+correcting-rollback branch adopts a confirmed policy into the controls and clears
+`refusedDraft` — which was the ONLY marker saying the display was not the user's own work —
+so a SECOND, newer success saw an unmarked display, read it as an intervening edit, and
+took the moved-on arm: `persisted` advanced to that reply's policy, the controls kept the
+first one, and `confirmedViewRevision` went on certifying them. The page then rendered
+`confirmed` ("What's on screen is what this host has saved") over values the host did not
+have, with no reset, no failed read and no lost reply anywhere in the sequence — C refused,
+A succeeds, B succeeds, no user edit between them. Every one of those three overlapping
+saves is a gesture the controls permit.
+
+The fix is a second marker, `adoptedView`, beside `refusedDraft`, and one predicate over
+both — `draftIsNotUserAuthored`. The two markers mean different things (a value this
+reducer PUT BACK, a value this reducer TOOK FROM THE HOST) and the same thing for every arm
+that installs an authoritative policy: nobody typed this, so replace it. Both consumers ask
+through the one predicate, which is not tidiness — the second consumer, `reconciled`'s
+adopt gate, is reachable with an adopted display and no refusal (W succeeds after X's reply
+is lost and Y is refused at a later revision), and it had the same defect independently.
+`edited` clears both, which is what keeps a real intervening edit protected.
 
 **Reachability of `edited-unsent` (the classifier's `uncommitted`), and which operations can
 host it.** `commit` dispatches `edited` and then `save-started` in the same tick, and
@@ -3155,12 +3362,34 @@ them has, where the notice carries the claim alone.
 
 ### Axis 2 — the REQUEST account (3 operations × 4 outcomes)
 
-| OUTCOME                       | `set` (draft)                                                   | `reset`                                                                                      | `restore`                                                                                   |
-| ----------------------------- | --------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| success                       | no notice — the controls carry it                               | no notice; the editor remounts on the re-read                                                | no notice                                                                                   |
-| refused                       | "Couldn't save: <host reason>" + the rollback/kept split (D330) | "Couldn't save: <host reason>" - the operation is NOT named; one classifier serves all three | same as reset                                                                               |
-| unknown (own reply lost)      | "That change may or may not have been saved."                   | "We don't know whether the reset went through - it hasn't been re-read."                     | "We don't know whether restoring the default groups went through - it hasn't been re-read." |
-| unknown-after-failed-read (S) | n/a — a draft save has no post-write read of its own            | the staleness banner owns it (D327/D330); the notice is not the surface                      | n/a                                                                                         |
+| OUTCOME                       | `set` (draft)                                                   | `reset`                                                                  | `restore`                                                                                   |
+| ----------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| success                       | no notice — the controls carry it                               | no notice; the editor remounts on the re-read                            | no notice                                                                                   |
+| refused                       | "Couldn't save: <host reason>" + the rollback/kept split (D330) | "Couldn't reset these settings: <host reason>"                           | "Couldn't restore the default groups: <host reason>"                                        |
+| unknown (own reply lost)      | "That change may or may not have been saved."                   | "We don't know whether the reset went through - it hasn't been re-read." | "We don't know whether restoring the default groups went through - it hasn't been re-read." |
+| unknown-after-failed-read (S) | n/a — a draft save has no post-write read of its own            | the staleness banner owns it (D327/D330); the notice is not the surface  | n/a                                                                                         |
+
+**The `refused` row is the follow-up #16 fix, and it is the row that turned this
+table from a description into a promise.** It PREVIOUSLY read "Couldn't reset:
+<host reason>" / "Couldn't restore: <host reason>" while no such string existed
+anywhere in the tree — the table was describing copy nobody had written, which
+is the orphaned-prose class one level up from the code. The eighth pass
+corrected the table DOWN to what `classifyFallbackSaveFailure` actually did
+("the operation is NOT named; one classifier serves all three"), because a guess
+at a destructive action's wording is a product decision, not a state-model rule.
+Ruling (a), tenth-pass close-out: name the operation, parallel with the
+`unknown` row directly below, which had always named it correctly — so the
+inconsistency was visible inside one panel. The classifier now takes the
+operation, and the `unknown` arm's own message dropped its "so we can't tell
+whether this was saved" clause with it: that clause said the same thing as this
+table's next row, one sentence earlier and in the wrong noun for two of the
+three columns.
+
+`RetryableTransportError` (the host's own "never dispatched" guarantee) and a
+non-`HostRpcError` throw carry the operation too — "Couldn't reach this host, so
+nothing was reset", "Couldn't restore the default groups." Those are not on this
+axis because they are not host ANSWERS: the axis is what the host said, and
+those two are what the transport said.
 
 ### Reachability and coverage
 

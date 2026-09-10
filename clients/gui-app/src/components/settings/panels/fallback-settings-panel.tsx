@@ -19,6 +19,7 @@ import {
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
+import { useSettingsRowDescriptionId } from "@/components/settings/settings-row-description";
 import { HostScopeGate } from "@/components/settings/host-scope/host-scope-gate";
 import {
   useHostScope,
@@ -45,6 +46,7 @@ import { FallbackBehaviorGroup } from "@/components/settings/panels/fallback/fal
 import { FallbackOverridesMatrix } from "@/components/settings/panels/fallback/fallback-overrides-matrix";
 import { FallbackDangerZone } from "@/components/settings/panels/fallback/fallback-danger-zone";
 import { FallbackTierGroupsEditor } from "@/components/settings/panels/fallback/fallback-tier-groups-editor";
+import { FallbackAllowedDestinations } from "@/components/settings/panels/fallback/fallback-allowed-destinations";
 import {
   applyGroupsInverse,
   keyedGroupsMatch,
@@ -448,7 +450,7 @@ function FallbackPolicyEditor(props: {
           });
         })
         .catch((error: unknown) => {
-          const failure = classifyFallbackSaveFailure(error);
+          const failure = classifyFallbackSaveFailure(error, "draft");
           dispatch({
             type: "save-failed",
             requestId,
@@ -567,7 +569,10 @@ function FallbackPolicyEditor(props: {
         });
       })
       .catch((error: unknown) => {
-        const failure = classifyFallbackSaveFailure(error);
+        // The same noun the dispatch above carries. Two spellings of "what
+        // this request is" would be two things to keep in step, so both read
+        // `restore`.
+        const failure = classifyFallbackSaveFailure(error, "restore");
         dispatch({
           type: "save-failed",
           requestId,
@@ -633,7 +638,11 @@ function FallbackPolicyEditor(props: {
         });
       },
       (error: unknown) => {
-        const failure = classifyFallbackSaveFailure(error);
+        // `reset`, which is what makes the refusal say so. This handler is
+        // bound to the mutation's own rejection and nothing else (see the
+        // two-argument `then` above), so it never sees a failed READ - which
+        // would not be a refused reset and must not wear this wording.
+        const failure = classifyFallbackSaveFailure(error, "reset");
         dispatch({
           type: "save-failed",
           requestId,
@@ -735,12 +744,11 @@ function FallbackPolicyEditor(props: {
           label="Automatic fallback"
           description={masterToggleDescription(inFlightCount)}
           control={
-            <Switch
+            <MasterFallbackToggle
               checked={state.draft.enabled}
               onCheckedChange={(next) => {
                 commit({ ...state.draft, enabled: next }, "enabled", null);
               }}
-              aria-label="Automatic fallback"
             />
           }
         />
@@ -821,6 +829,21 @@ function FallbackPolicyEditor(props: {
         }}
         status={saveStatusFor("behavior", "px-5 pb-4")}
       />
+      {/* Lane G3's FC8 surface, mounted here rather than inside the groups
+          editor: it edits `destinationExclusions`, a policy field of its own,
+          and the groups editor owns `tierGroups`. `null` identities are
+          correct BECAUSE of that - the exclusion never adds, removes or
+          reorders a candidate row, so the rows keep the identities they have.
+          If that ever stops being true this mount is wrong and has to carry a
+          keyed list instead. `field: "tierGroups"` only decides which group
+          the panel's one status line renders under, which is the group this
+          control sits above. */}
+      <FallbackAllowedDestinations
+        policy={state.draft}
+        onChange={(next) => {
+          commit(next, "tierGroups", null);
+        }}
+      />
       <FallbackTierGroupsEditor
         policy={state.draft}
         groups={state.keyedTierGroups}
@@ -833,6 +856,20 @@ function FallbackPolicyEditor(props: {
         labelFor={profileLabelFor}
         effortOptions={effortOptions}
         previewPending={previewQuery.isFetching}
+        // The distinction `preview` cannot make (FC9). `preview` is
+        // data-or-null and a null renders no line, so a FAILED check was
+        // indistinguishable from a host that was never asked - the user got no
+        // answer, no explanation and no way to ask again. `isError` is the one
+        // fact that separates them, and it is false for both of the reasons
+        // this query answers nothing on purpose: a gate that is closed (an
+        // invalid draft, groups the editor is not showing) leaves the query
+        // disabled and `pending`, and an older host that does not advertise the
+        // method never runs it either. So this is exactly "we asked and it
+        // failed", which is exactly the state a retry can fix.
+        previewUnavailable={previewQuery.isError}
+        onRetryPreview={() => {
+          void previewQuery.refetch();
+        }}
         onChange={(next, groups) => {
           editDraft(next, "tierGroups", groups);
         }}
@@ -867,6 +904,38 @@ function FallbackPolicyEditor(props: {
         status={saveStatusFor("danger", "px-5 pb-4")}
       />
     </div>
+  );
+}
+
+/**
+ * The master switch, as a component so it can READ its row's description.
+ *
+ * `SettingsRow` publishes its description's id through
+ * `SettingsRowDescriptionContext`, and only something rendered INSIDE the
+ * `control` slot is below that provider - which the inline `<Switch>` this
+ * replaces was not, being JSX built one component up. So the switch carried a
+ * bare `aria-label` and the paragraph explaining what turning it off does
+ * ("Chats already waiting or switching finish on their own - 2 in progress
+ * right now") was visible text with no programmatic relationship to the
+ * control it explains. The two timing Selects in the Behavior group already
+ * consume the same context; this is the row that did not (AX8).
+ *
+ * The count in that description is the reason it matters more here than
+ * elsewhere: it is the fact the toggle DECISION turns on, and a keyboard user
+ * landing on the switch had no way to hear it.
+ */
+function MasterFallbackToggle(props: {
+  readonly checked: boolean;
+  readonly onCheckedChange: (next: boolean) => void;
+}): ReactNode {
+  const describedById = useSettingsRowDescriptionId();
+  return (
+    <Switch
+      checked={props.checked}
+      onCheckedChange={props.onCheckedChange}
+      aria-label="Automatic fallback"
+      aria-describedby={describedById}
+    />
   );
 }
 
@@ -1250,6 +1319,15 @@ function ProfileStepHint(): ReactNode {
  *    rollback then displaced, so any ordering word in this sentence is wrong
  *    half the time.
  *
+ * Both of those arms also consult `authorityInvalidated`, and that was the
+ * follow-up: `persistedUnverified` is only the CONFIRMED-reset case, so a reset
+ * whose own reply was lost left both sentences claiming force over a row nobody
+ * had read. The rule is now stated once for all three consumers of display
+ * authority - `persistedUnverified || authorityInvalidated !== null` - which is
+ * the same input {@link displayAccount} already took. See
+ * {@link outstandingOperationAccount} for the sequence and for why the sentence
+ * relates the two events with "also" and no order.
+ *
  * The remaining two claim nothing about what is stored, and only one of them
  * needs a fact at all: `unknown` names the DRAFT it is uncertain about, which
  * is not always the draft on screen. `refused-unverified` composes unchanged,
@@ -1488,15 +1566,71 @@ function saveNoticeStatus(
 const PRE_RESET_ROLLBACK_ACCOUNT =
   "What's back on screen is still the settings from before the reset, which may no longer be what this host is using.";
 
+/**
+ * The tail every host-claiming sentence ends in while an operation's outcome is
+ * unknown, held as ONE string because three sentences carry it.
+ *
+ * Only the tail, not the whole clause: two of the three carriers put it after a
+ * semicolon and one after a full stop, so the article's capitalisation stays at
+ * the call site. Splicing that at runtime is the thing `unrefreshedResetBody`
+ * already declined to do, and it is the load-bearing half - the part that must
+ * not drift - that lives here.
+ */
+const OUTSTANDING_OPERATION_TAIL =
+  "is also outstanding whose result is unknown, so what the host has now hasn't been re-read.";
+
+/**
+ * The account of the host's row when an operation that did NOT carry the
+ * display has gone unanswered.
+ *
+ * ## Why the refusal consequences need this at all
+ *
+ * `unverifiedHostRow` and `persistedUnverified` are two different ways to lose
+ * the right to say what the host holds, and the panel had THREE consumers of
+ * that right while only two of them knew it:
+ *
+ *  - the DISPLAY account ({@link displayAccount}) reads `unverifiedHostRow`;
+ *  - the two refusal consequences read `persistedUnverified` and nothing else.
+ *
+ * `persistedUnverified` is the narrower case - a reset the host CONFIRMED whose
+ * read-back failed. A reset whose own reply was LOST never gets that far:
+ * `unrefreshedReset` stays null, because nothing confirmed the reset, so
+ * `persistedUnverified` is false while the host's row is every bit as unknown.
+ * Reachable in four steps: a reset's reply is lost and its read fails, an
+ * ordinary save then succeeds (which discharges the read-back ticket but
+ * deliberately NOT the row obligation - a save dispatched after a lost reset
+ * can still have been overwritten by it), and a later save is refused. The
+ * revert then said "your last saved settings are back on screen and still in
+ * force" while the host may already be holding defaults.
+ *
+ * ## Why it claims no order
+ *
+ * A lost reply is not dated. This state knows a refusal happened and knows an
+ * operation is outstanding; it cannot know which the host applied first, so the
+ * sentence relates them with "also" and stops. Both orderings were written and
+ * both were false in some reachable sequence - the same finding
+ * {@link displayAccount}'s confirmed arm records.
+ */
+function outstandingOperationAccount(carries: FallbackSaveCarries): string {
+  return `a ${operationNoun(carries)} ${OUTSTANDING_OPERATION_TAIL}`;
+}
+
 function saveNoticeConsequence(
   outcome: FallbackSaveNoticeOutcome,
   status: FallbackSaveNoticeStatus,
 ): string {
   switch (outcome) {
     case "refused-reverted":
-      return status.persistedUnverified
-        ? `Your edit wasn't saved. ${PRE_RESET_ROLLBACK_ACCOUNT}`
-        : "Your last saved settings are back on screen and still in force.";
+      if (status.persistedUnverified) {
+        return `Your edit wasn't saved. ${PRE_RESET_ROLLBACK_ACCOUNT}`;
+      }
+      // The SECOND way display authority can be gone, and this arm consulted
+      // only the first one for a whole pass. See
+      // {@link outstandingOperationAccount}.
+      if (status.authorityInvalidated !== null) {
+        return `Your last saved settings are back on screen; ${outstandingOperationAccount(status.authorityInvalidated)}`;
+      }
+      return "Your last saved settings are back on screen and still in force.";
     case "refused-kept":
       // The refusal is about a request that judged some other draft, so the
       // question is what is on screen NOW - and "haven't been saved yet" is a
@@ -1509,9 +1643,13 @@ function saveNoticeConsequence(
       // does, and gives the same account, because it is describing the same
       // restored values.
       if (status.draftConfirmed) {
-        return status.persistedUnverified
-          ? `This change wasn't saved. ${PRE_RESET_ROLLBACK_ACCOUNT}`
-          : "This change wasn't saved. What's on screen is a different change the host has confirmed, and it is in force.";
+        if (status.persistedUnverified) {
+          return `This change wasn't saved. ${PRE_RESET_ROLLBACK_ACCOUNT}`;
+        }
+        if (status.authorityInvalidated !== null) {
+          return `This change wasn't saved. What's on screen is a different change the host has confirmed; ${outstandingOperationAccount(status.authorityInvalidated)}`;
+        }
+        return "This change wasn't saved. What's on screen is a different change the host has confirmed, and it is in force.";
       }
       return "The changes you have made since are still on screen and haven't been saved yet.";
     case "refused-unverified":
@@ -1596,7 +1734,11 @@ function displayAccount(status: {
         // that a confirmation happened and that an operation is outstanding
         // with no answer. The sentence says those two facts and nothing that
         // relates them.
-        return `What's on screen was confirmed as saved on this host. A ${operationNoun(status.authorityInvalidated)} is also outstanding whose result is unknown, so what the host has now hasn't been re-read.`;
+        //
+        // The article stays capitalised here and lowercase in the two refusal
+        // consequences that carry the same tail, which is why
+        // `OUTSTANDING_OPERATION_TAIL` is the tail alone.
+        return `What's on screen was confirmed as saved on this host. A ${operationNoun(status.authorityInvalidated)} ${OUTSTANDING_OPERATION_TAIL}`;
       }
       // Describes the DISPLAY's relation to the host, and says nothing about
       // who authored it or when (D347). `confirmedViewRevision` records that
@@ -1666,28 +1808,99 @@ function displayAccount(status: {
  * two arms, which is the defect, and it also folds in a host-ANSWERED fatal
  * marked `retryable` - which used to print "couldn't reach this host" about a
  * host that had just answered.
+ *
+ * ## Why it takes the operation
+ *
+ * One classifier serves all three dispatch sites, and it used to hard-code the
+ * SAVE wording for every one of them - so the single refusal a user ever sees
+ * for a destructive action read as an ordinary save failure: "Couldn't save:
+ * <reason>" for a reset that was turned down. The reset is the one operation
+ * where knowing WHICH request failed matters most, because the alternative
+ * reading is that a reset went through. The `unknown` outcome already named
+ * the operation correctly on its own consequence sentence
+ * ({@link unknownRequestAccount}), so the inconsistency was visible inside one
+ * panel.
+ *
+ * `carries` rather than a message per call site: the three arms below are the
+ * three things the client KNOWS, and that judgement is the same whichever
+ * operation was sent. Only the noun changes.
  */
-function classifyFallbackSaveFailure(error: unknown): {
+function classifyFallbackSaveFailure(
+  error: unknown,
+  carries: FallbackSaveCarries,
+): {
   readonly message: string;
   readonly outcome: FallbackSaveFailureOutcome;
 } {
   if (!(error instanceof HostRpcError)) {
-    return { message: "Couldn't save these settings.", outcome: "refused" };
+    return { message: refusedWithoutReason(carries), outcome: "refused" };
   }
   if (error instanceof RetryableTransportError) {
-    return {
-      message: "Couldn't reach this host, so nothing was saved.",
-      outcome: "refused",
-    };
+    return { message: unreachableHostMessage(carries), outcome: "refused" };
   }
   if (error instanceof HostTransportFailureError) {
+    // No second clause, and that is the change rather than an omission. This
+    // arm's outcome is `unknown`, whose consequence sentence already states
+    // the uncertainty in the operation's own words - "That change may or may
+    // not have been saved", "We don't know whether the reset went through".
+    // The old "so we can't tell whether this was saved" said the same thing
+    // one sentence earlier, in the wrong noun for two of the three
+    // operations, and the two rendered back to back.
     return {
-      message:
-        "Lost contact with this host before it answered, so we can't tell whether this was saved.",
+      message: "Lost contact with this host before it answered.",
       outcome: "unknown",
     };
   }
-  return { message: `Couldn't save: ${error.message}`, outcome: "refused" };
+  return {
+    message: `${refusalPrefix(carries)}: ${error.message}`,
+    outcome: "refused",
+  };
+}
+
+/**
+ * The lead-in to a refusal the host EXPLAINED, which the reason completes.
+ *
+ * The draft keeps the wording it always had. The other two name what was
+ * turned down, because a reset refused is not a save refused and the user has
+ * no other way to tell which of the two they pressed was rejected.
+ */
+function refusalPrefix(carries: FallbackSaveCarries): string {
+  switch (carries) {
+    case "draft":
+      return "Couldn't save";
+    case "reset":
+      return "Couldn't reset these settings";
+    case "restore":
+      return "Couldn't restore the default groups";
+  }
+}
+
+/** A failure with no reason to append - a throw that is not a host answer. */
+function refusedWithoutReason(carries: FallbackSaveCarries): string {
+  switch (carries) {
+    case "draft":
+      return "Couldn't save these settings.";
+    case "reset":
+      return "Couldn't reset these settings.";
+    case "restore":
+      return "Couldn't restore the default groups.";
+  }
+}
+
+/**
+ * `RetryableTransportError` carries the host's guarantee that the request was
+ * never dispatched, so this is the one failure that may say nothing happened -
+ * and the verb has to be the operation's own, not "saved".
+ */
+function unreachableHostMessage(carries: FallbackSaveCarries): string {
+  switch (carries) {
+    case "draft":
+      return "Couldn't reach this host, so nothing was saved.";
+    case "reset":
+      return "Couldn't reach this host, so nothing was reset.";
+    case "restore":
+      return "Couldn't reach this host, so nothing was restored.";
+  }
 }
 
 function FallbackPanelSkeleton(): ReactNode {

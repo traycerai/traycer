@@ -14,6 +14,7 @@ import {
 } from "@/components/settings/panels/fallback/fallback-rung-copy";
 import {
   EXCLUDED_MATRIX_REASONS,
+  FALLBACK_OVERRIDES_DISCLOSURE,
   MATRIX_REASONS,
   REASON_ROW_NOTES,
   RUNG_INELIGIBILITY_COPY,
@@ -82,6 +83,9 @@ export function FallbackOverridesMatrix(
             Reset overrides only
           </Button>
         </div>
+        <p className="mt-3 text-ui-sm text-muted-foreground">
+          {FALLBACK_OVERRIDES_DISCLOSURE}
+        </p>
         {/* ONE grid for the whole table, not a stack of flex rows: the chip
             columns then align by construction rather than by a fixed label
             width, which is also what keeps this off a px/rem layout size. The

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { FALLBACK_ACTION_OUTCOMES } from "@traycer/protocol/host/chat-fallback";
 import {
   describeFallbackOutcome,
+  fallbackLowUsageClause,
   fallbackReasonLabelFor,
   queuedMessagesMovingText,
   queuedMessagesReturningText,
@@ -75,6 +76,52 @@ describe("queued message copy family", () => {
     expect(waiting).not.toMatch(/back/);
     expect(moving).toMatch(/new settings/);
     expect(returning).toMatch(/back/);
+  });
+});
+
+describe("fallbackLowUsageClause", () => {
+  it("says 'running low' for near_limit with no named family", () => {
+    // Falsification: swap the severity check so hard_limit renders "running low" and THIS assertion must go red.
+    expect(
+      fallbackLowUsageClause({
+        accountName: "work-account",
+        severity: "near_limit",
+        limitedFamilies: [],
+      }),
+    ).toBe("work-account is running low on usage");
+  });
+
+  it("says 'reached its rate limit' for hard_limit with no named family", () => {
+    // Falsification: swap the severity check so near_limit renders "has reached its" and THIS assertion must go red.
+    expect(
+      fallbackLowUsageClause({
+        accountName: "work-account",
+        severity: "hard_limit",
+        limitedFamilies: [],
+      }),
+    ).toBe("work-account has reached its rate limit");
+  });
+
+  it("names a single family as the qualifier before 'usage'", () => {
+    // Falsification: drop the limitedFamilies qualifier from the near_limit branch and THIS assertion must go red.
+    expect(
+      fallbackLowUsageClause({
+        accountName: "work-account",
+        severity: "near_limit",
+        limitedFamilies: ["Fable"],
+      }),
+    ).toBe("work-account is running low on Fable usage");
+  });
+
+  it("joins multiple families with ', ' before 'rate limit'", () => {
+    // Falsification: join limitedFamilies with " and " instead of ", " and THIS assertion must go red.
+    expect(
+      fallbackLowUsageClause({
+        accountName: "work-account",
+        severity: "hard_limit",
+        limitedFamilies: ["Fable", "Opus"],
+      }),
+    ).toBe("work-account has reached its Fable, Opus rate limit");
   });
 });
 

@@ -1,4 +1,4 @@
-import { type KeyboardEvent, type ReactNode } from "react";
+import { useId, type KeyboardEvent, type ReactNode } from "react";
 import { ArrowDown, ArrowUp, X } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -9,6 +9,7 @@ import {
 import {
   keyedCandidate,
   moveKeyedCandidate,
+  tierGroupIdentityGeneration,
   type FallbackGroupsInverse,
   type KeyedCandidate,
   type KeyedGroup,
@@ -22,8 +23,10 @@ import {
   useRemovalFocus,
 } from "@/components/settings/panels/fallback/fallback-removal-focus";
 import { guiHarnessIdSchema } from "@traycer/protocol/host/agent/shared";
+import { harnessLabel } from "@/components/settings/panels/fallback/fallback-harness-label";
 import type { AgentReasoningEffortOption } from "@traycer/protocol/host/index";
 import type { FallbackEffortOptions } from "@/components/settings/panels/fallback/fallback-effort-options";
+import { FallbackModelFamilyInput } from "@/components/settings/panels/fallback/fallback-model-family-input";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -33,7 +36,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { harnessDisplayName } from "@/components/session-import/session-import-model";
 import { cn } from "@/lib/utils";
 
 export interface FallbackTierGroupCardProps {
@@ -113,7 +115,26 @@ export function FallbackTierGroupCard(
       : defaultHarnessId;
   const { containerRef, focusAfterRemoval } = useRemovalFocus();
   return (
+    // A NAMED container, which is AX8's half of this card. Every control
+    // inside it repeats a label the panel uses several times over - "Provider",
+    // "Model family", "Effort", "Move up" - so with two groups on screen the
+    // accessible names alone cannot say which group is being changed, and with
+    // two rows in one group they cannot say which row. The names are right; the
+    // RELATIONSHIPS were missing.
+    //
+    // Naming the container rather than qualifying every control is the ARIA
+    // answer and the cheaper one: group context is announced on entry and then
+    // stays out of the way, where "Model family, row 2, group fast" would be
+    // read on every field. It also leaves every existing accessible-name query
+    // in the tree working.
+    //
+    // `aria-label` rather than `aria-labelledby` pointing at the name field:
+    // the group's name is an editable INPUT, and an input is not a label - its
+    // own accessible name is "Group name". Computed from the current value, so
+    // it follows a rename.
     <div
+      role="group"
+      aria-label={groupContainerLabel(group.id)}
       className="rounded-lg border border-border/60 p-4"
       data-testid={`fallback-tier-group-${group.id}`}
       ref={containerRef}
@@ -187,6 +208,11 @@ export function FallbackTierGroupCard(
                   ...candidateRemoveSelectors(group.candidates, index),
                   `[${FALLBACK_ADD_MODEL_ATTRIBUTE}]`,
                 ]);
+                // Read before the commit, for the reason spelled out at the
+                // group-level removal in `fallback-tier-groups-editor.tsx`:
+                // reading it inside the Undo callback would sample the
+                // generation at Undo time and always compare equal.
+                const generation = tierGroupIdentityGeneration();
                 onCommit({
                   ...group,
                   candidates: group.candidates.filter((_, at) => at !== index),
@@ -210,6 +236,7 @@ export function FallbackTierGroupCard(
                           groupDraftKey: group.draftKey,
                           candidate,
                           index,
+                          generation,
                         });
                       },
                     },
@@ -252,6 +279,21 @@ export function FallbackTierGroupCard(
       </Button>
     </div>
   );
+}
+
+/**
+ * The group container's accessible name.
+ *
+ * A blank name is a state the user can reach and hold - the draft is invalid
+ * until they type one, and the group stays on screen meanwhile - so the label
+ * has to work without it. "Unnamed model group" rather than a position,
+ * deliberately: the position is what the VALIDATION message uses ("Group 2
+ * needs a name"), and the two sentences are heard together, so the container
+ * saying nothing about which one it is sends the reader to the error line that
+ * does.
+ */
+function groupContainerLabel(id: string): string {
+  return id.trim() === "" ? "Unnamed model group" : `Model group ${id}`;
 }
 
 /**
@@ -386,8 +428,23 @@ function CandidateRow(props: {
   const commitCurrent = commitOnLeave(() => {
     onCommit(candidate);
   });
+  const familyId = useId();
+  const previewId = useId();
   return (
-    <div className="rounded-md bg-foreground/3 p-2">
+    // The row's own named container, nested inside the group's (AX8). "Model 1"
+    // is the same way the validation copy names a row
+    // (`fallback-policy-draft.ts`'s `candidateSubject`), so the container and
+    // the error line agree about what to call it - which is the whole point of
+    // naming it at all.
+    //
+    // Position and not the family name: the family is the field that is blank
+    // in the case this matters most, so naming the row by it produces "the
+    // model called “”".
+    <div
+      role="group"
+      aria-label={`Model ${index + 1}`}
+      className="rounded-md bg-foreground/3 p-2"
+    >
       <div className="flex flex-wrap items-center gap-2">
         <HarnessSelect
           harnessId={candidate.harnessId}
@@ -397,9 +454,24 @@ function CandidateRow(props: {
             onCommit({ ...candidate, harnessId: next });
           }}
         />
-        <Input
+        <FallbackModelFamilyInput
+          id={familyId}
+          harnessId={candidate.harnessId}
           value={candidate.modelFamily}
           aria-label="Model family"
+          // The verdict line below is what this field resolves to, so it is
+          // this field's DESCRIPTION (AX8). Dropped when there is no verdict
+          // rather than pointing at an element that is not rendered: a
+          // dangling `aria-describedby` is a promise of detail with nothing
+          // behind it, and the absence is itself meaningful here (D159).
+          aria-describedby={preview === null ? undefined : previewId}
+          // A blank family is invalid by the wire schema
+          // (`modelFamily: z.string().trim().min(1)`) and blocks EVERY commit
+          // on the page until it is filled, the master switch included. That
+          // is a local fact this row can see for itself, so it is stated on
+          // the field rather than threaded down from the panel's one error
+          // line - which names the row but cannot mark it.
+          aria-invalid={candidate.modelFamily.trim() === "" ? true : undefined}
           placeholder="opus"
           className="h-8 w-full max-w-[18ch]"
           onChange={(event) => {
@@ -444,7 +516,11 @@ function CandidateRow(props: {
           <X className="size-3.5" aria-hidden />
         </Button>
       </div>
-      <CandidatePreviewLine preview={preview} labelFor={labelFor} />
+      <CandidatePreviewLine
+        id={previewId}
+        preview={preview}
+        labelFor={labelFor}
+      />
     </div>
   );
 }
@@ -605,19 +681,6 @@ function HarnessSelect(props: {
   );
 }
 
-/**
- * "Claude Code" for a GUI harness, the raw id for anything else.
- *
- * `harnessDisplayName` takes the GUI union, and a stored candidate may name a
- * vendor outside it. Printing the id is the honest fallback: it is what is
- * saved, and inventing a friendly name for a harness this surface cannot
- * describe would be a label with nothing behind it.
- */
-function harnessLabel(harnessId: TierCandidate["harnessId"]): string {
-  const parsed = guiHarnessIdSchema.safeParse(harnessId);
-  return parsed.success ? harnessDisplayName(parsed.data) : harnessId;
-}
-
 function MoveButton(props: {
   readonly direction: "up" | "down";
   readonly disabled: boolean;
@@ -663,10 +726,17 @@ function MoveButton(props: {
  * either way; it stays and says why.
  */
 function CandidatePreviewLine(props: {
+  /**
+   * The id the row's Model family field points its `aria-describedby` at
+   * (AX8). The field is the one this verdict is about - it says what that
+   * family resolves to - so the association runs field → line rather than the
+   * line announcing itself.
+   */
+  readonly id: string;
   readonly preview: TierCandidatePreview | null;
   readonly labelFor: FallbackSettingsProfileLabel;
 }): ReactNode {
-  const { preview, labelFor } = props;
+  const { id, preview, labelFor } = props;
   if (preview === null) return null;
   const resolved = preview.resolvedModel;
   const parsedReason =
@@ -679,6 +749,7 @@ function CandidatePreviewLine(props: {
     parsedReason.data === "family-unmatched";
   return (
     <p
+      id={id}
       className={cn(
         "mt-1.5 text-ui-xs",
         unmatchedFamily ? "text-destructive" : "text-muted-foreground",

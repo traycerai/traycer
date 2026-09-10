@@ -9,6 +9,8 @@ import {
   type LandingPlacementTarget,
 } from "@/lib/composer/landing-placement";
 
+const TEST_WEBSOCKET_URL = "ws://127.0.0.1:4917/rpc";
+
 /**
  * Submit-time re-validation for the landing composer (redesign P1.2,
  * selection model §54): "submit re-validates the resolved host is usable
@@ -27,7 +29,7 @@ import {
  */
 function clientAddressing(
   hostId: string,
-  websocketUrl: string | null = "ws://127.0.0.1:4917/rpc",
+  websocketUrl: string | null,
 ): HostClient<HostRpcRegistry> {
   const activeHost: HostDirectoryEntry = {
     hostId,
@@ -86,7 +88,7 @@ function targetWith(
 ): LandingPlacementTarget {
   return {
     resolvedHostId: "host-a",
-    client: clientAddressing("host-a"),
+    client: clientAddressing("host-a", TEST_WEBSOCKET_URL),
     hostLabel: "Studio Mac",
     isPinned: false,
     namedHostDead: false,
@@ -96,7 +98,7 @@ function targetWith(
 
 describe("resolveLandingPlacement", () => {
   it("is ready when the resolved host is exactly what the client addresses", () => {
-    const client = clientAddressing("host-a");
+    const client = clientAddressing("host-a", TEST_WEBSOCKET_URL);
     const placement = resolveLandingPlacement(targetWith({ client }));
     expect(placement).toEqual({
       kind: "ready",
@@ -106,7 +108,7 @@ describe("resolveLandingPlacement", () => {
   });
 
   it("is ready for a pin whose own requester addresses the pinned host", () => {
-    const client = clientAddressing("host-b");
+    const client = clientAddressing("host-b", TEST_WEBSOCKET_URL);
     const placement = resolveLandingPlacement(
       targetWith({ resolvedHostId: "host-b", client, isPinned: true }),
     );
@@ -197,7 +199,7 @@ describe("resolveLandingPlacement", () => {
     const placement = resolveLandingPlacement(
       targetWith({
         resolvedHostId: "host-b",
-        client: clientAddressing("host-a"),
+        client: clientAddressing("host-a", TEST_WEBSOCKET_URL),
         isPinned: true,
         hostLabel: "Build Box",
       }),
@@ -212,7 +214,7 @@ describe("resolveLandingPlacement", () => {
     const placement = resolveLandingPlacement(
       targetWith({
         resolvedHostId: "host-next",
-        client: clientAddressing("host-previous"),
+        client: clientAddressing("host-previous", TEST_WEBSOCKET_URL),
         isPinned: false,
       }),
     );
@@ -224,7 +226,7 @@ describe("resolveLandingPlacement", () => {
   // `resolvedHostId` names the live host, `namedHostDead` stays false, and a
   // good client for it resolves ready, exactly like an unpinned target.
   it("does not refuse a pinned target through the namedHostDead arm", () => {
-    const client = clientAddressing("host-a");
+    const client = clientAddressing("host-a", TEST_WEBSOCKET_URL);
     const placement = resolveLandingPlacement(
       targetWith({ isPinned: true, namedHostDead: false, client }),
     );

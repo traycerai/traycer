@@ -10,6 +10,7 @@ import {
   encodeAutonomousResumeBlock,
   errorBlockSchema,
   errorBlockSchemaPreFallback,
+  providerNoticeKindSchema,
   providerNoticeKindSchemaPreFallback,
   providerNoticeMetadataSchema,
   providerNoticeNormalizedMetadataSchema,
@@ -1120,14 +1121,30 @@ describe("errorBlockSchema.failure round-trip and defaulting", () => {
 });
 
 describe("providerNoticeKindSchemaPreFallback rejects an unknown enum VALUE (not merely an unknown key)", () => {
-  it("rejects fallback_applied and fallback_wait_resumed, and still accepts every pre-fallback kind", () => {
-    expect(
-      providerNoticeKindSchemaPreFallback.safeParse("fallback_applied").success,
-    ).toBe(false);
-    expect(
-      providerNoticeKindSchemaPreFallback.safeParse("fallback_wait_resumed")
-        .success,
-    ).toBe(false);
+  it("rejects every fallback attribution kind, and still accepts every pre-fallback kind", () => {
+    // Named one at a time rather than derived as "the live enum minus this
+    // one": a derived list would pass for any pair of enums, including the two
+    // being identical, which is the property this cell exists to refuse. The
+    // three MOVE arms are listed separately for the same reason - splitting
+    // `fallback_applied` into three kinds is exactly the growth a `1.7`/`1.8`
+    // peer's frozen copy cannot absorb, so each new value has to be refused
+    // here by name.
+    for (const kind of [
+      "fallback_applied",
+      "fallback_returned",
+      "fallback_return_blocked",
+      "fallback_wait_resumed",
+      "fallback_settled",
+    ]) {
+      expect(providerNoticeKindSchemaPreFallback.safeParse(kind).success).toBe(
+        false,
+      );
+      // The live enum is the other half of the claim: these are refused
+      // because the freeze does not name them, NOT because they are unknown
+      // values everywhere. Without this line the cell would still pass if a
+      // kind were misspelled out of existence on both sides.
+      expect(providerNoticeKindSchema.safeParse(kind).success).toBe(true);
+    }
     for (const kind of [
       "model_rerouted",
       "model_verification",

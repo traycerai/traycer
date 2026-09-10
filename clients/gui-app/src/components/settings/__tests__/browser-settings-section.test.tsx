@@ -450,7 +450,7 @@ describe("<BrowserSettingsSection /> website sessions", () => {
   });
 
   it("keeps the sheet open on remove all and reveals the import next step", async () => {
-    const bridge = new FakeBrowserViewBridge();
+    const bridge = new FakeBrowserViewBridge({});
     const forgetLogins = vi.spyOn(bridge, "forgetLogins");
     browserViewState.current = bridge;
     renderSection(controller({}), {
@@ -508,7 +508,7 @@ describe("<BrowserSettingsSection /> website sessions", () => {
   });
 
   it("opens the existing import flow from the outcome-led row", async () => {
-    browserViewState.current = new FakeBrowserViewBridge();
+    browserViewState.current = new FakeBrowserViewBridge({});
     renderSection(controller({ enabled: true }), null);
 
     fireEvent.click(screen.getByRole("button", { name: "Choose source…" }));
@@ -525,7 +525,7 @@ describe("<BrowserSettingsSection /> website sessions", () => {
 
   describe("the import intent", () => {
     it("opens the import flow on mount without a click", async () => {
-      browserViewState.current = new FakeBrowserViewBridge();
+      browserViewState.current = new FakeBrowserViewBridge({});
       useBrowserFocusStore.getState().requestImportLogins();
 
       renderSection(controller({ enabled: true }), null);
@@ -536,7 +536,7 @@ describe("<BrowserSettingsSection /> website sessions", () => {
     });
 
     it("consumes the intent when the dialog closes", async () => {
-      browserViewState.current = new FakeBrowserViewBridge();
+      browserViewState.current = new FakeBrowserViewBridge({});
       useBrowserFocusStore.getState().requestImportLogins();
       renderSection(controller({ enabled: true }), null);
       await waitFor(() => {

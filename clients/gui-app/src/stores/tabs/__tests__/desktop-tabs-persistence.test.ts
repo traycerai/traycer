@@ -26,6 +26,7 @@ import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import { getTabSplitCompatibility } from "@/stores/tabs/tab-split-compatibility";
+import { SETTINGS_SECTIONS } from "@/lib/settings-sections";
 
 const CAPABILITIES = {
   schemaVersion: 2,
@@ -414,5 +415,52 @@ describe("desktop tabs persistence", () => {
       focusedSide: "right",
       routeBackingSide: "left",
     });
+  });
+});
+
+/**
+ * RG6: the SECOND hand-maintained `SETTINGS_PATHS` allowlist, local to this
+ * module's own `legacySystemTabs` (see that constant's comment - deliberately
+ * NOT shared with `store.ts`'s copy or derived from `SETTINGS_SECTIONS`, for
+ * the reason stated there: sharing removes the repeated-omission mechanism).
+ * `hydrateDesktopTabs` reaches `legacySystemTabs` only on the LEGACY path -
+ * no persisted v2 layout - via a legacy HISTORY ROUTE, so a settings tab here
+ * comes from that route rather than from `systemTabs` in the snapshot.
+ */
+describe("RG6: desktop-tabs-persistence's own legacySystemTabs recognizes every registered settings route", () => {
+  it.each(SETTINGS_SECTIONS.map((section) => section.id))(
+    "a legacy history route of /settings/%s hydrates a settings system tab at that route",
+    (sectionId) => {
+      hydrateDesktopTabs(emptySnapshot(), true, `/settings/${sectionId}`);
+      // Falsification: remove any one id from THIS module's own
+      // `SETTINGS_PATHS` copy - exactly that section's case reddens here,
+      // and ONLY here (the sibling sweep in `settings-kind.test.ts` reads
+      // `store.ts`'s separate hand-maintained copy and stays green). That
+      // asymmetry is the point of keeping the two lists unshared.
+      expect(useTabsStore.getState().systemTabs.settings?.lastPath).toBe(
+        `/settings/${sectionId}`,
+      );
+    },
+  );
+
+  it("explicitly covers the three ids the audit found omitted: fallback, app-notifications, link-phone", () => {
+    for (const id of ["fallback", "app-notifications", "link-phone"]) {
+      hydrateDesktopTabs(emptySnapshot(), true, `/settings/${id}`);
+      expect(useTabsStore.getState().systemTabs.settings?.lastPath).toBe(
+        `/settings/${id}`,
+      );
+    }
+  });
+
+  it("an unknown settings path falls back rather than being accepted", () => {
+    hydrateDesktopTabs(emptySnapshot(), true, "/settings/not-a-section");
+    expect(useTabsStore.getState().systemTabs.settings).toBeNull();
+  });
+
+  it("the retired 'service' id is still ACCEPTED - a persisted old path must still hydrate", () => {
+    hydrateDesktopTabs(emptySnapshot(), true, "/settings/service");
+    expect(useTabsStore.getState().systemTabs.settings?.lastPath).toBe(
+      "/settings/service",
+    );
   });
 });

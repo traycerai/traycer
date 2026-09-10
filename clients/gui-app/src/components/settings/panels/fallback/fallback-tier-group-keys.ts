@@ -79,6 +79,31 @@ export function createDraftGroupKey(): string {
   return `draft-group-${nextKey}`;
 }
 
+/**
+ * How many times the identities on screen have been RE-SEEDED wholesale.
+ *
+ * Not a second key counter, and it deliberately does not move when a single row
+ * or group is added: `nextKey` counts identities MINTED, this counts the
+ * moments every identity in the list was thrown away and replaced. Those are
+ * different events, and only the second one invalidates a removal inverse.
+ *
+ * Read by {@link applyGroupsInverse}, written by {@link toKeyedGroups} - which
+ * is the one and only re-seed site: hydration, `reconcileKeyedGroups`' foreign
+ * list, and `revertKeyedGroups`' shape change all reach it and nothing else
+ * does.
+ */
+let identityGeneration = 0;
+
+/**
+ * The generation an inverse must be minted against to still be applicable.
+ *
+ * Exported so a removal's toast can stamp its inverse at the moment the row
+ * left the list; every consumer of that stamp is {@link applyGroupsInverse}.
+ */
+export function tierGroupIdentityGeneration(): number {
+  return identityGeneration;
+}
+
 /** Hydration for one group: it and every row get an identity. */
 export function keyedGroup(group: TierGroup): KeyedGroup {
   return {
@@ -91,10 +116,19 @@ export function keyedGroup(group: TierGroup): KeyedGroup {
   };
 }
 
-/** Hydration: every stored row gets an identity as it enters the draft. */
+/**
+ * Hydration: every stored row gets an identity as it enters the draft.
+ *
+ * This is also the RE-SEED, and the two are the same act - a list arriving from
+ * outside the editor has no identities, so every row gets a new one whether
+ * that list is the first read or a revert whose shape no longer matches. So the
+ * generation is bumped here rather than at each caller: a future re-seed path
+ * gets the invalidation by construction instead of by remembering.
+ */
 export function toKeyedGroups(
   groups: readonly TierGroup[],
 ): readonly KeyedGroup[] {
+  identityGeneration += 1;
   return groups.map(keyedGroup);
 }
 
@@ -274,18 +308,30 @@ function sameCandidate(a: TierCandidate, b: TierCandidate): boolean {
  * identity-addressed rather than positional: `index` is only where to put the
  * row back, and even that is a preference the application clamps, because the
  * one thing a user cannot re-enter by typing is where a row sat.
+ *
+ * `generation` is what makes identity-addressing SOUND. Both variants address
+ * rows by `draftKey`, and a re-seed replaces every one of those keys - so after
+ * one, the inverse is holding an address that names nothing, and "nothing at
+ * that address" is indistinguishable from "the row really is still missing".
+ * The stamp turns that into a decidable question; see
+ * {@link tierGroupIdentityGeneration} and the guard in
+ * {@link applyGroupsInverse}.
  */
 export type FallbackGroupsInverse =
   | {
       readonly kind: "group";
       readonly group: KeyedGroup;
       readonly index: number;
+      /** {@link tierGroupIdentityGeneration} as of the removal. */
+      readonly generation: number;
     }
   | {
       readonly kind: "candidate";
       readonly groupDraftKey: string;
       readonly candidate: KeyedCandidate;
       readonly index: number;
+      /** {@link tierGroupIdentityGeneration} as of the removal. */
+      readonly generation: number;
     };
 
 /**
@@ -300,29 +346,45 @@ export function applyGroupsInverse(
   groups: readonly KeyedGroup[],
   inverse: FallbackGroupsInverse,
 ): readonly KeyedGroup[] {
+  // The identities this inverse addresses no longer exist: something re-seeded
+  // the whole list between the removal and this Undo. Refused for BOTH
+  // variants, one guard rather than two, because it is one question - is this
+  // inverse still addressed to the rows on screen - and the two arms answered
+  // it differently by accident before.
+  //
+  // The group arm FAILED OPEN. A refused save reverts to `persisted`, which is
+  // one group longer than the draft, so `revertKeyedGroups` sees a shape
+  // change and re-keys every group - correctly, since it cannot say which
+  // incoming row is which. The deleted group is therefore already back on
+  // screen, under a key this inverse has never seen. `draftKey` reads "still
+  // missing"; the `id` check below catches that much, because two groups with
+  // one name is not a valid policy - but only until the user RENAMES the
+  // restored group, which is an ordinary thing to do to a group that has just
+  // reappeared. Then neither address matches, the row is inserted a second
+  // time, and the deletion is undone twice from one gesture.
+  //
+  // A generation is what the two addresses cannot supply between them: they
+  // ask "is this row here", and the question that decides applicability is
+  // "does this inverse still describe the list". `id` remains below because it
+  // answers a third, narrower question - see there.
+  //
+  // The candidate arm failed SAFE for the same underlying reason (a re-seed
+  // invalidates its `groupDraftKey`, so its lookup no-ops), so this guard
+  // changes nothing it did and makes the reason explicit instead of
+  // incidental.
+  if (inverse.generation !== identityGeneration) return groups;
   if (inverse.kind === "group") {
-    // Two ways this row can already be back, and the identity check alone only
-    // sees the first.
+    // Undo pressed twice: the row this inverse holds is literally in the list.
     //
-    // `draftKey` catches Undo pressed twice: the row this inverse holds is
-    // literally in the list.
-    //
-    // `id` catches the row being restored by a path that RE-SEEDED identities,
-    // which is what a refused save does. The revert hands `revertKeyedGroups` a
-    // list one group longer than the draft, the shape no longer matches, and it
-    // re-keys every group - correctly, since it cannot say which incoming row
-    // is which. The deleted group is then back on screen under a key this
-    // inverse has never seen, so a key-only guard reads "still missing" and
-    // inserts a second copy. Two groups with one name is not a valid policy:
-    // the commit that follows fails local validation and leaves the user with a
-    // duplicate row and an error, from pressing Undo on a deletion that had
-    // already been undone for them.
-    //
-    // A name is not an identity (that is the whole of D174 and why `draftKey`
-    // exists), but it does not need to be here. The question is not "is this
-    // the same row" - it is "would putting this row back produce a policy the
-    // schema rejects", and `fallbackPolicySchema` refines group ids to be
-    // unique, so a name collision answers exactly that.
+    // `id` beside it is not redundant with the generation guard above - it
+    // catches a NAME collision inside the same generation, which the user can
+    // produce by renaming another group onto the deleted one's name before
+    // pressing Undo. The question here is not "is this the same row" but
+    // "would putting this row back produce a policy the schema rejects", and
+    // `fallbackPolicySchema` refines group ids to be unique, so a name
+    // collision answers exactly that. A name is not an identity - that is the
+    // whole of D174 and why `draftKey` exists - and it does not have to be to
+    // answer this one.
     if (
       groups.some(
         (group) =>

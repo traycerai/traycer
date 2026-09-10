@@ -10,6 +10,7 @@ import {
   keyedGroup,
   moveKeyedCandidate,
   revertKeyedGroups,
+  tierGroupIdentityGeneration,
   toKeyedGroups,
   toWireGroups,
   withTierGroups,
@@ -204,6 +205,47 @@ describe("revertKeyedGroups (F24) - the function's own table", () => {
 });
 
 describe("applyGroupsInverse (F18) - the function's own table", () => {
+  it("refuses an inverse minted before the identities were re-seeded, even when nothing else about it matches", () => {
+    // The six cells below all stamp `generation: tierGroupIdentityGeneration()`
+    // AT THE MOMENT the inverse is built, over a hand-written `current` array
+    // that never itself goes through `toKeyedGroups` - so none of them can
+    // ever observe the guard refuse anything: the stamp always agrees with
+    // whatever `identityGeneration` already is. This cell is the one that
+    // forces a REAL re-seed between the stamp and the apply, which is the only
+    // way to see the guard actually fire.
+    const hydrated = toKeyedGroups([tierGroup("cheap", [])]);
+    const stale = tierGroupIdentityGeneration();
+    // The re-seed: hydrating again bumps `identityGeneration`, exactly as a
+    // revert whose shape changed would.
+    const current = toKeyedGroups([tierGroup("fast", [])]);
+    expect(tierGroupIdentityGeneration()).not.toBe(stale);
+
+    // An inverse minted against the PRE-re-seed list, naming a group that
+    // matches nothing in `current` by id OR by draftKey.
+    const inverse: FallbackGroupsInverse = {
+      kind: "group",
+      group: hydrated[0],
+      index: 0,
+      generation: stale,
+    };
+    // Falsification: delete the `if (inverse.generation !== identityGeneration)
+    // return groups;` guard at the top of `applyGroupsInverse`. Neither the
+    // `draftKey` nor the `id` check below it can catch this case - "cheap"
+    // matches nothing in `current` - so the stale inverse would insert.
+    expect(applyGroupsInverse(current, inverse)).toBe(current);
+
+    // Positive control: the identical inverse, restamped with the CURRENT
+    // generation, does insert - proving the cell above is a refusal and not
+    // `applyGroupsInverse` being broken to always return its input.
+    const fresh: FallbackGroupsInverse = {
+      ...inverse,
+      generation: tierGroupIdentityGeneration(),
+    };
+    const inserted = applyGroupsInverse(current, fresh);
+    expect(inserted).not.toBe(current);
+    expect(inserted.map((group) => group.id)).toEqual(["cheap", "fast"]);
+  });
+
   it("re-inserts a group at its index into a list that has CHANGED since the removal", () => {
     const removedGroup: KeyedGroup = {
       draftKey: "g2",
@@ -216,10 +258,12 @@ describe("applyGroupsInverse (F18) - the function's own table", () => {
       { draftKey: "g1", id: "fast", candidates: [] },
       { draftKey: "g3", id: "new", candidates: [] },
     ];
+    const generation = tierGroupIdentityGeneration();
     const inverse: FallbackGroupsInverse = {
       kind: "group",
       group: removedGroup,
       index: 1,
+      generation,
     };
     const next = applyGroupsInverse(current, inverse);
     expect(next.map((group) => group.draftKey)).toEqual(["g1", "g2", "g3"]);
@@ -234,12 +278,14 @@ describe("applyGroupsInverse (F18) - the function's own table", () => {
     const current: readonly KeyedGroup[] = [
       { draftKey: "g1", id: "fast", candidates: [] },
     ];
+    const generation = tierGroupIdentityGeneration();
     const inverse: FallbackGroupsInverse = {
       kind: "group",
       group: removedGroup,
       // Wildly past the end - the list this index was captured against no
       // longer exists in that shape.
       index: 99,
+      generation,
     };
     const next = applyGroupsInverse(current, inverse);
     expect(next.map((group) => group.draftKey)).toEqual(["g1", "g2"]);
@@ -249,10 +295,12 @@ describe("applyGroupsInverse (F18) - the function's own table", () => {
     const already: readonly KeyedGroup[] = [
       { draftKey: "g1", id: "fast", candidates: [] },
     ];
+    const generation = tierGroupIdentityGeneration();
     const inverse: FallbackGroupsInverse = {
       kind: "group",
       group: already[0],
       index: 0,
+      generation,
     };
     expect(applyGroupsInverse(already, inverse)).toBe(already);
   });
@@ -261,11 +309,13 @@ describe("applyGroupsInverse (F18) - the function's own table", () => {
     const current: readonly KeyedGroup[] = [
       { draftKey: "g1", id: "fast", candidates: [] },
     ];
+    const generation = tierGroupIdentityGeneration();
     const inverse: FallbackGroupsInverse = {
       kind: "candidate",
       groupDraftKey: "gone",
       candidate: { key: "c1", value: candidate("opus") },
       index: 0,
+      generation,
     };
     expect(applyGroupsInverse(current, inverse)).toBe(current);
   });
@@ -282,11 +332,13 @@ describe("applyGroupsInverse (F18) - the function's own table", () => {
       key: "c2",
       value: candidate("sonnet"),
     };
+    const generation = tierGroupIdentityGeneration();
     const inverse: FallbackGroupsInverse = {
       kind: "candidate",
       groupDraftKey: "g1",
       candidate: removedCandidate,
       index: 50,
+      generation,
     };
     const next = applyGroupsInverse(current, inverse);
     expect(next[0].candidates.map((row) => row.key)).toEqual(["c1", "c2"]);
@@ -300,12 +352,69 @@ describe("applyGroupsInverse (F18) - the function's own table", () => {
         candidates: [{ key: "c1", value: candidate("opus") }],
       },
     ];
+    const generation = tierGroupIdentityGeneration();
     const inverse: FallbackGroupsInverse = {
       kind: "candidate",
       groupDraftKey: "g1",
       candidate: current[0].candidates[0],
       index: 0,
+      generation,
     };
     expect(applyGroupsInverse(current, inverse)).toBe(current);
+  });
+});
+
+describe("P2: the generation guard is NARROW - it refuses only across a re-seed, not across any revert", () => {
+  it("a rejected FAMILY EDIT (same shape, value differs) does not bump the generation, so a pending candidate-removal Undo still applies", () => {
+    // Hydrate two groups, "fast" with two candidates.
+    const hydrated = toKeyedGroups([
+      tierGroup("fast", [candidate("opus"), candidate("sonnet")]),
+      tierGroup("cheap", [candidate("haiku")]),
+    ]);
+    const [fast, cheap] = hydrated;
+    const removedCandidate = fast.candidates[1];
+    const generation = tierGroupIdentityGeneration();
+
+    // The user deletes "sonnet" (candidate index 1 of "fast"). The toast's
+    // inverse is stamped with the CURRENT generation, exactly as the
+    // production removal handler does.
+    const afterRemoval: readonly KeyedGroup[] = [
+      { ...fast, candidates: fast.candidates.slice(0, 1) },
+      cheap,
+    ];
+    const inverse: FallbackGroupsInverse = {
+      kind: "candidate",
+      groupDraftKey: fast.draftKey,
+      candidate: removedCandidate,
+      index: 1,
+      generation,
+    };
+
+    // Before the Undo is pressed, a DIFFERENT edit is refused by the host: a
+    // rejected family-name change on the surviving candidate. The revert
+    // restores the pre-edit VALUE through `revertKeyedGroups`, which is
+    // SHAPE-preserving (same group count, same candidate counts per group) -
+    // exactly the case that must NOT re-seed.
+    const rejectedEditWireGroups = [
+      { id: "fast", candidates: [candidate("claude-opus")] },
+      { id: "cheap", candidates: [candidate("haiku")] },
+    ];
+    const reverted = revertKeyedGroups(afterRemoval, rejectedEditWireGroups);
+    // Admission evidence: the revert really is the shape-preserving path -
+    // keys survive it - which is what the falsifier below would break.
+    expect(reverted[0].draftKey).toBe(fast.draftKey);
+    expect(reverted[0].candidates[0].key).toBe(fast.candidates[0].key);
+    expect(tierGroupIdentityGeneration()).toBe(generation);
+
+    // Falsification: make `revertKeyedGroups` re-seed on every call (drop
+    // its `sameGroupShape` early-return and always take the
+    // `toKeyedGroups(groups)` branch). The generation above would then have
+    // moved, and the Undo below would silently no-op instead of restoring
+    // "sonnet".
+    const undone = applyGroupsInverse(reverted, inverse);
+    expect(undone[0].candidates.map((row) => row.value.modelFamily)).toEqual([
+      "claude-opus",
+      "sonnet",
+    ]);
   });
 });

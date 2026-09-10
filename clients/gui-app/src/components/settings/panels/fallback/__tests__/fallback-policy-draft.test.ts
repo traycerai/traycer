@@ -6,8 +6,10 @@ import {
   type TierGroup,
 } from "@traycer/protocol/host/fallback-policy";
 import {
+  adoptedViewOnScreen,
   createFallbackPolicyDraftState,
   createFallbackSaveRequestId,
+  draftIsNotUserAuthored,
   fallbackDisplayOrder,
   fallbackDisplayOrderFor,
   fallbackLadderFrom,
@@ -242,6 +244,86 @@ describe("validateFallbackPolicyDraft", () => {
       policy({ maxWaitMinutes: 999_999 }),
     );
     expect(result.kind).toBe("invalid");
+  });
+
+  // AX8 rewrote four validation sentences so each NAMES the offending row. Only
+  // the `modelFamily` one was pinned; the three below had no assertion
+  // anywhere, and this describe reached no tierGroups path at all. Each asserts
+  // the WHOLE sentence with `toBe`, not a substring: the row is about the
+  // sentence a user reads, and a substring match would survive a rewrite that
+  // dropped the row from it - which is the defect, not a detail of it.
+
+  it("names the GROUP'S POSITION when a group has no name", () => {
+    const result = validateFallbackPolicyDraft(
+      policy({
+        tierGroups: [
+          { id: "fast", candidates: [candidate("opus")] },
+          { id: "", candidates: [candidate("sonnet")] },
+        ],
+      }),
+    );
+    // Falsification: return a bare "A model group needs a name." from
+    // `draftIssueMessage`'s `third === "id"` arm, or drop the `+ 1` from
+    // `groupPosition`. The first loses the row, the second names Group 1 for
+    // the second group - both make the sentence point at the wrong control.
+    expect(result).toEqual({
+      kind: "invalid",
+      message: "Group 2 needs a name.",
+    });
+  });
+
+  it("names the DUPLICATED NAME when two groups collide, and the collision is judged on TRIMMED ids", () => {
+    // Untrimmed on purpose. `fallbackPolicySchema`'s uniqueness refine runs on
+    // the PARSED groups, whose ids the schema has already trimmed, so " fast"
+    // and "fast" collide there - and `groupListIssueMessage` has to walk the
+    // draft with the same `.trim()` or it disagrees with the very refine that
+    // raised the issue.
+    const result = validateFallbackPolicyDraft(
+      policy({
+        tierGroups: [
+          { id: "fast", candidates: [candidate("opus")] },
+          { id: " fast", candidates: [candidate("sonnet")] },
+        ],
+      }),
+    );
+    // Falsification: drop the `.trim()` from `groupListIssueMessage`'s walk.
+    // The two ids no longer match in the walk, so it falls through to the
+    // generic "Two model groups have the same name." - the schema still refuses
+    // the draft, but the message stops naming which name, on exactly the input
+    // where the trim is what made them duplicates.
+    expect(result).toEqual({
+      kind: "invalid",
+      message: "Two model groups are both called “fast”.",
+    });
+  });
+
+  it("names the ROW when a candidate's effort level is blank", () => {
+    const result = validateFallbackPolicyDraft(
+      policy({
+        tierGroups: [
+          {
+            id: "fast",
+            candidates: [
+              candidate("opus"),
+              {
+                harnessId: "claude",
+                modelFamily: "sonnet",
+                reasoningEffort: "",
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    // Falsification: drop the `fifth === "reasoningEffort"` arm from
+    // `draftIssueMessage` and the message falls through to the group-list
+    // sentence, which describes a duplicate-name problem this draft does not
+    // have.
+    expect(result).toEqual({
+      kind: "invalid",
+      message:
+        "Model 2 in “fast” has a blank effort level - pick one, or leave it unset.",
+    });
   });
 });
 
@@ -1262,7 +1344,7 @@ describe("fallbackPolicyDraftReducer - composition-table cells (U / R / S togeth
         tierGroups: [tierGroup("fast", [candidate("")])],
       }),
     );
-    expect(invalid.localError).toBe("A model needs a family name.");
+    expect(invalid.localError).toBe("Model 1 in “fast” needs a family name.");
 
     // A's reply is lost while C is on screen: the `unknown` branch.
     const aUnknown = failUnknown(invalid, a);
@@ -1430,6 +1512,55 @@ describe("fallbackPolicyValuesEqual", () => {
       fallbackPolicyValuesEqual(
         policy({ tierGroups: [tierGroup("fast", [candidate("sonnet")])] }),
         policy({ tierGroups: [tierGroup("fast", [candidate("sonnet")])] }),
+      ),
+    ).toBe(true);
+  });
+
+  // P1: `destinationExclusions` joined the comparison. A round trip through
+  // `withTierGroups` cannot falsify this - that function spreads the policy
+  // and never touches the field - so these cells go straight at the
+  // predicate.
+  //
+  // Falsification takes TWO mutations in OPPOSITE directions, and no single one
+  // supplies both - which is the transferable point:
+  //
+  //  - **A MISSING check.** Delete the
+  //    `if (!sameDestinationExclusions(...)) { return false; }` block. That
+  //    reddens the MEMBERSHIP cell below (and lane G3's
+  //    `round-trips the full policy through keyed groups and the draft state`),
+  //    and it leaves both SET cells GREEN. Deleting the block makes every
+  //    exclusion comparison equal, which is exactly what those two assert -
+  //    they say `toBe(true)`, so a missing check SATISFIES them. A cell
+  //    asserting equality is structurally blind to a check that is absent.
+  //  - **A TOO-STRICT check.** Replace the set walk with an index-wise array
+  //    compare (`a.length === b.length && a.every((id, at) => id === b[at])`).
+  //    That reddens the two SET cells and leaves membership green.
+  //
+  // Both were measured, at 2 reds each. Reaching for only the deletion is the
+  // natural move and reads as "two of these three cells prove nothing".
+  it("is sensitive to destinationExclusions membership", () => {
+    expect(
+      fallbackPolicyValuesEqual(
+        policy({ destinationExclusions: ["claude"] }),
+        policy({ destinationExclusions: [] }),
+      ),
+    ).toBe(false);
+  });
+
+  it("treats destinationExclusions as a SET: order does not matter", () => {
+    expect(
+      fallbackPolicyValuesEqual(
+        policy({ destinationExclusions: ["claude", "codex"] }),
+        policy({ destinationExclusions: ["codex", "claude"] }),
+      ),
+    ).toBe(true);
+  });
+
+  it("treats destinationExclusions as a SET: a duplicate entry does not matter", () => {
+    expect(
+      fallbackPolicyValuesEqual(
+        policy({ destinationExclusions: ["claude", "claude"] }),
+        policy({ destinationExclusions: ["claude"] }),
       ),
     ).toBe(true);
   });
@@ -1965,5 +2096,335 @@ describe("fallbackPolicyDraftReducer - tenth pass: the obligation outlives the n
       restoredPolicy,
     );
     expect(restoreDone.unverifiedHostRow).toBeNull();
+  });
+});
+
+describe("R-OSS-1: a SECOND authoritative reply still corrects a display this reducer installed", () => {
+  function seeded(): FallbackPolicyDraftState {
+    return createFallbackPolicyDraftState(
+      policy({ enabled: false, graceWindowSeconds: 15 }),
+    );
+  }
+
+  function edit(
+    state: FallbackPolicyDraftState,
+    next: FallbackPolicy,
+  ): FallbackPolicyDraftState {
+    return fallbackPolicyDraftReducer(state, {
+      type: "edited",
+      policy: next,
+      field: "enabled",
+      keyedTierGroups: null,
+    });
+  }
+
+  function start(
+    state: FallbackPolicyDraftState,
+    requestId: number,
+  ): FallbackPolicyDraftState {
+    return fallbackPolicyDraftReducer(state, {
+      type: "save-started",
+      field: "enabled",
+      requestId,
+      carries: "draft",
+    });
+  }
+
+  function succeed(
+    state: FallbackPolicyDraftState,
+    requestId: number,
+    policyValue: FallbackPolicy,
+  ): FallbackPolicyDraftState {
+    return fallbackPolicyDraftReducer(state, {
+      type: "save-succeeded",
+      requestId,
+      policy: policyValue,
+    });
+  }
+
+  function refuse(
+    state: FallbackPolicyDraftState,
+    requestId: number,
+  ): FallbackPolicyDraftState {
+    return fallbackPolicyDraftReducer(state, {
+      type: "save-failed",
+      requestId,
+      message: "policy is out of date",
+      field: "enabled",
+      outcome: "refused",
+    });
+  }
+
+  const aPolicy = policy({ enabled: true, graceWindowSeconds: 15 });
+  const bPolicy = policy({ enabled: true, graceWindowSeconds: 12 });
+
+  /**
+   * Three overlapping draft saves, the NEWEST refused, so the display is a
+   * rollback this reducer put there and both older replies still outrank
+   * `persisted`.
+   *
+   * The request ids ascend with the revisions (A oldest, C newest) because
+   * `outranksPersisted` is `pending.revision >= state.persistedRevision`: A
+   * must clear the seeded watermark and B must clear the one A's own adoption
+   * installs, which is what makes BOTH successes authoritative rather than
+   * stale echoes. The refusal is last so that `unknownSave` is null when it
+   * lands - `applySaveFailed` cannot revert while a ticket is outstanding, and
+   * a `refused-unverified` there would never mark the rollback this turns on.
+   */
+  function refusedRollbackWithTwoRepliesOutstanding(): {
+    readonly state: FallbackPolicyDraftState;
+    readonly a: number;
+    readonly b: number;
+  } {
+    const a = createFallbackSaveRequestId();
+    const afterA = start(edit(seeded(), aPolicy), a);
+    const b = createFallbackSaveRequestId();
+    const afterB = start(edit(afterA, bPolicy), b);
+    const c = createFallbackSaveRequestId();
+    const afterC = start(
+      edit(afterB, policy({ enabled: true, graceWindowSeconds: 11 })),
+      c,
+    );
+    return { state: refuse(afterC, c), a, b };
+  }
+
+  it("C refused, then A succeeds, then B succeeds with no edit between: B ends up in the controls", () => {
+    const { state, a, b } = refusedRollbackWithTwoRepliesOutstanding();
+    // Admission evidence: the rollback arm really ran, so the display is this
+    // reducer's value and `draftIsNotUserAuthored` has something to see. Without
+    // this the cell could pass from a sequence that never reached the branch.
+    expect(state.refusedDraft?.revision).toBe(state.revision);
+    expect(state.refusedDraft?.restoredPersisted).toBe(true);
+    expect(draftIsNotUserAuthored(state)).toBe(true);
+
+    // A lands first and takes the correcting branch: the rollback showed a
+    // `persisted` this reply proves stale, so A is adopted into the controls.
+    const afterA = succeed(state, a, aPolicy);
+    expect(afterA.draft).toEqual(aPolicy);
+    // The marker MOVED rather than going out with `refusedDraft`. This is the
+    // whole fix: the branch that performed the correction used to disarm
+    // itself, because it cleared the only evidence it consulted.
+    expect(afterA.refusedDraft).toBeNull();
+    expect(adoptedViewOnScreen(afterA)).not.toBeNull();
+    expect(draftIsNotUserAuthored(afterA)).toBe(true);
+
+    // B lands second, newer than A and still older than the display's own
+    // revision. The display is STILL not the user's - it is A's adopted policy -
+    // so this must correct it again.
+    const afterB = succeed(afterA, b, bPolicy);
+    // Falsification: change the gate in `applySaveSucceeded`'s moved-on branch
+    // back to `draftIsRefused(state)`, or drop the
+    // `adoptedView: { revision: state.revision }` line from the correcting
+    // return. Either way B falls through to the ordinary moved-on arm, which
+    // advances `persisted` and leaves the controls showing A - a display this
+    // reducer installed, now contradicted by the row the same reducer just
+    // recorded.
+    expect(afterB.draft).toEqual(bPolicy);
+    expect(afterB.persisted).toEqual(bPolicy);
+    // The two must AGREE, and this is the assertion that separates the two
+    // worlds: under the defect `persisted` was B while the draft still showed
+    // A.
+    expect(fallbackPolicyValuesEqual(afterB.draft, afterB.persisted)).toBe(
+      true,
+    );
+    // Context, NOT a falsifier - and worth saying so, because the sentence this
+    // row is about is a claim about `confirmedViewRevision`. The number is the
+    // SAME in both worlds: A's correcting branch wrote `state.revision`, no
+    // later step moves `revision`, and the moved-on arm deliberately omits the
+    // field, so it survives untouched whichever branch B takes. What the defect
+    // changed is not the number but whether it is TRUE - a certification of a
+    // display that no longer matches `persisted` is how the page came to call
+    // A's policy "what this host has saved" while holding B's reply. So the
+    // equality above is the detector and this line is the standing statement
+    // that the certification is honest here.
+    expect(afterB.confirmedViewRevision).toBe(afterB.revision);
+  });
+
+  it("CONTROL: a real edit between the two successes is preserved, and B does NOT adopt over it", () => {
+    // The half that makes the cell above mean something. Without this, the fix
+    // passes its pin by simply always adopting - which would yank a control out
+    // from under someone mid-edit, the one rule this reducer exists to keep.
+    const { state, a, b } = refusedRollbackWithTwoRepliesOutstanding();
+    const afterA = succeed(state, a, aPolicy);
+    expect(adoptedViewOnScreen(afterA)).not.toBeNull();
+
+    // The user types. `applyEdited` clears the adoption marker on both of its
+    // returns, because what is on screen is now their own work.
+    const typed = policy({ enabled: false, graceWindowSeconds: 13 });
+    const afterEdit = edit(afterA, typed);
+    expect(adoptedViewOnScreen(afterEdit)).toBeNull();
+    expect(draftIsNotUserAuthored(afterEdit)).toBe(false);
+
+    const afterB = succeed(afterEdit, b, bPolicy);
+    // Falsification: drop `adoptedView: null` from BOTH returns of
+    // `applyEdited` **and** the revision comparison from
+    // `adoptedViewOnScreen`. B then takes the correcting branch and replaces
+    // the user's uncommitted edit with the host's policy - the regression the
+    // union predicate risks if an edit stops revoking the marker.
+    //
+    // The conjunction is the whole of it, and dropping the clear alone is NOT
+    // the falsifier - that was tried and measured at ZERO reds. `applyEdited`
+    // computes `const revision = state.revision + 1` once and both returns use
+    // it, and `adoptedViewOnScreen` only answers non-null while
+    // `adoptedView.revision === state.revision`, so the revision key revokes
+    // the marker on any edit whether or not it is nulled. The two mechanisms
+    // are redundant: each covers what the other would, so neither can be
+    // falsified while the other stands.
+    //
+    // The revision key is the load-bearing half. The explicit clear stays
+    // because `refusedDraft: null` sits beside it in both returns doing the
+    // identical job, and that one is pre-existing - it is the file's idiom for
+    // "an edit revokes what the reducer put there", not insurance.
+    expect(afterB.draft).toEqual(typed);
+    // `persisted` still advances - the reply is real and is recorded - it just
+    // does not reach the controls.
+    expect(afterB.persisted).toEqual(bPolicy);
+    // And the display is NOT certified, because this reply says nothing about
+    // the newer draft on screen.
+    expect(afterB.confirmedViewRevision).not.toBe(afterB.revision);
+  });
+});
+
+describe("R-OSS-1 second site: applyReconciled asks the SAME question, and its edge is reachable", () => {
+  // The union predicate has TWO call sites. The one above is
+  // `applySaveSucceeded`'s; this is `applyReconciled`'s, and it is pinned
+  // separately because a guard that is inert at one of its sites is a guard
+  // with no edge there - the fix would read as covered while half of it did
+  // nothing. Both sites ask through `draftIsNotUserAuthored` precisely so they
+  // cannot answer differently, so a reader needs to see each one answer.
+
+  function seeded(): FallbackPolicyDraftState {
+    return createFallbackPolicyDraftState(
+      policy({ enabled: false, graceWindowSeconds: 15 }),
+    );
+  }
+
+  function edit(
+    state: FallbackPolicyDraftState,
+    next: FallbackPolicy,
+  ): FallbackPolicyDraftState {
+    return fallbackPolicyDraftReducer(state, {
+      type: "edited",
+      policy: next,
+      field: "enabled",
+      keyedTierGroups: null,
+    });
+  }
+
+  function start(
+    state: FallbackPolicyDraftState,
+    requestId: number,
+  ): FallbackPolicyDraftState {
+    return fallbackPolicyDraftReducer(state, {
+      type: "save-started",
+      field: "enabled",
+      requestId,
+      carries: "draft",
+    });
+  }
+
+  function succeed(
+    state: FallbackPolicyDraftState,
+    requestId: number,
+    policyValue: FallbackPolicy,
+  ): FallbackPolicyDraftState {
+    return fallbackPolicyDraftReducer(state, {
+      type: "save-succeeded",
+      requestId,
+      policy: policyValue,
+    });
+  }
+
+  function failUnknown(
+    state: FallbackPolicyDraftState,
+    requestId: number,
+  ): FallbackPolicyDraftState {
+    return fallbackPolicyDraftReducer(state, {
+      type: "save-failed",
+      requestId,
+      message: "lost the connection",
+      field: "enabled",
+      outcome: "unknown",
+    });
+  }
+
+  function refuse(
+    state: FallbackPolicyDraftState,
+    requestId: number,
+  ): FallbackPolicyDraftState {
+    return fallbackPolicyDraftReducer(state, {
+      type: "save-failed",
+      requestId,
+      message: "policy is out of date",
+      field: "enabled",
+      outcome: "refused",
+    });
+  }
+
+  function reconcile(
+    state: FallbackPolicyDraftState,
+    requestId: number,
+    policyValue: FallbackPolicy,
+  ): FallbackPolicyDraftState {
+    return fallbackPolicyDraftReducer(state, {
+      type: "reconciled",
+      requestId,
+      policy: policyValue,
+    });
+  }
+
+  it("a read-back still adopts over a display an EARLIER success had adopted, with no refusal left standing", () => {
+    const wPolicy = policy({ enabled: true, graceWindowSeconds: 15 });
+    const xPolicy = policy({ enabled: true, graceWindowSeconds: 14 });
+    const typedPolicy = policy({ enabled: true, graceWindowSeconds: 13 });
+    const hostPolicy = policy({ enabled: false, graceWindowSeconds: 12 });
+
+    // W goes out first, so its request id is the LOWEST - which is what keeps
+    // X's ticket alive when W later succeeds.
+    const w = createFallbackSaveRequestId();
+    const afterW = start(edit(seeded(), wPolicy), w);
+    // X goes out next and its reply is LOST, raising the read-back ticket.
+    const x = createFallbackSaveRequestId();
+    const xLost = failUnknown(start(edit(afterW, xPolicy), x), x);
+    expect(xLost.unknownSave?.requestId).toBe(x);
+
+    // The user types, then Y is dispatched on that draft and REFUSED. Because
+    // X's ticket is outstanding, the refusal cannot revert - it takes the
+    // outstanding-ticket arm, which marks the refused draft without restoring
+    // `persisted`.
+    const y = createFallbackSaveRequestId();
+    const yRefused = refuse(start(edit(xLost, typedPolicy), y), y);
+    expect(yRefused.refusedDraft?.restoredPersisted).toBe(false);
+
+    // W's reply finally lands. It is OLDER than X, so it does not discharge
+    // X's ticket - and it outranks `persisted`, so it takes the correcting
+    // branch, adopting W into the controls and clearing the refusal marker.
+    const wDone = succeed(yRefused, w, wPolicy);
+    // Admission evidence, three parts. Without all three this cell could pass
+    // from a state that never reached the branch under test.
+    expect(wDone.unknownSave?.requestId).toBe(x);
+    expect(wDone.draft).toEqual(wPolicy);
+    expect(wDone.refusedDraft).toBeNull();
+    expect(adoptedViewOnScreen(wDone)).not.toBeNull();
+
+    // Now X's read-back arrives. The revision moved long ago (the user typed at
+    // revision 3), so the revision test alone says "the user has moved on" -
+    // but what is on screen is W's adopted policy, which the user did not
+    // author. The read must therefore ADOPT the host's row over it.
+    const readBack = reconcile(wDone, x, hostPolicy);
+    // Falsification: narrow `applyReconciled`'s gate back to
+    // `!refusedDraftOnScreen(state)` (dropping the `adoptedView` half of
+    // `draftIsNotUserAuthored`). W's correcting branch has already cleared
+    // `refusedDraft`, so the narrow predicate answers "moved on", the read-back
+    // takes the arm that leaves the display alone, and the panel then shows
+    // W's policy with NO notice while `persisted` holds the row this very read
+    // just returned - a control contradicting the host with nothing on screen
+    // to say so.
+    expect(readBack.draft).toEqual(hostPolicy);
+    // Only the adopt arm records confirmation, so this separates the two arms
+    // as well - unlike `persisted`, which both arms advance.
+    expect(readBack.confirmedViewRevision).toBe(readBack.revision);
+    expect(readBack.persisted).toEqual(hostPolicy);
+    expect(readBack.hostError).toBeNull();
   });
 });

@@ -15,6 +15,8 @@ import {
   settingsTabDescriptor,
 } from "@/stores/tabs/kinds/settings";
 import { settingsTabIntent } from "@/lib/tab-navigation/intents";
+import { SETTINGS_SECTIONS } from "@/lib/settings-sections";
+import { migrateTabsPersistedState } from "@/stores/tabs/store";
 
 describe("settings tab kind - host section", () => {
   it("settingsSectionFromPath maps /settings/host to the host section", () => {
@@ -89,5 +91,65 @@ describe("settings tab kind - host section", () => {
 
   it("settings default path is unchanged", () => {
     expect(settingsDefaultPath()).toBe("/settings/general");
+  });
+});
+
+/**
+ * RG6: `store.ts`'s own `SETTINGS_PATHS` allowlist is hand-maintained and
+ * deliberately NOT derived from `SETTINGS_SECTIONS` (see that file's own
+ * comment - sharing removes the repeated-omission mechanism the comment
+ * records: `devices`, then `app-notifications`/`link-phone`, each silently
+ * unrecognised as a settings route until a later addition happened to sit
+ * next to the gap). This sweep is what turns "silently dropped" into a red
+ * test: it derives its EXPECTATION from `SETTINGS_SECTIONS`, but the
+ * production allowlist stays hand-maintained.
+ */
+function persistedSettingsTab(sectionId: string): unknown {
+  return {
+    items: [],
+    systemTabs: {
+      settings: {
+        kind: "settings",
+        name: "Settings",
+        lastPath: `/settings/${sectionId}`,
+      },
+    },
+  };
+}
+
+describe("RG6: store.ts's migrateTabsPersistedState keeps every registered settings route", () => {
+  it.each(SETTINGS_SECTIONS.map((section) => section.id))(
+    "a persisted settings tab at /settings/%s survives migration",
+    (sectionId) => {
+      const migrated = migrateTabsPersistedState(
+        persistedSettingsTab(sectionId),
+      );
+      // Falsification: remove any one id from `SETTINGS_PATHS` in `store.ts` -
+      // exactly that section's case reddens here, and ONLY here (the sibling
+      // sweep in `desktop-tabs-persistence.test.ts` reads a SEPARATE
+      // hand-maintained copy of the same list and stays green).
+      expect(migrated.systemTabs.settings?.lastPath).toBe(
+        `/settings/${sectionId}`,
+      );
+    },
+  );
+
+  it("explicitly covers the three ids the audit found omitted: fallback, app-notifications, link-phone", () => {
+    for (const id of ["fallback", "app-notifications", "link-phone"]) {
+      const migrated = migrateTabsPersistedState(persistedSettingsTab(id));
+      expect(migrated.systemTabs.settings?.lastPath).toBe(`/settings/${id}`);
+    }
+  });
+
+  it("an unknown settings path falls back rather than being accepted", () => {
+    const migrated = migrateTabsPersistedState(
+      persistedSettingsTab("not-a-section"),
+    );
+    expect(migrated.systemTabs.settings).toBeNull();
+  });
+
+  it("the retired 'service' id is still ACCEPTED - a persisted old path must still hydrate", () => {
+    const migrated = migrateTabsPersistedState(persistedSettingsTab("service"));
+    expect(migrated.systemTabs.settings?.lastPath).toBe("/settings/service");
   });
 });

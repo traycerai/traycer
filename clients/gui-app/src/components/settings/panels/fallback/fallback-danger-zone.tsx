@@ -89,10 +89,35 @@ export function FallbackDangerZone(props: FallbackDangerZoneProps): ReactNode {
    * component ignorant of the outcome - it restores focus for any settled reset
    * it is still mounted for, and the successful one replaces it before this can
    * run (that path is `focusResetOnMount` above).
+   *
+   * ## Why it restores only from an UNCLAIMED focus
+   *
+   * The rest of the editor stays interactive while the reset is pending, so the
+   * user can be somewhere else by the time this fires - and "somewhere else" is
+   * routinely a text field. Restoring unconditionally then does two things, and
+   * the second is the damage: it moves the keyboard away, and the forced blur
+   * runs `CandidateRow`'s commit-on-leave, which SAVES a half-typed model
+   * family the user was in the middle of. So a refused reset could replace its
+   * own refusal notice with an unintended save of a value nobody finished.
+   *
+   * The condition is the same one the recovery is FOR. Confirming closes the
+   * dialog and disables the opener in one gesture, so the shared dialog's
+   * restoration lands on a disabled button, silently does nothing, and focus
+   * falls to `document.body` - that is the state this effect exists to repair,
+   * and it is exactly "nothing has claimed the keyboard". Anything else on
+   * screen holding focus is a deliberate move by the user and outranks a
+   * deferred restoration. Checking at settle time rather than subscribing to
+   * focus changes is the whole of it: there is no window between the two where
+   * the answer could differ.
    */
   useEffect(() => {
     if (!awaitingResetRef.current || isPending) return;
     awaitingResetRef.current = false;
+    // `document.body` is where the silent no-op above leaves it; `null` is the
+    // same absence in a document that has none, which jsdom and a detached
+    // tree can both produce. Neither is a control the user chose.
+    const active = document.activeElement;
+    if (active !== null && active !== document.body) return;
     resetButtonRef.current?.focus();
   }, [isPending]);
   return (

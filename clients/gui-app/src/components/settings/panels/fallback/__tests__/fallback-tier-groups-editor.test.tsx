@@ -41,6 +41,14 @@ vi.mock("sonner", () => ({
   },
 }));
 
+// R6: the card's Model family field is `FallbackModelFamilyInput`, which
+// queries the harness catalog. `data: undefined` means "no cached catalog",
+// under which the component renders a plain textbox with no datalist - every
+// existing family-input query in this suite keeps working unchanged.
+vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
+  useGuiHarnessModelsQuery: () => ({ data: undefined }),
+}));
+
 afterEach(() => {
   cleanup();
   toastSuccess.mockClear();
@@ -81,9 +89,15 @@ const NO_EFFORT_OPTIONS: FallbackEffortOptions = () => [];
 function Harness(props: {
   readonly initialPolicy: FallbackPolicy;
   readonly initialGroups: readonly KeyedGroup[];
+  readonly previewUnavailable: boolean | undefined;
+  readonly previewPending: boolean | undefined;
+  readonly onRetryPreview: (() => void) | undefined;
 }): ReactNode {
   const [policy, setPolicy] = useState(props.initialPolicy);
   const [groups, setGroups] = useState(props.initialGroups);
+  const previewUnavailable = props.previewUnavailable ?? false;
+  const previewPending = props.previewPending ?? false;
+  const onRetryPreview = props.onRetryPreview ?? (() => {});
   const groupsRef = useRef(groups);
   const policyRef = useRef(policy);
   useEffect(() => {
@@ -109,7 +123,9 @@ function Harness(props: {
       // that rather than pretending a label was produced.
       labelFor={(profileId) => profileId}
       effortOptions={NO_EFFORT_OPTIONS}
-      previewPending={false}
+      previewPending={previewPending}
+      previewUnavailable={previewUnavailable}
+      onRetryPreview={onRetryPreview}
       onChange={adopt}
       onCommit={adopt}
       onUndo={(inverse: FallbackGroupsInverse) => {
@@ -138,6 +154,9 @@ describe("FallbackTierGroupsEditor - candidate identity survives a reorder", () 
       <Harness
         initialPolicy={{ ...createDefaultFallbackPolicy(), tierGroups: groups }}
         initialGroups={toKeyedGroups(groups)}
+        previewUnavailable={undefined}
+        previewPending={undefined}
+        onRetryPreview={undefined}
       />,
     );
 
@@ -174,6 +193,9 @@ describe("FallbackTierGroupsEditor - F16 a group rename survives duplicate and e
       <Harness
         initialPolicy={{ ...createDefaultFallbackPolicy(), tierGroups: groups }}
         initialGroups={toKeyedGroups(groups)}
+        previewUnavailable={undefined}
+        previewPending={undefined}
+        onRetryPreview={undefined}
       />,
     );
     const nameInputs = () =>
@@ -215,6 +237,9 @@ describe("FallbackTierGroupsEditor - F16 a group rename survives duplicate and e
       <Harness
         initialPolicy={{ ...createDefaultFallbackPolicy(), tierGroups: groups }}
         initialGroups={toKeyedGroups(groups)}
+        previewUnavailable={undefined}
+        previewPending={undefined}
+        onRetryPreview={undefined}
       />,
     );
     expect(
@@ -243,6 +268,9 @@ describe("FallbackTierGroupsEditor - F24 removal focus, group deletion", () => {
       <Harness
         initialPolicy={{ ...createDefaultFallbackPolicy(), tierGroups: groups }}
         initialGroups={toKeyedGroups(groups)}
+        previewUnavailable={undefined}
+        previewPending={undefined}
+        onRetryPreview={undefined}
       />,
     );
     const deleteButtons = screen.getAllByRole("button", {
@@ -263,6 +291,9 @@ describe("FallbackTierGroupsEditor - F24 removal focus, group deletion", () => {
       <Harness
         initialPolicy={{ ...createDefaultFallbackPolicy(), tierGroups: groups }}
         initialGroups={toKeyedGroups(groups)}
+        previewUnavailable={undefined}
+        previewPending={undefined}
+        onRetryPreview={undefined}
       />,
     );
     const deleteButtons = screen.getAllByRole("button", {
@@ -279,6 +310,9 @@ describe("FallbackTierGroupsEditor - F24 removal focus, group deletion", () => {
       <Harness
         initialPolicy={{ ...createDefaultFallbackPolicy(), tierGroups: groups }}
         initialGroups={toKeyedGroups(groups)}
+        previewUnavailable={undefined}
+        previewPending={undefined}
+        onRetryPreview={undefined}
       />,
     );
     const deleteButtons = screen.getAllByRole("button", {
@@ -295,6 +329,9 @@ describe("FallbackTierGroupsEditor - F24 removal focus, group deletion", () => {
       <Harness
         initialPolicy={{ ...createDefaultFallbackPolicy(), tierGroups: groups }}
         initialGroups={toKeyedGroups(groups)}
+        previewUnavailable={undefined}
+        previewPending={undefined}
+        onRetryPreview={undefined}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Delete group" }));
@@ -321,6 +358,9 @@ describe("FallbackTierGroupsEditor - F24 removal focus, candidate removal", () =
       <Harness
         initialPolicy={{ ...createDefaultFallbackPolicy(), tierGroups: groups }}
         initialGroups={toKeyedGroups(groups)}
+        previewUnavailable={undefined}
+        previewPending={undefined}
+        onRetryPreview={undefined}
       />,
     );
     const survivor = screen.getByRole("button", { name: "Remove beta" });
@@ -334,6 +374,9 @@ describe("FallbackTierGroupsEditor - F24 removal focus, candidate removal", () =
       <Harness
         initialPolicy={{ ...createDefaultFallbackPolicy(), tierGroups: groups }}
         initialGroups={toKeyedGroups(groups)}
+        previewUnavailable={undefined}
+        previewPending={undefined}
+        onRetryPreview={undefined}
       />,
     );
     const survivor = screen.getByRole("button", { name: "Remove gamma" });
@@ -347,6 +390,9 @@ describe("FallbackTierGroupsEditor - F24 removal focus, candidate removal", () =
       <Harness
         initialPolicy={{ ...createDefaultFallbackPolicy(), tierGroups: groups }}
         initialGroups={toKeyedGroups(groups)}
+        previewUnavailable={undefined}
+        previewPending={undefined}
+        onRetryPreview={undefined}
       />,
     );
     const survivor = screen.getByRole("button", { name: "Remove beta" });
@@ -360,6 +406,9 @@ describe("FallbackTierGroupsEditor - F24 removal focus, candidate removal", () =
       <Harness
         initialPolicy={{ ...createDefaultFallbackPolicy(), tierGroups: groups }}
         initialGroups={toKeyedGroups(groups)}
+        previewUnavailable={undefined}
+        previewPending={undefined}
+        onRetryPreview={undefined}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Remove alpha" }));
@@ -380,6 +429,9 @@ describe("FallbackTierGroupsEditor - F18 undo restores exactly the deleted row, 
       <Harness
         initialPolicy={{ ...createDefaultFallbackPolicy(), tierGroups: groups }}
         initialGroups={toKeyedGroups(groups)}
+        previewUnavailable={undefined}
+        previewPending={undefined}
+        onRetryPreview={undefined}
       />,
     );
     // Delete "g1" (index 0) first - its toast is `toast.success` call #1.
@@ -407,5 +459,97 @@ describe("FallbackTierGroupsEditor - F18 undo restores exactly the deleted row, 
 
     expect(screen.getByTestId("fallback-tier-group-g1")).not.toBeNull();
     expect(screen.queryByTestId("fallback-tier-group-g3")).toBeNull();
+  });
+});
+
+describe("FallbackTierGroupsEditor - FC9: preview failure vs absence", () => {
+  function renderWith(
+    previewPending: boolean,
+    previewUnavailable: boolean,
+    onRetryPreview: () => void,
+  ) {
+    const groups: TierGroup[] = [tierGroup("fast", [candidate("opus")])];
+    render(
+      <Harness
+        initialPolicy={{ ...createDefaultFallbackPolicy(), tierGroups: groups }}
+        initialGroups={toKeyedGroups(groups)}
+        previewUnavailable={previewUnavailable}
+        previewPending={previewPending}
+        onRetryPreview={onRetryPreview}
+      />,
+    );
+  }
+
+  it("previewUnavailable alone renders the failure message and a working Try again", () => {
+    const onRetryPreview = vi.fn();
+    renderWith(false, true, onRetryPreview);
+    expect(
+      screen.getByText("Couldn't check what these models resolve to."),
+    ).not.toBeNull();
+    fireEvent.click(screen.getByTestId("fallback-tier-preview-retry"));
+    expect(onRetryPreview).toHaveBeenCalledTimes(1);
+  });
+
+  it("previewPending AND previewUnavailable together render ONLY the pending indicator - the !previewPending term in `failed` is what excludes them", () => {
+    renderWith(true, true, vi.fn());
+    expect(screen.getByText("Checking what these resolve to…")).not.toBeNull();
+    // Falsification: in `PreviewFooterStatus`
+    // (`fallback-tier-groups-editor.tsx`), drop the `!previewPending` term from
+    // `const failed = !previewPending && previewUnavailable`. Both messages
+    // then render together inside the live region, and the announcement
+    // contradicts the spinner beside it.
+    //
+    // That term IS the mutual exclusion now. It used to be the ORDER of two
+    // early returns, and this comment named that order until the component was
+    // restructured to keep its `role="status"` region mounted across every
+    // state - a live region inserted with its content is announced
+    // unreliably. Same property, different mechanism, so the mutation moved.
+    expect(
+      screen.queryByTestId("fallback-tier-preview-unavailable"),
+    ).toBeNull();
+    expect(
+      screen.queryByText("Couldn't check what these models resolve to."),
+    ).toBeNull();
+  });
+
+  it("D159: with both false, neither the pending indicator nor the failure message renders", () => {
+    renderWith(false, false, vi.fn());
+    expect(screen.queryByText("Checking what these resolve to…")).toBeNull();
+    expect(
+      screen.queryByText("Couldn't check what these models resolve to."),
+    ).toBeNull();
+    expect(
+      screen.queryByTestId("fallback-tier-preview-unavailable"),
+    ).toBeNull();
+  });
+
+  it("the live region is MOUNTED while there is nothing to say, so a later failure is announced rather than inserted", () => {
+    renderWith(false, false, vi.fn());
+    // The complement of the D159 cell above: no text, and yet the region
+    // exists. This is the assertion the announcement depends on - a
+    // `role="status"` inserted into the tree together with its content is
+    // announced unreliably, so the region has to be there BEFORE the failure
+    // text arrives in it.
+    //
+    // Falsification: revert `PreviewFooterStatus` to returning `null` until
+    // `previewUnavailable` and mounting the `role="status"` span with its text
+    // already inside. This cell reddens and the other three do not - they
+    // assert text and testids, which are identical either way, which is
+    // exactly why the live-region shape needs its own pin.
+    const region = document.querySelector('[role="status"]');
+    expect(region).not.toBeNull();
+    expect(region?.textContent ?? "").toBe("");
+
+    // And it is the SAME region the failure text lands in, not a second one.
+    cleanup();
+    renderWith(false, true, vi.fn());
+    const regions = document.querySelectorAll('[role="status"]');
+    expect(regions).toHaveLength(1);
+    // No `?? ""` here, unlike the `region?.` read above: `noUncheckedIndexedAccess`
+    // is off, so `regions[0]` is `Element` rather than `Element | undefined`, and
+    // the guard oxlint's `no-unnecessary-condition` sees is a dead one.
+    expect(regions[0].textContent).toContain(
+      "Couldn't check what these models resolve to.",
+    );
   });
 });

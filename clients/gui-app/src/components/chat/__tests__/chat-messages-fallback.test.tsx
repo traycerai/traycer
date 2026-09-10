@@ -30,6 +30,7 @@ import type {
   ChatTranscriptDerived,
 } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
 import type { ProviderNoticeDetail } from "@traycer/protocol/persistence/epic/content-blocks";
+import type { ChatFallbackListTargetsResponse } from "@traycer/protocol/host/chat-fallback";
 import {
   isTailHydrated,
   type TranscriptWindow,
@@ -68,7 +69,10 @@ import {
 } from "@/stores/chats/rendered-messages";
 import { FRESH_SESSION_HELPER } from "@/components/chat/fallback/fallback-copy";
 import { usePublishConfirmedManualFallbackAction } from "@/components/chat/fallback/use-confirmed-manual-action";
+import { usePublishUnattendedFallbackOutcome } from "@/components/chat/fallback/use-unattended-fallback-outcome";
 import { useFallbackRunManualRung } from "@/components/chat/fallback/use-fallback-actions";
+import { ChatComposerBannerPortalProvider } from "@/components/chat/composer/chat-composer-banner-portal";
+import { ChatComposerFallbackBanners } from "@/components/chat/fallback/chat-composer-fallback-banners";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
@@ -687,6 +691,19 @@ const runManualRungState = vi.hoisted(() => ({
   callCount: { current: 0 },
 }));
 
+// Same shape as `runManualRungState`, for the MF11 real-parent-transition
+// pin below - the destination menu's OWN pick verb, `chat.fallback.chooseTarget`,
+// distinct from the manual-rung verb the trigger above sends.
+type ChooseTargetResponse = ResponseOfMethod<
+  HostRpcRegistry,
+  "chat.fallback.chooseTarget"
+>;
+const chooseTargetState = vi.hoisted(() => ({
+  handler: (): Promise<ChooseTargetResponse> =>
+    Promise.resolve({ outcome: "applied" }),
+  callCount: { current: 0 },
+}));
+
 const liveHostClientSpine = new HostClient<HostRpcRegistry>({
   registry: hostRpcRegistry,
   invalidator: { invalidateHostScope: () => undefined },
@@ -699,6 +716,10 @@ const liveHostClientSpine = new HostClient<HostRpcRegistry>({
       "chat.fallback.runManualRung": () => {
         runManualRungState.callCount.current += 1;
         return runManualRungState.handler();
+      },
+      "chat.fallback.chooseTarget": () => {
+        chooseTargetState.callCount.current += 1;
+        return chooseTargetState.handler();
       },
     },
   }),
@@ -714,6 +735,40 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
 
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersListForClient: () => ({ data: undefined }),
+}));
+
+// One fixed, always-selectable destination - inert for every case in this
+// file except the MF11 real-parent-transition pin below, which is the only
+// test that opens a destination menu at all.
+const CHOOSE_TARGET_LIST_DATA: ChatFallbackListTargetsResponse = {
+  outcome: "listed",
+  failedTuple: FAILED_TUPLE,
+  profileTargets: [],
+  modelTargets: [
+    {
+      groupId: "grp-parent-transition",
+      harnessId: TARGET_TUPLE.harnessId,
+      modelFamily: TARGET_TUPLE.model,
+      model: TARGET_TUPLE.model,
+      reasoningEffort: TARGET_TUPLE.reasoningEffort,
+      profileId: TARGET_TUPLE.profileId,
+      severity: "ok",
+      usedPercent: null,
+      target: TARGET_TUPLE,
+      warnings: [],
+      selectable: true,
+      skip: null,
+    },
+  ],
+  modelTargetsSkip: null,
+};
+
+vi.mock("@/components/chat/fallback/use-fallback-targets", () => ({
+  useFallbackListTargets: () => ({
+    data: CHOOSE_TARGET_LIST_DATA,
+    isPending: false,
+    isError: false,
+  }),
 }));
 
 /** A minimal deferred - lets a test hold the RPC response open across an unmount. */
@@ -739,8 +794,16 @@ function ManualSwitchTrigger(props: {
     chatId: CHAT_ID,
     hostId: HOST_ID,
   });
+  const publishUnattended = usePublishUnattendedFallbackOutcome({
+    epicId: EPIC_ID,
+    chatId: CHAT_ID,
+    hostId: HOST_ID,
+  });
   const client = useHostClientForHostId(HOST_ID);
-  const { mutate } = useFallbackRunManualRung(client, CHAT_ID, publish);
+  const { mutate } = useFallbackRunManualRung(client, CHAT_ID, publish, {
+    inlineMenuOpen: false,
+    publishUnattended,
+  });
   return (
     <button
       type="button"
@@ -870,6 +933,55 @@ function renderTrigger(
       <ManualSwitchTrigger {...props} />
     </QueryClientProvider>,
   );
+}
+
+/**
+ * The REAL `ChatComposerFallbackBanners` for the MF11 real-parent-transition
+ * pin - rendered under the SAME `QueryClient` instance as the corresponding
+ * `renderChat` call, so the destination-menu pick's mutation lifecycle is one
+ * TanStack cache rather than two, exactly like `renderTrigger` above.
+ */
+function renderBanners(
+  pending: PendingFallback | undefined,
+  queryClient: QueryClient,
+) {
+  const result = render(
+    <QueryClientProvider client={queryClient}>
+      <ChatComposerBannerPortalProvider>
+        <ChatComposerFallbackBanners
+          topBannerKind="fallback"
+          fallback={{ pending, pendingReturn: undefined }}
+          rateLimitAdvisory={null}
+          client={liveHostClient}
+          chatId={CHAT_ID}
+          epicId={EPIC_ID}
+          hostId={HOST_ID}
+          canAct
+        />
+      </ChatComposerBannerPortalProvider>
+    </QueryClientProvider>,
+  );
+  return {
+    ...result,
+    rerenderWith: (nextPending: PendingFallback | undefined) => {
+      result.rerender(
+        <QueryClientProvider client={queryClient}>
+          <ChatComposerBannerPortalProvider>
+            <ChatComposerFallbackBanners
+              topBannerKind="fallback"
+              fallback={{ pending: nextPending, pendingReturn: undefined }}
+              rateLimitAdvisory={null}
+              client={liveHostClient}
+              chatId={CHAT_ID}
+              epicId={EPIC_ID}
+              hostId={HOST_ID}
+              canAct
+            />
+          </ChatComposerBannerPortalProvider>
+        </QueryClientProvider>,
+      );
+    },
+  };
 }
 
 // The ChatMessages fallback/completion announcer's own region
@@ -1577,6 +1689,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       liveOutcome: null,
       notices: [],
       manualOutcome: null,
+      unattendedOutcome: null,
     };
     // First observation: absorbed as baseline. There is no mounted React
     // queue here at all, so nothing but this observer's own guard could
@@ -2141,7 +2254,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     // Never resolved - deliberately left pending for the rest of the test.
   });
 
-  it("a manual switch RPC that resolves REFUSED (no_active_traversal, not 'applied') is never recorded and never spoken", async () => {
+  it("a manual switch RPC that resolves REFUSED (no_active_traversal, not 'applied') is never recorded as a confirmed action, but IS spoken to the announcer (MF11: the trigger is already gone when the answer lands)", async () => {
     const harness = createHarness();
     registerHarness(harness);
     const baselineEpoch = bootstrap(harness, undefined, undefined, undefined);
@@ -2162,13 +2275,180 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     });
     trigger.unmount();
     await flushAnnouncer();
+    // UNCHANGED: a refusal is never a confirmed action, whatever channel
+    // eventually reports it.
     // Falsification: drop the `data.outcome !== "applied"` early-return in
     // `useFallbackRunManualRung`'s `onSuccess` (use-fallback-actions.ts) -
     // this refusal would be recorded and spoken as if it had applied.
     expect(
       harness.handle.store.getState().confirmedManualFallbackAction,
     ).toBeNull();
-    expect(liveRegionText()).toBe("");
+    // RE-SPECIFIED (MF11): this used to assert `liveRegionText()` was "",
+    // because nothing then delivered a refusal answered after its trigger
+    // unmounted. That silence was the bug, not a fact worth pinning - the
+    // refusal IS owed to the user, unlike the applied/pending cases beside
+    // this one which stay silent because they are not confirmed actions. The
+    // two halves of this test differ on purpose: "never recorded" is about
+    // what counts as a CONFIRMED switch, and "IS spoken" is about whether an
+    // answer nobody was left to hear still reaches the user - a refusal is
+    // not the first and must not be the second either.
+    // Falsification: drop the
+    // `reportingRef.current.publishUnattended(message)` call from
+    // `useFallbackRunManualRung`'s `onSuccess` (use-fallback-actions.ts) and
+    // THIS assertion must go red.
+    expect(liveRegionText()).toBe("That's already been decided for this chat.");
+  });
+
+  describe("MF11: the destination menu's OWN pick loses its surface to the waiting card's real waiting -> switching transition", () => {
+    function waitingPending(revision: number): PendingFallback {
+      return pendingFallback({
+        state: "waiting",
+        traversalId: "trav-parent-transition",
+        revision,
+        deadline: null,
+        targetTuple: null,
+        impendingAction: null,
+        queuedItemsMoving: 0,
+      });
+    }
+
+    function switchingPending(revision: number): PendingFallback {
+      return pendingFallback({
+        state: "switching",
+        traversalId: "trav-parent-transition",
+        revision,
+        deadline: null,
+        targetTuple: TARGET_TUPLE,
+        impendingAction: null,
+        queuedItemsMoving: 0,
+      });
+    }
+
+    it("a losing pick answered AFTER the waiting menu is replaced by the switching card publishes exactly once, to the announcer alone", async () => {
+      const harness = createHarness();
+      registerHarness(harness);
+      const pending = waitingPending(1);
+      const baselineEpoch = bootstrap(harness, pending, undefined, undefined);
+      const chat = renderChat(baselineEpoch, undefined);
+      const banners = renderBanners(pending, chat.queryClient);
+
+      const deferred = makeDeferred<ChooseTargetResponse>();
+      chooseTargetState.handler = () => deferred.promise;
+
+      fireEvent.click(screen.getByRole("button", { name: "Switch instead…" }));
+      act(() => {
+        fireEvent.click(
+          screen.getByRole("button", { name: /gpt-6-astra-mini/ }),
+        );
+      });
+
+      // The RPC stays unresolved. The PARENT transitions to "switching" -
+      // production's real `waiting -> switching` transition, which is what
+      // actually unmounts the waiting menu. Deliberately NOT `unmount()`: the
+      // point of this pin is that production transition, not a test-driven
+      // teardown.
+      banners.rerenderWith(switchingPending(2));
+      expect(
+        screen.queryByRole("button", { name: /gpt-6-astra-mini/ }),
+      ).toBeNull();
+
+      const commits = await captureLiveRegionCommits(() => {
+        deferred.resolve({ outcome: "traversal_advanced" });
+      });
+      // Falsification: drop `useFallbackOutcomeReporting`'s unmount cleanup
+      // (use-fallback-actions.ts) entirely - that leaves `inlineMenuOpen: true`
+      // live when this deferred resolves after the menu's subtree is gone, so
+      // the refusal is swallowed by the open-menu early return instead of
+      // reaching the announcer, and this assertion goes to 0.
+      //
+      // What this pin does NOT falsify: swapping that cleanup's
+      // `useLayoutEffect` back to `useEffect`. `rerenderWith` above runs under
+      // RTL's act-wrapped `rerender`, which flushes passive effects before it
+      // returns, so the cleanup has already run by the time the `act` inside
+      // `captureLiveRegionCommits` resolves the deferred - under EITHER effect
+      // kind. The layout effect is there for the real browser, where a passive
+      // cleanup is scheduled after paint and an RPC response is a microtask, so
+      // a pick answered in that window would read a stale `inlineMenuOpen`.
+      // That is reasoned hardening this harness cannot express; recorded as a
+      // limit of the harness rather than dressed up as a pin.
+      expect(
+        countSentenceOccurrences(commits, "This chat already resumed."),
+      ).toBe(1);
+      expect(
+        harness.handle.store.getState().unattendedFallbackOutcome?.sequence,
+      ).toBe(1);
+
+      // No second commit afterward - the sequence-gated observer speaks this
+      // outcome exactly once.
+      await flushAnnouncer();
+      expect(
+        countSentenceOccurrences(commits, "This chat already resumed."),
+      ).toBe(1);
+    });
+
+    it("control: a losing pick that resolves APPLIED never reaches the announcer at all - no duplicate report of a real success", async () => {
+      const harness = createHarness();
+      registerHarness(harness);
+      const pending = waitingPending(1);
+      const baselineEpoch = bootstrap(harness, pending, undefined, undefined);
+      const chat = renderChat(baselineEpoch, undefined);
+      const banners = renderBanners(pending, chat.queryClient);
+
+      const deferred = makeDeferred<ChooseTargetResponse>();
+      chooseTargetState.handler = () => deferred.promise;
+
+      fireEvent.click(screen.getByRole("button", { name: "Switch instead…" }));
+      act(() => {
+        fireEvent.click(
+          screen.getByRole("button", { name: /gpt-6-astra-mini/ }),
+        );
+      });
+      banners.rerenderWith(switchingPending(2));
+
+      const commits = await captureLiveRegionCommits(() => {
+        deferred.resolve({ outcome: "applied" });
+      });
+      // `describeFallbackOutcome("applied")` is `null` - the frame that
+      // follows and the host's own durable notice are that outcome's
+      // feedback, so the hook's `onSuccess` must never publish for it.
+      expect(commits).toEqual([]);
+      expect(
+        harness.handle.store.getState().unattendedFallbackOutcome,
+      ).toBeNull();
+    });
+
+    it("control: the same pick, with the menu still MOUNTED and OPEN when it resolves, reports inline only - the announcer stays silent and unattendedFallbackOutcome stays null", async () => {
+      const harness = createHarness();
+      registerHarness(harness);
+      const pending = waitingPending(1);
+      const baselineEpoch = bootstrap(harness, pending, undefined, undefined);
+      const chat = renderChat(baselineEpoch, undefined);
+      renderBanners(pending, chat.queryClient);
+
+      const deferred = makeDeferred<ChooseTargetResponse>();
+      chooseTargetState.handler = () => deferred.promise;
+
+      fireEvent.click(screen.getByRole("button", { name: "Switch instead…" }));
+      act(() => {
+        fireEvent.click(
+          screen.getByRole("button", { name: /gpt-6-astra-mini/ }),
+        );
+      });
+      // Deliberately NO parent transition here - the menu stays mounted and
+      // OPEN (`inlineMenuOpen: true`) for the whole test, which is what stops
+      // the fix from double-reporting: this is the pin that proves the hook's
+      // `onSuccess` really does defer to the open menu's own inline line
+      // rather than reporting alongside it.
+      const commits = await captureLiveRegionCommits(() => {
+        deferred.resolve({ outcome: "traversal_advanced" });
+      });
+      expect(commits).toEqual([]);
+      expect(
+        harness.handle.store.getState().unattendedFallbackOutcome,
+      ).toBeNull();
+      // The menu's OWN inline line is what actually reports this refusal.
+      expect(screen.getByText("This chat already resumed.")).toBeDefined();
+    });
   });
 
   // D224: paired epoch-condition cases sharing ONE warm-baseline builder and

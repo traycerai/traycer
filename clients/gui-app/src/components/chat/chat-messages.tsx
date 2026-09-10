@@ -144,6 +144,7 @@ import type {
   ChatSessionState,
   ChatSessionStoreHandle,
   ConfirmedManualFallbackAction,
+  UnattendedFallbackOutcome,
 } from "@/stores/chats/chat-session-store";
 import { useStore } from "zustand";
 import type {
@@ -1056,6 +1057,55 @@ function observeManualFallbackAction(
   };
 }
 
+interface UnattendedFallbackAnnouncementObservation {
+  readonly sequence: number;
+  readonly announcement: FallbackAnnouncement | null;
+}
+
+/**
+ * A fallback answer that reached no surface, as an announcement (MF11).
+ *
+ * Same shape as {@link observeManualFallbackAction} and the same two guards,
+ * for the same reasons: a warm store outlives the surfaces that write to it, so
+ * the scope triple is re-checked here rather than trusted, and a high-water
+ * mark keeps a replayed frame carrying an older record silent.
+ *
+ * No copy of its own. The publisher records the sentence its own surface would
+ * have shown (`describeFallbackOutcome`), because a second wording for one set
+ * of outcomes is how the transcript and the toast come to disagree about what
+ * happened.
+ */
+function observeUnattendedFallbackOutcome(
+  outcome: UnattendedFallbackOutcome | null,
+  scope: ChatAnnouncementScope,
+  lastSequence: number,
+): UnattendedFallbackAnnouncementObservation {
+  if (
+    outcome === null ||
+    outcome.hostId !== scope.hostId ||
+    outcome.epicId !== scope.epicId ||
+    outcome.chatId !== scope.chatId
+  ) {
+    return { sequence: lastSequence, announcement: null };
+  }
+  if (outcome.sequence <= lastSequence) {
+    return { sequence: lastSequence, announcement: null };
+  }
+  return {
+    sequence: outcome.sequence,
+    announcement: {
+      key: JSON.stringify([
+        "unattended",
+        outcome.hostId,
+        outcome.epicId,
+        outcome.chatId,
+        outcome.sequence,
+      ]),
+      text: outcome.text,
+    },
+  };
+}
+
 function ChatFallbackAnnouncementSource(
   props: ChatLiveAnnouncementsProps & {
     readonly hostId: string;
@@ -1079,6 +1129,7 @@ function ChatFallbackAnnouncementSource(
   );
   const observerRef = useRef<FallbackAnnouncementObserver | null>(null);
   const lastManualSequence = useRef(0);
+  const lastUnattendedSequence = useRef(0);
   const notices = useMemo(
     () => fallbackNoticeAnnouncements(props.messages),
     [props.messages],
@@ -1118,6 +1169,12 @@ function ChatFallbackAnnouncementSource(
       labelFor,
     );
     lastManualSequence.current = manual.sequence;
+    const unattended = observeUnattendedFallbackOutcome(
+      state.unattendedFallbackOutcome,
+      props,
+      lastUnattendedSequence.current,
+    );
+    lastUnattendedSequence.current = unattended.sequence;
     // A store rebase can precede React's new transcript props. Do not pair
     // that epoch with the OLD rows, or its history would arrive as live news.
     // Transport `open` can also precede its authoritative snapshot. The
@@ -1157,6 +1214,7 @@ function ChatFallbackAnnouncementSource(
       liveOutcome: fallbackOutcomeAnnouncement(state.lastFallbackOutcome),
       notices,
       manualOutcome: manual.announcement,
+      unattendedOutcome: unattended.announcement,
     });
     enqueue(next.map((entry) => entry.text));
   });
@@ -1164,6 +1222,7 @@ function ChatFallbackAnnouncementSource(
   useLayoutEffect(() => {
     observerRef.current = createFallbackAnnouncementObserver();
     lastManualSequence.current = 0;
+    lastUnattendedSequence.current = 0;
     reset();
     observeState(handle.store.getState());
     // Observe the store itself: React may batch hold, choosing and switching
@@ -1175,6 +1234,7 @@ function ChatFallbackAnnouncementSource(
         state.lastFallbackOutcome !== prior.lastFallbackOutcome ||
         state.confirmedManualFallbackAction !==
           prior.confirmedManualFallbackAction ||
+        state.unattendedFallbackOutcome !== prior.unattendedFallbackOutcome ||
         state.connectionEpoch !== prior.connectionEpoch ||
         state.connectionStatus !== prior.connectionStatus ||
         state.snapshotLoaded !== prior.snapshotLoaded ||

@@ -158,10 +158,36 @@ export function FallbackWaitingCard({
 /**
  * "Resuming at 3:00 PM (in about 2h 14m)", or "Resuming shortly…".
  *
- * A `role="status"` live region, and the only part of the card that is one: a
- * wait is the state a user leaves the window on, so the moment it turns over is
- * worth announcing - while the buttons and the identity chip beside it would be
- * re-announced with it if the whole card were the region.
+ * TWO elements on one line, and the split is the whole point (AX9).
+ *
+ * The `role="status"` live region carries the SEMANTIC status only - the
+ * deadline, which is a fixed fact for the life of the wait. A wait is the state
+ * a user leaves the window on, so entering it and passing it are worth
+ * announcing; the buttons and the identity chip beside it would be re-announced
+ * with them if the whole card were the region, so it stays narrow.
+ *
+ * The countdown is a SIBLING of that region, never inside it. It is the only
+ * part that changes routinely: a six-hour wait ticks ~360 times, and while the
+ * whole sentence lived in the region every one of those ticks was a fresh
+ * polite announcement - hundreds of them, multiplied by every visible chat.
+ * Outside the region it is still in the accessibility tree and still readable
+ * on demand, which is what the finding asks for; it is simply not news. An
+ * `aria-hidden` countdown would have "fixed" the noise by deleting the number
+ * for exactly the users the region exists for.
+ *
+ * So the region's text changes exactly ONCE over an entire wait - when the
+ * deadline passes - and no minute tick can move it. Anything added here that
+ * varies with `now` belongs on the countdown side of that boundary.
+ *
+ * Entering the wait is NOT announced from here, and this region could not do it
+ * anyway: it mounts already carrying the deadline, and a live region that
+ * arrives with its text announces nothing - the same rule
+ * `fallback-destination-menu.tsx` states for its own regions, and the reason
+ * `FallbackWaitHeadline`'s two returns keep one element at one position rather
+ * than swapping the region out. Entry is spoken by the chat's announcer, from
+ * the `waiting` sentence in `stores/chats/chat-announcements.ts`. What this
+ * region is for is the CHANGE: the wait ending is news, and it is news at a
+ * moment no other surface is speaking.
  *
  * Its own component so the minute tick repaints this line rather than the card.
  * MINUTE resolution deliberately, unlike the grace card's seconds: a wait runs
@@ -173,7 +199,7 @@ export function FallbackWaitingCard({
  * deadline is the HOST's, and the frame that ends the wait takes a moment to
  * arrive; "Resuming shortly…" is true across the whole of that gap, and a
  * `null` deadline - an effect phase that is due now - lands on the same words
- * for the same reason.
+ * for the same reason. Neither state has a countdown to show.
  */
 function FallbackWaitHeadline({
   deadline,
@@ -181,13 +207,26 @@ function FallbackWaitHeadline({
   readonly deadline: number | null;
 }) {
   const now = useSampledNow();
-  const label =
-    deadline === null || deadline <= now
-      ? "Resuming shortly…"
-      : `Resuming at ${formatClockTime(deadline)} (in about ${formatResetCountdown(deadline, now)})`;
+  // Two returns rather than one with ternaries inside it, and the shape is
+  // load-bearing: both render the SAME element at the SAME position, so React
+  // reuses the live region across the deadline instead of replacing it. A
+  // region that is torn down and rebuilt is a region assistive tech was not
+  // observing when its text arrived - the mount-with-content case that
+  // announces nothing.
+  if (deadline === null || deadline <= now) {
+    return (
+      <div className="text-ui-sm">
+        <span role="status">Resuming shortly…</span>
+      </div>
+    );
+  }
   return (
-    <div role="status" className="text-ui-sm">
-      {label}
+    <div className="text-ui-sm">
+      <span role="status">Resuming at {formatClockTime(deadline)}</span>
+      <span className="text-muted-foreground">
+        {" "}
+        (in about {formatResetCountdown(deadline, now)})
+      </span>
     </div>
   );
 }
