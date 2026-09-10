@@ -9,6 +9,7 @@ import {
   resetNegotiatedManifests,
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { stageNotificationPartitionFloors } from "./notification-partition-floors";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import type {
   HostNotificationsCloudFeedRow,
@@ -420,16 +421,9 @@ beforeEach(() => {
   // keeps working; the "local-mode view consumption" describe below adds a
   // case that deliberately withholds this.
   //
-  // All THREE unary floors have to be staged, not just the two the mark-read
-  // path uses: `useNotificationFeedModeFor` admits mixed mode on the whole set,
-  // so omitting `indicatorState` silently drops every case here into local mode
-  // and the failure surfaces as unrelated cloud assertions, not as a version
-  // problem.
-  recordNegotiatedHostManifest(mockLocalHostEntry.hostId, {
-    "host.notifications.list": { major: 2, minor: 2 },
-    "host.notifications.markAllRead": { major: 1, minor: 1 },
-    "host.notifications.indicatorState": { major: 1, minor: 1 },
-  });
+  // The WHOLE unary floor set, from the fixture the provider suite stages
+  // too - `notification-partition-floors.ts` says why it is whole and shared.
+  stageNotificationPartitionFloors([mockLocalHostEntry.hostId]);
   useCloudNotificationsStore.getState().reset();
   __resetHostNotificationsStoreForTests();
   __resetNotificationsStoreForTests();

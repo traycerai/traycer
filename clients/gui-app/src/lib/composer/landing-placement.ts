@@ -5,7 +5,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { hasReadyRemoteSession } from "@traycer-clients/shared/host-transport/remote/index";
 import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import { dialableHostEndpointFor } from "@/lib/host/transport-key";
-import { negotiatedListTasksServesLocalFirst } from "@/lib/cloud-epic-tasks-query/local-first-admission";
+import { negotiatedCreateServesLocalFirst } from "@/lib/epic-create-admission";
 import {
   authorizesCloudCapability,
   type AuthStatus,
@@ -68,13 +68,15 @@ export type LandingPlacement =
  * Whether a session WITHOUT a cloud verdict may create on the placement host.
  *
  * `admitsLocalPlane` lets an `unverified` session onto the landing workspace,
- * and the composer there is live. `epic.create` negotiates only `@1.0`, whose
- * released contract is the cloud create - so nothing on the wire tells a
- * local-first host from an older one that would send the create to the cloud
- * on the retained credential, spending the capability the verdict withheld.
- * The host's `epic.listTasks` line answers instead: the release that serves
- * the local-first initial leg (`@1.6`) is the release whose create is
- * local-first, and that version IS negotiated. A `null` version (no handshake
+ * and the composer there is live. What must not happen is that create going to
+ * the cloud on the retained credential, spending the capability the verdict
+ * withheld.
+ *
+ * The subject is `epic.create`'s OWN negotiated line: `@1.1` is the minor from
+ * which the create is local-first. This used to ask `epic.listTasks@1.6`
+ * instead, because `epic.create` advertised a single `@1.0` line and could not
+ * answer for itself - see `negotiatedCreateServesLocalFirst` for why that
+ * proxy was retired rather than merely renamed. A `null` version (no handshake
  * yet) refuses too, with copy that says why; the chip re-resolves when the
  * manifest lands.
  *
@@ -84,11 +86,11 @@ export type LandingPlacement =
  */
 export function refuseCreateWithoutCloudVerdict(input: {
   readonly status: AuthStatus;
-  readonly negotiatedListTasks: SchemaVersion | null;
+  readonly negotiatedCreate: SchemaVersion | null;
   readonly hostLabel: string;
 }): LandingPlacement | null {
   if (authorizesCloudCapability(input.status)) return null;
-  if (negotiatedListTasksServesLocalFirst(input.negotiatedListTasks)) {
+  if (negotiatedCreateServesLocalFirst(input.negotiatedCreate)) {
     return null;
   }
   return {

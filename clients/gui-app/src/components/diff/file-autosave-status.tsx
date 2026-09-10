@@ -546,6 +546,15 @@ function statusDescription(state: FileEditRuntimeState): string {
       : "Unsaved changes — autosaving";
   }
   if (state.status === "offline") {
+    // "THIS DEVICE" IS CORRECT HERE and must not be swept into "the connected
+    // device" with the History / pin copy. Those strings describe epics, which
+    // live on the HOST serving them. This one describes the offline buffer:
+    // `offline` means the write to the host THREW, and `queueRecoveryWrite`
+    // then parks the draft in this renderer's own IndexedDB journal
+    // (`file-edit-recovery-store.ts`, keyed per window/tab). The bytes really
+    // are on the machine reading this sentence, and on a phone driving a
+    // remote host "the connected device" would name the one place they are
+    // NOT.
     return state.error ?? "Offline — changes are stored on this device";
   }
   if (state.status === "error") return state.error ?? "Autosave failed";

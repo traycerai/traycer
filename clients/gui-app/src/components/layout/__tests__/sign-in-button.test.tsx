@@ -39,7 +39,10 @@ import { setMobileApp } from "@/lib/mobile-app";
 import { AuthSessionExpiredToastBridge } from "@/providers/auth-session-expired-toast-bridge";
 import { LinkLoginDeepLinkBridge } from "@/components/layout/bridges/link-login-deep-link-bridge";
 import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
-import { decideDeepLinkRouting } from "@/lib/auth/link-login-deep-link-routing";
+import {
+  decideDeepLinkRouting,
+  linkLoginAlreadySignedInMessage,
+} from "@/lib/auth/link-login-deep-link-routing";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useLinkLoginDeepLinkOutcomeStore } from "@/stores/auth/link-login-deep-link-outcome-store";
@@ -300,6 +303,27 @@ describe("routing a link code the OS delivered", () => {
   });
 });
 
+/**
+ * `linkLoginAlreadySignedInMessage` - lane 9 item 3. The routing is shared
+ * between `signed-in` and `unverified`; the sentence must not be, because
+ * `unverified` is precisely the session this app could not verify.
+ */
+describe("the sentence for a refused already-signed-in claim", () => {
+  it("keeps the old sentence, verbatim, for a verified session", () => {
+    expect(linkLoginAlreadySignedInMessage("signed-in")).toBe(
+      "Already signed in on this phone — nothing to approve.",
+    );
+  });
+
+  it("does not claim the unverified session is signed in", () => {
+    const message = linkLoginAlreadySignedInMessage("unverified");
+    expect(message).toBe(
+      "This phone already has a stored session — nothing to approve.",
+    );
+    expect(message).not.toContain("signed in");
+  });
+});
+
 describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
   // The immutable Capacitor product flag, never the viewport: a narrow
   // desktop window is still a desktop, and a desktop offering to scan a QR
@@ -517,6 +541,77 @@ describe("link-code entry is gated on the mobile-app PRODUCT signal", () => {
       expect(claimed.length).toBe(1);
     });
     observing();
+    mobile.cleanupClient();
+  });
+
+  it("does not tell an unverified session it is signed in, on a camera-scanned claim", async () => {
+    // Lane 9 item 3: the `already-signed-in` routing is shared between
+    // `signed-in` and `unverified`, and the bridge picks the sentence beside
+    // the decision (`linkLoginAlreadySignedInMessage`).
+    setMobileApp(true);
+    vi.mocked(toast.info).mockClear();
+    const { host, emitCode } = deepLinkHost();
+    const mobile = mountSignInButton(host, "hero");
+    await mobile.waitForAuthService();
+
+    act(() => {
+      const auth = useAuthStore.getState();
+      auth.setUnverifiedSession(
+        {
+          userId: "u1",
+          userName: "U",
+          email: "u@example.test",
+          avatarUrl: null,
+        },
+        { userId: "u1", username: "U" },
+      );
+    });
+    act(() => {
+      emitCode("ABCDEFGHJK");
+    });
+
+    await waitFor(() => {
+      expect(vi.mocked(toast.info).mock.calls.length).toBeGreaterThan(0);
+    });
+    const message = vi.mocked(toast.info).mock.calls.at(-1)?.[0];
+    expect(message).toBe(
+      "This phone already has a stored session — nothing to approve.",
+    );
+    expect(message).not.toContain("signed in");
+    mobile.cleanupClient();
+  });
+
+  it("keeps the old sentence for a verified session's camera-scanned claim", async () => {
+    setMobileApp(true);
+    vi.mocked(toast.info).mockClear();
+    const { host, emitCode } = deepLinkHost();
+    const mobile = mountSignInButton(host, "hero");
+    await mobile.waitForAuthService();
+
+    act(() => {
+      const auth = useAuthStore.getState();
+      auth.setSignedIn(
+        {
+          userId: "u1",
+          userName: "U",
+          email: "u@example.test",
+          avatarUrl: null,
+        },
+        { userId: "u1", username: "U" },
+        [],
+      );
+    });
+    act(() => {
+      emitCode("ABCDEFGHJK");
+    });
+
+    await waitFor(() => {
+      expect(vi.mocked(toast.info).mock.calls.length).toBeGreaterThan(0);
+    });
+    const message = vi.mocked(toast.info).mock.calls.at(-1)?.[0];
+    expect(message).toBe(
+      "Already signed in on this phone — nothing to approve.",
+    );
     mobile.cleanupClient();
   });
 
