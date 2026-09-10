@@ -124,7 +124,7 @@ import {
   useEpicSetPinned,
   usePendingSetPinnedEpicIds,
 } from "@/hooks/epic/use-epic-set-pinned-mutation";
-import { epicMutationKeys } from "@/lib/query-keys";
+import { epicMutationKeys, queryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 const PROFILE = { userId: "user-1", userName: "U", email: "u@example.com" };
@@ -490,6 +490,141 @@ describe("useEpicSetPinned", () => {
     expect(pinnedById(queryClient.getQueryData(windowKey))).toEqual({
       "epic-1": false,
     });
+  });
+
+  /**
+   * The pin READING cache - where a local-homed row's rendered pin state
+   * actually comes from - must be reached by the write.
+   *
+   * It was not. The optimistic patch and the `onSuccess` invalidation both
+   * matched only the History key (`cloud.listTasks`, user at index 5), while the
+   * reading key is `["host", host, "epic.listTasks", params, user, "pin-reading"]`.
+   * So a successful pin reached the owning host and changed the backend, and the
+   * glyph kept the pre-click value indefinitely: `staleTime: Infinity` means
+   * nothing refetches it on its own, and only a manual invalidation corrected it.
+   */
+  it("patches the pin-reading cache for the dispatch host, and only that host's", () => {
+    const queryClient = new QueryClient();
+    const ownerReadingKey = queryKeys.cloudEpicPinReading(
+      "host-owning",
+      "user-1",
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    const otherReadingKey = queryKeys.cloudEpicPinReading(
+      "host-other",
+      "user-1",
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    queryClient.setQueryData(
+      ownerReadingKey,
+      pageWith([epicTask("epic-1", false)]),
+    );
+    queryClient.setQueryData(
+      otherReadingKey,
+      pageWith([epicTask("epic-1", false)]),
+    );
+    renderHook(() => useEpicSetPinned(), {
+      wrapper: makeWrapper(queryClient),
+    });
+
+    capturedOptions.onMutate?.({
+      epicId: "epic-1",
+      pinned: true,
+      isLocalHome: true,
+      hostId: "host-owning",
+    });
+
+    expect(pinnedById(queryClient.getQueryData(ownerReadingKey))).toEqual({
+      "epic-1": true,
+    });
+    // A different host's reading is a different machine's disk - untouched.
+    expect(pinnedById(queryClient.getQueryData(otherReadingKey))).toEqual({
+      "epic-1": false,
+    });
+  });
+
+  it("rolls the pin-reading cache back when the write fails", () => {
+    const queryClient = new QueryClient();
+    const ownerReadingKey = queryKeys.cloudEpicPinReading(
+      "host-owning",
+      "user-1",
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    queryClient.setQueryData(
+      ownerReadingKey,
+      pageWith([epicTask("epic-1", false)]),
+    );
+    renderHook(() => useEpicSetPinned(), {
+      wrapper: makeWrapper(queryClient),
+    });
+    const variables = {
+      epicId: "epic-1",
+      pinned: true,
+      isLocalHome: true,
+      hostId: "host-owning",
+    };
+
+    const context = capturedOptions.onMutate?.(variables);
+    expect(pinnedById(queryClient.getQueryData(ownerReadingKey))).toEqual({
+      "epic-1": true,
+    });
+
+    capturedOptions.onError?.(
+      { code: "RPC_ERROR", message: "test", fatalDetails: null },
+      variables,
+      context,
+    );
+
+    // Back to the host's real state. The rollback needs no enrollment of its
+    // own - it inverts the bit through the same patch function - which is why
+    // that enrollment lives in `setEpicPinnedInCloudTaskCaches` rather than at
+    // the two call sites.
+    expect(pinnedById(queryClient.getQueryData(ownerReadingKey))).toEqual({
+      "epic-1": false,
+    });
+  });
+
+  it("invalidates the dispatch host's pin reading on success", async () => {
+    const queryClient = new QueryClient();
+    const ownerReadingKey = queryKeys.cloudEpicPinReading(
+      "host-owning",
+      "user-1",
+      LIST_CLOUD_TASKS_REQUEST,
+    );
+    const invalidated: Array<readonly unknown[]> = [];
+    queryClient.setQueryData(
+      ownerReadingKey,
+      pageWith([epicTask("epic-1", true)]),
+    );
+    // Observed through the predicate rather than a refetch: this suite mocks
+    // `useHostMutation`, so there is no real query observer to refetch - what is
+    // being pinned is that the reading key is MATCHED by the success sweep.
+    const originalInvalidate = queryClient.invalidateQueries.bind(queryClient);
+    queryClient.invalidateQueries = (filters?: {
+      predicate?: (query: { queryKey: readonly unknown[] }) => boolean;
+    }) => {
+      if (filters?.predicate?.({ queryKey: ownerReadingKey }) === true) {
+        invalidated.push(ownerReadingKey);
+      }
+      return Promise.resolve();
+    };
+    renderHook(() => useEpicSetPinned(), {
+      wrapper: makeWrapper(queryClient),
+    });
+
+    await capturedOptions.onSuccess?.(
+      { pinned: true },
+      {
+        epicId: "epic-1",
+        pinned: true,
+        isLocalHome: true,
+        hostId: "host-owning",
+      },
+      { hostId: "host-owning", userId: "user-1" },
+    );
+
+    expect(invalidated).toEqual([ownerReadingKey]);
+    queryClient.invalidateQueries = originalInvalidate;
   });
 
   it("resets the scope's pagination and refreshes the first page on success", async () => {

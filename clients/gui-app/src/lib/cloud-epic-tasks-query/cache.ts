@@ -12,6 +12,7 @@ import {
 } from "@/stores/epics/cloud-epic-tasks-pages-store";
 import {
   isCloudEpicTasksQueryKey,
+  isEpicPinReadingQueryKey,
   isEpicTaskContextsQueryKey,
   queryKeys,
 } from "@/lib/query-keys";
@@ -197,7 +198,14 @@ export function setEpicPinnedInCloudTaskCaches(
 ): void {
   patchMatchingQueries(
     queryClient,
-    (query) => cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope),
+    // The pin READING cache is enrolled here, which covers the optimistic patch
+    // and its rollback in one place - `onError` inverts the bit through this
+    // same function. Without it a local-homed row's rendered pin came from a
+    // cache no write ever touched: the glyph kept the pre-click state after a
+    // SUCCESSFUL write, and `staleTime: Infinity` meant nothing refetched it.
+    (query) =>
+      cloudEpicTasksQueryKeyMatchesScope(query.queryKey, scope) ||
+      epicPinReadingQueryKeyMatchesScope(query.queryKey, scope),
     (response: ListTasksResponse) =>
       setEpicPinnedInCloudTasksResponse(response, epicId, pinned),
   );
@@ -296,6 +304,45 @@ function setEpicPinnedInTaskContextsResponse(
       },
     },
   };
+}
+
+/**
+ * Scope match for the per-host PIN READING key (`cloudQueryKeys.epicPinReading`):
+ * `["host", hostId, "epic.listTasks", params, userId, "pin-reading"]` - so the
+ * user sits at index 4, one earlier than in the History key, which is why this
+ * cannot be folded into the predicate below.
+ *
+ * The reading cache holds a `ListTasksResponse`, the same shape History's does,
+ * so every existing row patch applies to it unchanged; only the MATCH was
+ * missing.
+ *
+ * Enrolled at three of the eleven sites that match the History key, and the
+ * other eight are decisions rather than omissions. Enrolled: the pin patch below
+ * (which is also the rollback - `onError` inverts the bit through it) and the
+ * pin mutation's two `onSuccess` predicates. Not enrolled, because the overlay
+ * reads ONLY `pinned` out of this cache, and only for epics a live session
+ * already reports local-homed:
+ *
+ *  - the two title paths here, the session provider's title write-through, and
+ *    `epic.create`'s patch - a title or a new row in this cache is never
+ *    rendered from it;
+ *  - `setEpicLocalHomeInCloudTaskCaches` - a stale `home` here cannot be read,
+ *    because an epic that stops being local-homed leaves the session's
+ *    local-home set and is no longer overlaid at all;
+ *  - the `lastViewed` sort predicate and `reopenLocalFirstCloudPage` - both
+ *    describe a paged, verdict-demotable History page, which this is not;
+ *  - the delete sweep - this cache is a pinned-bit LOOKUP, never a row source,
+ *    so an entry for a deleted epic can neither render nor reintroduce a row.
+ */
+export function epicPinReadingQueryKeyMatchesScope(
+  queryKey: readonly unknown[],
+  scope: CloudEpicTasksCacheScope,
+): boolean {
+  return (
+    isEpicPinReadingQueryKey(queryKey) &&
+    (scope.hostId === null || queryKey[1] === scope.hostId) &&
+    queryKey[4] === scope.userId
+  );
 }
 
 export function cloudEpicTasksQueryKeyMatchesScope(

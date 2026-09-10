@@ -202,6 +202,26 @@ describe("combineLocalPinReadings", () => {
     expect(readings.size).toBe(0);
   });
 
+  it("skips a local row whose `pinned` the host OMITTED", () => {
+    // `pinned` is optional on the wire. An absent one is silence, exactly like a
+    // cloud-homed row's `false` - so it must not enter the map, because
+    // MEMBERSHIP is what `pinnedKnown` reports downstream.
+    const readings = combineLocalPinReadings([
+      {
+        data: {
+          tasks: [
+            { ...homedRow("epic-silent", false, "local"), pinned: undefined },
+            homedRow("epic-stated", true, "local"),
+          ],
+          hasMore: false,
+        },
+      },
+    ]);
+
+    expect(readings.has("epic-silent")).toBe(false);
+    expect(readings.get("epic-stated")).toBe(true);
+  });
+
   it("merges every host's page and skips rows with no epic id", () => {
     const readings = combineLocalPinReadings([
       {
