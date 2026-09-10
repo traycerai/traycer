@@ -98,7 +98,10 @@ import { useHistoryOpenItem } from "@/components/epics/use-history-open-item";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useChatHostFilterSupport } from "@/hooks/home/use-chat-host-filter-support";
 import { EpicsSortMenu } from "@/components/epics/epics-sort-menu";
-import { useHistoryListKeyboardNav } from "@/components/epics/use-history-list-keyboard-nav";
+import {
+  ROW_TARGET_SELECTOR,
+  useHistoryListKeyboardNav,
+} from "@/components/epics/use-history-list-keyboard-nav";
 import { ImportedUnseenDot } from "@/components/session-import/imported-unseen-dot";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import {
@@ -1806,7 +1809,9 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
           "updated ..." label squeezes the title to nothing at phone width. */}
       <div className={historyRowContentClassName(rowSweep.isVisible)}>
         <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden max-md:basis-full">
-          <HistoryRowLeadingIcon item={item} />
+          <HistoryRowStatusSlot>
+            <HistoryRowLeadingIcon item={item} />
+          </HistoryRowStatusSlot>
           {isRenaming ? (
             <input
               {...renameInputProps}
@@ -1820,7 +1825,9 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
               <span className="truncate font-medium text-foreground">
                 {displayTitle}
               </span>
-              <ImportedUnseenDot epicId={item.epicId} />
+              <HistoryRowStatusSlot>
+                <ImportedUnseenDot epicId={item.epicId} />
+              </HistoryRowStatusSlot>
               <HistoryOpenBadge epicId={item.epicId} isOpen={isOpen} />
               {pinControl}
               {titleEditControl}
@@ -2177,6 +2184,75 @@ function HistorySweepMenuItem(props: {
       <Paintbrush />
       Sweep Worktrees…
     </ContextMenuItem>
+  );
+}
+
+/**
+ * The hover target for the row's status glyph.
+ *
+ * `historyRowContentClassName` makes the whole content layer
+ * `pointer-events-none` so the row's overlay link underneath receives every
+ * click, and each control that wants the pointer opts back in with
+ * `pointer-events-auto` (pin, title edit, delete, PR pills). The status
+ * marks never did, so none of their tooltips - the running spinner's, the
+ * attention tones', the imported-unseen dot's, and now the provenance dot's -
+ * could open on desktop: the pointer fell straight through to the link.
+ * Opting in restores the hover for the whole class at once; every status mark
+ * on the row renders inside one of these.
+ *
+ * Opting in also means a click on the glyph would stop at the glyph, and the
+ * glyph is not a control - it is a 14px status mark that used to be part of
+ * the row's click surface. So the click is handed on to the row's activation
+ * target with its modifiers intact, which is what keeps ctrl/cmd-click on the
+ * spinner toggling selection exactly as it did through the overlay. Dispatched
+ * as a real DOM click rather than calling the row's handler directly so this
+ * slot needs to know nothing about what activation means - the overlay link
+ * and the selection-mode toggle both carry `data-history-row-target`.
+ *
+ * The glyph stays non-focusable, like every other status indicator: its
+ * sentence is its accessible name (`role="status"` + `aria-label`), which is
+ * how a screen reader reaches it, and a tab stop on every row for a
+ * non-interactive mark would cost keyboard users a keypress per row.
+ */
+function HistoryRowStatusSlot(props: {
+  readonly children: ReactNode;
+}): ReactNode {
+  const forwardClickToRow = useCallback(
+    (event: React.MouseEvent<HTMLSpanElement>) => {
+      const target = event.currentTarget
+        .closest("li")
+        ?.querySelector<HTMLElement>(ROW_TARGET_SELECTOR);
+      if (target === null || target === undefined) return;
+      event.preventDefault();
+      event.stopPropagation();
+      target.dispatchEvent(
+        new MouseEvent("click", {
+          bubbles: true,
+          cancelable: true,
+          button: event.button,
+          ctrlKey: event.ctrlKey,
+          metaKey: event.metaKey,
+          shiftKey: event.shiftKey,
+          altKey: event.altKey,
+        }),
+      );
+    },
+    [],
+  );
+  return (
+    // The handler is click FORWARDING, not an interaction of its own, which
+    // is why this is a presentational span and not a button: a button would
+    // announce itself and take focus, and the thing it activates already has
+    // both. `role="presentation"` states exactly that - the span contributes
+    // no semantics of its own; the status child keeps its `role="status"`.
+    <span
+      role="presentation"
+      className="pointer-events-auto inline-flex shrink-0 items-center"
+      data-testid="epics-list-row-status-slot"
+      onClick={forwardClickToRow}
+    >
+      {props.children}
+    </span>
   );
 }
 

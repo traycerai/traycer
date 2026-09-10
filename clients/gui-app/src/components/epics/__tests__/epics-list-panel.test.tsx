@@ -976,14 +976,114 @@ describe("<EpicsListPanel />", () => {
     testState.activityByEpicId.set("epic-from-history", "turn");
     renderPanel("embedded", "/");
 
+    const activityGlyph = await screen.findByTestId(
+      "epics-list-row-activity-epic-from-history",
+    );
+    expect(activityGlyph).toBeDefined();
+    // The status-slot opt-in covers the whole leading-glyph class, not just
+    // the new provenance dot - the running indicator sits inside the same
+    // slot the glyph does.
     expect(
-      await screen.findByTestId("epics-list-row-activity-epic-from-history"),
-    ).toBeDefined();
+      activityGlyph.closest('[data-testid="epics-list-row-status-slot"]'),
+    ).not.toBeNull();
     expect(
       screen.queryByTestId(
         "epics-list-row-provenance-local-only-epic-from-history",
       ),
     ).toBeNull();
+  });
+
+  it("keeps the status glyph's tooltip reachable above the row's pointer-events-none content layer", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    renderPanel("embedded", "/");
+
+    const glyph = await screen.findByTestId(
+      "epics-list-row-provenance-local-only-epic-from-history",
+    );
+    const slot = glyph.closest('[data-testid="epics-list-row-status-slot"]');
+    expect(slot).not.toBeNull();
+    if (slot === null) throw new Error("expected a status-slot ancestor");
+    expect(slot.className).toMatch(/pointer-events-auto/);
+
+    // The slot's opt-in has to sit INSIDE the row's opted-out content layer
+    // for the fix to matter - an ancestor further up carries
+    // `pointer-events-none`.
+    const contentLayer = slot.closest('[class~="pointer-events-none"]');
+    expect(contentLayer).not.toBeNull();
+
+    expect(tooltipTextNear(glyph)).toMatch(/not synced yet/i);
+  });
+
+  it("forwards a plain click on the status glyph to the row, so the glyph stays part of the row's click surface", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    const router = renderPanel("embedded", "/");
+
+    const glyph = await screen.findByTestId(
+      "epics-list-row-provenance-local-only-epic-from-history",
+    );
+    const slot = glyph.closest('[data-testid="epics-list-row-status-slot"]');
+    expect(slot).not.toBeNull();
+    if (slot === null) throw new Error("expected a status-slot ancestor");
+
+    fireEvent.click(slot);
+
+    // Read the selection state before the navigation below unmounts the
+    // panel - the row's checkbox would otherwise no longer be in the DOM to
+    // query.
+    expect(
+      screen
+        .getByRole("checkbox", { name: /select local only epic/i })
+        .getAttribute("aria-checked"),
+    ).toBe("false");
+
+    await waitFor(() => {
+      const tabId = useEpicCanvasStore
+        .getState()
+        .resolveTabIdForEpic("epic-from-history");
+      expect(tabId).not.toBeNull();
+      expect(router.state.location.pathname).toBe(
+        `/epics/epic-from-history/${tabId}`,
+      );
+    });
+  });
+
+  it("forwards a ctrl/meta-click on the status glyph as a selection toggle, exactly like the row", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    const router = renderPanel("embedded", "/");
+
+    const glyph = await screen.findByTestId(
+      "epics-list-row-provenance-local-only-epic-from-history",
+    );
+    const slot = glyph.closest('[data-testid="epics-list-row-status-slot"]');
+    expect(slot).not.toBeNull();
+    if (slot === null) throw new Error("expected a status-slot ancestor");
+
+    fireEvent.click(slot, { metaKey: true });
+
+    expect(router.state.location.pathname).toBe("/");
+    expect(
+      screen
+        .getByRole("checkbox", { name: /select local only epic/i })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(
+      screen.getByTestId("epics-list-delete-selected").matches(":disabled"),
+    ).toBe(false);
   });
 
   it("never names the cloud or the device when the host requires cloud access to list", () => {
