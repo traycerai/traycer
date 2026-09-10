@@ -153,9 +153,11 @@ const RESET_TIMESTAMP_PLAUSIBLE_WINDOW_MS = 365 * 24 * 60 * 60 * 1000;
  *
  * The named cadences come from `namedCadenceForDuration`, shared with the
  * strip's `formatCompactWindowDuration`, so "Monthly" and `mo` are answers to
- * one question. A calendar month is what makes that worth sharing: recognised
- * only at exactly 30 days, a January billing period reads "31d" and the
- * February one "28d".
+ * one question. A calendar month is what makes that worth sharing: it answers
+ * "month" across the whole 28-to-31-day range, because a billing period IS a
+ * calendar month and its length depends on which one it is. A rule that
+ * recognised only exactly 30 days would read a January period as "31d" and the
+ * February one as "28d", renaming a cadence that never changed.
  */
 function formatWindowDuration(minutes: number | null): string {
   if (minutes === null || minutes <= 0) return "Usage";

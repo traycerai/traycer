@@ -232,6 +232,17 @@ function backgroundCommandItem(taskId: string, title: string): BackgroundItem {
   };
 }
 
+function backgroundWakeupItem(taskId: string, title: string): BackgroundItem {
+  return {
+    taskId,
+    kind: "wakeup",
+    title,
+    blockId: `${taskId}-block`,
+    parentTaskId: null,
+    scheduledFor: new Date(2026, 0, 2, 9, 30).getTime(),
+  };
+}
+
 function content(text: string): JsonContent {
   return {
     type: "doc",
@@ -487,6 +498,32 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
     const chip = screen.getByTestId("chat-dock-chip-background");
     expect(chip.textContent).toBe("1");
     expect(chip.getAttribute("aria-label")).toBe("Background. 1 running.");
+  });
+
+  // `BackgroundItemsPanel` counts its own header on `dedupeByTaskId(items)`, so
+  // a duplicate `taskId` is ONE waiting row there. The chip counted the raw
+  // list and said "2 waiting" beside that panel's "1 waiting" - the
+  // disagreement `background-item-tree` exists to prevent. The host removes an
+  // item atomically at its terminal, so the duplicate is transient rather than
+  // expected; it is the asymmetry that is the defect, not the input.
+  it("counts a duplicated wakeup task once in the background chip, as the panel header does", () => {
+    useLayoutStore.setState({
+      composer: { ...DEFAULT_COMPOSER_LAYOUT, background: "compact" },
+    });
+
+    renderSurfaces(
+      surfacesProps({
+        restoreContext: EMPTY_RESTORE,
+        queueItems: [],
+        backgroundItems: [
+          backgroundWakeupItem("wake-1", "Review status"),
+          backgroundWakeupItem("wake-1", "Review status"),
+        ],
+      }),
+    );
+
+    const chip = screen.getByTestId("chat-dock-chip-background");
+    expect(chip.getAttribute("aria-label")).toBe("Background. 1 waiting.");
   });
 
   // The most important case: no self agent, no descendants, but the queue

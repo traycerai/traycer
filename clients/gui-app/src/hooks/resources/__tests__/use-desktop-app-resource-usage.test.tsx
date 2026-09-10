@@ -113,4 +113,47 @@ describe("useDesktopAppResourceUsage", () => {
 
     second.unmount();
   });
+
+  it("discards a sample that resolves after the last subscriber left, rather than restoring the cleared snapshot", async () => {
+    // The teardown above clears the snapshot; a round trip already in flight
+    // defeats that clear by writing the same figure straight back. It is
+    // silent - no listener remains to re-render - so it surfaces only when the
+    // NEXT subscriber reads the module snapshot synchronously on mount, which
+    // is exactly the stale reading the clear exists to prevent.
+    let resolveInFlight = (_snapshot: DesktopProcessMetricsSnapshot): void =>
+      undefined;
+    bridgeMock.getMetrics.mockReturnValueOnce(
+      new Promise<DesktopProcessMetricsSnapshot>((resolve) => {
+        resolveInFlight = resolve;
+      }),
+    );
+
+    const first = renderHook(() => useDesktopAppResourceUsage(true));
+    expect(bridgeMock.getMetrics).toHaveBeenCalledTimes(1);
+
+    // The last subscriber leaves within one IPC round trip of that sample.
+    first.unmount();
+
+    resolveInFlight({
+      appMetrics: [
+        {
+          pid: 1,
+          type: "Browser",
+          cpu: { percentCPUUsage: 7 },
+          memory: { workingSetSize: 512 * 1024 },
+        },
+      ],
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    const second = renderHook(() => useDesktopAppResourceUsage(true));
+    expect(second.result.current).toBeNull();
+
+    // And the sampler is not left broken by the discard: this subscriber's own
+    // sample lands normally.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(second.result.current).not.toBeNull();
+
+    second.unmount();
+  });
 });

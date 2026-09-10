@@ -52,6 +52,7 @@ import {
 } from "@/stores/tabs/layout";
 import type { SystemTab, TabRef } from "@/stores/tabs/types";
 import { isHomeTabEnabled } from "@/stores/settings/settings-store";
+import { SETTINGS_PATHS } from "@/stores/tabs/settings-paths";
 import { canMutateTabSplits } from "@/stores/tabs/tab-split-compatibility";
 import { isTabStructurallyLocked } from "@/stores/tabs/tab-structural-lock";
 
@@ -111,33 +112,6 @@ export interface TabsStoreState extends PersistedTabsStoreState {
 }
 
 const TABS_PERSIST_KEY = persistKey(STORE_KEYS.tabs);
-// Hand-maintained, and duplicated verbatim in `desktop-tabs-persistence.ts`.
-// It is NOT derived from `SETTINGS_SECTIONS` because it also has to accept
-// `service`, the retired id that `settings.service.tsx` still redirects, and
-// because a persisted path from an older build is exactly the input this
-// guards. The cost of hand-maintaining it is that a new section can be
-// forgotten here and silently stop being recognised as a settings route -
-// `devices` was, from the day it was added until `app-diagnostics` arrived and
-// the omission was noticed next to it.
-const SETTINGS_PATHS = new Set([
-  "agents",
-  "app-diagnostics",
-  "appearance",
-  "devices",
-  "diagnostics",
-  "general",
-  "host",
-  "keybindings",
-  "layout",
-  "notifications",
-  "opening-behavior",
-  "providers",
-  "service",
-  "shell",
-  "usage",
-  "worktrees",
-]);
-
 let tabsLocalPersistenceEnabled = true;
 let pendingLegacySourceActiveSelection = false;
 

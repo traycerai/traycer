@@ -23,6 +23,9 @@ const desktopAppResourceListeners = new Set<() => void>();
 let desktopAppResourceSnapshot: DesktopAppResourceUsage | null = null;
 let desktopAppResourceTimer: number | null = null;
 let desktopAppResourceInFlight = false;
+// Identifies the sampler a request belongs to, so a reply that arrives after
+// its sampler stopped can be told from one that is still wanted.
+let desktopAppResourceGeneration = 0;
 
 /**
  * `enabled` is required and is not a convenience: a subscriber is what STARTS
@@ -76,6 +79,7 @@ function subscribeDesktopAppResourceUsage(listener: () => void): () => void {
       // through `setDesktopAppResourceSnapshot`, because by here there is no
       // one left to notify.
       desktopAppResourceSnapshot = null;
+      desktopAppResourceGeneration += 1;
     }
   };
 }
@@ -92,15 +96,23 @@ function sampleDesktopAppResourceUsage(): void {
   }
   if (desktopAppResourceInFlight) return;
   desktopAppResourceInFlight = true;
+  // A round trip outlives the sampler that started it when the last subscriber
+  // leaves mid-flight. Writing the reply then would restore exactly the figure
+  // the teardown above cleared, and silently: no listener is left to re-render,
+  // so it surfaces only when the NEXT subscriber reads it synchronously on
+  // mount - the stale reading the clear exists to prevent.
+  const generation = desktopAppResourceGeneration;
   void bridge
     .getMetrics()
     .then(
       (snapshot) => {
+        if (generation !== desktopAppResourceGeneration) return;
         setDesktopAppResourceSnapshot(
           desktopAppResourceUsageFromMetrics(snapshot, Date.now()),
         );
       },
       () => {
+        if (generation !== desktopAppResourceGeneration) return;
         setDesktopAppResourceSnapshot(null);
       },
     )

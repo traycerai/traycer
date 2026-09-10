@@ -1297,4 +1297,32 @@ describe("Layout page settings analytics", () => {
       ).toEqual({ source: "direct_ui", section: "layout", setting });
     }
   });
+
+  it("accepts the general-section setting ids that the runtime allowlist used to omit", async () => {
+    // These three sat in the `AnalyticsSetting` union with no entry in the
+    // runtime allowlist, exactly as `chatTurnMinimapSide` did, so the sanitizer
+    // dropped every one of their events - `general-settings-panel.tsx` emits
+    // `steerOnModEnterEnabled` on each toggle. Building the allowlist from a
+    // `satisfies Record<AnalyticsSetting, true>` is what forced them in and
+    // makes the next omission a compile error; this asserts the runtime half
+    // that a type cannot.
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    const previouslyMissing = [
+      "steerOnModEnterEnabled",
+      "summonHotkeyChord",
+      "summonHotkeyEnabled",
+    ] as const;
+
+    for (const setting of previouslyMissing) {
+      expect(
+        sanitizeAnalyticsProperties(AnalyticsEvent.SettingChanged, {
+          source: "direct_ui",
+          section: "general",
+          setting,
+        }),
+      ).toEqual({ source: "direct_ui", section: "general", setting });
+    }
+  });
 });

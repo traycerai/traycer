@@ -59,6 +59,7 @@ import { accumulatedDiffTotals } from "@/lib/chat/accumulated-change-rows";
 import {
   backgroundHeaderSummary,
   backgroundRunningRowCount,
+  dedupeByTaskId,
 } from "@/lib/chat/background-item-tree";
 import type { WorkspaceComposerAvailability } from "@/lib/composer/workspace-composer-availability";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
@@ -581,10 +582,18 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
       ? 0
       : input.activeAgentCount + (input.selfAgent.activity === false ? 0 : 1);
   const backgroundItems = input.backgroundItems ?? NO_BACKGROUND_ITEMS;
+  // Counted on the deduped list, exactly as `BackgroundItemsPanel` counts its
+  // own header: a transient duplicate `taskId` renders one row there, so
+  // counting the raw list here would make the chip say "2 waiting" against the
+  // panel's "1 waiting".
+  const dedupedBackgroundItems = useMemo(
+    () => dedupeByTaskId(backgroundItems),
+    [backgroundItems],
+  );
   const backgroundRunning = useMemo(
     () =>
       backgroundRunningRowCount({
-        items: backgroundItems,
+        items: dedupedBackgroundItems,
         runningManagedCommandIds: input.runningManagedCommands.map(
           (command) => command.id,
         ),
@@ -592,18 +601,22 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
           (held) => held.commandId,
         ),
       }),
-    [backgroundItems, input.runningManagedCommands, input.heldManagedCommands],
+    [
+      dedupedBackgroundItems,
+      input.runningManagedCommands,
+      input.heldManagedCommands,
+    ],
   );
   const backgroundSummary = useMemo(
     () =>
       backgroundHeaderSummary({
         runningCount: backgroundRunning,
         heldCount: input.heldManagedCommands.length,
-        waitingWakeCount: backgroundItems.filter(
+        waitingWakeCount: dedupedBackgroundItems.filter(
           (item) => item.kind === "wakeup",
         ).length,
       }),
-    [backgroundRunning, input.heldManagedCommands, backgroundItems],
+    [backgroundRunning, input.heldManagedCommands, dedupedBackgroundItems],
   );
   const changeTotals = useMemo(
     () => accumulatedDiffTotals(input.restore.accumulatedFileChanges),

@@ -47,6 +47,7 @@ export function SettingsSegmentedControl<Value extends string>(
             }}
             className={cn(
               "inline-flex items-center rounded-sm px-3 py-1 text-ui-sm transition-colors",
+              "focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
               active
                 ? "bg-card text-foreground shadow-sm"
                 : "text-muted-foreground hover:text-foreground",
