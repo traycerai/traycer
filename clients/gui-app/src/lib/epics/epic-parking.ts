@@ -115,6 +115,7 @@ import {
   subscribeCrossWindowEpicVisibility,
 } from "@/lib/epics/cross-window-epic-visibility";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
+import { subscribeAgentActivity } from "@/stores/agent-activity-store";
 import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
 import { PARK_HIDDEN_EPIC_AFTER_MS } from "@/stores/replica-memory/retention-profile";
 import { useCallback, useSyncExternalStore } from "react";
@@ -483,3 +484,13 @@ export function __resetEpicParkingForTests(): void {
 
 subscribeEpicSurfaceVisibility(epicVisibilityChanged);
 subscribeCrossWindowEpicVisibility(epicVisibilityChanged);
+// The THIRD input to `canPark` that can settle on its own, and the one with no
+// other route back here. `waitForEligibility` listens to the open-epic
+// registry, whose eligibility key is emitted per SESSION - so an epic with no
+// session entry, refused because the activity plane was unanswered or did not
+// cover one of its chats' hosts, has nothing that would ever tell it the plane
+// recovered. The plane failing closed is deliberate; staying deferred after it
+// reopens is not.
+subscribeAgentActivity(() => {
+  retryDeferredEpicParks();
+});

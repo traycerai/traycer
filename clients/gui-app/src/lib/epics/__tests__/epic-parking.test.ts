@@ -1135,6 +1135,51 @@ describe("epic-parking - chat plane gating & missing-entry safeguard (Codex revi
     }
   });
 
+  // Pin 3d: pin 3b's refusal has to LIFT when the plane recovers.
+  //
+  // The activity plane is the third input to `canPark` that settles on its own,
+  // and the only one with no other route back into the decider:
+  // `waitForEligibility` watches the open-epic registry, whose eligibility key
+  // is emitted per SESSION, so an epic with no session entry has nothing that
+  // would ever announce the plane reopening. Failing closed while the plane is
+  // blind is deliberate; staying deferred forever afterwards is the bug.
+  //
+  // Falsified by cutting `subscribeAgentActivity(...)` in `epic-parking.ts`:
+  // before this pin existed that cut reddened NOTHING across 538 tests.
+  it("retries a park deferred by a blind activity plane once the plane answers again, with no visibility edge and no timer (pin 3d)", () => {
+    __resetAgentActivityStoreForTests();
+    const EPIC = "epic-park-plane-recovers-pin3d";
+    const TAB = "tab-park-plane-recovers-pin3d";
+    const CHAT_ID = "chat-plane-recovers-pin3d";
+    const HOST_ID = "host-plane-recovers-pin3d";
+    const chatRegistry = __getChatSessionRegistryForTests();
+
+    const chatHandle = buildTestChatHandle(EPIC, CHAT_ID, HOST_ID);
+    chatRegistry.acquire(
+      { epicId: EPIC, chatId: CHAT_ID, hostId: HOST_ID, scopeKey: "pin3d" },
+      () => chatHandle,
+    );
+
+    openEpicTab(TAB, EPIC);
+    try {
+      expect(__getOpenEpicRegistryForTests().get(EPIC)).toBeNull();
+
+      setEpicSurfaceVisibility(EPIC, "view-pin3d", false);
+      vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS * 3);
+
+      // Refused, and the window has already elapsed - no timer will fire again.
+      expect(isEpicParked(EPIC)).toBe(false);
+
+      // The plane comes back. Not a visibility edge, not a fresh timer, and
+      // not a chat-registry membership change.
+      __setAgentActivityPlaneAnsweringForTests();
+
+      expect(isEpicParked(EPIC)).toBe(true);
+    } finally {
+      closeEpicTab(TAB);
+    }
+  });
+
   // Pin 3c: with NEITHER a session NOR any chats, there is genuinely nothing
   // to lose or release - the one case that still short-circuits. This is the
   // arm that would catch a guard broad enough to never let anything park
@@ -1265,28 +1310,17 @@ describe("epic-parking - retryDeferredEpicParks wiring (Codex review pin 5)", ()
       vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS * 3);
       expect(isEpicParked(EPIC)).toBe(false);
 
-      // The chat settles - not a visibility edge, not a fresh timer.
+      // The chat settles - a STORE write, not a visibility edge, not a fresh
+      // timer, and not a membership change either.
+      //
+      // This is the whole pin. `registry.subscribe` relays only the shared
+      // session registry's membership and demand events, so this write emits
+      // nothing there; the park is re-attempted because
+      // `chat-session-registry.ts` watches the live handles' STORES. An
+      // earlier version of this test asserted the opposite - that settling
+      // alone left the epic unparked until some unrelated acquire shook it
+      // loose - which pinned the defect as if it were the contract.
       chatHandle.store.setState({ pendingActions: {} });
-      // Still refused: settling the STATE alone tells nobody to look again.
-      expect(isEpicParked(EPIC)).toBe(false);
-
-      // An UNRELATED chat registry structural change - what actually fires
-      // `registry.subscribe(() => retryDeferredEpicParks())` in production,
-      // since the wiring is registry-wide, not scoped to this epic's chat.
-      const unrelatedChat = buildTestChatHandle(
-        "epic-unrelated-pin5",
-        "chat-unrelated-pin5",
-        "host-unrelated-pin5",
-      );
-      chatRegistry.acquire(
-        {
-          epicId: "epic-unrelated-pin5",
-          chatId: "chat-unrelated-pin5",
-          hostId: "host-unrelated-pin5",
-          scopeKey: "pin5-unrelated-scope",
-        },
-        () => unrelatedChat,
-      );
 
       expect(isEpicParked(EPIC)).toBe(true);
     } finally {

@@ -103,9 +103,50 @@ export function getChatSessionRegistry(): ChatSessionRegistry {
 // without this the refusal is permanent for exactly the epics whose chats
 // caused it.
 setEpicChatWorkProbe((epicId) => registry.unsettledWorkForEpic(epicId));
+
+/**
+ * The registry's own signal is NOT enough, and assuming it was left this retry
+ * mostly inert.
+ *
+ * `unsettledWorkForEpic` reads `activeTurn`, `runStatus`, the approval lists
+ * and `pendingActions` out of each chat's STORE, but `registry.subscribe`
+ * relays only the shared session registry's membership and demand events -
+ * acquire, release, dispose. An inner store write is none of those. So the
+ * exact moment this retry exists for, a chat's last pending action being
+ * acknowledged, emitted nothing, and a park deferred for chat work sat waiting
+ * for some unrelated acquire elsewhere to shake it loose.
+ *
+ * So watch the stores themselves, rebinding on every membership change because
+ * membership is precisely what changes the set of live handles. Firing on
+ * every store write is deliberate and cheap: `retryDeferredEpicParks` walks
+ * this window's open-tab entries and returns immediately for every epic not
+ * sitting on a refused park, which is all of them almost all of the time.
+ */
+const chatStoreWatches = new Map<ChatSessionStoreHandle, () => void>();
+
+function rebindChatStoreWatches(): void {
+  const live = new Set(registry.listHandles());
+  for (const [handle, unsubscribe] of Array.from(chatStoreWatches)) {
+    if (live.has(handle)) continue;
+    unsubscribe();
+    chatStoreWatches.delete(handle);
+  }
+  for (const handle of live) {
+    if (chatStoreWatches.has(handle)) continue;
+    chatStoreWatches.set(
+      handle,
+      handle.store.subscribe(() => {
+        retryDeferredEpicParks();
+      }),
+    );
+  }
+}
+
 registry.subscribe(() => {
+  rebindChatStoreWatches();
   retryDeferredEpicParks();
 });
+rebindChatStoreWatches();
 
 export function getChatSessionHandleHostId(
   handle: ChatSessionStoreHandle,
