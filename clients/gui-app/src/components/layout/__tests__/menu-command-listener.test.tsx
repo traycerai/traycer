@@ -242,6 +242,7 @@ function buildDirtyHandle(epicId: string): OpenEpicStoreHandle {
     detachTransport: () => undefined,
     requestFreshSnapshot: () => undefined,
     retryTransport: () => undefined,
+    wakeTransport: () => undefined,
     isClean: () => false,
     hotArtifactRoomIdsForTests: () => [],
     ...INERT_ROOT_STATE_PORT,

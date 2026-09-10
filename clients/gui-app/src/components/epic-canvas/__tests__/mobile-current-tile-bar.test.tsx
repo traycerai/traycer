@@ -17,6 +17,12 @@ import {
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
+import type { ChatStreamSyncState } from "@/hooks/chats/use-chat-stream-sync-state";
+import {
+  SURFACE_SYNC_RANK,
+  useSurfaceSyncStore,
+  type SurfaceSyncEntry,
+} from "@/stores/sync/surface-sync-store";
 
 // The live tile icon is covered by the tab-strip tests; stub it here so this
 // test targets the bar's own composition (title, rename gating).
@@ -103,6 +109,34 @@ vi.mock("@/hooks/terminal/use-terminal-rename-for-mutation", () => ({
     mutate: mutateSpies.renameTerminal,
     isPending: false,
   }),
+}));
+
+// The chat SESSION is the external boundary here - this suite opens no chat
+// stream - so the hook that reads one is the seam. Everything downstream of it
+// (the gate, the suppression, the strip itself) stays real. The recorded args
+// are asserted too: reading a chat's stream off the wrong tile kind, or off a
+// tile with no host, is the failure that would make the strip describe a
+// different machine's chat.
+/** The surface's own wake, spied so a test can prove the button reaches it. */
+const chatWakeSpy = vi.hoisted(() => vi.fn());
+
+const chatSyncMock = vi.hoisted(() => {
+  const current: { value: ChatStreamSyncState } = {
+    value: { status: "closed", hasContent: false, wake: chatWakeSpy },
+  };
+  const calls: Array<readonly [string, string, string | null]> = [];
+  return { current, calls };
+});
+
+vi.mock("@/hooks/chats/use-chat-stream-sync-state", () => ({
+  useChatStreamSyncState: (
+    epicId: string,
+    chatId: string,
+    hostId: string | null,
+  ) => {
+    chatSyncMock.calls.push([epicId, chatId, hostId]);
+    return chatSyncMock.current.value;
+  },
 }));
 
 const SPEC_TILE: EpicCanvasTileRef = {
@@ -288,5 +322,120 @@ describe("<MobileCurrentTileBar />", () => {
     const title = screen.getByTestId("mobile-current-tile-title");
     expect(title.tagName).toBe("SPAN");
     expect(screen.queryByTestId("mobile-current-tile-title-input")).toBeNull();
+  });
+
+  describe("stream-syncing report", () => {
+    beforeEach(() => {
+      chatSyncMock.current.value = {
+        status: "closed",
+        hasContent: false,
+        wake: chatWakeSpy,
+      };
+      chatSyncMock.calls.length = 0;
+      chatWakeSpy.mockClear();
+      useSurfaceSyncStore.setState({ entries: {} });
+    });
+
+    function renderChatBar(input: {
+      readonly chat: ChatStreamSyncState;
+      readonly tile: EpicCanvasTileRef;
+    }): void {
+      chatSyncMock.current.value = input.chat;
+      render(<MobileCurrentTileBar epicId="epic-1" tile={input.tile} />);
+    }
+
+    // Entries are keyed by PUBLISHER token, not by surface, so a lookup finds
+    // the one whose `key` names this surface.
+    function publishedFor(surfaceKey: string): SurfaceSyncEntry | undefined {
+      return Object.values(useSurfaceSyncStore.getState().entries).find(
+        (entry) => entry.key === surfaceKey,
+      );
+    }
+
+    function published(): SurfaceSyncEntry | undefined {
+      return publishedFor(`chat:host-A:${CHAT_TILE.id}`);
+    }
+
+    it("renders no bar of its own - it reports instead", () => {
+      // The one element lives in the app shell, so a hand-off changes what the
+      // indicator says rather than which element is saying it.
+      renderChatBar({
+        tile: CHAT_TILE,
+        chat: { status: "reconnecting", hasContent: true, wake: chatWakeSpy },
+      });
+      expect(screen.queryByTestId("chat-stream-syncing-bar")).toBeNull();
+      expect(screen.queryByTestId("session-connectivity-strip-bar")).toBeNull();
+    });
+
+    it("reports a running spell while its own stream is away with content up", () => {
+      renderChatBar({
+        tile: CHAT_TILE,
+        chat: { status: "reconnecting", hasContent: true, wake: chatWakeSpy },
+      });
+      expect(published()?.spell.syncing).toBe(true);
+      expect(published()?.label).toBe("Chat");
+      expect(published()?.rank).toBe(SURFACE_SYNC_RANK.chat);
+    });
+
+    it("reports nothing running while the stream is healthy", () => {
+      renderChatBar({
+        tile: CHAT_TILE,
+        chat: { status: "open", hasContent: true, wake: chatWakeSpy },
+      });
+      expect(published()?.spell.syncing).toBe(false);
+    });
+
+    it("reports nothing running on a cold chat with nothing on screen", () => {
+      renderChatBar({
+        tile: CHAT_TILE,
+        chat: { status: "connecting", hasContent: false, wake: chatWakeSpy },
+      });
+      expect(published()?.spell.syncing).toBe(false);
+    });
+
+    it("carries the chat's OWN wake, so Retry reaches this chat's socket", () => {
+      renderChatBar({
+        tile: CHAT_TILE,
+        chat: { status: "reconnecting", hasContent: true, wake: chatWakeSpy },
+      });
+      published()?.wake?.();
+      expect(chatWakeSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("never reports a running spell for a tile that is not a chat", () => {
+      // Its stream is either covered by the Epic's report or already narrated
+      // by the tile itself.
+      renderChatBar({
+        tile: SPEC_TILE,
+        chat: { status: "reconnecting", hasContent: true, wake: chatWakeSpy },
+      });
+      expect(publishedFor(`chat:host-A:${SPEC_TILE.id}`)?.spell.syncing).toBe(
+        false,
+      );
+      expect(chatSyncMock.calls.every((call) => call[2] === null)).toBe(true);
+    });
+
+    it("reads the chat stream on the tile's OWN host, not the app's", () => {
+      renderChatBar({
+        tile: CHAT_TILE,
+        chat: { status: "open", hasContent: true, wake: chatWakeSpy },
+      });
+      expect(chatSyncMock.calls).toContainEqual([
+        "epic-1",
+        CHAT_TILE.id,
+        "host-A",
+      ]);
+    });
+
+    it("withdraws its report when the tile goes away", () => {
+      // A closed surface is no longer a claim about anything; leaving the entry
+      // behind would hold the indicator open over a stream nobody is watching.
+      const view = render(
+        <MobileCurrentTileBar epicId="epic-1" tile={CHAT_TILE} />,
+      );
+      expect(published()).toBeDefined();
+      view.unmount();
+      expect(published()).toBeUndefined();
+    });
   });
 });
