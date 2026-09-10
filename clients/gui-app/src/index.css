@@ -339,6 +339,20 @@
     padding-left: var(--safe-area-inset-left);
   }
 
+  /*
+   * The reservation above is PADDING on `#root`, which means the strips it
+   * reserves belong to `#root` and no descendant can paint them. That is
+   * invisible for every ordinary surface, whose ground matches the app's - but
+   * the mobile boot cover is deliberately the launch image's dark, so those
+   * strips would frame it in a different colour for the length of a launch.
+   *
+   * Scoped to the marker rather than applied to `#root` generally: this is the
+   * pre-binding phase only, and the app's own ground must return with the app.
+   */
+  #root:has(> [data-boot-ground]) {
+    background-color: var(--color-zinc-950);
+  }
+
   ::selection {
     background: color-mix(in oklch, var(--primary) 35%, transparent);
   }
