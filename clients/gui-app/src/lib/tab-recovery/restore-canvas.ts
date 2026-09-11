@@ -85,14 +85,14 @@ function restoreStructure(
   // Child order is the structural address. A moved or newly split anchor is
   // intentionally not followed into a different part of the canvas.
   const children = current.children.map((child, index) => {
-    const oldChild = before.children.at(index);
     const closedChild = after.children.at(index);
-    if (
-      oldChild === undefined ||
-      closedChild === undefined ||
-      child.id !== closedChild.id
-    )
-      return child;
+    if (closedChild === undefined || child.id !== closedChild.id) return child;
+    // A removed sibling shifts array indices; a collapsed group promotes its
+    // surviving descendant. Match that stable identity to its original branch.
+    const oldChild = before.children.find((candidate) =>
+      nodesById(candidate).has(closedChild.id),
+    );
+    if (oldChild === undefined) return child;
     return restoreStructure(oldChild, closedChild, child, context) ?? child;
   });
   return { ...current, children };

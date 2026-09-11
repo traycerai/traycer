@@ -573,6 +573,22 @@ describe("prepareSavedDraft", () => {
     expect(useLandingDraftStore.getState().drafts).toEqual([]);
   });
 
+  it("throws when the named host has neither a mirror nor a tombstone", async () => {
+    const fixture = createHostFixture({
+      list: () => Promise.resolve(listResponse([], [])),
+      readBlob: () => Promise.reject(new Error("unexpected blob read")),
+    });
+    mocks.resolveNamedHostClient.mockReturnValue(fixture.client);
+
+    await expect(
+      prepareSavedDraft(
+        recoveryItem("temporarily-missing-draft", HOST_ID, undefined),
+        () => true,
+      ),
+    ).rejects.toThrow();
+    expect(useLandingDraftStore.getState().drafts).toEqual([]);
+  });
+
   it("loads an adopted mirror and its image bytes from the named owner host", async () => {
     const draftId = "remote-draft";
     const hash = await sha256Hex(IMAGE_BYTES);

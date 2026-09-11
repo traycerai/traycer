@@ -9,6 +9,7 @@ import {
   pane,
 } from "@/stores/epics/canvas/__tests__/canvas-test-fixtures";
 import {
+  pruneRecoveryTiles,
   useTabRecoveryHistory,
   type ClosedHeaderTab,
   type LegacyRecoveryDraft,
@@ -628,6 +629,9 @@ describe("reopenClosedTab", () => {
     mocks.canvasState.closedTilePayloadsByTabId["tab-1"] = {
       [SPEC_A.instanceId]: { node: SPEC_A, pendingCreate: true },
     };
+    // A same-id tombstone from another Epic must not suppress this scoped
+    // recovery payload; the deletion path prunes its own recovery tile.
+    mocks.canvasState.selfDeletedArtifactIds.add(SPEC_A.id);
     mocks.preservedTileRecordIsLive.mockImplementation(
       (preserved) => preserved.pendingCreate,
     );
@@ -647,7 +651,7 @@ describe("reopenClosedTab", () => {
     expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
   });
 
-  it("does not restore a pending tile that was explicitly self-deleted", async () => {
+  it("does not reopen a tile removed by its scoped recovery prune", async () => {
     const entry = canvasEntry({ id: "entry-1", bulk: false });
     mocks.canvasState.tabsById["tab-1"] = {
       tabId: "tab-1",
@@ -658,12 +662,15 @@ describe("reopenClosedTab", () => {
     mocks.canvasState.closedTilePayloadsByTabId["tab-1"] = {
       [SPEC_A.instanceId]: { node: SPEC_A, pendingCreate: true },
     };
-    mocks.canvasState.selfDeletedArtifactIds.add(SPEC_A.id);
     useTabRecoveryHistory.setState({ entries: [entry], ready: true });
+    pruneRecoveryTiles(
+      (tile, epicId) => epicId === "epic-1" && tile.id === SPEC_A.id,
+    );
+
+    expect(useTabRecoveryHistory.getState().entries).toEqual([]);
 
     await reopenClosedTab(router("/epics/other/other-tab", undefined));
 
-    expect(mocks.preservedTileRecordIsLive).not.toHaveBeenCalled();
     expect(mocks.canvasState.restoreCanvasForRecovery).not.toHaveBeenCalled();
     expect(mocks.navigateToTabIntent).not.toHaveBeenCalled();
   });

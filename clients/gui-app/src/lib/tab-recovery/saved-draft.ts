@@ -147,7 +147,12 @@ export async function prepareSavedDraft(
   const document = listed.drafts.find(
     (draft) => draft.draftId === item.draftId,
   );
-  if (document === undefined || document.kind !== "landing") return false;
+  if (document === undefined) {
+    if (listed.tombstones.some((entry) => entry.draftId === item.draftId))
+      return false;
+    throw new Error("The draft is not available from its host yet.");
+  }
+  if (document.kind !== "landing") return false;
   return prepareHostDraft(document, item.hostId, client, stillCurrent);
 }
 

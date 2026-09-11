@@ -33,7 +33,8 @@ import {
 let reopening = false;
 function tileIsRecoverable(tile: EpicCanvasTileRef, tab: EpicViewTab): boolean {
   const state = useEpicCanvasStore.getState();
-  if (state.selfDeletedArtifactIds.has(tile.id)) return false;
+  // Successful deletions prune recovery by task/type/host identity. The
+  // legacy global bare-ID set can also name unrelated content on another host.
   if (
     rejectClosedPlainTerminalRestore({
       queryClient,

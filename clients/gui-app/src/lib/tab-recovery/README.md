@@ -135,3 +135,9 @@ or stale size metadata is replaced with measured sizes for future accounting.
 Capacity failure preserves the saved drafts and the recovery entry. Direct
 canvas-store closes capture their position from the full header strip, including
 drafts and split items.
+
+Reconstruction aligns surviving child IDs with their original branches before
+recursing, because closing a sibling shifts array positions. It never replaces
+a live sibling with the removed pane. Host draft list absence remains retryable;
+only a matching tombstone proves deletion. Tile deletions use scoped recovery
+pruners and record liveness, not the legacy global bare-ID deletion set.

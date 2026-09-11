@@ -90,6 +90,11 @@ function paneTabIds(
   return paneFor(state, paneId).tabInstanceIds;
 }
 
+function groupIds(root: TileLayoutNode | null): ReadonlyArray<string> {
+  if (root === null || root.kind === "pane") return [];
+  return [root.id, ...root.children.flatMap((child) => groupIds(child))];
+}
+
 describe("restoreClosedCanvas", () => {
   it("restores into the original pane and keeps the recovered tab permanent", () => {
     const before = canvas(
@@ -240,7 +245,83 @@ describe("restoreClosedCanvas", () => {
       ),
     ).toBe(true);
     expect(collectPanes(restored.root).map((item) => item.id)).toContain("p1");
+    expect(
+      collectPanes(restored.root)
+        .flatMap((item) => item.tabInstanceIds)
+        .toSorted(),
+    ).toEqual([A.instanceId, B.instanceId, C.instanceId].toSorted());
+    expect(Object.keys(restored.tilesByInstanceId).toSorted()).toEqual(
+      [A.instanceId, B.instanceId, C.instanceId].toSorted(),
+    );
   });
+
+  it.each([
+    ["first", "p1", A],
+    ["middle", "p2", B],
+  ] as const)(
+    "retains live siblings and recovers the $0 pane's content after an unrelated nested split",
+    (_position, closedPaneId, closedTile) => {
+      const before = canvas(
+        group("g1", "horizontal", [
+          pane("p1", [A.instanceId]),
+          pane("p2", [B.instanceId]),
+          pane("p3", [C.instanceId]),
+        ]),
+        [A, B, C],
+        "p3",
+        { g1: [0.2, 0.3, 0.5] },
+      );
+      const after = closeTab(before, closedPaneId, closedTile.instanceId);
+      // Split the last surviving branch for a first-pane close and the first
+      // surviving branch for a middle-pane close. Either choice shifts the
+      // sibling that follows the removed pane into the old index.
+      const unrelatedPaneId = closedPaneId === "p1" ? "p3" : "p1";
+      const current = splitPaneEmpty(after, unrelatedPaneId, "vertical");
+      const nestedGroupId =
+        current.root !== null && current.root.kind === "group"
+          ? current.root.children.find(
+              (child) => child.kind === "group" && child.id !== "g1",
+            )?.id
+          : undefined;
+      if (nestedGroupId === undefined) throw new Error("expected nested split");
+
+      const restored = restoreClosedCanvas(current, before, after, {
+        instanceIds: [closedTile.instanceId],
+        focus: false,
+      });
+      const currentPaneIds = collectPanes(current.root).map((item) => item.id);
+      const currentGroupIds = groupIds(current.root);
+      const restoredPanes = collectPanes(restored.root);
+      const restoredPaneIds = restoredPanes.map((item) => item.id);
+      const restoredTabIds = restoredPanes.flatMap(
+        (item) => item.tabInstanceIds,
+      );
+      const restoredGroupIds = groupIds(restored.root);
+
+      for (const paneId of currentPaneIds)
+        expect(restoredPaneIds.filter((id) => id === paneId)).toHaveLength(1);
+      for (const groupId of currentGroupIds)
+        expect(restoredGroupIds.filter((id) => id === groupId)).toHaveLength(1);
+      expect(
+        restored.root?.kind === "group" &&
+          restored.root.children.some(
+            (child) => child.kind === "group" && child.id === nestedGroupId,
+          ),
+      ).toBe(true);
+      expect(new Set(restoredPaneIds).size).toBe(restoredPaneIds.length);
+      expect(restored.activePaneId).toBe(current.activePaneId);
+      expect(restoredTabIds.toSorted()).toEqual(
+        [A.instanceId, B.instanceId, C.instanceId].toSorted(),
+      );
+      expect(new Set(restoredTabIds).size).toBe(restoredTabIds.length);
+      expect(Object.keys(restored.tilesByInstanceId).toSorted()).toEqual(
+        [A.instanceId, B.instanceId, C.instanceId].toSorted(),
+      );
+      expect(restored.tilesByInstanceId[closedTile.instanceId]).toEqual(
+        closedTile,
+      );
+    },
+  );
 
   it("falls back to the active pane when the original pane was moved away", () => {
     const before = canvas(
