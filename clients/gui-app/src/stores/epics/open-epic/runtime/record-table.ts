@@ -44,6 +44,26 @@
  * neither owns it: a host without the stream loses latency and nothing else,
  * and a delta lost to a disconnect is repaired by the next 20s list read.
  *
+ * ## The third write path: recency patches
+ *
+ * A revision-gated list read can answer `unchanged` - the rows this client
+ * holds are still current - and then the only thing left to deliver is what a
+ * QUIET write moved: `updatedAt` (and the per-row `revision` that rides with
+ * it), which the sidebar orders on. Those arrive as
+ * {@link RecordListRecencyPatch}es rather than as rows, and
+ * {@link RecordTable.applyTouches} is their path in.
+ *
+ * It is the rules above with two of them absent rather than a fourth
+ * mechanism. Rule 2 applies verbatim, and NOT through the plane's
+ * `supersedes*` waivers: a patch carries no authority of its own - it is the
+ * held row's own recency, restated - so the only question is whether it is
+ * newer, and `rowRevision` is what the shared test reads. Rule 1's OMISSION
+ * half is absent by construction, because an `unchanged` answer omits every
+ * row and retracts none; `snapshotFence` therefore stays where the last
+ * SNAPSHOT left it. Rule 1's carried half survives in the only form it can:
+ * an applied patch advances `rowSeq`, so a snapshot already in flight when the
+ * quiet write landed cannot roll the recency back.
+ *
  * ## What is shared and what is declared
  *
  * The mechanism above is shared. Everything a plane can legitimately differ on
@@ -61,6 +81,7 @@
  * which is two lines and keeps the grammars where the protocol put them.
  */
 import type { ChatRecordRemovalReason } from "@traycer/protocol/host/epic/chat-records";
+import type { RecordListRecencyPatch } from "@traycer/protocol/host/epic/record-list-revision";
 import { sessionKeyOf } from "@traycer-clients/shared/replica-runtime";
 
 /**
@@ -100,6 +121,48 @@ export interface RecordTablePublication<TSlice> {
   readonly retractions: Readonly<
     Record<string, ChatRecordRemovalReason>
   > | null;
+}
+
+/**
+ * What {@link RecordTable.applyTouches} needs to know about a plane's row
+ * shape - and deliberately no more than that, because the RULE it applies
+ * (strictly greater wins) is the shared algorithm's.
+ *
+ * Three members in one group rather than three loose plane members, so the
+ * `null` a plane without addressable recency writes is one answer instead of
+ * three.
+ */
+export interface RecordTableRecencyRules<TRow> {
+  /**
+   * The row-map key a patch names.
+   *
+   * A patch is not a row - it is the recency pair plus the ids that locate the
+   * row it belongs to - so {@link RecordTablePlane.rowKey} cannot address it.
+   * The patch carries `ownerUserId` for exactly this reason: the map is
+   * owner-scoped (see {@link ownerScopedRowKey}), and a patch keyed on the
+   * bare id would merge two different people's rows.
+   */
+  readonly rowKeyOfPatch: (patch: RecordListRecencyPatch) => string;
+  /**
+   * Where this plane's row keeps the monotonic revision the guard compares.
+   *
+   * Read here rather than through {@link RecordTablePlane.supersedesOnSnapshot}
+   * because a patch must be judged on the revision ALONE. Both record planes
+   * waive that comparison for a pair the row shape cannot judge, and every one
+   * of those waivers is about two rows of different provenance; a patch has no
+   * provenance to weigh - it is the held row's own recency, restated - so a
+   * waiver would license applying a stale one.
+   */
+  readonly revisionOf: (row: TRow) => number;
+  /**
+   * The held row with a patch's recency facts written onto it.
+   *
+   * The plane's job because only it knows the row type. A quiet write cannot
+   * have changed anything else, so this writes `updatedAt` and `revision` and
+   * nothing more - `recordListRecencyPatchSchema` carries nothing more to
+   * write.
+   */
+  readonly withPatch: (row: TRow, patch: RecordListRecencyPatch) => TRow;
 }
 
 /**
@@ -145,6 +208,17 @@ export interface RecordTablePlane<TRow, TSlice> {
   readonly supersedesOnSnapshot: (candidate: TRow, held: TRow) => boolean;
   /** Whether a row a DELTA carried replaces the one held. */
   readonly supersedesOnUpsert: (candidate: TRow, held: TRow) => boolean;
+  /**
+   * How a RECENCY PATCH lands on this plane's rows, or `null` for a plane
+   * whose rows have no recency a patch can name.
+   *
+   * `null` is a claim rather than a default, and one plane makes it honestly:
+   * the lane-state table is fed by typed subscribe rows rather than by a
+   * revision-gated list read, and its held row has no recency pair at all. A
+   * table that declares `null` drops every patch handed to it, which is the
+   * only thing it could do with one.
+   */
+  readonly recency: RecordTableRecencyRules<TRow> | null;
   /**
    * The slice this plane publishes, built from the rows visible to the current
    * viewer.
@@ -231,6 +305,20 @@ export interface RecordTable<TRow, TSlice> {
   applySnapshot(
     rows: readonly TRow[],
     issuedAtSeq: number | null,
+  ): RecordTablePublication<TSlice> | null;
+  /**
+   * The recency patches an `unchanged` list answer carried - see the module
+   * doc's third write path.
+   *
+   * A patch for a row this table does not hold is DROPPED rather than
+   * retained: there is no row to carry the recency on, and a patch is not
+   * enough to build one from (it carries four fields; a row has thirty). The
+   * next snapshot delivers the row itself, recency included, so nothing is
+   * lost - which is the same reason a patch for a RETRACTED id is dropped, via
+   * the same lookup.
+   */
+  applyTouches(
+    patches: readonly RecordListRecencyPatch[],
   ): RecordTablePublication<TSlice> | null;
   applyUpsert(row: TRow): RecordTablePublication<TSlice> | null;
   /** A single authoritative list row, retaining snapshot supersession rules. */
@@ -388,6 +476,36 @@ export function createRecordTable<TRow, TSlice>(
         rowSeq.set(key, ingestSeq);
       }
       snapshotFence = ingestSeq;
+      return recompute(false);
+    },
+
+    applyTouches(patches) {
+      const recency = plane.recency;
+      // A plane whose rows carry no addressable recency can do nothing with a
+      // patch but drop it - see `RecordTablePlane.recency`.
+      if (recency === null) return null;
+      let applied = false;
+      for (const patch of patches) {
+        const key = recency.rowKeyOfPatch(patch);
+        const held = rows.get(key);
+        // Nothing to carry the recency on. Also the retraction filter: a
+        // retracted row is gone from the map, so an absorbed removal cannot be
+        // undone by a patch that was already in flight for it.
+        if (held === undefined) continue;
+        // Rule 2, on the revision alone - see `revisionOf`.
+        if (patch.revision <= recency.revisionOf(held)) continue;
+        rows.set(key, recency.withPatch(held, patch));
+        // Rule 1's carried half. A snapshot issued before this quiet write
+        // cannot know about it and would otherwise roll the recency back
+        // through a plane that waives the revision guard.
+        ingestSeq += 1;
+        rowSeq.set(key, ingestSeq);
+        applied = true;
+      }
+      // `snapshotFence` deliberately stays where the last SNAPSHOT left it:
+      // this answer carried no rows, so it authorizes no omission and has
+      // nothing to protect.
+      if (!applied) return null;
       return recompute(false);
     },
 

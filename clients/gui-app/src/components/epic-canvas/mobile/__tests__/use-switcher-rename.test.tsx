@@ -471,6 +471,10 @@ describe("useSwitcherRename", () => {
           revision: 1,
           docResident: false,
           origin: "registry",
+          // `@1.3`'s session facet; `null` is what a host that cannot say
+          // answers, and nothing here is about the facet.
+          sessionState: null,
+          lastExit: null,
         },
       ],
       null,

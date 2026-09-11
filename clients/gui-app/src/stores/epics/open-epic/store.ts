@@ -52,7 +52,8 @@ import {
   applyChatRecordHeadRows,
   dropChatRecordHeadsForChat,
 } from "./chat-record-head";
-import type { TuiAgentRecordSummaryV12 } from "@traycer/protocol/host/epic/tui-agent-records";
+import type { RecordListRecencyPatch } from "@traycer/protocol/host/epic/record-list-revision";
+import type { TuiAgentRecordSummaryV13 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type {
   ChatRecordDelta,
   TuiAgentRecordDelta,
@@ -697,6 +698,22 @@ export interface OpenEpicState {
     issuedAtSeq: number | null,
   ) => void;
   /**
+   * Publishes the `unchanged` arm of an `epic.listChatRecords@1.3` answer: the
+   * rows this client holds are still current, and these are the recency facts
+   * a QUIET write moved since the client's `touchRevision`.
+   *
+   * Applied under the same strictly-exceeds rule a full row is applied under,
+   * so a replayed or reordered patch is dropped rather than merged. A patch for
+   * a row this session does not hold is dropped too - there is nothing to carry
+   * the recency on, and the next snapshot brings the row itself.
+   *
+   * NOT a rows answer with an empty list: this one omits every row and
+   * retracts none, which is why it has its own seam. See
+   * {@link OpenEpicState.applyChatRecords} for the omission rule it does not
+   * take part in.
+   */
+  applyChatRecordTouches: (patches: readonly RecordListRecencyPatch[]) => void;
+  /**
    * The chat-record ingest counter as it stands now - the value a list
    * request captures at dispatch and passes back to
    * {@link OpenEpicState.applyChatRecords} as `issuedAtSeq`. Monotonic, per
@@ -742,8 +759,15 @@ export interface OpenEpicState {
    * delete the `tuiUpsert` that announced it.
    */
   applyTuiAgentRecords: (
-    records: readonly TuiAgentRecordSummaryV12[],
+    records: readonly TuiAgentRecordSummaryV13[],
     issuedAtSeq: number | null,
+  ) => void;
+  /**
+   * The terminal twin of {@link OpenEpicState.applyChatRecordTouches}, with
+   * the identical contract.
+   */
+  applyTuiAgentRecordTouches: (
+    patches: readonly RecordListRecencyPatch[],
   ) => void;
   /**
    * The terminal-agent ingest counter as it stands now - the value a list
@@ -2097,6 +2121,15 @@ export function createOpenEpicStore(
               payload: { records, issuedAtSeq },
             });
           },
+          applyChatRecordTouches: (patches) => {
+            // No head plane to fold in, unlike the rows path above: a recency
+            // patch carries the recency pair and nothing else, so it says
+            // nothing about a publication head either way.
+            runtime.command({
+              kind: "apply-chat-record-touches",
+              payload: { touched: patches },
+            });
+          },
           peekChatIngestSeq: () => get().chatIngestSeq,
           markChatRecordListAuthoritative: () => {
             runtime.command({
@@ -2136,6 +2169,12 @@ export function createOpenEpicStore(
             runtime.command({
               kind: "apply-tui-agent-records",
               payload: { records, issuedAtSeq },
+            });
+          },
+          applyTuiAgentRecordTouches: (patches) => {
+            runtime.command({
+              kind: "apply-tui-agent-record-touches",
+              payload: { touched: patches },
             });
           },
           peekTuiAgentIngestSeq: () => get().tuiAgentIngestSeq,

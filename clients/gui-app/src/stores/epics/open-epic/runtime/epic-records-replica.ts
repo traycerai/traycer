@@ -25,7 +25,8 @@ import {
   encodeAwarenessUpdate,
 } from "y-protocols/awareness";
 import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
-import type { TuiAgentRecordSummaryV12 } from "@traycer/protocol/host/epic/tui-agent-records";
+import type { RecordListRecencyPatch } from "@traycer/protocol/host/epic/record-list-revision";
+import type { TuiAgentRecordSummaryV13 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type {
   ChatRecordDelta,
   TuiAgentRecordDelta,
@@ -248,6 +249,13 @@ export interface EpicRecordsReplica extends Replica<
     records: readonly ChatRecordSummaryV11[],
     issuedAtSeq: number | null,
   ): void;
+  /**
+   * The recency patches an `unchanged` chat-list answer carried. Separate from
+   * {@link EpicRecordsReplica.applyChatRecords} because the two arms of that
+   * answer are different statements: one delivers rows, the other says the
+   * rows are still current and only their recency moved.
+   */
+  applyChatRecordTouches(patches: readonly RecordListRecencyPatch[]): void;
   applyChatRecordDelta(delta: ChatRecordDelta): void;
   applyConfirmedChatMutation(mutation: ConfirmedChatMutation): void;
   peekChatIngestSeq(): number;
@@ -268,9 +276,11 @@ export interface EpicRecordsReplica extends Replica<
    */
   markChatRecordListNotAuthoritative(): void;
   applyTuiAgentRecords(
-    records: readonly TuiAgentRecordSummaryV12[],
+    records: readonly TuiAgentRecordSummaryV13[],
     issuedAtSeq: number | null,
   ): void;
+  /** The terminal twin of {@link EpicRecordsReplica.applyChatRecordTouches}. */
+  applyTuiAgentRecordTouches(patches: readonly RecordListRecencyPatch[]): void;
   applyTuiAgentRecordDelta(delta: TuiAgentRecordDelta): void;
   peekTuiAgentIngestSeq(): number;
   beginPendingChatCreation(pending: PendingChatCreation): void;
@@ -1437,6 +1447,16 @@ export function createEpicRecordsReplica(
       );
     },
 
+    applyChatRecordTouches(patches): void {
+      if (isDisposed()) return;
+      // No retraction arm: a patch cannot retract anything, so this publishes
+      // the slice alone and the two-branch shape the rows path needs would be
+      // a branch that never takes its second arm.
+      const publication = chatTable.applyTouches(patches);
+      if (publication !== null)
+        publishRecordSlice({ chatRecords: publication.chatRecords });
+    },
+
     applyConfirmedChatMutation(mutation): void {
       if (isDisposed()) return;
       const publication = chatTable.applyConfirmedMutation(mutation);
@@ -1482,6 +1502,13 @@ export function createEpicRecordsReplica(
               tuiAgentRetractions: publication.tuiAgentRetractions,
             },
       );
+    },
+
+    applyTuiAgentRecordTouches(patches): void {
+      if (isDisposed()) return;
+      const publication = tuiTable.applyTouches(patches);
+      if (publication !== null)
+        publishRecordSlice({ tuiAgentRecords: publication.tuiAgentRecords });
     },
 
     applyTuiAgentRecordDelta(delta): void {
