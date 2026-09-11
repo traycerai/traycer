@@ -86,6 +86,75 @@ const NEUTRAL_CAMERA: CommGraphTileCamera = {
 };
 
 /**
+ * WHAT THIS MOUNT WATCHED HAPPEN: the resolved view its last render handed the
+ * canvas a camera for, and whether that camera still owes the current view a
+ * reset.
+ *
+ * The record on the view state answers the change NOBODY saw. It cannot answer
+ * the change this tile watched happen over a camera saved before the record
+ * existed: that camera carries `null`, which at render is indistinguishable
+ * from a tile whose default never moved. The two differ by a fact about this
+ * mount, so this mount is what holds it.
+ */
+interface OfficeCameraWitness {
+  readonly view: OfficeViewId | null;
+  readonly owed: boolean;
+}
+
+/**
+ * The witness after a render at `resolvedViewId`, or the SAME OBJECT when
+ * nothing about it moved - the identity is what keeps the render-phase update
+ * below conditional rather than a loop.
+ */
+function nextOfficeCameraWitness(
+  witness: OfficeCameraWitness,
+  resolvedViewId: OfficeViewId | null,
+  cameraView: OfficeViewId | null,
+): OfficeCameraWitness {
+  if (witness.view === resolvedViewId) {
+    if (!witness.owed) return witness;
+    // The store has caught up. A reset that has LANDED is the record's to
+    // remember from here on; leaving it owed would neutralise the camera all
+    // over again on the render after the next pan.
+    if (cameraView !== resolvedViewId) return witness;
+    return { view: resolvedViewId, owed: false };
+  }
+  // A move BETWEEN two views is the transition a camera does not survive.
+  // Arriving from `null` is Auto answering for the first time and leaving for
+  // `null` is a re-pick of Auto - both write the camera they mean in the same
+  // breath, so neither is this rule's to reset.
+  const moved = witness.view !== null && resolvedViewId !== null;
+  // A PICK also writes the camera and the record together, so by the time the
+  // view it chose renders there is already nothing owed.
+  return { view: resolvedViewId, owed: moved && cameraView !== resolvedViewId };
+}
+
+/**
+ * Adjusting state DURING RENDER, which is the only place this can live.
+ *
+ * The replacement canvas builds its one-time runtime from the camera it is
+ * handed on its first render, so evidence of a transition has to be in hand in
+ * that same render: an effect is a frame too late, and a ref is not something
+ * React lets a render read. React re-runs this component with the adjusted
+ * state before committing, which is exactly the ordering wanted - the canvas
+ * that actually mounts is the one built from the adjusted decision.
+ */
+function useWitnessedOfficeViewMove(
+  resolvedViewId: OfficeViewId | null,
+  cameraView: OfficeViewId | null,
+): boolean {
+  const [witness, setWitness] = useState<OfficeCameraWitness>(() => ({
+    view: resolvedViewId,
+    // A fresh mount watched nothing happen: what its camera frames is the
+    // record's question, and D52 answers a `null` one by keeping the framing.
+    owed: false,
+  }));
+  const next = nextOfficeCameraWitness(witness, resolvedViewId, cameraView);
+  if (next !== witness) setWitness(next);
+  return next.owed;
+}
+
+/**
  * THE CAMERA THE CANVAS IS BUILT WITH - decided here, in render, not in an
  * effect.
  *
@@ -97,24 +166,30 @@ const NEUTRAL_CAMERA: CommGraphTileCamera = {
  * persists those coordinates stamped with the new view. The store writes that
  * follow this merely make the record agree with what the canvas already has.
  *
- * The record is the only evidence available at render, and it is enough: a
- * default change necessarily leaves it naming the view being left, so one test
- * covers both the change nobody saw and the change that just happened. A
- * `null` record means nobody framed this camera, which for any tile created
- * since the field existed means it is neutral already.
+ * TWO KINDS OF EVIDENCE, because there are two ways a camera comes to frame
+ * the wrong office. The record names the view a camera was saved under and is
+ * what a tile reopened after a default moved has; the witness is what a tile
+ * that watched the default move has, and is the only evidence a camera saved
+ * before the record existed leaves behind. A `null` record on its own still
+ * means "nobody framed this", which D52 keeps rather than reset.
  *
  * OFFICE ONLY. The same view object is handed to the Graph canvas, where the
  * camera belongs to the Graph - neutralising it there would erase a framing
- * the office has no claim on.
+ * the office has no claim on. A witnessed move made while the Graph is up
+ * stays owed and is spent on the next office render instead.
  */
 function officeViewForCanvas(
   view: CommGraphTileViewState,
   resolvedViewId: OfficeViewId | null,
+  witnessedMove: boolean,
 ): CommGraphTileViewState {
   if (view.mode !== "office") return view;
   if (resolvedViewId === null) return view;
-  if (view.officeCameraView === null) return view;
-  if (view.officeCameraView === resolvedViewId) return view;
+  const framesAnotherView =
+    witnessedMove ||
+    (view.officeCameraView !== null &&
+      view.officeCameraView !== resolvedViewId);
+  if (!framesAnotherView) return view;
   return { ...view, ...NEUTRAL_CAMERA, officeCameraView: resolvedViewId };
 }
 
@@ -295,9 +370,16 @@ export function CommGraphTile(props: CommGraphTileProps) {
     // office canvas, and the last one's numbers describe a box that is gone.
     node.view.mode === "office";
 
+  // The live half of the evidence below: a `null` record cannot carry a
+  // default change this tile is watching happen, so the tile remembers it.
+  const witnessedMove = useWitnessedOfficeViewMove(
+    resolvedViewId,
+    node.view.officeCameraView,
+  );
+
   const viewForCanvas = useMemo(
-    () => officeViewForCanvas(node.view, resolvedViewId),
-    [node.view, resolvedViewId],
+    () => officeViewForCanvas(node.view, resolvedViewId, witnessedMove),
+    [node.view, resolvedViewId, witnessedMove],
   );
 
   /**
@@ -309,6 +391,11 @@ export function CommGraphTile(props: CommGraphTileProps) {
    * resets whatever the record says - including a tile from before the record
    * existed, which is the reviewer's own reproduction. The record answers the
    * case nobody was here to see.
+   *
+   * This is the STORE side of that move; the witness above has already handed
+   * the arriving canvas a neutral camera, so what lands here is the store
+   * agreeing with a runtime that was built right, not a correction to one that
+   * was not.
    *
    * Only a tile still FOLLOWING the default is moved - an explicit pick and
    * its framing are nobody else's to touch - and only when the resolved view

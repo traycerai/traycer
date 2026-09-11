@@ -123,6 +123,7 @@ import {
 import * as Y from "yjs";
 import { CommGraphTile } from "@/components/epic-canvas/renderers/comm-graph-tile";
 import * as commGraphCanvasModule from "@/components/epic-canvas/comm-graph/comm-graph-canvas";
+import * as officeCanvasModule from "@/components/epic-canvas/comm-graph/office/comm-graph-office-canvas";
 import * as officeAutoModule from "@/lib/comm-graph/office/office-auto";
 import { OfficeScene } from "@/lib/comm-graph/office/office-scene";
 import { makeTestEpic } from "@/lib/comm-graph/office/office-test-epic";
@@ -1403,6 +1404,239 @@ describe("CommGraphTile", () => {
         y: 5000,
         width: 260,
         height: 175,
+      });
+    });
+  });
+
+  describe("actual runtime camera on a live default change with no record (fixup 3, R1)", () => {
+    // The record above (`officeCameraView`) is the only evidence available
+    // at render for a tile that was already OPEN when the default moved -
+    // but a camera persisted before that field existed carries `null`, and
+    // `null` reads as "nobody framed this, keep it". That is correct for a
+    // tile merely reopened, and WRONG for a tile watching the default move
+    // right now: nothing in the record says a move was witnessed, so
+    // without a second signal the render-time decision above has nothing
+    // to catch this on. `useWitnessedOfficeViewMove` is that signal - a
+    // render-phase state adjustment, not an effect, because `createOfficeRuntime`
+    // reads x/y/zoom exactly once at construction and an effect's write
+    // always lands one commit after the canvas that needed it.
+    it("resets the actual runtime camera for a live default change with no framing record at all", async () => {
+      const { step } = installCanvas();
+      const frames = vi.spyOn(OfficeScene.prototype, "frame");
+      const sync = vi.spyOn(OfficeScene.prototype, "sync");
+      useSettingsStore.getState().setAgentOfficeDefaultView("floor");
+      await renderSeededOfficeInLoadedSession({
+        ...DEFAULT_COMM_GRAPH_VIEW,
+        x: -10000,
+        y: -20000,
+        zoom: 4,
+        // A camera from before this field existed - never framed a view.
+        officeCameraView: null,
+      });
+      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setIntersecting(true);
+      caughtUp();
+      step();
+
+      // Not yet reset: nothing has moved, so the persisted framing survives
+      // exactly as a legacy tile's should.
+      expect(storedView()).toMatchObject({
+        x: -10000,
+        y: -20000,
+        zoom: 4,
+        officeCameraView: null,
+      });
+      const beforeElement = screen.getByTestId("comm-graph-office-canvas");
+
+      // The default moves WHILE this tile watches - the one signal the
+      // record alone could never carry.
+      act(() =>
+        useSettingsStore.getState().setAgentOfficeDefaultView("towers"),
+      );
+      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setIntersecting(true);
+      step();
+
+      // A genuinely different view is a genuinely different canvas
+      // instance, same as every other reset in this ticket.
+      expect(screen.getByTestId("comm-graph-office-canvas")).not.toBe(
+        beforeElement,
+      );
+      expect(storedView()).toMatchObject({
+        x: 0,
+        y: 0,
+        zoom: 1,
+        officeCameraView: "towers",
+      });
+      // The ACTUAL claim: the runtime's own frame has to contain the
+      // Towers world it is supposedly showing - not a Floor camera's
+      // numbers reinterpreted as Towers, which is exactly what a witness
+      // that never fired would have let through.
+      const state = lastFrameAndBounds(frames, sync);
+      const center = {
+        x: state.bounds.x + state.bounds.width / 2,
+        y: state.bounds.y + state.bounds.height / 2,
+      };
+      expect(center.x).toBeGreaterThanOrEqual(state.frame.x);
+      expect(center.x).toBeLessThanOrEqual(state.frame.x + state.frame.width);
+      expect(center.y).toBeGreaterThanOrEqual(state.frame.y);
+      expect(center.y).toBeLessThanOrEqual(state.frame.y + state.frame.height);
+
+      // And the write side agrees: a wheel from here persists coordinates
+      // relative to the NEUTRAL camera the runtime actually started from,
+      // not the stale Floor framing carried forward and re-stamped Towers.
+      fireEvent.wheel(screen.getByTestId("comm-graph-office-canvas"), {
+        deltaX: 20,
+        deltaY: 30,
+      });
+      step();
+      await act(async () => {
+        await new Promise((resolve) => window.setTimeout(resolve, 180));
+      });
+      expect(storedView()).toMatchObject({ officeCameraView: "towers" });
+      expect(storedView()?.x).not.toBe(-10020);
+      expect(storedView()?.y).not.toBe(-20030);
+    });
+
+    it("does not fire when the default never moves, even with no framing record", async () => {
+      // The control against the case above: a witness with nothing to
+      // report must not manufacture a reset on its own. `officeCameraView`
+      // staying null (not stamped to the resolved view) is the tell - a
+      // store-side stamp instead of a render-phase witness would have
+      // written a fabricated record here even though nothing moved.
+      const { step } = installCanvas();
+      const frames = vi.spyOn(OfficeScene.prototype, "frame");
+      const sync = vi.spyOn(OfficeScene.prototype, "sync");
+      useSettingsStore.getState().setAgentOfficeDefaultView("floor");
+      await renderSeededOfficeInLoadedSession({
+        ...DEFAULT_COMM_GRAPH_VIEW,
+        x: -10000,
+        y: -20000,
+        zoom: 4,
+        officeCameraView: null,
+      });
+      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setIntersecting(true);
+      caughtUp();
+      step();
+
+      const state = lastFrameAndBounds(frames, sync);
+      expect(storedView()).toMatchObject({
+        x: -10000,
+        y: -20000,
+        zoom: 4,
+        officeCameraView: null,
+      });
+      expect(state.frame).toEqual({
+        x: 2500,
+        y: 5000,
+        width: 260,
+        height: 175,
+      });
+    });
+
+    it("keeps a legacy camera when the default already moved before the tile ever mounted (accepted gap, D52)", async () => {
+      // Nothing witnessed this move - the default was already `towers` by
+      // the time this tile opened, so there is no live change for
+      // `useWitnessedOfficeViewMove` to catch, and no record to catch it at
+      // render either. Resetting here would throw away the framing of
+      // EVERY tile saved before `officeCameraView` existed the instant
+      // Settings' default happened to differ from what they were framed
+      // for - the worse of the two costs, and the one D52 accepted.
+      const { step } = installCanvas();
+      const frames = vi.spyOn(OfficeScene.prototype, "frame");
+      const sync = vi.spyOn(OfficeScene.prototype, "sync");
+      useSettingsStore.getState().setAgentOfficeDefaultView("towers");
+      await renderSeededOfficeInLoadedSession({
+        ...DEFAULT_COMM_GRAPH_VIEW,
+        x: -10000,
+        y: -20000,
+        zoom: 4,
+        officeCameraView: null,
+      });
+      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setIntersecting(true);
+      caughtUp();
+      step();
+
+      const state = lastFrameAndBounds(frames, sync);
+      expect(storedView()).toMatchObject({
+        x: -10000,
+        y: -20000,
+        zoom: 4,
+        officeCameraView: null,
+      });
+      expect(state.frame).toEqual({
+        x: 2500,
+        y: 5000,
+        width: 260,
+        height: 175,
+      });
+    });
+
+    it("stops overriding the camera it hands the canvas once the reset has landed", async () => {
+      // `useWitnessedOfficeViewMove` clears `owed` at render, once the
+      // store's record catches up with the resolved view. Without that
+      // clear the latch never lets go: the tile keeps handing the canvas a
+      // neutral camera long after the person has panned away from it.
+      //
+      // That defect is invisible in the SCENE'S OWN frame, which is why
+      // none of the cases above would catch it: `createOfficeRuntime` reads
+      // x/y/zoom exactly once at construction, so a canvas that is not
+      // remounted never re-reads the prop and a stale override never
+      // reaches a rendered frame. It is only visible one layer up, at the
+      // prop boundary itself - so this reads what the canvas was actually
+      // GIVEN on its most recent render, not what it drew.
+      const { step } = installCanvas();
+      const office = vi.spyOn(officeCanvasModule, "CommGraphOfficeCanvas");
+      useSettingsStore.getState().setAgentOfficeDefaultView("floor");
+      await renderSeededOfficeInLoadedSession({
+        ...DEFAULT_COMM_GRAPH_VIEW,
+        x: -10000,
+        y: -20000,
+        zoom: 4,
+        officeCameraView: null,
+      });
+      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setIntersecting(true);
+      caughtUp();
+      step();
+
+      act(() =>
+        useSettingsStore.getState().setAgentOfficeDefaultView("towers"),
+      );
+      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setIntersecting(true);
+      step();
+
+      // The pan that follows the reset - the moment `owed` has to have let
+      // go by, or this camera stays neutral forever no matter where the
+      // person pans to.
+      fireEvent.wheel(screen.getByTestId("comm-graph-office-canvas"), {
+        deltaX: 20,
+        deltaY: 30,
+      });
+      step();
+      await act(async () => {
+        await new Promise((resolve) => window.setTimeout(resolve, 180));
+      });
+
+      const handedCamera = lastCanvasCamera(office);
+      if (handedCamera === null) {
+        throw new Error("the office canvas never rendered with a view prop");
+      }
+      const stored = storedView();
+      if (stored === null) throw new Error("no stored view");
+      // The comparison below only means something if the store actually
+      // moved off neutral - otherwise a wheel that silently became a no-op
+      // would still pass, since a neutral `handedCamera` and a neutral
+      // `stored` agree trivially. This is what stops that from happening
+      // unnoticed; it doesn't pin exact coordinates, same reasoning as case 1.
+      expect(stored).not.toMatchObject({ x: 0, y: 0, zoom: 1 });
+      expect(handedCamera).toMatchObject({
+        x: stored.x,
+        y: stored.y,
+        zoom: stored.zoom,
       });
     });
   });
