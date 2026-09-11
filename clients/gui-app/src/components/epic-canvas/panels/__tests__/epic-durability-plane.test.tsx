@@ -187,7 +187,7 @@ describe("deriveEpicDurabilityPlane", () => {
     ).toEqual({ severity: "warning", sentence: "Storage status unknown" });
   });
 
-  it("shows 'No local backup' beside a stated status, not instead of it", () => {
+  it("shows 'New edits only in this window until synced' beside a stated status, not instead of it", () => {
     expect(
       planeFor({
         status: "offline",
@@ -199,11 +199,12 @@ describe("deriveEpicDurabilityPlane", () => {
       }),
     ).toEqual({
       severity: "danger",
-      sentence: "Cloud mirror — offline · No local backup",
+      sentence:
+        "Offline — sync paused · New edits only in this window until synced",
     });
   });
 
-  it("shows 'No local backup' on an otherwise-calm cloud-durable epic", () => {
+  it("shows 'New edits only in this window until synced' on an otherwise-calm cloud-durable epic", () => {
     expect(
       planeFor({
         status: "cloud",
@@ -213,7 +214,10 @@ describe("deriveEpicDurabilityPlane", () => {
         pauseReason: null,
         promotionState: null,
       }),
-    ).toEqual({ severity: "danger", sentence: "No local backup" });
+    ).toEqual({
+      severity: "danger",
+      sentence: "New edits only in this window until synced",
+    });
   });
 
   it("reads unknown protection beside a stated local status as its own clause", () => {
@@ -228,11 +232,27 @@ describe("deriveEpicDurabilityPlane", () => {
       }),
     ).toEqual({
       severity: "warning",
-      sentence: "Stored locally · Local backup status unknown",
+      sentence: "Not synced yet · New edits — backup status unknown",
     });
   });
 
-  it("shows a visibly distinct 'Promotion pending' for promotionState=pending", () => {
+  it("reads unknown protection on an otherwise-calm cloud-durable epic as 'New edits — backup status unknown'", () => {
+    expect(
+      planeFor({
+        status: "cloud",
+        protection: "unknown",
+        peerSpeaksDurabilityLegs: true,
+        cloudFreshness: null,
+        pauseReason: null,
+        promotionState: null,
+      }),
+    ).toEqual({
+      severity: "warning",
+      sentence: "New edits — backup status unknown",
+    });
+  });
+
+  it("shows a visibly distinct 'Sync pending' for promotionState=pending", () => {
     expect(
       planeFor({
         status: "promoting",
@@ -242,10 +262,10 @@ describe("deriveEpicDurabilityPlane", () => {
         pauseReason: null,
         promotionState: "pending",
       }),
-    ).toEqual({ severity: "warning", sentence: "Promotion pending" });
+    ).toEqual({ severity: "warning", sentence: "Sync pending" });
   });
 
-  it("keeps the live 'Promoting to cloud' copy for promotionState=active", () => {
+  it("keeps the live 'Syncing' copy for promotionState=active", () => {
     expect(
       planeFor({
         status: "promoting",
@@ -255,7 +275,7 @@ describe("deriveEpicDurabilityPlane", () => {
         pauseReason: null,
         promotionState: "active",
       }),
-    ).toEqual({ severity: "activity", sentence: "Promoting to cloud" });
+    ).toEqual({ severity: "activity", sentence: "Syncing" });
   });
 
   it("reads an offline mirror as a warning, not an error", () => {
@@ -268,7 +288,7 @@ describe("deriveEpicDurabilityPlane", () => {
         pauseReason: null,
         promotionState: null,
       }),
-    ).toEqual({ severity: "warning", sentence: "Cloud mirror — offline" });
+    ).toEqual({ severity: "warning", sentence: "Offline — sync paused" });
   });
 
   it.each<[EpicDurabilityPauseReasonV15 | null, EpicDurabilityPlane]>([
@@ -280,7 +300,7 @@ describe("deriveEpicDurabilityPlane", () => {
       "orphaned-local-edits-after-cloud-delete",
       {
         severity: "danger",
-        sentence: "Deleted in cloud — local edits kept here",
+        sentence: "Deleted — unsynced edits kept",
       },
     ],
     [
@@ -326,7 +346,7 @@ describe("deriveEpicDurabilityPlane", () => {
       }),
     ).toEqual({
       severity: "warning",
-      sentence: "Local copy — may be out of date · synced 3d",
+      sentence: "Saved copy — may be out of date · synced 3d",
     });
   });
 
@@ -342,11 +362,11 @@ describe("deriveEpicDurabilityPlane", () => {
       }),
     ).toEqual({
       severity: "warning",
-      sentence: "Local copy — may be out of date · never synced",
+      sentence: "Saved copy — may be out of date · never synced",
     });
   });
 
-  it("reads a local-copy freshness as a calm 'Local copy'", () => {
+  it("reads a local-copy freshness as a calm 'Saved copy'", () => {
     expect(
       planeFor({
         status: "cloud",
@@ -356,7 +376,7 @@ describe("deriveEpicDurabilityPlane", () => {
         pauseReason: null,
         promotionState: null,
       }),
-    ).toEqual({ severity: "steady", sentence: "Local copy" });
+    ).toEqual({ severity: "steady", sentence: "Saved copy" });
   });
 
   it("reads a syncing freshness as 'Checking for updates'", () => {
@@ -385,8 +405,131 @@ describe("deriveEpicDurabilityPlane", () => {
     ).toEqual({
       severity: "danger",
       sentence:
-        "Stored locally · No local backup · Local copy — may be out of date · never synced",
+        "Not synced yet · New edits only in this window until synced · Saved copy — may be out of date · never synced",
     });
+  });
+
+  // `s5-vocabulary-cleanup`: every clause used to name which SIDE of the sync
+  // a fact came from ("cloud", "local", "this device") instead of naming the
+  // condition as the person experiences it. This matrix sweeps the arms that
+  // used to say so and pins that none of them do any more.
+  it("never says cloud, local or device in any clause", () => {
+    interface MatrixCase {
+      readonly name: string;
+      readonly scenario: PlaneScenario;
+    }
+
+    const pauseReasons: ReadonlyArray<EpicDurabilityPauseReasonV15 | null> = [
+      "access-revoked",
+      "orphaned-local-edits-after-cloud-delete",
+      "delete-pending-acknowledgement",
+      "delete-tombstone-unscoped-cleared",
+      "entitlement-lapsed",
+      null,
+    ];
+
+    const cases: ReadonlyArray<MatrixCase> = [
+      {
+        name: "stated local, protection armed",
+        scenario: {
+          status: "local",
+          protection: "armed",
+          peerSpeaksDurabilityLegs: true,
+          cloudFreshness: null,
+          pauseReason: null,
+          promotionState: null,
+        },
+      },
+      {
+        name: "stated promoting, promotionState active",
+        scenario: {
+          status: "promoting",
+          protection: "armed",
+          peerSpeaksDurabilityLegs: true,
+          cloudFreshness: null,
+          pauseReason: null,
+          promotionState: "active",
+        },
+      },
+      {
+        name: "stated promoting, promotionState pending",
+        scenario: {
+          status: "promoting",
+          protection: "armed",
+          peerSpeaksDurabilityLegs: true,
+          cloudFreshness: null,
+          pauseReason: null,
+          promotionState: "pending",
+        },
+      },
+      {
+        name: "stated offline, protection unavailable, freshness stale with a reconciledAt",
+        scenario: {
+          status: "offline",
+          protection: "unavailable",
+          peerSpeaksDurabilityLegs: true,
+          cloudFreshness: {
+            kind: "lastCloudSyncAt",
+            reconciledAtEpochMs: NOW - 60_000,
+            state: "stale",
+          },
+          pauseReason: null,
+          promotionState: null,
+        },
+      },
+      ...pauseReasons.map((pauseReason) => ({
+        name: `paused, pauseReason ${String(pauseReason)}`,
+        scenario: {
+          status: "paused",
+          protection: "armed",
+          peerSpeaksDurabilityLegs: true,
+          cloudFreshness: null,
+          pauseReason,
+          promotionState: null,
+        } satisfies PlaneScenario,
+      })),
+      {
+        name: "cloudDurable, protection unknown",
+        scenario: {
+          status: "cloud",
+          protection: "unknown",
+          peerSpeaksDurabilityLegs: true,
+          cloudFreshness: null,
+          pauseReason: null,
+          promotionState: null,
+        },
+      },
+      {
+        name: "indeterminate, protection unavailable",
+        scenario: {
+          status: "unknown",
+          protection: "unavailable",
+          peerSpeaksDurabilityLegs: true,
+          cloudFreshness: null,
+          pauseReason: null,
+          promotionState: null,
+        },
+      },
+      {
+        name: "freshness local-copy",
+        scenario: {
+          status: "cloud",
+          protection: "armed",
+          peerSpeaksDurabilityLegs: true,
+          cloudFreshness: { kind: "freshnessUnknown", state: "local-copy" },
+          pauseReason: null,
+          promotionState: null,
+        },
+      },
+    ];
+
+    for (const { name, scenario } of cases) {
+      const plane = planeFor(scenario);
+      if (plane === null) continue;
+      expect(plane.sentence, name).not.toMatch(/\bcloud\b/i);
+      expect(plane.sentence, name).not.toMatch(/\blocal(ly)?\b/i);
+      expect(plane.sentence, name).not.toMatch(/device/i);
+    }
   });
 });
 

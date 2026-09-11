@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
+import { assertSettingsSearchTargets } from "@/components/settings/__tests__/settings-search-targets";
 import { OpeningBehaviorPanel } from "@/components/settings/panels/opening-behavior-panel";
 import { altLabel, modLabel, shiftLabel } from "@/lib/keybindings/platform";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -227,5 +228,20 @@ describe("<OpeningBehaviorPanel /> modifier legend", () => {
         `${modLabel()}-click opens a link in your default browser · ${altLabel()}-click flips the choice · ${shiftLabel()}-click opens a tile in a split · middle-click opens it in the background`,
       ),
     ).not.toBeNull();
+  });
+});
+
+describe("<OpeningBehaviorPanel /> search targets", () => {
+  // Every row the index points at is unconditional here, and the per-type
+  // rows it deliberately skips are hidden by default — so a default mount
+  // must light each indexed anchor exactly once.
+  it("matches the search index in the default shell", () => {
+    const { container } = render(<OpeningBehaviorPanel />);
+
+    assertSettingsSearchTargets(
+      "opening-behavior",
+      { runnerHost: null, featureSettings: null, mobileApp: false },
+      container,
+    );
   });
 });

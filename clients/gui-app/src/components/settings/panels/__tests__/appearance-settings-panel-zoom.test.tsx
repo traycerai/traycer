@@ -2,8 +2,16 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
+import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
+import { createFakeRunnerHost } from "../../../../../__tests__/create-fake-runner-host";
+import { assertSettingsSearchTargets } from "@/components/settings/__tests__/settings-search-targets";
 import { AppearanceSettingsPanel } from "@/components/settings/panels/appearance-settings-panel";
+import {
+  isZoomRowAvailable,
+  type SettingsAvailabilityContext,
+} from "@/lib/settings/settings-availability";
 import type { DesktopZoomBridge } from "@/lib/windows/types";
+import { RunnerHostProvider } from "@/providers/runner-host-provider";
 
 const zoomState: {
   bridge: FakeZoomBridge | null;
@@ -11,10 +19,6 @@ const zoomState: {
   bridge: null,
 };
 let queryClient: QueryClient;
-
-vi.mock("@/hooks/runner/use-desktop-zoom-bridge", () => ({
-  useDesktopZoomBridge: () => zoomState.bridge,
-}));
 
 class FakeZoomBridge implements DesktopZoomBridge {
   readonly ladder = [67, 75, 80, 90, 100, 110, 125, 150];
@@ -86,7 +90,51 @@ describe("<AppearanceSettingsPanel /> zoom control", () => {
 
     expect(screen.queryByLabelText("Display zoom")).toBeNull();
   });
+
+  // The search index offers Zoom exactly where this row renders. Both halves:
+  // an entry left always-available fails the bridge-absent case.
+  it("matches the search index with the zoom bridge present", () => {
+    const container = renderWithQueryClient(<AppearanceSettingsPanel />);
+
+    const context = currentAvailabilityContext();
+    expect(isZoomRowAvailable(context)).toBe(true);
+    assertSettingsSearchTargets("appearance", context, container);
+  });
+
+  it("matches the search index with the zoom bridge absent", () => {
+    zoomState.bridge = null;
+    const container = renderWithQueryClient(<AppearanceSettingsPanel />);
+
+    const context = currentAvailabilityContext();
+    expect(isZoomRowAvailable(context)).toBe(false);
+    assertSettingsSearchTargets("appearance", context, container);
+  });
+
+  // A host-less shell has no runner host at all, and every hook the Zoom row
+  // needs reaches for one — so the gate has to return before any of them run.
+  it("omits the Zoom row, and does not throw, with no runner host above it", () => {
+    const { container } = render(
+      <QueryClientProvider client={new QueryClient()}>
+        <AppearanceSettingsPanel />
+      </QueryClientProvider>,
+    );
+
+    expect(screen.queryByText("Zoom")).toBeNull();
+    expect(
+      container.querySelector('[data-settings-anchor="appearance-zoom"]'),
+    ).toBeNull();
+  });
 });
+
+let mountedRunnerHost: IRunnerHost | null = null;
+
+function currentAvailabilityContext(): SettingsAvailabilityContext {
+  return {
+    runnerHost: mountedRunnerHost,
+    featureSettings: null,
+    mobileApp: false,
+  };
+}
 
 function createQueryClient(): QueryClient {
   return new QueryClient({
@@ -97,8 +145,17 @@ function createQueryClient(): QueryClient {
   });
 }
 
-function renderWithQueryClient(children: ReactNode): void {
-  render(
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
-  );
+/**
+ * Mounts under a runner host whose `zoom` is the case's bridge, so the row's
+ * gate resolves the bridge exactly as the desktop shell does.
+ */
+function renderWithQueryClient(children: ReactNode): HTMLElement {
+  mountedRunnerHost = createFakeRunnerHost({ zoom: zoomState.bridge });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <RunnerHostProvider runnerHost={mountedRunnerHost}>
+        {children}
+      </RunnerHostProvider>
+    </QueryClientProvider>,
+  ).container;
 }

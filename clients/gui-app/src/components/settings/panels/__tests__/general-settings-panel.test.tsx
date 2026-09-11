@@ -7,6 +7,7 @@ import {
   within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import { toast } from "sonner";
 import {
   afterEach,
@@ -17,7 +18,16 @@ import {
   vi,
   type Mock,
 } from "vitest";
+import { createFakeRunnerHost } from "../../../../../__tests__/create-fake-runner-host";
+import { assertSettingsSearchTargets } from "@/components/settings/__tests__/settings-search-targets";
 import { GeneralSettingsPanel } from "@/components/settings/panels/general-settings-panel";
+import { setMobileApp } from "@/lib/mobile-app";
+import {
+  isExperimentalGroupAvailable,
+  isPreventSleepRowAvailable,
+  isVoiceInputRowAvailable,
+  type SettingsAvailabilityContext,
+} from "@/lib/settings/settings-availability";
 import { modLabel } from "@/lib/keybindings/platform";
 import { clearAllPersistedStores } from "@/lib/persist";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -109,8 +119,21 @@ const windowsBridgeMock = vi.hoisted(
 interface TestRunnerHost {
   hostManagement: { uninstallTraycer: Mock } | null;
   readonly hasLocalHost: boolean;
-  readonly power: { setSleepBlocked: () => Promise<void> };
+  /**
+   * Optional because it is a duck-typed extra a shell installs rather than a
+   * host field: the search-target cases below mount a shell that has none, and
+   * a shape that always carried one could not express that shell at all.
+   */
+  readonly power?: { setSleepBlocked: () => Promise<void> };
 }
+
+/**
+ * A shell with no bridges and no local host - the capability posture a phone
+ * and a browser tab share. The search-target cases pass this as their
+ * availability context while mounting a host of the same shape, so the index
+ * is asserted against the shell that actually rendered.
+ */
+const BRIDGELESS_RUNNER_HOST = createFakeRunnerHost({ hasLocalHost: false });
 
 interface TestFeatureSettingsBridge {
   readonly get: Mock<() => Promise<{ readonly agentRoles: boolean }>>;
@@ -767,6 +790,73 @@ describe("GeneralSettingsPanel", () => {
     screen.getByRole("textbox", { name: "Branch prefix" });
     screen.getByText("Default branch prefix");
   });
+
+  // Every anchored General entry the search index offers must land on exactly
+  // one element in the shell that offers it, and on none where it is
+  // withheld. Each case turns on ONE gate, so an entry left always-available
+  // while its row is gated fails the case whose gate is off.
+  describe("search targets", () => {
+    // Each case MOUNTS the shell its context describes. The panel reads its
+    // host through the mocked accessors above, so a context that claimed no
+    // bridges while the mock still served the desktop host would assert the
+    // index against a shell nothing rendered.
+    beforeEach(() => {
+      runnerHostMock.current = { hostManagement: null, hasLocalHost: false };
+    });
+
+    afterEach(() => {
+      setMobileApp(false);
+    });
+
+    it("matches the index with every bridge absent", () => {
+      const context: SettingsAvailabilityContext = {
+        runnerHost: BRIDGELESS_RUNNER_HOST,
+        featureSettings: null,
+        mobileApp: false,
+      };
+      expect(isExperimentalGroupAvailable(context)).toBe(false);
+      expect(isVoiceInputRowAvailable(context)).toBe(false);
+      expect(isPreventSleepRowAvailable(context)).toBe(false);
+      const { container } = render(panelTree());
+
+      assertSettingsSearchTargets("general", context, container);
+    });
+
+    it("matches the index with only the feature-settings bridge", () => {
+      const featureSettings: TestFeatureSettingsBridge = {
+        get: vi.fn(() => Promise.resolve({ agentRoles: false })),
+        setAgentRolesEnabled: vi.fn((enabled: boolean) =>
+          Promise.resolve({ agentRoles: enabled }),
+        ),
+      };
+      (globalThis as { runnerHost?: unknown }).runnerHost = {
+        platform: { featureSettings },
+      };
+      const context: SettingsAvailabilityContext = {
+        runnerHost: BRIDGELESS_RUNNER_HOST,
+        featureSettings,
+        mobileApp: false,
+      };
+      expect(isExperimentalGroupAvailable(context)).toBe(true);
+      const { container } = render(panelTree());
+
+      assertSettingsSearchTargets("general", context, container);
+    });
+
+    it("matches the index in the installed mobile app", () => {
+      setMobileApp(true);
+      const context: SettingsAvailabilityContext = {
+        runnerHost: BRIDGELESS_RUNNER_HOST,
+        featureSettings: null,
+        mobileApp: true,
+      };
+      expect(isVoiceInputRowAvailable(context)).toBe(false);
+      expect(isPreventSleepRowAvailable(context)).toBe(false);
+      const { container } = render(panelTree());
+
+      assertSettingsSearchTargets("general", context, container);
+    });
+  });
 });
 
 function documentPosition(
@@ -798,4 +888,16 @@ function renderPanel(): QueryClient {
     </QueryClientProvider>,
   );
   return queryClient;
+}
+
+/** The panel alone, with no runner host above it. */
+function panelTree(): ReactNode {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  return (
+    <QueryClientProvider client={queryClient}>
+      <GeneralSettingsPanel />
+    </QueryClientProvider>
+  );
 }

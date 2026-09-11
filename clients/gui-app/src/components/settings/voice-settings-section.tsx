@@ -4,27 +4,30 @@ import { SettingsRow } from "@/components/settings/settings-row";
 import { Switch } from "@/components/ui/switch";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
-import { useRunnerHost } from "@/providers/use-runner-host";
+import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
+import { isVoiceInputRowAvailable } from "@/lib/settings/settings-availability";
 
 export function VoiceSettingsSection(): ReactNode {
+  const availability = useSettingsAvailabilityContext();
   const { voiceInputEnabled, setVoiceInputEnabled } = useSettingsStore(
     useShallow((s) => ({
       voiceInputEnabled: s.voiceInputEnabled,
       setVoiceInputEnabled: s.setVoiceInputEnabled,
     })),
   );
-  const hasLocalHost = useRunnerHost().hasLocalHost;
 
   // `useDictationAvailability` refuses dictation outright without a local host,
   // so this row would be a toggle for something the shell will not do - and the
   // description below promises on-device transcription that a shell whose every
-  // reachable host is a remote machine cannot deliver. Same capability, same
-  // gate: the two must not be able to disagree.
-  if (!hasLocalHost) return null;
+  // reachable host is a remote machine cannot deliver. The gate itself lives in
+  // `isVoiceInputRowAvailable`, which the search entry pointing at this row
+  // calls too: same capability, same gate, so the two cannot disagree.
+  if (!isVoiceInputRowAvailable(availability)) return null;
 
   return (
     <SettingsRow
       label="Voice input"
+      anchor="general-voice-input"
       description="Dictate prompts with the mic button in the composer. Speech is transcribed on-device - audio never leaves your machine."
       control={
         <Switch

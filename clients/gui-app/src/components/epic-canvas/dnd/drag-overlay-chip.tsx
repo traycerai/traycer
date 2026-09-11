@@ -1,11 +1,8 @@
+import { ChatIndicatorHostScopes } from "@/components/notifications/chat-indicator-host-scopes";
 /**
- * Drag-overlay chips for the root DndContext. Content is derived purely
- * from the drag payload (tile ref resolved once at drag start, rail panel
- * definition, header tab) - the overlay mounts at the app shell, outside
- * any epic session provider, so chips must not read live epic projections.
- * Titles therefore show the payload's snapshot `name`, not the live title. The
- * one exception is a shell's output window, whose tile carries no name worth
- * showing at all - see `ManagedCommandOutputTileDragOverlay`.
+ * Drag previews mount at the app shell, outside epic session providers.
+ * Header tabs share the strip's registry-backed titles and indicators; canvas
+ * chips use payload snapshots unless their renderer resolves a live record.
  */
 import { AnimatePresence } from "motion/react";
 import * as m from "motion/react-m";
@@ -25,7 +22,14 @@ import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed
 import { managedCommandTitle } from "@/lib/managed-commands/managed-command-copy";
 import { useManagedCommandOnHost } from "@/stores/managed-commands/managed-commands-for-chat";
 import { HeaderTabDragOverlay } from "@/components/layout/tabs/tab-strip-drag-overlay";
-import { useHeaderTabs } from "@/stores/tabs/use-header-tabs";
+import { SplitTabDragOverlay } from "@/components/layout/tabs/split-tab-drag-overlay";
+import {
+  useHeaderStripItem,
+  useHeaderTabs,
+} from "@/stores/tabs/use-header-tabs";
+import { useHeaderTabIndicators } from "@/components/layout/tabs/header-tab-presentation";
+import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
+import { useTabsStore } from "@/stores/tabs/store";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
 import {
   LEFT_PANEL_RAIL_ITEM_DND_TYPE,
@@ -187,15 +191,31 @@ function HeaderTabOverlayChip(props: {
   readonly tab: HeaderTabDragData;
   readonly width: number | null;
 }) {
-  const allTabs = useHeaderTabs();
-  const tab =
-    allTabs.find(
-      (candidate) =>
-        candidate.kind === props.tab.tabKind &&
-        candidate.id === props.tab.tabId,
-    ) ?? null;
-  if (tab === null) return null;
-  return <HeaderTabDragOverlay tab={tab} width={props.width} />;
+  const item = useHeaderStripItem(props.tab.stripItemId);
+  const tearOff = useEpicDndStore((state) => state.headerTearOffPreview);
+  const isActive = useTabsStore(
+    (state) => state.activeItemId === props.tab.stripItemId,
+  );
+  const tabs = useHeaderTabs();
+  const { indicators, chatEpicIds, chatScopes } = useHeaderTabIndicators(tabs);
+  if (item === null) return null;
+  return (
+    <NotificationIndicatorsProvider indicators={indicators}>
+      <ChatIndicatorHostScopes scopes={chatScopes} chatEpicIds={chatEpicIds}>
+        {item.kind === "split" ? (
+          <SplitTabDragOverlay
+            item={item}
+            width={props.width}
+            source={props.tab}
+            isActive={isActive}
+            tearOff={tearOff}
+          />
+        ) : (
+          <HeaderTabDragOverlay tab={item.tab} width={props.width} />
+        )}
+      </ChatIndicatorHostScopes>
+    </NotificationIndicatorsProvider>
+  );
 }
 
 function EpicCanvasNodeDragOverlay(props: {
@@ -258,10 +278,8 @@ function EpicCanvasNodeDragOverlay(props: {
  * came from does - dragging "Output" out of a strip that says "Monitor · deploy
  * watcher" is the chip disagreeing with the thing under the cursor.
  *
- * The exception to this module's no-live-projections rule (see the header): the
- * chat-session registry is a module singleton, not an epic-scoped provider, so
- * it is readable from the app shell. Falls back to the payload's snapshot name
- * when the owning chat has no live session, exactly as the tab does.
+ * The chat-session registry is readable from the app shell. The title falls
+ * back to the payload's snapshot when the owning chat has no live session.
  */
 function ManagedCommandOutputTileDragOverlay(props: {
   readonly node: ManagedCommandOutputTileRef;

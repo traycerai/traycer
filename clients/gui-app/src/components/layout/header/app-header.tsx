@@ -144,6 +144,7 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
         // slot so their card does not move when the header appears under it.
         APP_HEADER_HEIGHT_CLASS,
         "relative z-20 flex shrink-0 items-center bg-canvas text-canvas-foreground after:absolute after:inset-x-0 after:bottom-0 after:z-1 after:h-px after:bg-border/90 after:content-['']",
+        { "after:inset-x-[var(--radius-xl)]": showAppNavChrome },
         framelessDesktop
           ? cn(
               "pl-3 pr-3",
@@ -176,7 +177,7 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
       ) : null}
       <div
         className={cn(
-          "relative z-10 flex min-w-0 flex-1 items-center",
+          "relative z-10 flex min-w-0 flex-1 items-center self-end",
           draggable && "[-webkit-app-region:drag]",
         )}
       >

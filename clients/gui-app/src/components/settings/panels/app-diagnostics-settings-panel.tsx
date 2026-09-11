@@ -86,6 +86,7 @@ export function AppDiagnosticsSettingsPanel(): ReactNode {
         )}
       >
         <LogDetailGroup
+          anchor="app-diagnostics-log-detail"
           controls={controls}
           emptyState={
             <LogInfoLine>
@@ -190,6 +191,7 @@ function MemoryDiagnosticsGroup(): ReactNode {
     return (
       <SettingsGroup
         title="Memory"
+        anchor="app-diagnostics-memory"
         tone="default"
         dataTestId={undefined}
         fill={false}
@@ -204,6 +206,7 @@ function MemoryDiagnosticsGroup(): ReactNode {
   return (
     <SettingsGroup
       title="Memory"
+      anchor="app-diagnostics-memory"
       tone="default"
       dataTestId={undefined}
       fill={false}
