@@ -6,7 +6,6 @@ import {
   LogIn,
   Plus,
   Settings2,
-  X,
 } from "lucide-react";
 import {
   PROVIDER_DISPLAY_NAMES,
@@ -41,21 +40,10 @@ import {
   resolveRateLimitFetchEligibility,
 } from "@/lib/rate-limit-providers";
 
-type ProviderId = ProviderCliState["providerId"];
-
 // Stable module-level reference (not a fresh closure per render) - Settings
 // has no picker leader scope, so every row opts out of the shortcut hint.
 function noProfileShortcutHint(): ProfileDropdownShortcutHint | null {
   return null;
-}
-
-function profileDriftKey(
-  providerId: ProviderId,
-  profile: ProviderProfile,
-): string | null {
-  const notice = profile.ambientDriftNotice;
-  if (notice === null) return null;
-  return `${providerId}:${profile.profileId}:${notice.changedAt}`;
 }
 
 function profileRateLimitFetchEligible(
@@ -102,14 +90,11 @@ interface ProviderProfileScopedSectionProps {
 }
 
 function ProfileScopedSectionMessages(props: {
-  readonly selectedProfile: ProviderProfile;
   readonly addProfileDisabled: boolean;
   readonly addProfileDisabledReason: string | null;
   readonly failedAttempt: FailedProviderProfileAttempt | null;
   readonly onAddProfile: () => void;
   readonly onDismissFailedAttempt: () => void;
-  readonly driftDismissed: boolean;
-  readonly onDismissDrift: () => void;
   readonly duplicateLabel: string | null;
 }): ReactNode {
   return (
@@ -155,14 +140,6 @@ function ProfileScopedSectionMessages(props: {
           </div>
         </div>
       ) : null}
-      {props.selectedProfile.kind === "ambient" &&
-      props.selectedProfile.ambientDriftNotice !== null &&
-      !props.driftDismissed ? (
-        <AmbientDriftNotice
-          profile={props.selectedProfile}
-          onDismiss={props.onDismissDrift}
-        />
-      ) : null}
       {props.duplicateLabel !== null ? (
         <ProfileWarning>Same account as {props.duplicateLabel}</ProfileWarning>
       ) : null}
@@ -204,9 +181,6 @@ export function ProviderProfileScopedSection(
     onSetProfileEnabled,
   } = props;
   const profiles = state.profiles;
-  const [dismissedDriftKeys, setDismissedDriftKeys] = useState<
-    readonly string[]
-  >([]);
   const [editProfileOpen, setEditProfileOpen] = useState(startInReauth);
   const [editSessionId, setEditSessionId] = useState(0);
   const [editIntent, setEditIntent] = useState<"manage" | "sign-in">(() =>
@@ -227,14 +201,6 @@ export function ProviderProfileScopedSection(
     ? signInUnavailableHint
     : null;
   const duplicateLabel = duplicateProfileLabel(selectedProfile, profiles);
-  const driftKey = profileDriftKey(state.providerId, selectedProfile);
-  const driftDismissed =
-    driftKey !== null && dismissedDriftKeys.includes(driftKey);
-
-  const dismissDrift = (): void => {
-    if (driftKey === null || dismissedDriftKeys.includes(driftKey)) return;
-    setDismissedDriftKeys((current) => [...current, driftKey]);
-  };
 
   const openProfileEditor = (): void => {
     setEditIntent("manage");
@@ -373,14 +339,11 @@ export function ProviderProfileScopedSection(
         </div>
 
         <ProfileScopedSectionMessages
-          selectedProfile={selectedProfile}
           addProfileDisabled={addProfileDisabled}
           addProfileDisabledReason={addProfileDisabledReason}
           failedAttempt={failedAttempt}
           onAddProfile={onAddProfile}
           onDismissFailedAttempt={onDismissFailedAttempt}
-          driftDismissed={driftDismissed}
-          onDismissDrift={dismissDrift}
           duplicateLabel={duplicateLabel}
         />
 
@@ -487,37 +450,6 @@ function ProfileSummary({
           </Badge>
         </TooltipWrapper>
       ) : null}
-    </div>
-  );
-}
-
-function AmbientDriftNotice({
-  profile,
-  onDismiss,
-}: {
-  readonly profile: ProviderProfile;
-  readonly onDismiss: () => void;
-}): ReactNode {
-  const currentEmail = profile.identity?.email ?? null;
-  const current =
-    currentEmail !== null ? redactEmail(currentEmail) : "an unknown account";
-  const previousEmail = profile.ambientDriftNotice?.previousEmail ?? null;
-  const previous =
-    previousEmail !== null ? redactEmail(previousEmail) : "an unknown account";
-  return (
-    <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-2 text-ui-xs text-amber-900 dark:text-amber-200">
-      <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-      <span className="min-w-0 flex-1">
-        {profileDisplayLabel(profile)} is now {current}; was {previous}.
-      </span>
-      <button
-        type="button"
-        aria-label="Dismiss ambient account change notice"
-        className="rounded p-0.5 text-current opacity-70 transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-        onClick={onDismiss}
-      >
-        <X className="size-3.5" />
-      </button>
     </div>
   );
 }
