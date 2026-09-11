@@ -54,6 +54,7 @@ function renderEditorSlot(): void {
       hasPastedImageBytes={null}
       ingestPastedComposerImages={null}
       isActive
+      disabled={false}
       onDocumentChange={() => undefined}
       onFocus={() => undefined}
 

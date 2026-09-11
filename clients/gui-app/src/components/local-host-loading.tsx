@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, type ReactNode } from "react";
+import { BrandEntrance } from "@/components/auth/brand-entrance";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import {
   HOST_PROGRESS_IDLE_HEADING,
@@ -147,7 +148,7 @@ export interface LocalHostLoadingContentProps {
 }
 
 /**
- * The host-boot body: spinner + heading, the progress bar, and the
+ * The host-boot body: brand entrance, spinner, heading, progress bar, and the
  * bootstrap-log disclosure (with the "Configure shell…" shortcut).
  * Deliberately has no outer chrome (no `min-h-svh` wrapper, no `<AppHeader>`,
  * no `<Card>`) so its caller provides its own bounded layout.
@@ -187,6 +188,11 @@ export function LocalHostLoadingContent(
 
   return (
     <LocalHostBodyShell>
+      <BrandEntrance size="compact">
+        <p className="brand-entrance-copy font-heading text-title-lg font-medium tracking-tight text-foreground">
+          traycer
+        </p>
+      </BrandEntrance>
       {/* THE ONE HEADING this surface has, and the spinner belongs TO it.
           The healthy startup card renders no dialog title above this body
           anymore - the old modal put "Setting up Traycer" 2px above this

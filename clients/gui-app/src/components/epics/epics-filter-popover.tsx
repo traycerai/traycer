@@ -55,12 +55,17 @@ const OWNERSHIP_OPTIONS: ReadonlyArray<{
   { value: "shared", label: "Shared" },
 ];
 
+function historyFilterActiveCount(search: HistorySearchState): number {
+  return (
+    search.ownershipScopes.length +
+    search.repos.length +
+    search.workspaces.length +
+    search.chatHosts.length
+  );
+}
+
 export function EpicsFilterPopover(props: EpicsFilterPopoverProps): ReactNode {
-  const activeCount =
-    props.search.ownershipScopes.length +
-    props.search.repos.length +
-    props.search.workspaces.length +
-    props.search.chatHosts.length;
+  const activeCount = historyFilterActiveCount(props.search);
   const ownershipCounts = new Map(
     props.facets?.ownershipScopes.map((facet) => [facet.value, facet.count]) ??
       [],

@@ -149,7 +149,7 @@ describe("locateTranscriptRowOrdinal resolves into the same enumeration buildRow
       chatId: "chat-1",
     };
     const rows = projectTranscriptRows(input);
-    const skeleton = buildRowSkeleton(input, previewText);
+    const skeleton = buildRowSkeleton(input, previewText, null);
 
     expect(rows.length).toBe(skeleton.length);
     expect(rows.map((row) => row.rowId)).toEqual(
@@ -195,7 +195,7 @@ describe("locateTranscriptRowOrdinal: block targets", () => {
       chatId: "chat-1",
     };
     const rows = projectTranscriptRows(input);
-    const skeleton = buildRowSkeleton(input, previewText);
+    const skeleton = buildRowSkeleton(input, previewText, null);
 
     const ordinal = locateOrThrow(rows, input.messages, {
       kind: "block",
@@ -254,7 +254,7 @@ describe("locateTranscriptRowOrdinal: block targets", () => {
       chatId: "chat-1",
     };
     const rows = projectTranscriptRows(input);
-    const skeleton = buildRowSkeleton(input, previewText);
+    const skeleton = buildRowSkeleton(input, previewText, null);
 
     const lateOrdinal = locateOrThrow(rows, input.messages, {
       kind: "block",
@@ -311,7 +311,7 @@ describe("locateTranscriptRowOrdinal: block targets", () => {
       chatId: "chat-1",
     };
     const rows = projectTranscriptRows(input);
-    const skeleton = buildRowSkeleton(input, previewText);
+    const skeleton = buildRowSkeleton(input, previewText, null);
 
     const parentOrdinal = locateOrThrow(rows, input.messages, {
       kind: "block",
@@ -390,7 +390,7 @@ describe("locateTranscriptRowOrdinal: sent-message targets", () => {
       chatId: "chat-1",
     };
     const rows = projectTranscriptRows(input);
-    const skeleton = buildRowSkeleton(input, previewText);
+    const skeleton = buildRowSkeleton(input, previewText, null);
 
     const ordinal = locateOrThrow(rows, input.messages, {
       kind: "sent-message",
@@ -459,7 +459,7 @@ describe("locateTranscriptRowOrdinal: sent-message targets", () => {
       chatId: "chat-1",
     };
     const rows = projectTranscriptRows(input);
-    const skeleton = buildRowSkeleton(input, previewText);
+    const skeleton = buildRowSkeleton(input, previewText, null);
 
     // |205 - 200| = 5 beats |100 - 200| = 100.
     const ordinal = locateOrThrow(rows, input.messages, {
@@ -586,7 +586,7 @@ describe("locateTranscriptRowOrdinal: receipt targets", () => {
       chatId: "chat-1",
     };
     const rows = projectTranscriptRows(input);
-    const skeleton = buildRowSkeleton(input, previewText);
+    const skeleton = buildRowSkeleton(input, previewText, null);
 
     const ordinal = locateOrThrow(rows, input.messages, {
       kind: "receipt",
@@ -625,7 +625,7 @@ describe("locateTranscriptRowOrdinal: receipt targets", () => {
       chatId: "chat-1",
     };
     const rows = projectTranscriptRows(input);
-    const skeleton = buildRowSkeleton(input, previewText);
+    const skeleton = buildRowSkeleton(input, previewText, null);
 
     const ordinal = locateOrThrow(rows, input.messages, {
       kind: "receipt",
@@ -728,7 +728,7 @@ describe("locateTranscriptRowOrdinal: message targets", () => {
     // the skeleton, so a client looking it up there waits forever.
     const input = splitTurnTranscript();
     const rows = projectTranscriptRows(input);
-    const skeleton = buildRowSkeleton(input, previewText);
+    const skeleton = buildRowSkeleton(input, previewText, null);
     expect(skeleton.map((entry) => entry.rowId)).not.toContain("m-turn");
 
     const ordinal = locateOrThrow(rows, input.messages, {
@@ -747,7 +747,7 @@ describe("locateTranscriptRowOrdinal: message targets", () => {
   it("resolves a USER record to its own row", () => {
     const input = splitTurnTranscript();
     const rows = projectTranscriptRows(input);
-    const skeleton = buildRowSkeleton(input, previewText);
+    const skeleton = buildRowSkeleton(input, previewText, null);
 
     const ordinal = locateOrThrow(rows, input.messages, {
       kind: "message",
@@ -763,7 +763,7 @@ describe("locateTranscriptRowOrdinal: message targets", () => {
     // slice - and jump the reader past the bubble they asked for.
     const input = splitTurnTranscript();
     const rows = projectTranscriptRows(input);
-    const skeleton = buildRowSkeleton(input, previewText);
+    const skeleton = buildRowSkeleton(input, previewText, null);
 
     const ordinal = locateOrThrow(rows, input.messages, {
       kind: "message",

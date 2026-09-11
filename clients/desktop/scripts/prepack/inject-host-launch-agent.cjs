@@ -145,7 +145,18 @@ const CLI_BINARY_NAME = "traycer";
 // not the label id) — it attests through its label signal — so this basename
 // is free to be chosen for the human reading it.
 const HOST_START_COMPAT_LAUNCHER = `${PRODUCT_NAME} Host`;
-const HOST_NODE_OPTIONS = "--max-semi-space-size=16";
+// Must stay in lockstep with the CLI's `service/host-node-options.ts:
+// HOST_V8_FLAGS` (this file is a CommonJS prepack script and cannot import it),
+// which carries the reasoning for the value and its kill criterion.
+//
+// Drift here is self-healing for the HOST and only for the host: the plist
+// launches `traycer host start`, and the supervisor spawns the host through
+// `withHostNodeOptions`, which strips this inherited value and re-appends the
+// canonical one. A stale number in this plist therefore mis-sizes the
+// SUPERVISOR's own young generation and nothing else. Worth keeping correct
+// anyway - a plist that disagrees with the source of truth reads as a bug to
+// whoever finds it next, and `launchctl print` is where operators look.
+const HOST_NODE_OPTIONS = "--max-semi-space-size=64";
 const HOST_SOFT_FILE_DESCRIPTOR_LIMIT = 8_192;
 // Matches `PRODUCTION_LABEL.id` in `src/electron-main/host/host-paths.ts`.
 // Release builds derive this label from their target stamp; the fallbacks below
