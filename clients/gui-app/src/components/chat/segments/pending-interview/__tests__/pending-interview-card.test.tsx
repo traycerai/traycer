@@ -513,6 +513,13 @@ function proceedButton(): HTMLButtonElement {
 }
 
 describe("PendingInterviewCard navigation highlight", () => {
+  afterEach(() => {
+    cleanup();
+    useInterviewDraftStore.setState({ draftsByChat: {} });
+    window.localStorage.clear();
+    setMobileApp(false);
+  });
+
   it("stamps data-navigation-highlighted on the card when flashing", () => {
     render(
       <TooltipProvider>
