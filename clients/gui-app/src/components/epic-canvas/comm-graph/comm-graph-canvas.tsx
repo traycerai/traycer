@@ -522,6 +522,47 @@ function CommGraphCanvasBody(props: CommGraphCanvasProps) {
     // share a sender: every cursor step gets its own visibility decision.
   }, [findRuntime, flowInstance, nodes, playing, pulse, senderAgentId]);
 
+  // React Flow anchors its viewport at the tile's top-left, so a tile that
+  // shrinks or grows around the graph - a split, a drag of the pane divider -
+  // keeps that corner and lets whatever was in the MIDDLE slide toward an
+  // edge. Shifting by half the size delta keeps the graph point that was
+  // under the centre under the centre. Programmatic, so `onMoveEnd` persists
+  // the shifted viewport without `onMoveStart` reading it as a person taking
+  // the camera.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (canvas === null || flowInstance === null) return;
+    const first = canvas.getBoundingClientRect();
+    let previous = { width: first.width, height: first.height };
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries.at(-1);
+      if (entry === undefined) return;
+      const next = {
+        width: entry.contentRect.width,
+        height: entry.contentRect.height,
+      };
+      const before = previous;
+      previous = next;
+      // A first measurement, or a tile collapsing to nothing while hidden, has
+      // no centre worth keeping.
+      if (before.width <= 0 || before.height <= 0) return;
+      if (next.width <= 0 || next.height <= 0) return;
+      const dx = (next.width - before.width) / 2;
+      const dy = (next.height - before.height) / 2;
+      if (dx === 0 && dy === 0) return;
+      const viewport = flowInstance.getViewport();
+      void flowInstance.setViewport({
+        x: viewport.x + dx,
+        y: viewport.y + dy,
+        zoom: viewport.zoom,
+      });
+    });
+    observer.observe(canvas);
+    return () => {
+      observer.disconnect();
+    };
+  }, [flowInstance]);
+
   const selectedEdge =
     selectedDetail?.kind === "pair"
       ? (aggregated.find((edge) => edge.id === selectedDetail.edgeId) ?? null)
