@@ -155,6 +155,43 @@ describe("<SettingsSearch /> focus under the pointer", () => {
   });
 });
 
+// The rail is a scrolling flex column whose section blocks keep
+// `min-height: auto`, so a shrinkable search box is the only child that can
+// collapse when the list outgrows the aside - and its input then paints over
+// the first group header.
+//
+// Both cases below pin the CLASS, not the layout: jsdom computes none, so
+// nothing here can observe the collapse itself. What they catch is the class
+// being dropped or made unconditional, which is how the collapse comes back.
+describe("<SettingsSearch /> shrink behaviour in the rail", () => {
+  function searchBox(): HTMLElement {
+    const box = document.querySelector("[data-settings-search-box]");
+    if (!(box instanceof HTMLElement)) {
+      throw new Error("search box wrapper not found");
+    }
+    return box;
+  }
+
+  it("refuses to shrink while the section list is the thing below it", () => {
+    render(<Harness />);
+
+    expect(searchBox().className).toContain("shrink-0");
+    expect(searchBox().className).not.toContain("min-h-0");
+  });
+
+  // While results are up they REPLACE the section list, and the list is the
+  // thing meant to scroll (`searchSettings` caps it at 12, not at a height),
+  // so the box goes back to shrinking - that is what pins the input above a
+  // scrolling list instead of scrolling the whole rail.
+  it("shrinks again while results are showing, so the list scrolls under a pinned input", () => {
+    render(<Harness />);
+    type("theme");
+
+    expect(searchBox().className).toContain("min-h-0");
+    expect(searchBox().className).not.toContain("shrink-0");
+  });
+});
+
 describe("<SettingsSearch /> selection", () => {
   it("arms a page-top reveal for a page result, not just a navigation", () => {
     // Navigating to the section already on screen moves nothing, so a page
