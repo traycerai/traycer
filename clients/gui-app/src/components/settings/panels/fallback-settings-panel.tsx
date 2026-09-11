@@ -86,6 +86,10 @@ import {
 } from "@/components/settings/panels/fallback/fallback-policy-draft";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import { cn } from "@/lib/utils";
+import {
+  FALLBACK,
+  MASTER_TOGGLE_DESCRIPTION,
+} from "@/components/settings/panels/fallback-settings.definitions";
 
 /**
  * Settings ▸ Host ▸ Fallback.
@@ -753,14 +757,19 @@ function FallbackPolicyEditor(props: {
         />
       )}
       <SettingsGroup
-        title="Fallback"
+        group={FALLBACK.definitions.fallback}
+        showTitle
         tone="default"
         dataTestId="settings-fallback-group"
         fill={false}
       >
         <SettingsRow
-          label="Automatic fallback"
-          description={masterToggleDescription(inFlightCount)}
+          row={FALLBACK.definitions.automaticFallback}
+          status={
+            inFlightCount === 0
+              ? undefined
+              : masterToggleDescription(inFlightCount)
+          }
           control={
             <MasterFallbackToggle
               checked={state.draft.enabled}
@@ -962,32 +971,6 @@ function MasterFallbackToggle(props: {
     />
   );
 }
-
-/**
- * What the master switch does, in three sentences - and the third is the one
- * that is not obvious.
- *
- * Fixed copy, agreed as written. Each sentence answers a question the previous
- * wording left open:
- *
- *  - **what stops** - NEW recovery, not the feature's effects;
- *  - **what does not** - work already in progress runs to its end, and the
- *    place to stop THAT is the chat's own card, which has the stop action. A
- *    user who reads "turning this off stops fallback" and then watches a chat
- *    go on waiting has been told something false by omission;
- *  - **what this switch is not.** Claude Code, Codex and the rest have their
- *    own retry and fallback behaviour, and this page does not reach it. Without
- *    the sentence, a user turning this off can reasonably believe they have
- *    stopped ALL automatic recovery on their machine, and then be surprised by
- *    their coding agent's own. That belief is the expensive one, because the
- *    remedy for it is in a different product.
- *
- * "Traycer recovery" rather than "fallback" as the subject of the first
- * sentence, for the same reason: the noun has to be ours specifically, or the
- * third sentence has nothing to contrast with.
- */
-const MASTER_TOGGLE_DESCRIPTION =
-  "Stops new Traycer recovery. Recovery already in progress continues; stop it from the chat. Your coding agent's own recovery settings are unchanged.";
 
 /**
  * The master toggle's helper, plus the count the decision turns on.

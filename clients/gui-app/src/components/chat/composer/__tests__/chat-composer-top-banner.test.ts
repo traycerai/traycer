@@ -9,7 +9,6 @@ describe("resolveComposerTopBannerKind", () => {
         profileDisabled: true,
         reauthVisible: true,
         fallbackReturnVisible: true,
-        ambientDriftVisible: true,
         rateLimitVisible: true,
       }),
     ).toBe("fallback");
@@ -20,20 +19,18 @@ describe("resolveComposerTopBannerKind", () => {
         profileDisabled: true,
         reauthVisible: false,
         fallbackReturnVisible: false,
-        ambientDriftVisible: false,
         rateLimitVisible: false,
       }),
     ).toBe("fallback");
   });
 
-  it("sits fallback-return between reauth and ambient-drift", () => {
+  it("sits fallback-return between reauth and rate-limit", () => {
     expect(
       resolveComposerTopBannerKind({
         fallbackVisible: false,
         profileDisabled: false,
         reauthVisible: true,
         fallbackReturnVisible: true,
-        ambientDriftVisible: true,
         rateLimitVisible: true,
       }),
     ).toBe("reauth");
@@ -43,7 +40,6 @@ describe("resolveComposerTopBannerKind", () => {
         profileDisabled: false,
         reauthVisible: false,
         fallbackReturnVisible: true,
-        ambientDriftVisible: true,
         rateLimitVisible: true,
       }),
     ).toBe("fallback-return");
@@ -53,10 +49,9 @@ describe("resolveComposerTopBannerKind", () => {
         profileDisabled: false,
         reauthVisible: false,
         fallbackReturnVisible: false,
-        ambientDriftVisible: true,
         rateLimitVisible: true,
       }),
-    ).toBe("ambient-drift");
+    ).toBe("rate-limit");
   });
 
   it("short-circuits everything below profileDisabled to none", () => {
@@ -66,7 +61,6 @@ describe("resolveComposerTopBannerKind", () => {
         profileDisabled: true,
         reauthVisible: true,
         fallbackReturnVisible: true,
-        ambientDriftVisible: true,
         rateLimitVisible: true,
       }),
     ).toBe("none");
@@ -79,7 +73,6 @@ describe("resolveComposerTopBannerKind", () => {
         profileDisabled: false,
         reauthVisible: false,
         fallbackReturnVisible: false,
-        ambientDriftVisible: false,
         rateLimitVisible: true,
       }),
     ).toBe("rate-limit");
@@ -89,7 +82,6 @@ describe("resolveComposerTopBannerKind", () => {
         profileDisabled: false,
         reauthVisible: false,
         fallbackReturnVisible: false,
-        ambientDriftVisible: false,
         rateLimitVisible: false,
       }),
     ).toBe("none");

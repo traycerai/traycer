@@ -15,6 +15,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { SETTINGS_ROW_STACK } from "@/components/settings/settings-row-layout";
 import { cn } from "@/lib/utils";
+import { FALLBACK } from "@/components/settings/panels/fallback-settings.definitions";
 
 const TRIGGER_CLASS = "w-[min(60vw,12rem)]";
 
@@ -94,14 +95,14 @@ export function FallbackBehaviorGroup(
   const { policy, onChange } = props;
   return (
     <SettingsGroup
-      title="Behavior"
+      group={FALLBACK.definitions.behavior}
+      showTitle
       tone="default"
       dataTestId="settings-fallback-behavior-group"
       fill={false}
     >
       <SettingsRow
-        label="Time to cancel before switching"
-        description="How long a chat shows the switch card before it goes ahead. Opening the destination menu pauses this."
+        row={FALLBACK.definitions.graceWindow}
         control={
           <NumberSelect
             ariaLabel="Time to cancel before switching"
@@ -118,8 +119,7 @@ export function FallbackBehaviorGroup(
         }
       />
       <SettingsRow
-        label="Longest wait for a reset"
-        description="The waiting step is skipped when a provider's limit resets later than this."
+        row={FALLBACK.definitions.maxWait}
         control={
           <NumberSelect
             ariaLabel="Longest wait for a reset"

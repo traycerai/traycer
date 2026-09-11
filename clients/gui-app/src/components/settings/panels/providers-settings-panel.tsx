@@ -1291,6 +1291,7 @@ function ProviderDetail({
           key={state.providerId}
           state={state}
           client={hostClient}
+          isLocalHost={isSelectedHostLocal}
           open
           onOpenChange={setAddProfileOpen}
           onFailedAttempt={setFailedProfileAttempt}

@@ -3,6 +3,7 @@ import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { Button } from "@/components/ui/button";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
+import { FALLBACK } from "@/components/settings/panels/fallback-settings.definitions";
 
 export interface FallbackDangerZoneProps {
   /** `null` when no host is resolved; the scope clause is then dropped. */
@@ -122,14 +123,14 @@ export function FallbackDangerZone(props: FallbackDangerZoneProps): ReactNode {
   }, [isPending]);
   return (
     <SettingsGroup
-      title="Danger Zone"
+      group={FALLBACK.definitions.dangerZone}
+      showTitle
       tone="danger"
       dataTestId="settings-fallback-danger-zone"
       fill={false}
     >
       <SettingsRow
-        label="Reset all fallback settings"
-        description="Puts everything on this page back to its default."
+        row={FALLBACK.definitions.resetAll}
         control={
           <Button
             type="button"

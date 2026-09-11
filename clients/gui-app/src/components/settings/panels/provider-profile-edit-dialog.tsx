@@ -384,6 +384,7 @@ function ProfileEditAccountSection(props: {
   readonly profile: ProviderProfile;
   readonly switchingAccount: boolean;
   readonly startInReauth: boolean;
+  readonly isLocalHost: boolean;
   readonly canOauth: boolean;
   readonly savePending: boolean;
   readonly invalid: boolean;
@@ -397,6 +398,7 @@ function ProfileEditAccountSection(props: {
       <ProviderProfileReauthPanel
         state={props.state}
         profile={props.profile}
+        isLocalHost={props.isLocalHost}
         onSameAccountReconnected={
           props.startInReauth ? props.onFinishSignIn : null
         }
@@ -459,6 +461,7 @@ export function ProfileEditDialog(props: {
   readonly profiles: readonly ProviderProfile[];
   readonly canOauth: boolean;
   readonly startInReauth: boolean;
+  readonly isLocalHost: boolean;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly remainingProfilesAfterRemoval: ReadonlyArray<ProviderProfile>;
@@ -636,6 +639,7 @@ export function ProfileEditDialog(props: {
               profile={props.profile}
               switchingAccount={switchingAccount}
               startInReauth={props.startInReauth}
+              isLocalHost={props.isLocalHost}
               canOauth={props.canOauth}
               savePending={savePending}
               invalid={invalid}

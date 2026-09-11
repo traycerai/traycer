@@ -18,11 +18,20 @@ import {
   canonicalDesktopIdentityAttestBytes,
   browserSessionsServerFrameSchema,
   browserSessionsV20,
+  browserSessionsV21,
   browserScreencastClientFrameSchema,
   browserScreencastOpenRequestSchema,
   browserScreencastServerFrameSchema,
   browserScreencastV20,
+  browserScreencastV21,
 } from "@traycer/protocol/host/browser/contracts";
+import {
+  BROWSER_VIEWPORT_MAX_EDGE,
+  BROWSER_VIEWPORT_MAX_PIXELS,
+  BROWSER_VIEWPORT_MIN_EDGE,
+  browserViewportIntentSchema,
+  browserViewportSizeSchema,
+} from "@traycer/protocol/host/browser/viewport";
 
 const SAMPLE_SESSION = {
   sessionId: "session-1",
@@ -1254,5 +1263,152 @@ describe("browser.sessions@2.0 frame-kind sets", () => {
     );
     expect(uxKinds.has("forgetLogins")).toBe(false);
     expect(uxKinds.has("clearSite")).toBe(false);
+  });
+});
+
+describe("browser viewport contracts", () => {
+  it("accepts integer edges from the tiny floor through a valid 4K viewport", () => {
+    expect(
+      browserViewportSizeSchema.safeParse({ width: 64, height: 64 }).success,
+    ).toBe(true);
+    expect(
+      browserViewportSizeSchema.safeParse({ width: 3_840, height: 2_160 })
+        .success,
+    ).toBe(true);
+    expect(
+      browserViewportSizeSchema.safeParse({ width: 8_192, height: 2_048 })
+        .success,
+    ).toBe(true);
+    expect(BROWSER_VIEWPORT_MIN_EDGE).toBe(64);
+    expect(BROWSER_VIEWPORT_MAX_EDGE).toBe(8_192);
+    expect(BROWSER_VIEWPORT_MAX_PIXELS).toBe(16_777_216);
+  });
+
+  it("rejects fractional, out-of-range, and over-area viewport sizes", () => {
+    for (const size of [
+      { width: 63, height: 64 },
+      { width: 64, height: 8_193 },
+      { width: 64.5, height: 64 },
+      { width: 8_192, height: 2_049 },
+    ]) {
+      expect(browserViewportSizeSchema.safeParse(size).success).toBe(false);
+    }
+  });
+
+  it("keeps fit and fixed intent discriminated", () => {
+    expect(browserViewportIntentSchema.safeParse({ mode: "fit" }).success).toBe(
+      true,
+    );
+    expect(
+      browserViewportIntentSchema.safeParse({
+        mode: "fixed",
+        width: 3_840,
+        height: 2_160,
+      }).success,
+    ).toBe(true);
+    expect(
+      browserViewportIntentSchema.safeParse({
+        mode: "fixed",
+        width: 64.5,
+        height: 64,
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("browser stream 2.1 viewport additions", () => {
+  const viewportState = {
+    kind: "viewportState",
+    hasBinaryPayload: false,
+    sessionId: "session-1",
+    tabId: "tab-1",
+    intent: { mode: "fixed", width: 3_840, height: 2_160 },
+    applied: { width: 3_840, height: 2_160, dpr: 2 },
+    revision: 4,
+    source: "user",
+    fitOwnerId: null,
+  };
+  const electronViewportRequest = {
+    kind: "electronViewportRequest",
+    hasBinaryPayload: false,
+    requestId: "request-1",
+    sessionId: "session-1",
+    tabId: "tab-1",
+    registrationId: "registration-1",
+    revision: 4,
+    intent: { mode: "fit" },
+    geometry: { width: 1_280, height: 720, dpr: 1 },
+  };
+
+  it("adds sessions frames on 2.1 while 2.0 rejects them", () => {
+    expect(
+      browserSessionsV21.serverFrameSchema.safeParse(viewportState).success,
+    ).toBe(true);
+    expect(
+      browserSessionsV20.serverFrameSchema.safeParse(viewportState).success,
+    ).toBe(false);
+    expect(
+      browserSessionsV21.serverFrameSchema.safeParse(electronViewportRequest)
+        .success,
+    ).toBe(true);
+    expect(
+      browserSessionsV20.serverFrameSchema.safeParse(electronViewportRequest)
+        .success,
+    ).toBe(false);
+    expect(
+      isBrowserSessionsJarServerFrame(
+        browserSessionsV21.serverFrameSchema.parse(electronViewportRequest),
+      ),
+    ).toBe(true);
+    expect(
+      new Set<string>(BROWSER_SESSIONS_JAR_SERVER_FRAME_KINDS).has(
+        "electronViewportRequest",
+      ),
+    ).toBe(true);
+    expect(
+      new Set<string>(BROWSER_SESSIONS_UX_CLIENT_FRAME_KINDS).has(
+        "electronViewportRequest",
+      ),
+    ).toBe(false);
+  });
+
+  it("adds client viewport frames without changing the 2.0 line", () => {
+    const setViewport = {
+      kind: "setViewport",
+      hasBinaryPayload: false,
+      requestId: "request-2",
+      sessionId: "session-1",
+      tabId: "tab-1",
+      intent: { mode: "fixed", width: 1_280, height: 720 },
+    };
+    expect(
+      browserSessionsV21.clientFrameSchema.safeParse(setViewport).success,
+    ).toBe(true);
+    expect(
+      browserSessionsV20.clientFrameSchema.safeParse(setViewport).success,
+    ).toBe(false);
+  });
+
+  it("keeps the 2.0 screencast shape and gates logicalViewport to 2.1", () => {
+    const oldFrame = {
+      kind: "viewportEpoch",
+      hasBinaryPayload: false,
+      epoch: 4,
+    };
+    expect(
+      browserScreencastV20.serverFrameSchema.safeParse(oldFrame).success,
+    ).toBe(true);
+    expect(
+      browserScreencastV20.serverFrameSchema.safeParse({
+        ...oldFrame,
+        logicalViewport: { width: 1_280, height: 720, dpr: 1 },
+      }).success,
+    ).toBe(false);
+    expect(
+      browserScreencastV21.serverFrameSchema.safeParse({
+        ...oldFrame,
+        logicalViewport: { width: 1_280, height: 720, dpr: 1 },
+      }).success,
+    ).toBe(true);
   });
 });

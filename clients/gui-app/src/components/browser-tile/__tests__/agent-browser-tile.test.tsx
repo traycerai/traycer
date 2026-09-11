@@ -1,6 +1,14 @@
 import "../../../../__tests__/test-browser-apis";
-import type { ComponentProps, ReactElement } from "react";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ComponentProps, ReactElement, ReactNode } from "react";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  type RenderResult,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ElectronTabSurface,
@@ -53,6 +61,10 @@ const state = vi.hoisted(() => ({
 
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ browserView: state.bridge }),
+  useRunnerHostOrNull: () => ({
+    browserView: state.bridge,
+    windows: { windowId: "window-a" },
+  }),
 }));
 vi.mock("@/hooks/browser/use-browser-annotation-session", () => ({
   useBrowserAnnotationSession: (input: { readonly browserView: unknown }) => {
@@ -69,6 +81,7 @@ vi.mock("@/lib/browser-view/tiles/visible-tile-registry", async (load) => {
 });
 vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
   useMaybeBrowserSessionsContext: () => state.sessions,
+  useMaybeBrowserSessionsCoordinatorKey: () => null,
 }));
 vi.mock("@/components/browser-tile/browser-start-page", () => ({
   BrowserStartPage: () => <div>Local servers</div>,
@@ -83,7 +96,6 @@ vi.mock("@/components/epic-canvas/renderers/use-electron-tile-chrome", () => ({
     return {
       controller: CHROME_CONTROLLER,
       navigateToUrl: state.navigateToUrl,
-      viewportPreset: "responsive",
       downloads: [],
       cancelDownload: vi.fn(),
       certificateError: null,
@@ -94,13 +106,13 @@ vi.mock("@/components/epic-canvas/renderers/use-electron-tile-chrome", () => ({
 }));
 
 const CHROME_CONTROLLER: TileController = {
+  viewport: null,
   capabilities: {
     navigate: false,
     back: false,
     forward: false,
     reload: false,
     zoom: false,
-    viewportPreset: false,
     devtools: false,
     find: false,
     siteInfo: false,
@@ -115,7 +127,6 @@ const CHROME_CONTROLLER: TileController = {
   canGoBack: false,
   canGoForward: false,
   zoomPercent: 100,
-  viewportPreset: "responsive",
   disabled: false,
   zoomLocked: false,
   annotation: null,
@@ -128,7 +139,6 @@ const CHROME_CONTROLLER: TileController = {
   onZoomOut: () => undefined,
   onZoomIn: () => undefined,
   onResetZoom: () => undefined,
-  onViewportPresetChange: () => undefined,
   onOpenDevTools: () => undefined,
   onClearSite: () => undefined,
 };
@@ -332,8 +342,23 @@ function surfaceElement(
   );
 }
 
-function renderTile(binding: ElectronTabBinding) {
-  return render(surfaceElement(NODE, binding));
+function renderWithQueryClient(ui: ReactElement): RenderResult {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+  const wrapper = (props: { readonly children: ReactNode }): ReactElement => (
+    <QueryClientProvider client={queryClient}>
+      {props.children}
+    </QueryClientProvider>
+  );
+  return render(ui, { wrapper });
+}
+
+function renderTile(binding: ElectronTabBinding): RenderResult {
+  return renderWithQueryClient(surfaceElement(NODE, binding));
 }
 
 function liveSessions(): BrowserSessionsState {
@@ -344,6 +369,9 @@ function liveSessions(): BrowserSessionsState {
     canMaterializeElectron: true,
     connectionGeneration: 0,
     items: [],
+    viewports: {},
+    setViewport: () => Promise.reject(new Error("not used")),
+    reportViewport: () => undefined,
     errorMessage: null,
     retry: () => {},
     openTab: state.openTab,
@@ -423,7 +451,7 @@ describe("ElectronTabSurface", () => {
 
   it("shows the start page without attaching an opaque native surface", () => {
     const bindSurface = vi.fn();
-    render(
+    renderWithQueryClient(
       surfaceElement(
         { ...NODE, url: "about:blank" },
         createBinding(bindSurface),
@@ -444,7 +472,7 @@ describe("ElectronTabSurface", () => {
    */
   it("keeps the annotation session inert under a placement with no epic", () => {
     state.bridge = new TestBridge();
-    render(
+    renderWithQueryClient(
       <ElectronTabSurface
         node={NODE}
         binding={createRecordingBinding()}
@@ -471,7 +499,7 @@ describe("ElectronTabSurface", () => {
     // never handing a browser view to anything - which is what it would do if
     // the bridge were absent rather than the epic.
     state.bridge = new TestBridge();
-    render(surfaceElement(NODE, createRecordingBinding()));
+    renderWithQueryClient(surfaceElement(NODE, createRecordingBinding()));
 
     expect(state.annotationInputs.at(-1)?.browserView).not.toBeNull();
   });
@@ -687,7 +715,7 @@ describe("ElectronTabSurface browser-scoped chords", () => {
   // the close would issue two for one gesture, the second racing a tab the host
   // has already removed and surfacing its refusal as a toast nobody earned.
   it("asks the host surface to close on Cmd+W under a landing placement, and sends nothing itself", async () => {
-    render(
+    renderWithQueryClient(
       <ElectronTabSurface
         node={NODE}
         binding={createBinding(
@@ -755,7 +783,7 @@ describe("ElectronTabSurface browser-scoped chords", () => {
 
   it("calls a non-null onRequestNewTab for Cmd+T instead of onOpenLinkInNewTile", () => {
     const onRequestNewTab = vi.fn<() => void>();
-    render(
+    renderWithQueryClient(
       <ElectronTabSurface
         node={NODE}
         binding={createBinding(

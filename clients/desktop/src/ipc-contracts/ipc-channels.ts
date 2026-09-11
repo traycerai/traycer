@@ -342,6 +342,7 @@ export const RunnerHostInvoke = {
   browserViewAttachSurface: "runnerHost:browserView:nativeTab:attachSurface",
   browserViewDetachSurface: "runnerHost:browserView:nativeTab:detachSurface",
   browserViewControlElectronTab: "runnerHost:browserView:nativeTab:control",
+  browserViewGuestViewportResult: "runnerHost:browserView:guest:viewportResult",
   browserViewSetReservedChords: "runnerHost:browserView:setReservedChords",
   browserViewFindInPage: "runnerHost:browserView:findInPage",
   browserViewStopFindInPage: "runnerHost:browserView:stopFindInPage",
@@ -472,6 +473,8 @@ export const RunnerHostEvent = {
     "runnerHost:event:browserView:guest:mountRequested",
   browserViewGuestReleaseRequested:
     "runnerHost:event:browserView:guest:releaseRequested",
+  browserViewGuestViewportRequested:
+    "runnerHost:event:browserView:guest:viewportRequested",
   browserViewNativeTabStatusChange:
     "runnerHost:event:browserView:nativeTab:statusChange",
   browserViewFindChange: "runnerHost:event:browserView:findChange",

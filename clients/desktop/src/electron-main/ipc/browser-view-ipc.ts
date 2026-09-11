@@ -780,6 +780,16 @@ export function registerBrowserViewIpc(
     },
   );
 
+  bridge.handleInvoke(
+    RunnerHostInvoke.browserViewGuestViewportResult,
+    (event, payload) => {
+      manager.viewport.reportPresentation(
+        readSenderWindowId(bridge, event),
+        browserViewIpcPayload.guestViewportResult.parse(payload),
+      );
+    },
+  );
+
   // BT-302/BT-303: the renderer is the source of truth for the guest-focused
   // input policy - which chords outrank guest keystrokes and what each one
   // means. It pushes the whole table at startup.

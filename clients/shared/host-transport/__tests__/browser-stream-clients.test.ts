@@ -16,6 +16,7 @@ import type {
 } from "@traycer/protocol/host/browser/contracts";
 import {
   browserScreencastOpenRequestSchemaV10,
+  browserSessionsOpenRequestSchemaV10,
   browserSessionsClientFrameSchemaV10,
 } from "@traycer/protocol/host/browser/contracts-v1";
 import { mockLocalHostEntry } from "../../host-client/mock/mock-host-directory";
@@ -44,7 +45,7 @@ import { browserSessionsLifecycle } from "@traycer-clients/shared/platform/brows
 
 /**
  * The served-majors restriction a v1.3.0 host advertises: it never got the
- * `@2.0` contracts, so its manifest installs only `@1` for both streams.
+ * `@2.1` contracts, so its manifest installs only `@1` for both streams.
  * Distinct from {@link SERVES_EVERY_INSTALLED_MAJOR}, which is what a
  * current host advertises and is what `completeHandshake` below already
  * exercises.
@@ -161,7 +162,7 @@ function completeHandshake(socket: StubStreamWebSocket): void {
 /**
  * Like {@link completeHandshake}, but the host's advertised manifest is
  * restricted to `served` - the shape of a v1.3.0 host that never got the
- * `@2.0` browser contracts.
+ * `@2.1` browser contracts.
  */
 function completeHandshakeWithManifest(
   socket: StubStreamWebSocket,
@@ -788,19 +789,22 @@ describe("BrowserScreencastStreamClient against a @1-only host (epic scope)", ()
   });
 });
 
-describe("browser.sessions / browser.screencast: the `independent` scope pins @2", () => {
-  it("fails the open against a @1-only host as `unsupported`, with no subscribe frame written", () => {
+describe("browser.sessions / browser.screencast: the `independent` scope uses @2.1", () => {
+  it("sends the strict scope request to a @1-only host and surfaces its frozen-schema refusal", () => {
     const { factory, sockets } = makeFactory();
     const client = makeClient(factory);
     const statuses: {
       readonly status: StreamConnectionStatus;
       readonly reason: StreamCloseReason | null;
     }[] = [];
+    const received: BrowserSessionsServerFrame[] = [];
     const stream = new BrowserSessionsStreamClient({
       wsStreamClient: client,
       scope: { kind: "independent" },
       callbacks: {
-        onServerFrame: () => undefined,
+        onServerFrame: (frame) => {
+          received.push(frame);
+        },
         onConnectionStatus: (status, reason) => {
           statuses.push({ status, reason });
         },
@@ -809,26 +813,53 @@ describe("browser.sessions / browser.screencast: the `independent` scope pins @2
 
     completeHandshakeWithManifest(sockets[0], V1_ONLY_SERVED);
 
+    const subscribeFrame = parseSent(sockets[0].textSent[1]);
+    expect(subscribeFrame.kind).toBe("subscribe");
+    expect(subscribeFrame.schemaVersion).toMatchObject({ major: 1, minor: 0 });
+    expect(subscribeFrame.params).toEqual({ scope: { kind: "independent" } });
+    expect(
+      browserSessionsOpenRequestSchemaV10.safeParse(subscribeFrame.params)
+        .success,
+    ).toBe(false);
+
+    // The frozen @1 host rejects this strict scope-shaped request rather than
+    // opening an unrelated epic inventory. Feed that server response through
+    // the normal transport path and assert the client preserves the refusal.
+    sockets[0].fireText({
+      kind: "fatalError",
+      details: {
+        code: "INCOMPATIBLE",
+        reason: "browser.sessions @1 does not accept scope-shaped params",
+        incompatibleMethods: null,
+        upgradeGuidance: {
+          clientShouldUpgrade: false,
+          hostShouldUpgrade: true,
+        },
+      },
+    });
+
     const kinds = sockets[0].textSent.map((raw) => parseSent(raw).kind);
-    expect(kinds).not.toContain("subscribe");
-    expect(kinds).toContain("fatalError");
+    expect(kinds).toEqual(["open", "subscribe"]);
 
     const last = statuses[statuses.length - 1];
+    if (last === undefined) throw new Error("expected closed status");
     expect(last.status).toBe("closed");
     expect(browserSessionsLifecycle(last.status, last.reason)).toBe(
       "unsupported",
     );
+    expect(received).toEqual([]);
 
     stream.close();
   });
 
-  it("screencast also fails the open against a @1-only host as `unsupported`", () => {
+  it("sends the strict scope request for screencast and surfaces its frozen-schema refusal", () => {
     const { factory, sockets } = makeFactory();
     const client = makeClient(factory);
     const statuses: {
       readonly status: StreamConnectionStatus;
       readonly reason: StreamCloseReason | null;
     }[] = [];
+    const received: BrowserScreencastServerFrame[] = [];
     const stream = new BrowserScreencastStreamClient({
       wsStreamClient: client,
       scope: { kind: "independent" },
@@ -841,7 +872,9 @@ describe("browser.sessions / browser.screencast: the `independent` scope pins @2
       role: "tile",
       handoffToken: null,
       callbacks: {
-        onServerFrame: () => undefined,
+        onServerFrame: (frame) => {
+          received.push(frame);
+        },
         onConnectionStatus: (status, reason) => {
           statuses.push({ status, reason });
         },
@@ -850,13 +883,47 @@ describe("browser.sessions / browser.screencast: the `independent` scope pins @2
 
     completeHandshakeWithManifest(sockets[0], V1_ONLY_SERVED);
 
+    const subscribeFrame = parseSent(sockets[0].textSent[1]);
+    expect(subscribeFrame.kind).toBe("subscribe");
+    expect(subscribeFrame.schemaVersion).toMatchObject({ major: 1, minor: 0 });
+    expect(subscribeFrame.params).toEqual({
+      scope: { kind: "independent" },
+      sessionId: "browser-session-1",
+      tabId: "browser-tab-1",
+      maxWidth: 1280,
+      maxHeight: 720,
+      quality: 80,
+      format: "jpeg",
+      role: "tile",
+      handoffToken: null,
+    });
+    expect(
+      browserScreencastOpenRequestSchemaV10.safeParse(subscribeFrame.params)
+        .success,
+    ).toBe(false);
+
+    sockets[0].fireText({
+      kind: "fatalError",
+      details: {
+        code: "INCOMPATIBLE",
+        reason: "browser.screencast @1 does not accept scope-shaped params",
+        incompatibleMethods: null,
+        upgradeGuidance: {
+          clientShouldUpgrade: false,
+          hostShouldUpgrade: true,
+        },
+      },
+    });
+
     const kinds = sockets[0].textSent.map((raw) => parseSent(raw).kind);
-    expect(kinds).not.toContain("subscribe");
+    expect(kinds).toEqual(["open", "subscribe"]);
 
     const last = statuses[statuses.length - 1];
+    if (last === undefined) throw new Error("expected closed status");
     expect(browserSessionsLifecycle(last.status, last.reason)).toBe(
       "unsupported",
     );
+    expect(received).toEqual([]);
 
     stream.close();
   });
@@ -876,7 +943,7 @@ describe("browser.sessions / browser.screencast: the `independent` scope pins @2
     completeHandshake(sockets[0]);
 
     const subscribeFrame = parseSent(sockets[0].textSent[1]);
-    expect(subscribeFrame.schemaVersion).toMatchObject({ major: 2, minor: 0 });
+    expect(subscribeFrame.schemaVersion).toMatchObject({ major: 2, minor: 1 });
     expect(subscribeFrame.params).toEqual({ scope: { kind: "independent" } });
 
     stream.close();
@@ -902,7 +969,7 @@ describe("browser.sessions against a host serving @1 and @2 (epic scope)", () =>
     completeHandshake(sockets[0]);
 
     const subscribeFrame = parseSent(sockets[0].textSent[1]);
-    expect(subscribeFrame.schemaVersion).toMatchObject({ major: 2, minor: 0 });
+    expect(subscribeFrame.schemaVersion).toMatchObject({ major: 2, minor: 1 });
     expect(subscribeFrame.params).toEqual({
       scope: { kind: "epic", epicId: "epic-1" },
     });

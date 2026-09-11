@@ -2,7 +2,6 @@ export type ComposerTopBannerKind =
   | "fallback"
   | "reauth"
   | "fallback-return"
-  | "ambient-drift"
   | "rate-limit"
   | "none";
 
@@ -25,7 +24,7 @@ export type ComposerTopBannerKind =
  * `ProfileDisabledRecovery` and the send gating are independent of this chain
  * and still render, so nothing about the disabled profile is hidden.
  *
- * **The return banner sits between `reauth` and `ambient-drift`,** and absorbs
+ * **The return banner sits between `reauth` and `rate-limit`,** and absorbs
  * the rate-limit advisory case: when the preferred profile has reset and the
  * current one is also running low, that is one situation and gets one banner,
  * not a collision between two.
@@ -41,7 +40,6 @@ export function resolveComposerTopBannerKind({
   profileDisabled,
   reauthVisible,
   fallbackReturnVisible,
-  ambientDriftVisible,
   rateLimitVisible,
 }: {
   /** A live traversal in `hold` / `choosing` / `switching` - the grace card. */
@@ -50,14 +48,12 @@ export function resolveComposerTopBannerKind({
   readonly reauthVisible: boolean;
   /** A surfaced switch-back offer - `pendingReturn` present BY VALUE. */
   readonly fallbackReturnVisible: boolean;
-  readonly ambientDriftVisible: boolean;
   readonly rateLimitVisible: boolean;
 }): ComposerTopBannerKind {
   if (fallbackVisible) return "fallback";
   if (profileDisabled) return "none";
   if (reauthVisible) return "reauth";
   if (fallbackReturnVisible) return "fallback-return";
-  if (ambientDriftVisible) return "ambient-drift";
   if (rateLimitVisible) return "rate-limit";
   return "none";
 }

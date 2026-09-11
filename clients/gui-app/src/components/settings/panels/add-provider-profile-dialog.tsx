@@ -46,6 +46,10 @@ import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import { redactEmail } from "@/lib/providers/redact-email";
 import { CodePasteField, CodePasteRestartNotice } from "./code-paste-field";
 import { handleSignInLinkCopyError } from "./provider-sign-in-link";
+import {
+  openBrowserLabel,
+  useAutoOpenLoginUrl,
+} from "./use-auto-open-login-url";
 import { waitingStepCopy } from "./waiting-step-copy";
 import {
   useProviderProfileLoginFlow,
@@ -111,6 +115,7 @@ export interface FailedProviderProfileAttempt {
 export function AddProviderProfileDialog({
   state,
   client,
+  isLocalHost,
   open,
   onOpenChange,
   onFailedAttempt,
@@ -118,6 +123,7 @@ export function AddProviderProfileDialog({
 }: {
   readonly state: ProviderCliState;
   readonly client: HostClient<HostRpcRegistry> | null;
+  readonly isLocalHost: boolean;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   /** `null` retracts a previously reported failure: fired when a new attempt
@@ -340,6 +346,7 @@ export function AddProviderProfileDialog({
 
           <AddProfileAccountSection
             flowState={flow.state}
+            isLocalHost={isLocalHost}
             startPending={flow.startPending}
             cancelPending={flow.cancelPending}
             cancelDisabled={flow.commitPending}
@@ -415,6 +422,7 @@ export function AddProviderProfileDialog({
 
 function AddProfileAccountSection({
   flowState,
+  isLocalHost,
   startPending,
   cancelPending,
   cancelDisabled,
@@ -434,6 +442,7 @@ function AddProfileAccountSection({
   onRetryFinalize,
 }: {
   readonly flowState: ProviderProfileLoginFlowState;
+  readonly isLocalHost: boolean;
   readonly startPending: boolean;
   readonly cancelPending: boolean;
   readonly cancelDisabled: boolean;
@@ -482,6 +491,8 @@ function AddProfileAccountSection({
       <div className="border-t border-border/60 pt-4">
         <AddProfileWaitingStep
           loginUrl={flowState.kind === "waiting" ? flowState.url : null}
+          userCode={flowState.kind === "waiting" ? flowState.userCode : null}
+          isLocalHost={isLocalHost}
           queuePending={startPending}
           cancelRequested={
             flowState.kind === "starting" && flowState.cancelRequested
@@ -637,8 +648,110 @@ function ShareSkillsAndPluginsField({
   );
 }
 
+function WaitingStepDeviceCode(props: {
+  readonly processingCode: boolean;
+  readonly userCode: string | null;
+  readonly copied: boolean;
+  readonly copy: (value: string) => void;
+}): ReactNode {
+  if (props.processingCode || props.userCode === null) return null;
+  const { userCode, copied, copy } = props;
+  return (
+    <div className="flex flex-wrap items-center gap-2 pl-6">
+      <code className="rounded-md border border-border/60 bg-foreground/5 px-2.5 py-1 font-mono text-ui tracking-[0.12em] text-foreground">
+        {userCode}
+      </code>
+      <Button
+        type="button"
+        size="icon-sm"
+        variant="outline"
+        aria-label={copied ? "Copied sign-in code" : "Copy sign-in code"}
+        onClick={() => copy(userCode)}
+      >
+        {copied ? (
+          <Check className="size-3.5" />
+        ) : (
+          <Copy className="size-3.5" />
+        )}
+      </Button>
+    </div>
+  );
+}
+
+function WaitingStepUrlActions(props: {
+  readonly processingCode: boolean;
+  readonly loginUrl: string | null;
+  readonly autoOpen: boolean;
+  readonly copied: boolean;
+  readonly copy: (value: string) => void;
+  readonly onOpenExternalLink: (url: string) => void;
+}): ReactNode {
+  if (props.processingCode || props.loginUrl === null) return null;
+  const { loginUrl, autoOpen, copied, copy, onOpenExternalLink } = props;
+  return (
+    <div className="flex flex-wrap items-center gap-2 pl-6">
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        onClick={() => onOpenExternalLink(loginUrl)}
+      >
+        <ExternalLink className="size-3.5" />
+        {openBrowserLabel(autoOpen)}
+      </Button>
+      <Button
+        type="button"
+        size="icon-sm"
+        variant="outline"
+        aria-label={copied ? "Copied sign-in link" : "Copy sign-in link"}
+        onClick={() => copy(loginUrl)}
+      >
+        {copied ? (
+          <Check className="size-3.5" />
+        ) : (
+          <Copy className="size-3.5" />
+        )}
+      </Button>
+    </div>
+  );
+}
+
+function WaitingStepPasteFallback(props: {
+  readonly waiting: boolean;
+  readonly processingCode: boolean;
+  readonly userCode: string | null;
+  readonly cancelRequested: boolean;
+  readonly codePaste: ProviderProfileLoginFlowCodePaste;
+}): ReactNode {
+  if (!props.waiting || !props.codePaste.enabled || props.userCode !== null) {
+    return null;
+  }
+  return (
+    <div className="border-t border-border/50 pt-3">
+      {props.processingCode ? null : (
+        <div className="mb-2">
+          <p className="text-ui-xs font-medium text-foreground">
+            Didn&apos;t return automatically?
+          </p>
+          <p className="mt-0.5 text-ui-xs text-muted-foreground">
+            If the browser shows a code, paste it here.
+          </p>
+        </div>
+      )}
+      <CodePasteField
+        key={props.codePaste.attemptId}
+        codePaste={props.codePaste}
+        disabled={props.cancelRequested}
+        visibleLabel={false}
+      />
+    </div>
+  );
+}
+
 export function AddProfileWaitingStep({
   loginUrl,
+  userCode,
+  isLocalHost,
   queuePending,
   cancelRequested,
   cancelPending,
@@ -649,6 +762,8 @@ export function AddProfileWaitingStep({
   onCancel,
 }: {
   readonly loginUrl: string | null;
+  readonly userCode: string | null;
+  readonly isLocalHost: boolean;
   readonly queuePending: boolean;
   readonly cancelRequested: boolean;
   readonly cancelPending: boolean;
@@ -663,16 +778,24 @@ export function AddProfileWaitingStep({
   readonly onOpenExternalLink: (url: string) => void;
   readonly onCancel: () => void;
 }): ReactNode {
+  const autoOpen = useAutoOpenLoginUrl(
+    isLocalHost,
+    userCode,
+    loginUrl,
+    onOpenExternalLink,
+  );
   const { copied, copy } = useClipboardCopy({
     resetMs: COPY_CONFIRMATION_RESET_MS,
     onSuccess: null,
     onError: handleSignInLinkCopyError,
   });
   const processingCode = codePaste.phase !== "idle";
+  const deviceCode = userCode !== null;
   const { title, guidance } = waitingStepCopy({
     phase: codePaste.phase,
     queuePending,
     cancelRequested,
+    deviceCode,
   });
 
   return (
@@ -692,53 +815,27 @@ export function AddProfileWaitingStep({
         </div>
       </div>
 
-      {!processingCode && loginUrl !== null ? (
-        <div className="flex flex-wrap items-center gap-2 pl-6">
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={() => onOpenExternalLink(loginUrl)}
-          >
-            <ExternalLink className="size-3.5" />
-            Open browser again
-          </Button>
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="outline"
-            aria-label={copied ? "Copied sign-in link" : "Copy sign-in link"}
-            onClick={() => copy(loginUrl)}
-          >
-            {copied ? (
-              <Check className="size-3.5" />
-            ) : (
-              <Copy className="size-3.5" />
-            )}
-          </Button>
-        </div>
-      ) : null}
-
-      {waiting && codePaste.enabled ? (
-        <div className="border-t border-border/50 pt-3">
-          {!processingCode ? (
-            <div className="mb-2">
-              <p className="text-ui-xs font-medium text-foreground">
-                Didn&apos;t return automatically?
-              </p>
-              <p className="mt-0.5 text-ui-xs text-muted-foreground">
-                If the browser shows a code, paste it here.
-              </p>
-            </div>
-          ) : null}
-          <CodePasteField
-            key={codePaste.attemptId}
-            codePaste={codePaste}
-            disabled={cancelRequested}
-            visibleLabel={false}
-          />
-        </div>
-      ) : null}
+      <WaitingStepDeviceCode
+        processingCode={processingCode}
+        userCode={userCode}
+        copied={copied}
+        copy={copy}
+      />
+      <WaitingStepUrlActions
+        processingCode={processingCode}
+        loginUrl={loginUrl}
+        autoOpen={autoOpen}
+        copied={copied}
+        copy={copy}
+        onOpenExternalLink={onOpenExternalLink}
+      />
+      <WaitingStepPasteFallback
+        waiting={waiting}
+        processingCode={processingCode}
+        userCode={userCode}
+        cancelRequested={cancelRequested}
+        codePaste={codePaste}
+      />
 
       <div className="flex justify-end">
         <Button

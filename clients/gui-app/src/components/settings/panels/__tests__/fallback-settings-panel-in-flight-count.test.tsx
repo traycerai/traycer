@@ -122,12 +122,7 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
 }));
 
 import { FallbackSettingsPanel } from "@/components/settings/panels/fallback-settings-panel";
-
-// Copied verbatim from `fallback-settings-panel.tsx`'s private
-// `MASTER_TOGGLE_DESCRIPTION` - not exported, so restated here the same way
-// the sibling suites restate other private production strings.
-const MASTER_TOGGLE_DESCRIPTION =
-  "Stops new Traycer recovery. Recovery already in progress continues; stop it from the chat. Your coding agent's own recovery settings are unchanged.";
+import { MASTER_TOGGLE_DESCRIPTION } from "@/components/settings/panels/fallback-settings.definitions";
 
 function policy(overrides: Partial<FallbackPolicy>): FallbackPolicy {
   return { ...createDefaultFallbackPolicy(), enabled: true, ...overrides };

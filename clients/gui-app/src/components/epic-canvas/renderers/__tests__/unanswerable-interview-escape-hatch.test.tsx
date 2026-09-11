@@ -112,6 +112,7 @@ function props(
       pendingApprovals: [],
       onFileEditDecision: () => undefined,
       onApprovalDecision: () => undefined,
+      highlightedApprovalId: null,
     },
     queue: {
       editingItem: null,
@@ -167,6 +168,7 @@ function interviewState(
     onAnswer: () => null,
     onSkip: () => null,
     onFork: null,
+    highlightedBlockId: null,
     ...overrides,
   };
 }

@@ -235,6 +235,10 @@ const followingSurfaceAppWideReadExemptions = [
 // single subscription it owns outlives every wizard that watches it.
 const appChromeAppWideReadExemptions = [
   "src/components/session-import/session-import-run-controller.tsx",
+  // Mounted once at the app root, outside any `<TabHostProvider>`. `hostId`
+  // null means follow the app-wide default (which may be remote) so auto-open
+  // can match the picker's create-profile gate.
+  "src/components/providers/provider-profile-add-flow-host.tsx",
 ];
 
 // Hook directories whose every RPC now takes the caller's client, because

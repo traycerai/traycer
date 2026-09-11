@@ -34,6 +34,12 @@ import {
 } from "@/components/chat/chat-transcript-row-height-memory";
 import { unhydratedRowCount } from "@/stores/chats/transcript-window";
 import { chatFindCoverageMessage } from "@/components/chat/chat-find";
+import {
+  CHAT_NAVIGATION_HIGHLIGHT_DURATION_MS,
+  resolvedScrollBlockId,
+  useChatNavigationBlockReveal,
+  type ChatNavigationHighlightTarget,
+} from "@/components/chat/chat-navigation-highlight";
 import type {
   OrdinalRange,
   TranscriptWindow,
@@ -246,7 +252,6 @@ const EMPTY_BACKGROUND_TOOL_BLOCK_IDS: ReadonlySet<string> = new Set();
 const EMPTY_ROW_INDEX_BY_KEY: ReadonlyMap<string, number> = new Map();
 /** Stable identity, so the legacy line's skeleton hand-off stays a no-op. */
 const EMPTY_ROW_SKELETON: readonly (RowSkeletonEntry | undefined)[] = [];
-const NAVIGATION_HIGHLIGHT_DURATION_MS = 3_000;
 /** `awaitScrollSettle`'s fallback timeout when `scrollend` never fires
  *  (jsdom, some browsers) - exported so tests can wait past it rather than
  *  hardcoding a copy of this number. Used only by the DOM-event-based
@@ -1414,6 +1419,7 @@ function ChatLiveAnnouncements(props: ChatLiveAnnouncementsProps) {
   );
 }
 
+// eslint-disable-next-line complexity
 function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const {
     getMessageActions,
@@ -1587,9 +1593,17 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const scrolledActiveUserMessageIdRef = useRef(
     restoredTabState.anchorMessageId,
   );
-  const [navigationHighlightedMessageId, setNavigationHighlightedMessageId] =
-    useState<string | null>(null);
+  const [navigationHighlight, setNavigationHighlight] =
+    useState<ChatNavigationHighlightTarget | null>(null);
   const navigationHighlightTimeoutRef = useRef<number | null>(null);
+  const getScroller = useCallback(
+    (): HTMLElement | null =>
+      chatTimelineRef.current?.getScrollableNode() ?? null,
+    [],
+  );
+  const blockReveal = useChatNavigationBlockReveal({
+    getScroller,
+  });
   const activeNavigationSettleCleanupRef = useRef<(() => void) | null>(null);
   const resolveSuppressedEndLanding = useCallback((): boolean => {
     const resolvePendingEndLanding = resolvePendingRestoreEndLandingRef.current;
@@ -1645,18 +1659,23 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       window.clearTimeout(navigationHighlightTimeoutRef.current);
       navigationHighlightTimeoutRef.current = null;
     }
-    setNavigationHighlightedMessageId(null);
-  }, []);
-  const showNavigationHighlight = useCallback((messageId: string): void => {
-    if (navigationHighlightTimeoutRef.current !== null) {
-      window.clearTimeout(navigationHighlightTimeoutRef.current);
-    }
-    setNavigationHighlightedMessageId(messageId);
-    navigationHighlightTimeoutRef.current = window.setTimeout(() => {
-      navigationHighlightTimeoutRef.current = null;
-      setNavigationHighlightedMessageId(null);
-    }, NAVIGATION_HIGHLIGHT_DURATION_MS);
-  }, []);
+    blockReveal.clearReveal();
+    setNavigationHighlight(null);
+  }, [blockReveal]);
+  const showNavigationHighlight = useCallback(
+    (messageId: string, blockId: string | null): void => {
+      if (navigationHighlightTimeoutRef.current !== null) {
+        window.clearTimeout(navigationHighlightTimeoutRef.current);
+      }
+      setNavigationHighlight({ messageId, blockId });
+      navigationHighlightTimeoutRef.current = window.setTimeout(() => {
+        navigationHighlightTimeoutRef.current = null;
+        blockReveal.clearReveal();
+        setNavigationHighlight(null);
+      }, CHAT_NAVIGATION_HIGHLIGHT_DURATION_MS);
+    },
+    [blockReveal],
+  );
   useEffect(
     () => () => {
       if (navigationHighlightTimeoutRef.current !== null) {
@@ -1906,6 +1925,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     (animated: boolean): void => {
       activeNavigationSettleCleanupRef.current?.();
       activeNavigationSettleCleanupRef.current = null;
+      clearNavigationHighlight();
       pendingHydrationRestoreAnchorIdRef.current = null;
       forgetPendingHydrationRestore(identity);
       setTimelineMode("following-end", true);
@@ -1952,6 +1972,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     },
     [
       beginImperativeScrollOperation,
+      clearNavigationHighlight,
       finishImperativeScrollOperation,
       identity,
       reconcileInvalidTimelineLanding,
@@ -2419,12 +2440,6 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     captureLastVisibleScrollSnapshot();
   }, [captureLastVisibleScrollSnapshot, scheduleActiveViewportUpdate, visible]);
 
-  const getScroller = useCallback(
-    (): HTMLElement | null =>
-      chatTimelineRef.current?.getScrollableNode() ?? null,
-    [],
-  );
-
   const scrollToTimelineLocation = useCallback(
     (location: ChatTimelineNavigationLocation): void => {
       void chatTimelineRef.current?.scrollToIndex({
@@ -2446,8 +2461,15 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // Ticket 10: settle/re-issue against the CURRENT geometry - an ANIMATED
   // long jump targets ESTIMATED heights; no mid-flight retargeting in the
   // installed LegendList.
-  const scrollToTimelineLocationSuppressingFollowRestore = useCallback(
-    (location: ChatTimelineNavigationLocation): void => {
+  //
+  // `afterSettle` runs once the ROW landing is done (valid or exhausted), so
+  // a block-level `scrollIntoView` cannot fight the 1px row-top re-issue.
+  // Find passes `null`; `navigateToMessage` requests the inner reveal here.
+  const issueFreeTimelineNavigation = useCallback(
+    (
+      location: ChatTimelineNavigationLocation,
+      afterSettle: (() => void) | null,
+    ): void => {
       activeNavigationSettleCleanupRef.current?.();
       const generationAtIssue = anchorUserScrollGenerationRef.current;
       const list = chatTimelineRef.current;
@@ -2458,6 +2480,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       );
       scrollToTimelineLocation(location);
       const scrollNode = list.getScrollableNode();
+      const finishFreeNavigation = (): void => {
+        finishImperativeScrollOperation(imperativeScrollGeneration);
+        followLatchRef.current?.completeOwnedFreeNavigation();
+        afterSettle?.();
+      };
       activeNavigationSettleCleanupRef.current = settleChatTimelineNavigation({
         awaitSettle: (onSettle) =>
           awaitScrollSettle(
@@ -2491,13 +2518,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           });
         },
         onSettledValid: () => {
-          finishImperativeScrollOperation(imperativeScrollGeneration);
-          followLatchRef.current?.completeOwnedFreeNavigation();
+          finishFreeNavigation();
           restorePersistencePendingRef.current = false;
         },
         onSettledInvalid: () => {
-          finishImperativeScrollOperation(imperativeScrollGeneration);
-          followLatchRef.current?.completeOwnedFreeNavigation();
+          finishFreeNavigation();
           acceptExhaustedPersistedRestoreFallback(
             restorePersistencePendingRef,
             pendingMeasuredFreeRestoreRef,
@@ -2515,6 +2540,13 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       finishImperativeScrollOperation,
       scrollToTimelineLocation,
     ],
+  );
+
+  const scrollToTimelineLocationSuppressingFollowRestore = useCallback(
+    (location: ChatTimelineNavigationLocation): void => {
+      issueFreeTimelineNavigation(location, null);
+    },
+    [issueFreeTimelineNavigation],
   );
 
   // Ticket 20 (no-visible-traversal requirement): `animated` is an explicit
@@ -2824,6 +2856,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       return;
     }
 
+    activeNavigationSettleCleanupRef.current?.();
+    activeNavigationSettleCleanupRef.current = null;
+    queueMicrotask(() => {
+      clearNavigationHighlight();
+    });
     const replay = restoreChatTabState(
       identity,
       listRowsRef.current.map((row) => row.key),
@@ -2863,6 +2900,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     );
     if (!issued) acceptFailedReplayLanding();
   }, [
+    clearNavigationHighlight,
     identity,
     reconcileInvalidTimelineLanding,
     restorePersistedTimelineLocation,
@@ -2870,12 +2908,16 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   ]);
 
   const navigateToMessage = useCallback(
-    (messageId: string, highlight: boolean, animated: boolean): void => {
+    (
+      messageId: string,
+      highlight: boolean,
+      animated: boolean,
+      blockId: string | null,
+    ): void => {
       // Decision #21: minimap/find/deep-link navigation all perform
       // manual-navigation cancellation first. Not a real gesture - a plain
       // release, no freeze: the navigation's own scroll (right below, via
-      // scrollToTimelineLocationSuppressingFollowRestore) takes over
-      // immediately regardless.
+      // issueFreeTimelineNavigation) takes over immediately regardless.
       forgetPendingHydrationRestore(identity);
       pendingHydrationRestoreAnchorIdRef.current = null;
       cancelTimelineLiveFollowForUserNavigation({
@@ -2891,14 +2933,28 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       );
       if (location === null) return;
       if (highlight) {
-        showNavigationHighlight(messageId);
+        showNavigationHighlight(messageId, blockId);
       }
-      scrollToTimelineLocationSuppressingFollowRestore(location);
+      // Inner card centering has to wait until the row-top settle/re-issue
+      // loop is done: a `scrollIntoView` during that window fails the 1px
+      // row-top check and the re-issue snaps back to the turn header. Paint
+      // at issue so an already-in-view card rings immediately; re-arm in
+      // `afterSettle` so the 3s is measured from the real landing.
+      issueFreeTimelineNavigation(
+        location,
+        highlight && blockId !== null
+          ? () => {
+              showNavigationHighlight(messageId, blockId);
+              blockReveal.requestReveal(messageId, blockId);
+            }
+          : null,
+      );
     },
     [
+      blockReveal,
       cancelTimelineLiveFollowForUserNavigation,
       identity,
-      scrollToTimelineLocationSuppressingFollowRestore,
+      issueFreeTimelineNavigation,
       setScrolledActiveUserMessageIdIfChanged,
       showNavigationHighlight,
     ],
@@ -2961,7 +3017,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   }, [identity, listRows, rawSavedTabState, restorePersistedTimelineLocation]);
 
   const onMinimapItemSelect = useCallback(
-    (messageId: string): void => navigateToMessage(messageId, false, true),
+    (messageId: string): void =>
+      navigateToMessage(messageId, false, true, null),
     [navigateToMessage],
   );
 
@@ -3024,9 +3081,13 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     onTimelineItemSizeChanged();
   }, [onTimelineItemSizeChanged]);
 
-  const onChatTimelineRowMount = useCallback((): void => {
-    scheduleChatFindMountedHighlightSync();
-  }, [scheduleChatFindMountedHighlightSync]);
+  const onChatTimelineRowMount = useCallback(
+    (messageId: string): void => {
+      scheduleChatFindMountedHighlightSync();
+      blockReveal.onRowMount(messageId);
+    },
+    [blockReveal, scheduleChatFindMountedHighlightSync],
+  );
 
   // The controller does not diff message arrays to decide scrolling - append,
   // prepend, reorder/weave, in-place update, and suffix replacement all flow
@@ -3080,7 +3141,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     // Animated (ticket 20 does not change minimap/deep-link semantics - find
     // is unrelated to this call site, see navigateToMessage's own comment):
     // a cross-tile jump is a real navigation the reader triggered elsewhere.
-    navigateToMessage(request.messageId, true, true);
+    navigateToMessage(
+      request.messageId,
+      true,
+      true,
+      resolvedScrollBlockId(request.blockId),
+    );
     scrollRequestRef.current = null;
   }, [
     activityGroupOpenStore,
@@ -3161,7 +3227,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
             followLatchRef={followLatchRef}
             isFollowCorrectionSuppressed={isFollowCorrectionSuppressed}
             resolveSuppressedEndLanding={resolveSuppressedEndLanding}
-            navigationHighlightedMessageId={navigationHighlightedMessageId}
+            navigationHighlightedMessageId={
+              navigationHighlight?.messageId ?? null
+            }
+            navigationHighlightedBlockId={navigationHighlight?.blockId ?? null}
             rowHeightMemory={rowHeightMemory}
             onItemSizeChanged={onChatTimelineItemSizeChanged}
             onRowMount={onChatTimelineRowMount}

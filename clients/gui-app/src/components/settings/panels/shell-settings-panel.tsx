@@ -17,6 +17,7 @@ import {
   HoverCardContent,
   HoverCardTrigger,
 } from "@/components/ui/hover-card";
+import { SHELL } from "@/components/settings/panels/shell-settings.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SETTINGS_ROW_STACK } from "@/components/settings/settings-row-layout";
@@ -555,7 +556,8 @@ function TerminalShellGroup(props: {
   const showWslCaption = wslCaption !== null;
   return (
     <SettingsGroup
-      title="Terminal shell · New terminals"
+      group={SHELL.definitions.terminalShell}
+      showTitle
       tone="default"
       dataTestId="terminal-shell-settings"
       fill={false}
@@ -854,7 +856,8 @@ function HostEnvironmentGroup(props: {
 }) {
   return (
     <SettingsGroup
-      title="Host environment · After restart"
+      group={SHELL.definitions.hostEnvironment}
+      showTitle
       tone="default"
       dataTestId="host-environment-settings"
       fill={false}

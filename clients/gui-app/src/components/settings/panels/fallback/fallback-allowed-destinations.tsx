@@ -3,6 +3,7 @@ import type { FallbackPolicy } from "@traycer/protocol/host/fallback-policy";
 import { harnessLabel } from "@/components/settings/panels/fallback/fallback-harness-label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { SettingsGroup } from "@/components/settings/settings-group";
+import { FALLBACK } from "@/components/settings/panels/fallback-settings.definitions";
 
 /** Destination preferences never edit equivalence groups or source membership. */
 export function FallbackAllowedDestinations(props: {
@@ -24,7 +25,8 @@ export function FallbackAllowedDestinations(props: {
   const allowed = members.filter((harnessId) => !exclusions.has(harnessId));
   return (
     <SettingsGroup
-      title="Allowed destinations"
+      group={FALLBACK.definitions.allowedDestinations}
+      showTitle
       tone="default"
       fill={false}
       dataTestId="settings-fallback-destinations"

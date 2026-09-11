@@ -103,6 +103,10 @@ const CODE_DERIVED_MATCHERS: ReadonlyArray<{
 const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   "desktop/src/electron-main/browser-view/annotation/browser-annotation-overlay-guest.ts": 3,
   "desktop/src/electron-main/browser-view/manager/browser-view-chords.ts": 1,
+  // These reads drive viewport editing and resize-handle navigation. They do
+  // not resolve registered shortcut identity, which remains code-derived.
+  "gui-app/src/components/browser-tile/browser-viewport-handles.tsx": 6,
+  "gui-app/src/components/browser-tile/browser-viewport-toolbar.tsx": 5,
   "gui-app/src/components/chat/chat-messages.tsx": 10,
   "gui-app/src/components/chat/composer/menu/github-mention-filter-popover.tsx": 3,
   "gui-app/src/components/chat/composer/picker/suggestion-render.ts": 5,

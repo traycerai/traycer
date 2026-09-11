@@ -162,12 +162,14 @@ function surfacesProps(): ChatLowerInteractionSurfacesProps {
       onAnswer: () => null,
       onSkip: () => null,
       onFork: null,
+      highlightedBlockId: null,
     },
     approvals: {
       pendingFileEditApprovals: [],
       pendingApprovals: [],
       onFileEditDecision: () => undefined,
       onApprovalDecision: () => undefined,
+      highlightedApprovalId: null,
     },
     queue: {
       editingItem: null,

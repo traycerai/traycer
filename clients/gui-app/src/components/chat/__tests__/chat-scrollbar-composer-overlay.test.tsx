@@ -522,12 +522,14 @@ function viewerSurfacesProps(): ChatLowerInteractionSurfacesProps {
     onAnswer: () => null,
     onSkip: () => null,
     onFork: null,
+    highlightedBlockId: null,
   };
   const approvals: ChatLowerApprovalsState = {
     pendingFileEditApprovals: [],
     pendingApprovals: [],
     onFileEditDecision: () => undefined,
     onApprovalDecision: () => undefined,
+    highlightedApprovalId: null,
   };
   const queue: ChatLowerQueueState = {
     editingItem: null,

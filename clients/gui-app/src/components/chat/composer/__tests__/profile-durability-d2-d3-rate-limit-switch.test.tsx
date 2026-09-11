@@ -161,9 +161,6 @@ function ComposerProfileSwitchHarness() {
 
 function ComposerBannerPrecedenceHarness() {
   const [profileId, setProfileId] = useState<string | null>(null);
-  const [pendingAmbientDrift, setPendingAmbientDrift] = useState(false);
-  const [acknowledgedAmbientDrift, setAcknowledgedAmbientDrift] =
-    useState(false);
   const reauthGate = useProviderReauthGate(
     "claude",
     profileId,
@@ -185,36 +182,12 @@ function ComposerBannerPrecedenceHarness() {
     profileDisabled: false,
     reauthVisible: reauthGate.signedOut,
     fallbackReturnVisible: false,
-    ambientDriftVisible: pendingAmbientDrift && !acknowledgedAmbientDrift,
     rateLimitVisible,
   });
-  const submit = (): void => {
-    if (!acknowledgedAmbientDrift) {
-      setPendingAmbientDrift(true);
-      return;
-    }
-  };
   return (
     <TooltipProvider delayDuration={0}>
       <div>
-        <button type="button" onClick={submit}>
-          Send
-        </button>
         <div data-testid="top-banner-kind">{topBannerKind}</div>
-        {topBannerKind === "ambient-drift" ? (
-          <div role="alert">
-            <span>Terminal account changed</span>
-            <button
-              type="button"
-              onClick={() => {
-                setAcknowledgedAmbientDrift(true);
-                setPendingAmbientDrift(false);
-              }}
-            >
-              Continue with Terminal account
-            </button>
-          </div>
-        ) : null}
         {topBannerKind === "rate-limit" && prompt.kind === "visible" ? (
           <ProfileRateLimitSwitchBanner
             harnessId="claude"
@@ -247,7 +220,7 @@ describe("D2/D3: lifecycle, durability, and banner precedence", () => {
   });
   afterEach(cleanup);
 
-  it("keeps Terminal identity drift ahead of rate-limit and reveals the warning after acknowledgement", () => {
+  it("shows the rate-limit warning even when provider state carries an ambientDriftNotice", () => {
     const ambient = profile({
       profileId: "ambient",
       kind: "ambient",
@@ -279,17 +252,10 @@ describe("D2/D3: lifecycle, durability, and banner precedence", () => {
       ]),
     ];
     render(<ComposerBannerPrecedenceHarness />);
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    expect(screen.getByTestId("top-banner-kind").textContent).toBe(
-      "ambient-drift",
-    );
-    expect(screen.queryByRole("button", { name: "Switch to Work" })).toBeNull();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Continue with Terminal account" }),
-    );
     expect(screen.getByTestId("top-banner-kind").textContent).toBe(
       "rate-limit",
     );
+    expect(screen.queryByText("Terminal account changed")).toBeNull();
     expect(
       screen.getByRole("button", { name: "Switch to Work" }),
     ).toBeDefined();

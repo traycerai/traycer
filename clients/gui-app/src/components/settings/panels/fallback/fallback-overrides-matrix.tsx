@@ -28,6 +28,7 @@ import {
   type OverrideChipState,
 } from "@/components/settings/panels/fallback/fallback-overrides-model";
 import { cn } from "@/lib/utils";
+import { FALLBACK } from "@/components/settings/panels/fallback-settings.definitions";
 
 export interface FallbackOverridesMatrixProps {
   readonly policy: FallbackPolicy;
@@ -55,7 +56,8 @@ export function FallbackOverridesMatrix(
   const { policy, rungOrder, onChange, status } = props;
   return (
     <SettingsGroup
-      title="Advanced"
+      group={FALLBACK.definitions.advanced}
+      showTitle
       tone="default"
       dataTestId="settings-fallback-overrides-group"
       fill={false}

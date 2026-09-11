@@ -24,6 +24,7 @@ import { SettingsGroup } from "@/components/settings/settings-group";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { FallbackTierGroupCard } from "@/components/settings/panels/fallback/fallback-tier-group-card";
+import { FALLBACK } from "@/components/settings/panels/fallback-settings.definitions";
 
 /**
  * The harness a brand-new row starts on when nothing else can supply one.
@@ -175,7 +176,8 @@ export function FallbackTierGroupsEditor(
 
   return (
     <SettingsGroup
-      title="Equivalent models"
+      group={FALLBACK.definitions.equivalentModels}
+      showTitle
       tone="default"
       dataTestId="settings-fallback-tier-groups"
       fill={false}
