@@ -14,6 +14,8 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
+import { SettingsGroup } from "@/components/settings/settings-group";
+import { SettingsRow } from "@/components/settings/settings-row";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
@@ -70,7 +72,7 @@ const ThemeImportDialog = lazy(() =>
   })),
 );
 const modes = [
-  { value: "system", label: "System", icon: Monitor },
+  { value: "system", label: "Follow device", icon: Monitor },
   { value: "light", label: "Light", icon: Sun },
   { value: "dark", label: "Dark", icon: Moon },
 ] as const;
@@ -108,51 +110,46 @@ export function ThemeGallery() {
   };
   return (
     <section className="space-y-5" aria-label="Theme">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="space-y-1">
-          <h2 className="text-ui-sm font-medium">Color scheme</h2>
-          <p className="text-ui-xs text-muted-foreground">
-            {mode === "system"
-              ? "Follows your device’s appearance."
-              : "Light and dark themes are saved separately."}
-          </p>
-        </div>
-        <div
-          role="group"
-          aria-label="Color scheme"
-          className="inline-flex rounded-md bg-foreground/5 p-0.5"
-        >
-          {modes.map(({ value, label, icon: Icon }) => (
-            <button
-              key={value}
-              type="button"
-              aria-pressed={mode === value}
-              onClick={() => setMode(value)}
-              className={cn(
-                "flex items-center gap-1.5 rounded px-3 py-1.5 text-ui-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
-                mode === value
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
+      <SettingsGroup
+        title="Themes"
+        tone="default"
+        dataTestId={undefined}
+        fill={false}
+      >
+        <SettingsRow
+          label="Theme mode"
+          description="Choose separate light and dark themes below. Follow device switches between them with your device’s appearance."
+          control={
+            <div
+              role="group"
+              aria-label="Theme mode"
+              className="inline-flex rounded-md bg-foreground/5 p-0.5"
             >
-              <Icon className="size-3.5" aria-hidden />
-              {label}
-            </button>
-          ))}
-        </div>
-      </div>
+              {modes.map(({ value, label, icon: Icon }) => (
+                <button
+                  key={value}
+                  type="button"
+                  aria-pressed={mode === value}
+                  onClick={() => setMode(value)}
+                  className={cn(
+                    "flex items-center gap-1.5 rounded px-3 py-1.5 text-ui-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                    mode === value
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <Icon className="size-3.5" aria-hidden />
+                  {label}
+                </button>
+              ))}
+            </div>
+          }
+        />
+        <ThemeSlot appearance="light" active={getResolvedTheme() === "light"} />
+        <ThemeSlot appearance="dark" active={getResolvedTheme() === "dark"} />
+        <GlassControl />
+      </SettingsGroup>
       <div className="space-y-2">
-        <h2 className="px-1 text-ui-xs font-semibold text-muted-foreground">
-          Themes
-        </h2>
-        <div className="divide-y divide-border/50 rounded-lg border border-border/60">
-          <ThemeSlot
-            appearance="light"
-            active={getResolvedTheme() === "light"}
-          />
-          <ThemeSlot appearance="dark" active={getResolvedTheme() === "dark"} />
-          <GlassControl />
-        </div>
         <div className="flex flex-wrap items-center gap-1 pt-1">
           <Button
             variant="ghost"
@@ -193,7 +190,7 @@ export function ThemeGallery() {
               open={resetOpen}
               onOpenChange={setResetOpen}
               title="Reset theme library?"
-              description="This deletes your saved themes and resets theme options. Built-in themes remain available. This cannot be undone."
+              description="This deletes all saved custom and imported themes and resets your light and dark theme choices, background opacity, prompt font and size, font ligatures, panel animations and duration, and text and border contrast. Built-in themes remain available. This cannot be undone."
               cascadeSummary={null}
               actionLabel="Reset library"
               isPending={false}
@@ -248,38 +245,33 @@ function ThemeSlot({
     ...getBuiltinThemeColors(saved?.base ?? preset.id, appearance),
     ...saved?.colors,
   };
-  const Icon = appearance === "light" ? Sun : Moon;
   return (
-    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-3 py-3">
-      <div className="flex items-center gap-2 text-ui-sm">
-        <Icon className="size-3.5 text-muted-foreground" aria-hidden />
-        <span>{appearance === "light" ? "Light theme" : "Dark theme"}</span>
-        {active ? (
-          <span className="text-ui-xs text-muted-foreground">· Active</span>
-        ) : null}
-      </div>
-      <div className="flex min-w-0 flex-1 basis-48 items-center gap-1 @min-[30rem]:max-w-[55%]">
-        <ThemePicker
-          appearance={appearance}
-          id={id}
-          name={name}
-          colors={colors}
-        />
-        <Button
-          size="icon-sm"
-          variant="ghost"
-          aria-label={`Edit ${appearance} theme`}
-          disabled={library.draft !== null}
-          onClick={() =>
-            library.setDraft(
-              saved ?? createThemeFromPreset(preset.id, appearance),
-            )
-          }
-        >
-          <Pencil className="size-3.5" />
-        </Button>
-      </div>
-    </div>
+    <SettingsRow
+      label={`${appearance === "light" ? "Light theme" : "Dark theme"}${active ? " · Active" : ""}`}
+      control={
+        <div className="flex w-[min(40cqw,24rem)] min-w-0 items-center gap-1">
+          <ThemePicker
+            appearance={appearance}
+            id={id}
+            name={name}
+            colors={colors}
+          />
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            aria-label={`Edit ${appearance} theme`}
+            disabled={library.draft !== null}
+            onClick={() =>
+              library.setDraft(
+                saved ?? createThemeFromPreset(preset.id, appearance),
+              )
+            }
+          >
+            <Pencil className="size-3.5" />
+          </Button>
+        </div>
+      }
+    />
   );
 }
 
@@ -332,7 +324,7 @@ function ThemePicker({
           <PaletteSwatch colors={colors} />
           <span
             id={`${pickerId}-value`}
-            className="min-w-0 flex-1 truncate text-start"
+            className="min-w-0 flex-1 break-words text-start"
           >
             {name}
           </span>
@@ -384,7 +376,7 @@ function ThemePicker({
                         ...theme.colors,
                       }}
                     />
-                    <span className="min-w-0 flex-1 truncate">
+                    <span className="min-w-0 flex-1 break-words">
                       {theme.name}
                     </span>
                   </CommandItem>
@@ -404,7 +396,7 @@ function ThemePicker({
                   <PaletteSwatch
                     colors={getBuiltinThemeColors(preset.id, appearance)}
                   />
-                  <span className="min-w-0 flex-1 truncate">
+                  <span className="min-w-0 flex-1 break-words">
                     {preset.label}
                   </span>
                 </CommandItem>
@@ -545,7 +537,7 @@ function SavedThemeGroup({
   return (
     <section className="space-y-1">
       <div className="flex items-center justify-between gap-2 px-2">
-        <h3 className="min-w-0 truncate text-ui-xs font-medium text-muted-foreground">
+        <h3 className="min-w-0 break-words text-ui-xs font-medium text-muted-foreground">
           {collection?.name ?? "Custom themes"}
         </h3>
         {collection ? (
@@ -577,7 +569,7 @@ function SavedThemeGroup({
                 ...theme.colors,
               }}
             />
-            <span className="min-w-0 flex-1 truncate text-ui-sm">
+            <span className="min-w-0 flex-1 break-words text-ui-sm">
               {theme.name}
             </span>
             <span className="text-ui-xs text-muted-foreground">
@@ -669,8 +661,8 @@ function ThemeActions({
           className="col-span-full flex flex-wrap items-center justify-between gap-3 rounded-lg bg-destructive/5 p-3"
         >
           <p className="text-ui-xs">
-            Delete {theme.name}? Active appearances return to the default
-            palette.
+            Delete {theme.name}? If selected, its light or dark mode switches
+            back to a built-in theme.
           </p>
           <div className="flex gap-2">
             <Button
@@ -704,27 +696,28 @@ function GlassControl() {
   const opacity = useThemeLibraryStore((state) => state.glassOpacity);
   const setOpacity = useThemeLibraryStore((state) => state.setGlassOpacity);
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-3">
-      <label htmlFor="theme-glass" className="text-ui-sm">
-        Glass opacity
-      </label>
-      <div className="flex min-w-0 items-center gap-3">
-        <input
-          id="theme-glass"
-          type="range"
-          min={30}
-          max={100}
-          value={opacity}
-          onChange={(event) => setOpacity(Number(event.target.value))}
-          className="accent-primary"
-        />
-        <output className="text-ui-xs tabular-nums text-muted-foreground">
-          {opacity}%
-        </output>
-        <Button size="sm" variant="ghost" onClick={() => setOpacity(100)}>
-          Reset
-        </Button>
-      </div>
-    </div>
+    <SettingsRow
+      label="Background opacity"
+      description="Opacity of menu, dialog, and prompt backgrounds. Lower values let more show through; 100% is solid."
+      control={
+        <div className="flex min-w-0 items-center gap-3">
+          <input
+            aria-label="Background opacity"
+            type="range"
+            min={30}
+            max={100}
+            value={opacity}
+            onChange={(event) => setOpacity(Number(event.target.value))}
+            className="accent-primary"
+          />
+          <output className="text-ui-xs tabular-nums text-muted-foreground">
+            {opacity}%
+          </output>
+          <Button size="sm" variant="ghost" onClick={() => setOpacity(100)}>
+            Reset
+          </Button>
+        </div>
+      }
+    />
   );
 }

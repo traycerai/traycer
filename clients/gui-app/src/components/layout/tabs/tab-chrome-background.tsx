@@ -21,7 +21,10 @@ export function TabChromeBackground({
       <TabCap side="left" fill={fill} borderColor={borderColor} />
       <span
         data-testid="tab-chrome-center"
-        className={cn("-mx-px h-full flex-1", borderColor && "border-t")}
+        className={cn(
+          "-mx-px h-full flex-1",
+          borderColor && "border-t-[1.5px]",
+        )}
         style={{ backgroundColor: fill, borderTopColor: borderColor }}
       />
       <TabCap side="right" fill={fill} borderColor={borderColor} />
@@ -29,7 +32,7 @@ export function TabChromeBackground({
         <span
           aria-hidden
           data-testid="tab-baseline-cover"
-          className="absolute inset-x-0 bottom-0 z-0 h-px"
+          className="absolute inset-x-0 bottom-0 z-0 h-[1.5px]"
           style={{ backgroundColor: fill }}
         />
       ) : null}
@@ -56,8 +59,8 @@ function TabCap({
   // like a second line at display scaling.
   const outline =
     side === "left"
-      ? "M -2 35.5 H 0 A 12 12 0 0 0 12 23.5 V 10.5 A 10 10 0 0 1 22 0.5 H 24"
-      : "M 0 0.5 H 2 A 10 10 0 0 1 12 10.5 V 23.5 A 12 12 0 0 0 24 35.5 H 26";
+      ? "M -2 35.25 H 0 A 12 12 0 0 0 12 23.25 V 10.75 A 10 10 0 0 1 22 0.75 H 24"
+      : "M 0 0.75 H 2 A 10 10 0 0 1 12 10.75 V 23.25 A 12 12 0 0 0 24 35.25 H 26";
   return (
     <svg
       data-testid={`tab-cap-${side}`}
@@ -72,7 +75,7 @@ function TabCap({
           d={outline}
           fill="none"
           stroke={borderColor}
-          strokeWidth="1"
+          strokeWidth="1.5"
           strokeLinecap="square"
           vectorEffect="non-scaling-stroke"
         />

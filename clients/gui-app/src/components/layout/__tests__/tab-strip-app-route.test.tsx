@@ -72,6 +72,11 @@ vi.mock("@/hooks/notifications/use-host-notification-indicators-query", () => ({
 vi.mock("@/hooks/chats/use-chat-fork-queries", () => ({
   useChatForkEventQuery: () => ({ data: undefined }),
 }));
+
+// This navigation fixture has no live host transport.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
+}));
 vi.mock("@/hooks/epic/use-epic-task-pinned-states-query", () => ({
   useEpicTaskPinnedStates: () => new Map(),
 }));
@@ -346,7 +351,7 @@ describe("app route tab-strip navigation", () => {
     const baselineCoverClassName =
       screen.getByTestId("tab-baseline-cover").className;
     expect(baselineCoverClassName).toContain("bottom-0");
-    expect(baselineCoverClassName).toContain("h-px");
+    expect(baselineCoverClassName).toContain("h-[1.5px]");
     expect(baselineCoverClassName).toContain("z-0");
     expect(screen.getByTestId("tab-cap-left").getAttribute("class")).toContain(
       "z-10",
@@ -358,19 +363,19 @@ describe("app route tab-strip navigation", () => {
       "z-10",
     );
     expect(screen.getByTestId("tab-chrome-center").className).toContain(
-      "border-t",
+      "border-t-[1.5px]",
     );
     expect(
       screen.getByTestId("tab-cap-outline-left").getAttribute("d"),
-    ).toContain("M -2 35.5 H 0");
+    ).toContain("M -2 35.25 H 0");
     expect(
       screen.getByTestId("tab-cap-outline-left").getAttribute("d"),
-    ).toContain("V 10.5 A 10 10 0 0 1 22 0.5");
+    ).toContain("V 10.75 A 10 10 0 0 1 22 0.75");
     expect(
       screen.getByTestId("tab-cap-outline-right").getAttribute("d"),
-    ).toContain("24 35.5 H 26");
+    ).toContain("24 35.25 H 26");
     expect(
       screen.getByTestId("tab-cap-outline-right").getAttribute("d"),
-    ).toContain("M 0 0.5 H 2 A 10 10 0 0 1 12 10.5");
+    ).toContain("M 0 0.75 H 2 A 10 10 0 0 1 12 10.75");
   });
 });

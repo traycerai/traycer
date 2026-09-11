@@ -38,7 +38,7 @@ export function SettingsRow(props: SettingsRowProps) {
         {description ? (
           <p
             id={descriptionId}
-            className="max-w-[72ch] text-pretty text-ui-sm text-muted-foreground"
+            className="max-w-[72ch] break-words text-pretty text-ui-sm text-muted-foreground"
           >
             {description}
           </p>

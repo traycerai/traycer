@@ -16,8 +16,10 @@ import {
   SplitFillableMemberVisual,
 } from "./header-tab-visual";
 import type { HeaderTabDragData } from "./header-tab-dnd";
+import type { HeaderTabDragGhost } from "@/components/epic-canvas/dnd/dnd-store";
 
 interface SplitTabDragOverlayProps {
+  readonly ghost: HeaderTabDragGhost | null;
   readonly item: Extract<HeaderStripItem, { readonly kind: "split" }>;
   readonly width: number | null;
   readonly source: HeaderTabDragData;
@@ -64,6 +66,8 @@ export function SplitTabDragOverlay(props: SplitTabDragOverlayProps) {
       member.tab.kind === tabKind &&
       member.tab.id === tabId,
   );
+  const leftGhost = item.left === draggedMember ? props.ghost : null;
+  const rightGhost = item.right === draggedMember ? props.ghost : null;
   return (
     <div
       ref={overlayRef}
@@ -73,10 +77,17 @@ export function SplitTabDragOverlay(props: SplitTabDragOverlayProps) {
     >
       {props.tearOff && draggedMember?.kind === "tab" ? (
         <div className={headerTabClassName("own", true)}>
-          <HeaderTabPreview tab={draggedMember.tab} chrome="own" isActive />
+          <HeaderTabPreview
+            tab={draggedMember.tab}
+            ghost={props.ghost}
+            chrome="own"
+            isActive
+          />
         </div>
       ) : (
         <SplitTabLayout
+          leftColor={splitMemberColor(item.left, leftGhost)}
+          rightColor={splitMemberColor(item.right, rightGhost)}
           splitId={item.id}
           selectedSide={props.isActive ? item.focusedSide : null}
           control={
@@ -97,12 +108,14 @@ export function SplitTabDragOverlay(props: SplitTabDragOverlayProps) {
           left={
             <SplitMemberOverlay
               member={item.left}
+              ghost={leftGhost}
               focused={props.isActive ? item.focusedSide === "left" : false}
             />
           }
           right={
             <SplitMemberOverlay
               member={item.right}
+              ghost={rightGhost}
               focused={props.isActive ? item.focusedSide === "right" : false}
             />
           }
@@ -113,6 +126,7 @@ export function SplitTabDragOverlay(props: SplitTabDragOverlayProps) {
 }
 
 function SplitMemberOverlay(props: {
+  readonly ghost: HeaderTabDragGhost | null;
   readonly member: HeaderStripMember;
   readonly focused: boolean;
 }) {
@@ -129,7 +143,20 @@ function SplitMemberOverlay(props: {
   }
   return (
     <div className={headerTabClassName("member", focused)}>
-      <HeaderTabPreview tab={member.tab} chrome="member" isActive={focused} />
+      <HeaderTabPreview
+        tab={member.tab}
+        ghost={props.ghost}
+        chrome="member"
+        isActive={focused}
+      />
     </div>
   );
+}
+
+function splitMemberColor(
+  member: HeaderStripMember,
+  ghost: HeaderTabDragGhost | null,
+): string | null {
+  if (ghost !== null) return ghost.appearance?.color ?? null;
+  return member.kind === "tab" ? (member.tab.appearance?.color ?? null) : null;
 }
