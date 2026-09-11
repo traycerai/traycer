@@ -20,6 +20,7 @@ export function waitingStepCopy(args: {
   readonly phase: ProviderProfileLoginFlowCodePastePhase;
   readonly queuePending: boolean;
   readonly cancelRequested: boolean;
+  readonly deviceCode: boolean;
 }): WaitingStepCopy {
   if (args.cancelRequested) {
     return {
@@ -41,6 +42,13 @@ export function waitingStepCopy(args: {
     return {
       title: "Checking approval…",
       guidance: "This usually takes only a moment.",
+    };
+  }
+  if (args.deviceCode) {
+    return {
+      title: "Approve sign-in in your browser",
+      guidance:
+        "Open the page, enter this code, then return here. We'll continue automatically after you approve.",
     };
   }
   return {

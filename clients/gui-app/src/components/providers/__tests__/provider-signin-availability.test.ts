@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import {
   providerSignInUnavailableHint,
+  providerStartLoginFailureMessage,
   providerSupportsTerminalLogin,
+  shouldAutoOpenLoginUrl,
 } from "@/components/providers/provider-signin-availability";
 
 function providerState(overrides: Partial<ProviderCliState>): ProviderCliState {
@@ -112,6 +114,39 @@ describe("providerSignInUnavailableHint", () => {
   it("explains the remote-host case in terms of what sign-in does", () => {
     const hint = providerSignInUnavailableHint(providerState({}), false);
     expect(hint).toContain("opens a browser on the machine running Traycer");
+  });
+
+  it("allows Claude code-paste sign-in on a remote host", () => {
+    expect(
+      providerSignInUnavailableHint(
+        providerState({
+          loginCapability: {
+            oauthArgs: ["auth", "login"],
+            token: null,
+            codePaste: {},
+            terminalLogin: null,
+          },
+        }),
+        false,
+      ),
+    ).toBeNull();
+  });
+
+  it("allows --device-auth sign-in on a remote host", () => {
+    expect(
+      providerSignInUnavailableHint(
+        providerState({
+          providerId: "codex",
+          loginCapability: {
+            oauthArgs: ["login", "--device-auth"],
+            token: null,
+            codePaste: null,
+            terminalLogin: null,
+          },
+        }),
+        false,
+      ),
+    ).toBeNull();
   });
 
   it("reports a blocking managed pack rather than a false host precondition", () => {
@@ -246,5 +281,39 @@ describe("providerSupportsTerminalLogin", () => {
         terminalLogin: {},
       }),
     ).toBe(true);
+  });
+});
+
+describe("shouldAutoOpenLoginUrl", () => {
+  it("auto-opens on a remote host even without a device code", () => {
+    expect(shouldAutoOpenLoginUrl(false, null)).toBe(true);
+  });
+
+  it("auto-opens a device-code URL on a local host", () => {
+    expect(shouldAutoOpenLoginUrl(true, "7CH1-OXNVU")).toBe(true);
+  });
+
+  it("does not auto-open a code-paste URL on a local host", () => {
+    expect(shouldAutoOpenLoginUrl(true, null)).toBe(false);
+  });
+});
+
+describe("providerStartLoginFailureMessage", () => {
+  it("names a ChatGPT workspace that has not enabled device-code login", () => {
+    expect(
+      providerStartLoginFailureMessage(
+        "device_auth_unavailable",
+        "Sign-in did not start.",
+      ),
+    ).toContain("Device-code login is not enabled");
+  });
+
+  it("names a missing device code instead of provider-unavailable copy", () => {
+    expect(
+      providerStartLoginFailureMessage(
+        "device_code_missing",
+        "Sign-in did not start.",
+      ),
+    ).toContain("did not print a device code");
   });
 });
