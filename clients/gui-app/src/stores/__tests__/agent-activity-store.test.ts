@@ -160,8 +160,11 @@ describe("subscribeAgentActivityPlaneHealth", () => {
 
     // Narrow -> fleet-wide, with the answer unchanged at true. The cap's busy
     // gate reads both predicates, so a consumer not woken here would sit on
-    // "cannot speak for this session" until an unrelated write.
+    // "cannot speak for this session" until an unrelated write. A merged
+    // host flips `servedBy` and the stamp in the same frame; the stamp alone
+    // would still be narrow.
     __setHostAgentActivityHealthForTests(HOST_A, {
+      servedBy: "cloud",
       cloudSyncStatus: "connected",
     });
     expect(callCount).toBe(2);
@@ -199,7 +202,23 @@ describe("agentActivityPlaneSpansFleet", () => {
     expect(agentActivityPlaneSpansFleet()).toBe(false);
   });
 
-  it("is true for a local plane whose host attests a connected cloud link", () => {
+  it("is true for a cloud-served frame whose host attests a connected cloud link", () => {
+    __setHostAgentActivityHealthForTests(HOST_A, {
+      connectionStatus: "open",
+      stateFrameSeenThisEpoch: true,
+      servedBy: "cloud",
+      cloudSyncStatus: "connected",
+    });
+
+    expect(agentActivityPlaneSpansFleet()).toBe(true);
+  });
+
+  it("is false for a local plane even when its stamp says connected", () => {
+    // A merged-plane host reports `servedBy: "cloud"` the moment its union
+    // reaches the other hosts, and `"local"` under the REAL link stamp while
+    // it does not - so `"local"` is narrow whatever the stamp says. Before the
+    // merged plane this pairing was fleet-spanning; that reading would trust
+    // a frame that carries only this machine's agents.
     __setHostAgentActivityHealthForTests(HOST_A, {
       connectionStatus: "open",
       stateFrameSeenThisEpoch: true,
@@ -207,7 +226,10 @@ describe("agentActivityPlaneSpansFleet", () => {
       cloudSyncStatus: "connected",
     });
 
-    expect(agentActivityPlaneSpansFleet()).toBe(true);
+    expect(agentActivityPlaneAnswers()).toBe(true);
+    expect(agentActivityPlaneSpansFleet()).toBe(false);
+    expect(agentActivityPlaneCoversHost(HOST_A)).toBe(true);
+    expect(agentActivityPlaneCoversHost(HOST_B)).toBe(false);
   });
 
   it("is false for a local plane with no cloud claim", () => {
