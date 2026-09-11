@@ -48,7 +48,7 @@ import {
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import { tabItemId, type PersistedTabStripLayout } from "@/stores/tabs/layout";
-import { useTabsStore } from "@/stores/tabs/store";
+import { readTabStripLayout, useTabsStore } from "@/stores/tabs/store";
 import type { TabRef } from "@/stores/tabs/types";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -210,6 +210,9 @@ function entrySummary() {
             kind: item.kind,
             id: item.kind === "epic" ? item.tab.tabId : item.draftId,
             index: item.index,
+            ...(item.placement === undefined
+              ? {}
+              : { placement: item.placement }),
             ...(item.kind === "draft"
               ? { hasSnapshot: item.legacyDraft !== undefined }
               : {}),
@@ -245,6 +248,7 @@ function snapshot() {
       closed: draft.closed,
     })),
     activeHeaderItemId: useTabsStore.getState().activeItemId,
+    tabLayout: readTabStripLayout(),
     errors: [...fixtureErrors],
     toasts: Array.from(
       document.querySelectorAll("[data-sonner-toast]"),
@@ -292,6 +296,36 @@ function installBridge(reopen: () => Promise<void>): void {
         for (const ref of refs)
           tabCommandCoordinator.closeRefAfterConfirmed(ref);
       });
+    },
+    seedTopLevelSplit: (
+      leftTaskId: string,
+      rightTaskId: string,
+      splitId: string,
+      leftRatio: number,
+    ) => {
+      const store = useTabsStore.getState();
+      store.pair({
+        left: { kind: "epic", id: leftTaskId },
+        right: { kind: "epic", id: rightTaskId },
+        splitId,
+        leftRatio,
+      });
+      store.focusSplitSide({ splitId, side: "right" });
+      return splitId;
+    },
+    seedNamedGroup: (firstTaskId: string, secondTaskId: string) => {
+      const first: TabRef = { kind: "epic", id: firstTaskId };
+      const second: TabRef = { kind: "epic", id: secondTaskId };
+      const store = useTabsStore.getState();
+      const groupId = store.createGroup(first);
+      if (groupId === null) throw new Error("tab group was not created");
+      store.setTabGroup(second, groupId);
+      store.updateGroup(groupId, {
+        name: "Recovery group",
+        color: "#8ab4f8",
+        collapsed: false,
+      });
+      return groupId;
     },
     seedInnerSplit: (tabId: string) => {
       const store = useEpicCanvasStore.getState();

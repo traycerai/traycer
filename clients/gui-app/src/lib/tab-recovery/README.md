@@ -29,6 +29,22 @@ and recovering the last task does not leave an extra placeholder. Text drafts,
 image-only drafts, and deliberate split slots are preserved. Bulk header
 recovery preserves its surviving selection, including a Start Page.
 
+`header-layout.ts` captures each closed header tab's split, customization, and
+named-group metadata. Bulk capture reads the original layout once, so both
+sides of a split share one strip position. Recovery restores the original split
+pairing and ratio when its members are available as standalone tabs with
+compatible group membership. A surviving partner keeps its current position;
+a partner in a new split, a changed group, or a structurally locked view is left
+alone, and the closed tab returns standalone. An empty Start Page that is a
+remembered split partner is retained. Only eligible recovery items are opened;
+split metadata never resurrects a missing or permanently deleted partner.
+
+Recovered tabs regain their color/icon and group membership. A removed group's
+name, color and collapsed state are restored; an existing group's newer state
+wins. The normal single/bulk navigation rules still decide selection. Older
+journal entries without placement metadata retain standalone recovery, and
+invalid optional placement metadata does not discard recoverable content.
+
 `restore-canvas.ts` reconstructs the smallest recognizable changed region of
 an ID-addressed split tree. It ignores tab edits and size changes when checking
 structure, preserves surviving pane contents and unrelated sizes, and falls
@@ -51,7 +67,7 @@ Closing a blank tab, including a blank-only Close All, leaves its pane intact.
 Explicit Close Group removes the pane. Loading older canvases retires blank-only
 tabs and duplicate picker tabs without removing their panes or changing splits.
 
-Draft recovery stores only the saved draft ID, owner host, and strip position.
+Draft recovery stores the saved draft ID, owner host, and header placement.
 The saved-draft store owns content and image retention; reopening a closed row
 uses its current content. An already-open row is skipped. A missing adopted
 mirror is read from its owner host; transient host/image failures retain the
@@ -89,8 +105,9 @@ bun scripts/tab-recovery-browser-regression.mjs
 The browser regression launches a disposable Chrome profile and Vite fixture.
 It uses real tab stores, coordinator, split restoration, navigation, TabStrip,
 and IndexedDB; authentication and host services are in-memory fixtures. It
-covers empty history, draft and task recovery, bulk recovery, collapsed splits,
-reload persistence, and duplicate recovery. Set `CHOKIDAR_USEPOLLING=true` if
+covers empty history, draft and task recovery, bulk recovery, collapsed inner
+splits, top-level split recovery across reload, named-group recovery, reload
+persistence, and duplicate recovery. Set `CHOKIDAR_USEPOLLING=true` if
 the machine has exhausted native file watchers.
 
 For live authenticated browser validation, also exercise keyboard and both

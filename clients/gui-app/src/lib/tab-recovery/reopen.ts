@@ -106,6 +106,7 @@ async function prepareHeaderItem(
       draftId: item.draftId,
       hostId: item.hostId,
       index: item.index,
+      ...(item.placement === undefined ? {} : { placement: item.placement }),
     };
   }
   const canvas =

@@ -29,6 +29,7 @@ import {
   flattenLayoutRefs,
   tabItemId,
   tabRefKey,
+  type SplitStripItem,
   type PersistedTabStripLayout,
 } from "@/stores/tabs/layout";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
@@ -43,6 +44,8 @@ function resetStores(): void {
     stripOrder: [],
     activationHistory: [],
     systemTabs: { history: null, settings: null },
+    customizations: undefined,
+    groups: undefined,
   });
   useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
   useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
@@ -67,6 +70,34 @@ function seedStrip(refs: ReadonlyArray<TabRef>, active: TabRef): void {
     ...layout,
     stripOrder: refs,
   });
+}
+
+function seedLayout(layout: PersistedTabStripLayout): void {
+  useTabsStore.setState({
+    ...layout,
+    stripOrder: flattenLayoutRefs(layout),
+  });
+}
+
+function tabItem(ref: TabRef) {
+  return { kind: "tab" as const, id: tabItemId(ref), ref };
+}
+
+function splitItem(
+  id: string,
+  left: TabRef | null,
+  right: TabRef | null,
+  leftRatio: number,
+): SplitStripItem {
+  return {
+    kind: "split",
+    id,
+    left: left === null ? { kind: "empty" } : { kind: "tab", ref: left },
+    right: right === null ? { kind: "empty" } : { kind: "tab", ref: right },
+    focusedSide: "right",
+    routeBackingSide: left === null ? "right" : "left",
+    leftRatio,
+  };
 }
 
 function stripRefs(): ReadonlyArray<TabRef> {
@@ -522,6 +553,455 @@ describe("tab recovery through the command coordinator", () => {
       refB,
       refA,
       survivorRef,
+    ]);
+  });
+
+  it.each(["left", "right"] as const)(
+    "restores a closed %s split side with its original ratio and order",
+    (closedSide) => {
+      const taskA = useEpicCanvasStore
+        .getState()
+        .openEpicTab("epic-place-a", "A");
+      const taskB = useEpicCanvasStore
+        .getState()
+        .openEpicTab("epic-place-b", "B");
+      const taskC = useEpicCanvasStore
+        .getState()
+        .openEpicTab("epic-place-c", "C");
+      const refA: TabRef = { kind: "epic", id: taskA };
+      const refB: TabRef = { kind: "epic", id: taskB };
+      const refC: TabRef = { kind: "epic", id: taskC };
+      const split = splitItem(`split-place-${closedSide}`, refA, refB, 0.37);
+      seedLayout({
+        version: 2,
+        items: [tabItem(refC), split],
+        activeItemId: split.id,
+        systemTabs: { history: null, settings: null },
+        activationHistory: [refB, refC],
+      });
+
+      const closed = closedSide === "left" ? refA : refB;
+      expect(tabCommandCoordinator.closeRefAfterConfirmed(closed)).toBe(true);
+      const entry = useTabRecoveryHistory.getState().entries.at(0);
+      if (entry === undefined || entry.kind !== "header") {
+        throw new Error("expected a split recovery entry");
+      }
+      expect(entry.items[0]).toMatchObject({
+        index: 1,
+        placement: { split },
+      });
+
+      tabCommandCoordinator.restoreClosedHeaderTabs(entry.items, null);
+
+      const survivorSide = closedSide === "left" ? "right" : "left";
+      expect(useTabsStore.getState().items).toEqual([
+        tabItem(refC),
+        { ...split, focusedSide: survivorSide, routeBackingSide: survivorSide },
+      ]);
+      const restored = useTabsStore.getState().items.at(1);
+      if (restored === undefined || restored.kind !== "split")
+        throw new Error("expected restored split");
+      expect(restored.leftRatio).toBe(0.37);
+      // Rejoining must keep the surviving tab's current focus side, even when
+      // that side differs from the captured split's focused side.
+      expect(restored.focusedSide).toBe(
+        closedSide === "left" ? "right" : "left",
+      );
+    },
+  );
+
+  it("restores group metadata and per-tab appearance after a bulk group close", () => {
+    const taskA = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-group-a", "A");
+    const taskB = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-group-b", "B");
+    const taskC = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-group-c", "C");
+    const refA: TabRef = { kind: "epic", id: taskA };
+    const refB: TabRef = { kind: "epic", id: taskB };
+    const refC: TabRef = { kind: "epic", id: taskC };
+    const group = {
+      name: "Review tabs",
+      color: "#8ab4f8",
+      collapsed: true,
+    };
+    seedLayout({
+      version: 2,
+      items: [tabItem(refA), tabItem(refB), tabItem(refC)],
+      activeItemId: tabItemId(refC),
+      systemTabs: { history: null, settings: null },
+      customizations: {
+        [tabRefKey(refA)]: {
+          color: "#f28b82",
+          icon: "A",
+          groupId: "group-recover",
+        },
+        [tabRefKey(refB)]: {
+          color: "#81c995",
+          icon: "B",
+          groupId: "group-recover",
+        },
+      },
+      groups: { "group-recover": group },
+      activationHistory: [refC],
+    });
+
+    batchHeaderTabRecovery(() => {
+      expect(tabCommandCoordinator.closeRefAfterConfirmed(refA)).toBe(true);
+      expect(tabCommandCoordinator.closeRefAfterConfirmed(refB)).toBe(true);
+    });
+    const entry = useTabRecoveryHistory.getState().entries.at(0);
+    if (entry === undefined || entry.kind !== "header") {
+      throw new Error("expected a bulk group recovery entry");
+    }
+    expect(entry.items.map((item) => item.index)).toEqual([0, 1]);
+    expect(entry.items[0]).toMatchObject({
+      placement: {
+        customization: {
+          color: "#f28b82",
+          icon: "A",
+          groupId: "group-recover",
+        },
+        group,
+      },
+    });
+
+    tabCommandCoordinator.restoreClosedHeaderTabs(entry.items, null);
+
+    expect(useTabsStore.getState().groups).toEqual({ "group-recover": group });
+    expect(useTabsStore.getState().customizations).toMatchObject({
+      [tabRefKey(refA)]: {
+        color: "#f28b82",
+        icon: "A",
+        groupId: "group-recover",
+      },
+      [tabRefKey(refB)]: {
+        color: "#81c995",
+        icon: "B",
+        groupId: "group-recover",
+      },
+    });
+    expect(stripRefs().map(tabRefKey)).toEqual([
+      tabRefKey(refA),
+      tabRefKey(refB),
+      tabRefKey(refC),
+    ]);
+  });
+
+  it("uses the renamed current group while recovering an older group member", () => {
+    const taskA = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-renamed-a", "A");
+    const taskB = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-renamed-b", "B");
+    const refA: TabRef = { kind: "epic", id: taskA };
+    const refB: TabRef = { kind: "epic", id: taskB };
+    const oldGroup = { name: "Before", color: "#fdd663", collapsed: false };
+    seedLayout({
+      version: 2,
+      items: [tabItem(refA), tabItem(refB)],
+      activeItemId: tabItemId(refB),
+      systemTabs: { history: null, settings: null },
+      customizations: {
+        [tabRefKey(refA)]: { color: null, icon: "A", groupId: "renamed-group" },
+        [tabRefKey(refB)]: { color: null, icon: "B", groupId: "renamed-group" },
+      },
+      groups: { "renamed-group": oldGroup },
+    });
+
+    expect(tabCommandCoordinator.closeRefAfterConfirmed(refA)).toBe(true);
+    useTabsStore.getState().updateGroup("renamed-group", {
+      name: "After",
+      color: "#c58af9",
+      collapsed: false,
+    });
+    const entry = useTabRecoveryHistory.getState().entries.at(0);
+    if (entry === undefined || entry.kind !== "header") {
+      throw new Error("expected a renamed-group recovery entry");
+    }
+
+    tabCommandCoordinator.restoreClosedHeaderTabs(entry.items, null);
+
+    expect(useTabsStore.getState().groups?.["renamed-group"]).toEqual({
+      name: "After",
+      color: "#c58af9",
+      collapsed: false,
+    });
+    expect(useTabsStore.getState().customizations).toMatchObject({
+      [tabRefKey(refA)]: { groupId: "renamed-group" },
+      [tabRefKey(refB)]: { groupId: "renamed-group" },
+    });
+  });
+
+  it("keeps original top-level indices for a mixed split and standalone batch", () => {
+    const taskA = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-mixed-a", "A");
+    const taskB = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-mixed-b", "B");
+    const taskC = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-mixed-c", "C");
+    const refA: TabRef = { kind: "epic", id: taskA };
+    const refB: TabRef = { kind: "epic", id: taskB };
+    const refC: TabRef = { kind: "epic", id: taskC };
+    const split = splitItem("split-mixed", refA, refB, 0.42);
+    seedLayout({
+      version: 2,
+      items: [split, tabItem(refC)],
+      activeItemId: tabItemId(refC),
+      systemTabs: { history: null, settings: null },
+    });
+
+    batchHeaderTabRecovery(() => {
+      expect(tabCommandCoordinator.closeRefAfterConfirmed(refA)).toBe(true);
+      expect(tabCommandCoordinator.closeRefAfterConfirmed(refC)).toBe(true);
+    });
+    const entry = useTabRecoveryHistory.getState().entries.at(0);
+    if (entry === undefined || entry.kind !== "header") {
+      throw new Error("expected a mixed recovery entry");
+    }
+    expect(entry.items.map((item) => item.index)).toEqual([0, 1]);
+
+    tabCommandCoordinator.restoreClosedHeaderTabs(entry.items, null);
+
+    expect(useTabsStore.getState().items).toEqual([
+      { ...split, routeBackingSide: "right" },
+      tabItem(refC),
+    ]);
+  });
+
+  it("restores a split once when both split members and a neighbor close in one batch", () => {
+    const taskA = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-batch-split-a", "A");
+    const taskB = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-batch-split-b", "B");
+    const taskC = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-batch-split-c", "C");
+    const refA: TabRef = { kind: "epic", id: taskA };
+    const refB: TabRef = { kind: "epic", id: taskB };
+    const refC: TabRef = { kind: "epic", id: taskC };
+    const split = splitItem("split-batch-both", refA, refB, 0.46);
+    seedLayout({
+      version: 2,
+      items: [split, tabItem(refC)],
+      activeItemId: tabItemId(refC),
+      systemTabs: { history: null, settings: null },
+    });
+
+    batchHeaderTabRecovery(() => {
+      expect(tabCommandCoordinator.closeRefAfterConfirmed(refA)).toBe(true);
+      expect(tabCommandCoordinator.closeRefAfterConfirmed(refB)).toBe(true);
+      expect(tabCommandCoordinator.closeRefAfterConfirmed(refC)).toBe(true);
+    });
+    const entry = useTabRecoveryHistory.getState().entries.at(0);
+    if (entry === undefined || entry.kind !== "header") {
+      throw new Error("expected a full split batch recovery entry");
+    }
+    expect(entry.items.map((item) => item.index)).toEqual([0, 0, 1]);
+    expect(
+      entry.items
+        .slice(0, 2)
+        .every((item) => item.placement?.split?.id === split.id),
+    ).toBe(true);
+
+    tabCommandCoordinator.restoreClosedHeaderTabs(entry.items, null);
+
+    expect(useTabsStore.getState().items).toEqual([split, tabItem(refC)]);
+  });
+
+  it("keeps a recovered tab standalone when its former survivor joins a new split", () => {
+    const taskA = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-new-split-a", "A");
+    const taskB = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-new-split-b", "B");
+    const taskC = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-new-split-c", "C");
+    const refA: TabRef = { kind: "epic", id: taskA };
+    const refB: TabRef = { kind: "epic", id: taskB };
+    const refC: TabRef = { kind: "epic", id: taskC };
+    seedLayout({
+      version: 2,
+      items: [tabItem(refC), splitItem("split-old", refA, refB, 0.6)],
+      activeItemId: "split-old",
+      systemTabs: { history: null, settings: null },
+    });
+
+    expect(tabCommandCoordinator.closeRefAfterConfirmed(refA)).toBe(true);
+    const newSplit = splitItem("split-new", refB, refC, 0.8);
+    seedLayout({
+      version: 2,
+      items: [newSplit],
+      activeItemId: newSplit.id,
+      systemTabs: { history: null, settings: null },
+    });
+    const entry = useTabRecoveryHistory.getState().entries.at(0);
+    if (entry === undefined || entry.kind !== "header") {
+      throw new Error("expected a split recovery entry");
+    }
+
+    tabCommandCoordinator.restoreClosedHeaderTabs(entry.items, null);
+
+    expect(useTabsStore.getState().items).toEqual([newSplit, tabItem(refA)]);
+    expect(useTabsStore.getState().items[0]).toEqual(newSplit);
+  });
+
+  it("keeps the recovered tab standalone when its former survivor changes group", () => {
+    const taskA = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-new-group-a", "A");
+    const taskB = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-new-group-b", "B");
+    const refA: TabRef = { kind: "epic", id: taskA };
+    const refB: TabRef = { kind: "epic", id: taskB };
+    const split = splitItem("split-new-group", refA, refB, 0.5);
+    seedLayout({
+      version: 2,
+      items: [split],
+      activeItemId: split.id,
+      systemTabs: { history: null, settings: null },
+      customizations: {
+        [tabRefKey(refA)]: {
+          color: "#f28b82",
+          icon: "A",
+          groupId: "old-group",
+        },
+        [tabRefKey(refB)]: {
+          color: "#81c995",
+          icon: "B",
+          groupId: "old-group",
+        },
+      },
+      groups: {
+        "old-group": { name: "Old", color: "#8ab4f8", collapsed: false },
+      },
+    });
+
+    expect(tabCommandCoordinator.closeRefAfterConfirmed(refA)).toBe(true);
+    const newGroupId = useTabsStore.getState().createGroup(refB);
+    if (newGroupId === null) throw new Error("expected a new group");
+    const entry = useTabRecoveryHistory.getState().entries.at(0);
+    if (entry === undefined || entry.kind !== "header") {
+      throw new Error("expected a changed-group recovery entry");
+    }
+
+    tabCommandCoordinator.restoreClosedHeaderTabs(entry.items, null);
+
+    expect(useTabsStore.getState().items).toEqual([
+      tabItem(refA),
+      tabItem(refB),
+    ]);
+    expect(useTabsStore.getState().customizations).toMatchObject({
+      [tabRefKey(refA)]: { groupId: "old-group" },
+      [tabRefKey(refB)]: { groupId: newGroupId },
+    });
+    expect(useTabsStore.getState().groups?.["old-group"]).toEqual({
+      name: "Old",
+      color: "#8ab4f8",
+      collapsed: false,
+    });
+  });
+
+  it("restores an empty opposite split side", () => {
+    const taskId = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-empty-opposite", "Empty opposite");
+    const ref: TabRef = { kind: "epic", id: taskId };
+    const split = splitItem("split-empty-opposite", ref, null, 0.64);
+    seedLayout({
+      version: 2,
+      items: [split],
+      activeItemId: split.id,
+      systemTabs: { history: null, settings: null },
+    });
+
+    expect(tabCommandCoordinator.closeRefAfterConfirmed(ref)).toBe(true);
+    const entry = useTabRecoveryHistory.getState().entries.at(0);
+    if (entry === undefined || entry.kind !== "header") {
+      throw new Error("expected an empty-split recovery entry");
+    }
+
+    tabCommandCoordinator.restoreClosedHeaderTabs(entry.items, null);
+
+    expect(useTabsStore.getState().items).toEqual([split]);
+    expect(useTabsStore.getState().items[0]).toEqual(split);
+  });
+
+  it("keeps an intentional empty draft split peer during task recovery", () => {
+    const taskId = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-empty-draft-peer", "Task");
+    const draftId = useLandingDraftStore.getState().createDraft(null);
+    const taskRef: TabRef = { kind: "epic", id: taskId };
+    const draftRef: TabRef = { kind: "draft", id: draftId };
+    const split = splitItem("split-empty-draft-peer", taskRef, draftRef, 0.55);
+    seedLayout({
+      version: 2,
+      items: [split],
+      activeItemId: split.id,
+      systemTabs: { history: null, settings: null },
+    });
+
+    expect(tabCommandCoordinator.closeRefAfterConfirmed(taskRef)).toBe(true);
+    const entry = useTabRecoveryHistory.getState().entries.at(0);
+    if (entry === undefined || entry.kind !== "header") {
+      throw new Error("expected an empty-draft-peer recovery entry");
+    }
+
+    tabCommandCoordinator.restoreClosedHeaderTabs(entry.items, draftId);
+
+    expect(useLandingDraftStore.getState().drafts).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: draftId })]),
+    );
+    expect(useTabsStore.getState().items).toEqual([
+      { ...split, focusedSide: "right", routeBackingSide: "right" },
+    ]);
+  });
+
+  it("captures and restores placement for a direct canvas-store close", () => {
+    const taskA = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-direct-a", "A");
+    const taskB = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-direct-b", "B");
+    const refA: TabRef = { kind: "epic", id: taskA };
+    const refB: TabRef = { kind: "epic", id: taskB };
+    const split = splitItem("split-direct", refA, refB, 0.29);
+    seedLayout({
+      version: 2,
+      items: [split],
+      activeItemId: split.id,
+      systemTabs: { history: null, settings: null },
+    });
+
+    useEpicCanvasStore.getState().closeTab(taskA);
+
+    const entry = useTabRecoveryHistory.getState().entries.at(0);
+    if (entry === undefined || entry.kind !== "header") {
+      throw new Error("expected direct-close recovery entry");
+    }
+    expect(entry.items[0]).toMatchObject({
+      index: 0,
+      placement: { split },
+    });
+
+    tabCommandCoordinator.restoreClosedHeaderTabs(entry.items, null);
+
+    expect(useTabsStore.getState().items).toEqual([
+      { ...split, focusedSide: "right", routeBackingSide: "right" },
     ]);
   });
 });

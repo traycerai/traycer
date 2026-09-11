@@ -1,3 +1,7 @@
+import {
+  captureHeaderLocation,
+  restoreHeaderLayout,
+} from "@/lib/tab-recovery/header-layout";
 import { EMPTY_CANVAS } from "@/stores/epics/canvas/canvas-state";
 import {
   recordClosedHeaderTab,
@@ -36,6 +40,7 @@ import {
   createLayoutItem,
   findStripItemForRef,
   flattenLayoutRefs,
+  flattenStripItemRefs,
   focusLayoutRef,
   focusSplitSide,
   pairLayoutRefs,
@@ -1329,6 +1334,13 @@ export class TabCommandCoordinator {
     if (replaceEmptyDraftId !== null) {
       const ref: TabRef = { kind: "draft", id: replaceEmptyDraftId };
       const item = findStripItemForRef(previousLayout, ref);
+      const isSplitPartner = items.some(
+        (closed) =>
+          closed.placement?.split !== undefined &&
+          flattenStripItemRefs(closed.placement.split).some(
+            (partner) => tabRefKey(partner) === tabRefKey(ref),
+          ),
+      );
       draftRuntimeRegistry.flush(replaceEmptyDraftId);
       const draft = useLandingDraftStore
         .getState()
@@ -1337,6 +1349,7 @@ export class TabCommandCoordinator {
       // closes. Keep deliberate split slots and drafts containing user work.
       if (
         item?.kind === "tab" &&
+        !isSplitPartner &&
         previousLayout.activeItemId === item.id &&
         !isTabCloseLocked(ref) &&
         draft !== undefined &&
@@ -1359,27 +1372,32 @@ export class TabCommandCoordinator {
     );
     this.execute({
       layout: () => {
-        let layout =
+        const base =
           replacement === null
             ? currentLayout()
             : layoutWithRemovedRef(currentLayout(), replacement);
-        for (const item of items.toSorted((a, b) => a.index - b.index)) {
-          const ref: TabRef =
-            item.kind === "epic"
-              ? { kind: "epic", id: item.tab.tabId }
-              : { kind: "draft", id: item.draftId };
-          layout = createLayoutItem(layout, ref);
-          const placed = findStripItemForRef(layout, ref);
-          if (placed !== null)
-            layout = reorderStripItem(layout, {
-              itemId: placed.id,
-              targetIndex: item.index,
-            });
-        }
+        const layout = restoreHeaderLayout(
+          base,
+          items.map((item) => ({
+            ...item,
+            ref:
+              item.kind === "epic"
+                ? { kind: "epic" as const, id: item.tab.tabId }
+                : { kind: "draft" as const, id: item.draftId },
+          })),
+          canSplitRef,
+        );
+        if (survivingActiveItemId === null) return layout;
+        if (layout.items.some((item) => item.id === survivingActiveItemId))
+          return { ...layout, activeItemId: survivingActiveItemId };
+        // Reconstructing a split changes its item's id. Keep the same surviving
+        // view selected; single recovery's navigation selects the reopened side.
+        const survivor = focusedRef(previousLayout);
+        if (survivor === null) return layout;
         return {
-          ...layout,
-          activeItemId: survivingActiveItemId ?? layout.activeItemId,
+          ...focusLayoutRef(layout, survivor),
           activationHistory: layout.activationHistory,
+          groups: layout.groups,
         };
       },
       reservedAdditions: refs,
@@ -1416,11 +1434,7 @@ export class TabCommandCoordinator {
     const layout = currentLayout();
     if (findStripItemForRef(layout, ref) === null) return false;
     const next = layoutWithRemovedRef(layout, ref);
-    const item = findStripItemForRef(layout, ref);
-    const index = Math.max(
-      0,
-      layout.items.findIndex((candidate) => candidate.id === item?.id),
-    );
+    const location = captureHeaderLocation(layout, ref, 0);
     let recovery: ClosedHeaderTab | null = null;
     if (ref.kind === "draft") {
       draftRuntimeRegistry.flush(ref.id);
@@ -1433,13 +1447,14 @@ export class TabCommandCoordinator {
           draftId: draft.id,
           hostId:
             draft.adoption.state === "adopted" ? draft.adoption.hostId : null,
-          index,
+          ...location,
         };
     } else if (ref.kind === "epic") {
       const state = useEpicCanvasStore.getState();
       const tab = state.tabsById[ref.id];
       const canvas = state.canvasByTabId[ref.id] ?? EMPTY_CANVAS;
-      if (tab !== undefined) recovery = { kind: "epic", tab, canvas, index };
+      if (tab !== undefined)
+        recovery = { kind: "epic", tab, canvas, ...location };
     }
     this.execute({
       layout: next,

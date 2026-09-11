@@ -1,3 +1,13 @@
+import { readTabStripLayout } from "@/stores/tabs/store";
+import {
+  findStripItemForRef,
+  type PersistedTabStripLayout,
+} from "@/stores/tabs/layout";
+import {
+  captureHeaderLocation,
+  closedHeaderPlacementSchema,
+  type ClosedHeaderPlacement,
+} from "./header-layout";
 import type { LandingDraftTab } from "@/stores/home/landing-draft-store";
 import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
 import { collectPanes, findPaneById } from "@/stores/epics/canvas/tile-tree";
@@ -76,12 +86,18 @@ export type LegacyRecoveryDraft = Pick<
   | "composerMode"
   | "workspace"
 >;
+// Registered tab kinds load source stores that also use this journal. Resolve
+// their placement validator lazily, when a persisted entry is actually parsed.
 const headerSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("epic"),
     tab: tabSchema,
     canvas: canvasSchema,
     index: z.number().int().nonnegative(),
+    placement: z
+      .lazy(() => closedHeaderPlacementSchema)
+      .optional()
+      .catch(undefined),
   }),
   z.object({
     kind: z.literal("draft"),
@@ -89,6 +105,10 @@ const headerSchema = z.discriminatedUnion("kind", [
     hostId: z.string().nullable(),
     legacyDraft: draftSchema.optional(),
     index: z.number().int().nonnegative(),
+    placement: z
+      .lazy(() => closedHeaderPlacementSchema)
+      .optional()
+      .catch(undefined),
   }),
 ]);
 const currentEntrySchema = z.discriminatedUnion("kind", [
@@ -140,6 +160,7 @@ export type ClosedHeaderTab =
       readonly tab: EpicViewTab;
       readonly canvas: EpicCanvasState;
       readonly index: number;
+      readonly placement?: ClosedHeaderPlacement;
     }
   | {
       readonly kind: "draft";
@@ -148,6 +169,7 @@ export type ClosedHeaderTab =
       /** Present only when reading a journal written before saved drafts. */
       readonly legacyDraft?: LegacyRecoveryDraft;
       readonly index: number;
+      readonly placement?: ClosedHeaderPlacement;
     };
 export type TabRecoveryEntry =
   | {
@@ -181,6 +203,7 @@ let bucket: string | null = null;
 let generation = 0;
 let suppressed = 0;
 let batch: ClosedHeaderTab[] | null = null;
+let batchLayout: PersistedTabStripLayout | null = null;
 let writes: Promise<void> = Promise.resolve();
 const pendingEpicPrunes = new Set<string>();
 const pendingDraftPrunes = new Set<string>();
@@ -349,11 +372,13 @@ export function batchHeaderTabRecovery(run: () => void): void {
     return;
   }
   batch = [];
+  batchLayout = readTabStripLayout();
   try {
     run();
   } finally {
     const items = batch;
     batch = null;
+    batchLayout = null;
     if (items.length > 0)
       append({ kind: "header", id: uuidv4(), items, bulk: true });
   }
@@ -367,6 +392,21 @@ function append(entry: TabRecoveryEntry): void {
 export function recordClosedHeaderTab(item: ClosedHeaderTab): void {
   if (suppressed > 0) return;
   if (batch !== null) {
+    const ref =
+      item.kind === "epic"
+        ? { kind: "epic" as const, id: item.tab.tabId }
+        : { kind: "draft" as const, id: item.draftId };
+    if (
+      batchLayout !== null &&
+      findStripItemForRef(batchLayout, ref) !== null
+    ) {
+      batch.push({
+        ...item,
+        ...captureHeaderLocation(batchLayout, ref, item.index),
+      });
+      return;
+    }
+    // Legacy/source-only callers can have no coordinated layout to capture.
     let index = item.index;
     for (const earlier of batch.toSorted((a, b) => a.index - b.index)) {
       if (earlier.index <= index) index += 1;

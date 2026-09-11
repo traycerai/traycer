@@ -157,6 +157,12 @@ function canvasEntry(snapshot) {
   return snapshot.entries.find((entry) => entry.kind === "canvas");
 }
 
+function splitItem(snapshot, splitId) {
+  return snapshot.tabLayout.items.find(
+    (item) => item.kind === "split" && item.id === splitId,
+  );
+}
+
 try {
   const pageUrl = `http://127.0.0.1:${vitePort}${fixtureUrlPath}`;
   const requireFromHere = createRequire(import.meta.url);
@@ -321,6 +327,168 @@ try {
     "bulk restore changed the surviving header focus",
   );
 
+  const splitLeft = await callBridge(client, "createTask", [
+    "Top-level split left",
+  ]);
+  const splitRight = await callBridge(client, "createTask", [
+    "Top-level split right",
+  ]);
+  const splitId = await callBridge(client, "seedTopLevelSplit", [
+    splitLeft,
+    splitRight,
+    "browser-recovery-top-level-split",
+    0.32,
+  ]);
+  state = await callBridge(client, "snapshot", []);
+  const topLevelSplitBeforeClose = splitItem(state, splitId);
+  assert(
+    topLevelSplitBeforeClose !== undefined,
+    "top-level split fixture was not created",
+  );
+  assert(
+    topLevelSplitBeforeClose.left.kind === "tab" &&
+      topLevelSplitBeforeClose.left.ref.id === splitLeft &&
+      topLevelSplitBeforeClose.right.kind === "tab" &&
+      topLevelSplitBeforeClose.right.ref.id === splitRight &&
+      topLevelSplitBeforeClose.leftRatio === 0.32 &&
+      topLevelSplitBeforeClose.focusedSide === "right",
+    "top-level split fixture did not preserve its pair, ratio, and focus",
+  );
+  await callBridge(client, "closeTask", [splitLeft]);
+  await callBridge(client, "flush", []);
+  state = await callBridge(client, "snapshot", []);
+  assert(
+    headerEntry(state)?.items.some((item) => item.id === splitLeft),
+    "closed top-level split side was not journaled",
+  );
+  assert(
+    state.tabLayout.items.some(
+      (item) =>
+        item.kind === "tab" &&
+        item.ref.kind === "epic" &&
+        item.ref.id === splitRight,
+    ),
+    "closing one top-level split side did not leave its peer standalone",
+  );
+  await client.send("Page.reload", { ignoreCache: false });
+  await waitFor(
+    client,
+    "the tab recovery fixture to remount after top-level split close",
+    `Boolean(document.querySelector('[data-testid="tab-recovery-browser-fixture"]')) && typeof window.__traycerTabRecovery === "object"`,
+  );
+  await waitForRecoveryReady(client, "top-level split recovery history");
+  state = await callBridge(client, "snapshot", []);
+  const persistedSplitEntry = headerEntry(state)?.items.find(
+    (item) => item.id === splitLeft,
+  );
+  assert(
+    persistedSplitEntry !== undefined,
+    "top-level split recovery history did not survive a reload",
+  );
+  assert.equal(
+    persistedSplitEntry.placement?.split?.id,
+    splitId,
+    "top-level split placement metadata did not survive a reload",
+  );
+  assert.equal(
+    persistedSplitEntry.placement?.split?.leftRatio,
+    0.32,
+    "top-level split ratio metadata did not survive a reload",
+  );
+  await clickSelector(client, '[data-testid="recovery-reopen"]');
+  await waitForRecoveryConsumed(client, "top-level split recovery");
+  state = await callBridge(client, "snapshot", []);
+  const restoredSplit = splitItem(state, splitId);
+  assert(restoredSplit !== undefined, "top-level split was not restored");
+  assert(
+    restoredSplit.left.kind === "tab" &&
+      restoredSplit.left.ref.id === splitLeft &&
+      restoredSplit.right.kind === "tab" &&
+      restoredSplit.right.ref.id === splitRight &&
+      restoredSplit.leftRatio === 0.32 &&
+      restoredSplit.focusedSide === "left",
+    "single top-level split recovery did not restore pair, ratio, or focus",
+  );
+  assert(
+    state.activeHeaderItemId === splitId,
+    "single top-level split recovery did not focus the restored side",
+  );
+
+  const groupTaskA = await callBridge(client, "createTask", ["Named group A"]);
+  const groupTaskB = await callBridge(client, "createTask", ["Named group B"]);
+  const groupSurvivor = await callBridge(client, "createTask", [
+    "Group surviving focus",
+  ]);
+  const groupId = await callBridge(client, "seedNamedGroup", [
+    groupTaskA,
+    groupTaskB,
+  ]);
+  state = await callBridge(client, "snapshot", []);
+  assert.equal(
+    state.tabLayout.groups?.[groupId]?.name,
+    "Recovery group",
+    "named group fixture did not retain its name",
+  );
+  assert.equal(
+    state.tabLayout.groups?.[groupId]?.color,
+    "#8ab4f8",
+    "named group fixture did not retain its color",
+  );
+  const groupFocusBeforeClose = state.activeHeaderItemId;
+  assert.equal(
+    groupFocusBeforeClose,
+    `tab:epic:${groupSurvivor}`,
+    "group fixture did not leave the surviving tab focused",
+  );
+  await callBridge(client, "closeBulk", [
+    [
+      { kind: "epic", id: groupTaskA },
+      { kind: "epic", id: groupTaskB },
+    ],
+  ]);
+  state = await callBridge(client, "snapshot", []);
+  assert(
+    headerEntry(state)?.bulk === true,
+    "group close was not one bulk action",
+  );
+  assert(
+    state.tabLayout.groups?.[groupId] === undefined,
+    "closed group metadata remained visible before recovery",
+  );
+  await clickSelector(client, '[data-testid="recovery-reopen"]');
+  await waitForRecoveryConsumed(client, "named group bulk recovery");
+  state = await callBridge(client, "snapshot", []);
+  assert(
+    state.openTaskIds.includes(groupTaskA) &&
+      state.openTaskIds.includes(groupTaskB),
+    "bulk group recovery did not restore every group member",
+  );
+  assert.equal(
+    state.tabLayout.groups?.[groupId]?.name,
+    "Recovery group",
+    "bulk group recovery did not restore the group name",
+  );
+  assert.equal(
+    state.tabLayout.groups?.[groupId]?.color,
+    "#8ab4f8",
+    "bulk group recovery did not restore the group color",
+  );
+  assert.equal(
+    state.tabLayout.customizations?.[`epic:${groupTaskA}`]?.groupId,
+    groupId,
+    "bulk group recovery did not restore member A's group membership",
+  );
+  assert.equal(
+    state.tabLayout.customizations?.[`epic:${groupTaskB}`]?.groupId,
+    groupId,
+    "bulk group recovery did not restore member B's group membership",
+  );
+  assert(
+    state.activeHeaderItemId === groupFocusBeforeClose &&
+      state.openTaskIds.includes(groupSurvivor),
+    "bulk group recovery changed the surviving header focus",
+  );
+
   const splitTask = await callBridge(client, "createTask", ["Split recovery"]);
   await callBridge(client, "seedInnerSplit", [splitTask]);
   state = await callBridge(client, "snapshot", []);
@@ -452,6 +620,8 @@ try {
           "startup-empty-history",
           "draft-close-reopen",
           "single-and-bulk-task-recovery",
+          "top-level-split-recovery-and-persistence",
+          "named-group-bulk-recovery",
           "inner-split-recovery",
           "empty-pane-recovery-and-persistence",
           "reload-persisted-history",
