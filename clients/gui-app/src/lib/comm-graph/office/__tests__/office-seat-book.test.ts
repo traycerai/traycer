@@ -49,6 +49,7 @@ function makeSeat(spec: SeatSpec): OfficeSeat {
     facing: "up",
     hitTiles:
       spec.kind === "cubby" ? { width: 1, height: 1 } : { width: 2, height: 2 },
+    hitBox: null,
     floorIndex: spec.floorIndex,
     roomId: spec.roomId,
     hostId: spec.hostId ?? null,

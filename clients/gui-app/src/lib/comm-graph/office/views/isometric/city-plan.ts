@@ -811,6 +811,7 @@ function buildDistrict(
         chairTile: tiles.door,
         facing: "down",
         hitTiles: { width: 1, height: LOT_ROWS },
+        hitBox: null,
         floorIndex,
         roomId: block.blockId,
         hostId: block.hostId,

@@ -3780,6 +3780,9 @@ export class OfficeScene {
 
   /** A seat's projected box - what the rect test and the hit region both use. */
   private seatBox(seat: OfficeSeat): OfficeRect {
+    // The plan's own answer wins where it has one: a seat painted away from
+    // its desk tile knows where it went, and this end cannot derive it.
+    if (seat.hitBox !== null) return seat.hitBox;
     const origin = this.point(seat.deskTile.col, seat.deskTile.row);
     return {
       x: origin.x,

@@ -1026,6 +1026,8 @@ function materializeSeats(
       chairTile: { col: slot.col, row: storey.row + (quiet ? 0 : 2) },
       facing: "down",
       hitTiles: { width: quiet ? 1 : 2, height: quiet ? 1 : 2 },
+      // Oblique paints a desk on its own tile; the tiles box already fits.
+      hitBox: null,
       floorIndex: storey.id,
       roomId: slot.room,
       hostId: building.hostId,

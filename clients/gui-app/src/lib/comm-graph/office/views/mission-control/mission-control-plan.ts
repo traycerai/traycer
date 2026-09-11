@@ -1751,6 +1751,8 @@ function buildDesks(
       chairTile: { col: packing.podiumCol, row: HQ_CHAIR_ROW },
       facing: PODIUM_FACING,
       hitTiles: { width: CONSOLE_WIDTH_TILES, height: 1 },
+      // A console sits on the tiles it is measured in.
+      hitBox: null,
       floorIndex: FLOOR_INDEX,
       roomId: ROOM_ID,
       hostId: hq === undefined ? null : hq.hostId,
@@ -1767,6 +1769,8 @@ function buildDesks(
       chairTile: { col: packing.podiumCol, row: HQ_CHAIR_ROW },
       facing: PODIUM_FACING,
       hitTiles: { width: CONSOLE_WIDTH_TILES, height: 1 },
+      // A console sits on the tiles it is measured in.
+      hitBox: null,
       floorIndex: FLOOR_INDEX,
       roomId: ROOM_ID,
       hostId: null,
@@ -1784,6 +1788,8 @@ function buildDesks(
       chairTile: slot.chairTile,
       facing: CONSOLE_FACING,
       hitTiles: { width: CONSOLE_WIDTH_TILES, height: 1 },
+      // A console sits on the tiles it is measured in.
+      hitBox: null,
       floorIndex: FLOOR_INDEX,
       roomId: ROOM_ID,
       hostId: fill.hostId,

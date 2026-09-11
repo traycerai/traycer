@@ -405,6 +405,7 @@ function buildRoom(
       chairTile,
       facing: "up",
       hitTiles: { width: DESK_WIDTH_TILES, height: SEAT_HIT_ROWS },
+      hitBox: null,
       floorIndex,
       roomId: plan.roomId,
       hostId,

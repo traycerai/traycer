@@ -1350,6 +1350,7 @@ describe("CommGraphOfficeCanvas fixup 1 - renderer projection and semantic zoom 
       chairTile: { col: 4, row: 5 },
       facing: "down" as const,
       hitTiles: { width: 1, height: 1 },
+      hitBox: null,
       floorIndex: 0,
       roomId: null,
       hostId: null,

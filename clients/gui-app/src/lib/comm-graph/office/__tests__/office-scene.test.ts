@@ -4415,6 +4415,7 @@ function deskSeat(args: {
     chairTile: { col: args.deskTile.col, row: args.deskTile.row + 1 },
     facing: "up",
     hitTiles: { width: 2, height: 2 },
+    hitBox: null,
     floorIndex: args.floorIndex,
     roomId: null,
     hostId: null,
@@ -4434,6 +4435,7 @@ function cubbySeat(args: {
     chairTile: args.deskTile,
     facing: "up",
     hitTiles: { width: 1, height: 1 },
+    hitBox: null,
     floorIndex: args.floorIndex,
     roomId: null,
     hostId: null,
@@ -6204,6 +6206,104 @@ describe("OfficeScene fixup 1 - F17 isometric growth reports a projected shift",
 
     for (let step = 0; step < 5; step += 1) scene.tick(100);
     expect(frameOf(scene).awayAgentIds.has(target)).toBe(true);
+  });
+});
+
+describe("OfficeScene fixup 1 - F18 a seat's declared painted box (D53)", () => {
+  /**
+   * Left of and above the desk tile's own projected corner, which is the
+   * shape an isometric building takes: centred on `project(col + .5, row + 1)`
+   * and rising with its storeys, so the art is offset in BOTH axes and no
+   * `hitTiles` size - a width and a height, with no offset and no sign - can
+   * ever reach it.
+   */
+  const PAINTED_BOX: OfficeRect = { x: 2104, y: 72, width: 32, height: 24 };
+
+  function sceneWithBoxedSeat(): OfficeScene {
+    const boxed: OfficeSeat = {
+      ...deskSeat({
+        seatId: "h/0/boxed",
+        deskTile: { col: 6, row: 6 },
+        floorIndex: 0,
+      }),
+      hitBox: PAINTED_BOX,
+    };
+    const plain = deskSeat({
+      seatId: "h/0/plain",
+      deskTile: { col: 2, row: 2 },
+      floorIndex: 0,
+    });
+    const layout: OfficeLayout = {
+      view: "floor",
+      cols: 16,
+      rows: 16,
+      desks: new Map([
+        ["boxed", { ...boxed, agentId: "boxed" }],
+        ["plain", { ...plain, agentId: "plain" }],
+      ]),
+      seats: new Map([
+        [boxed.seatId, boxed],
+        [plain.seatId, plain],
+      ]),
+      signs: [],
+      rooms: [],
+      floors: [handBuiltFloor([])],
+      doorTile: { col: 0, row: 0 },
+      lobbyTile: { col: 0, row: 1 },
+      props: [],
+      walkable: allWalkable(16, 16),
+      frozen: null,
+      shiftFromPrevious: null,
+      stable: true,
+    };
+    const view: OfficeView = {
+      ...OFFICE_VIEWS.floor,
+      plan: () => layout,
+      painter: {
+        ...OFFICE_VIEWS.floor.painter,
+        projector: () => SHIFTED_PROJECTOR,
+      },
+    };
+    const scene = new OfficeScene(view, null);
+    scene.sync(
+      sceneInput({
+        agents: [
+          agent({ id: "boxed", createdAt: 1 }),
+          agent({ id: "plain", createdAt: 1 }),
+        ],
+        visibleAgentIds: new Set(["boxed", "plain"]),
+      }),
+    );
+    return scene;
+  }
+
+  it("locates and hit-tests a seat at its declared box, not at its desk tiles", () => {
+    const scene = sceneWithBoxedSeat();
+
+    expect(scene.locate("boxed")).toEqual(PAINTED_BOX);
+    expect(
+      scene.hitTest({
+        x: PAINTED_BOX.x + PAINTED_BOX.width / 2,
+        y: PAINTED_BOX.y + PAINTED_BOX.height / 2,
+      }),
+    ).toBe("boxed");
+    // The tiles box is where the whole seam used to answer: desk tile (6,6)
+    // through the +2048px projector, two tiles square. Top row, so the
+    // seated character (a row below, at its chair) is not what answers here.
+    expect(scene.hitTest({ x: 2144 + 4, y: 96 + 4 })).not.toBe("boxed");
+  });
+
+  it("leaves a seat with no declared box on its desk tiles", () => {
+    const scene = sceneWithBoxedSeat();
+
+    // Desk tile (2,2) projected, two tiles square - exactly as before D53.
+    expect(scene.locate("plain")).toEqual({
+      x: 2080,
+      y: 32,
+      width: 32,
+      height: 32,
+    });
+    expect(scene.hitTest({ x: 2080 + 4, y: 32 + 4 })).toBe("plain");
   });
 });
 

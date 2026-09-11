@@ -327,6 +327,20 @@ export interface OfficeSeat {
   readonly facing: OfficeFacing;
   /** The seat's box in tiles from `deskTile`: 2×2 desk, 1×1 cubby, 2×1 console. */
   readonly hitTiles: OfficeSize;
+  /**
+   * Where this seat is actually PAINTED, in projected world pixels, or `null`
+   * to take the `hitTiles` box from `deskTile` as before.
+   *
+   * A size in tiles anchored at the desk's own projected corner describes a
+   * seat drawn at its tile, which is every seat on a layered or oblique view.
+   * An isometric building is not: it is centred on `project(col + 0.5, row + 1)`
+   * and rises `storeys × 8` px ABOVE that, so its painted box is offset from
+   * the desk tile in both axes and no width and height can reach it - the hit
+   * rect and the art share no pixel at all. A view that paints somewhere else
+   * says where here rather than the contract growing a second tile-space
+   * fiction; the seat book and the scene both read this first.
+   */
+  readonly hitBox: OfficeRect | null;
   /** The storey this seat belongs to: its door, lobby, queue and corridors. */
   readonly floorIndex: number;
   /** The room that owns it - visits, boards and plates - or `null` in the open. */

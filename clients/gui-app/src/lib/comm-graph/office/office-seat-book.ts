@@ -319,6 +319,9 @@ export class OfficeSeatBook {
     }
     const seat = this.effectiveSeat(agentId);
     if (seat === null) return null;
+    // Same rule the scene's own `seatBox` follows: a painted box, where the
+    // plan declared one, is where this agent IS.
+    if (seat.hitBox !== null) return seat.hitBox;
     const origin = projector.project(seat.deskTile.col, seat.deskTile.row);
     return {
       x: origin.x,

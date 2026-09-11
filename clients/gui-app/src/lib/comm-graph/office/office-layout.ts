@@ -2712,6 +2712,8 @@ function decorateDesks(
       kind: FLOOR_SEAT_KIND,
       facing: FLOOR_SEAT_FACING,
       hitTiles: { width: DESK_WIDTH_TILES, height: SEAT_HIT_ROWS },
+      // Drawn at its own tile, so the tiles box is the box.
+      hitBox: null,
       floorIndex,
       roomId,
       hostId,
