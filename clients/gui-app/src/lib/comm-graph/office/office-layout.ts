@@ -34,6 +34,7 @@
  */
 import type {
   OfficeAgentInput,
+  OfficeAmenity,
   OfficeAmenityKind,
   OfficeAreaSign,
   OfficeDesk,
@@ -45,6 +46,9 @@ import type {
   OfficeRoom,
   OfficePod,
   OfficePodStyle,
+  OfficeSeat,
+  OfficeSeatKind,
+  OfficeSign,
   OfficeSpriteName,
   OfficeTilePos,
   OfficeTileRect,
@@ -766,7 +770,15 @@ interface FloorBuild {
   readonly amenities: ReadonlyArray<AmenityPlacement>;
 }
 
-function compareByCreation(
+/**
+ * The canonical order over agents: creation time, ties broken by id.
+ *
+ * Exported because the population partition has to agree with the packing
+ * about who came first - "the first-created root is HQ" and "a lineage reads
+ * left to right" are the same statement read twice, and two copies of this
+ * comparison drifting apart would put the HQ occupant in somebody else's room.
+ */
+export function compareByCreation(
   left: OfficeAgentInput,
   right: OfficeAgentInput,
 ): number {
@@ -1109,7 +1121,7 @@ function blankWalkableGrid(
 }
 
 /** The cabin's own wall ring, minus the one tile its door opens through. */
-function blockCabinWalls(walkable: boolean[][], room: OfficeRoom): void {
+function blockCabinWalls(walkable: boolean[][], room: PlacedRoom): void {
   const { col, row, cols, rows } = room.bounds;
   const right = col + cols - 1;
   const bottom = row + rows - 1;
@@ -1201,6 +1213,64 @@ function placeStairwell(args: {
     }
   }
   return { col, row };
+}
+
+// ---- What the packing produces --------------------------------------- //
+
+/*
+ * The packing makes GEOMETRY. The identities the contract puts on a layout -
+ * seat ids, floor and room ownership, spot anchors, corridors, signs - are
+ * added afterwards by the decoration at the foot of this file, from exactly
+ * the answers the scene derives for itself today.
+ *
+ * They are separated because the packing is what must not move: the split
+ * keeps "where things are" one body of code with one test, and makes the new
+ * vocabulary a pass over its output rather than an edit inside it.
+ */
+
+/** A desk, as packed. The decoration gives it an identity and an owner. */
+interface PlacedDesk {
+  readonly agentId: string;
+  /** Top-left tile of the two-tile-wide desk. */
+  readonly deskTile: OfficeTilePos;
+  /** The chair tile, directly below the desk's left tile. */
+  readonly chairTile: OfficeTilePos;
+  /** A root agent (no parent on the floor) gets a manager desk with a plant. */
+  readonly manager: boolean;
+}
+
+/** A cabin, as packed. The decoration adds the tile a visitor stands on. */
+interface PlacedRoom {
+  readonly rootAgentId: string;
+  readonly name: string;
+  readonly bounds: OfficeTileRect;
+  readonly doorTile: OfficeTilePos;
+  readonly signTile: OfficeTilePos;
+  readonly pods: ReadonlyArray<OfficePod>;
+}
+
+/** An errand spot, as packed. The decoration adds its approach and target. */
+interface PlacedSpot {
+  readonly kind: OfficeErrandSpot["kind"];
+  readonly tile: OfficeTilePos;
+  readonly facing: OfficeFacing;
+}
+
+/** A storey, as packed. The decoration adds its corridors and queue facing. */
+interface PlacedFloor {
+  readonly hostId: string | null;
+  readonly bounds: OfficeTileRect;
+  readonly doorTile: OfficeTilePos;
+  readonly lobbyTile: OfficeTilePos;
+  readonly receptionTile: OfficeTilePos;
+  readonly receptionQueueTiles: ReadonlyArray<OfficeTilePos>;
+  readonly clockTile: OfficeTilePos;
+  readonly stairsTile: OfficeTilePos | null;
+  readonly errandSpots: ReadonlyArray<PlacedSpot>;
+  readonly cafeteria: OfficeTileRect | null;
+  readonly gameRoom: OfficeTileRect | null;
+  readonly areaSigns: ReadonlyArray<OfficeAreaSign>;
+  readonly amenities: ReadonlyArray<OfficeAmenity>;
 }
 
 // ---- Fitting out a storey -------------------------------------------- //
@@ -1698,7 +1768,7 @@ function buildCornerFittings(
 
 interface SpotBuilder {
   readonly context: PlanContext;
-  readonly spots: OfficeErrandSpot[];
+  readonly spots: PlacedSpot[];
   readonly used: Set<string>;
   /** Tiles the floor already owes to something else: the door, the lobby, the queue. */
   readonly blocked: ReadonlySet<string>;
@@ -1712,7 +1782,7 @@ interface ErrandSpotRequest {
   readonly blocked: ReadonlySet<string>;
   readonly amenities: ReadonlyArray<AmenityPlan>;
   readonly corner: CornerFittings | null;
-  readonly rooms: ReadonlyArray<OfficeRoom>;
+  readonly rooms: ReadonlyArray<PlacedRoom>;
   readonly stairsTile: OfficeTilePos | null;
 }
 
@@ -2014,7 +2084,7 @@ function addBinSpots(builder: SpotBuilder, build: FloorBuild): void {
 function addPeekSpots(
   builder: SpotBuilder,
   build: FloorBuild,
-  rooms: ReadonlyArray<OfficeRoom>,
+  rooms: ReadonlyArray<PlacedRoom>,
 ): void {
   const top = build.originRow;
   const bottom = top + build.localRows - 1;
@@ -2084,9 +2154,7 @@ function addCorridorSpots(
   }
 }
 
-function errandSpotsFor(
-  request: ErrandSpotRequest,
-): ReadonlyArray<OfficeErrandSpot> {
+function errandSpotsFor(request: ErrandSpotRequest): ReadonlyArray<PlacedSpot> {
   const builder: SpotBuilder = {
     context: request.context,
     spots: [],
@@ -2118,7 +2186,7 @@ function errandSpotsFor(
  * that has children.
  */
 interface PlacedBlocks {
-  readonly desks: Map<string, OfficeDesk>;
+  readonly desks: Map<string, PlacedDesk>;
   readonly pods: OfficePod[];
 }
 
@@ -2218,8 +2286,8 @@ function placeBlock(request: PlaceBlockRequest, out: PlacedBlocks): void {
 
 function collectCabins(
   builds: ReadonlyArray<FloorBuild>,
-  desks: Map<string, OfficeDesk>,
-  rooms: OfficeRoom[],
+  desks: Map<string, PlacedDesk>,
+  rooms: PlacedRoom[],
 ): void {
   for (const build of builds) {
     for (const cabin of build.cabins) {
@@ -2259,7 +2327,7 @@ function collectCabins(
 
 function blockDeskTiles(
   walkable: boolean[][],
-  desks: ReadonlyMap<string, OfficeDesk>,
+  desks: ReadonlyMap<string, PlacedDesk>,
 ): void {
   for (const desk of desks.values()) {
     for (let offset = 0; offset < DESK_WIDTH_TILES; offset += 1) {
@@ -2273,7 +2341,7 @@ function blockDeskTiles(
 
 function addManagerPlants(
   context: PlanContext,
-  desks: ReadonlyMap<string, OfficeDesk>,
+  desks: ReadonlyMap<string, PlacedDesk>,
 ): void {
   for (const desk of desks.values()) {
     if (!desk.manager) continue;
@@ -2299,7 +2367,7 @@ function addManagerPlants(
  */
 function addCabinBins(
   context: PlanContext,
-  desks: ReadonlyMap<string, OfficeDesk>,
+  desks: ReadonlyMap<string, PlacedDesk>,
 ): void {
   for (const desk of desks.values()) {
     if (!desk.manager) continue;
@@ -2331,7 +2399,7 @@ function podOpeningOf(pod: OfficePod): OfficeTilePos {
 
 function blockPodOutlines(
   context: PlanContext,
-  rooms: ReadonlyArray<OfficeRoom>,
+  rooms: ReadonlyArray<PlacedRoom>,
 ): void {
   for (const room of rooms) {
     for (const pod of room.pods) {
@@ -2369,7 +2437,7 @@ function blockPodOutlines(
  * cannot be un-blocked in place without also un-blocking whatever else shares
  * those tiles.
  */
-function resolvePods(context: PlanContext, rooms: OfficeRoom[]): void {
+function resolvePods(context: PlanContext, rooms: PlacedRoom[]): void {
   for (;;) {
     const trial: PlanContext = {
       cols: context.cols,
@@ -2401,7 +2469,7 @@ interface FloorFitRequest {
   readonly build: FloorBuild;
   readonly doorCol: number;
   readonly multiFloor: boolean;
-  readonly rooms: ReadonlyArray<OfficeRoom>;
+  readonly rooms: ReadonlyArray<PlacedRoom>;
 }
 
 /** The building's own fittings hang on the OUTER wall, clear of every cabin. */
@@ -2431,7 +2499,7 @@ function addWallFittings(
   return clockTile;
 }
 
-function fitFloor(request: FloorFitRequest): OfficeFloor {
+function fitFloor(request: FloorFitRequest): PlacedFloor {
   const { build, context, doorCol } = request;
   const bottomRow = build.originRow + build.localRows - 1;
   const doorTile: OfficeTilePos = { col: doorCol, row: bottomRow };
@@ -2549,6 +2617,355 @@ function amenityBoundsOf(
   return found === undefined ? null : found.bounds;
 }
 
+// ---- Decoration ------------------------------------------------------- //
+
+/*
+ * Everything below turns the packing's geometry into the vocabulary every view
+ * shares. It adds fields and reads nothing back into the packing, so the floor
+ * plan above is the same floor plan it has always been.
+ *
+ * The values are TODAY'S values, derived where the scene derives them itself:
+ * the storey band decides a seat's floor, the cabin or pod it stands in
+ * decides its room, a spot's target is the prop above it in its own column,
+ * the corridors are the tiles a stroll may stop on, and the signs are the
+ * lettering the prop pass emits. Nothing here is new behaviour; it is the same
+ * answers, computed once by the plan instead of repeatedly by the scene.
+ */
+
+/** Floor is today's plan, so nothing on it has ever been anything but a desk. */
+const FLOOR_SEAT_KIND: OfficeSeatKind = "desk";
+/** Seats face up: the screen is ahead and the viewer sees the back of a head. */
+const FLOOR_SEAT_FACING: OfficeFacing = "up";
+/** Somebody at the counter has their back to the room, as they always have. */
+const FLOOR_QUEUE_FACING: OfficeFacing = "down";
+/** The desk row and the chair row under it: the box the scene hit-tests today. */
+const SEAT_HIT_ROWS = 2;
+/** Stands in a seat id for a host or a room that is not there. */
+const SEAT_ID_NONE = "-";
+/** Cabin and amenity signs are two tiles wide; a pod plate is one. */
+const ROOM_SIGN_WIDTH_TILES = 2;
+const POD_PLATE_WIDTH_TILES = 1;
+/** First content row of a storey, past its cap and its wall face. */
+const CORRIDOR_FIRST_ROW_OFFSET = 2;
+
+/** The storey a row belongs to. Storeys share a wall row; the upper one wins. */
+function floorIndexOfRow(
+  floors: ReadonlyArray<PlacedFloor>,
+  row: number,
+): number {
+  for (let index = 0; index < floors.length; index += 1) {
+    const bounds = floors[index].bounds;
+    if (row >= bounds.row && row < bounds.row + bounds.rows) return index;
+  }
+  return 0;
+}
+
+/**
+ * The cabin a tile stands in, or `null` where it stands in none.
+ *
+ * A pod is deliberately NOT a room here, tempting though it is: a pod is a
+ * region drawn INSIDE a cabin, and a `roomId` naming one would not resolve in
+ * `layout.rooms`. Every consumer of the field - the room a claim prefers, who
+ * counts as same-room for a visit, what a hover card says - would then have to
+ * know that some room ids are not rooms. Same room means same cabin, which is
+ * what it has always meant on this floor.
+ */
+function roomIdOfTile(
+  rooms: ReadonlyArray<PlacedRoom>,
+  tile: OfficeTilePos,
+): string | null {
+  for (const room of rooms) {
+    if (withinRect(room.bounds, tile)) return room.rootAgentId;
+  }
+  return null;
+}
+
+/**
+ * Seat ids, and who owns each seat.
+ *
+ * The id is `"<host>/<floor>/<room>/<n>"`, and `n` counts within that room in
+ * packing order - which is creation order, so an agent joining a room takes the
+ * next number and leaves every number before it alone.
+ */
+function decorateDesks(
+  placed: ReadonlyMap<string, PlacedDesk>,
+  rooms: ReadonlyArray<PlacedRoom>,
+  floors: ReadonlyArray<PlacedFloor>,
+): ReadonlyMap<string, OfficeDesk> {
+  const desks = new Map<string, OfficeDesk>();
+  const nextInRoom = new Map<string, number>();
+  for (const [agentId, desk] of placed) {
+    const floorIndex = floorIndexOfRow(floors, desk.deskTile.row);
+    const hostId = floors[floorIndex].hostId;
+    const roomId = roomIdOfTile(rooms, desk.deskTile);
+    const group = [
+      hostId ?? SEAT_ID_NONE,
+      floorIndex,
+      roomId ?? SEAT_ID_NONE,
+    ].join("/");
+    const index = nextInRoom.get(group) ?? 0;
+    nextInRoom.set(group, index + 1);
+    desks.set(agentId, {
+      ...desk,
+      seatId: `${group}/${index}`,
+      kind: FLOOR_SEAT_KIND,
+      facing: FLOOR_SEAT_FACING,
+      hitTiles: { width: DESK_WIDTH_TILES, height: SEAT_HIT_ROWS },
+      floorIndex,
+      roomId,
+      hostId,
+    });
+  }
+  return desks;
+}
+
+/**
+ * What a spot ACTS on: the nearest prop of the right kind standing above it in
+ * its own column, which is exactly the lookup the scene does when a paper ball
+ * is thrown, a plant is watered or a screen flashes. Spots that act on nothing
+ * - a coffee queue, a stroll tile - have no target.
+ */
+function actionSpriteOf(
+  kind: OfficeErrandSpot["kind"],
+): OfficeSpriteName | null {
+  if (kind === "bin") return "bin";
+  if (kind === "darts") return "dartboard";
+  if (kind === "water-plant") return "plant";
+  if (kind === "arcade") return "arcade";
+  if (kind === "console") return "tv";
+  return null;
+}
+
+function propTileAbove(
+  props: ReadonlyArray<OfficeProp>,
+  tile: OfficeTilePos,
+  name: OfficeSpriteName,
+): OfficeTilePos | null {
+  let found: OfficeTilePos | null = null;
+  for (const prop of props) {
+    if (prop.sprite.name !== name) continue;
+    if (prop.tile.col !== tile.col) continue;
+    if (prop.tile.row >= tile.row) continue;
+    if (found !== null && prop.tile.row <= found.row) continue;
+    found = prop.tile;
+  }
+  return found;
+}
+
+/**
+ * Which fixture a spot belongs to.
+ *
+ * On this floor a storey holds at most one table of each kind, and a table's
+ * two sides are laid on the same row - so the storey, the kind and the row name
+ * exactly the table, which is exactly the pairing the scene makes today when it
+ * looks for the agent on the other side. A view that stands two tables of one
+ * kind on one row has to issue finer ids than this.
+ */
+function fixtureIdOf(spot: PlacedSpot, floorIndex: number): string {
+  return `${floorIndex}/${spot.kind}/${spot.tile.row}`;
+}
+
+function decorateSpots(
+  spots: ReadonlyArray<PlacedSpot>,
+  props: ReadonlyArray<OfficeProp>,
+  floorIndex: number,
+): ReadonlyArray<OfficeErrandSpot> {
+  return spots.map((spot) => {
+    const sprite = actionSpriteOf(spot.kind);
+    return {
+      ...spot,
+      fixtureId: fixtureIdOf(spot, floorIndex),
+      // On this floor you act from where you stand; an oblique or isometric
+      // view can put the approach a tile off the fixture instead.
+      approachTile: spot.tile,
+      actionTile:
+        sprite === null ? null : propTileAbove(props, spot.tile, sprite),
+      floorIndex,
+    };
+  });
+}
+
+interface CorridorRequest {
+  readonly cols: number;
+  readonly walkable: ReadonlyArray<ReadonlyArray<boolean>>;
+  readonly rooms: ReadonlyArray<PlacedRoom>;
+  readonly floor: PlacedFloor;
+}
+
+/**
+ * The storey's own corridors: walkable floor between the wall face and the
+ * lobby that belongs to nothing in particular. A cabin, an amenity, the door,
+ * the lobby, the queue and any tile an errand spot already names are all
+ * somewhere to BE, and standing about in one of them is not a stroll.
+ */
+function corridorTilesOf(
+  request: CorridorRequest,
+): ReadonlyArray<OfficeTilePos> {
+  const { floor } = request;
+  const reserved = new Set<string>([
+    tileKey(floor.doorTile),
+    tileKey(floor.lobbyTile),
+    ...floor.receptionQueueTiles.map(tileKey),
+    ...floor.errandSpots.map((spot) => tileKey(spot.tile)),
+  ]);
+  const tiles: OfficeTilePos[] = [];
+  const first = floor.bounds.row + CORRIDOR_FIRST_ROW_OFFSET;
+  const last = floor.lobbyTile.row - 1;
+  for (let row = first; row <= last; row += 1) {
+    for (let col = 1; col < request.cols - 1; col += 1) {
+      if (!request.walkable[row][col]) continue;
+      const tile: OfficeTilePos = { col, row };
+      if (reserved.has(tileKey(tile))) continue;
+      if (request.rooms.some((room) => withinRect(room.bounds, tile))) continue;
+      if (floor.amenities.some((room) => withinRect(room.bounds, tile))) {
+        continue;
+      }
+      tiles.push(tile);
+    }
+  }
+  return tiles;
+}
+
+/**
+ * Where a visitor from this cabin stands: the aisle tile under the root's
+ * chair, which is where the scene has always put one. One tile per room rather
+ * than one per desk, because a visit is a call on the room's own people and
+ * every view has to be able to name the place it happens.
+ */
+function visitTileOf(
+  room: PlacedRoom,
+  desks: ReadonlyMap<string, OfficeDesk>,
+  walkable: ReadonlyArray<ReadonlyArray<boolean>>,
+): OfficeTilePos | null {
+  const desk = desks.get(room.rootAgentId);
+  if (desk === undefined) return null;
+  const tile: OfficeTilePos = {
+    col: desk.chairTile.col,
+    row: desk.chairTile.row + 1,
+  };
+  if (tile.row < 0 || tile.row >= walkable.length) return null;
+  if (!walkable[tile.row][tile.col]) return null;
+  return tile;
+}
+
+/**
+ * Every piece of lettering the floor carries, in the order the prop pass emits
+ * it today: each cabin's sign and its pods' plates, then the amenity signs.
+ *
+ * A cabin sign and a pod plate NAME somebody, so they carry an owner and the
+ * renderer hides them until that agent exists at the cursor - which is what the
+ * prop pass checks for itself today. An amenity is nobody's, so its sign has no
+ * owner and is always drawn.
+ */
+function floorSigns(
+  rooms: ReadonlyArray<PlacedRoom>,
+  floors: ReadonlyArray<PlacedFloor>,
+): ReadonlyArray<OfficeSign> {
+  const signs: OfficeSign[] = [];
+  for (const room of rooms) {
+    const hostId = floors[floorIndexOfRow(floors, room.bounds.row)].hostId;
+    signs.push({
+      kind: "room",
+      tile: room.signTile,
+      widthTiles: ROOM_SIGN_WIDTH_TILES,
+      text: room.name,
+      ownerAgentId: room.rootAgentId,
+      hostId,
+      agentIds: [],
+    });
+    for (const pod of room.pods) {
+      signs.push({
+        kind: "pod",
+        tile: pod.plateTile,
+        widthTiles: POD_PLATE_WIDTH_TILES,
+        text: pod.name,
+        ownerAgentId: pod.leadAgentId,
+        hostId,
+        agentIds: [],
+      });
+    }
+  }
+  for (const floor of floors) {
+    for (const sign of floor.areaSigns) {
+      signs.push({
+        kind: "area",
+        tile: sign.signTile,
+        widthTiles: ROOM_SIGN_WIDTH_TILES,
+        text: sign.name,
+        ownerAgentId: null,
+        hostId: floor.hostId,
+        agentIds: [],
+      });
+    }
+  }
+  return signs;
+}
+
+interface DecorationRequest {
+  readonly cols: number;
+  readonly rows: number;
+  readonly placedDesks: ReadonlyMap<string, PlacedDesk>;
+  readonly placedRooms: ReadonlyArray<PlacedRoom>;
+  readonly placedFloors: ReadonlyArray<PlacedFloor>;
+  readonly props: ReadonlyArray<OfficeProp>;
+  readonly walkable: ReadonlyArray<ReadonlyArray<boolean>>;
+}
+
+/**
+ * The packed floor, given the vocabulary the contract puts on every layout.
+ *
+ * `frozen` is `null` and `shiftFromPrevious` is `null` because this plan is a
+ * pure function of the agent set and carries nothing between runs, and `stable`
+ * is `false` because it re-packs: a fifth child arriving moves the chairs
+ * around it, and the scene has to walk whoever moved.
+ */
+function decorateFloorLayout(request: DecorationRequest): OfficeLayout {
+  const { cols, rows, props, walkable } = request;
+  const desks = decorateDesks(
+    request.placedDesks,
+    request.placedRooms,
+    request.placedFloors,
+  );
+  const seats = new Map<string, OfficeSeat>();
+  for (const desk of desks.values()) seats.set(desk.seatId, desk);
+  const rooms: ReadonlyArray<OfficeRoom> = request.placedRooms.map((room) => ({
+    ...room,
+    visitTile: visitTileOf(room, desks, walkable),
+  }));
+  const floors: ReadonlyArray<OfficeFloor> = request.placedFloors.map(
+    (floor, floorIndex) => ({
+      ...floor,
+      queueFacing: FLOOR_QUEUE_FACING,
+      corridorTiles: corridorTilesOf({
+        cols,
+        walkable,
+        rooms: request.placedRooms,
+        floor,
+      }),
+      errandSpots: decorateSpots(floor.errandSpots, props, floorIndex),
+    }),
+  );
+  return {
+    view: "floor",
+    cols,
+    rows,
+    desks,
+    seats,
+    signs: floorSigns(request.placedRooms, request.placedFloors),
+    rooms,
+    floors,
+    // The FIRST storey's entrance is the building's, so everything that only
+    // knows about one door keeps working on a single-host epic.
+    doorTile: floors[0].doorTile,
+    lobbyTile: floors[0].lobbyTile,
+    props,
+    walkable,
+    frozen: null,
+    shiftFromPrevious: null,
+    stable: false,
+  };
+}
+
 export function layoutOffice(
   agents: ReadonlyArray<OfficeAgentInput>,
 ): OfficeLayout {
@@ -2559,8 +2976,8 @@ export function layoutOffice(
   const rows = last.originRow + last.localRows;
   const doorCol = Math.floor((cols - 1) / 2);
 
-  const desks = new Map<string, OfficeDesk>();
-  const rooms: OfficeRoom[] = [];
+  const desks = new Map<string, PlacedDesk>();
+  const rooms: PlacedRoom[] = [];
   collectCabins(builds, desks, rooms);
 
   const walkable = blankWalkableGrid(cols, rows, builds);
@@ -2582,17 +2999,13 @@ export function layoutOffice(
     fitFloor({ context, build, doorCol, multiFloor, rooms }),
   );
 
-  return {
+  return decorateFloorLayout({
     cols,
     rows,
-    desks,
-    rooms,
-    floors,
-    // The FIRST storey's entrance is the building's, so everything that only
-    // knows about one door keeps working on a single-host epic.
-    doorTile: floors[0].doorTile,
-    lobbyTile: floors[0].lobbyTile,
+    placedDesks: desks,
+    placedRooms: rooms,
+    placedFloors: floors,
     props: context.props,
     walkable,
-  };
+  });
 }

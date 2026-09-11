@@ -216,16 +216,66 @@ export interface OfficeTileRect {
   readonly rows: number;
 }
 
+// ---- Views ------------------------------------------------------------ //
+
+/**
+ * Which office a layout is a layout OF. The union is the set of views that
+ * SHIP: a view is registered here and in `views/office-view.ts` together, so
+ * the picker, the persisted choice and the shared suites all follow one list
+ * and a half-registered view cannot exist.
+ */
+export type OfficeViewId = "floor";
+
+/**
+ * Semantic zoom, decided by the camera: `0` overview (pips with state glyphs),
+ * `1` office, `2` close-up. A painter is handed one and draws for it; nothing
+ * downstream re-derives the level from a zoom factor.
+ */
+export type OfficeLod = 0 | 1 | 2;
+
 // ---- Layout ---------------------------------------------------------- //
 
-export interface OfficeDesk {
-  readonly agentId: string;
-  /** Top-left tile of the two-tile-wide desk. */
+/**
+ * What kind of place an agent sits in. A `desk` is the full workstation every
+ * view has had; a `cubby` is the one-tile slot a cold agent waits in with no
+ * monitor, nameplate or errands; a `console` is the amphitheatre's two-tile
+ * station. The kind is what the scene reads - never the view id.
+ */
+export type OfficeSeatKind = "desk" | "cubby" | "console";
+
+/**
+ * One place an agent can sit, whether or not anybody sits there. Reserve seats
+ * are seats: they carry ids from the moment the plan makes them, which is what
+ * lets the seat book hand one out without inventing geometry of its own.
+ */
+export interface OfficeSeat {
+  /**
+   * Stable across plans: `"<host>/<floor>/<room>/<n>"`. On an append-stable
+   * layout the same seat keeps the same id for the life of the view, which is
+   * what makes "who is where" survive a re-plan.
+   */
+  readonly seatId: string;
+  readonly kind: OfficeSeatKind;
+  /** Top-left tile of the furniture; hit boxes are anchored here. */
   readonly deskTile: OfficeTilePos;
-  /** The chair tile, directly below the desk's left tile. */
+  /** Path goal, and the character's own tile once it is seated. */
   readonly chairTile: OfficeTilePos;
+  /** Which way the seated character looks; `"up"` on Floor. */
+  readonly facing: OfficeFacing;
+  /** The seat's box in tiles from `deskTile`: 2×2 desk, 1×1 cubby, 2×1 console. */
+  readonly hitTiles: OfficeSize;
+  /** The storey this seat belongs to: its door, lobby, queue and corridors. */
+  readonly floorIndex: number;
+  /** The room that owns it - visits, boards and plates - or `null` in the open. */
+  readonly roomId: string | null;
+  readonly hostId: string | null;
   /** A root agent (no parent on the floor) gets a manager desk with a plant. */
   readonly manager: boolean;
+}
+
+/** A seat the plan handed to an agent: the INITIAL assignment, not the truth. */
+export interface OfficeDesk extends OfficeSeat {
+  readonly agentId: string;
 }
 
 export interface OfficeProp {
@@ -253,6 +303,12 @@ export interface OfficeRoom {
    * lie inside its parent pod's (or the cabin's) interior.
    */
   readonly pods: ReadonlyArray<OfficePod>;
+  /**
+   * Where a visitor from this same room stands to call on somebody, or `null`
+   * where the room has no such tile. A visit is same-room in every view, so
+   * the room owns the tile rather than the scene deriving it from a chair.
+   */
+  readonly visitTile: OfficeTilePos | null;
 }
 
 /**
@@ -301,6 +357,18 @@ export interface OfficeFloor {
    * person queue here in arrival order.
    */
   readonly receptionQueueTiles: ReadonlyArray<OfficeTilePos>;
+  /** Which way somebody in the queue looks; `"down"` on Floor. */
+  readonly queueFacing: OfficeFacing;
+  /**
+   * The stroll tiles this storey OWNS: walkable floor that belongs to nothing
+   * in particular - not a room, not an amenity, not the lobby, the door or the
+   * queue, and not a tile some errand spot already names.
+   *
+   * Carried rather than scanned, because "the rows above the lobby" is a fact
+   * about one storey of one view: an oblique aisle row and an isometric
+   * district corridor are both corridors and neither is above a lobby.
+   */
+  readonly corridorTiles: ReadonlyArray<OfficeTilePos>;
   /** Wall tile carrying this floor's clock. */
   readonly clockTile: OfficeTilePos;
   /** Top-left of the two-by-two stairwell, or `null` on a single-floor building. */
@@ -405,6 +473,58 @@ export interface OfficeErrandSpot {
   readonly kind: OfficeErrandKind;
   readonly tile: OfficeTilePos;
   readonly facing: OfficeFacing;
+  /**
+   * The FIXTURE this spot belongs to - one id per table, sofa or board, not
+   * one per row. Two agents rally when they stand at spots that share a
+   * fixture, which is what stops a same-kind neighbour at a different table
+   * from being read as the other end of this one.
+   */
+  readonly fixtureId: string;
+  /** Where the walker actually stands; `tile` on Floor. */
+  readonly approachTile: OfficeTilePos;
+  /**
+   * What a throw, a watering or a sparkle is aimed AT, or `null` for a spot
+   * that acts on nothing. Projected like any other tile, so the target of a
+   * paper ball is right in an isometric view too.
+   */
+  readonly actionTile: OfficeTilePos | null;
+  readonly floorIndex: number;
+}
+
+/**
+ * What a piece of lettering on the plan NAMES. `room`, `pod` and `area` are
+ * today's cabin signs, pod plates and amenity signs; `host`, `plate`, `board`
+ * and `hq-board` are what the later views hang on a storey.
+ */
+export type OfficeSignKind =
+  | "room"
+  | "pod"
+  | "area"
+  | "host"
+  | "plate"
+  | "board"
+  | "hq-board";
+
+/**
+ * One piece of lettering, placed by the plan and drawn by the renderer.
+ *
+ * Signs leave the scene's prop pass because WHO a sign names is a plan fact
+ * and WHETHER it can be drawn is a cursor fact: a sign whose owner does not
+ * exist yet at the cursor has no name to show, and that check belongs where
+ * the visible set is known rather than inside the packing.
+ */
+export interface OfficeSign {
+  readonly kind: OfficeSignKind;
+  /** Left tile of the sign; `widthTiles` runs right from here. */
+  readonly tile: OfficeTilePos;
+  readonly widthTiles: number;
+  /** `""` where the renderer resolves the text itself, as for a host name. */
+  readonly text: string;
+  /** Drawn only while this agent is visible at the cursor; `null` draws always. */
+  readonly ownerAgentId: string | null;
+  readonly hostId: string | null;
+  /** Boards only: whose statuses this sign summarises. */
+  readonly agentIds: ReadonlyArray<string>;
 }
 
 /**
@@ -413,10 +533,19 @@ export interface OfficeErrandSpot {
  * a stored coordinate.
  */
 export interface OfficeLayout {
+  /** Which view produced this layout. The scene never reads it; the tests do. */
+  readonly view: OfficeViewId;
   readonly cols: number;
   readonly rows: number;
   /** One desk per agent in the input set, keyed by agent id. */
   readonly desks: ReadonlyMap<string, OfficeDesk>;
+  /**
+   * EVERY seat the plan made, reserves included, keyed by `seatId`. The seat
+   * book hands these out; `desks` is only the initial assignment.
+   */
+  readonly seats: ReadonlyMap<string, OfficeSeat>;
+  /** Every piece of lettering on the plan, in draw order. */
+  readonly signs: ReadonlyArray<OfficeSign>;
   /** One cabin per root agent, in layout order. Empty when there are no agents. */
   readonly rooms: ReadonlyArray<OfficeRoom>;
   /** One per host, in host-id order; never empty (an empty epic has one floor). */
@@ -429,6 +558,25 @@ export interface OfficeLayout {
   readonly props: ReadonlyArray<OfficeProp>;
   /** `walkable[row][col]`; desks, chairs, walls and props are not walkable. */
   readonly walkable: ReadonlyArray<ReadonlyArray<boolean>>;
+  /**
+   * This view's own packing metadata, carried forward through `previous` so a
+   * plan can re-pack the way it packed last time. OPAQUE to the scene, which
+   * is the point: wings, tower counts, tier widths and lot grids are facts
+   * about one packer and nothing outside it may read them.
+   */
+  readonly frozen: unknown;
+  /**
+   * How far the whole world moved since `previous`, or `null` when it did not.
+   * The scene translates every tile and point it holds by this and pans the
+   * camera back, so a building that grew a storey does not jump on screen.
+   */
+  readonly shiftFromPrevious: OfficeTilePos | null;
+  /**
+   * `true` where a seat only ever moves by `shiftFromPrevious`, so an
+   * appended agent never rehomes anybody. Floor and Campus re-pack instead
+   * and say `false`.
+   */
+  readonly stable: boolean;
 }
 
 // ---- Scene inputs --------------------------------------------------- //
@@ -562,6 +710,21 @@ export type OfficeDrawable =
       readonly y: number;
       readonly alpha?: number;
     };
+
+/**
+ * One drawable in a DEPTH-ORDERED world stream, for the views whose props and
+ * characters interleave (an oblique desk front covers its own occupant's lap;
+ * an isometric building stands in front of whatever is behind it).
+ *
+ * `ownerAgentId` travels with the drawable so the renderer resolves a name tag
+ * from the thing it drew rather than by scanning hit regions for whatever
+ * happens to overlap it.
+ */
+export interface OfficeWorldDrawable {
+  readonly drawable: OfficeDrawable;
+  readonly depth: number;
+  readonly ownerAgentId: string | null;
+}
 
 export interface OfficeHitRegion {
   readonly agentId: string;

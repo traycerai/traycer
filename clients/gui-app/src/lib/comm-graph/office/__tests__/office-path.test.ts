@@ -41,15 +41,21 @@ function sealedLayout(): OfficeLayout {
     [false, false, true],
   ];
   return {
+    view: "floor",
     cols: 3,
     rows: 3,
     desks: new Map(),
+    seats: new Map(),
+    signs: [],
     rooms: [],
     floors: [],
     doorTile: { col: 0, row: 0 },
     lobbyTile: { col: 0, row: 0 },
     props: [],
     walkable,
+    frozen: null,
+    shiftFromPrevious: null,
+    stable: false,
   };
 }
 

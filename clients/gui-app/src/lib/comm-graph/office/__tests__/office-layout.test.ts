@@ -59,6 +59,28 @@ function tileOf(layout: OfficeLayout, agentId: string): OfficeTilePos {
   return desk.deskTile;
 }
 
+/** Where a desk was PUT, with none of the identity a seat also carries. */
+interface DeskPlacement {
+  readonly deskTile: OfficeTilePos;
+  readonly chairTile: OfficeTilePos;
+  readonly manager: boolean;
+}
+
+function deskGeometry(
+  layout: OfficeLayout,
+): ReadonlyMap<string, DeskPlacement> {
+  return new Map(
+    Array.from(layout.desks, ([agentId, desk]) => [
+      agentId,
+      {
+        deskTile: desk.deskTile,
+        chairTile: desk.chairTile,
+        manager: desk.manager,
+      },
+    ]),
+  );
+}
+
 function roomOf(layout: OfficeLayout, rootAgentId: string): OfficeRoom {
   const room = layout.rooms.find(
     (candidate) => candidate.rootAgentId === rootAgentId,
@@ -655,7 +677,9 @@ describe("layoutOffice floors", () => {
     // host: grouping must not move a desk.
     expect(hosted.cols).toBe(hostless.cols);
     expect(hosted.rows).toBe(hostless.rows);
-    expect(hosted.desks).toEqual(hostless.desks);
+    // A desk now carries its host and a seat id derived from it, so the two
+    // sets are compared on the placement this case is actually about.
+    expect(deskGeometry(hosted)).toEqual(deskGeometry(hostless));
     expect(hosted.doorTile).toEqual(hostless.doorTile);
   });
 

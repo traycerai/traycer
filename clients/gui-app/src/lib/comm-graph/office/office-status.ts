@@ -13,6 +13,31 @@ import type { OfficeAgentStatus } from "@/lib/comm-graph/office/office-types";
 import type { AgentActivityTier } from "@/lib/agent-activity";
 
 /**
+ * The statuses that mean SOMETHING IS HAPPENING to this agent.
+ *
+ * One set, exported rather than restated, because three readers have to agree
+ * about it or the floor contradicts itself: the population partition calls a
+ * team live when any member is hot, the seat book wakes a cubby agent into a
+ * reserve seat when its status enters this set, and the directory lights the
+ * same rows. `archived` and `idle` are the only ones outside it - an archived
+ * desk has nothing left to do, and an idle one has nothing to do yet.
+ */
+export const OFFICE_HOT_STATUSES: ReadonlySet<OfficeAgentStatus> = new Set([
+  "working",
+  "awaiting",
+  "attention",
+  "failure",
+  "background",
+]);
+
+/** Whether a status is one of `OFFICE_HOT_STATUSES`; `undefined` is not. */
+export function isOfficeHotStatus(
+  status: OfficeAgentStatus | undefined,
+): boolean {
+  return status !== undefined && OFFICE_HOT_STATUSES.has(status);
+}
+
+/**
  * Whether a record is archived AS OF a cursor.
  *
  * `archivedAt` is a moment on the same timeline the cursor sits on, so a
