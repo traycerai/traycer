@@ -879,7 +879,7 @@ async function waitForHostedChatLoaded(
     const record = queryHostedRecord(container, instanceId);
     expect(record).not.toBeNull();
     expect(
-      record?.querySelector('[data-testid="chat-tile-loading"]'),
+      record?.querySelector('[data-testid^="chat-tile-pre-content-"]'),
     ).toBeNull();
     expect(record?.querySelector('[data-testid="chat-tile"]')).not.toBeNull();
     expect(record?.querySelector("[data-message-id]")).not.toBeNull();

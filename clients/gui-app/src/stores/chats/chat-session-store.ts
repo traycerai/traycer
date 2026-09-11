@@ -689,7 +689,7 @@ function chatRecordWithoutTranscript(chat: Chat): ChatSessionRecord {
 
 /**
  * What the connection attempts BEFORE the first snapshot have produced - the
- * evidence the chat tile's bounded loading gate reads.
+ * evidence the chat tile's pre-content body reads (`chat-pre-content.ts`).
  *
  * It exists because a stream can fail forever without ever going terminal. A
  * host that refuses `chat.subscribe` with a RETRYABLE fatal (host 1.2.0 on a
@@ -734,9 +734,10 @@ function countPreSnapshotRetry(
 ): PreSnapshotRetryEvidence {
   return {
     count: (previous?.count ?? 0) + 1,
-    // Stamped by the FIRST failure and never moved: it anchors the elapsed
-    // arm of the tile's gate, which asks how long this load has been failing,
-    // not how long ago the newest attempt died.
+    // Stamped by the FIRST failure and never moved: a tile that mounts into
+    // this streak dates its wait from here (`chatLoadWaitBeganAt`), which asks
+    // how long this load has been failing, not how long ago the newest
+    // attempt died.
     firstAt: previous?.firstAt ?? now,
     code: details?.code ?? previous?.code ?? null,
     reason: details?.reason ?? previous?.reason ?? null,
@@ -749,10 +750,10 @@ export interface ChatSessionState {
   readonly connectionStatus: StreamConnectionStatus;
   /**
    * Set when the host terminates the `chat.subscribe` stream with a
-   * `fatalError` (e.g. `CHAT_INVALID` / `CHAT_NOT_VISIBLE`, collapsed to code
-   * `UNAUTHORIZED` on the wire). Drives the tile's error state instead of an
-   * indefinite loading spinner when a snapshot never arrives. Cleared on every
-   * fresh (re)connect attempt.
+   * `fatalError` (e.g. `CHAT_INVALID` or `CHAT_NOT_VISIBLE`, each sent under
+   * its own code). Drives the tile's error state instead of an indefinite
+   * loading spinner when a snapshot never arrives. Cleared on every fresh
+   * (re)connect attempt.
    */
   readonly fatalClose: FatalErrorDetails | null;
   readonly snapshotLoaded: boolean;

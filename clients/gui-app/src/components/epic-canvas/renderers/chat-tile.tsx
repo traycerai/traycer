@@ -161,10 +161,8 @@ import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import {
   useHostReachability,
-  resolvedHostLabel,
+  type HostReachability,
 } from "@/hooks/agent/use-host-reachability";
-import { useBoundedHostLoad } from "@/hooks/host/use-bounded-host-load";
-import { TileHostLoadState } from "./tile-host-load-state";
 import {
   useEpicCreateChatForHost,
   useEpicUpdateChatRunSettings,
@@ -261,6 +259,7 @@ import { ChatTileErrorNoticeToasts } from "./chat-tile-error-notice-toasts";
 import { ChatTileRestoreResultToasts } from "./chat-tile-restore-result-toasts";
 import { HostWorkspaceSelector } from "@/components/home/host-workspace-selector/host-workspace-selector";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { TraycerNextStepOption } from "@/markdown/traycer-next-steps";
 import { ChatLowerInteractionSurfaces } from "./chat-tile-lower-surfaces";
 import { composerHasBlockingApprovals } from "./chat-approval-visibility";
@@ -283,10 +282,8 @@ import {
 } from "./chat-tile-session-state";
 import { toast } from "sonner";
 import type { ChatSurfaceNode } from "./chat-tile-types";
-import {
-  ChatTileLoading,
-  ChatTilePreSnapshotGate,
-} from "./chat-tile-runtime-gate";
+import { ChatTilePreContent } from "./chat-tile-runtime-gate";
+import type { ChatLoadWait, ChatTilePreContentFrame } from "./chat-pre-content";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import { chatTileCatalogActivity } from "./chat-tile-surface-activity";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
@@ -350,6 +347,12 @@ interface ChatTileSessionViewProps {
    * like a loaded one, since for rendering the transcript it is.
    */
   readonly isLiveSession: boolean;
+  /**
+   * The wait `ChatTile` records above its handle branch, for the body shown
+   * before the first snapshot. `null` for a published copy, whose state is
+   * synthesized loaded and never waits.
+   */
+  readonly preContent: ChatTilePreContentFrame | null;
 }
 
 function buildModelReasoningLabels(
@@ -385,8 +388,52 @@ function reasoningLabelEntry(
  * Chat history rendered from `chat.subscribe`. The Epic session still supplies
  * the chat tile identity, title, tree placement, and mention catalog, but chat
  * content now comes from the host-owned per-chat stream.
+ *
+ * Keyed by the chat. What the tile decides once per mount - the cross-host
+ * exemption below, and the wait its pre-content body narrates - belongs to
+ * one chat, so a tile handed another chat starts both over instead of
+ * inheriting them. Tiles are one chat for life today; the key keeps that
+ * true by construction rather than by a property of the surface host.
  */
 export function ChatTile(props: ChatTileProps) {
+  return (
+    <ChatTileForChat
+      key={props.node.id}
+      node={props.node}
+      viewTabId={props.viewTabId}
+      tileId={props.tileId}
+      isActive={props.isActive}
+    />
+  );
+}
+
+/**
+ * The wait for this chat's first transcript, with what the pre-content body
+ * needs from above the handle branch. See `ChatLoadWait` for why it lives
+ * here and not in the body.
+ */
+function useChatTilePreContentFrame(
+  reachability: HostReachability,
+): ChatTilePreContentFrame {
+  const [wait, setWait] = useState<ChatLoadWait>(() => ({
+    startedAt: Date.now(),
+    attemptsBefore: 0,
+    inheritsStreak: true,
+  }));
+  const restartWait = useCallback((attemptsNow: number) => {
+    setWait({
+      startedAt: Date.now(),
+      attemptsBefore: attemptsNow,
+      inheritsStreak: false,
+    });
+  }, []);
+  return useMemo(
+    () => ({ wait, restartWait, reachability }),
+    [wait, restartWait, reachability],
+  );
+}
+
+function ChatTileForChat(props: ChatTileProps) {
   const { node, viewTabId, isActive } = props;
   const epicId = useOpenEpicId();
   // Gate the host `chat.subscribe` on this tile having some EVIDENCE that the
@@ -495,18 +542,16 @@ export function ChatTile(props: ChatTileProps) {
     !epicParked && (chatRecord !== null || isCrossHostOpen || isCloudKnown),
   );
   const reachability = useHostReachability(tabHostId);
-  // The chat's own bounded load (invariant 6). `handle === null` is this
-  // tile's spinner-forever shape and it has THREE causes that look identical
-  // from here: the tab's host client is null so every `useHostQuery` disabled
-  // itself (audit S3), the subscription is live but nothing has arrived (S4),
-  // or the directory has not answered at all (S5's `checking`, which this tile
-  // had no arm for). The reader cannot act on the difference, so all three get
-  // one sentence naming the host - and an end.
-  const chatLoad = useBoundedHostLoad({
-    hostId: tabHostId,
-    hostLabel: resolvedHostLabel(reachability),
-    pending: handle === null,
-  });
+  // The chat's own bounded load (invariant 6), for both halves of the wait:
+  // while `handle === null`, and after it until the first snapshot. The
+  // handle-pending half has THREE causes that look identical from here: the
+  // tab's host client is null so every `useHostQuery` disabled itself (audit
+  // S3), the subscription is live but nothing has arrived (S4), or the
+  // directory has not answered at all (S5's `checking`). The reader cannot act
+  // on the difference, so all three get one sentence naming the host - and an
+  // end. The wait is recorded here, above the branch, so the handle arriving
+  // restarts none of its deadlines.
+  const preContentFrame = useChatTilePreContentFrame(reachability);
   // Feeds `TombstonedProfileProvider` below - "ran on <label> (removed)" for
   // a message anchored to a since-tombstoned profile. Shares the same
   // tab-scoped query the reauth gate/rate-limit prompt already read, so this
@@ -563,20 +608,11 @@ export function ChatTile(props: ChatTileProps) {
         className="flex h-full min-h-0 flex-col"
       >
         {deadTileBanner}
-        {chatLoad.kind === "ready" ? (
-          // Unreachable while `pending` is `handle === null` and we are inside
-          // that branch, but written as a fallback rather than a cast: the
-          // spinner is the strictly safer thing to render if that ever stops
-          // being true.
-          <ChatTileLoading />
-        ) : (
-          <TileHostLoadState
-            load={chatLoad}
-            subject="agent"
-            onRetry={null}
-            testId={`chat-tile-load-${node.id}`}
-          />
-        )}
+        <ChatTilePreContent
+          testId={`chat-tile-pre-content-${node.id}`}
+          frame={preContentFrame}
+          session={null}
+        />
       </div>
     );
   }
@@ -597,6 +633,7 @@ export function ChatTile(props: ChatTileProps) {
           currentEpicId={epicId}
           readOnlyNotice={null}
           isLiveSession
+          preContent={preContentFrame}
         />
       </TombstonedProfileProvider>
     </div>
@@ -1260,9 +1297,11 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
             <div className="relative flex min-h-0 flex-1 flex-col">
               <ChatSessionMessagesSurface
                 snapshotLoaded={view.snapshotLoaded}
+                connectionStatus={view.connectionStatus}
                 fatalClose={view.fatalClose}
                 preSnapshotRetries={view.preSnapshotRetries}
                 onRetry={view.onChatRetryFromUser}
+                preContent={view.preContent}
                 restoreContext={view.restoreContext}
                 node={view.node}
                 epicId={view.currentEpicId}
@@ -3127,8 +3166,10 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     transcriptBaselineEpoch: state.transcriptBaselineEpoch,
     transcriptHydrationSequence: state.transcriptHydrationSequence,
     coldRewrittenMessageIds: state.coldRewrittenMessageIds,
+    connectionStatus: state.connectionStatus,
     fatalClose: state.fatalClose,
     preSnapshotRetries: state.preSnapshotRetries,
+    preContent: props.preContent,
     // TWO retries, deliberately, and they are not interchangeable.
     //
     // `onChatRetry` is the AUTOMATIC one: `useRecordHostOlderThanDataRefusal`
@@ -3262,10 +3303,13 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
 
 interface ChatSessionMessagesSurfaceProps {
   readonly snapshotLoaded: boolean;
+  readonly connectionStatus: StreamConnectionStatus;
   readonly fatalClose: FatalErrorDetails | null;
-  /** Failed pre-snapshot attempts; see `ChatTilePreSnapshotGate`. */
+  /** Failed pre-snapshot attempts; see `ChatTilePreContent`. */
   readonly preSnapshotRetries: PreSnapshotRetryEvidence | null;
   readonly onRetry: () => void;
+  /** See `ChatTileSessionViewProps.preContent`. */
+  readonly preContent: ChatTilePreContentFrame | null;
   readonly restoreContext: ChatRestoreContextValue;
   readonly node: ChatSurfaceNode;
   readonly epicId: string;
@@ -3341,25 +3385,25 @@ function ChatSessionMessagesSurface(
   props: ChatSessionMessagesSurfaceProps,
 ): ReactNode {
   // Until the real `chat.subscribe` snapshot lands (~0.5s - the host is
-  // local-first) the gate owns this surface: the loading skeleton, the fatal
+  // local-first) the pre-content body owns this surface: the wait, the fatal
   // close the host will never follow with a snapshot, and the streak of failed
   // attempts a host that never closes fatally would otherwise spin on forever.
   // The snapshot then renders the user message + real turn state in one
   // transition; there is no optimistic seed.
   if (!props.snapshotLoaded) {
+    // A published copy's state is synthesized loaded, so it never gets here:
+    // it has no wait to narrate and no host session to retry.
+    if (props.preContent === null) return null;
     return (
-      // Keyed by the chat, because the gate's stall deadline is anchored at
-      // its own first render. Tiles are one chat for life and the surface host
-      // keys records by instance, so this never actually remounts today - it
-      // is here so that stays true by construction rather than by a property
-      // of a component two layers up: a gate instance carried over to another
-      // chat would inherit the first one's start and declare the new load
-      // stalled on sight.
-      <ChatTilePreSnapshotGate
-        key={props.node.id}
-        fatalClose={props.fatalClose}
-        retries={props.preSnapshotRetries}
-        onRetry={props.onRetry}
+      <ChatTilePreContent
+        testId={`chat-tile-pre-content-${props.node.id}`}
+        frame={props.preContent}
+        session={{
+          fatalClose: props.fatalClose,
+          connectionStatus: props.connectionStatus,
+          retries: props.preSnapshotRetries,
+          onRetry: props.onRetry,
+        }}
       />
     );
   }

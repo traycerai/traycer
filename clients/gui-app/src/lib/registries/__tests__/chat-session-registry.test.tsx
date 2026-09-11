@@ -387,7 +387,7 @@ describe("useChatSessionHandle owner identity (R-1)", () => {
  * The isolated tests all passed while this was broken, which is the point of
  * putting it here: the mapper collapsed `unknown` into a non-dialable entry,
  * `hostTransportKey` refused anything non-dialable, THIS registry released the
- * handle on the changed key, and `chat-tile` rendered `ChatTileLoading`
+ * handle on the changed key, and `chat-tile` rendered its loading state
  * forever — while `useHostReachability` one layer up had just decided the same
  * host was reachable. Every layer was individually defensible.
  *

@@ -591,7 +591,9 @@ function renderChatTile(): void {
 
 async function waitForChatTileLoaded(): Promise<void> {
   await waitFor(() => {
-    expect(screen.queryByTestId("chat-tile-loading")).toBeNull();
+    expect(
+      document.querySelector('[data-testid^="chat-tile-pre-content-"]'),
+    ).toBeNull();
   });
   await waitFor(() => {
     expect(screen.getByTestId("queued-message-rows")).not.toBeNull();
