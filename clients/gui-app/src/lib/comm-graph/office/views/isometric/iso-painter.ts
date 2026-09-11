@@ -17,6 +17,7 @@
  * - a City storey is 8 px of slab, so storey `i` of a building hangs at
  *   `y - i * 8` and its roof at `y - storeys * 8`.
  */
+import { officeSpriteSize } from "@/lib/comm-graph/office/office-pixel-art";
 import { isOfficeHotStatus } from "@/lib/comm-graph/office/office-status";
 import {
   OFFICE_TILE,
@@ -35,7 +36,10 @@ import {
   type OfficeWorldDrawable,
 } from "@/lib/comm-graph/office/office-types";
 import {
-  isoTileKey,
+  cityRoofLift,
+  isoPropsIn,
+  isoRoomsIn,
+  isoSpotDraws,
   isoWithinRect,
   readCityFrozen,
   ISO_CAMPUS_STACK_HEIGHT,
@@ -66,8 +70,16 @@ const DOOR_ISO_HEIGHT = 32;
 const WINDOW_SIZE = 8;
 const SPIRE_WIDTH = 8;
 
-/** Depth nudge that keeps a monitor over its own desk and nothing else. */
-const OVER_DESK = 0.25;
+/**
+ * Everything one seat stands up shares ONE depth - the foot of its own tile.
+ *
+ * There is no nudge, because `depth` is now measured in foot pixels: a nudge
+ * big enough to order a seven-storey stack would be big enough to lift that
+ * stack past a character standing a pixel nearer, which is the defect the one
+ * depth unit exists to close. Within a tile there is nothing to decide by
+ * depth anyway - the parts are emitted back to front, and both the painter's
+ * sort and the scene's merge are stable, so emission order is the order.
+ */
 
 function projectorFor(layout: OfficeLayout): OfficeProjector {
   const frozen = readCityFrozen(layout);
@@ -86,30 +98,17 @@ function projectorFor(layout: OfficeLayout): OfficeProjector {
     // An envelope leaves a City agent from the ROOF it works under, not from
     // the pavement its door opens onto.
     seatLift: (seat: OfficeSeat) =>
-      (frozen.storeysBySeatId.get(seat.seatId) ?? 1) * ISO_STOREY_HEIGHT,
+      cityRoofLift(frozen.storeysBySeatId.get(seat.seatId) ?? 1),
   });
 }
 
 /**
- * The sizes of the few UNPROJECTED sprites a district stands on its ground.
- *
  * Campus and City reuse the flat office's reception, trees and fixtures rather
- * than an isometric set - the decision that ships these two views now - so the
- * painter has to know how tall each one is to put its foot on the right tile.
+ * than an isometric set - the decision that ships these two views now - so
+ * every sprite size below comes from `officeSpriteSize`, the one table that
+ * knows them. A second copy of those numbers here was a second place for the
+ * painter and the plan's index to disagree about where a foot lands.
  */
-const OFFICE_SPRITE_FOOTPRINT: Partial<
-  Record<OfficeSpriteName, { readonly width: number; readonly height: number }>
-> = {
-  reception: { width: 32, height: 16 },
-  tree: { width: 16, height: 32 },
-  plant: { width: 16, height: 24 },
-  bench: { width: 32, height: 16 },
-  "coffee-machine": { width: 16, height: 24 },
-  "water-cooler": { width: 16, height: 24 },
-  vending: { width: 16, height: 24 },
-  "cafe-table": { width: 32, height: 16 },
-  sofa: { width: 32, height: 16 },
-};
 
 /** Where a tile's own corner lands, which every anchor below is relative to. */
 function cornerOf(
@@ -117,6 +116,19 @@ function cornerOf(
   tile: OfficeTilePos,
 ): OfficePoint {
   return projector.project(tile.col, tile.row);
+}
+
+/**
+ * A seat's own anchor point: D20's foot for the character that sits in it.
+ *
+ * The scene puts the character, its name tag and its envelope endpoint here,
+ * so anything the painter draws AS that seat has to agree with it.
+ */
+function seatAnchorOf(
+  projector: OfficeProjector,
+  seat: OfficeSeat,
+): OfficePoint {
+  return projector.project(seat.chairTile.col + 0.5, seat.chairTile.row + 1);
 }
 
 /** Depth of anything standing on a tile: the foot is the diamond's centre. */
@@ -178,7 +190,7 @@ function groundSpriteAt(
 function pushRoomWalls(scan: FloorScan, out: OfficeDrawable[]): void {
   if (scan.layout.view !== "campus") return;
   const { tiles } = scan;
-  for (const room of scan.layout.rooms) {
+  for (const room of isoRoomsIn(scan.layout, tiles)) {
     const { bounds } = room;
     for (let col = bounds.col; col < bounds.col + bounds.cols; col += 1) {
       const tile: OfficeTilePos = { col, row: bounds.row };
@@ -205,6 +217,29 @@ function pushRoomWalls(scan: FloorScan, out: OfficeDrawable[]): void {
   }
 }
 
+/**
+ * The face the shared clock hands pivot on, one per district.
+ *
+ * The scene draws the HANDS as an overlay, centred on
+ * `project(clockTile) + (width / 2, OFFICE_TILE - height + height / 2)`, and
+ * owns nothing else about the clock. A painter that left the face out - as
+ * this one did - left the hands turning in mid-air. The anchor below is that
+ * same expression minus the centring, so the two cannot drift apart.
+ */
+function pushClockFaces(scan: FloorScan, out: OfficeDrawable[]): void {
+  const size = officeSpriteSize({ name: "clock" });
+  for (const floor of scan.layout.floors) {
+    if (!isoWithinRect(scan.tiles, floor.clockTile)) continue;
+    const face = cornerOf(scan.projector, floor.clockTile);
+    out.push({
+      kind: "sprite",
+      sprite: { name: "clock" },
+      x: face.x,
+      y: face.y + OFFICE_TILE - size.height,
+    });
+  }
+}
+
 /** The gate every district is entered through, one per floor. */
 function pushDoors(scan: FloorScan, out: OfficeDrawable[]): void {
   for (const floor of scan.layout.floors) {
@@ -219,36 +254,21 @@ function pushDoors(scan: FloorScan, out: OfficeDrawable[]): void {
   }
 }
 
-/** Every tile an errand spot claims as its fixture, across the whole layout. */
-function fixtureTiles(layout: OfficeLayout): ReadonlySet<string> {
-  const tiles = new Set<string>();
-  for (const floor of layout.floors) {
-    for (const spot of floor.errandSpots) {
-      const tile = spot.actionTile;
-      if (tile !== null) tiles.add(isoTileKey(tile));
-    }
-  }
-  return tiles;
-}
-
 /**
  * Everything the plan stood on the ground that is NOT an errand fixture.
  *
  * A fixture is in `layout.props` too - that is how the plan says what its
  * `actionTile` means - but it is drawn by `spotProps`, in the world stream,
  * where it can be given a depth. Drawing it here as well would paint every
- * coffee machine twice, once behind the person queueing at it.
+ * coffee machine twice, once behind the person queueing at it. The index
+ * leaves the fixtures out for exactly that reason, so there is nothing to
+ * filter here and, more to the point, nothing to SCAN: a pan reads the tiles
+ * it is asked about and not the thousand props it is not.
  */
 function pushProps(scan: FloorScan, out: OfficeDrawable[]): void {
-  const fixtures = fixtureTiles(scan.layout);
-  for (const prop of scan.layout.props) {
-    if (!isoWithinRect(scan.tiles, prop.tile)) continue;
-    if (fixtures.has(isoTileKey(prop.tile))) continue;
+  for (const prop of isoPropsIn(scan.layout, scan.tiles)) {
     const corner = cornerOf(scan.projector, prop.tile);
-    const size = OFFICE_SPRITE_FOOTPRINT[prop.sprite.name] ?? {
-      width: OFFICE_TILE,
-      height: OFFICE_TILE,
-    };
+    const size = officeSpriteSize(prop.sprite);
     const origin = isoPropOrigin(corner, size.width, size.height);
     out.push({ kind: "sprite", sprite: prop.sprite, x: origin.x, y: origin.y });
   }
@@ -327,7 +347,7 @@ function blockMap(
   }
   const roomFill: OfficeBlockFill =
     layout.view === "city" ? "building" : "room";
-  for (const room of layout.rooms) push(room.bounds, roomFill);
+  for (const room of isoRoomsIn(layout, tiles)) push(room.bounds, roomFill);
   return blocks;
 }
 
@@ -354,6 +374,9 @@ function paintFloor(
   pushRoomWalls(scan, standing);
   pushDoors(scan, standing);
   pushProps(scan, standing);
+  // A dial is detail: at office zoom the hands alone read as a clock, and the
+  // face would only crowd a district already carrying its signage.
+  if (lod === 2) pushClockFaces(scan, standing);
   // Ground first, then whatever stands on it back to front: inside one chunk
   // the floor never occludes anything, and the standing pieces occlude each
   // other exactly as the world stream orders them.
@@ -391,7 +414,6 @@ function campusSeatProps(
   projector: OfficeProjector,
   seat: OfficeSeat,
   state: OfficeDeskState,
-  lod: OfficeLod,
 ): ReadonlyArray<OfficeWorldDrawable> {
   const corner = cornerOf(projector, seat.deskTile);
   const depth = tileDepth(projector, seat.deskTile, "prop");
@@ -415,7 +437,7 @@ function campusSeatProps(
         x: corner.x,
         y: corner.y + ISO_HALF_HEIGHT - OFFICE_TILE,
       },
-      depth: depth + OVER_DESK,
+      depth,
       ownerAgentId: state.agentId,
     });
     return out;
@@ -430,11 +452,11 @@ function campusSeatProps(
       x: corner.x - OFFICE_TILE / 2,
       y: corner.y + ISO_HALF_HEIGHT - MONITOR_LIFT - OFFICE_TILE / 2,
     },
-    depth: depth + OVER_DESK,
+    depth,
     ownerAgentId: state.agentId,
   });
   const stack = envelopeStackOf(state.openRequests);
-  if (stack !== null && lod > 0) {
+  if (stack !== null) {
     out.push({
       drawable: {
         kind: "sprite",
@@ -442,7 +464,7 @@ function campusSeatProps(
         x: corner.x + 2,
         y: corner.y + ISO_HALF_HEIGHT - DESK_ISO_HEIGHT / 2,
       },
-      depth: depth + OVER_DESK * 2,
+      depth,
       ownerAgentId: state.agentId,
     });
   }
@@ -462,12 +484,17 @@ interface CitySeatArgs {
   readonly frozen: CityFrozen;
   readonly seat: OfficeSeat;
   readonly state: OfficeDeskState;
-  readonly lod: OfficeLod;
 }
 
 function citySeatProps(args: CitySeatArgs): ReadonlyArray<OfficeWorldDrawable> {
-  const { projector, frozen, seat, state, lod } = args;
+  const { projector, frozen, seat, state } = args;
   const corner = cornerOf(projector, seat.deskTile);
+  // The building stands on its lot but is CENTRED on its occupant's own
+  // anchor column - the chair tile's foot, which is the point the scene puts
+  // a character, a name tag and an envelope endpoint on. Centring it on the
+  // lot instead left every rooftop launch 24 px out to one side of the roof
+  // it was supposed to leave from.
+  const centreX = seatAnchorOf(projector, seat).x;
   const depth = tileDepth(projector, seat.deskTile, "prop");
   const storeys = frozen.storeysBySeatId.get(seat.seatId) ?? 1;
   const out: OfficeWorldDrawable[] = [];
@@ -483,41 +510,40 @@ function citySeatProps(args: CitySeatArgs): ReadonlyArray<OfficeWorldDrawable> {
       drawable: {
         kind: "sprite",
         sprite: { name: "block-left" },
-        x: corner.x - ISO_HALF_WIDTH,
+        x: centreX - ISO_HALF_WIDTH,
         y,
       },
-      depth: depth + storey * OVER_DESK,
+      depth,
       ownerAgentId: state.agentId,
     });
     out.push({
       drawable: {
         kind: "sprite",
         sprite: { name: "block-right" },
-        x: corner.x,
+        x: centreX,
         y,
       },
-      depth: depth + storey * OVER_DESK,
-      ownerAgentId: state.agentId,
-    });
-    if (lod === 0) continue;
-    out.push({
-      drawable: {
-        kind: "sprite",
-        sprite: { name: windowName },
-        x: corner.x - ISO_HALF_WIDTH + WINDOW_SIZE / 2,
-        y: y + WINDOW_SIZE / 2,
-      },
-      depth: depth + storey * OVER_DESK + OVER_DESK / 2,
+      depth,
       ownerAgentId: state.agentId,
     });
     out.push({
       drawable: {
         kind: "sprite",
         sprite: { name: windowName },
-        x: corner.x + WINDOW_SIZE / 2,
+        x: centreX - ISO_HALF_WIDTH + WINDOW_SIZE / 2,
         y: y + WINDOW_SIZE / 2,
       },
-      depth: depth + storey * OVER_DESK + OVER_DESK / 2,
+      depth,
+      ownerAgentId: state.agentId,
+    });
+    out.push({
+      drawable: {
+        kind: "sprite",
+        sprite: { name: windowName },
+        x: centreX + WINDOW_SIZE / 2,
+        y: y + WINDOW_SIZE / 2,
+      },
+      depth,
       ownerAgentId: state.agentId,
     });
   }
@@ -529,10 +555,10 @@ function citySeatProps(args: CitySeatArgs): ReadonlyArray<OfficeWorldDrawable> {
     drawable: {
       kind: "sprite",
       sprite: { name: state.sheeted ? "dust-sheet" : "block-top" },
-      x: corner.x - ISO_HALF_WIDTH,
+      x: centreX - ISO_HALF_WIDTH,
       y: roofY,
     },
-    depth: depth + storeys * OVER_DESK,
+    depth,
     ownerAgentId: state.agentId,
   });
   if (!state.sheeted && frozen.spireSeatIds.has(seat.seatId)) {
@@ -540,10 +566,10 @@ function citySeatProps(args: CitySeatArgs): ReadonlyArray<OfficeWorldDrawable> {
       drawable: {
         kind: "sprite",
         sprite: { name: "spire" },
-        x: corner.x - SPIRE_WIDTH / 2,
+        x: centreX - SPIRE_WIDTH / 2,
         y: roofY - ISO_SPIRE_LIFT,
       },
-      depth: depth + (storeys + 1) * OVER_DESK,
+      depth,
       ownerAgentId: state.agentId,
     });
   }
@@ -556,12 +582,16 @@ function paintSeat(
   state: OfficeDeskState,
   lod: OfficeLod,
 ): ReadonlyArray<OfficeWorldDrawable> {
+  // D27: at overview a seat is a pip the scene draws, and the block map is the
+  // whole of the floor. Answered before projecting, so nothing is computed for
+  // a seat that has nothing to say.
+  if (lod === 0) return [];
   const projector = projectorFor(layout);
   const frozen = readCityFrozen(layout);
   if (frozen !== null) {
-    return citySeatProps({ projector, frozen, seat, state, lod });
+    return citySeatProps({ projector, frozen, seat, state });
   }
-  return campusSeatProps(projector, seat, state, lod);
+  return campusSeatProps(projector, seat, state);
 }
 
 // ---- Errand spots ----------------------------------------------------- //
@@ -569,9 +599,11 @@ function paintSeat(
 /**
  * The fixture a spot stands at, drawn ONCE however many seats it has.
  *
- * The spot that owns the fixture carries its tile as `actionTile`; a second
- * seat at the same table carries `null` and draws nothing, which is what stops
- * a two-seat table from being painted twice at half a pixel's difference.
+ * EVERY seat at a bench names that bench as its `actionTile` - that is the
+ * anchor a sitting pose is aimed at, and a second seat that named nothing
+ * would leave its arrival standing in front of a bench it cannot reach. So
+ * the plan's index, not the anchor, decides which of them paints it: one
+ * bench, two people on it, no second copy half a pixel away.
  */
 function paintSpot(
   layout: OfficeLayout,
@@ -581,12 +613,10 @@ function paintSpot(
   if (lod === 0) return [];
   const tile = spot.actionTile;
   if (tile === null) return [];
+  if (!isoSpotDraws(layout, spot)) return [];
   const name = ISO_SPOT_FIXTURES[spot.kind];
   if (name === undefined) return [];
-  const size = OFFICE_SPRITE_FOOTPRINT[name] ?? {
-    width: OFFICE_TILE,
-    height: OFFICE_TILE,
-  };
+  const size = officeSpriteSize({ name });
   const projector = projectorFor(layout);
   const origin = isoPropOrigin(
     cornerOf(projector, tile),

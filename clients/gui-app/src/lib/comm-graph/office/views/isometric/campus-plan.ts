@@ -1,24 +1,38 @@
 /**
- * CAMPUS: low buildings on grass, one room per family, seen from the corner.
+ * CAMPUS: low buildings on grass, one room per TEAM, seen from the corner.
  *
- * A room holds a root agent's whole subtree, sized by that subtree exactly as
- * the Floor sizes a cabin - but on a FLAT near-square grid of slots rather than
- * the Floor's nested one. That difference is the view: the Floor's hierarchical
- * packing turns the recording's 309-agent epic into a 100 x 362 tile corridor,
- * and a corridor projected isometrically is a diagonal nothing can frame. The
- * same subtree on a near-square grid is 55 x 55, which is the 60 x 60 the spec
- * quotes and the 1,920 x 960 projection it quotes with it.
+ * A room is a team of the partition (D38): one cabin per lead-and-members
+ * team, the host's HQ in a cabin of its own, and one bullpen per district for
+ * everybody the partition calls a solo. It is not a lineage subtree, and that
+ * distinction is the whole view. The recording's 309-agent epic is one root
+ * with thirty teams under it, so "a room per subtree" built ONE 55 x 55 room
+ * holding all 309 desks: geometry the spec's numbers liked and a picture that
+ * showed the user no team at all.
+ *
+ * Sizing still belongs to the room rather than to the Floor's packer. A team's
+ * members go on a FLAT near-square grid of slots, and the rooms themselves
+ * shelf-pack into a near-square district, because the Floor's hierarchical
+ * packing turns that same epic into a 100 x 362 tile corridor and a corridor
+ * projected isometrically is a diagonal nothing can frame.
+ *
+ * A team of nine or more splits into a second cabin exactly as the oblique
+ * views split one, so no room is a corridor either. The solos do NOT split:
+ * chopping a district's leaves into nines would invent thirty bullpens nobody
+ * belongs to, which is the same failure as one room holding everybody, seen
+ * from the other end.
  *
  * Campus re-packs, like the Floor: a fifth child arriving moves the chairs
  * around it and the scene walks whoever moved. `stable: false` says so, and
- * that is the whole of its growth rule - there is no frozen packing to carry,
- * which is why `frozen` is `null` here and rich on City.
+ * that is the whole of its growth rule - there is no packing to carry, and
+ * `previous` is never read. What Campus does put in `frozen` is the painter's
+ * index and nothing else, which is a fact about the layout in hand rather
+ * than anything carried forward from the last one.
  *
  * Rooms have back walls on their top-left and top-right edges and nothing at
  * the front, so the room is open to the viewer and the desks inside it are
  * visible. The plate hangs on the back wall.
  */
-import { compareByCreation } from "@/lib/comm-graph/office/office-layout";
+import type { OfficeHostPopulation } from "@/lib/comm-graph/office/office-population";
 import {
   OFFICE_CHARACTER_HEIGHT,
   type OfficeAgentInput,
@@ -42,6 +56,7 @@ import { ISO_PAINTER } from "@/lib/comm-graph/office/views/isometric/iso-painter
 import {
   buildIsoCafe,
   buildIsoCourtyard,
+  buildIsoIndex,
   isoBlankGrid,
   isoFixtureProps,
   isoFloorOf,
@@ -65,6 +80,7 @@ import {
   type IsoDistrictBuild,
   type IsoGrid,
   type IsoPlacedBlock,
+  type IsoPlanIndex,
 } from "@/lib/comm-graph/office/views/isometric/iso-plan-core";
 import type {
   OfficePlanInput,
@@ -87,74 +103,67 @@ const WALL_COLS = 1;
 /** The plant beside a room lead's desk, in that slot's spare column. */
 const PLANT_COL_OFFSET = 2;
 
+/** How many members share one cabin before a team takes a second one. */
+const ROOM_SPLIT = 9;
+
+/**
+ * What Campus puts in `frozen`, which is only ever the painter's index.
+ *
+ * A `kind` because `frozen` is `unknown` by contract and every reader of it
+ * has to prove what it is holding before it reads one.
+ */
+interface CampusFrozen {
+  readonly kind: "campus";
+  readonly index: IsoPlanIndex;
+}
+
 /** A room, planned before it is placed. */
 interface CampusRoomPlan extends IsoBlockSpec {
-  readonly root: OfficeAgentInput;
+  /**
+   * The room's identity, and the `roomId` every desk in it carries.
+   *
+   * SYNTHETIC on purpose (D16). A team is named by its lead, so a room keyed
+   * on the lead's bare agent id is a room that changes identity the day the
+   * lead is archived and the second member takes over - and a room whose
+   * second cabin would have no id at all. `<teamId>/room/<n>`, `<hq>/hq` and
+   * `<host>/bullpen` name the ROOM; whoever leads it is on the plate.
+   */
+  readonly roomId: string;
+  /** The plate's text: the lead's name, or what a bullpen holds. */
+  readonly name: string;
+  /**
+   * The lead this room is named FOR, or `null` in a bullpen, which has none.
+   * This is the real agent; `roomId` is not, and the two must not be confused.
+   */
+  readonly leadAgentId: string | null;
   readonly occupants: ReadonlyArray<OfficeAgentInput>;
   readonly perRow: number;
 }
 
-interface Forest {
-  readonly roots: ReadonlyArray<OfficeAgentInput>;
-  readonly childrenByParent: ReadonlyMap<
-    string,
-    ReadonlyArray<OfficeAgentInput>
-  >;
-}
-
-/**
- * An agent whose parent is not on this host is a root HERE. A district is one
- * host's campus, and a family that straddles two machines is two families as
- * far as the ground is concerned.
- */
-function buildForest(agents: ReadonlyArray<OfficeAgentInput>): Forest {
-  const byId = new Map(agents.map((agent) => [agent.id, agent]));
-  const childrenByParent = new Map<string, OfficeAgentInput[]>();
-  const roots: OfficeAgentInput[] = [];
-  const ordered = [...agents].sort(compareByCreation);
-  for (const agent of ordered) {
-    const parentId = agent.parentId;
-    if (parentId === null || parentId === agent.id || !byId.has(parentId)) {
-      roots.push(agent);
-      continue;
-    }
-    const siblings = childrenByParent.get(parentId);
-    if (siblings === undefined) childrenByParent.set(parentId, [agent]);
-    else siblings.push(agent);
+function chunks<T>(
+  items: ReadonlyArray<T>,
+  size: number,
+): ReadonlyArray<ReadonlyArray<T>> {
+  const out: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    out.push([...items.slice(index, index + size)]);
   }
-  return { roots, childrenByParent };
-}
-
-/** The root, then its subtree depth-first in creation order. */
-function subtreeOf(
-  forest: Forest,
-  root: OfficeAgentInput,
-  claimed: Set<string>,
-): ReadonlyArray<OfficeAgentInput> {
-  const occupants: OfficeAgentInput[] = [];
-  const visit = (agent: OfficeAgentInput): void => {
-    // A reparenting cycle can name a child that is already somebody's; it keeps
-    // the first room it was given rather than being seated twice.
-    if (claimed.has(agent.id)) return;
-    claimed.add(agent.id);
-    occupants.push(agent);
-    for (const child of forest.childrenByParent.get(agent.id) ?? []) {
-      visit(child);
-    }
-  };
-  visit(root);
-  return occupants;
+  return out;
 }
 
 function roomPlanFor(
-  root: OfficeAgentInput,
+  roomId: string,
+  name: string,
+  leadAgentId: string | null,
   occupants: ReadonlyArray<OfficeAgentInput>,
 ): CampusRoomPlan {
   const perRow = Math.max(1, Math.ceil(Math.sqrt(occupants.length)));
   const slotRows = Math.max(1, Math.ceil(occupants.length / perRow));
   return {
-    blockId: root.id,
-    root,
+    blockId: roomId,
+    roomId,
+    name,
+    leadAgentId,
     occupants,
     perRow,
     cols: WALL_COLS + perRow * SLOT_COLS,
@@ -162,20 +171,71 @@ function roomPlanFor(
   };
 }
 
+/**
+ * One district's rooms, read off the partition rather than off the lineage.
+ *
+ * The partition is the ONE answer six geometries agree on, so a campus that
+ * derived its own families from `parentId` would draw a different office from
+ * the boards beside it. Order is the partition's: HQ, then the teams as it
+ * lists them, then the bullpen.
+ */
 function roomPlansFor(
-  agents: ReadonlyArray<OfficeAgentInput>,
+  host: OfficeHostPopulation,
+  present: ReadonlyArray<OfficeAgentInput>,
 ): ReadonlyArray<CampusRoomPlan> {
-  const forest = buildForest(agents);
-  const claimed = new Set<string>();
-  const plans: CampusRoomPlan[] = [];
-  const collect = (root: OfficeAgentInput): void => {
-    if (claimed.has(root.id)) return;
-    plans.push(roomPlanFor(root, subtreeOf(forest, root, claimed)));
+  const byId = new Map(present.map((agent) => [agent.id, agent]));
+  const seated = new Set<string>();
+  // A team roster names only its own host's members, but nothing stops two
+  // rosters from naming the same id, and nobody may be seated twice.
+  const take = (ids: ReadonlyArray<string>): OfficeAgentInput[] => {
+    const kept: OfficeAgentInput[] = [];
+    for (const id of ids) {
+      const agent = byId.get(id);
+      if (agent === undefined || seated.has(id)) continue;
+      seated.add(id);
+      kept.push(agent);
+    }
+    return kept;
   };
-  for (const root of forest.roots) collect(root);
-  // Whoever a cycle left unreachable opens a room of their own: an odd campus
-  // beats a missing desk.
-  for (const agent of [...agents].sort(compareByCreation)) collect(agent);
+
+  const plans: CampusRoomPlan[] = [];
+  const hqId = host.hqAgentId;
+  if (hqId !== null) {
+    const hq = take([hqId]);
+    if (hq.length > 0) {
+      plans.push(roomPlanFor(`${hqId}/hq`, hq[0].name, hqId, hq));
+    }
+  }
+  for (const team of host.teams) {
+    const members = take(team.memberAgentIds);
+    const leadName = byId.get(team.leadAgentId)?.name ?? "Team";
+    for (const [index, occupants] of chunks(members, ROOM_SPLIT).entries()) {
+      plans.push(
+        roomPlanFor(
+          `${team.teamId}/room/${index}`,
+          leadName,
+          team.leadAgentId,
+          occupants,
+        ),
+      );
+    }
+  }
+  // The solos, plus anybody the partition left unclassified: an odd campus
+  // beats a missing desk, and a leaf with no room is a leaf with no chair.
+  const bullpen = [
+    ...take(host.solos.map((member) => member.agentId)),
+    ...take(present.map((agent) => agent.id)),
+  ];
+  if (bullpen.length > 0) {
+    plans.push(
+      roomPlanFor(
+        `${isoHostKey(host.hostId)}/bullpen`,
+        `Bullpen · ${bullpen.length} solos`,
+        null,
+        bullpen,
+      ),
+    );
+  }
   return plans;
 }
 
@@ -200,10 +260,10 @@ const AMENITY_BLOCKS: ReadonlyArray<IsoBlockSpec> = [
  * contradicts.
  */
 function districtPlanFor(
-  hostId: string | null,
+  host: OfficeHostPopulation,
   agents: ReadonlyArray<OfficeAgentInput>,
 ): CampusDistrictPlan {
-  const rooms = roomPlansFor(agents);
+  const rooms = roomPlansFor(host, agents);
   const blocks = [...AMENITY_BLOCKS, ...rooms];
   const widthBudget = isoNearSquareWidth(blocks);
   const packed = isoShelfPack(blocks, widthBudget, 0, isoShelfStart(0, 0));
@@ -214,7 +274,7 @@ function districtPlanFor(
     contentRows = Math.max(contentRows, block.row + block.rows);
   }
   return {
-    hostId,
+    hostId: host.hostId,
     rooms,
     widthBudget,
     cols: contentCols + ISO_DISTRICT_RING * 2,
@@ -222,8 +282,16 @@ function districtPlanFor(
   };
 }
 
+/** The district an epic with nobody in it still gets. */
+const EMPTY_HOST: OfficeHostPopulation = {
+  hostId: null,
+  hqAgentId: null,
+  teams: [],
+  solos: [],
+};
+
 function agentsByHost(input: OfficePlanInput): ReadonlyArray<{
-  readonly hostId: string | null;
+  readonly host: OfficeHostPopulation;
   readonly agents: ReadonlyArray<OfficeAgentInput>;
 }> {
   const groups = new Map<string, OfficeAgentInput[]>();
@@ -234,18 +302,18 @@ function agentsByHost(input: OfficePlanInput): ReadonlyArray<{
     else bucket.push(agent);
   }
   const ordered: Array<{
-    hostId: string | null;
+    host: OfficeHostPopulation;
     agents: ReadonlyArray<OfficeAgentInput>;
   }> = [];
   for (const host of input.partition.hosts) {
     ordered.push({
-      hostId: host.hostId,
+      host,
       agents: groups.get(isoHostKey(host.hostId)) ?? [],
     });
   }
   // An empty epic still gets one district: every consumer of `floors` assumes
   // there is at least one, and a campus with nobody on it is still a campus.
-  if (ordered.length === 0) ordered.push({ hostId: null, agents: [] });
+  if (ordered.length === 0) ordered.push({ host: EMPTY_HOST, agents: [] });
   return ordered;
 }
 
@@ -263,7 +331,7 @@ function planWorld(input: OfficePlanInput): CampusWorld {
   let col = 0;
   let rows = 0;
   for (const group of agentsByHost(input)) {
-    const plan = districtPlanFor(group.hostId, group.agents);
+    const plan = districtPlanFor(group.host, group.agents);
     districts.push({ ...plan, col });
     col += plan.cols + ISO_DISTRICT_GAP;
     rows = Math.max(rows, plan.rows);
@@ -312,9 +380,12 @@ function buildRoom(
     blocked.push({ col: bounds.col, row });
   }
 
-  const seatGroup = [hostId ?? ISO_SEAT_ID_NONE, floorIndex, plan.root.id].join(
-    "/",
-  );
+  // The district's own id, NOT its index: a host arriving ahead of this one in
+  // the partition's order renumbers every index after it, and a seat named by
+  // one is a seat that changes name because somebody else showed up. Campus
+  // re-packs, so it has no seat book to invalidate - but the name is free to
+  // get right, and the same defect on City was this fixup's F1.
+  const seatGroup = [hostId ?? ISO_SEAT_ID_NONE, plan.roomId].join("/");
   const desks: OfficeDesk[] = [];
   for (const [index, agent] of plan.occupants.entries()) {
     const slotCol = index % plan.perRow;
@@ -335,9 +406,9 @@ function buildRoom(
       facing: "up",
       hitTiles: { width: DESK_WIDTH_TILES, height: SEAT_HIT_ROWS },
       floorIndex,
-      roomId: plan.root.id,
+      roomId: plan.roomId,
       hostId,
-      manager: agent.id === plan.root.id,
+      manager: agent.id === plan.leadAgentId,
       agentId: agent.id,
     });
     for (let offset = 0; offset < DESK_WIDTH_TILES; offset += 1) {
@@ -346,8 +417,9 @@ function buildRoom(
     blocked.push(chairTile);
   }
 
-  // Every room has a lead - it is built around one - but a room whose lead has
-  // no desk yet has nothing to stand a plant beside.
+  // The plant stands beside the FIRST desk, which is the lead's wherever there
+  // is one - a team lists its lead first - and just the first solo's in a
+  // bullpen. An empty room has nothing to stand it beside.
   const spots: OfficeErrandSpot[] = [];
   if (desks.length > 0) {
     const plantTile: OfficeTilePos = {
@@ -360,14 +432,14 @@ function buildRoom(
         kind: "water-plant",
         stand: { col: plantTile.col, row: plantTile.row + 1 },
         fixture: plantTile,
+        action: plantTile,
         floorIndex,
-        owns: true,
         facing: "up",
         // This one stands INSIDE a room, so it is that room's own - the same
         // rule the Floor's cabin plants get, said as data rather than read
-        // back off the kind. `roomId` is the room's root agent, which is what
-        // a seat's own `roomId` carries.
-        audience: { kind: "room", roomId: plan.root.id },
+        // back off the kind. `roomId` is the room's synthetic id, which is
+        // what a seat's own `roomId` carries.
+        audience: { kind: "room", roomId: plan.roomId },
       }),
     );
   }
@@ -386,8 +458,9 @@ function buildRoom(
   };
   return {
     room: {
-      rootAgentId: plan.root.id,
-      name: plan.root.name,
+      // A room id, not an agent id (D16): every desk's `roomId` resolves here.
+      rootAgentId: plan.roomId,
+      name: plan.name,
       bounds,
       doorTile,
       signTile,
@@ -402,8 +475,10 @@ function buildRoom(
       kind: "plate",
       tile: signTile,
       widthTiles: ISO_SIGN_WIDTH_TILES,
-      text: plan.root.name,
-      ownerAgentId: plan.root.id,
+      text: plan.name,
+      // The REAL lead, which `rootAgentId` deliberately is not. A bullpen has
+      // none, and says so rather than promoting its first solo.
+      ownerAgentId: plan.leadAgentId,
       hostId,
       // A plate names its lead; `agentIds` is for the BOARDS that summarise a
       // room's statuses, and carrying a thousand ids on a nameplate is a
@@ -495,9 +570,8 @@ function buildDistrict(
  * The campus, whole.
  *
  * `occupancy` is deliberately not consulted: this plan re-packs, so there is no
- * seat to honour - a seat id here is `<host>/<district>/<room>/<n>`, which the
- * same agent in the same room keeps across a re-pack anyway, exactly as the
- * Floor's does.
+ * seat to honour - a seat id here is `<host>/<room>/<n>`, which the same agent
+ * in the same room keeps across a re-pack anyway, exactly as the Floor's does.
  */
 export function planCampus(input: OfficePlanInput): OfficeLayout {
   const world = planWorld(input);
@@ -551,7 +625,17 @@ export function planCampus(input: OfficePlanInput): OfficeLayout {
     lobbyTile: floors[0].lobbyTile,
     props,
     walkable: grid.walkable,
-    frozen: null,
+    // NOT a packing: Campus carries nothing from one plan to the next, and
+    // never reads its own `frozen` back. What is in there is the painter's
+    // lookup, built from the layout this call just finished.
+    frozen: {
+      kind: "campus",
+      index: buildIsoIndex({
+        props,
+        rooms,
+        spots: floors.flatMap((floor) => floor.errandSpots),
+      }),
+    } satisfies CampusFrozen,
     shiftFromPrevious: null,
     stable: false,
   };
@@ -572,7 +656,7 @@ export const CAMPUS_VIEW: OfficeView = {
   id: "campus",
   label: "Campus",
   description:
-    "Rooms sized by their subtree, shelf-packed into a near-square so the projected diamond fills the viewport.",
+    "A cabin per team, sized by its members and shelf-packed into a near-square so the projected diamond fills the viewport.",
   plan: planCampus,
   measure: measureCampus,
   painter: ISO_PAINTER,

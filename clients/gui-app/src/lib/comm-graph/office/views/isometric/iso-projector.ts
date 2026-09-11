@@ -70,13 +70,24 @@ const DEPTH_KIND_RANK: Readonly<Record<IsoDepthKind, number>> = {
 };
 
 /**
- * Both tie-breakers folded under one unit of foot y.
+ * Both tie-breakers folded into the FRACTION of one foot pixel.
  *
- * `depth` is one number by contract, so the three keys are packed into it:
- * the foot is scaled up and the tie-breakers live below the resulting unit.
- * The scale is what decides how finely two feet still count as level - here
- * 1/4096 of a sprite pixel, which no walker's sub-pixel position ever
- * distinguishes - and the cap is what keeps the tie term inside that unit.
+ * `depth` is one number by contract, and - this is the whole point - it is the
+ * SAME number the scene gives its actors: D20's raw projected foot y. A
+ * painter that scaled the foot up to make room for its tie-breakers would sort
+ * every prop after every character no matter which foot was nearer, which is
+ * exactly the occlusion the world stream exists to get right.
+ *
+ * So the tie-breakers live strictly below one pixel instead: `col + row` first
+ * (the true distance from the back of the world), then kind. The cap and the
+ * step are chosen so the largest possible fraction, `(1023 * 4 + 2) / 4096`,
+ * is still under 1 - a tie-break can never outrank a real pixel of depth.
+ *
+ * A prop and a character never tie exactly, so the kind rank is not load
+ * bearing between the two streams: a prop's foot is its tile's centre, at
+ * `(col + row + 1) * 8`, and a character's is its tile's bottom centre, at
+ * `(col + row + 1.5) * 8`. Whoever stands on a tile is always four pixels
+ * nearer than what stands on it, which is the right answer anyway.
  */
 const DEPTH_SCALE = 4096;
 const DEPTH_COLROW_CAP = 1023;
@@ -88,9 +99,8 @@ export function isoDepth(
   kind: IsoDepthKind,
 ): number {
   const clamped = Math.min(Math.max(Math.round(colRow), 0), DEPTH_COLROW_CAP);
-  return (
-    footY * DEPTH_SCALE + clamped * DEPTH_COLROW_STEP + DEPTH_KIND_RANK[kind]
-  );
+  const tie = clamped * DEPTH_COLROW_STEP + DEPTH_KIND_RANK[kind];
+  return footY + tie / DEPTH_SCALE;
 }
 
 export interface IsoProjectorSpec {

@@ -42,6 +42,7 @@ import { ISO_PAINTER } from "@/lib/comm-graph/office/views/isometric/iso-painter
 import {
   buildIsoCafe,
   buildIsoCourtyard,
+  buildIsoIndex,
   isoBlankGrid,
   isoFloorOf,
   isoHostKey,
@@ -437,13 +438,18 @@ function annexFor(
   };
 }
 
+/**
+ * A seat's name, from identities that OUTLIVE the current plan.
+ *
+ * The host, the block (a team id, an HQ occupant, a solo chunk) and the lot
+ * index are all facts about who works where; the district's position in this
+ * plan's host ordering is not. Naming a seat after that ordering meant a host
+ * arriving earlier in the alphabet renamed every seat in every later district,
+ * which threw away the seat book's claims and the frozen lot assignments and
+ * moved people who had not moved.
+ */
 function seatIdOf(block: CityPlacedBlock, index: number): string {
-  return [
-    block.hostId ?? ISO_SEAT_ID_NONE,
-    block.districtIndex,
-    block.blockId,
-    index,
-  ].join("/");
+  return [block.hostId ?? ISO_SEAT_ID_NONE, block.blockId, index].join("/");
 }
 
 /** A free-lot cursor per block, so seating a thousand agents stays linear. */
@@ -918,6 +924,11 @@ export function planCity(input: OfficePlanInput): OfficeLayout {
   }
   const frozen: CityFrozen = {
     kind: "city",
+    index: buildIsoIndex({
+      props,
+      rooms,
+      spots: floors.flatMap((floor) => floor.errandSpots),
+    }),
     districts: pack.districts.map((district) => district.frozen),
     blocks: pack.districts.flatMap((district) => district.blocks),
     seatIdByAgentId: pack.ledger.assignments(),

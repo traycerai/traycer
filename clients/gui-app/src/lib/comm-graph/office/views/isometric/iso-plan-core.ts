@@ -18,6 +18,12 @@
  * asks for - in this projection a band to the right of another one is drawn
  * down and to the right of it.
  */
+import { officeSpriteSize } from "@/lib/comm-graph/office/office-pixel-art";
+import {
+  ISO_HALF_HEIGHT,
+  ISO_HALF_WIDTH,
+  ISO_STOREY_HEIGHT,
+} from "@/lib/comm-graph/office/views/isometric/iso-projector";
 import type {
   OfficeAmenity,
   OfficeAreaSign,
@@ -210,13 +216,18 @@ export function isoWithinRect(
  * One amenity block, whole: where it is, what stands in it, what that blocks,
  * and the errand spots in front of each fixture.
  *
- * A FIXTURE IS DRAWN FROM ITS SPOT: the spot that owns a fixture carries its
- * tile as `actionTile` and the painter draws it there, with a depth, rather
- * than flat in the floor pass. The second seat at a two-seat table carries
- * `null` instead, so the table is drawn once while both seats still share a
- * `fixtureId` and still rally. It is RECORDED in `layout.props` all the same -
- * `actionTile` promises that a named sprite stands on that tile, and the
- * painter is not the only reader of that promise.
+ * A FIXTURE IS DRAWN FROM ITS SPOT: every spot that acts on something carries
+ * that tile as `actionTile` and the painter draws it there, with a depth,
+ * rather than flat in the floor pass.
+ *
+ * A bench, a table and a sofa are all wider than the diamond they stand on,
+ * so each is TWO tiles with a seat under each - and each seat acts on the
+ * half it is standing at, which is what lets the second of them sit down
+ * instead of waiting in front of an anchor it does not have. The two still
+ * name one `fixtureId`, which is what makes them rally rather than sit at the
+ * same table ignoring each other. Every one of those tiles is RECORDED in
+ * `layout.props`: `actionTile` promises that a named sprite stands there, and
+ * the painter is not the only reader of that promise.
  */
 export interface IsoAmenityBuild {
   readonly rect: OfficeTileRect;
@@ -271,10 +282,26 @@ export const ISO_FLOOR_AUDIENCE: OfficeSpotAudience = { kind: "floor" };
 export interface IsoSpotArgs {
   readonly kind: OfficeErrandSpot["kind"];
   readonly stand: OfficeTilePos;
-  readonly fixture: OfficeTilePos;
+  /**
+   * The FIXTURE this spot belongs to: the bench, the table, the sofa. Two
+   * seats at one of those name the same tile here however far apart they sit,
+   * because that shared name is what makes them rally instead of ignoring
+   * each other across the same table. `null` for a spot that belongs to no
+   * fixture - a stroll across the lawn - which then rallies with nobody.
+   */
+  readonly fixture: OfficeTilePos | null;
+  /**
+   * What this spot ACTS on: its OWN end of that fixture, directly above it.
+   *
+   * A bench is wider than the diamond it is anchored on, so a two-seat bench
+   * is two tiles with a seat under each, and each seat sits on the half it is
+   * standing at. `null` only where the spot acts on nothing at all - and only
+   * there, because the scene reads a null anchor as "nothing to sit on": a
+   * second seat that carried `null` to avoid painting a second sprite would
+   * be paying for one bench with one arrival left standing.
+   */
+  readonly action: OfficeTilePos | null;
   readonly floorIndex: number;
-  /** `false` for the second seat of a shared fixture: it draws nothing. */
-  readonly owns: boolean;
   readonly facing: OfficeErrandSpot["facing"];
   readonly audience: OfficeSpotAudience;
 }
@@ -285,9 +312,15 @@ export function isoSpotAt(args: IsoSpotArgs): OfficeErrandSpot {
     tile: args.stand,
     facing: args.facing,
     audience: args.audience,
-    fixtureId: fixtureIdOf(args.floorIndex, args.kind, args.fixture),
+    // A spot with no fixture rallies with nobody, so it is named by the tile
+    // it stands on and shares that id with no one.
+    fixtureId: fixtureIdOf(
+      args.floorIndex,
+      args.kind,
+      args.fixture ?? args.stand,
+    ),
     approachTile: args.stand,
-    actionTile: args.owns ? args.fixture : null,
+    actionTile: args.action,
     floorIndex: args.floorIndex,
   };
 }
@@ -312,18 +345,24 @@ export const ISO_SPOT_FIXTURES: Partial<
 };
 
 /**
- * The props a set of spots stands up: one per spot that OWNS its fixture, so a
- * two-seat table is recorded once however many people sit at it.
+ * The props a set of spots stands up: one per fixture TILE.
+ *
+ * Per tile rather than per spot, because two spots can act on one tile - a
+ * queue in front of a coffee machine - and one prop is one prop.
  */
 export function isoFixtureProps(
   spots: ReadonlyArray<OfficeErrandSpot>,
 ): ReadonlyArray<OfficeProp> {
   const props: OfficeProp[] = [];
+  const standing = new Set<string>();
   for (const spot of spots) {
     const tile = spot.actionTile;
     if (tile === null) continue;
     const name = ISO_SPOT_FIXTURES[spot.kind];
     if (name === undefined) continue;
+    const key = isoTileKey(tile);
+    if (standing.has(key)) continue;
+    standing.add(key);
     props.push({ sprite: { name }, tile });
   }
   return props;
@@ -371,8 +410,8 @@ export function buildIsoCourtyard(args: AmenityArgs): IsoCourtyardBuild {
       kind: "garden",
       stand: { col: col + 1, row: row + 3 },
       fixture: benchTile,
+      action: benchTile,
       floorIndex,
-      owns: true,
       facing: "up",
       audience: ISO_FLOOR_AUDIENCE,
     }),
@@ -380,8 +419,8 @@ export function buildIsoCourtyard(args: AmenityArgs): IsoCourtyardBuild {
       kind: "garden",
       stand: { col: col + 2, row: row + 3 },
       fixture: benchTile,
+      action: { col: col + 2, row: row + 2 },
       floorIndex,
-      owns: false,
       facing: "up",
       audience: ISO_FLOOR_AUDIENCE,
     }),
@@ -389,26 +428,28 @@ export function buildIsoCourtyard(args: AmenityArgs): IsoCourtyardBuild {
       kind: "water-plant",
       stand: { col: col + 5, row: row + 3 },
       fixture: plantTile,
+      action: plantTile,
       floorIndex,
-      owns: true,
       facing: "up",
       audience: ISO_FLOOR_AUDIENCE,
     }),
     isoSpotAt({
       kind: "garden",
       stand: { col, row: row + 4 },
-      fixture: { col, row: row + 4 },
+      // Grass, not a bench: a stroll belongs to no fixture and acts on
+      // nothing, and the scene reads the sitting decision off that null.
+      fixture: null,
+      action: null,
       floorIndex,
-      owns: false,
       facing: "down",
       audience: ISO_FLOOR_AUDIENCE,
     }),
     isoSpotAt({
       kind: "garden",
       stand: { col: col + 6, row: row + 4 },
-      fixture: { col: col + 6, row: row + 4 },
+      fixture: null,
+      action: null,
       floorIndex,
-      owns: false,
       facing: "down",
       audience: ISO_FLOOR_AUDIENCE,
     }),
@@ -463,8 +504,8 @@ export function buildIsoCafe(args: AmenityArgs): IsoAmenityBuild {
       kind: "coffee",
       stand: { col, row: row + 1 },
       fixture: coffeeTile,
+      action: coffeeTile,
       floorIndex,
-      owns: true,
       facing: "up",
       audience: ISO_FLOOR_AUDIENCE,
     }),
@@ -472,8 +513,8 @@ export function buildIsoCafe(args: AmenityArgs): IsoAmenityBuild {
       kind: "cooler",
       stand: { col: col + 3, row: row + 1 },
       fixture: coolerTile,
+      action: coolerTile,
       floorIndex,
-      owns: true,
       facing: "up",
       audience: ISO_FLOOR_AUDIENCE,
     }),
@@ -481,8 +522,8 @@ export function buildIsoCafe(args: AmenityArgs): IsoAmenityBuild {
       kind: "vending",
       stand: { col: col + 6, row: row + 1 },
       fixture: vendingTile,
+      action: vendingTile,
       floorIndex,
-      owns: true,
       facing: "up",
       audience: ISO_FLOOR_AUDIENCE,
     }),
@@ -490,8 +531,8 @@ export function buildIsoCafe(args: AmenityArgs): IsoAmenityBuild {
       kind: "cafe",
       stand: { col, row: row + 3 },
       fixture: tableA,
+      action: tableA,
       floorIndex,
-      owns: true,
       facing: "up",
       audience: ISO_FLOOR_AUDIENCE,
     }),
@@ -499,8 +540,8 @@ export function buildIsoCafe(args: AmenityArgs): IsoAmenityBuild {
       kind: "cafe",
       stand: { col: col + 1, row: row + 3 },
       fixture: tableA,
+      action: { col: col + 1, row: row + 2 },
       floorIndex,
-      owns: false,
       facing: "up",
       audience: ISO_FLOOR_AUDIENCE,
     }),
@@ -508,8 +549,8 @@ export function buildIsoCafe(args: AmenityArgs): IsoAmenityBuild {
       kind: "cafe",
       stand: { col: col + 4, row: row + 3 },
       fixture: tableB,
+      action: tableB,
       floorIndex,
-      owns: true,
       facing: "up",
       audience: ISO_FLOOR_AUDIENCE,
     }),
@@ -517,8 +558,8 @@ export function buildIsoCafe(args: AmenityArgs): IsoAmenityBuild {
       kind: "cafe",
       stand: { col: col + 5, row: row + 3 },
       fixture: tableB,
+      action: { col: col + 5, row: row + 2 },
       floorIndex,
-      owns: false,
       facing: "up",
       audience: ISO_FLOOR_AUDIENCE,
     }),
@@ -526,8 +567,8 @@ export function buildIsoCafe(args: AmenityArgs): IsoAmenityBuild {
       kind: "sofa",
       stand: { col: col + 2, row: row + 5 },
       fixture: sofaTile,
+      action: sofaTile,
       floorIndex,
-      owns: true,
       facing: "up",
       audience: ISO_FLOOR_AUDIENCE,
     }),
@@ -535,8 +576,8 @@ export function buildIsoCafe(args: AmenityArgs): IsoAmenityBuild {
       kind: "sofa",
       stand: { col: col + 3, row: row + 5 },
       fixture: sofaTile,
+      action: { col: col + 3, row: row + 4 },
       floorIndex,
-      owns: false,
       facing: "up",
       audience: ISO_FLOOR_AUDIENCE,
     }),
@@ -710,8 +751,24 @@ export interface CityFrozenDistrict {
   readonly cursor: IsoShelfCursor;
 }
 
+/**
+ * How far above its D20 anchor a City seat's envelope leaves: the CENTRE of
+ * the roof its occupant works under, not the roof's top edge.
+ *
+ * The scene puts an endpoint at `anchor.y - OFFICE_CHARACTER_HEIGHT - lift`,
+ * and the roof of a `storeys`-high stack is drawn with its centre one storey
+ * below the top of the stack. Those two cancel to exactly this, which is why
+ * a one-storey building lifts nothing: its roof centre IS its occupant's head
+ * height. Painter and projector both read it, so they cannot disagree.
+ */
+export function cityRoofLift(storeys: number): number {
+  return (storeys - 1) * ISO_STOREY_HEIGHT;
+}
+
 export interface CityFrozen {
   readonly kind: "city";
+  /** What the painter reads instead of walking `rooms` and `props`. */
+  readonly index: IsoPlanIndex;
   readonly districts: ReadonlyArray<CityFrozenDistrict>;
   readonly blocks: ReadonlyArray<CityFrozenBlock>;
   /** Which seat each agent holds; a seat id names a block and a lot index. */
@@ -747,3 +804,273 @@ export function readCityFrozen(layout: OfficeLayout | null): CityFrozen | null {
 
 /** The `<host>` segment of a seat id. */
 export const ISO_SEAT_ID_NONE = "-";
+
+// ---- The painter's index ---------------------------------------------- //
+
+/**
+ * WHAT THE PAINTER READS, arranged so that a pan reads what it draws.
+ *
+ * The painter is called per visible CHUNK, and a chunk of a 1,000-agent world
+ * holds a few dozen tiles. Walking `layout.rooms` and `layout.props` to find
+ * them means reading a thousand rooms and a thousand props to emit thirty-two
+ * drawables, sixty times a second, for every chunk on screen. So the plan -
+ * which walks those arrays once anyway, while it is building them - hands the
+ * painter a lookup instead.
+ *
+ * It lives in `frozen`, which the contract already calls per-view metadata
+ * opaque to everything above the view. That is the only place it can live: a
+ * field on `OfficeLayout` would be an isometric fact in a shared type, and a
+ * cache in the painter module would be state keyed on a layout it does not
+ * own - wrong the moment two scenes hold two layouts, and unfalsifiable in a
+ * test. `frozen` carrying an index is not the same as `frozen` carrying a
+ * PACKING: Campus re-packs every plan and still has one of these.
+ *
+ * The class is the guard. `frozen` is `unknown`, and `instanceof` is the one
+ * check that cannot be spoofed by a plain object that happens to have the
+ * right shape.
+ */
+const ISO_INDEX_CELL = 16;
+
+interface IsoIndexedProp {
+  readonly prop: OfficeProp;
+  readonly order: number;
+}
+
+interface IsoIndexedRoom {
+  readonly room: OfficeRoom;
+  readonly order: number;
+}
+
+export class IsoPlanIndex {
+  /** Floor-pass props only: a fixture is drawn from its spot, not from here. */
+  readonly propsByTile: Map<string, IsoIndexedProp[]>;
+  /** Rooms by coarse cell, because a room is a rect and a tile map of one
+   * would hold every interior tile it covers. */
+  readonly roomsByCell: Map<string, IsoIndexedRoom[]>;
+  /** The one spot per fixture tile that draws it; the rest only sit at it. */
+  readonly drawingSpots: Set<string>;
+  /** The widest and tallest sprite indexed, in TILES, rounded up. */
+  propMargin: number;
+  constructor() {
+    this.propsByTile = new Map();
+    this.roomsByCell = new Map();
+    this.drawingSpots = new Set();
+    this.propMargin = 0;
+  }
+}
+
+export interface IsoIndexArgs {
+  readonly props: ReadonlyArray<OfficeProp>;
+  readonly rooms: ReadonlyArray<OfficeRoom>;
+  readonly spots: ReadonlyArray<OfficeErrandSpot>;
+}
+
+/** A spot's own name, stable across the two places that build one. */
+function isoSpotKey(spot: OfficeErrandSpot): string {
+  return [
+    spot.floorIndex,
+    spot.kind,
+    spot.approachTile.col,
+    spot.approachTile.row,
+  ].join("/");
+}
+
+function cellKey(col: number, row: number): string {
+  return `${col}:${row}`;
+}
+
+export function buildIsoIndex(args: IsoIndexArgs): IsoPlanIndex {
+  const index = new IsoPlanIndex();
+
+  // Which spot draws which fixture, decided once. First spot in plan order
+  // wins, which is the seat the plan itself listed first.
+  const drawn = new Set<string>();
+  const fixtureTiles = new Set<string>();
+  for (const spot of args.spots) {
+    const tile = spot.actionTile;
+    if (tile === null) continue;
+    const key = isoTileKey(tile);
+    fixtureTiles.add(key);
+    if (ISO_SPOT_FIXTURES[spot.kind] === undefined || drawn.has(key)) continue;
+    drawn.add(key);
+    index.drawingSpots.add(isoSpotKey(spot));
+  }
+
+  let margin = 0;
+  for (const [order, prop] of args.props.entries()) {
+    const key = isoTileKey(prop.tile);
+    // A fixture is in `layout.props` so the plan's promise is readable, and
+    // out of this index so the floor pass cannot paint it a second time.
+    if (fixtureTiles.has(key)) continue;
+    const bucket = index.propsByTile.get(key);
+    if (bucket === undefined) index.propsByTile.set(key, [{ prop, order }]);
+    else bucket.push({ prop, order });
+    const size = officeSpriteSize(prop.sprite);
+    // A sprite is anchored at its tile's CORNER and reaches up and to the
+    // left of it. One tile step is 16 px across and 8 px down, so a sprite
+    // `h` tall can be anchored `h / 8` tiles behind the window and still
+    // reach into it, and one `w` wide `w / 32` tiles to either side.
+    margin = Math.max(
+      margin,
+      Math.ceil(size.height / ISO_HALF_HEIGHT),
+      Math.ceil(size.width / (ISO_HALF_WIDTH * 2)),
+    );
+  }
+  index.propMargin = margin;
+
+  for (const [order, room] of args.rooms.entries()) {
+    const { bounds } = room;
+    const firstCol = Math.floor(bounds.col / ISO_INDEX_CELL);
+    const lastCol = Math.floor((bounds.col + bounds.cols - 1) / ISO_INDEX_CELL);
+    const firstRow = Math.floor(bounds.row / ISO_INDEX_CELL);
+    const lastRow = Math.floor((bounds.row + bounds.rows - 1) / ISO_INDEX_CELL);
+    for (let row = firstRow; row <= lastRow; row += 1) {
+      for (let col = firstCol; col <= lastCol; col += 1) {
+        const key = cellKey(col, row);
+        const bucket = index.roomsByCell.get(key);
+        if (bucket === undefined) index.roomsByCell.set(key, [{ room, order }]);
+        else bucket.push({ room, order });
+      }
+    }
+  }
+  return index;
+}
+
+/**
+ * This layout's index, or `null` for a layout that carries none.
+ *
+ * `null` is a real answer, not an error: a plan from another view - or from a
+ * version of this one that predates the index - has no lookup to offer, and
+ * the painter falls back to reading the arrays whole. Slow is not wrong.
+ */
+export function readIsoIndex(layout: OfficeLayout): IsoPlanIndex | null {
+  const frozen = layout.frozen;
+  if (typeof frozen !== "object" || frozen === null) return null;
+  if (!("index" in frozen)) return null;
+  const index = frozen.index;
+  return index instanceof IsoPlanIndex ? index : null;
+}
+
+/** Whether this spot is the one that DRAWS its fixture. */
+export function isoSpotDraws(
+  layout: OfficeLayout,
+  spot: OfficeErrandSpot,
+): boolean {
+  if (spot.actionTile === null) return false;
+  const index = readIsoIndex(layout);
+  if (index === null) return true;
+  return index.drawingSpots.has(isoSpotKey(spot));
+}
+
+/**
+ * The floor-pass props anchored in or just behind this window.
+ *
+ * "Just behind" is the margin: a tree anchored one tile off the top edge still
+ * hangs into the window, and a chunk that dropped it would show half a tree
+ * whenever the camera stopped on that line.
+ */
+export function isoPropsIn(
+  layout: OfficeLayout,
+  tiles: OfficeTileRect,
+): ReadonlyArray<OfficeProp> {
+  const index = readIsoIndex(layout);
+  if (index === null) {
+    return layout.props.filter((prop) => isoWithinRect(tiles, prop.tile));
+  }
+  if (tiles.cols <= 0 || tiles.rows <= 0) return [];
+  const found: IsoIndexedProp[] = [];
+  // The margin runs BOTH ways on both axes, unlike an axis-aligned view's.
+  // A sprite hangs half its width to either side of its tile's corner here,
+  // so a neighbour in front can reach back into the window exactly as one
+  // behind can reach forward into it.
+  const margin = index.propMargin;
+  const firstRow = Math.max(0, tiles.row - margin);
+  const firstCol = Math.max(0, tiles.col - margin);
+  for (let row = firstRow; row < tiles.row + tiles.rows + margin; row += 1) {
+    for (let col = firstCol; col < tiles.col + tiles.cols + margin; col += 1) {
+      const bucket = index.propsByTile.get(`${col},${row}`);
+      if (bucket !== undefined) found.push(...bucket);
+    }
+  }
+  return found
+    .filter(({ prop }) => isoPropReaches(tiles, prop))
+    .sort((left, right) => left.order - right.order)
+    .map(({ prop }) => prop);
+}
+
+/**
+ * Whether a prop's SPRITE reaches the window, rather than its tile.
+ *
+ * Both are measured in projected pixels, because that is the only space in
+ * which "does this overlap" has an answer here: a tile rect projects to a
+ * diamond, and a sprite is an upright box hanging off one tile's corner.
+ */
+function isoPropReaches(tiles: OfficeTileRect, prop: OfficeProp): boolean {
+  const size = officeSpriteSize(prop.sprite);
+  const x = (prop.tile.col - prop.tile.row) * ISO_HALF_WIDTH;
+  const y = (prop.tile.col + prop.tile.row) * ISO_HALF_HEIGHT;
+  const left = x - size.width / 2;
+  const top = y + ISO_HALF_HEIGHT - size.height;
+  // The window's own projected box: its four tile corners, min and max. The
+  // origin cancels on both sides, so neither term needs the projector.
+  const cols = [tiles.col, tiles.col + tiles.cols];
+  const rows = [tiles.row, tiles.row + tiles.rows];
+  let minX = Infinity;
+  let maxX = -Infinity;
+  for (const col of cols) {
+    for (const row of rows) {
+      minX = Math.min(minX, (col - row) * ISO_HALF_WIDTH);
+      maxX = Math.max(maxX, (col - row) * ISO_HALF_WIDTH);
+    }
+  }
+  const minY = (cols[0] + rows[0]) * ISO_HALF_HEIGHT;
+  const maxY = (cols[1] + rows[1]) * ISO_HALF_HEIGHT;
+  return (
+    left < maxX &&
+    left + size.width > minX &&
+    top < maxY &&
+    top + size.height > minY
+  );
+}
+
+/** The rooms whose bounds touch this window, in the plan's own order. */
+export function isoRoomsIn(
+  layout: OfficeLayout,
+  tiles: OfficeTileRect,
+): ReadonlyArray<OfficeRoom> {
+  const index = readIsoIndex(layout);
+  if (index === null) return layout.rooms;
+  if (tiles.cols <= 0 || tiles.rows <= 0) return [];
+  const found = new Map<number, OfficeRoom>();
+  const firstCol = Math.floor(Math.max(0, tiles.col) / ISO_INDEX_CELL);
+  const lastCol = Math.floor(
+    Math.max(0, tiles.col + tiles.cols - 1) / ISO_INDEX_CELL,
+  );
+  const firstRow = Math.floor(Math.max(0, tiles.row) / ISO_INDEX_CELL);
+  const lastRow = Math.floor(
+    Math.max(0, tiles.row + tiles.rows - 1) / ISO_INDEX_CELL,
+  );
+  for (let row = firstRow; row <= lastRow; row += 1) {
+    for (let col = firstCol; col <= lastCol; col += 1) {
+      for (const entry of index.roomsByCell.get(cellKey(col, row)) ?? []) {
+        if (!isoRectsOverlap(entry.room.bounds, tiles)) continue;
+        found.set(entry.order, entry.room);
+      }
+    }
+  }
+  return [...found.entries()]
+    .sort((left, right) => left[0] - right[0])
+    .map(([, room]) => room);
+}
+
+export function isoRectsOverlap(
+  left: OfficeTileRect,
+  right: OfficeTileRect,
+): boolean {
+  return (
+    left.col < right.col + right.cols &&
+    right.col < left.col + left.cols &&
+    left.row < right.row + right.rows &&
+    right.row < left.row + left.rows
+  );
+}

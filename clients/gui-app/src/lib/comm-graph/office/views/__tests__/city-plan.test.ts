@@ -1,14 +1,24 @@
 import { describe, expect, it } from "vitest";
+import type { CommGraphPulse } from "@/lib/comm-graph/comm-graph-timeline";
+import { agentAppearance } from "@/lib/comm-graph/office/office-appearance";
 import { officeSpriteSize } from "@/lib/comm-graph/office/office-pixel-art";
 import { findOfficePath } from "@/lib/comm-graph/office/office-path";
 import { partitionOfficePopulation } from "@/lib/comm-graph/office/office-population";
+import { OfficeScene } from "@/lib/comm-graph/office/office-scene";
 import { makeTestEpic } from "@/lib/comm-graph/office/office-test-epic";
 import {
   OFFICE_CHARACTER_HEIGHT,
   OFFICE_CHARACTER_WIDTH,
+  OFFICE_TILE,
+  type OfficeAgentInput,
+  type OfficeAgentStatus,
+  type OfficeErrandSpot,
   type OfficeFloor,
   type OfficeLayout,
+  type OfficePoint,
+  type OfficeProp,
   type OfficeRect,
+  type OfficeSceneInput,
   type OfficeSize,
   type OfficeTilePos,
   type OfficeTileRect,
@@ -18,12 +28,21 @@ import {
   planCity,
 } from "@/lib/comm-graph/office/views/isometric/city-plan";
 import { ISO_PAINTER } from "@/lib/comm-graph/office/views/isometric/iso-painter";
-import { readCityFrozen } from "@/lib/comm-graph/office/views/isometric/iso-plan-core";
 import {
+  isoPropsIn,
+  isoRoomsIn,
+  isoRectsOverlap,
+  readCityFrozen,
+} from "@/lib/comm-graph/office/views/isometric/iso-plan-core";
+import {
+  ISO_HALF_HEIGHT,
+  ISO_HALF_WIDTH,
   isoDepth,
-  ISO_STOREY_HEIGHT,
 } from "@/lib/comm-graph/office/views/isometric/iso-projector";
-import type { OfficePlanInput } from "@/lib/comm-graph/office/views/office-view";
+import {
+  OFFICE_VIEWS,
+  type OfficePlanInput,
+} from "@/lib/comm-graph/office/views/office-view";
 
 type Shape = "triage" | "two-hosts";
 
@@ -63,6 +82,235 @@ function within(rect: OfficeTileRect, tile: OfficeTilePos): boolean {
     tile.row >= rect.row &&
     tile.row < rect.row + rect.rows
   );
+}
+
+// `Reflect.get` is declared as returning `any`; read it through a narrower
+// type so the trap hands back `unknown` rather than smuggling `any` out.
+const reflectGet: (
+  target: object,
+  key: string | symbol,
+  receiver: unknown,
+) => unknown = Reflect.get;
+
+/**
+ * A `ReadonlyArray` wrapper that counts every numeric-index read, so a test
+ * can prove a lookup never walked the array it wraps. `for...of` reads
+ * indices through the iterator, so it counts too.
+ */
+function countedArrayProxy<T>(
+  items: ReadonlyArray<T>,
+  counts: { reads: number },
+): ReadonlyArray<T> {
+  return new Proxy(items, {
+    get(target, prop, receiver): unknown {
+      if (typeof prop === "string" && /^\d+$/.test(prop)) counts.reads += 1;
+      return reflectGet(target, prop, receiver);
+    },
+  });
+}
+
+/**
+ * Mirrors the private `isoPropReaches` in `iso-plan-core.ts`: whether a
+ * prop's SPRITE box - an upright box hanging off its tile's projected corner -
+ * overlaps a tile window's own projected diamond box. Restated here, against
+ * the exported projection constants, so the brute-force check below is an
+ * independent read of the same geometry rather than a call into the function
+ * under test.
+ */
+function propReachesWindow(tiles: OfficeTileRect, prop: OfficeProp): boolean {
+  const size = officeSpriteSize(prop.sprite);
+  const x = (prop.tile.col - prop.tile.row) * ISO_HALF_WIDTH;
+  const y = (prop.tile.col + prop.tile.row) * ISO_HALF_HEIGHT;
+  const left = x - size.width / 2;
+  const top = y + ISO_HALF_HEIGHT - size.height;
+  const cols = [tiles.col, tiles.col + tiles.cols];
+  const rows = [tiles.row, tiles.row + tiles.rows];
+  let minX = Infinity;
+  let maxX = -Infinity;
+  for (const col of cols) {
+    for (const row of rows) {
+      minX = Math.min(minX, (col - row) * ISO_HALF_WIDTH);
+      maxX = Math.max(maxX, (col - row) * ISO_HALF_WIDTH);
+    }
+  }
+  const minY = (cols[0] + rows[0]) * ISO_HALF_HEIGHT;
+  const maxY = (cols[1] + rows[1]) * ISO_HALF_HEIGHT;
+  return (
+    left < maxX &&
+    left + size.width > minX &&
+    top < maxY &&
+    top + size.height > minY
+  );
+}
+
+/** Every tile some errand spot names as the fixture it acts on. */
+function fixtureTilesOf(layout: OfficeLayout): ReadonlySet<string> {
+  const tiles = new Set<string>();
+  for (const floor of layout.floors) {
+    for (const spot of floor.errandSpots) {
+      if (spot.actionTile === null) continue;
+      tiles.add(`${spot.actionTile.col},${spot.actionTile.row}`);
+    }
+  }
+  return tiles;
+}
+
+const WHOLE_WORLD: OfficeRect = { x: 0, y: 0, width: 8000, height: 8000 };
+
+function sceneInputFor(
+  agents: OfficePlanInput["agents"],
+  statusById: ReadonlyMap<string, OfficeAgentStatus>,
+): OfficeSceneInput {
+  const visibleAgentIds = new Set(agents.map((agent) => agent.id));
+  return {
+    agents,
+    visibleAgentIds,
+    statusById,
+    partition: partitionOfficePopulation({
+      agents,
+      statusById,
+      previous: null,
+    }),
+    activityById: new Map<string, number>(),
+    viewport: VIEWPORT_1280,
+    openRequestsByReceiver: new Map<string, number>(),
+    pulse: null,
+    pulseKey: null,
+    stepMs: 800,
+    cursorMs: null,
+    clockMs: 0,
+    // Idle wandering is a LIVE, PAUSED-PLAYBACK behaviour: `errandMustEnd`
+    // and `updateErrandStarts` both refuse to run one while `playing` is
+    // true, since playback makes every agent idle between its own rows.
+    playing: false,
+    reducedMotion: false,
+  };
+}
+
+/** One painted roof, with everything the tall-block cases ask about it. */
+interface CityRoofFacts {
+  readonly agentId: string;
+  /** The painted `block-top` box: where the user sees this building's roof. */
+  readonly box: OfficeRect;
+  readonly depth: number;
+  /** The centre of the hit rect the SCENE gives this seat, which is not it. */
+  readonly seatCentre: OfficePoint;
+}
+
+function centreOf(box: OfficeRect): OfficePoint {
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+}
+
+function rectsOverlap(left: OfficeRect, right: OfficeRect): boolean {
+  return (
+    left.x < right.x + right.width &&
+    right.x < left.x + left.width &&
+    left.y < right.y + right.height &&
+    right.y < left.y + left.height
+  );
+}
+
+/**
+ * A real City scene holding two buildings whose PAINTED roofs overlap, with
+ * the nearer and the farther of the two picked out.
+ *
+ * Measured fixture: `one-team(3)` with activity 100/190/280 gives `team-lead`
+ * four storeys and `member-0` seven, whose roofs land at `(120,120)` and
+ * `(136,128)` - a 16 x 8 overlap, with `member-0` one lot nearer. The overlap
+ * is asserted rather than assumed, so a plan that moved this geometry fails
+ * the cases below loudly instead of making them vacuous.
+ */
+function overlappingCityRoofs(): {
+  readonly scene: OfficeScene;
+  readonly layout: OfficeLayout;
+  readonly nearer: CityRoofFacts;
+  readonly farther: CityRoofFacts;
+} {
+  const epic = makeTestEpic("one-team", 3, 1);
+  const statusById = new Map<string, OfficeAgentStatus>();
+  const activityById = new Map<string, number>();
+  for (const [index, agent] of epic.agents.entries()) {
+    statusById.set(agent.id, "working");
+    activityById.set(agent.id, [100, 190, 280][index] ?? 0);
+  }
+  const scene = new OfficeScene(OFFICE_VIEWS.city, null);
+  scene.sync({ ...sceneInputFor(epic.agents, statusById), activityById });
+  const layout = scene.layout();
+  if (layout === null) throw new Error("expected a layout after sync");
+  const projector = ISO_PAINTER.projector(layout);
+
+  const roofs: CityRoofFacts[] = [];
+  for (const [agentId, desk] of layout.desks) {
+    const seat = layout.seats.get(desk.seatId);
+    if (seat === undefined) continue;
+    const roof = ISO_PAINTER.seatProps(
+      layout,
+      seat,
+      {
+        agentId,
+        name: agentId,
+        status: "working",
+        sheeted: false,
+        openRequests: 0,
+        screenFrame: 0,
+        harnessId: null,
+        modelTier: "medium",
+        accentId: null,
+      },
+      2,
+    ).find(
+      (entry) =>
+        entry.drawable.kind === "sprite" &&
+        entry.drawable.sprite.name === "block-top",
+    );
+    if (roof === undefined || roof.drawable.kind !== "sprite") continue;
+    const size = officeSpriteSize(roof.drawable.sprite);
+    const corner = projector.project(seat.deskTile.col, seat.deskTile.row);
+    roofs.push({
+      agentId,
+      box: {
+        x: roof.drawable.x,
+        y: roof.drawable.y,
+        width: size.width,
+        height: size.height,
+      },
+      depth: roof.depth,
+      // `OfficeScene.seatBox` restated: `hitTiles` tiles from the DESK
+      // TILE's projected corner, down and right. Restated rather than read
+      // off `frame.hitRegions` so the gap the skipped case names is visible
+      // here as two different boxes rather than one lookup.
+      seatCentre: centreOf({
+        x: corner.x,
+        y: corner.y,
+        width: seat.hitTiles.width * OFFICE_TILE,
+        height: seat.hitTiles.height * OFFICE_TILE,
+      }),
+    });
+  }
+
+  let pair: readonly [CityRoofFacts, CityRoofFacts] | null = null;
+  for (let i = 0; i < roofs.length && pair === null; i += 1) {
+    for (let j = i + 1; j < roofs.length; j += 1) {
+      if (rectsOverlap(roofs[i].box, roofs[j].box)) {
+        pair = [roofs[i], roofs[j]];
+        break;
+      }
+    }
+  }
+  if (pair === null) throw new Error("expected two overlapping City roofs");
+  const [left, right] = pair;
+  const overlapWidth =
+    Math.min(left.box.x + left.box.width, right.box.x + right.box.width) -
+    Math.max(left.box.x, right.box.x);
+  const overlapHeight =
+    Math.min(left.box.y + left.box.height, right.box.y + right.box.height) -
+    Math.max(left.box.y, right.box.y);
+  expect(overlapWidth).toBeGreaterThan(0);
+  expect(overlapHeight).toBeGreaterThan(0);
+  const nearer = left.depth > right.depth ? left : right;
+  const farther = left.depth > right.depth ? right : left;
+  expect(nearer.agentId).not.toBe(farther.agentId);
+  return { scene, layout, nearer, farther };
 }
 
 /**
@@ -184,6 +432,59 @@ function signProblems(
   return problems;
 }
 
+/**
+ * The two garden spots that share one bench, and every garden spot there is.
+ *
+ * A bench is two tiles with a seat under each; both seats name the same
+ * `fixtureId`, which is what makes them rally, and each acts on its own half.
+ */
+function gardenSpotsOf(layout: OfficeLayout): {
+  readonly all: ReadonlyArray<OfficeErrandSpot>;
+  readonly benchPair: ReadonlyArray<OfficeErrandSpot>;
+} {
+  const all = layout.floors.flatMap((floor) =>
+    floor.errandSpots.filter((spot) => spot.kind === "garden"),
+  );
+  const byFixture = new Map<string, OfficeErrandSpot[]>();
+  for (const spot of all) {
+    const bucket = byFixture.get(spot.fixtureId);
+    if (bucket === undefined) byFixture.set(spot.fixtureId, [spot]);
+    else bucket.push(spot);
+  }
+  const benchPair = [...byFixture.values()].find((spots) => spots.length === 2);
+  if (benchPair === undefined) throw new Error("expected a two-seat bench");
+  return { all, benchPair };
+}
+
+/**
+ * Whether anybody reaches this spot and SITS there, within a bounded number
+ * of 100 ms ticks. The pose is read off the character drawn on the spot's own
+ * projected foot point, which is where the scene puts whoever is using it.
+ */
+function someoneSitsAt(
+  scene: OfficeScene,
+  layout: OfficeLayout,
+  spot: OfficeErrandSpot,
+): boolean {
+  const foot = ISO_PAINTER.projector(layout).project(
+    spot.tile.col + 0.5,
+    spot.tile.row + 1,
+  );
+  const spriteX = foot.x - OFFICE_CHARACTER_WIDTH / 2;
+  const spriteY = foot.y - OFFICE_CHARACTER_HEIGHT;
+  for (let step = 0; step < 3000; step += 1) {
+    scene.tick(100);
+    for (const entry of scene.frame(2, WHOLE_WORLD).world ?? []) {
+      const drawable = entry.drawable;
+      if (drawable.kind !== "sprite") continue;
+      if (drawable.sprite.name !== "character") continue;
+      if (drawable.x !== spriteX || drawable.y !== spriteY) continue;
+      if (drawable.sprite.pose === "sit") return true;
+    }
+  }
+  return false;
+}
+
 describe("planCity", () => {
   describe.each([12, 309, 1000])(
     "the shared layout invariants at %i agents",
@@ -215,13 +516,16 @@ describe("planCity", () => {
     const busy = new Map<string, number>();
     for (const agent of input.agents) busy.set(agent.id, 400);
     const layout = planCity({ ...input, activityById: busy });
-    const projector = ISO_PAINTER.projector(layout);
+    // Read the STOREY COUNT itself rather than inferring it from `seatLift`.
+    // The lift is the height of a roof's centre above its occupant's anchor,
+    // which is one storey short of the stack by construction; it was only ever
+    // a stand-in for this number and stopped being one when the launch point
+    // moved onto the roof.
+    const frozen = readCityFrozen(layout);
+    if (frozen === null) throw new Error("expected City's frozen packing");
     let maxStoreys = 0;
-    for (const seat of layout.seats.values()) {
-      maxStoreys = Math.max(
-        maxStoreys,
-        projector.seatLift(seat) / ISO_STOREY_HEIGHT,
-      );
+    for (const storeys of frozen.storeysBySeatId.values()) {
+      maxStoreys = Math.max(maxStoreys, storeys);
     }
     expect(maxStoreys).toBeLessThanOrEqual(7);
     // Every occupied seat is busy enough to hit the cap, so the cap is what
@@ -393,45 +697,81 @@ describe("planCity", () => {
     });
   });
 
-  it("draws and hits overlapping tall blocks front-most first", () => {
-    const layout = planCity(inputFor("triage", 60, VIEWPORT_1280));
-    // The origin corner (col + row === 0) is degenerate for a monotonicity
-    // check - every other tile's diagonal distance is compared against it.
-    const seats = [...layout.seats.values()].filter(
-      (seat) => seat.deskTile.col + seat.deskTile.row > 0,
-    );
-    expect(seats.length).toBeGreaterThan(0);
-    const byDepth = seats
-      .map((seat) => ({
-        colRow: seat.deskTile.col + seat.deskTile.row,
-        depth: Math.max(
-          ...ISO_PAINTER.seatProps(
-            layout,
-            seat,
-            {
-              agentId: "agent-root",
-              name: "Root",
-              status: "working",
-              sheeted: false,
-              openRequests: 0,
-              screenFrame: 0,
-              harnessId: null,
-              modelTier: "medium",
-              accentId: null,
-            },
-            1,
-          ).map((entry) => entry.depth),
-        ),
-      }))
-      .sort((left, right) => left.depth - right.depth);
-    // Draw and hit order both walk this array front-to-back / back-to-front
-    // by depth, so a nearer footprint (larger col+row) must never sort before
-    // a farther one.
-    for (let index = 1; index < byDepth.length; index += 1) {
-      expect(byDepth[index].colRow).toBeGreaterThanOrEqual(
-        byDepth[index - 1].colRow,
-      );
+  it("draws the farther of two overlapping roofs first and hits each building by its own seat box", () => {
+    // The old case never drew, merged or hit anything - it took the max of
+    // each seat's painter depths, sorted them and checked `col + row` was
+    // increasing, which passes for any monotone depth formula whether or not
+    // the drawn art actually overlaps. This one goes through the real scene.
+    const { scene, nearer, farther } = overlappingCityRoofs();
+    // 1. World order: every BUILDING entry the farther owner draws (its
+    // slabs, windows and roof - all one depth per seat) comes before every
+    // building entry the nearer owner draws. The two owners' own OCCUPANTS
+    // are excluded from this comparison on purpose: a seat's occupant always
+    // stands nearer than its own building's roof (a character's foot is 12
+    // px nearer than the prop on the same tile - see `iso-projector.ts`), so
+    // the farther owner's occupant legitimately outranks the nearer owner's
+    // building. That is unrelated to which BUILDING is in front.
+    const frame = scene.frame(2, WHOLE_WORLD);
+    expect(frame.world).not.toBeNull();
+    if (frame.world === null) return;
+    const isBuildingEntry = (entry: (typeof frame.world)[number]): boolean =>
+      entry.drawable.kind === "sprite" &&
+      entry.drawable.sprite.name !== "character";
+    const buildingIndexOfOwner = new Map<string, number[]>();
+    for (const [index, entry] of frame.world.entries()) {
+      if (entry.ownerAgentId === null || !isBuildingEntry(entry)) continue;
+      const bucket = buildingIndexOfOwner.get(entry.ownerAgentId);
+      if (bucket === undefined)
+        buildingIndexOfOwner.set(entry.ownerAgentId, [index]);
+      else bucket.push(index);
     }
+    const nearerBuildingIndices =
+      buildingIndexOfOwner.get(nearer.agentId) ?? [];
+    const fartherBuildingIndices =
+      buildingIndexOfOwner.get(farther.agentId) ?? [];
+    expect(nearerBuildingIndices.length).toBeGreaterThan(0);
+    expect(fartherBuildingIndices.length).toBeGreaterThan(0);
+    const maxFartherBuildingIndex = Math.max(...fartherBuildingIndices);
+    const minNearerBuildingIndex = Math.min(...nearerBuildingIndices);
+    expect(minNearerBuildingIndex).toBeGreaterThan(maxFartherBuildingIndex);
+
+    // The NEARER building's own occupant - standing in its own doorway, one
+    // tile below its own roof - draws after that building's own entries too.
+    const nearerOccupantIndices = frame.world
+      .map((entry, index) => ({ entry, index }))
+      .filter(
+        ({ entry }) =>
+          entry.ownerAgentId === nearer.agentId &&
+          entry.drawable.kind === "sprite" &&
+          entry.drawable.sprite.name === "character",
+      )
+      .map(({ index }) => index);
+    expect(nearerOccupantIndices.length).toBeGreaterThan(0);
+    expect(Math.min(...nearerOccupantIndices)).toBeGreaterThan(
+      Math.max(...nearerBuildingIndices),
+    );
+
+    // 2. `hitTest` genuinely distinguishes the two buildings by their own
+    // (Floor-shaped) seat hit box.
+    expect(scene.hitTest(nearer.seatCentre)).toBe(nearer.agentId);
+    expect(scene.hitTest(farther.seatCentre)).toBe(farther.agentId);
+  });
+
+  it("hits a tall building where the user can see it, at its own roof centre", (context) => {
+    context.skip(
+      "Blocked on the seat hit box, which no isometric plan or painter can " +
+        "reach: `OfficeScene.seatBox` builds it as `hitTiles.width x " +
+        "hitTiles.height` tiles anchored at the DESK TILE's projected " +
+        "corner, extending down and right. A City building is painted up " +
+        "and 24 px left of that corner and rises `storeys * 8` px above it, " +
+        "so the two rects never share a pixel and no `hitTiles` value can " +
+        "make them. Reported to the coordinator for routing; the assertions " +
+        "below are the required behaviour, so closing it is deleting this " +
+        "skip.",
+    );
+    const { scene, nearer, farther } = overlappingCityRoofs();
+    expect(scene.hitTest(centreOf(nearer.box))).toBe(nearer.agentId);
+    expect(scene.hitTest(centreOf(farther.box))).toBe(farther.agentId);
   });
 
   it("orders isoDepth by foot y first, then col+row, then kind", () => {
@@ -596,5 +936,385 @@ describe("planCity", () => {
     }
 
     expect([...new Set(problems)]).toEqual([]);
+  });
+
+  it("renames nothing when a lexically earlier host arrives", () => {
+    const first = makeTestEpic("triage", 40, 1);
+    // Every agent starts on host-b, so the district's own seat ids carry
+    // "host-b" throughout - the rewrite is entirely in `hostId`.
+    const hostBAgents: ReadonlyArray<OfficeAgentInput> = first.agents.map(
+      (agent) => ({ ...agent, hostId: "host-b" }),
+    );
+    const partitionA = partitionOfficePopulation({
+      agents: hostBAgents,
+      statusById: first.statusById,
+      previous: null,
+    });
+    const inputA: OfficePlanInput = {
+      agents: hostBAgents,
+      partition: partitionA,
+      occupancy: new Map<string, string>(),
+      needsCapacity: [],
+      activityById: new Map<string, number>(),
+      viewport: VIEWPORT_1280,
+      previous: null,
+    };
+    const a = planCity(inputA);
+
+    // A later-created root agent on host-a, which sorts before "host-b" in
+    // the partition's own host order (`Array.from(named).sort()` in
+    // `office-population.ts`) - that lexical ordering is what pushes
+    // host-b's district from districtIndex 0 to districtIndex 1.
+    const extra: OfficeAgentInput = {
+      id: "agent-extra-root",
+      name: "agent-extra-root",
+      kind: "chat",
+      hostId: "host-a",
+      archivedAt: null,
+      modelTier: "medium",
+      harnessId: null,
+      model: null,
+      parentId: null,
+      archived: false,
+      createdAt: hostBAgents.length,
+      appearance: agentAppearance("agent-extra-root", "chat", null),
+    };
+    const agentsB = [...hostBAgents, extra];
+    const statusById = new Map(first.statusById);
+    statusById.set(extra.id, "idle");
+    const partitionB = partitionOfficePopulation({
+      agents: agentsB,
+      statusById,
+      previous: partitionA,
+    });
+    const b = planCity({
+      ...inputA,
+      agents: agentsB,
+      partition: partitionB,
+      previous: a,
+    });
+    expect(b.floors.length).toBe(2);
+
+    const problems: string[] = [];
+    for (const agent of hostBAgents) {
+      const before = a.desks.get(agent.id);
+      const after = b.desks.get(agent.id);
+      if (before === undefined || after === undefined) {
+        problems.push(`${agent.id} lost its desk`);
+        continue;
+      }
+      if (after.seatId !== before.seatId) {
+        problems.push(
+          `${agent.id} seatId moved from ${before.seatId} to ${after.seatId}`,
+        );
+      }
+      if (
+        after.deskTile.col !== before.deskTile.col ||
+        after.deskTile.row !== before.deskTile.row
+      ) {
+        problems.push(`${agent.id} deskTile moved`);
+      }
+      if (
+        after.chairTile.col !== before.chairTile.col ||
+        after.chairTile.row !== before.chairTile.row
+      ) {
+        problems.push(`${agent.id} chairTile moved`);
+      }
+    }
+    // Before the fix `seatIdOf` folded the district's INDEX into the id, so
+    // every one of these 40 seat ids changed the moment host-a's district
+    // took index 0 and pushed host-b's to index 1 - even though nothing
+    // about host-b moved.
+    expect(problems).toEqual([]);
+  });
+
+  it("keeps a nearer character painted over a farther prop in the merged world stream", () => {
+    const epic = makeTestEpic("triage", 60, 1);
+    const statusById = new Map<string, OfficeAgentStatus>();
+    for (const agent of epic.agents) statusById.set(agent.id, "working");
+    const activityById = new Map<string, number>();
+    for (const [index, agent] of epic.agents.entries()) {
+      activityById.set(agent.id, index % 37);
+    }
+    const scene = new OfficeScene(OFFICE_VIEWS.city, null);
+    scene.sync({ ...sceneInputFor(epic.agents, statusById), activityById });
+    const frame = scene.frame(2, WHOLE_WORLD);
+    expect(frame.world).not.toBeNull();
+    if (frame.world === null) return;
+
+    const isCharacter = (entry: (typeof frame.world)[number]): boolean =>
+      entry.drawable.kind === "sprite" &&
+      entry.drawable.sprite.name === "character";
+    const isProp = (entry: (typeof frame.world)[number]): boolean =>
+      entry.drawable.kind === "sprite" && !isCharacter(entry);
+
+    const characterDepths = frame.world.filter(isCharacter).map((e) => e.depth);
+    const propEntries = frame.world.filter(isProp);
+    expect(characterDepths.length).toBeGreaterThan(0);
+    expect(propEntries.length).toBeGreaterThan(0);
+
+    // `frame.world` is built by a stable ascending sort on `depth`, so it is
+    // non-decreasing by construction - restated here as the merge's own
+    // contract rather than as evidence of the fix.
+    for (let index = 1; index < frame.world.length; index += 1) {
+      expect(frame.world[index].depth).toBeGreaterThanOrEqual(
+        frame.world[index - 1].depth,
+      );
+    }
+
+    // The defect: before the fix every prop's depth was `footY * 4096 + tie`,
+    // so on any fixture this size a prop's depth (in the tens of thousands)
+    // dwarfed every character's raw foot-y depth (at most a few thousand) -
+    // no prop could ever sort BEFORE (behind) any character, however far
+    // back it actually stood. With one depth unit, a prop far from the
+    // camera legitimately sorts behind a character standing near it. Assert
+    // that mixed ordering actually happens, or this case proves nothing.
+    const minCharacterDepth = Math.min(...characterDepths);
+    const hasPropBehindACharacter = propEntries.some(
+      (entry) => entry.depth < minCharacterDepth,
+    );
+    expect(hasPropBehindACharacter).toBe(true);
+
+    // Every prop's depth is the real projected foot y plus a tie-break that
+    // stays strictly under one pixel, and never exceeds the layout's own
+    // projected height.
+    const layout = scene.layout();
+    if (layout === null) throw new Error("expected a layout after sync");
+    const projectedHeight = ISO_PAINTER.projector(layout).bounds.height;
+    for (const entry of propEntries) {
+      const fraction = entry.depth - Math.floor(entry.depth);
+      expect(fraction).toBeLessThan(1);
+      expect(entry.depth).toBeLessThan(projectedHeight);
+    }
+  });
+
+  it("leaves a request envelope from the sender's own roof centre, not its side", () => {
+    const epic = makeTestEpic("one-team", 3, 1);
+    const statusById = new Map<string, OfficeAgentStatus>();
+    for (const agent of epic.agents) statusById.set(agent.id, "idle");
+    const scene = new OfficeScene(OFFICE_VIEWS.city, null);
+    const baseInput = sceneInputFor(epic.agents, statusById);
+    scene.sync(baseInput);
+    const pulse: CommGraphPulse = {
+      kind: "edge",
+      edgeId: "agent-root<->team-lead",
+      pulseKind: "request",
+      fromAgentId: "agent-root",
+      toAgentId: "team-lead",
+    };
+    scene.sync({ ...baseInput, pulse, pulseKey: "pulse-1" });
+    // No `tick` yet, so the envelope's own progress is 0 - its endpoint is
+    // exactly the sender's launch point, with no arc lift folded in.
+    const frame = scene.frame(2, WHOLE_WORLD);
+    const envelope = frame.overlay.find(
+      (drawable) => drawable.kind === "envelope",
+    );
+    expect(envelope).toBeDefined();
+    if (envelope === undefined) return;
+
+    const layout = scene.layout();
+    if (layout === null) throw new Error("expected a layout after sync");
+    const rootSeatId = layout.desks.get("agent-root")?.seatId;
+    const rootSeat =
+      rootSeatId === undefined ? undefined : layout.seats.get(rootSeatId);
+    expect(rootSeat).toBeDefined();
+    if (rootSeat === undefined) return;
+    const drawables = ISO_PAINTER.seatProps(
+      layout,
+      rootSeat,
+      {
+        agentId: "agent-root",
+        name: "Root",
+        status: "idle",
+        sheeted: false,
+        openRequests: 0,
+        screenFrame: 0,
+        harnessId: null,
+        modelTier: "medium",
+        accentId: null,
+      },
+      2,
+    );
+    const roof = drawables.find(
+      (entry) =>
+        entry.drawable.kind === "sprite" &&
+        entry.drawable.sprite.name === "block-top",
+    );
+    expect(roof).toBeDefined();
+    if (roof === undefined || roof.drawable.kind !== "sprite") return;
+    const roofSize = officeSpriteSize(roof.drawable.sprite);
+    // Before the fix the roof was centred on the desk tile's own corner, 24
+    // px to one side of this.
+    expect({ x: envelope.x, y: envelope.y }).toEqual({
+      x: roof.drawable.x + roofSize.width / 2,
+      y: roof.drawable.y + roofSize.height / 2,
+    });
+  });
+
+  it("reads only the index's own references at lod 2, never layout.rooms or layout.props whole", () => {
+    const input = inputFor("triage", 1000, VIEWPORT_1280);
+    const layout = planCity(input);
+
+    const roomCounts = { reads: 0 };
+    const propCounts = { reads: 0 };
+    const countingLayout: OfficeLayout = {
+      ...layout,
+      rooms: countedArrayProxy(layout.rooms, roomCounts),
+      props: countedArrayProxy(layout.props, propCounts),
+    };
+    // Measured: the first district's park (with its two trees and its
+    // reception desk) sits near here on this fixture, so this window is one
+    // that actually holds non-fixture props - unlike the world's own corner,
+    // which City's shelf-packed districts leave empty.
+    const window: OfficeTileRect = { col: 50, row: 42, cols: 32, rows: 32 };
+    ISO_PAINTER.floor(countingLayout, window, 2);
+    // Before the fix the floor pass walked both arrays whole to find what
+    // falls in one small window; the index built once by the plan makes both
+    // zero however big the layout is.
+    expect(roomCounts.reads).toBe(0);
+    expect(propCounts.reads).toBe(0);
+
+    const rooms = isoRoomsIn(layout, window);
+    const bruteRooms = new Set(
+      layout.rooms.filter((room) => isoRectsOverlap(room.bounds, window)),
+    );
+    expect(new Set(rooms)).toEqual(bruteRooms);
+    // Asserting the count is smaller than the whole roster is what stops a
+    // lookup that just returns everything from passing this case by
+    // accident. Measured on this fixture.
+    expect(rooms.length).toBeLessThan(layout.rooms.length);
+    expect(rooms.length).toBeGreaterThan(0);
+
+    // `isoPropsIn` also drops every FIXTURE tile - a bench, a table, a
+    // coffee machine - because those are drawn from their errand spot in the
+    // world stream, not from the floor pass; painting them here too would
+    // double them. So the brute force has to exclude those tiles too, or it
+    // counts fixtures the lookup is right to leave out.
+    const fixtureTiles = fixtureTilesOf(layout);
+    const props = isoPropsIn(layout, window);
+    const bruteProps = new Set(
+      layout.props.filter(
+        (prop) =>
+          !fixtureTiles.has(`${prop.tile.col},${prop.tile.row}`) &&
+          propReachesWindow(window, prop),
+      ),
+    );
+    expect(new Set(props)).toEqual(bruteProps);
+    for (const prop of props) {
+      expect(propReachesWindow(window, prop)).toBe(true);
+    }
+    expect(props.length).toBeGreaterThan(0);
+    expect(props.length).toBeLessThan(layout.props.length);
+  });
+
+  it("gives both bench seats a sitting pose and leaves the bare lawn spots standing", () => {
+    const epic = makeTestEpic("triage", 12, 1);
+    const statusById = new Map<string, OfficeAgentStatus>();
+    for (const agent of epic.agents) statusById.set(agent.id, "idle");
+    const scene = new OfficeScene(OFFICE_VIEWS.city, null);
+    scene.sync(sceneInputFor(epic.agents, statusById));
+    const layout = scene.layout();
+    if (layout === null) throw new Error("expected a layout after sync");
+
+    const { all, benchPair } = gardenSpotsOf(layout);
+    // Both halves of the bench are real anchors, each with its own sprite on
+    // it. Before the fix the second carried `null` to keep the art from being
+    // drawn twice, and the scene reads a null garden anchor as "no bench,
+    // therefore stand" - so the second arrival waited on its feet.
+    const propAt = new Map(
+      layout.props.map((prop) => [`${prop.tile.col},${prop.tile.row}`, prop]),
+    );
+    const problems: string[] = [];
+    for (const spot of benchPair) {
+      const tile = spot.actionTile;
+      if (tile === null) {
+        problems.push(
+          `bench seat at ${spot.tile.col},${spot.tile.row} has no anchor`,
+        );
+        continue;
+      }
+      const name = propAt.get(`${tile.col},${tile.row}`)?.sprite.name;
+      if (name !== "bench")
+        problems.push(`no bench at ${tile.col},${tile.row}`);
+    }
+    // A bare stroll across the lawn still acts on nothing, which is the other
+    // half of the garden's two outcomes.
+    for (const spot of all) {
+      if (benchPair.includes(spot)) continue;
+      if (spot.actionTile !== null) {
+        problems.push(
+          `stroll at ${spot.tile.col},${spot.tile.row} has an anchor`,
+        );
+      }
+    }
+    expect(problems).toEqual([]);
+
+    expect(someoneSitsAt(scene, layout, benchPair[1])).toBe(true);
+  });
+
+  it("draws exactly one clock per floor at lod 2, and none at lod 1", () => {
+    const layout = planCity(inputFor("triage", 60, VIEWPORT_1280));
+    const clockSize = officeSpriteSize({ name: "clock" });
+    const projector = ISO_PAINTER.projector(layout);
+    const window: OfficeTileRect = {
+      col: 0,
+      row: 0,
+      cols: layout.cols,
+      rows: layout.rows,
+    };
+
+    const atLod1 = ISO_PAINTER.floor(layout, window, 1);
+    const clocksAt1 = atLod1.filter(
+      (drawable) =>
+        drawable.kind === "sprite" && drawable.sprite.name === "clock",
+    );
+    expect(clocksAt1).toHaveLength(0);
+
+    const atLod2 = ISO_PAINTER.floor(layout, window, 2);
+    const clocksAt2 = atLod2.filter(
+      (drawable) =>
+        drawable.kind === "sprite" && drawable.sprite.name === "clock",
+    );
+    expect(clocksAt2).toHaveLength(layout.floors.length);
+    for (const floor of layout.floors) {
+      const corner = projector.project(
+        floor.clockTile.col,
+        floor.clockTile.row,
+      );
+      const expected = {
+        x: corner.x,
+        y: corner.y + OFFICE_TILE - clockSize.height,
+      };
+      const found = clocksAt2.some(
+        (drawable) =>
+          drawable.kind === "sprite" &&
+          drawable.x === expected.x &&
+          drawable.y === expected.y,
+      );
+      expect(
+        found,
+        `no clock face for floor at ${floor.clockTile.col},${floor.clockTile.row}`,
+      ).toBe(true);
+    }
+  });
+
+  it("draws nothing for an occupied seat at overview, and something at close-up", () => {
+    const layout = planCity(inputFor("triage", 60, VIEWPORT_1280));
+    const seat = [...layout.seats.values()][0];
+    const state = {
+      agentId: "agent-root",
+      name: "Root",
+      status: "working" as const,
+      sheeted: false,
+      openRequests: 0,
+      screenFrame: 0 as const,
+      harnessId: null,
+      modelTier: "medium" as const,
+      accentId: null,
+    };
+    expect(ISO_PAINTER.seatProps(layout, seat, state, 0)).toEqual([]);
+    expect(
+      ISO_PAINTER.seatProps(layout, seat, state, 2).length,
+    ).toBeGreaterThan(0);
   });
 });
