@@ -115,6 +115,25 @@ export interface IHostStreamClient<
    */
   isReady(): boolean;
   /**
+   * Whether the connection behind this client is READY and has heard nothing
+   * from the host for at least `ms` - the transport's own verdict, read by the
+   * human Retry paths so a person's click can escalate from "re-subscribe" to
+   * "drop the socket and re-dial" when, and only when, the session is provably
+   * dead.
+   *
+   * OPTIONAL, in the shape `subscribeAtVersion?` already uses on
+   * `IStreamClient`: this interface is implemented structurally by two
+   * production classes, two `implements` test classes and a couple of dozen
+   * object literals, and a required member would be a sweep of all of them to
+   * express "not measured". ABSENT MEANS NOT MEASURED, never "silent" - every
+   * caller reads `?.(ms) ?? false`, so a transport with no answer never
+   * escalates anything.
+   *
+   * `WsStreamClient` deliberately leaves it absent: a local socket's failure
+   * modes are its own and nothing above it escalates on local silence.
+   */
+  isSilentFor?(ms: number): boolean;
+  /**
    * Learned per-method compatibility with the connected host, keyed by stream
    * method name. `"unknown"` until capability evidence is available:
    * `WsStreamClient` learns it from its handshake and `RemoteStreamClient`

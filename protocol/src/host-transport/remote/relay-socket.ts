@@ -62,6 +62,15 @@ export type RelayKillReason =
   | "revoked"
   | "host_gone"
   | "policy_violation"
+  /**
+   * The host asked the relay to drop this client leg because it can no longer
+   * serve the Noise session behind it (a residual handshake/decrypt failure, a
+   * standing sweep, a slow-session eviction). Known here for its BACKOFF
+   * semantics, not its provenance: it is still `not-host-evidence`, but the
+   * host is demonstrably alive and asking for a re-handshake, so the session
+   * redials at its current ladder rung instead of the congestion cap.
+   */
+  | "session_reset"
   | (string & {});
 
 export interface RelaySocketHandlers {

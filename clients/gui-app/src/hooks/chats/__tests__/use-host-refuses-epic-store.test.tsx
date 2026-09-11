@@ -40,6 +40,9 @@ import {
   useHostRefusesEpicStore,
   useRecordHostOlderThanDataRefusal,
 } from "@/hooks/chats/use-host-refuses-epic-store";
+import { createChatSessionStore } from "@/stores/chats/chat-session-store";
+import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
+import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
 const retry = vi.fn();
 
@@ -197,6 +200,64 @@ describe("useRecordHostOlderThanDataRefusal", () => {
     // Re-rendering on the same version asks nothing more.
     rerender();
     expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("a host version move reaches retry and never wakeTransport", async () => {
+    const wakeTransport = vi.fn();
+    const handle = createChatSessionStore({
+      environment: CHAT_STORE_TEST_ENVIRONMENT,
+      hostId: HOST_ID,
+      epicId: EPIC_ID,
+      chatId: "chat-1",
+      userId: "owner-1",
+      onAuthError: null,
+      onProviderAuthError: null,
+      wakeTransport,
+      transportSilentFor: () => true,
+      streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
+      streamClientFactory: () => ({
+        sendAction: () => undefined,
+        sameTurnSteeringProtocolSupported: () => true,
+        requestTranscriptRange: () => undefined,
+        requestResnapshot: () => undefined,
+        close: () => undefined,
+      }),
+    });
+    const retryCalls = vi.fn();
+    const originalRetry = handle.store.getState().retry;
+    handle.store.setState({
+      retry: () => {
+        retryCalls();
+        originalRetry();
+      },
+    });
+    try {
+      const { result, rerender } = renderHook(() => {
+        useRecordHostOlderThanDataRefusal({
+          hostId: HOST_ID,
+          epicId: EPIC_ID,
+          hostVersion: directoryState.version,
+          fatalCloseCode: HOST_OLDER_THAN_DATA_FATAL_CODE,
+          snapshotLoaded: false,
+          isLiveSession: true,
+          retry: () => handle.store.getState().retry(),
+        });
+        return useHostRefusesEpicStore(HOST_ID, EPIC_ID);
+      });
+      await waitFor(() => {
+        expect(result.current).toBe(true);
+      });
+      expect(retryCalls).not.toHaveBeenCalled();
+      expect(wakeTransport).not.toHaveBeenCalled();
+
+      directoryState.version = "2.0.0";
+      rerender();
+
+      expect(retryCalls).toHaveBeenCalledTimes(1);
+      expect(wakeTransport).not.toHaveBeenCalled();
+    } finally {
+      handle.dispose();
+    }
   });
 
   it("re-records against the current version when the retry draws a fresh close", async () => {
