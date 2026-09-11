@@ -1,5 +1,6 @@
 import { type ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { GENERAL } from "@/components/settings/panels/general-settings.definitions";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { Switch } from "@/components/ui/switch";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -26,9 +27,8 @@ export function PreventSleepSettingsSection(): ReactNode {
 
   return (
     <SettingsRow
-      label="Prevent sleep while running"
-      anchor="general-prevent-sleep"
-      description="Keep the computer awake while an agent is running, so work continues when you step away."
+      row={GENERAL.definitions.preventSleep}
+      status={undefined}
       control={
         <Switch
           checked={preventSleepWhileRunning}

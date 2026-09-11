@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { PushPermissionState } from "@traycer-clients/shared/platform/runner-host";
+import { APP_NOTIFICATIONS } from "@/components/settings/panels/app-notifications-settings.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -66,16 +67,15 @@ function PushPermissionGroup(): ReactNode {
   const view = pushPermissionView(query);
   return (
     <SettingsGroup
-      title="This phone"
-      anchor="app-notifications-this-phone"
+      group={APP_NOTIFICATIONS.definitions.thisPhone}
+      showTitle
       tone="default"
       dataTestId="push-permission-section"
       fill={false}
     >
       <SettingsRow
-        label="Push notifications"
-        anchor="app-notifications-push"
-        description={viewDescription(view)}
+        row={APP_NOTIFICATIONS.definitions.pushNotifications}
+        status={viewDescription(view)}
         control={
           <div
             data-testid="push-permission-state"

@@ -1,5 +1,6 @@
 import { useShallow } from "zustand/react/shallow";
 import { useState } from "react";
+import { APPEARANCE } from "@/components/settings/panels/appearance-settings.definitions";
 import { FontPicker } from "@/components/settings/controls/font-picker";
 import { SettingsNumberInput } from "@/components/settings/controls/settings-number-input";
 import { SettingsRow } from "@/components/settings/settings-row";
@@ -40,8 +41,8 @@ export function AppearanceDetails() {
       </div>
       <div className="overflow-hidden rounded-lg border border-border/60">
         <SettingsRow
-          label="Prompt font"
-          description="The font used where you write prompts."
+          row={APPEARANCE.definitions.promptFont}
+          status={undefined}
           control={
             <div className="flex flex-wrap justify-end gap-2">
               <FontPicker
@@ -72,8 +73,8 @@ export function AppearanceDetails() {
         {advanced ? (
           <>
             <SettingsRow
-              label="Font ligatures"
-              description="Use combined letterforms in prompts and code when the font supports them."
+              row={APPEARANCE.definitions.fontLigatures}
+              status={undefined}
               control={
                 <Switch
                   checked={preferences.fontLigatures}
@@ -85,8 +86,8 @@ export function AppearanceDetails() {
               }
             />
             <SettingsRow
-              label="Panel animations"
-              description="Animate sidebars, menus, and dialogs as they open and close."
+              row={APPEARANCE.definitions.panelAnimations}
+              status={undefined}
               control={
                 <Switch
                   checked={preferences.panelAnimations}
@@ -98,8 +99,8 @@ export function AppearanceDetails() {
               }
             />
             <SettingsRow
-              label="Panel animation duration"
-              description="How quickly sidebars, menus, and dialogs open and close."
+              row={APPEARANCE.definitions.panelAnimationDuration}
+              status={undefined}
               control={
                 <SettingsNumberInput
                   value={preferences.panelAnimationDuration}
@@ -118,8 +119,8 @@ export function AppearanceDetails() {
               }
             />
             <SettingsRow
-              label="Contrast"
-              description="Adjust text and border contrast across the interface."
+              row={APPEARANCE.definitions.contrast}
+              status={undefined}
               control={
                 <div className="flex flex-wrap items-center justify-end gap-2">
                   <output className="text-ui-xs tabular-nums">

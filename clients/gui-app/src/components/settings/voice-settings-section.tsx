@@ -1,5 +1,6 @@
 import { type ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { GENERAL } from "@/components/settings/panels/general-settings.definitions";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { Switch } from "@/components/ui/switch";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -23,9 +24,8 @@ export function VoiceSettingsSection(): ReactNode {
 
   return (
     <SettingsRow
-      label="Voice input"
-      anchor="general-voice-input"
-      description="Dictate prompts with the mic button in the composer. Speech is transcribed on-device - audio never leaves your machine."
+      row={GENERAL.definitions.voiceInput}
+      status={undefined}
       control={
         <Switch
           checked={voiceInputEnabled}

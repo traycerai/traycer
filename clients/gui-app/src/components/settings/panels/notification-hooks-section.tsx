@@ -8,6 +8,7 @@ import {
   HOOK_SEVERITIES,
 } from "@/components/settings/panels/notification-hook-draft";
 import { NotificationHookEditorDialog } from "@/components/settings/panels/notification-hook-editor-dialog";
+import { HOST_NOTIFICATIONS } from "@/components/settings/panels/notifications-settings.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
@@ -41,7 +42,8 @@ export function NotificationHooksSection(props: {
   const { data, error, isLoading, refetch } = props.statusQuery;
   return (
     <SettingsGroup
-      title="Notification hooks"
+      group={HOST_NOTIFICATIONS.definitions.notificationHooks}
+      showTitle
       tone="default"
       dataTestId="notification-hooks-manager"
       fill

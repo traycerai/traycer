@@ -25,7 +25,10 @@ import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { trackSettingChanged, type AnalyticsSetting } from "@/lib/analytics";
-import { MOD_ENTER_LABEL } from "@/lib/settings-search/settings-search-entries";
+import {
+  GENERAL,
+  MOD_ENTER_LABEL,
+} from "@/components/settings/panels/general-settings.definitions";
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
 import { isExperimentalGroupAvailable } from "@/lib/settings/settings-availability";
 import { useRunnerFeatureSettingsQuery } from "@/hooks/runner/use-runner-feature-settings-query";
@@ -78,17 +81,16 @@ export function GeneralSettingsPanel() {
     >
       <div className={cn("flex flex-col", compact ? "gap-3.5" : "gap-5")}>
         <SettingsGroup
-          title="Chat & composer"
-          anchor="general-chat-composer"
+          group={GENERAL.definitions.chatComposer}
+          showTitle
           tone="default"
           dataTestId={undefined}
           fill={false}
         >
           <VoiceSettingsSection />
           <SettingsRow
-            label="Quote reply on text selection"
-            anchor="general-quote-reply"
-            description="Selecting assistant text shows a quote button that inserts the selection into the composer."
+            row={GENERAL.definitions.quoteReply}
+            status={undefined}
             control={
               <Switch
                 checked={quoteReplyEnabled}
@@ -101,9 +103,8 @@ export function GeneralSettingsPanel() {
             }
           />
           <SettingsRow
-            label={`Steer with ${MOD_ENTER_LABEL}`}
-            anchor="general-steer-on-mod-enter"
-            description={`While a turn is running on a supported harness, ${MOD_ENTER_LABEL} sends the composer text as a same-turn steering message that jumps the queue. Plain Enter keeps queueing.`}
+            row={GENERAL.definitions.steerOnModEnter}
+            status={undefined}
             control={
               <Switch
                 checked={steerOnModEnterEnabled}
@@ -116,9 +117,8 @@ export function GeneralSettingsPanel() {
             }
           />
           <SettingsRow
-            label="Pin context usage breakdown"
-            anchor="general-pin-context-usage"
-            description="Keep the context window breakdown visible near the chat composer when usage data is available."
+            row={GENERAL.definitions.pinContextUsage}
+            status={undefined}
             control={
               <Switch
                 checked={pinContextUsageBreakdown}
@@ -135,17 +135,16 @@ export function GeneralSettingsPanel() {
         <BrowserSettingsSection />
 
         <SettingsGroup
-          title="Running agents"
-          anchor="general-running-agents"
+          group={GENERAL.definitions.runningAgents}
+          showTitle
           tone="default"
           dataTestId={undefined}
           fill={false}
         >
           <PreventSleepSettingsSection />
           <SettingsRow
-            label="Show global resources button"
-            anchor="general-global-resources-button"
-            description="Show the app-wide resource monitor in the header."
+            row={GENERAL.definitions.globalResourcesButton}
+            status={undefined}
             control={
               <Switch
                 checked={showGlobalResourceMonitor}
@@ -158,9 +157,8 @@ export function GeneralSettingsPanel() {
             }
           />
           <SettingsRow
-            label="Show navigator resource stats"
-            anchor="general-navigator-resource-stats"
-            description="Show compact live CPU and memory chips in task navigator rows."
+            row={GENERAL.definitions.navigatorResourceStats}
+            status={undefined}
             control={
               <Switch
                 checked={showNavigatorResourceStats}
@@ -175,8 +173,8 @@ export function GeneralSettingsPanel() {
         </SettingsGroup>
 
         <SettingsGroup
-          title="Worktrees"
-          anchor="general-worktrees"
+          group={GENERAL.definitions.worktrees}
+          showTitle
           tone="default"
           dataTestId={undefined}
           fill={false}
@@ -186,19 +184,18 @@ export function GeneralSettingsPanel() {
 
         {featureSettingsAvailable ? (
           <SettingsGroup
-            title="Experimental"
-            anchor="general-experimental"
+            group={GENERAL.definitions.experimental}
+            showTitle
             tone="default"
             dataTestId={undefined}
             fill={false}
           >
             <SettingsRow
-              label="Agent roles"
-              anchor="general-agent-roles"
-              description={
+              row={GENERAL.definitions.agentRoles}
+              status={
                 featureSettings.isError
                   ? "Couldn't read feature settings. Repair ~/.traycer/cli/config.json, or back it up before resetting it, then reopen Settings."
-                  : "Let agents claim durable responsibilities and coordinate through role-aware tools and prompts."
+                  : undefined
               }
               control={
                 <Switch
@@ -224,16 +221,15 @@ export function GeneralSettingsPanel() {
             name the machine from here. Both are now on that host's own
             Overview, under the sidebar's host picker. */}
         <SettingsGroup
-          title="Onboarding"
-          anchor="general-onboarding"
+          group={GENERAL.definitions.onboarding}
+          showTitle
           tone="default"
           dataTestId={undefined}
           fill={false}
         >
           <SettingsRow
-            label="Product tour"
-            anchor="general-product-tour"
-            description="Replay the first-launch onboarding tour."
+            row={GENERAL.definitions.productTour}
+            status={undefined}
             control={
               <Button
                 type="button"
@@ -273,8 +269,8 @@ export function GeneralSettingsPanel() {
 function DangerZoneSection() {
   return (
     <SettingsGroup
-      title="Danger Zone"
-      anchor="general-danger-zone"
+      group={GENERAL.definitions.dangerZone}
+      showTitle
       tone="danger"
       dataTestId="settings-danger-zone"
       fill={false}
@@ -342,9 +338,8 @@ function SettingsLocalAppStateSection() {
   return (
     <>
       <SettingsRow
-        label="Local app state"
-        anchor="general-local-app-state"
-        description="Reset this device's app state - open tabs, layout, drafts, settings, and view preferences - then reload. You stay signed in. File edit snapshots are cleared from the host's own Overview page."
+        row={GENERAL.definitions.localAppState}
+        status={undefined}
         control={
           <Button
             type="button"

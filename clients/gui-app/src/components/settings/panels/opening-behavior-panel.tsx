@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { SettingsRowDefinition } from "@/lib/settings-search/settings-definitions";
 import {
   Select,
   SelectContent,
@@ -6,6 +7,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { OPENING_BEHAVIOR } from "@/components/settings/panels/opening-behavior.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsRow } from "@/components/settings/settings-row";
@@ -88,8 +90,8 @@ const TRIGGER_CLASS = "w-[min(60vw,12rem)]";
 /**
  * A single-tile viewport has nowhere to put a split or a floating tile, so
  * every placement choice on this page collapses to "here". Said as the row's
- * DESCRIPTION rather than the amber hint: nothing is wrong, and nothing was
- * overridden - the window is simply narrow.
+ * status, in its description's place, rather than the amber hint: nothing is
+ * wrong, and nothing was overridden - the window is simply narrow.
  */
 const SINGLE_TILE_VIEWPORT_NOTE =
   "Narrow windows show one tile at a time, so everything opens in this pane.";
@@ -118,15 +120,15 @@ export function OpeningBehaviorPanel(): ReactNode {
     >
       <div className={cn("flex flex-col", compact ? "gap-3.5" : "gap-5")}>
         <SettingsGroup
-          title="Links"
-          anchor="opening-links"
+          group={OPENING_BEHAVIOR.definitions.links}
+          showTitle
           tone="default"
           dataTestId="settings-opening-links"
           fill={false}
         >
           <SettingsRow
-            label="Open links"
-            anchor="opening-links-default"
+            row={OPENING_BEHAVIOR.definitions.openLinks}
+            status={undefined}
             control={
               <EnumSelect
                 labels={LINK_OPEN_DEFAULT_LABELS}
@@ -143,32 +145,28 @@ export function OpeningBehaviorPanel(): ReactNode {
           {linkOpen.default === "per-kind" ? (
             <div className="bg-foreground/3">
               <LinkKindRow
-                label="Markdown"
-                description="In chat, artifacts, comm graph, and markdown previews."
+                row={OPENING_BEHAVIOR.definitions.linkMarkdown}
                 value={linkOpen.markdown}
                 onValueChange={(markdown) => {
                   setLinkOpen({ markdown });
                 }}
               />
               <LinkKindRow
-                label="Terminal"
-                description="URLs and hyperlinks printed by a terminal."
+                row={OPENING_BEHAVIOR.definitions.linkTerminal}
                 value={linkOpen.terminal}
                 onValueChange={(terminal) => {
                   setLinkOpen({ terminal });
                 }}
               />
               <LinkKindRow
-                label="GitHub"
-                description="Pull request rows, headers, commits, and worktree PR chips."
+                row={OPENING_BEHAVIOR.definitions.linkGithub}
                 value={linkOpen.github}
                 onValueChange={(github) => {
                   setLinkOpen({ github });
                 }}
               />
               <LinkKindRow
-                label="Images"
-                description="Images opened from the lightbox."
+                row={OPENING_BEHAVIOR.definitions.linkImages}
                 value={linkOpen.image}
                 onValueChange={(image) => {
                   setLinkOpen({ image });
@@ -179,18 +177,15 @@ export function OpeningBehaviorPanel(): ReactNode {
         </SettingsGroup>
 
         <SettingsGroup
-          title="Tile placement"
-          anchor="opening-tile-placement"
+          group={OPENING_BEHAVIOR.definitions.tilePlacement}
+          showTitle
           tone="default"
           dataTestId="settings-opening-tiles"
           fill={false}
         >
           <SettingsRow
-            label="Open new tiles"
-            anchor="opening-tiles-default"
-            description={
-              singleTileViewport ? SINGLE_TILE_VIEWPORT_NOTE : undefined
-            }
+            row={OPENING_BEHAVIOR.definitions.openNewTiles}
+            status={singleTileViewport ? SINGLE_TILE_VIEWPORT_NOTE : undefined}
             control={
               <EnumSelect
                 labels={TILE_PLACEMENT_DEFAULT_LABELS}
@@ -207,8 +202,8 @@ export function OpeningBehaviorPanel(): ReactNode {
           {tilePlacement.default === "per-category" ? (
             <div className="bg-foreground/3">
               <SettingsRow
-                label="Files, diffs & artifacts"
-                description="Files, diffs, pull requests, artifacts, command output, and the communication graph."
+                row={OPENING_BEHAVIOR.definitions.tileContent}
+                status={undefined}
                 control={
                   <EnumSelect
                     labels={TILE_PLACEMENT_LABELS}
@@ -223,8 +218,8 @@ export function OpeningBehaviorPanel(): ReactNode {
                 }
               />
               <SettingsRow
-                label="Agents & terminals"
-                description="Chats, agents, and terminal sessions."
+                row={OPENING_BEHAVIOR.definitions.tileConversation}
+                status={undefined}
                 control={
                   <EnumSelect
                     labels={TILE_PLACEMENT_LABELS}
@@ -239,8 +234,8 @@ export function OpeningBehaviorPanel(): ReactNode {
                 }
               />
               <SettingsRow
-                label="Browsers"
-                description="Browser sessions and their tabs."
+                row={OPENING_BEHAVIOR.definitions.tileBrowser}
+                status={undefined}
                 control={
                   <EnumSelect
                     labels={BROWSER_TILE_PLACEMENT_LABELS}
@@ -255,8 +250,8 @@ export function OpeningBehaviorPanel(): ReactNode {
                 }
               />
               <SettingsRow
-                label="Side chats"
-                description="Asides started with /btw or /side, placed next to the chat they were asked from."
+                row={OPENING_BEHAVIOR.definitions.tileSideChat}
+                status={undefined}
                 control={
                   <EnumSelect
                     labels={SIDE_CHAT_PLACEMENT_LABELS}
@@ -273,9 +268,8 @@ export function OpeningBehaviorPanel(): ReactNode {
             </div>
           ) : null}
           <SettingsRow
-            label="Agent-opened tabs"
-            anchor="opening-tiles-agent-opened"
-            description="When an agent or a page opens a browser tab without you clicking anything."
+            row={OPENING_BEHAVIOR.definitions.agentOpenedTabs}
+            status={undefined}
             control={
               <EnumSelect
                 labels={AGENT_TAB_SURFACING_LABELS}
@@ -301,15 +295,14 @@ export function OpeningBehaviorPanel(): ReactNode {
 
 /** The four per-kind link rows differ only in copy and which field they set. */
 function LinkKindRow(props: {
-  readonly label: string;
-  readonly description: string;
+  readonly row: SettingsRowDefinition;
   readonly value: LinkOpenMode;
   readonly onValueChange: (value: LinkOpenMode) => void;
 }): ReactNode {
   return (
     <SettingsRow
-      label={props.label}
-      description={props.description}
+      row={props.row}
+      status={undefined}
       control={
         <EnumSelect
           labels={LINK_OPEN_MODE_LABELS}
@@ -319,7 +312,7 @@ function LinkKindRow(props: {
             trackOpeningBehaviorSetting("linkOpen");
             props.onValueChange(value);
           }}
-          ariaLabel={props.label}
+          ariaLabel={props.row.label}
         />
       }
     />

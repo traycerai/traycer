@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { APP_NOTIFICATIONS } from "@/components/settings/panels/app-notifications-settings.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
@@ -24,16 +25,15 @@ function SystemNotificationSettingsGroup(): ReactNode {
   const openSettings = useNotificationSystemSettingsOpenMutation();
   return (
     <SettingsGroup
-      title="System"
-      anchor="app-notifications-system"
+      group={APP_NOTIFICATIONS.definitions.system}
+      showTitle
       tone="default"
       dataTestId="system-notification-settings-section"
       fill={false}
     >
       <SettingsRow
-        label="OS notifications"
-        anchor="app-notifications-os"
-        description="Banners, badges, and delivery are managed by your operating system."
+        row={APP_NOTIFICATIONS.definitions.osNotifications}
+        status={undefined}
         control={
           <Button
             type="button"

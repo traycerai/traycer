@@ -1,4 +1,5 @@
 import { AppearanceDetails } from "@/components/settings/themes/appearance-details";
+import { APPEARANCE } from "@/components/settings/panels/appearance-settings.definitions";
 import { useMemo } from "react";
 import { RotateCcw } from "lucide-react";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
@@ -133,17 +134,16 @@ export function AppearanceSettingsPanel() {
         <AppearanceDetails />
 
         <SettingsGroup
-          title="Interface"
-          anchor="appearance-interface"
+          group={APPEARANCE.definitions.interface}
+          showTitle
           tone="default"
           dataTestId={undefined}
           fill={false}
         >
           <DesktopZoomSettingsRow />
           <SettingsRow
-            label="Use pointer cursors"
-            anchor="appearance-pointer-cursors"
-            description="Change the cursor to a pointer when hovering over interactive elements."
+            row={APPEARANCE.definitions.pointerCursors}
+            status={undefined}
             control={
               <Switch
                 checked={pointerCursors}
@@ -156,9 +156,8 @@ export function AppearanceSettingsPanel() {
             }
           />
           <SettingsRow
-            label="Minimap side"
-            anchor="appearance-minimap-side"
-            description="Place chat and artifact minimaps on the left or right, or hide both."
+            row={APPEARANCE.definitions.minimapSide}
+            status={undefined}
             control={
               <Select
                 value={chatTurnMinimapSide}
@@ -192,16 +191,15 @@ export function AppearanceSettingsPanel() {
         </SettingsGroup>
 
         <SettingsGroup
-          title="Typography"
-          anchor="appearance-typography"
+          group={APPEARANCE.definitions.typography}
+          showTitle
           tone="default"
           dataTestId={undefined}
           fill={false}
         >
           <SettingsRow
-            label="UI font"
-            anchor="appearance-ui-font"
-            description="Font and size used across the Traycer interface."
+            row={APPEARANCE.definitions.uiFont}
+            status={undefined}
             control={
               <div className="flex flex-col items-end gap-2">
                 <FontPicker
@@ -232,9 +230,8 @@ export function AppearanceSettingsPanel() {
             }
           />
           <SettingsRow
-            label="Code font"
-            anchor="appearance-code-font"
-            description="Font and size used for code across agents and diffs."
+            row={APPEARANCE.definitions.codeFont}
+            status={undefined}
             control={
               <div className="flex flex-col items-end gap-2">
                 <FontPicker
@@ -267,8 +264,8 @@ export function AppearanceSettingsPanel() {
         </SettingsGroup>
 
         <SettingsGroup
-          title="Terminal"
-          anchor="appearance-terminal-group"
+          group={APPEARANCE.definitions.terminal}
+          showTitle
           tone="default"
           dataTestId={undefined}
           fill={false}
@@ -277,9 +274,8 @@ export function AppearanceSettingsPanel() {
             <div className="grid grid-cols-1 @min-[32rem]:grid-cols-[7fr_5fr]">
               <div className="flex flex-col">
                 <SettingsRow
-                  label="Terminal font"
-                  anchor="appearance-terminal-font"
-                  description="Font and size used in the terminal. Follows the code font until you set them."
+                  row={APPEARANCE.definitions.terminalFont}
+                  status={undefined}
                   control={
                     <div className="flex flex-col items-end gap-2">
                       <FontPicker
@@ -309,9 +305,8 @@ export function AppearanceSettingsPanel() {
                   }
                 />
                 <SettingsRow
-                  label="Terminal cursor"
-                  anchor="appearance-terminal-cursor"
-                  description="Shape of the cursor in the terminal."
+                  row={APPEARANCE.definitions.terminalCursor}
+                  status={undefined}
                   control={
                     <TerminalCursorStylePicker
                       value={terminalCursorStyle}
@@ -323,9 +318,8 @@ export function AppearanceSettingsPanel() {
                   }
                 />
                 <SettingsRow
-                  label="Blink cursor"
-                  anchor="appearance-blink-cursor"
-                  description="Blink the terminal cursor while the terminal is focused."
+                  row={APPEARANCE.definitions.blinkCursor}
+                  status={undefined}
                   control={
                     <Switch
                       checked={terminalCursorBlink}
@@ -351,16 +345,15 @@ export function AppearanceSettingsPanel() {
         </SettingsGroup>
 
         <SettingsGroup
-          title="Artifact icons"
-          anchor="appearance-artifact-icons"
+          group={APPEARANCE.definitions.artifactIcons}
+          showTitle
           tone="default"
           dataTestId={undefined}
           fill={false}
         >
           <SettingsRow
-            label="Artifact icon colors"
-            anchor="appearance-artifact-icon-colors"
-            description="Turn on type-specific colors, or leave node icons neutral."
+            row={APPEARANCE.definitions.artifactIconColors}
+            status={undefined}
             control={
               <EpicNodeIconColorPicker
                 enabled={artifactIconColorMode === "byType"}
@@ -412,9 +405,8 @@ function AvailableDesktopZoomSettingsRow() {
 
   return (
     <SettingsRow
-      label="Zoom"
-      anchor="appearance-zoom"
-      description="Scales the whole app; font sizes only adjust typography."
+      row={APPEARANCE.definitions.zoom}
+      status={undefined}
       control={
         <div className="flex items-center gap-2">
           <Select
