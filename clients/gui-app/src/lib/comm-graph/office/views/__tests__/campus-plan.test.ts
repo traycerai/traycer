@@ -365,6 +365,17 @@ function someoneSitsAt(
   return false;
 }
 
+/**
+ * The plate width a test can honestly report: six pixels a character plus the
+ * plate's padding, the same deterministic monospace advance T2's own
+ * `office-signs.test.ts` measures with. jsdom has no font metrics, and what
+ * this case is about is the ANCHOR rather than the text, so the measure only
+ * has to be the one the sign suite's assertions already mean.
+ */
+function plateMeasure(text: string): number {
+  return text.length * 6 + 8;
+}
+
 /** A viewport as the scene culls to it: grown by its own margin. */
 function grownByMargin(view: OfficeRect): OfficeRect {
   return {
@@ -1331,6 +1342,8 @@ describe("planCampus", () => {
         roleClaims: {},
         projector,
         lod: 2,
+        zoom: 1,
+        measure: plateMeasure,
       });
       expect(drawn).toHaveLength(1);
       expect(drawn[0].anchor).toEqual(anchor);
