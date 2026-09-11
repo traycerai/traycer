@@ -19,13 +19,15 @@ import type { TuiAgentRecordSummaryV12 } from "@traycer/protocol/host/epic/tui-a
  */
 interface TuiAgentListAnswer {
   readonly tuiAgents: readonly TuiAgentRecordSummaryV12[];
-  readonly issuedAtSeq: number | null;
   /**
-   * WHICH store's counter `issuedAtSeq` was read from - see the chat twin
-   * (`ChatRecordListAnswer.fenceIdentity`): a cached answer can outlive the
-   * store, and a cross-generation fence is degraded to `null` at apply.
+   * Always this store's own counter - see the chat twin
+   * (`ChatRecordListAnswer.issuedAtSeq`): the store generation is part of the
+   * cache key, so an entry belongs to exactly one session and no fence from
+   * another generation can reach the applying effect. The cross-generation
+   * check that used to sit at apply is gone with it, deliberately: it could
+   * not fire, and an unreachable guard reads as protection without being any.
    */
-  readonly fenceIdentity: number | null;
+  readonly issuedAtSeq: number | null;
 }
 
 /**
@@ -82,13 +84,21 @@ export function useEpicSyncTuiAgentRecords(epicId: string): void {
   // users on one installation must never share a cache slot.
   const viewerUserId = useCloudChatViewerId();
   const store = handle?.store ?? null;
+  // The session GENERATION in the cache key, for the reason spelled out on the
+  // chat twin: renderer parking unmounts this hook, releases the session, and
+  // remounts it against a FRESH store on show - and inside `staleTime` that
+  // remount would otherwise be served whole from the pre-park answer, with no
+  // request issued and a terminal agent deleted at the host while parked still
+  // rendering a row. Read straight through rather than memoized: minted once
+  // per store construction, so it is a constant for a given `store`.
+  const fenceIdentity = store?.getState().ingestFenceIdentity ?? null;
   const query = useHostQueryWithResponseMap<
     HostRpcRegistry,
     "epic.listTuiAgents",
     TuiAgentListAnswer,
-    { readonly seq: number; readonly fenceIdentity: number } | null
+    { readonly seq: number } | null
   >({
-    cacheKeyIdentity: [viewerUserId],
+    cacheKeyIdentity: [viewerUserId, fenceIdentity],
     client,
     method: "epic.listTuiAgents",
     params,
@@ -108,18 +118,13 @@ export function useEpicSyncTuiAgentRecords(epicId: string): void {
     // the store knows the answer could not have carried that row.
     captureRequestContext: () => {
       if (store === null) return null;
-      const state = store.getState();
-      return {
-        seq: state.peekTuiAgentIngestSeq(),
-        fenceIdentity: state.ingestFenceIdentity,
-      };
+      return { seq: store.getState().peekTuiAgentIngestSeq() };
     },
     mapResponse: ({ response, requestContext }) => {
       const context = requestContext ?? null;
       return {
         tuiAgents: response.tuiAgents,
         issuedAtSeq: context === null ? null : context.seq,
-        fenceIdentity: context === null ? null : context.fenceIdentity,
       };
     },
   });
@@ -127,13 +132,9 @@ export function useEpicSyncTuiAgentRecords(epicId: string): void {
   const answer = query.data ?? null;
   useEffect(() => {
     if (answer === null || store === null) return;
-    // A cross-generation fence is degraded to `null`, never trusted - see
-    // `TuiAgentListAnswer.fenceIdentity` and the chat twin.
-    const fence =
-      answer.fenceIdentity === store.getState().ingestFenceIdentity
-        ? answer.issuedAtSeq
-        : null;
-    store.getState().applyTuiAgentRecords(answer.tuiAgents, fence);
+    // The fence is used as captured - it was read from THIS store, because the
+    // generation is in the cache key. See `TuiAgentListAnswer.issuedAtSeq`.
+    store.getState().applyTuiAgentRecords(answer.tuiAgents, answer.issuedAtSeq);
   }, [answer, store]);
 }
 

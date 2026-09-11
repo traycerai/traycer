@@ -34,11 +34,36 @@ import {
   readInterviewDraftSnapshot,
   rehydrateInterviewDraftsFromStorage,
   useInterviewDraftStore,
+  type StoredInterviewDraft,
 } from "@/stores/composer/interview-draft-store";
 import type { ChatForkMode } from "@/components/chat/chat-message";
 
 // Slightly longer than the card's ~110ms highlight-then-advance window.
 const ADVANCE_MS = 200;
+
+function expectStoredInterviewDraft(
+  actual: StoredInterviewDraft | null,
+  payload: {
+    readonly pageIndex: number;
+    readonly answers: StoredInterviewDraft["answers"];
+  },
+): void {
+  expect(actual).not.toBeNull();
+  if (actual === null) return;
+  expect(typeof actual.draftId).toBe("string");
+  expect(actual.draftId.length).toBeGreaterThan(0);
+  expect(typeof actual.lastTouchedAt).toBe("number");
+  expect(actual).toEqual({
+    pageIndex: payload.pageIndex,
+    answers: payload.answers,
+    draftId: actual.draftId,
+    hostRevision: 0,
+    targetEpicId: null,
+    lastTouchedAt: actual.lastTouchedAt,
+    generation: actual.generation,
+    syncedGeneration: 0,
+  });
+}
 
 describe("draftFromStoredAnswer", () => {
   it("falls back to saved labels when option indices now name different labels", () => {
@@ -963,13 +988,16 @@ describe("PendingInterviewCard keyboard navigation", () => {
     expect(onSubmit).not.toHaveBeenCalled();
     expect(onSkip).not.toHaveBeenCalled();
     expect(onFork).not.toHaveBeenCalled();
-    expect(readInterviewDraftSnapshot("chat-1", "interview-1")).toEqual({
-      pageIndex: 0,
-      answers: [
-        { selected: ["Alpha"], otherText: "", otherSelected: false },
-        { selected: [], otherText: "", otherSelected: false },
-      ],
-    });
+    expectStoredInterviewDraft(
+      readInterviewDraftSnapshot("chat-1", "interview-1"),
+      {
+        pageIndex: 0,
+        answers: [
+          { selected: ["Alpha"], otherText: "", otherSelected: false },
+          { selected: [], otherText: "", otherSelected: false },
+        ],
+      },
+    );
   });
 
   it("withdraws the Other row when the question's answer channel cannot carry free text", () => {
@@ -1304,29 +1332,32 @@ describe("PendingInterviewCard keyboard navigation", () => {
       expect(cardA.getByText("First question?")).toBeTruthy();
       expect(cardB.getByText("First question?")).toBeTruthy();
       expect(onSubmit).not.toHaveBeenCalled();
-      expect(readInterviewDraftSnapshot("chat-1", "interview-1")).toEqual({
-        pageIndex: 0,
-        answers: [
-          {
-            questionIdentity: questionIdentity(
-              singleSelect("q1", "First question?", ["Alpha", "Beta"]),
-            ),
-            selected: [],
-            selectedOptionIndices: [],
-            otherText: "",
-            otherSelected: true,
-          },
-          {
-            questionIdentity: questionIdentity(
-              singleSelect("q2", "Second question?", ["Gamma"]),
-            ),
-            selected: [],
-            selectedOptionIndices: [],
-            otherText: "",
-            otherSelected: false,
-          },
-        ],
-      });
+      expectStoredInterviewDraft(
+        readInterviewDraftSnapshot("chat-1", "interview-1"),
+        {
+          pageIndex: 0,
+          answers: [
+            {
+              questionIdentity: questionIdentity(
+                singleSelect("q1", "First question?", ["Alpha", "Beta"]),
+              ),
+              selected: [],
+              selectedOptionIndices: [],
+              otherText: "",
+              otherSelected: true,
+            },
+            {
+              questionIdentity: questionIdentity(
+                singleSelect("q2", "Second question?", ["Gamma"]),
+              ),
+              selected: [],
+              selectedOptionIndices: [],
+              otherText: "",
+              otherSelected: false,
+            },
+          ],
+        },
+      );
     } finally {
       vi.useRealTimers();
     }
@@ -1373,20 +1404,23 @@ describe("PendingInterviewCard keyboard navigation", () => {
       });
 
       expect(onSubmit).not.toHaveBeenCalled();
-      expect(readInterviewDraftSnapshot("chat-1", "interview-1")).toEqual({
-        pageIndex: 0,
-        answers: [
-          {
-            questionIdentity: questionIdentity(
-              singleSelect("only", "Only question?", ["Alpha", "Beta"]),
-            ),
-            selected: [],
-            selectedOptionIndices: [],
-            otherText: "",
-            otherSelected: true,
-          },
-        ],
-      });
+      expectStoredInterviewDraft(
+        readInterviewDraftSnapshot("chat-1", "interview-1"),
+        {
+          pageIndex: 0,
+          answers: [
+            {
+              questionIdentity: questionIdentity(
+                singleSelect("only", "Only question?", ["Alpha", "Beta"]),
+              ),
+              selected: [],
+              selectedOptionIndices: [],
+              otherText: "",
+              otherSelected: true,
+            },
+          ],
+        },
+      );
     } finally {
       vi.useRealTimers();
     }
@@ -1714,29 +1748,32 @@ describe("PendingInterviewCard keyboard navigation", () => {
       expect(onSubmit).not.toHaveBeenCalled();
       expect(cardA.getByText("First question?")).toBeTruthy();
       expect(cardB.getByText("First question?")).toBeTruthy();
-      expect(readInterviewDraftSnapshot("chat-1", "interview-1")).toEqual({
-        pageIndex: 0,
-        answers: [
-          {
-            questionIdentity: questionIdentity(
-              singleSelect("q1", "First question?", ["Alpha", "Beta"]),
-            ),
-            selected: [],
-            selectedOptionIndices: [],
-            otherText: "",
-            otherSelected: false,
-          },
-          {
-            questionIdentity: questionIdentity(
-              singleSelect("q2", "Second question?", ["Gamma", "Delta"]),
-            ),
-            selected: ["Gamma"],
-            selectedOptionIndices: [0],
-            otherText: "",
-            otherSelected: false,
-          },
-        ],
-      });
+      expectStoredInterviewDraft(
+        readInterviewDraftSnapshot("chat-1", "interview-1"),
+        {
+          pageIndex: 0,
+          answers: [
+            {
+              questionIdentity: questionIdentity(
+                singleSelect("q1", "First question?", ["Alpha", "Beta"]),
+              ),
+              selected: [],
+              selectedOptionIndices: [],
+              otherText: "",
+              otherSelected: false,
+            },
+            {
+              questionIdentity: questionIdentity(
+                singleSelect("q2", "Second question?", ["Gamma", "Delta"]),
+              ),
+              selected: ["Gamma"],
+              selectedOptionIndices: [0],
+              otherText: "",
+              otherSelected: false,
+            },
+          ],
+        },
+      );
     } finally {
       vi.useRealTimers();
     }
@@ -1792,38 +1829,41 @@ describe("PendingInterviewCard keyboard navigation", () => {
       expect(onSubmit).not.toHaveBeenCalled();
       expect(cardA.getByText("Third question?")).toBeTruthy();
       expect(cardB.getByText("Third question?")).toBeTruthy();
-      expect(readInterviewDraftSnapshot("chat-1", "interview-1")).toEqual({
-        pageIndex: 2,
-        answers: [
-          {
-            questionIdentity: questionIdentity(
-              singleSelect("q1", "First question?", ["Alpha", "Beta"]),
-            ),
-            selected: ["Alpha"],
-            selectedOptionIndices: [0],
-            otherText: "",
-            otherSelected: false,
-          },
-          {
-            questionIdentity: questionIdentity(
-              singleSelect("q2", "Second question?", ["Gamma", "Delta"]),
-            ),
-            selected: [],
-            selectedOptionIndices: [],
-            otherText: "",
-            otherSelected: false,
-          },
-          {
-            questionIdentity: questionIdentity(
-              singleSelect("q3", "Third question?", ["Epsilon", "Zeta"]),
-            ),
-            selected: [],
-            selectedOptionIndices: [],
-            otherText: "",
-            otherSelected: false,
-          },
-        ],
-      });
+      expectStoredInterviewDraft(
+        readInterviewDraftSnapshot("chat-1", "interview-1"),
+        {
+          pageIndex: 2,
+          answers: [
+            {
+              questionIdentity: questionIdentity(
+                singleSelect("q1", "First question?", ["Alpha", "Beta"]),
+              ),
+              selected: ["Alpha"],
+              selectedOptionIndices: [0],
+              otherText: "",
+              otherSelected: false,
+            },
+            {
+              questionIdentity: questionIdentity(
+                singleSelect("q2", "Second question?", ["Gamma", "Delta"]),
+              ),
+              selected: [],
+              selectedOptionIndices: [],
+              otherText: "",
+              otherSelected: false,
+            },
+            {
+              questionIdentity: questionIdentity(
+                singleSelect("q3", "Third question?", ["Epsilon", "Zeta"]),
+              ),
+              selected: [],
+              selectedOptionIndices: [],
+              otherText: "",
+              otherSelected: false,
+            },
+          ],
+        },
+      );
     } finally {
       vi.useRealTimers();
     }
@@ -2640,5 +2680,97 @@ describe("PendingInterviewCard keyboard navigation", () => {
     fireEvent.click(detailsButton);
     expect(detailsButton.getAttribute("aria-expanded")).toBe("false");
     expect(detailsButton.getAttribute("aria-controls")).toBeNull();
+  });
+});
+
+describe("PendingInterviewCard choice mode chrome", () => {
+  afterEach(() => {
+    cleanup();
+    useInterviewDraftStore.setState({ draftsByChat: {} });
+    window.localStorage.clear();
+    setMobileApp(false);
+  });
+
+  it("names a last single-choice pick as send, with radio glyphs", () => {
+    renderCard(
+      [withoutCustomAnswer(singleSelect("q1", "Choose", ["Alpha", "Beta"]))],
+      vi.fn(),
+      null,
+    );
+
+    expect(screen.getByTestId("interview-choice-mode-hint").textContent).toBe(
+      "Pick one to send",
+    );
+    expect(
+      document.querySelectorAll('[data-interview-choice-glyph="radio"]'),
+    ).toHaveLength(2);
+    expect(
+      document.querySelector('[data-interview-choice-glyph="checkbox"]'),
+    ).toBeNull();
+  });
+
+  it("names an earlier single-choice pick as continue", () => {
+    renderCard(
+      [
+        withoutCustomAnswer(singleSelect("q1", "First?", ["Alpha"])),
+        withoutCustomAnswer(singleSelect("q2", "Second?", ["Beta"])),
+      ],
+      vi.fn(),
+      null,
+    );
+
+    expect(screen.getByTestId("interview-choice-mode-hint").textContent).toBe(
+      "Pick one to continue",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(screen.getByTestId("interview-choice-mode-hint").textContent).toBe(
+      "Pick one to send",
+    );
+  });
+
+  it("names a last multi-choice pick as Submit, with checkbox glyphs", () => {
+    renderCard(
+      [withoutCustomAnswer(multiSelect("m", "Pick some", ["Alpha", "Beta"]))],
+      vi.fn(),
+      null,
+    );
+
+    expect(screen.getByTestId("interview-choice-mode-hint").textContent).toBe(
+      "Pick any, then Submit",
+    );
+    expect(
+      document.querySelectorAll('[data-interview-choice-glyph="checkbox"]'),
+    ).toHaveLength(2);
+    expect(
+      document.querySelector('[data-interview-choice-glyph="radio"]'),
+    ).toBeNull();
+  });
+
+  it("names an earlier multi-choice pick as Next", () => {
+    renderCard(
+      [
+        withoutCustomAnswer(multiSelect("m1", "Pick some", ["Alpha"])),
+        withoutCustomAnswer(singleSelect("q2", "Second?", ["Beta"])),
+      ],
+      vi.fn(),
+      null,
+    );
+
+    expect(screen.getByTestId("interview-choice-mode-hint").textContent).toBe(
+      "Pick any, then Next",
+    );
+  });
+
+  it("omits the mode line on a free-text-only question", () => {
+    renderCard([singleSelect("free", "Describe it", [])], vi.fn(), null);
+    expect(screen.queryByTestId("interview-choice-mode-hint")).toBeNull();
+  });
+
+  it("keeps Other without a choice glyph", () => {
+    renderCard([singleSelect("q1", "Choose", ["Alpha"])], vi.fn(), null);
+    expect(
+      document.querySelectorAll('[data-interview-choice-glyph="radio"]'),
+    ).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Other" })).toBeTruthy();
   });
 });

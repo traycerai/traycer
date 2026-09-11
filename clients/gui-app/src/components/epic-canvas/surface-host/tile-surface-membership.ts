@@ -80,6 +80,7 @@ import {
   isChatRemoteDeleted,
   subscribeChatRemoteDeletion,
 } from "@/components/epic-canvas/surface-host/remote-deleted-chat-registry";
+import { isEpicParked, subscribeEpicParking } from "@/lib/epics/epic-parking";
 
 export type SurfaceMembershipListener = () => void;
 
@@ -185,15 +186,30 @@ function setsEqual(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
 function recomputeMembership(): void {
   if (tabCommandCoordinator.getLedger().suppressionDepth > 0) return;
 
+  const canvasState = useEpicCanvasStore.getState();
   const retainedRefKeys = new Set(computeRetainedTopLevelRefKeys());
   const instanceIdToTabId = collectCanvasWideRetainedChatMembership(
-    useEpicCanvasStore.getState().canvasByTabId,
+    canvasState.canvasByTabId,
   );
   const nextMembership = new Set<string>();
   for (const [instanceId, tabId] of instanceIdToTabId) {
-    if (retainedRefKeys.has(tabRefKey({ kind: "epic", id: tabId }))) {
-      nextMembership.add(instanceId);
-    }
+    if (!retainedRefKeys.has(tabRefKey({ kind: "epic", id: tabId }))) continue;
+    // Layer 4: renderer parking (plan C, decision C1). A hosted body is
+    // mounted by `StableTileSurfaceHost`, which lives ABOVE every
+    // `EpicSessionProvider` - so unlike an inline tile it does not unmount
+    // when the epic's session gate closes, and a parked epic would otherwise
+    // keep a whole chat surface alive on the DISPOSED handle its environment
+    // record still names, still holding a `chat.subscribe` lease.
+    //
+    // Enforced through membership rather than inside the body, because
+    // membership is the sole authority over which records exist: nothing else
+    // can delete the environment record, and a record left behind keeps the
+    // sticky `canMountBody` latch. Leaving is not losing anything - the
+    // canvas entry is untouched, so showing the epic again re-admits the same
+    // instance and the pane re-slots it.
+    const epicId = canvasState.tabsById[tabId]?.epicId;
+    if (epicId !== undefined && isEpicParked(epicId)) continue;
+    nextMembership.add(instanceId);
   }
 
   if (setsEqual(nextMembership, currentMembership)) return;
@@ -224,4 +240,9 @@ useTabsStore.subscribe(recomputeMembership);
 useLandingDraftStore.subscribe(recomputeMembership);
 tabCommandCoordinator.subscribe(recomputeMembership);
 subscribeChatRemoteDeletion(recomputeMembership);
+// Parking moves no store this file already watches - it is a clock over the
+// visible-view registry - so its own edge has to reach the recompute, in both
+// directions: parking drops an epic's hosted chats, showing it again restores
+// them.
+subscribeEpicParking(recomputeMembership);
 recomputeMembership();

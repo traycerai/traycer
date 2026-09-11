@@ -214,6 +214,99 @@ describe("formatAgentListResponse categorization", () => {
     );
   });
 
+  it("renders every owner-host state the host can report, and explains them", () => {
+    // All three words on one listing: an agent choosing whether to address a
+    // remote peer needs `connectable` and `offline` told apart, and both told
+    // apart from "this row cannot say".
+    const caller = agent({ id: "caller", isSelf: true });
+    const rows = [
+      caller,
+      {
+        ...agent({ id: "here", parentId: "caller" }),
+        ownerHostConnectivity: "connectable",
+      },
+      {
+        ...agent({
+          id: "away",
+          parentId: "caller",
+          isLocal: false,
+          hostId: "d2",
+        }),
+        ownerHostConnectivity: "offline",
+      },
+      {
+        ...agent({
+          id: "theirs",
+          parentId: "caller",
+          isLocal: false,
+          hostId: "d3",
+        }),
+        ownerHostConnectivity: "unknown",
+      },
+    ];
+
+    const output = formatAgentListResponse(response(rows, "caller"));
+
+    const lineFor = (id: string): string =>
+      output.split("\n").find((line) => line.includes(`${id} gui/`)) ?? "";
+    expect(lineFor("here")).toContain("owner host: connectable");
+    expect(lineFor("away")).toContain("owner host: offline");
+    expect(lineFor("theirs")).toContain("owner host: unknown");
+    // The caveat matters as much as the words: `unknown` on another user's row
+    // means not observable, not down, and a reader told only "unknown" would
+    // reasonably assume the latter.
+    expect(output).toContain(
+      "owner host: <state>: whether the machine running the agent is reachable",
+    );
+    expect(output).toContain(
+      "a row owned by another user is always unknown, because the host directory lists only your own machines - unknown there means not observable, not down",
+    );
+  });
+
+  it("says nothing about owner hosts when the listing does not carry the field", () => {
+    // The versioned wire schema has no `ownerHostConnectivity`, so the CLI
+    // path renders exactly what it rendered before - no row token, and no
+    // legend line advertising a field this listing cannot express.
+    const caller = agent({ id: "caller", isSelf: true });
+    const remote = {
+      ...agent({
+        id: "away",
+        parentId: "caller",
+        isLocal: false,
+        hostId: "d2",
+      }),
+      ownerHostConnectivity: "offline",
+    };
+    const parsed = listAgentsResponseSchema.parse(
+      response([caller, remote], "caller"),
+    );
+
+    const output = formatAgentListResponse(parsed);
+
+    expect(output).not.toContain("owner host:");
+  });
+
+  it("ignores an owner-host word this build does not know", () => {
+    // A newer host inventing a fourth state must not put an unexplained token
+    // in front of a model whose legend cannot describe it. The row degrades to
+    // carrying nothing, which is what an older build always did.
+    const caller = agent({ id: "caller", isSelf: true });
+    const odd = {
+      ...agent({
+        id: "weird",
+        parentId: "caller",
+        isLocal: false,
+        hostId: "d2",
+      }),
+      ownerHostConnectivity: "quarantined",
+    };
+
+    const output = formatAgentListResponse(response([caller, odd], "caller"));
+
+    expect(output).not.toContain("quarantined");
+    expect(output).not.toContain("owner host:");
+  });
+
   it("still explains [archived] when every enriched row is unarchived (presence, not truthiness)", () => {
     const caller = agent({ id: "caller", isSelf: true });
     const notArchived = {

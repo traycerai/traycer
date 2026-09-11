@@ -33,6 +33,15 @@ function startIfNeeded(): void {
   // sat idle and every stamp from yesterday still claims to be today.
   sampledNow = Date.now();
   tick += 1;
+  // The component that woke the clock has ALREADY rendered against the old
+  // `sampledNow`, which is as stale as the idle period (hours, in a
+  // long-open app), and the interval would not repaint it for a full minute:
+  // a countdown to a check 30s away read as hours away until the first tick.
+  // Notify every current subscriber so the fresh sample paints now - a
+  // one-time cost paid only when the clock comes back from idle.
+  for (const listener of listeners) {
+    listener();
+  }
   intervalHandle = window.setInterval(() => {
     tick += 1;
     sampledNow = Date.now();

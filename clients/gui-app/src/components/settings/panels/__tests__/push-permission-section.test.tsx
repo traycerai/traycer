@@ -139,6 +139,18 @@ afterEach(() => {
 });
 
 describe("<PushPermissionSection />", () => {
+  // A host-less shell has no runner host at all, and every hook the group
+  // uses reaches for one — so the gate has to return before any of them run.
+  it("renders nothing, and does not throw, with no runner host above it", () => {
+    const view = render(
+      <QueryClientProvider client={new QueryClient()}>
+        <PushPermissionSection />
+      </QueryClientProvider>,
+    );
+
+    expect(view.container.innerHTML).toBe("");
+  });
+
   it("renders nothing where the shell has no OS push permission", () => {
     renderSection(null);
 

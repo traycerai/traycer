@@ -115,6 +115,7 @@ export function OfficeLegend() {
             "bg-popover p-2",
             "text-popover-foreground shadow-md",
           )}
+          data-slot="office-legend-popover"
           data-testid="comm-graph-office-legend-card"
         >
           {SECTIONS.map((section) => (

@@ -72,6 +72,7 @@ type ComposerCommit = {
 
 const homeMocks = vi.hoisted(() => ({
   navigate: vi.fn(),
+  openSettings: vi.fn(),
   systemModalOpen: false,
   request: vi.fn<(method: string, payload: unknown) => Promise<unknown>>(),
   getActiveHostId: vi.fn(() => "host-home"),
@@ -89,6 +90,13 @@ const homeMocks = vi.hoisted(() => ({
   isMobile: false,
   tabActivity: { visible: true, focused: true },
   delayComposerRegistration: false,
+  /**
+   * Real appearance hooks/RPCs are out of scope for this suite (they need
+   * their own host-fixture work) - stub the whole child so only its mount
+   * lifecycle is observable, matching how `home-hero`/`landing-composer`
+   * above are already stubbed rather than left real.
+   */
+  appearanceEvents: [] as Array<"mount" | "unmount">,
 }));
 
 // Drive the viewport branch directly. jsdom reports a desktop width, so this
@@ -126,6 +134,10 @@ vi.mock("@/lib/host", () => ({
     getActiveHost: homeMocks.getActiveHost,
     getRequestContextUserId: homeMocks.getRequestContextUserId,
   }),
+  // The landing surface reads the OPTIONAL client (it renders with no host
+  // runtime in the layout suites); null keeps the cloud-drafts section absent
+  // here, which is what this page's cases are about.
+  useOptionalHostClient: () => null,
 }));
 
 /** The composer's resolved placement (P1.2), pointed at the mocked host. */
@@ -390,7 +402,31 @@ vi.mock(
       props.children,
   }),
 );
+
+// The Customize-start-page button's only job is the settings funnel, which
+// needs a live router this suite deliberately does not build.
+vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
+  useSystemTabModalActions: () => ({
+    openSettings: homeMocks.openSettings,
+    openHistory: vi.fn(),
+    close: vi.fn(),
+    setSection: vi.fn(),
+  }),
+}));
+
+vi.mock("@/components/home/landing-appearance-wallpaper", () => ({
+  LandingAppearanceWallpaper: () => {
+    useLayoutEffect(() => {
+      homeMocks.appearanceEvents.push("mount");
+      return () => {
+        homeMocks.appearanceEvents.push("unmount");
+      };
+    }, []);
+    return <div data-testid="appearance-wallpaper-stub" />;
+  },
+}));
 import { HomePage } from "@/components/home/home-page";
+import { useSettingsStore } from "@/stores/settings/settings-store";
 
 // The workspace-folders store buckets by host; every fixture in this suite
 // resolves the active host through `homeMocks.getActiveHostId()`, so seed and
@@ -410,6 +446,15 @@ function setGlobalWorkspaceFolders(
       [TEST_HOST_ID]: { folders, folderInfoByPath, primaryPath: null },
     },
   });
+}
+
+function composerPlacement(): string | null {
+  return (
+    screen
+      .getByTestId("landing-composer")
+      .closest("[data-composer-placement]")
+      ?.getAttribute("data-composer-placement") ?? null
+  );
 }
 
 describe("<HomePage />", () => {
@@ -435,6 +480,8 @@ describe("<HomePage />", () => {
     });
     homeMocks.composerCommits.length = 0;
     homeMocks.nextInstanceId = 0;
+    homeMocks.appearanceEvents.length = 0;
+    useSettingsStore.setState({ showGreeting: true, showRecentHistory: true });
     useLandingPanelStore.getState().resetForTests();
     useTabsStore.setState(INITIAL_TAB_LAYOUT);
     useAuthStore.setState({
@@ -1123,6 +1170,117 @@ describe("<HomePage />", () => {
         ),
       ];
       expect(lateNullKeys).toHaveLength(1);
+
+      queryClient.clear();
+    });
+  });
+
+  describe("appearance wallpaper visibility and layout stability", () => {
+    it("mounts the appearance layer only while the tab is visible", () => {
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      const tree = () => (
+        <QueryClientProvider client={queryClient}>
+          <HomePage />
+        </QueryClientProvider>
+      );
+      const { rerender } = render(tree());
+      expect(screen.queryByTestId("appearance-wallpaper-stub")).not.toBeNull();
+      expect(homeMocks.appearanceEvents).toEqual(["mount"]);
+
+      homeMocks.tabActivity = { visible: false, focused: false };
+      rerender(tree());
+      expect(screen.queryByTestId("appearance-wallpaper-stub")).toBeNull();
+      expect(homeMocks.appearanceEvents).toEqual(["mount", "unmount"]);
+
+      homeMocks.tabActivity = { visible: true, focused: true };
+      rerender(tree());
+      expect(screen.queryByTestId("appearance-wallpaper-stub")).not.toBeNull();
+      expect(homeMocks.appearanceEvents).toEqual(["mount", "unmount", "mount"]);
+      queryClient.clear();
+    });
+
+    it("keeps the composer top-anchored when only the greeting is hidden", () => {
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      useSettingsStore.setState({
+        showGreeting: false,
+        showRecentHistory: true,
+      });
+      render(
+        <QueryClientProvider client={queryClient}>
+          <HomePage />
+        </QueryClientProvider>,
+      );
+
+      expect(composerPlacement()).toBe("top");
+      queryClient.clear();
+    });
+
+    it("toggling greeting/history visibility moves no other surface: same composer instance, appearance stays mounted", () => {
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      render(
+        <QueryClientProvider client={queryClient}>
+          <HomePage />
+        </QueryClientProvider>,
+      );
+      const composerInstanceId =
+        screen.getByTestId("landing-composer").dataset.instanceId;
+      expect(screen.queryByTestId("epics-list-panel")).not.toBeNull();
+      expect(
+        screen.getByTestId("home-hero").parentElement?.className,
+      ).not.toContain("invisible");
+      expect(composerPlacement()).toBe("top");
+      expect(homeMocks.appearanceEvents).toEqual(["mount"]);
+      const composerSubmit = screen.getByTestId("landing-submit");
+      composerSubmit.focus();
+      expect(document.activeElement).toBe(composerSubmit);
+
+      act(() => {
+        useSettingsStore.setState({
+          showGreeting: false,
+          showRecentHistory: false,
+        });
+      });
+
+      // The hero section stays mounted (just visually hidden) so its layout
+      // track never collapses; history's row is the one that actually
+      // unmounts. Neither toggle is an appearance/composer concern, so the
+      // composer neither remounts nor loses focus.
+      expect(
+        screen.getByTestId("home-hero").parentElement?.className,
+      ).toContain("invisible");
+      // Nothing above or below the composer any more, so it centres itself in
+      // the surface instead of staying anchored to the top of its row.
+      expect(composerPlacement()).toBe("centered");
+      expect(screen.queryByTestId("epics-list-panel")).toBeNull();
+      expect(screen.getByTestId("landing-composer").dataset.instanceId).toBe(
+        composerInstanceId,
+      );
+      expect(homeMocks.appearanceEvents).toEqual(["mount"]);
+      expect(document.activeElement).toBe(composerSubmit);
+
+      act(() => {
+        useSettingsStore.setState({
+          showGreeting: true,
+          showRecentHistory: true,
+        });
+      });
+
+      expect(
+        screen.getByTestId("home-hero").parentElement?.className,
+      ).not.toContain("invisible");
+      expect(composerPlacement()).toBe("top");
+      expect(screen.queryByTestId("epics-list-panel")).not.toBeNull();
+      expect(screen.getByTestId("landing-composer").dataset.instanceId).toBe(
+        composerInstanceId,
+      );
+      expect(homeMocks.appearanceEvents).toEqual(["mount"]);
+      expect(document.activeElement).toBe(composerSubmit);
 
       queryClient.clear();
     });

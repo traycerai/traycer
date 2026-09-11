@@ -38,8 +38,8 @@
  * consumer that ignores the marker.
  */
 import {
-  epicStateSubscribeServerFrameSchemaV10,
-  type EpicStateSubscribeServerFrameV10,
+  epicStateSubscribeServerFrameSchemaV11,
+  type EpicStateSubscribeServerFrameV11,
 } from "@traycer/protocol/host/epic/state-subscribe";
 import type { EpicLaneCursor } from "@traycer/protocol/host/epic/lane-cursor";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
@@ -53,8 +53,8 @@ import type { IStreamClient } from "./i-stream-client";
 
 export const EPIC_STATE_SUBSCRIBE_METHOD = "epic.state.subscribe";
 
-type StateServerFrame<Kind extends EpicStateSubscribeServerFrameV10["kind"]> =
-  Extract<EpicStateSubscribeServerFrameV10, { readonly kind: Kind }>;
+type StateServerFrame<Kind extends EpicStateSubscribeServerFrameV11["kind"]> =
+  Extract<EpicStateSubscribeServerFrameV11, { readonly kind: Kind }>;
 
 export type EpicStateSnapshotFrame = StateServerFrame<"snapshot">;
 export type EpicStateResumedFrame = StateServerFrame<"resumed">;
@@ -132,7 +132,7 @@ export class EpicStateStreamClient {
     if (this.closed) return;
     // Text-only by contract; see the module doc.
     if (binaryPayload !== null) return;
-    const parsed = epicStateSubscribeServerFrameSchemaV10.safeParse(envelope);
+    const parsed = epicStateSubscribeServerFrameSchemaV11.safeParse(envelope);
     // A frame this build cannot parse is dropped rather than guessed at. The
     // snapshot `basis` enum is CLOSED for the same reason, so a widened basis
     // from a newer host arrives as an unparseable frame instead of as a

@@ -3,6 +3,7 @@ import { ContextMenu as ContextMenuPrimitive } from "radix-ui";
 import { CheckIcon, ChevronRightIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePaneAwareContentGuard } from "@/components/epic-tabs/pane-visibility-context";
+import { useDialogOverlayBoundaryEl } from "@/providers/dialog-overlay-boundary-context";
 import { usePortalConcealed } from "@/components/ui/portal-concealment-context";
 import { useSafeAreaCollisionPadding } from "@/components/ui/safe-area-collision-padding";
 
@@ -168,17 +169,23 @@ function ContextMenuSubContent({
   // A submenu opens sideways from a row that is itself already near an edge, so
   // it is the surface most likely to need the clamp its parent content has.
   const safeAreaInsets = useSafeAreaCollisionPadding();
+  // Same boundary fallback as `DropdownMenuSubContent`: with no explicit
+  // container, Radix portals to `document.body`, which can land the submenu
+  // outside a dialog's own stacking context.
+  const dialogBoundary = useDialogOverlayBoundaryEl();
   return (
-    <ContextMenuPrimitive.SubContent
-      ref={ref}
-      data-slot="context-menu-sub-content"
-      collisionPadding={collisionPadding ?? safeAreaInsets}
-      className={cn(
-        "z-50 max-w-safe-dvw min-w-24 overflow-hidden rounded-lg bg-popover p-1 text-popover-foreground shadow-lg ring-1 ring-foreground/10 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
-        className,
-      )}
-      {...props}
-    />
+    <ContextMenuPrimitive.Portal container={dialogBoundary ?? undefined}>
+      <ContextMenuPrimitive.SubContent
+        ref={ref}
+        data-slot="context-menu-sub-content"
+        collisionPadding={collisionPadding ?? safeAreaInsets}
+        className={cn(
+          "z-50 max-w-safe-dvw min-w-24 overflow-hidden rounded-lg bg-popover p-1 text-popover-foreground shadow-lg ring-1 ring-foreground/10 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          className,
+        )}
+        {...props}
+      />
+    </ContextMenuPrimitive.Portal>
   );
 }
 

@@ -185,6 +185,7 @@ function DiagnosticsPanelOverRpc(props: {
           skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
         >
           <LogDetailGroup
+            anchor={null}
             controls={hostControls}
             // CALLED, not rendered as `<HostLogDetailEmptyReason />`. An
             // element is truthy however it renders, so as JSX this prop could
@@ -283,6 +284,7 @@ function DiagnosticsPanelOverLocalStore(props: {
           has no log-levels bridge", which is what the empty state says.
         */}
         <LogDetailGroup
+          anchor={null}
           controls={hostControls}
           emptyState={
             <LogInfoLine>

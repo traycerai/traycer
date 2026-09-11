@@ -17,12 +17,12 @@ import {
 import {
   tileCategoryOf,
   type ExplicitTilePlacement,
-  type TileCategory,
   type TileOpenGesture,
   type TileOpenIntent,
   type TileOpenMode,
   type TileOpenModifiers,
   type TileOpenPlan,
+  type TilePlacementCategory,
 } from "./intent";
 
 const NO_MODIFIERS: TileOpenModifiers = {
@@ -46,7 +46,7 @@ function resolveMode(
  * placements it names, not "whatever is configured". */
 function resolvePlacement(
   settings: TilePlacementSettings,
-  category: TileCategory,
+  category: TilePlacementCategory,
   modifiers: TileOpenModifiers,
 ): BrowserTilePlacement {
   const configured = tilePlacementForCategory(settings, category);
@@ -65,7 +65,7 @@ function resolvePlacement(
 function categoryRecency(
   canvas: EpicCanvasState,
   pane: TilePane,
-  category: TileCategory,
+  category: TilePlacementCategory,
 ): number | null {
   let best: number | null = null;
   for (const instanceId of pane.tabInstanceIds) {
@@ -89,7 +89,7 @@ function categoryRecency(
  */
 function affinityPaneId(
   canvas: EpicCanvasState,
-  category: TileCategory,
+  category: TilePlacementCategory,
 ): string | null {
   let bestId: string | null = null;
   let bestRank = 0;
@@ -145,7 +145,7 @@ function anchorPaneId(canvas: EpicCanvasState): string | null {
  */
 function resolveExplicitPlan(
   tabId: string,
-  placement: ExplicitTilePlacement,
+  placement: Exclude<ExplicitTilePlacement, { kind: "beside" }>,
   mode: TileOpenMode,
   singleTileViewport: boolean,
 ): TileOpenPlan {
@@ -176,11 +176,65 @@ function resolveExplicitPlan(
   };
 }
 
+type BesidePlacement = Extract<ExplicitTilePlacement, { kind: "beside" }>;
+
+/**
+ * The `beside` placement to honour, or `null` when there is none or its pane
+ * is gone (closed before a forked chat projected). A gone pane still places
+ * under the placement's own row - unanchored, the way a side chat asked from
+ * a chat that is not on this canvas does.
+ */
+function anchoredBeside(
+  placement: ExplicitTilePlacement | null,
+  canvas: EpicCanvasState,
+): BesidePlacement | null {
+  if (placement === null || placement.kind !== "beside") return null;
+  if (canvas.root === null) return null;
+  return findPaneById(canvas.root, placement.paneId) === null
+    ? null
+    : placement;
+}
+
+/**
+ * A `beside` placement decided the pane but not the shape: its category's
+ * setting row (plus the same modifiers as any configured open) says whether
+ * the tile becomes a tab of that pane or a split to its right. Category
+ * grouping (C5) and empty-pane filling deliberately do NOT apply - the whole
+ * point of naming the pane is that the tile lands next to it, not in
+ * whichever pane last showed something similar.
+ */
+function resolveBesidePlan(args: {
+  readonly settings: TilePlacementSettings;
+  readonly placement: BesidePlacement;
+  readonly modifiers: TileOpenModifiers;
+  readonly tabId: string;
+  readonly mode: TileOpenMode;
+  readonly singleTileViewport: boolean;
+}): TileOpenPlan {
+  const { mode, tabId } = args;
+  const { paneId } = args.placement;
+  const configured = resolvePlacement(
+    args.settings,
+    args.placement.category,
+    args.modifiers,
+  );
+  if (
+    configured === "tab" ||
+    mode === "background" ||
+    args.singleTileViewport
+  ) {
+    return { kind: "open-in-pane", tabId, paneId, mode, index: null };
+  }
+  // `pip` cannot be configured for an anchored category (its row is a plain
+  // `TilePlacement`), so anything that is not `tab` is a split.
+  return { kind: "split", tabId, paneId, edge: "right", mode };
+}
+
 /** Steps 4b-7: the configured placement, once no caller has overridden it. */
 function resolveConfiguredPlan(args: {
   readonly canvas: EpicCanvasState;
   readonly settings: TilePlacementSettings;
-  readonly category: TileCategory;
+  readonly category: TilePlacementCategory;
   readonly modifiers: TileOpenModifiers;
   readonly tabId: string;
   readonly mode: "preview" | "permanent";
@@ -250,7 +304,11 @@ export function resolveTileOpen(input: {
       : input.resolveTargetTabForEpic(intent.target.epicId);
 
   const modifiers = intent.modifiers ?? NO_MODIFIERS;
-  const category = tileCategoryOf(intent.node);
+  const beside = anchoredBeside(intent.placement, canvas);
+  const category: TilePlacementCategory =
+    intent.placement?.kind === "beside"
+      ? intent.placement.category
+      : tileCategoryOf(intent.node);
 
   // 2. Mode (C4). Needed before dedupe: a permanent hit on the pane's preview
   // promotes it.
@@ -276,8 +334,19 @@ export function resolveTileOpen(input: {
     }
   }
 
-  // 4a. Explicit placement wins over the setting (C7).
-  if (intent.placement !== null) {
+  // 4a. Explicit placement wins over the setting (C7); a `beside` placement
+  // wins on the pane and defers to its row on the shape.
+  if (beside !== null) {
+    return resolveBesidePlan({
+      settings,
+      placement: beside,
+      modifiers,
+      tabId,
+      mode,
+      singleTileViewport,
+    });
+  }
+  if (intent.placement !== null && intent.placement.kind !== "beside") {
     return resolveExplicitPlan(
       tabId,
       intent.placement,

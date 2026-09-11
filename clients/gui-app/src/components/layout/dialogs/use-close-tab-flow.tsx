@@ -6,6 +6,7 @@ import { readTabStripLayout } from "@/stores/tabs/store";
 import {
   findStripItemForRef,
   flattenStripItemRefs,
+  tabRefKey,
 } from "@/stores/tabs/layout";
 import { getHeaderTabs } from "@/stores/tabs/use-header-tabs";
 import {
@@ -26,6 +27,7 @@ export interface CloseTabFlow {
   readonly requestCloseTab: (tab: HeaderTab) => void;
   readonly closeOtherTabs: (tab: HeaderTab) => void;
   readonly closeActiveTab: () => void;
+  readonly closeGroup: (groupId: string) => void;
   readonly unsyncedDialog: ReactNode;
 }
 
@@ -98,6 +100,31 @@ export function useCloseTabFlow(): CloseTabFlow {
     [closeTab, navigate],
   );
 
+  const closeGroup = useCallback(
+    (groupId: string) => {
+      const layout = readTabStripLayout();
+      const members = getHeaderTabs().filter(
+        (tab) => layout.customizations?.[tabRefKey(tab)]?.groupId === groupId,
+      );
+      const active = members.find((tab) => tabMatchesPath(tab, activePathname));
+      let skipped = 0;
+      for (const tab of members) {
+        if (tab === active) continue;
+        if (tabRequiresCloseConfirm(tab)) {
+          skipped += 1;
+          continue;
+        }
+        closeTab(tab);
+      }
+      if (active !== undefined) requestCloseTab(active);
+      if (skipped > 0)
+        toast.warning(`Kept ${skipped} tabs open with unsynced edits`, {
+          description: "Close those tabs individually to discard their edits.",
+        });
+    },
+    [activePathname, closeTab, requestCloseTab],
+  );
+
   const closeActiveTab = useCallback(() => {
     // Deliberately keyed off the route, NOT `selectHostFocusedRef`. A split
     // only moves `routeBackingSide` onto the focused side when that side holds
@@ -122,9 +149,16 @@ export function useCloseTabFlow(): CloseTabFlow {
       requestCloseTab,
       closeOtherTabs,
       closeActiveTab,
+      closeGroup,
       unsyncedDialog: dialog.dialog,
     }),
-    [closeActiveTab, closeOtherTabs, dialog.dialog, requestCloseTab],
+    [
+      closeActiveTab,
+      closeGroup,
+      closeOtherTabs,
+      dialog.dialog,
+      requestCloseTab,
+    ],
   );
 }
 

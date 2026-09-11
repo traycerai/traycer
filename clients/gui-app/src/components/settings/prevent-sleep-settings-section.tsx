@@ -4,9 +4,11 @@ import { SettingsRow } from "@/components/settings/settings-row";
 import { Switch } from "@/components/ui/switch";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { trackSettingChanged } from "@/lib/analytics";
-import { isMobileApp } from "@/lib/mobile-app";
+import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
+import { isPreventSleepRowAvailable } from "@/lib/settings/settings-availability";
 
 export function PreventSleepSettingsSection(): ReactNode {
+  const availability = useSettingsAvailabilityContext();
   const { preventSleepWhileRunning, setPreventSleepWhileRunning } =
     useSettingsStore(
       useShallow((s) => ({
@@ -20,11 +22,12 @@ export function PreventSleepSettingsSection(): ReactNode {
   // `resolveDesktopPowerBridge` returns null in the mobile app, so the toggle
   // would persist a preference nothing can act on and the device would sleep
   // anyway. Hide it there.
-  if (isMobileApp()) return null;
+  if (!isPreventSleepRowAvailable(availability)) return null;
 
   return (
     <SettingsRow
       label="Prevent sleep while running"
+      anchor="general-prevent-sleep"
       description="Keep the computer awake while an agent is running, so work continues when you step away."
       control={
         <Switch

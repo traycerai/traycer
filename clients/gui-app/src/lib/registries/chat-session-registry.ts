@@ -19,6 +19,11 @@ import {
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
 import { openOwnedDurableStreamClient } from "@/lib/host/owned-durable-stream-client";
 import { useOpenEpicId } from "@/lib/epic-selectors";
+import {
+  isEpicParked,
+  retryDeferredEpicParks,
+  subscribeEpicParking,
+} from "@/lib/epics/epic-parking";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
@@ -35,6 +40,7 @@ import {
   createStreamFlushCoordinator,
 } from "@/stores/chats/stream-flush-coordinator";
 import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
+import { setEpicChatWorkProbe } from "@/stores/epics/open-epic/session-registry";
 import { getRetentionProfile } from "@/stores/replica-memory/retention-profile";
 
 const registry = new ChatSessionRegistry({
@@ -85,6 +91,67 @@ export function getChatSessionRegistry(): ChatSessionRegistry {
   return registry;
 }
 
+// The cross-plane wiring for a park verdict, both halves anchored HERE because
+// this module is downstream of both: it already imports `epic-parking`, which
+// imports the open-epic registry, so it can reach either without closing a
+// cycle - and neither of them can reach the chat registry without one.
+//
+// Registering the probe is what lets `canPark` see a chat holding work before
+// the epic-level decision force-disposes it; the subscription is the other half
+// and is not optional. A park refused for chat work waits on the OPEN-EPIC
+// registry's signal, which an epic with no session entry never emits, so
+// without this the refusal is permanent for exactly the epics whose chats
+// caused it.
+setEpicChatWorkProbe((epicId) => registry.unsettledWorkForEpic(epicId));
+
+/**
+ * The registry's own signal is NOT enough, and assuming it was left this retry
+ * mostly inert.
+ *
+ * `unsettledWorkForEpic` reads `activeTurn`, `runStatus`, the approval lists,
+ * `pendingActions`, `acceptedActions`, `failedSendRestoration` and `restore`
+ * out of each chat's STORE, but `registry.subscribe` relays only the shared
+ * session registry's membership and demand events - acquire, release, dispose.
+ * An inner store write is none of those. So the exact moments this retry exists
+ * for - a chat's last action settling, a restoration slot being taken into the
+ * composer, a restore completing - emitted nothing, and a park deferred for
+ * chat work sat waiting for some unrelated acquire elsewhere to shake it loose.
+ *
+ * Every one of those settlements is a store write and nothing else, which is
+ * why the watch is on the store rather than on any narrower signal.
+ *
+ * So watch the stores themselves, rebinding on every membership change because
+ * membership is precisely what changes the set of live handles. Firing on
+ * every store write is deliberate and cheap: `retryDeferredEpicParks` walks
+ * this window's open-tab entries and returns immediately for every epic not
+ * sitting on a refused park, which is all of them almost all of the time.
+ */
+const chatStoreWatches = new Map<ChatSessionStoreHandle, () => void>();
+
+function rebindChatStoreWatches(): void {
+  const live = new Set(registry.listHandles());
+  for (const [handle, unsubscribe] of Array.from(chatStoreWatches)) {
+    if (live.has(handle)) continue;
+    unsubscribe();
+    chatStoreWatches.delete(handle);
+  }
+  for (const handle of live) {
+    if (chatStoreWatches.has(handle)) continue;
+    chatStoreWatches.set(
+      handle,
+      handle.store.subscribe(() => {
+        retryDeferredEpicParks();
+      }),
+    );
+  }
+}
+
+registry.subscribe(() => {
+  rebindChatStoreWatches();
+  retryDeferredEpicParks();
+});
+rebindChatStoreWatches();
+
 export function getChatSessionHandleHostId(
   handle: ChatSessionStoreHandle,
 ): string | null {
@@ -94,6 +161,28 @@ export function getChatSessionHandleHostId(
 export function disposeAllChatSessions(): void {
   registry.disposeAll();
 }
+
+/**
+ * Renderer parking (plan C, decision C1): a parked epic holds no
+ * `chat.subscribe`.
+ *
+ * Wired here, on the plane that OWNS chat sessions, rather than called from
+ * the parking module - so that module stays a near-leaf that knows about
+ * visibility, a clock and the epic session registry, and each plane answers
+ * for its own subscriptions. It is also what makes the release complete
+ * without the tiles' cooperation: a chat tile releasing its lease leaves the
+ * session WARM with its websocket open for `DEFAULT_CHAT_IDLE_TTL_MS`, and one
+ * surviving subscription keeps the epic visible-leased on the host, which is
+ * the whole thing parking exists to end.
+ *
+ * Module-scoped and never torn down, matching the registry singleton it acts
+ * on. `isEpicParked` is re-read rather than trusted from the notification: the
+ * signal fires on both edges and only the parked one releases anything.
+ */
+subscribeEpicParking((epicId) => {
+  if (!isEpicParked(epicId)) return;
+  registry.disposeForEpic(epicId);
+});
 
 export function useChatSessionHandle(
   chatId: string,

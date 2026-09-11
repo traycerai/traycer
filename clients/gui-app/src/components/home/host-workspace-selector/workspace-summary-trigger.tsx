@@ -178,7 +178,6 @@ export function WorkspaceSummaryTrigger(
               discardDisabled={false}
               onEditEnvironment={NOOP}
               readOnly
-              nestedInPopover={false}
               bindingResolved={bindingResolved}
               recentWorkspaces={null}
               moveToRecent={false}

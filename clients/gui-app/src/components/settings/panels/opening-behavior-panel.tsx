@@ -65,6 +65,14 @@ const TILE_PLACEMENT_DEFAULT_LABELS: Record<
   ...TILE_PLACEMENT_LABELS,
   "per-category": "Per tile type",
 };
+/**
+ * A side chat is always placed relative to the chat it was asked from, so
+ * "this pane" would be ambiguous here: the options name the SOURCE chat.
+ */
+const SIDE_CHAT_PLACEMENT_LABELS: Record<TilePlacement, string> = {
+  tab: "As a tab of the source chat",
+  split: "In a split beside the source chat",
+};
 /** Only the browser category can float - the other two have no PiP host. */
 const BROWSER_TILE_PLACEMENT_LABELS: Record<BrowserTilePlacement, string> = {
   ...TILE_PLACEMENT_LABELS,
@@ -111,12 +119,14 @@ export function OpeningBehaviorPanel(): ReactNode {
       <div className={cn("flex flex-col", compact ? "gap-3.5" : "gap-5")}>
         <SettingsGroup
           title="Links"
+          anchor="opening-links"
           tone="default"
           dataTestId="settings-opening-links"
           fill={false}
         >
           <SettingsRow
             label="Open links"
+            anchor="opening-links-default"
             control={
               <EnumSelect
                 labels={LINK_OPEN_DEFAULT_LABELS}
@@ -170,12 +180,14 @@ export function OpeningBehaviorPanel(): ReactNode {
 
         <SettingsGroup
           title="Tile placement"
+          anchor="opening-tile-placement"
           tone="default"
           dataTestId="settings-opening-tiles"
           fill={false}
         >
           <SettingsRow
             label="Open new tiles"
+            anchor="opening-tiles-default"
             description={
               singleTileViewport ? SINGLE_TILE_VIEWPORT_NOTE : undefined
             }
@@ -242,10 +254,27 @@ export function OpeningBehaviorPanel(): ReactNode {
                   />
                 }
               />
+              <SettingsRow
+                label="Side chats"
+                description="Asides started with /btw or /side, placed next to the chat they were asked from."
+                control={
+                  <EnumSelect
+                    labels={SIDE_CHAT_PLACEMENT_LABELS}
+                    isValue={isTilePlacement}
+                    value={tilePlacement.sideChat}
+                    onValueChange={(sideChat) => {
+                      trackOpeningBehaviorSetting("tilePlacement");
+                      setTilePlacement({ sideChat });
+                    }}
+                    ariaLabel="Side chats"
+                  />
+                }
+              />
             </div>
           ) : null}
           <SettingsRow
             label="Agent-opened tabs"
+            anchor="opening-tiles-agent-opened"
             description="When an agent or a page opens a browser tab without you clicking anything."
             control={
               <EnumSelect

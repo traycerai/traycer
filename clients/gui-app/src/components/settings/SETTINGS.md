@@ -54,6 +54,204 @@ navigation event. The two `SETTINGS_PATHS` sets (`stores/tabs/store.ts` and
 gate at all: a section absent from them stops being recognised as a settings
 route for persistence. `devices` was missing from both for its whole life.
 
+## Search
+
+The rail's first control is a search box (`settings-search-box.tsx`), rendered
+by `SettingsSidebar` and therefore present in BOTH surfaces and both rail
+variants at no extra cost. While a query is non-empty the results REPLACE the
+section list — two lists in one column would compete, and every result already
+names the section it belongs to.
+
+Five parts:
+
+| Part           | File                                                    | Owns                                           |
+| -------------- | ------------------------------------------------------- | ---------------------------------------------- |
+| Index          | `lib/settings-search/settings-search-entries.ts`        | Every page, group and row a query can land on  |
+| Availability   | `lib/settings/settings-availability.ts`                 | One predicate per row gate, shared with panels |
+| Ranking        | `lib/settings-search/settings-search.ts`                | Fuse pass, field weights, kind tie-break       |
+| Reveal request | `stores/settings/settings-search-store.ts`              | The one pending "scroll here" handoff          |
+| Reveal         | `use-settings-anchor-reveal.ts` + `settings-search.css` | Finding the element, scrolling, flashing       |
+
+**The index is hand-written, and cannot not be.** There is no schema behind
+these settings — a "setting" is a hand-authored row in one of sixteen panels,
+and the largest panels (Providers' per-provider tab bar, the Worktrees
+inventory, the Host overview) are bespoke JSX with no row primitive to walk.
+So the index is maintained by hand, and the join between an entry and the thing
+it points at is guarded by
+`lib/settings-search/__tests__/settings-search-index.test.ts`: every anchor in
+the index must be written somewhere under `components/settings/`, and every
+anchor written there must be indexed. Both directions, because a row that grows
+an anchor and never gets an entry is a row search cannot reach.
+
+That test **cannot** see whether an entry's LABEL still matches its row's. That
+half is reviewer discipline, which is why entries copy labels from the surface
+verbatim rather than paraphrasing them: a result whose words differ from the
+row it lands on reads as the wrong result.
+
+**Keyboard.** The input keeps focus the whole time, so it is a `combobox`
+whose `aria-activedescendant` names the highlighted `option` and whose
+`aria-controls` names the `listbox` — an empty one when nothing matches, never a
+paragraph in its place. The pointer never takes focus either: result options
+are `tabIndex={-1}` and the options and the clear button cancel `mousedown`,
+so after a click the arrows, typing and Escape still reach the input (clearing
+unmounts the clear button, and focus taken by it would fall to the document). The query lives in
+`stores/settings/settings-search-store.ts` rather than in the rail, because
+the modal frame needs to know a search is running: the settings overlay's
+`consumeEscape` (`stores/tabs/overlays/settings.tsx`) clears it from the
+dialog's own capture-phase Escape handler, so the first Escape clears the
+search and only the next one closes Settings. A `stopPropagation` inside the
+rail cannot do that — Radix hears Escape on the document before the input
+does. The rail clears the query when it unmounts, so it never greets the next
+visit.
+
+**Ranking.** One Fuse pass through the shared wrapper the composer menus
+already use (`lib/composer/fuzzy-ranking.ts`) — same library, same tolerance,
+so a typo behaves the same here as in the `@` menu. Fields are weighted label >
+keywords > group > section > scope > description. Keywords are the point of the
+index: they carry the words a label does not ("dark mode" → Theme, "proxy" →
+the Shell page, "caffeinate" → Prevent sleep). A small per-kind factor breaks
+near-ties toward the more specific hit, so typing "theme" lands on the ROW
+rather than the page — and it is small enough that a page still wins on its own
+name.
+
+**Anchors.** `SettingsRow` and `SettingsGroup` take an `anchor` prop and emit
+`data-settings-anchor`; a hand-built row writes the attribute directly (see
+`worktree-branch-prefix-section.tsx`). `LogDetailGroup` takes its anchor as a
+required `string | null` prop because the same card is the "Log detail" group
+on two different pages, and only the app's is indexed — the host page passes
+`null`.
+Anchors are unique across the whole index — the lookup is a bare attribute
+selector with no section in it.
+
+A group anchors its **card**, not the `<section>` that also wraps its heading.
+The heading sits outside the card by design, so a mark on the section drew the
+ring around the label plus the empty gutter beneath it and made the group's
+name read as part of its contents. `__tests__/settings-group.test.tsx` pins
+this.
+
+**A result must land somewhere.** Four kinds of conditional row, four
+different answers:
+
+- **Gated on a MODE** (the per-kind Link rows, the per-category Tile rows,
+  which render only once their parent is switched off the default) — not
+  indexed; the vocabulary rides on the parent row's keywords.
+- **Gated on DATA** ("Detected dev origins" and its Browser card, which render
+  only once a terminal has printed a local URL) — not indexed. No shell can
+  promise the row, so no shell offers it. This one shipped as a result that
+  navigated to General and lit nothing.
+- **Gated on the SHELL** (Zoom, Experimental and OS notifications need a
+  desktop bridge; This phone needs `pushPermission`; Voice input and Prevent
+  sleep hide in the mobile app) — indexed, with
+  `availableWhen` set to the gate's **named predicate** in
+  `lib/settings/settings-availability.ts`. The panel calls the SAME function to
+  decide whether to render the row, so a gate is written in exactly one place
+  and the index and the surface cannot disagree. Both reach it through
+  `useSettingsAvailabilityContext()` (`hooks/settings/`), which reads the
+  runner host, the desktop feature-settings bridge and `isMobileApp()` at
+  render time — never a module constant, so a module evaluated before the
+  Capacitor entry runs cannot freeze the wrong answer. The context is the
+  whole truth: a predicate reads only its argument, never a global, so the
+  predicates module has no React in it and tests call it with a literal
+  context.
+- **Gated on the SELECTED HOST** (which removal verb a host has — "Remove
+  Traycer" for this computer, "Remove from account" for a registered remote;
+  File edit snapshots behind a live route; Data & migration behind the host's
+  stream and a negotiated import capability; host Diagnostics' Log detail and
+  both Shell cards, Terminal shell · New terminals and Host environment ·
+  After restart, which a host too old for the config RPC replaces with a
+  notice; and the Overview's Installation and Danger zone cards themselves,
+  which the page drops for an unresolved or vanished host) — not indexed. A
+  shell-level context cannot decide selected-host identity or a capability
+  negotiated over host RPC, and a predicate that pretended to would be a
+  second, wrong model of the panel. The rule is **stable destinations**: index
+  the PAGE, which renders whatever state the selected host is in, and fold
+  the vocabulary of everything on it into the page entry's keywords, so
+  "uninstall", "snapshots", "import", "installation", "log level", "startup
+  flags" and "wsl" still land on the right page. The invariant that follows:
+  **no host-scoped section indexes an anchor.**
+- **Gated on the HOST RUNTIME** (Website sessions, which also needs a bound
+  host runtime and a successful first read of the browser bridge; host
+  Notifications' two groups, which the page's scope gate conceals while the
+  host connects or is unreachable and drops for a vanished host) — not
+  indexed as groups or rows either. Their vocabulary rides on the General and
+  host Notifications page entries.
+
+Bespoke pages are indexed at page/region level for the same reason: their
+content exists only once a host answers an RPC.
+
+**DOM contract tests.** The source scan proves an anchor is WRITTEN; it cannot
+prove it renders. `__tests__/settings-search-targets.ts`
+(`assertSettingsSearchTargets(section, context, container)`) closes that for a
+mounted panel: every anchored entry for the section must resolve to exactly
+ONE element when its `availableWhen(context)` is true and to ZERO when false.
+It is wired into the existing panel suites, not a separate one, and each suite
+turns on one gate at a time — every bridge absent, each bridge alone, mobile
+and not. The zero half is the point: a row wrongly left `alwaysAvailable`
+while its panel gates it passes a fully bridged mount and fails only the case
+whose gate is off. No host-scoped section indexes an anchor, so the host
+panels have nothing to assert and the helper, which refuses a section with no
+anchored entries, is wired into the application panels only.
+
+What these tests cannot catch: state combinations no suite mounts (a
+bridge-present shell with no host runtime bound, an unreachable or vanished
+selected host), whether a label still matches its row, whether the
+target is VISIBLE (CSS, a collapsed disclosure), and a capability that
+vanishes between the search and the navigation.
+
+**Reveal.** A click arms the store, then navigates through
+`lib/settings-navigation.ts` (surface-agnostic — the modal deliberately uses no
+router hooks). `useSettingsAnchorReveal`, mounted once inside
+`SettingsPanelForSection` so both surfaces get exactly one watcher, polls on
+`requestAnimationFrame` for the element until it is VISIBLE or a 3s deadline
+passes, then scrolls it to CENTER (so the group heading above it stays visible)
+and marks it for 1.8s. Visible, not merely present: a scope gate keeps its
+content mounted inside a hidden `<Activity>` while the host connects, and an
+element found there would spend the request on a scroll to nowhere
+(`checkVisibility()`, falling back to `offsetParent`). A page result arms a
+request too, with a `null` anchor: once the requested section is on screen its
+pane scrolls to the top and nothing is marked — navigating to the section
+already showing would otherwise move nothing. The pane is the
+`[data-settings-panel-pane]` element each SURFACE (`settings-surface.tsx`,
+`settings-modal-content.tsx`) wraps its panel in, not anything a panel renders,
+so a bespoke panel cannot fall outside it.
+
+The deadline is measured from the request's `requestedAt`, not from when a
+watcher started looking, so a request that outlives its surface cannot fire
+when Settings is next opened. Closing the surface also clears whatever request
+is pending — deferred one tick and cancelled by the watcher's next mount.
+React's development double-mount unmounts and remounts synchronously, so its
+clear never runs and a request armed just before the panel existed (the
+phone's section list navigating into it) survives; a real unmount has nothing
+to cancel it. One close is not an abandonment: promoting the modal into the
+settings tab. The modal surface calls the settings overlay's
+`prepareForPromotion` first, which marks a handoff in the store; the closing
+watcher then leaves the request alone, and the next watcher to mount — the
+tab's, which mounts lazily, after any deferred clear would have run — ends the
+handoff and reveals it.
+
+An anchored row's scroll is done by hand on the row's **nearest scrolling
+ancestor**, not on the surface's pane: a fill-height panel such as Agent
+selection scrolls inside its own body, where moving the outer pane cannot
+center anything. It is never `scrollIntoView`, which moves every scrollable
+ancestor and in the modal dragged the whole dialog (header, rail and all) up
+with the panel pane. The deadline covers a cold host RPC; giving up clears
+the request, so a stale one never fires at a user who has since navigated
+somewhere else. The flash is attribute-driven, not class-driven, because the
+element is marked from outside React — and it is an alpha of `--foreground`,
+never `var(--muted)`, which collapses into the card on most preset themes.
+
+**The mark's lifetime is held in refs, deliberately.** Finding the element ends
+the REQUEST — the watcher clears it immediately so a never-resolved one cannot
+fire later — but the mark has to outlive that by most of two seconds. Those two
+lifetimes shared one effect once, and because clearing the request mutates a
+value that effect depends on, React tore the effect down the instant it
+succeeded and the teardown stripped the attribute it had just set: the row
+scrolled into view and never lit up. Nothing static caught it — the attribute
+WAS being set — so `__tests__/settings-anchor-reveal.test.tsx` asserts the
+settled state (is the mark still there after the request clears?) rather than
+that `setAttribute` was called, which would pass against the broken version.
+Do not move the flash back into the `pendingReveal`-keyed effect.
+
 ## Responsive Behavior (mobile)
 
 The **route** presentation collapses to a drill-down below the 768px
@@ -714,7 +912,15 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     (`conversation`) and **Browsers** (`browser`) - product nouns for what the
     user opens, not the store's category words. Browser alone adds **Picture
     in picture** (`BrowserTilePlacement`) because the other two have no PiP
-    host. Defaults content=tab, conversation=tab, browser=split;
+    host. A fourth row, **Side chats** (`sideChat`), covers the `/btw` /
+    `/side` aside: it is a plain `chat` tile, so no tile kind maps to the
+    row - the open carries it as a `beside` placement
+    (`ExplicitTilePlacement`) naming the source chat's pane, and the row
+    decides only how "beside" is drawn ("As a tab of the source chat" /
+    "In a split beside the source chat"). Its own row rather than Agents &
+    terminals because an aside is read next to its conversation whatever
+    the user chose for new agents. Defaults content=tab, conversation=tab,
+    browser=split, sideChat=split;
     `tilePlacementForCategory` resolves a category against the default. On a
     single-tile viewport (`useIsMobileViewport()`) the row gains the
     DESCRIPTION "Narrow windows show one tile at a time, so everything opens
@@ -740,24 +946,49 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
   - The pre-refactor keys (`browserLinkDefaultMode`,
     `{terminal,markdown}BrowserLinkOpenMode`, `agentTabSurfacingMode`) are
     migrated once in the store's persist `merge` and then dropped.
-- `Appearance` Five preference groups via `settings-group.tsx`, broad-to-
-  specialized in one column: **Theme**, **Interface**, **Typography**,
-  **Terminal**, **Artifact icons** - each a quiet `<h2>` label outside its own
-  bordered card; changes apply live, the surrounding app stays the primary
-  preview. A design pass (`settings-related-panels-core-flows` artifact,
-  extending the compact Settings language past General/Worktrees to five more
-  panels - Appearance, Notifications, Diagnostics, Shell, Host) introduced
-  this grouping; the controls themselves are unchanged except where noted
-  below.
-  - **Theme**: Theme mode (`ThemeModeToggle` - Light/Dark/System,
-    `theme`/`setTheme`) and Preset (`ThemePresetPicker`,
-    `themePreset`/`setThemePreset`) - broad color/surface choices lead.
+- `Appearance`: the theme library (`themes/theme-gallery.tsx`) leads,
+  followed by **Start page**, **Interface**, **Fonts and text**, **Motion and
+  readability**, **Terminal**, and **Icon colors** via `settings-group.tsx`.
+  Each group has an `<h2>` label outside its bordered card. Settings apply
+  immediately; the theme editor previews a draft until Save theme or Cancel.
+  `themes/appearance-details.tsx` supplies the prompt font and ligature rows
+  inside Fonts and text, plus the separate Motion and readability group.
+  - **Theme**: light/dark/system mode (`theme`/`setTheme`) plus the theme
+    library - selection, editing, import/export - lives in `ThemeGallery`,
+    backed by `stores/settings/theme-library-store.ts` and applied by
+    `lib/theme-applier.ts`. `themePreset` remains the built-in-palette
+    fallback the gallery clears on a custom selection. See
+    `docs/theme-customization.md`. Anything that bakes theme colours into a
+    non-CSS surface (a canvas, xterm, a worker) subscribes to
+    `useThemeRevision()` (`providers/use-theme-revision.ts`) rather than to
+    the mode/preset fields, because a custom theme repaints the cascade
+    without changing either.
+  - **Start page** (`start-page-settings-section.tsx`): the personal landing
+    backdrop. Plain rows only, like every other group here - the start page
+    itself is the preview. Rows: Wallpaper (56x34 thumbnail + "Choose
+    image..." + Remove; secondary text is the stored file name, "Custom image"
+    when the image has no stored name, or "None" when no image is loaded),
+    Wallpaper effect (segmented Photo / Dot pattern / Film grain, only once
+    a wallpaper is set), Effect strength (0..100 range input with Subtle /
+    Strong endpoints, only for dot pattern and film grain), Tint wallpaper
+    with theme accent color (`Switch`, dot pattern only; off dithers each RGB channel on its
+    own so the image keeps its own colours), Greeting and
+    Recent tasks (`showGreeting` / `showRecentHistory` switches). The style,
+    intensity, tint and the chosen file's `name` all live in the settings store
+    (`startPageWallpaper`); the bytes live only in the appearance blob store.
+    `lib/appearance/start-page-wallpaper.ts` owns one entry point per user
+    action (`chooseStartPageWallpaper` / `removeStartPageWallpaper`), and each
+    writes BOTH stores - that is what keeps a name from outliving the bytes it
+    describes, and is why the name can be an ordinary settings field rather
+    than a `File` subclass smuggled through IndexedDB. The start
+    page's own `Paintbrush` button opens this panel - there is no separate
+    appearance editor.
   - **Interface**: Zoom (`DesktopZoomSettingsRow` - desktop-only, renders
     nothing without a zoom bridge; backed by
     `useRunnerZoomPercentQuery`/`SetMutation`/`ResetMutation` against host/OS
-    state, not a settings-store field) and Use pointer cursors
+    state, not a settings-store field) and Show a hand cursor over clickable controls
     (`pointerCursors` `Switch`, default on).
-  - **Typography.** Two structurally identical rows - `UI font` and
+  - **Fonts and text.** Two structurally identical rows - `Interface font` and
     `Code font` - each pairing a font picker with its size input stacked
     directly below. `Terminal font` moved out to its own **Terminal** group
     below (it pairs with the cursor rows and the live preview, not with UI/Code
@@ -2088,6 +2319,157 @@ aria-live="polite"` carrying the equivalent text for
       call sites in `host-workspace-selector.tsx` and the cached-default path
       in `use-landing-composer-actions.ts`; entirely client-local, no host
       RPC or protocol change.
+  - **Automatic cleanup** (`worktree-auto-cleanup-chip.tsx`) — ONE chip in the
+    inventory toolbar's leading slot, opening a popover that holds the opt-in
+    letting this host delete proven-safe, long-idle worktrees unattended.
+    **Default off**, per HOST identity (not per signed-in user), and backed
+    entirely by the host: `worktree.getAutoCleanupPolicy` /
+    `setAutoCleanupPolicy` through `useHostQuery` / `useHostMutation`. Nothing
+    here schedules, retries, or simulates cleanup client-side — deletion
+    authority is the host's, and a local fallback would be a second scheduler
+    nobody asked for.
+    - **Why a chip.** This was a card above the inventory (a two-line summary
+      over a `Collapsible` threshold). The panel is a fixed height, so every
+      row that card spent was a worktree the list below could not show — and it
+      spent them unconditionally, for a policy consulted rarely and changed
+      almost never. A chip costs the list nothing: it rides in a toolbar row
+      that already exists. The panel header's subtitle went with it, so the
+      list card is the only child of the fill-height column in BOTH views
+      (inventory and cleanup history).
+    - **Five states, decided by one pure function** (`resolveAutoCleanupGate`,
+      exported for its own test): `absent` (no resolved host — the inventory's
+      own `HostScopeGate` names that state, and a second copy of it in the
+      toolbar would be two answers to one question, so the chip renders
+      nothing), `checking`, `offline`, `unsupported`, `ready`. The ladder fails
+      OPEN into `checking` on `useHostMethodSupport`'s `null`: telling someone
+      their host is too old because no handshake has completed yet is a claim
+      about a fact not in evidence. In the standalone-toolbar path the chip
+      sits ABOVE the gate, so it makes the gate's two checks — scope usability
+      and reachability — itself before mounting any host read. The three
+      non-`ready`, non-`absent` states render the chip INERT with their
+      sentence in a Tooltip and no popover; `offline` and `unsupported` stay
+      deliberately different sentences, one calling for starting a machine and
+      the other for updating it. Inertness is `aria-disabled`, not the
+      `disabled` attribute: a disabled button takes neither pointer events nor
+      focus, which would make the one sentence the chip exists to deliver
+      unreachable by mouse AND by keyboard.
+    - **The chip states the policy at a glance**: `Cleanup · On · 7d` with a
+      green dot, `Cleanup off` with a grey one, and a bare `Cleanup` with NO
+      dot until the read lands — an unknown policy must not paint "off", which
+      is a real state. So the policy read is mounted eagerly with the chip
+      rather than on open, and a read that FAILS leaves the chip live (the
+      error is a line inside the popover, not a reason to withhold the
+      control). Accessible name is `Automatic cleanup settings`, and
+      `aria-expanded` comes from the Radix trigger.
+    - **Writes carry the revision they read.** `expectedRevision` is required by
+      the contract, so the toggle stays disabled until the policy read lands.
+      A mismatch comes back as `AUTO_CLEANUP_POLICY_REVISION_CONFLICT`, which
+      is NOT toasted as a transport error: the hook re-reads the policy and the
+      popover explains inline that the setting moved somewhere else. The
+      success response IS the fresh policy state, so it is written straight
+      into the read query's slot and no second round trip is needed.
+    - **The popover** (Radix `Popover`, `align="start"`, `w-[min(88vw,20rem)]`)
+      is: the title + the switch on one row (plus the pending-write spinner);
+      then, enabled only, the safety sentence, the threshold, and a footer
+      carrying the schedule and a **History** link. Switched off it collapses
+      to one muted line, "Nothing is deleted automatically." — a policy that
+      deletes nothing has nothing to configure, so the threshold and the
+      footer are ABSENT rather than disabled controls over an inert setting.
+      Toggling the switch does not close the popover. Open state is
+      component-local (`useState(false)`) and never persisted, and the chip is
+      keyed by host: a remount, a host switch or a re-entry into Settings
+      starts closed.
+    - **Threshold** (in the popover, under the safety explanation): presets
+      7 / 14 / 30 / 60 / 90 days plus a free value validated against the host's
+      own `bounds` (`autoCleanupDaysError`), never a constant here — a host
+      that moves its bounds needs no client release, and the control can never
+      offer a value the host is about to refuse. The presets wrap to two rows
+      inside the popover; that is the intended shape, not an overflow.
+    - **Arriving from a Sweep.** The per-Task **Sweep worktrees** dialog
+      (`components/epics/sweep-worktrees-dialog.tsx`) shows one muted line in
+      its Choose state — "Proven-safe worktrees can be removed automatically."
+      plus a link-styled **Set up automatic cleanup** button — only while the
+      census settled with at least one `defaultChecked` row AND that dialog's
+      latched host both advertises `worktree.getAutoCleanupPolicy` and reads
+      back `enabled: false`. A loading, failed, unsupported or enabled policy
+      renders nothing, and the capability is checked BEFORE the read is
+      mounted, so nothing about the sweep ever waits on it. Enabling the policy
+      is the whole frequency cap: no dismissal, nothing persisted. The link
+      goes through `lib/worktree/open-auto-cleanup-settings.ts`, which reuses
+      the notification router's three seams in the same order —
+      `carryViewedHostIntoSettingsScope` (the policy is per host),
+      `selectWorktreeCleanupView("settings", null)` (the inventory, never
+      history), and then `ensureSettingsTab` — plus a third hint of its own,
+      `requestAutoCleanupFocus(hostId)`. That request is one-shot exactly like
+      `focusedRunId`, and it NAMES ITS HOST (`autoCleanupFocusHostId`, not a
+      bare boolean): the policy is per host and the chip administers exactly
+      one, so a request whose host never mounts a chip — offline, too old, or
+      Settings never opened — must not be spent on whichever host is scoped
+      next. The chip consumes it only while `scope.hostId` matches, by OPENING
+      its popover (Radix's mount autofocus then puts the caret on the switch,
+      the first tabbable inside), and clears it immediately after. The open is
+      applied during RENDER rather than in an effect — `react-hooks/
+set-state-in-effect` forbids the effect form, and an effect would also
+      arrive a commit too late for the mount autofocus — while the store clear
+      stays in an effect, where an external write belongs. `openHistory` drops
+      the request because a chip-focus request is stale the moment the panel
+      leaves the inventory, and a caller with no host to name asks for no focus
+      at all.
+      The line's own `useNavigate` lives in the innermost component, which
+      mounts only once the capability is proven AND the policy came back off —
+      so a Sweep dialog rendered without a `RouterProvider` never reaches the
+      router hook, rather than relying on TanStack warning and carrying on.
+    - **Paused** states render the reason in plain English
+      (`AUTO_CLEANUP_PAUSED_COPY`, a `Record` over the closed wire enum so a new
+      arm fails to compile rather than rendering as silence) and offer NO repair
+      affordance: every arm clears without the user acting. `nextEvaluationAt`
+      is `null` while paused, and reads as "Next check: paused" — a real state,
+      not a missing timestamp. That line is why the pause copy exists at all: a
+      stale "last checked" must never be the only evidence nothing is happening.
+  - **Cleanup history** (`worktree-cleanup-history.tsx`) — a SUB-VIEW, not a
+    second card: it replaces the panel body and carries a back control. Reached
+    from the cleanup popover's **History** link (which closes the popover on
+    the way, since history is the full-panel view), or arrived at directly from
+    an automatic-cleanup notification. Cursor-paginated newest-first over
+    `worktree.listAutoCleanupRuns` with an explicit **Load more** (no
+    auto-advance: history holds up to 200 runs and the user asked for the newest
+    ones); expanding a run fetches its targets through
+    `worktree.getAutoCleanupRun`, so a page costs one request rather than one
+    per row.
+    - **The presentation rule is a product decision, not styling**
+      (`worktree-auto-cleanup-copy.ts`). A `skipped` target is the safety engine
+      WORKING — it lost eligibility between selection and deletion — so it reads
+      "No longer eligible" in neutral styling. An `interrupted` one is honestly
+      unconfirmed ("Unconfirmed — Host stopped during cleanup"): the row may not
+      claim a deletion just because the directory is gone now, nor a failure
+      that never happened. **Only `failed` wears failure styling.** Putting the
+      other two in red trains people to ignore the one state that means Traycer
+      could not do something it was authorized to do.
+    - The host's `displayMessage` wins wherever it exists: `reasonCode` is an
+      OPEN string by contract, so a code this build has never heard of still
+      renders host-composed prose.
+    - **Every target row stands alone.** A later re-selection of the same path is
+      an ordinary new row, never folded into the attempt before it.
+      `worktreePath` renders verbatim — it names a directory on the very host
+      the panel is already talking to, which is why history never leaves it.
+    - **Arriving from a notification.** A `worktree_auto_cleanup` row routes
+      through the `hostSurface` family with `view: "cleanupHistory"`, the run id
+      as its focus hint, AND the run's `hostId`.
+      `routeHostSurfaceNotification` applies both BEFORE navigating, so the
+      panel reads them on its first render rather than flashing the wrong host
+      or the wrong sub-view: `carryViewedHostIntoSettingsScope` (history is
+      host-local, so the destination is only well defined once Settings is
+      administering the host the run happened on) and `selectWorktreeCleanupView`
+      (`stores/settings/worktree-cleanup-view-store` — not persisted, mirroring
+      `settings-host-scope-store`). The focus hint is consumed ONCE, on arrival,
+      so re-entering history later never silently re-expands a run the user
+      closed. Manual `worktree_deletion` rows carry NEITHER field, which is
+      exactly why their behavior is unchanged: they select the inventory for
+      whichever host is already being administered.
+    - `run: null` from `getAutoCleanupRun` is an ordinary outcome, not an error:
+      retention GC bounds history, so a notification can outlive the run it
+      names and the honest answer is "this run is no longer in this host's
+      history".
   - **Worktree inventory.** Host-wide management of the git worktrees Traycer
     creates under `~/.traycer/worktrees/`, presented as a calm
     inspection-and-cleanup list, not a delete console - own bordered card,

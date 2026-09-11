@@ -5,6 +5,7 @@ import {
   agentActivitySubscribeV10,
   agentActivitySubscribeV11,
   agentActivitySubscribeV12,
+  agentActivitySubscribeV13,
 } from "@traycer/protocol/host/agent/activity";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 
@@ -105,7 +106,7 @@ describe("agent.activity.subscribe@1.1", () => {
     ).toBe(false);
   });
 
-  it("registers 1.0, 1.1 and 1.2 densely with 1.2 as the latest minor", () => {
+  it("registers 1.0 through 1.3 densely with 1.3 as the latest minor", () => {
     expect(
       agentActivitySubscribeClientFrameSchema.parse({
         kind: "ping",
@@ -113,10 +114,54 @@ describe("agent.activity.subscribe@1.1", () => {
       }),
     ).toEqual({ kind: "ping", hasBinaryPayload: false });
     const entry = hostStreamRpcRegistry["agent.activity.subscribe"];
-    expect(entry[1].latestMinor).toBe(2);
+    expect(entry[1].latestMinor).toBe(3);
     expect(entry[1].versions[0].contract).toBe(agentActivitySubscribeV10);
     expect(entry[1].versions[1].contract).toBe(agentActivitySubscribeV11);
     expect(entry[1].versions[2].contract).toBe(agentActivitySubscribeV12);
+    expect(entry[1].versions[3].contract).toBe(agentActivitySubscribeV13);
+  });
+
+  // `1.3` grows nothing on the wire - it exists only so the host can tell
+  // which readers understand a `servedBy: "local"` frame's stamp as a real
+  // link status (see `agentActivitySubscribeCarriesLocalLinkStamp` on the
+  // host). Its three schemas must be 1.2's, by reference.
+  it("1.3 is wire-identical to 1.2: same schemaVersion.major, same schemas by reference", () => {
+    expect(agentActivitySubscribeV13.schemaVersion).toEqual({
+      major: 1,
+      minor: 3,
+    });
+    expect(agentActivitySubscribeV13.openRequestSchema).toBe(
+      agentActivitySubscribeV12.openRequestSchema,
+    );
+    expect(agentActivitySubscribeV13.serverFrameSchema).toBe(
+      agentActivitySubscribeV12.serverFrameSchema,
+    );
+    expect(agentActivitySubscribeV13.clientFrameSchema).toBe(
+      agentActivitySubscribeV12.clientFrameSchema,
+    );
+  });
+
+  // The 1.3 contract itself, asserted through the parser rather than the
+  // reference equality above: a `servedBy: "local"` frame MAY carry a real
+  // link status. A later cross-field restriction (local implies null) would
+  // keep every reference check green while breaking the merged plane's
+  // "own agents authoritative, fleet unknown" frame.
+  it("1.3 accepts a local frame stamped with a real link status", () => {
+    const frame = {
+      kind: "state",
+      servedBy: "local",
+      byEpic: {},
+      cloudSyncStatus: "disconnected",
+      hasBinaryPayload: false,
+    };
+    expect(agentActivitySubscribeV13.serverFrameSchema.parse(frame)).toEqual(
+      frame,
+    );
+    expect(
+      hostStreamRpcRegistry[
+        "agent.activity.subscribe"
+      ][1].versions[3].contract.serverFrameSchema.parse(frame),
+    ).toEqual(frame);
   });
 
   // Read the schema OFF THE REGISTRY, not the imported symbol: a later edit
