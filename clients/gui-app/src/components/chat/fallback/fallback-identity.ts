@@ -459,6 +459,34 @@ function pendingFallbackDestinationTuple(
 }
 
 /**
+ * Whether a pending fallback is RESUMING the tuple that failed rather than
+ * moving the chat off it.
+ *
+ * The wait rung's resume is the pending fallback shaped like that: once the
+ * reset arrives, the host commits the FAILED tuple as the target and runs the
+ * same switching phases a move runs, so `switching` names a destination that is
+ * where the chat already is. Every surface that said "Switching to …" off that
+ * destination told the user the chat had moved to the model it never left.
+ *
+ * The host's sameness rule - provider, model and account, the triple the
+ * restamps select by - applied to the destination
+ * {@link pendingFallbackDestinationTuple} names, so this cannot disagree with
+ * the sentence it stands in for about which tuple is the destination.
+ */
+export function pendingFallbackResumesFailedTuple(
+  pending: PendingFallback,
+): boolean {
+  const destination = pendingFallbackDestinationTuple(pending);
+  if (destination === null) return false;
+  const failed = pending.failedTuple;
+  return (
+    destination.harnessId === failed.harnessId &&
+    destination.model === failed.model &&
+    destination.profileId === failed.profileId
+  );
+}
+
+/**
  * A run tuple as a card names it.
  *
  * Pure, taking the label resolver as an argument, so one providers read serves

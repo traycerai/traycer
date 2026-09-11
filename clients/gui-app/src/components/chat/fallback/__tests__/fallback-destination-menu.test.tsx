@@ -30,7 +30,7 @@ import {
   PAUSING_COUNTDOWN_LABEL,
   describeListTargetsOutcome,
 } from "@/components/chat/fallback/fallback-copy";
-import { formatClockTime } from "@/lib/relative-time";
+import { formatClockTime, formatResetDateTime } from "@/lib/relative-time";
 import type { FallbackChoiceLease } from "@/stores/chats/chat-session-store";
 import {
   BANNED_VOCABULARY,
@@ -2102,6 +2102,48 @@ describe("FallbackWaitingMenu", () => {
     // dangling "Resumes at" fragment with nothing to fill it.
     expect(screen.getByText(consequences)).toBeDefined();
     expect(screen.queryByText(/Resumes at/)).toBeNull();
+  });
+
+  // The policy's wait cap reaches seven days, so the header's resume time
+  // needs its weekday once it is that far out - the bare clock time alone
+  // would name the wrong day.
+  it("names the header's resume time with its weekday once it is a day or more away", () => {
+    const at = Date.now() + 4 * 24 * 60 * 60_000;
+    render(
+      <TabHostProvider hostId={HOST_ID}>
+        <FallbackWaitingMenu
+          pending={pendingFallback({
+            state: "waiting",
+            reason: "rate_limit",
+            failedTuple: FAILED_CLAUDE_TUPLE,
+            targetTuple: null,
+            impendingAction: null,
+            deadline: at,
+            attempt: 1,
+            maxAttempts: 1,
+            queuedItemsMoving: 0,
+            siblingSwitching: 0,
+            traversalId: "traversal-dest",
+            revision: 8,
+          })}
+          client={null}
+          epicId={EPIC_ID}
+          chatId={CHAT_ID}
+          hostId={HOST_ID}
+          canAct
+        />
+      </TabHostProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Switch instead…" }));
+    const replays = "Replays this message on the destination you pick.";
+    const freshSession = "Starts a fresh session from this transcript.";
+    const resumesAtLabel = formatResetDateTime(at);
+    // Falsification: `formatWaitTime` always returning `formatClockTime` -
+    // this reads the bare clock time instead of the weekday-qualified form.
+    const header =
+      `Resumes at ${resumesAtLabel} unless you pick something. ` +
+      `${replays} ${freshSession}`;
+    expect(screen.getByText(header)).toBeDefined();
   });
 
   // F10: the test above only ever used `queuedItemsMoving: 0`, which takes

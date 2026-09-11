@@ -34,8 +34,8 @@ import {
 /**
  * Full-panel coverage for the two failure kinds and the reset path -
  * everything that needs the real reducer wired to real controls, with only
- * the host RPC boundary (the three fallback-policy hooks) and the host scope
- * faked, following the precedent in
+ * the host RPC boundary (the panel's host hooks, each stubbed below) and the
+ * host scope faked, following the precedent in
  * `agent-selection-guide-section.test.tsx`.
  */
 
@@ -197,6 +197,15 @@ vi.mock("@/hooks/providers/use-fallback-policy-query", async () => {
     },
   };
 });
+
+// The in-flight-count poll calls `useHostClient()` too, same as the mocks
+// around it - unreachable outside a `<HostRuntimeProvider>`. `data: undefined`
+// leaves the panel on the count the policy read above carried; the polled
+// count itself is `fallback-settings-panel-in-flight-count.test.tsx`'s
+// subject.
+vi.mock("@/hooks/providers/use-fallback-in-flight-count-query", () => ({
+  useFallbackInFlightCountQuery: () => ({ data: undefined }),
+}));
 
 // The F20 catalog read is out of this suite's scope; zero options is the
 // documented "no answer" state that keeps the free-text Effort input, which is
@@ -4269,7 +4278,7 @@ describe("FallbackSettingsPanel - AX8: the master switch names its own consequen
     const description =
       describedBy === null ? null : document.getElementById(describedBy);
     expect(description?.textContent ?? "").toContain(
-      "Chats already waiting or switching finish on their own",
+      "Recovery already in progress continues; stop it from the chat.",
     );
   });
 });

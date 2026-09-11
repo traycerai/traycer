@@ -21,6 +21,7 @@ import {
   type RowSkeletonEntry,
 } from "@traycer/protocol/persistence/chat-transcript/row-skeleton";
 import { transcriptRowContextSchema } from "@traycer/protocol/persistence/chat-transcript/row-context";
+import { transcriptRowContextSchemaPreFallback } from "@traycer/protocol/persistence/chat-transcript/row-context";
 import {
   interviewAnswerabilitySchema,
   judgeInterviewAnswerability,
@@ -714,7 +715,9 @@ export const chatTranscriptWindowSchemaPreFallback = z.object({
   incompleteRowIds: z.array(z.string()).optional(),
   messages: z.array(messageSchemaPreFallback),
   events: z.array(chatEventSchema),
-  rowContext: z.record(z.string(), transcriptRowContextSchema).optional(),
+  rowContext: z
+    .record(z.string(), transcriptRowContextSchemaPreFallback)
+    .optional(),
 });
 
 /**
@@ -874,7 +877,9 @@ export const chatRangeResponseSchemaPreFallback = z.object({
   incompleteRowIds: z.array(z.string()).optional(),
   messages: z.array(messageSchemaPreFallback),
   events: z.array(chatEventSchema),
-  rowContext: z.record(z.string(), transcriptRowContextSchema).default({}),
+  rowContext: z
+    .record(z.string(), transcriptRowContextSchemaPreFallback)
+    .default({}),
   reachedStart: z.boolean(),
   reachedEnd: z.boolean(),
   truncatedAtOrdinal: z.number().int().nonnegative().optional(),

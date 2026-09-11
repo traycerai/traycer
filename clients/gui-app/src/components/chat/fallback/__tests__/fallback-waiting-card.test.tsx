@@ -7,6 +7,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FallbackWaitingCard } from "@/components/chat/fallback/fallback-waiting-card";
+import { formatResetDateTime } from "@/lib/relative-time";
 import { useSettingsHostScopeStore } from "@/stores/settings/settings-host-scope-store";
 import {
   BANNED_VOCABULARY,
@@ -235,6 +236,30 @@ describe("FallbackWaitingCard", () => {
     // Falsification: drop the deadline <= now branch in FallbackWaitHeadline and THIS assertion must go red.
     expect(screen.getByRole("status").textContent).toBe("Resuming shortly…");
     expect(screen.getByRole("status").textContent).not.toMatch(/0s/);
+  });
+
+  // The policy's wait cap reaches seven days, so a resume time this far out
+  // needs its weekday - "Resuming at 10:34 AM" for a reset days away names
+  // the wrong day.
+  it("names the resume time with its weekday once it is a day or more away", () => {
+    vi.useFakeTimers();
+    // A fixed, far-future base so this cell cannot inherit a leaked sample
+    // from an earlier test in this file: advancing a full minute-clock
+    // interval past it forces an unconditional re-sample, landing `now` at
+    // exactly `base + 60_000` regardless of what the shared clock read
+    // before.
+    const base = Date.parse("2030-01-01T00:00:00.000Z");
+    vi.setSystemTime(base);
+    const deadline = base + 4 * 24 * 60 * 60_000;
+    renderCard({ deadline });
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    // Falsification: `formatWaitTime` always returning `formatClockTime` -
+    // this reads the bare clock time instead of the weekday-qualified form.
+    expect(screen.getByRole("status").textContent).toBe(
+      `Resuming at ${formatResetDateTime(deadline)}`,
+    );
   });
 
   it("sends cancel with the DTO ref on Stop waiting", () => {

@@ -147,15 +147,35 @@ export const transcriptRowContextSchema = z.object({
 export type TranscriptRowContext = z.infer<typeof transcriptRowContextSchema>;
 
 /**
+ * Frozen copy bound to the released pre-fallback lines (`chat.subscribe@1.8`
+ * and `@1.9`), which bind their `rowContext` to THIS schema.
+ *
+ * Only `profileWalkUnprovable` differs, because that flag is provider
+ * fallback's and provider fallback was minted at `@1.10`. What a released line
+ * owes a later line's field is tolerance, not stripping: the host writes the
+ * flag at every minor, and a `≤1.9` peer drops the key on decode as an unknown
+ * member - the same treatment `failure` gets on the error block. Such a peer
+ * then falls back to its own walk, which is exactly what it did before the
+ * flag existed.
+ *
+ * The byte-stability of those lines is pinned by
+ * `host/agent/gui/__tests__/chat-schema-checkpoints.test.ts`, which is what
+ * caught the field reaching them through the live schema.
+ */
+export const transcriptRowContextSchemaPreFallback =
+  transcriptRowContextSchema.omit({ profileWalkUnprovable: true });
+
+/**
  * Frozen copy bound to the released windowed line (`chat.subscribe@1.8`).
  *
- * Only `sessionAnchor` differs: it takes the anchor union as 1.3.0 shipped it,
- * without the Antigravity arm. Everything else is shared with the live schema
- * by spreading `.shape`, so a field added above reaches both copies and only
- * the discriminant this freeze exists to withhold stays behind.
+ * Only `sessionAnchor` differs from the pre-fallback copy above: it takes the
+ * anchor union as 1.3.0 shipped it, without the Antigravity arm. Everything
+ * else is shared by extension, so a field added above reaches this copy too -
+ * which is why it extends the FROZEN copy rather than the live schema. A field
+ * minted for a later line must reach neither released line.
  */
 export const transcriptRowContextSchemaPreAntigravity =
-  transcriptRowContextSchema.extend({
+  transcriptRowContextSchemaPreFallback.extend({
     sessionAnchor: chatSessionAnchorSchemaPreAntigravity.optional(),
   });
 

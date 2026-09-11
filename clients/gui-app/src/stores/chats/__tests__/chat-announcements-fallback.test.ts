@@ -18,7 +18,7 @@ import {
   FRESH_SESSION_HELPER,
   STOP_WAITING_LABEL,
 } from "@/components/chat/fallback/fallback-copy";
-import { formatClockTime } from "@/lib/relative-time";
+import { formatClockTime, formatResetDateTime } from "@/lib/relative-time";
 import {
   createFallbackAnnouncementObserver,
   fallbackNoticeAnnouncements,
@@ -46,6 +46,7 @@ import {
  */
 
 const NOW = Date.parse("2026-06-01T12:00:00.000Z");
+const DAY_MS = 24 * 60 * 60_000;
 
 // Two tuples on the SAME provider/model FAMILY ("gpt-6-astra") but different
 // exact model slugs, and a third tuple on a DIFFERENT provider reusing the
@@ -454,6 +455,9 @@ describe("fallbackTraversalAnnouncement", () => {
     })?.text;
     expect(planOnly).toBe(`Switching this chat to ${TARGET_IDENTITY}.`);
 
+    // A destination-less `switching` frame with no plan at all announces
+    // nothing (see the destination-less table below) - it no longer falls
+    // back to a default sentence.
     const neither = fallbackTraversalAnnouncement({
       pending: pendingFallback({
         state: "switching",
@@ -466,8 +470,103 @@ describe("fallbackTraversalAnnouncement", () => {
       failedIdentity: FAILED_IDENTITY,
       targetIdentity: null,
       now: NOW,
+    });
+    expect(neither).toBeNull();
+  });
+
+  function pendingFallbackWithTarget(input: {
+    readonly state: PendingFallback["state"];
+    readonly targetTuple: ChatRunSettings | null;
+  }): PendingFallback {
+    return {
+      traversalId: "t1",
+      revision: 4,
+      state: input.state,
+      reason: "rate_limit",
+      failedTuple: FAILED_TUPLE,
+      targetTuple: input.targetTuple,
+      impendingAction: null,
+      deadline: null,
+      graceRemainingMs: null,
+      attempt: 1,
+      maxAttempts: 3,
+      queuedItemsMoving: 0,
+      siblingSwitching: 0,
+    };
+  }
+
+  // The wait rung's resume commits the FAILED tuple as `switching`'s target,
+  // so there is nowhere to switch TO: "Switching this chat to Astra Codex
+  // (acct-north)" announced a move that never happened.
+  it("switching: announces a resume, not a switch, when the destination is the tuple that failed", () => {
+    const text = fallbackTraversalAnnouncement({
+      pending: pendingFallbackWithTarget({
+        state: "switching",
+        targetTuple: FAILED_TUPLE,
+      }),
+      plan: null,
+      failedIdentity: FAILED_IDENTITY,
+      targetIdentity: FAILED_IDENTITY,
+      now: NOW,
     })?.text;
-    expect(neither).toBe("The host is preparing the provider switch.");
+    expect(text).toBe(`Resuming this chat on ${FAILED_IDENTITY}.`);
+    expect(text).not.toMatch(/Switching this chat/);
+  });
+
+  // A destination-less `switching` frame is NEVER a resolved plan in
+  // production - `enterSwitchRung` re-points `impending` at the rung being
+  // ENTERED, still resolving, whatever the hold had predicted. So the
+  // announcer's rule is keyed on the destination alone, not on the plan's
+  // action: `destination === null` announces nothing, for every plan shape.
+  // "The host is preparing the provider switch." no longer exists.
+  //
+  // Four rows:
+  //  - `checking` is the LIVE shape - a resolving plan maps to `checking` in
+  //    `fallbackPlanForAnnouncement`, the same 34 ms between "This chat will
+  //    wait until 12:29 am" and the waiting card that the grace card pins;
+  //  - a `switch` plan with a null destination - a real destination rung
+  //    that has not named one yet;
+  //  - a `wait` plan - the resolved-plan defensive control, mirroring the
+  //    grace card's row (c);
+  //  - no plan at all.
+  it("switching: returns null for a destination-less frame, under every plan shape", () => {
+    const cases: ReadonlyArray<FallbackAnnouncementPlan | null> = [
+      plan({
+        planId: "plan-checking",
+        action: "checking",
+        destination: null,
+        resumesAt: null,
+      }),
+      plan({
+        planId: "plan-switch-pending",
+        action: "switch",
+        destination: null,
+        resumesAt: null,
+      }),
+      plan({
+        planId: "plan-wait-resolved",
+        action: "wait",
+        destination: null,
+        resumesAt: Date.now() + 3_600_000,
+      }),
+      null,
+    ];
+    for (const testPlan of cases) {
+      // Falsification: restore the pre-fix ternary text - every row here
+      // goes red, reading "The host is preparing the provider switch."
+      // instead of null.
+      const result = fallbackTraversalAnnouncement({
+        pending: pendingFallbackWithTarget({
+          state: "switching",
+          targetTuple: null,
+        }),
+        plan: testPlan,
+        failedIdentity: FAILED_IDENTITY,
+        targetIdentity: null,
+        now: NOW,
+      });
+      expect(result).toBeNull();
+    }
   });
 
   it("waiting: names the failed provider and the real resume time, or a fallback line with no time when there is none", () => {
@@ -506,6 +605,58 @@ describe("fallbackTraversalAnnouncement", () => {
     );
     // Negative half: never the switching card's action words on a wait.
     expect(withoutDeadline).not.toContain("switch");
+  });
+
+  // The policy's wait cap reaches seven days (`FALLBACK_POLICY_LIMITS.
+  // maxWaitMinutes`), so a resume time named this far out is not always
+  // inside the same day - "Resuming at 10:34 AM" for a reset days away names
+  // the wrong day.
+  it("waiting: names the resume time with its weekday once it is a day or more away", () => {
+    const farResumesAt = NOW + 4 * DAY_MS;
+    const text = fallbackTraversalAnnouncement({
+      pending: pendingFallback({
+        state: "waiting",
+        traversalId: "t1",
+        revision: 3,
+        deadline: farResumesAt,
+        queuedItemsMoving: 0,
+      }),
+      plan: null,
+      failedIdentity: FAILED_IDENTITY,
+      targetIdentity: null,
+      now: NOW,
+    })?.text;
+    // Falsification: `formatWaitTime` always returning `formatClockTime` -
+    // this reads the bare clock time instead of the weekday-qualified form.
+    const resumesAtLabel = formatResetDateTime(farResumesAt);
+    const resume = `Resuming at ${resumesAtLabel}.`;
+    const cancel = `Select ${STOP_WAITING_LABEL} to cancel.`;
+    expect(text).toBe(`Waiting for ${FAILED_IDENTITY}. ${resume} ${cancel}`);
+  });
+
+  it("hold: states the wait plan's resume time with its weekday once it is a day or more away", () => {
+    const farResumesAt = NOW + 4 * DAY_MS;
+    const text = fallbackTraversalAnnouncement({
+      pending: pendingFallback({
+        state: "hold",
+        traversalId: "t1",
+        revision: 1,
+        deadline: NOW + 5_000,
+        queuedItemsMoving: 0,
+      }),
+      plan: plan({
+        planId: "plan-wait-far",
+        action: "wait",
+        destination: null,
+        resumesAt: farResumesAt,
+      }),
+      failedIdentity: FAILED_IDENTITY,
+      targetIdentity: null,
+      now: NOW,
+    })?.text;
+    const resumesAtLabel = formatResetDateTime(farResumesAt);
+    expect(text).toContain(`and resume at ${resumesAtLabel}.`);
+    expect(text).toContain(`The chat will wait for ${FAILED_IDENTITY}`);
   });
 
   it("semanticKey: differs by state and by planId, but is identical across two calls with the same state/plan even if `now` moves", () => {

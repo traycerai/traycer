@@ -886,6 +886,39 @@ describe("<BackgroundItemsPanel />", () => {
     expect(ambientTitle).toMatch(/^Waiting for Claude Code's limit · resumes /);
     expect(ambientTitle).not.toMatch(/Claude Code · /);
   });
+
+  // The policy's wait cap reaches seven days, so this row's resume time
+  // needs its weekday once it is that far out - the bare clock time alone
+  // would name the wrong day.
+  it("titles a fallback-wait row with its weekday once the resume time is a day or more away", () => {
+    const at = Date.now() + 4 * 24 * 60 * 60_000;
+    const wait = backgroundItem({
+      kind: "fallback-wait",
+      taskId: "wait-far",
+      title: "raw title should not win",
+      blockId: "wait-far",
+      parentTaskId: null,
+      scheduledFor: at,
+      providerId: "claude-code",
+      profileLabel: "work-account",
+    });
+    renderPanel({
+      items: [wait],
+      onItemClick: () => undefined,
+      onStopItem: () => null,
+      onStopAll: () => null,
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Background/ }));
+    const waitTitle = screen.getByText(
+      /Waiting for Claude Code · work-account's limit/,
+    ).textContent;
+    // Falsification: `formatWaitTime` always returning `formatClockTime` -
+    // this reads the bare clock time instead of the weekday-qualified form.
+    const weekday = new Date(at).toLocaleDateString(undefined, {
+      weekday: "short",
+    });
+    expect(waitTitle).toContain(weekday);
+  });
 });
 
 interface PanelInput {

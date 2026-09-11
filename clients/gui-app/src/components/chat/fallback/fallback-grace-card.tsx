@@ -7,7 +7,12 @@ import type {
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import { Button } from "@/components/ui/button";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
-import { formatClockTime, useGraceCountdown } from "@/lib/relative-time";
+import {
+  formatWaitTime,
+  GRACE_COUNTDOWN_IMMINENT,
+  useGraceCountdown,
+  useSampledNow,
+} from "@/lib/relative-time";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -25,6 +30,7 @@ import {
 import {
   fallbackResolvedIdentitySentence,
   fallbackTupleIdentity,
+  pendingFallbackResumesFailedTuple,
   useFallbackProfileLabels,
 } from "./fallback-identity";
 import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
@@ -109,6 +115,9 @@ export function FallbackGraceCard({
     { kind: "fallback", pending },
     labelFor,
   );
+  // Whether that destination is the tuple that failed: the wait rung's resume,
+  // which has no "to" at all - see {@link pendingFallbackResumesFailedTuple}.
+  const resuming = pendingFallbackResumesFailedTuple(pending);
   const reasonLabel = fallbackReasonLabelFor(pending.reason);
   // "Sign in instead" belongs only to a signed-out traversal: for any other
   // reason it would send the user to fix an account that is working.
@@ -255,14 +264,24 @@ export function FallbackGraceCard({
       <FallbackGraceHeadline
         state={pending.state}
         targetLabel={targetLabel}
+        resuming={resuming}
         deadline={pending.deadline}
         impendingAction={pending.impendingAction}
       />
 
-      <div className="text-ui-xs text-muted-foreground">
-        {FRESH_SESSION_HELPER}
-        {queuedText === null ? null : ` ${queuedText}`}
-      </div>
+      {/*
+       * Only for a plan that MOVES the chat to a named destination - the
+       * announcer's rule for the same sentence (`fallbackHoldText`). A wait
+       * resumes the session it failed on (`routing=resume`), so on a wait
+       * plan's hold card and on the resume itself this line was false, and so
+       * was "will run on the new settings too" for a queue that is not moving.
+       */}
+      {targetLabel !== null && !resuming ? (
+        <div className="text-ui-xs text-muted-foreground">
+          {FRESH_SESSION_HELPER}
+          {queuedText === null ? null : ` ${queuedText}`}
+        </div>
+      ) : null}
 
       <div className="flex flex-wrap items-center gap-2">
         <Button
@@ -310,11 +329,17 @@ export function FallbackGraceCard({
 function FallbackGraceHeadline({
   state,
   targetLabel,
+  resuming,
   deadline,
   impendingAction,
 }: {
   readonly state: PendingFallback["state"];
   readonly targetLabel: string | null;
+  /**
+   * The destination is the tuple that failed - the wait rung's resume - so
+   * there is nowhere to switch TO.
+   */
+  readonly resuming: boolean;
   readonly deadline: number | null;
   /** The host's plan for when this window ends. `null` when nothing is takeable. */
   readonly impendingAction: FallbackImpendingAction | null;
@@ -323,13 +348,30 @@ function FallbackGraceHeadline({
   // screen that changes between ticks, so the once-a-second wake repaints one
   // line instead of the buttons, the helper text and the identity chip.
   const countdown = useGraceCountdown(deadline);
+  // The minute clock, for the wait plan's resume time alone: whether it is far
+  // enough out to need its weekday (`formatWaitTime`).
+  const now = useSampledNow();
   // `switching` has committed: there is nothing left to count down to, and a
   // timer here would imply the user still had a window they no longer have.
   if (state === "switching") {
+    // The wait's resume runs these same phases onto the tuple that failed:
+    // "Switching to <the model it was already on>…" said the chat had moved
+    // when it was only going back to work.
+    if (resuming) {
+      return <div className="text-ui-sm">Resuming now…</div>;
+    }
+    // No destination: the host has just entered a rung and resolves its target
+    // in the next breath - `enterSwitchRung` publishes this frame with the plan
+    // re-pointed at that rung and still resolving, whatever the hold had
+    // predicted. That breath either names a target ("Switching to …") or skips
+    // the rung for the next one, a wait or a settle, so "Switching now…" here
+    // was false every time the rung was skipped: 34 ms of it between "This
+    // chat will wait until 12:29 am" and the waiting card, live. The card's
+    // own words for a plan the host has not resolved are true either way.
     return (
       <div className="text-ui-sm">
         {targetLabel === null
-          ? "Switching now…"
+          ? "Deciding what to do…"
           : `Switching to ${targetLabel}…`}
       </div>
     );
@@ -356,7 +398,7 @@ function FallbackGraceHeadline({
     // finished resolving, and the wrong one for a plan it has.
     return (
       <div className="text-ui-sm">
-        {impendingHeadline(impendingAction)}
+        {impendingHeadline(impendingAction, now)}
         {countdown === null
           ? ""
           : ` ${impendingCountdownClause(impendingAction, countdown)}`}
@@ -366,7 +408,7 @@ function FallbackGraceHeadline({
   return (
     <div className="text-ui-sm">
       Switching to <span className="font-medium">{targetLabel}</span>
-      {countdown === null ? "" : ` in ${countdown}`}
+      {countdown === null ? "" : ` ${countdownPhrase(countdown)}`}
     </div>
   );
 }
@@ -379,7 +421,10 @@ function FallbackGraceHeadline({
  * being resolved. A rung with a target renders the destination sentence
  * instead, which is the branch above.
  */
-function impendingHeadline(action: FallbackImpendingAction | null): string {
+function impendingHeadline(
+  action: FallbackImpendingAction | null,
+  now: number,
+): string {
   // `null` is the host saying nothing is takeable - a traversal about to
   // settle as exhausted. Saying "deciding" would promise a decision that is
   // not coming.
@@ -392,7 +437,7 @@ function impendingHeadline(action: FallbackImpendingAction | null): string {
     case "wait":
       return action.resumesAt === null
         ? "This turn failed. This chat will wait for the limit to reset."
-        : `This turn failed. This chat will wait until ${formatClockTime(action.resumesAt)}.`;
+        : `This turn failed. This chat will wait until ${formatWaitTime(action.resumesAt, now)}.`;
     case "notify":
       return "This turn failed. Nothing else to try.";
     case "retry":
@@ -421,17 +466,32 @@ function impendingCountdownClause(
   action: FallbackImpendingAction | null,
   countdown: string,
 ): string {
-  if (action === null) return `Stopping in ${countdown}.`;
-  if (action.pending !== null) return `Deciding what to do in ${countdown}.`;
+  const when = countdownPhrase(countdown);
+  if (action === null) return `Stopping ${when}.`;
+  if (action.pending !== null) return `Deciding what to do ${when}.`;
   switch (action.rung) {
     case "wait":
-      return `Waiting starts in ${countdown}.`;
+      return `Waiting starts ${when}.`;
     case "retry":
-      return `Retrying in ${countdown}.`;
+      return `Retrying ${when}.`;
     case "notify":
-      return `Stopping in ${countdown}.`;
+      return `Stopping ${when}.`;
     case "profile":
     case "tier":
-      return `Switching in ${countdown}.`;
+      return `Switching ${when}.`;
   }
+}
+
+/**
+ * "in 12s" - or, at or past the deadline, the imminent phrase on its own.
+ *
+ * `formatGraceCountdown` answers {@link GRACE_COUNTDOWN_IMMINENT} there, and
+ * the card really does sit past its deadline: the host holds an expiry for up
+ * to 30 s past it while a profile probe is still out, and every window
+ * crosses it for the moment before the host's timer fires. Every clause on
+ * this card reads "… in <countdown>", so without this it said "Deciding what
+ * to do in any moment now."
+ */
+function countdownPhrase(countdown: string): string {
+  return countdown === GRACE_COUNTDOWN_IMMINENT ? countdown : `in ${countdown}`;
 }

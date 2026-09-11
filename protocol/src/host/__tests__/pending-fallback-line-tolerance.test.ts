@@ -605,3 +605,146 @@ describe("every frozen chat.subscribe line tolerates lastFailedAttempt without g
     });
   }
 });
+
+// ─── `profileWalkUnprovable` on a row's `rowContext` ──────────────────────
+//
+// Same shape as the three groups above, one level down: `profileWalkUnprovable`
+// is additive-optional on `transcriptRowContextSchema`
+// (`persistence/chat-transcript/row-context.ts`), not on the snapshot or
+// `turnStateChanged` frame itself, and it reaches a peer through BOTH
+// windowed body channels - the snapshot's `tail.rowContext` and a `range`
+// response's `rowContext` - because a row scrolled back into view is served
+// by `range`, not by the tail. `1.9`'s frozen copy
+// (`transcriptRowContextSchemaPreFallback`) and `1.8`'s
+// (`transcriptRowContextSchemaPreAntigravity`, which extends it - see
+// `subscribe.ts`'s pre-Antigravity windowed bundle) both omit the flag.
+
+// A row context entry carrying the flag alongside a sibling
+// (`legacyRowAnchorAt`) that survives on every line. The sibling is what lets
+// the tolerance assertions below prove the KEY was dropped rather than the
+// whole row context being discarded - a schema that dropped `rowContext`
+// entirely would otherwise pass too.
+function profileWalkUnprovableRowContextFixture(): Record<string, unknown> {
+  return {
+    "row-1": { profileWalkUnprovable: true, legacyRowAnchorAt: 1000 },
+  };
+}
+
+// The rest of a `range` response, independent of `rowContext`. No earlier
+// group in this file needed one - `pendingFallback`/`pendingReturn`/
+// `lastFailedAttempt` ride the snapshot and `turnStateChanged` only.
+function baseRangeResponse(): Record<string, unknown> {
+  return {
+    requestId: "req-1",
+    epoch: 0,
+    fromOrdinal: 0,
+    rowIds: [],
+    messages: [],
+    events: [],
+    reachedStart: true,
+    reachedEnd: true,
+  };
+}
+
+describe("chat.subscribe@1.10 carries profileWalkUnprovable on a row's rowContext", () => {
+  it("round-trips profileWalkUnprovable intact on a snapshot frame's tail.rowContext", () => {
+    const rowContext = profileWalkUnprovableRowContextFixture();
+    const parsed = chatSubscribeV110.serverFrameSchema.parse(
+      frame("snapshot", {
+        snapshot: {
+          ...baseWindowedSnapshot(),
+          tail: { fromOrdinal: 0, messages: [], events: [], rowContext },
+        },
+      }),
+    );
+
+    if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+    expect(parsed.snapshot.tail.rowContext).toEqual(rowContext);
+  });
+
+  it("round-trips profileWalkUnprovable intact on a range frame's rowContext", () => {
+    const rowContext = profileWalkUnprovableRowContextFixture();
+    const parsed = chatSubscribeV110.serverFrameSchema.parse(
+      frame("range", { range: { ...baseRangeResponse(), rowContext } }),
+    );
+
+    if (parsed.kind !== "range") throw new Error("expected range");
+    expect(parsed.range.rowContext).toEqual(rowContext);
+  });
+});
+
+describe("every frozen windowed chat.subscribe line tolerates profileWalkUnprovable without gaining it", () => {
+  // `1.0`-`1.7` embed the whole chat record and never grew a `rowContext`
+  // side channel at all (see `row-context.ts`) - there is no frame shape on
+  // those lines to carry the flag, so this loop is scoped to the windowed
+  // minors instead of inventing a `rowContext` for a line that has none.
+  const windowedReleasedMinors = RELEASED_MINORS.filter((minor) => minor >= 8);
+
+  it("covers chat.subscribe@1.8 and @1.9 (the only released lines with a rowContext channel)", () => {
+    expect(windowedReleasedMinors).toEqual([8, 9]);
+  });
+
+  for (const minor of windowedReleasedMinors) {
+    const version = `1.${minor}`;
+
+    describe(`chat.subscribe@${version}`, () => {
+      const { contract } = chatSubscribeLine.versions[minor];
+
+      it("parses a snapshot frame whose tail.rowContext carries profileWalkUnprovable, and strips the key", () => {
+        const rowContext = profileWalkUnprovableRowContextFixture();
+        const snapshot = {
+          ...baseWindowedSnapshot(),
+          tail: { fromOrdinal: 0, messages: [], events: [], rowContext },
+        };
+        const result = contract.serverFrameSchema.safeParse(
+          frame("snapshot", { snapshot }),
+        );
+
+        expect(result.success).toBe(true);
+        if (!result.success) return;
+        const parsed = result.data as {
+          kind: string;
+          snapshot?: { tail?: { rowContext?: Record<string, object> } };
+        };
+        if (parsed.kind !== "snapshot") throw new Error("expected snapshot");
+
+        const rowContextEntry = parsed.snapshot?.tail?.rowContext?.["row-1"];
+        if (rowContextEntry === undefined) {
+          throw new Error("expected a row-1 entry");
+        }
+        // The key itself is gone...
+        expect(Object.hasOwn(rowContextEntry, "profileWalkUnprovable")).toBe(
+          false,
+        );
+        // ...but the sibling survives, so the row context was not discarded
+        // wholesale - only the one key was.
+        expect(Object.hasOwn(rowContextEntry, "legacyRowAnchorAt")).toBe(true);
+      });
+
+      it("parses a range frame whose rowContext carries profileWalkUnprovable, and strips the key", () => {
+        const rowContext = profileWalkUnprovableRowContextFixture();
+        const range = { ...baseRangeResponse(), rowContext };
+        const result = contract.serverFrameSchema.safeParse(
+          frame("range", { range }),
+        );
+
+        expect(result.success).toBe(true);
+        if (!result.success) return;
+        const parsed = result.data as {
+          kind: string;
+          range?: { rowContext?: Record<string, object> };
+        };
+        if (parsed.kind !== "range") throw new Error("expected range");
+
+        const rowContextEntry = parsed.range?.rowContext?.["row-1"];
+        if (rowContextEntry === undefined) {
+          throw new Error("expected a row-1 entry");
+        }
+        expect(Object.hasOwn(rowContextEntry, "profileWalkUnprovable")).toBe(
+          false,
+        );
+        expect(Object.hasOwn(rowContextEntry, "legacyRowAnchorAt")).toBe(true);
+      });
+    });
+  }
+});

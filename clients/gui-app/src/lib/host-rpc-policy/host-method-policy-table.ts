@@ -1726,12 +1726,17 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   // Reading the host-global fallback policy - a pure read, so `latest`.
-  // `poll: null`: the policy changes only through `providers.fallbackPolicy.set`
-  // on this same surface, which invalidates the query directly; the derived
-  // `inFlightCount` is refreshed by the settings panel on its own cadence.
+  //
+  // Opt-in polling (`poll: true`), for one caller: the settings panel's
+  // "N in progress right now" (`useFallbackInFlightCountQuery`), which reads
+  // this method under its OWN cache entry so the count stays true while the
+  // page is open. The policy read itself (`useFallbackPolicyQuery`) must not
+  // opt in: its entry is where `set` and `restoreTierGroups` write their
+  // responses, and a poll landing after one of those writes would put the
+  // pre-save policy back for the next mount to seed from.
   "providers.fallbackPolicy.get": {
     ...LATEST_SCHEDULING,
-    poll: null,
+    poll: { kind: "fixed", intervalMs: 5 * SECOND_MS },
   },
   // Saving the fallback policy is a persisted settings write - `fifo` for the
   // same reason as the classic provider mutations above: two rapid saves must

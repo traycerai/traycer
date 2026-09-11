@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react";
+import { useLayoutEffect, useSyncExternalStore } from "react";
 
 const SECOND_MS = 1_000;
 const MINUTE_MS = 60_000;
@@ -22,10 +22,39 @@ interface SharedClock {
   /** For `useSyncExternalStore`'s subscribe argument. Starts the interval on
    *  the first listener and stops it when the last one leaves. */
   readonly subscribe: (listener: () => void) => () => void;
-  /** Monotonic tick count - the store snapshot, not a time. */
+  /**
+   * Monotonic tick count. The coalesced refresh compares it and the clock's
+   * pins count it; no hook renders from it (see {@link sampledNow}).
+   */
   readonly getSnapshot: () => number;
-  /** The instant sampled at construction, subscription, or the last fire. */
+  /**
+   * The instant sampled at construction, subscription, or the last fire - and
+   * the snapshot every hook in this file hands `useSyncExternalStore`, so
+   * each one renders from the value that call RETURNS.
+   *
+   * Never from a second read of the clock beside a tick snapshot. The desktop
+   * renderer is built with the React Compiler, which memoizes a render-time
+   * read of a mutable module value on the hook's other inputs:
+   * `useGraceCountdown` read `sampledNow()` next to a discarded tick, its
+   * string was cached on `deadline` alone, and every tick re-rendered a card
+   * that kept its FIRST render's countdown - "in 3m 27s" on a 15 s window,
+   * seen live, stale by however long the clock had idled before the card
+   * mounted. Returned from the snapshot, the time is the memo's key rather
+   * than something the memo hides.
+   */
   readonly sampledNow: () => number;
+  /**
+   * Re-take the sample now, and wake every subscriber if it moved.
+   *
+   * For a consumer whose INPUT changed rather than its subscription.
+   * `subscribe` corrects a newcomer's first render, but a mounted countdown
+   * handed a new deadline mid-tick renders it against the last fire's
+   * sample - up to one interval old - until the next fire. Seen live on the
+   * grace card: resumed from the destination menu with 14.57 s left, it
+   * painted "16s" before counting down. `>` for the same reason as in
+   * `subscribe`: a backwards system-clock jump leaves the sample standing.
+   */
+  readonly resample: () => void;
 }
 
 // Round-4 merge note: `origin/main` fixed the SAME defect independently, by
@@ -110,18 +139,21 @@ export function createSharedClock(intervalMs: number): SharedClock {
       const sampleTheRenderSaw = sampledNow;
       startIfNeeded();
       // A new subscriber's FIRST render already happened, and it read whatever
-      // sample the last fire (or module load) left behind - up to one whole
-      // interval old. That is a visible error at both cadences: a grace card
+      // sample the last fire (or module load) left behind: up to one whole
+      // interval old while the clock runs, and as old as that last fire when
+      // it had stopped - minutes, for the second clock, whose common case is
+      // idle ("in 3m 27s" on a 15 s window, seen live). The one-interval case
+      // is already a visible error at both cadences: a grace card
       // mounting 900ms into the second clock's tick renders a countdown 900ms
       // high (a 5s window paints "6s"), and a row mounting 50s into the minute
       // clock's renders "Just now" for something a minute old.
       //
-      // Re-sampling alone would not reach the screen: `getSnapshot` returns the
-      // TICK, so a fresher time behind an unchanged tick is a store React has
-      // no reason to re-read. Bumping the tick is what makes the correction a
-      // re-render - and `useSyncExternalStore` re-reads the snapshot right
-      // after subscribe for exactly this case, a store that moved between
-      // render and effect.
+      // Re-sampling IS the correction: every hook's snapshot is `sampledNow`,
+      // and `useSyncExternalStore` re-reads the snapshot right after
+      // subscribe for exactly this case, a store that moved between render
+      // and effect. The tick is bumped too, because the coalesced refresh
+      // below compares ticks to decide whether its trailing sweep still owes
+      // the existing listeners the new sample.
       //
       // Every listener must eventually observe the refreshed sample. The
       // broadcast is coalesced independently of millisecond timing; the sample
@@ -145,13 +177,20 @@ export function createSharedClock(intervalMs: number): SharedClock {
     },
     getSnapshot: () => tick,
     sampledNow: () => sampledNow,
+    resample: () => {
+      const now = Date.now();
+      if (now <= sampledNow) return;
+      sampledNow = now;
+      tick += 1;
+      notifyListeners();
+    },
   };
 }
 
 // The long clock: every relative timestamp, reset countdown and "far reset"
 // decision in the app. Minute resolution is what those labels change at.
 const minuteClock = createSharedClock(MINUTE_MS);
-const { subscribe, getSnapshot } = minuteClock;
+const { subscribe } = minuteClock;
 const sampledNowOf = minuteClock.sampledNow;
 
 /**
@@ -229,8 +268,8 @@ export function formatCompactRelativeTime(
  * tick repaints the label rather than its surrounding row.
  */
 export function useCompactRelativeTime(timestamp: number): string {
-  useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-  return formatCompactRelativeTime(timestamp, sampledNowOf());
+  const now = useSyncExternalStore(subscribe, sampledNowOf, sampledNowOf);
+  return formatCompactRelativeTime(timestamp, now);
 }
 
 /**
@@ -240,13 +279,12 @@ export function useCompactRelativeTime(timestamp: number): string {
  * list row does not re-render when the clock ticks.
  */
 export function useRelativeTimestamp(createdAt: number): string {
-  useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-  return formatRelativeTimestamp(createdAt, sampledNowOf());
+  const now = useSyncExternalStore(subscribe, sampledNowOf, sampledNowOf);
+  return formatRelativeTimestamp(createdAt, now);
 }
 
 export function useSampledNow(): number {
-  useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-  return sampledNowOf();
+  return useSyncExternalStore(subscribe, sampledNowOf, sampledNowOf);
 }
 
 /**
@@ -285,9 +323,9 @@ export function formatResetCountdown(resetsAt: number, now: number): string {
  * still pays for only one interval.
  */
 export function useResetCountdown(resetsAt: number | null): string | null {
-  useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const now = useSyncExternalStore(subscribe, sampledNowOf, sampledNowOf);
   if (resetsAt === null) return null;
-  return formatResetCountdown(resetsAt, sampledNowOf());
+  return formatResetCountdown(resetsAt, now);
 }
 
 /**
@@ -316,9 +354,9 @@ export function isFarReset(resetsAt: number, now: number): boolean {
  * display without a remount.
  */
 export function useIsFarReset(resetsAt: number | null): boolean {
-  useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const now = useSyncExternalStore(subscribe, sampledNowOf, sampledNowOf);
   if (resetsAt === null) return false;
-  return isFarReset(resetsAt, sampledNowOf());
+  return isFarReset(resetsAt, now);
 }
 
 /**
@@ -492,13 +530,12 @@ export function formatFullTimestamp(timestamp: number): string {
  * rather than the transcript row around it.
  */
 export function useMessageTime(timestamp: number): string {
-  useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-  // `sampledNowOf()`, not a bare `sampledNow`: this hook arrived from
-  // `origin/main`, where the clock's sample was a module-level binding. It is a
-  // per-instance closure on this branch (that is what stops one clock's sample
-  // leaking into another's fake-timer test), so the sample is read through the
-  // instance's accessor like every other hook in this file.
-  return formatMessageTime(timestamp, sampledNowOf());
+  // The instance's accessor as the SNAPSHOT, like every hook in this file.
+  // This hook arrived from `origin/main`, where the sample was a module-level
+  // binding read beside the tick; rendering from the returned value is what
+  // keys the compiled label on the time instead of caching it on `timestamp`.
+  const now = useSyncExternalStore(subscribe, sampledNowOf, sampledNowOf);
+  return formatMessageTime(timestamp, now);
 }
 
 /**
@@ -520,17 +557,8 @@ export function formatResetFullDateTime(resetsAt: number): string {
 /**
  * Bare wall-clock time - "3:00 PM".
  *
- * The one format the provider-fallback surfaces state a resume time in: the
- * waiting card ("Resuming at 3:00 PM"), its background-items row ("Waiting for
- * Claude Code's limit · resumes 3:00 PM"), and the destination menu's wait row.
- * Exported so those three cannot drift apart - the background panel's own
- * `formatWakeupTime` is a zero-padded 24-hour string ("15:00") belonging to the
- * Claude wake row, and ux-surfaces is explicit that a fallback wait must never
- * be rendered in the wake row's form.
- *
- * No weekday and no date, unlike {@link formatResetDateTime}: a wait is capped
- * at the policy's longest wait (six hours by default), so the day is never in
- * question and the extra words cost width in a card that is mostly buttons.
+ * The time half of {@link formatWaitTime}, which is what a fallback surface
+ * calls: on its own this is only correct for a moment less than a day away.
  * `hour12` is explicit rather than left to the locale so the AM/PM designator
  * always renders - without it "3:00" is ambiguous in exactly the case the card
  * exists for.
@@ -543,6 +571,38 @@ export function formatClockTime(at: number): string {
     minute: "2-digit",
     hour12: true,
   });
+}
+
+/**
+ * A fallback wait or reset time - "3:00 PM" while it is less than a day away,
+ * "Sat 3:00 PM" once it is further.
+ *
+ * The one format the provider-fallback surfaces state such a time in: the
+ * waiting card ("Resuming at 3:00 PM"), its background-items row ("Waiting for
+ * Claude Code's limit · resumes 3:00 PM"), the waiting menu's header, the hold
+ * card's wait plan, the error row's "Wait until 3:00 PM" and its beyond-the-cap
+ * sentence, and the announcer. One function so those cannot drift apart - and
+ * never the background panel's own `formatWakeupTime`, a zero-padded 24-hour
+ * string ("15:00") belonging to the Claude wake row, which ux-surfaces is
+ * explicit a fallback wait must never be rendered as.
+ *
+ * The weekday is not decoration. These surfaces used to print the clock time
+ * alone, on the grounds that a wait is capped at the policy's longest wait and
+ * so "the day is never in question" - true of the six-hour default and false of
+ * the setting, which goes to seven days (`FALLBACK_POLICY_LIMITS`), and never
+ * true of a boundary BEYOND the cap, which the error row names as well. A card
+ * reading "Wait until 10:34 AM" for a reset four days out states the wrong day.
+ * Under a day the next occurrence of a clock time is unambiguous, so the short
+ * form stays where it is enough; past a day the weekday alone disambiguates,
+ * because provider windows reset within a week - the rule
+ * {@link formatResetDateTime} already states for the limit popover, and the
+ * same one-day threshold as {@link isFarReset}.
+ *
+ * Takes `now` rather than reading the clock, so a caller in render passes the
+ * shared minute clock ({@link useSampledNow}) and stays pure.
+ */
+export function formatWaitTime(at: number, now: number): string {
+  return isFarReset(at, now) ? formatResetDateTime(at) : formatClockTime(at);
 }
 
 /**
@@ -596,11 +656,21 @@ export function formatGraceCountdown(deadline: number, now: number): string {
  * with it.
  */
 export function useGraceCountdown(deadline: number | null): string | null {
-  useSyncExternalStore(
+  const now = useSyncExternalStore(
     secondClock.subscribe,
-    secondClock.getSnapshot,
-    secondClock.getSnapshot,
+    secondClock.sampledNow,
+    secondClock.sampledNow,
   );
+  // A new deadline on a mounted card - the destination menu closing, a
+  // re-armed window - would render against the last fire's sample, up to a
+  // second old, until the next fire. Re-sampling in a LAYOUT effect wakes
+  // this subscriber, and the re-render it forces lands before paint, so the
+  // first frame of the new deadline is counted from now. Without it a resume
+  // with 14.57 s left painted "16s". On mount it changes nothing: React
+  // re-checks the snapshot after subscribing, as it always did.
+  useLayoutEffect(() => {
+    secondClock.resample();
+  }, [deadline]);
   if (deadline === null) return null;
-  return formatGraceCountdown(deadline, secondClock.sampledNow());
+  return formatGraceCountdown(deadline, now);
 }

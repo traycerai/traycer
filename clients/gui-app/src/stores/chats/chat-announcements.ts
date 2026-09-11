@@ -14,8 +14,9 @@ import {
   queuedMessagesMovingText,
   queuedMessagesReturningText,
 } from "@/components/chat/fallback/fallback-copy";
+import { pendingFallbackResumesFailedTuple } from "@/components/chat/fallback/fallback-identity";
 import { isFallbackNoticeKind } from "@/components/chat/fallback/fallback-notice-kinds";
-import { formatClockTime } from "@/lib/relative-time";
+import { formatWaitTime } from "@/lib/relative-time";
 
 /**
  * Polite announcements for transcript completions and fallback lifecycle.
@@ -348,6 +349,7 @@ function cancelOpportunityText(deadline: number | null, now: number): string {
 function fallbackPlanText(
   plan: FallbackAnnouncementPlan | null,
   failedIdentity: string,
+  now: number,
 ): string {
   if (plan === null || plan.action === "notify") {
     return "No fallback destination is available. The chat will stop and keep the error visible.";
@@ -365,7 +367,7 @@ function fallbackPlanText(
     case "wait":
       return plan.resumesAt === null
         ? `The host is checking when ${failedIdentity} can resume.`
-        : `The chat will wait for ${failedIdentity} and resume at ${formatClockTime(plan.resumesAt)}.`;
+        : `The chat will wait for ${failedIdentity} and resume at ${formatWaitTime(plan.resumesAt, now)}.`;
   }
 }
 
@@ -375,7 +377,7 @@ function fallbackHoldText(
   failedIdentity: string,
   now: number,
 ): string {
-  const parts = [fallbackPlanText(plan, failedIdentity)];
+  const parts = [fallbackPlanText(plan, failedIdentity, now)];
   if (plan?.action === "switch" && plan.destination !== null) {
     parts.push(FRESH_SESSION_HELPER);
     const moving = queuedMessagesMovingText(pending.queuedItemsMoving);
@@ -402,21 +404,32 @@ export function fallbackTraversalAnnouncement(input: {
       text = fallbackHoldText(pending, plan, failedIdentity, now);
       break;
     case "choosing":
-      text = `Fallback countdown paused. ${fallbackPlanText(plan, failedIdentity)} Choose a destination or close the menu to resume the countdown.`;
+      text = `Fallback countdown paused. ${fallbackPlanText(plan, failedIdentity, now)} Choose a destination or close the menu to resume the countdown.`;
       break;
     case "switching": {
+      // The wait rung's resume runs these same phases onto the tuple that
+      // failed, so there is nowhere to switch TO: "Switching this chat to <the
+      // model it was already on>" announced a move that never happened.
+      if (pendingFallbackResumesFailedTuple(pending)) {
+        text = `Resuming this chat on ${failedIdentity}.`;
+        break;
+      }
       const destination = targetIdentity ?? plan?.destination ?? null;
-      text =
-        destination === null
-          ? "The host is preparing the provider switch."
-          : `Switching this chat to ${destination}.`;
+      // No destination: a rung's commit phase entering it, the plan re-pointed
+      // at that rung and still resolving. The next breath names a target
+      // (announced below, as the switch it is) or skips the rung for the next
+      // one (announced as whatever it becomes), so there is no switch to
+      // announce yet - and "The host is preparing the provider switch." was
+      // false every time the rung was skipped, as on the way to a wait.
+      if (destination === null) return null;
+      text = `Switching this chat to ${destination}.`;
       break;
     }
     case "waiting": {
       const resume =
         pending.deadline === null
           ? "The host will resume when the verified reset is ready."
-          : `Resuming at ${formatClockTime(pending.deadline)}.`;
+          : `Resuming at ${formatWaitTime(pending.deadline, now)}.`;
       text = `Waiting for ${failedIdentity}. ${resume} Select ${STOP_WAITING_LABEL} to cancel.`;
       break;
     }

@@ -67,6 +67,14 @@ vi.mock("@/hooks/providers/use-fallback-policy-query", () => ({
   }),
 }));
 
+// The in-flight-count poll calls `useHostClient()` too, unreachable outside a
+// `<HostRuntimeProvider>`. `data: undefined` leaves the panel on the count
+// `queryData` above carries - this suite is about Effort, not the poll, which
+// `fallback-settings-panel-in-flight-count.test.tsx` covers on its own.
+vi.mock("@/hooks/providers/use-fallback-in-flight-count-query", () => ({
+  useFallbackInFlightCountQuery: () => ({ data: undefined }),
+}));
+
 vi.mock("@/hooks/providers/use-fallback-policy-set-mutation", () => ({
   useFallbackPolicySetMutation: () => ({
     mutateAsync: fallbackMocks.setMutateAsync,

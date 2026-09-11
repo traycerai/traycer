@@ -5,7 +5,7 @@ import type {
   PendingFallback,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { HostRpcRegistry } from "@/lib/host";
-import { formatClockTime } from "@/lib/relative-time";
+import { formatWaitTime, useSampledNow } from "@/lib/relative-time";
 import {
   CHOOSE_DIFFERENTLY_LABEL,
   COUNTDOWN_NOT_PAUSED_LABEL,
@@ -332,6 +332,9 @@ export function FallbackWaitingMenu({
 }) {
   const [open, setOpen] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
+  // The shared minute clock, for the header's resume time alone: whether it is
+  // far enough out to need its weekday (`formatWaitTime`).
+  const now = useSampledNow();
   // The transition this menu is MOST likely to lose its surface to is its own
   // card's: `waiting -> switching` replaces the waiting subtree wholesale, so a
   // losing pick answered a beat later finds no menu, no inline line and no live
@@ -387,7 +390,11 @@ export function FallbackWaitingMenu({
     <FallbackDestinationMenu
       triggerLabel={SWITCH_INSTEAD_LABEL}
       triggerDisabled={!canAct}
-      header={waitingMenuHeader(pending.deadline, pending.queuedItemsMoving)}
+      header={waitingMenuHeader(
+        pending.deadline,
+        pending.queuedItemsMoving,
+        now,
+      )}
       selector={{
         kind: "traversal",
         traversalId: pending.traversalId,
@@ -424,8 +431,9 @@ export function FallbackWaitingMenu({
 function waitingMenuHeader(
   deadline: number | null,
   queuedItemsMoving: number,
+  now: number,
 ): string {
   const consequences = switchConsequencesText(queuedItemsMoving);
   if (deadline === null) return consequences;
-  return `Resumes at ${formatClockTime(deadline)} unless you pick something. ${consequences}`;
+  return `Resumes at ${formatWaitTime(deadline, now)} unless you pick something. ${consequences}`;
 }

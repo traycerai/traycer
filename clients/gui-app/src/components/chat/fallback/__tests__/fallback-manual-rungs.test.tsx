@@ -15,7 +15,7 @@ import type { ChatFallbackListTargetsResponse } from "@traycer/protocol/host/cha
 import { ChatTranscriptProvider } from "@/components/chat/chat-transcript-context";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { FallbackManualRungActions } from "@/components/chat/fallback/fallback-manual-rungs";
-import { formatClockTime } from "@/lib/relative-time";
+import { formatClockTime, formatResetDateTime } from "@/lib/relative-time";
 import {
   BANNED_VOCABULARY,
   FAILED_CLAUDE_TUPLE,
@@ -416,6 +416,32 @@ describe("FallbackManualRungActions", () => {
     expect(text).not.toContain("rate_limit");
   });
 
+  // The policy's wait cap reaches seven days, so "Wait until" needs its
+  // weekday once the reset is that far out - the bare clock time alone would
+  // name the wrong day.
+  it("names Wait until with its weekday once the reset is a day or more away", () => {
+    const farResetsAt = Date.now() + 4 * 24 * 60 * 60_000;
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: farResetsAt,
+        waitDisposition: "eligible",
+      }),
+    );
+    renderActions(TURN_ID);
+    // Falsification: `formatWaitTime` always returning `formatClockTime` -
+    // this button is never found, since its name still carries the bare
+    // clock time instead of the weekday-qualified form.
+    expect(
+      screen.getByRole("button", {
+        name: `Wait until ${formatResetDateTime(farResetsAt)}`,
+      }),
+    ).toBeDefined();
+  });
+
   // The negative twins of the case above, and the reason this card needed a
   // gate at all: `ErrorSegment` is DURABLE TRANSCRIPT, so these affordances
   // mount for anyone who can open the chat, and `chat.fallback.runManualRung`
@@ -627,6 +653,31 @@ describe("FallbackManualRungActions", () => {
       screen.getByText(
         `This limit resets at ${formatClockTime(RESETS_AT)}, later than your longest wait allows.`,
       ),
+    ).toBeDefined();
+  });
+
+  // Same weekday rule as "Wait until": the boundary this sentence names is,
+  // by construction, later than the policy's cap - up to seven days - so the
+  // bare clock time is wrong here even more often than on the button.
+  it("names the beyond-cap boundary with its weekday once it is a day or more away", () => {
+    const farResetsAt = Date.now() + 4 * 24 * 60 * 60_000;
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ["retry"],
+        resetsAt: farResetsAt,
+        waitDisposition: "beyond_cap",
+      }),
+    );
+    renderActions(TURN_ID);
+    const resetsAtLabel = formatResetDateTime(farResetsAt);
+    const beyondCap = "later than your longest wait allows.";
+    // Falsification: `formatWaitTime` always returning `formatClockTime` -
+    // this reads the bare clock time instead of the weekday-qualified form.
+    expect(
+      screen.getByText(`This limit resets at ${resetsAtLabel}, ${beyondCap}`),
     ).toBeDefined();
   });
 

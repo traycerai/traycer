@@ -11,7 +11,7 @@ import { useMaybeChatTranscript } from "@/components/chat/chat-transcript-contex
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useExistingChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
-import { formatClockTime } from "@/lib/relative-time";
+import { formatWaitTime, useSampledNow } from "@/lib/relative-time";
 import type { ChatSessionState } from "@/stores/chats/chat-session-store";
 import {
   HOST_UNREACHABLE_LABEL,
@@ -354,8 +354,11 @@ function ManualRungAffordances({
     [attempt, chatId, epicId, runManualRung],
   );
 
+  // The shared minute clock, for one decision only: whether a wait or reset
+  // time is far enough out to need its weekday (`formatWaitTime`).
+  const now = useSampledNow();
   const rungs = attempt.eligibleRungs;
-  const waitUntil = waitUntilLabel(attempt);
+  const waitUntil = waitUntilLabel(attempt, now);
   // `!canAct` folded in, not checked separately, so every control this
   // component draws is gated by construction rather than one at a time - the
   // bare Retry / Wait buttons, their duplicates inside the empty menu, and the
@@ -377,7 +380,7 @@ function ManualRungAffordances({
     attempt.waitDisposition,
     attempt.failure.resetsAt === undefined
       ? null
-      : formatClockTime(attempt.failure.resetsAt),
+      : formatWaitTime(attempt.failure.resetsAt, now),
   );
   // Why there is no Switch… button, in the host's own terms - the exact
   // counterpart to `waitExplanation`, and added for the same reason F6 added
@@ -540,7 +543,7 @@ function ManualRungAffordances({
 }
 
 /**
- * "Wait until 3:00 PM", or `null`.
+ * "Wait until 3:00 PM" ("Wait until Sat 3:00 PM" past a day), or `null`.
  *
  * Two gates, and they are not redundant. `wait_once` in `eligibleRungs` is the
  * HOST's answer - it is present iff the failure carries a verified boundary
@@ -548,10 +551,18 @@ function ManualRungAffordances({
  * eligibility rule; it is this component refusing to name a time it does not
  * have, since the field is optional on the failure payload and a button reading
  * "Wait until undefined" is worse than no button.
+ *
+ * The host now keeps the two in step - it restates the boundary its verdict
+ * was decided against onto `failure` - and this second gate is where they were
+ * seen apart: a Codex usage limit is stamped before its post-limit probe
+ * answers, so it arrived `eligible` with no time and drew no button at all.
  */
-function waitUntilLabel(attempt: LastFailedAttempt): string | null {
+function waitUntilLabel(
+  attempt: LastFailedAttempt,
+  now: number,
+): string | null {
   if (!attempt.eligibleRungs.includes("wait_once")) return null;
   const resetsAt = attempt.failure.resetsAt;
   if (resetsAt === undefined) return null;
-  return `Wait until ${formatClockTime(resetsAt)}`;
+  return `Wait until ${formatWaitTime(resetsAt, now)}`;
 }

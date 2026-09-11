@@ -1219,13 +1219,23 @@ export const lastFailedAttemptSchema = z.object({
   /** What distinguishes this attempt from a retry of the same message. */
   turnId: z.string(),
   /**
-   * The typed failure, as the error block already carries it.
+   * The typed failure, as the error block already carries it - with the wait's
+   * boundary restated on it whenever the host found one.
    *
    * Reused rather than flattened to a reason string: `resetsAt` +
    * `resetsAtSource` are exactly what the `wait_once` rung's boundary copy
    * needs, and they arrive here under the same guarantee the block gives - a
    * provider-reported or probe-read boundary only, never a gauge estimate - so
    * a card may render it as a time without qualifying it.
+   *
+   * RESTATED, not copied, which is the one difference from the block. The
+   * stamp is what the error said when it was emitted, and for a Codex usage
+   * limit that is no reset at all: the post-limit probe that learns one
+   * answers after the stamp. So whenever {@link waitDisposition} was decided
+   * against a verified boundary (`eligible`, `beyond_cap`), the host writes
+   * THAT boundary's `resetsAt` / `resetsAtSource` / `scope` here - the time the
+   * wait would be armed for - and a card naming it cannot disagree with the
+   * verdict it names it under. Otherwise this is the stamp, unchanged.
    */
   failure: agentFailureSchema,
   /**
@@ -4014,6 +4024,15 @@ export const chatSubscribeV19 = defineStreamRpcContract({
 // stripped by the host: it is an additive-optional member, so a lower peer's
 // deep decoder drops it as an unknown key and the shallow/raw paths carry it
 // uninspected. What older lines owe it is tolerance, not stripping.
+//
+// `profileWalkUnprovable` on a row's `rowContext` is the same shape one level
+// down. It is this line's profile attribution refusing a walk, and the frozen
+// lines hold it back with their own copy of the row context
+// (`transcriptRowContextSchemaPreFallback`), which `@1.8`'s pre-Antigravity
+// copy now extends rather than the live schema. The host writes the flag at
+// every minor; a `≤1.9` peer drops the key and falls back to its own walk, as
+// it did before the flag existed. Byte-stability of those two lines is pinned
+// by `__tests__/chat-schema-checkpoints.test.ts`.
 export const chatSubscribeV110 = defineStreamRpcContract({
   method: "chat.subscribe",
   schemaVersion: { major: 1, minor: 10 } as const,

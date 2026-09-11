@@ -5,8 +5,8 @@ import type { PendingFallback } from "@traycer/protocol/host/agent/gui/subscribe
 import { Button } from "@/components/ui/button";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import {
-  formatClockTime,
   formatResetCountdown,
+  formatWaitTime,
   useSampledNow,
 } from "@/lib/relative-time";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -39,7 +39,7 @@ import {
  * would put "Starts a fresh session from this transcript" on a card whose whole
  * point is that no session changes.
  *
- * The time is the SHARED 12-hour format (`formatClockTime`), never the Claude
+ * The time is the SHARED 12-hour format (`formatWaitTime`), never the Claude
  * wake row's zero-padded 24-hour form: a fallback wait and a scheduled wake are
  * different things, and rendering one in the other's shape is how a user reads a
  * paused chat as a wake they scheduled.
@@ -222,7 +222,7 @@ function FallbackWaitHeadline({
   }
   return (
     <div className="text-ui-sm">
-      <span role="status">Resuming at {formatClockTime(deadline)}</span>
+      <span role="status">Resuming at {formatWaitTime(deadline, now)}</span>
       <span className="text-muted-foreground">
         {" "}
         (in about {formatResetCountdown(deadline, now)})

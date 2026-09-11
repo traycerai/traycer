@@ -36,6 +36,7 @@ import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { useFallbackPolicyQuery } from "@/hooks/providers/use-fallback-policy-query";
+import { useFallbackInFlightCountQuery } from "@/hooks/providers/use-fallback-in-flight-count-query";
 import { useFallbackPolicySetMutation } from "@/hooks/providers/use-fallback-policy-set-mutation";
 import { useFallbackPolicyResetMutation } from "@/hooks/providers/use-fallback-policy-reset-mutation";
 import { useFallbackPolicyRestoreTierGroupsMutation } from "@/hooks/providers/use-fallback-policy-restore-tier-groups-mutation";
@@ -158,6 +159,7 @@ function FallbackSettingsPanelBody(props: {
 }): ReactNode {
   const { scope } = props;
   const query = useFallbackPolicyQuery();
+  const inFlightCountQuery = useFallbackInFlightCountQuery();
   /**
    * Bumped when a reset has replaced the stored policy wholesale, to remount
    * the editor onto the refetched read.
@@ -191,9 +193,11 @@ function FallbackSettingsPanelBody(props: {
   /**
    * The authoritative read of what the host actually has, for the two cases that
    * need one: a save whose reply was lost, and a reset - whose result is by
-   * construction not the value it returned. Everything else on this page is
+   * construction not the value it returned. Every control on this page is
    * seeded once and never re-reads, which is what stops a background refetch
-   * yanking a control out from under someone mid-edit.
+   * yanking a control out from under someone mid-edit. The one thing that
+   * does poll is the in-flight count, and it polls its own cache entry and
+   * seeds nothing (`useFallbackInFlightCountQuery`).
    */
   const refetchPolicy =
     useCallback(async (): Promise<FallbackPolicy | null> => {
@@ -260,7 +264,10 @@ function FallbackSettingsPanelBody(props: {
       // there is no hydration effect anywhere in this file.
       key={`${scope.hostId ?? ""}:${resetGeneration}`}
       initialPolicy={query.data.policy}
-      inFlightCount={query.data.inFlightCount}
+      // The polled count once it has answered, else the one this read carried.
+      inFlightCount={
+        inFlightCountQuery.data?.inFlightCount ?? query.data.inFlightCount
+      }
       storedPolicyUnreadable={query.data.storedPolicyUnreadable}
       hostLabel={scope.host === null ? null : scope.hostLabel}
       refetchPolicy={refetchPolicy}
@@ -287,7 +294,8 @@ function FallbackPolicyEditor(props: {
    * Re-reads the host's own policy, answering `null` when the read failed.
    *
    * Two callers: the unknown-outcome read-back, and the reset - which cannot
-   * take its own response as the answer. Nothing else on this page re-reads.
+   * take its own response as the answer. Nothing else on this page re-reads
+   * the policy; the in-flight count polls on its own cache entry.
    */
   readonly refetchPolicy: () => Promise<FallbackPolicy | null>;
   readonly returnFocusToReset: boolean;
@@ -931,10 +939,10 @@ function FallbackPolicyEditor(props: {
  * `control` slot is below that provider - which the inline `<Switch>` this
  * replaces was not, being JSX built one component up. So the switch carried a
  * bare `aria-label` and the paragraph explaining what turning it off does
- * ("Chats already waiting or switching finish on their own - 2 in progress
- * right now") was visible text with no programmatic relationship to the
- * control it explains. The two timing Selects in the Behavior group already
- * consume the same context; this is the row that did not (AX8).
+ * ("Recovery already in progress continues; stop it from the chat. … 2 in
+ * progress right now.") was visible text with no programmatic relationship to
+ * the control it explains. The two timing Selects in the Behavior group
+ * already consume the same context; this is the row that did not (AX8).
  *
  * The count in that description is the reason it matters more here than
  * elsewhere: it is the fact the toggle DECISION turns on, and a keyboard user
@@ -984,10 +992,13 @@ const MASTER_TOGGLE_DESCRIPTION =
 /**
  * The master toggle's helper, plus the count the decision turns on.
  *
- * The count is the policy read's `inFlightCount` and is deliberately a plain
- * number with no link: every chat that is holding or waiting already shows its
- * own card with its own stop action, and a list here would be a second place
- * to act on them. It is APPENDED to the fixed copy rather than woven into it -
+ * The count is polled while the page is open, by
+ * `useFallbackInFlightCountQuery`: "right now" is a claim about the present,
+ * and the policy read that also carries it is read once. It is deliberately a
+ * plain number with no link: every chat that is holding or waiting already
+ * shows its own card with its own stop action, and a list here would be a
+ * second place to act on them. It is APPENDED to the fixed copy rather than
+ * woven into it -
  * "stop it from the chat" is where a reader is sent, and how many there are is
  * a separate fact that is absent when it is zero.
  */

@@ -2716,17 +2716,27 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     notice says what is on screen is not what is stored.
   - **`inFlightCount`** is rendered as a plain number in the master toggle's
     helper with **no link**: every holding or waiting chat already shows its own
-    card with its own stop action. It is derived per read, so it is only as
-    fresh as the last one - and this query takes the app-wide
-    `refetchOnWindowFocus: false` and `refetchOnReconnect: false`
-    (`lib/query-client.ts`), so nothing AMBIENT re-reads it to freshen it. That
-    is not the same as "nothing else refetches": those flags say nothing about
-    INVALIDATION, which starts a refetch by a route they never see. It happens
-    that none does today - `set` and `restoreTierGroups` write their response in
-    place with `setQueriesData`, and `reset` invalidates with
-    `refetchType: "none"` - so the only reads are the panel's own two, both
-    deliberate: the read-back after a save whose reply was lost, and the read
-    after a reset.
+    card with its own stop action. "Right now" is a claim about the present,
+    so the number is POLLED while the page is open:
+    `useFallbackInFlightCountQuery` reads `providers.fallbackPolicy.get` on
+    the table's fixed 5 s cadence, under its own cache entry. It used to come
+    off the policy read, which is read once, and a live run showed "1 in
+    progress right now" for minutes after the only hold had switched. That
+    entry holds the whole response, not just the number, because `set` and
+    `restoreTierGroups` update every entry under the method's scope with a
+    response-shaped updater - a bare number there would come back from the
+    first save as an object, printed on the page.
+    The policy read itself does not poll: those same two writers put their
+    responses into its entry in place, and a poll landing after one of those
+    writes would put the pre-save policy back for the next mount to seed from.
+    Nothing AMBIENT re-reads it either (`refetchOnWindowFocus` and
+    `refetchOnReconnect` are off app-wide), but that is not "nothing refetches
+    it": the host-scope sweep (`lib/host/query-invalidator.ts`) refetches every
+    active host query on availability recovery and key rotation, and `reset`
+    invalidates with `refetchType: "none"` because its own caller does the
+    read. So the policy's re-reads are the panel's own two - the read-back
+    after a save whose reply was lost, and the read after a reset - plus a
+    sweep.
   - **No per-chat and no per-task control exists anywhere in the app**, by
     decision. The harness/model picker and the composer gain nothing from this
     feature; per-chat intervention is the actions on the cards themselves.

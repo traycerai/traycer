@@ -24,7 +24,7 @@ import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-di
 import { LivePulse } from "@/components/ui/live-pulse";
 import { LiveElapsed } from "@/components/chat/segments/segment-elapsed";
 import { fallbackProviderLabelFor } from "@/components/chat/fallback/fallback-identity";
-import { formatClockTime } from "@/lib/relative-time";
+import { formatWaitTime, useSampledNow } from "@/lib/relative-time";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed-command-monitor-icon";
 import { ManagedCommandStopAction } from "@/components/managed-commands/managed-command-lifecycle-actions";
@@ -204,7 +204,7 @@ function formatWakeupTime(scheduledFor: number): string {
   return `${hours}:${minutes}`;
 }
 
-function backgroundItemDisplayTitle(item: BackgroundItem): string {
+function backgroundItemDisplayTitle(item: BackgroundItem, now: number): string {
   if (item.kind === "wakeup") {
     const scheduledFor = itemScheduledFor(item);
     const time =
@@ -239,7 +239,7 @@ function backgroundItemDisplayTitle(item: BackgroundItem): string {
     // `formatWakeupTime`'s zero-padded 24-hour one. That distinction is the
     // point: a fallback wait and a scheduled wake are different things, and a
     // wait rendered in the wake row's shape reads as a wake the user set.
-    return `Waiting for ${account}'s limit · resumes ${formatClockTime(item.scheduledFor)}`;
+    return `Waiting for ${account}'s limit · resumes ${formatWaitTime(item.scheduledFor, now)}`;
   }
   return item.title;
 }
@@ -723,8 +723,11 @@ function BackgroundTreeRow(props: {
 }) {
   const { node } = props;
   const item = node.item;
+  // The shared minute clock, read for the fallback-wait row's resume time:
+  // whether it is far enough out to need its weekday (`formatWaitTime`).
+  const now = useSampledNow();
   const displayTitle =
-    item === null ? node.title : backgroundItemDisplayTitle(item);
+    item === null ? node.title : backgroundItemDisplayTitle(item, now);
 
   return (
     <li className="m-0">

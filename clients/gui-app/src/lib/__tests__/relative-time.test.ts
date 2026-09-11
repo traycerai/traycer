@@ -13,9 +13,15 @@ import {
   formatResetCountdown,
   formatResetDateTime,
   formatResetFullDateTime,
+  formatWaitTime,
   isFarReset,
+  useCompactRelativeTime,
   useGraceCountdown,
+  useIsFarReset,
+  useMessageTime,
   useRelativeTimestamp,
+  useResetCountdown,
+  useSampledNow,
 } from "@/lib/relative-time";
 
 const MINUTE_MS = 60_000;
@@ -308,6 +314,122 @@ describe("useGraceCountdown", () => {
   });
 });
 
+/**
+ * Compiled-mode pins for the MINUTE-clock hooks, the same shape as
+ * `useGraceCountdown`'s cell above: each builds its own fake-timer window
+ * and asserts the label one minute tick must produce. They pin the class the
+ * live grace-card freeze belonged to - the compiler memoizes a render-time
+ * read of `sampledNowOf()` on inputs the clock's tick never changes, so the
+ * leaf re-renders on every tick and returns its FIRST render's value.
+ * `relative-time.ts` is in `REACT_COMPILER_REGRESSION_FILES`, so these run
+ * compiled; uncompiled, this class is invisible.
+ */
+describe("minute-clock hooks re-render with a NEW value after a live tick (compiled)", () => {
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it("useSampledNow: the sampled instant advances after a minute tick", () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useSampledNow());
+    const first = result.current;
+    act(() => {
+      vi.advanceTimersByTime(MINUTE_MS);
+    });
+    // Falsification: the compiler memoizes `sampledNowOf()` on no changing
+    // input (the hook takes no argument at all), so a regressed build returns
+    // `first` again here instead of the freshly ticked sample.
+    expect(result.current).toBeGreaterThan(first);
+  });
+
+  it("useRelativeTimestamp: the label crosses from 'Just now' to '1m ago' after a minute tick", () => {
+    vi.useFakeTimers();
+    const createdAt = Date.now();
+    const { result } = renderHook(() => useRelativeTimestamp(createdAt));
+    expect(result.current).toBe("Just now");
+    act(() => {
+      vi.advanceTimersByTime(MINUTE_MS);
+    });
+    // Falsification: the compiler memoizes `formatRelativeTimestamp(createdAt,
+    // sampledNowOf())` on `createdAt` alone (the only prop-like input it sees),
+    // so a regressed build still reads "Just now" here.
+    expect(result.current).toBe("1m ago");
+  });
+
+  it("useCompactRelativeTime: the label crosses from 'now' to '1m' after a minute tick", () => {
+    vi.useFakeTimers();
+    const timestamp = Date.now();
+    const { result } = renderHook(() => useCompactRelativeTime(timestamp));
+    expect(result.current).toBe("now");
+    act(() => {
+      vi.advanceTimersByTime(MINUTE_MS);
+    });
+    expect(result.current).toBe("1m");
+  });
+
+  it("useResetCountdown: the countdown decrements after a minute tick", () => {
+    vi.useFakeTimers();
+    const resetsAt = Date.now() + 3 * MINUTE_MS;
+    const { result } = renderHook(() => useResetCountdown(resetsAt));
+    expect(result.current).toBe("3m");
+    act(() => {
+      vi.advanceTimersByTime(MINUTE_MS);
+    });
+    expect(result.current).toBe("2m");
+  });
+
+  it("useIsFarReset: flips from true to false as a minute tick crosses the one-day boundary", () => {
+    vi.useFakeTimers();
+    const resetsAt = Date.now() + DAY_MS + 30_000;
+    const { result } = renderHook(() => useIsFarReset(resetsAt));
+    expect(result.current).toBe(true);
+    act(() => {
+      vi.advanceTimersByTime(MINUTE_MS);
+    });
+    // Falsification: the compiler memoizes `isFarReset(resetsAt,
+    // sampledNowOf())` on `resetsAt` alone, so a regressed build still reads
+    // `true` a minute after the real margin dropped under one day.
+    expect(result.current).toBe(false);
+  });
+
+  // `useMessageTime`'s label is NOT minute-relative like the others above - a
+  // day-scoped clock stamp reads the same at :00 and :59 of the same hour, so
+  // an ordinary minute tick proves nothing about it. Its one live transition
+  // is the day rollover the module doc calls out: "a stamp showing '3:45 PM'
+  // has to become 'Sep 10, 3:45 PM' once the day rolls over under a tab left
+  // open overnight." That is the tick this cell drives.
+  it("useMessageTime: the date prefix appears once a live tick crosses midnight", () => {
+    vi.useFakeTimers();
+    const justBeforeMidnight = new Date(2026, 3, 23, 23, 59, 30).getTime();
+    // Set BEFORE mount: the subscribe-time correction re-renders the first
+    // frame from a fresh sample, so the pre-tick read below is the SAME-DAY
+    // form deterministically, not whatever a previous cell in this file left
+    // the shared minute clock's sample at.
+    vi.setSystemTime(justBeforeMidnight);
+    const timestamp = justBeforeMidnight;
+    const { result } = renderHook(() => useMessageTime(timestamp));
+    const sameDayForm = new Date(timestamp).toLocaleTimeString(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+    });
+    // Same-day form, unambiguously: the label alone, no date prefix - not
+    // merely "no comma", which a differently-wrong string could also satisfy.
+    expect(result.current).toBe(sameDayForm);
+    act(() => {
+      vi.advanceTimersByTime(MINUTE_MS);
+    });
+    const datePrefix = new Date(timestamp).toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+    });
+    // Falsification: the compiler memoizes `formatMessageTime(timestamp,
+    // sampledNowOf())` on `timestamp` alone, so a regressed build still reads
+    // `sameDayForm` here instead of the dated cross-midnight form.
+    expect(result.current).toBe(`${datePrefix}, ${sameDayForm}`);
+  });
+});
+
 const CLOCK_OPTIONS: Intl.DateTimeFormatOptions = {
   hour: "numeric",
   minute: "2-digit",
@@ -343,6 +465,31 @@ describe("formatClockTime", () => {
     // locale's own hour token so this survives a non-Latin numbering system,
     // where a literal "3" appears nowhere in a correct render.
     expect(formatted).toContain(dateTimePart(at, CLOCK_OPTIONS, "hour"));
+  });
+});
+
+// The cap a fallback wait can name went to seven days
+// (`FALLBACK_POLICY_LIMITS.maxWaitMinutes`), and a card naming a time that far
+// out with no weekday states the wrong day - the reason this exists rather
+// than every wait surface calling `formatClockTime` directly.
+describe("formatWaitTime", () => {
+  const now = Date.parse("2026-04-23T12:00:00.000Z");
+
+  it("renders the bare clock time for a moment under a day away", () => {
+    expect(formatWaitTime(now + 23 * HOUR_MS, now)).toBe(
+      formatClockTime(now + 23 * HOUR_MS),
+    );
+  });
+
+  it("renders the weekday-qualified form at exactly a day away, and beyond", () => {
+    // Falsification: `formatWaitTime` always returning `formatClockTime(at)` -
+    // both of these still equal the bare clock time instead.
+    expect(formatWaitTime(now + DAY_MS, now)).toBe(
+      formatResetDateTime(now + DAY_MS),
+    );
+    expect(formatWaitTime(now + 4 * DAY_MS, now)).toBe(
+      formatResetDateTime(now + 4 * DAY_MS),
+    );
   });
 });
 
@@ -811,6 +958,80 @@ describe("createSharedClock restart after going idle", () => {
     expect(clock.getSnapshot()).toBe(2);
     expect(clock.sampledNow()).toBe(BASE + 57_000);
     stopSecondRestart();
+  });
+});
+
+// A mounted subscriber whose INPUT changed - not its
+// subscription - used to render against the last interval fire's sample,
+// up to one interval old, until the next fire. `resample()` is the
+// corrective the caller reaches for on that path (see `useGraceCountdown`'s
+// `useLayoutEffect`), so it is tested directly here, the same way
+// `subscribe`'s own re-sampling is tested above.
+describe("createSharedClock resample", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("notifies once on a forward move and leaves an already-current sample alone", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(BASE);
+    const clock = createSharedClock(1_000);
+    let calls = 0;
+    const stop = clock.subscribe(() => {
+      calls += 1;
+    });
+    calls = 0; // discard subscribe's own immediate correction
+
+    // Same millisecond as the last sample: nothing moved, so `resample`
+    // must not notify - `>` rather than `!==`, mirrored from `subscribe`'s
+    // own guard.
+    clock.resample();
+    expect(calls).toBe(0);
+    expect(clock.getSnapshot()).toBe(0);
+
+    vi.setSystemTime(BASE + 400);
+    clock.resample();
+    // Falsification: delete `notifyListeners()` from `resample` (stores the
+    // new sample but never wakes a subscriber already rendered against the
+    // old one) - `calls` stays 0 here even though the two assertions below
+    // still pass, since `sampledNow`/`getSnapshot` read the store directly.
+    expect(calls).toBe(1);
+    expect(clock.sampledNow()).toBe(BASE + 400);
+    expect(clock.getSnapshot()).toBe(1);
+
+    // A second forward move notifies again - not a one-shot latch.
+    vi.setSystemTime(BASE + 900);
+    clock.resample();
+    expect(calls).toBe(2);
+    expect(clock.sampledNow()).toBe(BASE + 900);
+    expect(clock.getSnapshot()).toBe(2);
+
+    stop();
+  });
+
+  it("does not notify or move the sample on a backward system-clock jump", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(BASE + 900);
+    const clock = createSharedClock(1_000);
+    let calls = 0;
+    const stop = clock.subscribe(() => {
+      calls += 1;
+    });
+    calls = 0;
+    const snapshotBefore = clock.getSnapshot();
+
+    // The clock jumps backward - a system-clock correction, not a tick.
+    vi.setSystemTime(BASE);
+    clock.resample();
+    // Falsification: drop the `now <= sampledNow` guard (or weaken it to
+    // `now < sampledNow`, which still fires on an EQUAL sample) - the sample
+    // rewinds to `BASE`, the snapshot bumps, and every mounted subscriber is
+    // woken to re-render a countdown that just moved backward.
+    expect(calls).toBe(0);
+    expect(clock.sampledNow()).toBe(BASE + 900);
+    expect(clock.getSnapshot()).toBe(snapshotBefore);
+
+    stop();
   });
 });
 
