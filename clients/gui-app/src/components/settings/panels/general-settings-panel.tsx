@@ -25,12 +25,11 @@ import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { useOnboardingStore } from "@/stores/onboarding/onboarding-store";
 import { trackSettingChanged, type AnalyticsSetting } from "@/lib/analytics";
-import { modLabel } from "@/lib/keybindings/platform";
-import { getFeatureSettingsBridge } from "@/lib/desktop-feature-settings";
+import { MOD_ENTER_LABEL } from "@/lib/settings-search/settings-search-entries";
+import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
+import { isExperimentalGroupAvailable } from "@/lib/settings/settings-availability";
 import { useRunnerFeatureSettingsQuery } from "@/hooks/runner/use-runner-feature-settings-query";
 import { useRunnerAgentRolesSet } from "@/hooks/runner/use-runner-agent-roles-set-mutation";
-
-const MOD_ENTER_LABEL = `${modLabel()}+Enter`;
 
 function trackGeneralSetting(setting: AnalyticsSetting): void {
   trackSettingChanged("general", setting);
@@ -68,7 +67,8 @@ export function GeneralSettingsPanel() {
   const compact = useSettingsDensity() === "compact";
   const featureSettings = useRunnerFeatureSettingsQuery();
   const setAgentRoles = useRunnerAgentRolesSet();
-  const featureSettingsAvailable = getFeatureSettingsBridge() !== null;
+  const availability = useSettingsAvailabilityContext();
+  const featureSettingsAvailable = isExperimentalGroupAvailable(availability);
 
   return (
     <SettingsPanelShell
@@ -79,6 +79,7 @@ export function GeneralSettingsPanel() {
       <div className={cn("flex flex-col", compact ? "gap-3.5" : "gap-5")}>
         <SettingsGroup
           title="Chat & composer"
+          anchor="general-chat-composer"
           tone="default"
           dataTestId={undefined}
           fill={false}
@@ -86,6 +87,7 @@ export function GeneralSettingsPanel() {
           <VoiceSettingsSection />
           <SettingsRow
             label="Quote reply on text selection"
+            anchor="general-quote-reply"
             description="Selecting assistant text shows a quote button that inserts the selection into the composer."
             control={
               <Switch
@@ -100,6 +102,7 @@ export function GeneralSettingsPanel() {
           />
           <SettingsRow
             label={`Steer with ${MOD_ENTER_LABEL}`}
+            anchor="general-steer-on-mod-enter"
             description={`While a turn is running on a supported harness, ${MOD_ENTER_LABEL} sends the composer text as a same-turn steering message that jumps the queue. Plain Enter keeps queueing.`}
             control={
               <Switch
@@ -114,6 +117,7 @@ export function GeneralSettingsPanel() {
           />
           <SettingsRow
             label="Pin context usage breakdown"
+            anchor="general-pin-context-usage"
             description="Keep the context window breakdown visible near the chat composer when usage data is available."
             control={
               <Switch
@@ -132,6 +136,7 @@ export function GeneralSettingsPanel() {
 
         <SettingsGroup
           title="Running agents"
+          anchor="general-running-agents"
           tone="default"
           dataTestId={undefined}
           fill={false}
@@ -139,6 +144,7 @@ export function GeneralSettingsPanel() {
           <PreventSleepSettingsSection />
           <SettingsRow
             label="Show global resources button"
+            anchor="general-global-resources-button"
             description="Show the app-wide resource monitor in the header."
             control={
               <Switch
@@ -153,6 +159,7 @@ export function GeneralSettingsPanel() {
           />
           <SettingsRow
             label="Show navigator resource stats"
+            anchor="general-navigator-resource-stats"
             description="Show compact live CPU and memory chips in task navigator rows."
             control={
               <Switch
@@ -169,6 +176,7 @@ export function GeneralSettingsPanel() {
 
         <SettingsGroup
           title="Worktrees"
+          anchor="general-worktrees"
           tone="default"
           dataTestId={undefined}
           fill={false}
@@ -179,12 +187,14 @@ export function GeneralSettingsPanel() {
         {featureSettingsAvailable ? (
           <SettingsGroup
             title="Experimental"
+            anchor="general-experimental"
             tone="default"
             dataTestId={undefined}
             fill={false}
           >
             <SettingsRow
               label="Agent roles"
+              anchor="general-agent-roles"
               description={
                 featureSettings.isError
                   ? "Couldn't read feature settings. Repair ~/.traycer/cli/config.json, or back it up before resetting it, then reopen Settings."
@@ -215,12 +225,14 @@ export function GeneralSettingsPanel() {
             Overview, under the sidebar's host picker. */}
         <SettingsGroup
           title="Onboarding"
+          anchor="general-onboarding"
           tone="default"
           dataTestId={undefined}
           fill={false}
         >
           <SettingsRow
             label="Product tour"
+            anchor="general-product-tour"
             description="Replay the first-launch onboarding tour."
             control={
               <Button
@@ -262,6 +274,7 @@ function DangerZoneSection() {
   return (
     <SettingsGroup
       title="Danger Zone"
+      anchor="general-danger-zone"
       tone="danger"
       dataTestId="settings-danger-zone"
       fill={false}
@@ -330,6 +343,7 @@ function SettingsLocalAppStateSection() {
     <>
       <SettingsRow
         label="Local app state"
+        anchor="general-local-app-state"
         description="Reset this device's app state - open tabs, layout, drafts, settings, and view preferences - then reload. You stay signed in. File edit snapshots are cleared from the host's own Overview page."
         control={
           <Button

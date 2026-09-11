@@ -13,4 +13,6 @@ export const historyOverlayModule: SystemOverlayModule<"history"> = {
   ),
   promotionIntent: () => resolveHistoryTabIntent(),
   isOverlayPath: (pathname) => isHistoryPath(pathname),
+  consumeEscape: () => false,
+  prepareForPromotion: () => undefined,
 };

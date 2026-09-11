@@ -1,4 +1,4 @@
-import { Fragment, useMemo, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, type ReactNode } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { ChevronRight } from "lucide-react";
 import { AnimatePresence } from "motion/react";
@@ -26,6 +26,9 @@ import { AddHostDialog } from "@/components/settings/host-scope/add-host-dialog"
 import { useRegisteredHostsPollLiveness } from "@/hooks/auth/use-registered-hosts-query";
 import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
 import { useFleetUpdateViews } from "@/hooks/host/use-fleet-update-views";
+import { SettingsSearch } from "@/components/settings/settings-search-box";
+import { isSettingsSearchActive } from "@/lib/settings-search/settings-search";
+import { useSettingsSearchStore } from "@/stores/settings/settings-search-store";
 
 export type SettingsSidebarMode =
   | { readonly kind: "route" }
@@ -59,6 +62,16 @@ export interface SettingsSidebarProps {
  */
 export function SettingsSidebar(props: SettingsSidebarProps) {
   const scope = useHostScope();
+  // Read here, not in the search component, because a running search REPLACES
+  // this list — the rail cannot ask a child whether to render its own body.
+  // Held in the store so the modal frame around the rail can see a search is
+  // running (Escape clears it before it closes anything), but scoped to this
+  // mount: two rails are never on screen at once, and a remembered query would
+  // greet the next visit with a filtered rail and no memory of why.
+  const query = useSettingsSearchStore((state) => state.query);
+  const setQuery = useSettingsSearchStore((state) => state.setQuery);
+  useEffect(() => () => setQuery(""), [setQuery]);
+  const searching = isSettingsSearchActive(query);
   // The OFFERED list, and the same one the leader digits index: a row's `index`
   // below is what `singleDigitLeaderDigitFor` badges it with, and
   // `switchToSettingsSection` walks this list to resolve that digit back to a
@@ -87,37 +100,48 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
           : "w-full",
       )}
     >
-      {SETTINGS_SECTION_GROUPS.map((group, groupIndex) => (
-        <Fragment key={group.id}>
-          {groupIndex === 0 ? null : <SettingsSidebarGroupRule />}
-          <SettingsSidebarGroupHeader label={group.label} />
-          {group.id === "host" ? (
-            <SettingsSidebarHostPicker scope={scope} />
-          ) : null}
-          <div
-            className={cn(
-              "flex flex-col gap-0.5",
-              // Indent alone: these sections are not siblings of the host row,
-              // they are its contents, and stepping them in says so without
-              // drawing anything. A guide line said the same thing louder and
-              // put a second vertical edge next to the rail's own border.
-              group.id === "host" && "ml-4",
-            )}
-          >
-            {sections.map((section, index) =>
-              section.group === group.id ? (
-                <SettingsSidebarItem
-                  key={section.id}
-                  section={section}
-                  index={index}
-                  mode={props.mode}
-                  variant={props.variant}
-                />
-              ) : null,
-            )}
-          </div>
-        </Fragment>
-      ))}
+      <SettingsSearch query={query} onQueryChange={setQuery} />
+      {/* The results took this space. Keeping the section list under them
+          would put two competing lists in one column, and the top one already
+          names the section every row belongs to. */}
+      {searching
+        ? null
+        : SETTINGS_SECTION_GROUPS.map((group, groupIndex) => (
+            <Fragment key={group.id}>
+              {groupIndex === 0 ? null : <SettingsSidebarGroupRule />}
+              <SettingsSidebarGroupHeader label={group.label} />
+              {group.id === "host" ? (
+                <SettingsSidebarHostPicker scope={scope} />
+              ) : null}
+              <div
+                className={cn(
+                  "flex flex-col gap-0.5",
+                  // Indent alone: these sections are not siblings of the host row,
+                  // they are its contents, and stepping them in says so without
+                  // drawing anything. A guide line said the same thing louder and
+                  // put a second vertical edge next to the rail's own border.
+                  group.id === "host" && "ml-4",
+                )}
+              >
+                {sections.map((section, index) =>
+                  section.group === group.id ? (
+                    <SettingsSidebarItem
+                      key={section.id}
+                      section={section}
+                      index={index}
+                      mode={props.mode}
+                      variant={props.variant}
+                    />
+                  ) : null,
+                )}
+              </div>
+            </Fragment>
+          ))}
+      {/* Mounted once, and OUTSIDE the search branch: the picker footer is the
+          only opener, but the dialog reads a shared store — two copies would
+          race its open state, and unmounting it while a search runs would tear
+          down a dialog that is open. */}
+      <AddHostDialog />
     </aside>
   );
 }
@@ -185,9 +209,6 @@ function SettingsSidebarHostPicker(props: {
           {scope.activeHost?.name ?? "another host"}.
         </p>
       )}
-      {/* Mounted once: the picker footer is the only opener, but the dialog
-          reads a shared store and two copies would race its open state. */}
-      <AddHostDialog />
     </div>
   );
 }
