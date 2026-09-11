@@ -186,14 +186,36 @@ function overviewGeometry(layout: OfficeLayout): {
   };
 }
 
+function overlappingTierRange(
+  tiles: OfficeTileRect,
+  tierCount: number,
+): { readonly start: number; readonly end: number } {
+  const origin = TIERS_ORIGIN_ROW;
+  const stride = ROWS_PER_TIER;
+  const queryStart = tiles.row;
+  const queryEnd = tiles.row + tiles.rows;
+  if (tiles.rows <= 0 || queryEnd <= origin) {
+    return { start: 0, end: 0 };
+  }
+  const lastRow = origin + tierCount * stride;
+  if (queryStart >= lastRow) {
+    return { start: 0, end: 0 };
+  }
+  const start = Math.max(0, Math.floor((queryStart - origin) / stride));
+  const end = Math.min(tierCount, Math.ceil((queryEnd - origin) / stride));
+  if (end <= start) return { start: 0, end: 0 };
+  return { start, end };
+}
+
 function blockMap(
   layout: OfficeLayout,
   tiles: OfficeTileRect,
 ): ReadonlyArray<OfficeDrawable> {
   const geometry = overviewGeometry(layout);
   if (geometry === null) return [];
+  const range = overlappingTierRange(tiles, geometry.tierSeatCounts.length);
   const blocks: OfficeDrawable[] = [];
-  for (let tier = 0; tier < geometry.tierSeatCounts.length; tier += 1) {
+  for (let tier = range.start; tier < range.end; tier += 1) {
     const count = geometry.tierSeatCounts[tier];
     const bounds: OfficeTileRect = {
       col: originColFor(count, geometry.centerCol),

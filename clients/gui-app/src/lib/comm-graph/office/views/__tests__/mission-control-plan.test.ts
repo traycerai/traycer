@@ -820,6 +820,12 @@ function countingReads<T>(
   return new Proxy(items, {
     get(target, property) {
       if (property === "length") return target.length;
+      if (property === "every") return target.every.bind(target);
+      if (property === "map") return target.map.bind(target);
+      if (property === "filter") return target.filter.bind(target);
+      if (property === Symbol.iterator) {
+        return target[Symbol.iterator].bind(target);
+      }
       if (typeof property === "string" && /^\d+$/.test(property)) {
         onRead();
         return target[Number.parseInt(property, 10)];
@@ -827,6 +833,52 @@ function countingReads<T>(
       return undefined;
     },
   });
+}
+
+function countingIndexReads<T>(
+  items: ReadonlyArray<T>,
+  seen: number[],
+): ReadonlyArray<T> {
+  return new Proxy(items, {
+    get(target, property) {
+      if (property === "length") return target.length;
+      if (property === "every") {
+        return (
+          predicate: (value: T, index: number, array: readonly T[]) => boolean,
+        ) => target.every(predicate);
+      }
+      if (typeof property === "string" && /^\d+$/.test(property)) {
+        const index = Number.parseInt(property, 10);
+        seen.push(index);
+        return target[index];
+      }
+      return undefined;
+    },
+  });
+}
+
+function sceneAdvance(
+  input: OfficePlanInput,
+  scene: OfficeScene,
+  agents: ReadonlyArray<OfficeAgentInput>,
+): OfficePlanInput {
+  const previous = requireLayout(scene);
+  const statuses = new Map<string, OfficeAgentStatus>(
+    agents.map((agent) => [agent.id, "working"]),
+  );
+  const next: OfficePlanInput = {
+    ...input,
+    agents,
+    partition: partitionOfficePopulation({
+      agents,
+      statusById: statuses,
+      previous: input.partition,
+    }),
+    occupancy: occupancyOf(previous),
+    previous,
+  };
+  scene.sync({ ...sceneInputFor(next), reducedMotion: true });
+  return next;
 }
 
 class CountingSeatMap extends Map<string, OfficeSeat> {
@@ -1358,5 +1410,87 @@ describe("mission-control cold-review findings", () => {
     }
     expect(counts[1]).toBeLessThanOrEqual(counts[0]);
     expect(counts[2]).toBeLessThanOrEqual(counts[0]);
+  });
+
+  it("reads no non-overlapping tier counts on an empty lod-0 pan through growth and shrink", () => {
+    let tierReads = 0;
+    let bandReads = 0;
+    let reserveReads = 0;
+    const tracked: OfficeView = {
+      ...MISSION_CONTROL_VIEW,
+      plan: (input) => {
+        const layout = MISSION_CONTROL_VIEW.plan(input);
+        const frozen = frozenOf(layout);
+        if (frozen === null) throw new Error("no frozen");
+        return {
+          ...layout,
+          frozen: {
+            ...frozen,
+            tierSeatCounts: countingReads(frozen.tierSeatCounts, () => {
+              tierReads += 1;
+            }),
+            hostBands: countingReads(frozen.hostBands, () => {
+              bandReads += 1;
+            }),
+            teamReserveSeatIds: countingReads(frozen.teamReserveSeatIds, () => {
+              reserveReads += 1;
+            }),
+          },
+        };
+      },
+    };
+    const full = makeTestEpic("one-team", 1000, 1).agents.map((agent) => ({
+      ...agent,
+      hostId: "host-a",
+      archived: false,
+      archivedAt: null,
+    }));
+    let input = planFresh(
+      { agents: full.slice(0, 12), statusById: new Map() },
+      VIEWPORT_WIDE,
+    ).input;
+    const scene = new OfficeScene(tracked, null);
+    scene.sync(sceneInputFor(input));
+    const tierReadsByN: number[] = [];
+    for (const n of [12, 1000, 12]) {
+      input = sceneAdvance(input, scene, full.slice(0, n));
+      scene.frame(0, { x: 0, y: 0, width: 1, height: 1 });
+      tierReads = 0;
+      bandReads = 0;
+      reserveReads = 0;
+      const frame = scene.frame(0, { x: 16, y: 0, width: 1, height: 1 });
+      expect(frame.floor.length).toBe(0);
+      expect(frame.actors.length).toBe(0);
+      expect(bandReads).toBe(0);
+      expect(reserveReads).toBe(0);
+      tierReadsByN.push(tierReads);
+    }
+    expect(tierReadsByN).toEqual([0, 0, 0]);
+  });
+
+  it("paints only overlapping lod-0 tier geometry for a three-row query", () => {
+    for (const n of [12, 1000]) {
+      const layout = planFresh(
+        makeTestEpic("one-team", n, 1),
+        VIEWPORT_WIDE,
+      ).layout;
+      const frozen = frozenOf(layout);
+      if (frozen === null) throw new Error("no frozen");
+      const seen: number[] = [];
+      const observed = {
+        ...layout,
+        frozen: {
+          ...frozen,
+          tierSeatCounts: countingIndexReads(frozen.tierSeatCounts, seen),
+        },
+      };
+      const frame = MISSION_CONTROL_VIEW.painter.floor(
+        observed,
+        { col: 0, row: 8, cols: layout.cols, rows: 3 },
+        0,
+      );
+      expect(frame).toHaveLength(1);
+      expect(seen).toEqual([0]);
+    }
   });
 });
