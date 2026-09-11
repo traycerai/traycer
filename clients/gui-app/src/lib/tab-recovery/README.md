@@ -141,3 +141,8 @@ recursing, because closing a sibling shifts array positions. It never replaces
 a live sibling with the removed pane. Host draft list absence remains retryable;
 only a matching tombstone proves deletion. Tile deletions use scoped recovery
 pruners and record liveness, not the legacy global bare-ID deletion set.
+
+Confirmed deletion callbacks suppress close recording, and successful terminal-agent
+deletion prunes recovery using its task, type, host and content ID. Buffered closes
+and deletion prunes remain keyed to their original account/window while hydration
+is unavailable; switching back merges them with that bucket's unread journal.

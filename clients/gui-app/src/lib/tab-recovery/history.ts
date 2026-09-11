@@ -205,6 +205,55 @@ let pendingTilePrunes: Array<
   (tile: EpicCanvasTileRef, epicId: string) => boolean
 > = [];
 
+interface PendingHistoryWork {
+  readonly entries: readonly TabRecoveryEntry[];
+  readonly epicPrunes: readonly string[];
+  readonly draftPrunes: readonly string[];
+  readonly tilePrunes: typeof pendingTilePrunes;
+}
+const suspendedHistoryWork = new Map<string, PendingHistoryWork>();
+const EMPTY_PENDING_HISTORY_WORK: PendingHistoryWork = {
+  entries: [],
+  epicPrunes: [],
+  draftPrunes: [],
+  tilePrunes: [],
+};
+
+function applyPendingHistoryWork(
+  pending: PendingHistoryWork,
+  ready: boolean,
+): void {
+  pendingEpicPrunes.clear();
+  pendingDraftPrunes.clear();
+  for (const id of pending.epicPrunes) pendingEpicPrunes.add(id);
+  for (const id of pending.draftPrunes) pendingDraftPrunes.add(id);
+  pendingTilePrunes = [...pending.tilePrunes];
+  useTabRecoveryHistory.setState({ entries: pending.entries, ready });
+}
+
+function activateRecoveryBucket(
+  previous: string | null,
+  next: string | null,
+): void {
+  if (previous === next && next !== null) return;
+  if (
+    previous !== null &&
+    next !== null &&
+    !useTabRecoveryHistory.getState().ready
+  ) {
+    suspendedHistoryWork.set(previous, {
+      entries: useTabRecoveryHistory.getState().entries,
+      epicPrunes: [...pendingEpicPrunes],
+      draftPrunes: [...pendingDraftPrunes],
+      tilePrunes: [...pendingTilePrunes],
+    });
+  }
+  if (next === null && previous !== null) suspendedHistoryWork.delete(previous);
+  const pending = next === null ? undefined : suspendedHistoryWork.get(next);
+  if (next !== null) suspendedHistoryWork.delete(next);
+  applyPendingHistoryWork(pending ?? EMPTY_PENDING_HISTORY_WORK, next === null);
+}
+
 let recoveryDatabase: import("idb-keyval").UseStore | null = null;
 function database() {
   recoveryDatabase ??= createStore(persistKey("tab-recovery"), "history");
@@ -326,14 +375,9 @@ export async function configureTabRecoveryHistory(
   const previous = bucket;
   bucket = next;
   const token = ++generation;
-  // A retry for this bucket must retain closes and deletions captured while
-  // storage was unavailable. Only an identity change starts a fresh session.
-  if (previous !== next || next === null) {
-    pendingEpicPrunes.clear();
-    pendingDraftPrunes.clear();
-    pendingTilePrunes = [];
-    useTabRecoveryHistory.setState({ entries: [], ready: next === null });
-  }
+  // Pending work belongs to the bucket where it was captured, even if its
+  // read is still in flight or storage is unavailable when accounts switch.
+  activateRecoveryBucket(previous, next);
   if (next === null) {
     if (previous !== null) {
       persistedHistories.delete(previous);
@@ -793,6 +837,7 @@ export function recoveryTiles(): ReadonlyArray<{
 /** Drain queued writes before the app deletes local databases and reloads. */
 export async function resetTabRecoveryHistory(): Promise<void> {
   persistedHistories.clear();
+  suspendedHistoryWork.clear();
   pendingDraftPrunes.clear();
   bucket = null;
   generation += 1;

@@ -336,6 +336,58 @@ describe("tab recovery history", () => {
     ]);
   });
 
+  it("retains pending closes and prunes for an unread account across an account switch", async () => {
+    const deleted = draft("persisted-before-failure", textContent("delete"));
+    recordClosedHeaderTab(deleted);
+    await flushTabRecoveryHistory();
+
+    const store = createStore(persistKey("tab-recovery"), "history");
+    const key = tabRecoveryKey(ACCOUNT_ONE, WINDOW_ONE);
+    const diskBeforeFailure = await idbGet<unknown>(key, store);
+    expect(diskBeforeFailure).toEqual(expect.objectContaining({ version: 2 }));
+
+    await resetTabRecoveryHistory();
+    setWindow(WINDOW_ONE);
+    const get = vi.mocked(idbKeyval.get);
+    get.mockClear();
+    get
+      .mockRejectedValueOnce(new Error("temporary IndexedDB read failure"))
+      .mockRejectedValueOnce(new Error("temporary IndexedDB read failure"))
+      .mockRejectedValueOnce(new Error("temporary IndexedDB read failure"));
+    await configureTabRecoveryHistory(ACCOUNT_ONE);
+    expect(useTabRecoveryHistory.getState().ready).toBe(false);
+
+    const fresh = draft("pending-during-failure", textContent("keep"));
+    recordClosedHeaderTab(fresh);
+    pruneRecoveryDraft(deleted.draftId);
+    expect(await idbGet<unknown>(key, store)).toEqual(diskBeforeFailure);
+
+    await configureTabRecoveryHistory(ACCOUNT_TWO);
+    expect(useTabRecoveryHistory.getState().entries).toEqual([]);
+
+    await configureTabRecoveryHistory(ACCOUNT_ONE);
+    await flushTabRecoveryHistory();
+
+    const recoveredItems = useTabRecoveryHistory
+      .getState()
+      .entries.flatMap((entry) => (entry.kind === "header" ? entry.items : []));
+    expect(recoveredItems).toEqual([fresh]);
+    const diskAfterRecovery = await idbGet<unknown>(key, store);
+    if (
+      typeof diskAfterRecovery !== "object" ||
+      diskAfterRecovery === null ||
+      !("entries" in diskAfterRecovery) ||
+      !Array.isArray(diskAfterRecovery.entries)
+    ) {
+      throw new Error("expected the recovered journal to contain entries");
+    }
+    expect(diskAfterRecovery.entries).toHaveLength(1);
+    expect(diskAfterRecovery.entries[0]).toMatchObject({
+      kind: "header",
+      items: [fresh],
+    });
+  });
+
   it("batches header closes into one bulk entry and suppresses internal closes", () => {
     const one = draft("draft-one", textContent("one"));
     const two = draft("draft-two", textContent("two"));
