@@ -116,6 +116,11 @@ describe("<LocalHostLoadingContent />", () => {
     expect(brand.getAttribute("data-size")).toBe("boot");
     expect(brand.querySelector("svg")).not.toBeNull();
     expect(brand.textContent).toBe("traycer");
+    // The mark shimmers for as long as this card is up (the sweep itself is
+    // covered in `brand-entrance.test.tsx`); the wordmark is outside it.
+    const shimmer = screen.getByTestId("brand-entrance-mark-shimmer");
+    expect(shimmer.querySelector("svg")).not.toBeNull();
+    expect(shimmer.textContent).toBe("");
   });
 
   it("does NOT carry an open disclosure into a fresh launch", () => {
