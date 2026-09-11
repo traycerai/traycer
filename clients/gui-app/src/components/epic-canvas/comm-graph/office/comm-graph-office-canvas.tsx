@@ -67,7 +67,11 @@ import { OfficeLegend } from "@/components/epic-canvas/comm-graph/office/office-
 import {
   createOfficeStaticSurface,
   officeBakesIntoStaticFloor,
+  officeStaticChunkTiles,
+  OFFICE_STATIC_CHUNK_BUDGET,
   OfficeStaticLayer,
+  planOfficeStaticChunks,
+  type OfficeStaticChunkDraw,
 } from "@/components/epic-canvas/comm-graph/office/office-static-layer";
 import {
   isElementVisible,
@@ -136,7 +140,6 @@ import {
   type OfficeSign,
   type OfficeSize,
   type OfficeTheme,
-  type OfficeTileRect,
 } from "@/lib/comm-graph/office/office-types";
 
 /**
@@ -621,14 +624,8 @@ function worldRectOf(camera: OfficeCamera, viewport: ScreenSize): OfficeRect {
   };
 }
 
-/**
- * The whole layout as one chunk. The static layer is a bitmap of the entire
- * world, so it is painted from the whole thing rather than from the frame's
- * culled floor - T7 chunks it, and this is the seam that moves when it does.
- */
-function wholeWorldTiles(layout: OfficeLayout): OfficeTileRect {
-  return { col: 0, row: 0, cols: layout.cols, rows: layout.rows };
-}
+/** No floor bitmaps this frame: the floor is drawn. Frozen; see `NO_SIGNS`. */
+const NO_STATIC_CHUNKS: ReadonlyArray<OfficeStaticChunkDraw> = [];
 
 /**
  * The static layer's version, with the BAND folded in. Two zoom bands of one
@@ -795,11 +792,14 @@ interface DrawFrameArgs {
   readonly awayAgentIds: ReadonlySet<string>;
   readonly hoveredAgentId: string | null;
   /**
-   * The floor, already painted in sprite space. `null` where no offscreen
-   * surface could be made, in which case the floor is drawn tile by tile as it
-   * always was - the fast path is an optimization, never a requirement.
+   * The floor, already painted in sprite space, one chunk per bitmap. EMPTY
+   * where none could be held - no offscreen surface, overview zoom, or a view
+   * larger than the chunk budget - in which case the floor is drawn tile by
+   * tile as it always was; the fast path is an optimization, never a
+   * requirement. A non-empty set always covers the whole view rect, so the two
+   * paths never both draw the same sprite.
    */
-  readonly staticFloor: HTMLCanvasElement | null;
+  readonly staticFloor: ReadonlyArray<OfficeStaticChunkDraw>;
 }
 
 /**
@@ -1556,10 +1556,12 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
     clocks,
     sprites: "draw",
   } as const;
-  if (staticFloor === null) {
+  if (staticFloor.length === 0) {
     drawDrawableLayer({ ...layer, drawables: frame.floor, anchor: "top-left" });
   } else {
-    ctx.drawImage(staticFloor, 0, 0);
+    for (const chunk of staticFloor) {
+      ctx.drawImage(chunk.canvas, chunk.x, chunk.y);
+    }
     // The layer baked the sprites and nothing else, so the rest of the floor
     // takes the ordinary path - otherwise a label on the floor would appear
     // only on hosts that could not make an offscreen surface.
@@ -2341,37 +2343,53 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     };
 
     /**
-     * The floor as a bitmap, repainted only when the plan's version, its band,
-     * the theme or its size moves; every other frame this is one `drawImage`.
+     * The floor as bitmaps, one per 512-pixel chunk of the world the camera
+     * has reached, repainted only when the plan's version, its band, the theme
+     * or the world's size moves; every other frame this is a dozen
+     * `drawImage`s of squares already in hand.
      *
      * NOT baked at overview, and never from the frame's own floor. At lod 0 the
      * floor is a few dozen filled rects covering the view, and baking a whole
      * world's bitmap to blit them would be the largest allocation the office
-     * makes. Above it the bake is the WHOLE world - the frame's floor is culled
-     * to the viewport, and a bitmap painted from that would hold whatever
-     * happened to be on screen when it was last repainted.
+     * makes. Above it each chunk is painted from the tiles that reach INTO it,
+     * asked of the painter once - the frame's floor is culled to the viewport,
+     * and a bitmap painted from that would hold whatever happened to be on
+     * screen when it was last repainted.
      */
     const bakeFloor = (
       frame: OfficeFrame,
       layout: OfficeLayout | null,
       lod: OfficeLod,
-    ): HTMLCanvasElement | null => {
-      if (lod === 0 || layout === null) return null;
-      return staticLayer.sync(
-        {
+      view: OfficeRect,
+    ): ReadonlyArray<OfficeStaticChunkDraw> => {
+      if (layout === null) return NO_STATIC_CHUNKS;
+      return staticLayer.sync({
+        key: {
           staticVersion: staticKeyOf(frame.staticVersion, lod),
           theme: resolvedTheme,
           width: frame.size.width,
           height: frame.size.height,
         },
-        (floorCtx) => {
+        chunks: planOfficeStaticChunks({
+          world: frame.size,
+          view,
+          lod,
+          budget: OFFICE_STATIC_CHUNK_BUDGET,
+        }),
+        paint: (floorCtx, chunk) => {
+          const tiles = officeStaticChunkTiles({
+            projector: officeView.painter.projector(layout),
+            cols: layout.cols,
+            rows: layout.rows,
+            chunk,
+          });
           drawStaticFloor(
             floorCtx,
-            officeView.painter.floor(layout, wholeWorldTiles(layout), lod),
+            officeView.painter.floor(layout, tiles, lod),
             resolvedTheme,
           );
         },
-      );
+      });
     };
 
     const step = (now: number): void => {
@@ -2446,7 +2464,8 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       // map and pips at overview, pixel art otherwise - so it is chosen here,
       // once, and everything below reads it rather than the zoom.
       const lod = officeLodForZoom(camera.zoom);
-      const frame = scene.frame(lod, worldRectOf(camera, viewport));
+      const worldRect = worldRectOf(camera, viewport);
+      const frame = scene.frame(lod, worldRect);
       runtime.setHitRegions(frame.hitRegions);
       runtime.setEnvelopeRegions(frame.envelopeHitRegions);
       const layout = scene.layout();
@@ -2458,7 +2477,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       drawOfficeFrame({
         ctx,
         frame,
-        staticFloor: bakeFloor(frame, layout, lod),
+        staticFloor: bakeFloor(frame, layout, lod, worldRect),
         camera,
         lod,
         viewport,

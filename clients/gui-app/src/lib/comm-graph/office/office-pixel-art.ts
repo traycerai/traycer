@@ -794,8 +794,16 @@ const surfaceCache = new Map<string, SpriteSurface | null>();
  * A floor draws a few hundred distinct sprites at once, so this is roomy
  * enough that a live floor never evicts something it is still using, and
  * bounded enough that a long session cannot grow without limit.
+ *
+ * The densest view's working set at office zoom is about 850 surfaces in a
+ * 1280 x 700 tile - one per distinct look of every visible seated agent, plus
+ * the walkers - and the four new poses and the front-facing seated maps
+ * multiply the KEYS over that. 1,024 was within thrashing distance of it:
+ * evicting a sprite the same frame asks for again is the one failure mode a
+ * cap can have. A seated surface is under 2 KB of pixels, so 4,096 of them
+ * stay under 32 MB worst case, shared by every canvas in the tab, once.
  */
-export const OFFICE_SPRITE_CACHE_LIMIT = 1024;
+export const OFFICE_SPRITE_CACHE_LIMIT = 4096;
 
 export function clearOfficeSpriteCache(): void {
   surfaceCache.clear();
@@ -840,7 +848,7 @@ export function officeSpriteSurface(
   ref: OfficeSpriteRef,
   theme: OfficeTheme,
 ): SpriteSurface | null {
-  const key = cacheKey(ref, theme);
+  const key = officeSpriteCacheKey(ref, theme);
   const cached = readCachedSurface(key);
   if (cached !== undefined) return cached;
   const built = buildSurface(ref, theme);
@@ -848,7 +856,17 @@ export function officeSpriteSurface(
   return built;
 }
 
-function cacheKey(ref: OfficeSpriteRef, theme: OfficeTheme): string {
+/**
+ * What makes two sprite requests the SAME surface: the name, the palette, and
+ * for a character every part of the look that is drawn into its pixels.
+ *
+ * Exported because "how many distinct sprites does one frame ask for" is a
+ * budget, and the only honest answer to it is the key the cache itself uses.
+ */
+export function officeSpriteCacheKey(
+  ref: OfficeSpriteRef,
+  theme: OfficeTheme,
+): string {
   if (ref.name !== "character") {
     return `${ref.name}|${theme}|${ref.tint ?? ""}`;
   }

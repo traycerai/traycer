@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { layoutOffice } from "@/lib/comm-graph/office/office-layout";
-import { findOfficePath } from "@/lib/comm-graph/office/office-path";
+import {
+  findOfficePath,
+  officePathScratch,
+} from "@/lib/comm-graph/office/office-path";
 import type {
   OfficeAgentInput,
   OfficeAppearance,
@@ -163,5 +166,50 @@ describe("findOfficePath", () => {
         row: layout.rows,
       }),
     ).toBeNull();
+  });
+
+  it("grows its working grids once for a layout, not once per search", () => {
+    // A search used to allocate two full-grid typed arrays every time it ran,
+    // and a sync of a live office runs dozens of them.
+    const desks = [...layout.desks.values()];
+    findOfficePath(layout, layout.doorTile, desks[0].chairTile);
+    const first = officePathScratch();
+
+    for (const desk of desks) {
+      findOfficePath(layout, layout.doorTile, desk.chairTile);
+      findOfficePath(layout, desk.chairTile, layout.lobbyTile);
+    }
+
+    const after = officePathScratch();
+    expect(after.growths).toBe(first.growths);
+    expect(after.capacity).toBeGreaterThanOrEqual(layout.cols * layout.rows);
+  });
+
+  it("keeps a grid big enough for the largest office it has searched", () => {
+    const small = sealedLayout();
+    const before = officePathScratch();
+
+    findOfficePath(small, { col: 0, row: 0 }, { col: 2, row: 2 });
+
+    // The big layout above has already run, so a three-by-three floor reuses
+    // what is there rather than shrinking it and growing it back.
+    const after = officePathScratch();
+    expect(after.capacity).toBe(before.capacity);
+    expect(after.growths).toBe(before.growths);
+  });
+
+  it("finds the same route whichever search ran before it", () => {
+    // The grids are shared between calls, so a stale cell left by the previous
+    // search would show up as a route that depends on history.
+    const desk = layout.desks.get("fourth");
+    if (desk === undefined) throw new Error("expected a desk");
+    const alone = findOfficePath(layout, layout.doorTile, desk.chairTile);
+
+    findOfficePath(layout, layout.lobbyTile, layout.doorTile);
+    findOfficePath(sealedLayout(), { col: 0, row: 0 }, { col: 2, row: 2 });
+
+    expect(findOfficePath(layout, layout.doorTile, desk.chairTile)).toEqual(
+      alone,
+    );
   });
 });

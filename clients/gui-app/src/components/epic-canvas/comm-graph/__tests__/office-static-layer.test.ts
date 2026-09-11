@@ -1,9 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OfficeDrawable } from "@/lib/comm-graph/office/office-types";
+import type {
+  OfficeDrawable,
+  OfficeRect,
+  OfficeSize,
+} from "@/lib/comm-graph/office/office-types";
+import { createIsoProjector } from "@/lib/comm-graph/office/views/isometric/iso-projector";
+import type { OfficeProjector } from "@/lib/comm-graph/office/views/office-view";
 import {
   officeBakesIntoStaticFloor,
+  officeStaticChunkRect,
+  officeStaticChunkTiles,
   officeStaticLayerKeysMatch,
+  OFFICE_STATIC_CHUNK_BUDGET,
+  OFFICE_STATIC_CHUNK_PX,
   OfficeStaticLayer,
+  planOfficeStaticChunks,
+  type OfficeStaticChunk,
   type OfficeStaticLayerKey,
   type OfficeStaticSurface,
 } from "@/components/epic-canvas/comm-graph/office/office-static-layer";
@@ -14,6 +26,11 @@ const KEY: OfficeStaticLayerKey = {
   width: 320,
   height: 240,
 };
+
+/** One chunk of a world that is only one chunk big. */
+const ORIGIN_CHUNK: ReadonlyArray<OfficeStaticChunk> = [
+  { chunkCol: 0, chunkRow: 0 },
+];
 
 /**
  * A typed 2D context borrowed from a temporary `getContext` stub - jsdom's own
@@ -100,24 +117,107 @@ describe("OfficeStaticLayer", () => {
     const layer = new OfficeStaticLayer(create);
     const paint = vi.fn();
 
-    const first = layer.sync(KEY, paint);
-    const second = layer.sync({ ...KEY }, paint);
-    const third = layer.sync({ ...KEY }, paint);
+    const first = layer.sync({ key: KEY, chunks: ORIGIN_CHUNK, paint });
+    const second = layer.sync({ key: { ...KEY }, chunks: ORIGIN_CHUNK, paint });
+    const third = layer.sync({ key: { ...KEY }, chunks: ORIGIN_CHUNK, paint });
 
     // The whole point: thirty frames a second cost one paint, not thirty.
     expect(paint).toHaveBeenCalledTimes(1);
     expect(layer.paintCount).toBe(1);
-    expect(second).toBe(first);
-    expect(third).toBe(first);
+    expect(second[0].canvas).toBe(first[0].canvas);
+    expect(third[0].canvas).toBe(first[0].canvas);
+  });
+
+  it("paints each chunk once and hands them back in the order asked for", () => {
+    const { create } = fakeSurfaces();
+    const layer = new OfficeStaticLayer(create);
+    const paint = vi.fn();
+    const world: OfficeStaticLayerKey = { ...KEY, width: 1600, height: 1200 };
+    const chunks: ReadonlyArray<OfficeStaticChunk> = [
+      { chunkCol: 0, chunkRow: 0 },
+      { chunkCol: 1, chunkRow: 0 },
+      { chunkCol: 1, chunkRow: 1 },
+    ];
+
+    const drawn = layer.sync({ key: world, chunks, paint });
+    const again = layer.sync({ key: world, chunks, paint });
+
+    expect(paint).toHaveBeenCalledTimes(3);
+    expect(layer.chunkCount).toBe(3);
+    expect(drawn.map((chunk) => [chunk.x, chunk.y])).toEqual([
+      [0, 0],
+      [OFFICE_STATIC_CHUNK_PX, 0],
+      [OFFICE_STATIC_CHUNK_PX, OFFICE_STATIC_CHUNK_PX],
+    ]);
+    expect(again.map((chunk) => chunk.canvas)).toEqual(
+      drawn.map((chunk) => chunk.canvas),
+    );
+  });
+
+  it("paints a chunk in world space, so a painter needs no chunk offset", () => {
+    const { create, made } = fakeSurfaces();
+    const layer = new OfficeStaticLayer(create);
+    const transforms: ReadonlyArray<number>[] = [];
+    const surface = made;
+    const chunk: OfficeStaticChunk = { chunkCol: 1, chunkRow: 2 };
+
+    layer.sync({
+      key: { ...KEY, width: 1600, height: 1600 },
+      chunks: [chunk],
+      paint: (ctx, rect) => {
+        transforms.push([rect.x, rect.y, rect.width, rect.height]);
+        // The context the painter is handed is already offset, so a sprite at
+        // a world coordinate lands in the chunk without the painter knowing
+        // there are chunks at all.
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+      },
+    });
+
+    expect(transforms).toEqual([
+      [
+        OFFICE_STATIC_CHUNK_PX,
+        OFFICE_STATIC_CHUNK_PX * 2,
+        OFFICE_STATIC_CHUNK_PX,
+        OFFICE_STATIC_CHUNK_PX,
+      ],
+    ]);
+    expect(surface[0].canvas.width).toBe(OFFICE_STATIC_CHUNK_PX);
+  });
+
+  it("crops the chunks at the world's edge rather than over-allocating", () => {
+    const { create, made } = fakeSurfaces();
+    const layer = new OfficeStaticLayer(create);
+
+    layer.sync({
+      key: { ...KEY, width: 600, height: 700 },
+      chunks: [
+        { chunkCol: 0, chunkRow: 0 },
+        { chunkCol: 1, chunkRow: 1 },
+      ],
+      paint: () => undefined,
+    });
+
+    expect([made[0].canvas.width, made[0].canvas.height]).toEqual([
+      OFFICE_STATIC_CHUNK_PX,
+      OFFICE_STATIC_CHUNK_PX,
+    ]);
+    expect([made[1].canvas.width, made[1].canvas.height]).toEqual([
+      600 - OFFICE_STATIC_CHUNK_PX,
+      700 - OFFICE_STATIC_CHUNK_PX,
+    ]);
   });
 
   it("repaints when the floor's version moves", () => {
     const { create } = fakeSurfaces();
     const layer = new OfficeStaticLayer(create);
     const paint = vi.fn();
-    layer.sync(KEY, paint);
+    layer.sync({ key: KEY, chunks: ORIGIN_CHUNK, paint });
 
-    layer.sync({ ...KEY, staticVersion: 2 }, paint);
+    layer.sync({
+      key: { ...KEY, staticVersion: 2 },
+      chunks: ORIGIN_CHUNK,
+      paint,
+    });
 
     expect(paint).toHaveBeenCalledTimes(2);
   });
@@ -126,61 +226,136 @@ describe("OfficeStaticLayer", () => {
     const { create } = fakeSurfaces();
     const layer = new OfficeStaticLayer(create);
     const paint = vi.fn();
-    layer.sync(KEY, paint);
+    layer.sync({ key: KEY, chunks: ORIGIN_CHUNK, paint });
 
-    layer.sync({ ...KEY, theme: "light" }, paint);
+    layer.sync({
+      key: { ...KEY, theme: "light" },
+      chunks: ORIGIN_CHUNK,
+      paint,
+    });
 
     expect(paint).toHaveBeenCalledTimes(2);
   });
 
-  it("reuses the bitmap for a repaint at the same size", () => {
+  it("drops every chunk it held when the key moves", () => {
     const { create, made } = fakeSurfaces();
     const layer = new OfficeStaticLayer(create);
-    layer.sync(KEY, () => undefined);
+    layer.sync({ key: KEY, chunks: ORIGIN_CHUNK, paint: () => undefined });
 
-    layer.sync({ ...KEY, theme: "light" }, () => undefined);
+    layer.sync({
+      key: { ...KEY, staticVersion: 2 },
+      chunks: ORIGIN_CHUNK,
+      paint: () => undefined,
+    });
 
-    // A theme flip is new pixels in the same box; allocating a second bitmap
-    // to throw the first one away would be the expensive way to do that.
-    expect(made).toHaveLength(1);
-  });
-
-  it("takes a new bitmap when the floor changes size", () => {
-    const { create, made } = fakeSurfaces();
-    const layer = new OfficeStaticLayer(create);
-    layer.sync(KEY, () => undefined);
-
-    layer.sync({ ...KEY, width: 640 }, () => undefined);
-
+    // A chunk of the previous plan is pixels of a floor that no longer exists,
+    // and it is zeroed rather than left in hand until it is collected.
     expect(made).toHaveLength(2);
-    // The old one is zeroed rather than left holding a floor's worth of pixels
-    // until it is collected.
     expect(made[0].canvas.width).toBe(0);
     expect(made[0].canvas.height).toBe(0);
+    expect(layer.chunkCount).toBe(1);
+  });
+
+  it("evicts the least recently drawn chunk past the budget", () => {
+    const { create } = fakeSurfaces();
+    const layer = new OfficeStaticLayer(create);
+    const key: OfficeStaticLayerKey = { ...KEY, width: 65_536, height: 1024 };
+    const paint = vi.fn();
+    const chunkAt = (col: number): OfficeStaticChunk => ({
+      chunkCol: col,
+      chunkRow: 0,
+    });
+    // A pan along a long floor, a chunk at a time, well past the budget.
+    for (let col = 0; col < OFFICE_STATIC_CHUNK_BUDGET; col += 1) {
+      layer.sync({ key, chunks: [chunkAt(col)], paint });
+    }
+    expect(layer.chunkCount).toBe(OFFICE_STATIC_CHUNK_BUDGET);
+    // The oldest is re-drawn, which makes it the youngest; the SECOND chunk is
+    // now the one nothing has asked for in longest.
+    layer.sync({ key, chunks: [chunkAt(0)], paint });
+    expect(paint).toHaveBeenCalledTimes(OFFICE_STATIC_CHUNK_BUDGET);
+
+    layer.sync({ key, chunks: [chunkAt(OFFICE_STATIC_CHUNK_BUDGET)], paint });
+
+    expect(layer.chunkCount).toBe(OFFICE_STATIC_CHUNK_BUDGET);
+    // Chunk 0 is still in hand - insertion order would have evicted it - and
+    // chunk 1 is the one that went.
+    layer.sync({ key, chunks: [chunkAt(0)], paint });
+    expect(paint).toHaveBeenCalledTimes(OFFICE_STATIC_CHUNK_BUDGET + 1);
+    layer.sync({ key, chunks: [chunkAt(1)], paint });
+    expect(paint).toHaveBeenCalledTimes(OFFICE_STATIC_CHUNK_BUDGET + 2);
+  });
+
+  it("never holds more pixels than the budget allows", () => {
+    const { create } = fakeSurfaces();
+    const layer = new OfficeStaticLayer(create);
+    const key: OfficeStaticLayerKey = { ...KEY, width: 65_536, height: 65_536 };
+    for (let col = 0; col < 80; col += 1) {
+      layer.sync({
+        key,
+        chunks: [{ chunkCol: col, chunkRow: col }],
+        paint: () => undefined,
+      });
+    }
+
+    expect(layer.heldPixels).toBeLessThanOrEqual(
+      OFFICE_STATIC_CHUNK_BUDGET * OFFICE_STATIC_CHUNK_PX ** 2,
+    );
+  });
+
+  it("holds nothing while the office is suspended", () => {
+    const { create } = fakeSurfaces();
+    const layer = new OfficeStaticLayer(create);
+    layer.sync({ key: KEY, chunks: ORIGIN_CHUNK, paint: () => undefined });
+    expect(layer.heldPixels).toBeGreaterThan(0);
+
+    // What the canvas does the moment the tile stops being eligible.
+    layer.release();
+
+    expect(layer.heldPixels).toBe(0);
+    expect(layer.chunkCount).toBe(0);
   });
 
   it("drops the bitmap on release and repaints if asked again", () => {
     const { create, made } = fakeSurfaces();
     const layer = new OfficeStaticLayer(create);
     const paint = vi.fn();
-    layer.sync(KEY, paint);
+    layer.sync({ key: KEY, chunks: ORIGIN_CHUNK, paint });
 
     layer.release();
 
     expect(made[0].canvas.width).toBe(0);
-    layer.sync(KEY, paint);
+    layer.sync({ key: KEY, chunks: ORIGIN_CHUNK, paint });
     expect(paint).toHaveBeenCalledTimes(2);
   });
 
-  it("draws nothing for a floor with no area yet", () => {
+  it("bakes nothing for a floor with no area yet", () => {
     const { create } = fakeSurfaces();
     const layer = new OfficeStaticLayer(create);
     const paint = vi.fn();
 
     // The first frames of a tile that has not been laid out.
-    expect(layer.sync({ ...KEY, width: 0 }, paint)).toBeNull();
-    expect(layer.sync({ ...KEY, height: 0 }, paint)).toBeNull();
+    expect(
+      layer.sync({ key: { ...KEY, width: 0 }, chunks: ORIGIN_CHUNK, paint }),
+    ).toEqual([]);
+    expect(
+      layer.sync({ key: { ...KEY, height: 0 }, chunks: ORIGIN_CHUNK, paint }),
+    ).toEqual([]);
     expect(paint).not.toHaveBeenCalled();
+  });
+
+  it("bakes nothing when the plan holds no chunks", () => {
+    const { create } = fakeSurfaces();
+    const layer = new OfficeStaticLayer(create);
+    const paint = vi.fn();
+    layer.sync({ key: KEY, chunks: ORIGIN_CHUNK, paint });
+
+    // Overview: the planner answers with nothing, and the pixels go with it.
+    const drawn = layer.sync({ key: KEY, chunks: [], paint });
+
+    expect(drawn).toEqual([]);
+    expect(layer.heldPixels).toBe(0);
+    expect(paint).toHaveBeenCalledTimes(1);
   });
 
   it("reports no layer where the host has no 2D context at all", () => {
@@ -189,8 +364,386 @@ describe("OfficeStaticLayer", () => {
     const layer = new OfficeStaticLayer(() => null);
     const paint = vi.fn();
 
-    expect(layer.sync(KEY, paint)).toBeNull();
+    expect(layer.sync({ key: KEY, chunks: ORIGIN_CHUNK, paint })).toEqual([]);
     expect(paint).not.toHaveBeenCalled();
+  });
+
+  it("hands back nothing rather than a half-baked set of chunks", () => {
+    // Half the floor blitted and half of it drawn is the floor drawn TWICE
+    // where the two meet, so a set that cannot be completed is not a set.
+    let made = 0;
+    const layer = new OfficeStaticLayer((width, height) => {
+      made += 1;
+      if (made > 1) return null;
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      if (ctx === null) throw new Error("the stub returned no context");
+      return { canvas, ctx };
+    });
+
+    const drawn = layer.sync({
+      key: { ...KEY, width: 1600, height: 600 },
+      chunks: [
+        { chunkCol: 0, chunkRow: 0 },
+        { chunkCol: 1, chunkRow: 0 },
+      ],
+      paint: () => undefined,
+    });
+
+    expect(drawn).toEqual([]);
+    expect(layer.heldPixels).toBe(0);
+  });
+});
+
+// ---- The planner ------------------------------------------------------- //
+
+/** The review's largest world: a thousand independent roots, in sprite px. */
+const BIG_WORLD: OfficeSize = { width: 3456, height: 7696 };
+
+function viewAt(args: {
+  readonly x: number;
+  readonly y: number;
+  readonly viewport: OfficeSize;
+  readonly zoom: number;
+}): OfficeRect {
+  const { viewport, x, y, zoom } = args;
+  return {
+    x,
+    y,
+    width: viewport.width / zoom,
+    height: viewport.height / zoom,
+  };
+}
+
+function chunkSpanOf(chunks: ReadonlyArray<OfficeStaticChunk>): {
+  readonly firstCol: number;
+  readonly lastCol: number;
+  readonly firstRow: number;
+  readonly lastRow: number;
+} {
+  const cols = chunks.map((chunk) => chunk.chunkCol);
+  const rows = chunks.map((chunk) => chunk.chunkRow);
+  return {
+    firstCol: Math.min(...cols),
+    lastCol: Math.max(...cols),
+    firstRow: Math.min(...rows),
+    lastRow: Math.max(...rows),
+  };
+}
+
+describe("planOfficeStaticChunks", () => {
+  it("holds nothing at overview, whatever the camera can see", () => {
+    // The lod-0 floor is a few dozen filled rects; a world's worth of bitmap
+    // to blit them is the largest allocation the office makes, for the
+    // cheapest thing it draws.
+    expect(
+      planOfficeStaticChunks({
+        world: BIG_WORLD,
+        view: { x: 0, y: 0, width: BIG_WORLD.width, height: BIG_WORLD.height },
+        lod: 0,
+        budget: OFFICE_STATIC_CHUNK_BUDGET,
+      }),
+    ).toEqual([]);
+  });
+
+  it.each([0.7, 0.9, 1, 1.6, 2, 4])(
+    "never exceeds the budget at zoom %f, wherever the camera is",
+    (zoom) => {
+      for (const viewport of [
+        { width: 1280, height: 700 },
+        { width: 2560, height: 1400 },
+        { width: 680, height: 440 },
+      ]) {
+        for (let x = -1024; x < BIG_WORLD.width + 1024; x += 377) {
+          for (let y = -1024; y < BIG_WORLD.height + 1024; y += 613) {
+            const chunks = planOfficeStaticChunks({
+              world: BIG_WORLD,
+              view: viewAt({ x, y, viewport, zoom }),
+              lod: 1,
+              budget: OFFICE_STATIC_CHUNK_BUDGET,
+            });
+            expect(chunks.length).toBeLessThanOrEqual(
+              OFFICE_STATIC_CHUNK_BUDGET,
+            );
+          }
+        }
+      }
+    },
+  );
+
+  it("covers the whole view wherever it holds anything at all", () => {
+    // The renderer skips the floor's sprites the moment it is handed a chunk,
+    // so a plan that covered only part of the view would leave a hole in the
+    // floor rather than a slower frame.
+    for (let x = -600; x < BIG_WORLD.width + 600; x += 311) {
+      for (let y = -600; y < BIG_WORLD.height + 600; y += 517) {
+        const view = viewAt({
+          x,
+          y,
+          viewport: { width: 1280, height: 700 },
+          zoom: 1,
+        });
+        const chunks = planOfficeStaticChunks({
+          world: BIG_WORLD,
+          view,
+          lod: 1,
+          budget: OFFICE_STATIC_CHUNK_BUDGET,
+        });
+        if (chunks.length === 0) continue;
+        const span = chunkSpanOf(chunks);
+        const left = Math.max(0, view.x);
+        const top = Math.max(0, view.y);
+        const right = Math.min(BIG_WORLD.width, view.x + view.width);
+        const bottom = Math.min(BIG_WORLD.height, view.y + view.height);
+        expect(span.firstCol * OFFICE_STATIC_CHUNK_PX).toBeLessThanOrEqual(
+          left,
+        );
+        expect(span.firstRow * OFFICE_STATIC_CHUNK_PX).toBeLessThanOrEqual(top);
+        expect(
+          (span.lastCol + 1) * OFFICE_STATIC_CHUNK_PX,
+        ).toBeGreaterThanOrEqual(right);
+        expect(
+          (span.lastRow + 1) * OFFICE_STATIC_CHUNK_PX,
+        ).toBeGreaterThanOrEqual(bottom);
+      }
+    }
+  });
+
+  it("bakes one chunk of margin around what the camera can see", () => {
+    // What a pan crosses into. Without it the chunk at the leading edge is
+    // baked on the frame it becomes visible, which is the frame least able to
+    // afford it.
+    const chunks = planOfficeStaticChunks({
+      world: { width: 4096, height: 4096 },
+      view: { x: 1100, y: 1100, width: 100, height: 100 },
+      lod: 1,
+      budget: OFFICE_STATIC_CHUNK_BUDGET,
+    });
+
+    expect(chunkSpanOf(chunks)).toEqual({
+      firstCol: 1,
+      lastCol: 3,
+      firstRow: 1,
+      lastRow: 3,
+    });
+    expect(chunks).toHaveLength(9);
+  });
+
+  it("clamps the margin to the world rather than planning chunks off it", () => {
+    const chunks = planOfficeStaticChunks({
+      world: { width: 700, height: 700 },
+      view: { x: 0, y: 0, width: 100, height: 100 },
+      lod: 1,
+      budget: OFFICE_STATIC_CHUNK_BUDGET,
+    });
+
+    expect(chunks).toEqual([
+      { chunkCol: 0, chunkRow: 0 },
+      { chunkCol: 1, chunkRow: 0 },
+      { chunkCol: 0, chunkRow: 1 },
+      { chunkCol: 1, chunkRow: 1 },
+    ]);
+  });
+
+  it("drops the margin before it drops a chunk the camera can see", () => {
+    // Six by four is the budget exactly; the margin ring around it is not.
+    const chunks = planOfficeStaticChunks({
+      world: BIG_WORLD,
+      view: {
+        x: OFFICE_STATIC_CHUNK_PX,
+        y: OFFICE_STATIC_CHUNK_PX,
+        width: OFFICE_STATIC_CHUNK_PX * 6,
+        height: OFFICE_STATIC_CHUNK_PX * 4,
+      },
+      lod: 1,
+      budget: OFFICE_STATIC_CHUNK_BUDGET,
+    });
+
+    expect(chunks).toHaveLength(OFFICE_STATIC_CHUNK_BUDGET);
+    expect(chunkSpanOf(chunks)).toEqual({
+      firstCol: 1,
+      lastCol: 6,
+      firstRow: 1,
+      lastRow: 4,
+    });
+  });
+
+  it("holds nothing rather than part of a floor too large for the budget", () => {
+    const chunks = planOfficeStaticChunks({
+      world: BIG_WORLD,
+      view: {
+        x: 0,
+        y: 0,
+        width: OFFICE_STATIC_CHUNK_PX * 7,
+        height: OFFICE_STATIC_CHUNK_PX * 4,
+      },
+      lod: 1,
+      budget: OFFICE_STATIC_CHUNK_BUDGET,
+    });
+
+    expect(chunks).toEqual([]);
+  });
+
+  it("holds nothing for a view that misses the world", () => {
+    expect(
+      planOfficeStaticChunks({
+        world: BIG_WORLD,
+        view: { x: -4000, y: -4000, width: 1280, height: 700 },
+        lod: 1,
+        budget: OFFICE_STATIC_CHUNK_BUDGET,
+      }),
+    ).toEqual([]);
+  });
+
+  it("holds nothing for a world with no area yet", () => {
+    expect(
+      planOfficeStaticChunks({
+        world: { width: 0, height: 0 },
+        view: { x: 0, y: 0, width: 1280, height: 700 },
+        lod: 1,
+        budget: OFFICE_STATIC_CHUNK_BUDGET,
+      }),
+    ).toEqual([]);
+  });
+});
+
+describe("officeStaticChunkRect", () => {
+  it("places a chunk on the grid and crops it at the world's edge", () => {
+    const world: OfficeSize = { width: 1200, height: 600 };
+
+    expect(officeStaticChunkRect({ chunkCol: 0, chunkRow: 0 }, world)).toEqual({
+      x: 0,
+      y: 0,
+      width: OFFICE_STATIC_CHUNK_PX,
+      height: OFFICE_STATIC_CHUNK_PX,
+    });
+    expect(officeStaticChunkRect({ chunkCol: 2, chunkRow: 1 }, world)).toEqual({
+      x: OFFICE_STATIC_CHUNK_PX * 2,
+      y: OFFICE_STATIC_CHUNK_PX,
+      width: 1200 - OFFICE_STATIC_CHUNK_PX * 2,
+      height: 600 - OFFICE_STATIC_CHUNK_PX,
+    });
+  });
+});
+
+// ---- Chunk to tiles ---------------------------------------------------- //
+
+const IDENTITY_PROJECTOR: OfficeProjector = {
+  project: (col, row) => ({ x: col * 16, y: row * 16 }),
+  bounds: { x: 0, y: 0, width: 16 * 400, height: 16 * 400 },
+  seatLift: () => 0,
+};
+
+function containsTile(
+  tiles: { col: number; row: number; cols: number; rows: number },
+  col: number,
+  row: number,
+): boolean {
+  return (
+    col >= tiles.col &&
+    col < tiles.col + tiles.cols &&
+    row >= tiles.row &&
+    row < tiles.row + tiles.rows
+  );
+}
+
+describe("officeStaticChunkTiles", () => {
+  it.each([
+    ["the flat and oblique views' identity", IDENTITY_PROJECTOR, 400, 400],
+    [
+      "an isometric shear",
+      createIsoProjector({
+        cols: 200,
+        rows: 200,
+        stackHeight: 24,
+        seatLift: () => 0,
+      }),
+      200,
+      200,
+    ],
+  ])(
+    "asks for every tile whose art lands in the chunk under %s",
+    (_name, projector, cols, rows) => {
+      const chunk: OfficeRect = {
+        x: OFFICE_STATIC_CHUNK_PX * 2,
+        y: OFFICE_STATIC_CHUNK_PX,
+        width: OFFICE_STATIC_CHUNK_PX,
+        height: OFFICE_STATIC_CHUNK_PX,
+      };
+      const tiles = officeStaticChunkTiles({ projector, cols, rows, chunk });
+
+      // Every tile the chunk actually covers has to be in the answer, or the
+      // chunk is baked with a hole in it that nothing ever fills.
+      for (let row = 0; row < rows; row += 1) {
+        for (let col = 0; col < cols; col += 1) {
+          const point = projector.project(col, row);
+          if (
+            point.x < chunk.x ||
+            point.x >= chunk.x + chunk.width ||
+            point.y < chunk.y ||
+            point.y >= chunk.y + chunk.height
+          ) {
+            continue;
+          }
+          expect(containsTile(tiles, col, row)).toBe(true);
+        }
+      }
+    },
+  );
+
+  it("asks for a fraction of a large world, which is the whole point", () => {
+    const chunk: OfficeRect = {
+      x: 0,
+      y: 0,
+      width: OFFICE_STATIC_CHUNK_PX,
+      height: OFFICE_STATIC_CHUNK_PX,
+    };
+
+    const tiles = officeStaticChunkTiles({
+      projector: IDENTITY_PROJECTOR,
+      cols: 400,
+      rows: 400,
+      chunk,
+    });
+
+    expect(tiles.cols * tiles.rows).toBeLessThan((400 * 400) / 10);
+  });
+
+  it("clamps to the world, never off it", () => {
+    const tiles = officeStaticChunkTiles({
+      projector: IDENTITY_PROJECTOR,
+      cols: 20,
+      rows: 20,
+      chunk: {
+        x: 0,
+        y: 0,
+        width: OFFICE_STATIC_CHUNK_PX,
+        height: OFFICE_STATIC_CHUNK_PX,
+      },
+    });
+
+    expect(tiles).toEqual({ col: 0, row: 0, cols: 20, rows: 20 });
+  });
+
+  it("asks for the whole world where the projection is not affine", () => {
+    // Slower and still correct, which is the right way for a projector nobody
+    // has written yet to fail.
+    const curved: OfficeProjector = {
+      project: (col, row) => ({ x: col * col * 16, y: row * 16 }),
+      bounds: { x: 0, y: 0, width: 1600, height: 1600 },
+      seatLift: () => 0,
+    };
+
+    expect(
+      officeStaticChunkTiles({
+        projector: curved,
+        cols: 30,
+        rows: 30,
+        chunk: { x: 512, y: 512, width: 512, height: 512 },
+      }),
+    ).toEqual({ col: 0, row: 0, cols: 30, rows: 30 });
   });
 });
 
