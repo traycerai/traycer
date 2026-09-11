@@ -37,6 +37,11 @@ import {
 } from "@/lib/notifications/notification-chime";
 import type { DefaultOpenTarget } from "@/lib/editor/editor-menu-catalog";
 import type { TilePlacementCategory } from "@/lib/canvas/tile-open/intent";
+import {
+  CONTEXT_USAGE_ROW_KEYS,
+  isContextUsageRowKey,
+  type ContextUsageRowKey,
+} from "@/components/chat/context-usage";
 
 export type ThemeMode = "system" | "light" | "dark";
 export type EpicNodeIconColorMode = "byType" | "none";
@@ -185,6 +190,22 @@ export interface StartPageWallpaper {
    */
   readonly curatedId: string | null;
 }
+/**
+ * One field of the pinned context breakdown - the same keys the breakdown
+ * rows carry, so the picker can only ever name a row the strip knows how to
+ * draw.
+ */
+export type ContextBreakdownField = ContextUsageRowKey;
+export const DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS: ReadonlyArray<ContextBreakdownField> =
+  CONTEXT_USAGE_ROW_KEYS;
+
+/**
+ * How the unpinned context chip draws the remaining percentage: the sentence
+ * (`75% context left`), a circular gauge with the number inside, or the gauge
+ * on its own with the number left to the label.
+ */
+export type ContextIndicatorStyle = "text" | "ring" | "ring-only";
+export const DEFAULT_CONTEXT_INDICATOR_STYLE: ContextIndicatorStyle = "text";
 
 export interface SettingsState {
   startPageWallpaper: StartPageWallpaper | null;
@@ -312,6 +333,15 @@ export interface SettingsState {
    * drawer behave exactly as they did before Home existed.
    */
   homeTabEnabled: boolean;
+  /**
+   * Which breakdown rows the pinned context strip draws, in the strip's own
+   * order. Never empty: the strip with no fields is what unpinning is for, so
+   * the toggle refuses to remove the last one. Only read while
+   * `pinContextUsageBreakdown` is on.
+   */
+  pinnedContextBreakdownFields: ReadonlyArray<ContextBreakdownField>;
+  /** Shape of the unpinned context chip. */
+  contextIndicatorStyle: ContextIndicatorStyle;
   setTheme: (theme: ThemeMode) => void;
   setThemePreset: (preset: ThemePreset) => void;
   setComposerMode: (mode: ComposerMode) => void;
@@ -352,6 +382,8 @@ export interface SettingsState {
     value: NotificationChimeSound,
   ) => void;
   setHomeTabEnabled: (value: boolean) => void;
+  togglePinnedContextBreakdownField: (field: ContextBreakdownField) => void;
+  setContextIndicatorStyle: (style: ContextIndicatorStyle) => void;
 }
 
 type PersistedSettingsState = Pick<
@@ -396,6 +428,8 @@ type PersistedSettingsState = Pick<
   | "workspaceFileWordWrap"
   | "notificationChimeSounds"
   | "homeTabEnabled"
+  | "pinnedContextBreakdownFields"
+  | "contextIndicatorStyle"
 >;
 
 type SetFn = (
@@ -474,6 +508,8 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     workspaceFileWordWrap: state.workspaceFileWordWrap,
     notificationChimeSounds: state.notificationChimeSounds,
     homeTabEnabled: state.homeTabEnabled,
+    pinnedContextBreakdownFields: state.pinnedContextBreakdownFields,
+    contextIndicatorStyle: state.contextIndicatorStyle,
   };
 }
 
@@ -523,6 +559,8 @@ export const useSettingsStore = create<SettingsState>()(
       workspaceFileWordWrap: null,
       notificationChimeSounds: DEFAULT_NOTIFICATION_CHIME_SOUNDS,
       homeTabEnabled: false,
+      pinnedContextBreakdownFields: DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS,
+      contextIndicatorStyle: DEFAULT_CONTEXT_INDICATOR_STYLE,
       setTheme: makeSetter(set, "theme"),
       setThemePreset: (themePreset) => {
         if (useThemeLibraryStore.getState().clearSelection())
@@ -651,6 +689,26 @@ export const useSettingsStore = create<SettingsState>()(
         );
       },
       setHomeTabEnabled: makeSetter(set, "homeTabEnabled"),
+      togglePinnedContextBreakdownField: (field) => {
+        set((s) => {
+          const selected = new Set(s.pinnedContextBreakdownFields);
+          if (selected.has(field)) {
+            // The last field stays: an empty strip is what unpinning is for.
+            if (selected.size === 1) return s;
+            selected.delete(field);
+          } else {
+            selected.add(field);
+          }
+          // Re-inserted in canonical order rather than appended, so the strip
+          // reads the same whatever order the fields were switched on in.
+          return {
+            pinnedContextBreakdownFields: CONTEXT_USAGE_ROW_KEYS.filter(
+              (candidate) => selected.has(candidate),
+            ),
+          };
+        });
+      },
+      setContextIndicatorStyle: makeSetter(set, "contextIndicatorStyle"),
     }),
     {
       ...basePersistOptions(persistKey(STORE_KEYS.settings)),
@@ -728,6 +786,15 @@ export const useSettingsStore = create<SettingsState>()(
             typeof merged.homeTabEnabled === "boolean"
               ? merged.homeTabEnabled
               : false,
+          pinnedContextBreakdownFields:
+            resolvePersistedPinnedContextBreakdownFields(
+              persisted.pinnedContextBreakdownFields,
+            ),
+          contextIndicatorStyle: isContextIndicatorStyle(
+            persisted.contextIndicatorStyle,
+          )
+            ? persisted.contextIndicatorStyle
+            : DEFAULT_CONTEXT_INDICATOR_STYLE,
         };
       },
     },
@@ -856,6 +923,27 @@ export function isAgentTabSurfacing(
   value: unknown,
 ): value is AgentTabSurfacing {
   return value === "off" || value === "surface";
+}
+
+export function isContextIndicatorStyle(
+  value: unknown,
+): value is ContextIndicatorStyle {
+  return value === "text" || value === "ring" || value === "ring-only";
+}
+
+/**
+ * Unknown ids are dropped (a row renamed or retired since the value was
+ * written), duplicates collapse, and the survivors take canonical order. A
+ * list left empty by that - or anything that is not a list - falls back to
+ * every field, since the strip is never drawn with none.
+ */
+function resolvePersistedPinnedContextBreakdownFields(
+  value: unknown,
+): ReadonlyArray<ContextBreakdownField> {
+  if (!Array.isArray(value)) return DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS;
+  const selected = new Set(value.filter(isContextUsageRowKey));
+  if (selected.size === 0) return DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS;
+  return CONTEXT_USAGE_ROW_KEYS.filter((candidate) => selected.has(candidate));
 }
 
 /** The configured mode for one link kind; the global default wins unless it

@@ -138,7 +138,11 @@ vi.mock("@/lib/host", async (importOriginal) => {
 });
 
 import { LayoutSettingsPanel } from "@/components/settings/panels/layout-settings-panel";
-import { trackSettingChanged } from "@/lib/analytics";
+import {
+  AnalyticsEvent,
+  sanitizeAnalyticsProperties,
+  trackSettingChanged,
+} from "@/lib/analytics";
 
 // ── fixtures ─────────────────────────────────────────────────────────────
 
@@ -658,6 +662,173 @@ describe("<LayoutSettingsPanel />", () => {
         }),
       );
       expect(useSettingsStore.getState().pinContextUsageBreakdown).toBe(true);
+    });
+
+    it("hides the pinned breakdown field chips while the pin switch is off and shows them once it is on", () => {
+      render(<LayoutSettingsPanel />);
+      const chatGroup = screen.getByTestId("layout-chat-group");
+
+      expect(
+        within(chatGroup).queryByRole("group", {
+          name: "Pinned breakdown fields",
+        }),
+      ).toBeNull();
+
+      fireEvent.click(
+        within(chatGroup).getByRole("switch", {
+          name: "Pin context breakdown",
+        }),
+      );
+
+      const subgroup = within(chatGroup).getByTestId(
+        "layout-chat-pinned-context-subgroup",
+      );
+      const chips = within(subgroup).getByRole("group", {
+        name: "Pinned breakdown fields",
+      });
+      expect(
+        within(chips)
+          .getAllByRole("button")
+          .map((chip) => chip.textContent),
+      ).toEqual(["Used", "Fresh", "Cache read", "Cache write", "Output"]);
+      for (const chip of within(chips).getAllByRole("button")) {
+        expect(chip.getAttribute("aria-pressed")).toBe("true");
+      }
+    });
+
+    it("writes the pinned breakdown fields from the chips and tracks the analytics id", () => {
+      useSettingsStore.setState({ pinContextUsageBreakdown: true });
+      render(<LayoutSettingsPanel />);
+      const chips = screen.getByRole("group", {
+        name: "Pinned breakdown fields",
+      });
+
+      fireEvent.click(within(chips).getByRole("button", { name: "Fresh" }));
+      fireEvent.click(
+        within(chips).getByRole("button", { name: "Cache write" }),
+      );
+
+      expect(useSettingsStore.getState().pinnedContextBreakdownFields).toEqual([
+        "used",
+        "cacheRead",
+        "output",
+      ]);
+      expect(
+        within(chips)
+          .getByRole("button", { name: "Fresh" })
+          .getAttribute("aria-pressed"),
+      ).toBe("false");
+      expect(trackSettingChanged).toHaveBeenCalledWith(
+        "layout",
+        "pinnedContextBreakdownFields",
+      );
+    });
+
+    it("keeps the last selected field chip pressed and inert", () => {
+      useSettingsStore.setState({
+        pinContextUsageBreakdown: true,
+        pinnedContextBreakdownFields: ["output"],
+      });
+      render(<LayoutSettingsPanel />);
+      const chips = screen.getByRole("group", {
+        name: "Pinned breakdown fields",
+      });
+      const output = within(chips).getByRole("button", { name: "Output" });
+
+      expect(output.getAttribute("aria-disabled")).toBe("true");
+      // The inert chip is not silent about why: a hint says what the floor is
+      // and where the strip is hidden instead.
+      expect(
+        screen.getByText(
+          "One field stays selected - use the switch above to hide the strip.",
+        ),
+      ).toBeTruthy();
+      fireEvent.click(output);
+
+      expect(useSettingsStore.getState().pinnedContextBreakdownFields).toEqual([
+        "output",
+      ]);
+      expect(output.getAttribute("aria-pressed")).toBe("true");
+      expect(
+        within(chips)
+          .getByRole("button", { name: "Used" })
+          .getAttribute("aria-disabled"),
+      ).toBe("false");
+    });
+
+    it("renders and writes 'Context indicator' in the Chat group, tracking the analytics id", () => {
+      render(<LayoutSettingsPanel />);
+      const chatGroup = screen.getByTestId("layout-chat-group");
+      const control = within(chatGroup).getByRole("group", {
+        name: "Context indicator",
+      });
+
+      expect(
+        within(control)
+          .getByRole("button", { name: "Text" })
+          .getAttribute("aria-pressed"),
+      ).toBe("true");
+
+      fireEvent.click(within(control).getByRole("button", { name: "Ring" }));
+      expect(useSettingsStore.getState().contextIndicatorStyle).toBe("ring");
+
+      fireEvent.click(
+        within(control).getByRole("button", { name: "Ring only" }),
+      );
+      expect(useSettingsStore.getState().contextIndicatorStyle).toBe(
+        "ring-only",
+      );
+      expect(
+        within(control)
+          .getByRole("button", { name: "Ring only" })
+          .getAttribute("aria-pressed"),
+      ).toBe("true");
+      expect(trackSettingChanged).toHaveBeenCalledWith(
+        "layout",
+        "contextIndicatorStyle",
+      );
+    });
+
+    it.each(["pinnedContextBreakdownFields", "contextIndicatorStyle"])(
+      "accepts %s through the runtime analytics allowlist",
+      (setting) => {
+        expect(
+          sanitizeAnalyticsProperties(AnalyticsEvent.SettingChanged, {
+            source: "direct_ui",
+            section: "layout",
+            setting,
+          }),
+        ).toEqual({ source: "direct_ui", section: "layout", setting });
+      },
+    );
+
+    it("keeps the Chat group's own order, with Fields inside the pin subgroup", () => {
+      useSettingsStore.setState({ pinContextUsageBreakdown: true });
+      render(<LayoutSettingsPanel />);
+      const chatGroup = screen.getByTestId("layout-chat-group");
+      const subgroup = within(chatGroup).getByTestId(
+        "layout-chat-pinned-context-subgroup",
+      );
+
+      // The Fields row belongs to the switch that governs it - scoping the
+      // query to the group alone would still pass if it escaped the subgroup.
+      expect(
+        within(subgroup).getByRole("group", {
+          name: "Pinned breakdown fields",
+        }),
+      ).toBeTruthy();
+
+      const order = [
+        subgroup,
+        within(chatGroup).getByRole("group", { name: "Context indicator" }),
+        within(chatGroup).getByRole("combobox", { name: "Minimap position" }),
+      ];
+      for (let index = 1; index < order.length; index += 1) {
+        expect(
+          order[index - 1].compareDocumentPosition(order[index]) &
+            Node.DOCUMENT_POSITION_FOLLOWING,
+        ).toBeTruthy();
+      }
     });
 
     it("renders and writes 'Minimap position' in the Chat group", () => {

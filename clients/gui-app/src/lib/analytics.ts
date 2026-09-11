@@ -278,6 +278,7 @@ export type AnalyticsSetting =
   | "codeFontFamily"
   | "codeFontSize"
   | "composerMode"
+  | "contextIndicatorStyle"
   | "defaultEditor"
   | "defaultPermission"
   | "defaultReasoning"
@@ -316,6 +317,7 @@ export type AnalyticsSetting =
   | "layout.sidebar.resourceMetrics"
   | "linkOpen"
   | "pinContextUsageBreakdown"
+  | "pinnedContextBreakdownFields"
   | "pointerCursors"
   | "preventSleepWhileRunning"
   | "quoteReplyEnabled"
@@ -1196,6 +1198,7 @@ const ANALYTICS_SETTINGS = new Set<string>(
     codeFontFamily: true,
     codeFontSize: true,
     composerMode: true,
+    contextIndicatorStyle: true,
     defaultEditor: true,
     defaultPermission: true,
     defaultReasoning: true,
@@ -1230,6 +1233,7 @@ const ANALYTICS_SETTINGS = new Set<string>(
     "layout.sidebar.resourceMetrics": true,
     linkOpen: true,
     pinContextUsageBreakdown: true,
+    pinnedContextBreakdownFields: true,
     pointerCursors: true,
     preventSleepWhileRunning: true,
     quoteReplyEnabled: true,

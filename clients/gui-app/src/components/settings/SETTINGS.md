@@ -1336,6 +1336,43 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     visible, then `Show all limits` and a chip per limit); and **Resource
     monitor** (subgroup, title switch = `resources.enabled`) holding Scope
     (Host / Desktop app) and a Metrics chip row.
+  - **Chat** (in `layout-settings-panel.tsx` itself). `Pin context breakdown`
+    is a `SettingsSubgroup` whose title switch is the pin
+    (`pinContextUsageBreakdown`); open, it shows one `Fields` chip row
+    (`SettingsToggleChips`, `pinnedContextBreakdownFields`) listing every row
+    the breakdown can print - `Used` · `Fresh` · `Cache read` · `Cache write` ·
+    `Output`, the keys and order of `CONTEXT_USAGE_ROW_KEYS` in
+    `chat/context-usage.ts`, so the picker can never name a row the strip
+    cannot draw. The pinned strip prints the selected fields in that order;
+    the leading `Context N% left` is not a field and always prints. The last
+    selected chip is `aria-disabled` with a `hint` saying so, and the store
+    toggle refuses to empty the list, because a strip with no figures is what
+    the switch above is for. Rehydration drops unknown ids and an empty
+    survivor set falls back to all. The popover breakdown is unaffected. A
+    selected field the current turn cannot produce simply does not print
+    (`buildContextUsageRows` omits the cache rows until a harness reports
+    cache), so a selection of `Cache read` alone draws the leading percentage
+    and no figures until the first cache hit. The strip is never blank, since
+    the percentage is not a field.
+
+    - `Context indicator` (`contextIndicatorStyle`, segmented Text / Ring /
+      Ring only, default `text`) shapes the UNPINNED chip: the sentence, a
+      gauge with the percentage inside (`size-5`) or the gauge alone
+      (`size-4`, percentage in the tooltip and the `aria-label`). The gauge is
+      the same construction as `MicProgressRing` and `DownloadProgressRing` -
+      20-unit viewBox, radius 8.5, `strokeOpacity` track, round cap,
+      `-rotate-90` on the `<svg>` - with the arc = context LEFT, and its
+      number is an HTML element centred over the SVG rather than an SVG
+      `<text>`: a user-unit `fontSize` is measured against the viewBox, and
+      the root font size IS the `uiFontSize` setting, so a "7-unit" numeral
+      renders at ~4px on the smallest setting. Two details exist for the
+      exhausted end: the arc is floored at 5% so 0% left still draws a tick
+      rather than a bare track, and the trigger's resting `opacity-70` is
+      dropped both in the gauge styles and at the destructive threshold, so
+      the chip is loudest when the window is nearly gone. The severity tone is
+      inherited from the trigger in every style, and the compaction action
+      sits beside the chip regardless.
+
   - **Nesting is drawn, not indented.** `SettingsSubgroup`
     (`controls/settings-subgroup.tsx`) is an inset card whose title row can host
     the switch that owns it, because a parent switch and the rows it governs

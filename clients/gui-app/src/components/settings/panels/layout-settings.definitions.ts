@@ -308,12 +308,12 @@ export const LAYOUT = defineSettingsSection("layout", {
     keywords: ["messages", "conversation", "pane"],
   },
   pinContextBreakdown: {
-    kind: "row",
-    group: "chat",
+    kind: "group",
     search: { anchor: "layout-pin-context-breakdown" },
     label: "Pin context breakdown",
     description:
       "Keep the context window breakdown visible near the chat composer when usage data is available.",
+    breadcrumb: "Chat",
     availableWhen: alwaysAvailable,
     keywords: [
       "context window",
@@ -322,6 +322,26 @@ export const LAYOUT = defineSettingsSection("layout", {
       // Its name on General before it moved here.
       "pin context usage breakdown",
     ],
+  },
+  pinnedFields: {
+    kind: "row",
+    group: "pinContextBreakdown",
+    search: { contributesTo: "pinContextBreakdown" },
+    label: "Fields",
+    description:
+      "Which figures the pinned strip prints, in this order. The remaining percentage always leads.",
+    availableWhen: alwaysAvailable,
+    keywords: ["used", "fresh", "cache read", "cache write", "output"],
+  },
+  contextIndicator: {
+    kind: "row",
+    group: "chat",
+    search: { anchor: "layout-context-indicator" },
+    label: "Context indicator",
+    description:
+      "How the chip beside the composer shows the context window left while the breakdown is not pinned.",
+    availableWhen: alwaysAvailable,
+    keywords: ["chip", "ring", "text", "gauge", "context left", "composer"],
   },
   minimapSide: {
     kind: "row",

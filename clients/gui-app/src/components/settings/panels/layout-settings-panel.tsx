@@ -1,8 +1,15 @@
 import type { ReactNode } from "react";
-import { LAYOUT } from "@/components/settings/panels/layout-settings.definitions";
+import {
+  CONTEXT_USAGE_ROW_KEYS,
+  CONTEXT_USAGE_ROW_LABELS,
+} from "@/components/chat/context-usage";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
+import { LAYOUT } from "@/components/settings/panels/layout-settings.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
+import { SettingsSegmentedControl } from "@/components/settings/controls/settings-segmented-control";
+import { SettingsSubgroup } from "@/components/settings/controls/settings-subgroup";
+import { SettingsToggleChips } from "@/components/settings/controls/settings-toggle-chips";
 import { ComposerLayoutGroup } from "@/components/settings/panels/layout/composer-layout-group";
 import { SidebarLayoutGroup } from "@/components/settings/panels/layout/sidebar-layout-group";
 import { StatusBarLayoutGroup } from "@/components/settings/panels/layout/status-bar-layout-group";
@@ -57,7 +64,7 @@ export function LayoutSettingsPanel(): ReactNode {
 }
 
 /**
- * The message pane's own layout. Both controls describe the pane rather than
+ * The message pane's own layout. These controls describe the pane rather than
  * the composer bar, which is why they are here and not in the composer group
  * that lands beside this one later.
  */
@@ -67,6 +74,18 @@ function ChatLayoutGroup(): ReactNode {
   );
   const setPinContextUsageBreakdown = useSettingsStore(
     (state) => state.setPinContextUsageBreakdown,
+  );
+  const pinnedContextBreakdownFields = useSettingsStore(
+    (state) => state.pinnedContextBreakdownFields,
+  );
+  const togglePinnedContextBreakdownField = useSettingsStore(
+    (state) => state.togglePinnedContextBreakdownField,
+  );
+  const contextIndicatorStyle = useSettingsStore(
+    (state) => state.contextIndicatorStyle,
+  );
+  const setContextIndicatorStyle = useSettingsStore(
+    (state) => state.setContextIndicatorStyle,
   );
   const chatTurnMinimapSide = useSettingsStore(
     (state) => state.chatTurnMinimapSide,
@@ -80,8 +99,9 @@ function ChatLayoutGroup(): ReactNode {
       dataTestId="layout-chat-group"
       fill={false}
     >
-      <SettingsRow
-        row={LAYOUT.definitions.pinContextBreakdown}
+      <SettingsSubgroup
+        group={LAYOUT.definitions.pinContextBreakdown}
+        icon={null}
         control={
           <Switch
             checked={pinContextUsageBreakdown}
@@ -90,6 +110,56 @@ function ChatLayoutGroup(): ReactNode {
               setPinContextUsageBreakdown(value);
             }}
             aria-label="Pin context breakdown"
+          />
+        }
+        open={pinContextUsageBreakdown}
+        level={3}
+        dataTestId="layout-chat-pinned-context-subgroup"
+      >
+        <SettingsRow
+          row={LAYOUT.definitions.pinnedFields}
+          hint={
+            pinnedContextBreakdownFields.length === 1
+              ? "One field stays selected - use the switch above to hide the strip."
+              : undefined
+          }
+          control={
+            <SettingsToggleChips
+              chips={CONTEXT_USAGE_ROW_KEYS.map((field) => ({
+                value: field,
+                label: CONTEXT_USAGE_ROW_LABELS[field],
+                pressed: pinnedContextBreakdownFields.includes(field),
+                // The last selected field is not a choice: the strip is never
+                // drawn empty, and hiding it whole is the switch above.
+                disabled:
+                  pinnedContextBreakdownFields.length === 1 &&
+                  pinnedContextBreakdownFields[0] === field,
+              }))}
+              onToggle={(field) => {
+                trackLayoutSetting("pinnedContextBreakdownFields");
+                togglePinnedContextBreakdownField(field);
+              }}
+              ariaLabel="Pinned breakdown fields"
+              emptyLabel="No fields available"
+            />
+          }
+        />
+      </SettingsSubgroup>
+      <SettingsRow
+        row={LAYOUT.definitions.contextIndicator}
+        control={
+          <SettingsSegmentedControl
+            value={contextIndicatorStyle}
+            options={[
+              { value: "text", label: "Text" },
+              { value: "ring", label: "Ring" },
+              { value: "ring-only", label: "Ring only" },
+            ]}
+            onChange={(style) => {
+              trackLayoutSetting("contextIndicatorStyle");
+              setContextIndicatorStyle(style);
+            }}
+            ariaLabel="Context indicator"
           />
         }
       />
