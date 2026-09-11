@@ -391,14 +391,17 @@ export const LAYOUT = defineSettingsSection("layout", {
     kind: "row",
     group: "sidebar",
     search: { anchor: "layout-sidebar-resource-chips" },
-    label: "Show resource chips on sidebar rows",
-    description:
-      "Show compact live CPU and memory chips in task navigator rows.",
+    label: "Resource chips on sidebar rows",
+    description: "Show compact live readings in task navigator rows.",
     availableWhen: alwaysAvailable,
+    // The per-reading chips are this row's own control, so their names ride
+    // on it rather than being anchors of their own.
     keywords: [
       "cpu",
       "memory",
       "ram",
+      "processes",
+      "readings",
       // Its name on General before it moved here.
       "show navigator resource stats",
     ],

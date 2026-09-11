@@ -1300,7 +1300,7 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     | Home tab                            | General ▸ Layout          | Tabs       |
     | Pin context breakdown               | General ▸ Chat & composer | Chat       |
     | Minimap side                        | Appearance                | Chat       |
-    | Show resource chips on sidebar rows | General ▸ Running agents  | Sidebar    |
+    | Resource chips on sidebar rows      | General ▸ Running agents  | Sidebar    |
 
     Their search entries moved with them
     (`lib/settings-search/settings-search-entries.ts`), each keeping its old
@@ -1581,10 +1581,24 @@ header`, which describes `MobileAppHeader`'s own monitor rather than the
     filter and `StatusBarKeybindingBridge` READ that flag rather than testing
     the build, so the pair follows from the field.
   - **Sidebar** (`panels/layout/sidebar-layout-group.tsx`, its own file because
-    the group is a list rather than a stack of rows): the relocated `Show
-resource chips on sidebar rows` switch, then **Panels**, which draws the same
+    the group is a list rather than a stack of rows): the relocated `Resource
+chips on sidebar rows` row, then **Panels**, which draws the same
     `left-panel-store.panelGroups` twice - as the rail, and as the detail the
     rail has no room for.
+  - **Resource chips are a metric picker, not a switch.** The row is a
+    `SettingsToggleChips` trio (`CPU` / `Memory` / `Processes`) over
+    `settings-store.navigatorResourceMetrics`, the same control and labels the
+    Resource monitor's Metrics row uses, and the task navigator rows print
+    exactly the picked readings in that order; the default is an empty pick,
+    which draws no chip and is what the old switch's `off` was. Every reading
+    names itself on screen (`12%`, `357 MB RSS`, `3 procs`) because a pickable
+    list can stand any one of them alone - the process count takes the status
+    bar's own `procs` heading for it. The retired `showNavigatorResourceStats`
+    boolean is still read by the store's `merge` for one release (`true` → all
+    three, `false` → none) and dropped on the next write. Its analytics id is
+    `layout.sidebar.resourceMetrics` - a NEW id, so it takes the Sidebar
+    group's dotted family name rather than the bare form the relocated rows
+    keep to stay joinable with their history.
   - **The page mirrors the rail, because the rail is what it configures.** The
     block leads with a horizontal STRIP of rail tiles: the registry's icons
     (`getLeftPanelDefinition`, shared with the rail) in `panelGroups` order, in

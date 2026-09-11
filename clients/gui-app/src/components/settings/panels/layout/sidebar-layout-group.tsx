@@ -52,8 +52,9 @@ import {
   LEFT_PANEL_DEFINITIONS,
   type LeftPanelAvailabilityContext,
 } from "@/components/epic-canvas/sidebar/left-panel-registry";
-import { LAYOUT } from "@/components/settings/panels/layout-settings.definitions";
+import { SettingsToggleChips } from "@/components/settings/controls/settings-toggle-chips";
 import { trackLayoutSetting } from "@/components/settings/panels/layout/track-layout-setting";
+import { LAYOUT } from "@/components/settings/panels/layout-settings.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import {
@@ -74,13 +75,16 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Switch } from "@/components/ui/switch";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { mergeRefs } from "@/lib/merge-refs";
 import { cn } from "@/lib/utils";
 import { useSettingsDensity } from "@/providers/settings-density-context";
-import { useSettingsStore } from "@/stores/settings/settings-store";
+import {
+  NAVIGATOR_RESOURCE_METRICS,
+  useSettingsStore,
+  type NavigatorResourceMetric,
+} from "@/stores/settings/settings-store";
 import {
   areLeftPanelGroupsEqual,
   DEFAULT_LEFT_PANEL_GROUPS,
@@ -108,12 +112,24 @@ const SETTINGS_PRESENCE: Omit<
   hasPullRequests: false,
 };
 
+// Mapped over the store's own metric order rather than re-listing it, so the
+// row cannot drift from the order the chip prints. The labels are the Resource
+// monitor's own, so the two pickers read as one control.
+const NAVIGATOR_RESOURCE_METRIC_LABELS: Record<
+  NavigatorResourceMetric,
+  string
+> = {
+  cpu: "CPU",
+  memory: "Memory",
+  processes: "Processes",
+};
+
 export function SidebarLayoutGroup(): ReactNode {
-  const showNavigatorResourceStats = useSettingsStore(
-    (state) => state.showNavigatorResourceStats,
+  const navigatorResourceMetrics = useSettingsStore(
+    (state) => state.navigatorResourceMetrics,
   );
-  const setShowNavigatorResourceStats = useSettingsStore(
-    (state) => state.setShowNavigatorResourceStats,
+  const toggleNavigatorResourceMetric = useSettingsStore(
+    (state) => state.toggleNavigatorResourceMetric,
   );
   return (
     <SettingsGroup
@@ -126,13 +142,19 @@ export function SidebarLayoutGroup(): ReactNode {
       <SettingsRow
         row={LAYOUT.definitions.sidebarResourceChips}
         control={
-          <Switch
-            checked={showNavigatorResourceStats}
-            onCheckedChange={(value) => {
-              trackLayoutSetting("showNavigatorResourceStats");
-              setShowNavigatorResourceStats(value);
+          <SettingsToggleChips
+            chips={NAVIGATOR_RESOURCE_METRICS.map((metric) => ({
+              value: metric,
+              label: NAVIGATOR_RESOURCE_METRIC_LABELS[metric],
+              pressed: navigatorResourceMetrics.includes(metric),
+              disabled: false,
+            }))}
+            onToggle={(metric) => {
+              trackLayoutSetting("layout.sidebar.resourceMetrics");
+              toggleNavigatorResourceMetric(metric);
             }}
-            aria-label="Show resource chips on sidebar rows"
+            ariaLabel="Resource chips on sidebar rows"
+            emptyLabel="No readings available"
           />
         }
       />

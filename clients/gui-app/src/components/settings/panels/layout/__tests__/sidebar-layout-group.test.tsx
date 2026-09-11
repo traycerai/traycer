@@ -549,16 +549,21 @@ describe("<SidebarLayoutGroup /> reset buttons", () => {
 });
 
 describe("<SidebarLayoutGroup /> narrow viewport", () => {
-  it("replaces the panel list with a note, keeping the resource-chips switch", () => {
+  it("replaces the panel list with a note, keeping the resource-chips row", () => {
     viewport.mobile = true;
     render(<SidebarLayoutGroup />);
 
     expect(screen.queryByTestId("layout-sidebar-panels")).toBeNull();
     expect(screen.getByText("Panel layout needs the sidebar")).toBeTruthy();
+    // The chips row is not part of the panel list, so it survives a viewport
+    // that has no rail for the list to describe.
+    const chips = screen.getByRole("group", {
+      name: "Resource chips on sidebar rows",
+    });
+    expect(within(chips).getByRole("button", { name: "CPU" })).toBeTruthy();
+    expect(within(chips).getByRole("button", { name: "Memory" })).toBeTruthy();
     expect(
-      screen.getByRole("switch", {
-        name: "Show resource chips on sidebar rows",
-      }),
+      within(chips).getByRole("button", { name: "Processes" }),
     ).toBeTruthy();
   });
 });

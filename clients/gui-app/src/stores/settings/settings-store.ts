@@ -117,6 +117,23 @@ export function inactiveCursorStyleFor(
   return style === "block" ? "outline" : style;
 }
 
+/**
+ * The readings a task navigator / sidebar row can print inline. Ordered as the
+ * chip prints them; the stored list is always a subsequence of this one.
+ */
+export type NavigatorResourceMetric = "cpu" | "memory" | "processes";
+export const NAVIGATOR_RESOURCE_METRICS: ReadonlyArray<NavigatorResourceMetric> =
+  ["cpu", "memory", "processes"];
+/** Chips are opt-in: a fresh install draws none until a reading is picked. */
+export const DEFAULT_NAVIGATOR_RESOURCE_METRICS: ReadonlyArray<NavigatorResourceMetric> =
+  [];
+
+export function isNavigatorResourceMetric(
+  value: unknown,
+): value is NavigatorResourceMetric {
+  return value === "cpu" || value === "memory" || value === "processes";
+}
+
 // Default font sizes, shared with the Appearance panel so its reset-to-default
 // affordance and the store's initial state stay a single source of truth.
 export const DEFAULT_UI_FONT_SIZE = 15;
@@ -190,8 +207,11 @@ export interface SettingsState {
   preventSleepWhileRunning: boolean;
   /** Show the app-global resource monitor button in the header. */
   showGlobalResourceMonitor: boolean;
-  /** Show inline resource usage chips in task navigator/sidebar rows. */
-  showNavigatorResourceStats: boolean;
+  /**
+   * Which readings the inline resource chip in task navigator/sidebar rows
+   * prints, in chip order. An empty list draws no chip at all.
+   */
+  navigatorResourceMetrics: ReadonlyArray<NavigatorResourceMetric>;
   /**
    * Keep the chat context-window breakdown pinned near the composer instead of
    * the compact-only chip. Global preference, default off; chats without
@@ -297,7 +317,8 @@ export interface SettingsState {
   setComposerMode: (mode: ComposerMode) => void;
   setPreventSleepWhileRunning: (value: boolean) => void;
   setShowGlobalResourceMonitor: (value: boolean) => void;
-  setShowNavigatorResourceStats: (value: boolean) => void;
+  /** Adds or removes one reading; the list keeps chip order either way. */
+  toggleNavigatorResourceMetric: (metric: NavigatorResourceMetric) => void;
   setPinContextUsageBreakdown: (value: boolean) => void;
   setMinimapSide: (value: MinimapPlacement) => void;
   setPointerCursors: (value: boolean) => void;
@@ -347,7 +368,7 @@ type PersistedSettingsState = Pick<
   | "composerMode"
   | "preventSleepWhileRunning"
   | "showGlobalResourceMonitor"
-  | "showNavigatorResourceStats"
+  | "navigatorResourceMetrics"
   | "pinContextUsageBreakdown"
   | "chatTurnMinimapSide"
   | "pointerCursors"
@@ -425,7 +446,7 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     composerMode: state.composerMode,
     preventSleepWhileRunning: state.preventSleepWhileRunning,
     showGlobalResourceMonitor: state.showGlobalResourceMonitor,
-    showNavigatorResourceStats: state.showNavigatorResourceStats,
+    navigatorResourceMetrics: state.navigatorResourceMetrics,
     pinContextUsageBreakdown: state.pinContextUsageBreakdown,
     chatTurnMinimapSide: state.chatTurnMinimapSide,
     pointerCursors: state.pointerCursors,
@@ -474,7 +495,7 @@ export const useSettingsStore = create<SettingsState>()(
       composerMode: DEFAULT_COMPOSER_MODE,
       preventSleepWhileRunning: false,
       showGlobalResourceMonitor: true,
-      showNavigatorResourceStats: false,
+      navigatorResourceMetrics: DEFAULT_NAVIGATOR_RESOURCE_METRICS,
       pinContextUsageBreakdown: false,
       chatTurnMinimapSide: DEFAULT_MINIMAP_SIDE,
       pointerCursors: true,
@@ -513,10 +534,21 @@ export const useSettingsStore = create<SettingsState>()(
         set,
         "showGlobalResourceMonitor",
       ),
-      setShowNavigatorResourceStats: makeSetter(
-        set,
-        "showNavigatorResourceStats",
-      ),
+      toggleNavigatorResourceMetric: (metric) => {
+        set((s) => {
+          const selected = new Set(s.navigatorResourceMetrics);
+          if (selected.has(metric)) {
+            selected.delete(metric);
+          } else {
+            selected.add(metric);
+          }
+          return {
+            navigatorResourceMetrics: NAVIGATOR_RESOURCE_METRICS.filter(
+              (candidate) => selected.has(candidate),
+            ),
+          };
+        });
+      },
       setPinContextUsageBreakdown: makeSetter(set, "pinContextUsageBreakdown"),
       setMinimapSide: makeSetter(set, "chatTurnMinimapSide"),
       setPointerCursors: makeSetter(set, "pointerCursors"),
@@ -684,6 +716,10 @@ export const useSettingsStore = create<SettingsState>()(
             persisted.notificationChimeSounds,
             persisted.notificationChimeSound,
           ),
+          navigatorResourceMetrics: resolvePersistedNavigatorResourceMetrics(
+            persisted.navigatorResourceMetrics,
+            persisted.showNavigatorResourceStats,
+          ),
           // Narrowed rather than merged verbatim, for the same reason
           // `workspaceFileWordWrap` is: this flag gates a tab kind, a route
           // guard and a chord, so a truthy non-boolean rehydrating as-is would
@@ -763,6 +799,31 @@ function resolvePersistedNotificationChimeSounds(
   }
 
   return resolved;
+}
+
+/**
+ * Rehydration for the sidebar resource chip's metric list, doubling as the
+ * one-shot migration off the retired `showNavigatorResourceStats` switch: a
+ * persisted `true` becomes every metric, `false` becomes none. The list wins
+ * whenever it is present, so a user who has since picked a subset keeps it
+ * even while the old key is still readable; `partialize` does not list the old
+ * key, so the next write drops it. Unknown ids are dropped and the survivors
+ * are put back in chip order, so a hand-edited record cannot draw a chip the
+ * settings row has no button for.
+ */
+function resolvePersistedNavigatorResourceMetrics(
+  value: unknown,
+  legacy: unknown,
+): ReadonlyArray<NavigatorResourceMetric> {
+  if (Array.isArray(value)) {
+    const entries: ReadonlyArray<unknown> = value;
+    const selected = new Set(entries.filter(isNavigatorResourceMetric));
+    return NAVIGATOR_RESOURCE_METRICS.filter((metric) => selected.has(metric));
+  }
+  if (typeof legacy === "boolean") {
+    return legacy ? [...NAVIGATOR_RESOURCE_METRICS] : [];
+  }
+  return DEFAULT_NAVIGATOR_RESOURCE_METRICS;
 }
 
 export function isLinkOpenMode(value: unknown): value is LinkOpenMode {

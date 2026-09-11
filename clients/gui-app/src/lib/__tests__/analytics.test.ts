@@ -1275,6 +1275,25 @@ describe("Layout page settings analytics", () => {
     }
   });
 
+  it("tracks the sidebar resource metric picker under the layout section", async () => {
+    const { AnalyticsEvent, sanitizeAnalyticsProperties } =
+      await import("@/lib/analytics");
+
+    // A NEW id rather than a relocated one, so it takes the Sidebar group's
+    // dotted family name instead of a bare key there is no history to join.
+    expect(
+      sanitizeAnalyticsProperties(AnalyticsEvent.SettingChanged, {
+        source: "direct_ui",
+        section: "layout",
+        setting: "layout.sidebar.resourceMetrics",
+      }),
+    ).toEqual({
+      source: "direct_ui",
+      section: "layout",
+      setting: "layout.sidebar.resourceMetrics",
+    });
+  });
+
   it("tracks every layout.sidebar.* setting id through trackSettingChanged", async () => {
     const { AnalyticsEvent, sanitizeAnalyticsProperties, trackSettingChanged } =
       await import("@/lib/analytics");
@@ -1284,6 +1303,7 @@ describe("Layout page settings analytics", () => {
       "layout.sidebar.panelVisibility",
       "layout.sidebar.resetOrder",
       "layout.sidebar.resetVisibility",
+      "layout.sidebar.resourceMetrics",
     ] as const;
 
     for (const setting of sidebarSettings) {

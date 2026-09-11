@@ -313,6 +313,7 @@ export type AnalyticsSetting =
   | "layout.composer.access"
   | "layout.composer.mic"
   | "layout.composer.compactButton"
+  | "layout.sidebar.resourceMetrics"
   | "linkOpen"
   | "pinContextUsageBreakdown"
   | "pointerCursors"
@@ -1226,6 +1227,7 @@ const ANALYTICS_SETTINGS = new Set<string>(
     "layout.composer.access": true,
     "layout.composer.mic": true,
     "layout.composer.compactButton": true,
+    "layout.sidebar.resourceMetrics": true,
     linkOpen: true,
     pinContextUsageBreakdown: true,
     pointerCursors: true,

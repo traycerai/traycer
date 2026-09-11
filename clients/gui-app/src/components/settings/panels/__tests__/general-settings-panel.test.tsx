@@ -276,7 +276,7 @@ describe("GeneralSettingsPanel", () => {
     useOnboardingStore.setState({ completedAt: null, step: 0 });
     useSettingsStore.setState({
       showGlobalResourceMonitor: true,
-      showNavigatorResourceStats: false,
+      navigatorResourceMetrics: [],
       pinContextUsageBreakdown: false,
       quoteReplyEnabled: true,
       homeTabEnabled: false,
@@ -392,8 +392,10 @@ describe("GeneralSettingsPanel", () => {
     expect(
       screen.queryByRole("switch", { name: "Show global resources button" }),
     ).toBeNull();
+    // Queried by the control the Layout page actually renders for it - the
+    // name this ever had as a switch here was never the one the row used.
     expect(
-      screen.queryByRole("switch", { name: "Show navigator resource stats" }),
+      screen.queryByRole("group", { name: "Resource chips on sidebar rows" }),
     ).toBeNull();
     expect(screen.queryByRole("switch", { name: "Home tab" })).toBeNull();
     expect(screen.queryByText("Layout")).toBeNull();

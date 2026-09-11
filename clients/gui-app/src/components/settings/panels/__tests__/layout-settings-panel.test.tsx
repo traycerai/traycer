@@ -671,19 +671,51 @@ describe("<LayoutSettingsPanel />", () => {
       expect(useSettingsStore.getState().chatTurnMinimapSide).toBe("left");
     });
 
-    it("renders and writes 'Show resource chips on sidebar rows' in the Sidebar group", () => {
+    it("renders 'Resource chips on sidebar rows' as metric chips in the Sidebar group and writes the list", () => {
       render(<LayoutSettingsPanel />);
       const sidebarGroup = screen.getByTestId("layout-sidebar-group");
+      const chips = within(sidebarGroup).getByRole("group", {
+        name: "Resource chips on sidebar rows",
+      });
+      const cpu = within(chips).getByRole("button", { name: "CPU" });
+      const memory = within(chips).getByRole("button", { name: "Memory" });
+      const processes = within(chips).getByRole("button", {
+        name: "Processes",
+      });
 
-      expect(useSettingsStore.getState().showNavigatorResourceStats).toBe(
-        false,
-      );
-      fireEvent.click(
-        within(sidebarGroup).getByRole("switch", {
-          name: "Show resource chips on sidebar rows",
+      // Off by default, exactly as the switch it replaces was.
+      expect(useSettingsStore.getState().navigatorResourceMetrics).toEqual([]);
+      expect(cpu.getAttribute("aria-pressed")).toBe("false");
+      expect(memory.getAttribute("aria-pressed")).toBe("false");
+      expect(processes.getAttribute("aria-pressed")).toBe("false");
+
+      fireEvent.click(processes);
+      fireEvent.click(cpu);
+      // Chip order, not click order.
+      expect(useSettingsStore.getState().navigatorResourceMetrics).toEqual([
+        "cpu",
+        "processes",
+      ]);
+      expect(cpu.getAttribute("aria-pressed")).toBe("true");
+      expect(memory.getAttribute("aria-pressed")).toBe("false");
+      expect(processes.getAttribute("aria-pressed")).toBe("true");
+
+      fireEvent.click(memory);
+      expect(useSettingsStore.getState().navigatorResourceMetrics).toEqual([
+        "cpu",
+        "memory",
+        "processes",
+      ]);
+
+      fireEvent.click(cpu);
+      fireEvent.click(memory);
+      fireEvent.click(processes);
+      expect(useSettingsStore.getState().navigatorResourceMetrics).toEqual([]);
+      expect(
+        within(sidebarGroup).queryByRole("switch", {
+          name: /resource chips/i,
         }),
-      );
-      expect(useSettingsStore.getState().showNavigatorResourceStats).toBe(true);
+      ).toBeNull();
     });
 
     it("renders and writes 'Show resource monitor in header' in the Status bar group", () => {
