@@ -996,6 +996,9 @@ describe("CommGraphTile", () => {
       const restore = benchAt("?officeBench=12");
       try {
         await renderOfficeTile();
+        await waitFor(() => {
+          expect(screen.getByTestId("comm-graph-office-canvas")).toBeDefined();
+        });
         setIntersecting(true);
         setOfficeCanvasSize({ width: 1040, height: 700 });
         await act(async () => {
@@ -1003,7 +1006,6 @@ describe("CommGraphTile", () => {
         });
 
         expect(screen.queryByTestId("comm-graph-empty")).toBeNull();
-        expect(screen.getByTestId("comm-graph-office-canvas")).toBeDefined();
         // The accessible list is one entry per agent the floor is showing, so
         // it is the bench's population as the office actually received it.
         expect(screen.getAllByTestId(/^comm-graph-office-agent-/)).toHaveLength(
@@ -1016,17 +1018,22 @@ describe("CommGraphTile", () => {
 
     it("leaves the epic's own agents alone when nothing asks for a bench", async () => {
       // The gate is the URL and nothing else: the fixture's four agents are
-      // what this tile draws on every other case in this file.
+      // what this tile draws on every other case in this file. Waited for the
+      // same way the rest of the suite waits - the epic's agents arrive from
+      // the projection a tick after the render, and a tile with none of them
+      // yet is the empty graph rather than an office.
       await renderOfficeTile();
+      await waitFor(() => {
+        expect(
+          screen.getByTestId(`comm-graph-office-agent-${CHAT_ID}`),
+        ).toBeDefined();
+      });
       setIntersecting(true);
       setOfficeCanvasSize({ width: 1040, height: 700 });
       await act(async () => {
         await Promise.resolve();
       });
 
-      expect(
-        screen.getByTestId(`comm-graph-office-agent-${CHAT_ID}`),
-      ).toBeDefined();
       expect(screen.getAllByTestId(/^comm-graph-office-agent-/)).toHaveLength(
         4,
       );
