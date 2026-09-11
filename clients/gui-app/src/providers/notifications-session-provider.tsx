@@ -43,7 +43,11 @@ import {
   useNotificationFeedModeFor,
   type NotificationFeedMode,
 } from "@/lib/notifications/notification-feed-mode";
-import { useStreamMethodSupportFor } from "@/lib/host/stream-runtime-context";
+import {
+  useStreamMethodSchemaVersionFor,
+  useStreamMethodSupportFor,
+} from "@/lib/host/stream-runtime-context";
+import { negotiatedActivityServesLocalOnly } from "@/lib/agent-activity-plane-admission";
 import {
   NotificationFeedModeContext,
   NotificationFeedModeSettlingContext,
@@ -283,6 +287,17 @@ function NotificationsSessionBody(
   // app-wide effective host can still be unresolved when this stream opens.
   const servingHostClient = useHostClientFor(servingHostEntry);
   const servingHostId = servingHostEntry?.hostId ?? null;
+  // Whether THIS connection can be asked for the local activity plane. Read
+  // from the stream client's own manifest prediction rather than from any
+  // frame, because the decision is made before a frame exists (see
+  // `negotiatedActivityServesLocalOnly`).
+  const activityStreamVersion = useStreamMethodSchemaVersionFor(
+    servingStreamClient,
+    "agent.activity.subscribe",
+  );
+  const activityServesLocalOnly = negotiatedActivityServesLocalOnly(
+    activityStreamVersion,
+  );
   const queryClient = useQueryClient();
   const authService = useAuthService();
   const showNotification = useNotificationShow();
@@ -295,6 +310,17 @@ function NotificationsSessionBody(
   const activityDisposerRef = useRef<(() => void) | null>(null);
   /** The host whose lane `activityDisposerRef` holds - the slice a verdict loss clears. */
   const activityStreamHostIdRef = useRef<string | null>(null);
+  /**
+   * Whether the lane `activityDisposerRef` holds was admitted by
+   * `activityServesLocalOnly` - i.e. opened with `plane: "local-only"`, PINNED
+   * at `agent.activity.subscribe@1.2`.
+   *
+   * A property of the SUBSCRIPTION, not of the method, exactly as
+   * `tearDownCloudLanes` says of cloud membership: a verdict holder's lane
+   * leaves the plane to the host and pins nothing, so it survives a capability
+   * reading this one cannot.
+   */
+  const activityLanePinnedLocalOnlyRef = useRef(false);
   const hostDisposerRef = useRef<(() => void) | null>(null);
   const cloudDisposerRef = useRef<(() => void) | null>(null);
   // Set when a cloud-verdict loss closed the cloud lanes while the host lanes
@@ -606,6 +632,7 @@ function NotificationsSessionBody(
       disposer();
     }
     activityStreamHostIdRef.current = null;
+    activityLanePinnedLocalOnlyRef.current = false;
     if (hostDisposerRef.current !== null) {
       const disposer = hostDisposerRef.current;
       hostDisposerRef.current = null;
@@ -619,11 +646,18 @@ function NotificationsSessionBody(
   }, []);
 
   // The CLOUD-AUTHORIZED lanes: the per-user Notifications room
-  // (collaboration), the cloud feed relay, and the agent-activity stream. All
-  // three carry the account's server-side data - activity is served from the
-  // cloud union in current host wiring (`openForCurrentUser`'s doc) - so all
-  // three are a cloud CAPABILITY and may only run while a `/api/v3/user`
-  // verdict is held.
+  // (collaboration), the cloud feed relay, and the agent-activity stream as it
+  // was OPENED. All three carry the account's server-side data, so all three
+  // are a cloud CAPABILITY and may only run while a `/api/v3/user` verdict is
+  // held.
+  //
+  // Activity's membership is a property of the SUBSCRIPTION, not of the
+  // method: a stream opened with `plane: "local-only"` reads this machine's
+  // own tracker and is not in this set at all. Every stream this function can
+  // find was opened by a verdict holder (that is the only cohort that opens
+  // one with the plane left to the host), so closing it unconditionally is
+  // right - but see `settleCloudVerdictEdge` for the reopen that has to
+  // follow on a connection that can be asked for the local plane.
   //
   // The host notification lane (`hostDisposerRef`) is deliberately untouched.
   // It is this machine's own notifications - local-plane truth an unverified
@@ -655,10 +689,143 @@ function NotificationsSessionBody(
     // reopens it and the new epoch's frame repopulates it.
     const activityHostId = activityStreamHostIdRef.current;
     activityStreamHostIdRef.current = null;
+    activityLanePinnedLocalOnlyRef.current = false;
     if (activityHostId !== null) {
       useAgentActivityStore.getState().resetHost(activityHostId);
     }
   }, []);
+
+  /**
+   * Same recovery contract as `EpicSessionProvider`: an `UNAUTHORIZED`
+   * terminal close means the host could not accept the current context
+   * bearer, so re-validate against AuthnV3 and let the cascade either rotate
+   * the credentials (transient) or tear the session down via sign-out.
+   *
+   * Hoisted to the component so the activity lane's two openers hand the
+   * stream the SAME handler; it was previously local to the session opener,
+   * which is the only place that needed it.
+   */
+  const onStreamAuthError = useCallback((): void => {
+    void authService.revalidateCurrentContext();
+  }, [authService]);
+
+  /**
+   * THE place the agent-activity lane is opened. Two callers reach it - the
+   * session opener below and the cloud-verdict LOSS edge - and it exists as
+   * one function because "which plane may this session ask for" is exactly
+   * the decision that must not be made twice.
+   *
+   * Two admissions, and they are different facts:
+   *  - a verdict holder opens on the released line with the plane left to the
+   *    host, exactly as before this selector existed;
+   *  - a session with no verdict opens ONLY where this connection negotiated
+   *    `agent.activity.subscribe@1.2`, and then asks for `local-only`, so the
+   *    host reads its own tracker and acquires no cloud room.
+   *
+   * The plane is derived from the SAME `cloudAuthorized` the admission is, so
+   * there is no path that admits an unverified session and then opens it with
+   * the plane left to the host.
+   *
+   * Idempotent on the lane's own ref: the loss edge runs inside an effect that
+   * also reaches the opener, and a second open would leave the first session
+   * unreferenced and unclosable.
+   */
+  const openActivityLane = useCallback(
+    (cloudAuthorized: boolean): void => {
+      if (activityDisposerRef.current !== null) return;
+      // BOTH admissions, in the opener rather than at its call sites. The
+      // cloud-verdict loss edge calls this from the top of the reopen effect,
+      // ABOVE that effect's own `admitsLocalPlane` guard - so without this
+      // line a `signing-in` session (which holds no plane at all, and whose
+      // verdict is also `false`) opened a lane for the instant before the
+      // guard below tore it down again. Caught by the suspension test, which
+      // counts subscriptions rather than final state.
+      if (!admitsLocalPlane(status)) return;
+      if (!cloudAuthorized && !activityServesLocalOnly) return;
+      const lease = hostConnectionRef.current;
+      const streamHostId = servingHostId;
+      if (lease === null || servingStreamClient === null) return;
+      if (streamHostId === null) return;
+      // The lease and the serving host are read from two places that move on
+      // different edges. The verdict-loss caller runs at the TOP of the main
+      // effect, before that effect's host-switch teardown releases the lease -
+      // so on a pass where the serving host changed AND the verdict was lost,
+      // the lease still belongs to the departed host. Opening on it would
+      // drive the new host's stream with the old host's reconnect engine and
+      // retire the wrong host's epoch health on close. Refusing here is safe:
+      // the teardown below the caller runs on this same pass and the session
+      // opener reopens the lane against a lease acquired for the new host.
+      if (lease.hostId !== streamHostId) return;
+      activityDisposerRef.current = openAgentActivityStream({
+        hostId: streamHostId,
+        reconnectEngine: lease.reconnect,
+        wsStreamClient: servingStreamClient,
+        onAuthError: onStreamAuthError,
+        plane: cloudAuthorized ? null : "local-only",
+      });
+      activityStreamHostIdRef.current = streamHostId;
+      activityLanePinnedLocalOnlyRef.current = !cloudAuthorized;
+    },
+    [
+      activityServesLocalOnly,
+      servingHostId,
+      servingStreamClient,
+      onStreamAuthError,
+      status,
+    ],
+  );
+
+  /**
+   * THE wake edge for a pinned activity lane whose capability went away and
+   * came back - the same-client, same-principal recovery the R2 dispatch class
+   * left open on this one surface.
+   *
+   * A local-only lane is pinned at `agent.activity.subscribe@1.2`. The
+   * capability that admits it is read at RENDER, from this connection's
+   * negotiated manifest, and the host PROCESS behind a stable host id can be
+   * replaced between that read and the frame. When it is replaced by a build
+   * without the minor, the pinned session is refused `INCOMPATIBLE` - and it
+   * is correctly never retried on a timer (`isReopenableHostStreamClose`
+   * excludes it, because a version skew does not heal on a clock).
+   *
+   * What it DOES heal on is the capability coming back, and nothing acted on
+   * that: the lane's disposer stayed non-null, `openActivityLane`'s idempotence
+   * guard refused every later reopen, and agent activity was gone for the life
+   * of the session even after the host was serving `@1.2` again.
+   *
+   * So the intent is retained rather than the handle: when the admission this
+   * lane was opened under is no longer true, close THIS lane and clear its
+   * handle, which puts the ordinary opener back in charge - it fires from the
+   * main effect the moment `activityServesLocalOnly` flips back, because that
+   * value is one of `openActivityLane`'s own dependencies.
+   *
+   * Three things it deliberately does NOT do:
+   *  - it does not touch the host or cloud lanes. This is one method's version
+   *    verdict, not a session event, and tearing the sibling feed down would
+   *    make a recoverable skew look like a disconnect.
+   *  - it does not reset the activity slice. Unlike the verdict-loss close in
+   *    `tearDownCloudLanes`, this lane is expected back, and its next epoch's
+   *    first frame reconciles `byEpic` the way a reconnect's does. Blanking it
+   *    here would spin every running agent for the length of the skew.
+   *  - it does not schedule anything. There is no timer here by design; the
+   *    manifest read is the signal.
+   *
+   * Scoped to the lane actually held: a verdict holder's lane pins no minor and
+   * is not this one (`activityLanePinnedLocalOnlyRef`), and a lane belonging to
+   * a host this render no longer serves is the host-switch teardown's business,
+   * not this edge's.
+   */
+  useEffect(() => {
+    if (activityDisposerRef.current === null) return;
+    if (!activityLanePinnedLocalOnlyRef.current) return;
+    if (activityStreamHostIdRef.current !== servingHostId) return;
+    if (activityServesLocalOnly) return;
+    const disposer = activityDisposerRef.current;
+    activityDisposerRef.current = null;
+    activityStreamHostIdRef.current = null;
+    activityLanePinnedLocalOnlyRef.current = false;
+    disposer();
+  }, [activityServesLocalOnly, servingHostId]);
 
   // The relay session's rows and its view-consumption bookkeeping are one
   // unit of ownership: the driver holds an in-flight claim and a retry timer
@@ -764,13 +931,28 @@ function NotificationsSessionBody(
         cloudLanesClosedByVerdictLossRef.current = true;
         tearDownCloudLanes();
         resetCloudRelaySession();
+        // The lane set to CLOSE is unchanged: the open activity stream was
+        // opened by a verdict holder with the plane left to the host, so it is
+        // a cloud lane and it goes. What is new is that something may take its
+        // place - on a connection that negotiated the `local-only` selector,
+        // the same lane reopens reading this machine's own tracker.
+        //
+        // Reopened HERE and not by the effect's `anyStreamOpen` gate, which
+        // this transition cannot reach: the host notification lane
+        // deliberately survives a verdict loss, so "no lane is open" is false
+        // and the gate calls nothing. Routed through the one activity opener
+        // so this does not become a second place that decides the plane, and
+        // deliberately touching NOTHING else - the local lane must come
+        // through a demotion with no close and no re-subscription, which is
+        // the invariant this provider's tests pin most explicitly.
+        openActivityLane(false);
         return;
       }
       if (!cloudLanesClosedByVerdictLossRef.current) return;
       cloudLanesClosedByVerdictLossRef.current = false;
       tearDown();
     },
-    [tearDown, tearDownCloudLanes, resetCloudRelaySession],
+    [tearDown, tearDownCloudLanes, resetCloudRelaySession, openActivityLane],
   );
 
   // A disconnect (IPC drop / host restart) is not a truth reset: rendered
@@ -872,14 +1054,25 @@ function NotificationsSessionBody(
    * its host notifications must open while its account-backed lanes stay
    * shut.
    *
-   * Agent activity is in the cloud set on the wire's word, not the lane's
-   * name: `agent.activity.subscribe` is served from the cloud union
-   * everywhere in current production wiring (`registry.ts`, "local remains
-   * dormant until an explicit host mode exists"), and the host connection
-   * carries no renderer verdict, so an open stream would keep reading
-   * cross-host activity on the retained bearer after the verdict was
-   * withdrawn. A negotiated local-only activity mode is what would move it
-   * back to the local set.
+   * Agent activity is the one lane in that set whose membership is now
+   * NEGOTIATED rather than fixed. `agent.activity.subscribe` lets the host
+   * pick the plane, and when it picks the cloud union the host acquires a
+   * per-user Notifications room on the retained bearer - so on a host that
+   * cannot be told otherwise, an unverified session still opens nothing.
+   *
+   * `@1.2` is what lets it be told otherwise: the open request carries
+   * `plane: "local-only"`, the host serves its own tracker, no cloud room is
+   * acquired, and the unverified cohort gets back the activity of the agents
+   * running on the very machine it is talking to.
+   *
+   * The gate is the NEGOTIATED minor, not the host's own plane selection.
+   * Those are different facts: a host's default plane is its own business
+   * (the host tree moved to local-first, then to a merged view that serves
+   * its own agents at once and still acquires the room for the others), but
+   * nothing on the wire says which, and `servedBy` reports the choice only
+   * after the room it was gating has already been acquired. This comment
+   * previously asserted the host selection itself - it had gone stale, and
+   * the stale sentence was the stated reason for withholding the lane.
    */
   const openForCurrentUser = useCallback(
     (settledFeedMode: NotificationFeedMode, cloudAuthorized: boolean): void => {
@@ -889,13 +1082,9 @@ function NotificationsSessionBody(
       ) {
         return;
       }
-      // Same recovery contract as EpicSessionProvider: an `UNAUTHORIZED`
-      // terminal close means the host couldn't accept the current context
-      // bearer. Re-validate against AuthnV3 so the cascade either rotates the
-      // context credentials (transient) or tears the session down via sign-out.
-      const onAuthError = (): void => {
-        void authService.revalidateCurrentContext();
-      };
+      // The shared recovery contract, hoisted to `onStreamAuthError` so the
+      // activity lane's two openers hand their stream the same handler.
+      const onAuthError = onStreamAuthError;
       const onEntitlementDenied = (): void => {
         // Dormant defense for a future server-side entitlement gate: preserve a
         // defined unavailable wall and revalidate auth instead of leaving the
@@ -949,17 +1138,11 @@ function NotificationsSessionBody(
       // reads `byHost.values()` and merges per EPIC, never reporting an agent
       // as belonging to the bucket's host.
       //
-      // Gated on the cloud verdict like the two lanes below (see the doc on
-      // this callback): the host serves this stream from the cloud union.
-      if (servingStreamClient !== null && cloudAuthorized) {
-        activityDisposerRef.current = openAgentActivityStream(
-          streamHostId,
-          reconnect,
-          servingStreamClient,
-          onAuthError,
-        );
-        activityStreamHostIdRef.current = streamHostId;
-      }
+      // Both admissions and the plane they imply live in `openActivityLane`,
+      // which the cloud-verdict loss edge also calls. Reached here with the
+      // host connection lease already stored on `hostConnectionRef`, which is
+      // what that opener reads for its reconnect policy.
+      openActivityLane(cloudAuthorized);
       // Both cloud-lane bail-outs below are `if` bodies rather than early
       // returns from `openForCurrentUser`, and that is the whole point: the
       // HOST feed is opened at the bottom of this function, so returning from
@@ -1074,6 +1257,33 @@ function NotificationsSessionBody(
       onFeedFrame,
       onPresenceChanged,
       onHostStreamOpened,
+      // Read at the activity-lane open below (hoisted to `onAuthError`), so it
+      // belongs here. It costs no extra invalidation: it is a `useCallback`
+      // memoized on `authService` alone, which is already a dependency of this
+      // array, so its identity moves exactly when `authService` does and never
+      // on its own.
+      onStreamAuthError,
+      // CALLED at the activity-lane open above, so it belongs here. Omitting
+      // it did not merely risk staleness in the abstract: this callback then
+      // captures whichever `openActivityLane` existed when the OTHER deps last
+      // changed, and a retained-principal transition (`signing-in` back to
+      // `signed-in` for the same account) changes none of them - so the host
+      // feed reopens while the captured lane opener still holds the
+      // `signing-in` reading and agent activity never comes back.
+      //
+      // `activityServesLocalOnly` is deliberately NOT listed beside it, and
+      // that is the same argument rather than an exception to it. This body
+      // never reads the value - it is one INPUT to the opener, and
+      // `openActivityLane` already carries it in its own dependency array, so
+      // a flip re-creates the opener and re-creates this callback through it.
+      // Listing the raw input as well refreshes nothing the function does not
+      // already refresh, which is exactly the pattern the paragraph above
+      // warns about, one level down.
+      //
+      // Nor is the raw value what re-opens a pinned lane when the capability
+      // returns: that is the effect keyed on `activityServesLocalOnly` beside
+      // `openActivityLane`, which owns the wake and is untouched here.
+      openActivityLane,
     ],
   );
 
@@ -1243,7 +1453,19 @@ function NotificationsSessionBody(
     }
     if (!anyStreamOpen(openStreams)) {
       openForCurrentUser(settledFeedMode, isSignedIn);
+      return;
     }
+    // The activity-plane admission settles on the stream client's FIRST
+    // handshake, later than every other input to this effect. A session that
+    // starts unverified has its host lane open by then, so the gate above is
+    // false and the session opener is never reached again - the local
+    // activity lane would stay shut for the life of that session, on exactly
+    // the cohort the selector exists for.
+    //
+    // The lane's own opener is idempotent and admission-checked, so this is a
+    // no-op on every pass but the one where the admission arrives, and on a
+    // verdict holder (whose lane is already open) it does nothing at all.
+    openActivityLane(isSignedIn);
   }, [
     servingHostId,
     status,
@@ -1258,6 +1480,13 @@ function NotificationsSessionBody(
     markHostReplicaDisconnected,
     openForCurrentUser,
     notificationFeedMode,
+    // The second omission of the same shape, and the sharper one: this effect
+    // calls the lane opener precisely BECAUSE the activity admission settles
+    // later than every other input here (see the note above the call). Leaving
+    // it out of the deps meant the pass that was supposed to notice the
+    // admission arriving could run a closure captured before it did - the
+    // effect existing for a late signal while holding an early reading of it.
+    openActivityLane,
   ]);
 
   useEffect(() => {

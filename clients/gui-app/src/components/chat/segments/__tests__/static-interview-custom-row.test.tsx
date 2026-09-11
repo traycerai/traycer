@@ -95,4 +95,37 @@ describe("StaticInterviewOptions and the withdrawn custom-answer channel", () =>
 
     expect(screen.getByText("something the user typed")).toBeTruthy();
   });
+
+  it("renders radio glyphs on listed single-choice rows, not on Other", () => {
+    renderOptions({
+      question: question(null, ["Alpha", "Beta"]),
+      customText: null,
+    });
+
+    expect(
+      document.querySelectorAll('[data-interview-choice-glyph="radio"]'),
+    ).toHaveLength(2);
+    expect(
+      document.querySelector('[data-interview-choice-glyph="checkbox"]'),
+    ).toBeNull();
+    expect(screen.getByText("Other")).toBeTruthy();
+  });
+
+  it("renders checkbox glyphs on listed multi-choice rows", () => {
+    renderOptions({
+      question: { ...question(false, ["Alpha", "Beta"]), multiSelect: true },
+      customText: null,
+    });
+
+    expect(
+      document.querySelectorAll('[data-interview-choice-glyph="checkbox"]'),
+    ).toHaveLength(2);
+    expect(
+      document.querySelector('[data-interview-choice-glyph="radio"]'),
+    ).toBeNull();
+    const selected = document.querySelector(
+      '[data-interview-choice-glyph="checkbox"][data-selected="true"]',
+    );
+    expect(selected).not.toBeNull();
+  });
 });

@@ -39,6 +39,14 @@ let chrome;
 let chromeProfilePath;
 let client;
 let viteProcess;
+let viteError = "";
+const runtimeExceptions = [];
+const MAX_DIAGNOSTIC_TEXT = 12_000;
+const MAX_RUNTIME_EXCEPTIONS = 20;
+
+function appendDiagnostic(target, value) {
+  return `${target}${value}`.slice(-MAX_DIAGNOSTIC_TEXT);
+}
 
 function connect(webSocketDebuggerUrl) {
   return new Promise((resolve, reject) => {
@@ -78,6 +86,16 @@ function connect(webSocketDebuggerUrl) {
     });
     socket.addEventListener("message", (event) => {
       const message = JSON.parse(event.data);
+      if (message.method === "Runtime.exceptionThrown") {
+        const details = message.params?.exceptionDetails;
+        const description =
+          details?.exception?.description ??
+          details?.text ??
+          JSON.stringify(details ?? message);
+        runtimeExceptions.push(String(description).slice(0, 2_000));
+        if (runtimeExceptions.length > MAX_RUNTIME_EXCEPTIONS)
+          runtimeExceptions.shift();
+      }
       const request = pending.get(message.id);
       if (request === undefined) return;
       pending.delete(message.id);
@@ -162,16 +180,16 @@ try {
     ],
     { cwd: projectRoot, stdio: ["ignore", "ignore", "pipe"] },
   );
-  let viteError = "";
   viteProcess.stderr.setEncoding("utf8");
   viteProcess.stderr.on("data", (chunk) => {
-    viteError += chunk;
+    viteError = appendDiagnostic(viteError, chunk);
   });
   await waitForHttp(pageUrl, viteProcess, () => viteError, "Vite");
 
   const launched = await launchChromeWithDevTools(
     chromePath,
     "traycer-tab-recovery-",
+    [],
   );
   chrome = launched.chrome;
   chromeProfilePath = launched.profilePath;
@@ -228,6 +246,16 @@ try {
     draftEntry?.items[0]?.id === draftId,
     "closed draft was not journaled",
   );
+  assert(
+    draftEntry.items[0].hasSnapshot === false,
+    "saved draft recovery journal retained an editor snapshot",
+  );
+  assert(
+    state.draftRecords.some(
+      (draft) => draft.id === draftId && draft.closed === true,
+    ),
+    "closed saved draft record was not retained",
+  );
   await clickSelector(client, '[data-testid="recovery-reopen"]');
   await waitForRecoveryConsumed(client, "draft recovery");
   await callBridge(client, "flush", []);
@@ -236,6 +264,12 @@ try {
   assert(
     state.draftIds.includes(draftId),
     "draft was not restored to the strip",
+  );
+  assert(
+    state.draftRecords.some(
+      (draft) => draft.id === draftId && draft.closed === false,
+    ),
+    "saved draft record was not reopened",
   );
 
   const singleTask = await callBridge(client, "createTask", [
@@ -430,6 +464,13 @@ try {
   );
 } catch (error) {
   console.error("TAB RECOVERY BROWSER REGRESSION FAILED:", error);
+  if (viteError.trim() !== "")
+    console.error("VITE STDERR (latest output):\n" + viteError);
+  if (runtimeExceptions.length > 0)
+    console.error(
+      "CDP RUNTIME EXCEPTIONS (latest output):\n" +
+        runtimeExceptions.join("\n---\n"),
+    );
   process.exitCode = 1;
 } finally {
   client?.close();

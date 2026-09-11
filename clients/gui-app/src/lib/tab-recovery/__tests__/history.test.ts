@@ -1,11 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createStore, set } from "idb-keyval";
 import type { JsonContent } from "@traycer/protocol/common/registry";
-import {
-  LANDING_IMAGE_BUDGET_BYTES,
-  landingLiveImageRootHashes,
-  reserveLandingImageBudget,
-} from "@/lib/composer/landing-image-budget";
+import { landingLiveImageRootHashes } from "@/lib/composer/landing-image-budget";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
 import { closeTab } from "@/stores/epics/canvas/actions";
 import type { EpicCanvasState, EpicViewTab } from "@/stores/epics/canvas/types";
@@ -20,6 +16,7 @@ import {
   batchHeaderTabRecovery,
   configureTabRecoveryHistory,
   MAX_RECOVERY_ACTIONS,
+  pruneRecoveryDraft,
   pruneRecoveryEpics,
   pruneRecoveryTiles,
   recordClosedCanvas,
@@ -31,6 +28,7 @@ import {
   useTabRecoveryHistory,
   withoutTabRecovery,
   type ClosedHeaderTab,
+  type LegacyRecoveryDraft,
   type TabRecoveryEntry,
 } from "../history";
 
@@ -45,23 +43,49 @@ function setWindow(windowId: string): void {
 
 function draft(
   id: string,
+  _content: JsonContent,
+): Extract<ClosedHeaderTab, { kind: "draft" }> {
+  return {
+    kind: "draft",
+    draftId: id,
+    hostId: null,
+    index: 0,
+  };
+}
+
+function legacyDraft(id: string, content: JsonContent): LegacyRecoveryDraft {
+  return {
+    id,
+    content,
+    selection: null,
+    lastTouchedAt: 1,
+    settings: null,
+    composerMode: "chat",
+    workspace: {
+      folders: [],
+      primaryPath: null,
+      folderInfoByPath: {},
+    },
+  };
+}
+
+function legacyDraftItem(
+  id: string,
+  content: JsonContent,
+  index = 0,
+): Record<string, unknown> {
+  return { kind: "draft", draft: legacyDraft(id, content), index };
+}
+
+function legacyDraftRef(
+  id: string,
   content: JsonContent,
 ): Extract<ClosedHeaderTab, { kind: "draft" }> {
   return {
     kind: "draft",
-    draft: {
-      id,
-      content,
-      selection: null,
-      lastTouchedAt: 1,
-      settings: null,
-      composerMode: "chat",
-      workspace: {
-        folders: [],
-        primaryPath: null,
-        folderInfoByPath: {},
-      },
-    },
+    draftId: id,
+    hostId: null,
+    legacyDraft: legacyDraft(id, content),
     index: 0,
   };
 }
@@ -146,7 +170,7 @@ function canvasWithBlankAndSpec(): {
 }
 
 async function seedPersistedEntries(
-  entries: readonly TabRecoveryEntry[],
+  entries: readonly unknown[],
 ): Promise<void> {
   await configureTabRecoveryHistory(null);
   await flushTabRecoveryHistory();
@@ -217,6 +241,17 @@ describe("tab recovery history", () => {
       false,
     );
 
+    const beforePrune = useTabRecoveryHistory.getState().entries.at(0);
+    if (beforePrune === undefined || beforePrune.kind !== "header") {
+      throw new Error("expected the mixed header entry before pruning");
+    }
+    const survivorItem = beforePrune.items.find(
+      (item) => item.kind === "draft",
+    );
+    if (survivorItem === undefined) {
+      throw new Error("expected a surviving draft item");
+    }
+
     pruneRecoveryEpics(["epic-deleted"]);
 
     const entries = useTabRecoveryHistory.getState().entries;
@@ -225,6 +260,11 @@ describe("tab recovery history", () => {
       kind: "header",
       items: [{ ...draftItem, index: 1 }],
     });
+    const afterPrune = entries[0];
+    if (afterPrune.kind !== "header") {
+      throw new Error("expected the mixed header entry after pruning");
+    }
+    expect(afterPrune.items[0]).toBe(survivorItem);
   });
 
   it("prunes deleted tile members and removes an empty canvas entry", () => {
@@ -251,39 +291,20 @@ describe("tab recovery history", () => {
     expect(entries).toHaveLength(0);
   });
 
-  it("filters blank Start Pages from mixed bulk closes while preserving positions", () => {
-    const blank = draft("blank-start", {
-      type: "doc",
-      content: [{ type: "paragraph" }],
-    });
-    const whitespace = draft("whitespace-start", textContent(" \n\t"));
-    const text = draft("text-draft", textContent("keep this"));
-    const image = draft("image-draft", imageContent("image-hash"));
-    const task: ClosedHeaderTab = {
-      kind: "epic",
-      tab: epicTab("epic-empty-canvas", "tab-empty-canvas"),
-      canvas: emptyCanvas(),
-      index: 0,
-    };
-
-    batchHeaderTabRecovery(() => {
-      recordClosedHeaderTab(blank);
-      recordClosedHeaderTab(whitespace);
-      recordClosedHeaderTab(text);
-      recordClosedHeaderTab(image);
-      recordClosedHeaderTab(task);
-    });
+  it("records saved drafts as references without an editor snapshot", () => {
+    const item = draft(
+      "saved-draft",
+      textContent("latest content lives in the store"),
+    );
+    recordClosedHeaderTab(item);
 
     const entry = useTabRecoveryHistory.getState().entries.at(0);
     if (entry === undefined || entry.kind !== "header") {
-      throw new Error("expected a mixed bulk recovery entry");
+      throw new Error("expected a draft recovery entry");
     }
-    expect(
-      entry.items.map((item) =>
-        item.kind === "draft" ? item.draft.id : item.tab.tabId,
-      ),
-    ).toEqual(["text-draft", "image-draft", "tab-empty-canvas"]);
-    expect(entry.items.map((item) => item.index)).toEqual([2, 3, 4]);
+    expect(entry.items).toEqual([item]);
+    expect(entry.items[0]).not.toHaveProperty("draft");
+    expect(entry.items[0]).not.toHaveProperty("content");
   });
 
   it("filters blank inner tiles without dropping a real closed tile", () => {
@@ -309,7 +330,7 @@ describe("tab recovery history", () => {
       );
     for (let index = 0; index < 5; index += 1)
       recordClosedHeaderTab(
-        draft(`blank-${String(index)}`, {
+        legacyDraftRef(`blank-${String(index)}`, {
           type: "doc",
           content: [{ type: "paragraph" }],
         }),
@@ -321,7 +342,7 @@ describe("tab recovery history", () => {
       if (entry.kind !== "header") return "canvas";
       const item = entry.items.at(0);
       if (item === undefined || item.kind !== "draft") return "task";
-      return item.draft.id;
+      return item.draftId;
     });
     expect(ids).toEqual(
       Array.from(
@@ -332,13 +353,21 @@ describe("tab recovery history", () => {
   });
 
   it("cleans blank legacy entries while retaining mixed content and empty tasks", async () => {
-    const blank = draft("legacy-blank", {
+    const blank = legacyDraftItem("legacy-blank", {
       type: "doc",
       content: [{ type: "paragraph" }],
     });
-    const whitespace = draft("legacy-whitespace", textContent("  \n\t"));
-    const text = draft("legacy-text", textContent("persist me"));
-    const image = draft("legacy-image", imageContent("legacy-image-hash"));
+    const whitespace = legacyDraftItem(
+      "legacy-whitespace",
+      textContent("  \n\t"),
+      1,
+    );
+    const text = legacyDraftItem("legacy-text", textContent("persist me"), 2);
+    const image = legacyDraftItem(
+      "legacy-image",
+      imageContent("legacy-image-hash"),
+      3,
+    );
     const task: ClosedHeaderTab = {
       kind: "epic",
       tab: epicTab("legacy-empty-task", "legacy-task-tab"),
@@ -376,13 +405,7 @@ describe("tab recovery history", () => {
         kind: "header",
         id: "legacy-mixed-header",
         bulk: true,
-        items: [
-          blank,
-          { ...whitespace, index: 1 },
-          { ...text, index: 2 },
-          { ...image, index: 3 },
-          task,
-        ],
+        items: [blank, whitespace, text, image, task],
       },
       blankCanvasEntry,
       mixedCanvasEntry,
@@ -406,7 +429,7 @@ describe("tab recovery history", () => {
     }
     expect(
       mixedHeader.items.map((item) =>
-        item.kind === "draft" ? item.draft.id : item.tab.tabId,
+        item.kind === "draft" ? item.draftId : item.tab.tabId,
       ),
     ).toEqual(["legacy-text", "legacy-image", "legacy-task-tab"]);
     expect(mixedHeader.items.map((item) => item.index)).toEqual([2, 3, 4]);
@@ -450,28 +473,12 @@ describe("tab recovery history", () => {
     expect(useTabRecoveryHistory.getState().entries).toEqual([]);
   });
 
-  it("keeps image hashes referenced only by a recoverable draft as live roots", () => {
-    const hash = "a".repeat(64);
-    const content: JsonContent = {
-      type: "doc",
-      content: [
-        {
-          type: "imageAttachment",
-          attrs: {
-            id: "image-a",
-            fileName: "image.png",
-            hash,
-            mimeType: "image/png",
-            size: 3,
-          },
-        },
-      ],
-    };
-    const item = draft("draft-with-image", content);
+  it("does not treat a saved draft reference as an image ownership root", () => {
+    const item = draft("draft-with-image", imageContent("image-hash"));
     recordClosedHeaderTab(item);
 
-    expect(recoveryDrafts()).toEqual([item.draft]);
-    expect(landingLiveImageRootHashes()).toEqual(new Set([hash]));
+    expect(recoveryDrafts()).toEqual([]);
+    expect(landingLiveImageRootHashes()).toEqual(new Set());
 
     const entry = useTabRecoveryHistory.getState().entries.at(0);
     if (entry === undefined) throw new Error("expected recovery entry");
@@ -480,35 +487,25 @@ describe("tab recovery history", () => {
     expect(landingLiveImageRootHashes()).toEqual(new Set());
   });
 
-  it("releases the oldest image-bearing recovery draft before rejecting a new image", () => {
-    const halfBudget = LANDING_IMAGE_BUDGET_BYTES / 2;
-    const contentFor = (hash: string): JsonContent => ({
-      type: "doc",
-      content: [
-        {
-          type: "imageAttachment",
-          attrs: {
-            id: hash,
-            fileName: "image.png",
-            hash,
-            mimeType: "image/png",
-            size: halfBudget,
-          },
-        },
-      ],
-    });
-    recordClosedHeaderTab(draft("old-image-draft", contentFor("old-image")));
-    recordClosedHeaderTab(draft("new-image-draft", contentFor("new-image")));
+  it("keeps image hashes for a legacy snapshot during migration", () => {
+    const hash = "a".repeat(64);
+    const item = legacyDraftRef("legacy-image-draft", imageContent(hash));
+    recordClosedHeaderTab(item);
 
-    const reservation = reserveLandingImageBudget("active-draft", [
-      { hash: "incoming-image", bytes: 1 },
-    ]);
+    expect(recoveryDrafts()).toEqual([item.legacyDraft]);
+    expect(landingLiveImageRootHashes()).toEqual(new Set([hash]));
+  });
 
-    expect(reservation).not.toBeNull();
-    expect(recoveryDrafts().map((item) => item.id)).toEqual([
-      "new-image-draft",
-    ]);
-    expect(landingLiveImageRootHashes()).toEqual(new Set(["new-image"]));
-    reservation?.release();
+  it("prunes a permanently deleted draft from recovery references", () => {
+    recordClosedHeaderTab(draft("draft-to-delete", textContent("remove me")));
+    recordClosedHeaderTab(draft("draft-to-keep", textContent("keep me")));
+
+    pruneRecoveryDraft("draft-to-delete");
+
+    const items = useTabRecoveryHistory
+      .getState()
+      .entries.flatMap((entry) => (entry.kind === "header" ? entry.items : []));
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "draft", draftId: "draft-to-keep" });
   });
 });

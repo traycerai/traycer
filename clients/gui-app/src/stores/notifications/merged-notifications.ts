@@ -1,7 +1,10 @@
 import { useCallback, useMemo } from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostRpcError,
+  type RequiredHostMethodVersion,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostRpcRegistry } from "@/lib/host";
 import {
   authorizesCloudCapability,
@@ -64,6 +67,10 @@ import {
 } from "@/stores/notifications/cloud-notifications-store";
 import { requestCloudEntityRead } from "@/lib/notifications/cloud-entity-read-driver";
 import {
+  NOTIFICATIONS_PARTITIONED_CLEAR_ALL_MINOR,
+  NOTIFICATIONS_PARTITIONED_LIST_MAJOR,
+  NOTIFICATIONS_PARTITIONED_LIST_MINOR,
+  NOTIFICATIONS_PARTITIONED_MARK_ALL_READ_MINOR,
   useNotificationFeedMode,
   useNotificationFeedModeSettling,
 } from "@/lib/notifications/notification-feed-mode";
@@ -78,6 +85,7 @@ import {
 import {
   formatHostNotificationPresentation,
   parseKnownHostNotificationPayloadForKind,
+  type HostNotificationChatStoppedPayload,
   type HostNotificationKnownPayload,
   type HostNotificationOutcome,
   type HostNotificationSeverity,
@@ -752,6 +760,39 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
   // See `HeldNotificationFeedModeResult.settling`: partition-dependent unary
   // calls wait while a held `cloud` host is re-negotiating.
   const feedModeSettling = useNotificationFeedModeSettling();
+  /**
+   * ONE reading of "does this call name the local partition?", spent by every
+   * request below that attaches `home` AND by the dispatch floors that some of
+   * them claim for it.
+   *
+   * Hoisted here rather than repeated per call because a floor derived from a
+   * second copy of this condition is a floor that can disagree with the frame
+   * it is supposed to be about - which is the whole defect the floors exist to
+   * close, reintroduced one layer up.
+   */
+  const sendsHomeSelector = feedMode === "cloud";
+  /**
+   * The `list` floor, written ONCE for the three pagination mutations below.
+   *
+   * They are byte-identical in this respect, and three copies of a floor is
+   * three chances to add a fourth pager without one. `list` is the member this
+   * class nearly lost: its `@2.2 -> @1.0` downgrade refuses a request carrying
+   * `home`, which reads like protection until you notice a downgrade bridges
+   * MAJORS. A rollback to `@2.1` or `@2.0` never reaches it - the transport
+   * projects the params through the older MINOR's plain `z.object`, which
+   * strips `home` and succeeds - so the peer merges whole-origin rows into the
+   * cloud lane and answers 200.
+   */
+  const partitionedListFloor = (): RequiredHostMethodVersion | null =>
+    sendsHomeSelector
+      ? {
+          method: "host.notifications.list",
+          version: {
+            major: NOTIFICATIONS_PARTITIONED_LIST_MAJOR,
+            minor: NOTIFICATIONS_PARTITIONED_LIST_MINOR,
+          },
+        }
+      : null;
   // Bound to the host that OWNS the notification streams, not the app-wide
   // active host. Every mutation below addresses a row that came from that
   // host's origin store (or its relayed cloud lane), so routing them anywhere
@@ -977,8 +1018,31 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
     method: "host.notifications.markAllRead",
     mapVariables: (variables) => ({
       beforeUpdatedAt: variables.beforeUpdatedAt,
-      ...(feedMode === "cloud" ? { home: "local" as const } : {}),
+      ...(sendsHomeSelector ? { home: "local" as const } : {}),
     }),
+    // Same class as `clearHostAll` below, and for the same structural reason:
+    // `markAllRead` has an EMPTY `downgradePathsFromLatest`, so a peer that
+    // came back below `@1.1` parses this against its frozen `@1.0` schema and
+    // STRIPS `home` rather than refusing it - marking cloud-home rows read
+    // that this session was never shown. The settling hold closes the window
+    // the renderer can observe; only a dispatch-bound floor closes the one
+    // between a settled render and the frame being written.
+    //
+    // Its sibling `list` carries the same floor, three pagers down. It was
+    // briefly excluded here on the grounds that `@2.2` REFUSES a downgrade
+    // carrying `home`, which is true and irrelevant: a downgrade path bridges
+    // MAJORS, and a rollback to `@2.1` never reaches one. Left as written,
+    // that sentence would have contradicted the floors two functions away.
+    requiredHostMethodVersion: () =>
+      sendsHomeSelector
+        ? {
+            method: "host.notifications.markAllRead",
+            version: {
+              major: 1,
+              minor: NOTIFICATIONS_PARTITIONED_MARK_ALL_READ_MINOR,
+            },
+          }
+        : null,
     options: {
       mutationKey: notificationsMutationKeys.markAllRead(),
       onMutate: () => captureHostNotificationMutationContext(client),
@@ -1012,7 +1076,38 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
   >({
     client,
     method: "host.notifications.clearAll",
-    mapVariables: (variables) => variables,
+    // The same partition selector its three siblings already send, on the
+    // same condition. `clearAll@1.1` closes the gap documented at the call
+    // site below: in mixed mode this clear now names the local partition
+    // instead of silently taking the whole origin.
+    mapVariables: (variables) => ({
+      beforeUpdatedAt: variables.beforeUpdatedAt,
+      ...(sendsHomeSelector ? { home: "local" as const } : {}),
+    }),
+    // The floor is owed exactly when the frame CARRIES the selector, so it
+    // reads the same predicate `mapVariables` does rather than re-deriving
+    // the condition - two copies of "are we sending `home`?" is how a frame
+    // ends up carrying a selector no floor was claimed for.
+    //
+    // Why a dispatch floor when the action already holds through settling:
+    // the render guard closes the interval the renderer can OBSERVE. A host
+    // process can still be replaced between a settled render and the frame
+    // being written, which is the gap `use-host-query.ts` documents for
+    // `epic.create`. On an `@1.0` peer `home` is an OPTIONAL field, so the
+    // replacement STRIPS it and answers 200 - a whole-origin delete wearing
+    // the shape of a partitioned one, and the least recoverable of the four
+    // selectors to get wrong. Refusing before send is the only place that
+    // answer can still be prevented.
+    requiredHostMethodVersion: () =>
+      sendsHomeSelector
+        ? {
+            method: "host.notifications.clearAll",
+            version: {
+              major: 1,
+              minor: NOTIFICATIONS_PARTITIONED_CLEAR_ALL_MINOR,
+            },
+          }
+        : null,
     options: {
       mutationKey: notificationsMutationKeys.clearAll(),
       onMutate: () => captureHostNotificationMutationContext(client),
@@ -1044,8 +1139,9 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       filter: "recent",
       limit: HOST_PAGE_LIMIT,
       cursor: variables.cursor,
-      ...(feedMode === "cloud" ? { home: "local" as const } : {}),
+      ...(sendsHomeSelector ? { home: "local" as const } : {}),
     }),
+    requiredHostMethodVersion: partitionedListFloor,
     options: {
       mutationKey: notificationsMutationKeys.loadMore(),
       onMutate: () => beginHostNotificationMutation(client, "recent"),
@@ -1090,8 +1186,9 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       filter: "attention",
       limit: HOST_PAGE_LIMIT,
       cursor: variables.cursor,
-      ...(feedMode === "cloud" ? { home: "local" as const } : {}),
+      ...(sendsHomeSelector ? { home: "local" as const } : {}),
     }),
+    requiredHostMethodVersion: partitionedListFloor,
     options: {
       mutationKey: notificationsMutationKeys.loadMoreAttention(),
       onMutate: () => beginHostNotificationMutation(client, "attention"),
@@ -1142,8 +1239,9 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       filter: "unreadRecent",
       limit: HOST_PAGE_LIMIT,
       cursor: variables.cursor ?? undefined,
-      ...(feedMode === "cloud" ? { home: "local" as const } : {}),
+      ...(sendsHomeSelector ? { home: "local" as const } : {}),
     }),
+    requiredHostMethodVersion: partitionedListFloor,
     options: {
       mutationKey: notificationsMutationKeys.loadMoreUnreadRecent(),
       onMutate: () => beginHostNotificationMutation(client, "unreadRecent"),
@@ -1366,6 +1464,17 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       },
       clearAll: () => {
         if (feedMode === "upgrade-required") return;
+        // The same hold `markAllAsRead` takes above, and clear-all needs it
+        // for the same reason plus a sharper one. `useHeldNotificationFeedMode`
+        // deliberately keeps reporting `cloud` through a same-host
+        // renegotiation, so a dispatch inside that window can land on a host
+        // that has just rolled back below `clearAll@1.1` - which STRIPS the
+        // `home` selector `mapVariables` attaches and turns this into a
+        // whole-origin clear, defeating the sixth floor at the one moment the
+        // floor cannot see. Mark-all's version of this reaches cloud-home rows;
+        // this one DELETES them. The whole gesture waits rather than half of it
+        // landing. Found by review.
+        if (feedModeSettling) return;
         // The confirmation this sits behind promises "every notification
         // currently visible in this feed", and in mixed mode the feed renders
         // four lanes, not one. So the fan-out is the same shape mark-all
@@ -1383,22 +1492,22 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         // and deliberately not `client !== null`, which survives a disconnect
         // that has already taken the rows' host away.
         //
-        // KNOWN GAP in mixed mode, and stated here because the wire does not
-        // say it: `host.notifications.clearAll` is still `@1.0`, whose request
-        // is `{ beforeUpdatedAt }` and nothing else. There is no `home`
-        // selector, so this clears the host's WHOLE origin store, not its
-        // `home: "local"` partition. Every sibling in this class was
-        // partitioned - `list@2.2`, `markAllRead@1.1`, `indicatorState@1.1` -
-        // and clear-all was missed.
+        // The gap this comment used to describe is CLOSED. It read: clear-all
+        // is still `@1.0`, whose request is `{ beforeUpdatedAt }` and nothing
+        // else, so in mixed mode it clears the host's WHOLE origin rather than
+        // its `home: "local"` partition - every sibling in the class
+        // (`list@2.2`, `markAllRead@1.1`, `indicatorState@1.1`) was
+        // partitioned and clear-all was missed. The consequence was that a
+        // cloud-home occurrence absent from the observed relay snapshot (one
+        // arriving while the relay lags) was cleared here even though the
+        // version-bounded `cloudClearAll` below deliberately excludes it.
         //
-        // The consequence is narrow but real: a cloud-home occurrence absent
-        // from the observed relay snapshot (one arriving while the relay lags)
-        // is cleared by this call even though the version-bounded
-        // `cloudClearAll` below deliberately excludes it. Closing it needs a
-        // partitioned clear-all minor negotiated end to end, not a change
-        // here; dropping the host leg in mixed mode instead would leave the
-        // local partition uncleared and break the same promise in the other
-        // direction. Tracked on #889.
+        // `clearAll@1.1` adds the selector, `mapVariables` above sends it on
+        // the same `feedMode === "cloud"` condition as its siblings, and
+        // `useNotificationFeedModeFor` will not choose mixed mode against a
+        // host below `@1.1` - which is the half that matters, because the
+        // selector is an OPTIONAL field and an `@1.0` peer STRIPS it and
+        // clears everything while looking like it complied.
         //
         // What IS gated is the verdict: a whole-origin clear from a session
         // that no longer holds one would delete cloud-home replicas the
@@ -1817,24 +1926,8 @@ function navigationPayloadFromKnown(
   known: HostNotificationKnownPayload,
 ): NotificationPayload | null {
   switch (known.kind) {
-    case "chat": {
-      // A final, unqualified Done describes the current end-state, so it
-      // always opens at the end of the transcript. Failures and qualified
-      // Done rows retain their occurrence anchor.
-      const includeTranscriptAnchor =
-        known.outcome === "errored" || known.backgroundWorkRunning === true;
-      const scrollToEnd =
-        known.outcome === "completed" && known.backgroundWorkRunning !== true;
-      return {
-        kind: "chat",
-        epicId: known.epicId,
-        chatId: known.chatId ?? undefined,
-        ...(known.hostId === undefined ? {} : { hostId: known.hostId }),
-        messageId: includeTranscriptAnchor ? known.messageId : undefined,
-        eventId: includeTranscriptAnchor ? known.eventId : undefined,
-        ...(scrollToEnd ? { scrollToEnd: true as const } : {}),
-      };
-    }
+    case "chat":
+      return navigationPayloadForChatStopped(known);
     case "agent_stalled":
       return { kind: "chat", epicId: known.epicId, chatId: known.chatId };
     case "workspace_operation_failed":
@@ -1880,7 +1973,44 @@ function navigationPayloadFromKnown(
     // designed degradation rather than a guessed destination.
     case "worktree_deletion":
       return navigationPayloadForWorktreeDeletion(known);
+    // An automatic run DOES have something to focus: its own history entry,
+    // which survives the worktrees it removed. The run id is a hint either way -
+    // retention GC bounds history, so a row read months later may name a run
+    // that is gone, and landing on the history list is then the right answer
+    // rather than a dead end.
+    case "worktree_auto_cleanup":
+      return {
+        kind: "hostSurface",
+        surface: "worktreeSettings",
+        view: "cleanupHistory",
+        // History is host-local, so the destination is only well defined with
+        // the host named: Settings administers one host at a time and the
+        // reader may well be looking at another one.
+        hostId: known.hostId,
+        focus: { resourceId: known.runId },
+      };
   }
+}
+
+function navigationPayloadForChatStopped(
+  known: HostNotificationChatStoppedPayload,
+): NotificationPayload {
+  // A final, unqualified Done describes the current end-state, so it always
+  // opens at the end of the transcript. Failures and qualified Done rows
+  // retain their occurrence anchor.
+  const includeTranscriptAnchor =
+    known.outcome === "errored" || known.backgroundWorkRunning === true;
+  const scrollToEnd =
+    known.outcome === "completed" && known.backgroundWorkRunning !== true;
+  return {
+    kind: "chat",
+    epicId: known.epicId,
+    chatId: known.chatId ?? undefined,
+    ...(known.hostId === undefined ? {} : { hostId: known.hostId }),
+    messageId: includeTranscriptAnchor ? known.messageId : undefined,
+    eventId: includeTranscriptAnchor ? known.eventId : undefined,
+    ...(scrollToEnd ? { scrollToEnd: true as const } : {}),
+  };
 }
 
 function navigationPayloadForWorktreeDeletion(known: {

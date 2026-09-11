@@ -62,7 +62,10 @@ import { assetMediaTypeSchema } from "@traycer/protocol/host/asset-stream-schema
 /** Lowercase hex sha256 - the only form a content address is written in. */
 const sha256HexSchema = z.string().regex(/^[0-9a-f]{64}$/);
 
-export const readChatAttachmentRequestSchema = z.object({
+// `epic.readChatAttachment@1.0` request - FROZEN. Its own literal object, and
+// the schema the released contract points at; the live request below extends
+// it, so a `@1.0` peer's parse strips the selector.
+export const readChatAttachmentRequestSchemaPre11 = z.object({
   epicId: z.string().min(1),
   /**
    * The chat that REFERENCES the attachment - the authorization subject, not a
@@ -74,6 +77,33 @@ export const readChatAttachmentRequestSchema = z.object({
   /** Content address of the image bytes. */
   hash: sha256HexSchema,
 });
+export type ReadChatAttachmentRequestPre11 = z.infer<
+  typeof readChatAttachmentRequestSchemaPre11
+>;
+
+/**
+ * `@1.1`: serve this read from the host's own disk store and STOP there.
+ *
+ * The two legs above are one chain today - disk, then a bearer pass-through to
+ * the cloud blob - and a caller cannot ask for the first without the second.
+ * That is fine for a session holding a cloud verdict and wrong for one that is
+ * not: the whole request has to be withheld, so a cloud-homed epic loses its
+ * chat images even where the bytes are sitting on the very disk the request is
+ * addressed to.
+ *
+ * The client asks for the leg it is entitled to instead. `missing` is the
+ * honest answer when the disk does not have them - it already means "the bytes
+ * are not obtainable, render the stored-on-the-originating-device marker",
+ * which is exactly true here - and the caller learns nothing it could not
+ * learn by asking a host with no local copy.
+ *
+ * A selector, not a new method: the authorization argument above is unchanged,
+ * `chatId` still gates the local read, and asking for less can only narrow.
+ */
+export const readChatAttachmentRequestSchema =
+  readChatAttachmentRequestSchemaPre11.extend({
+    plane: z.literal("local-only").optional(),
+  });
 export type ReadChatAttachmentRequest = z.infer<
   typeof readChatAttachmentRequestSchema
 >;

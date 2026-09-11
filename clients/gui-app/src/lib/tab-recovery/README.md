@@ -44,13 +44,26 @@ Closing a blank tab, including a blank-only Close All, leaves its pane intact.
 Explicit Close Group removes the pane. Loading older canvases retires blank-only
 tabs and duplicate picker tabs without removing their panes or changing splits.
 
+Draft recovery stores only the saved draft ID, owner host, and strip position.
+The saved-draft store owns content and image retention; reopening a closed row
+uses its current content. An already-open row is skipped. A missing adopted
+mirror is read from its owner host; transient host/image failures retain the
+recovery action, while permanent draft deletion prunes it. Bulk recovery keeps
+the surviving draft selection. History's Drafts list and Cmd/Ctrl+Shift+T reuse
+the same saved rows.
+
+Old snapshot journals are read for compatibility only. If no saved draft exists,
+the legacy snapshot is imported once as a closed saved draft, including pending
+paste bytes. It never overwrites a newer saved row. Legacy image contents from
+all accounts in the window count toward the existing image budget and remain GC
+roots until imported or expired; new reference-only entries own no images. Inline
+legacy images reserve capacity as a batch before storage writes. Admission never
+evicts recovery entries: a rejected paste or restore leaves history intact.
+
 The journal retains at most 50 closing actions with a 32 MiB approximate JSON
-budget (the newest action is always kept). Old closed image-bearing drafts can
-also expire under the existing landing-image byte budget. Recovery references
-protect image bytes from collection, including persisted histories of inactive
-accounts in the same window; inline pending-paste bytes are retained
-and stored by hash before the draft reopens. Shutdown drains queued journal
-writes; resetting local application state clears the journal too.
+budget (the newest action is always kept). Pruning retains unchanged entry
+objects so the cached size of unrelated history is reused. Shutdown drains
+queued journal writes; resetting local application state clears the journal too.
 
 Browser startup waits for the account-scoped canvas to hydrate before resolving
 saved tab routes or reconciling the strip. The initial empty anonymous canvas

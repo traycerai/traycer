@@ -3,6 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { EpicViewTab } from "@/stores/epics/canvas/types";
 import {
+  isOpenLandingDraft,
   useLandingDraftStore,
   type LandingDraftTab,
 } from "@/stores/home/landing-draft-store";
@@ -83,7 +84,9 @@ export function useHeaderTabs(): ReadonlyArray<HeaderTab> {
       }),
     ),
   );
-  const draftTabs = useLandingDraftStore(useShallow((s) => s.drafts));
+  const draftTabs = useLandingDraftStore(
+    useShallow((s) => s.drafts.filter(isOpenLandingDraft)),
+  );
   const systemTabs = useTabsStore(useShallow((s) => s.systemTabs));
 
   const epicTabsById = useMemo(
@@ -165,7 +168,9 @@ export function useHeaderStripItems(): ReadonlyArray<HeaderStripItem> {
       }),
     ),
   );
-  const draftTabs = useLandingDraftStore(useShallow((s) => s.drafts));
+  const draftTabs = useLandingDraftStore(
+    useShallow((s) => s.drafts.filter(isOpenLandingDraft)),
+  );
   const systemTabs = useTabsStore(useShallow((s) => s.systemTabs));
   const epicTabsById = useMemo(
     () => new Map<string, EpicViewTab>(epicTabs.map((tab) => [tab.tabId, tab])),
@@ -284,11 +289,12 @@ function useHeaderTabForRef(ref: TabRef | null): HeaderTab | null {
   const epic = useEpicCanvasStore((state) =>
     ref?.kind === "epic" ? (state.tabsById[ref.id] ?? null) : null,
   );
-  const draft = useLandingDraftStore((state) =>
-    ref?.kind === "draft"
-      ? (state.drafts.find((candidate) => candidate.id === ref.id) ?? null)
-      : null,
-  );
+  const draft = useLandingDraftStore((state) => {
+    if (ref?.kind !== "draft") return null;
+    const found =
+      state.drafts.find((candidate) => candidate.id === ref.id) ?? null;
+    return found !== null && isOpenLandingDraft(found) ? found : null;
+  });
   const system = useTabsStore((state) => {
     if (ref?.kind === "history") return state.systemTabs.history;
     if (ref?.kind === "settings") return state.systemTabs.settings;
@@ -478,7 +484,9 @@ export function getHeaderTabs(): ReadonlyArray<HeaderTab> {
     const tab = canvasState.tabsById[tabId];
     return tab === undefined ? [] : [tab];
   });
-  const draftTabs = useLandingDraftStore.getState().drafts;
+  const draftTabs = useLandingDraftStore
+    .getState()
+    .drafts.filter(isOpenLandingDraft);
   const systemTabs = useTabsStore.getState().systemTabs;
   const epicTabsById = new Map<string, EpicViewTab>(
     epicTabs.map((t) => [t.tabId, t]),

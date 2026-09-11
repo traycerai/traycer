@@ -1,3 +1,4 @@
+import type { LandingDraftTab } from "@/stores/home/landing-draft-store";
 import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
 import { collectPanes, findPaneById } from "@/stores/epics/canvas/tile-tree";
 import { create } from "zustand";
@@ -20,7 +21,7 @@ import type {
   EpicCanvasTileRef,
   EpicViewTab,
 } from "@/stores/epics/canvas/types";
-import type { LandingDraftTab } from "@/stores/home/landing-draft-store";
+
 import { registerExtraImageRootSource } from "@/lib/composer/landing-image-budget";
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
 import { landingImagePartition } from "@/lib/composer/landing-image-store";
@@ -65,6 +66,16 @@ const draftSchema = z.object({
     ),
   }),
 });
+export type LegacyRecoveryDraft = Pick<
+  LandingDraftTab,
+  | "id"
+  | "content"
+  | "selection"
+  | "lastTouchedAt"
+  | "settings"
+  | "composerMode"
+  | "workspace"
+>;
 const headerSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("epic"),
@@ -74,11 +85,13 @@ const headerSchema = z.discriminatedUnion("kind", [
   }),
   z.object({
     kind: z.literal("draft"),
-    draft: draftSchema,
+    draftId: z.string(),
+    hostId: z.string().nullable(),
+    legacyDraft: draftSchema.optional(),
     index: z.number().int().nonnegative(),
   }),
 ]);
-const entrySchema = z.discriminatedUnion("kind", [
+const currentEntrySchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("header"),
     id: z.string(),
@@ -96,6 +109,31 @@ const entrySchema = z.discriminatedUnion("kind", [
     bulk: z.boolean(),
   }),
 ]);
+const entrySchema = z.preprocess((value) => {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("items" in value) ||
+    !Array.isArray(value.items)
+  )
+    return value;
+  return {
+    ...value,
+    items: value.items.map((item: unknown) => {
+      if (typeof item !== "object" || item === null || !("draft" in item))
+        return item;
+      const legacy = draftSchema.safeParse(item.draft);
+      return legacy.success
+        ? {
+            ...item,
+            draftId: legacy.data.id,
+            hostId: null,
+            legacyDraft: legacy.data,
+          }
+        : item;
+    }),
+  };
+}, currentEntrySchema);
 export type ClosedHeaderTab =
   | {
       readonly kind: "epic";
@@ -105,7 +143,10 @@ export type ClosedHeaderTab =
     }
   | {
       readonly kind: "draft";
-      readonly draft: LandingDraftTab;
+      readonly draftId: string;
+      readonly hostId: string | null;
+      /** Present only when reading a journal written before saved drafts. */
+      readonly legacyDraft?: LegacyRecoveryDraft;
       readonly index: number;
     };
 export type TabRecoveryEntry =
@@ -142,6 +183,10 @@ let suppressed = 0;
 let batch: ClosedHeaderTab[] | null = null;
 let writes: Promise<void> = Promise.resolve();
 const pendingEpicPrunes = new Set<string>();
+const pendingDraftPrunes = new Set<string>();
+// Compatibility only: new recovery entries contain no draft content. Legacy
+// journals in OTHER accounts still own image bytes until imported or expired.
+const persistedHistories = new Map<string, readonly TabRecoveryEntry[]>();
 let pendingTilePrunes: Array<
   (tile: EpicCanvasTileRef, epicId: string) => boolean
 > = [];
@@ -155,7 +200,9 @@ function meaningfulEntry(entry: TabRecoveryEntry): TabRecoveryEntry[] {
   if (entry.kind === "header") {
     const items = entry.items.filter(
       (item) =>
-        item.kind === "epic" || !isEmptyLandingDraftContent(item.draft.content),
+        item.kind === "epic" ||
+        item.legacyDraft === undefined ||
+        !isEmptyLandingDraftContent(item.legacyDraft.content),
     );
     return items.length === 0
       ? []
@@ -208,8 +255,9 @@ function persistHistory(): void {
   const key = bucket;
   if (key === null || !useTabRecoveryHistory.getState().ready) return;
   const entries = useTabRecoveryHistory.getState().entries;
+  persistedHistories.set(key, entries);
   writes = writes
-    .then(() => set(key, { version: 1, entries }, database()))
+    .then(() => set(key, { version: 2, entries }, database()))
     .catch((error: unknown) => {
       appLogger.warn("[tab-recovery] history persistence failed", {
         error: describeLogError(error),
@@ -232,21 +280,27 @@ export async function configureTabRecoveryHistory(
   bucket = next;
   const token = ++generation;
   pendingEpicPrunes.clear();
+  pendingDraftPrunes.clear();
   pendingTilePrunes = [];
   useTabRecoveryHistory.setState({ entries: [], ready: next === null });
   if (next === null) {
-    if (previous !== null)
+    if (previous !== null) {
+      persistedHistories.delete(previous);
       writes = writes
         .then(() => del(previous, database()))
         .catch(() => undefined);
+    }
     return;
   }
   let restored: TabRecoveryEntry[] = [];
   try {
-    await writes;
+    await persistedRecoveryImageRootHashes();
     const raw: unknown = await get(next, database());
     const envelope = z
-      .object({ version: z.literal(1), entries: z.array(z.unknown()) })
+      .object({
+        version: z.union([z.literal(1), z.literal(2)]),
+        entries: z.array(z.unknown()),
+      })
       .safeParse(raw);
     if (envelope.success)
       restored = envelope.data.entries.flatMap((value) => {
@@ -267,6 +321,8 @@ export async function configureTabRecoveryHistory(
     ready: true,
   });
   if (pendingEpicPrunes.size > 0) pruneRecoveryEpics([...pendingEpicPrunes]);
+  for (const id of pendingDraftPrunes) pruneRecoveryDraft(id);
+  pendingDraftPrunes.clear();
   for (const predicate of pendingTilePrunes) pruneRecoveryTiles(predicate);
   pendingEpicPrunes.clear();
   pendingTilePrunes = [];
@@ -403,6 +459,7 @@ export function pruneRecoveryEpics(epicIds: readonly string[]): void {
         const items = entry.items.filter(
           (item) => item.kind !== "epic" || !ids.has(item.tab.epicId),
         );
+        if (items.length === entry.items.length) return [entry];
         return items.length === 0 ? [] : [{ ...entry, items }];
       }),
   );
@@ -429,6 +486,12 @@ export function pruneRecoveryTiles(
   });
   if (!affected) return;
   const clean = (canvas: EpicCanvasState, epicId: string): EpicCanvasState => {
+    if (
+      !Object.values(canvas.tilesByInstanceId).some(
+        (tile) => tile !== undefined && isDeleted(tile, epicId),
+      )
+    )
+      return canvas;
     const tilesByInstanceId = Object.fromEntries(
       Object.entries(canvas.tilesByInstanceId).filter(
         ([, tile]) => tile !== undefined && !isDeleted(tile, epicId),
@@ -440,34 +503,53 @@ export function pruneRecoveryTiles(
     useTabRecoveryHistory
       .getState()
       .entries.flatMap<TabRecoveryEntry>((entry) => {
-        if (entry.kind === "header")
+        if (entry.kind === "header") {
+          const items = entry.items.map((item) => {
+            if (item.kind === "draft") return item;
+            const canvas = clean(item.canvas, item.tab.epicId);
+            return canvas === item.canvas ? item : { ...item, canvas };
+          });
           return [
-            {
-              ...entry,
-              items: entry.items.map((item) =>
-                item.kind === "draft"
-                  ? item
-                  : { ...item, canvas: clean(item.canvas, item.tab.epicId) },
-              ),
-            },
+            items.every((item, index) => item === entry.items[index])
+              ? entry
+              : { ...entry, items },
           ];
+        }
         const instanceIds = entry.instanceIds.filter((id) => {
           const tile = entry.before.tilesByInstanceId[id];
           return tile !== undefined && !isDeleted(tile, entry.tab.epicId);
         });
-        return instanceIds.length === 0 && (entry.paneIds ?? []).length === 0
-          ? []
-          : [
-              {
-                ...entry,
-                instanceIds,
-                before: clean(entry.before, entry.tab.epicId),
-                after: clean(entry.after, entry.tab.epicId),
-              },
-            ];
+        if (instanceIds.length === 0 && (entry.paneIds ?? []).length === 0)
+          return [];
+        const before = clean(entry.before, entry.tab.epicId);
+        const after = clean(entry.after, entry.tab.epicId);
+        return [
+          before === entry.before &&
+          after === entry.after &&
+          instanceIds.length === entry.instanceIds.length
+            ? entry
+            : { ...entry, instanceIds, before, after },
+        ];
       }),
   );
 }
+/** Permanent deletion must not be undone by a later reopen command. */
+export function pruneRecoveryDraft(draftId: string): void {
+  if (!useTabRecoveryHistory.getState().ready) pendingDraftPrunes.add(draftId);
+  replaceEntries(
+    useTabRecoveryHistory
+      .getState()
+      .entries.flatMap<TabRecoveryEntry>((entry) => {
+        if (entry.kind !== "header") return [entry];
+        const items = entry.items.filter(
+          (item) => item.kind !== "draft" || item.draftId !== draftId,
+        );
+        if (items.length === entry.items.length) return [entry];
+        return items.length === 0 ? [] : [{ ...entry, items }];
+      }),
+  );
+}
+
 export function recoveryEpicIds(
   entries: readonly TabRecoveryEntry[],
 ): readonly string[] {
@@ -483,13 +565,29 @@ export function recoveryEpicIds(
     ),
   ];
 }
-export function recoveryDrafts(): readonly LandingDraftTab[] {
+/** Keep referenced saved rows locally available while their close action exists. */
+export function recoveryDraftIds(): ReadonlySet<string> {
+  return new Set(
+    useTabRecoveryHistory
+      .getState()
+      .entries.flatMap((entry) =>
+        entry.kind === "header"
+          ? entry.items.flatMap((item) =>
+              item.kind === "draft" ? [item.draftId] : [],
+            )
+          : [],
+      ),
+  );
+}
+export function recoveryDrafts(): readonly LegacyRecoveryDraft[] {
   return useTabRecoveryHistory
     .getState()
     .entries.flatMap((entry) =>
       entry.kind === "header"
         ? entry.items.flatMap((item) =>
-            item.kind === "draft" ? [item.draft] : [],
+            item.kind === "draft" && item.legacyDraft !== undefined
+              ? [item.legacyDraft]
+              : [],
           )
         : [],
     );
@@ -497,8 +595,8 @@ export function recoveryDrafts(): readonly LandingDraftTab[] {
 function recoveryEntryImageHashes(entry: TabRecoveryEntry): readonly string[] {
   if (entry.kind !== "header") return [];
   return entry.items.flatMap((item) =>
-    item.kind === "draft"
-      ? collectImageAtoms(item.draft.content).flatMap((atom) =>
+    item.kind === "draft" && item.legacyDraft !== undefined
+      ? collectImageAtoms(item.legacyDraft.content).flatMap((atom) =>
           atom.hash === null ? [] : [atom.hash],
         )
       : [],
@@ -512,62 +610,74 @@ function recoveryEntryImageHashes(entry: TabRecoveryEntry): readonly string[] {
 export async function persistedRecoveryImageRootHashes(): Promise<
   readonly string[]
 > {
-  await writes;
+  const pendingWrites = writes;
+  await pendingWrites;
   const records = await databaseEntries<IDBValidKey, unknown>(database());
   const suffix = `:${landingImagePartition()}`;
-  const hashes = new Set<string>();
+  const loaded = new Map<string, readonly TabRecoveryEntry[]>();
   for (const [key, raw] of records) {
     if (typeof key !== "string" || !key.endsWith(suffix)) continue;
     const envelope = z
-      .object({ version: z.literal(1), entries: z.array(z.unknown()) })
+      .object({
+        version: z.union([z.literal(1), z.literal(2)]),
+        entries: z.array(z.unknown()),
+      })
       .safeParse(raw);
     if (!envelope.success) continue;
-    for (const value of envelope.data.entries) {
-      const parsed = entrySchema.safeParse(value);
-      if (!parsed.success || parsed.data.kind !== "header") continue;
-      for (const hash of recoveryEntryImageHashes(parsed.data))
-        hashes.add(hash);
-    }
+    loaded.set(
+      key,
+      envelope.data.entries.flatMap((value) => {
+        const parsed = entrySchema.safeParse(value);
+        return parsed.success ? [parsed.data] : [];
+      }),
+    );
   }
-  return [...hashes];
+  // A history update during the read already updated our cache synchronously.
+  // Never replace that newer view with the older disk snapshot.
+  if (writes === pendingWrites) {
+    persistedHistories.clear();
+    for (const [key, entries] of loaded) persistedHistories.set(key, entries);
+  }
+  return [
+    ...new Set(
+      [...loaded.values()].flatMap((entries) =>
+        entries.flatMap(recoveryEntryImageHashes),
+      ),
+    ),
+  ];
 }
 
+function legacyRecoveryHistories(): ReadonlyMap<
+  string,
+  readonly TabRecoveryEntry[]
+> {
+  const histories = new Map(persistedHistories);
+  if (bucket !== null)
+    histories.set(bucket, useTabRecoveryHistory.getState().entries);
+  else histories.set("", useTabRecoveryHistory.getState().entries);
+  return histories;
+}
+function legacyRecoveryContents(): readonly JsonContent[] {
+  return [...legacyRecoveryHistories().values()].flatMap((entries) =>
+    entries.flatMap((entry) =>
+      entry.kind !== "header"
+        ? []
+        : entry.items.flatMap((item) =>
+            item.kind === "draft" && item.legacyDraft !== undefined
+              ? [item.legacyDraft.content]
+              : [],
+          ),
+    ),
+  );
+}
 registerExtraImageRootSource({
   hashes: () =>
-    recoveryDrafts().flatMap((draft) =>
-      collectImageAtoms(draft.content).flatMap((atom) =>
+    legacyRecoveryContents().flatMap((content) =>
+      collectImageAtoms(content).flatMap((atom) =>
         atom.hash === null ? [] : [atom.hash],
       ),
     ),
-  contents: () => recoveryDrafts().map((draft) => draft.content),
-  releaseOldest: () => {
-    const entries = useTabRecoveryHistory.getState().entries;
-    const oldest = entries.find(
-      (entry) =>
-        entry.kind === "header" &&
-        entry.items.some(
-          (item) =>
-            item.kind === "draft" &&
-            collectImageAtoms(item.draft.content).length > 0,
-        ),
-    );
-    if (oldest?.kind !== "header") return false;
-    const index = oldest.items.findIndex(
-      (item) =>
-        item.kind === "draft" &&
-        collectImageAtoms(item.draft.content).length > 0,
-    );
-    const items = oldest.items.filter(
-      (_item, itemIndex) => itemIndex !== index,
-    );
-    replaceEntries(
-      entries.flatMap((entry) => {
-        if (entry.id !== oldest.id) return [entry];
-        return items.length === 0 ? [] : [{ ...oldest, items }];
-      }),
-    );
-    return true;
-  },
+  contents: legacyRecoveryContents,
 });
 
 export function discardRecoveryTab(tabId: string): void {
@@ -580,6 +690,7 @@ export function discardRecoveryTab(tabId: string): void {
         const items = entry.items.filter(
           (item) => item.kind !== "epic" || item.tab.tabId !== tabId,
         );
+        if (items.length === entry.items.length) return [entry];
         return items.length === 0 ? [] : [{ ...entry, items }];
       }),
   );
@@ -608,6 +719,8 @@ export function recoveryTiles(): ReadonlyArray<{
 
 /** Drain queued writes before the app deletes local databases and reloads. */
 export async function resetTabRecoveryHistory(): Promise<void> {
+  persistedHistories.clear();
+  pendingDraftPrunes.clear();
   bucket = null;
   generation += 1;
   useTabRecoveryHistory.setState({ entries: [], ready: true });

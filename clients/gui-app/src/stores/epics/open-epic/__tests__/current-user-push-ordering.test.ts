@@ -65,6 +65,7 @@ function openWithRecording(userId: string | null): {
     // Unreached: this suite never calls `retryTransport`. Answered anyway
     // rather than defaulted, so it stays a decision the option forces.
     onRetryTransport: () => {},
+    onWakeTransport: () => undefined,
     runtime: binding,
     accounting: createProcessBackedAccountingPort({
       hostId: "test-host",

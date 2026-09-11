@@ -10,6 +10,7 @@ import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type {
   AgentActivityByEpic,
   AgentActivityCloudSyncStatus,
+  AgentActivityPlaneSelector,
   AgentActivityServedBy,
 } from "@traycer/protocol/host/agent/activity";
 import {
@@ -17,6 +18,7 @@ import {
   EMPTY_EPIC_AGENT_ACTIVITY,
   mergeEpicAgentActivity,
   reconcileAgentActivityByEpic,
+  type AgentActivityCoverage,
   type EpicAgentActivity,
 } from "@/lib/agent-activity";
 import {
@@ -58,6 +60,12 @@ export interface HostAgentActivity {
    * `disconnected` value means the union below was built while the host could
    * not see other hosts' agents: it is a true statement about what the host
    * saw, not about who is working.
+   *
+   * Read WITH `servedBy`: a merged-plane host that holds a room whose link is
+   * down sends its origin-store view as `servedBy: "local"` under that link
+   * stamp. The local half is authoritative for the host's own agents
+   * ({@link hostSliceCoversItsOwnHost}); the stamp names the half that is
+   * missing. Only a `"cloud"` frame stamped `connected` reaches the fleet.
    */
   readonly cloudSyncStatus: AgentActivityCloudSyncStatus | null;
   readonly byEpic: ReadonlyMap<string, EpicAgentActivity>;
@@ -218,8 +226,16 @@ export function noteAgentActivityConnectionStatus(
  * the socket does anything and needs no re-assertion on a reopen - the reopen
  * lane dials into the same slice.
  */
-export function openAgentActivityStream(
-  hostId: string,
+/**
+ * Everything {@link openAgentActivityStream} needs, as one object because the
+ * positional form had reached five parameters. Every field is REQUIRED: the
+ * two nullable ones carry a decision (`null` means "no handler" and "host
+ * chooses the plane"), and an optional field would let a caller omit that
+ * decision and inherit it silently - which is exactly the class of defect the
+ * `hostId` parameter was added to close.
+ */
+export interface OpenAgentActivityStreamInput {
+  readonly hostId: string;
   /**
    * THE reconnect policy for this stream's host (redesign P4.1 /
    * connection-registry §6), acquired from the connection registry by the one
@@ -228,10 +244,26 @@ export function openAgentActivityStream(
    * backoff shape live once, in the engine, and each stream still gets its
    * own independent lane so a sibling stream's refusal cannot pace it.
    */
-  reconnectEngine: HostReconnectEngine,
-  wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>,
-  onAuthError: (() => void) | null,
+  readonly reconnectEngine: HostReconnectEngine;
+  readonly wsStreamClient: IHostStreamClient<HostStreamRpcRegistry>;
+  readonly onAuthError: (() => void) | null;
+  /**
+   * The plane this session may ask for. `"local-only"` is for a session with
+   * no cloud verdict; `null` leaves the choice to the host, which is what the
+   * verified cohort does.
+   *
+   * Captured once and reused by every REOPEN below - a reconnect must not
+   * quietly widen a local-only subscription back to the host's own choice.
+   * The caller closes and reopens the stream on a verdict change, so a cohort
+   * move is a new stream rather than a mutation of this one.
+   */
+  readonly plane: AgentActivityPlaneSelector | null;
+}
+
+export function openAgentActivityStream(
+  input: OpenAgentActivityStreamInput,
 ): () => void {
+  const { hostId, reconnectEngine, wsStreamClient, onAuthError, plane } = input;
   // A new stream epoch makes NO health claim until its own session speaks.
   //
   // Neither end of a replacement publishes one otherwise: `IStreamSession`'s
@@ -263,6 +295,7 @@ export function openAgentActivityStream(
     let client: AgentActivityStreamClient | null = null;
     client = new AgentActivityStreamClient({
       wsStreamClient,
+      plane,
       callbacks: {
         onState: (servedBy, byEpic, cloudSyncStatus) => {
           if (currentClient !== client) return;
@@ -482,10 +515,7 @@ function hostActivityAnswers(host: HostAgentActivity): boolean {
  * says the stream closed.
  */
 export function agentActivityPlaneAnswers(): boolean {
-  for (const host of useAgentActivityStore.getState().byHost.values()) {
-    if (hostActivityAnswers(host)) return true;
-  }
-  return false;
+  return selectPlaneAnswers(useAgentActivityStore.getState().byHost);
 }
 
 /**
@@ -515,12 +545,112 @@ export function agentActivityPlaneAnswers(): boolean {
  * read as blind.
  */
 export function agentActivityPlaneSpansFleet(): boolean {
-  for (const host of useAgentActivityStore.getState().byHost.values()) {
-    if (hostActivityAnswers(host) && host.cloudSyncStatus === "connected") {
+  return selectPlaneSpansFleet(useAgentActivityStore.getState().byHost);
+}
+
+function selectPlaneSpansFleet(
+  byHost: ReadonlyMap<string, HostAgentActivity>,
+): boolean {
+  for (const host of byHost.values()) {
+    // `servedBy` is part of the claim, not decoration: a merged-plane host
+    // sends `servedBy: "local"` under a real link stamp whenever its union
+    // does NOT reach the fleet (awareness mid-rebuild, link flapping), and
+    // that frame must not be read as fleet coverage on the strength of the
+    // stamp alone. A cloud-plane host of any released line stamps only its
+    // `"cloud"` frames, so nothing it sends changes answer here.
+    if (
+      hostActivityAnswers(host) &&
+      host.servedBy === "cloud" &&
+      host.cloudSyncStatus === "connected"
+    ) {
       return true;
     }
   }
   return false;
+}
+
+/**
+ * Whether this host's slice vouches for ITS OWN agents. Wider than
+ * {@link hostActivityAnswers} by exactly one arm: a `servedBy: "local"` frame
+ * is the host's origin store and is authoritative for the machine it came
+ * from whatever its cloud link is doing - a merged-plane host keeps sending
+ * it, stamped with the real link status, while its room is down. That stamp
+ * still withholds fleet coverage (see {@link selectPlaneSpansFleet}) and the
+ * "nobody is working" vouch ({@link agentActivityPlaneAnswers}); it only
+ * stops the host's own rows from reading as unknown during a socket flap.
+ */
+function hostSliceCoversItsOwnHost(host: HostAgentActivity): boolean {
+  if (host.connectionStatus !== "open" || !host.stateFrameSeenThisEpoch) {
+    return false;
+  }
+  return host.servedBy === "local" || hostActivityAnswers(host);
+}
+
+function selectPlaneAnswers(
+  byHost: ReadonlyMap<string, HostAgentActivity>,
+): boolean {
+  for (const host of byHost.values()) {
+    if (hostActivityAnswers(host)) return true;
+  }
+  return false;
+}
+
+/**
+ * {@link AgentActivityCoverage} for ONE host, from a `byHost` snapshot.
+ *
+ * The three arms are exactly {@link agentActivityPlaneCoversHost}'s question
+ * split into the two ways it can answer "no", because those two are what the
+ * predicate's boolean throws away and what a rendering surface needs:
+ *
+ * - the plane covers this host -> `covered`;
+ * - the plane ANSWERS but not for this host -> `unserved`, the arm that must
+ *   render unknown rather than idle;
+ * - nothing answers at all -> `indeterminate`, which is the pill's story and
+ *   not a per-entity one (see the type's doc).
+ *
+ * A `null` host cannot detect EXCLUSION - a surface that cannot name the machine
+ * an entity lives on has no entity for a narrow union to have excluded - so it
+ * answers `indeterminate` and keeps the reading it already had.
+ *
+ * With ONE exception, and it is above the null check rather than inside it: a
+ * FLEET-SPANNING union answers `covered` for a null host too, because a union
+ * that reaches everywhere reaches wherever this entity is. The exception is why
+ * this paragraph no longer says "indeterminate by construction" - it was written
+ * when the null arm fell through to the exclusion line, and it described the
+ * intent of that arm rather than the function's whole answer.
+ */
+export function selectAgentActivityCoverage(
+  byHost: ReadonlyMap<string, HostAgentActivity>,
+  hostId: string | null,
+): AgentActivityCoverage {
+  if (selectPlaneSpansFleet(byHost)) return "covered";
+  // `unserved` is the claim "the plane answers, and NOT about this entity" -
+  // exclusion. Without a host there is no entity to be excluded, so a narrow
+  // union that answers for some other machine said nothing either way and the
+  // honest arm is `indeterminate`. This used to fall through to the line
+  // below, which read a local union's answer as evidence of exclusion and
+  // rendered unknown where the doc above promises the surface keeps the
+  // reading it already had - and where three static call sites
+  // (`chat-progress-icon`, `tab-strip-item`, `epics-list-shared`) already pass
+  // `indeterminate` by hand for this same no-host case.
+  if (hostId === null) return "indeterminate";
+  const host = byHost.get(hostId);
+  if (host !== undefined && hostSliceCoversItsOwnHost(host)) return "covered";
+  return selectPlaneAnswers(byHost) ? "unserved" : "indeterminate";
+}
+
+/**
+ * Reactive {@link selectAgentActivityCoverage}. Returns a primitive, so
+ * Zustand's `Object.is` comparison re-renders a consumer only when the answer
+ * itself flips - never on the unrelated `byHost` replacements every frame and
+ * every status change produce.
+ */
+export function useAgentActivityCoverage(
+  hostId: string | null,
+): AgentActivityCoverage {
+  return useAgentActivityStore((state) =>
+    selectAgentActivityCoverage(state.byHost, hostId),
+  );
 }
 
 /**
@@ -536,9 +666,12 @@ export function agentActivityPlaneSpansFleet(): boolean {
  * host-agnostic "does this reach everywhere", not "does this reach HERE").
  */
 export function agentActivityPlaneCoversHost(hostId: string): boolean {
-  if (agentActivityPlaneSpansFleet()) return true;
-  const host = useAgentActivityStore.getState().byHost.get(hostId);
-  return host !== undefined && hostActivityAnswers(host);
+  return (
+    selectAgentActivityCoverage(
+      useAgentActivityStore.getState().byHost,
+      hostId,
+    ) === "covered"
+  );
 }
 
 /**

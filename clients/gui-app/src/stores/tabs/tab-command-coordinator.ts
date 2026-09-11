@@ -18,6 +18,7 @@ import {
   useEpicCanvasStore,
 } from "@/stores/epics/canvas/store";
 import {
+  isOpenLandingDraft,
   newestLandingDraftId,
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
@@ -321,7 +322,7 @@ function sourceHasRef(ref: TabRef): boolean {
   if (ref.kind === "draft") {
     return useLandingDraftStore
       .getState()
-      .drafts.some((draft) => draft.id === ref.id);
+      .drafts.some((draft) => draft.id === ref.id && isOpenLandingDraft(draft));
   }
   return currentLayout().systemTabs[ref.kind] !== null;
 }
@@ -1038,16 +1039,26 @@ export class TabCommandCoordinator {
       mobileStableDraftId ??
       (target.create ? uuidv4() : null);
     if (draftId === null) return null;
-    const exists = useLandingDraftStore
-      .getState()
-      .drafts.some((draft) => draft.id === draftId);
-    if (!target.create && !exists) return null;
+    const drafts = useLandingDraftStore.getState().drafts;
+    const present = drafts.some((draft) => draft.id === draftId);
+    const open = drafts.some(
+      (draft) => draft.id === draftId && isOpenLandingDraft(draft),
+    );
+    if (!target.create && !open) return null;
     const ref: TabRef = { kind: "draft", id: draftId };
     return this.activationForRef(layout, ref, () => {
-      if (!exists) {
+      if (!present) {
         useLandingDraftStore
           .getState()
           .createDraftWithId(draftId, target.settings);
+        return;
+      }
+      if (!open) {
+        // Retained-but-closed. `createDraftWithId` would no-op on the
+        // existing row and leave `closed` set, so the ref we are installing
+        // would name a draft `tabSourceRefs()` excludes - a tab pointing at
+        // nothing reachable. Reopening is the create this target asked for.
+        useLandingDraftStore.getState().openDraft(draftId);
         return;
       }
       useLandingDraftStore.getState().setActiveDraft(draftId);
@@ -1172,7 +1183,9 @@ export class TabCommandCoordinator {
     if (ref.kind === "draft") {
       const exists = useLandingDraftStore
         .getState()
-        .drafts.some((draft) => draft.id === ref.id);
+        .drafts.some(
+          (draft) => draft.id === ref.id && isOpenLandingDraft(draft),
+        );
       if (!exists) return null;
       return this.activationForRef(layout, ref, () => {
         useLandingDraftStore.getState().setActiveDraft(ref.id);
@@ -1224,7 +1237,7 @@ export class TabCommandCoordinator {
       },
       applyRemovals: () => {
         this.applyExpectedSourceMutation(() => {
-          useLandingDraftStore.getState().closeDraft(command.draftId);
+          useLandingDraftStore.getState().deleteDraft(command.draftId);
         });
       },
     });
@@ -1309,6 +1322,7 @@ export class TabCommandCoordinator {
   ): void {
     if (items.length === 0) return;
     const previousLayout = currentLayout();
+    const previousActiveDraftId = useLandingDraftStore.getState().activeDraftId;
     let replacement: TabRef | null = null;
     if (replaceEmptyDraftId !== null) {
       const ref: TabRef = { kind: "draft", id: replaceEmptyDraftId };
@@ -1339,7 +1353,7 @@ export class TabCommandCoordinator {
     const refs: TabRef[] = items.map((item) =>
       item.kind === "epic"
         ? { kind: "epic", id: item.tab.tabId }
-        : { kind: "draft", id: item.draft.id },
+        : { kind: "draft", id: item.draftId },
     );
     this.execute({
       layout: () => {
@@ -1351,7 +1365,7 @@ export class TabCommandCoordinator {
           const ref: TabRef =
             item.kind === "epic"
               ? { kind: "epic", id: item.tab.tabId }
-              : { kind: "draft", id: item.draft.id };
+              : { kind: "draft", id: item.draftId };
           layout = createLayoutItem(layout, ref);
           const placed = findStripItemForRef(layout, ref);
           if (placed !== null)
@@ -1375,9 +1389,14 @@ export class TabCommandCoordinator {
             useEpicCanvasStore
               .getState()
               .restoreTabForRecovery(item.tab, item.canvas);
-          else
-            useLandingDraftStore.getState().restoreDraftForRecovery(item.draft);
+          else useLandingDraftStore.getState().openDraft(item.draftId);
         }
+        if (
+          previousActiveDraftId !== null &&
+          previousActiveDraftId !== replaceEmptyDraftId
+        )
+          useLandingDraftStore.getState().setActiveDraft(previousActiveDraftId);
+        else useLandingDraftStore.getState().clearActiveDraft();
       },
       applyRemovals: () => {
         if (replacement !== null)
@@ -1406,7 +1425,14 @@ export class TabCommandCoordinator {
       const draft = useLandingDraftStore
         .getState()
         .drafts.find((candidate) => candidate.id === ref.id);
-      if (draft !== undefined) recovery = { kind: "draft", draft, index };
+      if (draft !== undefined && !isEmptyLandingDraftContent(draft.content))
+        recovery = {
+          kind: "draft",
+          draftId: draft.id,
+          hostId:
+            draft.adoption.state === "adopted" ? draft.adoption.hostId : null,
+          index,
+        };
     } else if (ref.kind === "epic") {
       const state = useEpicCanvasStore.getState();
       const tab = state.tabsById[ref.id];
@@ -1908,12 +1934,18 @@ export class TabCommandCoordinator {
     const currentDrafts = useLandingDraftStore.getState().drafts;
     const activeDraftId =
       selected?.kind === "draft" &&
-      currentDrafts.some((draft) => draft.id === selected.id)
+      currentDrafts.some(
+        (draft) => draft.id === selected.id && isOpenLandingDraft(draft),
+      )
         ? selected.id
         : null;
     if (activeDraftId !== useLandingDraftStore.getState().activeDraftId) {
       this.applyExpectedSourceMutation(() => {
-        useLandingDraftStore.setState({ activeDraftId });
+        if (activeDraftId === null) {
+          useLandingDraftStore.getState().clearActiveDraft();
+        } else {
+          useLandingDraftStore.getState().setActiveDraft(activeDraftId);
+        }
       });
     }
   }

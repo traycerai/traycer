@@ -15,6 +15,7 @@ import type {
 } from "@/lib/commands/types";
 
 const spies = vi.hoisted(() => ({
+  deletedArtifactsAvailable: false,
   openTileIntoTargetGroup:
     vi.fn<
       (args: {
@@ -22,6 +23,14 @@ const spies = vi.hoisted(() => ({
         readonly groupId: string | null;
       }) => void
     >(),
+}));
+
+vi.mock("@/hooks/epic/use-epic-session-host-id", () => ({
+  useEpicSessionHostId: () => "host-1",
+}));
+
+vi.mock("@/hooks/epic/use-deleted-artifacts-available", () => ({
+  useDeletedArtifactsAvailable: () => spies.deletedArtifactsAvailable,
 }));
 
 const DEEPEST_SUBPAGE: CommandSubpage = {
@@ -167,6 +176,7 @@ afterEach(() => {
   stubCoarsePointer(false);
   vi.useRealTimers();
   vi.clearAllMocks();
+  spies.deletedArtifactsAvailable = false;
 });
 
 /**
@@ -209,6 +219,42 @@ describe("PaneOpener", () => {
     expect(screen.getByTestId("pane-opener")).not.toBeNull();
     expect(screen.getByText("Open Leaf")).not.toBeNull();
     expect(screen.getByText("Category")).not.toBeNull();
+  });
+
+  it("fuzzy-finds deleted artifacts when recovery is available", () => {
+    spies.deletedArtifactsAvailable = true;
+    render(
+      <PaneOpener
+        epicId="epic-1"
+        tabId="tab-deleted"
+        groupId="group-deleted"
+        active={false}
+      />,
+    );
+
+    fireEvent.change(searchInput(), { target: { value: "restore" } });
+
+    expect(
+      screen.getByRole("option", { name: "Deleted artifacts" }),
+    ).not.toBeNull();
+    expect(screen.queryByRole("option", { name: "Open Leaf" })).toBeNull();
+  });
+
+  it("hides deleted artifacts when the epic host lacks recovery RPCs", () => {
+    render(
+      <PaneOpener
+        epicId="epic-1"
+        tabId="tab-no-deleted"
+        groupId="group-no-deleted"
+        active={false}
+      />,
+    );
+
+    fireEvent.change(searchInput(), { target: { value: "restore" } });
+
+    expect(
+      screen.queryByRole("option", { name: "Deleted artifacts" }),
+    ).toBeNull();
   });
 
   it("focuses the search input when the pane is the active group", () => {
@@ -315,6 +361,31 @@ describe("PaneOpener", () => {
     const anchor = screen.getByTestId("focus-anchor");
     anchor.focus();
     requestPaneOpenerFocus("tab-a", "shared-pane");
+
+    rendered.rerender(
+      <>
+        <button type="button" data-testid="focus-anchor">
+          Focus anchor
+        </button>
+        <PaneOpener
+          epicId="epic-1"
+          tabId="tab-a"
+          groupId="shared-pane"
+          active={false}
+        />
+        <PaneOpener
+          epicId="epic-2"
+          tabId="tab-b"
+          groupId="shared-pane"
+          active
+        />
+      </>,
+    );
+
+    // A mounted picker with the same pane id in another task must not consume
+    // the request. It also must not run normal autofocus while the request is
+    // still targeted at tab-a.
+    expect(document.activeElement).toBe(anchor);
 
     rendered.rerender(
       <>

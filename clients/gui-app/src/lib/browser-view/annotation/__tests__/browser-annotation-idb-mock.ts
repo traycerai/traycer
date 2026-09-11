@@ -27,6 +27,6 @@ export function createIdbKeyvalMock(idbData: Map<string, unknown>) {
       return Promise.resolve();
     }),
     keys: vi.fn(() => Promise.resolve(Array.from(idbData.keys()))),
-    entries: vi.fn(() => Promise.resolve([])),
+    entries: vi.fn(() => Promise.resolve(Array.from(idbData.entries()))),
   };
 }

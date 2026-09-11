@@ -113,6 +113,7 @@ function fakeSession(): FakeSession {
       throw new Error("not exercised by these tests");
     }),
     notifyBearerRotated: vi.fn(),
+    notifyCloudVerdictChanged: vi.fn(),
     wake: (reason, probe) => {
       wakeReasons.push(reason);
       wakeProbes.push(probe);

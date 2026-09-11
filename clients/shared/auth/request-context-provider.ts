@@ -175,6 +175,25 @@ export interface RequestContextProvider {
   onSessionVerified(
     listener: (era: AuthEra) => void,
   ): RequestContextSubscription;
+  /**
+   * Fires when the live context's CLOUD VERDICT changed IN PLACE - what the
+   * session's credential may BUY moved while the context object itself stayed
+   * the same.
+   *
+   * This is the announcement a transport needs in order to keep an already-open
+   * connection honest, and it exists because the in-place case is invisible to
+   * every other signal here. `onChange` is silent by contract when the context
+   * reference does not move; `onBearerRotated` fires for a demotion only
+   * because one happens to rotate alongside it, and says nothing about the
+   * verdict; `onSessionVerified` covers promotions only, and not all of them.
+   *
+   * A MINTED context is deliberately NOT announced here. `setSignedIn` /
+   * `setUnverified` replace the context and emit `onChange`, whose consumers
+   * rebuild their transports - and a rebuilt connection asserts the verdict on
+   * its own `open` frame. Announcing both would push a redundant control frame
+   * onto a socket that was about to be replaced anyway.
+   */
+  onCloudVerdictChanged(listener: () => void): RequestContextSubscription;
 }
 
 export interface MintRequestContextOptions {
@@ -268,6 +287,7 @@ export class DefaultRequestContextProvider implements RequestContextProvider {
   private readonly listeners = new Set<RequestContextListener>();
   private readonly bearerRotationListeners = new Set<() => void>();
   private readonly sessionVerifiedListeners = new Set<(era: AuthEra) => void>();
+  private readonly cloudVerdictListeners = new Set<() => void>();
   /**
    * Bumped by every method below that changes the live credential, ALWAYS
    * before that change is announced — see `emitContextChange` /
@@ -319,6 +339,45 @@ export class DefaultRequestContextProvider implements RequestContextProvider {
     return () => {
       this.sessionVerifiedListeners.delete(listener);
     };
+  }
+
+  onCloudVerdictChanged(listener: () => void): RequestContextSubscription {
+    if (this.disposed) {
+      return () => {};
+    }
+    this.cloudVerdictListeners.add(listener);
+    return () => {
+      this.cloudVerdictListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Announce that the live context's cloud verdict changed in place - see
+   * {@link RequestContextProvider.onCloudVerdictChanged}.
+   *
+   * DRIVEN BY THE AUTH BOUNDARY, NOT BY THIS CLASS, for exactly the reason
+   * {@link announceSessionVerified} is: the verdict is committed in more than
+   * one place - on the context here, and in the auth store this provider
+   * deliberately knows nothing about - and a listener that reads the store must
+   * not run between the two. So the boundary applies the verdict, finishes its
+   * commit, and announces last.
+   *
+   * That ordering is load-bearing rather than tidy. The GUI's stream clients
+   * read the verdict they put on the wire from the auth store, so announcing
+   * before the store commit would push a frame carrying the verdict the session
+   * just STOPPED holding - a demotion announced as an authorization.
+   *
+   * A no-op while signed out: there is no live context whose verdict could have
+   * moved, and no connection left to tell.
+   */
+  announceCloudVerdictChanged(): void {
+    this.assertNotDisposed();
+    if (this.currentContext === null) {
+      return;
+    }
+    for (const listener of [...this.cloudVerdictListeners]) {
+      listener();
+    }
   }
 
   /**
@@ -507,6 +566,7 @@ export class DefaultRequestContextProvider implements RequestContextProvider {
     this.listeners.clear();
     this.bearerRotationListeners.clear();
     this.sessionVerifiedListeners.clear();
+    this.cloudVerdictListeners.clear();
   }
 
   private assertNotDisposed(): void {

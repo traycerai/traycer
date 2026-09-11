@@ -195,6 +195,14 @@ describe("tab recovery through the command coordinator", () => {
     }
     expect(entry.bulk).toBe(true);
     expect(entry.items.map((item) => item.kind)).toEqual(["epic", "draft"]);
+    const recoveredDraft = entry.items.find((item) => item.kind === "draft");
+    expect(recoveredDraft).toMatchObject({
+      kind: "draft",
+      draftId,
+      hostId: null,
+    });
+    expect(recoveredDraft).not.toHaveProperty("draft");
+    expect(recoveredDraft).not.toHaveProperty("legacyDraft");
     // The draft is at live index 1 after Task B is removed; batching maps it
     // back to its original strip position 2 so reopening preserves order.
     expect(entry.items.map((item) => item.index)).toEqual([1, 2]);
@@ -213,6 +221,15 @@ describe("tab recovery through the command coordinator", () => {
     expect(
       useLandingDraftStore.getState().drafts.map((item) => item.id),
     ).toContain(draftId);
+    const restoredDraft = useLandingDraftStore
+      .getState()
+      .drafts.find((item) => item.id === draftId);
+    if (restoredDraft === undefined) {
+      throw new Error("expected the restored draft to remain in the store");
+    }
+    expect(restoredDraft.id).toBe(draftId);
+    expect(restoredDraft.closed).toBe(false);
+    expect(restoredDraft.content.type).toBe("doc");
   });
 
   it("does not journal a draft consumed by a successful draft-to-task replacement", () => {
@@ -231,6 +248,30 @@ describe("tab recovery through the command coordinator", () => {
     expect(useTabRecoveryHistory.getState().entries).toEqual([]);
     expect(stripRefs().map(tabRefKey)).toEqual(["epic:task-submitted"]);
     expect(useLandingDraftStore.getState().drafts).toEqual([]);
+  });
+
+  it("prunes a saved draft recovery reference on permanent deletion", () => {
+    const draftId = useLandingDraftStore.getState().createDraft(null);
+    useLandingDraftStore.getState().setDraftContent(
+      draftId,
+      {
+        type: "doc",
+        content: [
+          { type: "paragraph", content: [{ type: "text", text: "delete" }] },
+        ],
+      },
+      null,
+    );
+    const draftRef: TabRef = { kind: "draft", id: draftId };
+    seedStrip([draftRef], draftRef);
+
+    expect(tabCommandCoordinator.closeRefAfterConfirmed(draftRef)).toBe(true);
+    expect(useTabRecoveryHistory.getState().entries).toHaveLength(1);
+
+    useLandingDraftStore.getState().deleteDraft(draftId);
+
+    expect(useLandingDraftStore.getState().drafts).toEqual([]);
+    expect(useTabRecoveryHistory.getState().entries).toEqual([]);
   });
 
   it("captures a surviving chat viewport before restoring a closed split", () => {
@@ -317,7 +358,7 @@ describe("tab recovery through the command coordinator", () => {
     });
   });
 
-  it("preserves nonempty text and image drafts during task recovery", () => {
+  it("restores saved draft references with their latest text and image content", () => {
     const taskId = useEpicCanvasStore
       .getState()
       .openEpicTab("epic-preserve-drafts", "Task with drafts");
@@ -355,18 +396,34 @@ describe("tab recovery through the command coordinator", () => {
     useLandingDraftStore
       .getState()
       .setDraftContent(imageDraftId, imageContent, null);
+    const latestTextContent: JsonContent = {
+      type: "doc",
+      content: [
+        { type: "paragraph", content: [{ type: "text", text: "latest" }] },
+      ],
+    };
+    useLandingDraftStore
+      .getState()
+      .setDraftContent(textDraftId, latestTextContent, null);
     const taskRef: TabRef = { kind: "epic", id: taskId };
     const textRef: TabRef = { kind: "draft", id: textDraftId };
     const imageRef: TabRef = { kind: "draft", id: imageDraftId };
     seedStrip([taskRef, textRef, imageRef], taskRef);
 
-    expect(tabCommandCoordinator.closeRefAfterConfirmed(taskRef)).toBe(true);
+    batchHeaderTabRecovery(() => {
+      expect(tabCommandCoordinator.closeRefAfterConfirmed(textRef)).toBe(true);
+      expect(tabCommandCoordinator.closeRefAfterConfirmed(imageRef)).toBe(true);
+    });
     const recovery = useTabRecoveryHistory.getState().entries.at(0);
     if (recovery === undefined || recovery.kind !== "header") {
-      throw new Error("expected the closed task recovery entry");
+      throw new Error("expected the closed draft recovery entry");
     }
+    expect(recovery.items).toEqual([
+      { kind: "draft", draftId: textDraftId, hostId: null, index: 1 },
+      { kind: "draft", draftId: imageDraftId, hostId: null, index: 2 },
+    ]);
 
-    seedStrip([textRef, imageRef], textRef);
+    seedStrip([taskRef], taskRef);
     tabCommandCoordinator.restoreClosedHeaderTabs(recovery.items, null);
 
     expect(useLandingDraftStore.getState().drafts).toHaveLength(2);
@@ -377,7 +434,7 @@ describe("tab recovery through the command coordinator", () => {
       useLandingDraftStore
         .getState()
         .drafts.find((draft) => draft.id === textDraftId)?.content,
-    ).toEqual(textContent);
+    ).toEqual(latestTextContent);
     expect(
       useLandingDraftStore
         .getState()

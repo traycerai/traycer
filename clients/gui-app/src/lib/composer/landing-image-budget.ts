@@ -58,14 +58,14 @@ export function registerLandingDraftRootSource(
 }
 
 /**
- * Extra content hashes that must survive landing GC. Chat-composer annotation
- * crops live in this same store (hash + filename on the draft record) and are
- * not present in landing draft content.
+ * Extra content hashes that must survive landing GC: chat-composer annotation
+ * crops (hash + filename on the draft record, not present in landing draft
+ * content) and the images referenced by composer / new-chat / stash rows,
+ * which live in this same partition.
  */
 export interface ExtraImageRootSource {
   hashes(): ReadonlyArray<string>;
   contents?: () => ReadonlyArray<JsonContent>;
-  releaseOldest?: () => boolean;
 }
 
 const extraRootSources: ExtraImageRootSource[] = [];
@@ -207,28 +207,6 @@ function showBudgetExceededToast(draftId: string | null): void {
   );
 }
 
-function projectedImageBytes(
-  candidates: ReadonlyArray<LandingImageBudgetCandidate>,
-): number {
-  const roots = landingLiveImageRootHashes();
-  const seen = new Set<string>();
-  let additional = 0;
-  for (const candidate of candidates) {
-    if (candidate.hash === null) {
-      additional += candidate.bytes;
-      continue;
-    }
-    if (
-      !roots.has(candidate.hash) &&
-      !seen.has(candidate.hash) &&
-      !inFlight.has(candidate.hash)
-    )
-      additional += candidate.bytes;
-    seen.add(candidate.hash);
-  }
-  return currentReferencedBytes() + inFlightBytes() + additional;
-}
-
 /**
  * Reserves capacity for every candidate, charged against current live usage
  * PLUS every other outstanding reservation. A candidate whose hash is already
@@ -249,11 +227,17 @@ export function reserveLandingImageBudget(
   draftId: string | null,
   candidates: ReadonlyArray<LandingImageBudgetCandidate>,
 ): LandingImageBudgetReservation | null {
-  // Retained closed drafts yield capacity before any live draft is affected.
-  while (projectedImageBytes(candidates) > LANDING_IMAGE_BUDGET_BYTES) {
-    if (!extraRootSources.some((source) => source.releaseOldest?.() === true))
-      break;
-  }
+  const reservation = tryReserveLandingImageBudget(candidates);
+  if (reservation === null) showBudgetExceededToast(draftId);
+  return reservation;
+}
+
+/** Silent admission for callers that provide their own retryable failure UI.
+ * Admission never deletes drafts or recovery history, including on rejection.
+ */
+export function tryReserveLandingImageBudget(
+  candidates: ReadonlyArray<LandingImageBudgetCandidate>,
+): LandingImageBudgetReservation | null {
   const liveRoots = landingLiveImageRootHashes();
   const owned: Array<{ readonly key: string; readonly bytes: number }> = [];
   const seenThisCall = new Set<string>();
@@ -272,7 +256,6 @@ export function reserveLandingImageBudget(
     const projected =
       currentReferencedBytes() + inFlightBytes() + additionalBytes;
     if (projected > LANDING_IMAGE_BUDGET_BYTES) {
-      showBudgetExceededToast(draftId);
       return null;
     }
   }

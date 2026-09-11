@@ -12,6 +12,7 @@ import type { ReactNode } from "react";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { AssistantMessageBody } from "@/components/chat/chat-message-assistant-body";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { formatMessageTimeWithSeconds } from "@/lib/relative-time";
 import type {
   AssistantTurnMeta,
   ChatMessageRunState,
@@ -540,5 +541,194 @@ describe("AssistantMessageBody stopped turn rendering", () => {
     expect(
       screen.getAllByText("env: ANTHROPIC_API_KEY (sign-in bypassed)").length,
     ).toBeGreaterThan(0);
+  });
+});
+
+describe("AssistantMessageBody Timing tooltip section", () => {
+  // Started/completed timestamps are taken relative to `Date.now()` at test
+  // time (not a fixed epoch) so the day-scoping rule always resolves to "same
+  // day" regardless of when this suite runs, and the expected string is
+  // derived with `formatMessageTimeWithSeconds` (the exact function the
+  // source calls) rather than a hard-coded literal - per the "no pinned
+  // TZ/locale" trap.
+
+  it("shows Started and Finished rows on a naturally completed turn's tooltip, and no Stopped section", async () => {
+    const user = userEvent.setup();
+    const startedAt = Date.now() - 130_000;
+    const completedAt = Date.now();
+    render(
+      <AssistantMessageBody
+        {...bodyProps({
+          segments: [TEXT_SEGMENT],
+          elapsedStartedAt: startedAt,
+          completedAt,
+          meta: META,
+        })}
+      />,
+    );
+
+    const footer = screen.getByTestId("assistant-elapsed-footer");
+    await user.tab();
+    expect(document.activeElement).toBe(footer);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Started").length).toBeGreaterThan(0);
+    });
+    expect(screen.getAllByText("Finished").length).toBeGreaterThan(0);
+
+    const now = Date.now();
+    const expectedStarted = formatMessageTimeWithSeconds(startedAt, now);
+    const expectedFinished = formatMessageTimeWithSeconds(completedAt, now);
+    expect(screen.getAllByText(expectedStarted).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(expectedFinished).length).toBeGreaterThan(0);
+
+    // Positive/negative pairing for the stopped-turn test below: a naturally
+    // finished turn carries no "Stopped" section at all.
+    expect(screen.queryByText("Stopped at")).toBeNull();
+  });
+
+  // The live pre-turn run indicator's `createdAt` is a synthetic sort anchor,
+  // not a real send time (it can be epoch+1 on an empty transcript), so its
+  // tooltip is wired with `startedAt={null}` and the whole Timing section is
+  // gated on `startedAt !== null`. Paired with the test above: same
+  // `meta: META`, reached through `AssistantRunIndicator` instead of the
+  // elapsed footer. The Agent section is the positive arm proving the
+  // tooltip really did mount - Timing's absence is a deliberate gate, not a
+  // failure to open.
+  it("shows no Timing section at all on the live pre-turn run indicator's hover card", async () => {
+    const user = userEvent.setup();
+    render(
+      <AssistantMessageBody
+        {...bodyProps({
+          segments: [],
+          runState: "running",
+          elapsedStartedAt: Date.now() - 45_000,
+          meta: META,
+        })}
+      />,
+    );
+
+    const indicator = screen.getByTestId("assistant-run-indicator");
+    await user.hover(indicator);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Agent").length).toBeGreaterThan(0);
+    });
+    expect(screen.queryByText("Timing")).toBeNull();
+    expect(screen.queryByText("Started")).toBeNull();
+    expect(screen.queryByText("Finished")).toBeNull();
+  });
+
+  // A stopped turn's `completedAt` is resolved to the stop instant itself
+  // (`assistantTurnTiming`'s `stoppedAt ?? persisted`), so the tooltip prints
+  // "Stopped at" INSTEAD OF "Finished" - not both - or the reader would see
+  // one instant twice under two labels. Positive arm for "Finished" is the
+  // naturally-completed test above; this one, with `stopped` flipped on,
+  // must not show it.
+  it('shows "Stopped at" in place of "Finished" on a stopped turn\'s tooltip, never the old "Time" label', async () => {
+    const user = userEvent.setup();
+    const startedAt = Date.now() - 60_000;
+    const completedAt = Date.now();
+    render(
+      <AssistantMessageBody
+        {...bodyProps({
+          segments: [TEXT_SEGMENT],
+          elapsedStartedAt: startedAt,
+          completedAt,
+          stopped: STOPPED,
+          meta: META,
+        })}
+      />,
+    );
+
+    const footer = screen.getByTestId("assistant-elapsed-footer");
+    await user.tab();
+    expect(document.activeElement).toBe(footer);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Stopped at").length).toBeGreaterThan(0);
+    });
+    expect(screen.queryByText("Time")).toBeNull();
+    expect(screen.queryByText("Finished")).toBeNull();
+
+    const now = Date.now();
+    const expectedStoppedAt = formatMessageTimeWithSeconds(
+      STOPPED.stoppedAt,
+      now,
+    );
+    expect(screen.getAllByText(expectedStoppedAt).length).toBeGreaterThan(0);
+  });
+
+  // Paired with the test above: same stopped turn, one field flipped
+  // (`reason: null`). The dedicated "Stopped" section header exists only to
+  // carry the reason, so with no reason to show it must not render at all -
+  // "Stopped at" already said everything the stop knows, up in Timing.
+  it("omits the dedicated Stopped section header when a stopped turn carries no reason", async () => {
+    const user = userEvent.setup();
+    const stoppedNoReason: ChatMessageStoppedInfo = {
+      ...STOPPED,
+      reason: null,
+    };
+    const startedAt = Date.now() - 60_000;
+    const completedAt = Date.now();
+    render(
+      <AssistantMessageBody
+        {...bodyProps({
+          segments: [TEXT_SEGMENT],
+          elapsedStartedAt: startedAt,
+          completedAt,
+          stopped: stoppedNoReason,
+          meta: META,
+        })}
+      />,
+    );
+
+    const footer = screen.getByTestId("assistant-elapsed-footer");
+    await user.tab();
+    expect(document.activeElement).toBe(footer);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Stopped at").length).toBeGreaterThan(0);
+    });
+    // The footer's own visible "Stopped · Ns" label is a <span>, always
+    // present once `stopped !== null`; the section header this test is about
+    // is the tooltip's own `<div>`, so scope the query to that tag to avoid a
+    // false negative from the unrelated footer text.
+    expect(screen.queryByText("Stopped", { selector: "div" })).toBeNull();
+    expect(screen.queryByText("Reason")).toBeNull();
+  });
+
+  // Regression coverage for the row-state-matrix change: a footer with no
+  // agent metadata and no stop record used to render as a plain,
+  // un-hoverable `<div>` with no card at all. It must now be a real tooltip
+  // trigger whose card discloses Timing - the only section such a footer has.
+  it("is hoverable and discloses Timing even with no agent metadata and no stop record", async () => {
+    const user = userEvent.setup();
+    const startedAt = Date.now() - 10_000;
+    const completedAt = Date.now();
+    render(
+      <AssistantMessageBody
+        {...bodyProps({
+          segments: [TEXT_SEGMENT],
+          elapsedStartedAt: startedAt,
+          completedAt,
+          meta: null,
+          stopped: null,
+        })}
+      />,
+    );
+
+    const footer = screen.getByTestId("assistant-elapsed-footer");
+    await user.tab();
+    expect(document.activeElement).toBe(footer);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Timing").length).toBeGreaterThan(0);
+    });
+    expect(screen.getAllByText("Started").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Finished").length).toBeGreaterThan(0);
+    // No agent metadata, so no Agent section - Timing is the only content.
+    expect(screen.queryByText("Agent")).toBeNull();
+    expect(screen.queryByText("Provider")).toBeNull();
   });
 });

@@ -3,6 +3,7 @@ import { ChevronRight, Menu } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
+import { APP_HEADER_HEIGHT_CLASS } from "@/components/layout/header/app-header-height";
 import { SETTINGS_SECTIONS } from "@/lib/settings-sections";
 import { RateLimitIconButton } from "@/components/layout/header/rate-limit-icon";
 import { ResourceMonitorPopover } from "@/components/resources/resource-monitor-popover";
@@ -10,6 +11,7 @@ import { MobileNotificationsButton } from "@/components/notifications/mobile-not
 import { MobileEpicHeaderTitle } from "@/components/epic-canvas/mobile/epic-mobile-header-actions";
 import "@/components/layout/shell/mobile-shell-touch-targets.css";
 import { useRegisteredEpicTitle } from "@/lib/epic-selectors";
+import { cn } from "@/lib/utils";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 import { useMobileHeaderRightActions } from "@/stores/layout/mobile-header-right-actions";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -52,7 +54,12 @@ export function MobileAppHeader(): ReactNode {
       // reserved by `#root`, and `bg-background` is the same token the strip
       // shows, so the two read as one surface without the header having to
       // reach under the bar.
-      className="relative z-20 flex h-10 shrink-0 items-center gap-1 bg-background px-2 text-foreground after:absolute after:inset-x-0 after:bottom-0 after:z-1 after:h-px after:bg-border/90 after:content-[''] pointer-coarse:touch-chrome"
+      // The height is the shared token the toaster clears on the phone, so
+      // the two cannot drift apart.
+      className={cn(
+        APP_HEADER_HEIGHT_CLASS,
+        "relative z-20 flex shrink-0 items-center gap-1 bg-background px-2 text-foreground after:absolute after:inset-x-0 after:bottom-0 after:z-1 after:h-px after:bg-border/90 after:content-[''] pointer-coarse:touch-chrome",
+      )}
     >
       <Button
         type="button"

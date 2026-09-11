@@ -614,6 +614,7 @@ export function acquireRemoteSession<
       params,
       idempotencyKey,
       abortSignal,
+      callerAgentId,
       responseTimeoutMs,
       replayMustBeKeyed,
       requiredHostMethodVersion,
@@ -623,6 +624,7 @@ export function acquireRemoteSession<
         params,
         idempotencyKey,
         abortSignal,
+        callerAgentId,
         responseTimeoutMs,
         replayMustBeKeyed,
         requiredHostMethodVersion,
@@ -633,6 +635,7 @@ export function acquireRemoteSession<
     subscribeWithParamsProvider: (method, paramsProvider) =>
       session.subscribeWithParamsProvider(method, paramsProvider),
     notifyBearerRotated: () => session.notifyBearerRotated(),
+    notifyCloudVerdictChanged: () => session.notifyCloudVerdictChanged(),
     wake: (reason, probe) => {
       // Only a LIVE reference may accelerate a session. A view whose `close()`
       // already ran is a stale callback - a discarded render, a disposed
@@ -1110,6 +1113,7 @@ export function tryAcquireReadyRemoteSession<
           params,
           null,
           abortSignal,
+          null,
           responseTimeoutMs,
           // A borrowed status poll carries no key and is never a replay: the
           // caller re-polls on the next tick rather than retrying this one.

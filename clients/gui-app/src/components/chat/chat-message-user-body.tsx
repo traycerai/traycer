@@ -80,6 +80,7 @@ import type {
   ChatMessageEditing,
   ChatMessageUserActions,
 } from "./chat-message";
+import { ChatMessageTimestamp } from "./chat-message-timestamp";
 import { ChatUserMessageContent } from "./chat-user-message-content";
 import { UserMessageAttachmentGallery } from "./user-message-attachment-gallery";
 import { BrowserReferenceChips } from "./browser-reference-chips";
@@ -191,6 +192,7 @@ export function UserMessageBody({
           messageText={message.content}
           agentMessage={message.agentMessage}
           agentSenderInfo={message.agentSenderInfo}
+          sentAt={message.sentAt ?? message.createdAt}
         />
       </>
     );
@@ -209,11 +211,13 @@ function AgentMessageDisplayView({
   messageText,
   agentMessage,
   agentSenderInfo,
+  sentAt,
 }: {
   messageId: string;
   messageText: string;
   agentMessage: ChatMessageModel["agentMessage"];
   agentSenderInfo: NonNullable<ChatMessageModel["agentSenderInfo"]>;
+  sentAt: number;
 }): ReactNode {
   const tileInstanceId = useChatCollapsibleTileInstanceId();
   const collapsibleKey = useMemo(
@@ -307,6 +311,11 @@ function AgentMessageDisplayView({
   // name is the only element allowed to shrink, so the direction words are
   // for assistive tech only and reply-expected is an icon. The icon plus
   // "from" carry the meaning for sighted users.
+  //
+  // The arrival stamp trails the row, past the `flex-1` name cell, so it lands
+  // at the header's right edge. Agent-to-agent traffic is where a timeline is
+  // hardest to reconstruct - these rows have no human send behind them - so it
+  // is the one place the stamp is load-bearing rather than a convenience.
   const header = (
     <>
       <Inbox className="size-3.5 shrink-0 text-primary" aria-hidden />
@@ -319,6 +328,7 @@ function AgentMessageDisplayView({
         />
         {expectReply ? <ReplyExpectedIcon /> : null}
       </span>
+      <ChatMessageTimestamp timestamp={sentAt} />
     </>
   );
 

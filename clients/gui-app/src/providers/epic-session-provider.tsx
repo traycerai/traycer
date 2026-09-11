@@ -74,6 +74,7 @@ import {
   type EpicSessionTransportCloseTrigger,
 } from "@/lib/registries/epic-session-registry";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { reportEpicParkRefused, useEpicParked } from "@/lib/epics/epic-parking";
 import { shouldMergeEpicRoomSwap } from "@/lib/epics/epic-room-swap";
 import { armCarriesRootWrites } from "@/stores/epics/open-epic/runtime/epic-adapter-selection";
 import { ESTABLISHING_DEADLINE_MS } from "@/lib/host/bounded-load-budgets";
@@ -108,6 +109,9 @@ type OwnerIdentityVerdict =
   | { readonly kind: "rotated" };
 
 const OWNER_IDENTITY_STABLE: OwnerIdentityVerdict = { kind: "stable" };
+
+/** Passed to `reconnectAll` so a hand-driven wake is distinguishable in logs. */
+const EPIC_SESSION_WAKE_REASON = "user-retry";
 
 /**
  * INVARIANT (R-1): a tuple's `ownerIdentityKey` is the owner identity OF its
@@ -226,6 +230,52 @@ function requireConstructionHostStamp(handle: OpenEpicStoreHandle): string {
   return stamped;
 }
 
+/**
+ * Re-assert the release a parked epic is supposed to have already had, and
+ * answer whether it held.
+ *
+ * RE-ASSERTED, not assumed. `lib/epics/epic-parking.ts` releases the session
+ * before it publishes the parked signal, so this is almost always a no-op on
+ * an epic the registry no longer holds. What it covers is the one order where
+ * it is not: a session acquired AFTER that release - a host that only answered
+ * once the epic had already sat unwatched for the whole window - which would
+ * otherwise be a live `epic.subscribe` under a parked flag, holding the exact
+ * visible lease parking exists to drop.
+ *
+ * A refusal means the epic became dirty or busy in that same gap. The signal
+ * is taken back down rather than deferred here, because the retry belongs to
+ * the parking module, which watches the registry's own eligibility edge.
+ */
+function releaseParkedEpicSession(epicId: string): boolean {
+  if (getOpenEpicRegistry().park(epicId)) return true;
+  reportEpicParkRefused(epicId);
+  return false;
+}
+
+/**
+ * The handle this provider hands to its subtree, and the two states in which
+ * it hands out nothing.
+ *
+ * The PARKED arm is a render guard, not a tidy-up. Parking disposes the handle
+ * through the registry (plan C, decision C1), so the commit that observes the
+ * park has to publish `null` in that same commit - one frame later is a frame
+ * in which the session gate, the tile slots' environment publish and every
+ * `useOpenEpicHandle` caller are holding a destroyed store.
+ *
+ * Module scope for the reason `epicOwnershipKeyFor` is: the provider body sits
+ * against the complexity ceiling, and these branches are a fact about the
+ * inputs rather than anything that needs the component's scope.
+ */
+function publishedSessionHandle(
+  session: MountedSessionState | null,
+  ownershipClaimed: boolean,
+  parked: boolean,
+): OpenEpicStoreHandle | null {
+  if (!ownershipClaimed) return null;
+  if (parked) return null;
+  return session?.handle ?? null;
+}
+
 export function EpicSessionProvider(
   props: EpicSessionProviderProps,
 ): ReactNode {
@@ -298,6 +348,11 @@ export function EpicSessionProvider(
   const onAuthError = useEffectEvent((): void => {
     void authService.revalidateCurrentContext();
   });
+
+  // Renderer parking's published signal (plan C, C1). Read here rather than
+  // computed here: the decision is per EPIC and this component is per view
+  // tab, so two header views of one task must not each run their own window.
+  const parked = useEpicParked(epicId);
 
   const ownershipKey = epicOwnershipKeyFor(desktopBridge, epicId, tabId);
   const [claimedOwnershipKey, setClaimedOwnershipKey] = useState<string | null>(
@@ -603,11 +658,67 @@ export function EpicSessionProvider(
     targetHostId,
   ]);
 
+  // PARKED (plan C, decision C1): no pane of this epic has been visible in any
+  // window for the park window, so `lib/epics/epic-parking.ts` has released the
+  // session through the registry. This effect only drops THIS provider's
+  // reference to the handle that release destroyed - the same division
+  // `retireIfDead` draws for a dead runtime, and for the same reason: one owner
+  // decides, every provider forgets.
+  //
+  // Nothing is re-acquired here and nothing needs to be. Unparking flips the
+  // acquire effect's `parked` dependency, it re-runs with `sessionRef.current`
+  // null, and its acquire arm builds a fresh handle - which is a cold open,
+  // which is what decision C5 asks a shown parked tab to look like. Presented
+  // as `establishing` rather than left on a stale `ready`, so the shell's gate
+  // renders its loading body instead of a failure card while the handle is
+  // gone.
+  //
+  // ITS OWN EFFECT, not an arm of the acquire effect below. Parking is a
+  // release; the acquire effect is a construction with a cleanup that disposes
+  // a pending re-point candidate, and a park has no candidate and nothing to
+  // dispose. The acquire effect stops at a bare `if (parked) return` for that
+  // reason.
+  //
+  // NEITHER write is what stops consumers seeing the dead handle - `handle` is
+  // derived with its own `parked` guard below, so the context is already `null`
+  // in the render that observed the park. What these do is make the state agree
+  // with that guard before the guard OPENS again: a `session` still holding the
+  // disposed tuple would be published for one render on unpark, in the gap
+  // before the acquire effect re-runs. `sessionRef` is the same fact for that
+  // effect, which reads the ref rather than the state.
+  useEffect(() => {
+    if (!parked) return;
+    if (!releaseParkedEpicSession(epicId)) return;
+    sessionRef.current = null;
+    // SYNCHRONOUSLY, unlike every other session publish in this provider, and
+    // the difference is one of kind rather than taste: the others hand over a
+    // LIVE session, where a cancelled publish simply means the effect re-runs
+    // and rebuilds, while this one RETRACTS a destroyed one, where a cancelled
+    // publish leaves the destroyed tuple in state as the thing consumers read.
+    //
+    // Deferred to a microtask, this write was cancelled by the very edge it
+    // exists for: an unpark landing inside that window runs this effect's
+    // cleanup first, so `setSession(null)` never arrived, and the render that
+    // observed `parked === false` republished the disposed tuple through
+    // `publishedSessionHandle`. The render guard cannot close that one either,
+    // because in that render `parked` is already false - which is precisely
+    // the "one render on unpark" the note above describes.
+    setSession(null);
+    presentSession({
+      kind: "establishing",
+      targetHostId,
+      originalHostId: originalHostIdRef.current,
+    });
+  }, [epicId, parked, presentSession, targetHostId]);
+
   useEffect(() => {
     if (!ownershipClaimed) return;
     // The effect above owns what the shell shows for a null host; acquisition
     // needs a concrete `hostId` and has nothing to do until one arrives.
     if (targetHostId === null) return;
+    // The park effect above owns this state; re-running here would rebuild the
+    // very session it just released.
+    if (parked) return;
     const lifecycle = { cancelled: false };
     const registry = getOpenEpicRegistry();
     const handleSessionAuthError = (): void => {
@@ -933,6 +1044,19 @@ export function EpicSessionProvider(
           onRetryTransport: () => {
             liveness.dead = true;
             setRetryGeneration((generation) => generation + 1);
+          },
+          // THIS session's socket, never the app-wide one. Every surface owns
+          // its own transport - a chat opens one per session, and this opener
+          // holds the epic's - so a wake resolved from anywhere else would
+          // collapse the backoff on a connection the user is not waiting for
+          // and leave theirs sitting out its delay. `probeFirst: false`
+          // because a person pressing a button is demanding a re-dial, and the
+          // probe-first flavour answers a live-but-stuck socket with nothing.
+          onWakeTransport: () => {
+            wsStreamClient.reconnectAll(EPIC_SESSION_WAKE_REASON, {
+              probeFirst: false,
+              wakeProbe: null,
+            });
           },
           runtime: {
             port: runtimeWorker.port,
@@ -1567,6 +1691,7 @@ export function EpicSessionProvider(
     ownerIdentityKey,
     ownerIdentityKeyHostId,
     ownershipClaimed,
+    parked,
     planRestrictedSessionRebuildBackoff,
     presentSession,
     sessionUserId,
@@ -1582,7 +1707,7 @@ export function EpicSessionProvider(
     };
   }, [epicId]);
 
-  const handle = ownershipClaimed ? (session?.handle ?? null) : null;
+  const handle = publishedSessionHandle(session, ownershipClaimed, parked);
   // Stamp the SAME client the context below provides onto the handle, for
   // imperative callers outside this subtree (the DnD reparent commit) that
   // must address the host the session's records live on. Re-stamped on

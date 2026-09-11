@@ -11,6 +11,7 @@ import {
 import {
   useTabRecoveryHistory,
   type ClosedHeaderTab,
+  type LegacyRecoveryDraft,
   type TabRecoveryEntry,
 } from "@/lib/tab-recovery/history";
 import { reopenClosedTab } from "@/lib/tab-recovery/reopen";
@@ -27,8 +28,10 @@ const mocks = vi.hoisted(() => {
         ) => void
       >(),
     navigateToTabIntent: vi.fn<(intent: unknown) => void>(),
-    base64ToBytes: vi.fn<(value: string) => Uint8Array | null>(),
-    putImage: vi.fn<(bytes: Uint8Array) => Promise<string>>(),
+    prepareSavedDraft:
+      vi.fn<
+        (item: ClosedHeaderTab, stillCurrent: () => boolean) => Promise<boolean>
+      >(),
     scheduleLandingImageReconcile: vi.fn<() => void>(),
     toastInfo: vi.fn<(message: string, options: unknown) => void>(),
     canvasState: {
@@ -69,6 +72,10 @@ vi.mock("@/stores/home/landing-draft-store", () => ({
   },
 }));
 
+vi.mock("../saved-draft", () => ({
+  prepareSavedDraft: mocks.prepareSavedDraft,
+}));
+
 vi.mock("@/stores/tabs/tab-command-coordinator", () => ({
   tabCommandCoordinator: {
     restoreClosedHeaderTabs: mocks.restoreClosedHeaderTabs,
@@ -95,15 +102,6 @@ vi.mock("@/lib/terminals/plain-terminal-presentation-invalidation", () => ({
 }));
 
 vi.mock("@/lib/query-client", () => ({ queryClient: {} }));
-
-vi.mock("@/lib/composer/image-base64", () => ({
-  base64ToBytes: mocks.base64ToBytes,
-}));
-
-vi.mock("@/lib/composer/landing-image-store", () => ({
-  landingImagePartition: vi.fn(() => "default"),
-  putImage: mocks.putImage,
-}));
 
 vi.mock("@/lib/composer/landing-image-gc", () => ({
   scheduleLandingImageReconcile: mocks.scheduleLandingImageReconcile,
@@ -195,9 +193,7 @@ function canvasEntry(input: {
   };
 }
 
-function draft(
-  content: JsonContent,
-): import("@/stores/home/landing-draft-store").LandingDraftTab {
+function draft(content: JsonContent): LegacyRecoveryDraft {
   return {
     id: "draft-1",
     content,
@@ -210,6 +206,19 @@ function draft(
       primaryPath: null,
       folderInfoByPath: {},
     },
+  };
+}
+
+function draftRef(
+  content: JsonContent,
+  draftId = "draft-1",
+): Extract<ClosedHeaderTab, { kind: "draft" }> {
+  return {
+    kind: "draft",
+    draftId,
+    hostId: null,
+    legacyDraft: { ...draft(content), id: draftId },
+    index: 0,
   };
 }
 
@@ -235,8 +244,8 @@ function nextAnimationFrame(): Promise<void> {
 beforeEach(() => {
   mocks.restoreClosedHeaderTabs.mockReset();
   mocks.navigateToTabIntent.mockReset();
-  mocks.base64ToBytes.mockReset();
-  mocks.putImage.mockReset();
+  mocks.prepareSavedDraft.mockReset();
+  mocks.prepareSavedDraft.mockResolvedValue(true);
   mocks.scheduleLandingImageReconcile.mockReset();
   mocks.toastInfo.mockReset();
   mocks.canvasState.openTabOrder.length = 0;
@@ -285,6 +294,32 @@ describe("reopenClosedTab", () => {
     expect(useTabRecoveryHistory.getState().entries).toHaveLength(0);
   });
 
+  it("reopens a saved draft by reference so the store supplies its latest content", async () => {
+    const item: Extract<ClosedHeaderTab, { kind: "draft" }> = {
+      kind: "draft",
+      draftId: "saved-draft",
+      hostId: "host-1",
+      index: 0,
+    };
+    const entry: TabRecoveryEntry = {
+      id: "entry-1",
+      kind: "header",
+      bulk: false,
+      items: [item],
+    };
+    useTabRecoveryHistory.setState({ entries: [entry], ready: true });
+
+    await reopenClosedTab(router("/", undefined));
+
+    expect(mocks.prepareSavedDraft).toHaveBeenCalledWith(
+      item,
+      expect.any(Function),
+    );
+    expect(mocks.restoreClosedHeaderTabs).toHaveBeenCalledWith([item], null);
+    expect(item).not.toHaveProperty("legacyDraft");
+    expect(useTabRecoveryHistory.getState().entries).toHaveLength(0);
+  });
+
   it("keeps the recovery entry when a draft image cannot be restored", async () => {
     const image: JsonContent = {
       type: "imageAttachment",
@@ -294,11 +329,10 @@ describe("reopenClosedTab", () => {
       id: "entry-1",
       kind: "header",
       bulk: false,
-      items: [{ kind: "draft", index: 0, draft: draft(image) }],
+      items: [draftRef(image)],
     };
     useTabRecoveryHistory.setState({ entries: [entry], ready: true });
-    mocks.base64ToBytes.mockReturnValue(new Uint8Array([1, 2, 3]));
-    mocks.putImage.mockRejectedValue(new Error("host unavailable"));
+    mocks.prepareSavedDraft.mockRejectedValue(new Error("host unavailable"));
 
     await reopenClosedTab(router("/", undefined));
 
@@ -323,19 +357,18 @@ describe("reopenClosedTab", () => {
       type: "imageAttachment",
       attrs: { b64content: "not-decodable" },
     };
-    const failedDraft = draft(image);
+    const failedDraft = draftRef(image);
     const entry: TabRecoveryEntry = {
       id: "entry-1",
       kind: "header",
       bulk: true,
       items: [
         ...epicEntry({ id: "entry-1", bulk: true }).items,
-        { kind: "draft", index: 1, draft: failedDraft },
+        { ...draftRef(image, "draft-1"), index: 1 },
       ],
     };
     useTabRecoveryHistory.setState({ entries: [entry], ready: true });
-    mocks.base64ToBytes.mockReturnValue(new Uint8Array([1, 2, 3]));
-    mocks.putImage.mockRejectedValue(new Error("host unavailable"));
+    mocks.prepareSavedDraft.mockRejectedValue(new Error("host unavailable"));
 
     await reopenClosedTab(router("/", undefined));
 
@@ -346,7 +379,7 @@ describe("reopenClosedTab", () => {
     expect(useTabRecoveryHistory.getState().entries).toEqual([
       expect.objectContaining({
         id: "entry-1",
-        items: [{ kind: "draft", index: 1, draft: failedDraft }],
+        items: [{ ...failedDraft, index: 1 }],
       }),
     ]);
     expect(mocks.toastInfo).toHaveBeenCalledTimes(1);
@@ -530,24 +563,23 @@ describe("reopenClosedTab", () => {
       id: "entry-1",
       kind: "header",
       bulk: false,
-      items: [{ kind: "draft", index: 0, draft: draft(image) }],
+      items: [draftRef(image)],
     };
     useTabRecoveryHistory.setState({ entries: [entry], ready: true });
-    mocks.base64ToBytes.mockReturnValue(new Uint8Array([1, 2, 3]));
-    let resolveImage: (hash: string) => void = () => undefined;
-    mocks.putImage.mockImplementation(
+    let resolveDraft: (ready: boolean) => void = () => undefined;
+    mocks.prepareSavedDraft.mockImplementation(
       () =>
-        new Promise<string>((resolve) => {
-          resolveImage = resolve;
+        new Promise<boolean>((resolve) => {
+          resolveDraft = resolve;
         }),
     );
 
     const reopen = reopenClosedTab(router("/", undefined));
     await Promise.resolve();
-    expect(mocks.putImage).toHaveBeenCalledTimes(1);
+    expect(mocks.prepareSavedDraft).toHaveBeenCalledTimes(1);
 
     useTabRecoveryHistory.setState({ entries: [], ready: true });
-    resolveImage("hash");
+    resolveDraft(true);
     await reopen;
 
     expect(mocks.restoreClosedHeaderTabs).not.toHaveBeenCalled();

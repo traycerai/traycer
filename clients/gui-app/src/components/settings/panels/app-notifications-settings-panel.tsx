@@ -14,8 +14,8 @@ export function AppNotificationsSettingsPanel() {
 
   return (
     <SettingsPanelShell
-      title="Notifications"
-      description="How this app alerts you across hosts."
+      title="Sounds"
+      description="Which chime plays for each kind of alert, across hosts."
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
       <div className={cn("flex flex-col", compact ? "gap-3.5" : "gap-5")}>
@@ -24,12 +24,14 @@ export function AppNotificationsSettingsPanel() {
         <PushPermissionSection />
         <SettingsGroup
           title="Events"
+          anchor="app-notifications-events"
           tone="default"
           dataTestId="notification-event-settings-section"
           fill={false}
         >
           <SettingsRow
             label="Notification events"
+            anchor="app-notification-events"
             description="Choose which events alert you for the host selected in Settings."
             control={
               <Button

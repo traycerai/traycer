@@ -20,6 +20,7 @@ import {
   createRouter,
 } from "@tanstack/react-router";
 import {
+  act,
   cleanup,
   createEvent,
   fireEvent,
@@ -33,13 +34,19 @@ import {
   EpicsListPanel,
   type EpicsListPanelVariant,
 } from "@/components/epics/epics-list-panel";
+import { EpicsListHostRequiresCloudToList } from "@/components/epics/epics-list-shared";
+import { historyRowProvenanceLabel } from "@/components/epics/history-row-provenance";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
 import type { HistoryFacets } from "@/hooks/home/use-history-query";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useHistorySearchStore } from "@/stores/home/history-search-store";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useImportedUnseenStore } from "@/stores/session-import/imported-unseen-store";
+import { harnessDisplayName } from "@/components/session-import/session-import-model";
 import { DEFAULT_HISTORY_SEARCH } from "@/lib/history-search";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
 import { setDesktopEpicOwnershipBridge } from "@/lib/windows/desktop-epic-ownership";
 import type { DesktopWindowsBridge } from "@/lib/windows/types";
@@ -120,6 +127,10 @@ interface RenameEpicTitleVariables {
 }
 
 interface SetEpicPinnedVariables {
+  // Mirrors production's dispatch-side host. Declared locally here, which is
+  // exactly why the compile cannot flag a drift - the assertions below are the
+  // only thing that can, and only if they name the key.
+  readonly hostId: string | null;
   readonly epicId: string;
   readonly pinned: boolean;
 }
@@ -183,6 +194,13 @@ const testState = vi.hoisted(() => ({
   pendingSetPinnedEpicIds: new Set<string>(),
   refetch: vi.fn(),
   fetchNextPage: vi.fn(),
+  openLandingDraftFromHistory: vi.fn(),
+}));
+
+vi.mock("@/lib/commands/actions/open-landing-draft-from-history", () => ({
+  openLandingDraftFromHistory: (navigate: unknown, draftId: string): void => {
+    testState.openLandingDraftFromHistory(navigate, draftId);
+  },
 }));
 
 vi.mock("@/hooks/home/use-history-query", () => ({
@@ -237,6 +255,16 @@ vi.mock("@/hooks/epic/use-epic-set-pinned-mutation", () => ({
   usePendingSetPinnedEpicIds: () => testState.pendingSetPinnedEpicIds,
 }));
 
+/**
+ * `useEpicPinLocalHomeSupported` reads `useHostClient()`, which throws
+ * outside a `<HostRuntimeProvider>` - absent in this file. Fixed at `false`:
+ * every existing case here predates lane 9 item 5 and pins the pre-`@1.1`
+ * reading (`local-home` permanently unavailable).
+ */
+vi.mock("@/hooks/epic/use-epic-pin-local-home-support", () => ({
+  useEpicPinLocalHomeSupported: () => false,
+}));
+
 vi.mock("@/hooks/epic/use-epic-activity-status", () => ({
   useEpicActivityStatus: (epicId: string | null) =>
     epicId === null
@@ -265,6 +293,13 @@ function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
     isPinned: false,
     ...overrides,
   };
+}
+
+function resetImportedUnseenStore(): void {
+  act(() => {
+    const state = useImportedUnseenStore.getState();
+    for (const epicId of Object.keys(state.unseen)) state.markSeen(epicId);
+  });
 }
 
 function historyWorktree(): WorktreeHostEntryV12 {
@@ -342,6 +377,39 @@ function renderPanelWithOpenItem(
   return router;
 }
 
+/**
+ * Like {@link renderPanel}, but also returns the Testing Library render
+ * result - `rerender` and `unmount` - for tests that force a re-render (a
+ * glyph swap mid focus-session) or need to observe teardown (a document
+ * listener left behind by an unmounted row). No epic-tab routes: nothing
+ * here navigates.
+ */
+function renderPanelView(variant: EpicsListPanelVariant, initialEntry: string) {
+  const rootRoute = createRootRoute({
+    component: () => <RootOutlet />,
+  });
+  const indexRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/",
+    component: () => (
+      <EpicsListPanel
+        variant={variant}
+        className={undefined}
+        onSelectEpic={null}
+        onOpenItem={null}
+        routeSearch={null}
+        historyNowMs={null}
+        autoFocusSearch={false}
+      />
+    ),
+  });
+  const router = createRouter({
+    routeTree: rootRoute.addChildren([indexRoute]),
+    history: createMemoryHistory({ initialEntries: [initialEntry] }),
+  });
+  return { router, ...render(<RouterProvider router={router} />) };
+}
+
 function RootOutlet(): ReactNode {
   const content = (
     <QueryClientProvider client={queryClient}>
@@ -385,7 +453,9 @@ describe("<EpicsListPanel />", () => {
     testState.pendingSetPinnedEpicIds = new Set();
     testState.refetch.mockReset();
     testState.fetchNextPage.mockReset();
+    testState.openLandingDraftFromHistory.mockReset();
     testState.activityByEpicId.clear();
+    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
     queryClient.clear();
     // This fixture renders the panel without the application root bridge. The
     // bridge releases the controller's hydration gate in production, so make
@@ -397,6 +467,7 @@ describe("<EpicsListPanel />", () => {
     // holding a verdict. The store defaults to `signed-out`, under which every
     // pin assertion below would pass vacuously against a disabled control.
     useAuthStore.setState({ status: "signed-in" });
+    resetImportedUnseenStore();
   });
 
   it("lets a destination picker replace normal row navigation", async () => {
@@ -454,6 +525,8 @@ describe("<EpicsListPanel />", () => {
     setDesktopEpicOwnershipBridge(null);
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
+    resetImportedUnseenStore();
+    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   });
 
   it("opens landing history rows through the canonical epic tab route", async () => {
@@ -516,12 +589,71 @@ describe("<EpicsListPanel />", () => {
     };
     renderPanel("embedded", "/");
 
-    expect(
-      await screen.findByTestId("epics-list-cloud-page-unavailable"),
-    ).not.toBeNull();
+    const unavailable = await screen.findByTestId("epics-list-unavailable");
+    expect(unavailable).not.toBeNull();
     // RED before the fix: "No tasks yet" rendered under the notice, a claim
     // about an account whose tasks may all live on other devices.
     expect(screen.queryByTestId("epics-list-empty")).toBeNull();
+    expect(unavailable.getAttribute("data-remedy")).toBe("retry");
+
+    fireEvent.click(screen.getByTestId("epics-list-unavailable-retry"));
+    expect(testState.refetch).toHaveBeenCalled();
+  });
+
+  it("offers sign-in instead of a dead Retry when the session is unverified", async () => {
+    testState.items = [];
+    testState.completeness = {
+      cloudPage: "unavailable",
+      facets: "partial",
+      localRows: "none",
+      sort: "server",
+    };
+    useAuthStore.setState({ status: "unverified" });
+    renderPanel("embedded", "/");
+
+    const unavailable = await screen.findByTestId("epics-list-unavailable");
+    expect(unavailable.getAttribute("data-remedy")).toBe("sign-in");
+    expect(screen.queryByTestId("epics-list-unavailable-retry")).toBeNull();
+    expect(unavailable.textContent).toMatch(/once it is/i);
+    expect(unavailable.textContent).not.toMatch(/sign in again/i);
+    expect(screen.queryByTestId("epics-list-empty")).toBeNull();
+  });
+
+  it("does not call a filtered result empty when the listing was unavailable", async () => {
+    testState.items = [];
+    testState.completeness = {
+      cloudPage: "unavailable",
+      facets: "partial",
+      localRows: "suppressed-unprovable-filter",
+      sort: "server",
+    };
+    useHistorySearchStore.setState({
+      search: { ...DEFAULT_HISTORY_SEARCH, query: "missing" },
+    });
+    renderPanel("embedded", "/");
+
+    expect(await screen.findByTestId("epics-list-unavailable")).not.toBeNull();
+    expect(screen.queryByTestId("epics-list-filtered-empty")).toBeNull();
+    expect(screen.queryByTestId("epics-list-empty")).toBeNull();
+  });
+
+  it("shows the filtered empty state when the cloud page has settled", async () => {
+    testState.items = [];
+    testState.completeness = {
+      cloudPage: "settled",
+      facets: "server",
+      localRows: "none",
+      sort: "server",
+    };
+    useHistorySearchStore.setState({
+      search: { ...DEFAULT_HISTORY_SEARCH, query: "missing" },
+    });
+    renderPanel("embedded", "/");
+
+    expect(
+      await screen.findByTestId("epics-list-filtered-empty"),
+    ).not.toBeNull();
+    expect(screen.queryByTestId("epics-list-unavailable")).toBeNull();
   });
 
   it("shows the explicit cloud-pending state instead of an empty list", async () => {
@@ -530,12 +662,7 @@ describe("<EpicsListPanel />", () => {
     renderPanel("embedded", "/");
 
     expect(screen.queryByTestId("epics-list-empty")).toBeNull();
-    expect(
-      await screen.findByTestId("epics-list-cloud-page-pending"),
-    ).not.toBeNull();
-    expect(screen.getByTestId("epics-list-completeness").textContent).toContain(
-      "Cloud tasks are still loading",
-    );
+    expect(await screen.findByTestId("epics-list-loading")).not.toBeNull();
   });
 
   it("labels a task that is already open in the tab strip", async () => {
@@ -564,6 +691,8 @@ describe("<EpicsListPanel />", () => {
     expect(testState.setPinnedMutate).toHaveBeenCalledWith({
       epicId: "epic-from-history",
       pinned: false,
+      isLocalHome: false,
+      hostId: null,
     });
   });
 
@@ -578,6 +707,8 @@ describe("<EpicsListPanel />", () => {
     expect(testState.setPinnedMutate).toHaveBeenCalledWith({
       epicId: "epic-from-history",
       pinned: true,
+      isLocalHome: false,
+      hostId: null,
     });
   });
 
@@ -608,6 +739,8 @@ describe("<EpicsListPanel />", () => {
     expect(testState.setPinnedMutate).toHaveBeenCalledWith({
       epicId: "epic-from-history",
       pinned: true,
+      isLocalHome: false,
+      hostId: null,
     });
     // The pin control sits alongside - not inside - the row's absolute <Link>
     // overlay. A regression that nested it inside the link, or dropped the
@@ -697,7 +830,7 @@ describe("<EpicsListPanel />", () => {
     renderPanel("embedded", "/");
 
     const section = await screen.findByTestId("epics-list-preserved-section");
-    expect(section.textContent).toContain("Deleted in cloud");
+    expect(section.textContent).toContain("Deleted — unsynced edits kept");
     expect(section.textContent).toContain("Preserved orphan");
     // Arrangement fidelity: the ordinary list still rendered, and the orphan
     // is not in it - so this is a partition, not "everything moved".
@@ -706,48 +839,12 @@ describe("<EpicsListPanel />", () => {
     expect(rows.textContent).not.toContain("Preserved orphan");
   });
 
-  it("states what an offline page is missing instead of presenting it as complete", async () => {
+  it("never tells the user which rows came from the cloud or the device", async () => {
+    // The worst-case statement that used to render every line of the
+    // completeness notice: an unavailable cloud page, partial facets,
+    // a truncated local page and an order that is only a loaded union.
     testState.items = [
       historyItem({ id: "history-local", epicId: "local", title: "Local" }),
-    ];
-    testState.completeness = {
-      cloudPage: "unavailable",
-      facets: "partial",
-      localRows: "present",
-      sort: "loaded-union",
-    };
-    renderPanel("embedded", "/");
-
-    const notice = await screen.findByTestId("epics-list-completeness");
-    expect(notice.getAttribute("data-cloud-page")).toBe("unavailable");
-    expect(notice.textContent).toContain("Cloud tasks couldn't be reached");
-    // `facets: "partial"` means the counts describe a DIFFERENT set from the
-    // rows, so the notice may not claim they cover the listed tasks - the
-    // fixture sets exactly that, and the older wording asserted the opposite.
-    expect(notice.textContent).toContain("Order covers the tasks listed here");
-    expect(notice.textContent).toContain("filter counts may leave some");
-  });
-
-  it("keeps the complete-counts wording when only the ORDER is a loaded union", async () => {
-    testState.items = [
-      historyItem({ id: "history-local", epicId: "local", title: "Local" }),
-    ];
-    testState.completeness = {
-      cloudPage: "settled",
-      facets: "server",
-      localRows: "present",
-      sort: "loaded-union",
-    };
-    renderPanel("embedded", "/");
-
-    const notice = await screen.findByTestId("epics-list-completeness");
-    expect(notice.textContent).toContain("not everything you have");
-    expect(notice.textContent).not.toContain("filter counts may leave some");
-  });
-
-  it("says a truncated page may be missing tasks, without claiming where", async () => {
-    testState.items = [
-      historyItem({ id: "history-m1", epicId: "m1", title: "Mirror 1" }),
     ];
     testState.completeness = {
       cloudPage: "unavailable",
@@ -757,52 +854,17 @@ describe("<EpicsListPanel />", () => {
     };
     renderPanel("embedded", "/");
 
-    const notice = await screen.findByTestId("epics-list-completeness");
-    expect(notice.getAttribute("data-local-rows")).toBe("truncated");
-    // A `truncated` page that says nothing reads as covered-everything - the
-    // banner going silent is what this guards against, not one particular
-    // wording. The copy deliberately does not name WHERE the gap is:
-    // `truncated` has more than one producer (the page cap, an unprovable
-    // filter, an unread root doc), and the wire member does not distinguish
-    // them, so a client must not either.
-    expect(notice.textContent).toContain(
-      "couldn't be checked against your filters",
-    );
-  });
-
-  it("names a filter this device cannot check rather than showing an empty list", async () => {
-    testState.items = [];
-    testState.completeness = {
-      cloudPage: "unavailable",
-      facets: "partial",
-      localRows: "suppressed-unprovable-filter",
-      sort: "server",
-    };
-    renderPanel("embedded", "/");
-
-    const notice = await screen.findByTestId("epics-list-completeness");
-    expect(notice.getAttribute("data-local-rows")).toBe(
-      "suppressed-unprovable-filter",
-    );
-    expect(notice.textContent).toContain("can't be checked against tasks");
-  });
-
-  it("says nothing at all for a fully server-owned page", async () => {
-    testState.items = [
-      historyItem({ id: "history-cloud", epicId: "cloud", title: "Cloud" }),
-    ];
-    testState.completeness = {
-      cloudPage: "settled",
-      facets: "server",
-      localRows: "none",
-      sort: "server",
-    };
-    renderPanel("embedded", "/");
-
-    expect(await screen.findByText("Cloud")).not.toBeNull();
-    // A caveat that appears on a complete page is the same defect wearing the
-    // other sign.
-    expect(screen.queryByTestId("epics-list-completeness")).toBeNull();
+    const rows = await screen.findByTestId("epics-list-rows");
+    expect(rows.textContent).toContain("Local");
+    expect(screen.queryByRole("status")).toBeNull();
+    // Scoped to the list body's own container rather than the whole
+    // document: unrelated chrome (a filter chip label, for example) could
+    // otherwise fail this assertion for a reason that has nothing to do with
+    // the row or empty-state copy under test.
+    const listBody = rows.closest("section");
+    expect(listBody).not.toBeNull();
+    expect(listBody?.textContent ?? "").not.toMatch(/cloud/i);
+    expect(listBody?.textContent ?? "").not.toMatch(/device/i);
   });
 
   it("disables pin mutation for a local-home epic and names the cloud-sync boundary", async () => {
@@ -816,7 +878,7 @@ describe("<EpicsListPanel />", () => {
     renderPanel("embedded", "/");
 
     const pin = await screen.findByRole("button", {
-      name: "Pinning Local only epic needs cloud sync; it is stored on this device",
+      name: "Pinning Local only epic needs a newer Traycer host",
     });
     // `aria-disabled`, not the native attribute: a natively disabled button is
     // unfocusable and swallows pointer events, so the tooltip below - the only
@@ -831,7 +893,7 @@ describe("<EpicsListPanel />", () => {
     // account never gets and a stale row has already had - see
     // `HistoryPinControl`.
     expect(tooltipTextNear(pin)).toBe(
-      "This epic is stored on this device. Pinning needs cloud sync.",
+      "Pinning this task needs a newer Traycer host version. Update the host that serves it.",
     );
   });
 
@@ -851,14 +913,1210 @@ describe("<EpicsListPanel />", () => {
     renderPanel("embedded", "/");
 
     const pin = await screen.findByRole("button", {
-      name: "Pinning Orphaned epic is unavailable; its cloud copy was deleted and only this device's edits remain",
+      name: "Pinning Orphaned epic is unavailable; the task was deleted and only its unsynced edits remain",
     });
     expect(pin.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(pin);
     expect(testState.setPinnedMutate).not.toHaveBeenCalled();
     expect(tooltipTextNear(pin)).toBe(
-      "This epic's cloud copy was deleted. Only this device's edits remain, so it can't be pinned.",
+      "This task was deleted. Its unsynced edits are kept, but it can't be pinned.",
     );
+  });
+
+  it("never names the cloud or the device on the preserved-orphan section or its pin control", async () => {
+    testState.items = [
+      historyItem({
+        title: "Orphaned epic",
+        isLocalHome: false,
+        isPreservedOrphan: true,
+        isPinned: false,
+      }),
+    ];
+    renderPanel("embedded", "/");
+
+    const section = await screen.findByTestId("epics-list-preserved-section");
+    const heading = section.querySelector("h2");
+    expect(heading).not.toBeNull();
+    expect(heading?.textContent).toBe("Deleted — unsynced edits kept");
+    expect(section.textContent).not.toMatch(/cloud/i);
+    expect(section.textContent).not.toMatch(/device/i);
+
+    const provenanceGlyph = await screen.findByTestId(
+      "epics-list-row-provenance-preserved-orphan-epic-from-history",
+    );
+    expect(provenanceGlyph.getAttribute("aria-label")).not.toMatch(/cloud/i);
+    expect(provenanceGlyph.getAttribute("aria-label")).not.toMatch(/device/i);
+
+    const pin = await screen.findByRole("button", {
+      name: /Pinning Orphaned epic/,
+    });
+    const pinAccessibleName = pin.getAttribute("aria-label") ?? "";
+    expect(pinAccessibleName).not.toMatch(/cloud/i);
+    expect(pinAccessibleName).not.toMatch(/device/i);
+    const tooltip = tooltipTextNear(pin);
+    expect(tooltip).not.toBeNull();
+    expect(tooltip ?? "").not.toMatch(/cloud/i);
+    expect(tooltip ?? "").not.toMatch(/device/i);
+  });
+
+  it("shows the preserved-orphan provenance glyph with its deleted/export tooltip", async () => {
+    testState.items = [
+      historyItem({
+        title: "Orphaned epic",
+        isPreservedOrphan: true,
+      }),
+    ];
+    renderPanel("embedded", "/");
+
+    const glyph = await screen.findByTestId(
+      "epics-list-row-provenance-preserved-orphan-epic-from-history",
+    );
+    expect(glyph.getAttribute("role")).toBe("status");
+    expect(glyph.getAttribute("aria-label")).toMatch(/deleted/i);
+    expect(glyph.getAttribute("aria-label")).toMatch(/export/i);
+    expect(glyph.getAttribute("aria-label")).not.toMatch(/cloud|device/i);
+  });
+
+  it("shows the local-only provenance glyph telling a signed-in viewer to open the task to sync", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    renderPanel("embedded", "/");
+
+    const glyph = await screen.findByTestId(
+      "epics-list-row-provenance-local-only-epic-from-history",
+    );
+    expect(glyph.getAttribute("aria-label")).toMatch(/open this task to sync/i);
+
+    const link = await screen.findByRole("link", {
+      name: "Open task Local only epic",
+    });
+    const glyphSlot = glyph.parentElement;
+    if (glyphSlot === null) {
+      throw new Error(
+        "expected the provenance glyph to have a status slot parent",
+      );
+    }
+    // The row names both status slots; the leading one comes first.
+    expect(link.getAttribute("aria-describedby")?.split(" ").at(0)).toBe(
+      glyphSlot.id,
+    );
+  });
+
+  it("shows the local-only provenance glyph telling an unverified viewer it can't sync until the sign-in is confirmed", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    useAuthStore.setState({ status: "unverified" });
+    renderPanel("embedded", "/");
+
+    const glyph = await screen.findByTestId(
+      "epics-list-row-provenance-local-only-epic-from-history",
+    );
+    expect(glyph.getAttribute("aria-label")).toMatch(/can't sync for now/i);
+    expect(glyph.getAttribute("aria-label")).not.toMatch(/will sync/i);
+    expect(glyph.getAttribute("aria-label")).not.toMatch(/sign in again/i);
+  });
+
+  it("shows no provenance glyph for an ordinary row carrying neither marker", async () => {
+    renderPanel("embedded", "/");
+
+    await screen.findByRole("link", { name: "Open task Open from landing" });
+
+    expect(
+      screen.queryByTestId(
+        "epics-list-row-provenance-preserved-orphan-epic-from-history",
+      ),
+    ).toBeNull();
+    expect(
+      screen.queryByTestId(
+        "epics-list-row-provenance-local-only-epic-from-history",
+      ),
+    ).toBeNull();
+  });
+
+  it("prints the phone's provenance label on the desktop row for coarse pointers only", async () => {
+    testState.items = [
+      historyItem({
+        id: "history-local",
+        epicId: "local-epic",
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+      historyItem({
+        id: "history-orphan",
+        epicId: "orphan-epic",
+        title: "Orphaned epic",
+        isPreservedOrphan: true,
+      }),
+      historyItem({
+        id: "history-ordinary",
+        epicId: "ordinary-epic",
+        title: "Ordinary epic",
+      }),
+    ];
+    renderPanel("embedded", "/");
+
+    await screen.findByRole("link", { name: "Open task Ordinary epic" });
+
+    const localLabel = screen.getByTestId(
+      "epics-list-row-coarse-provenance-label-local-only",
+    );
+    expect(localLabel.textContent.trim()).toBe(
+      `· ${historyRowProvenanceLabel("local-only")}`,
+    );
+    expect(localLabel.classList.contains("hidden")).toBe(true);
+    expect(localLabel.classList.contains("pointer-coarse:inline")).toBe(true);
+    expect(localLabel.classList.contains("text-destructive")).toBe(false);
+
+    const orphanLabel = screen.getByTestId(
+      "epics-list-row-coarse-provenance-label-preserved-orphan",
+    );
+    expect(orphanLabel.textContent.trim()).toBe(
+      `· ${historyRowProvenanceLabel("preserved-orphan")}`,
+    );
+    expect(orphanLabel.classList.contains("text-destructive")).toBe(true);
+    expect(orphanLabel.classList.contains("hidden")).toBe(true);
+    expect(orphanLabel.classList.contains("pointer-coarse:inline")).toBe(true);
+
+    expect(
+      screen.getAllByTestId(/^epics-list-row-coarse-provenance-label-/).length,
+    ).toBe(2);
+
+    const localRow = localLabel.closest("li");
+    if (localRow === null) {
+      throw new Error(
+        "expected the local-only label to sit inside its row's <li>",
+      );
+    }
+    expect(localRow.textContent).toContain("Local only epic");
+
+    const orphanRow = orphanLabel.closest("li");
+    if (orphanRow === null) {
+      throw new Error(
+        "expected the preserved-orphan label to sit inside its row's <li>",
+      );
+    }
+    expect(orphanRow.textContent).toContain("Orphaned epic");
+  });
+
+  it("shows the running activity indicator instead of the provenance glyph on a local-home row an agent is working on", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    testState.activityByEpicId.set("epic-from-history", "turn");
+    renderPanel("embedded", "/");
+
+    const activityGlyph = await screen.findByTestId(
+      "epics-list-row-activity-epic-from-history",
+    );
+    expect(activityGlyph).toBeDefined();
+    // The status-slot opt-in covers the whole leading-glyph class, not just
+    // the new provenance dot - the running indicator sits inside the same
+    // slot the glyph does.
+    expect(
+      activityGlyph.closest('[data-testid="epics-list-row-status-slot"]'),
+    ).not.toBeNull();
+    expect(
+      screen.queryByTestId(
+        "epics-list-row-provenance-local-only-epic-from-history",
+      ),
+    ).toBeNull();
+  });
+
+  it("opens the running-activity glyph's tooltip when the row's overlay link gets keyboard focus", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    testState.activityByEpicId.set("epic-from-history", "turn");
+    renderPanel("embedded", "/");
+
+    await screen.findByTestId("epics-list-row-activity-epic-from-history");
+    const link = await screen.findByRole("link", {
+      name: "Open task Local only epic",
+    });
+
+    expect(screen.queryByRole("tooltip")).toBeNull();
+
+    act(() => {
+      link.focus();
+    });
+
+    const tooltips = await screen.findAllByRole("tooltip");
+    expect(
+      tooltips.some(
+        (tooltip) => tooltip.textContent === "Task activity in progress",
+      ),
+    ).toBe(true);
+
+    act(() => {
+      link.blur();
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
+  });
+
+  it("keeps the status glyph's tooltip reachable above the row's pointer-events-none content layer", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    renderPanel("embedded", "/");
+
+    const glyph = await screen.findByTestId(
+      "epics-list-row-provenance-local-only-epic-from-history",
+    );
+    const slot = glyph.closest('[data-testid="epics-list-row-status-slot"]');
+    expect(slot).not.toBeNull();
+    if (slot === null) throw new Error("expected a status-slot ancestor");
+    expect(slot.className).toMatch(/pointer-events-auto/);
+
+    // The slot's opt-in has to sit INSIDE the row's opted-out content layer
+    // for the fix to matter - an ancestor further up carries
+    // `pointer-events-none`.
+    const contentLayer = slot.closest('[class~="pointer-events-none"]');
+    expect(contentLayer).not.toBeNull();
+
+    expect(tooltipTextNear(glyph)).toMatch(/not synced yet/i);
+  });
+
+  it("opens the provenance glyph's tooltip when the row's overlay link gets keyboard focus, and closes it on blur", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    renderPanel("embedded", "/");
+
+    const glyph = await screen.findByTestId(
+      "epics-list-row-provenance-local-only-epic-from-history",
+    );
+    const expectedTooltip = glyph.getAttribute("aria-label");
+    expect(expectedTooltip).not.toBeNull();
+
+    const link = await screen.findByRole("link", {
+      name: "Open task Local only epic",
+    });
+
+    expect(screen.queryByRole("tooltip")).toBeNull();
+
+    act(() => {
+      link.focus();
+    });
+
+    const tooltips = await screen.findAllByRole("tooltip");
+    expect(
+      tooltips.some((tooltip) => tooltip.textContent === expectedTooltip),
+    ).toBe(true);
+
+    act(() => {
+      link.blur();
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
+  });
+
+  it("dismisses a held-open status tooltip on Escape and keeps it closed until focus returns", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    renderPanel("embedded", "/");
+
+    const glyph = await screen.findByTestId(
+      "epics-list-row-provenance-local-only-epic-from-history",
+    );
+    const expectedTooltip = glyph.getAttribute("aria-label");
+    expect(expectedTooltip).not.toBeNull();
+
+    const link = await screen.findByRole("link", {
+      name: "Open task Local only epic",
+    });
+
+    expect(screen.queryByRole("tooltip")).toBeNull();
+
+    act(() => {
+      link.focus();
+    });
+
+    const tooltips = await screen.findAllByRole("tooltip");
+    expect(
+      tooltips.some((tooltip) => tooltip.textContent === expectedTooltip),
+    ).toBe(true);
+
+    // Radix's Escape dismissal listens on the document.
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
+
+    // A second Escape, with nothing else changing, is a no-op - the tooltip
+    // stays closed for the rest of this focus session.
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("tooltip")).toBeNull();
+
+    // Blur then focus again is a NEW focus session, so the hold reopens.
+    act(() => {
+      link.blur();
+    });
+    act(() => {
+      link.focus();
+    });
+
+    const reopenedTooltips = await screen.findAllByRole("tooltip");
+    expect(
+      reopenedTooltips.some(
+        (tooltip) => tooltip.textContent === expectedTooltip,
+      ),
+    ).toBe(true);
+  });
+
+  it("suppresses the provenance glyph's tooltip when the overlay link is focused after a pointer press on the row, and restores it once the press is forgotten on pointer-up", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    renderPanel("embedded", "/");
+
+    const glyph = await screen.findByTestId(
+      "epics-list-row-provenance-local-only-epic-from-history",
+    );
+    const expectedTooltip = glyph.getAttribute("aria-label");
+    expect(expectedTooltip).not.toBeNull();
+
+    const card = await screen.findByTestId("epics-list-row-card");
+    const link = await screen.findByRole("link", {
+      name: "Open task Local only epic",
+    });
+
+    // A focus arriving during a pointer press is pointer focus, not keyboard
+    // focus - the tooltip must stay closed.
+    fireEvent.pointerDown(card);
+    act(() => {
+      link.focus();
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
+
+    // Pointer-up forgets the press, so the next focus on the same target is
+    // read as keyboard focus again.
+    fireEvent.pointerUp(card);
+    act(() => {
+      link.blur();
+    });
+    act(() => {
+      link.focus();
+    });
+
+    const tooltips = await screen.findAllByRole("tooltip");
+    expect(
+      tooltips.some((tooltip) => tooltip.textContent === expectedTooltip),
+    ).toBe(true);
+  });
+
+  it("forwards a plain click on the status glyph to the row, so the glyph stays part of the row's click surface", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    const router = renderPanel("embedded", "/");
+
+    const glyph = await screen.findByTestId(
+      "epics-list-row-provenance-local-only-epic-from-history",
+    );
+    const slot = glyph.closest('[data-testid="epics-list-row-status-slot"]');
+    expect(slot).not.toBeNull();
+    if (slot === null) throw new Error("expected a status-slot ancestor");
+
+    fireEvent.click(slot);
+
+    // Read the selection state before the navigation below unmounts the
+    // panel - the row's checkbox would otherwise no longer be in the DOM to
+    // query.
+    expect(
+      screen
+        .getByRole("checkbox", { name: /select local only epic/i })
+        .getAttribute("aria-checked"),
+    ).toBe("false");
+
+    await waitFor(() => {
+      const tabId = useEpicCanvasStore
+        .getState()
+        .resolveTabIdForEpic("epic-from-history");
+      expect(tabId).not.toBeNull();
+      expect(router.state.location.pathname).toBe(
+        `/epics/epic-from-history/${tabId}`,
+      );
+    });
+  });
+
+  it("forwards a ctrl/meta-click on the status glyph as a selection toggle, exactly like the row", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    const router = renderPanel("embedded", "/");
+
+    const glyph = await screen.findByTestId(
+      "epics-list-row-provenance-local-only-epic-from-history",
+    );
+    const slot = glyph.closest('[data-testid="epics-list-row-status-slot"]');
+    expect(slot).not.toBeNull();
+    if (slot === null) throw new Error("expected a status-slot ancestor");
+
+    fireEvent.click(slot, { metaKey: true });
+
+    expect(router.state.location.pathname).toBe("/");
+    expect(
+      screen
+        .getByRole("checkbox", { name: /select local only epic/i })
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(
+      screen.getByTestId("epics-list-delete-selected").matches(":disabled"),
+    ).toBe(false);
+  });
+
+  it("forwards a middle-click on the status slot to the row as a background open", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    const router = renderPanel("embedded", "/");
+
+    const glyph = await screen.findByTestId(
+      "epics-list-row-provenance-local-only-epic-from-history",
+    );
+    const slot = glyph.closest('[data-testid="epics-list-row-status-slot"]');
+    expect(slot).not.toBeNull();
+    if (slot === null) throw new Error("expected a status-slot ancestor");
+
+    fireEvent(
+      slot,
+      new MouseEvent("auxclick", {
+        bubbles: true,
+        cancelable: true,
+        button: 1,
+      }),
+    );
+
+    await waitFor(() => {
+      const tabId = useEpicCanvasStore
+        .getState()
+        .resolveTabIdForEpic("epic-from-history");
+      expect(tabId).not.toBeNull();
+    });
+    // Background, not foreground: the route never left the history list.
+    expect(router.state.location.pathname).toBe("/");
+  });
+
+  it("ignores a right-button auxclick on the status slot", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    const router = renderPanel("embedded", "/");
+
+    const glyph = await screen.findByTestId(
+      "epics-list-row-provenance-local-only-epic-from-history",
+    );
+    const slot = glyph.closest('[data-testid="epics-list-row-status-slot"]');
+    expect(slot).not.toBeNull();
+    if (slot === null) throw new Error("expected a status-slot ancestor");
+
+    fireEvent(
+      slot,
+      new MouseEvent("auxclick", {
+        bubbles: true,
+        cancelable: true,
+        button: 2,
+      }),
+    );
+
+    expect(
+      useEpicCanvasStore.getState().resolveTabIdForEpic("epic-from-history"),
+    ).toBeNull();
+    expect(router.state.location.pathname).toBe("/");
+  });
+
+  it("opens the row in the background on a middle-click of the overlay link itself", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    const router = renderPanel("embedded", "/");
+
+    const link = await screen.findByRole("link", {
+      name: "Open task Local only epic",
+    });
+
+    fireEvent(
+      link,
+      new MouseEvent("auxclick", {
+        bubbles: true,
+        cancelable: true,
+        button: 1,
+      }),
+    );
+
+    await waitFor(() => {
+      const tabId = useEpicCanvasStore
+        .getState()
+        .resolveTabIdForEpic("epic-from-history");
+      expect(tabId).not.toBeNull();
+    });
+    expect(router.state.location.pathname).toBe("/");
+  });
+
+  it("hides the imported-unseen status slot when there is nothing to show, so the title keeps no stray gap", async () => {
+    renderPanel("embedded", "/");
+
+    const link = await screen.findByRole("link", {
+      name: "Open task Open from landing",
+    });
+    const row = link.closest("li");
+    if (row === null) throw new Error("expected the row's <li> ancestor");
+
+    const slots = row.querySelectorAll(
+      '[data-testid="epics-list-row-status-slot"]',
+    );
+    expect(slots.length).toBe(2);
+
+    // First slot: the leading glyph, which always renders something and so
+    // never engages `empty:hidden`.
+    const leadingSlot = Array.from(slots).at(0);
+    if (leadingSlot === undefined) throw new Error("expected a leading slot");
+    expect(leadingSlot.childElementCount).toBeGreaterThan(0);
+
+    // Second slot: the imported-unseen dot, which renders nothing for this
+    // ordinary (never-imported) row. `empty:hidden` is jsdom-invisible as
+    // computed style, so the class plus emptiness together are what prove the
+    // fix's mechanism is actually wired to this slot.
+    const importedSlot = Array.from(slots).at(1);
+    if (importedSlot === undefined) throw new Error("expected a second slot");
+    expect(importedSlot.childElementCount).toBe(0);
+    expect(importedSlot.textContent).toBe("");
+    expect(importedSlot.className).toMatch(/\bempty:hidden\b/);
+
+    expect(screen.queryByTestId("imported-unseen-dot")).toBeNull();
+  });
+
+  it("fills the imported-unseen status slot once the task is a seeded imported-unseen row", async () => {
+    act(() => {
+      useImportedUnseenStore
+        .getState()
+        .markImported("epic-from-history", "claude");
+    });
+    renderPanel("embedded", "/");
+
+    const link = await screen.findByRole("link", {
+      name: "Open task Open from landing",
+    });
+    const row = link.closest("li");
+    if (row === null) throw new Error("expected the row's <li> ancestor");
+
+    const slots = row.querySelectorAll(
+      '[data-testid="epics-list-row-status-slot"]',
+    );
+    expect(slots.length).toBe(2);
+
+    const importedSlot = Array.from(slots).at(1);
+    if (importedSlot === undefined) throw new Error("expected a second slot");
+    expect(importedSlot.childElementCount).toBe(1);
+    expect(
+      importedSlot.querySelector('[data-testid="imported-unseen-dot"]'),
+    ).not.toBeNull();
+  });
+
+  it("describes the row link by the leading status slot, so keyboard users get the provenance sentence without a tab stop", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    renderPanel("embedded", "/");
+
+    const link = await screen.findByRole("link", {
+      name: "Open task Local only epic",
+    });
+    const describedById = link.getAttribute("aria-describedby");
+    if (describedById === null) {
+      throw new Error("expected the row link to carry aria-describedby");
+    }
+    expect(describedById.length).toBeGreaterThan(0);
+
+    // Two ids: the leading status slot first, then the imported-unseen slot.
+    const leadingDescribedById = describedById.split(" ").at(0);
+    if (leadingDescribedById === undefined) {
+      throw new Error("expected aria-describedby to name the leading slot");
+    }
+    const describedByElement = document.getElementById(leadingDescribedById);
+    if (describedByElement === null) {
+      throw new Error("expected the described element to exist in the DOM");
+    }
+    expect(describedByElement.getAttribute("data-testid")).toBe(
+      "epics-list-row-status-slot",
+    );
+
+    const glyph = describedByElement.querySelector(
+      '[data-testid^="epics-list-row-provenance-local-only-"]',
+    );
+    if (glyph === null) {
+      throw new Error(
+        "expected the provenance glyph inside the described slot",
+      );
+    }
+    expect(glyph.getAttribute("aria-label")).toMatch(/not synced yet/i);
+
+    const row = link.closest("li");
+    if (row === null) throw new Error("expected the row's <li> ancestor");
+    const slots = row.querySelectorAll(
+      '[data-testid="epics-list-row-status-slot"]',
+    );
+    expect(slots.length).toBe(2);
+    const importedUnseenSlot = Array.from(slots).at(1);
+    if (importedUnseenSlot === undefined) {
+      throw new Error("expected a second slot");
+    }
+    // The imported-unseen slot is the SECOND described id: heard through the
+    // description, never held open on screen.
+    expect(importedUnseenSlot.id).toBe(describedById.split(" ").at(1));
+  });
+
+  it("describes the selection-mode toggle by the same status slot", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    renderPanel("embedded", "/");
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Select history items" }),
+    );
+
+    const toggle = await screen.findByRole("button", {
+      name: "Toggle selection for Local only epic",
+    });
+    const describedById = toggle.getAttribute("aria-describedby");
+    if (describedById === null) {
+      throw new Error(
+        "expected the selection toggle to carry aria-describedby",
+      );
+    }
+    expect(describedById.length).toBeGreaterThan(0);
+
+    // Two ids: the leading status slot first, then the imported-unseen slot.
+    const leadingDescribedById = describedById.split(" ").at(0);
+    if (leadingDescribedById === undefined) {
+      throw new Error("expected aria-describedby to name the leading slot");
+    }
+    const describedByElement = document.getElementById(leadingDescribedById);
+    if (describedByElement === null) {
+      throw new Error("expected the described element to exist in the DOM");
+    }
+    expect(describedByElement.getAttribute("data-testid")).toBe(
+      "epics-list-row-status-slot",
+    );
+
+    const glyph = describedByElement.querySelector(
+      '[data-testid^="epics-list-row-provenance-local-only-"]',
+    );
+    if (glyph === null) {
+      throw new Error(
+        "expected the provenance glyph inside the described slot",
+      );
+    }
+    expect(glyph.getAttribute("aria-label")).toMatch(/not synced yet/i);
+  });
+
+  it("opens the provenance glyph's tooltip when the selection-mode toggle gets keyboard focus", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    renderPanel("embedded", "/");
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Select history items" }),
+    );
+
+    const glyph = await screen.findByTestId(
+      "epics-list-row-provenance-local-only-epic-from-history",
+    );
+    const expectedTooltip = glyph.getAttribute("aria-label");
+    expect(expectedTooltip).not.toBeNull();
+
+    const toggle = await screen.findByRole("button", {
+      name: "Toggle selection for Local only epic",
+    });
+
+    expect(screen.queryByRole("tooltip")).toBeNull();
+
+    act(() => {
+      toggle.focus();
+    });
+
+    const tooltips = await screen.findAllByRole("tooltip");
+    expect(
+      tooltips.some((tooltip) => tooltip.textContent === expectedTooltip),
+    ).toBe(true);
+
+    act(() => {
+      toggle.blur();
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
+  });
+
+  it("reads the next keyboard focus correctly after a press that started on the row was released outside it", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    renderPanel("embedded", "/");
+
+    const glyph = await screen.findByTestId(
+      "epics-list-row-provenance-local-only-epic-from-history",
+    );
+    const expectedTooltip = glyph.getAttribute("aria-label");
+    expect(expectedTooltip).not.toBeNull();
+
+    const card = await screen.findByTestId("epics-list-row-card");
+    const link = await screen.findByRole("link", {
+      name: "Open task Local only epic",
+    });
+
+    // A press that starts on the row but releases OUTSIDE it (not on the
+    // card) must still be forgotten - the release listener lives on the
+    // card's `ownerDocument`, not the card element itself, so a release
+    // anywhere in the document is what forgets the press.
+    fireEvent.pointerDown(card);
+    fireEvent.pointerUp(document.body);
+
+    act(() => {
+      link.focus();
+    });
+
+    const tooltips = await screen.findAllByRole("tooltip");
+    expect(
+      tooltips.some((tooltip) => tooltip.textContent === expectedTooltip),
+    ).toBe(true);
+  });
+
+  it("consumes the pointer press on the focus that reads it, so a lost release cannot suppress the next keyboard focus", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    renderPanel("embedded", "/");
+
+    const glyph = await screen.findByTestId(
+      "epics-list-row-provenance-local-only-epic-from-history",
+    );
+    const expectedTooltip = glyph.getAttribute("aria-label");
+    expect(expectedTooltip).not.toBeNull();
+
+    const card = await screen.findByTestId("epics-list-row-card");
+    const link = await screen.findByRole("link", {
+      name: "Open task Local only epic",
+    });
+
+    fireEvent.pointerDown(card);
+    act(() => {
+      link.focus();
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
+
+    // No pointerup/pointercancel ever fires here - the earlier focus already
+    // consumed the press on read, so this next focus (with nothing left to
+    // release) must not be misread as pointer-driven again.
+    act(() => {
+      link.blur();
+    });
+    act(() => {
+      link.focus();
+    });
+
+    const tooltips = await screen.findAllByRole("tooltip");
+    expect(
+      tooltips.some((tooltip) => tooltip.textContent === expectedTooltip),
+    ).toBe(true);
+  });
+
+  it("keeps an Escape dismissal in effect after the leading glyph swaps mid keyboard-focus session, and lets a new session reopen it", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    // Running first: the spinner takes the leading slot ahead of the
+    // provenance dot (see `HistoryRowStatusIcon`).
+    testState.activityByEpicId.set("epic-from-history", "turn");
+    renderPanel("embedded", "/");
+
+    await screen.findByTestId("epics-list-row-activity-epic-from-history");
+    const link = await screen.findByRole("link", {
+      name: "Open task Local only epic",
+    });
+
+    act(() => {
+      link.focus();
+    });
+
+    const runningTooltips = await screen.findAllByRole("tooltip");
+    expect(
+      runningTooltips.some(
+        (tooltip) => tooltip.textContent === "Task activity in progress",
+      ),
+    ).toBe(true);
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
+
+    // Swap the row's leading glyph WITHOUT moving focus: the agent goes
+    // idle, so the slot now wraps the provenance dot instead of the
+    // spinner. `useEpicActivityStatus` is mocked here as a plain read of
+    // `testState.activityByEpicId` with no subscription of its own, so
+    // mutating the map alone triggers no re-render - the row must actually
+    // re-render for the swap to reach the DOM. `EpicsListRow` itself reads
+    // `useEpicCanvasStore` (`resolveTabIdForEpic`), so opening this epic's
+    // tab changes that selector's value and forces exactly that re-render,
+    // without moving focus or touching the row's `item` prop.
+    testState.activityByEpicId.delete("epic-from-history");
+    act(() => {
+      useEpicCanvasStore
+        .getState()
+        .openEpicTab("epic-from-history", "Local only epic");
+    });
+
+    const swappedGlyph = await screen.findByTestId(
+      "epics-list-row-provenance-local-only-epic-from-history",
+    );
+    const swappedTooltip = swappedGlyph.getAttribute("aria-label");
+    expect(swappedTooltip).not.toBeNull();
+    expect(swappedTooltip).not.toBe("Task activity in progress");
+
+    // The dismissal is owned by the SLOT, not by the glyph that carried it -
+    // so the new glyph inherits it and stays closed for the rest of this
+    // focus session, even though it never itself received an Escape.
+    expect(screen.queryByRole("tooltip")).toBeNull();
+
+    // Blur then focus again is a NEW focus session, so the hold reopens -
+    // now over the swapped-in glyph.
+    act(() => {
+      link.blur();
+    });
+    act(() => {
+      link.focus();
+    });
+
+    const reopenedTooltips = await screen.findAllByRole("tooltip");
+    expect(
+      reopenedTooltips.some(
+        (tooltip) => tooltip.textContent === swappedTooltip,
+      ),
+    ).toBe(true);
+  });
+
+  it("closes a hover-open tooltip elsewhere in the row when a keyboard-focus hold begins beside it", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    renderPanel("embedded", "/");
+
+    // Local-home pin support is fixed at `false` in this file (see the
+    // `use-epic-pin-local-home-support` mock above), so this control is
+    // permanently `aria-disabled` but still focusable/hoverable - and it
+    // carries its own, ordinary (uncontrolled) tooltip via `Tooltip` /
+    // `TooltipTrigger`, unlike the status glyph's controlled one.
+    const pin = await screen.findByRole("button", {
+      name: "Pinning Local only epic needs a newer Traycer host",
+    });
+    const link = await screen.findByRole("link", {
+      name: "Open task Local only epic",
+    });
+    const glyph = await screen.findByTestId(
+      "epics-list-row-provenance-local-only-epic-from-history",
+    );
+    const expectedGlyphTooltip = glyph.getAttribute("aria-label");
+    expect(expectedGlyphTooltip).not.toBeNull();
+
+    expect(screen.queryByRole("tooltip")).toBeNull();
+
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      // Radix's tooltip trigger opens on `pointermove` (not `pointerenter`),
+      // behind the provider's 500ms open delay. This open is driven purely
+      // by the pointer, so - unlike a focus-opened tooltip - it survives an
+      // unrelated focus move elsewhere in the row.
+      fireEvent.pointerMove(pin, { pointerType: "mouse" });
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+
+      const hoveredTooltips = screen.getAllByRole("tooltip");
+      expect(
+        hoveredTooltips.some(
+          (tooltip) =>
+            tooltip.textContent ===
+            "Pinning this task needs a newer Traycer host version. Update the host that serves it.",
+        ),
+      ).toBe(true);
+
+      // Keyboard-focus the row's activation target - no pointer event -
+      // which starts the row's own hold over the status glyph's tooltip.
+      act(() => {
+        link.focus();
+      });
+
+      const tooltipsAfterHold = screen.getAllByRole("tooltip");
+      const distinctTexts = new Set(
+        tooltipsAfterHold.map((tooltip) => tooltip.textContent),
+      );
+      // The hover-opened pin tooltip closed: the hold sends Radix's own
+      // exclusivity signal (`closeOpenTooltips`) before it opens, so only
+      // the status glyph's sentence remains.
+      expect(distinctTexts.size).toBe(1);
+      expect(
+        tooltipsAfterHold.every(
+          (tooltip) => tooltip.textContent === expectedGlyphTooltip,
+        ),
+      ).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("removes its document pointerup/pointercancel listeners when the row unmounts mid-press", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    const { unmount } = renderPanelView("embedded", "/");
+
+    const card = await screen.findByTestId("epics-list-row-card");
+
+    const removeEventListenerSpy = vi.spyOn(document, "removeEventListener");
+    try {
+      // Starts a press with nothing to release it: the row's own pending
+      // listeners (`pointerup` / `pointercancel` on `document`) are what a
+      // row unmounted mid-press (the list re-sorting under a drag) must not
+      // leave behind to fire at some later release.
+      fireEvent.pointerDown(card);
+
+      unmount();
+
+      const removedTypes = removeEventListenerSpy.mock.calls.map((call) =>
+        call.at(0),
+      );
+      expect(removedTypes).toContain("pointerup");
+      expect(removedTypes).toContain("pointercancel");
+    } finally {
+      removeEventListenerSpy.mockRestore();
+    }
+  });
+
+  it("exposes the imported-unseen dot through the row's description but holds only the leading mark's tooltip open on keyboard focus", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    act(() => {
+      useImportedUnseenStore
+        .getState()
+        .markImported("epic-from-history", "claude");
+    });
+    renderPanel("embedded", "/");
+
+    const provenanceGlyph = await screen.findByTestId(
+      "epics-list-row-provenance-local-only-epic-from-history",
+    );
+    const provenanceTooltip = provenanceGlyph.getAttribute("aria-label");
+    expect(provenanceTooltip).not.toBeNull();
+
+    const importedDot = await screen.findByTestId("imported-unseen-dot");
+    const importedTooltip = `Imported from ${harnessDisplayName("claude")} - not opened yet`;
+
+    const link = await screen.findByRole("link", {
+      name: "Open task Local only epic",
+    });
+
+    expect(screen.queryByRole("tooltip")).toBeNull();
+
+    act(() => {
+      link.focus();
+    });
+
+    const tooltips = await screen.findAllByRole("tooltip");
+    expect(
+      tooltips.some((tooltip) => tooltip.textContent === provenanceTooltip),
+    ).toBe(true);
+    expect(
+      tooltips.some((tooltip) => tooltip.textContent === importedTooltip),
+    ).toBe(false);
+    // Radix can render a visually-hidden duplicate of the same open tooltip's
+    // content alongside the positioned one - dedupe by text so that harmless
+    // duplication cannot be misread as a second, distinct tooltip being open.
+    const distinctTooltipTexts = new Set(
+      tooltips.map((tooltip) => tooltip.textContent),
+    );
+    expect(distinctTooltipTexts.size).toBe(1);
+
+    const describedById = link.getAttribute("aria-describedby");
+    if (describedById === null) {
+      throw new Error("expected the link to carry aria-describedby");
+    }
+    const describedByIds = describedById.split(" ");
+    expect(describedByIds.length).toBe(2);
+    const [statusId, importedId] = describedByIds;
+
+    const statusElement = document.getElementById(statusId);
+    if (statusElement === null) {
+      throw new Error("expected the leading status slot to exist");
+    }
+    expect(statusElement.contains(provenanceGlyph)).toBe(true);
+
+    const importedElement = document.getElementById(importedId);
+    if (importedElement === null) {
+      throw new Error("expected the imported-unseen slot to exist");
+    }
+    expect(importedElement.contains(importedDot)).toBe(true);
+
+    act(() => {
+      link.blur();
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
+  });
+
+  it("opens only the selection toggle's own tooltip when a row that cannot be selected gets keyboard focus in selection mode", async () => {
+    // A row alongside the orphan CAN be selected - `canSelect` (and so the
+    // "Select history items" affordance) requires at least one deletable
+    // item, and a preserved orphan is never one.
+    testState.items = [
+      historyItem({
+        id: "history-orphan",
+        epicId: "orphan",
+        title: "Orphaned epic",
+        isPreservedOrphan: true,
+      }),
+      historyItem({}),
+    ];
+    renderPanel("embedded", "/");
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Select history items" }),
+    );
+
+    const provenanceGlyph = await screen.findByTestId(
+      "epics-list-row-provenance-preserved-orphan-orphan",
+    );
+    const provenanceTooltip = provenanceGlyph.getAttribute("aria-label");
+    expect(provenanceTooltip).not.toBeNull();
+
+    const toggle = await screen.findByRole("button", {
+      name: "Cannot select Orphaned epic",
+    });
+
+    expect(screen.queryByRole("tooltip")).toBeNull();
+
+    act(() => {
+      toggle.focus();
+    });
+
+    const tooltips = await screen.findAllByRole("tooltip");
+    const deleteDisabledTooltip =
+      "This task was already deleted. Only its unsynced edits remain, so there is nothing left to delete.";
+    expect(
+      tooltips.some((tooltip) => tooltip.textContent === deleteDisabledTooltip),
+    ).toBe(true);
+    expect(
+      tooltips.some((tooltip) => tooltip.textContent === provenanceTooltip),
+    ).toBe(false);
+    const distinctTooltipTexts = new Set(
+      tooltips.map((tooltip) => tooltip.textContent),
+    );
+    expect(distinctTooltipTexts.size).toBe(1);
+
+    act(() => {
+      toggle.blur();
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
+  });
+
+  it("never names the cloud or the device when the host requires cloud access to list", () => {
+    render(<EpicsListHostRequiresCloudToList />);
+
+    const node = screen.getByTestId("epics-list-host-requires-cloud-to-list");
+    expect(node.textContent).toContain("Couldn't load your tasks");
+    expect(node.textContent).not.toMatch(/cloud/i);
+    expect(node.textContent).not.toMatch(/device/i);
   });
 
   // The Sweep control keeps its slot in every task row rather than appearing
@@ -1948,4 +3206,137 @@ describe("<EpicsListPanel />", () => {
     expect(event.defaultPrevented).toBe(false);
     expect(document.activeElement).toBe(input);
   });
+
+  it("shows retained drafts above the task list without selecting a filter", async () => {
+    seedRetainedLandingDraft("abandoned prompt");
+    renderPanel("embedded", "/");
+
+    const drafts = await screen.findByTestId("history-drafts-block");
+    const tasks = await screen.findByTestId("epics-list-rows");
+    expect(screen.getByText("abandoned prompt")).not.toBeNull();
+    expect(await screen.findByText("Open from landing")).not.toBeNull();
+    expect(
+      drafts.compareDocumentPosition(tasks) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+  });
+
+  it("does not show a block for an empty start-task composer", async () => {
+    useLandingDraftStore.getState().createDraft(null);
+    renderPanel("embedded", "/");
+
+    expect(await screen.findByText("Open from landing")).not.toBeNull();
+    expect(screen.queryByTestId("history-drafts-block")).toBeNull();
+  });
+
+  it("does not expose drafts as a task filter", async () => {
+    seedRetainedLandingDraft("abandoned prompt");
+    renderPanel("embedded", "/");
+
+    fireEvent.click(await screen.findByRole("button", { name: /filter/i }));
+    expect(await screen.findByTestId("epics-filter-popover")).not.toBeNull();
+    expect(screen.queryByRole("checkbox", { name: /drafts/i })).toBeNull();
+  });
+
+  it("opens a retained draft through openLandingDraftFromHistory", async () => {
+    const draftId = seedRetainedLandingDraft("abandoned prompt");
+    renderPanel("embedded", "/");
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Open draft abandoned prompt",
+      }),
+    );
+
+    expect(testState.openLandingDraftFromHistory).toHaveBeenCalledTimes(1);
+    expect(testState.openLandingDraftFromHistory.mock.calls[0][1]).toBe(
+      draftId,
+    );
+  });
+
+  it("asks for confirmation before deleting a retained draft", async () => {
+    const draftId = seedRetainedLandingDraft("abandoned prompt");
+    renderPanel("embedded", "/");
+
+    expect(await screen.findByText("abandoned prompt")).not.toBeNull();
+    fireEvent.click(screen.getByTestId("history-drafts-row-delete"));
+
+    expect(
+      await screen.findByTestId("history-drafts-delete-dialog"),
+    ).not.toBeNull();
+    expect(screen.getByText('Delete "abandoned prompt"?')).not.toBeNull();
+    expect(
+      screen.getByText(/removes the start-task draft on every device/i),
+    ).not.toBeNull();
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.some((draft) => draft.id === draftId),
+    ).toBe(true);
+
+    fireEvent.click(screen.getByTestId("history-drafts-delete-cancel"));
+    await waitFor(() => {
+      expect(screen.queryByTestId("history-drafts-delete-dialog")).toBeNull();
+    });
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.some((draft) => draft.id === draftId),
+    ).toBe(true);
+
+    fireEvent.click(screen.getByTestId("history-drafts-row-delete"));
+    fireEvent.click(await screen.findByTestId("history-drafts-delete-confirm"));
+
+    await waitFor(() => {
+      expect(
+        useLandingDraftStore
+          .getState()
+          .drafts.some((draft) => draft.id === draftId),
+      ).toBe(false);
+    });
+    expect(screen.queryByText("abandoned prompt")).toBeNull();
+  });
+
+  it("warns that an open draft will be deleted on every device", async () => {
+    const draftId = seedRetainedLandingDraft("live tab");
+    useLandingDraftStore.getState().openDraft(draftId);
+    renderPanel("embedded", "/");
+
+    fireEvent.click(await screen.findByTestId("history-drafts-row-delete"));
+    expect(
+      await screen.findByText(/this draft is currently open/i),
+    ).not.toBeNull();
+    expect(screen.getByText(/every device/i)).not.toBeNull();
+  });
+
+  it("caps the draft block and expands it on request", async () => {
+    for (let index = 0; index < 6; index += 1) {
+      seedRetainedLandingDraft(`draft ${index}`);
+    }
+
+    renderPanel("page", "/");
+
+    expect(await screen.findAllByTestId("history-drafts-row")).toHaveLength(5);
+    fireEvent.click(screen.getByRole("button", { name: "View all 6" }));
+    expect(screen.getAllByTestId("history-drafts-row")).toHaveLength(6);
+    expect(screen.getByRole("button", { name: "Show less" })).not.toBeNull();
+  });
+
+  it("hides the drafts block in the destination picker", async () => {
+    seedRetainedLandingDraft("abandoned prompt");
+    renderPanel("picker", "/");
+
+    expect(await screen.findByText("Open from landing")).not.toBeNull();
+    expect(screen.queryByTestId("history-drafts-block")).toBeNull();
+  });
 });
+
+function seedRetainedLandingDraft(text: string): string {
+  const content: JsonContent = {
+    type: "doc",
+    content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+  };
+  const id = useLandingDraftStore.getState().createDraft(null);
+  useLandingDraftStore.getState().setDraftContent(id, content, null);
+  useLandingDraftStore.getState().closeDraft(id);
+  return id;
+}

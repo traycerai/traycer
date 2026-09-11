@@ -3,28 +3,8 @@ import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/ver
 import type { IStreamSession } from "./i-stream-session";
 import type { ParamsOf } from "./ws-stream-client";
 
-/**
- * What `subscribeWithParamsProvider` re-reads before every wire subscribe.
- *
- * The argument is the version the params are about to be DECLARED at, so a
- * method served on more than one major can shape its open request for the
- * major that was actually negotiated - which is knowable only here, after the
- * open-ack selection and before the subscribe frame is written. A provider
- * that serves one line ignores it, so widening this cost existing providers
- * nothing.
- *
- * `null` means the transport cannot report a version: it is the runtime
- * worker's stream proxy, which invokes the provider on the WORKER side and
- * pushes the value across, where the negotiation is main's to observe. A
- * provider that gets `null` must answer with what it would send before any
- * handshake - its newest line - and never guess an older one; the proxy
- * carries only single-major epic methods, so no multi-major consumer is
- * reached through it.
- */
-export type StreamParamsProvider<
-  Registry extends VersionedStreamRpcRegistry,
-  Method extends keyof Registry & string,
-> = (onWireVersion: SchemaVersion | null) => ParamsOf<Registry, Method>;
+import type { StreamParamsProvider } from "@traycer/protocol/host-transport/remote/stream-codec";
+export type { StreamParamsProvider };
 
 /**
  * Subscribe-only seam over a streaming transport (transport-seam spike).

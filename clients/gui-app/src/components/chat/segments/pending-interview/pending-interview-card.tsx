@@ -15,6 +15,7 @@ import {
   InterviewQuestionHeader,
   InterviewQuestionPager,
 } from "@/components/chat/segments/interview-visuals";
+import { interviewChoiceModeHint } from "./interview-choice-mode";
 import { QuestionPage } from "./question-page";
 import { QUESTION_TRANSITION, useInterviewCard } from "./use-interview-card";
 
@@ -58,6 +59,8 @@ interface PendingInterviewCardProps {
    * pending either way.
    */
   onFork: ((mode: ChatForkMode) => void) | null;
+  readonly epicId?: string | null;
+  readonly hostId?: string | null;
 }
 
 export function PendingInterviewCard(props: PendingInterviewCardProps) {
@@ -87,6 +90,8 @@ export function PendingInterviewCard(props: PendingInterviewCardProps) {
   } = useInterviewCard({
     chatId: props.chatId,
     blockId: props.blockId,
+    epicId: props.epicId,
+    hostId: props.hostId,
     questions: props.questions,
     isActive: props.isActive,
     isBusy: props.isBusy,
@@ -108,6 +113,7 @@ export function PendingInterviewCard(props: PendingInterviewCardProps) {
           questionText="Input needed"
           headerFindUnitId={null}
           questionFindUnitId={null}
+          modeHint={null}
         />
       ) : (
         <AnimatePresence mode="wait" initial={false}>
@@ -132,6 +138,11 @@ export function PendingInterviewCard(props: PendingInterviewCardProps) {
               questionText={question.question}
               headerFindUnitId={null}
               questionFindUnitId={null}
+              modeHint={
+                question.options.length === 0
+                  ? null
+                  : interviewChoiceModeHint(question.multiSelect, isLast)
+              }
             />
             <QuestionPage
               question={question}

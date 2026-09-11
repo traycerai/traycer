@@ -18,6 +18,7 @@
  */
 import { type ReactNode } from "react";
 import { TabHostContext } from "./hooks/use-tab-host-id";
+import { TabDraftMirrorMount } from "@/hooks/drafts/use-tab-draft-mirror";
 
 export interface TabHostProviderProps {
   readonly hostId: string;
@@ -27,6 +28,7 @@ export interface TabHostProviderProps {
 export function TabHostProvider(props: TabHostProviderProps): ReactNode {
   return (
     <TabHostContext.Provider value={props.hostId}>
+      <TabDraftMirrorMount />
       {props.children}
     </TabHostContext.Provider>
   );

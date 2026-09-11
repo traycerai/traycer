@@ -85,6 +85,22 @@ vi.mock("@/hooks/epic/use-epic-record-viewed-mutation", () => ({
   useEpicRecordViewed: () => ({ mutate: recordViewed }),
 }));
 
+/**
+ * `useEpicPinLocalHomeSupported` and `tab-strip.tsx`'s own `useHostClient()`
+ * (for the Undo dispatch's `epicPinDispatchAdmitted` re-check) both need a
+ * `<HostRuntimeProvider>` this tree does not build.
+ */
+vi.mock("@/hooks/epic/use-epic-pin-local-home-support", () => ({
+  useEpicPinLocalHomeSupported: () => false,
+}));
+vi.mock("@/lib/host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/host")>();
+  return {
+    ...actual,
+    useHostClient: () => ({ getActiveHostId: () => null }),
+  };
+});
+
 vi.mock("@/components/layout/bridges/tray-open-epic-bridge", () => ({
   TrayOpenEpicBridge: () => null,
 }));
@@ -346,15 +362,15 @@ describe("app route tab-strip navigation", () => {
     );
     expect(
       screen.getByTestId("tab-cap-outline-left").getAttribute("d"),
-    ).toContain("M -2 39.5 L 0 39.5");
+    ).toContain("M -2 35.5 H 0");
     expect(
       screen.getByTestId("tab-cap-outline-left").getAttribute("d"),
-    ).toContain("10.6 0.5 15 0.5 L 20 0.5");
+    ).toContain("V 10.5 A 10 10 0 0 1 22 0.5");
     expect(
       screen.getByTestId("tab-cap-outline-right").getAttribute("d"),
-    ).toContain("L 22 39.5");
+    ).toContain("24 35.5 H 26");
     expect(
       screen.getByTestId("tab-cap-outline-right").getAttribute("d"),
-    ).toContain("M 0 0.5 L 5 0.5 C 9.4 0.5");
+    ).toContain("M 0 0.5 H 2 A 10 10 0 0 1 12 10.5");
   });
 });

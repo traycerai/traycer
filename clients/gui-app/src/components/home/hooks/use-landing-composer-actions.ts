@@ -306,6 +306,24 @@ export function useLandingComposerActions(
         chat: input.chat,
       })
         .then((response) => {
+          // A REFUSAL resolves, so it arrives HERE and not in the `.catch`
+          // below - and the two arms want opposite things. Rolling back is
+          // what a refusal needs: the seed exists to cover the in-flight
+          // window for an epic that is about to exist, and after a refusal no
+          // epic ever will, so re-asserting it would leave the chip and the
+          // palette's Files/Diff openers listing folders for an epic id the
+          // host never created. Same teardown as the rejection arm, minus the
+          // rethrow: the call sites' own refusal branches settle the attempt,
+          // and turning this into a rejection would route a refused create
+          // into `onError`'s generic "Couldn't create epic." toast, discarding
+          // the host's message and the repair the typed arm exists to offer.
+          if (response.refusal !== undefined) {
+            clearEpicCreateSeedPending(input.epicId);
+            if (seededBindingsKey !== null) {
+              queryClient.removeQueries({ queryKey: seededBindingsKey });
+            }
+            return response;
+          }
           // Re-assert the seed after success to overwrite a racing first fetch
           // that returned `[]` before the host's warm-slot create seed landed
           // (no flicker). `useEpicCreateForClient`'s invalidation then
@@ -499,6 +517,33 @@ export function useLandingComposerActions(
             draftRuntimeRegistry.complete(attempt);
             return;
           }
+          // A REFUSAL resolves this promise rather than rejecting it -
+          // `epic.create@1.1` carries it as an optional key on the ordinary
+          // response - so every line below has to be skipped explicitly. None
+          // of it is harmless on a create that did not happen: it would open a
+          // tab and navigate into an epic the host never made, then leave the
+          // user on a route whose `epic.subscribe` fails with a second,
+          // unrelated-looking error. The host also rejects the pending-create
+          // gates on refusal, so those racing opens WILL fail; that is correct
+          // and must not be narrated twice.
+          //
+          // Settled exactly like the rejection arm below, which is the same
+          // fact from the other side: local state was staged for an epic that
+          // will not exist, and that includes the handoff registered above -
+          // left `pending` it would outlive the epic it names. The draft and
+          // the staged worktree intent survive on purpose, so a repaired store
+          // makes resubmitting work. `useEpicCreateForClient.onSuccess` owns
+          // the user-facing message.
+          if (response.refusal !== undefined) {
+            settleUnlandedLandingEpic({
+              epicId,
+              chatId,
+              hostId: activeHostId,
+              userId,
+            });
+            draftRuntimeRegistry.complete(attempt);
+            return;
+          }
           // The server accepted the exact staged worktree intent. Failed
           // preparation and rejected create paths leave it intact for retry.
           clearConsumedLandingWorktreeIntent(workspaceContext);
@@ -545,10 +590,15 @@ export function useLandingComposerActions(
               },
             });
           } else {
-            // A user close and an out-of-band post-intent content change both
-            // preserve their current draft state. The successful server result
-            // remains discoverable without replacing or focusing either one.
+            // Content changed after send: keep that later edit. A close
+            // during create used to be the same branch because close
+            // destroyed the row; now close retains, so `"closed"` must
+            // still delete (decision #13) or the sent text stays as a
+            // draft alongside the new epic.
             placeCreatedEpicInBackground(epicId, epicTitle);
+            if (settlement.kind === "closed") {
+              useLandingDraftStore.getState().deleteDraft(attempt.draftId);
+            }
           }
           draftRuntimeRegistry.complete(attempt);
         })
@@ -564,17 +614,14 @@ export function useLandingComposerActions(
             return;
           }
           // The epic never landed on the host: drop the create marker so its
-          // orphaned tab is no longer exempt from existence reconciliation.
-          unmarkEpicCreatedThisSession(epicId);
-          useComposerRunSettingsStore.getState().clearEpicRunSettings([epicId]);
-          useEpicCanvasStore.getState().clearEpicTitlePending(epicId);
-          useEpicCanvasStore.getState().clearChatTitlePending(chatId);
-          useInitialChatHandoffStore
-            .getState()
-            .markFailed(
-              { hostId: activeHostId, userId, epicId },
-              "Couldn't create the epic.",
-            );
+          // orphaned tab is no longer exempt from existence reconciliation,
+          // and settle the handoff.
+          settleUnlandedLandingEpic({
+            epicId,
+            chatId,
+            hostId: activeHostId,
+            userId,
+          });
           draftRuntimeRegistry.complete(attempt);
         });
     },
@@ -808,7 +855,26 @@ export function useLandingComposerActions(
         chat: null,
       })
         .then(
-          () => {
+          (response) => {
+            // A REFUSAL lands HERE, not in the arm below: `epic.create@1.1`
+            // answers it as an optional key on a resolved response, so the
+            // fulfilled arm runs for a create that did not happen. This flow
+            // is the dangerous one of the two - it navigated and opened the
+            // tile BEFORE the round-trip, so without this branch it would
+            // clear the staged worktree intent a retry needs, re-arm the
+            // reconciler exemption for an epic that does not exist, and then
+            // chain `agent.tui.prepareLaunch` / `epic.createTuiAgent` against
+            // it, whose own `onError` toast would report the missing epic as a
+            // second, unrelated-looking failure.
+            //
+            // Settled exactly like the rejection arm below, because it is the
+            // same fact: the epic never landed, so drop the marker and let the
+            // existence reconciler prune the orphan tab. `useEpicCreateForClient.onSuccess`
+            // owns the user-facing message and the repair offer.
+            if (response.refusal !== undefined) {
+              unmarkEpicCreatedThisSession(epicId);
+              return;
+            }
             // This staged selection now belongs to a successfully-created
             // epic. Until this point a retry must see the exact same intent.
             clearConsumedLandingWorktreeIntent(workspaceContext);
@@ -877,17 +943,18 @@ export function useLandingComposerActions(
   // on a host the chip never showed" is unreachable rather than unlikely.
   // The second submit-time gate, on the host the first one named: a session
   // without a cloud verdict may only create on a host that serves creates
-  // locally, and `epic.create@1.0` cannot say - its `epic.listTasks` line can.
-  // See `refuseCreateWithoutCloudVerdict`.
+  // locally, which `epic.create@1.1` now states directly (it used to be read
+  // off the `epic.listTasks` line, because `epic.create` had only `@1.0` and
+  // could not answer for itself). See `refuseCreateWithoutCloudVerdict`.
   const resolveAdmittedPlacement = useCallback((): LandingPlacement => {
     const placement = resolveLandingPlacement(target);
     if (placement.kind === "refused") return placement;
     return (
       refuseCreateWithoutCloudVerdict({
         status: useAuthStore.getState().status,
-        negotiatedListTasks: getNegotiatedHostMethodVersion(
+        negotiatedCreate: getNegotiatedHostMethodVersion(
           placement.hostId,
-          "epic.listTasks",
+          "epic.create",
         ),
         hostLabel: target.hostLabel,
       }) ?? placement
@@ -1066,6 +1133,35 @@ function discardRetiredLandingEpic(input: {
   useComposerRunSettingsStore.getState().clearEpicRunSettings([input.epicId]);
   useEpicCanvasStore.getState().clearEpicTitlePending(input.epicId);
   useEpicCanvasStore.getState().clearChatTitlePending(input.chatId);
+}
+
+/**
+ * The epic never landed on the host - a REJECTED or a REFUSED create - for an
+ * attempt that is still current.
+ *
+ * Everything {@link discardRetiredLandingEpic} drops, plus the one settlement
+ * the retired arm must not perform: the initial-chat handoff registered before
+ * the request moves to `failed`. That entry is persisted and, while `pending`,
+ * `selectHasActiveInitialChatHandoffForEpic` counts it as a reason to keep the
+ * epic's tab from reconciliation - so left alone it outlives the epic it names.
+ * The retired arm skips this because the identity bridge already tore the
+ * entry down and `markFailed` would re-insert one under the departed identity;
+ * a refusal has no such bridge, which is why it takes THIS exit and not that
+ * one. One function for both arms so the two cannot drift again.
+ */
+function settleUnlandedLandingEpic(input: {
+  readonly epicId: string;
+  readonly chatId: string;
+  readonly hostId: string;
+  readonly userId: string | null;
+}): void {
+  discardRetiredLandingEpic(input);
+  useInitialChatHandoffStore
+    .getState()
+    .markFailed(
+      { hostId: input.hostId, userId: input.userId, epicId: input.epicId },
+      "Couldn't create the epic.",
+    );
 }
 
 interface LandingWorkspaceContext {

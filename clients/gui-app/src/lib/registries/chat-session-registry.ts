@@ -7,6 +7,8 @@ import {
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ChatStreamClient } from "@traycer-clients/shared/host-transport/chat-stream-client";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
+import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { useAuthService, useHostClient } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
@@ -17,6 +19,11 @@ import {
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
 import { openOwnedDurableStreamClient } from "@/lib/host/owned-durable-stream-client";
 import { useOpenEpicId } from "@/lib/epic-selectors";
+import {
+  isEpicParked,
+  retryDeferredEpicParks,
+  subscribeEpicParking,
+} from "@/lib/epics/epic-parking";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
@@ -33,6 +40,7 @@ import {
   createStreamFlushCoordinator,
 } from "@/stores/chats/stream-flush-coordinator";
 import { createRendererRuntimeEnvironment } from "@/stores/epics/open-epic/runtime/runtime-environment";
+import { setEpicChatWorkProbe } from "@/stores/epics/open-epic/session-registry";
 import { getRetentionProfile } from "@/stores/replica-memory/retention-profile";
 
 const registry = new ChatSessionRegistry({
@@ -57,6 +65,9 @@ const STREAM_FLUSH_COORDINATOR = createStreamFlushCoordinator(
 );
 const CHAT_SESSION_SCOPE_SEPARATOR = "\u0000";
 
+/** Passed to `reconnectAll` so a hand-driven wake is distinguishable in logs. */
+const CHAT_SESSION_WAKE_REASON = "user-retry";
+
 const handleHostIds = new WeakMap<ChatSessionStoreHandle, string | null>();
 
 let streamClientFactoryOverride: ChatStreamClientFactory | null = null;
@@ -80,6 +91,67 @@ export function getChatSessionRegistry(): ChatSessionRegistry {
   return registry;
 }
 
+// The cross-plane wiring for a park verdict, both halves anchored HERE because
+// this module is downstream of both: it already imports `epic-parking`, which
+// imports the open-epic registry, so it can reach either without closing a
+// cycle - and neither of them can reach the chat registry without one.
+//
+// Registering the probe is what lets `canPark` see a chat holding work before
+// the epic-level decision force-disposes it; the subscription is the other half
+// and is not optional. A park refused for chat work waits on the OPEN-EPIC
+// registry's signal, which an epic with no session entry never emits, so
+// without this the refusal is permanent for exactly the epics whose chats
+// caused it.
+setEpicChatWorkProbe((epicId) => registry.unsettledWorkForEpic(epicId));
+
+/**
+ * The registry's own signal is NOT enough, and assuming it was left this retry
+ * mostly inert.
+ *
+ * `unsettledWorkForEpic` reads `activeTurn`, `runStatus`, the approval lists,
+ * `pendingActions`, `acceptedActions`, `failedSendRestoration` and `restore`
+ * out of each chat's STORE, but `registry.subscribe` relays only the shared
+ * session registry's membership and demand events - acquire, release, dispose.
+ * An inner store write is none of those. So the exact moments this retry exists
+ * for - a chat's last action settling, a restoration slot being taken into the
+ * composer, a restore completing - emitted nothing, and a park deferred for
+ * chat work sat waiting for some unrelated acquire elsewhere to shake it loose.
+ *
+ * Every one of those settlements is a store write and nothing else, which is
+ * why the watch is on the store rather than on any narrower signal.
+ *
+ * So watch the stores themselves, rebinding on every membership change because
+ * membership is precisely what changes the set of live handles. Firing on
+ * every store write is deliberate and cheap: `retryDeferredEpicParks` walks
+ * this window's open-tab entries and returns immediately for every epic not
+ * sitting on a refused park, which is all of them almost all of the time.
+ */
+const chatStoreWatches = new Map<ChatSessionStoreHandle, () => void>();
+
+function rebindChatStoreWatches(): void {
+  const live = new Set(registry.listHandles());
+  for (const [handle, unsubscribe] of Array.from(chatStoreWatches)) {
+    if (live.has(handle)) continue;
+    unsubscribe();
+    chatStoreWatches.delete(handle);
+  }
+  for (const handle of live) {
+    if (chatStoreWatches.has(handle)) continue;
+    chatStoreWatches.set(
+      handle,
+      handle.store.subscribe(() => {
+        retryDeferredEpicParks();
+      }),
+    );
+  }
+}
+
+registry.subscribe(() => {
+  rebindChatStoreWatches();
+  retryDeferredEpicParks();
+});
+rebindChatStoreWatches();
+
 export function getChatSessionHandleHostId(
   handle: ChatSessionStoreHandle,
 ): string | null {
@@ -89,6 +161,28 @@ export function getChatSessionHandleHostId(
 export function disposeAllChatSessions(): void {
   registry.disposeAll();
 }
+
+/**
+ * Renderer parking (plan C, decision C1): a parked epic holds no
+ * `chat.subscribe`.
+ *
+ * Wired here, on the plane that OWNS chat sessions, rather than called from
+ * the parking module - so that module stays a near-leaf that knows about
+ * visibility, a clock and the epic session registry, and each plane answers
+ * for its own subscriptions. It is also what makes the release complete
+ * without the tiles' cooperation: a chat tile releasing its lease leaves the
+ * session WARM with its websocket open for `DEFAULT_CHAT_IDLE_TTL_MS`, and one
+ * surviving subscription keeps the epic visible-leased on the host, which is
+ * the whole thing parking exists to end.
+ *
+ * Module-scoped and never torn down, matching the registry singleton it acts
+ * on. `isEpicParked` is re-read rather than trusted from the notification: the
+ * signal fires on both edges and only the parked one releases anything.
+ */
+subscribeEpicParking((epicId) => {
+  if (!isEpicParked(epicId)) return;
+  registry.disposeForEpic(epicId);
+});
 
 export function useChatSessionHandle(
   chatId: string,
@@ -177,6 +271,14 @@ export function useChatSessionHandle(
     // revived session is never handed a dead transport. `retry()` re-invokes
     // this factory, rebuilding the transport with live deps.
     let acquiredHandle: ChatSessionStoreHandle | null = null;
+    // The socket THIS chat's stream rides, captured as the transport is built.
+    // A mutable slot rather than a value because `retry()` re-invokes the
+    // factory and builds a new one: a wake must reach whichever socket is
+    // current, not the one that existed when the session was first opened.
+    // `null` until the first build, and on the override path, where no
+    // transport of ours exists to wake.
+    let boundStreamClient: IHostStreamClient<HostStreamRpcRegistry> | null =
+      null;
     const factory: ChatStreamClientFactory = (
       factoryEpicId,
       factoryChatId,
@@ -196,13 +298,15 @@ export function useChatSessionHandle(
       const result = openOwnedDurableStreamClient(
         openTransport,
         hostId,
-        (ws) =>
-          new ChatStreamClient({
+        (ws) => {
+          boundStreamClient = ws;
+          return new ChatStreamClient({
             wsStreamClient: ws,
             epicId: factoryEpicId,
             chatId: factoryChatId,
             callbacks,
-          }),
+          });
+        },
         () => acquiredHandle?.store.getState().retry(),
       );
       return {
@@ -246,6 +350,19 @@ export function useChatSessionHandle(
           streamFlushCoordinator: STREAM_FLUSH_COORDINATOR,
           onAuthError,
           onProviderAuthError,
+          // THIS chat's socket, never the app-wide one. Each chat session owns
+          // its own transport, so a wake resolved from `useWsStreamClient()`
+          // would collapse the backoff on a different connection and leave
+          // this one sitting out its delay - a button that appears to work and
+          // does nothing. `probeFirst: false` because a person pressing it is
+          // demanding a re-dial, and the probe-first flavour answers a
+          // live-but-stuck socket with nothing.
+          wakeTransport: () => {
+            boundStreamClient?.reconnectAll(CHAT_SESSION_WAKE_REASON, {
+              probeFirst: false,
+              wakeProbe: null,
+            });
+          },
         }),
     );
     acquiredHandle = next;

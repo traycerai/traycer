@@ -1,6 +1,8 @@
 import { type CSSProperties, type ReactNode } from "react";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { BackgroundActivityGlyph } from "@/components/notifications/background-activity-glyph";
+import { UnknownActivityGlyph } from "@/components/notifications/unknown-activity-glyph";
+import type { AgentActivityCoverage } from "@/lib/agent-activity";
 import {
   attentionTone,
   DONE_TONE,
@@ -10,9 +12,19 @@ import {
 } from "@/components/notifications/notification-indicator-tones";
 import type { NotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { useStatusGlyphTooltipOpen } from "@/components/notifications/status-glyph-focus";
 import { cn } from "@/lib/utils";
 
 export const BACKGROUND_ACTIVITY_TITLE = "Background activity — agent idle";
+
+/**
+ * The tooltip for {@link AgentActivityCoverage} `"unserved"`. Says what is
+ * missing (this device's view) rather than what is wrong (nothing is), because
+ * nothing here is broken: the serving host built a narrow union and the agent
+ * may be perfectly busy on another machine.
+ */
+export const UNKNOWN_ACTIVITY_TITLE =
+  "Agent status unknown — this device isn't receiving activity for its machine";
 
 /**
  * Live-activity tier for the running slot. `"turn"` is the agent actually
@@ -28,6 +40,26 @@ export type IndicatorRunningKind = "turn" | "background" | false;
 interface NotificationIndicatorIconProps {
   readonly state: NotificationIndicatorState;
   readonly running: IndicatorRunningKind;
+  /**
+   * What the served activity plane can say about this subject's host.
+   *
+   * A SEPARATE axis from {@link running}, not a fourth member of it, and the
+   * separation is the whole point: `running` is a claim the plane MADE, and
+   * this is whether the plane was in a position to make one at all. Folding
+   * them together would put "we don't know" in the precedence slot where a
+   * spinner outranks an unread completion, which is backwards - an unknown
+   * reading must never displace a fact somebody else reported.
+   *
+   * So it is consulted LAST, in `defaultIcon`'s slot: every attention tone,
+   * every running claim, the unread-done marker and the terminal outcome are
+   * all facts a producer stated, and they outrank the absence of one.
+   *
+   * Required at every call site, never defaulted: a surface that renders an
+   * agent's status has to answer whether it can see that agent's machine, and
+   * `"indeterminate"` is the answer for one that cannot name a host - said out
+   * loud rather than inherited from a default nobody read.
+   */
+  readonly activityCoverage: AgentActivityCoverage;
   readonly subjectId: string;
   readonly testIdPrefix: string;
   readonly className: string | undefined;
@@ -84,6 +116,21 @@ export function NotificationIndicatorIcon(
   if (terminalTone !== null) {
     return (
       <IndicatorTonePresentation tone={terminalTone} indicatorProps={props} />
+    );
+  }
+  // LAST, and only here: the idle glyph is the one slot that renders a
+  // CONCLUSION drawn from silence ("nothing is happening"), and `unserved` is
+  // exactly the state in which this app is not entitled to draw it. Everything
+  // above is something a producer said, and none of it is displaced by an
+  // absent view. `indeterminate` deliberately falls through to the idle glyph
+  // (see `AgentActivityCoverage`).
+  if (props.activityCoverage === "unserved") {
+    return (
+      <IndicatorSpan indicatorProps={props} tooltip={UNKNOWN_ACTIVITY_TITLE}>
+        <UnknownActivityGlyph
+          testId={`${props.testIdPrefix}-unknown-activity-${props.subjectId}`}
+        />
+      </IndicatorSpan>
     );
   }
   return props.defaultIcon;
@@ -152,12 +199,17 @@ function IndicatorSpan(props: {
   readonly tooltip: string;
   readonly children: ReactNode;
 }): ReactNode {
+  // Held open while the containing history row's target has keyboard focus
+  // (`StatusGlyphFocusContext`); plain hover everywhere else.
+  const tooltipOpen = useStatusGlyphTooltipOpen();
   return (
     <TooltipWrapper
       label={props.tooltip}
       side="top"
       sideOffset={undefined}
       align={undefined}
+      open={tooltipOpen.open}
+      onOpenChange={tooltipOpen.onOpenChange}
     >
       <span
         role="status"

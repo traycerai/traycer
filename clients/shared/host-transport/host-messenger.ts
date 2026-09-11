@@ -1,19 +1,24 @@
+import type { VersionedRpcRegistry } from "@traycer/protocol/framework/index";
 import {
-  holdersRevisionWireFieldSchema,
-  isRpcErrorCode,
-  worktreeBusyHoldersSchema,
-  type LatestContract,
-  type MethodVersionRegistry,
-  type RequestOf,
-  type ResponseOf,
-  type RpcErrorCode,
-  type RpcErrorDetails,
-  type SchemaVersion,
-  type VersionedRpcRegistry,
-  type WorktreeBusyHolder,
-} from "@traycer/protocol/framework/index";
-import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+  HostRpcError,
+  HostTransportFailureError,
+  type RequestOfMethod,
+  type RequiredHostMethodVersion,
+  type ResponseOfMethod,
+} from "@traycer/protocol/host-transport/remote/rpc-types";
 import type { OpenFrameBearerSource } from "../auth/bearer-source";
+
+export {
+  HostMethodVersionUnsatisfiedError,
+  HostRequestAbortedError,
+  HostRpcError,
+  HostTransportFailureError,
+  RetryableTransportError,
+  negotiatedVersionMeetsRequirement,
+  type RequestOfMethod,
+  type RequiredHostMethodVersion,
+  type ResponseOfMethod,
+} from "@traycer/protocol/host-transport/remote/rpc-types";
 
 /**
  * Immutable transport coordinates captured for one host-RPC job. The
@@ -34,6 +39,42 @@ export interface HostRequestAuthority {
   readonly endpoint: HostTransportEndpoint;
   readonly bearer: OpenFrameBearerSource;
   readonly abortSignal: AbortSignal;
+  /**
+   * Whether the session behind `bearer` may spend a CLOUD CAPABILITY, carried
+   * to the host on this request's `open` frame so a context the host registers
+   * as live inherits the verdict instead of defaulting to authorized.
+   *
+   * That registration is the reason a one-request socket needs a verdict at
+   * all. The request itself is the small half: the host registers this
+   * connection's context in its live-context registry, where background workers
+   * select it for work no client asked for - so a `/rpc` call from an
+   * unverified session would otherwise hand the host an authorized context to
+   * spend on that user's account.
+   *
+   * A LIVE READ, not a captured boolean, and that is the whole correctness of
+   * it. An authority outlives its construction: the request coordinator queues
+   * it, and `WsRpcClient` then awaits `session.dial()` before the open frame
+   * goes out. A snapshot taken at construction can therefore be sent long after
+   * the verdict moved - and a same-context demotion does NOT abort the context
+   * (that is the point of demoting in place), so the `abortSignal` fence never
+   * fires and nothing else catches it. The result was an `open` frame asserting
+   * `cloudAuthorized: true` for a session already demoted.
+   *
+   * So it is read as LATE as the frame allows - in `WsRpcClient` at the
+   * `session.send({kind: "open"})` that follows the dial. Note this is later
+   * than `bearer`, which `extractBearerOrThrowRpcError` pulls before
+   * `session.dial()`; the two are deliberately NOT level. The skew only runs
+   * one way and that way is closed: a demotion during the dial sends
+   * `cloudAuthorized: false` beside a pre-demotion bearer, which denies. The
+   * opposite pairing - a stale `true` beside a fresh bearer - is the one that
+   * would spend, and reading the verdict last is what makes it unreachable.
+   *
+   * OPTIONAL, and the absence is meaningful rather than a default: an authority
+   * that does not carry a verdict is one built before this existed, and the
+   * host reads its silence as authorized - the same "presence is the
+   * declaration" rule the wire field itself follows.
+   */
+  readonly cloudAuthorized?: () => boolean;
 }
 
 /**
@@ -86,7 +127,7 @@ export interface HostRequestOptions {
    * So the requirement travels WITH the request and is checked against the
    * manifest of the connection carrying it, between `openAck` and the request
    * frame. Below the floor, both transports refuse pre-send with
-   * {@link HostMethodVersionUnsatisfiedError}; nothing was dispatched, so the
+   * `HostMethodVersionUnsatisfiedError`; nothing was dispatched, so the
    * refusal is unambiguous.
    *
    * `method` is not necessarily the method being sent. A caller may condition
@@ -97,41 +138,6 @@ export interface HostRequestOptions {
    * handshake negotiates.
    */
   readonly requiredHostMethodVersion: RequiredHostMethodVersion | null;
-}
-
-/**
- * "Method `method` must be advertised at `version` or higher, in the same
- * major." See {@link HostRequestOptions.requiredHostMethodVersion}.
- */
-export interface RequiredHostMethodVersion {
-  readonly method: string;
-  readonly version: SchemaVersion;
-}
-
-/**
- * Whether a connection's advertised version for the required method clears the
- * floor. `undefined` - the host does not advertise the method at all - does
- * not, and neither does a different major: a major is a break, so "higher"
- * across one is not the same capability.
- *
- * A host whose canonical entry sits on a HIGHER major also fails, and that is
- * fail-closed rather than a gap. Such a peer may still serve the caller's
- * major through the same-major downgrade, but its manifest entry carries only
- * the canonical `{ major, minor }` - the minor it would serve on the older
- * major is not in it - so there is no evidence here that the floor is met, and
- * a floor exists precisely because guessing is what went wrong.
- *
- * Shared by both transports so the local and remote answers cannot drift.
- */
-export function negotiatedVersionMeetsRequirement(
-  negotiated: SchemaVersion | undefined,
-  requirement: RequiredHostMethodVersion,
-): boolean {
-  if (negotiated === undefined) return false;
-  return (
-    negotiated.major === requirement.version.major &&
-    negotiated.minor >= requirement.version.minor
-  );
 }
 
 /**
@@ -174,204 +180,6 @@ export interface IHostMessenger<Registry extends VersionedRpcRegistry> {
     responseTimeoutMs: number,
     options: HostRequestOptions,
   ): Promise<ResponseOfMethod<Registry, Method>>;
-}
-
-/**
- * Canonical request payload for a method on a validated host registry.
- *
- * `LatestContract<Registry[Method]>` tracks the highest installed major and
- * minor for that method - the same canonical contract the host's resolver
- * is written against - so clients and the dispatcher agree on shape.
- */
-export type RequestOfMethod<
-  Registry extends VersionedRpcRegistry,
-  Method extends keyof Registry & string,
-> = Registry[Method] extends MethodVersionRegistry
-  ? RequestOf<LatestContract<Registry[Method]>>
-  : never;
-
-/** Canonical response payload for a method on a validated host registry. */
-export type ResponseOfMethod<
-  Registry extends VersionedRpcRegistry,
-  Method extends keyof Registry & string,
-> = Registry[Method] extends MethodVersionRegistry
-  ? ResponseOf<LatestContract<Registry[Method]>>
-  : never;
-
-/**
- * Typed error thrown by `IHostMessenger.request` when the host returns an
- * error envelope or when envelope decoding fails. Preserves the correlating
- * `requestId` and method name so callers can attribute failures.
- */
-export class HostRpcError extends Error {
-  readonly code: RpcErrorCode;
-  readonly requestId: string;
-  readonly method: string;
-  /**
-   * Buffered `fatalError` payload preserved verbatim from the host's
-   * pre-close frame (or from the client-side mirror compatibility check).
-   * `null` when the failure did not arrive via a fatal-error frame.
-   */
-  readonly fatalDetails: FatalErrorDetails | null;
-  /**
-   * Typed holder inventory on `WORKTREE_BUSY` and
-   * `WORKTREE_HOLDERS_CHANGED`. `null` when the envelope omitted it (old
-   * host), carried a different code, or failed schema parse. Callers that
-   * render a confirm dialog read this; they must not fall back to parsing
-   * `message`.
-   */
-  readonly holders: readonly WorktreeBusyHolder[] | null;
-  /**
-   * Opaque host digest of that inventory. `null` when the envelope omitted
-   * it, carried a different code, or was not a non-empty string.
-   */
-  readonly holdersRevision: string | null;
-
-  constructor(details: {
-    code: RpcErrorCode;
-    message: string;
-    requestId: string;
-    method: string;
-    fatalDetails: FatalErrorDetails | null;
-    holders?: readonly WorktreeBusyHolder[] | null;
-    holdersRevision?: string | null;
-  }) {
-    super(details.message);
-    this.name = "HostRpcError";
-    this.code = details.code;
-    this.requestId = details.requestId;
-    this.method = details.method;
-    this.fatalDetails = details.fatalDetails;
-    this.holders = isHolderCarryingCode(details.code)
-      ? (details.holders ?? null)
-      : null;
-    this.holdersRevision = isHolderCarryingCode(details.code)
-      ? (details.holdersRevision ?? null)
-      : null;
-  }
-
-  static fromErrorDetails(
-    error: RpcErrorDetails,
-    requestId: string,
-    method: string,
-  ): HostRpcError {
-    return new HostRpcError({
-      code: error.code,
-      message: error.message,
-      requestId,
-      method,
-      fatalDetails: null,
-      holders: holdersForBusyCode(error.code, error.holders),
-      holdersRevision: holdersRevisionForBusyCode(
-        error.code,
-        error.holdersRevision,
-      ),
-    });
-  }
-
-  /**
-   * Build from a decoded wire error envelope (`code` is an open string).
-   * Unknown codes collapse to `RPC_ERROR`. `holders` (and
-   * `holdersRevision`) survive only on `WORKTREE_BUSY` /
-   * `WORKTREE_HOLDERS_CHANGED` when they match the protocol schema.
-   */
-  static fromWireEnvelope(
-    error: {
-      readonly code: string;
-      readonly message: string;
-      readonly holders?: unknown;
-      readonly holdersRevision?: unknown;
-    },
-    requestId: string,
-    method: string,
-  ): HostRpcError {
-    return new HostRpcError({
-      code: isRpcErrorCode(error.code) ? error.code : "RPC_ERROR",
-      message: error.message,
-      requestId,
-      method,
-      fatalDetails: null,
-      holders: holdersForBusyCode(error.code, error.holders),
-      holdersRevision: holdersRevisionForBusyCode(
-        error.code,
-        error.holdersRevision,
-      ),
-    });
-  }
-}
-
-/**
- * A pre-send refusal: this connection's handshake does not meet the floor the
- * caller attached to the request.
- *
- * Extends `HostRpcError` so it is non-retryable by construction - the retrying
- * messenger only retries `RetryableTransportError`, and retrying is exactly
- * wrong here, since a redial reaches the same downgraded host. Callers that
- * have their own copy for this condition (`epic.listTasks`' withdrawn-verdict
- * error, the composer's inline create refusal) catch this specific type rather
- * than matching on `code`, which several unrelated paths also produce.
- */
-export class HostMethodVersionUnsatisfiedError extends HostRpcError {
-  readonly requirement: RequiredHostMethodVersion;
-  /** What the connection advertised, or `null` when it advertised nothing. */
-  readonly negotiated: SchemaVersion | null;
-
-  constructor(details: {
-    requirement: RequiredHostMethodVersion;
-    negotiated: SchemaVersion | undefined;
-    requestId: string;
-    method: string;
-    hostId: string;
-  }) {
-    const advertised =
-      details.negotiated === undefined
-        ? "not advertised"
-        : `${String(details.negotiated.major)}.${String(details.negotiated.minor)}`;
-    super({
-      code: "DOWNGRADE_UNSUPPORTED",
-      message: `Host '${details.hostId}' negotiated '${details.requirement.method}' at ${advertised}, below the ${String(details.requirement.version.major)}.${String(details.requirement.version.minor)} this '${details.method}' call requires`,
-      requestId: details.requestId,
-      method: details.method,
-      fatalDetails: null,
-    });
-    this.name = "HostMethodVersionUnsatisfiedError";
-    this.requirement = details.requirement;
-    this.negotiated = details.negotiated ?? null;
-  }
-}
-
-function isHolderCarryingCode(code: string): boolean {
-  return code === "WORKTREE_BUSY" || code === "WORKTREE_HOLDERS_CHANGED";
-}
-
-function holdersForBusyCode(
-  code: string,
-  holders: unknown,
-): readonly WorktreeBusyHolder[] | null {
-  if (!isHolderCarryingCode(code)) {
-    return null;
-  }
-  if (holders === undefined || holders === null) {
-    return null;
-  }
-  const parsed = worktreeBusyHoldersSchema.safeParse(holders);
-  return parsed.success ? parsed.data : null;
-}
-
-function holdersRevisionForBusyCode(
-  code: string,
-  revision: unknown,
-): string | null {
-  if (!isHolderCarryingCode(code)) return null;
-  const parsed = holdersRevisionWireFieldSchema.safeParse(revision);
-  if (
-    !parsed.success ||
-    parsed.data === undefined ||
-    parsed.data.length === 0
-  ) {
-    return null;
-  }
-  return parsed.data;
 }
 
 /**
@@ -426,96 +234,6 @@ export async function withHostRpcErrorBoundary<T>(
     return await run();
   } catch (error) {
     throw toHostRpcError(error, method);
-  }
-}
-
-/**
- * A `HostRpcError` whose cause is the transport itself - no host bound, a
- * dropped or unopenable WebSocket, a dial or frame timeout - rather than the
- * host rejecting the operation. The host either never saw the request or
- * never answered it, so the failure says nothing about the method that
- * happened to be in flight.
- *
- * It is a `HostRpcError` (`code` stays `"RPC_ERROR"`) so existing
- * `instanceof HostRpcError` / `code`-based handling - the auth-aware wrapper,
- * error toasts - keeps treating it exactly as it did before, while UI layers
- * can branch on the class to describe the connection ("host unreachable")
- * instead of the operation.
- */
-export class HostTransportFailureError extends HostRpcError {
-  constructor(details: {
-    code: RpcErrorCode;
-    message: string;
-    requestId: string;
-    method: string;
-    fatalDetails: FatalErrorDetails | null;
-  }) {
-    super(details);
-    this.name = "HostTransportFailureError";
-  }
-}
-
-/**
- * A `HostTransportFailureError` for which the host is known not to have
- * dispatched the request: either the request frame was never put on the wire
- * (dial/handshake failure), or the host explicitly reported that its post-open
- * request deadline elapsed while it was still awaiting that frame.
- *
- * The "host did not dispatch the request" guarantee is what makes it safe to
- * retry even non-idempotent methods: a fresh dial cannot double-apply a side
- * effect. `createRetryingMessenger` keys its bounded retry off this subclass;
- * an ambiguous post-send drop stays a
- * `HostTransportFailureError`, and a malformed frame or any host-originated
- * error without the no-dispatch guarantee stays a plain `HostRpcError` - both
- * propagate on the first attempt.
- */
-export class RetryableTransportError extends HostTransportFailureError {
-  /**
-   * This retryability was earned by a NEGOTIATED KEY rather than by proof that
-   * nothing was dispatched.
-   *
-   * The two grounds are not interchangeable and the difference decides what a
-   * retry is allowed to do. A pre-dispatch failure is safe to replay however
-   * the next connection is configured, because the host never saw the call. A
-   * post-send failure is safe only for as long as the host is deduplicating
-   * the key - so a replay of one must itself be keyed, which is what
-   * {@link HostRequestOptions.replayMustBeKeyed} carries into the next attempt.
-   *
-   * Defaulted nowhere: every construction states its ground, because a
-   * `false` assumed by omission would silently license exactly the unkeyed
-   * replay this field exists to prevent.
-   */
-  readonly replaySafetyFromKey: boolean;
-
-  constructor(details: {
-    code: RpcErrorCode;
-    message: string;
-    requestId: string;
-    method: string;
-    fatalDetails: FatalErrorDetails | null;
-    replaySafetyFromKey: boolean;
-  }) {
-    super(details);
-    this.name = "RetryableTransportError";
-    this.replaySafetyFromKey = details.replaySafetyFromKey;
-  }
-}
-
-/**
- * A caller-owned request authority was aborted. Unlike a pre-send dial
- * failure, this is never retryable: the authority belongs to a context or host
- * binding that has already been replaced or disposed.
- */
-export class HostRequestAbortedError extends HostTransportFailureError {
-  constructor(details: { message: string; requestId: string; method: string }) {
-    super({
-      code: "RPC_ERROR",
-      message: details.message,
-      requestId: details.requestId,
-      method: details.method,
-      fatalDetails: null,
-    });
-    this.name = "HostRequestAbortedError";
   }
 }
 

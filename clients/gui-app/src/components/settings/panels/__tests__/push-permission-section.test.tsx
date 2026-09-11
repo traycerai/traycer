@@ -139,6 +139,18 @@ afterEach(() => {
 });
 
 describe("<PushPermissionSection />", () => {
+  // A host-less shell has no runner host at all, and every hook the group
+  // uses reaches for one — so the gate has to return before any of them run.
+  it("renders nothing, and does not throw, with no runner host above it", () => {
+    const view = render(
+      <QueryClientProvider client={new QueryClient()}>
+        <PushPermissionSection />
+      </QueryClientProvider>,
+    );
+
+    expect(view.container.innerHTML).toBe("");
+  });
+
   it("renders nothing where the shell has no OS push permission", () => {
     renderSection(null);
 
@@ -279,7 +291,7 @@ describe("<PushPermissionSection />", () => {
     // Built on the REAL app query client: its 60s `staleTime` is the whole
     // point. The `onChange` subscription is disposed while this row is
     // unmounted, so nothing invalidates in between - leave a person to change
-    // the switch in the OS Settings app between two visits to Notifications
+    // the switch in the OS Settings app between two visits to Sounds
     // and a cached answer would show them "Off · Open Settings" on a phone
     // where push is already on.
     const permission = doubleFor("denied");

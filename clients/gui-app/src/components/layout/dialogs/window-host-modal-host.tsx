@@ -20,7 +20,7 @@ import {
 import { BootOpenSettingsButton } from "@/components/host/host-boot-surface";
 import { useHostProvisioningProgress } from "@/hooks/host/use-host-provisioning-progress";
 import { useWindowNarration } from "@/hooks/host/use-window-narration";
-import { admitsLocalPlane, useAuthStore } from "@/stores/auth/auth-store";
+import { useShellLocalPlaneAdmission } from "@/hooks/auth/use-shell-local-plane-admission";
 import { getClientAppVersion } from "@/lib/app-version";
 import { isMobileApp } from "@/lib/mobile-app";
 import { appLogger } from "@/lib/logger";
@@ -148,7 +148,7 @@ function NarratingWindowHostModal(props: {
   const { narration } = props;
   const progress = useHostProvisioningProgress();
   const controller = useHostReadinessController();
-  const authStatus = useAuthStore((state) => state.status);
+  const shellAdmission = useShellLocalPlaneAdmission();
   const presentation = controller.defaultHostPresentation;
   const localLifecycle = presentsLocalHostLifecycle(presentation);
   const settled = hasSettledFailure(narration.cause, presentation);
@@ -189,12 +189,13 @@ function NarratingWindowHostModal(props: {
   const predicateInput = {
     readiness: controller.readinessFor("default-host", null),
     hasBeenReady: controller.hasBeenDefaultHostReady,
-    // Must track `HostReadyGate`'s own input exactly (`admitsLocalPlane`, not
-    // `signed-in`): these two read ONE shared predicate precisely so they can
-    // never disagree about whether an app exists behind this surface, and
-    // feeding them different `signedIn` values would recreate that
-    // disagreement in the inputs instead of the predicate.
-    signedIn: admitsLocalPlane(authStatus),
+    // Must track `HostReadyGate`'s own input exactly (SHELL admission, not
+    // `signed-in` and not the status-only `admitsLocalPlane`): these two read
+    // ONE shared predicate precisely so they can never disagree about whether
+    // an app exists behind this surface, and feeding them different `signedIn`
+    // values would recreate that disagreement in the inputs instead of the
+    // predicate.
+    signedIn: shellAdmission.admitted,
     // The `/settings` bypass is already handled: `WindowHostModalHost` returns
     // null on it before this component mounts, so the gate is not drawing
     // there either and there is nothing to stand down from.

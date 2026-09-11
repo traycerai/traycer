@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { LegacyRecoveryDraft } from "@/lib/tab-recovery/history";
 
 // In-memory stand-in for idb-keyval, mirroring landing-image-store.test. Keyed by
 // string hash; the store argument is ignored. The Map is hoisted so tests can
@@ -97,6 +98,7 @@ async function flush(): Promise<void> {
 
 type Modules = {
   readonly gc: typeof import("@/lib/composer/landing-image-gc");
+  readonly budget: typeof import("@/lib/composer/landing-image-budget");
   readonly store: typeof import("@/lib/composer/landing-image-store");
   readonly draft: typeof import("@/stores/home/landing-draft-store");
   readonly runtime: typeof import("@/stores/home/draft-runtime-registry");
@@ -141,6 +143,7 @@ async function loadModules(opts: {
     Promise.resolve(Array.from(dataForStore(store).entries())),
   );
   const store = await import("@/lib/composer/landing-image-store");
+  const budget = await import("@/lib/composer/landing-image-budget");
   const gc = await import("@/lib/composer/landing-image-gc");
   const recovery = await import("@/lib/tab-recovery/history");
   const draft = await import("@/stores/home/landing-draft-store");
@@ -148,7 +151,7 @@ async function loadModules(opts: {
   recovery.useTabRecoveryHistory.setState({ entries: [], ready: true });
   draft.useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   runtime.draftRuntimeRegistry.resetForTesting();
-  return { gc, store, draft, runtime, recovery, idb };
+  return { gc, budget, store, draft, runtime, recovery, idb };
 }
 
 function makeDraft(
@@ -167,6 +170,27 @@ function makeDraft(
     settings: null,
     composerMode: "chat",
     workspace: m.draft.emptyLandingDraftWorkspaceSnapshot(),
+    ...m.draft.freshLandingMirrorState(),
+  };
+}
+
+function makeLegacyDraft(
+  m: Modules,
+  input: {
+    readonly id: string;
+    readonly content: JsonContent;
+    readonly lastTouchedAt: number;
+  },
+): LegacyRecoveryDraft {
+  const draft = makeDraft(m, input);
+  return {
+    id: draft.id,
+    content: draft.content,
+    selection: draft.selection,
+    lastTouchedAt: draft.lastTouchedAt,
+    settings: draft.settings,
+    composerMode: draft.composerMode,
+    workspace: draft.workspace,
   };
 }
 
@@ -301,8 +325,10 @@ describe("landing-image-gc", () => {
           items: [
             {
               kind: "draft",
+              draftId: "recovered-draft",
+              hostId: null,
               index: 0,
-              draft: makeDraft(m, {
+              legacyDraft: makeLegacyDraft(m, {
                 id: "recovered-draft",
                 content: docWithImages(imageNode(hash, 3)),
                 lastTouchedAt: 1,
@@ -331,7 +357,9 @@ describe("landing-image-gc", () => {
     await first.recovery.configureTabRecoveryHistory("account-a");
     first.recovery.recordClosedHeaderTab({
       kind: "draft",
-      draft: makeDraft(first, {
+      draftId: "account-a-draft",
+      hostId: null,
+      legacyDraft: makeLegacyDraft(first, {
         id: "account-a-draft",
         content: docWithImages(imageNode(hash, 3)),
         lastTouchedAt: 1,
@@ -355,6 +383,55 @@ describe("landing-image-gc", () => {
     await flush();
 
     expect(await reloaded.store.imageHashKeys()).toContain(hash);
+  });
+
+  it("refuses admission while a persisted inactive legacy history fills the budget", async () => {
+    const m = await loadModules({ desktop: true });
+    const legacyHash = "account-a-budget-image";
+    await m.recovery.configureTabRecoveryHistory("account-a");
+    m.recovery.recordClosedHeaderTab({
+      kind: "draft",
+      draftId: "account-a-budget-draft",
+      hostId: null,
+      legacyDraft: makeLegacyDraft(m, {
+        id: "account-a-budget-draft",
+        content: docWithImages(
+          imageNode(legacyHash, m.budget.LANDING_IMAGE_BUDGET_BYTES - 1),
+        ),
+        lastTouchedAt: 1,
+      }),
+      index: 0,
+    });
+    await m.recovery.flushTabRecoveryHistory();
+
+    const canonicalDraft = makeDraft(m, {
+      id: "canonical-saved-draft",
+      content: docWithImages(imageNode("canonical-image", 3)),
+      lastTouchedAt: 2,
+    });
+    m.draft.useLandingDraftStore.setState({
+      drafts: [canonicalDraft],
+      activeDraftId: null,
+    });
+    await m.recovery.configureTabRecoveryHistory("account-b");
+
+    const reservation = m.budget.reserveLandingImageBudget("account-b-draft", [
+      { hash: "new-image", bytes: 2 },
+    ]);
+    expect(reservation).toBeNull();
+    await m.recovery.flushTabRecoveryHistory();
+
+    await m.recovery.configureTabRecoveryHistory("account-a");
+    const accountAEntries = m.recovery.useTabRecoveryHistory.getState().entries;
+    expect(accountAEntries).toHaveLength(1);
+    expect(accountAEntries[0]).toMatchObject({
+      kind: "header",
+      items: [{ kind: "draft", draftId: "account-a-budget-draft" }],
+    });
+    expect(m.draft.useLandingDraftStore.getState().drafts).toHaveLength(1);
+    expect(m.draft.useLandingDraftStore.getState().drafts[0]?.id).toBe(
+      "canonical-saved-draft",
+    );
   });
 
   it("[C2] a just-pasted hash in the live editor survives a reconcile from an unrelated close", async () => {
@@ -457,15 +534,46 @@ describe("landing-image-gc", () => {
     expect(await m.store.imageHashKeys()).not.toContain("orphan");
   });
 
-  it("close reclaims the session entry, then the bytes on the settling sweep", async () => {
+  it("empty close deletes the draft and reclaims unreferenced session bytes", async () => {
     const m = await loadModules({ desktop: true });
-    // [B2] Roots are trustworthy (landing editor mounted) so post-close sweeps
-    // may reclaim the session entry and then the bytes.
     m.gc.markLandingEditorMounted();
     m.gc.markLandingDraftsReady();
     await flush();
 
     const hash = await m.store.putImage(bytesOf([30, 31, 32]));
+    m.draft.useLandingDraftStore.setState({
+      drafts: [
+        makeDraft(m, {
+          id: "d1",
+          content: EMPTY_DOC,
+          lastTouchedAt: 1,
+        }),
+      ],
+      activeDraftId: "d1",
+    });
+    expect(m.store.sessionObjectUrl(hash)).not.toBeNull();
+
+    m.draft.useLandingDraftStore.getState().closeDraft("d1");
+    expect(m.draft.useLandingDraftStore.getState().drafts).toEqual([]);
+
+    await m.gc.reconcile();
+    await flush();
+    expect(m.store.sessionObjectUrl(hash)).toBeNull();
+    expect(await m.store.imageHashKeys()).toContain(hash);
+
+    await m.gc.reconcile();
+    await flush();
+    expect(await m.store.imageHashKeys()).not.toContain(hash);
+  });
+
+  it("retained close keeps image bytes by hash through reconcile", async () => {
+    const m = await loadModules({ desktop: true });
+    m.gc.markLandingEditorMounted();
+    m.gc.markLandingDraftsReady();
+    await flush();
+
+    const bytes = bytesOf([30, 31, 32]);
+    const hash = await m.store.putImage(bytes);
     m.draft.useLandingDraftStore.setState({
       drafts: [
         makeDraft(m, {
@@ -477,25 +585,23 @@ describe("landing-image-gc", () => {
       activeDraftId: "d1",
     });
 
-    // While referenced, nothing is reclaimed.
-    await m.gc.reconcile();
-    await flush();
-    expect(await m.store.imageHashKeys()).toContain(hash);
-    expect(m.store.sessionObjectUrl(hash)).not.toBeNull();
-
-    // Close the draft (composer is not editing it → live mirror empty).
     m.draft.useLandingDraftStore.getState().closeDraft("d1");
+    expect(m.draft.useLandingDraftStore.getState().drafts[0]?.closed).toBe(
+      true,
+    );
 
-    // First post-close sweep: session entry released, bytes still session-protected.
     await m.gc.reconcile();
     await flush();
-    expect(m.store.sessionObjectUrl(hash)).toBeNull();
+    await m.gc.reconcile();
+    await flush();
+
     expect(await m.store.imageHashKeys()).toContain(hash);
-
-    // Settling sweep (session now empty): the bytes are reclaimed.
-    await m.gc.reconcile();
-    await flush();
-    expect(await m.store.imageHashKeys()).not.toContain(hash);
+    const stored = await m.store.getImageBytes(hash);
+    expect(stored).toBeDefined();
+    if (stored === undefined) return;
+    expect(Array.from(stored)).toEqual(Array.from(bytes));
+    const recomputed = await sha256Hex(stored);
+    expect(recomputed).toBe(hash);
   });
 
   // Budget admission tests live in landing-image-budget.test.ts (canonical

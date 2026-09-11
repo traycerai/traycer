@@ -14,7 +14,7 @@ import type {
   StreamMethodSupport,
 } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import type { StreamParamsProvider } from "@traycer-clients/shared/host-transport/i-stream-client";
-import { epicStateSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/state-subscribe";
+import { epicStateSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/state-subscribe";
 import { epicStatusSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/status-subscribe";
 import { fakeDurableStreamTransports } from "@/lib/host/test-support/fake-durable-stream-transport";
 
@@ -78,7 +78,7 @@ function stateSnapshot(sourceRoot: Y.Doc): EpicStateSnapshotFrame {
   if (typeof title !== "string") {
     throw new Error("expected the source root to hold an epic title");
   }
-  const parsed = epicStateSubscribeServerFrameSchemaV10.parse({
+  const parsed = epicStateSubscribeServerFrameSchemaV11.parse({
     kind: "snapshot",
     hasBinaryPayload: false,
     authorityEpoch: AUTHORITY_EPOCH,

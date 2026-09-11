@@ -147,7 +147,9 @@ function currentRefs(): ReadonlyArray<TabRef> {
   const drafts = useLandingDraftStore.getState();
   return [
     ...canvas.openTabOrder.map((id): TabRef => ({ kind: "epic", id })),
-    ...drafts.drafts.map((draft): TabRef => ({ kind: "draft", id: draft.id })),
+    ...drafts.drafts
+      .filter((draft) => !draft.closed)
+      .map((draft): TabRef => ({ kind: "draft", id: draft.id })),
   ];
 }
 
@@ -205,8 +207,11 @@ function entrySummary() {
       entry.kind === "header"
         ? entry.items.map((item) => ({
             kind: item.kind,
-            id: item.kind === "epic" ? item.tab.tabId : item.draft.id,
+            id: item.kind === "epic" ? item.tab.tabId : item.draftId,
             index: item.index,
+            ...(item.kind === "draft"
+              ? { hasSnapshot: item.legacyDraft !== undefined }
+              : {}),
           }))
         : {
             tabId: entry.tab.tabId,
@@ -231,7 +236,13 @@ function snapshot() {
       name: tab.name,
     })),
     openTaskIds: canvas.openTabOrder,
-    draftIds: drafts.drafts.map((draft) => draft.id),
+    draftIds: drafts.drafts
+      .filter((draft) => !draft.closed)
+      .map((draft) => draft.id),
+    draftRecords: drafts.drafts.map((draft) => ({
+      id: draft.id,
+      closed: draft.closed,
+    })),
     activeHeaderItemId: useTabsStore.getState().activeItemId,
     errors: [...fixtureErrors],
     toasts: Array.from(

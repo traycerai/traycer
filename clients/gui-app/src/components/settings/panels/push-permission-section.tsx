@@ -16,7 +16,8 @@ import {
   usePushPermissionRequestMutation,
   type PushPermissionRequestMutation,
 } from "@/hooks/runner/use-push-permission-request-mutation";
-import { useRunnerHost } from "@/providers/use-runner-host";
+import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
+import { isPushPermissionGroupAvailable } from "@/lib/settings/settings-availability";
 
 type PushPermissionView =
   | { readonly kind: "loading" }
@@ -34,7 +35,7 @@ const READ_FAILED = "Couldn't read this phone's notification setting.";
 
 /**
  * The OS push permission of the phone this renderer runs on. It belongs under
- * Application → Notifications because it never varies with the selected host.
+ * Application → Sounds because it never varies with the selected host.
  *
  * It exists because the OS remembers a refusal forever - the app asks once,
  * and after a "Don't Allow" no amount of relaunching can re-prompt. Without
@@ -47,25 +48,33 @@ const READ_FAILED = "Couldn't read this phone's notification setting.";
  * is the UI word for a HOST (Settings → Devices lists hosts), so "This device"
  * would read as one more host-scoped setting - the exact confusion the row is
  * here to end.
+ *
+ * The gate is the only thing rendered above it: every hook the group uses
+ * reaches the runner host, which throws in a host-less shell, so they live in
+ * the child and run only once the gate has passed.
  */
 export function PushPermissionSection(): ReactNode {
-  const { pushPermission } = useRunnerHost();
+  const availability = useSettingsAvailabilityContext();
+  if (!isPushPermissionGroupAvailable(availability)) return null;
+  return <PushPermissionGroup />;
+}
+
+function PushPermissionGroup(): ReactNode {
   const query = usePushPermissionQuery();
   const request = usePushPermissionRequestMutation();
   const openSettings = usePushPermissionOpenSettingsMutation();
-
-  if (pushPermission === null) return null;
-
   const view = pushPermissionView(query);
   return (
     <SettingsGroup
       title="This phone"
+      anchor="app-notifications-this-phone"
       tone="default"
       dataTestId="push-permission-section"
       fill={false}
     >
       <SettingsRow
         label="Push notifications"
+        anchor="app-notifications-push"
         description={viewDescription(view)}
         control={
           <div

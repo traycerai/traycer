@@ -1,6 +1,6 @@
+import { prepareSavedDraft } from "./saved-draft";
 import { restoreClosedCanvas } from "./restore-canvas";
 import { toast } from "sonner";
-import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { KeybindingRouter } from "@/lib/keybindings/dispatch";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
@@ -13,8 +13,6 @@ import {
 import { preservedTileRecordIsLive } from "@/lib/commands/actions/history-navigation";
 import { rejectClosedPlainTerminalRestore } from "@/lib/terminals/plain-terminal-presentation-invalidation";
 import { queryClient } from "@/lib/query-client";
-import { base64ToBytes } from "@/lib/composer/image-base64";
-import { putImage } from "@/lib/composer/landing-image-store";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
 import { parseEpicCanvasState } from "@/stores/epics/canvas/migrate-canvas";
 import type {
@@ -51,28 +49,6 @@ function cleanCanvas(canvas: EpicCanvasState, epicId: string): EpicCanvasState {
   );
   return parseEpicCanvasState({ ...canvas, tilesByInstanceId }) ?? canvas;
 }
-/** Finish an immediate paste-before-close from the bytes retained in the journal. */
-async function durableDraftContent(node: JsonContent): Promise<JsonContent> {
-  if (
-    node.type === "imageAttachment" &&
-    typeof node.attrs?.b64content === "string"
-  ) {
-    const bytes = base64ToBytes(node.attrs.b64content);
-    if (bytes === null)
-      throw new Error("The draft image could not be decoded.");
-    const hash = await putImage(bytes);
-    const attrs = Object.fromEntries(
-      Object.entries(node.attrs).filter(([key]) => key !== "b64content"),
-    );
-    return { ...node, attrs: { ...attrs, hash, size: bytes.byteLength } };
-  }
-  return node.content === undefined
-    ? node
-    : {
-        ...node,
-        content: await Promise.all(node.content.map(durableDraftContent)),
-      };
-}
 function activateEpic(
   router: KeybindingRouter,
   epicId: string,
@@ -105,13 +81,13 @@ interface RestoreOutcome {
 function headerKey(item: ClosedHeaderTab): string {
   return item.kind === "epic"
     ? `epic:${item.tab.tabId}`
-    : `draft:${item.draft.id}`;
+    : `draft:${item.draftId}`;
 }
 function headerIsOpen(item: ClosedHeaderTab): boolean {
   if (item.kind === "draft")
     return useLandingDraftStore
       .getState()
-      .drafts.some((draft) => draft.id === item.draft.id);
+      .drafts.some((draft) => draft.id === item.draftId && !draft.closed);
   const state = useEpicCanvasStore.getState();
   const existing = state.tabsById[item.tab.tabId];
   return (
@@ -121,15 +97,17 @@ function headerIsOpen(item: ClosedHeaderTab): boolean {
 }
 async function prepareHeaderItem(
   item: ClosedHeaderTab,
-): Promise<ClosedHeaderTab> {
-  if (item.kind === "draft")
+  stillCurrent: () => boolean,
+): Promise<ClosedHeaderTab | null> {
+  if (item.kind === "draft") {
+    if (!(await prepareSavedDraft(item, stillCurrent))) return null;
     return {
-      ...item,
-      draft: {
-        ...item.draft,
-        content: await durableDraftContent(item.draft.content),
-      },
+      kind: "draft",
+      draftId: item.draftId,
+      hostId: item.hostId,
+      index: item.index,
     };
+  }
   const canvas =
     useEpicCanvasStore.getState().canvasByTabId[item.tab.tabId] ?? item.canvas;
   return { ...item, canvas: cleanCanvas(canvas, item.tab.epicId) };
@@ -138,12 +116,26 @@ async function restoreHeader(
   entry: Extract<TabRecoveryEntry, { kind: "header" }>,
   router: KeybindingRouter,
 ): Promise<RestoreOutcome> {
+  const generation = recoveryHistoryGeneration();
+  const stillCurrent = (item: ClosedHeaderTab): boolean => {
+    if (generation !== recoveryHistoryGeneration()) return false;
+    const current = useTabRecoveryHistory
+      .getState()
+      .entries.find((candidate) => candidate.id === entry.id);
+    return (
+      current?.kind === "header" &&
+      current.items.some(
+        (candidate) => headerKey(candidate) === headerKey(item),
+      )
+    );
+  };
   const prepared: ClosedHeaderTab[] = [];
   const failed: ClosedHeaderTab[] = [];
   for (const item of entry.items) {
     if (headerIsOpen(item)) continue;
     try {
-      prepared.push(await prepareHeaderItem(item));
+      const ready = await prepareHeaderItem(item, () => stillCurrent(item));
+      if (ready !== null) prepared.push(ready);
     } catch {
       failed.push(item);
     }
@@ -193,7 +185,7 @@ async function restoreHeader(
   if (!entry.bulk && first !== undefined) {
     if (first.kind === "epic")
       activateEpic(router, first.tab.epicId, first.tab.tabId);
-    else router.navigateToTabIntent(draftTabIntent(first.draft.id));
+    else router.navigateToTabIntent(draftTabIntent(first.draftId));
   }
   return { restored: items.length > 0, retained: retained.length > 0 };
 }

@@ -194,7 +194,16 @@ describe("/epics/$epicId/$tabId route", () => {
     const state = useEpicCanvasStore.getState();
     expect(state.openTabOrder).toEqual([TAB_ID]);
     expect(Object.keys(state.tabsById)).toEqual([TAB_ID]);
-    expect(recordViewed).toHaveBeenCalledWith({ epicId: EPIC_ID });
+    // `isLocalHome: false` because no epic session is registered here, so
+    // `useEpicLocalHomeReading` answers `unstated` and the held cloud
+    // verdict decides immediately. The flag is asserted rather than
+    // loosened to `objectContaining`: it is the whole carve-out, and a
+    // route that started sending `true` from an unstated reading would be
+    // claiming a local home nobody stated.
+    expect(recordViewed).toHaveBeenCalledWith({
+      epicId: EPIC_ID,
+      isLocalHome: false,
+    });
   });
 
   it("repairs a stale tab route to a sibling tab without carrying nested focus params", async () => {

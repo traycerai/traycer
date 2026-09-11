@@ -22,6 +22,8 @@ import { AgentsSettingsPanel } from "@/components/settings/panels/agents-setting
 import { NotificationsSettingsPanel } from "@/components/settings/panels/notifications-settings-panel";
 import { UsageSettingsPanel } from "@/components/settings/panels/usage-settings-panel";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
+import { useSettingsAnchorReveal } from "@/components/settings/use-settings-anchor-reveal";
+import "./settings-search.css";
 
 export interface SettingsModalContentProps {
   readonly section: SettingsSectionId | null;
@@ -56,7 +58,13 @@ export function SettingsModalContent(
           }}
           variant="rail"
         />
-        <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto">
+        {/* The pane a page result scrolls to the top: see
+            `useSettingsAnchorReveal`. Marked here, by the surface, rather
+            than by each panel, so a bespoke panel cannot opt out of it. */}
+        <div
+          data-settings-panel-pane
+          className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto"
+        >
           <SettingsPanelForSection section={section} />
         </div>
       </div>
@@ -91,6 +99,11 @@ const SETTINGS_PANELS = {
 export function SettingsPanelForSection(props: {
   readonly section: SettingsSectionId;
 }): ReactNode {
+  // The one mount point for the settings-search reveal watcher, and the reason
+  // it sits here rather than in either surface: both the modal and the routed
+  // tab render their panel THROUGH this function, so one watcher covers both
+  // and there is no arrangement of surfaces that gets two of them.
+  useSettingsAnchorReveal(props.section);
   const Panel = SETTINGS_PANELS[props.section];
   return <Panel />;
 }

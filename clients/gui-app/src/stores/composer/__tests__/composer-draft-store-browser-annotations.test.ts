@@ -519,6 +519,7 @@ describe("composer draft store browserAnnotations", () => {
       userId: null,
       onAuthError: null,
       onProviderAuthError: null,
+      wakeTransport: null,
       streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
       streamClientFactory: () => ({
         sendAction: () => undefined,
@@ -534,6 +535,8 @@ describe("composer draft store browserAnnotations", () => {
           clientActionId: "action-m2",
           action: "send",
           queueItemId: null,
+          checkpointId: null,
+          revertArtifacts: null,
           interviewBlockId: null,
           interviewDeliveryRetry: null,
           messageId: "msg-m2",
