@@ -1217,15 +1217,22 @@ describe("partitionOfficePopulation", () => {
   /**
    * EVERY COMBINATION OF WHO RETURNS, WHAT SURVIVED, AND WHERE.
    *
-   * One row per line of the ticket's matrix; N5 and N7 are rows of it too,
-   * restated here alongside the rest so the whole class is closed in one
-   * place. Each row says whether it fails on `e89c7e1ea` (the tree before
-   * this fixup's `reconcileReturningLeads` pass) or is a control that passes
-   * on both trees - a row a fix could quietly break without a matrix case to
-   * notice.
+   * One row per line of the ticket's matrix; N5, N7, N9 and N10 are rows of
+   * it too, restated here alongside the rest so the whole class is closed in
+   * one place. Each row says whether it fails on `e89c7e1ea` / `4bbfcbb9b`
+   * (the trees before waiting-team continuity was resolved before HQ) or is
+   * a control that passes on both trees - a row a fix could quietly break
+   * without a matrix case to notice.
+   *
+   * Ancestry and incumbency qualify the three dimensions: a later-root lead
+   * is still a lead (N9); continuity recorded only in the previous team is
+   * still a waiting team (N10); a vacant office respects a known incumbent
+   * (row 7). Absence from `previous.members` restores no history - rows 4
+   * and 5 hold for a present parent supplying the identity, and the orphan
+   * rule applies when that parent is gone.
    */
   describe("the returning-agent matrix", () => {
-    it("row 1: the lead returns with survivors on the same host - rejoins as lead (N7, fails on e89c7e1ea)", () => {
+    it("row 1: a lead returns to current survivors on the same host and rejoins as lead (N7, fails on e89c7e1ea)", () => {
       const base: ReadonlyArray<OfficeAgentInput> = [
         agent({ id: "R", hostId: "host-a", createdAt: 0 }),
         agent({ id: "L", parentId: "R", hostId: "host-a", createdAt: 1 }),
@@ -1265,7 +1272,123 @@ describe("partitionOfficePopulation", () => {
       expect(after.teamOf("M")?.memberAgentIds).toEqual(["L", "M"]);
     });
 
-    it("row 2: the lead returns with survivors on a different host - a solo carrying the accent, the team keeps its survivors with no lead in the roster (fails on e89c7e1ea)", () => {
+    it.each([
+      { label: "host-a", home: "host-a" },
+      { label: "the unattributed group", home: null },
+    ])(
+      "row 1, later-root lead: returns locally on $label and rejoins its waiting team instead of taking HQ (N9)",
+      ({ home }) => {
+        // R and L are BOTH true roots. R is first-created so R is HQ; L
+        // leads its own team because it brought somebody. The fresh pass
+        // would hand the empty corner office to L the moment R is gone -
+        // L is now the first-created true root of an empty host - but its
+        // own team is waiting, and a fresh HQ reading never proves the
+        // returner was HQ.
+        const base: ReadonlyArray<OfficeAgentInput> = [
+          agent({ id: "R", hostId: home, createdAt: 0 }),
+          agent({ id: "L", hostId: home, createdAt: 1 }),
+          agent({ id: "M", parentId: "L", hostId: home, createdAt: 2 }),
+        ];
+        const withLead = partitionVerified({
+          agents: base,
+          statusById: statusMap([]),
+          previous: null,
+        });
+        expect(withLead.classOf("R")).toBe("hq");
+        expect(withLead.classOf("L")).toBe("team");
+        expect(withLead.teamOf("M")?.memberAgentIds).toEqual(["L", "M"]);
+
+        const leadRemoved: ReadonlyArray<OfficeAgentInput> = [base[2]];
+        const headless = partitionVerified({
+          agents: leadRemoved,
+          statusById: statusMap([]),
+          previous: withLead,
+        });
+        expect(headless.teamOf("M")?.memberAgentIds).toEqual(["M"]);
+
+        const returned: ReadonlyArray<OfficeAgentInput> = [base[1], base[2]];
+        const after = partitionVerified({
+          agents: returned,
+          statusById: statusMap([]),
+          previous: headless,
+        });
+
+        expect(after.classOf("L")).toBe("team");
+        expect(after.members.get("L")?.teamId).toBe("L");
+        const homeHost = after.hosts.find((host) => host.hostId === home);
+        expect(homeHost).toBeDefined();
+        expect(homeHost?.hqAgentId).toBeNull();
+        expect(homeHost?.solos).toEqual([]);
+        expect(homeHost?.teams).toHaveLength(1);
+        expect(homeHost?.teams[0]?.teamId).toBe("L");
+        expect(homeHost?.teams[0]?.memberAgentIds).toEqual(["L", "M"]);
+      },
+    );
+
+    it.each([
+      { label: "host-a", home: "host-a" },
+      { label: "the unattributed group", home: null },
+    ])(
+      "row 1, continuity only in the previous team: takes its team back on $label when the last old member leaves in the same step (N10)",
+      ({ home }) => {
+        // Current survivors and a team recorded only in `previous` are
+        // the same waiting team. M is the last local member; it leaves
+        // in the same step L returns and N arrives, so reconciliation
+        // that looked only at currently-surviving frozen members would
+        // leave L an orphan solo while adoption seated N in team L -
+        // two answers to one question.
+        const base: ReadonlyArray<OfficeAgentInput> = [
+          agent({ id: "R", hostId: home, createdAt: 0 }),
+          agent({ id: "L", parentId: "R", hostId: home, createdAt: 1 }),
+          agent({ id: "M", parentId: "L", hostId: home, createdAt: 2 }),
+          agent({ id: "S", parentId: "L", hostId: "host-b", createdAt: 3 }),
+        ];
+        const withLead = partitionVerified({
+          agents: base,
+          statusById: statusMap([]),
+          previous: null,
+        });
+        expect(withLead.classOf("S")).toBe("solo");
+        expect(withLead.members.get("S")?.teamId).toBe("L");
+        expect(withLead.teamOf("M")?.memberAgentIds).toEqual(["L", "M"]);
+
+        const leadRemoved: ReadonlyArray<OfficeAgentInput> = [base[2], base[3]];
+        const headless = partitionVerified({
+          agents: leadRemoved,
+          statusById: statusMap([]),
+          previous: withLead,
+        });
+        expect(headless.teamOf("M")?.memberAgentIds).toEqual(["M"]);
+        expect(headless.classOf("S")).toBe("solo");
+        expect(headless.members.get("S")?.teamId).toBe("L");
+
+        const grownAgents: ReadonlyArray<OfficeAgentInput> = [
+          base[1],
+          base[3],
+          agent({ id: "N", parentId: "S", hostId: home, createdAt: 6 }),
+        ];
+        const after = partitionVerified({
+          agents: grownAgents,
+          statusById: statusMap([]),
+          previous: headless,
+        });
+
+        expect(after.classOf("L")).toBe("team");
+        expect(after.members.get("L")?.teamId).toBe("L");
+        const homeHost = after.hosts.find((host) => host.hostId === home);
+        expect(homeHost).toBeDefined();
+        expect(homeHost?.solos).toEqual([]);
+        expect(homeHost?.teams).toHaveLength(1);
+        expect(homeHost?.teams[0]?.teamId).toBe("L");
+        expect(homeHost?.teams[0]?.memberAgentIds).toEqual(["L", "N"]);
+
+        const hostB = after.hosts.find((host) => host.hostId === "host-b");
+        expect(hostB?.solos.map((solo) => solo.agentId)).toEqual(["S"]);
+        expect(hostB?.solos[0]?.teamId).toBe("L");
+      },
+    );
+
+    it("row 2: a lead returns to survivors on a different host - a solo carrying the accent; the team keeps its survivors with no lead in the roster (fails on e89c7e1ea)", () => {
       const base: ReadonlyArray<OfficeAgentInput> = [
         agent({ id: "R", hostId: "host-a", createdAt: 0 }),
         agent({ id: "L", parentId: "R", hostId: "host-a", createdAt: 1 }),
@@ -1317,7 +1440,80 @@ describe("partitionOfficePopulation", () => {
       expect(hostB?.solos.map((solo) => solo.agentId)).toEqual(["L"]);
     });
 
-    it("row 3: the lead returns with no survivors - teamless solo (N5, control)", () => {
+    it.each([
+      { label: "host-a into host-b", home: "host-a", away: "host-b" },
+      {
+        label: "the unattributed group into host-b",
+        home: null,
+        away: "host-b",
+      },
+      {
+        label: "host-a into the unattributed group",
+        home: "host-a",
+        away: null,
+      },
+    ])(
+      "row 2, later-root lead: returns remotely from $label as a solo carrying the accent, never HQ (N9)",
+      ({ home, away }) => {
+        // Matrix row 2 applied to a returning true-root lead. The fresh
+        // pass would hand L the empty corner office wherever it came back
+        // to - it is that host's first-created true root - but its team is
+        // waiting on the home host, so L is a stranded solo carrying accent
+        // L, never HQ. The unattributed group is a host like any other in
+        // both directions: it can be the building left behind and it can be
+        // the one walked into, and neither reading is special-cased.
+        const base: ReadonlyArray<OfficeAgentInput> = [
+          agent({ id: "R", hostId: home, createdAt: 0 }),
+          agent({ id: "L", hostId: home, createdAt: 1 }),
+          agent({ id: "M", parentId: "L", hostId: home, createdAt: 2 }),
+        ];
+        const withLead = partitionVerified({
+          agents: base,
+          statusById: statusMap([]),
+          previous: null,
+        });
+        expect(withLead.classOf("R")).toBe("hq");
+        expect(withLead.classOf("L")).toBe("team");
+        const leadRemoved: ReadonlyArray<OfficeAgentInput> = [base[2]];
+        const headless = partitionVerified({
+          agents: leadRemoved,
+          statusById: statusMap([]),
+          previous: withLead,
+        });
+        expect(headless.teamOf("M")?.memberAgentIds).toEqual(["M"]);
+
+        const returned: ReadonlyArray<OfficeAgentInput> = [
+          agent({ id: "L", hostId: away, createdAt: 1 }),
+          base[2],
+        ];
+        const after = partitionVerified({
+          agents: returned,
+          statusById: statusMap([]),
+          previous: headless,
+        });
+
+        expect(after.classOf("L")).toBe("solo");
+        expect(after.members.get("L")?.teamId).toBe("L");
+        expect(after.members.get("L")?.hostId).toBe(away);
+
+        const homeHost = after.hosts.find((host) => host.hostId === home);
+        expect(homeHost?.teams).toHaveLength(1);
+        expect(homeHost?.teams[0]?.teamId).toBe("L");
+        expect(homeHost?.teams[0]?.memberAgentIds).toEqual(["M"]);
+
+        const awayHost = after.hosts.find((host) => host.hostId === away);
+        expect(awayHost).toBeDefined();
+        expect(awayHost?.hqAgentId).toBeNull();
+        expect(awayHost?.solos.map((solo) => solo.agentId)).toEqual(["L"]);
+        expect(awayHost?.solos[0]?.teamId).toBe("L");
+      },
+    );
+
+    it("row 3: N5's orphan lead with no valid team home is a teamless solo - not an unconditional no-survivors rule (control)", () => {
+      // N5, scoped. A returning true root with nobody waiting follows the
+      // ordinary fresh HQ rule (row 7); a returning child of a present HQ
+      // follows the ordinary team rule. This row is only the orphan whose
+      // team has no record left to rejoin.
       const base: ReadonlyArray<OfficeAgentInput> = [
         agent({ id: "R", hostId: "host-a", createdAt: 0 }),
         agent({ id: "L", parentId: "R", hostId: "host-a", createdAt: 1 }),
@@ -1432,18 +1628,67 @@ describe("partitionOfficePopulation", () => {
       expect(hostA?.teams[0]?.memberAgentIds).toEqual(["L"]);
     });
 
+    it.each([
+      { label: "the team's own host", returnHost: "host-a" },
+      { label: "a different host", returnHost: "host-b" },
+    ])(
+      "rows 4-5 control: a member returning with its parent absent is a team-less orphan solo on $label, not a restored member",
+      ({ returnHost }) => {
+        // Absence from `previous.members` restores no history. Rows 4 and
+        // 5 hold when a PRESENT parent supplies the identity; they do not
+        // prove that a returning member reclaims a team it used to sit in.
+        // Team L is still waiting with S, and M still does not rejoin.
+        const base: ReadonlyArray<OfficeAgentInput> = [
+          agent({ id: "R", hostId: "host-a", createdAt: 0 }),
+          agent({ id: "L", parentId: "R", hostId: "host-a", createdAt: 1 }),
+          agent({ id: "M", parentId: "L", hostId: "host-a", createdAt: 2 }),
+          agent({ id: "S", parentId: "L", hostId: "host-a", createdAt: 3 }),
+        ];
+        const withLead = partitionVerified({
+          agents: base,
+          statusById: statusMap([]),
+          previous: null,
+        });
+        expect(withLead.teamOf("L")?.memberAgentIds).toEqual(["L", "M", "S"]);
+
+        const leadAndMemberGone: ReadonlyArray<OfficeAgentInput> = [
+          base[0],
+          base[3],
+        ];
+        const withoutLeadAndMember = partitionVerified({
+          agents: leadAndMemberGone,
+          statusById: statusMap([]),
+          previous: withLead,
+        });
+        expect(withoutLeadAndMember.teamOf("S")?.memberAgentIds).toEqual(["S"]);
+
+        const returned: ReadonlyArray<OfficeAgentInput> = [
+          base[0],
+          base[3],
+          agent({ id: "M", parentId: "L", hostId: returnHost, createdAt: 2 }),
+        ];
+        const after = partitionVerified({
+          agents: returned,
+          statusById: statusMap([]),
+          previous: withoutLeadAndMember,
+        });
+
+        expect(after.classOf("M")).toBe("solo");
+        expect(after.members.get("M")?.teamId).toBeNull();
+        expect(after.teamOf("S")?.memberAgentIds).toEqual(["S"]);
+      },
+    );
+
     it("row 6: a member returns with no survivors - a stranded solo carrying the accent it had, teamOf null (D24, control)", () => {
       // Reachable only through a parent that is ITSELF a stranded solo
-      // carrying the accent: a returning member with no survivors and no
-      // present parent would be a plain teamless solo with nothing to
-      // inherit from, which is a different (and uninteresting) shape. Here
-      // P is that stranded parent - present throughout, never removed - and
-      // M is the member that leaves team L and later returns as P's child.
+      // carrying the accent. M is P's child from the start, on the same
+      // host it returns to: the old fixture reparented M from L to P and
+      // moved it from A to B, which mixed inheritance with a host change.
       const base: ReadonlyArray<OfficeAgentInput> = [
         agent({ id: "R", hostId: "host-a", createdAt: 0 }),
         agent({ id: "L", parentId: "R", hostId: "host-a", createdAt: 1 }),
         agent({ id: "P", parentId: "L", hostId: "host-b", createdAt: 2 }),
-        agent({ id: "M", parentId: "L", hostId: "host-a", createdAt: 3 }),
+        agent({ id: "M", parentId: "P", hostId: "host-a", createdAt: 3 }),
       ];
       const withLead = partitionVerified({
         agents: base,
@@ -1467,12 +1712,11 @@ describe("partitionOfficePopulation", () => {
       });
       expect(noSurvivors.members.get("P")?.teamId).toBe("L");
 
-      // M returns as P's child, not L's - L is gone, and P is the present
-      // agent carrying the accent it inherits.
+      // M returns under P, still on host-a.
       const returned: ReadonlyArray<OfficeAgentInput> = [
         base[0],
         base[2],
-        agent({ id: "M", parentId: "P", hostId: "host-b", createdAt: 3 }),
+        agent({ id: "M", parentId: "P", hostId: "host-a", createdAt: 3 }),
       ];
       const after = partitionVerified({
         agents: returned,
@@ -1488,22 +1732,32 @@ describe("partitionOfficePopulation", () => {
       }
     });
 
-    it("row 7a: HQ returns with no other root pinned in the meantime - HQ again (control)", () => {
+    it("row 7a: a genuine returning HQ takes an empty corner office - no team was waiting (control)", () => {
+      // S is a leaf of HQ, not a member of a team named R: HQ leads no
+      // team. Dropping R leaves the office vacant; S staying does not
+      // create a waiting team, so R taking the office again is the HQ
+      // exception, not rows 1 and 2.
+      const base: ReadonlyArray<OfficeAgentInput> = [
+        agent({ id: "R", hostId: "host-a", createdAt: 0 }),
+        agent({ id: "S", parentId: "R", hostId: "host-a", createdAt: 1 }),
+      ];
       const withRoot = partitionVerified({
-        agents: [agent({ id: "R", hostId: "host-a", createdAt: 0 })],
+        agents: base,
         statusById: statusMap([]),
         previous: null,
       });
       expect(withRoot.classOf("R")).toBe("hq");
+      expect(withRoot.hosts[0]?.hqAgentId).toBe("R");
 
       const gone = partitionVerified({
-        agents: [],
+        agents: [base[1]],
         statusById: statusMap([]),
         previous: withRoot,
       });
+      expect(gone.hosts[0]?.hqAgentId).toBeNull();
 
       const after = partitionVerified({
-        agents: [agent({ id: "R", hostId: "host-a", createdAt: 0 })],
+        agents: base,
         statusById: statusMap([]),
         previous: gone,
       });
@@ -1511,40 +1765,56 @@ describe("partitionOfficePopulation", () => {
       expect(after.hosts[0]?.hqAgentId).toBe("R");
     });
 
-    it("row 7b: HQ returns after another root took it - the returner does not displace it (control)", () => {
-      const withRoot = partitionVerified({
-        agents: [agent({ id: "R", hostId: "host-a", createdAt: 0 })],
-        statusById: statusMap([]),
-        previous: null,
-      });
-
-      // R leaves and a different root, O, arrives and becomes the new HQ -
-      // nothing here yet remembers R at all.
-      const withNewHq = partitionVerified({
-        agents: [agent({ id: "O", hostId: "host-a", createdAt: 1 })],
-        statusById: statusMap([]),
-        previous: withRoot,
-      });
-      expect(withNewHq.classOf("O")).toBe("hq");
-
-      // R returns alongside the incumbent O.
-      const after = partitionVerified({
-        agents: [
-          agent({ id: "O", hostId: "host-a", createdAt: 1 }),
+    it.each([
+      { label: "with somebody under it", keepChild: true, expected: "team" },
+      { label: "on its own", keepChild: false, expected: "solo" },
+    ])(
+      "row 7b: an older returning root $label does not displace a known incumbent HQ (control)",
+      ({ keepChild, expected }) => {
+        // "Still the first-created true root" respects a known incumbent, so
+        // an older returner cannot take the office back. A former team lead
+        // with a waiting team belongs to rows 1 and 2, not to this exception.
+        //
+        // What the returner becomes INSTEAD is pinned both ways, because the
+        // two answers come from different rules and a change to either would
+        // otherwise pass unnoticed: a later root that brought somebody leads
+        // a team of its own - here a team of just itself, since the somebody
+        // is frozen as the solo it has always been - and one that brought
+        // nobody is a plain solo. Neither is a second corner office, which
+        // is the whole of what this row is about.
+        const base: ReadonlyArray<OfficeAgentInput> = [
           agent({ id: "R", hostId: "host-a", createdAt: 0 }),
-        ],
-        statusById: statusMap([]),
-        previous: withNewHq,
-      });
+          agent({ id: "S", parentId: "R", hostId: "host-a", createdAt: 1 }),
+        ];
+        const present = keepChild ? base : [base[0]];
+        const withRoot = partitionVerified({
+          agents: present,
+          statusById: statusMap([]),
+          previous: null,
+        });
+        expect(withRoot.classOf("R")).toBe("hq");
 
-      // O keeps the office; R is a returning root with no children of its
-      // own, so it is classified the plain solo it is rather than a second
-      // HQ.
-      expect(after.classOf("O")).toBe("hq");
-      expect(after.hosts[0]?.hqAgentId).toBe("O");
-      expect(after.classOf("R")).toBe("solo");
-      expect(after.members.get("R")?.teamId).toBeNull();
-    });
+        const replacement = agent({ id: "Q", hostId: "host-a", createdAt: 5 });
+        const survivors = keepChild ? [base[1], replacement] : [replacement];
+        const interim = partitionVerified({
+          agents: survivors,
+          statusById: statusMap([]),
+          previous: withRoot,
+        });
+        expect(interim.classOf("Q")).toBe("hq");
+        expect(interim.hosts[0]?.hqAgentId).toBe("Q");
+
+        const after = partitionVerified({
+          agents: [...present, replacement],
+          statusById: statusMap([]),
+          previous: interim,
+        });
+
+        expect(after.classOf("Q")).toBe("hq");
+        expect(after.hosts[0]?.hqAgentId).toBe("Q");
+        expect(after.classOf("R")).toBe(expected);
+      },
+    );
 
     it("row 8: a teamless solo returns - solo, teamId null (control)", () => {
       const base: ReadonlyArray<OfficeAgentInput> = [
@@ -1629,6 +1899,238 @@ describe("partitionOfficePopulation", () => {
       expect(after.teamOf("L")?.teamId).toBe("L");
       expect(after.teamOf("L")?.memberAgentIds).toEqual(["L", "M"]);
       expect(after.hosts[0].hqAgentId).toBe("Q");
+    });
+  });
+
+  /**
+   * THE WHOLE FAMILY OF TRANSITIONS, NOT A LIST OF THE ONES SOMEBODY THOUGHT OF.
+   *
+   * Six fixups of this file were each found by a reader constructing one more
+   * sequence by hand, and every one of them was a shape the cases above had no
+   * reason to reach. The rows are still worth having - they say what the office
+   * is SUPPOSED to look like - but they cannot be what closes the question, so
+   * this case enumerates the whole neighbourhood instead and asserts the
+   * invariants over all of it.
+   *
+   * The neighbourhood: two trees (a lead that is HQ's own child, and a lead that
+   * is a later root of its own), on a named host and on the unattributed group,
+   * with a local member, a member stranded in another building, and a spare root
+   * that can take an emptied corner office. Every subset of those five is a
+   * `previous`, every subset is the set that follows it - which makes every
+   * removal, every return, and every combination of the two - and one arrival
+   * turns up in each, under each possible parent, in its own building or the
+   * other one. 40,960 transitions, fixed and in a fixed order: no randomness, no
+   * seed, nothing that passes today and fails on somebody else's machine.
+   *
+   * Every partition is built through `partitionVerified`, so the placement,
+   * host and lead-in-roster invariants run on all of them - the `previous` ones
+   * included. On top of those, two claims that only a transition can test: a
+   * known agent never changes class or team (that is what freezing MEANS, and
+   * breaking it teleports a character across the building), and an agent running
+   * a building is never also the lead a team is named after (the corner office
+   * and a roster are two placements, and taking both is the shape that started
+   * this).
+   */
+  describe("every removal, return and arrival in the bounded family", () => {
+    const NO_STATUS: ReadonlyMap<string, OfficeAgentStatus> = new Map();
+    /** R, L, M, S, Q - so a subset is five bits. */
+    const SCAN_SUBSETS = 1 << 5;
+
+    interface ScanTree {
+      /** Whether L leads a team of its own rather than one under HQ. */
+      readonly laterRoot: boolean;
+      readonly home: string | null;
+    }
+
+    const SCAN_TREES: ReadonlyArray<ScanTree> = [
+      { laterRoot: false, home: "host-a" },
+      { laterRoot: false, home: null },
+      { laterRoot: true, home: "host-a" },
+      { laterRoot: true, home: null },
+    ];
+
+    /**
+     * R runs the place, L leads the team, M sits in it, S is the same team's
+     * member in another building, and Q is the root that can walk into an empty
+     * corner office while L is away.
+     */
+    function scanPool(tree: ScanTree): ReadonlyArray<OfficeAgentInput> {
+      return [
+        agent({ id: "R", parentId: null, createdAt: 0, hostId: tree.home }),
+        agent({
+          id: "L",
+          parentId: tree.laterRoot ? null : "R",
+          createdAt: 1,
+          hostId: tree.home,
+        }),
+        agent({ id: "M", parentId: "L", createdAt: 2, hostId: tree.home }),
+        agent({ id: "S", parentId: "L", createdAt: 3, hostId: "host-b" }),
+        agent({ id: "Q", parentId: null, createdAt: 5, hostId: tree.home }),
+      ];
+    }
+
+    function chosen(
+      pool: ReadonlyArray<OfficeAgentInput>,
+      bits: number,
+    ): ReadonlyArray<OfficeAgentInput> {
+      return pool.filter((_, index) => (bits & (1 << index)) !== 0);
+    }
+
+    /** The arrival, in every place the epic has to put one. */
+    function scanArrivals(tree: ScanTree): ReadonlyArray<OfficeAgentInput> {
+      const arrivals: OfficeAgentInput[] = [];
+      for (const parentId of [null, "R", "L", "M", "S"]) {
+        for (const hostId of [tree.home, "host-b"]) {
+          arrivals.push(agent({ id: "N", parentId, createdAt: 6, hostId }));
+        }
+      }
+      return arrivals;
+    }
+
+    interface ScanStage {
+      readonly tree: ScanTree;
+      readonly pool: ReadonlyArray<OfficeAgentInput>;
+      readonly arrivals: ReadonlyArray<OfficeAgentInput>;
+      readonly previousIds: ReadonlyArray<string>;
+      readonly previous: OfficePopulation;
+    }
+
+    /**
+     * Every `previous` the scan starts a transition from: each tree partitioned
+     * whole, then each subset of it partitioned against that - so the states the
+     * transitions begin in are themselves reached by a removal rather than
+     * conjured, and a frozen class is a real frozen class.
+     */
+    function scanStages(): ReadonlyArray<ScanStage> {
+      const stages: ScanStage[] = [];
+      for (const tree of SCAN_TREES) {
+        const pool = scanPool(tree);
+        const arrivals = scanArrivals(tree);
+        const initial = partitionVerified({
+          agents: pool.slice(0, 4),
+          statusById: NO_STATUS,
+          previous: null,
+        });
+        for (let bits = 0; bits < SCAN_SUBSETS; bits++) {
+          const agents = chosen(pool, bits);
+          stages.push({
+            tree,
+            pool,
+            arrivals,
+            previousIds: agents.map((candidate) => candidate.id),
+            previous: partitionVerified({
+              agents,
+              statusById: NO_STATUS,
+              previous: initial,
+            }),
+          });
+        }
+      }
+      return stages;
+    }
+
+    /** A known agent that changed class or team: freezing, broken. */
+    function reclassificationsIn(
+      after: OfficePopulation,
+      previous: OfficePopulation,
+    ): ReadonlyArray<string> {
+      const changed: string[] = [];
+      for (const [agentId, member] of after.members) {
+        const was = previous.members.get(agentId);
+        if (was === undefined) continue;
+        if (
+          was.agentClass === member.agentClass &&
+          was.teamId === member.teamId
+        ) {
+          continue;
+        }
+        changed.push(`reclassified:${agentId}`);
+      }
+      return changed;
+    }
+
+    /**
+     * An agent in a corner office that a team is also named after. Not a
+     * duplicate placement the count check can see - the team may be in another
+     * building entirely, and its roster need not mention the lead - but the same
+     * error underneath: the office decided this agent runs a host while its own
+     * people were still sitting in a room with its name on it.
+     */
+    function hqsThatLeadTeams(after: OfficePopulation): ReadonlyArray<string> {
+      const leads = new Set<string>();
+      for (const host of after.hosts) {
+        for (const team of host.teams) leads.add(team.teamId);
+      }
+      const offenders: string[] = [];
+      for (const host of after.hosts) {
+        if (host.hqAgentId === null || !leads.has(host.hqAgentId)) continue;
+        offenders.push(`hq-leads-a-team:${host.hqAgentId}`);
+      }
+      return offenders;
+    }
+
+    function describeTransition(
+      stage: ScanStage,
+      agents: ReadonlyArray<OfficeAgentInput>,
+    ): string {
+      const shape = stage.tree.laterRoot ? "later-root" : "under-hq";
+      const following = agents.map(
+        (candidate) =>
+          `${candidate.id}(parent ${String(candidate.parentId)}, host ${String(candidate.hostId)})`,
+      );
+      return `${shape} on host ${String(stage.tree.home)}: [${stage.previousIds.join(", ")}] -> [${following.join(", ")}]`;
+    }
+
+    /**
+     * The wrapper's failures say what is wrong but not which of 40,960 sequences
+     * produced it, and reading that back out of a bare assertion message is
+     * hopeless - so the transition is attached on the way past.
+     */
+    function underTransition(
+      context: () => string,
+      build: () => OfficePopulation,
+    ): OfficePopulation {
+      try {
+        return build();
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new Error(`${context()}\n${detail}`, { cause: error });
+      }
+    }
+
+    it("never puts an agent in two places, or in none, or outside its own team", () => {
+      const failures: string[] = [];
+      let transitions = 0;
+      for (const stage of scanStages()) {
+        for (let bits = 0; bits < SCAN_SUBSETS; bits++) {
+          for (const arrival of stage.arrivals) {
+            const agents = [...chosen(stage.pool, bits), arrival];
+            const describeThis = (): string =>
+              describeTransition(stage, agents);
+            const after = underTransition(describeThis, () =>
+              partitionVerified({
+                agents,
+                statusById: NO_STATUS,
+                previous: stage.previous,
+              }),
+            );
+            transitions += 1;
+            const broken = [
+              ...reclassificationsIn(after, stage.previous),
+              ...hqsThatLeadTeams(after),
+            ];
+            if (broken.length > 0) {
+              failures.push(`${describeThis()}\n  ${broken.join(", ")}`);
+            }
+          }
+        }
+      }
+      // The first few read as a report; the length is the whole verdict.
+      expect(failures.slice(0, 3)).toEqual([]);
+      expect(failures).toHaveLength(0);
+      // The enumeration itself, pinned: a loop quietly narrowed is a scan that
+      // passes because it stopped looking.
+      expect(transitions).toBe(40_960);
     });
   });
 });

@@ -343,6 +343,14 @@ function freezeAgainstPrevious(
  * rather than a reclassification. The canonically first keeps the office and
  * the other is reported as a solo, so "exactly one of HQ, a team, or solos"
  * cannot break.
+ *
+ * THE MAP THIS RETURNS IS WHAT THE HOSTS ARE BUILT FROM, so it has to be taken
+ * from classes nothing will change again. Everything downstream leaves `hq`
+ * alone: `adoptArrivals` writes only `team` or `solo`, and only onto an agent
+ * it reached as somebody's child - which an arrival reading as HQ is not, being
+ * a true root - while the cross-host pass only moves members out of teams. The
+ * one pass that DOES unmake an HQ is the returning-lead reconciliation, and it
+ * runs before this one for exactly that reason.
  */
 function settleHqs(
   lineage: Lineage,
@@ -520,6 +528,32 @@ function teamHomeHostOf(
   if (lead !== undefined && isMemberOfTeam(drafts.get(teamId), teamId)) {
     return { resolved: true, hostId: lead.hostId };
   }
+  return waitingTeamHomeOf(lineage, drafts, teamId, previous);
+}
+
+/**
+ * WHERE A TEAM IS, ON EVIDENCE THAT DOES NOT COME FROM ITS LEAD.
+ *
+ * The two tiers under `teamHomeHostOf`'s first one, named apart because a
+ * RETURNING lead has to ask this exact question and must not be allowed the
+ * first one: "an agent called L is standing here" is what it is trying to find
+ * out, not something it may assume, and a lead that read its own host back
+ * would carry its whole team into whatever building it came back into.
+ *
+ * The surviving members first, because a team whose lead is gone is not
+ * homeless - it is still sitting wherever they are sitting. Then the record the
+ * last partition kept for the TEAM, which is all that is left once the final
+ * local member leaves in the same step the lead comes back or an arrival turns
+ * up. One question, one answer, for the returner and the arrival alike: they
+ * are both being placed against the same team, and a team cannot be waiting in
+ * one building for one of them and in another for the other.
+ */
+function waitingTeamHomeOf(
+  lineage: Lineage,
+  drafts: ReadonlyMap<string, Draft>,
+  teamId: string,
+  previous: OfficePopulation | null,
+): { readonly resolved: boolean; readonly hostId: string | null } {
   const surviving = survivingMemberHostOf(lineage, drafts, teamId, previous);
   if (surviving.resolved) return surviving;
   return rememberedTeamHomeOf(previous, teamId);
@@ -559,13 +593,28 @@ function survivingMemberHostOf(
  * team whose lead is standing outside it: the same broken shape three earlier
  * fixups closed, arrived at from a direction none of them covered.
  *
- * The team's surviving members are what makes this safe to do. They establish
- * that the team is real and, between them, where it is - so a lead that comes
- * back into that building rejoins at the front of the roster, and one that
- * comes back into a different building is a solo over there carrying its own
- * team's colour, exactly as any other member would be. With nobody left in the
- * team there is nothing to rejoin, and the returning lead is the solo its
- * fresh classification already made it.
+ * The WAITING TEAM is what makes this safe to do, and what says where to put
+ * the returner: it establishes that the team is real and which building it is
+ * in - so a lead that comes back into that building rejoins at the front of the
+ * roster, and one that comes back into a different building is a solo over
+ * there carrying its own team's colour, exactly as any other member would be.
+ * With no team waiting there is nothing to rejoin, and the returning lead is
+ * the solo its fresh classification already made it.
+ *
+ * WHAT THE RETURNER ITSELF READS AS PROVES NOTHING about where it belongs, and
+ * that includes reading as HQ. An empty corner office is the ordinary state of
+ * a host whose first-created root has just come back, so "fresh draft says HQ"
+ * is a fact about the rest of the set, not evidence that this agent used to run
+ * the place. A former lead whose people are still at their desks is a returning
+ * LEAD however the fresh pass reads it, and skipping it here left exactly the
+ * shape this pass exists to prevent - a present local lead outside its own
+ * roster, with a corner office on top. A genuine returning HQ is unaffected
+ * without needing a guard: HQ leads no team, so no team is ever waiting for it.
+ *
+ * This is why the pass runs BEFORE the HQs settle. Unmaking an HQ after the map
+ * the hosts are built from has been captured would place the returner twice -
+ * once in the corner office that map still names, once in the roster it just
+ * rejoined.
  */
 function reconcileReturningLeads(
   lineage: Lineage,
@@ -578,14 +627,13 @@ function reconcileReturningLeads(
     // Only a RETURNING agent: one `previous` knew is frozen, and one that has
     // always been here is already whatever it has always been.
     if (previous.members.has(agent.id)) continue;
-    const draft = drafts.get(agent.id);
-    // An agent that has come back into an empty corner office is HQ again,
-    // and HQ leads no team.
-    if (draft === undefined || draft.agentClass === "hq") continue;
-    const home = survivingMemberHostOf(lineage, drafts, agent.id, previous);
+    if (!drafts.has(agent.id)) continue;
+    const home = waitingTeamHomeOf(lineage, drafts, agent.id, previous);
     if (!home.resolved) continue;
-    draft.agentClass = home.hostId === agent.hostId ? "team" : "solo";
-    draft.teamId = agent.id;
+    drafts.set(agent.id, {
+      agentClass: home.hostId === agent.hostId ? "team" : "solo",
+      teamId: agent.id,
+    });
     settled.add(agent.id);
   }
   return settled;
@@ -714,11 +762,15 @@ export function partitionOfficePopulation(
   // matter - it has no class to preserve yet - and the passes below finish
   // deciding one for it against the office these known agents make up.
   freezeAgainstPrevious(lineage, drafts, input.previous);
-  const hqs = settleHqs(lineage, drafts);
-  // Before the arrivals are adopted, so a returning lead's own arriving
+  // Before the offices are handed out, so that a lead coming back to a host
+  // whose corner office happens to be empty is read as the returning lead it
+  // is; and before the arrivals are adopted, so a returning lead's own arriving
   // children read the team it has just rejoined rather than the orphan
   // classification it briefly had.
   const rejoined = reconcileReturningLeads(lineage, drafts, input.previous);
+  // The offices, taken from the classes as they now stand. Nothing past this
+  // line makes or unmakes an HQ, so this map and the members agree.
+  const hqs = settleHqs(lineage, drafts);
   // After the HQs settle, so an arrival reads a parent whose class nothing
   // further can change; before the cross-host pass, so an arrival that
   // inherits a team in another building is stranded like any other member.
