@@ -460,6 +460,84 @@ describe("formatAgentListResponse categorization", () => {
   });
 });
 
+describe("session state token", () => {
+  it("renders sleeping with a last-exit parenthetical, and without one when lastExit is null", () => {
+    const caller = agent({ id: "caller", isSelf: true });
+    const withExit = {
+      ...agent({ id: "napping", parentId: "caller" }),
+      sessionState: "sleeping" as const,
+      lastExit: "user-stop" as const,
+    };
+    const withoutExit = {
+      ...agent({ id: "dozing", parentId: "caller" }),
+      sessionState: "sleeping" as const,
+      lastExit: null,
+    };
+    const output = formatAgentListResponse(
+      response([caller, withExit, withoutExit], "caller"),
+    );
+
+    expect(agentLine(output, "napping gui/")).toContain(
+      "session: sleeping (last exit: user-stop)",
+    );
+    const dozingLine = agentLine(output, "dozing gui/");
+    expect(dozingLine).toContain("session: sleeping");
+    expect(dozingLine).not.toContain("last exit");
+  });
+
+  it("renders stopped and running with no last-exit token, even when lastExit is set", () => {
+    const caller = agent({ id: "caller", isSelf: true });
+    const stopped = {
+      ...agent({ id: "done", parentId: "caller" }),
+      sessionState: "stopped" as const,
+      lastExit: "user-stop" as const,
+    };
+    const running = {
+      ...agent({ id: "busy", parentId: "caller" }),
+      sessionState: "running" as const,
+      lastExit: "reaped" as const,
+    };
+    const output = formatAgentListResponse(
+      response([caller, stopped, running], "caller"),
+    );
+
+    const stoppedLine = agentLine(output, "done gui/");
+    expect(stoppedLine).toContain("session: stopped");
+    expect(stoppedLine).not.toContain("last exit");
+    const runningLine = agentLine(output, "busy gui/");
+    expect(runningLine).toContain("session: running");
+    expect(runningLine).not.toContain("last exit");
+  });
+
+  it("renders no session token and omits the legend entry when every row's sessionState is null", () => {
+    const caller = agent({ id: "caller", isSelf: true });
+    const unknown = agent({ id: "unknowable", parentId: "caller" });
+    const output = formatAgentListResponse(
+      response([caller, unknown], "caller"),
+    );
+
+    expect(output).not.toContain("session:");
+    expect(output).not.toContain("session: <state>");
+  });
+
+  it("explains the token and says a sleeping agent resumes and is not dead, once at least one row carries a state", () => {
+    const caller = agent({ id: "caller", isSelf: true });
+    const sleeping = {
+      ...agent({ id: "napping", parentId: "caller" }),
+      sessionState: "sleeping" as const,
+      lastExit: "reaped" as const,
+    };
+    const output = formatAgentListResponse(
+      response([caller, sleeping], "caller"),
+    );
+
+    expect(output).toContain("session: <state>: the agent's own session");
+    expect(output).toContain(
+      "sleeping (no live session; it RESUMES on your next message or when the agent is opened, so a sleeping peer is still addressable and is not dead)",
+    );
+  });
+});
+
 describe("formatAgentSelf", () => {
   it("reports the agent's own working directory", () => {
     const output = formatAgentSelf(
