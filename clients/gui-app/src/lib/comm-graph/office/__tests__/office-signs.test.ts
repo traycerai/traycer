@@ -10,6 +10,9 @@ import { describe, expect, it } from "vitest";
 import { makeTestEpic } from "@/lib/comm-graph/office/office-test-epic";
 import { partitionOfficePopulation } from "@/lib/comm-graph/office/office-population";
 import {
+  OFFICE_SIGN_FONT_PX,
+  OFFICE_SIGN_LETTER_SPACING_EM,
+  OFFICE_SIGN_PADDING_X,
   officeBoardText,
   officeFloorSignsToDraw,
   officeSignCenterX,
@@ -28,16 +31,26 @@ import {
 } from "@/lib/comm-graph/office/views/office-view";
 
 /**
- * The plate width the component's own recording canvas reports: six pixels a
- * character, plus the plate's horizontal padding.
+ * A plate's width in the face it is ACTUALLY DRAWN IN, derived rather than
+ * guessed.
  *
- * jsdom has no font metrics of its own, so a deterministic monospace advance
- * is what a test can honestly measure with - and six pixels is about right for
- * the bold 10px monospace the plate is actually set in. What is under test is
- * "the widest reading whose PLATE fits the board", not a particular typeface.
+ * jsdom has no text shaping, so the width has to be computed - but it is
+ * computed from the same declaration the renderer sets on the context. Every
+ * face in `OFFICE_SIGN_MONOSPACE_STACK` advances 0.6em a character, and
+ * `ctx.letterSpacing` counts towards `measureText` as well as towards the
+ * painted glyphs, so the plate's real advance is 0.68em - 6.8px at
+ * `OFFICE_SIGN_FONT_PX`, not the flat 6 an untracked face would give.
+ *
+ * That thirteen percent is not cosmetic. It is what separates a rung that fits
+ * from one that overflows the room it names, and it is why the expectations
+ * below are stated as "the rung this many pixels admits" rather than as a
+ * character budget. Changing the font size or the tracking moves this number
+ * and moves those expectations with it, which is the point of deriving it.
  */
-const CHAR_PX = 6;
-const PLATE_PADDING_PX = 8;
+const MONOSPACE_ADVANCE_EM = 0.6;
+const CHAR_PX =
+  OFFICE_SIGN_FONT_PX * (MONOSPACE_ADVANCE_EM + OFFICE_SIGN_LETTER_SPACING_EM);
+const PLATE_PADDING_PX = OFFICE_SIGN_PADDING_X * 2;
 function measure(text: string): number {
   return text.length * CHAR_PX + PLATE_PADDING_PX;
 }
@@ -401,11 +414,21 @@ for (const viewId of ["towers", "building"] as const) {
         lod: 1,
       });
       expect(drawn).toHaveLength(1);
+      const counted = board.agentIds.length - 1;
       // The same counts the spelt-out reading would have carried - the hidden
       // member excluded rather than defaulted to idle - said at the rung a
       // six-tile board has the pixels for. What this case is about is WHO was
       // counted; the vocabulary is D55's ladder doing its own job.
-      expect(drawn[0].text).toBe(`${board.agentIds.length - 1}D · 0W · 0I`);
+      expect(drawn[0].text).toBe(`${counted}D · 0W · 0I`);
+      // That rung is the one MEASUREMENT picks, not the one a character budget
+      // would have. Six tiles is ninety-six pixels and the spelt-out reading
+      // needs well over twice that, so the sentence is not withheld here to
+      // keep an expectation green - it genuinely does not fit the room.
+      const available = boardWidthPx(6);
+      expect(measure(drawn[0].text)).toBeLessThanOrEqual(available);
+      expect(measure(`${counted} doing · 0 waiting · 0 idle`)).toBeGreaterThan(
+        available,
+      );
     });
 
     it("uses the width ladder for a real board instead of truncating its summary", () => {
@@ -461,9 +484,21 @@ for (const viewId of ["towers", "building"] as const) {
       expect(drawn[0].text).toBe(full);
       expect(drawn[1].text).toBe(short);
       expect(drawn[2].text).toBe(compact);
+      // Each board took the widest reading ITS pixels admit: the rung it got
+      // fits, and the rung above it does not. Without the second half of that
+      // pair the three expectations would also pass for a resolver that always
+      // returned the narrowest reading it had.
+      const widths = [full, short, compact].map((text) =>
+        boardWidthPx(tilesFor(text)),
+      );
+      expect(measure(full)).toBeLessThanOrEqual(widths[0]);
+      expect(measure(short)).toBeLessThanOrEqual(widths[1]);
+      expect(measure(full)).toBeGreaterThan(widths[1]);
+      expect(measure(compact)).toBeLessThanOrEqual(widths[2]);
+      expect(measure(short)).toBeGreaterThan(widths[2]);
     });
 
-    it("ranks the five hottest agents on a real HQ board", () => {
+    it("ranks the five hottest agents on a real HQ board, in the pixels that board actually has", () => {
       const { epic, layout, names, statusById } = realObliqueSigns(viewId);
       const hq = layout.signs.find((sign) => sign.kind === "hq-board");
       if (hq === undefined) throw new Error("expected a real HQ board");
@@ -472,6 +507,9 @@ for (const viewId of ["towers", "building"] as const) {
       const statuses = new Map(statusById);
       const hqNames = new Map(names);
       for (const agentId of hq.agentIds) statuses.set(agentId, "idle");
+      // Coolest first, so the ranking has to REVERSE this to be right: an
+      // implementation that kept roster order would read "PR MW ID OH LF"
+      // backwards, and one that sorted by id would not produce it at all.
       const heat: ReadonlyArray<OfficeAgentStatus> = [
         "background",
         "awaiting",
@@ -479,15 +517,26 @@ for (const viewId of ["towers", "building"] as const) {
         "failure",
         "attention",
       ];
+      // NAMES OF ORDINARY LENGTH. Two-letter seeds fit at every rung, so they
+      // can only show that five things were listed - never that the board
+      // chose a reading for the room it had. These are the lengths a real
+      // roster carries, and at this board's width they do not fit spelt out.
+      const written: ReadonlyArray<string> = [
+        "Lena Fischer",
+        "Omar Haddad",
+        "Ines Duarte",
+        "Marcus Webb",
+        "Priya Raman",
+      ];
       for (let index = 0; index < hottest.length; index += 1) {
         statuses.set(hottest[index], heat[index]);
-        hqNames.set(hottest[index], `H${index}`);
+        hqNames.set(hottest[index], written[index]);
       }
-      const ranked = "H4 · H3 · H2 · H1 · H0";
+      // The board's OWN width, off the real plan - not a width reverse-derived
+      // from the answer, which would make any rung the right one.
+      const available = boardWidthPx(hq.widthTiles);
       const drawn = officeSignsToDraw({
-        signs: [
-          { ...hq, widthTiles: Math.ceil(measure(ranked) / OFFICE_TILE) },
-        ],
+        signs: [hq],
         visibleAgentIds: new Set(epic.agents.map((person) => person.id)),
         statusById: statuses,
         nameById: hqNames,
@@ -499,7 +548,19 @@ for (const viewId of ["towers", "building"] as const) {
         lod: 1,
       });
       expect(drawn).toHaveLength(1);
-      expect(drawn[0].text).toBe(ranked);
+      // Hottest first, all five, at the only rung this board has the room for.
+      expect(drawn[0].text).toBe("PR MW ID OH LF");
+      // And it is the WIDEST that fits, not merely one that does: the plate
+      // the resolver chose is inside the board, and the rung above it is not.
+      expect(measure(drawn[0].text)).toBeLessThanOrEqual(available);
+      expect(measure("PR · MW · ID · OH · LF")).toBeGreaterThan(available);
+      expect(measure("Priya · Marcus · Ines · Omar · Lena")).toBeGreaterThan(
+        available,
+      );
+      // Every one of the five is still named, and named in descending heat -
+      // the point of an HQ board is WHO needs the lead, so shortening may cost
+      // letters and must never cost an identity.
+      expect(drawn[0].text.split(" ")).toEqual(["PR", "MW", "ID", "OH", "LF"]);
     });
   });
 }

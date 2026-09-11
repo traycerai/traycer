@@ -69,6 +69,26 @@ export interface OfficeFloorSignToDraw {
  */
 export type OfficePlateMeasure = (text: string) => number;
 
+/**
+ * THE FACE A PLATE IS SET IN, declared here rather than in the renderer.
+ *
+ * The resolver decides a board's reading by measuring it, so the typography
+ * that decides the measurement belongs beside the rule that consumes it -
+ * otherwise the two drift and the ladder is picked in a face the plate is not
+ * drawn in. The renderer still owns the drawing; it reads these to set the
+ * context up, and `signPlateMeasure` is the only thing that measures.
+ *
+ * The tracking is part of the width. `ctx.letterSpacing` is applied by
+ * `measureText` as well as by `fillText`, so a model of this face that leaves
+ * it out under-reports every plate by eight percent - which is the difference
+ * between a rung that fits and one that overflows the room it names.
+ */
+export const OFFICE_SIGN_FONT_PX = 10;
+export const OFFICE_SIGN_PADDING_X = 4;
+export const OFFICE_SIGN_LETTER_SPACING_EM = 0.08;
+export const OFFICE_SIGN_MONOSPACE_STACK =
+  "ui-monospace, SFMono-Regular, Menlo, monospace";
+
 /** Hottest first, as the directory orders its own rows. */
 const STATUS_HEAT: Readonly<Record<OfficeAgentStatus, number>> = {
   attention: 0,

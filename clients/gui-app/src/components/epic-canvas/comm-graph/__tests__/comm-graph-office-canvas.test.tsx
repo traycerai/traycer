@@ -486,10 +486,13 @@ function installCanvas(): { readonly step: () => void } {
   // to get there is exactly what the type rules forbid. Everything the
   // painter reaches for that is not answered here is a no-op.
   const blank = {} as CanvasRenderingContext2D;
+  const face = { font: "10px monospace", letterSpacing: "0px" };
   const context = new Proxy(blank, {
     get: (_target, key): unknown => {
       if (key === "measureText") {
-        return (text: string) => ({ width: text.length * 6 });
+        return (text: string) => ({
+          width: modelledTextWidth(text, face.font, face.letterSpacing),
+        });
       }
       if (key === "createImageData") {
         return (width: number, height: number) => ({
@@ -498,7 +501,15 @@ function installCanvas(): { readonly step: () => void } {
       }
       return noop;
     },
-    set: () => true,
+    set: (_target, key, value): boolean => {
+      // The face is the one thing this proxy has to REMEMBER rather than
+      // discard: `measureText` answers in whatever the caller just set.
+      if (key === "font" && typeof value === "string") face.font = value;
+      if (key === "letterSpacing" && typeof value === "string") {
+        face.letterSpacing = value;
+      }
+      return true;
+    },
   });
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(
     () => context,
@@ -1451,6 +1462,31 @@ describe("CommGraphOfficeCanvas", () => {
  * `createImageData` get real-shaped answers because callers read their
  * return value; everything else is a recorder.
  */
+/**
+ * `measureText`, modelled on the face the caller actually set.
+ *
+ * jsdom has no text shaping, so a width has to be computed rather than
+ * measured - but it can be computed from the SAME two properties a browser
+ * would use. Every face in the monospace stack advances 0.6em a character, and
+ * `ctx.letterSpacing` is applied by `measureText` as well as by `fillText`, so
+ * a sign plate (bold 10px, tracked 0.08em) comes out 13% wider a character
+ * than a name tag (10px, untracked) - which is the whole reason the board
+ * ladder is picked by measurement and not by counting characters.
+ */
+const MONOSPACE_ADVANCE_EM = 0.6;
+
+function modelledTextWidth(
+  text: string,
+  font: string,
+  letterSpacing: string,
+): number {
+  const px = /(\d+(?:\.\d+)?)px/.exec(font);
+  const tracking = /(-?\d+(?:\.\d+)?)em/.exec(letterSpacing);
+  const size = px === null ? 10 : Number(px[1]);
+  const spacing = tracking === null ? 0 : Number(tracking[1]);
+  return text.length * size * (MONOSPACE_ADVANCE_EM + spacing);
+}
+
 interface RecordedCall {
   readonly method: string;
   readonly args: ReadonlyArray<unknown>;
@@ -1462,7 +1498,17 @@ function createRecordingContext(calls: RecordedCall[]): unknown {
     get(_target, prop) {
       if (typeof prop !== "string") return undefined;
       if (prop === "measureText") {
-        return (text: string) => ({ width: text.length * 6 });
+        // The recorder already stores every assignment, so the face a caller
+        // set is readable straight off the backing object.
+        return (text: string) => ({
+          width: modelledTextWidth(
+            text,
+            typeof backing.font === "string" ? backing.font : "10px monospace",
+            typeof backing.letterSpacing === "string"
+              ? backing.letterSpacing
+              : "0px",
+          ),
+        });
       }
       if (prop === "createImageData") {
         return (width: number, height: number) => ({

@@ -136,6 +136,10 @@ import { officeModelTier } from "@/lib/comm-graph/office/office-model-tier";
 import { officeClockAngles } from "@/lib/comm-graph/office/office-clock";
 import { officeFlagKind } from "@/components/epic-canvas/comm-graph/office/office-flag-kind";
 import {
+  OFFICE_SIGN_FONT_PX,
+  OFFICE_SIGN_LETTER_SPACING_EM,
+  OFFICE_SIGN_MONOSPACE_STACK,
+  OFFICE_SIGN_PADDING_X,
   officeFloorSignsToDraw,
   officeSignCenterX,
   officeSignsToDraw,
@@ -196,15 +200,11 @@ const CLICK_SLOP_PX = 4;
 const VIEW_PERSIST_DEBOUNCE_MS = 150;
 const LABEL_FONT_PX = 10;
 const HOVER_LABEL_FONT_PX = 11;
-const MONOSPACE_STACK = "ui-monospace, SFMono-Regular, Menlo, monospace";
 /** The name-tag font, prebuilt: the width cache keys on text alone only
  * because this never varies. */
-const LABEL_FONT = `${LABEL_FONT_PX}px ${MONOSPACE_STACK}`;
-const SIGN_FONT_PX = 10;
-const SIGN_PADDING_X = 4;
+const LABEL_FONT = `${LABEL_FONT_PX}px ${OFFICE_SIGN_MONOSPACE_STACK}`;
 const SIGN_PADDING_Y = 2;
 const SIGN_PLATE_RADIUS = 3;
-const SIGN_LETTER_SPACING = "0.08em";
 const CLOCK_HOUR_HAND = 3;
 const CLOCK_MINUTE_HAND = 4;
 const CLOCK_HUB_RADIUS = 1.5;
@@ -870,7 +870,7 @@ function drawScreenLabel(
   const { alpha, backing, color, fontPx, screenX, screenY, text } = label;
   ctx.save();
   ctx.globalAlpha = alpha;
-  ctx.font = `${fontPx}px ${MONOSPACE_STACK}`;
+  ctx.font = `${fontPx}px ${OFFICE_SIGN_MONOSPACE_STACK}`;
   ctx.textAlign = "center";
   ctx.textBaseline = "alphabetic";
   ctx.fillStyle = backing;
@@ -1109,8 +1109,8 @@ function drawFloorSigns(args: {
  */
 /** Puts the plate's own face on the context. Shared, so measuring matches drawing. */
 function applySignPlateFont(ctx: CanvasRenderingContext2D): void {
-  ctx.font = `bold ${SIGN_FONT_PX}px ${MONOSPACE_STACK}`;
-  ctx.letterSpacing = SIGN_LETTER_SPACING;
+  ctx.font = `bold ${OFFICE_SIGN_FONT_PX}px ${OFFICE_SIGN_MONOSPACE_STACK}`;
+  ctx.letterSpacing = `${OFFICE_SIGN_LETTER_SPACING_EM}em`;
 }
 
 /**
@@ -1126,7 +1126,7 @@ function signPlateMeasure(ctx: CanvasRenderingContext2D): OfficePlateMeasure {
   return (text: string): number => {
     ctx.save();
     applySignPlateFont(ctx);
-    const width = ctx.measureText(text).width + SIGN_PADDING_X * 2;
+    const width = ctx.measureText(text).width + OFFICE_SIGN_PADDING_X * 2;
     ctx.restore();
     return width;
   };
@@ -1146,10 +1146,10 @@ function drawSignPlate(
   applySignPlateFont(ctx);
   ctx.textAlign = "center";
   ctx.textBaseline = "alphabetic";
-  const width = ctx.measureText(text).width + SIGN_PADDING_X * 2;
-  const height = SIGN_FONT_PX + SIGN_PADDING_Y * 2;
+  const width = ctx.measureText(text).width + OFFICE_SIGN_PADDING_X * 2;
+  const height = OFFICE_SIGN_FONT_PX + SIGN_PADDING_Y * 2;
   const left = screenX - width / 2;
-  const top = screenY - SIGN_FONT_PX - SIGN_PADDING_Y;
+  const top = screenY - OFFICE_SIGN_FONT_PX - SIGN_PADDING_Y;
   ctx.beginPath();
   if (typeof ctx.roundRect === "function") {
     ctx.roundRect(left, top, width, height, SIGN_PLATE_RADIUS);
@@ -1468,7 +1468,8 @@ function drawSignLabels(args: {
       ).toUpperCase(),
       screenX,
       screenY:
-        (baseline + SIGN_FONT_PX + SIGN_PADDING_Y * 2) * camera.zoom + camera.y,
+        (baseline + OFFICE_SIGN_FONT_PX + SIGN_PADDING_Y * 2) * camera.zoom +
+        camera.y,
       palette,
     });
   }
