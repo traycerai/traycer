@@ -48,6 +48,8 @@ function fakeSession(): FakeSession {
     start: vi.fn(),
     isClosed: () => closeCalls > 0 || session.closedUnderneath,
     isReady: () => session.ready,
+    // Structural member: this fake models readiness, never silence.
+    isSilentFor: () => false,
     sendUnary: vi.fn(async () => ({}) as never),
     forceReconnect: vi.fn(),
     subscribe: vi.fn(() => {

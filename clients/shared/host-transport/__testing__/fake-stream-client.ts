@@ -224,6 +224,17 @@ export class FakeStreamClient implements IHostStreamClient<HostStreamRpcRegistry
     return true;
   }
 
+  /**
+   * What {@link isSilentFor} answers. Mutable so a suite can drive BOTH arms of
+   * a silence gate off one fake - the escalation and the plain path - without
+   * a second client class.
+   */
+  silentFor = false;
+
+  isSilentFor(): boolean {
+    return this.silentFor;
+  }
+
   getMethodSupport(): "unknown" {
     return "unknown";
   }

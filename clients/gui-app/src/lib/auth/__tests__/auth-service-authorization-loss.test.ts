@@ -285,6 +285,8 @@ function fakeSession(): FakeSession {
     start: vi.fn(),
     isClosed: () => closeCalls > 0,
     isReady: () => true,
+    // Structural member: this fake models readiness, never silence.
+    isSilentFor: () => false,
     sendUnary: vi.fn(() => {
       throw new Error("not exercised by these tests");
     }),

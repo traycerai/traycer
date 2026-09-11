@@ -31,7 +31,9 @@ export type { EpicSessionTransportCloseTrigger } from "@/stores/epics/open-epic/
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
+import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { releaseDesktopEpicOwnershipForEpic } from "@/lib/windows/desktop-epic-ownership";
 
 export const EpicSessionContext = createStableDevContext(
@@ -167,6 +169,30 @@ export function getEpicSessionHandleHostClient(
 ): HostClient<HostRpcRegistry> | null {
   return handleHostClients.get(handle) ?? null;
 }
+
+/**
+ * The session's own stream transport, stamped by `epic-session-provider.tsx`
+ * for the one question Retry has to ask it: is the socket behind the failure
+ * card actually silent? (`retryRepoint`.)
+ *
+ * Keyed by HANDLE rather than held in a provider ref because the handle is
+ * what outlives a mount: the registry keeps it warm across an unmount, and a
+ * sibling provider can adopt it. A provider-local ref answers for the
+ * transport THAT provider constructed, so a remount onto a warm handle - or
+ * the loser of an adoption race - reads null and Retry silently stops forcing
+ * a re-dial. Here, the answer travels with the session it describes.
+ *
+ * Beside {@link handleHostIds} and for its reason: this map and the registry
+ * that hands back warm handles live in ONE module, so no module replacement
+ * can leave a surviving warm handle whose entry was left behind. An absent
+ * entry means no transport is measuring silence for that handle - a handle a
+ * test built, or one whose transport has closed - and reads as "not silent",
+ * which is the pre-gate behaviour.
+ */
+export const handleStreamClients = new WeakMap<
+  OpenEpicStoreHandle,
+  IHostStreamClient<HostStreamRpcRegistry>
+>();
 
 /**
  * Registry is module-scoped so background Epic tabs survive route transitions

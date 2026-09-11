@@ -1261,7 +1261,7 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
                 snapshotLoaded={view.snapshotLoaded}
                 fatalClose={view.fatalClose}
                 preSnapshotRetries={view.preSnapshotRetries}
-                onRetry={view.onChatRetry}
+                onRetry={view.onChatRetryFromUser}
                 restoreContext={view.restoreContext}
                 node={view.node}
                 epicId={view.currentEpicId}
@@ -3128,7 +3128,16 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
     coldRewrittenMessageIds: state.coldRewrittenMessageIds,
     fatalClose: state.fatalClose,
     preSnapshotRetries: state.preSnapshotRetries,
+    // TWO retries, deliberately, and they are not interchangeable.
+    //
+    // `onChatRetry` is the AUTOMATIC one: `useRecordHostOlderThanDataRefusal`
+    // above calls it once per host version move, so it must stay the plain
+    // re-subscribe. A person's click goes to `onChatRetryFromUser` below,
+    // which additionally drops a transport the session itself reports silent.
+    // Wiring the button to this one is how the escalation was lost before;
+    // wiring the effect to that one would drop a socket on every host upgrade.
     onChatRetry: () => handle.store.getState().retry(),
+    onChatRetryFromUser: () => handle.store.getState().retryFromUser(),
     restoreContext,
     messages: pinnedTodoRenderState.messages,
     activeTurnId,

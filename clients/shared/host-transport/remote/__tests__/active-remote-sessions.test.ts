@@ -70,6 +70,7 @@ interface FakeSession extends IRemoteSession<
    */
   closedUnderneath: boolean;
   fatalCode: string | null;
+  silentFor: boolean;
   emitClosed(): void;
 }
 
@@ -96,12 +97,14 @@ function fakeSession(): FakeSession {
     ready: false,
     closedUnderneath: false,
     fatalCode: null,
+    silentFor: false,
     emitClosed: () => {
       for (const listener of [...closedListeners]) listener();
     },
     start: vi.fn(),
     isClosed: () => closeCalls > 0 || session.closedUnderneath,
     isReady: () => session.ready,
+    isSilentFor: () => session.silentFor,
     sendUnary: vi.fn(async () => ({}) as never),
     subscribe: vi.fn(() => {
       throw new Error("not exercised by these tests");
@@ -1343,6 +1346,20 @@ describe("auth-recovery policy is part of the session identity", () => {
     expect(builds).toBe(1);
     first.close();
     second.close();
+  });
+});
+
+describe("isSilentFor on acquired views", () => {
+  it("answers false on a released view even when the session would report silent", () => {
+    const identity = freshIdentity();
+    const session = fakeSession();
+    session.silentFor = true;
+    const view = acquireRemoteSession(identity, ELIGIBLE_POLICY, () => session);
+
+    expect(view.isSilentFor(20_000)).toBe(true);
+    view.close();
+    expect(view.isSilentFor(20_000)).toBe(false);
+    expireLinger();
   });
 });
 
