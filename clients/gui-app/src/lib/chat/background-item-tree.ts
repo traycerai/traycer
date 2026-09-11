@@ -265,3 +265,36 @@ export function backgroundHeaderSummary(input: {
   }
   return parts.length === 0 ? "0 running" : parts.join(" · ");
 }
+
+/**
+ * The one kind everything in the Background section shares, or `"mixed"`.
+ *
+ * This is the compact chip's resting glyph: a chip standing for the section
+ * shows that kind's own icon when every row would draw the same one, and a
+ * neutral stack when the rows differ - so a chip over a single pending wake
+ * reads as a wake, and a chip over a wake and a held shell does not pretend to
+ * be either.
+ *
+ * A managed shell is its OWN member rather than a `"command"`, because the
+ * panel draws the two from different glyph families on purpose: a
+ * harness-delivered `command` row gets the kind icon, and a host-supervised
+ * shell gets the radar / play / pause glyphs that keep it apart from the
+ * harness's own `Monitor` kind. Folding them together would let the chip claim
+ * a shared kind over rows the panel draws differently.
+ *
+ * Nothing present reads as `"mixed"` too. The section - and so the chip - does
+ * not exist then, so the answer is never drawn; it is only the value that does
+ * not claim a kind nothing has.
+ */
+export function backgroundRestingKind(input: {
+  readonly items: ReadonlyArray<BackgroundItem>;
+  readonly hasManagedCommands: boolean;
+}): BackgroundItem["kind"] | "managedShell" | "mixed" {
+  const kinds = new Set<BackgroundItem["kind"] | "managedShell">(
+    input.items.map((item) => item.kind),
+  );
+  if (input.hasManagedCommands) kinds.add("managedShell");
+  if (kinds.size !== 1) return "mixed";
+  for (const kind of kinds) return kind;
+  return "mixed";
+}

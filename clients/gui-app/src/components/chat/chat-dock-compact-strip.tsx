@@ -1,14 +1,23 @@
 import type { ReactNode } from "react";
-import { Activity, Bot, FileDiff } from "lucide-react";
+import {
+  Bot,
+  FileDiff,
+  Layers,
+  PauseCircle,
+  type LucideIcon,
+} from "lucide-react";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { BACKGROUND_KIND_ICONS } from "@/lib/chat/background-kind-icon";
 import { ChatDockCompactChip } from "@/components/chat/chat-dock-compact-chip";
 import {
   ChatDockCompactStripContext,
   useChatDockCompactStrip,
-  type ChatDockSection,
+  type ChatDockCompactChipGlyph,
   type ChatDockCompactStripValue,
 } from "@/components/chat/chat-dock-compact-context";
 
 export type {
+  ChatDockCompactChipGlyph,
   ChatDockCompactChipModel,
   ChatDockCompactStripValue,
   ChatDockSection,
@@ -25,16 +34,41 @@ export function ChatDockCompactStripProvider(props: {
   );
 }
 
-const CHIP_ICONS: Record<ChatDockSection, ReactNode> = {
-  filesChanged: <FileDiff className="size-3.5 shrink-0" aria-hidden />,
-  activeAgents: <Bot className="size-3.5 shrink-0" aria-hidden />,
-  background: <Activity className="size-3.5 shrink-0" aria-hidden />,
+const GLYPH_ICONS: Readonly<
+  Record<Exclude<ChatDockCompactChipGlyph, "working">, LucideIcon>
+> = {
+  filesChanged: FileDiff,
+  activeAgents: Bot,
+  mixed: Layers,
+  // A shell only rests once it is held, so this is the panel's held glyph -
+  // the one that row shows beside the word "Held" - and never the radar its
+  // running sibling draws.
+  managedShell: PauseCircle,
+  ...BACKGROUND_KIND_ICONS,
 };
 
+/** Test id of the spinner a working chip draws in place of its icon. */
+export const CHAT_DOCK_CHIP_WORKING_TEST_ID = "chat-dock-chip-working";
+
+function ChipGlyph(props: { readonly glyph: ChatDockCompactChipGlyph }) {
+  if (props.glyph === "working") {
+    return (
+      <AgentSpinningDots
+        className="text-current"
+        testId={CHAT_DOCK_CHIP_WORKING_TEST_ID}
+        variant={undefined}
+      />
+    );
+  }
+  const Icon = GLYPH_ICONS[props.glyph];
+  return <Icon className="size-3.5 shrink-0" aria-hidden />;
+}
+
 /**
- * The compact chips, at the head of the composer's bottom strip - ahead of the
- * host and workspace chips, because they describe this chat's own activity and
- * those describe where it runs.
+ * The compact chips, at the tail of the composer's bottom strip - after the
+ * host and workspace chips, hard against the context-usage cluster. They come
+ * and go with what the chat is doing, and the tail is where that can happen
+ * without the pickers on the left shifting under the pointer.
  *
  * Renders nothing outside a chat tile, and nothing inside one whose every row
  * is either on screen or empty.
@@ -45,12 +79,12 @@ export function ChatDockCompactStrip(): ReactNode {
   return (
     <div
       data-testid="chat-dock-compact-strip"
-      className="flex min-w-0 shrink-0 items-center gap-1"
+      className="ml-auto flex min-w-0 shrink-0 items-center gap-1"
     >
       {value.chips.map((chip) => (
         <ChatDockCompactChip
           key={chip.section}
-          icon={CHIP_ICONS[chip.section]}
+          icon={<ChipGlyph glyph={chip.glyph} />}
           text={chip.text}
           label={chip.label}
           pulseToken={chip.pulseToken}

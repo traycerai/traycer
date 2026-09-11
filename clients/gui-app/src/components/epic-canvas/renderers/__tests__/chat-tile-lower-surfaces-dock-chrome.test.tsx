@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -123,6 +124,7 @@ import {
 import {
   disposeManagedCommandChatSessions,
   installManagedCommandChatSession,
+  type ManagedCommandChatSessionStub,
 } from "@/stores/managed-commands/test-support/managed-command-chat-session";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -137,7 +139,10 @@ import {
   DEFAULT_COMPOSER_LAYOUT,
   useLayoutStore,
 } from "@/stores/settings/layout-store";
-import { ChatDockCompactStrip } from "@/components/chat/chat-dock-compact-strip";
+import {
+  CHAT_DOCK_CHIP_WORKING_TEST_ID,
+  ChatDockCompactStrip,
+} from "@/components/chat/chat-dock-compact-strip";
 import {
   ChatLowerInteractionSurfaces,
   type ChatLowerInteractionSurfacesProps,
@@ -188,6 +193,7 @@ const noopStreamClientFactory: EpicStreamClientFactory = () => ({
 });
 
 let epicHandle: OpenedStoreForTest;
+let managedCommandSession: ManagedCommandChatSessionStub;
 
 function setAgentStopControls(controls: AgentStopControls): void {
   agentStopControlsMock = controls;
@@ -392,8 +398,14 @@ function renderSurfaces(props: ChatLowerInteractionSurfacesProps) {
   return render(tile(props));
 }
 
+// The number alone. A working chip's spinner is text too (a braille frame),
+// so the button's own `textContent` would read `⠋3`.
+function chipText(section: string): string | null {
+  return screen.getByTestId(`chat-dock-chip-${section}-text`).textContent;
+}
+
 beforeEach(() => {
-  installManagedCommandChatSession({
+  managedCommandSession = installManagedCommandChatSession({
     hostId: HOST_ID,
     epicId: EPIC_ID,
     chatId: CHAT_ID,
@@ -447,7 +459,7 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
     );
 
     const chip = screen.getByTestId("chat-dock-chip-filesChanged");
-    expect(chip.textContent).toBe(`+5 ${MINUS}3`);
+    expect(chipText("filesChanged")).toBe(`+5 ${MINUS}3`);
     expect(chip.getAttribute("aria-label")).toBe(
       "Files changed. 2 files, 5 added and 3 removed.",
     );
@@ -476,9 +488,49 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
     );
 
     const chip = screen.getByTestId("chat-dock-chip-activeAgents");
-    expect(chip.textContent).toBe(`${expectedRunningCount}`);
+    expect(chipText("activeAgents")).toBe(`${expectedRunningCount}`);
+    // The panel's row list, folded into the tooltip: who, and in what state.
     expect(chip.getAttribute("aria-label")).toBe(
-      `Active agents. ${expectedRunningCount} running.`,
+      `Active agents. ${expectedRunningCount} running. This chat working, Child one working, Child two in background.`,
+    );
+  });
+
+  it("spins the active-agents chip while any agent is mid-turn, and rests on the icon when every one is background-only", () => {
+    useLayoutStore.setState({
+      composer: { ...DEFAULT_COMPOSER_LAYOUT, activeAgents: "compact" },
+    });
+    setAgentStopControls({
+      self: agentRow("chat-1", "This chat", "background"),
+      descendants: [agentRow("child-1", "Child one", "turn")],
+    });
+    const props = surfacesProps({
+      restoreContext: EMPTY_RESTORE,
+      queueItems: [],
+      backgroundItems: [],
+    });
+
+    const { rerender } = renderSurfaces(props);
+
+    const chip = screen.getByTestId("chat-dock-chip-activeAgents");
+    expect(
+      within(chip).getByTestId(CHAT_DOCK_CHIP_WORKING_TEST_ID),
+    ).not.toBeNull();
+    expect(chip.querySelector("svg")).toBeNull();
+    expect(chipText("activeAgents")).toBe("2");
+
+    setAgentStopControls({
+      self: agentRow("chat-1", "This chat", "background"),
+      descendants: [agentRow("child-1", "Child one", "background")],
+    });
+    rerender(tile(props));
+
+    expect(
+      within(chip).queryByTestId(CHAT_DOCK_CHIP_WORKING_TEST_ID),
+    ).toBeNull();
+    expect(chip.querySelector("svg.lucide-bot")).not.toBeNull();
+    expect(chipText("activeAgents")).toBe("2");
+    expect(chip.getAttribute("aria-label")).toBe(
+      "Active agents. 2 running. This chat in background, Child one in background.",
     );
   });
 
@@ -496,8 +548,78 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
     );
 
     const chip = screen.getByTestId("chat-dock-chip-background");
-    expect(chip.textContent).toBe("1");
+    expect(chipText("background")).toBe("1");
     expect(chip.getAttribute("aria-label")).toBe("Background. 1 running.");
+    // Something is running, so the glyph is the spinner, whatever the kind.
+    expect(
+      within(chip).getByTestId(CHAT_DOCK_CHIP_WORKING_TEST_ID),
+    ).not.toBeNull();
+    expect(chip.querySelector("svg")).toBeNull();
+  });
+
+  // A pending wake is not running, so the chip rests - and rests on the wake's
+  // own icon, the one the panel row would draw, rather than a generic one.
+  it("rests the background chip on the one kind present, and on the neutral stack when kinds differ", () => {
+    useLayoutStore.setState({
+      composer: { ...DEFAULT_COMPOSER_LAYOUT, background: "compact" },
+    });
+    renderSurfaces(
+      surfacesProps({
+        restoreContext: EMPTY_RESTORE,
+        queueItems: [],
+        backgroundItems: [backgroundWakeupItem("wake-1", "Review status")],
+      }),
+    );
+
+    const chip = screen.getByTestId("chat-dock-chip-background");
+    expect(chipText("background")).toBe("0");
+    expect(
+      within(chip).queryByTestId(CHAT_DOCK_CHIP_WORKING_TEST_ID),
+    ).toBeNull();
+    expect(chip.querySelector("svg.lucide-alarm-clock")).not.toBeNull();
+
+    // A held shell joins the wake: two kinds, so neither icon may stand for
+    // both. Held output is not running, so the chip still rests.
+    act(() => {
+      managedCommandSession.setHeldUpdates([
+        { commandId: "cmd-1", description: "deploy watcher", heldAtMs: 1 },
+      ]);
+    });
+
+    expect(chipText("background")).toBe("0");
+    expect(
+      within(chip).queryByTestId(CHAT_DOCK_CHIP_WORKING_TEST_ID),
+    ).toBeNull();
+    expect(chip.querySelector("svg.lucide-layers")).not.toBeNull();
+  });
+
+  // A running shell is excluded from the held set and forces the spinner, so a
+  // resting chip with shells in it is always HELD shells - which is the glyph
+  // the panel's own row draws beside the word "Held".
+  it("rests a shells-only background chip on the held glyph", () => {
+    useLayoutStore.setState({
+      composer: { ...DEFAULT_COMPOSER_LAYOUT, background: "compact" },
+    });
+
+    renderSurfaces(
+      surfacesProps({
+        restoreContext: EMPTY_RESTORE,
+        queueItems: [],
+        backgroundItems: [],
+      }),
+    );
+    act(() => {
+      managedCommandSession.setHeldUpdates([
+        { commandId: "cmd-1", description: "deploy watcher", heldAtMs: 1 },
+      ]);
+    });
+
+    const chip = screen.getByTestId("chat-dock-chip-background");
+    expect(chip.getAttribute("aria-label")).toBe("Background. 1 held.");
+    expect(
+      within(chip).queryByTestId(CHAT_DOCK_CHIP_WORKING_TEST_ID),
+    ).toBeNull();
+    expect(chip.querySelector("svg.lucide-circle-pause")).not.toBeNull();
   });
 
   // `BackgroundItemsPanel` counts its own header on `dedupeByTaskId(items)`, so
@@ -554,7 +676,7 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
     );
 
     const chip = screen.getByTestId("chat-dock-chip-activeAgents");
-    expect(chip.textContent).toBe("0 · 2");
+    expect(chipText("activeAgents")).toBe("0 · 2");
     expect(chip.getAttribute("aria-label")).toBe(
       "Active agents. 0 running, 2 received from other agents and queued.",
     );
@@ -565,6 +687,68 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
     );
     expect(previews).toHaveLength(1);
     expect(previews[0]?.textContent).toContain("My own message");
+  });
+
+  // The roster is bounded by fleet size, so an uncapped join would read a
+  // paragraph out before the count a listener actually wanted.
+  it("names at most three agents in the chip's label and counts the rest", () => {
+    useLayoutStore.setState({
+      composer: { ...DEFAULT_COMPOSER_LAYOUT, activeAgents: "compact" },
+    });
+    setAgentStopControls({
+      self: agentRow("chat-1", "This chat", "turn"),
+      descendants: [
+        agentRow("child-1", "Child one", "turn"),
+        agentRow("child-2", "Child two", "background"),
+        agentRow("child-3", "Child three", "turn"),
+        agentRow("child-4", "Child four", "turn"),
+      ],
+    });
+
+    renderSurfaces(
+      surfacesProps({
+        restoreContext: EMPTY_RESTORE,
+        queueItems: [],
+        backgroundItems: [],
+      }),
+    );
+
+    const chip = screen.getByTestId("chat-dock-chip-activeAgents");
+    expect(chipText("activeAgents")).toBe("5");
+    expect(chip.getAttribute("aria-label")).toBe(
+      "Active agents. 5 running. This chat working, Child one working, Child two in background, and 2 more.",
+    );
+  });
+
+  // Reachable only through the received-A2A clause: with no self record the
+  // count is 0 and the panel renders nothing, so the chip must not spin or
+  // name working agents over that zero.
+  it("keeps the spinner and the roster off a chip standing for received prompts alone", () => {
+    useLayoutStore.setState({
+      composer: { ...DEFAULT_COMPOSER_LAYOUT, activeAgents: "compact" },
+    });
+    setAgentStopControls({
+      self: null,
+      descendants: [agentRow("child-1", "Child one", "turn")],
+    });
+
+    renderSurfaces(
+      surfacesProps({
+        restoreContext: EMPTY_RESTORE,
+        queueItems: [receivedAgentQueueItem("received-1", "Received prompt")],
+        backgroundItems: [],
+      }),
+    );
+
+    const chip = screen.getByTestId("chat-dock-chip-activeAgents");
+    expect(chipText("activeAgents")).toBe("0 · 1");
+    expect(
+      within(chip).queryByTestId(CHAT_DOCK_CHIP_WORKING_TEST_ID),
+    ).toBeNull();
+    expect(chip.querySelector("svg.lucide-bot")).not.toBeNull();
+    expect(chip.getAttribute("aria-label")).toBe(
+      "Active agents. 0 running, 1 received from other agents and queued.",
+    );
   });
 
   it("reveals a folded row already expanded on chip click, and folds it back to a chip on the second click", () => {

@@ -23,6 +23,7 @@ import {
 import { ChatComposerBannerPortalProvider } from "@/components/chat/composer/chat-composer-banner-portal";
 import { ChatLowerDock } from "@/components/chat/chat-lower-dock";
 import {
+  ChatDockCompactStrip,
   ChatDockCompactStripProvider,
   type ChatDockCompactChipModel,
   type ChatDockCompactStripValue,
@@ -58,6 +59,7 @@ import {
 import { accumulatedDiffTotals } from "@/lib/chat/accumulated-change-rows";
 import {
   backgroundHeaderSummary,
+  backgroundRestingKind,
   backgroundRunningRowCount,
   dedupeByTaskId,
 } from "@/lib/chat/background-item-tree";
@@ -262,6 +264,38 @@ interface ComposerSurfaceLayout {
   readonly slotBottomSpacing: ComposerSlotBottomSpacing;
 }
 
+/**
+ * The chat composer's bottom strip: where this chat runs, then what it is
+ * DOING, then how much context is left.
+ *
+ * The compact chips close the left cell, hard against the context-usage
+ * cluster. They come and go with the chat's activity, and the host / workspace
+ * pickers ahead of them must not shift under the pointer when one appears -
+ * which is exactly what putting the chips first did. That ordering is the
+ * whole of the fix, so it lives in a named component with a suite on it rather
+ * than inline in the tile that happens to mount it.
+ *
+ * The strip is rendered here rather than handed in, so this node's identity
+ * does not move when a count does - it reads its own contents from the dock's
+ * context.
+ */
+export function ChatDockWorkspaceControls(props: {
+  /** The host + workspace picker cluster, first and left-aligned. */
+  readonly hostWorkspaceSelector: ReactNode;
+  /** The context-usage leaf, which owns the row's trailing cell. */
+  readonly usageChip: ReactNode;
+}): ReactNode {
+  return (
+    <>
+      <div className="flex min-w-0 items-center gap-2 overflow-hidden">
+        {props.hostWorkspaceSelector}
+        <ChatDockCompactStrip />
+      </div>
+      {props.usageChip}
+    </>
+  );
+}
+
 export function ChatLowerInteractionSurfaces(
   props: ChatLowerInteractionSurfacesProps,
 ) {
@@ -359,7 +393,7 @@ export function ChatLowerInteractionSurfaces(
     snapshotLoaded: props.runtime.snapshotLoaded,
     restore: props.restoreContext,
     selfAgent: stopControls.self,
-    activeAgentCount: activeAgents.length,
+    activeAgents,
     activeAgentsVisible,
     backgroundVisible,
     backgroundItems: props.backgroundItems,
@@ -537,7 +571,7 @@ interface ChatDockChromeInput {
   readonly snapshotLoaded: boolean;
   readonly restore: ChatRestoreContextValue;
   readonly selfAgent: AgentRow | null;
-  readonly activeAgentCount: number;
+  readonly activeAgents: ReadonlyArray<AgentRow>;
   readonly activeAgentsVisible: boolean;
   readonly backgroundVisible: boolean;
   readonly backgroundItems: ReadonlyArray<BackgroundItem> | undefined;
@@ -580,7 +614,28 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
   const agentsRunningCount =
     input.selfAgent === null
       ? 0
-      : input.activeAgentCount + (input.selfAgent.activity === false ? 0 : 1);
+      : input.activeAgents.length +
+        (input.selfAgent.activity === false ? 0 : 1);
+  // Gated on `selfAgent` exactly as the count is, so the three never disagree:
+  // with no self record the count is 0, the panel declines to render at all,
+  // and a chip surviving on received A2A rows alone must not spin or name
+  // agents over that zero.
+  //
+  // Mid-turn is the only tier that spins. An agent kept alive by background
+  // work alone is counted, but nothing is being written on its behalf right
+  // now, and the sidebar's own row draws that tier without a spinner too.
+  const agentsWorking =
+    input.selfAgent !== null &&
+    (input.selfAgent.activity === "turn" ||
+      input.activeAgents.some((agent) => agent.activity === "turn"));
+  const selfAgent = input.selfAgent;
+  const agentsRoster = useMemo(
+    () =>
+      selfAgent === null
+        ? null
+        : agentRoster([selfAgent, ...input.activeAgents]),
+    [selfAgent, input.activeAgents],
+  );
   const backgroundItems = input.backgroundItems ?? NO_BACKGROUND_ITEMS;
   // Counted on the deduped list, exactly as `BackgroundItemsPanel` counts its
   // own header: a transient duplicate `taskId` renders one row there, so
@@ -617,6 +672,24 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
         ).length,
       }),
     [backgroundRunning, input.heldManagedCommands, dedupedBackgroundItems],
+  );
+  // The chip's icon when nothing is running - a held shell, a pending wake -
+  // is the kind's own, so the chip reads as what it stands for. Running and
+  // held shells are counted together: the sets overlap, and one of either is
+  // enough to put a shell row in the section.
+  const backgroundRestingGlyph = useMemo(
+    () =>
+      backgroundRestingKind({
+        items: dedupedBackgroundItems,
+        hasManagedCommands:
+          input.runningManagedCommands.length > 0 ||
+          input.heldManagedCommands.length > 0,
+      }),
+    [
+      dedupedBackgroundItems,
+      input.runningManagedCommands,
+      input.heldManagedCommands,
+    ],
   );
   const changeTotals = useMemo(
     () => accumulatedDiffTotals(input.restore.accumulatedFileChanges),
@@ -677,6 +750,7 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
     if (filesChip) {
       models.push({
         section: "filesChanged",
+        glyph: "filesChanged",
         text: changeCountsShortForm(changeTotals, changedFileCount),
         label: `Files changed. ${fileCountPhrase(changedFileCount)}, ${changeTotals.additions} added and ${changeTotals.deletions} removed.`,
         // Constant, so this fires on the chip's arrival and never again -
@@ -691,11 +765,15 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
     if (agentsChip) {
       models.push({
         section: "activeAgents",
+        glyph: agentsWorking ? "working" : "activeAgents",
         text:
           receivedAgentCount > 0
             ? `${agentsRunningCount} · ${receivedAgentCount}`
             : `${agentsRunningCount}`,
-        label: `Active agents. ${agentsRunningCount} running${receivedAgentCount > 0 ? `, ${receivedAgentCount} received from other agents and queued` : ""}.`,
+        // The roster is the panel's row list folded into the sentence: the
+        // chip is the only door to that list while the row is away, so its
+        // tooltip has to say WHO is running, not just how many.
+        label: `Active agents. ${agentsRunningCount} running${receivedAgentCount > 0 ? `, ${receivedAgentCount} received from other agents and queued` : ""}.${agentsRoster === null ? "" : ` ${agentsRoster}.`}`,
         // Only the first agent starting is worth an eye-flick - which is the
         // moment this chip appears; a count moving between two non-zero values
         // is the same fact, updated.
@@ -705,6 +783,7 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
     if (backgroundChip) {
       models.push({
         section: "background",
+        glyph: backgroundRunning > 0 ? "working" : backgroundRestingGlyph,
         text: `${backgroundRunning}`,
         // The number on the chip is the running count, but the section can be
         // on screen for a held shell or a pending wake with nothing running at
@@ -720,9 +799,12 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
     agentsChip,
     backgroundChip,
     backgroundSummary,
+    backgroundRestingGlyph,
     changeTotals,
     changedFileCount,
     agentsRunningCount,
+    agentsWorking,
+    agentsRoster,
     receivedAgentCount,
     backgroundRunning,
   ]);
@@ -733,6 +815,43 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
   );
 
   return { folded, dockQueue, strip };
+}
+
+/** How many agents the chip's sentence names before it starts counting. */
+const ROSTER_NAME_LIMIT = 3;
+
+/**
+ * The agents by name and state, as one clause: `Planner working, Reviewer in
+ * background`. Null when there is no one to name, so the sentence it joins
+ * ends cleanly instead of trailing an empty clause.
+ *
+ * Capped, because the roster is bounded by fleet size and nothing else - a
+ * workflow fanning out to a dozen agents with free-form titles would put a
+ * paragraph on the chip's accessible name, read out in full before the count
+ * the listener actually asked for. The names past the cap become a number; the
+ * panel one click away is still the whole list.
+ */
+function agentRoster(agents: ReadonlyArray<AgentRow>): string | null {
+  if (agents.length === 0) return null;
+  const named = agents
+    .slice(0, ROSTER_NAME_LIMIT)
+    .map((agent) => `${agent.title} ${agentStateWord(agent.activity)}`);
+  const remaining = agents.length - named.length;
+  if (remaining > 0) named.push(`and ${remaining} more`);
+  return named.join(", ");
+}
+
+function agentStateWord(activity: AgentRow["activity"]): string {
+  switch (activity) {
+    case "turn":
+      return "working";
+    case "background":
+      return "in background";
+    case false:
+      return "idle";
+  }
+  const unreachable: never = activity;
+  return unreachable;
 }
 
 /**

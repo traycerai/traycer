@@ -1,10 +1,35 @@
 import { createContext, useContext } from "react";
+import type { BackgroundItemKind } from "@traycer/protocol/host/agent/gui/subscribe";
 
 /** The three dock rows Layout ▸ Composer can fold into a chip. */
 export type ChatDockSection = "filesChanged" | "activeAgents" | "background";
 
+/**
+ * What a chip draws ahead of its number.
+ *
+ * `working` is the app's spinner, and it stands in for the section's own icon
+ * whenever the section has something in flight: an agent mid-turn, a
+ * background job running. The count beside it stays, so the chip still says
+ * how many; the glyph says whether anything is happening right now.
+ *
+ * The Background chip has no icon of its own. At rest it borrows the icon of
+ * the one kind its rows share - a wake, a sub-agent - and shows a neutral
+ * stack (`mixed`) when they differ, exactly as the panel's rows would draw
+ * them. `managedShell` is the host-supervised shell, which the panel draws
+ * from its own glyph family rather than from the kind icons; a resting chip
+ * with shells in it is always a HELD shell, since a running one spins.
+ */
+export type ChatDockCompactChipGlyph =
+  | "filesChanged"
+  | "activeAgents"
+  | "working"
+  | "managedShell"
+  | "mixed"
+  | BackgroundItemKind;
+
 export interface ChatDockCompactChipModel {
   readonly section: ChatDockSection;
+  readonly glyph: ChatDockCompactChipGlyph;
   /** The short form the chip prints: `+395 −12`, `3`, `2 · 1`. */
   readonly text: string;
   /** The whole sentence it stands for - the chip's accessible name. */
