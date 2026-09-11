@@ -1066,12 +1066,13 @@ function NotificationsSessionBody(
    * running on the very machine it is talking to.
    *
    * The gate is the NEGOTIATED minor, not the host's own plane selection.
-   * Those are different facts: a host may well serve local by default (the
-   * host tree has since moved to exactly that), but nothing on the wire says
-   * so, and `servedBy` reports the choice only after the room it was gating
-   * has already been acquired. This comment previously asserted the host
-   * selection itself - it had gone stale, and the stale sentence was the
-   * stated reason for withholding the lane.
+   * Those are different facts: a host's default plane is its own business
+   * (the host tree moved to local-first, then to a merged view that serves
+   * its own agents at once and still acquires the room for the others), but
+   * nothing on the wire says which, and `servedBy` reports the choice only
+   * after the room it was gating has already been acquired. This comment
+   * previously asserted the host selection itself - it had gone stale, and
+   * the stale sentence was the stated reason for withholding the lane.
    */
   const openForCurrentUser = useCallback(
     (settledFeedMode: NotificationFeedMode, cloudAuthorized: boolean): void => {

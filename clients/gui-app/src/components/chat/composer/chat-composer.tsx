@@ -8,7 +8,6 @@ import {
   type ReactNode,
 } from "react";
 import { useStore } from "zustand";
-import { AlertTriangle } from "lucide-react";
 import type { ProviderTerminalLoginSurface } from "@/lib/providers/provider-terminal-login-surface";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
@@ -55,7 +54,6 @@ import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { hasLandingImageBytes } from "@/lib/composer/landing-image-store";
 import { ChatComposerDraftAuthorityBanner } from "./chat-composer-draft-authority";
 import { useChatComposerDraftAuthority } from "@/hooks/drafts/use-chat-composer-draft-authority";
-import { redactEmail } from "@/lib/providers/redact-email";
 
 import type { ComposerPromptEditorHandle } from "./composer-prompt-editor";
 import { ChatComposerAttachmentsStrip } from "./chat-composer-attachments-strip";
@@ -85,10 +83,6 @@ import {
 import { useProviderPackGateForClient } from "@/hooks/providers/use-provider-pack-gate";
 import { useProfileRateLimitSwitchPrompt } from "./use-profile-rate-limit-switch-prompt";
 import { useRefreshProvidersListOnTurn } from "@/hooks/providers/use-refresh-providers-list-on-turn";
-import {
-  useAmbientDriftGate,
-  type AmbientDriftSendNotice,
-} from "./use-ambient-drift-gate";
 import { useComposerPickerItems } from "./picker/use-composer-picker-items";
 import { commitProfileSelection } from "@/stores/composer/commit-selection";
 import { useTaskProfileRateLimitSwitch } from "./use-task-profile-rate-limit-switch";
@@ -564,20 +558,11 @@ function ChatComposerImpl(props: ChatComposerProps) {
     pastePending,
     annotationPreparationPending,
   );
-  const ambientDrift = useAmbientDriftGate(
-    hostClient,
-    reauthGate.state,
-    profileId,
-  );
-  // Preserves the submit source (Enter vs Cmd+Enter) across the ambient-drift
-  // "Continue" resubmit, so acknowledging drift on a steer chord still steers.
-  const lastSubmitSourceRef = useRef<ChatComposerSubmitSource>("enter");
   const handleSubmitDraft = useCallback(
     (source: ChatComposerSubmitSource): void => {
-      lastSubmitSourceRef.current = source;
-      ambientDrift.guardSubmit(() => submitDraft(source));
+      submitDraft(source);
     },
-    [ambientDrift, submitDraft],
+    [submitDraft],
   );
   const handleSubmitFromButton = useCallback((): void => {
     handleSubmitDraft("enter");
@@ -594,16 +579,9 @@ function ChatComposerImpl(props: ChatComposerProps) {
   const topBannerKind = resolveComposerTopBannerKind({
     profileDisabled: profileEligibility.disabled,
     reauthVisible: reauthBanner !== null,
-    ambientDriftVisible: ambientDrift.pendingNotice !== null,
     rateLimitVisible:
       !reauthGate.signedOut && rateLimitPrompt.kind === "visible",
   });
-  const continueAfterAmbientDrift = (): void => {
-    ambientDrift.acknowledge(() => {
-      if (rateLimitPrompt.kind === "visible") return;
-      submitDraft(lastSubmitSourceRef.current);
-    });
-  };
 
   const removeImage = useCallback((id: string) => {
     Analytics.getInstance().track(AnalyticsEvent.AttachmentRemoved, {
@@ -691,14 +669,6 @@ function ChatComposerImpl(props: ChatComposerProps) {
                   ? null
                   : () => onSwitchProfile(null)
               }
-            />
-          ) : null}
-          {topBannerKind === "ambient-drift" &&
-          ambientDrift.pendingNotice !== null ? (
-            <AmbientDriftSendBanner
-              notice={ambientDrift.pendingNotice}
-              onContinue={continueAfterAmbientDrift}
-              onDismiss={ambientDrift.dismiss}
             />
           ) : null}
           {topSlot}
@@ -848,51 +818,6 @@ function resolveReauthBannerProps(gate: ProviderReauthGate): {
     return null;
   }
   return { providerId: gate.providerId, reason: gate.reason };
-}
-
-function AmbientDriftSendBanner({
-  notice,
-  onContinue,
-  onDismiss,
-}: {
-  readonly notice: AmbientDriftSendNotice;
-  readonly onContinue: () => void;
-  readonly onDismiss: () => void;
-}): ReactNode {
-  return (
-    <div className="mb-2 flex flex-col gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-ui-sm text-amber-900 dark:text-amber-200">
-      <div className="flex items-start gap-2">
-        <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-        <div className="min-w-0">
-          <div className="font-medium">Terminal account changed</div>
-          <div className="text-ui-xs">
-            Terminal account is now {driftEmailCopy(notice.currentEmail)}; was{" "}
-            {driftEmailCopy(notice.previousEmail)}.
-          </div>
-        </div>
-      </div>
-      <div className="flex flex-wrap items-center gap-2 pl-6">
-        <button
-          type="button"
-          className="rounded-md bg-foreground/90 px-2.5 py-1 text-ui-xs font-medium text-background transition-colors hover:bg-foreground"
-          onClick={onContinue}
-        >
-          Continue with Terminal account
-        </button>
-        <button
-          type="button"
-          className="rounded-md px-2.5 py-1 text-ui-xs text-current opacity-80 transition-opacity hover:opacity-100"
-          onClick={onDismiss}
-        >
-          Dismiss
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function driftEmailCopy(email: string | null): string {
-  return email === null ? "an unknown account" : redactEmail(email);
 }
 
 function imageAttachmentsUnsupported(

@@ -418,7 +418,6 @@ export function WorkspaceFolderSummaryControl(props: {
             draftPending={props.draftPending === true}
             onEditEnvironment={props.onEditEnvironment}
             readOnly={false}
-            nestedInPopover={dialogBoundaryEl !== null}
             bindingResolved={props.bindingResolved}
             recentWorkspaces={props.recentWorkspaces}
             moveToRecent={props.moveToRecent}

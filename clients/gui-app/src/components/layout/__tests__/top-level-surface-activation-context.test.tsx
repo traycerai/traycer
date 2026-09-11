@@ -16,6 +16,7 @@ const TAB: HeaderTab = {
   icon: null,
   canDuplicate: false,
   canOpenInNewWindow: false,
+  appearance: null,
 };
 
 function InteractionProbe(props: {

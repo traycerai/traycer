@@ -18,6 +18,7 @@ import type {
   BrowserViewDetachSurface,
   BrowserViewDownloadCancel,
   BrowserViewElectronTabControl,
+  BrowserViewGuestViewportResult,
   BrowserViewFindRequest,
   BrowserViewFindStop,
   LoginImportRequest,
@@ -85,6 +86,14 @@ const annotationAttachResultSchema: z.ZodType<BrowserAnnotationAttachResultInput
     annotationId: z.string(),
     status: z.enum(["attached", "failed"]),
   });
+const guestViewportResultSchema: z.ZodType<BrowserViewGuestViewportResult> = z
+  .object({
+    requestId: nonEmptyStringSchema,
+    registrationId: nonEmptyStringSchema,
+    revision: z.number().int().nonnegative(),
+    applied: z.boolean(),
+  })
+  .strict();
 const findRequestSchema: z.ZodType<BrowserViewFindRequest> =
   tileKeySchema.extend({
     requestId: z.number(),
@@ -238,6 +247,7 @@ export const browserViewIpcPayload = {
   detachSurface: detachSurfaceSchema,
   downloadCancel: downloadCancelSchema,
   electronTabControl: electronTabControlSchema,
+  guestViewportResult: guestViewportResultSchema,
   findRequest: findRequestSchema,
   findStop: findStopSchema,
   loginImportRun: loginImportRunSchema,

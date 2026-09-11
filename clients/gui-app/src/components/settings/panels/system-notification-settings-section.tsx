@@ -1,11 +1,11 @@
 import type { ReactNode } from "react";
+import { APP_NOTIFICATIONS } from "@/components/settings/panels/app-notifications-settings.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { useNotificationSystemSettingsOpenMutation } from "@/hooks/runner/use-notification-system-settings-open-mutation";
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
-import { isSystemNotificationsGroupAvailable } from "@/lib/settings/settings-availability";
 
 /**
  * Desktop pointer to native banner, badge and delivery preferences.
@@ -16,7 +16,9 @@ import { isSystemNotificationsGroupAvailable } from "@/lib/settings/settings-ava
  */
 export function SystemNotificationSettingsSection(): ReactNode {
   const availability = useSettingsAvailabilityContext();
-  if (!isSystemNotificationsGroupAvailable(availability)) return null;
+  if (!APP_NOTIFICATIONS.definitions.system.availableWhen(availability)) {
+    return null;
+  }
   return <SystemNotificationSettingsGroup />;
 }
 
@@ -24,16 +26,14 @@ function SystemNotificationSettingsGroup(): ReactNode {
   const openSettings = useNotificationSystemSettingsOpenMutation();
   return (
     <SettingsGroup
-      title="System"
-      anchor="app-notifications-system"
+      group={APP_NOTIFICATIONS.definitions.system}
+      showTitle
       tone="default"
       dataTestId="system-notification-settings-section"
       fill={false}
     >
       <SettingsRow
-        label="OS notifications"
-        anchor="app-notifications-os"
-        description="Banners, badges, and delivery are managed by your operating system."
+        row={APP_NOTIFICATIONS.definitions.osNotifications}
         control={
           <Button
             type="button"
