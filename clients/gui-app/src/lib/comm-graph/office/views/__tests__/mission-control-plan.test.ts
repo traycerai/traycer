@@ -93,6 +93,27 @@ function nextCreatedAt(agents: ReadonlyArray<OfficeAgentInput>): number {
   return max + 1;
 }
 
+function aisleIndexOf(layout: OfficeLayout, id: string): number {
+  const lead = layout.desks.get(id);
+  if (lead === undefined) throw new Error(`missing lead ${id}`);
+  const seats = [...layout.seats.values()]
+    .filter(
+      (seat) =>
+        seat.kind === "console" && seat.deskTile.row === lead.deskTile.row,
+    )
+    .sort((left, right) => left.deskTile.col - right.deskTile.col);
+  const index = seats.findIndex((seat) => seat.seatId === lead.seatId);
+  if (
+    index === 0 ||
+    index === seats.length - 1 ||
+    index % 12 === 0 ||
+    index % 12 === 11
+  ) {
+    return -1;
+  }
+  return index;
+}
+
 function teamSizedEpic(sizes: ReadonlyArray<number>): OfficeTestEpic {
   const sample = makeTestEpic("many-roots", 1, 1);
   const root = sample.agents[0];
@@ -792,6 +813,22 @@ function exposedStepPixels(
   return exposed;
 }
 
+function countingReads<T>(
+  items: ReadonlyArray<T>,
+  onRead: () => void,
+): ReadonlyArray<T> {
+  return new Proxy(items, {
+    get(target, property) {
+      if (property === "length") return target.length;
+      if (typeof property === "string" && /^\d+$/.test(property)) {
+        onRead();
+        return target[Number.parseInt(property, 10)];
+      }
+      return undefined;
+    },
+  });
+}
+
 class CountingSeatMap extends Map<string, OfficeSeat> {
   constructor(
     entries: Iterable<readonly [string, OfficeSeat]>,
@@ -1154,5 +1191,102 @@ describe("mission-control cold-review findings", () => {
         expect(scene.locate(agent.id)).not.toBeNull();
       }
     }
+  });
+
+  it("keeps seats identical after a status-only replan that follows a consumed reserve", () => {
+    const input = planFresh(
+      makeTestEpic("one-team", 12, 1),
+      VIEWPORT_WIDE,
+    ).input;
+    const before = MISSION_CONTROL_VIEW.plan(input);
+    const lead = input.agents.find((agent) => agent.id === "team-lead");
+    if (lead === undefined) throw new Error("no lead");
+    const next = grownFrom(input, before, [
+      childAgent(lead, "reserve-consumer", nextCreatedAt(input.agents)),
+    ]);
+    const consumed = MISSION_CONTROL_VIEW.plan(next);
+    const statuses = new Map<string, OfficeAgentStatus>(
+      next.agents.map((agent) => [agent.id, "working"]),
+    );
+    statuses.set(lead.id, "awaiting");
+    const statusOnly = MISSION_CONTROL_VIEW.plan({
+      ...next,
+      previous: consumed,
+      occupancy: new Map(),
+      partition: partitionOfficePopulation({
+        agents: next.agents,
+        statusById: statuses,
+        previous: next.partition,
+      }),
+    });
+    expect(statusOnly.seats.size).toBe(consumed.seats.size);
+    expect(statusOnly.seats).toEqual(consumed.seats);
+  });
+
+  it("sits every lead at an aisle end on a fresh three-team office", () => {
+    const layout = planFresh(teamSizedEpic([2, 2, 2]), VIEWPORT_WIDE).layout;
+    const interior = ["team-0-lead", "team-1-lead", "team-2-lead"].filter(
+      (id) => aisleIndexOf(layout, id) >= 0,
+    );
+    expect(interior).toEqual([]);
+  });
+
+  it("sits an arriving team lead at an aisle end", () => {
+    const input = planFresh(
+      makeTestEpic("many-roots", 2, 1),
+      VIEWPORT_WIDE,
+    ).input;
+    const before = MISSION_CONTROL_VIEW.plan(input);
+    const parent = input.agents[0];
+    const lead = childAgent(
+      parent,
+      "arriving-lead",
+      nextCreatedAt(input.agents),
+    );
+    const member = childAgent(lead, "arriving-member", lead.createdAt + 1);
+    const after = MISSION_CONTROL_VIEW.plan(
+      grownFrom(input, before, [lead, member]),
+    );
+    expect(aisleIndexOf(after, lead.id)).toBe(-1);
+  });
+
+  it("does not grow band or pod reads with population on an empty pan", () => {
+    const counts: Array<{ bandReads: number; podReads: number }> = [];
+    for (const n of [12, 1000]) {
+      let bandReads = 0;
+      let podReads = 0;
+      const tracked: OfficeView = {
+        ...MISSION_CONTROL_VIEW,
+        plan: (input) => {
+          const layout = MISSION_CONTROL_VIEW.plan(input);
+          const frozen = frozenOf(layout);
+          if (frozen === null) throw new Error("no frozen");
+          const hostBands = countingReads(frozen.hostBands, () => {
+            bandReads += 1;
+          });
+          const rooms = layout.rooms.map((room) => ({
+            ...room,
+            pods: countingReads(room.pods, () => {
+              podReads += 1;
+            }),
+          }));
+          return { ...layout, rooms, frozen: { ...frozen, hostBands } };
+        },
+      };
+      const epic = makeTestEpic("triage", n, 1);
+      const hosted: OfficeTestEpic = {
+        ...epic,
+        agents: epic.agents.map((agent) => ({ ...agent, hostId: "host-a" })),
+      };
+      const scene = new OfficeScene(tracked, null);
+      scene.sync(sceneInputFor(planFresh(hosted, VIEWPORT_WIDE).input));
+      scene.frame(1, { x: 0, y: 0, width: 1, height: 1 });
+      bandReads = 0;
+      podReads = 0;
+      scene.frame(1, { x: 16, y: 0, width: 1, height: 1 });
+      counts.push({ bandReads, podReads });
+    }
+    expect(counts[1].bandReads).toBeLessThanOrEqual(counts[0].bandReads);
+    expect(counts[1].podReads).toBeLessThanOrEqual(counts[0].podReads);
   });
 });

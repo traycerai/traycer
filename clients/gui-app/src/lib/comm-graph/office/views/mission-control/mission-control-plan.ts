@@ -77,6 +77,8 @@ export interface MissionControlFrozen {
   readonly centerCol: number;
   readonly teamReserveSeatIds: ReadonlyArray<MissionControlTeamReserve>;
   readonly hostBands: ReadonlyArray<MissionControlHostBand>;
+  readonly bandByTile: Readonly<Record<string, OfficeSpriteName>>;
+  readonly podByTile: Readonly<Record<string, OfficeSpriteName>>;
 }
 
 interface ConsoleSlot {
@@ -140,25 +142,42 @@ function isHostBand(value: unknown): value is MissionControlHostBand {
   );
 }
 
-export function isMissionControlFrozen(
-  value: unknown,
-): value is MissionControlFrozen {
-  if (value === null || typeof value !== "object") return false;
-  if (
-    !("tierSeatCounts" in value) ||
-    !("centerCol" in value) ||
-    !("teamReserveSeatIds" in value) ||
-    !("hostBands" in value)
-  ) {
-    return false;
-  }
+function isFrozenPayload(value: {
+  readonly tierSeatCounts: unknown;
+  readonly centerCol: unknown;
+  readonly teamReserveSeatIds: unknown;
+  readonly hostBands: unknown;
+  readonly bandByTile: unknown;
+  readonly podByTile: unknown;
+}): boolean {
   if (!Array.isArray(value.tierSeatCounts)) return false;
   if (!value.tierSeatCounts.every(isFiniteNumber)) return false;
   if (!isFiniteNumber(value.centerCol)) return false;
   if (!Array.isArray(value.teamReserveSeatIds)) return false;
   if (!value.teamReserveSeatIds.every(isTeamReserve)) return false;
   if (!Array.isArray(value.hostBands)) return false;
-  return value.hostBands.every(isHostBand);
+  if (!value.hostBands.every(isHostBand)) return false;
+  if (!isSpriteRecord(value.bandByTile)) return false;
+  return isSpriteRecord(value.podByTile);
+}
+
+export function isMissionControlFrozen(
+  value: unknown,
+): value is MissionControlFrozen {
+  if (value === null || typeof value !== "object") return false;
+  if (!("tierSeatCounts" in value)) return false;
+  if (!("centerCol" in value)) return false;
+  if (!("teamReserveSeatIds" in value)) return false;
+  if (!("hostBands" in value)) return false;
+  if (!("bandByTile" in value)) return false;
+  if (!("podByTile" in value)) return false;
+  return isFrozenPayload(value);
+}
+
+function isSpriteRecord(
+  value: unknown,
+): value is Readonly<Record<string, OfficeSpriteName>> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 export function frozenOf(
@@ -729,9 +748,31 @@ function growOpenIndex(request: {
   return firstOpenFill(fills, previousLength);
 }
 
-function seatArrivals(request: {
+function fillOccupied(fills: ReadonlyArray<SlotFill>): boolean[] {
+  const used: boolean[] = [];
+  for (const fill of fills) {
+    used.push(fill.agentId !== null || fill.reserveForTeamId !== null);
+  }
+  return used;
+}
+
+function growSlots(request: {
+  fills: SlotFill[];
+  slots: ConsoleSlot[];
+  counts: number[];
+  readonly centerCol: number;
+}): void {
+  appendTiersUntil(request.counts, request.slots.length + 1);
+  const grown = buildSlots(request.counts, request.centerCol);
+  request.slots.length = 0;
+  for (const slot of grown) request.slots.push(slot);
+  extendFillsTo(request.fills, request.slots.length);
+}
+
+function seatOneArrival(request: {
   readonly input: OfficePlanInput;
-  readonly arrivals: ReadonlyArray<OfficeAgentInput>;
+  readonly agent: OfficeAgentInput;
+  readonly teamId: string | null;
   fills: SlotFill[];
   slots: ConsoleSlot[];
   counts: number[];
@@ -739,49 +780,181 @@ function seatArrivals(request: {
   readonly takenAgents: Set<string>;
   readonly reserveByTeam: Map<string, number>;
 }): void {
-  const { input, arrivals, fills, takenAgents, reserveByTeam } = request;
-  for (const agent of arrivals) {
-    if (takenAgents.has(agent.id)) continue;
-    const member = input.partition.members.get(agent.id);
-    const teamId = member?.agentClass === "team" ? member.teamId : null;
-    const index = growOpenIndex({
+  const { agent, teamId, fills, takenAgents, reserveByTeam } = request;
+  const index = growOpenIndex({
+    fills,
+    slots: request.slots,
+    counts: request.counts,
+    centerCol: request.centerCol,
+    reserveByTeam,
+    teamId,
+  });
+  if (index < 0) return;
+  fills[index] = {
+    agentId: agent.id,
+    teamId:
+      teamId ?? request.input.partition.members.get(agent.id)?.teamId ?? null,
+    hostId: hostOfAgent(request.input, agent.id),
+    reserveForTeamId: null,
+  };
+  takenAgents.add(agent.id);
+  if (teamId !== null && reserveByTeam.get(teamId) === index) {
+    reserveByTeam.delete(teamId);
+  }
+}
+
+function placeNewTeamRun(request: {
+  readonly input: OfficePlanInput;
+  readonly teamId: string;
+  readonly members: ReadonlyArray<OfficeAgentInput>;
+  fills: SlotFill[];
+  slots: ConsoleSlot[];
+  counts: number[];
+  readonly centerCol: number;
+  readonly takenAgents: Set<string>;
+  readonly reserveByTeam: Map<string, number>;
+}): void {
+  const { teamId, members, fills, slots, takenAgents, reserveByTeam } = request;
+  const hostId = hostOfAgent(request.input, members[0].id);
+  const length = members.length + 1;
+  let start = firstAisleAlignedStart(slots, fillOccupied(fills), length);
+  while (start < 0 && request.counts.length < 64) {
+    growSlots({
       fills,
-      slots: request.slots,
+      slots,
       counts: request.counts,
       centerCol: request.centerCol,
-      reserveByTeam,
-      teamId,
     });
-    if (index < 0) continue;
-    fills[index] = {
+    start = firstAisleAlignedStart(slots, fillOccupied(fills), length);
+  }
+  if (start < 0) return;
+  const run: Placement[] = [];
+  for (const agent of members) {
+    run.push({
       agentId: agent.id,
-      teamId: teamId ?? member?.teamId ?? null,
-      hostId: hostOfAgent(input, agent.id),
+      teamId,
+      hostId,
       reserveForTeamId: null,
-    };
-    takenAgents.add(agent.id);
-    if (teamId !== null && reserveByTeam.get(teamId) === index) {
-      reserveByTeam.delete(teamId);
+    });
+  }
+  run.push({
+    agentId: null,
+    teamId,
+    hostId,
+    reserveForTeamId: teamId,
+  });
+  fillRun(fills, slots, start, run);
+  for (const agent of members) takenAgents.add(agent.id);
+  for (let i = start; i < start + length; i += 1) {
+    if (fills[i].reserveForTeamId === teamId) {
+      reserveByTeam.set(teamId, i);
+      break;
     }
   }
 }
 
+function seatArrivals(request: {
+  readonly input: OfficePlanInput;
+  readonly arrivals: ReadonlyArray<OfficeAgentInput>;
+  readonly established: ReadonlySet<string>;
+  fills: SlotFill[];
+  slots: ConsoleSlot[];
+  counts: number[];
+  readonly centerCol: number;
+  readonly takenAgents: Set<string>;
+  readonly reserveByTeam: Map<string, number>;
+}): void {
+  const { input, arrivals, established, takenAgents, reserveByTeam } = request;
+  const newTeams = new Map<string, OfficeAgentInput[]>();
+  const joiners: OfficeAgentInput[] = [];
+  const solos: OfficeAgentInput[] = [];
+  for (const agent of arrivals) {
+    if (takenAgents.has(agent.id)) continue;
+    const member = input.partition.members.get(agent.id);
+    const teamId = member?.agentClass === "team" ? member.teamId : null;
+    if (teamId === null) {
+      solos.push(agent);
+      continue;
+    }
+    if (established.has(teamId) || reserveByTeam.has(teamId)) {
+      joiners.push(agent);
+      continue;
+    }
+    const group = newTeams.get(teamId) ?? [];
+    group.push(agent);
+    newTeams.set(teamId, group);
+  }
+  for (const agent of joiners) {
+    const member = input.partition.members.get(agent.id);
+    seatOneArrival({
+      input,
+      agent,
+      teamId: member?.agentClass === "team" ? member.teamId : null,
+      fills: request.fills,
+      slots: request.slots,
+      counts: request.counts,
+      centerCol: request.centerCol,
+      takenAgents,
+      reserveByTeam,
+    });
+  }
+  for (const [teamId, members] of newTeams) {
+    placeNewTeamRun({
+      input,
+      teamId,
+      members,
+      fills: request.fills,
+      slots: request.slots,
+      counts: request.counts,
+      centerCol: request.centerCol,
+      takenAgents,
+      reserveByTeam,
+    });
+  }
+  for (const agent of solos) {
+    seatOneArrival({
+      input,
+      agent,
+      teamId: null,
+      fills: request.fills,
+      slots: request.slots,
+      counts: request.counts,
+      centerCol: request.centerCol,
+      takenAgents,
+      reserveByTeam,
+    });
+  }
+}
+
+function establishedTeamIds(
+  input: OfficePlanInput,
+  previous: MissionControlFrozen,
+): Set<string> {
+  const known = new Set(
+    previous.teamReserveSeatIds.map((entry) => entry.teamId),
+  );
+  const layout = input.previous;
+  if (layout === null) return known;
+  for (const desk of layout.desks.values()) {
+    const teamId = teamOfAgent(input, desk.agentId);
+    if (teamId !== null) known.add(teamId);
+  }
+  return known;
+}
+
 function ensureTeamReserves(request: {
   readonly input: OfficePlanInput;
-  readonly previous: MissionControlFrozen;
+  readonly established: ReadonlySet<string>;
   fills: SlotFill[];
   slots: ConsoleSlot[];
   counts: number[];
   readonly centerCol: number;
   readonly reserveByTeam: Map<string, number>;
 }): void {
-  const { input, previous, fills, reserveByTeam } = request;
-  const known = new Set(
-    previous.teamReserveSeatIds.map((entry) => entry.teamId),
-  );
+  const { input, established, fills, reserveByTeam } = request;
   for (const host of input.partition.hosts) {
     for (const team of host.teams) {
-      if (known.has(team.teamId)) continue;
+      if (established.has(team.teamId)) continue;
       if (reserveByTeam.has(team.teamId)) continue;
       const index = growOpenIndex({
         fills,
@@ -824,9 +997,11 @@ function packFromPrevious(
   }
   const reserveByTeam = restoreTeamReserves(previous, fills);
   copyPreviousEmptyHosts(input.previous, fills);
+  const established = establishedTeamIds(input, previous);
   seatArrivals({
     input,
     arrivals,
+    established,
     fills,
     slots,
     counts,
@@ -836,7 +1011,7 @@ function packFromPrevious(
   });
   ensureTeamReserves({
     input,
-    previous,
+    established,
     fills,
     slots,
     counts,
@@ -1657,6 +1832,44 @@ function hostBandsOf(packing: Packing): ReadonlyArray<MissionControlHostBand> {
   return bands;
 }
 
+function bandByTileOf(
+  bands: ReadonlyArray<MissionControlHostBand>,
+): Record<string, OfficeSpriteName> {
+  const out: Record<string, OfficeSpriteName> = {};
+  for (const band of bands) {
+    out[`${band.col},${band.row}`] = band.sprite;
+  }
+  return out;
+}
+
+function podFloorSprite(
+  tint: "cool" | "warm",
+  col: number,
+  row: number,
+): OfficeSpriteName {
+  const even = (col + row) % 2 === 0;
+  if (tint === "warm") {
+    return even ? "floor-pod-warm-a" : "floor-pod-warm-b";
+  }
+  return even ? "floor-pod-a" : "floor-pod-b";
+}
+
+function podByTileOf(
+  pods: OfficeRoom["pods"],
+): Record<string, OfficeSpriteName> {
+  const out: Record<string, OfficeSpriteName> = {};
+  for (const pod of pods) {
+    for (let r = 0; r < pod.bounds.rows; r += 1) {
+      for (let c = 0; c < pod.bounds.cols; c += 1) {
+        const col = pod.bounds.col + c;
+        const row = pod.bounds.row + r;
+        out[`${col},${row}`] = podFloorSprite(pod.tint, col, row);
+      }
+    }
+  }
+  return out;
+}
+
 export function planMissionControl(input: OfficePlanInput): OfficeLayout {
   const packing = pack(input);
   const byId = agentsById(input.agents);
@@ -1709,6 +1922,7 @@ export function planMissionControl(input: OfficePlanInput): OfficeLayout {
     pods: teamPods(packing, byId),
     visitTile,
   };
+  const pods = room.pods;
   const areaSigns: ReadonlyArray<OfficeAreaSign> = [
     { name: "Lounge", signTile: { col: packing.loungeOriginCol, row: 0 } },
   ];
@@ -1733,11 +1947,14 @@ export function planMissionControl(input: OfficePlanInput): OfficeLayout {
     areaSigns,
     amenities,
   };
+  const hostBands = hostBandsOf(packing);
   const frozen: MissionControlFrozen = {
     tierSeatCounts: packing.tierCounts,
     centerCol: packing.centerCol,
     teamReserveSeatIds: packing.teamReserves,
-    hostBands: hostBandsOf(packing),
+    hostBands,
+    bandByTile: bandByTileOf(hostBands),
+    podByTile: podByTileOf(pods),
   };
   return {
     view: VIEW_ID,

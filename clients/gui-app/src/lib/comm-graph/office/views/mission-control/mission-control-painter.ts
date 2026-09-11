@@ -22,8 +22,6 @@ import type {
   OfficeLayout,
   OfficeLod,
   OfficeModelTier,
-  OfficePod,
-  OfficeRoom,
   OfficeSeat,
   OfficeSpriteName,
   OfficeTilePos,
@@ -141,50 +139,25 @@ function floorSpriteAt(col: number, row: number): OfficeSpriteName {
   return (col + row) % 2 === 0 ? "floor-a" : "floor-b";
 }
 
-function podFloorName(
-  tint: "cool" | "warm",
-  col: number,
-  row: number,
-): OfficeSpriteName {
-  const even = (col + row) % 2 === 0;
-  if (tint === "warm") return even ? "floor-pod-warm-a" : "floor-pod-warm-b";
-  return even ? "floor-pod-a" : "floor-pod-b";
+function isSpriteRecord(
+  value: unknown,
+): value is Readonly<Record<string, OfficeSpriteName>> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function hostBandSpriteAt(
-  layout: OfficeLayout,
-  col: number,
-  row: number,
-): OfficeSpriteName | null {
-  const frozen = frozenOf(layout);
-  if (frozen === null) return null;
-  for (const band of frozen.hostBands) {
-    if (band.col === col && band.row === row) return band.sprite;
-  }
-  return null;
-}
-
-function tileInPod(pod: OfficePod, col: number, row: number): boolean {
-  return (
-    col >= pod.bounds.col &&
-    col < pod.bounds.col + pod.bounds.cols &&
-    row >= pod.bounds.row &&
-    row < pod.bounds.row + pod.bounds.rows
-  );
-}
-
-function podSpriteAt(
-  rooms: ReadonlyArray<OfficeRoom>,
-  col: number,
-  row: number,
-): OfficeSpriteName | null {
-  let found: OfficeSpriteName | null = null;
-  for (const room of rooms) {
-    for (const pod of room.pods) {
-      if (tileInPod(pod, col, row)) found = podFloorName(pod.tint, col, row);
-    }
-  }
-  return found;
+function floorLookups(layout: OfficeLayout): {
+  readonly bandByTile: Readonly<Record<string, OfficeSpriteName>>;
+  readonly podByTile: Readonly<Record<string, OfficeSpriteName>>;
+} | null {
+  const frozen = layout.frozen;
+  if (frozen === null || typeof frozen !== "object") return null;
+  if (!("bandByTile" in frozen) || !("podByTile" in frozen)) return null;
+  if (!isSpriteRecord(frozen.bandByTile)) return null;
+  if (!isSpriteRecord(frozen.podByTile)) return null;
+  return {
+    bandByTile: frozen.bandByTile,
+    podByTile: frozen.podByTile,
+  };
 }
 
 function tileRectsOverlap(
@@ -283,17 +256,19 @@ function paintFloor(
 ): ReadonlyArray<OfficeDrawable> {
   if (lod === 0) return blockMap(layout, tiles);
   const drawables: OfficeDrawable[] = [];
+  const lookups = floorLookups(layout);
   const lastCol = tiles.col + tiles.cols;
   const lastRow = tiles.row + tiles.rows;
   for (let row = tiles.row; row < lastRow; row += 1) {
     if (row < 0 || row >= layout.rows) continue;
     for (let col = tiles.col; col < lastCol; col += 1) {
       if (col < 0 || col >= layout.cols) continue;
-      const band = hostBandSpriteAt(layout, col, row);
-      const tinted = podSpriteAt(layout.rooms, col, row);
+      const key = `${col},${row}`;
+      const band = lookups === null ? undefined : lookups.bandByTile[key];
+      const tinted = lookups === null ? undefined : lookups.podByTile[key];
       let sprite: OfficeSpriteName =
-        tinted === null ? floorSpriteAt(col, row) : tinted;
-      if (band !== null) sprite = band;
+        tinted === undefined ? floorSpriteAt(col, row) : tinted;
+      if (band !== undefined) sprite = band;
       drawables.push({
         kind: "sprite",
         sprite: { name: sprite },
