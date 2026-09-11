@@ -43,6 +43,7 @@ import {
   buildIsoCafe,
   buildIsoCourtyard,
   isoBlankGrid,
+  isoFixtureProps,
   isoFloorOf,
   isoHostKey,
   isoHostSign,
@@ -279,6 +280,7 @@ interface RoomBuild {
   readonly desks: ReadonlyArray<OfficeDesk>;
   readonly blocked: ReadonlyArray<OfficeTilePos>;
   readonly spots: ReadonlyArray<OfficeErrandSpot>;
+  readonly props: ReadonlyArray<OfficeProp>;
   readonly sign: OfficeSign;
 }
 
@@ -361,6 +363,11 @@ function buildRoom(
         floorIndex,
         owns: true,
         facing: "up",
+        // This one stands INSIDE a room, so it is that room's own - the same
+        // rule the Floor's cabin plants get, said as data rather than read
+        // back off the kind. `roomId` is the room's root agent, which is what
+        // a seat's own `roomId` carries.
+        audience: { kind: "room", roomId: plan.root.id },
       }),
     );
   }
@@ -390,6 +397,7 @@ function buildRoom(
     desks,
     blocked,
     spots,
+    props: isoFixtureProps(spots),
     sign: {
       kind: "plate",
       tile: signTile,
@@ -456,6 +464,7 @@ function buildDistrict(
     desks.push(...built.desks);
     blocked.push(...built.blocked);
     spots.push(...built.spots);
+    props.push(...built.props);
     signs.push(built.sign);
   }
 

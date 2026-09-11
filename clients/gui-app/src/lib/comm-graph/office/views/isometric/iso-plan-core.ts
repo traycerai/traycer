@@ -27,6 +27,8 @@ import type {
   OfficeProp,
   OfficeRoom,
   OfficeSign,
+  OfficeSpotAudience,
+  OfficeSpriteName,
   OfficeTilePos,
   OfficeTileRect,
 } from "@/lib/comm-graph/office/office-types";
@@ -208,16 +210,19 @@ export function isoWithinRect(
  * One amenity block, whole: where it is, what stands in it, what that blocks,
  * and the errand spots in front of each fixture.
  *
- * A FIXTURE IS DRAWN FROM ITS SPOT, not from `layout.props`: the spot that owns
- * a fixture carries its tile as `actionTile` and the painter draws it there.
- * The second seat at a two-seat table carries `null` instead, so the table is
- * drawn once while both seats still share a `fixtureId` and still rally.
+ * A FIXTURE IS DRAWN FROM ITS SPOT: the spot that owns a fixture carries its
+ * tile as `actionTile` and the painter draws it there, with a depth, rather
+ * than flat in the floor pass. The second seat at a two-seat table carries
+ * `null` instead, so the table is drawn once while both seats still share a
+ * `fixtureId` and still rally. It is RECORDED in `layout.props` all the same -
+ * `actionTile` promises that a named sprite stands on that tile, and the
+ * painter is not the only reader of that promise.
  */
 export interface IsoAmenityBuild {
   readonly rect: OfficeTileRect;
   readonly amenity: OfficeAmenity;
   readonly areaSign: OfficeAreaSign;
-  /** Props that are NOT an errand fixture; these do go in `layout.props`. */
+  /** Scenery and fixtures alike; the painter decides which pass draws which. */
   readonly props: ReadonlyArray<OfficeProp>;
   readonly blocked: ReadonlyArray<OfficeTilePos>;
   readonly spots: ReadonlyArray<OfficeErrandSpot>;
@@ -252,6 +257,17 @@ function fixtureIdOf(
   return `${floorIndex}/${kind}/${tile.col}/${tile.row}`;
 }
 
+/**
+ * The audience of everything a DISTRICT stands up: its courtyard, its cafe,
+ * its park.
+ *
+ * A district is one host's whole world here - there is no second storey to be
+ * excluded from and no cabin any of it stands inside - so an amenity spot is
+ * open to everyone seated in it, and the floor index the scene checks first is
+ * what keeps one host's coffee out of another's reach.
+ */
+export const ISO_FLOOR_AUDIENCE: OfficeSpotAudience = { kind: "floor" };
+
 export interface IsoSpotArgs {
   readonly kind: OfficeErrandSpot["kind"];
   readonly stand: OfficeTilePos;
@@ -260,6 +276,7 @@ export interface IsoSpotArgs {
   /** `false` for the second seat of a shared fixture: it draws nothing. */
   readonly owns: boolean;
   readonly facing: OfficeErrandSpot["facing"];
+  readonly audience: OfficeSpotAudience;
 }
 
 export function isoSpotAt(args: IsoSpotArgs): OfficeErrandSpot {
@@ -267,11 +284,49 @@ export function isoSpotAt(args: IsoSpotArgs): OfficeErrandSpot {
     kind: args.kind,
     tile: args.stand,
     facing: args.facing,
+    audience: args.audience,
     fixtureId: fixtureIdOf(args.floorIndex, args.kind, args.fixture),
     approachTile: args.stand,
     actionTile: args.owns ? args.fixture : null,
     floorIndex: args.floorIndex,
   };
+}
+
+/**
+ * What stands at each errand kind. Declared once, because the plan and the
+ * painter both have to mean the same object by it: the plan RECORDS the fixture
+ * in `layout.props` - `actionTile` is a promise that a named sprite stands
+ * there, and a plan that only implied one would leave the scene guessing - and
+ * the painter DRAWS it from the spot, where it can be given a depth.
+ */
+export const ISO_SPOT_FIXTURES: Partial<
+  Record<OfficeErrandSpot["kind"], OfficeSpriteName>
+> = {
+  coffee: "coffee-machine",
+  cooler: "water-cooler",
+  vending: "vending",
+  cafe: "cafe-table",
+  sofa: "sofa",
+  garden: "bench",
+  "water-plant": "plant",
+};
+
+/**
+ * The props a set of spots stands up: one per spot that OWNS its fixture, so a
+ * two-seat table is recorded once however many people sit at it.
+ */
+export function isoFixtureProps(
+  spots: ReadonlyArray<OfficeErrandSpot>,
+): ReadonlyArray<OfficeProp> {
+  const props: OfficeProp[] = [];
+  for (const spot of spots) {
+    const tile = spot.actionTile;
+    if (tile === null) continue;
+    const name = ISO_SPOT_FIXTURES[spot.kind];
+    if (name === undefined) continue;
+    props.push({ sprite: { name }, tile });
+  }
+  return props;
 }
 
 /**
@@ -292,7 +347,7 @@ export function buildIsoCourtyard(args: AmenityArgs): IsoCourtyardBuild {
   const receptionTile: OfficeTilePos = { col: col + 2, row };
   const benchTile: OfficeTilePos = { col: col + 1, row: row + 2 };
   const plantTile: OfficeTilePos = { col: col + 5, row: row + 2 };
-  const props: OfficeProp[] = [
+  const scenery: ReadonlyArray<OfficeProp> = [
     { sprite: { name: "tree" }, tile: { col, row } },
     { sprite: { name: "reception" }, tile: receptionTile },
     { sprite: { name: "tree" }, tile: { col: col + 6, row } },
@@ -319,6 +374,7 @@ export function buildIsoCourtyard(args: AmenityArgs): IsoCourtyardBuild {
       floorIndex,
       owns: true,
       facing: "up",
+      audience: ISO_FLOOR_AUDIENCE,
     }),
     isoSpotAt({
       kind: "garden",
@@ -327,6 +383,7 @@ export function buildIsoCourtyard(args: AmenityArgs): IsoCourtyardBuild {
       floorIndex,
       owns: false,
       facing: "up",
+      audience: ISO_FLOOR_AUDIENCE,
     }),
     isoSpotAt({
       kind: "water-plant",
@@ -335,6 +392,7 @@ export function buildIsoCourtyard(args: AmenityArgs): IsoCourtyardBuild {
       floorIndex,
       owns: true,
       facing: "up",
+      audience: ISO_FLOOR_AUDIENCE,
     }),
     isoSpotAt({
       kind: "garden",
@@ -343,6 +401,7 @@ export function buildIsoCourtyard(args: AmenityArgs): IsoCourtyardBuild {
       floorIndex,
       owns: false,
       facing: "down",
+      audience: ISO_FLOOR_AUDIENCE,
     }),
     isoSpotAt({
       kind: "garden",
@@ -351,6 +410,7 @@ export function buildIsoCourtyard(args: AmenityArgs): IsoCourtyardBuild {
       floorIndex,
       owns: false,
       facing: "down",
+      audience: ISO_FLOOR_AUDIENCE,
     }),
   ];
   return {
@@ -363,7 +423,7 @@ export function buildIsoCourtyard(args: AmenityArgs): IsoCourtyardBuild {
       name: args.name,
     },
     areaSign: { name: args.name, signTile: { col: col + 4, row } },
-    props,
+    props: [...scenery, ...isoFixtureProps(spots)],
     blocked,
     spots,
     receptionTile,
@@ -406,6 +466,7 @@ export function buildIsoCafe(args: AmenityArgs): IsoAmenityBuild {
       floorIndex,
       owns: true,
       facing: "up",
+      audience: ISO_FLOOR_AUDIENCE,
     }),
     isoSpotAt({
       kind: "cooler",
@@ -414,6 +475,7 @@ export function buildIsoCafe(args: AmenityArgs): IsoAmenityBuild {
       floorIndex,
       owns: true,
       facing: "up",
+      audience: ISO_FLOOR_AUDIENCE,
     }),
     isoSpotAt({
       kind: "vending",
@@ -422,6 +484,7 @@ export function buildIsoCafe(args: AmenityArgs): IsoAmenityBuild {
       floorIndex,
       owns: true,
       facing: "up",
+      audience: ISO_FLOOR_AUDIENCE,
     }),
     isoSpotAt({
       kind: "cafe",
@@ -430,6 +493,7 @@ export function buildIsoCafe(args: AmenityArgs): IsoAmenityBuild {
       floorIndex,
       owns: true,
       facing: "up",
+      audience: ISO_FLOOR_AUDIENCE,
     }),
     isoSpotAt({
       kind: "cafe",
@@ -438,6 +502,7 @@ export function buildIsoCafe(args: AmenityArgs): IsoAmenityBuild {
       floorIndex,
       owns: false,
       facing: "up",
+      audience: ISO_FLOOR_AUDIENCE,
     }),
     isoSpotAt({
       kind: "cafe",
@@ -446,6 +511,7 @@ export function buildIsoCafe(args: AmenityArgs): IsoAmenityBuild {
       floorIndex,
       owns: true,
       facing: "up",
+      audience: ISO_FLOOR_AUDIENCE,
     }),
     isoSpotAt({
       kind: "cafe",
@@ -454,6 +520,7 @@ export function buildIsoCafe(args: AmenityArgs): IsoAmenityBuild {
       floorIndex,
       owns: false,
       facing: "up",
+      audience: ISO_FLOOR_AUDIENCE,
     }),
     isoSpotAt({
       kind: "sofa",
@@ -462,6 +529,7 @@ export function buildIsoCafe(args: AmenityArgs): IsoAmenityBuild {
       floorIndex,
       owns: true,
       facing: "up",
+      audience: ISO_FLOOR_AUDIENCE,
     }),
     isoSpotAt({
       kind: "sofa",
@@ -470,6 +538,7 @@ export function buildIsoCafe(args: AmenityArgs): IsoAmenityBuild {
       floorIndex,
       owns: false,
       facing: "up",
+      audience: ISO_FLOOR_AUDIENCE,
     }),
   ];
   return {
@@ -482,7 +551,7 @@ export function buildIsoCafe(args: AmenityArgs): IsoAmenityBuild {
       name: args.name,
     },
     areaSign: { name: args.name, signTile: { col: col + 1, row } },
-    props: [],
+    props: isoFixtureProps(spots),
     blocked,
     spots,
   };

@@ -21,6 +21,7 @@ import { isOfficeHotStatus } from "@/lib/comm-graph/office/office-status";
 import {
   OFFICE_TILE,
   type OfficeAgentStatus,
+  type OfficeBlockFill,
   type OfficeDrawable,
   type OfficeErrandSpot,
   type OfficeLayout,
@@ -34,9 +35,11 @@ import {
   type OfficeWorldDrawable,
 } from "@/lib/comm-graph/office/office-types";
 import {
+  isoTileKey,
   isoWithinRect,
   readCityFrozen,
   ISO_CAMPUS_STACK_HEIGHT,
+  ISO_SPOT_FIXTURES,
   type CityFrozen,
 } from "@/lib/comm-graph/office/views/isometric/iso-plan-core";
 import {
@@ -216,10 +219,31 @@ function pushDoors(scan: FloorScan, out: OfficeDrawable[]): void {
   }
 }
 
-/** Everything the plan stood on the ground that is not an errand fixture. */
+/** Every tile an errand spot claims as its fixture, across the whole layout. */
+function fixtureTiles(layout: OfficeLayout): ReadonlySet<string> {
+  const tiles = new Set<string>();
+  for (const floor of layout.floors) {
+    for (const spot of floor.errandSpots) {
+      const tile = spot.actionTile;
+      if (tile !== null) tiles.add(isoTileKey(tile));
+    }
+  }
+  return tiles;
+}
+
+/**
+ * Everything the plan stood on the ground that is NOT an errand fixture.
+ *
+ * A fixture is in `layout.props` too - that is how the plan says what its
+ * `actionTile` means - but it is drawn by `spotProps`, in the world stream,
+ * where it can be given a depth. Drawing it here as well would paint every
+ * coffee machine twice, once behind the person queueing at it.
+ */
 function pushProps(scan: FloorScan, out: OfficeDrawable[]): void {
+  const fixtures = fixtureTiles(scan.layout);
   for (const prop of scan.layout.props) {
     if (!isoWithinRect(scan.tiles, prop.tile)) continue;
+    if (fixtures.has(isoTileKey(prop.tile))) continue;
     const corner = cornerOf(scan.projector, prop.tile);
     const size = OFFICE_SPRITE_FOOTPRINT[prop.sprite.name] ?? {
       width: OFFICE_TILE,
@@ -230,15 +254,89 @@ function pushProps(scan: FloorScan, out: OfficeDrawable[]): void {
   }
 }
 
+/** Whether two tile rects share a tile, which is the whole cull at lod 0. */
+function tileRectsOverlap(
+  left: OfficeTileRect,
+  right: OfficeTileRect,
+): boolean {
+  return (
+    left.col < right.col + right.cols &&
+    right.col < left.col + left.cols &&
+    left.row < right.row + right.rows &&
+    right.row < left.row + left.rows
+  );
+}
+
+/**
+ * A tile rect as ONE axis-aligned rectangle, which is what a `block` is.
+ *
+ * A tile rect projects to a DIAMOND here, so a rect can only approximate it and
+ * the only question is which rect. Not the bounding box: a diamond fills exactly
+ * half of its own box, so boxes of two rooms that do not touch overlap by more
+ * than half their width and the whole map reads as one slab. Instead the box is
+ * shrunk about the diamond's own centre until its AREA is the diamond's, which
+ * is `1 / sqrt(2)` on each side. It covers the right amount of ground in the
+ * right place, and regions that do not touch mostly do not either.
+ */
+const DIAMOND_TO_RECT = Math.SQRT1_2;
+
+function blockOf(
+  projector: OfficeProjector,
+  bounds: OfficeTileRect,
+  fill: OfficeBlockFill,
+): OfficeDrawable {
+  const centre = projector.project(
+    bounds.col + bounds.cols / 2,
+    bounds.row + bounds.rows / 2,
+  );
+  const span = bounds.cols + bounds.rows;
+  const width = span * ISO_HALF_WIDTH * DIAMOND_TO_RECT;
+  const height = span * ISO_HALF_HEIGHT * DIAMOND_TO_RECT;
+  return {
+    kind: "block",
+    x: centre.x - width / 2,
+    y: centre.y - height / 2,
+    width,
+    height,
+    fill,
+  };
+}
+
+/**
+ * The world at OVERVIEW zoom: one rect per district, amenity and block, and no
+ * tiles at all. A few dozen drawables where the tile grid is tens of thousands.
+ *
+ * A Campus room is a cabin and a City block is a stand of buildings, which is
+ * the one thing the two views disagree about here; `layout.rooms` carries both.
+ */
+function blockMap(
+  layout: OfficeLayout,
+  tiles: OfficeTileRect,
+): ReadonlyArray<OfficeDrawable> {
+  const projector = projectorFor(layout);
+  const blocks: OfficeDrawable[] = [];
+  const push = (bounds: OfficeTileRect, fill: OfficeBlockFill): void => {
+    if (!tileRectsOverlap(bounds, tiles)) return;
+    blocks.push(blockOf(projector, bounds, fill));
+  };
+  for (const floor of layout.floors) push(floor.bounds, "storey");
+  for (const floor of layout.floors) {
+    for (const amenity of floor.amenities) {
+      push(amenity.bounds, amenity.kind === "garden" ? "grass" : "plaza");
+    }
+  }
+  const roomFill: OfficeBlockFill =
+    layout.view === "city" ? "building" : "room";
+  for (const room of layout.rooms) push(room.bounds, roomFill);
+  return blocks;
+}
+
 function paintFloor(
   layout: OfficeLayout,
   tiles: OfficeTileRect,
   lod: OfficeLod,
 ): ReadonlyArray<OfficeDrawable> {
-  // At overview the floor is a block map rather than tiles. The filled-rect
-  // drawable it needs does not exist yet; until it does, overview draws no
-  // ground at all, which is the honest empty rather than a million diamonds.
-  if (lod === 0) return [];
+  if (lod === 0) return blockMap(layout, tiles);
   const projector = projectorFor(layout);
   const scan: FloorScan = { layout, projector, tiles };
   const ground: OfficeDrawable[] = [];
@@ -375,6 +473,7 @@ function citySeatProps(args: CitySeatArgs): ReadonlyArray<OfficeWorldDrawable> {
   const out: OfficeWorldDrawable[] = [];
   const lit =
     state.agentId !== null &&
+    !state.sheeted &&
     state.status !== "archived" &&
     isOfficeHotStatus(state.status);
   const windowName: OfficeSpriteName = lit ? "window-lit" : "window-dark";
@@ -422,18 +521,21 @@ function citySeatProps(args: CitySeatArgs): ReadonlyArray<OfficeWorldDrawable> {
       ownerAgentId: state.agentId,
     });
   }
+  // A vacated building is not demolished - it is SHUT. The sheet caps it in
+  // place of its roof (both sprites are the 32 x 16 roof diamond), the windows
+  // above are already dark, and the mast comes down with the occupant.
   const roofY = corner.y - storeys * ISO_STOREY_HEIGHT;
   out.push({
     drawable: {
       kind: "sprite",
-      sprite: { name: "block-top" },
+      sprite: { name: state.sheeted ? "dust-sheet" : "block-top" },
       x: corner.x - ISO_HALF_WIDTH,
       y: roofY,
     },
     depth: depth + storeys * OVER_DESK,
     ownerAgentId: state.agentId,
   });
-  if (frozen.spireSeatIds.has(seat.seatId)) {
+  if (!state.sheeted && frozen.spireSeatIds.has(seat.seatId)) {
     out.push({
       drawable: {
         kind: "sprite",
@@ -464,18 +566,6 @@ function paintSeat(
 
 // ---- Errand spots ----------------------------------------------------- //
 
-const SPOT_FIXTURES: Partial<
-  Record<OfficeErrandSpot["kind"], OfficeSpriteName>
-> = {
-  coffee: "coffee-machine",
-  cooler: "water-cooler",
-  vending: "vending",
-  cafe: "cafe-table",
-  sofa: "sofa",
-  garden: "bench",
-  "water-plant": "plant",
-};
-
 /**
  * The fixture a spot stands at, drawn ONCE however many seats it has.
  *
@@ -491,7 +581,7 @@ function paintSpot(
   if (lod === 0) return [];
   const tile = spot.actionTile;
   if (tile === null) return [];
-  const name = SPOT_FIXTURES[spot.kind];
+  const name = ISO_SPOT_FIXTURES[spot.kind];
   if (name === undefined) return [];
   const size = OFFICE_SPRITE_FOOTPRINT[name] ?? {
     width: OFFICE_TILE,

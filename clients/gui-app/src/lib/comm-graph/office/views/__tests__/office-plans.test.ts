@@ -407,6 +407,9 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
      * keeps hosts on separate storeys and Towers stands each host's towers
      * apart; Building joins its wings with a skybridge, the only crossing;
      * Mission control seats both hosts in one hall and has no plazas to link.
+     * Campus and City give each host a district in its own column band, with
+     * dead columns between them that no pass ever opens - the isometric views
+     * separate hosts by construction rather than by distance.
      * The record is exhaustive on purpose: a view added to the registry has to
      * say which it is before this suite compiles.
      */
@@ -417,6 +420,8 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
       towers: "isolated",
       building: "skybridge",
       "mission-control": "one-hall",
+      campus: "isolated",
+      city: "isolated",
     };
 
     it("links host plazas only where the view builds a skybridge", (context) => {

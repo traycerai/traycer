@@ -3,13 +3,15 @@ import { officeSpriteSize } from "@/lib/comm-graph/office/office-pixel-art";
 import { findOfficePath } from "@/lib/comm-graph/office/office-path";
 import { partitionOfficePopulation } from "@/lib/comm-graph/office/office-population";
 import { makeTestEpic } from "@/lib/comm-graph/office/office-test-epic";
-import type {
-  OfficeFloor,
-  OfficeLayout,
-  OfficeRect,
-  OfficeSize,
-  OfficeTilePos,
-  OfficeTileRect,
+import {
+  OFFICE_CHARACTER_HEIGHT,
+  OFFICE_CHARACTER_WIDTH,
+  type OfficeFloor,
+  type OfficeLayout,
+  type OfficeRect,
+  type OfficeSize,
+  type OfficeTilePos,
+  type OfficeTileRect,
 } from "@/lib/comm-graph/office/office-types";
 import {
   measureCampus,
@@ -384,12 +386,14 @@ describe("planCampus", () => {
         seat,
         {
           agentId: "agent-root",
+          name: "Root",
           status: "working",
           sheeted: false,
           openRequests: 3,
           screenFrame: 0,
           harnessId: null,
           modelTier: "large",
+          accentId: null,
         },
         2,
       );
@@ -422,6 +426,88 @@ describe("planCampus", () => {
         width: size.width,
         height: size.height,
       });
+    }
+
+    expect([...new Set(problems)]).toEqual([]);
+  });
+
+  it("holds a character, a lod-0 block and every fixture inside those bounds", () => {
+    const layout = planCampus(inputFor("triage", 200, VIEWPORT_1280));
+    const projector = ISO_PAINTER.projector(layout);
+    const { bounds } = projector;
+    const problems: string[] = [];
+
+    const checkBox = (label: string, box: OfficeRect): void => {
+      if (box.x < bounds.x) problems.push(`${label} x below bounds`);
+      if (box.y < bounds.y) problems.push(`${label} y below bounds`);
+      if (box.x + box.width > bounds.x + bounds.width) {
+        problems.push(`${label} x+width exceeds bounds`);
+      }
+      if (box.y + box.height > bounds.y + bounds.height) {
+        problems.push(`${label} y+height exceeds bounds`);
+      }
+    };
+
+    // The anchor every view now shares: a character's foot is the projected
+    // bottom-centre of its tile and its sprite hangs the character's height
+    // above it. `H` is what buys the top row's character its headroom, so
+    // this is the case that would fail if `H` were sized off the props alone.
+    const characterBox = (tile: OfficeTilePos): OfficeRect => {
+      const foot = projector.project(tile.col + 0.5, tile.row + 1);
+      return {
+        x: foot.x - OFFICE_CHARACTER_WIDTH / 2,
+        y: foot.y - OFFICE_CHARACTER_HEIGHT,
+        width: OFFICE_CHARACTER_WIDTH,
+        height: OFFICE_CHARACTER_HEIGHT,
+      };
+    };
+    const extremes: ReadonlyArray<OfficeTilePos> = [
+      { col: 0, row: 0 },
+      { col: layout.cols - 1, row: 0 },
+      { col: 0, row: layout.rows - 1 },
+      { col: layout.cols - 1, row: layout.rows - 1 },
+    ];
+    for (const tile of extremes) {
+      checkBox(`character at ${tile.col},${tile.row}`, characterBox(tile));
+    }
+    for (const seat of layout.seats.values()) {
+      checkBox(`character in ${seat.seatId}`, characterBox(seat.chairTile));
+    }
+
+    // The overview block map, which is world pixels rather than a sprite box.
+    const tiles: OfficeTileRect = {
+      col: 0,
+      row: 0,
+      cols: layout.cols,
+      rows: layout.rows,
+    };
+    const blocks = ISO_PAINTER.floor(layout, tiles, 0);
+    expect(blocks.length).toBeGreaterThan(0);
+    for (const drawable of blocks) {
+      expect(drawable.kind).toBe("block");
+      if (drawable.kind !== "block") continue;
+      checkBox("block", {
+        x: drawable.x,
+        y: drawable.y,
+        width: drawable.width,
+        height: drawable.height,
+      });
+    }
+
+    // And every fixture an errand spot stands up.
+    for (const floor of layout.floors) {
+      for (const spot of floor.errandSpots) {
+        for (const entry of ISO_PAINTER.spotProps(layout, spot, 2)) {
+          if (entry.drawable.kind !== "sprite") continue;
+          const size = officeSpriteSize(entry.drawable.sprite);
+          checkBox(`spot ${spot.kind}`, {
+            x: entry.drawable.x,
+            y: entry.drawable.y,
+            width: size.width,
+            height: size.height,
+          });
+        }
+      }
     }
 
     expect([...new Set(problems)]).toEqual([]);

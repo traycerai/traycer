@@ -3639,11 +3639,14 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
     if (from === undefined || to === undefined) {
       throw new Error("expected both desks");
     }
-    const projector = view.painter.projector(layout);
     const launched = envelopes(frameOf(scene))[0];
     expect(launched).toBeDefined();
     expect(launched.progress).toBe(0);
-    const start = projector.project(from.chairTile.col, from.chairTile.row);
+    // It leaves the SENDER, which is the centre line of the sprite box that
+    // agent's own chair tile puts it in - measured through `footRect` rather
+    // than off the tile's corner, because only the identity projector puts
+    // those two in the same place.
+    const start = footRect(layout, from.chairTile);
     expect(launched.x).toBeCloseTo(start.x + OFFICE_CHARACTER_WIDTH / 2, 0);
 
     // Runs to completion and is delivered - never stalls mid-flight.
