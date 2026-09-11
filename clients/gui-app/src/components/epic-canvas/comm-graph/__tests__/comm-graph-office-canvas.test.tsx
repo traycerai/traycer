@@ -58,15 +58,21 @@ import type { CommGraphEvent } from "@/lib/comm-graph/comm-graph-events";
 import type { CommGraphPulse } from "@/lib/comm-graph/comm-graph-timeline";
 import { OfficeScene } from "@/lib/comm-graph/office/office-scene";
 import { OFFICE_VIEWS } from "@/lib/comm-graph/office/views/office-view";
+import type { OfficeView } from "@/lib/comm-graph/office/views/office-view";
 import { partitionOfficePopulation } from "@/lib/comm-graph/office/office-population";
 import { BASE_STEP_MS } from "@/components/epic-canvas/comm-graph/use-comm-graph-transport";
 import { agentAppearance } from "@/lib/comm-graph/office/office-appearance";
 import { officeModelTier } from "@/lib/comm-graph/office/office-model-tier";
-import type {
-  OfficeAgentInput,
-  OfficeAgentStatus,
-  OfficeRect,
-  OfficeSceneInput,
+import {
+  OFFICE_TILE,
+  type OfficeAgentInput,
+  type OfficeAgentStatus,
+  type OfficeFloor,
+  type OfficeLayout,
+  type OfficeRect,
+  type OfficeSceneInput,
+  type OfficeSign,
+  type OfficeTileRect,
 } from "@/lib/comm-graph/office/office-types";
 import type { CommGraphTileViewState } from "@/stores/epics/canvas/types";
 import type { TileFindAdapter } from "@/stores/tile-find";
@@ -1047,5 +1053,407 @@ describe("CommGraphOfficeCanvas", () => {
       ),
     ).toBeNull();
     expect(screen.getByText("Nobody here by that name.")).toBeDefined();
+  });
+});
+
+/**
+ * A recording 2D context: every call is captured as `{method, args}` rather
+ * than executed against a real surface - jsdom has no canvas backend, and the
+ * point of this harness is the ARGUMENTS a draw call was made with (a sign's
+ * projected x, a name tag's call count), never a pixel. `measureText` and
+ * `createImageData` get real-shaped answers because callers read their
+ * return value; everything else is a recorder.
+ */
+interface RecordedCall {
+  readonly method: string;
+  readonly args: ReadonlyArray<unknown>;
+}
+
+function createRecordingContext(calls: RecordedCall[]): unknown {
+  const backing: Record<string, unknown> = {};
+  return new Proxy(backing, {
+    get(_target, prop) {
+      if (typeof prop !== "string") return undefined;
+      if (prop === "measureText") {
+        return (text: string) => ({ width: text.length * 6 });
+      }
+      if (prop === "createImageData") {
+        return (width: number, height: number) => ({
+          data: new Uint8ClampedArray(width * height * 4),
+          width,
+          height,
+        });
+      }
+      if (prop === "canvas") return document.createElement("canvas");
+      return (...args: ReadonlyArray<unknown>): void => {
+        calls.push({ method: prop, args });
+      };
+    },
+    set(_target, prop, value) {
+      if (typeof prop === "string") {
+        backing[prop] = value;
+        calls.push({ method: `set:${prop}`, args: [value] });
+      }
+      return true;
+    },
+  });
+}
+
+/** Installs a `getContext` stub and returns its undo. */
+function stubGetContext(factory: () => unknown): () => void {
+  const original = Object.getOwnPropertyDescriptor(
+    HTMLCanvasElement.prototype,
+    "getContext",
+  );
+  Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
+    configurable: true,
+    value: factory,
+  });
+  return () => {
+    if (original === undefined) {
+      Reflect.deleteProperty(HTMLCanvasElement.prototype, "getContext");
+      return;
+    }
+    Object.defineProperty(HTMLCanvasElement.prototype, "getContext", original);
+  };
+}
+
+/**
+ * Deliberately NOT `DEFAULT_COMM_GRAPH_VIEW` (`{x:0,y:0,zoom:1}`) - a view
+ * equal to the default enables auto-fit, which frames the floor and leaves
+ * the camera at whatever position that produced rather than the identity
+ * camera this suite's expected coordinates are computed against.
+ */
+const FIXED_CAMERA_VIEW: CommGraphTileViewState = {
+  x: 5,
+  y: 0,
+  zoom: 1,
+  mode: "office",
+  officeView: null,
+  officeAutoView: null,
+};
+
+function officeElementWithView(
+  officeView: OfficeView,
+  visibleIds: ReadonlySet<string>,
+  agents: ReadonlyArray<CommGraphAgentNode>,
+) {
+  return (
+    <CommGraphOfficeCanvas
+      epicId="epic-1"
+      tileInstanceId="comm-graph-instance-renderer"
+      agents={agents}
+      agentIds={visibleIds}
+      events={[]}
+      hosts={[]}
+      initialHistoryCaughtUp={false}
+      playing={false}
+      pulse={null}
+      pulseKey={null}
+      modeToggle={null}
+      view={FIXED_CAMERA_VIEW}
+      officeView={officeView}
+      // The tile has settled which view this is; these cases are about where
+      // the renderer puts things, not about Auto still deciding.
+      ready
+      onAutoProbe={vi.fn()}
+      viewPicker={null}
+      autoChip={null}
+      onCameraChange={vi.fn()}
+      canOpenAgentForEvent={() => true}
+      canJump={() => false}
+      onJump={vi.fn()}
+      canJumpToSender={() => false}
+      onJumpToSender={vi.fn()}
+      canJumpToCreated={() => false}
+      onJumpToCreated={vi.fn()}
+      onOpenAgent={vi.fn()}
+    />
+  );
+}
+
+const BOUNDING_RECT_STUB: DOMRect = {
+  x: 0,
+  y: 0,
+  width: 1200,
+  height: 800,
+  top: 0,
+  left: 0,
+  right: 1200,
+  bottom: 800,
+  toJSON: () => ({}),
+};
+
+describe("CommGraphOfficeCanvas fixup 1 - renderer projection and semantic zoom (F5, F10)", () => {
+  let rafQueue: Array<{
+    readonly id: number;
+    readonly callback: FrameRequestCallback;
+  }> = [];
+  let nextRafId = 1;
+  let canceledRafIds = new Set<number>();
+  let calls: RecordedCall[] = [];
+  let restoreGetContext: (() => void) | null = null;
+
+  function flushRaf(times: number): void {
+    for (let step = 0; step < times; step += 1) {
+      const pending = rafQueue;
+      rafQueue = [];
+      act(() => {
+        for (const queued of pending) {
+          if (!canceledRafIds.has(queued.id))
+            queued.callback(performance.now());
+        }
+      });
+    }
+  }
+
+  beforeEach(() => {
+    activeObserverCallbacks = [];
+    vi.stubGlobal("IntersectionObserver", ControllableIntersectionObserver);
+    calls = [];
+    rafQueue = [];
+    canceledRafIds = new Set();
+    nextRafId = 1;
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      const id = nextRafId;
+      nextRafId += 1;
+      rafQueue.push({ id, callback: cb });
+      return id;
+    });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => {
+      canceledRafIds.add(id);
+    });
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue(
+      BOUNDING_RECT_STUB,
+    );
+    restoreGetContext = stubGetContext(() => createRecordingContext(calls));
+  });
+
+  afterEach(() => {
+    cleanup();
+    restoreGetContext?.();
+    restoreGetContext = null;
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    useCommGraphTimelineStore.setState({ stateByEpicId: {} });
+  });
+
+  const RENDERER_BOUNDS: OfficeTileRect = {
+    col: 0,
+    row: 0,
+    cols: 16,
+    rows: 16,
+  };
+
+  function emptyFloor(): OfficeFloor {
+    return {
+      hostId: null,
+      bounds: RENDERER_BOUNDS,
+      doorTile: { col: 0, row: 0 },
+      lobbyTile: { col: 0, row: 1 },
+      receptionTile: { col: 0, row: 2 },
+      receptionQueueTiles: [],
+      queueFacing: "down",
+      corridorTiles: [],
+      clockTile: { col: 15, row: 0 },
+      stairsTile: null,
+      errandSpots: [],
+      cafeteria: null,
+      gameRoom: null,
+      areaSigns: [],
+      amenities: [],
+    };
+  }
+
+  function allWalkable(
+    rows: number,
+    cols: number,
+  ): ReadonlyArray<ReadonlyArray<boolean>> {
+    return Array.from({ length: rows }, () =>
+      Array.from({ length: cols }, () => true),
+    );
+  }
+
+  /** A projector that shifts every projected x by +2048px - the review's own F5 recipe. */
+  const SHIFTED_PROJECTOR_X = 2048;
+
+  it("F5: carries the projected sign anchor to the board's label text, not raw tile math", () => {
+    const boardSign: OfficeSign = {
+      kind: "board",
+      tile: { col: 2, row: 2 },
+      widthTiles: 2,
+      text: "",
+      ownerAgentId: null,
+      hostId: null,
+      agentIds: [],
+    };
+    const layout: OfficeLayout = {
+      view: "floor",
+      cols: 16,
+      rows: 16,
+      desks: new Map(),
+      seats: new Map(),
+      signs: [boardSign],
+      rooms: [],
+      floors: [emptyFloor()],
+      doorTile: { col: 0, row: 0 },
+      lobbyTile: { col: 0, row: 1 },
+      props: [],
+      walkable: allWalkable(16, 16),
+      frozen: null,
+      shiftFromPrevious: null,
+      stable: true,
+    };
+    const view: OfficeView = {
+      ...OFFICE_VIEWS.floor,
+      plan: () => layout,
+      painter: {
+        ...OFFICE_VIEWS.floor.painter,
+        projector: () => ({
+          project: (col: number, row: number) => ({
+            x: SHIFTED_PROJECTOR_X + col * OFFICE_TILE,
+            y: row * OFFICE_TILE,
+          }),
+          bounds: { x: 0, y: 0, width: 4096, height: 4096 },
+          seatLift: () => 0,
+        }),
+      },
+    };
+
+    render(withQueryClient(officeElementWithView(view, new Set<string>(), [])));
+    setIntersecting(true);
+    flushRaf(3);
+
+    const fillTextCalls = calls.filter((call) => call.method === "fillText");
+    // Found by the separator every board reading carries, at any width. A
+    // TWO-tile board abbreviates by rule ("0D · 0W · 0I") rather than spelling
+    // the buckets out, so matching on the word "DOING" would pin F11's layout
+    // rule into a case that is only about WHERE the text lands.
+    const boardTextCall = fillTextCalls.find(
+      (call) =>
+        typeof call.args[0] === "string" && call.args[0].includes(" · "),
+    );
+    expect(boardTextCall).toBeDefined();
+    // Fixed camera (zoom 1, x=5, y=0): the projected anchor for tile (2,2)
+    // with a two-tile board centred on it is x = 2048 + (2+1)*16 = 2096,
+    // screenX = 2096 * 1 + 5 = 2101. The unfixed renderer instead multiplies
+    // the raw tile by OFFICE_TILE with no projector at all, landing at
+    // screenX = 3 * 16 + 5 = 53.
+    expect(boardTextCall?.args[1]).toBe(2101);
+  });
+
+  it("F10: an unhovered, unselected, unmatched agent's name tag draws nothing at LOD 1", () => {
+    const seat = {
+      seatId: "h/0/worker",
+      kind: "desk" as const,
+      deskTile: { col: 4, row: 4 },
+      chairTile: { col: 4, row: 5 },
+      facing: "down" as const,
+      hitTiles: { width: 1, height: 1 },
+      floorIndex: 0,
+      roomId: null,
+      hostId: null,
+      manager: false,
+    };
+    const layout: OfficeLayout = {
+      view: "floor",
+      cols: 16,
+      rows: 16,
+      desks: new Map([["worker", { ...seat, agentId: "worker" }]]),
+      seats: new Map([["h/0/worker", seat]]),
+      signs: [],
+      rooms: [],
+      floors: [emptyFloor()],
+      doorTile: { col: 0, row: 0 },
+      lobbyTile: { col: 0, row: 1 },
+      props: [],
+      walkable: allWalkable(16, 16),
+      frozen: null,
+      shiftFromPrevious: null,
+      stable: true,
+    };
+    const view: OfficeView = { ...OFFICE_VIEWS.floor, plan: () => layout };
+    const worker = agent("worker", "Worker");
+
+    render(
+      withQueryClient(
+        officeElementWithView(view, new Set(["worker"]), [worker]),
+      ),
+    );
+    setIntersecting(true);
+    flushRaf(3);
+
+    const nameTextCalls = calls.filter(
+      (call) =>
+        call.method === "fillText" &&
+        typeof call.args[0] === "string" &&
+        call.args[0].includes("Worker"),
+    );
+    // Required rule: at LOD 1, a name tag is drawn only for a hovered,
+    // selected, or search-matched agent. This one is none of those, so it
+    // must produce zero text calls; the unfixed renderer draws it regardless.
+    expect(nameTextCalls).toHaveLength(0);
+  });
+
+  it("F11: gives an HQ board a different summary than an ordinary board over the same roster", () => {
+    const roster = ["a", "b", "c", "d", "e"];
+    const ordinaryBoard: OfficeSign = {
+      kind: "board",
+      tile: { col: 2, row: 2 },
+      widthTiles: 2,
+      text: "",
+      ownerAgentId: null,
+      hostId: null,
+      agentIds: roster,
+    };
+    const hqBoard: OfficeSign = {
+      kind: "hq-board",
+      tile: { col: 8, row: 2 },
+      widthTiles: 2,
+      text: "",
+      ownerAgentId: null,
+      hostId: null,
+      agentIds: roster,
+    };
+    const layout: OfficeLayout = {
+      view: "floor",
+      cols: 16,
+      rows: 16,
+      desks: new Map(),
+      seats: new Map(),
+      signs: [ordinaryBoard, hqBoard],
+      rooms: [],
+      floors: [emptyFloor()],
+      doorTile: { col: 0, row: 0 },
+      lobbyTile: { col: 0, row: 1 },
+      props: [],
+      walkable: allWalkable(16, 16),
+      frozen: null,
+      shiftFromPrevious: null,
+      stable: true,
+    };
+    const view: OfficeView = { ...OFFICE_VIEWS.floor, plan: () => layout };
+    const agents = roster.map((id) => agent(id, id));
+
+    render(
+      withQueryClient(officeElementWithView(view, new Set(roster), agents)),
+    );
+    setIntersecting(true);
+    flushRaf(3);
+
+    // Every sign plate is exactly one `fillText`, and at this zoom nothing
+    // else writes text: name tags are suppressed at lod 1 for an agent that is
+    // neither hovered, selected nor matched, and a single-floor building draws
+    // no storey label. So these two strings ARE the two boards.
+    const plateTexts = calls
+      .filter((call) => call.method === "fillText")
+      .map((call) => call.args[0])
+      .filter((text): text is string => typeof text === "string");
+    expect(plateTexts).toHaveLength(2);
+    // Required rule: the HQ board ranks its five hottest agents; an ordinary
+    // board reports the doing/waiting/idle buckets. They must not read the
+    // same over an identical roster - the unfixed renderer gives both boards
+    // the same officeBoardSummary text.
+    expect(plateTexts[0]).not.toBe(plateTexts[1]);
   });
 });

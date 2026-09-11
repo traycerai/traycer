@@ -247,10 +247,7 @@ describe("OfficeScene replay", () => {
 
     // A CHARACTER hit region, distinguished from the seat's own (which stays
     // hit-testable - a sheeted, empty desk - even once nobody is in it).
-    function hasCharacterRegion(
-      frame: ReturnType<typeof frameOf>,
-      agentId: string,
-    ): boolean {
+    function hasCharacterRegion(frame: OfficeFrame, agentId: string): boolean {
       return frame.hitRegions.some(
         (region) => region.agentId === agentId && region.rect.width === 16,
       );

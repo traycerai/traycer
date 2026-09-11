@@ -108,6 +108,14 @@ export const OFFICE_CULL_MARGIN_PX = 64;
  */
 const FRAME_CHUNK_TILES = 32;
 
+/**
+ * The same chunk, in the PROJECTED world pixels the index is actually keyed by.
+ * A tile is `OFFICE_TILE` across before projection, so this is the chunk's side
+ * for a view whose projector is the identity - and the unit every view's boxes
+ * are bucketed and queried in, identity or not.
+ */
+const FRAME_CHUNK_PX = FRAME_CHUNK_TILES * OFFICE_TILE;
+
 /** A cubby's occupant is drawn dimmed at close-up: present, not working. */
 const CUBBY_OCCUPANT_ALPHA = 0.6;
 
@@ -916,7 +924,19 @@ function seatedCharacter(agentId: string, seat: OfficeSeat): OfficeCharacter {
 }
 
 /** An agent and the seat it is actually in - the claim, or the assignment. */
+/** A seat the PAINTER is asked about; `null` where nobody is in it. */
 interface SeatedAgent {
+  /** `null` for an unoccupied reserve, which is furniture with nobody in it. */
+  readonly agentId: string | null;
+  readonly seat: OfficeSeat;
+}
+
+/**
+ * A seat with somebody actually in it. The occupancy view rather than the paint
+ * view: every routine that asks "who is sitting where" - visits, rallies,
+ * boards - wants an agent, and an empty reserve is not an answer to that.
+ */
+interface OccupiedSeat {
   readonly agentId: string;
   readonly seat: OfficeSeat;
 }
@@ -925,6 +945,16 @@ interface SeatedAgent {
 interface FrameChunkIndex {
   readonly seats: ReadonlyMap<string, ReadonlyArray<OfficeSeat>>;
   readonly spots: ReadonlyMap<string, ReadonlyArray<OfficeErrandSpot>>;
+  /**
+   * Seat ids the plan assigned to NOBODY - the spare desks a wake can claim.
+   *
+   * Read off `layout.desks` rather than off who is currently seated, because
+   * those answer different questions: a desk whose owner does not exist at the
+   * cursor is empty too, and drawing it would leak the future onto the floor.
+   * The plan's own assignment is the only thing that distinguishes "furniture
+   * nobody owns" from "somebody's desk, waiting for them".
+   */
+  readonly reserves: ReadonlySet<string>;
 }
 
 interface CachedSeatProps {
@@ -950,6 +980,54 @@ function floorKeyOf(
 function compareIdPair(left: string, right: string): number {
   if (left === right) return 0;
   return left < right ? -1 : 1;
+}
+
+/** One hit region with the place in the world stream it was drawn at. */
+interface DepthOrderedRegion {
+  readonly region: OfficeHitRegion;
+  readonly depth: number;
+  /** Props before actors at one depth, as `mergeByDepth` leaves them. */
+  readonly tier: 0 | 1;
+  readonly order: number;
+}
+
+function compareDepthOrder(
+  left: DepthOrderedRegion,
+  right: DepthOrderedRegion,
+): number {
+  if (left.depth !== right.depth) return left.depth - right.depth;
+  if (left.tier !== right.tier) return left.tier - right.tier;
+  return left.order - right.order;
+}
+
+/**
+ * The LAST depth each owner was drawn at. A desk is several drawables and a
+ * character is a sprite plus its tag, and what decides whether the pointer is
+ * on it is whichever of them the painter put down last.
+ */
+function deepestByOwner(
+  entries: ReadonlyArray<OfficeWorldDrawable>,
+): ReadonlyMap<string, number> {
+  const deepest = new Map<string, number>();
+  for (const entry of entries) {
+    const owner = entry.ownerAgentId;
+    if (owner === null) continue;
+    const current = deepest.get(owner);
+    if (current === undefined || entry.depth > current) {
+      deepest.set(owner, entry.depth);
+    }
+  }
+  return deepest;
+}
+
+/** Baseline draw order: a character lower on the floor overlaps one above it. */
+function compareByDrawOrder(
+  left: OfficeCharacter,
+  right: OfficeCharacter,
+): number {
+  if (left.row !== right.row) return left.row - right.row;
+  if (left.col !== right.col) return left.col - right.col;
+  return compareIdPair(left.agentId, right.agentId);
 }
 
 /**
@@ -998,15 +1076,50 @@ function stepAgainst(tile: OfficeTilePos, facing: OfficeFacing): OfficeTilePos {
   return { col: tile.col - 1, row: tile.row };
 }
 
-function characterAlpha(
-  archived: boolean,
-  inCubby: boolean,
-): number | undefined {
-  if (archived) return ARCHIVED_ALPHA;
-  return inCubby ? CUBBY_OCCUPANT_ALPHA : undefined;
+/**
+ * How solid a character is drawn.
+ *
+ * Three independent reasons to fade, multiplied rather than ranked, because
+ * they are answers to different questions: archived is "has left", cubby is
+ * "is waiting rather than working", and the SEAT's own `idleAlpha` is a view
+ * saying that a quiet occupant of this particular desk should recede - Building
+ * dims its team-room desks so a live room reads as the lit ones. `undefined`
+ * where nothing applies, so the common case emits no alpha at all.
+ */
+function characterAlpha(args: {
+  readonly archived: boolean;
+  readonly inCubby: boolean;
+  readonly seatIdle: number | null;
+}): number | undefined {
+  const { archived, inCubby, seatIdle } = args;
+  let alpha = 1;
+  if (archived) alpha *= ARCHIVED_ALPHA;
+  if (inCubby) alpha *= CUBBY_OCCUPANT_ALPHA;
+  if (seatIdle !== null) alpha *= seatIdle;
+  return alpha === 1 ? undefined : alpha;
 }
 
 const NO_AWAY_IDS: ReadonlySet<string> = new Set<string>();
+
+/** Nobody. Shared so a sync that rehomes no one allocates nothing. */
+const NO_IDS: ReadonlyArray<string> = [];
+
+/**
+ * What a painter is told about a reserve seat standing empty. Shared rather
+ * than rebuilt per frame: it is the same answer for every empty seat in the
+ * office, and the seat-prop cache keys off it.
+ */
+const EMPTY_SEAT_STATE: OfficeDeskState = {
+  agentId: null,
+  name: null,
+  status: "idle",
+  sheeted: false,
+  openRequests: 0,
+  screenFrame: 0,
+  harnessId: null,
+  modelTier: "medium",
+  accentId: null,
+};
 
 /** What a scene with no layout answers with: a frame of nothing, at no size. */
 function emptyFrame(): OfficeFrame {
@@ -1033,9 +1146,36 @@ function pipGlyphOf(status: OfficeAgentStatus): OfficePipGlyph {
   return "none";
 }
 
-/** Which index chunk a tile falls in; the key both halves of the index use. */
-function chunkKeyOf(col: number, row: number): string {
-  return `${Math.floor(col / FRAME_CHUNK_TILES)},${Math.floor(row / FRAME_CHUNK_TILES)}`;
+/**
+ * Every index chunk a PROJECTED box reaches.
+ *
+ * The index and the query have to live in one space, and that space is world
+ * pixels AFTER projection. Bucketing by the unprojected tile and querying by
+ * the projected viewport agrees only for the identity projector: on Campus,
+ * City, or anything else that moves an origin or skews an axis, the chunk a
+ * desk was filed under is not a chunk the viewport ever asks for, and the
+ * projected box test downstream can only reject candidates - it can never
+ * recover one whose bucket went unread.
+ *
+ * A box wider than a chunk lands in several, so both halves of the index
+ * dedupe what they hand back.
+ */
+function chunkKeysOfBox(box: OfficeRect): ReadonlyArray<string> {
+  const firstCol = Math.floor(box.x / FRAME_CHUNK_PX);
+  const lastCol = Math.floor(
+    (box.x + Math.max(0, box.width - 1)) / FRAME_CHUNK_PX,
+  );
+  const firstRow = Math.floor(box.y / FRAME_CHUNK_PX);
+  const lastRow = Math.floor(
+    (box.y + Math.max(0, box.height - 1)) / FRAME_CHUNK_PX,
+  );
+  const keys: string[] = [];
+  for (let row = firstRow; row <= lastRow; row += 1) {
+    for (let col = firstCol; col <= lastCol; col += 1) {
+      keys.push(`${col},${row}`);
+    }
+  }
+  return keys;
 }
 
 function rectsOverlap(a: OfficeRect, b: OfficeRect): boolean {
@@ -1154,12 +1294,6 @@ export class OfficeScene {
   private byAgentIdCache: ReadonlyArray<OfficeCharacter> | null = null;
   private byAgentIdVersion = -1;
   /**
-   * Cleared around every mutation, since draw order depends on POSITION and
-   * every character moves. Within one `frame()` nothing mutates, so the three
-   * passes that need it share one sort.
-   */
-  private orderedCache: ReadonlyArray<OfficeCharacter> | null = null;
-  /**
    * Seats and spots by index chunk, rebuilt once per layout.
    *
    * `frame` is bounded by the viewport rather than by the population, and this
@@ -1237,7 +1371,6 @@ export class OfficeScene {
    * `suspend` changes is what the scene is holding, nothing more.
    */
   suspend(): void {
-    this.orderedCache = null;
     this.byAgentIdCache = null;
     this.byAgentIdVersion = -1;
     this.chunkIndex = null;
@@ -1264,7 +1397,6 @@ export class OfficeScene {
   sync(input: OfficeSceneInput): void {
     const firstSync = !this.synced;
     this.synced = true;
-    this.orderedCache = null;
     this.visibleAgentIds = input.visibleAgentIds;
     this.statusById = input.statusById;
     this.openRequestsByReceiver = input.openRequestsByReceiver;
@@ -1292,15 +1424,26 @@ export class OfficeScene {
     }
 
     this.adoptLayout(input.agents);
+    let reclaimed: ReadonlyArray<string> = NO_IDS;
     if (rewound) {
       // A scrub back cannot replay the walks that led to today's claims, so it
       // does not try: they are re-derived from the statuses as of the cursor,
       // the same treatment the rest of the in-flight state gets.
+      const seatsBefore = this.seatIdsOfKnown();
       this.seats.recomputeClaims(input.statusById, this.seats.knownAgentIds());
+      reclaimed = this.changedSeats(seatsBefore);
     }
     this.applyArchivalTransitions(input, firstSync);
     this.reconcileCharacters(input, firstSync);
     this.returningIds.clear();
+    // The claims were REPLACED above, and a character that survived
+    // reconciliation is still standing wherever the old claim put it. Nothing
+    // downstream would notice: `updateSeatClaims` compares the seats it finds
+    // after the replacement against themselves. Rehoming here is what makes
+    // painted occupancy, the effective seat and the as-of state agree, so a
+    // scrub back off a reserve ends at the cubby rather than on a seat the
+    // agent no longer holds.
+    this.rehomeCharacters(reclaimed);
     this.updateSeatClaims();
     // An errand ends on the sync that ends it, not on the tick after: playback
     // starting or an agent picking work back up are both seen here first.
@@ -1317,15 +1460,10 @@ export class OfficeScene {
       // replay the row the cursor happens to be sitting on.
       if (!firstSync) this.applyPulse(input.pulse);
     }
-    this.orderedCache = null;
   }
 
   tick(dtMs: number): void {
     if (dtMs <= 0) return;
-    // Cleared on the way IN as well as out: the errand logic below reads the
-    // ordering while it is moving characters, so a cache built before the tick
-    // would be handed to it stale.
-    this.orderedCache = null;
     this.nowMs += dtMs;
     for (const character of this.characters.values()) {
       this.advanceCharacter(character, dtMs);
@@ -1333,7 +1471,6 @@ export class OfficeScene {
     this.updateErrandStarts();
     this.advanceEnvelopes(dtMs);
     this.advancePaperBalls(dtMs);
-    this.orderedCache = null;
   }
 
   /**
@@ -1353,8 +1490,11 @@ export class OfficeScene {
     if (layout === null || projector === null) return emptyFrame();
     const rect = grownBy(view, OFFICE_CULL_MARGIN_PX);
     const floor = this.floorIn(layout, tileRectOf(rect), lod);
-    const overlay = lod === 0 ? this.buildEnvelopes() : this.buildOverlay(rect);
+    // Culled ONCE and shared. The overlay reads the same characters the actors
+    // do, so a non-overview frame no longer walks the population twice.
     const characters = this.charactersIn(rect);
+    const overlay =
+      lod === 0 ? this.buildEnvelopes() : this.buildOverlay(rect, characters);
     const seats = this.seatsIn(rect);
     const size: OfficeSize = {
       width: projector.bounds.width,
@@ -1386,7 +1526,9 @@ export class OfficeScene {
       actors: layered ? actors.map((entry) => entry.drawable) : [],
       world: layered ? null : mergeByDepth(props, actors),
       overlay,
-      hitRegions: this.buildHitRegions(characters, seats),
+      hitRegions: layered
+        ? this.buildHitRegions(characters, seats)
+        : this.worldHitRegions({ characters, seats, props, actors }),
       envelopeHitRegions: envelopeHitRegionsOf(overlay),
       awayAgentIds: this.awayAgentIdsAmong(characters),
       focus: this.focusPoint(),
@@ -1450,14 +1592,56 @@ export class OfficeScene {
       width: OFFICE_TILE * 2,
       height: OFFICE_TILE * 2,
     };
-    const regions = this.buildHitRegions(
-      this.charactersIn(rect),
-      this.seatsIn(rect),
-    );
+    const regions = this.hitOrderedRegions({
+      layout,
+      rect,
+      characters: this.charactersIn(rect),
+      seats: this.seatsIn(rect),
+    });
     for (const region of regions) {
       if (containsPoint(region.rect, point)) return region.agentId;
     }
     return null;
+  }
+
+  /**
+   * Hit regions in the order the frame would draw them, front-most first.
+   *
+   * `hitTest` answers a POINTER, which asks the same question the eye does, so
+   * it has to be ordered the same way the frame is - and for a `world` painter
+   * that ordering is only knowable from the drawables themselves. The painter
+   * is called directly rather than through `buildSeatProps` on purpose: this
+   * runs on pointer events over two tiles of world, and routing it through the
+   * per-frame cache would evict a whole frame's worth of seats to answer one
+   * hover at a level of detail nothing is being drawn at.
+   */
+  private hitOrderedRegions(args: {
+    readonly layout: OfficeLayout;
+    readonly rect: OfficeRect;
+    readonly characters: ReadonlyArray<OfficeCharacter>;
+    readonly seats: ReadonlyArray<SeatedAgent>;
+  }): ReadonlyArray<OfficeHitRegion> {
+    const { characters, layout, seats } = args;
+    if (this.view.painter.depth === "layered") {
+      return this.buildHitRegions(characters, seats);
+    }
+    const props: OfficeWorldDrawable[] = [];
+    for (const seated of seats) {
+      props.push(
+        ...this.view.painter.seatProps(
+          layout,
+          seated.seat,
+          this.deskStateOf(seated),
+          2,
+        ),
+      );
+    }
+    return this.worldHitRegions({
+      characters,
+      seats,
+      props,
+      actors: this.buildActors(characters, 2),
+    });
   }
 
   /**
@@ -1792,6 +1976,11 @@ export class OfficeScene {
     character.rallying = false;
     // Arrived: the hurry is over because the thing it was for has happened.
     character.hurrying = false;
+    // HOME, so a reserve it was releasing is free NOW rather than whenever the
+    // next input happens to arrive. `vacated` only acts on a claim already in
+    // `releasing`, and a releasing claim means the chair just taken is the
+    // agent's own assignment - so this cannot free a seat somebody is in.
+    this.seats.vacated(character.agentId);
     this.flushPending(character);
   }
 
@@ -1819,6 +2008,13 @@ export class OfficeScene {
   private depart(agentId: string): void {
     this.removeCharacter(agentId);
     this.departedIds.add(agentId);
+    // GONE, so anything it was holding is free. An archived agent walks out of
+    // whatever seat it was in, reserve included, and waiting for a later sync
+    // to notice would keep a desk reserved for somebody who has left the
+    // building. `endClaim` first because the claim may still be `held`:
+    // `vacated` only releases one that is already on its way out.
+    this.seats.endClaim(agentId);
+    this.seats.vacated(agentId);
   }
 
   // ---- Reception ------------------------------------------------------ //
@@ -1862,15 +2058,31 @@ export class OfficeScene {
     newcomers.sort();
     this.queueOrder.push(...newcomers);
 
+    // Claimed by PHYSICAL TILE, not by floor and slot index.
+    //
+    // A storey does not own its reception: on Towers and Building every floor
+    // of one building derives its queue from the building's own column and
+    // plaza row, so floor 0's slot 0 and floor 1's slot 0 are the same
+    // coordinate - the same aliasing the errand-spot index already dedupes by
+    // tile. Counting per floor handed that one tile to two agents and stood
+    // them inside each other. The per-floor cursor stays, because a floor's
+    // tiles are still its own list in its own order; what is global is the
+    // claim, and `queueOrder` is already one order by arrival.
     const slots = new Map<string, OfficeTilePos>();
-    const takenByFloor = new Map<number, number>();
+    const nextByFloor = new Map<number, number>();
+    const takenTiles = new Set<string>();
     for (const agentId of this.queueOrder) {
       const floorIndex = this.floorIndexOfAgent(agentId);
-      const floor = this.currentLayout.floors[floorIndex];
-      const taken = takenByFloor.get(floorIndex) ?? 0;
-      if (taken >= floor.receptionQueueTiles.length) continue;
-      slots.set(agentId, floor.receptionQueueTiles[taken]);
-      takenByFloor.set(floorIndex, taken + 1);
+      const tiles = this.currentLayout.floors[floorIndex].receptionQueueTiles;
+      let next = nextByFloor.get(floorIndex) ?? 0;
+      while (next < tiles.length && takenTiles.has(tileKeyOf(tiles[next]))) {
+        next += 1;
+      }
+      nextByFloor.set(floorIndex, next + 1);
+      if (next >= tiles.length) continue;
+      const tile = tiles[next];
+      slots.set(agentId, tile);
+      takenTiles.add(tileKeyOf(tile));
     }
 
     for (const character of this.characters.values()) {
@@ -2159,8 +2371,13 @@ export class OfficeScene {
       viewport: this.viewport,
       previous,
     });
+    // Both captured against the layout still in force: the chairs so a uniform
+    // shift can be subtracted back out below, and the projector so a growth
+    // that only moved the ORIGIN is still reported to the camera.
+    const chairsBefore = this.chairTilesOfKnown();
+    const projectorBefore = this.projectorOrNull;
     this.installLayout(planned);
-    this.applyShift(planned.shiftFromPrevious);
+    this.applyShift(planned.shiftFromPrevious, projectorBefore);
     const moved = this.seats.adopt(
       planned,
       agents.map((agent) => agent.id),
@@ -2168,7 +2385,68 @@ export class OfficeScene {
     // Before reconciling, so a newly spawned walker is not immediately
     // re-pathed to the destination it was just given. On a STABLE layout the
     // moved set is empty by construction and this walks nobody.
-    this.rehomeCharacters(moved);
+    this.rehomeCharacters(
+      this.movedBeyondShift(moved, chairsBefore, planned.shiftFromPrevious),
+    );
+  }
+
+  /** Every known agent's effective seat id, or `null` where it has none. */
+  private seatIdsOfKnown(): ReadonlyMap<string, string | null> {
+    const seatIds = new Map<string, string | null>();
+    for (const agentId of this.seats.knownAgentIds()) {
+      seatIds.set(agentId, this.seats.effectiveSeat(agentId)?.seatId ?? null);
+    }
+    return seatIds;
+  }
+
+  /** Whoever's effective seat is not the one they had when `before` was taken. */
+  private changedSeats(
+    before: ReadonlyMap<string, string | null>,
+  ): ReadonlyArray<string> {
+    const changed: string[] = [];
+    for (const [agentId, seatId] of before) {
+      const now = this.seats.effectiveSeat(agentId)?.seatId ?? null;
+      if (now !== seatId) changed.push(agentId);
+    }
+    return changed;
+  }
+
+  /** Every known agent's chair, as of the layout still in force. */
+  private chairTilesOfKnown(): ReadonlyMap<string, OfficeTilePos> {
+    const chairs = new Map<string, OfficeTilePos>();
+    for (const agentId of this.seats.knownAgentIds()) {
+      const seat = this.seats.effectiveSeat(agentId);
+      if (seat !== null) chairs.set(agentId, seat.chairTile);
+    }
+    return chairs;
+  }
+
+  /**
+   * Who actually moved, once the whole world's own movement is taken out.
+   *
+   * The seat book decides "moved" by comparing chair coordinates, and a uniform
+   * shift changes every one of them - so a building that merely grew a storey
+   * reports its entire population as having moved, and rehoming them cancels
+   * every errand in flight. The shift is not a move: `applyShift` has already
+   * carried each character, each path and each errand target by exactly this
+   * much, so a chair that is where it was PLUS the shift is a chair nobody
+   * needs to walk to.
+   */
+  private movedBeyondShift(
+    moved: ReadonlyArray<string>,
+    before: ReadonlyMap<string, OfficeTilePos>,
+    shift: OfficeTilePos | null,
+  ): ReadonlyArray<string> {
+    if (shift === null || (shift.col === 0 && shift.row === 0)) return moved;
+    return moved.filter((agentId) => {
+      const was = before.get(agentId);
+      const seat = this.seats.effectiveSeat(agentId);
+      if (was === undefined || seat === null) return true;
+      return (
+        seat.chairTile.col - shift.col !== was.col ||
+        seat.chairTile.row - shift.row !== was.row
+      );
+    });
   }
 
   /**
@@ -2179,9 +2457,12 @@ export class OfficeScene {
    * The camera is the renderer's and is left for it to collect, which is what
    * keeps the office from appearing to jump while nothing in it moved.
    */
-  private applyShift(shift: OfficeTilePos | null): void {
-    if (shift === null) return;
-    if (shift.col === 0 && shift.row === 0) return;
+  /**
+   * Carry everybody, and everything they were headed for, by a whole-tile
+   * shift. Positions, paths, queue slots and errand targets all name tiles, so
+   * all of them move together or the office tears.
+   */
+  private slideCharacters(shift: OfficeTilePos): void {
     const slide = (tile: OfficeTilePos): OfficeTilePos => ({
       col: tile.col + shift.col,
       row: tile.row + shift.row,
@@ -2194,21 +2475,39 @@ export class OfficeScene {
         character.queueTile = slide(character.queueTile);
       }
       const target = character.errandTarget;
-      if (target !== null) {
-        character.errandTarget = {
-          ...target,
-          tile: slide(target.tile),
-          actionTile:
-            target.actionTile === null ? null : slide(target.actionTile),
-        };
-        // The key names a TILE, and the tile moved; a stale key would forbid
-        // an errand to a spot this agent has never been to.
-        character.lastErrandKey = tileKeyOf(character.errandTarget.tile);
-      }
+      if (target === null) continue;
+      character.errandTarget = {
+        ...target,
+        tile: slide(target.tile),
+        actionTile:
+          target.actionTile === null ? null : slide(target.actionTile),
+      };
+      // The key names a TILE, and the tile moved; a stale key would forbid an
+      // errand to a spot this agent has never been to.
+      character.lastErrandKey = tileKeyOf(character.errandTarget.tile);
     }
-    const origin = this.point(0, 0);
-    const moved = this.point(shift.col, shift.row);
-    const delta: OfficePoint = { x: moved.x - origin.x, y: moved.y - origin.y };
+  }
+
+  private applyShift(
+    shift: OfficeTilePos | null,
+    before: OfficeProjector | null,
+  ): void {
+    if (shift !== null && (shift.col !== 0 || shift.row !== 0)) {
+      this.slideCharacters(shift);
+    }
+    if (before === null) return;
+    // ONE delta, covering both ways the world can move under a fixed camera.
+    //
+    // A tile shift moves what is AT a projected point. An isometric plan that
+    // grows rows moves the point itself: `originX = rows * halfWidth`, so every
+    // projection slides sideways while the tiles, the seats and the ids are all
+    // exactly as they were and `shiftFromPrevious` is null. Measured as "where
+    // the old origin tile lands now, minus where it landed before", one
+    // subtraction answers a tile shift, an origin move, and both at once.
+    const from = before.project(0, 0);
+    const to = this.point(shift?.col ?? 0, shift?.row ?? 0);
+    const delta: OfficePoint = { x: to.x - from.x, y: to.y - from.y };
+    if (delta.x === 0 && delta.y === 0) return;
     this.paperBalls = this.paperBalls.map((ball) => ({
       ...ball,
       from: { x: ball.from.x + delta.x, y: ball.from.y + delta.y },
@@ -3359,10 +3658,14 @@ export class OfficeScene {
     const layout = this.currentLayout;
     const seats = new Map<string, OfficeSeat[]>();
     for (const seat of layout.seats.values()) {
-      const key = chunkKeyOf(seat.deskTile.col, seat.deskTile.row);
-      const bucket = seats.get(key);
-      if (bucket === undefined) seats.set(key, [seat]);
-      else bucket.push(seat);
+      // Filed under the chunks its PROJECTED box covers, which is the same box
+      // the accept test below re-checks it against - so the bucket set can
+      // never be narrower than the set of rects that would accept it.
+      for (const key of chunkKeysOfBox(this.seatBox(seat))) {
+        const bucket = seats.get(key);
+        if (bucket === undefined) seats.set(key, [seat]);
+        else bucket.push(seat);
+      }
     }
     const spots = new Map<string, OfficeErrandSpot[]>();
     const seen = new Set<string>();
@@ -3371,62 +3674,67 @@ export class OfficeScene {
         const tileKey = tileKeyOf(spot.approachTile);
         if (seen.has(tileKey)) continue;
         seen.add(tileKey);
-        const key = chunkKeyOf(spot.approachTile.col, spot.approachTile.row);
-        const bucket = spots.get(key);
-        if (bucket === undefined) spots.set(key, [spot]);
-        else bucket.push(spot);
+        for (const key of chunkKeysOfBox(this.spotBox(spot))) {
+          const bucket = spots.get(key);
+          if (bucket === undefined) spots.set(key, [spot]);
+          else bucket.push(spot);
+        }
       }
     }
-    const built: FrameChunkIndex = { seats, spots };
+    const assigned = new Set<string>();
+    for (const desk of layout.desks.values()) assigned.add(desk.seatId);
+    const reserves = new Set<string>();
+    for (const seat of layout.seats.values()) {
+      // A spare CUBBY is the quiet stack's empty slot, not a desk with a front
+      // to draw, so it is not furniture the painter is asked about.
+      if (seat.kind === "cubby" || assigned.has(seat.seatId)) continue;
+      reserves.add(seat.seatId);
+    }
+    const built: FrameChunkIndex = { seats, spots, reserves };
     this.chunkIndex = built;
     this.chunkIndexVersion = this.layoutVersion;
     return built;
   }
 
-  /** Every index chunk key a world-pixel rect reaches. */
-  private chunkKeysFor(rect: OfficeRect): ReadonlyArray<string> {
-    const tiles = tileRectOf(rect);
-    const firstCol = Math.floor(tiles.col / FRAME_CHUNK_TILES);
-    const lastCol = Math.floor(
-      (tiles.col + Math.max(0, tiles.cols - 1)) / FRAME_CHUNK_TILES,
-    );
-    const firstRow = Math.floor(tiles.row / FRAME_CHUNK_TILES);
-    const lastRow = Math.floor(
-      (tiles.row + Math.max(0, tiles.rows - 1)) / FRAME_CHUNK_TILES,
-    );
-    const keys: string[] = [];
-    for (let row = firstRow; row <= lastRow; row += 1) {
-      for (let col = firstCol; col <= lastCol; col += 1)
-        keys.push(`${col},${row}`);
-    }
-    return keys;
-  }
-
   /**
-   * The seats the rect touches, with the agent in each - the OCCUPIED ones
-   * only, because an empty seat on the Floor is a seat for somebody who does
-   * not exist at this cursor, and drawing it would leak the future.
+   * The seats the rect touches, with the agent in each.
    *
-   * A chunk is indexed by the seat's own tile, and a projector may place a
-   * seat's art well away from it, so every candidate is tested against the
-   * rect before it is kept.
+   * An OCCUPIED seat is kept when its occupant exists at the cursor. An
+   * unoccupied one is kept only when it is a `reserve`: a reserve standing
+   * empty is a real piece of furniture that a view draws as a faint desk front
+   * and labels at close-up, whereas an empty ASSIGNED desk belongs to somebody
+   * who does not exist yet at this cursor, and drawing that would leak the
+   * future onto the floor.
+   *
+   * A chunk is indexed by the seat's projected box, and a box can straddle
+   * several, so a seat reachable through two keys is still reported once.
    */
   private seatsIn(rect: OfficeRect): ReadonlyArray<SeatedAgent> {
     const index = this.index();
     const found: SeatedAgent[] = [];
-    for (const key of this.chunkKeysFor(rect)) {
+    const seen = new Set<string>();
+    for (const key of chunkKeysOfBox(rect)) {
       const bucket = index.seats.get(key);
       if (bucket === undefined) continue;
       for (const seat of bucket) {
+        if (seen.has(seat.seatId)) continue;
         const agentId = this.seats.occupant(seat.seatId);
-        if (agentId === null) continue;
-        if (!this.visibleAgentIds.has(agentId)) continue;
+        if (agentId === null && !index.reserves.has(seat.seatId)) continue;
+        if (agentId !== null && !this.visibleAgentIds.has(agentId)) continue;
         if (!rectsOverlap(this.seatBox(seat), rect)) continue;
+        seen.add(seat.seatId);
         found.push({ agentId, seat });
       }
     }
     // Canonical order, so the same input and rect give the same frame twice.
-    found.sort((left, right) => compareIdPair(left.agentId, right.agentId));
+    // An empty reserve has no id to sort by, so it sorts under its seat id -
+    // which is stable for the same reason an agent id is.
+    found.sort((left, right) =>
+      compareIdPair(
+        left.agentId ?? left.seat.seatId,
+        right.agentId ?? right.seat.seatId,
+      ),
+    );
     return found;
   }
 
@@ -3451,22 +3759,19 @@ export class OfficeScene {
     return drawables;
   }
 
-  /** The spots the rect touches, already deduped by the index. */
+  /** The spots the rect touches, deduped by tile in the index and by key here. */
   private spotsIn(rect: OfficeRect): ReadonlyArray<OfficeErrandSpot> {
     const index = this.index();
     const found: OfficeErrandSpot[] = [];
-    for (const key of this.chunkKeysFor(rect)) {
+    const seen = new Set<string>();
+    for (const key of chunkKeysOfBox(rect)) {
       const bucket = index.spots.get(key);
       if (bucket === undefined) continue;
       for (const spot of bucket) {
-        const origin = this.point(spot.approachTile.col, spot.approachTile.row);
-        const box: OfficeRect = {
-          x: origin.x,
-          y: origin.y,
-          width: OFFICE_TILE,
-          height: OFFICE_TILE,
-        };
-        if (!rectsOverlap(box, rect)) continue;
+        const tileKey = tileKeyOf(spot.approachTile);
+        if (seen.has(tileKey)) continue;
+        if (!rectsOverlap(this.spotBox(spot), rect)) continue;
+        seen.add(tileKey);
         found.push(spot);
       }
     }
@@ -3481,6 +3786,17 @@ export class OfficeScene {
       y: origin.y,
       width: seat.hitTiles.width * OFFICE_TILE,
       height: seat.hitTiles.height * OFFICE_TILE,
+    };
+  }
+
+  /** A spot's projected box: the one tile its walker stands on. */
+  private spotBox(spot: OfficeErrandSpot): OfficeRect {
+    const origin = this.point(spot.approachTile.col, spot.approachTile.row);
+    return {
+      x: origin.x,
+      y: origin.y,
+      width: OFFICE_TILE,
+      height: OFFICE_TILE,
     };
   }
 
@@ -3506,17 +3822,43 @@ export class OfficeScene {
    */
   private charactersIn(rect: OfficeRect): ReadonlyArray<OfficeCharacter> {
     const found: OfficeCharacter[] = [];
-    for (const character of this.orderedCharacters()) {
+    // CULL FIRST. Sorting the whole population to answer a viewport that holds
+    // forty of them is the cost this method exists to avoid, and the sort is
+    // the expensive half: the draw order of the forty is the same whether it
+    // is read out of a thousand-entry ordering or computed over the forty.
+    // The overlap test is inlined so an off-screen character costs one
+    // projected point rather than a box object nothing keeps.
+    for (const character of this.characters.values()) {
       if (!this.agentById.has(character.agentId)) continue;
-      if (!rectsOverlap(this.characterBox(character), rect)) continue;
+      if (!this.characterTouches(character, rect)) continue;
       found.push(character);
     }
+    found.sort(compareByDrawOrder);
     return found;
+  }
+
+  /** Is this character's sprite inside the rect? Asked without building a box. */
+  private characterTouches(
+    character: OfficeCharacter,
+    rect: OfficeRect,
+  ): boolean {
+    const foot = this.footPoint(character.col, character.row);
+    const x = foot.x - OFFICE_CHARACTER_WIDTH / 2;
+    const y = foot.y - OFFICE_CHARACTER_HEIGHT;
+    return (
+      x < rect.x + rect.width &&
+      rect.x < x + OFFICE_CHARACTER_WIDTH &&
+      y < rect.y + rect.height &&
+      rect.y < y + OFFICE_CHARACTER_HEIGHT
+    );
   }
 
   /** What one desk LOOKS like right now, as the painter needs to see it. */
   private deskStateOf(seated: SeatedAgent): OfficeDeskState {
     const agentId = seated.agentId;
+    // An empty reserve: the painter draws the furniture and nothing personal.
+    // Everything below reads off an occupant, so there is nothing to compute.
+    if (agentId === null) return EMPTY_SEAT_STATE;
     const agent = this.agentById.get(agentId);
     const status = this.statusOf(agentId);
     const character = this.characters.get(agentId);
@@ -3677,7 +4019,11 @@ export class OfficeScene {
           },
           x,
           y,
-          alpha: characterAlpha(archived, inCubby),
+          alpha: characterAlpha({
+            archived,
+            inCubby,
+            seatIdle: this.seatIdleAlphaOf(character, lod),
+          }),
         },
         depth,
         ownerAgentId: character.agentId,
@@ -3696,6 +4042,24 @@ export class OfficeScene {
       });
     }
     return actors;
+  }
+
+  /**
+   * The seat's own dimming for a quiet occupant, or `null` where none applies.
+   *
+   * Four conditions, and each excludes a case the view would not want dimmed:
+   * the seat has to declare one, the character has to be IN it rather than
+   * walking over it, the status has to be idle, and the lod has to be one that
+   * draws characters at all - at overview a pip carries the state on its own.
+   */
+  private seatIdleAlphaOf(
+    character: OfficeCharacter,
+    lod: OfficeLod,
+  ): number | null {
+    if (lod === 0) return null;
+    if (!character.seated) return null;
+    if (this.statusOf(character.agentId) !== "idle") return null;
+    return this.seats.effectiveSeat(character.agentId)?.idleAlpha ?? null;
   }
 
   /** The envelopes in flight. Always built: there are at most two dozen. */
@@ -3723,7 +4087,10 @@ export class OfficeScene {
     return overlay;
   }
 
-  private buildOverlay(rect: OfficeRect): ReadonlyArray<OfficeDrawable> {
+  private buildOverlay(
+    rect: OfficeRect,
+    characters: ReadonlyArray<OfficeCharacter>,
+  ): ReadonlyArray<OfficeDrawable> {
     const overlay: OfficeDrawable[] = [];
     const clockSize = officeSpriteSize({ name: "clock" });
     for (const floor of this.currentLayout.floors) {
@@ -3750,7 +4117,7 @@ export class OfficeScene {
         timeMs: this.clockMs,
       });
     }
-    for (const character of this.charactersIn(rect)) {
+    for (const character of characters) {
       const head = this.headPointOfCharacter(character);
       const bubble = this.bubbleFor(character);
       if (bubble !== null) {
@@ -3967,20 +4334,89 @@ export class OfficeScene {
     }
     for (let index = seats.length - 1; index >= 0; index -= 1) {
       const seated = seats[index];
-      regions.push({
-        agentId: seated.agentId,
-        rect: this.seatBox(seated.seat),
-      });
+      const agentId = seated.agentId;
+      // An empty reserve is furniture, not somebody: it is drawn, and it is
+      // not hoverable, because a hit region resolves to an agent.
+      if (agentId === null) continue;
+      regions.push({ agentId, rect: this.seatBox(seated.seat) });
     }
     return regions;
   }
 
+  /**
+   * The same regions, ordered by the DEPTH the world stream is drawn in.
+   *
+   * A `layered` painter draws every prop and then every actor, so reversing the
+   * two lists is already the front-most-first order and `buildHitRegions` is
+   * exact. A `world` painter does not: it interleaves desks and people by
+   * depth, so on Campus or City the nearer of two overlapping buildings can be
+   * the one with the LOWER row, and an order taken from row/column disagrees
+   * with what the eye sees. Taken from the depths the merge itself sorts by,
+   * the pointer always resolves to whatever was painted last.
+   *
+   * Ties keep emission order - props before actors, and within each the order
+   * the painter produced - which is exactly how `mergeByDepth`'s stable sort
+   * leaves them, so a foreground drawable a painter deliberately emitted late
+   * at the same depth stays in front here too.
+   */
+  private worldHitRegions(args: {
+    readonly characters: ReadonlyArray<OfficeCharacter>;
+    readonly seats: ReadonlyArray<SeatedAgent>;
+    readonly props: ReadonlyArray<OfficeWorldDrawable>;
+    readonly actors: ReadonlyArray<OfficeWorldDrawable>;
+  }): ReadonlyArray<OfficeHitRegion> {
+    const { actors, characters, props, seats } = args;
+    const propDepths = deepestByOwner(props);
+    const actorDepths = deepestByOwner(actors);
+    const entries: DepthOrderedRegion[] = [];
+    for (const seated of seats) {
+      const agentId = seated.agentId;
+      if (agentId === null) continue;
+      const depth = propDepths.get(agentId);
+      if (depth === undefined) continue;
+      entries.push({
+        region: { agentId, rect: this.seatBox(seated.seat) },
+        depth,
+        tier: 0,
+        order: entries.length,
+      });
+    }
+    for (const character of characters) {
+      const depth = actorDepths.get(character.agentId);
+      if (depth === undefined) continue;
+      entries.push({
+        region: {
+          agentId: character.agentId,
+          rect: this.characterBox(character),
+        },
+        depth,
+        tier: 1,
+        order: entries.length,
+      });
+    }
+    entries.sort(compareDepthOrder);
+    const regions: OfficeHitRegion[] = [];
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      regions.push(entries[index].region);
+    }
+    return regions;
+  }
+
+  /**
+   * Where playback points the camera: the sender of the pulsing row.
+   *
+   * The SEATED anchor first, which is the lifted one an envelope already flies
+   * between - a City rooftop is forty pixels above the street its tile
+   * projects to, and a focus that ignored the lift would frame the pavement.
+   * It also keeps the height steady: without it, focus jumped the moment a
+   * flight ended and the branch below took over.
+   */
   private focusPoint(): OfficePoint | null {
     const inFlight = this.envelopes.at(0);
     if (inFlight !== undefined) return this.seatPointOf(inFlight.fromAgentId);
     const senderId = pulseSenderId(this.pulse);
     if (senderId === null) return null;
-    return this.headPointOf(senderId);
+    return this.seatPointOf(senderId) ?? this.headPointOf(senderId);
   }
 
   // ---- Shared derivations -------------------------------------------- //
@@ -3990,8 +4426,8 @@ export class OfficeScene {
    * seat it is actually in - the CLAIM where it holds one, never the plan's
    * opening offer.
    */
-  private visibleSeats(): ReadonlyArray<SeatedAgent> {
-    const seated: SeatedAgent[] = [];
+  private visibleSeats(): ReadonlyArray<OccupiedSeat> {
+    const seated: OccupiedSeat[] = [];
     for (const agentId of this.seats.knownAgentIds()) {
       if (!this.visibleAgentIds.has(agentId)) continue;
       const seat = this.seats.effectiveSeat(agentId);
@@ -4029,19 +4465,6 @@ export class OfficeScene {
       if (room.rootAgentId === roomId) return room;
     }
     return null;
-  }
-
-  /** Baseline order: a character lower on the floor overlaps one above it. */
-  private orderedCharacters(): ReadonlyArray<OfficeCharacter> {
-    const cached = this.orderedCache;
-    if (cached !== null) return cached;
-    const ordered = Array.from(this.characters.values()).sort((left, right) => {
-      if (left.row !== right.row) return left.row - right.row;
-      if (left.col !== right.col) return left.col - right.col;
-      return compareIdPair(left.agentId, right.agentId);
-    });
-    this.orderedCache = ordered;
-    return ordered;
   }
 
   private headPointOf(agentId: string): OfficePoint | null {
@@ -4122,10 +4545,15 @@ export class OfficeScene {
    * WAKING. A cold agent in a cubby whose status turns hot takes the first free
    * reserve seat it can, and gives it back once it has gone quiet and is home.
    *
-   * Attention and failure still queue at reception first; the claim is made
-   * here all the same, so the seat is spoken for from the moment the wake is
-   * decided rather than from the moment the walk ends - otherwise somebody
-   * else takes it while this one is standing in line.
+   * The claim waits for RECEPTION. An attention or failure agent queues at the
+   * counter first, and a desk it is not walking to yet is a desk nobody else
+   * can have: claiming at the moment the wake is decided held a seat empty for
+   * however long the queue took. It is claimed on the sync that ends the
+   * reception stop - which is this one, since `needsReception` is false from
+   * the moment the status stops calling for a person. The cost is real and
+   * accepted: a wake that reaches the counter and finds the office full while
+   * it waited stays where it is and asks the next plan for capacity, exactly
+   * as any other agent that cannot find a seat does.
    */
   private updateSeatClaims(): void {
     const rehome: string[] = [];
@@ -4137,11 +4565,15 @@ export class OfficeScene {
         this.visibleAgentIds.has(agentId) &&
         !this.archivedIds.has(agentId) &&
         isOfficeHotStatus(this.statusById.get(agentId));
-      if (hot) {
+      if (hot && !this.needsReception(agentId)) {
         this.seats.claim(agentId, {
           roomId: assigned.roomId,
           floorIndex: assigned.floorIndex,
         });
+      } else if (hot) {
+        // Headed for the counter: no claim yet, and no release either - one it
+        // already holds from an earlier wake is still its own.
+        continue;
       } else {
         this.seats.endClaim(agentId);
         // The seat is free once the character is OUT of it, which on a floor

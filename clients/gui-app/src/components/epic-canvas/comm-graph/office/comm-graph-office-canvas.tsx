@@ -103,7 +103,6 @@ import { agentAppearance } from "@/lib/comm-graph/office/office-appearance";
 import {
   drawOfficeSprite,
   officePalette,
-  officeSpriteFootY,
   officeSpriteSize,
   type OfficePalette,
 } from "@/lib/comm-graph/office/office-pixel-art";
@@ -119,7 +118,10 @@ import {
   partitionOfficePopulation,
   type OfficePopulation,
 } from "@/lib/comm-graph/office/office-population";
-import type { OfficeView } from "@/lib/comm-graph/office/views/office-view";
+import type {
+  OfficeProjector,
+  OfficeView,
+} from "@/lib/comm-graph/office/views/office-view";
 import type { OfficeAutoProbe } from "@/lib/comm-graph/office/office-auto";
 import { useOfficeEligibility } from "@/components/epic-canvas/comm-graph/office/use-office-eligibility";
 import {
@@ -128,9 +130,14 @@ import {
 } from "@/lib/comm-graph/office/office-status";
 import { officeModelTier } from "@/lib/comm-graph/office/office-model-tier";
 import { officeClockAngles } from "@/lib/comm-graph/office/office-clock";
-import { officeFloorName } from "@/lib/comm-graph/office/office-floor-name";
 import { officeFlagKind } from "@/components/epic-canvas/comm-graph/office/office-flag-kind";
-import { officeBoardSummary } from "@/components/epic-canvas/comm-graph/office/office-board-summary";
+import {
+  officeFloorSignsToDraw,
+  officeSignCenterX,
+  officeSignsToDraw,
+  type OfficeFloorSignToDraw,
+  type OfficeSignToDraw,
+} from "@/lib/comm-graph/office/office-signs";
 import {
   layoutNameTags,
   NAME_TAG_LINE_HEIGHT,
@@ -153,6 +160,7 @@ import {
   type OfficeRect,
   type OfficeSceneInput,
   type OfficeSign,
+  type OfficeSpriteName,
   type OfficeSize,
   type OfficeTheme,
 } from "@/lib/comm-graph/office/office-types";
@@ -433,6 +441,13 @@ interface OfficeRuntime {
   readonly setSuspended: (next: boolean) => void;
   readonly getHoveredAgentId: () => string | null;
   readonly setHoveredAgentId: (next: string | null) => void;
+  /**
+   * Whose detail panel is open. Mirrored here for the same reason the hovered
+   * id is: the frame loop is built once and reads its inputs through the
+   * runtime, and a selection change has to repaint without rebuilding it.
+   */
+  readonly getSelectedAgentId: () => string | null;
+  readonly setSelectedAgentId: (next: string | null) => void;
   readonly getHostNames: () => ReadonlyMap<string, string>;
   readonly setHostNames: (next: ReadonlyMap<string, string>) => void;
   /**
@@ -488,6 +503,7 @@ function createOfficeRuntime(view: CommGraphTileViewState): OfficeRuntime {
   let nameById: ReadonlyMap<string, string> = new Map();
   let roleClaims: Readonly<Record<string, readonly RoleClaim[]>> = {};
   let hoveredAgentId: string | null = null;
+  let selectedAgentId: string | null = null;
   return {
     getCamera: () => camera,
     getViewport: () => viewport,
@@ -577,6 +593,12 @@ function createOfficeRuntime(view: CommGraphTileViewState): OfficeRuntime {
     setHoveredAgentId: (next) => {
       if (next === hoveredAgentId) return;
       hoveredAgentId = next;
+      invalidateListener();
+    },
+    getSelectedAgentId: () => selectedAgentId,
+    setSelectedAgentId: (next) => {
+      if (next === selectedAgentId) return;
+      selectedAgentId = next;
       invalidateListener();
     },
     getHostNames: () => hostNames,
@@ -883,6 +905,13 @@ interface DrawFrameArgs {
   readonly hostNameById: ReadonlyMap<string, string>;
   readonly awayAgentIds: ReadonlySet<string>;
   readonly hoveredAgentId: string | null;
+  /** Whose detail panel is open; named at lod 1 even when unhovered. */
+  readonly selectedAgentId: string | null;
+  /**
+   * The view's projection, or `null` before the first layout. Every sign anchor
+   * goes through it: a tile is only a screen position once a view has said so.
+   */
+  readonly projector: OfficeProjector | null;
   /**
    * The floor, already painted in sprite space, one chunk per bitmap. EMPTY
    * where none could be held - no offscreen surface, overview zoom, or a view
@@ -1046,23 +1075,16 @@ function drawAnchoredSprite(
 function drawFloorSigns(args: {
   readonly ctx: CanvasRenderingContext2D;
   readonly camera: OfficeCamera;
-  readonly floors: ReadonlyArray<OfficeFloor>;
-  readonly hostNameById: ReadonlyMap<string, string>;
+  readonly signs: ReadonlyArray<OfficeFloorSignToDraw>;
   readonly color: string;
   readonly backing: string;
 }): void {
-  const { backing, camera, color, ctx, floors, hostNameById } = args;
-  if (floors.length <= 1) return;
-  for (const floor of floors) {
-    const anchor = floor.stairsTile ?? {
-      col: floor.bounds.col,
-      row: floor.bounds.row,
-    };
+  const { backing, camera, color, ctx, signs } = args;
+  for (const entry of signs) {
     drawScreenLabel(ctx, {
-      text: officeFloorName(floor.hostId, hostNameById),
-      screenX:
-        (anchor.col * OFFICE_TILE + OFFICE_TILE) * camera.zoom + camera.x,
-      screenY: anchor.row * OFFICE_TILE * camera.zoom + camera.y - 2,
+      text: entry.text,
+      screenX: entry.anchor.x * camera.zoom + camera.x,
+      screenY: entry.anchor.y * camera.zoom + camera.y - 2,
       fontPx: LABEL_FONT_PX,
       color,
       backing,
@@ -1320,102 +1342,54 @@ function truncateSign(text: string, maxChars: number): string {
 }
 
 /**
- * The lettering the PLAN placed: cabin signs, pod plates, area names, boards.
+ * Whether the middle zoom band names this character.
  *
- * Drawn here rather than emitted by the scene because a sign NAMES an agent
- * and whether that agent exists is a fact about the time cursor: a cabin whose
- * lead has not been created yet at this cursor has no name to show, and the
- * visible set is known here and nowhere else.
- *
- * Two passes, because a sign is two things in two coordinate spaces: the board
- * it hangs on is world art under the camera, and the text on it is screen-space
- * so it stays crisp at every zoom.
+ * Only the three the reader has singled out: the one under the pointer, the one
+ * whose panel is open, and the ones Find is matching. A label with no owner is
+ * not a name tag at all - a painter's own lettering - and is always drawn.
  */
-/** One sign, resolved: the plan's placement plus the text it says right now. */
-interface SignToDraw {
-  readonly sign: OfficeSign;
-  readonly text: string;
-  /**
-   * The owner's role claim, drawn under the name at close-up. `null` where
-   * nobody has claimed one - which is most agents, so the plate is a name
-   * alone unless somebody has said otherwise.
-   */
-  readonly subtext: string | null;
+function isNameTagCalledFor(args: {
+  readonly owner: string | null;
+  readonly hoveredAgentId: string | null;
+  readonly selectedAgentId: string | null;
+  readonly searchMatchIds: ReadonlySet<string>;
+}): boolean {
+  const { hoveredAgentId, owner, searchMatchIds, selectedAgentId } = args;
+  if (owner === null) return true;
+  return (
+    owner === hoveredAgentId ||
+    owner === selectedAgentId ||
+    searchMatchIds.has(owner)
+  );
 }
 
-/** Overview draws none; see the note in `drawOfficeFrame`. */
-const NO_SIGN_ENTRIES: ReadonlyArray<SignToDraw> = [];
+/** Overview draws none; see the note in `officeSignsToDraw`. */
+const NO_SIGN_ENTRIES: ReadonlyArray<OfficeSignToDraw> = [];
+const NO_FLOOR_SIGN_ENTRIES: ReadonlyArray<OfficeFloorSignToDraw> = [];
 
-function signsToDraw(args: {
-  readonly signs: ReadonlyArray<OfficeSign>;
-  readonly visibleAgentIds: ReadonlySet<string>;
-  readonly statusById: ReadonlyMap<string, OfficeAgentStatus>;
-  readonly nameById: ReadonlyMap<string, string>;
-  readonly hostNameById: ReadonlyMap<string, string>;
-  readonly roleClaims: Readonly<Record<string, readonly RoleClaim[]>>;
-}): ReadonlyArray<SignToDraw> {
-  const {
-    hostNameById,
-    nameById,
-    roleClaims,
-    signs,
-    statusById,
-    visibleAgentIds,
-  } = args;
-  const out: SignToDraw[] = [];
-  for (const sign of signs) {
-    const owner = sign.ownerAgentId;
-    if (owner !== null && !visibleAgentIds.has(owner)) continue;
-    if (sign.kind === "board" || sign.kind === "hq-board") {
-      out.push({
-        sign,
-        text: officeBoardSummary(sign.agentIds, statusById),
-        subtext: null,
-      });
-      continue;
-    }
-    // A host sign carries no text of its own: the layout knows the id and the
-    // directory knows what the machine is called. Everything else says what
-    // the plan wrote, re-lettered from the owner's current name.
-    const text = signTextOf({ sign, owner, nameById, hostNameById });
-    if (text === "") continue;
-    out.push({ sign, text, subtext: roleClaimOf(roleClaims, owner) });
-  }
-  return out;
+/**
+ * How far a sign's art reaches ABOVE its own tile.
+ *
+ * A sprite-space constant, so it is added to the PROJECTED top of the tile
+ * rather than recomputed from an unprojected row - the same treatment the
+ * overlay's clock face gets, and the reason signs now land on their cabins
+ * under an isometric projector instead of beside them.
+ */
+function signArtOverhang(name: OfficeSpriteName): number {
+  return OFFICE_TILE - officeSpriteSize({ name }).height;
 }
 
 /**
- * The door plate's second line: what this agent has CLAIMED to be doing, in
- * its own words.
+ * The lettering the PLAN placed: cabin signs, pod plates, area names, boards.
  *
- * The first claim only. A plate is two tiles wide and a list of roles on it
- * would be unreadable at any zoom; the hover card carries the rest.
+ * Two passes, because a sign is two things in two coordinate spaces: the board
+ * it hangs on is world art under the camera, and the text on it is screen-space
+ * so it stays crisp at every zoom. Both hang off the anchor the resolver
+ * projected, so neither has any tile arithmetic of its own.
  */
-function roleClaimOf(
-  roleClaims: Readonly<Record<string, readonly RoleClaim[]>>,
-  owner: string | null,
-): string | null {
-  if (owner === null) return null;
-  if (!Object.hasOwn(roleClaims, owner)) return null;
-  return roleClaims[owner].at(0)?.role ?? null;
-}
-
-/** What one non-board sign says right now: the owner's name, or a host's. */
-function signTextOf(args: {
-  readonly sign: OfficeSign;
-  readonly owner: string | null;
-  readonly nameById: ReadonlyMap<string, string>;
-  readonly hostNameById: ReadonlyMap<string, string>;
-}): string {
-  const { hostNameById, nameById, owner, sign } = args;
-  if (sign.text === "") return officeFloorName(sign.hostId, hostNameById);
-  if (owner === null) return sign.text;
-  return nameById.get(owner) ?? sign.text;
-}
-
 function drawSignArt(args: {
   readonly ctx: CanvasRenderingContext2D;
-  readonly signs: ReadonlyArray<SignToDraw>;
+  readonly signs: ReadonlyArray<OfficeSignToDraw>;
   readonly theme: OfficeTheme;
 }): void {
   const { ctx, signs, theme } = args;
@@ -1426,8 +1400,8 @@ function drawSignArt(args: {
       ctx,
       { name },
       {
-        x: entry.sign.tile.col * OFFICE_TILE,
-        y: officeSpriteFootY({ name }, entry.sign.tile.row),
+        x: entry.anchor.x,
+        y: entry.anchor.y + signArtOverhang(name),
       },
       theme,
     );
@@ -1436,7 +1410,7 @@ function drawSignArt(args: {
 
 function drawSignLabels(args: {
   readonly ctx: CanvasRenderingContext2D;
-  readonly signs: ReadonlyArray<SignToDraw>;
+  readonly signs: ReadonlyArray<OfficeSignToDraw>;
   readonly camera: OfficeCamera;
   readonly palette: OfficePalette;
   readonly lod: OfficeLod;
@@ -1445,19 +1419,12 @@ function drawSignLabels(args: {
   for (const entry of signs) {
     const name = signSpriteFor(entry.sign);
     const baseline =
-      name === null
-        ? entry.sign.tile.row * OFFICE_TILE + SIGN_LABEL_BASELINE
-        : officeSpriteFootY({ name }, entry.sign.tile.row) +
-          SIGN_LABEL_BASELINE;
-    const centerX =
-      entry.sign.tile.col * OFFICE_TILE +
-      (entry.sign.widthTiles * OFFICE_TILE) / 2;
-    const screenX = centerX * camera.zoom + camera.x;
+      entry.anchor.y +
+      (name === null ? 0 : signArtOverhang(name)) +
+      SIGN_LABEL_BASELINE;
+    const screenX = officeSignCenterX(entry) * camera.zoom + camera.x;
     drawSignPlate(ctx, {
-      text: truncateSign(
-        entry.text,
-        signMaxChars(entry.sign.widthTiles),
-      ).toUpperCase(),
+      text: signPlateText(entry).toUpperCase(),
       screenX,
       screenY: baseline * camera.zoom + camera.y,
       palette,
@@ -1477,6 +1444,18 @@ function drawSignLabels(args: {
       palette,
     });
   }
+}
+
+/**
+ * A board is already laid out to its own width by the resolver, so truncating
+ * it here would cut a reading that was chosen to fit. A NAME is different: it
+ * cannot be abbreviated by rule and keeps the ellipsis it always had.
+ */
+function signPlateText(entry: OfficeSignToDraw): string {
+  if (entry.sign.kind === "board" || entry.sign.kind === "hq-board") {
+    return entry.text;
+  }
+  return truncateSign(entry.text, signMaxChars(entry.sign.widthTiles));
 }
 
 /**
@@ -1561,6 +1540,9 @@ function drawNameTags(args: {
   readonly backings: Readonly<Record<OfficeLabelTone, string>>;
   readonly awayAgentIds: ReadonlySet<string>;
   readonly hoveredAgentId: string | null;
+  readonly selectedAgentId: string | null;
+  readonly searchMatchIds: ReadonlySet<string>;
+  readonly lod: OfficeLod;
 }): void {
   const {
     awayAgentIds,
@@ -1569,8 +1551,16 @@ function drawNameTags(args: {
     ctx,
     hoveredAgentId,
     labels,
+    lod,
     palette,
+    searchMatchIds,
+    selectedAgentId,
   } = args;
+  // SEMANTIC ZOOM. At overview a name is a smear over a five-pixel pip, so
+  // there are none; in the middle band only the agents the reader has actually
+  // pointed at get one, because a floor of four hundred names is a wall of text
+  // that hides the office it describes; at close-up everything is named.
+  if (lod === 0) return;
   const candidates = resetScratch(nameTagScratch);
   ctx.font = LABEL_FONT;
   for (const label of labels) {
@@ -1585,6 +1575,17 @@ function drawNameTags(args: {
     // is wrong the moment two things share a column.
     const owner = label.ownerAgentId;
     if (owner !== null && awayAgentIds.has(owner) && owner !== hoveredAgentId) {
+      continue;
+    }
+    if (
+      lod === 1 &&
+      !isNameTagCalledFor({
+        owner,
+        hoveredAgentId,
+        selectedAgentId,
+        searchMatchIds,
+      })
+    ) {
       continue;
     }
     candidates.push({
@@ -1622,6 +1623,7 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
     nameById,
     roleClaims,
     searchMatchIds,
+    selectedAgentId,
     staticFloor,
     statusById,
     theme,
@@ -1629,20 +1631,26 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
     visibleAgentIds,
   } = args;
   const palette = officePalette(theme);
-  // NO SIGNAGE AT OVERVIEW. A two-tile board is five screen pixels there and
-  // the plate its text needs is wider than the room it names, so the block map
-  // carries the whole reading on its own.
+  // Resolved once, through the view's own projector: what each sign says at
+  // this cursor and where that lands in world pixels. Overview resolves none.
+  const projector = args.projector;
   const signs =
-    lod === 0
+    projector === null
       ? NO_SIGN_ENTRIES
-      : signsToDraw({
+      : officeSignsToDraw({
           signs: args.signs,
           visibleAgentIds,
           statusById,
           nameById,
           hostNameById,
           roleClaims,
+          projector,
+          lod,
         });
+  const floorSigns =
+    projector === null
+      ? NO_FLOOR_SIGN_ENTRIES
+      : officeFloorSignsToDraw({ floors, hostNameById, projector, lod });
   // The backing exists to separate glyphs from whatever they sit on, so it has
   // to contrast with the TEXT. A fixed dark backing did that for the dark
   // theme's light text and smeared the light theme's dark text into a bold
@@ -1748,13 +1756,15 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
     backings: labelBackings,
     awayAgentIds,
     hoveredAgentId,
+    selectedAgentId,
+    searchMatchIds,
+    lod,
   });
 
   drawFloorSigns({
     ctx,
     camera,
-    floors,
-    hostNameById,
+    signs: floorSigns,
     color: palette.text,
     backing: labelBackings.default,
   });
@@ -2078,6 +2088,13 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     // frame that shows it has to be asked for.
     runtime.invalidateFrame();
   }, [roleClaimsByAgentId, runtime]);
+
+  // Selecting an agent names it at the middle zoom band, so the frame loop has
+  // to know who that is. Pushed rather than closed over, for the same reason
+  // the names are: the loop is built once and outlives every selection.
+  useEffect(() => {
+    runtime.setSelectedAgentId(selectedAgentId);
+  }, [runtime, selectedAgentId]);
 
   const officeAgents = useMemo<ReadonlyArray<OfficeAgentInput>>(
     () =>
@@ -2628,6 +2645,27 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     };
 
     /**
+     * The view's projection, remembered per layout.
+     *
+     * `painter.projector(layout)` builds a small object with closures in it,
+     * and the signage needs one every frame. Keyed on layout identity because
+     * that is exactly when a projection can change - a new plan is the only
+     * thing that moves an origin or a scale.
+     */
+    let projectorLayout: OfficeLayout | null = null;
+    let projectorCache: OfficeProjector | null = null;
+    const projectorFor = (
+      layout: OfficeLayout | null,
+    ): OfficeProjector | null => {
+      if (layout === null) return null;
+      if (projectorLayout !== layout) {
+        projectorLayout = layout;
+        projectorCache = officeView.painter.projector(layout);
+      }
+      return projectorCache;
+    };
+
+    /**
      * The floor as bitmaps, one per 512-pixel chunk of the world the camera
      * has reached, repainted only when the plan's version, its band, the theme
      * or the world's size moves; every other frame this is a dozen
@@ -2767,6 +2805,8 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         ctx,
         frame,
         staticFloor: bakeFloor(frame, layout, lod, worldRect),
+        projector: projectorFor(layout),
+        selectedAgentId: runtime.getSelectedAgentId(),
         camera,
         lod,
         viewport,
