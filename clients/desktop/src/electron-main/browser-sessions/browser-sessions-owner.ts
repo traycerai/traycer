@@ -1035,6 +1035,7 @@ class BrowserSessionsStream {
       case "electronTabAccepted":
       case "releaseElectronTab":
       case "cdpRequest":
+      case "electronViewportRequest":
         this.electronTabs?.handleFrame(frame);
         return;
       case "capturePrimaryProfile":
