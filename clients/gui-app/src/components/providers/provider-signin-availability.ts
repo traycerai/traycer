@@ -1,4 +1,7 @@
-import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
+import type {
+  ProviderCliState,
+  ProviderLoginFailure,
+} from "@traycer/protocol/host/provider-schemas";
 import {
   providerPackBlocksExecution,
   providerPackPreparingForProvider,
@@ -93,6 +96,72 @@ export function providerCanStartProfileOauth(
 }
 
 /**
+ * Headless `providers.startLogin` that does not need a localhost callback on
+ * the host: Claude's paste-code page, or a CLI spawned with `--device-auth`.
+ * Terminal login is a different button (composer), so it is not this.
+ */
+export function providerLoginIsRemoteSafe(
+  loginCapability: ProviderCliState["loginCapability"] | undefined,
+): boolean {
+  if (loginCapability === null || loginCapability === undefined) return false;
+  if (loginCapability.codePaste !== null) return true;
+  const oauthArgs = loginCapability.oauthArgs ?? null;
+  return oauthArgs !== null && oauthArgs.includes("--device-auth");
+}
+
+/**
+ * Whether the GUI should open `startLogin`'s URL itself.
+ *
+ * On a local host the login child may already open a browser (Claude, Antigravity).
+ * Opening the same URL again double-opens a consent page on one `state`.
+ * Device-auth children (`userCode` present) do not open a browser, so the GUI
+ * must. Remote hosts never show the host's browser to the user.
+ */
+export function shouldAutoOpenLoginUrl(
+  isLocalHost: boolean,
+  userCode: string | null,
+): boolean {
+  return !isLocalHost || userCode !== null;
+}
+
+/**
+ * Locality for auto-open: a missing directory row fails closed (treat as
+ * local) so we do not open a second consent tab on this machine. `null`
+ * captured host id means follow the app-wide default, which may be remote.
+ */
+export function hostIsLocalForLoginAutoOpen(
+  directory: ReadonlyArray<{ readonly hostId: string; readonly kind: string }>,
+  capturedHostId: string | null,
+  defaultActiveHostId: string | null,
+): boolean {
+  const effectiveHostId = capturedHostId ?? defaultActiveHostId;
+  if (effectiveHostId === null) return true;
+  return (
+    directory.find((entry) => entry.hostId === effectiveHostId)?.kind !==
+    "remote"
+  );
+}
+
+const DEVICE_AUTH_UNAVAILABLE_MESSAGE =
+  "Device-code login is not enabled for this ChatGPT account. Enable it in ChatGPT security settings (personal) or workspace permissions (admin), then retry.";
+const DEVICE_CODE_MISSING_MESSAGE =
+  "Sign-in did not print a device code in time. Try again.";
+
+/** Copy for a typed `providers.startLogin` failure, or `notStarted` when none. */
+export function providerStartLoginFailureMessage(
+  failure: ProviderLoginFailure | null | undefined,
+  notStarted: string,
+): string {
+  if (failure === "device_auth_unavailable") {
+    return DEVICE_AUTH_UNAVAILABLE_MESSAGE;
+  }
+  if (failure === "device_code_missing") {
+    return DEVICE_CODE_MISSING_MESSAGE;
+  }
+  return notStarted;
+}
+
+/**
  * WHY sign-in is unavailable, or null when it is available.
  *
  * The tooltip used to be one hardcoded sentence - "Sign in requires a local
@@ -147,7 +216,10 @@ export function providerSignInUnavailableHint(
     }
     return `${name} does not support browser sign-in. Authenticate with its own CLI, or set an API key on the Account tab.`;
   }
-  if (!isSelectedHostLocal) {
+  if (
+    !isSelectedHostLocal &&
+    !providerLoginIsRemoteSafe(state.loginCapability)
+  ) {
     return "Signing in opens a browser on the machine running Traycer, so it is only available on a local host.";
   }
   const packPreparing = providerPackPreparingForProvider(state);

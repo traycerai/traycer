@@ -2665,6 +2665,41 @@ export type ProvidersStartLoginResponseV11 = z.infer<
 >;
 
 /**
+ * Why a headless login did not start, when `started` is false for a reason
+ * the GUI can act on. Null on success and on the generic "did not start"
+ * path (unresolvable binary, cancelled before spawn, …).
+ *
+ * `device_auth_unavailable`: we spawned `login --device-auth` and the CLI
+ * printed the localhost-callback flow instead. Codex does this when ChatGPT
+ * device-code login is not enabled for the account/workspace.
+ *
+ * `device_code_missing`: we scraped an external device URL but no user code
+ * before the URL-grace timer. A slow Codex print must not read as "the
+ * provider tooling is unavailable".
+ */
+export const providerLoginFailureSchema = z.enum([
+  "device_auth_unavailable",
+  "device_code_missing",
+]);
+export type ProviderLoginFailure = z.infer<typeof providerLoginFailureSchema>;
+
+/**
+ * `providers.startLogin@1.2` response - adds the device-code user code and a
+ * typed failure. Request is unchanged from v1.1. Codex `--device-auth` prints
+ * `https://auth.openai.com/codex/device` and a separate one-time code; stuffing
+ * the code into `url` would break `openLink`. `.default(null)` so a v1.1 body
+ * is a valid v1.2 body.
+ */
+export const providersStartLoginResponseSchemaV12 =
+  providersStartLoginResponseSchemaV11.extend({
+    userCode: z.string().nullable().default(null),
+    failure: providerLoginFailureSchema.nullable().default(null),
+  });
+export type ProvidersStartLoginResponseV12 = z.infer<
+  typeof providersStartLoginResponseSchemaV12
+>;
+
+/**
  * `providers.awaitLogin@2.1` request. Blocks until an in-flight
  * `providers.startLogin` child finishes (the browser loopback completes or the
  * CLI exits), then returns the freshly re-probed state - the honest "did the

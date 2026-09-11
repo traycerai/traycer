@@ -59,6 +59,8 @@ function profileRateLimitFetchEligible(
 interface ProviderProfileScopedSectionProps {
   readonly state: ProviderCliState;
   readonly hostId: string | null;
+  /** The selected host is this machine - the reauth waiting step auto-opens
+   *  only when it is not, or when the child printed a device code. */
   readonly isSelectedHostLocal: boolean;
   readonly canAddProfile: boolean;
   /**
@@ -192,11 +194,11 @@ export function ProviderProfileScopedSection(
       (candidate) => profileCommitId(candidate) === selectedProfileId,
     ) ?? profiles[0];
   const providerLabel = PROVIDER_DISPLAY_NAMES[state.providerId];
-  const addProfileDisabled = !canAddProfile || !isSelectedHostLocal;
+  const addProfileDisabled = !canAddProfile;
   // `TooltipWrapper` degrades to a passthrough Slot for both `null` and
   // `undefined` labels; `null` here is just the plainer of the two spellings.
   const addProfileDisabledReason = addProfileDisabled
-    ? "Add profiles from a local host with browser sign-in available."
+    ? signInUnavailableHint
     : null;
   const duplicateLabel = duplicateProfileLabel(selectedProfile, profiles);
 
@@ -360,6 +362,7 @@ export function ProviderProfileScopedSection(
         profiles={profiles}
         canOauth={canAddProfile}
         startInReauth={editIntent === "sign-in"}
+        isLocalHost={isSelectedHostLocal}
         open={editProfileOpen}
         onOpenChange={setEditProfileOpen}
         remainingProfilesAfterRemoval={profiles.filter(
