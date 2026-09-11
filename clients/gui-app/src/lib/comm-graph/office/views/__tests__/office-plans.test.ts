@@ -23,6 +23,7 @@ import {
   type OfficeSpriteName,
   type OfficeTilePos,
   type OfficeTileRect,
+  type OfficeViewId,
 } from "@/lib/comm-graph/office/office-types";
 import {
   OFFICE_VIEW_IDS,
@@ -385,14 +386,6 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
       expect(floorBandContains(floor, rootDesk.deskTile.row)).toBe(true);
     });
 
-    it("has no walkable path between host plazas that is not a skybridge", () => {
-      if (view.id === "mission-control") return;
-      if (layout.floors.length < 2) return;
-      const first = layout.floors[0].doorTile;
-      const second = layout.floors[1].doorTile;
-      expect(findOfficePath(layout, first, second)).toBeNull();
-    });
-
     /**
      * Every host gets its own naming, one way or another. Floor names a host by
      * the cabins standing on its own storey rather than by a `host` sign - that
@@ -409,27 +402,46 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
       expect(hostIds.size).toBe(2);
     });
 
-    it("connects host plazas only through Building's skybridge", () => {
-      if (viewId !== "building" && viewId !== "towers") return;
+    /**
+     * Whether a character can walk from one host's door to the other's. Floor
+     * keeps hosts on separate storeys and Towers stands each host's towers
+     * apart; Building joins its wings with a skybridge, the only crossing;
+     * Mission control seats both hosts in one hall and has no plazas to link.
+     * The record is exhaustive on purpose: a view added to the registry has to
+     * say which it is before this suite compiles.
+     */
+    const HOST_PLAZA_LINK: Readonly<
+      Record<OfficeViewId, "isolated" | "skybridge" | "one-hall">
+    > = {
+      floor: "isolated",
+      towers: "isolated",
+      building: "skybridge",
+      "mission-control": "one-hall",
+    };
 
-      const plazaFor = (hostId: string): OfficeFloor => {
-        const plaza = layout.floors.find(
-          (floor) => floor.hostId === hostId && floor.bounds.rows === 5,
+    it("links host plazas only where the view builds a skybridge", (context) => {
+      const link = HOST_PLAZA_LINK[viewId];
+      if (link === "one-hall") {
+        context.skip(`${viewId} seats both hosts in one hall`);
+        return;
+      }
+
+      // Every storey of a host shares the host's plaza door (D13), so the
+      // first floor of the host is the right door on every view.
+      const doorFor = (hostId: string): OfficeTilePos => {
+        const floor = layout.floors.find(
+          (candidate) => candidate.hostId === hostId,
         );
-        if (plaza === undefined) {
-          throw new Error(`missing plaza for ${hostId}`);
+        if (floor === undefined) {
+          throw new Error(`missing a floor for ${hostId}`);
         }
-        return plaza;
+        return floor.doorTile;
       };
-      const plazaA = plazaFor("host-a");
-      const plazaB = plazaFor("host-b");
-      const plazaPath = findOfficePath(
-        layout,
-        plazaA.doorTile,
-        plazaB.doorTile,
-      );
+      const doorA = doorFor("host-a");
+      const doorB = doorFor("host-b");
+      const plazaPath = findOfficePath(layout, doorA, doorB);
 
-      if (viewId === "towers") {
+      if (link === "isolated") {
         expect(plazaPath).toBeNull();
         return;
       }
@@ -441,9 +453,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
         walkable[prop.tile.row][prop.tile.col] = false;
       }
       const withoutBridge: OfficeLayout = { ...layout, walkable };
-      expect(
-        findOfficePath(withoutBridge, plazaA.doorTile, plazaB.doorTile),
-      ).toBeNull();
+      expect(findOfficePath(withoutBridge, doorA, doorB)).toBeNull();
     });
   });
 
