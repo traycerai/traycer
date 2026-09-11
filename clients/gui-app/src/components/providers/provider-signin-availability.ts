@@ -124,6 +124,24 @@ export function shouldAutoOpenLoginUrl(
   return !isLocalHost || userCode !== null;
 }
 
+/**
+ * Locality for auto-open: a missing directory row fails closed (treat as
+ * local) so we do not open a second consent tab on this machine. `null`
+ * captured host id means follow the app-wide default, which may be remote.
+ */
+export function hostIsLocalForLoginAutoOpen(
+  directory: ReadonlyArray<{ readonly hostId: string; readonly kind: string }>,
+  capturedHostId: string | null,
+  defaultActiveHostId: string | null,
+): boolean {
+  const effectiveHostId = capturedHostId ?? defaultActiveHostId;
+  if (effectiveHostId === null) return true;
+  return (
+    directory.find((entry) => entry.hostId === effectiveHostId)?.kind !==
+    "remote"
+  );
+}
+
 const DEVICE_AUTH_UNAVAILABLE_MESSAGE =
   "Device-code login is not enabled for this ChatGPT account. Enable it in ChatGPT security settings (personal) or workspace permissions (admin), then retry.";
 const DEVICE_CODE_MISSING_MESSAGE =

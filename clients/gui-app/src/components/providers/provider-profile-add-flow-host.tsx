@@ -1,6 +1,8 @@
 import { useMemo, type ReactNode } from "react";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
+import { hostIsLocalForLoginAutoOpen } from "@/components/providers/provider-signin-availability";
 import { AddProviderProfileDialog } from "@/components/settings/panels/add-provider-profile-dialog";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostDirectoryList } from "@/hooks/host/use-host-directory-list-query";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
@@ -45,11 +47,12 @@ function ProviderProfileAddFlowSession({
   const close = useProviderProfileAddFlowStore((state) => state.close);
   const client = useHostClientForHostId(hostId);
   const directory = useHostDirectoryList();
-  // Unknown / missing entry fails closed (treat as local) so we do not
-  // auto-open a second consent tab on this machine.
-  const isLocalHost =
-    hostId === null ||
-    directory.data?.find((entry) => entry.hostId === hostId)?.kind !== "remote";
+  const defaultActiveHostId = useAddressableHostId();
+  const isLocalHost = hostIsLocalForLoginAutoOpen(
+    directory.data ?? [],
+    hostId,
+    defaultActiveHostId,
+  );
   const providersQuery = useProvidersListForClient(client, {
     enabled: true,
     subscribed: true,

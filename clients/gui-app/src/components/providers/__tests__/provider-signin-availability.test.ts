@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import {
+  hostIsLocalForLoginAutoOpen,
   providerSignInUnavailableHint,
   providerStartLoginFailureMessage,
   providerSupportsTerminalLogin,
@@ -295,6 +296,36 @@ describe("shouldAutoOpenLoginUrl", () => {
 
   it("does not auto-open a code-paste URL on a local host", () => {
     expect(shouldAutoOpenLoginUrl(true, null)).toBe(false);
+  });
+});
+
+describe("hostIsLocalForLoginAutoOpen", () => {
+  const directory = [
+    { hostId: "local-1", kind: "local" },
+    { hostId: "remote-1", kind: "remote" },
+  ];
+
+  it("follows the app-wide default when the captured host id is null", () => {
+    expect(hostIsLocalForLoginAutoOpen(directory, null, "remote-1")).toBe(
+      false,
+    );
+    expect(hostIsLocalForLoginAutoOpen(directory, null, "local-1")).toBe(true);
+  });
+
+  it("prefers the captured host id over the default", () => {
+    expect(hostIsLocalForLoginAutoOpen(directory, "remote-1", "local-1")).toBe(
+      false,
+    );
+    expect(hostIsLocalForLoginAutoOpen(directory, "local-1", "remote-1")).toBe(
+      true,
+    );
+  });
+
+  it("fails closed as local when the resolved host is missing", () => {
+    expect(hostIsLocalForLoginAutoOpen(directory, null, null)).toBe(true);
+    expect(hostIsLocalForLoginAutoOpen(directory, "gone", "remote-1")).toBe(
+      true,
+    );
   });
 });
 
