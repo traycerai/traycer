@@ -68,7 +68,6 @@ describe("SettingsRow", () => {
     render(
       <SettingsRow
         row={ROWS.definitions.artifactIconColors}
-        status={undefined}
         control={
           <div className="w-80" data-testid="wide-control">
             Wide control
@@ -124,7 +123,6 @@ describe("SettingsRow", () => {
     render(
       <SettingsRow
         row={ROWS.definitions.wideControl}
-        status={undefined}
         control={
           <div className="w-80" data-testid="overflow-risk-control">
             wide
@@ -166,7 +164,6 @@ describe("SettingsRow", () => {
     render(
       <SettingsRow
         row={ROWS.definitions.someLabel}
-        status={undefined}
         control={<div data-testid="control">Control</div>}
       />,
     );
@@ -207,7 +204,6 @@ describe("SettingsRow", () => {
     render(
       <SettingsRow
         row={ROWS.definitions.openNewTiles}
-        status={undefined}
         control={<DescribedControl>In this pane</DescribedControl>}
       />,
     );
@@ -228,7 +224,6 @@ describe("SettingsRow", () => {
     render(
       <SettingsRow
         row={ROWS.definitions.openLinks}
-        status={undefined}
         control={<DescribedControl>In Traycer</DescribedControl>}
       />,
     );
@@ -282,24 +277,62 @@ describe("SettingsRow", () => {
     expect(document.getElementById(describedBy)?.textContent).toBe("Checking…");
   });
 
-  it("treats a null status as suppressing the description, not as absent", () => {
-    // `status ?? description` would bring the static sentence back here.
-    render(
+  // `status ?? description` would bring the static sentence back for `null`,
+  // and a truthiness test would for `false` and `""`. All three are a
+  // deliberate "say nothing here".
+  for (const [name, suppression] of [
+    ["null", null],
+    ["false", false],
+    ["an empty string", ""],
+  ] as const) {
+    it(`treats ${name} as suppressing the description, not as absent`, () => {
+      render(
+        <SettingsRow
+          row={ROWS.definitions.openNewTiles}
+          status={suppression}
+          control={<DescribedControl>In this pane</DescribedControl>}
+        />,
+      );
+
+      expect(
+        screen.queryByText("Narrow windows show one tile at a time."),
+      ).toBeNull();
+      expect(
+        screen
+          .getByRole("button", { name: "In this pane" })
+          .getAttribute("aria-describedby"),
+      ).toBeNull();
+    });
+  }
+
+  it("restores the static description when a status goes back to undefined", () => {
+    const { rerender } = render(
       <SettingsRow
         row={ROWS.definitions.openNewTiles}
-        status={null}
+        status="Couldn't read this setting."
+        control={<DescribedControl>In this pane</DescribedControl>}
+      />,
+    );
+    expect(
+      screen.queryByText("Narrow windows show one tile at a time."),
+    ).toBeNull();
+
+    rerender(
+      <SettingsRow
+        row={ROWS.definitions.openNewTiles}
+        status={undefined}
         control={<DescribedControl>In this pane</DescribedControl>}
       />,
     );
 
-    expect(
-      screen.queryByText("Narrow windows show one tile at a time."),
-    ).toBeNull();
-    expect(
-      screen
-        .getByRole("button", { name: "In this pane" })
-        .getAttribute("aria-describedby"),
-    ).toBeNull();
+    expect(screen.queryByText("Couldn't read this setting.")).toBeNull();
+    const describedBy = screen
+      .getByRole("button", { name: "In this pane" })
+      .getAttribute("aria-describedby");
+    if (describedBy === null) throw new Error("expected aria-describedby");
+    const region = document.getElementById(describedBy);
+    expect(region?.tagName).toBe("P");
+    expect(region?.textContent).toBe("Narrow windows show one tile at a time.");
   });
 
   it("writes its definition's anchor, and none for a contributor", () => {
@@ -307,12 +340,10 @@ describe("SettingsRow", () => {
       <>
         <SettingsRow
           row={ROWS.definitions.artifactIconColors}
-          status={undefined}
           control={<span>control</span>}
         />
         <SettingsRow
           row={ROWS.definitions.openLinks}
-          status={undefined}
           control={<span>control</span>}
         />
       </>,

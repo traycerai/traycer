@@ -32,7 +32,6 @@ export function AppNotificationsSettingsPanel() {
         >
           <SettingsRow
             row={APP_NOTIFICATIONS.definitions.notificationEvents}
-            status={undefined}
             control={
               <Button
                 type="button"

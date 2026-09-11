@@ -42,7 +42,6 @@ export function AppearanceDetails() {
       <div className="overflow-hidden rounded-lg border border-border/60">
         <SettingsRow
           row={APPEARANCE.definitions.promptFont}
-          status={undefined}
           control={
             <div className="flex flex-wrap justify-end gap-2">
               <FontPicker
@@ -74,7 +73,6 @@ export function AppearanceDetails() {
           <>
             <SettingsRow
               row={APPEARANCE.definitions.fontLigatures}
-              status={undefined}
               control={
                 <Switch
                   checked={preferences.fontLigatures}
@@ -87,7 +85,6 @@ export function AppearanceDetails() {
             />
             <SettingsRow
               row={APPEARANCE.definitions.panelAnimations}
-              status={undefined}
               control={
                 <Switch
                   checked={preferences.panelAnimations}
@@ -100,7 +97,6 @@ export function AppearanceDetails() {
             />
             <SettingsRow
               row={APPEARANCE.definitions.panelAnimationDuration}
-              status={undefined}
               control={
                 <SettingsNumberInput
                   value={preferences.panelAnimationDuration}
@@ -120,7 +116,6 @@ export function AppearanceDetails() {
             />
             <SettingsRow
               row={APPEARANCE.definitions.contrast}
-              status={undefined}
               control={
                 <div className="flex flex-wrap items-center justify-end gap-2">
                   <output className="text-ui-xs tabular-nums">

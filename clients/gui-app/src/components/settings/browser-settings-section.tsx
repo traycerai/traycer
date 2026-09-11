@@ -65,7 +65,6 @@ export function BrowserSettingsSection(): ReactNode {
         >
           <SettingsRow
             row={GENERAL.definitions.detectedDevOrigins}
-            status={undefined}
             control={
               <BrowserDevOriginsControl
                 origins={browserDevOrigins}
@@ -286,7 +285,6 @@ function ImportLoginsRow(props: {
   return (
     <SettingsRow
       row={GENERAL.definitions.bringInExistingSessions}
-      status={undefined}
       hint={enabled ? null : "Turn on Save website sessions first."}
       control={
         <Button
@@ -437,7 +435,6 @@ function SavedWebsiteSessionsState(props: {
     <div className="border-b border-border/40">
       <SettingsRow
         row={GENERAL.definitions.savedWebsiteSessions}
-        status={undefined}
         control={
           <span className="text-ui-sm text-muted-foreground" role="status">
             {props.status}
@@ -514,7 +511,6 @@ function SavedWebsiteSessionsManager(props: {
       <div className="border-b border-border/40">
         <SettingsRow
           row={GENERAL.definitions.savedWebsiteSessions}
-          status={undefined}
           control={
             <span className="tabular-nums text-ui-sm text-muted-foreground">
               {siteCountLabel(props.sites.length)}

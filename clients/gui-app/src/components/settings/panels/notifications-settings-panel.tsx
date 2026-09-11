@@ -247,7 +247,6 @@ function NotificationSeverityList(props: {
         <SettingsRow
           key={severity.id}
           row={severity.row}
-          status={undefined}
           control={
             <Switch
               checked={matrixValue(props.config, severity.id, "renderer")}

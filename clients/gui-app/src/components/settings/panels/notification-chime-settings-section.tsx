@@ -53,7 +53,6 @@ export function NotificationChimeSettingsSection() {
         <SettingsRow
           key={event.eventType}
           row={event.row}
-          status={undefined}
           control={
             <NotificationChimeSelect
               label={event.row.label}

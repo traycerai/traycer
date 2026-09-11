@@ -284,7 +284,6 @@ export function ArtifactVersionSettingsSection(props: {
       >
         <SettingsRow
           row={HOST_OVERVIEW.definitions.captureVersions}
-          status={undefined}
           control={
             <Switch
               checked={settings.enabled}
@@ -299,7 +298,6 @@ export function ArtifactVersionSettingsSection(props: {
         />
         <SettingsRow
           row={HOST_OVERVIEW.definitions.retention}
-          status={undefined}
           control={
             <div className="grid w-full max-w-md grid-cols-3 gap-2">
               <label
@@ -376,7 +374,6 @@ export function ArtifactVersionSettingsSection(props: {
         />
         <SettingsRow
           row={HOST_OVERVIEW.definitions.storage}
-          status={undefined}
           control={
             <div className="text-right text-ui-sm">
               <p>{formatBytes(snapshot.storage.referencedBytes)} referenced</p>
@@ -388,7 +385,6 @@ export function ArtifactVersionSettingsSection(props: {
         />
         <SettingsRow
           row={HOST_OVERVIEW.definitions.clearVersionHistory}
-          status={undefined}
           control={
             <Button
               size="sm"

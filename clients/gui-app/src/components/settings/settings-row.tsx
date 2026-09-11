@@ -15,11 +15,12 @@ interface SettingsRowProps {
   readonly row: SettingsRowDefinition;
   /**
    * Live copy shown INSTEAD of the definition's static description, in the
-   * same described-by region. Selected by `!== undefined`: `undefined` shows
-   * the static description, anything else replaces it — and `null`, `false` or
-   * `""` replace it with nothing, which is a deliberate suppression.
+   * same described-by region. Selected by `!== undefined`: omitted (or
+   * `undefined`) shows the static description, anything else replaces it — and
+   * `null`, `false` or `""` replace it with nothing, which is a deliberate
+   * suppression.
    */
-  readonly status: ReactNode | undefined;
+  readonly status?: ReactNode;
   hint?: ReactNode;
   readonly control: ReactNode;
 }

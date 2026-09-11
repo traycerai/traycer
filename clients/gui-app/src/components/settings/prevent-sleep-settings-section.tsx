@@ -6,7 +6,6 @@ import { Switch } from "@/components/ui/switch";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { trackSettingChanged } from "@/lib/analytics";
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
-import { isPreventSleepRowAvailable } from "@/lib/settings/settings-availability";
 
 export function PreventSleepSettingsSection(): ReactNode {
   const availability = useSettingsAvailabilityContext();
@@ -23,12 +22,12 @@ export function PreventSleepSettingsSection(): ReactNode {
   // `resolveDesktopPowerBridge` returns null in the mobile app, so the toggle
   // would persist a preference nothing can act on and the device would sleep
   // anyway. Hide it there.
-  if (!isPreventSleepRowAvailable(availability)) return null;
+  if (!GENERAL.definitions.preventSleep.availableWhen(availability))
+    return null;
 
   return (
     <SettingsRow
       row={GENERAL.definitions.preventSleep}
-      status={undefined}
       control={
         <Switch
           checked={preventSleepWhileRunning}

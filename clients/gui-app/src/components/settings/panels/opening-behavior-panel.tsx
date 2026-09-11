@@ -128,7 +128,6 @@ export function OpeningBehaviorPanel(): ReactNode {
         >
           <SettingsRow
             row={OPENING_BEHAVIOR.definitions.openLinks}
-            status={undefined}
             control={
               <EnumSelect
                 labels={LINK_OPEN_DEFAULT_LABELS}
@@ -203,7 +202,6 @@ export function OpeningBehaviorPanel(): ReactNode {
             <div className="bg-foreground/3">
               <SettingsRow
                 row={OPENING_BEHAVIOR.definitions.tileContent}
-                status={undefined}
                 control={
                   <EnumSelect
                     labels={TILE_PLACEMENT_LABELS}
@@ -219,7 +217,6 @@ export function OpeningBehaviorPanel(): ReactNode {
               />
               <SettingsRow
                 row={OPENING_BEHAVIOR.definitions.tileConversation}
-                status={undefined}
                 control={
                   <EnumSelect
                     labels={TILE_PLACEMENT_LABELS}
@@ -235,7 +232,6 @@ export function OpeningBehaviorPanel(): ReactNode {
               />
               <SettingsRow
                 row={OPENING_BEHAVIOR.definitions.tileBrowser}
-                status={undefined}
                 control={
                   <EnumSelect
                     labels={BROWSER_TILE_PLACEMENT_LABELS}
@@ -251,7 +247,6 @@ export function OpeningBehaviorPanel(): ReactNode {
               />
               <SettingsRow
                 row={OPENING_BEHAVIOR.definitions.tileSideChat}
-                status={undefined}
                 control={
                   <EnumSelect
                     labels={SIDE_CHAT_PLACEMENT_LABELS}
@@ -269,7 +264,6 @@ export function OpeningBehaviorPanel(): ReactNode {
           ) : null}
           <SettingsRow
             row={OPENING_BEHAVIOR.definitions.agentOpenedTabs}
-            status={undefined}
             control={
               <EnumSelect
                 labels={AGENT_TAB_SURFACING_LABELS}
@@ -302,7 +296,6 @@ function LinkKindRow(props: {
   return (
     <SettingsRow
       row={props.row}
-      status={undefined}
       control={
         <EnumSelect
           labels={LINK_OPEN_MODE_LABELS}

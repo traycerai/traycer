@@ -100,10 +100,13 @@ describe("settings search index", () => {
     expect(anchored).toEqual([]);
   });
 
-  it("writes no anchor as a literal — every one comes from a definition", () => {
-    // A definition's anchor is written by the primitive, or by a bespoke
-    // region from `X.definitions.y.anchor`. A string literal would be an
-    // anchor with no definition behind it: rendered, but indexed nowhere.
+  it("writes no anchor in the common literal form", () => {
+    // Hygiene, not proof: anchors are written by the primitive, or by a
+    // bespoke region from `X.definitions.y.anchor`, and this catches the usual
+    // way that slips — `anchor="…"` / `data-settings-anchor="…"`. It cannot
+    // see `data-settings-anchor={"…"}` or a string held in a variable. Whether
+    // a rendered anchor is indexed under its section is established by the
+    // fixture executor's reverse membership, not here.
     const literals = [...tsxFilesUnder(SETTINGS_DIR)].flatMap((file) =>
       [
         ...readFileSync(file, "utf8").matchAll(
@@ -150,6 +153,25 @@ describe("settings search assembly", () => {
 });
 
 describe("settings section collections", () => {
+  it("gives every member exactly one search placement", () => {
+    // Read from the plain input, not from what the factory made of it: a
+    // `search` with both `anchor` and `contributesTo` satisfies each arm of
+    // the placement union, and the factory would both fold it into its target
+    // and emit its own entry. The compiler rejects it; this does not rely on
+    // the compiler having seen it.
+    const offenders = SETTINGS_SEARCH_COLLECTIONS.flatMap((collection) =>
+      Object.entries(collection.input).flatMap(([key, member]) => {
+        if (!("kind" in member)) return [];
+        const placements = [
+          "anchor" in member.search,
+          "contributesTo" in member.search,
+        ].filter(Boolean).length;
+        return placements === 1 ? [] : [`${collection.section}:${key}`];
+      }),
+    );
+    expect(offenders).toEqual([]);
+  });
+
   for (const collection of SETTINGS_SEARCH_COLLECTIONS) {
     describe(collection.section, () => {
       it("defines every member of its input, and nothing else", () => {

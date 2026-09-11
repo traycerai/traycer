@@ -97,8 +97,10 @@ predicates; it never imports the assembled index or the search consumer.
   (case-insensitive duplicates dropped, own keywords first, then contributors
   in input order). A target is an entry-owning member of the same collection
   or the page: `contributesTo` is typed to exactly those keys, so a dangling
-  key, the member itself and another contributor are compile errors. Row
-  targets are allowed — the per-kind Link rows fold into **Open links**, the
+  key, the member itself and another contributor are compile errors. A
+  `search` naming both placements is a compile error on that member too (a
+  union alone would accept it), and the index test checks every member has
+  exactly one. Row targets are allowed — the per-kind Link rows fold into **Open links**, the
   per-category Tile rows into **Open new tiles**.
 - A group's `breadcrumb` is the group segment of its result's breadcrumb —
   `null` for a rendered card, `"Providers"` for that page's region groups.
@@ -107,9 +109,9 @@ predicates; it never imports the assembled index or the search consumer.
   Experimental, not by its own predicate). A contribution target is not a
   container: contributing never changes the target's availability.
 - **`status` replaces the static description.** `SettingsRow` takes
-  `status: ReactNode | undefined`, selected by `!== undefined` — never
-  truthiness, never `status ?? description`, because `null` / `false` / `""`
-  are a deliberate suppression. A status renders INSTEAD of the definition's
+  an optional `status?: ReactNode`, selected by `!== undefined` — omitted and
+  `undefined` are the same, never truthiness, never `status ?? description`,
+  because `null` / `false` / `""` are a deliberate suppression. A status renders INSTEAD of the definition's
   description, in the same described-by region (a `div`, since it is arbitrary
   content) with the same muted style, and the `aria-describedby` id follows
   whichever region rendered. The definition's `description` stays the
@@ -122,8 +124,11 @@ predicates; it never imports the assembled index or the search consumer.
 - **Hand-built regions read the definition too.** The branch-prefix row keeps
   its bespoke layout (the input and its live preview share a line) and writes
   `data-settings-anchor={GENERAL.definitions.branchPrefix.anchor}` and its
-  label from the definition. An anchor is never a string literal in the
-  settings tree; the index test scans for one.
+  label from the definition. The index test also scans the settings tree for
+  the common literal form (`anchor="…"` / `data-settings-anchor="…"`) as a
+  hygiene check; it cannot see an expression or a variable, so reachability
+  and membership rest on the fixture executor and reverse membership, not on
+  the scan.
 - Shared rendering components take definitions through typed props:
   `LogDetailGroup` takes its page's `group` (anchored on App Diagnostics,
   folded into the page on host Diagnostics), each `LogLevelControl` carries
@@ -144,6 +149,7 @@ predicates; it never imports the assembled index or the search consumer.
 | Every anchored entry has exactly one unconcealed target in every registered shell where its gate is on, none where off, and at least one registered shell where it is on | the fixture executor (`__tests__/settings-search-fixtures.test.tsx`) mounts every `section × shell` in `__tests__/settings-search-fixture-registry.ts` and runs `assertSettingsSearchTargets`; the index test asserts every anchored section is registered and every anchored entry is available in one of its shells |
 | Every rendered anchor is an indexed anchor of that section                                                                                                               | reverse membership inside `assertSettingsSearchTargets`                                                                                                                                                                                                                                                               |
 | Every contributor's words reach an entry                                                                                                                                 | the coverage test: its label and keywords appear in its target entry's document; no dangling, self or contributor target                                                                                                                                                                                              |
+| Every member has exactly one placement                                                                                                                                   | `CheckedSectionInput` rejects a `search` with both; the index test checks the input member by member                                                                                                                                                                                                                  |
 | Host-scoped sections index no anchor                                                                                                                                     | an exhaustive index test                                                                                                                                                                                                                                                                                              |
 
 **Not guaranteed:**
@@ -226,9 +232,12 @@ different answers:
   desktop bridge; This phone needs `pushPermission`; Voice input and Prevent
   sleep hide in the mobile app) — indexed, with the definition's
   `availableWhen` set to the gate's **named predicate** in
-  `lib/settings/settings-availability.ts`. The panel calls the SAME function to
-  decide whether to render the row, so a gate is written in exactly one place
-  and the index and the surface cannot disagree. Both reach it through
+  `lib/settings/settings-availability.ts`. The panel gates the row (or group)
+  on that definition's own `availableWhen` — the composed predicate the entry
+  carries — so a gate is written in exactly one place and the index and the
+  surface cannot disagree. The gate stays a component boundary: Zoom, This
+  phone and System check it in an outer component and mount their hooks only
+  once it passes. Both reach the context through
   `useSettingsAvailabilityContext()` (`hooks/settings/`), which reads the
   runner host, the desktop feature-settings bridge and `isMobileApp()` at
   render time — never a module constant, so a module evaluated before the

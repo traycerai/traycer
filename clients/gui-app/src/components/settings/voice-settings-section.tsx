@@ -6,7 +6,6 @@ import { Switch } from "@/components/ui/switch";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
-import { isVoiceInputRowAvailable } from "@/lib/settings/settings-availability";
 
 export function VoiceSettingsSection(): ReactNode {
   const availability = useSettingsAvailabilityContext();
@@ -20,12 +19,11 @@ export function VoiceSettingsSection(): ReactNode {
   // `useDictationAvailability` refuses dictation outright in the mobile app, so
   // this row would be a toggle for something the build will not do - and the
   // description below makes a promise that build cannot keep. Hide it there.
-  if (!isVoiceInputRowAvailable(availability)) return null;
+  if (!GENERAL.definitions.voiceInput.availableWhen(availability)) return null;
 
   return (
     <SettingsRow
       row={GENERAL.definitions.voiceInput}
-      status={undefined}
       control={
         <Switch
           checked={voiceInputEnabled}

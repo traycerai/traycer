@@ -30,7 +30,6 @@ import {
   MOD_ENTER_LABEL,
 } from "@/components/settings/panels/general-settings.definitions";
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
-import { isExperimentalGroupAvailable } from "@/lib/settings/settings-availability";
 import { useRunnerFeatureSettingsQuery } from "@/hooks/runner/use-runner-feature-settings-query";
 import { useRunnerAgentRolesSet } from "@/hooks/runner/use-runner-agent-roles-set-mutation";
 
@@ -71,7 +70,8 @@ export function GeneralSettingsPanel() {
   const featureSettings = useRunnerFeatureSettingsQuery();
   const setAgentRoles = useRunnerAgentRolesSet();
   const availability = useSettingsAvailabilityContext();
-  const featureSettingsAvailable = isExperimentalGroupAvailable(availability);
+  const featureSettingsAvailable =
+    GENERAL.definitions.experimental.availableWhen(availability);
 
   return (
     <SettingsPanelShell
@@ -90,7 +90,6 @@ export function GeneralSettingsPanel() {
           <VoiceSettingsSection />
           <SettingsRow
             row={GENERAL.definitions.quoteReply}
-            status={undefined}
             control={
               <Switch
                 checked={quoteReplyEnabled}
@@ -104,7 +103,6 @@ export function GeneralSettingsPanel() {
           />
           <SettingsRow
             row={GENERAL.definitions.steerOnModEnter}
-            status={undefined}
             control={
               <Switch
                 checked={steerOnModEnterEnabled}
@@ -118,7 +116,6 @@ export function GeneralSettingsPanel() {
           />
           <SettingsRow
             row={GENERAL.definitions.pinContextUsage}
-            status={undefined}
             control={
               <Switch
                 checked={pinContextUsageBreakdown}
@@ -144,7 +141,6 @@ export function GeneralSettingsPanel() {
           <PreventSleepSettingsSection />
           <SettingsRow
             row={GENERAL.definitions.globalResourcesButton}
-            status={undefined}
             control={
               <Switch
                 checked={showGlobalResourceMonitor}
@@ -158,7 +154,6 @@ export function GeneralSettingsPanel() {
           />
           <SettingsRow
             row={GENERAL.definitions.navigatorResourceStats}
-            status={undefined}
             control={
               <Switch
                 checked={showNavigatorResourceStats}
@@ -229,7 +224,6 @@ export function GeneralSettingsPanel() {
         >
           <SettingsRow
             row={GENERAL.definitions.productTour}
-            status={undefined}
             control={
               <Button
                 type="button"
@@ -339,7 +333,6 @@ function SettingsLocalAppStateSection() {
     <>
       <SettingsRow
         row={GENERAL.definitions.localAppState}
-        status={undefined}
         control={
           <Button
             type="button"

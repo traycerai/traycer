@@ -23,7 +23,6 @@ import {
 } from "@/components/ui/select";
 import { useDesktopZoomBridge } from "@/hooks/runner/use-desktop-zoom-bridge";
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
-import { isZoomRowAvailable } from "@/lib/settings/settings-availability";
 import {
   useRunnerZoomChangeSubscription,
   useRunnerZoomPercentQuery,
@@ -143,7 +142,6 @@ export function AppearanceSettingsPanel() {
           <DesktopZoomSettingsRow />
           <SettingsRow
             row={APPEARANCE.definitions.pointerCursors}
-            status={undefined}
             control={
               <Switch
                 checked={pointerCursors}
@@ -157,7 +155,6 @@ export function AppearanceSettingsPanel() {
           />
           <SettingsRow
             row={APPEARANCE.definitions.minimapSide}
-            status={undefined}
             control={
               <Select
                 value={chatTurnMinimapSide}
@@ -199,7 +196,6 @@ export function AppearanceSettingsPanel() {
         >
           <SettingsRow
             row={APPEARANCE.definitions.uiFont}
-            status={undefined}
             control={
               <div className="flex flex-col items-end gap-2">
                 <FontPicker
@@ -231,7 +227,6 @@ export function AppearanceSettingsPanel() {
           />
           <SettingsRow
             row={APPEARANCE.definitions.codeFont}
-            status={undefined}
             control={
               <div className="flex flex-col items-end gap-2">
                 <FontPicker
@@ -275,7 +270,6 @@ export function AppearanceSettingsPanel() {
               <div className="flex flex-col">
                 <SettingsRow
                   row={APPEARANCE.definitions.terminalFont}
-                  status={undefined}
                   control={
                     <div className="flex flex-col items-end gap-2">
                       <FontPicker
@@ -306,7 +300,6 @@ export function AppearanceSettingsPanel() {
                 />
                 <SettingsRow
                   row={APPEARANCE.definitions.terminalCursor}
-                  status={undefined}
                   control={
                     <TerminalCursorStylePicker
                       value={terminalCursorStyle}
@@ -319,7 +312,6 @@ export function AppearanceSettingsPanel() {
                 />
                 <SettingsRow
                   row={APPEARANCE.definitions.blinkCursor}
-                  status={undefined}
                   control={
                     <Switch
                       checked={terminalCursorBlink}
@@ -353,7 +345,6 @@ export function AppearanceSettingsPanel() {
         >
           <SettingsRow
             row={APPEARANCE.definitions.artifactIconColors}
-            status={undefined}
             control={
               <EpicNodeIconColorPicker
                 enabled={artifactIconColorMode === "byType"}
@@ -387,7 +378,7 @@ export function AppearanceSettingsPanel() {
  */
 function DesktopZoomSettingsRow() {
   const availability = useSettingsAvailabilityContext();
-  if (!isZoomRowAvailable(availability)) return null;
+  if (!APPEARANCE.definitions.zoom.availableWhen(availability)) return null;
   return <AvailableDesktopZoomSettingsRow />;
 }
 
@@ -406,7 +397,6 @@ function AvailableDesktopZoomSettingsRow() {
   return (
     <SettingsRow
       row={APPEARANCE.definitions.zoom}
-      status={undefined}
       control={
         <div className="flex items-center gap-2">
           <Select

@@ -38,7 +38,6 @@ export function LogLevelRow(props: LogLevelRowProps) {
   return (
     <SettingsRow
       row={control.row}
-      status={undefined}
       control={
         <Select
           value={control.level}

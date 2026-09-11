@@ -362,7 +362,6 @@ function RemoveTraycerRow(): ReactNode {
       return (
         <SettingsRow
           row={HOST_OVERVIEW.definitions.removalIncomplete}
-          status={undefined}
           control={
             <Button
               type="button"
@@ -381,7 +380,6 @@ function RemoveTraycerRow(): ReactNode {
       return (
         <SettingsRow
           row={HOST_OVERVIEW.definitions.removalUnverified}
-          status={undefined}
           control={
             <span className="text-muted-foreground text-xs">
               Check terminal
@@ -393,7 +391,6 @@ function RemoveTraycerRow(): ReactNode {
     return (
       <SettingsRow
         row={HOST_OVERVIEW.definitions.removed}
-        status={undefined}
         control={
           <Button
             type="button"
@@ -413,7 +410,6 @@ function RemoveTraycerRow(): ReactNode {
     <>
       <SettingsRow
         row={HOST_OVERVIEW.definitions.removeTraycer}
-        status={undefined}
         control={
           <Button
             type="button"

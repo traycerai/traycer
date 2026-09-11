@@ -18,7 +18,6 @@ import {
   type PushPermissionRequestMutation,
 } from "@/hooks/runner/use-push-permission-request-mutation";
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
-import { isPushPermissionGroupAvailable } from "@/lib/settings/settings-availability";
 
 type PushPermissionView =
   | { readonly kind: "loading" }
@@ -56,7 +55,9 @@ const READ_FAILED = "Couldn't read this phone's notification setting.";
  */
 export function PushPermissionSection(): ReactNode {
   const availability = useSettingsAvailabilityContext();
-  if (!isPushPermissionGroupAvailable(availability)) return null;
+  if (!APP_NOTIFICATIONS.definitions.thisPhone.availableWhen(availability)) {
+    return null;
+  }
   return <PushPermissionGroup />;
 }
 

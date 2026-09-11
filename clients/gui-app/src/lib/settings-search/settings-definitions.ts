@@ -149,26 +149,52 @@ type GroupKey<Input> = {
     : never;
 }[MemberKey<Input>];
 
+/**
+ * A member whose `search` names BOTH placements. Structurally it satisfies the
+ * `{ anchor }` arm and the `{ contributesTo }` arm at once — a union does not
+ * reject a property that another arm declares — so it is caught by name here.
+ */
+interface HybridPlacement {
+  readonly search: {
+    readonly anchor: unknown;
+    readonly contributesTo: unknown;
+  };
+}
+
+/**
+ * What a hybrid's `search` is checked against. An object with a required
+ * property the hybrid cannot have, so the compiler reports it as missing and
+ * prints the reason on the offending member.
+ */
+interface ExclusivePlacementError {
+  readonly placementError: "search takes exactly one of { anchor } or { contributesTo }";
+}
+
 type EntryOwnerKey<Input> = {
-  [Key in MemberKey<Input>]: Input[Key] extends {
-    readonly search: { readonly anchor: string | null };
-  }
-    ? Key
-    : never;
+  [Key in MemberKey<Input>]: Input[Key] extends HybridPlacement
+    ? never
+    : Input[Key] extends {
+          readonly search: { readonly anchor: string | null };
+        }
+      ? Key
+      : never;
 }[MemberKey<Input>];
 
 /**
  * The inferred input re-checked against its own keys: a row's `group` must
- * name a group-kind member, and every `contributesTo` an entry-owning member or
+ * name a group-kind member, every `contributesTo` an entry-owning member or
  * `"page"` — which rules out a dangling key, the member itself, and another
- * contributor at compile time.
+ * contributor — and a `search` must name one placement, not both. Each is a
+ * compile error on the offending member.
  */
 type CheckedSectionInput<Input> = {
   readonly [Key in keyof Input]: Key extends "page"
     ? SettingsPageInput
-    : Input[Key] extends { readonly kind: "group" }
-      ? SettingsGroupInput<EntryOwnerKey<Input>>
-      : SettingsRowInput<GroupKey<Input>, EntryOwnerKey<Input>>;
+    : Input[Key] extends HybridPlacement
+      ? { readonly search: ExclusivePlacementError }
+      : Input[Key] extends { readonly kind: "group" }
+        ? SettingsGroupInput<EntryOwnerKey<Input>>
+        : SettingsRowInput<GroupKey<Input>, EntryOwnerKey<Input>>;
 };
 
 /** A placement once the section is enumerated, target keys erased. */
