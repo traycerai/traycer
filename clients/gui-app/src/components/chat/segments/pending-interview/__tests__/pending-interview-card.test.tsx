@@ -2682,3 +2682,95 @@ describe("PendingInterviewCard keyboard navigation", () => {
     expect(detailsButton.getAttribute("aria-controls")).toBeNull();
   });
 });
+
+describe("PendingInterviewCard choice mode chrome", () => {
+  afterEach(() => {
+    cleanup();
+    useInterviewDraftStore.setState({ draftsByChat: {} });
+    window.localStorage.clear();
+    setMobileApp(false);
+  });
+
+  it("names a last single-choice pick as send, with radio glyphs", () => {
+    renderCard(
+      [withoutCustomAnswer(singleSelect("q1", "Choose", ["Alpha", "Beta"]))],
+      vi.fn(),
+      null,
+    );
+
+    expect(screen.getByTestId("interview-choice-mode-hint").textContent).toBe(
+      "Pick one to send",
+    );
+    expect(
+      document.querySelectorAll('[data-interview-choice-glyph="radio"]'),
+    ).toHaveLength(2);
+    expect(
+      document.querySelector('[data-interview-choice-glyph="checkbox"]'),
+    ).toBeNull();
+  });
+
+  it("names an earlier single-choice pick as continue", () => {
+    renderCard(
+      [
+        withoutCustomAnswer(singleSelect("q1", "First?", ["Alpha"])),
+        withoutCustomAnswer(singleSelect("q2", "Second?", ["Beta"])),
+      ],
+      vi.fn(),
+      null,
+    );
+
+    expect(screen.getByTestId("interview-choice-mode-hint").textContent).toBe(
+      "Pick one to continue",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(screen.getByTestId("interview-choice-mode-hint").textContent).toBe(
+      "Pick one to send",
+    );
+  });
+
+  it("names a last multi-choice pick as Submit, with checkbox glyphs", () => {
+    renderCard(
+      [withoutCustomAnswer(multiSelect("m", "Pick some", ["Alpha", "Beta"]))],
+      vi.fn(),
+      null,
+    );
+
+    expect(screen.getByTestId("interview-choice-mode-hint").textContent).toBe(
+      "Pick any, then Submit",
+    );
+    expect(
+      document.querySelectorAll('[data-interview-choice-glyph="checkbox"]'),
+    ).toHaveLength(2);
+    expect(
+      document.querySelector('[data-interview-choice-glyph="radio"]'),
+    ).toBeNull();
+  });
+
+  it("names an earlier multi-choice pick as Next", () => {
+    renderCard(
+      [
+        withoutCustomAnswer(multiSelect("m1", "Pick some", ["Alpha"])),
+        withoutCustomAnswer(singleSelect("q2", "Second?", ["Beta"])),
+      ],
+      vi.fn(),
+      null,
+    );
+
+    expect(screen.getByTestId("interview-choice-mode-hint").textContent).toBe(
+      "Pick any, then Next",
+    );
+  });
+
+  it("omits the mode line on a free-text-only question", () => {
+    renderCard([singleSelect("free", "Describe it", [])], vi.fn(), null);
+    expect(screen.queryByTestId("interview-choice-mode-hint")).toBeNull();
+  });
+
+  it("keeps Other without a choice glyph", () => {
+    renderCard([singleSelect("q1", "Choose", ["Alpha"])], vi.fn(), null);
+    expect(
+      document.querySelectorAll('[data-interview-choice-glyph="radio"]'),
+    ).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Other" })).toBeTruthy();
+  });
+});

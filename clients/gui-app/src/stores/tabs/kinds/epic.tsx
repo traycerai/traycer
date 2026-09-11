@@ -1,11 +1,7 @@
 import { createElement, lazy } from "react";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
-import {
-  epicHasUnsyncedEdits,
-  getEpicSessionHandleHostId,
-  getOpenEpicRegistry,
-} from "@/lib/registries/epic-session-registry";
+import { epicHasUnsyncedEdits } from "@/lib/registries/epic-session-registry";
 import { buildNestedFocusSearchPatch } from "@/lib/epic-nested-focus-route";
 import { epicPathname, epicTabRoute } from "@/lib/routes";
 import { existingEpicTabIntent } from "@/lib/tab-navigation/intents";
@@ -25,21 +21,19 @@ const epicSurface = lazy(() =>
 );
 
 /**
- * The host serving this epic right now, read from the live session rather
- * than stored on the tab.
- *
- * The session provider owns the answer (`requestedHostId ?? effectiveHostId`,
- * stamped onto the handle at acquire); this reads it. `null` when the registry
- * holds no handle - a background tab evicted past the MRU cap, or any tab
- * before the provider's first acquisition, including the window between the
- * registry's own emit for that acquisition and the handle being stamped.
- * Every one of those degrades a consumer to the app-wide client, which is what
- * it used before this projection existed - a safe direction, and the reason
- * this can be a plain read instead of an ordering contract.
+ * `build()`'s input: the epic-canvas source record plus the `hostId` the
+ * caller already resolved. `hostId` is NOT re-derived in here from
+ * `getEpicSessionHostId` - it is a projection of the open-epic registry, and
+ * `useHeaderTabForRef` / `useHeaderTabs`' projection already subscribe to
+ * that registry via `useSyncExternalStore` so they re-render on a session
+ * re-point. Reading it a second time inside `build()` would create a second,
+ * unsubscribed source for the same fact: correct the instant `build()` runs,
+ * stale the moment the session re-points without also touching this
+ * `EpicViewTab`. One caller resolves it, `build()` only stamps it.
  */
-function epicSessionHostId(epicId: string): string | null {
-  const handle = getOpenEpicRegistry().peek(epicId);
-  return handle === null ? null : getEpicSessionHandleHostId(handle);
+interface EpicTabBuildSource {
+  readonly view: EpicViewTab;
+  readonly hostId: string | null;
 }
 
 /**
@@ -48,9 +42,9 @@ function epicSessionHostId(epicId: string): string | null {
  * flat `HeaderTab` variant. Close routes through the epic-canvas store
  * so visible header order and canvas restoration stay consistent.
  */
-export const epicTabModule: TabKindModule<"epic", EpicViewTab> = {
+export const epicTabModule: TabKindModule<"epic", EpicTabBuildSource> = {
   kind: "epic",
-  build: (source) => {
+  build: ({ view: source, hostId }) => {
     const closeLocked = isTabCloseLocked({
       kind: "epic",
       id: source.tabId,
@@ -63,13 +57,14 @@ export const epicTabModule: TabKindModule<"epic", EpicViewTab> = {
       kind: "epic",
       id: source.tabId,
       epicId: source.epicId,
-      hostId: epicSessionHostId(source.epicId),
+      hostId,
       route: epicPathname({ tabId: source.tabId, epicId: source.epicId }),
       name: source.name,
       icon: null,
       canClose: !closeLocked,
       canDuplicate: !structurallyLocked,
       canOpenInNewWindow: !structurallyLocked,
+      appearance: null,
     };
   },
   descriptor: {

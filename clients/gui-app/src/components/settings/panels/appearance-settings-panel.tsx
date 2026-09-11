@@ -1,10 +1,14 @@
-import { AppearanceDetails } from "@/components/settings/themes/appearance-details";
+import {
+  AppearanceDetails,
+  AppearanceFontRows,
+} from "@/components/settings/themes/appearance-details";
 import { APPEARANCE } from "@/components/settings/panels/appearance-settings.definitions";
 import { useMemo } from "react";
 import { RotateCcw } from "lucide-react";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { SettingsGroup } from "@/components/settings/settings-group";
+import { StartPageSettingsSection } from "@/components/settings/start-page-settings-section";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import { EpicNodeIconColorPicker } from "@/components/settings/controls/node-icon-color-picker";
 import { SettingsNumberInput } from "@/components/settings/controls/settings-number-input";
@@ -123,14 +127,15 @@ export function AppearanceSettingsPanel() {
   return (
     <SettingsPanelShell
       title="Appearance"
-      description="Themes, typography, and display preferences."
+      description="Themes, fonts, and display preferences."
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
       <div
         className={cn("@container flex flex-col", compact ? "gap-5" : "gap-8")}
       >
         <ThemeGallery />
-        <AppearanceDetails />
+
+        <StartPageSettingsSection />
 
         <SettingsGroup
           group={APPEARANCE.definitions.interface}
@@ -149,7 +154,7 @@ export function AppearanceSettingsPanel() {
                   "pointerCursors",
                   setPointerCursors,
                 )}
-                aria-label="Use pointer cursors"
+                aria-label="Show a hand cursor over clickable controls"
               />
             }
           />
@@ -172,7 +177,7 @@ export function AppearanceSettingsPanel() {
               >
                 <SelectTrigger
                   size="sm"
-                  aria-label="Minimap side"
+                  aria-label="Minimap position"
                   className="w-[min(40vw,8rem)]"
                 >
                   <SelectValue />
@@ -180,7 +185,7 @@ export function AppearanceSettingsPanel() {
                 <SelectContent>
                   <SelectItem value="right">Right</SelectItem>
                   <SelectItem value="left">Left</SelectItem>
-                  <SelectItem value="hide">Hide</SelectItem>
+                  <SelectItem value="hide">Hidden</SelectItem>
                 </SelectContent>
               </Select>
             }
@@ -207,7 +212,7 @@ export function AppearanceSettingsPanel() {
                   options={installedFonts}
                   defaultLabel="Figtree (Default)"
                   resetTooltip="Reset to default"
-                  ariaLabel="UI font"
+                  ariaLabel="Interface font"
                 />
                 <SettingsNumberInput
                   value={uiFontSize}
@@ -218,7 +223,7 @@ export function AppearanceSettingsPanel() {
                   min={10}
                   max={20}
                   unit="px"
-                  ariaLabel="UI font size"
+                  ariaLabel="Interface font size"
                   defaultValue={DEFAULT_UI_FONT_SIZE}
                   resetTooltip="Reset to default"
                 />
@@ -256,7 +261,10 @@ export function AppearanceSettingsPanel() {
               </div>
             }
           />
+          <AppearanceFontRows />
         </SettingsGroup>
+
+        <AppearanceDetails />
 
         <SettingsGroup
           group={APPEARANCE.definitions.terminal}

@@ -88,8 +88,8 @@ predicates; it never imports the assembled index or the search consumer.
 
 - `page` is a required member of every input — the section's own entry.
 - `kind: "row" | "group"`. A row names its group by key (`group: "runningAgents"`,
-  compile-checked to be a group-kind member) or `null` (Appearance's "More
-  appearance options" rows sit in no group).
+  compile-checked to be a group-kind member) or `null` for a row that sits in
+  no group.
 - `search` is exactly one of `{ anchor: string | null }` — its own entry;
   `null` is a bespoke region with nothing stable to point at (Providers' seven
   concept groups), landing at the top of the page — or `{ contributesTo: key |
@@ -121,8 +121,14 @@ predicates; it never imports the assembled index or the search consumer.
   repair copy on a read error; rows whose only sentence is live — the narrow
   viewport notice on Open new tiles, the phone's push state, Import your work
   and Data migration progress, the host-named File edit snapshots and Remove
-  from account copy, the saving state of Save website sessions — have
-  `description: null` and pass the whole sentence as `status`.
+  from account copy, the saving state of Save website sessions, the start
+  page's wallpaper name — have `description: null` and pass the whole
+  sentence as `status`. Its label-line twin is `labelStatus`: a live badge the
+  row renders after the definition's label, in the same label element and
+  behind the row's own " · " separator, selected by `!== undefined` with
+  `null` / `false` / `""` rendering the bare label. The theme slots pass
+  `"Active"` there ("Light theme · Active"); the definition's label stays the
+  searchable copy.
 - **Hand-built regions read the definition too.** The branch-prefix row keeps
   its bespoke layout (the input and its live preview share a line) and writes
   `data-settings-anchor={GENERAL.definitions.branchPrefix.anchor}` and its
@@ -223,13 +229,14 @@ this.
 different answers:
 
 - **Gated on a MODE** (the per-kind Link rows, the per-category Tile rows,
-  which render only once their parent is switched off the default; the
-  Advanced rows of "More appearance options") — `contributesTo` the parent row
-  (or the page); no entry of their own.
+  which render only once their parent is switched off the default) —
+  `contributesTo` the parent row (or the page); no entry of their own.
 - **Gated on DATA** ("Detected dev origins" and its Browser card, which render
-  only once a terminal has printed a local URL) — `contributesTo: "page"`. No
-  shell can promise the row, so no shell offers it. This one shipped as a
-  result that navigated to General and lit nothing.
+  only once a terminal has printed a local URL; the start page's Wallpaper
+  effect, Effect strength and Tint rows, which render only once a wallpaper is
+  chosen and each only for the effects it adjusts) — `contributesTo: "page"`.
+  No shell can promise the row, so no shell offers it. "Detected dev origins"
+  shipped as a result that navigated to General and lit nothing.
 - **Gated on the SHELL** (Zoom, Experimental and OS notifications need a
   desktop bridge; This phone needs `pushPermission`; Voice input and Prevent
   sleep hide in the mobile app) — indexed, with the definition's
@@ -273,6 +280,11 @@ different answers:
 
 Bespoke pages are indexed at page/region level for the same reason: their
 content exists only once a host answers an RPC.
+
+Appearance's Themes, Start page and Motion and readability groups, and the
+Prompt font and ligature rows inside Fonts and text, carry no anchor either:
+every one `contributesTo: "page"`, so their labels land on the Appearance page
+beside its own vocabulary ("theme mode", "background opacity", "contrast").
 
 **DOM contract tests.** Types prove a definition is well-formed; they cannot
 prove it renders. `__tests__/settings-search-targets.ts`
@@ -1048,24 +1060,49 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
   - The pre-refactor keys (`browserLinkDefaultMode`,
     `{terminal,markdown}BrowserLinkOpenMode`, `agentTabSurfacingMode`) are
     migrated once in the store's persist `merge` and then dropped.
-- `Appearance` Five preference groups via `settings-group.tsx`, broad-to-
-  specialized in one column: **Theme**, **Interface**, **Typography**,
-  **Terminal**, **Artifact icons** - each a quiet `<h2>` label outside its own
-  bordered card; changes apply live, the surrounding app stays the primary
-  preview. A design pass (`settings-related-panels-core-flows` artifact,
-  extending the compact Settings language past General/Worktrees to five more
-  panels - Appearance, Notifications, Diagnostics, Shell, Host) introduced
-  this grouping; the controls themselves are unchanged except where noted
-  below.
-  - **Theme**: Theme mode (`ThemeModeToggle` - Light/Dark/System,
-    `theme`/`setTheme`) and Preset (`ThemePresetPicker`,
-    `themePreset`/`setThemePreset`) - broad color/surface choices lead.
+- `Appearance`: the theme library (`themes/theme-gallery.tsx`) leads,
+  followed by **Start page**, **Interface**, **Fonts and text**, **Motion and
+  readability**, **Terminal**, and **Icon colors** via `settings-group.tsx`.
+  Each group has an `<h2>` label outside its bordered card. Settings apply
+  immediately; the theme editor previews a draft until Save theme or Cancel.
+  `themes/appearance-details.tsx` supplies the prompt font and ligature rows
+  inside Fonts and text, plus the separate Motion and readability group.
+  - **Theme**: light/dark/system mode (`theme`/`setTheme`) plus the theme
+    library - selection, editing, import/export - lives in `ThemeGallery`,
+    backed by `stores/settings/theme-library-store.ts` and applied by
+    `lib/theme-applier.ts`. `themePreset` remains the built-in-palette
+    fallback the gallery clears on a custom selection. See
+    `docs/theme-customization.md`. Anything that bakes theme colours into a
+    non-CSS surface (a canvas, xterm, a worker) subscribes to
+    `useThemeRevision()` (`providers/use-theme-revision.ts`) rather than to
+    the mode/preset fields, because a custom theme repaints the cascade
+    without changing either.
+  - **Start page** (`start-page-settings-section.tsx`): the personal landing
+    backdrop. Plain rows only, like every other group here - the start page
+    itself is the preview. Rows: Wallpaper (56x34 thumbnail + "Choose
+    image..." + Remove; secondary text is the stored file name, "Custom image"
+    when the image has no stored name, or "None" when no image is loaded),
+    Wallpaper effect (segmented Photo / Dot pattern / Film grain, only once
+    a wallpaper is set), Effect strength (0..100 range input with Subtle /
+    Strong endpoints, only for dot pattern and film grain), Tint wallpaper
+    with theme accent color (`Switch`, dot pattern only; off dithers each RGB channel on its
+    own so the image keeps its own colours), Greeting and
+    Recent tasks (`showGreeting` / `showRecentHistory` switches). The style,
+    intensity, tint and the chosen file's `name` all live in the settings store
+    (`startPageWallpaper`); the bytes live only in the appearance blob store.
+    `lib/appearance/start-page-wallpaper.ts` owns one entry point per user
+    action (`chooseStartPageWallpaper` / `removeStartPageWallpaper`), and each
+    writes BOTH stores - that is what keeps a name from outliving the bytes it
+    describes, and is why the name can be an ordinary settings field rather
+    than a `File` subclass smuggled through IndexedDB. The start
+    page's own `Paintbrush` button opens this panel - there is no separate
+    appearance editor.
   - **Interface**: Zoom (`DesktopZoomSettingsRow` - desktop-only, renders
     nothing without a zoom bridge; backed by
     `useRunnerZoomPercentQuery`/`SetMutation`/`ResetMutation` against host/OS
-    state, not a settings-store field) and Use pointer cursors
+    state, not a settings-store field) and Show a hand cursor over clickable controls
     (`pointerCursors` `Switch`, default on).
-  - **Typography.** Two structurally identical rows - `UI font` and
+  - **Fonts and text.** Two structurally identical rows - `Interface font` and
     `Code font` - each pairing a font picker with its size input stacked
     directly below. `Terminal font` moved out to its own **Terminal** group
     below (it pairs with the cursor rows and the live preview, not with UI/Code

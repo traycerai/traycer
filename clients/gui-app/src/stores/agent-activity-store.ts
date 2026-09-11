@@ -60,6 +60,12 @@ export interface HostAgentActivity {
    * `disconnected` value means the union below was built while the host could
    * not see other hosts' agents: it is a true statement about what the host
    * saw, not about who is working.
+   *
+   * Read WITH `servedBy`: a merged-plane host that holds a room whose link is
+   * down sends its origin-store view as `servedBy: "local"` under that link
+   * stamp. The local half is authoritative for the host's own agents
+   * ({@link hostSliceCoversItsOwnHost}); the stamp names the half that is
+   * missing. Only a `"cloud"` frame stamped `connected` reaches the fleet.
    */
   readonly cloudSyncStatus: AgentActivityCloudSyncStatus | null;
   readonly byEpic: ReadonlyMap<string, EpicAgentActivity>;
@@ -546,11 +552,38 @@ function selectPlaneSpansFleet(
   byHost: ReadonlyMap<string, HostAgentActivity>,
 ): boolean {
   for (const host of byHost.values()) {
-    if (hostActivityAnswers(host) && host.cloudSyncStatus === "connected") {
+    // `servedBy` is part of the claim, not decoration: a merged-plane host
+    // sends `servedBy: "local"` under a real link stamp whenever its union
+    // does NOT reach the fleet (awareness mid-rebuild, link flapping), and
+    // that frame must not be read as fleet coverage on the strength of the
+    // stamp alone. A cloud-plane host of any released line stamps only its
+    // `"cloud"` frames, so nothing it sends changes answer here.
+    if (
+      hostActivityAnswers(host) &&
+      host.servedBy === "cloud" &&
+      host.cloudSyncStatus === "connected"
+    ) {
       return true;
     }
   }
   return false;
+}
+
+/**
+ * Whether this host's slice vouches for ITS OWN agents. Wider than
+ * {@link hostActivityAnswers} by exactly one arm: a `servedBy: "local"` frame
+ * is the host's origin store and is authoritative for the machine it came
+ * from whatever its cloud link is doing - a merged-plane host keeps sending
+ * it, stamped with the real link status, while its room is down. That stamp
+ * still withholds fleet coverage (see {@link selectPlaneSpansFleet}) and the
+ * "nobody is working" vouch ({@link agentActivityPlaneAnswers}); it only
+ * stops the host's own rows from reading as unknown during a socket flap.
+ */
+function hostSliceCoversItsOwnHost(host: HostAgentActivity): boolean {
+  if (host.connectionStatus !== "open" || !host.stateFrameSeenThisEpoch) {
+    return false;
+  }
+  return host.servedBy === "local" || hostActivityAnswers(host);
 }
 
 function selectPlaneAnswers(
@@ -602,7 +635,7 @@ export function selectAgentActivityCoverage(
   // `indeterminate` by hand for this same no-host case.
   if (hostId === null) return "indeterminate";
   const host = byHost.get(hostId);
-  if (host !== undefined && hostActivityAnswers(host)) return "covered";
+  if (host !== undefined && hostSliceCoversItsOwnHost(host)) return "covered";
   return selectPlaneAnswers(byHost) ? "unserved" : "indeterminate";
 }
 

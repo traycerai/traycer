@@ -12,7 +12,7 @@ const ROWS = defineSettingsSection("appearance", {
     kind: "row",
     group: null,
     search: { anchor: "test-artifact-icon-colors" },
-    label: "Artifact icon colors",
+    label: "Color icons by type",
     description: "Pick colors used for artifact type icons.",
     availableWhen: alwaysAvailable,
     keywords: ["icons"],
@@ -76,7 +76,7 @@ describe("SettingsRow", () => {
       />,
     );
 
-    const label = screen.getByText("Artifact icon colors");
+    const label = screen.getByText("Color icons by type");
     const labelBlock = label.parentElement;
     if (labelBlock === null) throw new Error("expected label block parent");
 
@@ -354,8 +354,45 @@ describe("SettingsRow", () => {
     expect(anchored[0]?.getAttribute("data-settings-anchor")).toBe(
       "test-artifact-icon-colors",
     );
-    expect(anchored[0]?.textContent).toContain("Artifact icon colors");
+    expect(anchored[0]?.textContent).toContain("Color icons by type");
   });
+
+  it("badges the label line with a label status, behind its own separator", () => {
+    render(
+      <SettingsRow
+        row={ROWS.definitions.openLinks}
+        labelStatus="Active"
+        control={<span>control</span>}
+      />,
+    );
+
+    // One label element carries both: the definition's label, then the badge.
+    expect(screen.getByText("Open links · Active").className).toContain(
+      "font-medium",
+    );
+  });
+
+  // Like `status`: omitted and `undefined` show the bare label, and `null`,
+  // `false` and `""` are a deliberate "no badge" — never a dangling separator.
+  for (const [name, labelStatus] of [
+    ["undefined", undefined],
+    ["null", null],
+    ["false", false],
+    ["an empty string", ""],
+  ] as const) {
+    it(`renders the bare label for a ${name} label status`, () => {
+      render(
+        <SettingsRow
+          row={ROWS.definitions.openLinks}
+          labelStatus={labelStatus}
+          control={<span>control</span>}
+        />,
+      );
+
+      const label = screen.getByText("Open links");
+      expect(label.textContent).toBe("Open links");
+    });
+  }
 });
 
 /** Stands in for a real settings control that opts into the description. */

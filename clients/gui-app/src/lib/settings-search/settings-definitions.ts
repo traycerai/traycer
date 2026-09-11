@@ -30,7 +30,7 @@ export type SettingsAvailability = (
  * What a search hit IS, which is also what clicking it can promise.
  *
  * - `section` — a whole settings page. Lands at the top of it.
- * - `group` — a titled card inside a page ("Typography", "Running agents"),
+ * - `group` — a titled card inside a page ("Fonts and text", "Running agents"),
  *   or a named region of a bespoke page that has no card.
  * - `setting` — one row, the thing a user actually came to change.
  *

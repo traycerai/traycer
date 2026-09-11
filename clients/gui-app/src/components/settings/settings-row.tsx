@@ -21,20 +21,29 @@ interface SettingsRowProps {
    * suppression.
    */
   readonly status?: ReactNode;
+  /**
+   * A live badge beside the definition's static label — the label-line twin of
+   * `status`. The row renders it after `row.label`, in the same label element,
+   * behind its own " · " separator ("Light theme · Active"). Selected by
+   * `!== undefined` like `status`; `null`, `false` or `""` render the bare
+   * label. The definition's `label` stays the searchable copy.
+   */
+  readonly labelStatus?: ReactNode;
   hint?: ReactNode;
   readonly control: ReactNode;
 }
 
 export function SettingsRow(props: SettingsRowProps) {
-  const { row, status, hint, control } = props;
+  const { row, status, labelStatus, hint, control } = props;
   const compact = useSettingsDensity() === "compact";
   const descriptionId = useId();
   const showsStatus = status !== undefined;
   const described = showsStatus
     ? rendersContent(status)
     : rendersContent(row.description);
+  const badged = labelStatus !== undefined && rendersContent(labelStatus);
   const descriptionClassName =
-    "max-w-[72ch] text-pretty text-ui-sm text-muted-foreground";
+    "max-w-[72ch] break-words text-pretty text-ui-sm text-muted-foreground";
   return (
     <div
       data-settings-anchor={row.anchor ?? undefined}
@@ -47,7 +56,15 @@ export function SettingsRow(props: SettingsRowProps) {
       <div
         className={cn("min-w-[50%] flex-1 space-y-1", SETTINGS_ROW_STACK.label)}
       >
-        <div className="font-medium text-foreground">{row.label}</div>
+        <div className="font-medium text-foreground">
+          {row.label}
+          {badged ? (
+            <>
+              {" · "}
+              {labelStatus}
+            </>
+          ) : null}
+        </div>
         {described && showsStatus ? (
           // A `div`, not a `p`: a status is arbitrary content.
           <div id={descriptionId} className={descriptionClassName}>
