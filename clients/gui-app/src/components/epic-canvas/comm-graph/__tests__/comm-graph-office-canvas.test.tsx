@@ -79,6 +79,7 @@ import { OFFICE_VIEWS } from "@/lib/comm-graph/office/views/office-view";
 import type { OfficeView } from "@/lib/comm-graph/office/views/office-view";
 import { partitionOfficePopulation } from "@/lib/comm-graph/office/office-population";
 import { BASE_STEP_MS } from "@/components/epic-canvas/comm-graph/use-comm-graph-transport";
+import { OFFICE_FRAME_INTERVAL_MS } from "@/components/epic-canvas/comm-graph/office/office-frame-gate";
 import { agentAppearance } from "@/lib/comm-graph/office/office-appearance";
 import { officeModelTier } from "@/lib/comm-graph/office/office-model-tier";
 import {
@@ -90,6 +91,7 @@ import {
   type OfficeLayout,
   type OfficeRect,
   type OfficeSceneInput,
+  type OfficeSeat,
   type OfficeSign,
   type OfficeTileRect,
 } from "@/lib/comm-graph/office/office-types";
@@ -1523,6 +1525,7 @@ function officeElementWithView(
   officeView: OfficeView,
   visibleIds: ReadonlySet<string>,
   agents: ReadonlyArray<CommGraphAgentNode>,
+  overrides: Partial<CommGraphOfficeCanvasProps>,
 ) {
   return (
     <CommGraphOfficeCanvas
@@ -1554,6 +1557,7 @@ function officeElementWithView(
       canJumpToCreated={() => false}
       onJumpToCreated={vi.fn()}
       onOpenAgent={vi.fn()}
+      {...overrides}
     />
   );
 }
@@ -1570,7 +1574,7 @@ const BOUNDING_RECT_STUB: DOMRect = {
   toJSON: () => ({}),
 };
 
-describe("CommGraphOfficeCanvas fixup 1 - renderer projection and semantic zoom (F5, F10)", () => {
+describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic zoom and board width (F5, F10, F11)", () => {
   let rafQueue: Array<{
     readonly id: number;
     readonly callback: FrameRequestCallback;
@@ -1579,15 +1583,26 @@ describe("CommGraphOfficeCanvas fixup 1 - renderer projection and semantic zoom 
   let canceledRafIds = new Set<number>();
   let calls: RecordedCall[] = [];
   let restoreGetContext: (() => void) | null = null;
+  let frameClockMs = 0;
 
+  /**
+   * One drawn frame per flush, on a clock of this suite's own.
+   *
+   * The loop is rate-capped at 30fps off the timestamp rAF hands it, and a
+   * suite runs many frames inside one wall-clock millisecond - so handing it
+   * `performance.now()` makes "how many frames did I flush" depend on how
+   * fast the machine got here, and every frame after the first in a batch
+   * silently draws nothing. A synthetic clock that steps past the interval
+   * each time is what makes a flush mean a frame.
+   */
   function flushRaf(times: number): void {
     for (let step = 0; step < times; step += 1) {
+      frameClockMs += OFFICE_FRAME_INTERVAL_MS + 1;
       const pending = rafQueue;
       rafQueue = [];
       act(() => {
         for (const queued of pending) {
-          if (!canceledRafIds.has(queued.id))
-            queued.callback(performance.now());
+          if (!canceledRafIds.has(queued.id)) queued.callback(frameClockMs);
         }
       });
     }
@@ -1600,6 +1615,7 @@ describe("CommGraphOfficeCanvas fixup 1 - renderer projection and semantic zoom 
     rafQueue = [];
     canceledRafIds = new Set();
     nextRafId = 1;
+    frameClockMs = 0;
     vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
       const id = nextRafId;
       nextRafId += 1;
@@ -1706,18 +1722,21 @@ describe("CommGraphOfficeCanvas fixup 1 - renderer projection and semantic zoom 
       },
     };
 
-    render(withQueryClient(officeElementWithView(view, new Set<string>(), [])));
+    render(
+      withQueryClient(officeElementWithView(view, new Set<string>(), [], {})),
+    );
     setIntersecting(true);
     flushRaf(3);
 
     const fillTextCalls = calls.filter((call) => call.method === "fillText");
-    // Found by the separator every board reading carries, at any width. A
-    // TWO-tile board abbreviates by rule ("0D · 0W · 0I") rather than spelling
-    // the buckets out, so matching on the word "DOING" would pin F11's layout
-    // rule into a case that is only about WHERE the text lands.
+    // A TWO-tile board is thirty-two screen pixels, and the plate for even
+    // the abbreviated reading does not fit that, so the board takes the
+    // narrowest rung it has: the counts with no separators. Matched on that
+    // rather than on a word, because what this case is about is WHERE the
+    // text lands, not which rung the width picked.
     const boardTextCall = fillTextCalls.find(
       (call) =>
-        typeof call.args[0] === "string" && call.args[0].includes(" · "),
+        typeof call.args[0] === "string" && call.args[0].startsWith("0D"),
     );
     expect(boardTextCall).toBeDefined();
     // Fixed camera (zoom 1, x=5, y=0): the projected anchor for tile (2,2)
@@ -1764,7 +1783,7 @@ describe("CommGraphOfficeCanvas fixup 1 - renderer projection and semantic zoom 
 
     render(
       withQueryClient(
-        officeElementWithView(view, new Set(["worker"]), [worker]),
+        officeElementWithView(view, new Set(["worker"]), [worker], {}),
       ),
     );
     setIntersecting(true);
@@ -1780,6 +1799,284 @@ describe("CommGraphOfficeCanvas fixup 1 - renderer projection and semantic zoom 
     // selected, or search-matched agent. This one is none of those, so it
     // must produce zero text calls; the unfixed renderer draws it regardless.
     expect(nameTextCalls).toHaveLength(0);
+  });
+
+  /** The same camera, zoomed past the 1.6 threshold into the close-up band. */
+  const CLOSE_UP_CAMERA_VIEW: CommGraphTileViewState = {
+    ...FIXED_CAMERA_VIEW,
+    zoom: 2,
+  };
+
+  function seatAt(args: {
+    readonly seatId: string;
+    readonly col: number;
+    readonly row: number;
+  }): OfficeSeat {
+    return {
+      seatId: args.seatId,
+      kind: "desk",
+      deskTile: { col: args.col, row: args.row },
+      chairTile: { col: args.col, row: args.row + 1 },
+      facing: "down",
+      hitTiles: { width: 1, height: 1 },
+      hitBox: null,
+      floorIndex: 0,
+      roomId: null,
+      hostId: null,
+      manager: false,
+    };
+  }
+
+  /**
+   * A floor with a chair far from its door, and the view that plans it.
+   *
+   * Far on purpose: an agent REVEALED while playback is running walks in from
+   * the door rather than appearing in its chair, so a long walk is a walker
+   * that stays a walker for as many frames as a case needs.
+   */
+  function walkInView(): OfficeView {
+    const host = seatAt({ seatId: "h/0/host", col: 2, row: 2 });
+    const worker = seatAt({ seatId: "h/0/worker", col: 12, row: 12 });
+    const layout: OfficeLayout = {
+      view: "floor",
+      cols: 16,
+      rows: 16,
+      desks: new Map([
+        ["host", { ...host, agentId: "host" }],
+        ["worker", { ...worker, agentId: "worker" }],
+      ]),
+      seats: new Map([
+        ["h/0/host", host],
+        ["h/0/worker", worker],
+      ]),
+      signs: [],
+      rooms: [],
+      floors: [emptyFloor()],
+      doorTile: { col: 0, row: 0 },
+      lobbyTile: { col: 0, row: 1 },
+      props: [],
+      walkable: allWalkable(16, 16),
+      frozen: null,
+      shiftFromPrevious: null,
+      stable: true,
+    };
+    return { ...OFFICE_VIEWS.floor, plan: () => layout };
+  }
+
+  // One shared first word, so a single query matches both and the seated one
+  // becomes the control for the walking one.
+  const HOST_AGENT = agent("host", "Alpha Sitter");
+  const WALKER_AGENT = agent("worker", "Alpha Walker");
+
+  /**
+   * Renders the office, then reveals the walker on a second commit.
+   *
+   * The first sync seats everybody silently - that is what a first sync is -
+   * so the walker has to arrive on a later one, with playback running, to be
+   * announced as a walk-in rather than simply appearing in its chair.
+   */
+  function renderWithWalker(args: {
+    readonly view: OfficeView;
+    readonly camera: CommGraphTileViewState;
+  }): ReturnType<typeof render> {
+    const { camera, view } = args;
+    const rendered = render(
+      withQueryClient(
+        officeElementWithView(view, new Set(["host"]), [HOST_AGENT], {
+          view: camera,
+        }),
+      ),
+    );
+    setIntersecting(true);
+    flushRaf(2);
+    rendered.rerender(
+      withQueryClient(
+        officeElementWithView(
+          view,
+          new Set(["host", "worker"]),
+          [HOST_AGENT, WALKER_AGENT],
+          { view: camera, playing: true },
+        ),
+      ),
+    );
+    flushRaf(3);
+    return rendered;
+  }
+
+  /** Every string this frame actually painted. */
+  function paintedText(): ReadonlyArray<string> {
+    const painted: string[] = [];
+    for (const call of calls) {
+      if (call.method !== "fillText") continue;
+      const [text] = call.args;
+      if (typeof text === "string") painted.push(text);
+    }
+    return painted;
+  }
+
+  it("F10 fixture control: revealing an agent during playback really does leave it out of its chair", () => {
+    // A PARALLEL SCENE, the trick this suite already uses for the lod-0 pips:
+    // jsdom draws nothing, so the fixture's own claim - that the worker is a
+    // walker and not somebody sitting down - is checked against the same view
+    // fed the same two syncs, rather than assumed.
+    const view = walkInView();
+    const scene = new OfficeScene(view, null);
+    const both = [HOST_AGENT, WALKER_AGENT].map(officeAgentInput);
+    const first = [officeAgentInput(HOST_AGENT)];
+    function syncInput(args: {
+      readonly agents: ReadonlyArray<OfficeAgentInput>;
+      readonly ids: ReadonlySet<string>;
+      readonly playing: boolean;
+    }): OfficeSceneInput {
+      return {
+        agents: args.agents,
+        visibleAgentIds: args.ids,
+        statusById: new Map(),
+        partition: partitionOfficePopulation({
+          agents: args.agents,
+          statusById: new Map(),
+          previous: null,
+        }),
+        activityById: new Map(),
+        viewport: { width: 1200, height: 800 },
+        pulse: null,
+        pulseKey: null,
+        stepMs: BASE_STEP_MS,
+        cursorMs: null,
+        clockMs: 0,
+        openRequestsByReceiver: new Map(),
+        playing: args.playing,
+        reducedMotion: false,
+      };
+    }
+    scene.sync(
+      syncInput({ agents: first, ids: new Set(["host"]), playing: false }),
+    );
+    scene.sync(
+      syncInput({
+        agents: both,
+        ids: new Set(["host", "worker"]),
+        playing: true,
+      }),
+    );
+
+    const away = scene.frame(2, WHOLE_WORLD).awayAgentIds;
+    expect(away.has("worker")).toBe(true);
+    expect(away.has("host")).toBe(false);
+  });
+
+  it("F10: names a SELECTED walker at LOD 1", () => {
+    renderWithWalker({ view: walkInView(), camera: FIXED_CAMERA_VIEW });
+    // The floor's own accessible list is how a reader opens an agent without
+    // a pointer, and it is the same selection the pointer sets.
+    act(() => {
+      screen.getByTestId("comm-graph-office-agent-worker").click();
+    });
+    calls.length = 0;
+    flushRaf(2);
+    expect(paintedText()).toContain("Alpha Walker");
+    // The control that makes it a walker case: the other agent is seated,
+    // unselected and unhovered, so the middle band leaves it unnamed.
+    expect(paintedText()).not.toContain("Alpha Sitter");
+  });
+
+  it("F10: names a SEARCH-MATCHED walker at LOD 1", async () => {
+    renderWithWalker({ view: walkInView(), camera: FIXED_CAMERA_VIEW });
+    await act(async () => {
+      await latestFindAdapter().search({
+        requestId: 7,
+        query: "alpha",
+        matchCase: false,
+      });
+    });
+    calls.length = 0;
+    flushRaf(2);
+
+    // BOTH are matched, and the seated one is the control: a match ring
+    // paints its agent's name itself, so counting occurrences of one name
+    // alone cannot tell a name tag from a ring. What can is that a matched
+    // WALKER is painted exactly as often as a matched sitter - the same ring,
+    // and the same tag. Drop the tag for walkers and the walker's count falls
+    // short of the sitter's by one label's worth of calls.
+    const walker = paintedText().filter((text) => text === "Alpha Walker");
+    const sitter = paintedText().filter((text) => text === "Alpha Sitter");
+    expect(sitter.length).toBeGreaterThan(0);
+    expect(walker.length).toBe(sitter.length);
+  });
+
+  it("F10: names an ordinary walker at LOD 2", () => {
+    renderWithWalker({ view: walkInView(), camera: CLOSE_UP_CAMERA_VIEW });
+    calls.length = 0;
+    flushRaf(2);
+
+    // Close-up names everything. Nobody is hovered, selected or matched here;
+    // at this zoom that is not a question anybody asks.
+    const painted = paintedText();
+    expect(painted).toContain("Alpha Walker");
+    expect(painted).toContain("Alpha Sitter");
+  });
+
+  it("F11: names all five of an eight-tile HQ board's hottest, inside the board's own pixels", () => {
+    // The reviewer's own fixture: ordinary two-word names, and a board wide
+    // enough that a character budget called four of them a comfortable fit
+    // while the plate they actually needed was 356px across a 128px board.
+    const roster = ["a", "b", "c", "d", "e", "f"];
+    const names = [
+      "Alpha Build",
+      "Beta Queue",
+      "Gamma Store",
+      "Delta Auth",
+      "Epsilon Docs",
+      "Zeta Idle",
+    ];
+    const hqBoard: OfficeSign = {
+      kind: "hq-board",
+      tile: { col: 2, row: 2 },
+      widthTiles: 8,
+      text: "",
+      ownerAgentId: null,
+      hostId: null,
+      agentIds: roster,
+    };
+    const layout: OfficeLayout = {
+      view: "floor",
+      cols: 16,
+      rows: 16,
+      desks: new Map(),
+      seats: new Map(),
+      signs: [hqBoard],
+      rooms: [],
+      floors: [emptyFloor()],
+      doorTile: { col: 0, row: 0 },
+      lobbyTile: { col: 0, row: 1 },
+      props: [],
+      walkable: allWalkable(16, 16),
+      frozen: null,
+      shiftFromPrevious: null,
+      stable: true,
+    };
+    const view: OfficeView = { ...OFFICE_VIEWS.floor, plan: () => layout };
+    const agents = roster.map((id, index) => agent(id, names[index]));
+
+    render(
+      withQueryClient(officeElementWithView(view, new Set(roster), agents, {})),
+    );
+    setIntersecting(true);
+    flushRaf(3);
+
+    // Found by the second-hottest either way, so a failure prints the plate
+    // that WAS painted rather than `undefined`.
+    const plate = paintedText().find(
+      (text) => text.includes("AB") || text.includes("ALPHA"),
+    );
+    // FIVE ENTRIES. The sixth (Zeta Idle) is outside the five hottest and
+    // stays off; the fifth is the one the old character budget dropped.
+    expect(plate).toBe("AB BQ GS DA ED");
+    // And it fits: this suite's canvas reports six pixels a character (jsdom
+    // has no font metrics of its own), so the plate is 14*6 + 8 = 92px on a
+    // board that is 8 tiles * 16px * zoom 1 = 128px wide.
+    const measured = (plate?.length ?? 0) * 6 + 8;
+    expect(measured).toBeLessThanOrEqual(8 * OFFICE_TILE);
   });
 
   it("F11: gives an HQ board a different summary than an ordinary board over the same roster", () => {
@@ -1823,7 +2120,7 @@ describe("CommGraphOfficeCanvas fixup 1 - renderer projection and semantic zoom 
     const agents = roster.map((id) => agent(id, id));
 
     render(
-      withQueryClient(officeElementWithView(view, new Set(roster), agents)),
+      withQueryClient(officeElementWithView(view, new Set(roster), agents, {})),
     );
     setIntersecting(true);
     flushRaf(3);
@@ -1911,6 +2208,7 @@ describe("CommGraphOfficeCanvas fixup 2 - real Towers semantic zoom", () => {
         OFFICE_VIEWS.towers,
         new Set(REAL_TOWERS_AGENTS.map((person) => person.id)),
         REAL_TOWERS_AGENTS,
+        {},
       ),
       { view: { ...FIXED_CAMERA_VIEW, zoom } },
     );
@@ -1947,6 +2245,7 @@ describe("CommGraphOfficeCanvas fixup 2 - real Towers semantic zoom", () => {
         OFFICE_VIEWS.towers,
         new Set(REAL_TOWERS_AGENTS.map((person) => person.id)),
         REAL_TOWERS_AGENTS,
+        {},
       ),
       {
         view: {
@@ -2036,7 +2335,7 @@ describe("CommGraphOfficeCanvas fixup 2 - real Towers semantic zoom", () => {
     const visibleIds = new Set(agents.map((person) => person.id));
     render(
       withQueryClient(
-        officeElementWithView(OFFICE_VIEWS.towers, visibleIds, agents),
+        officeElementWithView(OFFICE_VIEWS.towers, visibleIds, agents, {}),
       ),
     );
     setIntersecting(true);

@@ -27,6 +27,7 @@ import {
   type OfficeAppearance,
   type OfficeCharacterPose,
   type OfficeDrawable,
+  type OfficeDesk,
   type OfficeErrandSpot,
   type OfficeFloor,
   type OfficeFrame,
@@ -6847,6 +6848,472 @@ describe("OfficeScene fixup 1 - F17 isometric growth reports a projected shift",
   });
 });
 
+// ---- T2 fixup 2: the reviewer's residuals ---------------------------- //
+
+describe("OfficeScene fixup 2 - F2 a remembered errand tile follows the shift", () => {
+  /**
+   * TWO SPOTS ON ONE TILE, of different kinds, because that is the only shape
+   * in which `lastErrandKey` does any work at all: `errandOptionsFor` already
+   * excludes a spot of the last errand's KIND, so a tile is only ever
+   * consulted for a spot whose kind differs. One agent, and no rooms, so no
+   * visit target can ever be offered and the two spots are the whole of what
+   * this character could possibly walk to.
+   */
+  function spotsAt(tile: OfficeTilePos): ReadonlyArray<OfficeErrandSpot> {
+    const base = {
+      facing: "down" as const,
+      audience: { kind: "floor" as const },
+      actionTile: null,
+      floorIndex: 0,
+    };
+    return [
+      {
+        ...base,
+        kind: "coffee",
+        fixtureId: "coffee-1",
+        tile,
+        approachTile: tile,
+      },
+      {
+        ...base,
+        kind: "cooler",
+        fixtureId: "cooler-1",
+        tile,
+        approachTile: tile,
+      },
+    ];
+  }
+
+  function layoutAt(args: {
+    readonly deskRow: number;
+    readonly spotRow: number;
+    readonly shift: OfficeTilePos | null;
+    readonly desks: ReadonlyArray<string>;
+  }): OfficeLayout {
+    const { deskRow, desks, shift, spotRow } = args;
+    const seats = new Map<string, OfficeSeat>();
+    const assigned = new Map<string, OfficeDesk>();
+    for (let index = 0; index < desks.length; index += 1) {
+      const agentId = desks[index];
+      const seat = deskSeat({
+        seatId: `h/0/${agentId}`,
+        deskTile: { col: 2 + index * 3, row: deskRow },
+        floorIndex: 0,
+      });
+      seats.set(seat.seatId, seat);
+      assigned.set(agentId, { ...seat, agentId });
+    }
+    const floor: OfficeFloor = {
+      ...handBuiltFloor(spotsAt({ col: 10, row: spotRow })),
+      doorTile: { col: 0, row: deskRow - 3 },
+      lobbyTile: { col: 0, row: deskRow - 2 },
+      receptionTile: { col: 0, row: deskRow - 1 },
+      clockTile: { col: 15, row: deskRow - 3 },
+    };
+    return {
+      view: "floor",
+      cols: 16,
+      rows: 24,
+      desks: assigned,
+      seats,
+      signs: [],
+      rooms: [],
+      floors: [floor],
+      doorTile: { col: 0, row: deskRow - 3 },
+      lobbyTile: { col: 0, row: deskRow - 2 },
+      props: [],
+      walkable: allWalkable(24, 16),
+      frozen: null,
+      shiftFromPrevious: shift,
+      stable: true,
+    };
+  }
+
+  it("keeps the tile an agent last visited blocked after the whole floor moves", () => {
+    const before = layoutAt({
+      deskRow: 3,
+      spotRow: 10,
+      shift: null,
+      desks: ["a"],
+    });
+    const after = layoutAt({
+      deskRow: 7,
+      spotRow: 14,
+      shift: { col: 0, row: 4 },
+      desks: ["a", "b"],
+    });
+    const view: OfficeView = {
+      ...OFFICE_VIEWS.floor,
+      plan: (input) => (input.agents.length <= 1 ? before : after),
+    };
+    const scene = new OfficeScene(view, null);
+    const A = agent({ id: "a", createdAt: 1 });
+    const B = agent({ id: "b", createdAt: 2 });
+    scene.sync(sceneInput({ agents: [A], visibleAgentIds: new Set(["a"]) }));
+
+    // One errand, out and back. This is the positive control for everything
+    // below: the fixture demonstrably does send this agent on errands.
+    let away = false;
+    for (let step = 0; step < 600 && !away; step += 1) {
+      scene.tick(100);
+      away = frameOf(scene).awayAgentIds.has("a");
+    }
+    expect(away).toBe(true);
+    let home = false;
+    for (let step = 0; step < 600 && !home; step += 1) {
+      scene.tick(100);
+      home = !frameOf(scene).awayAgentIds.has("a");
+    }
+    expect(home).toBe(true);
+
+    // And now it stays home: the other spot shares the tile it just came back
+    // from, and the remembered key is the only thing excluding it.
+    let leftAgain = false;
+    for (let step = 0; step < 400 && !leftAgain; step += 1) {
+      scene.tick(100);
+      leftAgain = frameOf(scene).awayAgentIds.has("a");
+    }
+    expect(leftAgain).toBe(false);
+
+    // The whole floor translates four rows. The spot that was at 10,10 is at
+    // 10,14 now, and it is the SAME spot - so it has to stay blocked.
+    scene.sync(
+      sceneInput({
+        agents: [A, B],
+        visibleAgentIds: new Set(["a", "b"]),
+        pulseKey: "grow",
+      }),
+    );
+    let leftAfterShift = false;
+    for (let step = 0; step < 400 && !leftAfterShift; step += 1) {
+      scene.tick(100);
+      leftAfterShift = frameOf(scene).awayAgentIds.has("a");
+    }
+    expect(leftAfterShift).toBe(false);
+  });
+});
+
+describe("OfficeScene fixup 2 - F4 a foreground part is not the whole owner", () => {
+  const BACK: OfficeRect = { x: 0, y: 0, width: 200, height: 150 };
+  /** A local strip along the bottom of the back, painted far in front of it. */
+  const STRIP = { x: 0, y: 140, width: 200, height: 10 };
+  const STRIP_DEPTH = 1000;
+
+  /** A point on the back that a character covers, and the strip does not. */
+  const OVER_THE_BACK: OfficePoint = { x: 104, y: 70 };
+  /** A point the strip DOES cover, and a character with it. */
+  const UNDER_THE_STRIP: OfficePoint = { x: 104, y: 142 };
+
+  function sceneWithParts(): OfficeScene {
+    // `a` owns the two parts. Its own desk is out of the way in the corner so
+    // the only thing of `a`'s near either test point is the declared box.
+    const deskA: OfficeSeat = {
+      ...deskSeat({
+        seatId: "h/0/a",
+        deskTile: { col: 0, row: 0 },
+        floorIndex: 0,
+      }),
+      hitBox: BACK,
+    };
+    // Chair (6,4): foot (104, 80), sprite box (96,60,16,20) - over the back.
+    const deskB = deskSeat({
+      seatId: "h/0/b",
+      deskTile: { col: 6, row: 3 },
+      floorIndex: 0,
+    });
+    // Chair (6,8): foot (104, 144), sprite box (96,124,16,20) - into the strip.
+    const deskC = deskSeat({
+      seatId: "h/0/c",
+      deskTile: { col: 6, row: 7 },
+      floorIndex: 0,
+    });
+    const layout: OfficeLayout = {
+      view: "floor",
+      cols: 16,
+      rows: 16,
+      desks: new Map([
+        ["a", { ...deskA, agentId: "a" }],
+        ["b", { ...deskB, agentId: "b" }],
+        ["c", { ...deskC, agentId: "c" }],
+      ]),
+      seats: new Map([
+        ["h/0/a", deskA],
+        ["h/0/b", deskB],
+        ["h/0/c", deskC],
+      ]),
+      signs: [],
+      rooms: [],
+      floors: [handBuiltFloor([])],
+      doorTile: { col: 0, row: 0 },
+      lobbyTile: { col: 0, row: 1 },
+      props: [],
+      walkable: allWalkable(16, 16),
+      frozen: null,
+      shiftFromPrevious: null,
+      stable: true,
+    };
+    const view: OfficeView = {
+      ...OFFICE_VIEWS.floor,
+      plan: () => layout,
+      painter: {
+        ...OFFICE_VIEWS.floor.painter,
+        depth: "world",
+        // Nothing but `a`'s two parts, so every region in the frame is either
+        // one of them, `a`'s declared box, or somebody's character.
+        seatProps: (_layout, seat) =>
+          seat.seatId !== "h/0/a"
+            ? []
+            : [
+                {
+                  drawable: { kind: "block", fill: "room", ...BACK },
+                  depth: 0,
+                  ownerAgentId: "a",
+                },
+                {
+                  drawable: { kind: "block", fill: "pod", ...STRIP },
+                  depth: STRIP_DEPTH,
+                  ownerAgentId: "a",
+                },
+              ],
+      },
+    };
+    const scene = new OfficeScene(view, null);
+    scene.sync(
+      sceneInput({
+        agents: [
+          agent({ id: "a", createdAt: 1 }),
+          agent({ id: "b", createdAt: 2 }),
+          agent({ id: "c", createdAt: 3 }),
+        ],
+        visibleAgentIds: new Set(["a", "b", "c"]),
+      }),
+    );
+    return scene;
+  }
+
+  /** The first region covering this point: `hitRegions` is front-most first. */
+  function ownerAt(frame: OfficeFrame, point: OfficePoint): string | null {
+    for (const region of frame.hitRegions) {
+      const { rect } = region;
+      if (
+        point.x >= rect.x &&
+        point.x < rect.x + rect.width &&
+        point.y >= rect.y &&
+        point.y < rect.y + rect.height
+      ) {
+        return region.agentId;
+      }
+    }
+    return null;
+  }
+
+  it("gives an overlapped point to the character drawn over the back, not to the back's owner", () => {
+    const scene = sceneWithParts();
+    const frame = frameOf(scene);
+    if (frame.world === null) throw new Error("expected a world stream");
+
+    // What the EYE sees, established first and independently of the regions:
+    // the back goes down, then b's character over it.
+    const backIndex = frame.world.findIndex(
+      (entry) =>
+        entry.ownerAgentId === "a" &&
+        entry.drawable.kind === "block" &&
+        entry.drawable.height === BACK.height,
+    );
+    const characterIndex = frame.world.findIndex(
+      (entry) =>
+        entry.ownerAgentId === "b" &&
+        entry.drawable.kind === "sprite" &&
+        entry.drawable.sprite.name === "character",
+    );
+    expect(backIndex).toBeGreaterThanOrEqual(0);
+    expect(characterIndex).toBeGreaterThan(backIndex);
+
+    // Both paths must agree with that, and with each other.
+    expect(ownerAt(frame, OVER_THE_BACK)).toBe("b");
+    expect(scene.hitTest(OVER_THE_BACK)).toBe("b");
+  });
+
+  it("still gives a point the foreground strip covers to the strip's owner", () => {
+    const scene = sceneWithParts();
+    const frame = frameOf(scene);
+
+    // c's sprite box reaches y=144 and the strip starts at y=140, so this
+    // point is under both of them - and the strip is painted in front.
+    expect(ownerAt(frame, UNDER_THE_STRIP)).toBe("a");
+    expect(scene.hitTest(UNDER_THE_STRIP)).toBe("a");
+  });
+});
+
+describe("OfficeScene fixup 2 - F6 an empty frame projects nobody", () => {
+  /** Nowhere near any office this fixture could plan. */
+  const OFF_SCREEN: OfficeRect = {
+    x: -50_000,
+    y: -50_000,
+    width: 10,
+    height: 10,
+  };
+
+  interface WarmedEmptyFrame {
+    readonly projectCalls: number;
+    readonly frame: OfficeFrame;
+  }
+
+  /**
+   * The projector calls a SECOND empty frame costs, at this population.
+   *
+   * The first frame is allowed whatever it needs; what this measures is the
+   * steady state, which is where an office sitting still spends its battery.
+   */
+  function warmedEmptyFrame(population: number): WarmedEmptyFrame {
+    const epic = makeTestEpic("triage", population, 1);
+    let projectCalls = 0;
+    const view: OfficeView = {
+      ...OFFICE_VIEWS.floor,
+      painter: {
+        ...OFFICE_VIEWS.floor.painter,
+        projector: (layout) => {
+          const real = OFFICE_VIEWS.floor.painter.projector(layout);
+          return {
+            ...real,
+            project: (col, row) => {
+              projectCalls += 1;
+              return real.project(col, row);
+            },
+          };
+        },
+      },
+    };
+    const scene = new OfficeScene(view, null);
+    scene.sync(
+      sceneInput({
+        agents: epic.agents,
+        visibleAgentIds: new Set(epic.agents.map((person) => person.id)),
+        statusById: epic.statusById,
+      }),
+    );
+    scene.frame(1, OFF_SCREEN);
+    expect(projectCalls).toBeGreaterThan(0);
+    projectCalls = 0;
+    // The frame FIRST: an object literal reads `projectCalls` where it is
+    // written, so building the pair inline would report the counter as it was
+    // before the frame it is supposed to be measuring.
+    const frame = scene.frame(1, OFF_SCREEN);
+    return { projectCalls, frame };
+  }
+
+  it("costs the same projector calls at a thousand agents as at a hundred", () => {
+    const many = warmedEmptyFrame(1000);
+    const few = warmedEmptyFrame(100);
+
+    // Nothing is on screen either way, which is the premise: what follows is
+    // about the price of discovering that, not about what was drawn.
+    expect(many.frame.actors).toEqual([]);
+    expect(many.frame.props).toEqual([]);
+    expect(many.frame.hitRegions).toEqual([]);
+
+    // INDEPENDENT OF THE POPULATION. A frame is allowed the handful of fixed
+    // points its own geometry takes; what it may not do is pay one per agent
+    // it is not drawing - which was a thousand of them, every frame, forever.
+    expect(many.projectCalls).toBe(few.projectCalls);
+    expect(many.projectCalls).toBeLessThan(100);
+  });
+});
+
+describe("OfficeScene fixup 2 - F9 a walking sender focuses the walker", () => {
+  function walkingScene(): OfficeScene {
+    const desk = deskSeat({
+      seatId: "h/0/a",
+      deskTile: { col: 2, row: 3 },
+      floorIndex: 0,
+    });
+    const spot: OfficeErrandSpot = {
+      kind: "coffee",
+      tile: { col: 10, row: 10 },
+      facing: "down",
+      audience: { kind: "floor" },
+      fixtureId: "coffee-1",
+      approachTile: { col: 10, row: 10 },
+      actionTile: null,
+      floorIndex: 0,
+    };
+    const layout: OfficeLayout = {
+      view: "floor",
+      cols: 16,
+      rows: 16,
+      desks: new Map([["a", { ...desk, agentId: "a" }]]),
+      seats: new Map([["h/0/a", desk]]),
+      signs: [],
+      rooms: [],
+      floors: [handBuiltFloor([spot])],
+      doorTile: { col: 0, row: 0 },
+      lobbyTile: { col: 0, row: 1 },
+      props: [],
+      walkable: allWalkable(16, 16),
+      frozen: null,
+      shiftFromPrevious: null,
+      stable: true,
+    };
+    // The same lifted projector the seated case uses, so the two differ in
+    // the character's state and in nothing else.
+    const projector: OfficeProjector = {
+      project: (col, row) => ({ x: col * OFFICE_TILE, y: row * OFFICE_TILE }),
+      bounds: { x: 0, y: 0, width: 2000, height: 2000 },
+      seatLift: () => 40,
+    };
+    const view: OfficeView = {
+      ...OFFICE_VIEWS.floor,
+      plan: () => layout,
+      painter: { ...OFFICE_VIEWS.floor.painter, projector: () => projector },
+    };
+    const scene = new OfficeScene(view, null);
+    scene.sync(
+      sceneInput({
+        agents: [agent({ id: "a", createdAt: 1 })],
+        visibleAgentIds: new Set(["a"]),
+      }),
+    );
+    return scene;
+  }
+
+  it("points at the sender's live head while it is out of its chair", () => {
+    const scene = walkingScene();
+    let away = false;
+    for (let step = 0; step < 600 && !away; step += 1) {
+      scene.tick(100);
+      away = frameOf(scene).awayAgentIds.has("a");
+    }
+    expect(away).toBe(true);
+    // A few more steps, so the focus below is taken against a character that
+    // is genuinely between tiles rather than one still leaving its chair.
+    for (let step = 0; step < 5; step += 1) scene.tick(100);
+
+    scene.sync(
+      sceneInput({
+        agents: [agent({ id: "a", createdAt: 1 })],
+        visibleAgentIds: new Set(["a"]),
+        pulse: { kind: "agent", agentId: "a", senderAgentId: "a" },
+        pulseKey: "agent-a",
+      }),
+    );
+    // Still walking: the pulse is an agent pulse, and one of those does not
+    // send anybody back to their chair.
+    expect(frameOf(scene).awayAgentIds.has("a")).toBe(true);
+
+    // `locate` answers a WALKER with its own sprite box, so this is the live
+    // character and not the seat - and its head is the top-centre of it.
+    const box = scene.locate("a");
+    if (box === null) throw new Error("expected a box for the walker");
+    expect(frameOf(scene).focus).toEqual({
+      x: box.x + OFFICE_CHARACTER_WIDTH / 2,
+      y: box.y,
+    });
+    // The seated anchor would have been the lifted chair at y=20; anything
+    // reading the seat here answers that instead.
+    expect(frameOf(scene).focus?.y).not.toBe(20);
+  });
+});
+
 describe("OfficeScene fixup 1 - F19 a waking cubby stays under its occupant", () => {
   interface SeatCall {
     readonly seatId: string;
@@ -6859,6 +7326,8 @@ describe("OfficeScene fixup 1 - F19 a waking cubby stays under its occupant", ()
     readonly sleeper: string;
     readonly cubbySeatId: string;
     readonly wake: () => void;
+    /** Re-syncs with the sleeper on a new status; everyone else stays idle. */
+    readonly setStatus: (status: OfficeAgentStatus) => void;
   }
 
   /**
@@ -6900,19 +7369,41 @@ describe("OfficeScene fixup 1 - F19 a waking cubby stays under its occupant", ()
       (desk) => desk.kind === "cubby",
     );
     if (cubby === undefined) throw new Error("expected a cubby on Building");
-    const hot = new Map(cold);
-    hot.set(cubby.agentId, "working");
+    const setStatus = (status: OfficeAgentStatus): void => {
+      const next = new Map(cold);
+      next.set(cubby.agentId, status);
+      scene.sync(
+        sceneInput({ agents: epic.agents, visibleAgentIds, statusById: next }),
+      );
+    };
     return {
       scene,
       calls,
       sleeper: cubby.agentId,
       cubbySeatId: cubby.seatId,
       wake: () => {
-        scene.sync(
-          sceneInput({ agents: epic.agents, visibleAgentIds, statusById: hot }),
-        );
+        setStatus("working");
       },
+      setStatus,
     };
+  }
+
+  /** Ticks until this agent is in a chair again, or gives up. */
+  function settle(scene: OfficeScene, agentId: string): boolean {
+    for (let step = 0; step < 400; step += 1) {
+      scene.tick(100);
+      if (!frameOf(scene).awayAgentIds.has(agentId)) return true;
+    }
+    return false;
+  }
+
+  /** Ticks until this agent is out of its chair again, or gives up. */
+  function leave(scene: OfficeScene, agentId: string): boolean {
+    for (let step = 0; step < 400; step += 1) {
+      scene.tick(100);
+      if (frameOf(scene).awayAgentIds.has(agentId)) return true;
+    }
+    return false;
   }
 
   it("paints the cubby with its occupant on the sync that wakes it", () => {
@@ -6944,16 +7435,32 @@ describe("OfficeScene fixup 1 - F19 a waking cubby stays under its occupant", ()
     // Walk it all the way to the reserve it claimed. `awayAgentIds` is the
     // scene's own word for "not in its chair", so the loop ends on the same
     // boundary the seat release does rather than on a tick count.
-    let arrived = false;
-    for (let step = 0; step < 400 && !arrived; step += 1) {
-      scene.tick(100);
-      arrived = !frameOf(scene).awayAgentIds.has(sleeper);
-    }
-    expect(arrived).toBe(true);
+    expect(settle(scene, sleeper)).toBe(true);
 
     calls.length = 0;
     scene.frame(1, WHOLE_WORLD);
     expect(calls.some((call) => call.seatId === cubbySeatId)).toBe(false);
+  });
+
+  it("does not reopen the finished handover when the settled agent walks again", () => {
+    const { calls, cubbySeatId, scene, setStatus, sleeper, wake } =
+      wakingCubby();
+    wake();
+    expect(settle(scene, sleeper)).toBe(true);
+    calls.length = 0;
+    scene.frame(1, WHOLE_WORLD);
+    // The handover is over and the cubby is gone. Everything below is about a
+    // LATER walk, which has nothing to do with it.
+    expect(calls.some((call) => call.seatId === cubbySeatId)).toBe(false);
+
+    // Attention sends it to the counter - a real multi-tile queue-out, and it
+    // starts from the reserve it settled in, nowhere near the old cubby.
+    setStatus("attention");
+    expect(leave(scene, sleeper)).toBe(true);
+
+    calls.length = 0;
+    scene.frame(1, WHOLE_WORLD);
+    expect(calls.filter((call) => call.seatId === cubbySeatId)).toEqual([]);
   });
 });
 

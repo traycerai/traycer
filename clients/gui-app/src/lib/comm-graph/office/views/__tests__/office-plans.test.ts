@@ -14,11 +14,15 @@ import { partitionOfficePopulation } from "@/lib/comm-graph/office/office-popula
 import { OfficeScene } from "@/lib/comm-graph/office/office-scene";
 import { makeTestEpic } from "@/lib/comm-graph/office/office-test-epic";
 import {
+  OFFICE_CHARACTER_HEIGHT,
+  OFFICE_CHARACTER_WIDTH,
   type OfficeAgentInput,
   type OfficeAgentStatus,
   type OfficeErrandKind,
   type OfficeFloor,
+  type OfficeFrame,
   type OfficeLayout,
+  type OfficeRect,
   type OfficeSceneInput,
   type OfficeSpriteName,
   type OfficeTilePos,
@@ -28,11 +32,55 @@ import {
 import {
   OFFICE_VIEW_IDS,
   OFFICE_VIEWS,
+  type OfficePainter,
   type OfficePlanInput,
+  type OfficeProjector,
 } from "@/lib/comm-graph/office/views/office-view";
 
 function isWalkable(layout: OfficeLayout, tile: OfficeTilePos): boolean {
   return layout.walkable[tile.row]?.[tile.col];
+}
+
+/** A frame wide enough that nothing in the layout is culled by the viewport. */
+function frameOverLayout(
+  scene: OfficeScene,
+  projector: OfficeProjector,
+): OfficeFrame {
+  const { bounds } = projector;
+  const worldRect = {
+    x: bounds.x - 4096,
+    y: bounds.y - 4096,
+    width: bounds.width + 8192,
+    height: bounds.height + 8192,
+  };
+  return scene.frame(2, worldRect);
+}
+
+/**
+ * Where an agent's own CHARACTER is actually drawn, from the frame's hit
+ * regions - a seat region is desk-sized, so a character region is the one
+ * with `OFFICE_CHARACTER_HEIGHT`. `null` when nothing drew that agent.
+ */
+function characterRectOf(
+  frame: OfficeFrame,
+  agentId: string,
+): OfficeRect | null {
+  // F4 gives `worldHitRegions` one region PER DRAWABLE PART, not one per
+  // seat - so on a `world` painter (Campus, City) a seat's furniture parts
+  // sit in this same array now. `character` is the only 20px-tall sprite in
+  // `SPRITE_SIZES`, but a `block` drawable can be any height, so the width
+  // is pinned too; and if more than one region still matches, that is a
+  // silent ambiguity this helper must not paper over by taking the first.
+  const matches = frame.hitRegions.filter(
+    (candidate) =>
+      candidate.agentId === agentId &&
+      candidate.rect.height === OFFICE_CHARACTER_HEIGHT &&
+      candidate.rect.width === OFFICE_CHARACTER_WIDTH,
+  );
+  if (matches.length > 1) {
+    throw new Error(`more than one character-shaped hit region for ${agentId}`);
+  }
+  return matches.length === 0 ? null : matches[0].rect;
 }
 
 function floorBandContains(floor: OfficeFloor, row: number): boolean {
@@ -609,7 +657,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
     }
   });
 
-  it("moves only the characters the scene itself relocates, not every agent, when growth reshapes an unstable layout", (context) => {
+  it("walks every character whose chair actually moved to its new seat, and leaves the rest exactly where they were, when growth reshapes an unstable layout", (context) => {
     const epic = makeTestEpic("triage", 30, 4);
     const partition = partitionOfficePopulation({
       agents: epic.agents,
@@ -632,20 +680,41 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
       );
       return;
     }
-    // Captured from the SCENE, not recomputed from the two plans - this is
-    // what the finding calls a test-computed diff versus the real thing.
-    const beforeLocations = new Map(
-      epic.agents.map((person) => [person.id, scene.locate(person.id)]),
+    const beforeProjector = view.painter.projector(before);
+    // Captured from the SCENE's own DRAWN characters, not `scene.locate()`:
+    // for a seated agent, `locate` answers from the SEAT BOOK's effective
+    // seat, not from the character - so it reports the new seat's position
+    // even when nothing actually walked there. The hit region a character
+    // is really drawn at is the one thing a disabled `rehomeCharacters`
+    // cannot fake, because it is built from the character's own tile.
+    const beforeFrame = frameOverLayout(scene, beforeProjector);
+    const beforeRects = new Map(
+      epic.agents.map((person) => [
+        person.id,
+        characterRectOf(beforeFrame, person.id),
+      ]),
     );
 
+    // A single appended solo (the earlier fixture) never disturbs an
+    // existing chair on Floor or Campus: both repack by tiling cabins/rooms
+    // left to right, and one more pod at the end just extends the tiling.
+    // Growing an EXISTING team's lead by a whole extra team's worth of
+    // members grows that team's own room/cabin footprint enough to push
+    // everything packed after it - which is what actually reshuffles
+    // existing chairs on both views at this fixture (verified: 27 of 30
+    // pre-existing agents move at this exact scale/seed on both).
+    const leadAgent = epic.agents.find((agent) => agent.id.includes("lead"));
+    if (leadAgent === undefined) {
+      throw new Error("expected a team lead in the triage fixture");
+    }
     const grown = [
       ...epic.agents,
-      {
+      ...Array.from({ length: 7 }, (_unused, index) => ({
         ...epic.agents[0],
-        id: "office-plans-append-probe-2",
-        parentId: null,
-        createdAt: Number.MAX_SAFE_INTEGER,
-      },
+        id: `office-plans-grow-probe-${index}`,
+        parentId: leadAgent.id,
+        createdAt: Number.MAX_SAFE_INTEGER - index,
+      })),
     ];
     const grownPartition = partitionOfficePopulation({
       agents: grown,
@@ -661,13 +730,12 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
     );
     const after = scene.layout();
     if (after === null) throw new Error("expected a layout");
-    const newSeatId = after.desks.get("office-plans-append-probe-2")?.seatId;
+    const newSeatId = after.desks.get("office-plans-grow-probe-0")?.seatId;
     expect(newSeatId).toBeDefined();
 
     // An isometric view's origin can move with growth even when no tile
     // does (F17, tracked separately) - fold that known, separately-scoped
     // delta out here so THIS case stays about the moved-SET, not about F17.
-    const beforeProjector = view.painter.projector(before);
     const afterProjector = view.painter.projector(after);
     const originBefore = beforeProjector.project(0, 0);
     const originAfter = afterProjector.project(0, 0);
@@ -675,33 +743,74 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
       x: originAfter.x - originBefore.x,
       y: originAfter.y - originBefore.y,
     };
+    const afterFrame = frameOverLayout(scene, afterProjector);
 
-    // A seat whose tile is UNCHANGED between the two plans must leave its
-    // occupant's on-screen position exactly where it was, up to that origin
-    // delta - proven through the scene's own rehoming, not a diff the test
-    // performs itself. If the scene rehomed every agent (or none) regardless
-    // of whether their seat moved, this is where that would show up.
+    // An independent oracle for "where a settled agent's CHARACTER really
+    // belongs": a FRESH scene synced directly onto the grown population,
+    // which never goes through a re-layout transition or `rehomeCharacters`
+    // at all - a character seen for the first time is seated straight onto
+    // its assigned chair the moment it appears, a path `rehomeCharacters`
+    // never touches. Floor and Campus both replan purely from the agent set
+    // (`stable: false`; `previous` is never read - see floor-plan.ts and
+    // campus-plan.ts), so this fresh scene's drawn positions are exactly
+    // what the transitioned scene above SHOULD converge to, established
+    // without relying on the rehoming code path under test.
+    const freshScene = new OfficeScene(view, null);
+    freshScene.sync(
+      sceneInputFor({
+        agents: grown,
+        statusById: epic.statusById,
+        partition: grownPartition,
+      }),
+    );
+    const freshFrame = frameOverLayout(freshScene, afterProjector);
+
+    let movedCount = 0;
+    let unmovedCount = 0;
     for (const seatAgent of epic.agents) {
+      // Archived agents get a dust-sheeted desk, not a live character - there
+      // is nothing drawn to check them against, on EITHER side of growth.
+      if (seatAgent.archivedAt !== null) continue;
+      const beforeRect = beforeRects.get(seatAgent.id);
+      if (beforeRect === undefined) continue;
+      if (beforeRect === null) {
+        throw new Error(`no drawn character for ${seatAgent.id} before growth`);
+      }
+      const afterRect = characterRectOf(afterFrame, seatAgent.id);
+      const expectedIfUnmoved = {
+        ...beforeRect,
+        x: beforeRect.x + originDelta.x,
+        y: beforeRect.y + originDelta.y,
+      };
       const beforeSeat = before.desks.get(seatAgent.id);
       const afterSeat = after.desks.get(seatAgent.id);
-      if (beforeSeat === undefined || afterSeat === undefined) continue;
       const seatUnchanged =
+        beforeSeat !== undefined &&
+        afterSeat !== undefined &&
         beforeSeat.chairTile.col === afterSeat.chairTile.col &&
         beforeSeat.chairTile.row === afterSeat.chairTile.row;
-      if (!seatUnchanged) continue;
-      const beforeLocation = beforeLocations.get(seatAgent.id);
-      if (beforeLocation === undefined) continue;
-      const afterLocation = scene.locate(seatAgent.id);
-      expect(afterLocation).toEqual(
-        beforeLocation === null
-          ? null
-          : {
-              ...beforeLocation,
-              x: beforeLocation.x + originDelta.x,
-              y: beforeLocation.y + originDelta.y,
-            },
-      );
+      if (seatUnchanged) {
+        // A seat whose tile is UNCHANGED between the two plans must leave
+        // its occupant's DRAWN character exactly where it was, up to the
+        // origin delta - proven through the scene's own rehoming, not a
+        // diff the test performs itself.
+        unmovedCount += 1;
+        expect(afterRect).toEqual(expectedIfUnmoved);
+        continue;
+      }
+      // The scene actually rehomed this agent: its character now has to be
+      // DRAWN at the real seat a scene loaded fresh onto the SAME final
+      // layout would draw it at - not left standing at the stale pre-growth
+      // spot, which is exactly what a disabled `rehomeCharacters` leaves
+      // behind.
+      movedCount += 1;
+      expect(afterRect).toEqual(characterRectOf(freshFrame, seatAgent.id));
+      expect(afterRect).not.toEqual(expectedIfUnmoved);
     }
+    // The whole point of this fixture: real movement happened, and it
+    // was not universal either - both outcomes are exercised.
+    expect(movedCount).toBeGreaterThan(0);
+    expect(unmovedCount).toBeGreaterThan(0);
   });
 
   it("measures exactly the size its own plan projects to", () => {
@@ -717,7 +826,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
     expect(view.measure(input)).toEqual(scene.worldSize());
   });
 
-  it("keeps every sprite the real painter draws inside the projector's bounds", () => {
+  it("keeps every sprite the real painter draws CONTAINED in the projector's bounds", () => {
     const epic = makeTestEpic("triage", 60, 6);
     const partition = partitionOfficePopulation({
       agents: epic.agents,
@@ -745,21 +854,124 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
     const frame = scene.frame(2, worldRect);
     // The PAINTER's actual output, not the layout's declared hit boxes - a
     // sprite the painter draws taller or wider than its tile (a tower, a
-    // spire) is exactly what a declared-hitbox check cannot see.
-    const drawables =
-      frame.world !== null
+    // spire) is exactly what a declared-hitbox check cannot see. The floor
+    // drawables are included too - a lod-0/lod-1 block or tile sprite is as
+    // real a painter output as a prop or an actor.
+    const drawables = [
+      ...frame.floor,
+      ...(frame.world !== null
         ? frame.world.map((entry) => entry.drawable)
-        : [...frame.props, ...frame.actors];
+        : [...frame.props, ...frame.actors]),
+    ];
     let sprites = 0;
     for (const drawable of drawables) {
       if (drawable.kind !== "sprite") continue;
       sprites += 1;
       const size = officeSpriteSize(drawable.sprite);
-      expect(drawable.x + size.width).toBeGreaterThanOrEqual(bounds.x);
-      expect(drawable.y + size.height).toBeGreaterThanOrEqual(bounds.y);
-      expect(drawable.x).toBeLessThanOrEqual(bounds.x + bounds.width);
-      expect(drawable.y).toBeLessThanOrEqual(bounds.y + bounds.height);
+      // Full CONTAINMENT, not intersection: all four edges of the sprite's
+      // box have to sit inside the bounds box, not merely touch it.
+      expect(drawable.x).toBeGreaterThanOrEqual(bounds.x);
+      expect(drawable.y).toBeGreaterThanOrEqual(bounds.y);
+      expect(drawable.x + size.width).toBeLessThanOrEqual(
+        bounds.x + bounds.width,
+      );
+      expect(drawable.y + size.height).toBeLessThanOrEqual(
+        bounds.y + bounds.height,
+      );
     }
     expect(sprites).toBeGreaterThan(0);
+  });
+
+  /**
+   * (g)'s positive control: intersection alone would accept a sprite that
+   * pokes almost entirely outside the bounds as long as its top-left corner
+   * still touches them. Decorate the REAL painter to append one of its own
+   * real sprite parts at `(bounds.right - 1, bounds.bottom - 1)` - the exact
+   * reproduction the reviewer used - and prove two things about it: it is
+   * genuinely present in the real frame (so the probe above is reading real
+   * painter output, not a dropped part), and the containment predicate the
+   * case above uses rejects it.
+   */
+  it("(g) rejects a real sprite the painter draws mostly outside the bounds, proving the containment check above is not just intersection", () => {
+    const epic = makeTestEpic("triage", 60, 6);
+    const partition = partitionOfficePopulation({
+      agents: epic.agents,
+      statusById: epic.statusById,
+      previous: null,
+    });
+    let injected = false;
+    const decoratedPainter: OfficePainter = {
+      ...view.painter,
+      seatProps: (seatLayout, seat, state, lod) => {
+        const real = view.painter.seatProps(seatLayout, seat, state, lod);
+        if (injected) return real;
+        const realSprite = real.find(
+          (entry) => entry.drawable.kind === "sprite",
+        );
+        if (realSprite === undefined) return real;
+        injected = true;
+        const overflowBounds = view.painter.projector(seatLayout).bounds;
+        return [
+          ...real,
+          {
+            ...realSprite,
+            drawable: {
+              ...realSprite.drawable,
+              x: overflowBounds.x + overflowBounds.width - 1,
+              y: overflowBounds.y + overflowBounds.height - 1,
+            },
+          },
+        ];
+      },
+    };
+    const scene = new OfficeScene({ ...view, painter: decoratedPainter }, null);
+    scene.sync(
+      sceneInputFor({
+        agents: epic.agents,
+        statusById: epic.statusById,
+        partition,
+      }),
+    );
+    const layout = scene.layout();
+    if (layout === null) throw new Error("expected a layout");
+    const { bounds } = view.painter.projector(layout);
+    const worldRect = {
+      x: bounds.x - 4096,
+      y: bounds.y - 4096,
+      width: bounds.width + 8192,
+      height: bounds.height + 8192,
+    };
+    const frame = scene.frame(2, worldRect);
+    const drawables = [
+      ...frame.floor,
+      ...(frame.world !== null
+        ? frame.world.map((entry) => entry.drawable)
+        : [...frame.props, ...frame.actors]),
+    ];
+    const overflow = drawables.find(
+      (drawable) =>
+        drawable.kind === "sprite" &&
+        drawable.x === bounds.x + bounds.width - 1 &&
+        drawable.y === bounds.y + bounds.height - 1,
+    );
+    // The overflowing sprite really did reach the frame the scene handed
+    // back - injecting it into the painter was not silently dropped
+    // somewhere between the painter and the frame.
+    expect(overflow).toBeDefined();
+    if (overflow === undefined || overflow.kind !== "sprite") return;
+    const size = officeSpriteSize(overflow.sprite);
+    expect(overflow.x + size.width).toBeGreaterThanOrEqual(bounds.x);
+    expect(overflow.y + size.height).toBeGreaterThanOrEqual(bounds.y);
+    expect(overflow.x).toBeLessThanOrEqual(bounds.x + bounds.width);
+    expect(overflow.y).toBeLessThanOrEqual(bounds.y + bounds.height);
+    // It intersects the bounds (the four checks above, an intersection
+    // predicate, all pass) - and containment must still reject it, because
+    // almost its whole box lies past the bounds' right and bottom edges.
+    const contained =
+      overflow.x >= bounds.x &&
+      overflow.y >= bounds.y &&
+      overflow.x + size.width <= bounds.x + bounds.width &&
+      overflow.y + size.height <= bounds.y + bounds.height;
+    expect(contained).toBe(false);
   });
 });

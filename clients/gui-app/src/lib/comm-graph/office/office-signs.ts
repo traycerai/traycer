@@ -54,15 +54,20 @@ export interface OfficeFloorSignToDraw {
 }
 
 /**
- * Roughly how many characters fit across one tile of board at the sign font.
+ * How wide the PLATE for this text would be, in screen pixels.
  *
- * A board is the one sign whose text is a SUMMARY rather than a name, so it can
- * be said at several lengths and the widest that fits is the one to use. Six
- * tiles takes the full four-part reading; narrower boards step down to
- * initials. Names cannot do this - "Platform" abbreviated is not a name any
- * more - so they keep the ellipsis they have always had.
+ * Supplied by the renderer, because only the renderer has the font: the plate
+ * is set in a bold tracked-out monospace it owns, and a character count is not
+ * a width - a six-tile board is ninety-six pixels across and its full count
+ * reading measured nearly three hundred, so every one of them overflowed the
+ * room it was naming while a character budget said it fit.
+ *
+ * A board is the one sign whose text is a SUMMARY rather than a name, so it
+ * can be said at several lengths and the widest that fits is the one to use.
+ * Names cannot do this - "Platform" abbreviated is not a name any more - so
+ * they keep the ellipsis they have always had.
  */
-const BOARD_CHARS_PER_TILE = 7;
+export type OfficePlateMeasure = (text: string) => number;
 
 /** Hottest first, as the directory orders its own rows. */
 const STATUS_HEAT: Readonly<Record<OfficeAgentStatus, number>> = {
@@ -75,7 +80,7 @@ const STATUS_HEAT: Readonly<Record<OfficeAgentStatus, number>> = {
   archived: 6,
 };
 
-/** How many agents an HQ board names. */
+/** How many agents an HQ board names. Always this many, never fewer that fit. */
 const HQ_BOARD_NAMES = 5;
 
 interface BoardCounts {
@@ -120,14 +125,31 @@ function boardRenderings(counts: BoardCounts): ReadonlyArray<string> {
 }
 
 /** The widest rendering that fits, or the narrowest when none does. */
-function widestThatFits(
-  renderings: ReadonlyArray<string>,
-  budget: number,
-): string {
+function widestThatFits(args: {
+  readonly renderings: ReadonlyArray<string>;
+  readonly available: number;
+  readonly measure: OfficePlateMeasure;
+}): string {
+  const { available, measure, renderings } = args;
   for (const text of renderings) {
-    if (text.length <= budget) return text;
+    if (measure(text) <= available) return text;
   }
   return renderings[renderings.length - 1];
+}
+
+/**
+ * One name at three lengths, widest first: as written, its first word, its
+ * initials. A name is shortened rather than dropped, because the board exists
+ * to say WHO needs the lead and half a roster does not say it.
+ */
+function nameRungs(name: string): ReadonlyArray<string> {
+  const words = name.split(" ").filter((word) => word !== "");
+  // A ONE-WORD name keeps its word at every rung. "Zeta" abbreviated to "Z"
+  // names nobody, and a board of single letters is a board of no names at all
+  // - the separators are where the last of the width comes from instead.
+  if (words.length <= 1) return [name, name, name];
+  const initials = words.map((word) => word.slice(0, 1)).join("");
+  return [name, words[0], initials];
 }
 
 function compareHeat(
@@ -147,33 +169,47 @@ function compareHeat(
  *
  * HQ overlooks the whole office, and "who needs me" is what its board is for -
  * a count of idle agents is the one thing a lead standing there does not need.
- * Names are dropped whole when they do not fit; half a name is not a name.
+ * All five are listed whatever the width: an omitted name is an agent the
+ * board failed to raise, which is worse than an abbreviated one.
  */
 function hqBoardText(args: {
   readonly agentIds: ReadonlyArray<string>;
   readonly statusById: ReadonlyMap<string, OfficeAgentStatus>;
   readonly nameById: ReadonlyMap<string, string>;
-  readonly budget: number;
+  readonly available: number;
+  readonly measure: OfficePlateMeasure;
 }): string {
-  const { agentIds, budget, nameById, statusById } = args;
+  const { agentIds, available, measure, nameById, statusById } = args;
   const hottest = [...agentIds]
     .sort((left, right) => compareHeat(left, right, statusById))
     .slice(0, HQ_BOARD_NAMES);
-  const kept: string[] = [];
+  const named: string[] = [];
   for (const agentId of hottest) {
     const name = nameById.get(agentId);
     if (name === undefined) continue;
-    const next = [...kept, name].join(" · ");
-    if (kept.length > 0 && next.length > budget) break;
-    kept.push(name);
+    named.push(name);
   }
-  if (kept.length === 0) {
-    return widestThatFits(
-      boardRenderings(countRoster(agentIds, statusById)),
-      budget,
-    );
+  // Nobody is named yet at this cursor: the board falls back to counting,
+  // which is a true statement about the room rather than an empty plate.
+  if (named.length === 0) {
+    return widestThatFits({
+      renderings: boardRenderings(countRoster(agentIds, statusById)),
+      available,
+      measure,
+    });
   }
-  return kept.join(" · ");
+  // EVERY ENTRY, AT WHATEVER LENGTH FITS. The rungs shorten all of them
+  // together - written, first name, initials, then initials without the
+  // separators - so a narrow board says less about each agent and never less
+  // about how many of them need the lead.
+  const rungs = named.map(nameRungs);
+  const renderings = [
+    rungs.map((rung) => rung[0]).join(" · "),
+    rungs.map((rung) => rung[1]).join(" · "),
+    rungs.map((rung) => rung[2]).join(" · "),
+    rungs.map((rung) => rung[2]).join(" "),
+  ];
+  return widestThatFits({ renderings, available, measure });
 }
 
 /**
@@ -187,22 +223,37 @@ export function officeBoardText(args: {
   readonly statusById: ReadonlyMap<string, OfficeAgentStatus>;
   readonly visibleAgentIds: ReadonlySet<string>;
   readonly nameById: ReadonlyMap<string, string>;
+  /** The board's own width on screen, in the same pixels `measure` returns. */
+  readonly available: number;
+  readonly measure: OfficePlateMeasure;
 }): string {
-  const { nameById, sign, statusById, visibleAgentIds } = args;
+  const { available, measure, nameById, sign, statusById, visibleAgentIds } =
+    args;
   // AS OF THE CURSOR. The plan lists everyone the board will ever summarise;
   // an agent created later does not exist here yet and must not be counted,
   // least of all as an idle one.
   const roster = sign.agentIds.filter((agentId) =>
     visibleAgentIds.has(agentId),
   );
-  const budget = Math.max(1, sign.widthTiles) * BOARD_CHARS_PER_TILE;
   if (sign.kind === "hq-board") {
-    return hqBoardText({ agentIds: roster, statusById, nameById, budget });
+    return hqBoardText({
+      agentIds: roster,
+      statusById,
+      nameById,
+      available,
+      measure,
+    });
   }
-  return widestThatFits(
-    boardRenderings(countRoster(roster, statusById)),
-    budget,
-  );
+  return widestThatFits({
+    renderings: boardRenderings(countRoster(roster, statusById)),
+    available,
+    measure,
+  });
+}
+
+/** A board's own width on screen: its tiles, through the camera's zoom. */
+export function officeBoardWidthPx(sign: OfficeSign, zoom: number): number {
+  return Math.max(1, sign.widthTiles) * OFFICE_TILE * zoom;
 }
 
 /**
@@ -243,16 +294,21 @@ export function officeSignsToDraw(args: {
   readonly roleClaims: Readonly<Record<string, readonly RoleClaim[]>>;
   readonly projector: OfficeProjector;
   readonly lod: OfficeLod;
+  /** The camera's zoom, because a board's width on screen is a camera fact. */
+  readonly zoom: number;
+  readonly measure: OfficePlateMeasure;
 }): ReadonlyArray<OfficeSignToDraw> {
   const {
     hostNameById,
     lod,
+    measure,
     nameById,
     projector,
     roleClaims,
     signs,
     statusById,
     visibleAgentIds,
+    zoom,
   } = args;
   // NO LETTERING AT OVERVIEW. The block map carries the whole reading there.
   if (lod === 0) return NO_SIGNS_TO_DRAW;
@@ -264,7 +320,14 @@ export function officeSignsToDraw(args: {
     if (sign.kind === "board" || sign.kind === "hq-board") {
       out.push({
         sign,
-        text: officeBoardText({ sign, statusById, visibleAgentIds, nameById }),
+        text: officeBoardText({
+          sign,
+          statusById,
+          visibleAgentIds,
+          nameById,
+          available: officeBoardWidthPx(sign, zoom),
+          measure,
+        }),
         subtext: null,
         anchor,
       });

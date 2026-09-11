@@ -27,6 +27,26 @@ import {
   type OfficeProjector,
 } from "@/lib/comm-graph/office/views/office-view";
 
+/**
+ * The plate width the component's own recording canvas reports: six pixels a
+ * character, plus the plate's horizontal padding.
+ *
+ * jsdom has no font metrics of its own, so a deterministic monospace advance
+ * is what a test can honestly measure with - and six pixels is about right for
+ * the bold 10px monospace the plate is actually set in. What is under test is
+ * "the widest reading whose PLATE fits the board", not a particular typeface.
+ */
+const CHAR_PX = 6;
+const PLATE_PADDING_PX = 8;
+function measure(text: string): number {
+  return text.length * CHAR_PX + PLATE_PADDING_PX;
+}
+
+/** A board's own width on screen at zoom 1: sixteen pixels a tile. */
+function boardWidthPx(widthTiles: number): number {
+  return widthTiles * OFFICE_TILE;
+}
+
 /** A projector that shifts every projected x by +2048px - the review's own F5 recipe. */
 const SHIFTED_PROJECTOR: OfficeProjector = {
   project: (col, row) => ({
@@ -122,6 +142,8 @@ describe("officeSignsToDraw - F5 projected anchor", () => {
       nameById: new Map(),
       hostNameById: new Map(),
       roleClaims: {},
+      zoom: 1,
+      measure,
       projector: SHIFTED_PROJECTOR,
       lod: 1,
     });
@@ -146,6 +168,8 @@ describe("officeSignsToDraw / officeFloorSignsToDraw - F10 LOD-0 gate", () => {
       nameById: new Map(),
       hostNameById: new Map(),
       roleClaims: {},
+      zoom: 1,
+      measure,
       projector: SHIFTED_PROJECTOR,
       lod: 0,
     });
@@ -195,11 +219,15 @@ describe("officeBoardText - F11 roster filtering and width", () => {
       statusById,
       visibleAgentIds: new Set(["visible-owner"]),
       nameById: new Map(),
+      available: boardWidthPx(6),
+      measure,
     });
     // Only the visible owner is counted: 1 doing, 0 waiting, 0 idle - not the
-    // "1 doing, 0 waiting, 1 idle" the unfiltered roster would have produced
-    // by defaulting the absent future member to idle.
-    expect(text).toBe("1 doing · 0 waiting · 0 idle");
+    // "1D · 0W · 1I" the unfiltered roster would have produced by defaulting
+    // the absent future member to idle. Six tiles is ninety-six pixels, which
+    // the spelt-out reading does not fit, so this is the abbreviated rung -
+    // the counts are what the case is about, not the vocabulary.
+    expect(text).toBe("1D · 0W · 0I");
   });
 
   it("gives an HQ board a names ranking instead of the doing/waiting/idle counts", () => {
@@ -227,14 +255,106 @@ describe("officeBoardText - F11 roster filtering and width", () => {
       statusById,
       visibleAgentIds: new Set(["a", "b", "c", "d", "e"]),
       nameById,
+      available: boardWidthPx(2),
+      measure,
     });
     const hqText = officeBoardText({
       sign,
       statusById,
       visibleAgentIds: new Set(["a", "b", "c", "d", "e"]),
       nameById,
+      available: boardWidthPx(2),
+      measure,
     });
     expect(hqText).not.toBe(ordinaryEquivalent);
+  });
+});
+
+describe("officeBoardText - F11 five HQ names, laid out to the board", () => {
+  /** The reviewer's own fixture: six agents, ordinary two-word names. */
+  const ROSTER = ["a", "b", "c", "d", "e", "f"];
+  const STATUS_BY_ID = new Map<string, OfficeAgentStatus>([
+    ["a", "attention"],
+    ["b", "failure"],
+    ["c", "working"],
+    ["d", "awaiting"],
+    ["e", "background"],
+    ["f", "idle"],
+  ]);
+  const NAME_BY_ID = new Map([
+    ["a", "Alpha Build"],
+    ["b", "Beta Queue"],
+    ["c", "Gamma Store"],
+    ["d", "Delta Auth"],
+    ["e", "Epsilon Docs"],
+    ["f", "Zeta Idle"],
+  ]);
+
+  it("names all five hottest agents on an eight-tile board, shortened to fit", () => {
+    const sign = boardSign({
+      kind: "hq-board",
+      agentIds: ROSTER,
+      widthTiles: 8,
+    });
+    const available = boardWidthPx(8);
+    const text = officeBoardText({
+      sign,
+      statusById: STATUS_BY_ID,
+      visibleAgentIds: new Set(ROSTER),
+      nameById: NAME_BY_ID,
+      available,
+      measure,
+    });
+
+    // FIVE ENTRIES. The fifth-hottest used to be dropped whole because adding
+    // its name overran a character budget; a board that omits an agent has
+    // failed at the one thing it is for.
+    expect(text.split(" ")).toEqual(["AB", "BQ", "GS", "DA", "ED"]);
+    // Zeta Idle is sixth and stays off, which is the ranking working.
+    expect(text).not.toContain("ZI");
+    // And the chosen rung actually fits the room it names.
+    expect(measure(text)).toBeLessThanOrEqual(available);
+  });
+
+  it("spells the names out when the board is wide enough for them", () => {
+    const sign = boardSign({
+      kind: "hq-board",
+      agentIds: ROSTER,
+      widthTiles: 48,
+    });
+    const text = officeBoardText({
+      sign,
+      statusById: STATUS_BY_ID,
+      visibleAgentIds: new Set(ROSTER),
+      nameById: NAME_BY_ID,
+      available: boardWidthPx(48),
+      measure,
+    });
+    // The ladder is chosen by width, not pinned to its narrowest rung: given
+    // the pixels, the board says the names.
+    expect(text).toBe(
+      "Alpha Build · Beta Queue · Gamma Store · Delta Auth · Epsilon Docs",
+    );
+  });
+
+  it("steps a six-tile count board down to a rung that fits its ninety-six pixels", () => {
+    const sign = boardSign({ agentIds: ROSTER, widthTiles: 6 });
+    const available = boardWidthPx(6);
+    const text = officeBoardText({
+      sign,
+      statusById: STATUS_BY_ID,
+      visibleAgentIds: new Set(ROSTER),
+      nameById: NAME_BY_ID,
+      available,
+      measure,
+    });
+
+    expect(available).toBe(96);
+    expect(measure(text)).toBeLessThanOrEqual(available);
+    // And it had to step: the spelt-out reading of this same roster is nearly
+    // three times the board, which is the overflow the finding measured.
+    expect(measure("2 doing · 3 waiting · 1 idle")).toBeGreaterThan(available);
+    expect(text).toBe("2D · 3W · 1I");
   });
 });
 
@@ -250,6 +370,8 @@ for (const viewId of ["towers", "building"] as const) {
           nameById: names,
           hostNameById: new Map(),
           roleClaims: {},
+          zoom: 1,
+          measure,
           projector: OFFICE_VIEWS[viewId].painter.projector(layout),
           lod: 0,
         }),
@@ -273,13 +395,17 @@ for (const viewId of ["towers", "building"] as const) {
         nameById: names,
         hostNameById: new Map(),
         roleClaims: {},
+        zoom: 1,
+        measure,
         projector: OFFICE_VIEWS[viewId].painter.projector(layout),
         lod: 1,
       });
       expect(drawn).toHaveLength(1);
-      expect(drawn[0].text).toBe(
-        `${board.agentIds.length - 1} doing · 0 waiting · 0 idle`,
-      );
+      // The same counts the spelt-out reading would have carried - the hidden
+      // member excluded rather than defaulted to idle - said at the rung a
+      // six-tile board has the pixels for. What this case is about is WHO was
+      // counted; the vocabulary is D55's ladder doing its own job.
+      expect(drawn[0].text).toBe(`${board.agentIds.length - 1}D · 0W · 0I`);
     });
 
     it("uses the width ladder for a real board instead of truncating its summary", () => {
@@ -306,30 +432,35 @@ for (const viewId of ["towers", "building"] as const) {
         else if (status === "idle") counts.idle += 1;
         else counts.waiting += 1;
       }
+      const full = `${counts.doing} doing · ${counts.waiting} waiting · ${counts.idle} idle · ${counts.archived} archived`;
+      const short = `${counts.doing}D · ${counts.waiting}W · ${counts.idle}I · ${counts.archived}A`;
+      const compact = `${counts.doing}D ${counts.waiting}W ${counts.idle}I ${counts.archived}A`;
+      // A board sized to each rung in turn: just wide enough for that one, and
+      // therefore too narrow for the one above it. Derived rather than written
+      // down, because the counts come off a REAL roster and a hard-coded width
+      // would pin this case to one plan's population.
+      const tilesFor = (text: string): number =>
+        Math.ceil(measure(text) / OFFICE_TILE);
       const drawn = officeSignsToDraw({
         signs: [
-          { ...board, widthTiles: 6 },
-          { ...board, widthTiles: 3 },
-          { ...board, widthTiles: 1 },
+          { ...board, widthTiles: tilesFor(full) },
+          { ...board, widthTiles: tilesFor(short) },
+          { ...board, widthTiles: tilesFor(compact) },
         ],
         visibleAgentIds,
         statusById: statuses,
         nameById: names,
         hostNameById: new Map(),
         roleClaims: {},
+        zoom: 1,
+        measure,
         projector: OFFICE_VIEWS[viewId].painter.projector(layout),
         lod: 1,
       });
       expect(drawn).toHaveLength(3);
-      expect(drawn[0].text).toBe(
-        `${counts.doing} doing · ${counts.waiting} waiting · ${counts.idle} idle · ${counts.archived} archived`,
-      );
-      expect(drawn[1].text).toBe(
-        `${counts.doing}D · ${counts.waiting}W · ${counts.idle}I · ${counts.archived}A`,
-      );
-      expect(drawn[2].text).toBe(
-        `${counts.doing}D ${counts.waiting}W ${counts.idle}I ${counts.archived}A`,
-      );
+      expect(drawn[0].text).toBe(full);
+      expect(drawn[1].text).toBe(short);
+      expect(drawn[2].text).toBe(compact);
     });
 
     it("ranks the five hottest agents on a real HQ board", () => {
@@ -352,18 +483,23 @@ for (const viewId of ["towers", "building"] as const) {
         statuses.set(hottest[index], heat[index]);
         hqNames.set(hottest[index], `H${index}`);
       }
+      const ranked = "H4 · H3 · H2 · H1 · H0";
       const drawn = officeSignsToDraw({
-        signs: [hq],
+        signs: [
+          { ...hq, widthTiles: Math.ceil(measure(ranked) / OFFICE_TILE) },
+        ],
         visibleAgentIds: new Set(epic.agents.map((person) => person.id)),
         statusById: statuses,
         nameById: hqNames,
         hostNameById: new Map(),
         roleClaims: {},
+        zoom: 1,
+        measure,
         projector: OFFICE_VIEWS[viewId].painter.projector(layout),
         lod: 1,
       });
       expect(drawn).toHaveLength(1);
-      expect(drawn[0].text).toBe("H4 · H3 · H2 · H1 · H0");
+      expect(drawn[0].text).toBe(ranked);
     });
   });
 }
@@ -389,6 +525,8 @@ for (const viewId of ["towers", "building"] as const) {
       nameById: renamed,
       hostNameById: new Map(),
       roleClaims: {},
+      zoom: 1,
+      measure,
       projector: OFFICE_VIEWS[viewId].painter.projector(layout),
       lod: 1,
     });

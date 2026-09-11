@@ -54,6 +54,7 @@ import type { OfficePopulation } from "@/lib/comm-graph/office/office-population
 import {
   OFFICE_CHARACTER_HEIGHT,
   OFFICE_CHARACTER_WIDTH,
+  OFFICE_LOGO_SIZE,
   OFFICE_TILE,
   type OfficeAgentInput,
   type OfficeAgentStatus,
@@ -527,6 +528,17 @@ interface OfficeCharacter {
   lastErrandKey: string | null;
   /** Kind of the last errand; never chosen twice running either. */
   lastErrandKind: OfficeErrandTargetKind | null;
+  /**
+   * Where this character's feet PROJECT, remembered.
+   *
+   * Culling asks for it once per character per frame over the whole
+   * population, and a projector allocates a point every call - so a still
+   * office spent a thousand allocations a frame re-deriving a thousand
+   * unchanged positions, most of them nowhere near the viewport. Kept here
+   * rather than in a scene-side map because it is invalidated by exactly two
+   * things, and one of them is this character moving.
+   */
+  foot: CachedFootPoint | null;
   /** Legs taken of the current stroll, and how many it means to take. */
   errandLegs: number;
   errandLegsWanted: number;
@@ -545,6 +557,15 @@ interface OfficeCharacter {
   pending: PendingItem[];
   /** Running for the chair because a message is waiting. Cleared on sitting. */
   hurrying: boolean;
+}
+
+/** A projected foot point, and the two facts that make it still true. */
+interface CachedFootPoint {
+  readonly col: number;
+  readonly row: number;
+  /** The plan it was projected under; a new layout is a new projector. */
+  readonly version: number;
+  readonly point: OfficePoint;
 }
 
 interface OfficeEnvelope {
@@ -621,6 +642,20 @@ function mixSeed(seed: number, salt: number): number {
 
 function tileKeyOf(tile: OfficeTilePos): string {
   return `${tile.col},${tile.row}`;
+}
+
+/**
+ * The same remembered tile, moved. `lastErrandKey` outlives the errand that
+ * set it - that is what it is for - so it has to follow a shift on its own
+ * rather than being re-derived from a target that may already be null.
+ */
+function slideTileKey(key: string, shift: OfficeTilePos): string {
+  const comma = key.indexOf(",");
+  if (comma < 0) return key;
+  const col = Number(key.slice(0, comma));
+  const row = Number(key.slice(comma + 1));
+  if (!Number.isFinite(col) || !Number.isFinite(row)) return key;
+  return tileKeyOf({ col: col + shift.col, row: row + shift.row });
 }
 
 /**
@@ -933,6 +968,7 @@ function blankCharacter(agentId: string): OfficeCharacter {
     errandTarget: null,
     lastErrandKey: null,
     lastErrandKind: null,
+    foot: null,
     errandLegs: 0,
     errandLegsWanted: 0,
     rallying: false,
@@ -1040,9 +1076,12 @@ function compareDepthOrder(
 }
 
 /**
- * The LAST depth each owner was drawn at. A desk is several drawables and a
- * character is a sprite plus its tag, and what decides whether the pointer is
- * on it is whichever of them the painter put down last.
+ * The LAST depth each owner was drawn at. A character is a sprite plus its
+ * tag, emitted together, so one depth describes the whole of it.
+ *
+ * Deliberately NOT how a seat is read: a desk is several drawables at several
+ * depths, and see `shallowestByOwner` for the half of that which is safe to
+ * state about its whole box.
  */
 function deepestByOwner(
   entries: ReadonlyArray<OfficeWorldDrawable>,
@@ -1057,6 +1096,70 @@ function deepestByOwner(
     }
   }
   return deepest;
+}
+
+/**
+ * The FIRST depth each owner was drawn at.
+ *
+ * The depth a whole seat box may claim, because it is the only one every part
+ * of that seat is at least as deep as. Anything more is a foreground part's
+ * depth applied to ground the foreground part does not cover - which is how a
+ * desk's back used to beat a character standing over it.
+ */
+function shallowestByOwner(
+  entries: ReadonlyArray<OfficeWorldDrawable>,
+): ReadonlyMap<string, number> {
+  const shallowest = new Map<string, number>();
+  for (const entry of entries) {
+    const owner = entry.ownerAgentId;
+    if (owner === null) continue;
+    const current = shallowest.get(owner);
+    if (current === undefined || entry.depth < current) {
+      shallowest.set(owner, entry.depth);
+    }
+  }
+  return shallowest;
+}
+
+/**
+ * A drawable's own box in world pixels, or `null` where it has no extent a
+ * pointer should resolve to.
+ *
+ * Sprites are top-left anchored; clocks and logos are centred on their point.
+ * A label is lettering, an envelope carries its own regions, and a pip is the
+ * whole of an agent at a zoom where nothing is hovered.
+ */
+function drawableBox(drawable: OfficeDrawable): OfficeRect | null {
+  if (drawable.kind === "block") {
+    return {
+      x: drawable.x,
+      y: drawable.y,
+      width: drawable.width,
+      height: drawable.height,
+    };
+  }
+  if (drawable.kind === "sprite") {
+    const size = officeSpriteSize(drawable.sprite);
+    return {
+      x: drawable.x,
+      y: drawable.y,
+      width: size.width,
+      height: size.height,
+    };
+  }
+  if (drawable.kind === "clock" || drawable.kind === "logo") {
+    const size =
+      drawable.kind === "logo"
+        ? { width: OFFICE_LOGO_SIZE, height: OFFICE_LOGO_SIZE }
+        : officeSpriteSize({ name: "clock" });
+    return {
+      x: drawable.x - size.width / 2,
+      y: drawable.y - size.height / 2,
+      width: size.width,
+      height: size.height,
+    };
+  }
+  return null;
 }
 
 /** Baseline draw order: a character lower on the floor overlaps one above it. */
@@ -1268,6 +1371,17 @@ export class OfficeScene {
    */
   private pendingShift: OfficePoint | null = null;
   private readonly characters = new Map<string, OfficeCharacter>();
+  /**
+   * An open handover: the seat an agent has left but not yet walked out of,
+   * by the agent leaving it.
+   *
+   * A waking agent's effective seat becomes its reserve the instant it claims
+   * one, so nothing derived from the book can tell "still standing in the
+   * cubby it is leaving" from "walked away from that cubby three errands
+   * ago". This says which, opened when the claim moves an agent off its own
+   * seat and closed the first time it sits down anywhere.
+   */
+  private readonly handover = new Map<string, string>();
   private envelopes: OfficeEnvelope[] = [];
   private paperBalls: OfficePaperBall[] = [];
   private agentById = new Map<string, OfficeAgentInput>();
@@ -1470,6 +1584,9 @@ export class OfficeScene {
       // does not try: they are re-derived from the statuses as of the cursor,
       // the same treatment the rest of the in-flight state gets.
       const seatsBefore = this.seatIdsOfKnown();
+      // Transient motion is dropped on a scrub, and an open handover is
+      // transient motion: the claims below are re-derived from scratch.
+      this.handover.clear();
       this.seats.recomputeClaims(input.statusById, this.seats.knownAgentIds());
       reclaimed = this.changedSeats(seatsBefore);
     }
@@ -1764,6 +1881,31 @@ export class OfficeScene {
     return this.projector.project(col + 0.5, row + 1);
   }
 
+  /**
+   * This character's projected foot point, from the cache where it still
+   * holds. The two invalidations are the character moving and the plan
+   * changing under it; nothing else can move a projected point.
+   */
+  private footOf(character: OfficeCharacter): OfficePoint {
+    const cached = character.foot;
+    if (
+      cached !== null &&
+      cached.version === this.layoutVersion &&
+      cached.col === character.col &&
+      cached.row === character.row
+    ) {
+      return cached.point;
+    }
+    const point = this.footPoint(character.col, character.row);
+    character.foot = {
+      col: character.col,
+      row: character.row,
+      version: this.layoutVersion,
+      point,
+    };
+    return point;
+  }
+
   /** The sprite corner for a 16x20 character standing at `foot`. */
   private spriteCornerOf(foot: OfficePoint): OfficePoint {
     return {
@@ -1904,6 +2046,7 @@ export class OfficeScene {
 
   private removeCharacter(agentId: string): void {
     this.characters.delete(agentId);
+    this.handover.delete(agentId);
     this.membershipVersion += 1;
     this.envelopes = this.envelopes.filter(
       (envelope) =>
@@ -2040,6 +2183,9 @@ export class OfficeScene {
     // `releasing`, and a releasing claim means the chair just taken is the
     // agent's own assignment - so this cannot free a seat somebody is in.
     this.seats.vacated(character.agentId);
+    // Wherever this chair is, the agent has arrived in one: the seat it left
+    // is nobody's silhouette any more.
+    this.handover.delete(character.agentId);
     this.flushPending(character);
   }
 
@@ -2533,6 +2679,13 @@ export class OfficeScene {
       if (character.queueTile !== null) {
         character.queueTile = slide(character.queueTile);
       }
+      // The key names a TILE, and the tile moved; a stale key would forbid an
+      // errand to a spot this agent has never been to, or allow a repeat of
+      // the one it just came back from. It is remembered ACROSS errands, so it
+      // moves whether or not one is running.
+      if (character.lastErrandKey !== null) {
+        character.lastErrandKey = slideTileKey(character.lastErrandKey, shift);
+      }
       const target = character.errandTarget;
       if (target === null) continue;
       character.errandTarget = {
@@ -2541,9 +2694,6 @@ export class OfficeScene {
         actionTile:
           target.actionTile === null ? null : slide(target.actionTile),
       };
-      // The key names a TILE, and the tile moved; a stale key would forbid an
-      // errand to a spot this agent has never been to.
-      character.lastErrandKey = tileKeyOf(character.errandTarget.tile);
     }
   }
 
@@ -3927,8 +4077,10 @@ export class OfficeScene {
     if (occupant !== null) return occupant;
     const assignee = this.seats.assignee(seat.seatId);
     if (assignee === null || !this.visibleAgentIds.has(assignee)) return null;
-    const character = this.characters.get(assignee);
-    if (character === undefined || character.seated) return null;
+    // An OPEN handover, not merely an agent out of its chair. Every later
+    // walk - a queue-out, an errand, a trip home - would otherwise reopen a
+    // handover that finished the moment this agent first sat down.
+    if (this.handover.get(assignee) !== seat.seatId) return null;
     return assignee;
   }
 
@@ -3959,9 +4111,7 @@ export class OfficeScene {
 
   /** A character's projected box: the sprite standing on its own foot point. */
   private characterBox(character: OfficeCharacter): OfficeRect {
-    const corner = this.spriteCornerOf(
-      this.footPoint(character.col, character.row),
-    );
+    const corner = this.spriteCornerOf(this.footOf(character));
     return {
       x: corner.x,
       y: corner.y,
@@ -3999,7 +4149,7 @@ export class OfficeScene {
     character: OfficeCharacter,
     rect: OfficeRect,
   ): boolean {
-    const foot = this.footPoint(character.col, character.row);
+    const foot = this.footOf(character);
     const x = foot.x - OFFICE_CHARACTER_WIDTH / 2;
     const y = foot.y - OFFICE_CHARACTER_HEIGHT;
     return (
@@ -4169,7 +4319,7 @@ export class OfficeScene {
       const inCubby = this.seatedInCubby(character.agentId);
       if (inCubby && lod < 2) continue;
       const archived = this.archivedIds.has(character.agentId);
-      const foot = this.footPoint(character.col, character.row);
+      const foot = this.footOf(character);
       const corner = this.spriteCornerOf(foot);
       const x = corner.x;
       const y = corner.y;
@@ -4537,17 +4687,37 @@ export class OfficeScene {
     readonly actors: ReadonlyArray<OfficeWorldDrawable>;
   }): ReadonlyArray<OfficeHitRegion> {
     const { actors, characters, props, seats } = args;
-    const propDepths = deepestByOwner(props);
+    const propFloors = shallowestByOwner(props);
     const actorDepths = deepestByOwner(actors);
     const entries: DepthOrderedRegion[] = [];
+    // THE WHOLE SEAT, at the only depth all of it is at least as deep as. Its
+    // declared box (D53) is what culling, hover and the camera already use,
+    // and every point of it still resolves to its occupant - just no longer
+    // at the depth of whichever part happened to be drawn last.
     for (const seated of seats) {
       const agentId = seated.agentId;
       if (agentId === null) continue;
-      const depth = propDepths.get(agentId);
+      const depth = propFloors.get(agentId);
       if (depth === undefined) continue;
       entries.push({
         region: { agentId, rect: this.seatBox(seated.seat) },
         depth,
+        tier: 0,
+        order: entries.length,
+      });
+    }
+    // THEN EACH PART, where it actually is and at its own depth, so a
+    // foreground strip wins over a character where the strip covers it and
+    // nowhere else. Pushed after the boxes above, so a part at the same depth
+    // as its own seat is the front-most of the two.
+    for (const part of props) {
+      const agentId = part.ownerAgentId;
+      if (agentId === null) continue;
+      const rect = drawableBox(part.drawable);
+      if (rect === null) continue;
+      entries.push({
+        region: { agentId, rect },
+        depth: part.depth,
         tier: 0,
         order: entries.length,
       });
@@ -4587,6 +4757,13 @@ export class OfficeScene {
     if (inFlight !== undefined) return this.seatPointOf(inFlight.fromAgentId);
     const senderId = pulseSenderId(this.pulse);
     if (senderId === null) return null;
+    // ONLY WHILE SEATED. The lift is a fact about a chair, and a sender
+    // halfway across the floor is not in one: framing its empty seat points
+    // the camera at furniture while the person it is about walks past.
+    const character = this.characters.get(senderId);
+    if (character !== undefined && !character.seated) {
+      return this.headPointOfCharacter(character);
+    }
     return this.seatPointOf(senderId) ?? this.headPointOf(senderId);
   }
 
@@ -4645,7 +4822,7 @@ export class OfficeScene {
   }
 
   private headPointOfCharacter(character: OfficeCharacter): OfficePoint {
-    const foot = this.footPoint(character.col, character.row);
+    const foot = this.footOf(character);
     return { x: foot.x, y: foot.y - OFFICE_CHARACTER_HEIGHT };
   }
 
@@ -4726,6 +4903,24 @@ export class OfficeScene {
    * it waited stays where it is and asks the next plan for capacity, exactly
    * as any other agent that cannot find a seat does.
    */
+  /**
+   * This agent has gone cold: it wants its reserve no longer.
+   *
+   * Two calls, because a released seat is only FREE once the character is out
+   * of it - on a floor with motion that means back home and seated again, and
+   * on one without it means immediately, since there is nobody to be in it.
+   */
+  private releaseClaim(agentId: string, assigned: OfficeSeat): void {
+    this.seats.endClaim(agentId);
+    const character = this.characters.get(agentId);
+    const home =
+      character === undefined ||
+      (character.seated &&
+        character.col === assigned.chairTile.col &&
+        character.row === assigned.chairTile.row);
+    if (home) this.seats.vacated(agentId);
+  }
+
   private updateSeatClaims(): void {
     const rehome: string[] = [];
     for (const agentId of this.seats.knownAgentIds()) {
@@ -4746,19 +4941,17 @@ export class OfficeScene {
         // already holds from an earlier wake is still its own.
         continue;
       } else {
-        this.seats.endClaim(agentId);
-        // The seat is free once the character is OUT of it, which on a floor
-        // with motion means once it is back home and seated again.
-        const character = this.characters.get(agentId);
-        const home =
-          character === undefined ||
-          (character.seated &&
-            character.col === assigned.chairTile.col &&
-            character.row === assigned.chairTile.row);
-        if (home) this.seats.vacated(agentId);
+        this.releaseClaim(agentId, assigned);
       }
       const after = this.seats.effectiveSeat(agentId);
-      if (before?.seatId !== after?.seatId) rehome.push(agentId);
+      if (before?.seatId === after?.seatId) continue;
+      rehome.push(agentId);
+      // LEAVING HOME. The seat it is walking out of keeps its silhouette
+      // until it arrives somewhere; the handover closes at `settleInChair`
+      // and nothing reopens it.
+      if (after !== null && after.seatId !== assigned.seatId) {
+        this.handover.set(agentId, assigned.seatId);
+      }
     }
     // A wake and a cooling-off both MOVE somebody, so the character walks -
     // which is the whole visible point of a reserve seat.

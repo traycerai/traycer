@@ -139,6 +139,7 @@ import {
   officeFloorSignsToDraw,
   officeSignCenterX,
   officeSignsToDraw,
+  type OfficePlateMeasure,
   type OfficeFloorSignToDraw,
   type OfficeSignToDraw,
 } from "@/lib/comm-graph/office/office-signs";
@@ -907,7 +908,6 @@ interface DrawFrameArgs {
   /** One per host. A single-floor building names nothing - there is no choice to explain. */
   readonly floors: ReadonlyArray<OfficeFloor>;
   readonly hostNameById: ReadonlyMap<string, string>;
-  readonly awayAgentIds: ReadonlySet<string>;
   readonly hoveredAgentId: string | null;
   /** Whose detail panel is open; named at lod 1 even when unhovered. */
   readonly selectedAgentId: string | null;
@@ -1107,6 +1107,31 @@ function drawFloorSigns(args: {
  * also its own backing, so the four-offset outline the name tags use would
  * only muddy it.
  */
+/** Puts the plate's own face on the context. Shared, so measuring matches drawing. */
+function applySignPlateFont(ctx: CanvasRenderingContext2D): void {
+  ctx.font = `bold ${SIGN_FONT_PX}px ${MONOSPACE_STACK}`;
+  ctx.letterSpacing = SIGN_LETTER_SPACING;
+}
+
+/**
+ * How wide this text's plate would be, measured in the face it is drawn in.
+ *
+ * The resolver picks a board's reading by this, so the thing that decides
+ * whether a reading fits is the same measurement that lays it out. A count of
+ * characters is not a width: tracking, boldness and the fallback stack all
+ * move it, and a six-tile board that a character budget called comfortable
+ * measured three times the room it was naming.
+ */
+function signPlateMeasure(ctx: CanvasRenderingContext2D): OfficePlateMeasure {
+  return (text: string): number => {
+    ctx.save();
+    applySignPlateFont(ctx);
+    const width = ctx.measureText(text).width + SIGN_PADDING_X * 2;
+    ctx.restore();
+    return width;
+  };
+}
+
 function drawSignPlate(
   ctx: CanvasRenderingContext2D,
   sign: {
@@ -1118,10 +1143,9 @@ function drawSignPlate(
 ): void {
   const { palette, screenX, screenY, text } = sign;
   ctx.save();
-  ctx.font = `bold ${SIGN_FONT_PX}px ${MONOSPACE_STACK}`;
+  applySignPlateFont(ctx);
   ctx.textAlign = "center";
   ctx.textBaseline = "alphabetic";
-  ctx.letterSpacing = SIGN_LETTER_SPACING;
   const width = ctx.measureText(text).width + SIGN_PADDING_X * 2;
   const height = SIGN_FONT_PX + SIGN_PADDING_Y * 2;
   const left = screenX - width / 2;
@@ -1530,11 +1554,13 @@ function drawBlock(args: {
 /**
  * Agent name tags, thinned and de-overlapped.
  *
- * An agent AWAY from its desk keeps its tag only while hovered: a walking
- * character is already where the eye is, and its tag is what collides with
- * everyone else's the moment a group gathers. What survives that is then
- * placed by {@link layoutNameTags}, which moves or drops a tag rather than
- * letting two print through each other.
+ * WHO gets one is the zoom band's question and only the zoom band's: nothing
+ * here asks whether a character is in its chair. A walking agent's tag used
+ * to be dropped unless it was hovered, which quietly overrode the band - a
+ * selected agent lost its label the moment it stood up, and at close-up,
+ * where everything is named, a walker was not. Crowding is what
+ * {@link layoutNameTags} is for, and it moves or drops a tag by where the tag
+ * lands rather than by what its owner happens to be doing.
  */
 function drawNameTags(args: {
   readonly ctx: CanvasRenderingContext2D;
@@ -1542,14 +1568,12 @@ function drawNameTags(args: {
   readonly camera: OfficeCamera;
   readonly palette: OfficePalette;
   readonly backings: Readonly<Record<OfficeLabelTone, string>>;
-  readonly awayAgentIds: ReadonlySet<string>;
   readonly hoveredAgentId: string | null;
   readonly selectedAgentId: string | null;
   readonly searchMatchIds: ReadonlySet<string>;
   readonly lod: OfficeLod;
 }): void {
   const {
-    awayAgentIds,
     backings,
     camera,
     ctx,
@@ -1578,9 +1602,6 @@ function drawNameTags(args: {
     // the hit regions for one whose centre line matched, which is a guess that
     // is wrong the moment two things share a column.
     const owner = label.ownerAgentId;
-    if (owner !== null && awayAgentIds.has(owner) && owner !== hoveredAgentId) {
-      continue;
-    }
     if (
       lod === 1 &&
       !isNameTagCalledFor({
@@ -1617,7 +1638,6 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
   const {
     camera,
     ctx,
-    awayAgentIds,
     dpr,
     floors,
     frame,
@@ -1650,6 +1670,11 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
           roleClaims,
           projector,
           lod,
+          // A board is laid out to ITS OWN width on screen, which moves with
+          // the camera: the same six tiles are ninety-six pixels at 1x and
+          // sixty-seven at 0.7, and the reading that fits is not the same one.
+          zoom: camera.zoom,
+          measure: signPlateMeasure(ctx),
         });
   const floorSigns =
     projector === null
@@ -1758,7 +1783,6 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
     camera,
     palette,
     backings: labelBackings,
-    awayAgentIds,
     hoveredAgentId,
     selectedAgentId,
     searchMatchIds,
@@ -2871,7 +2895,6 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         nameById: runtime.getNameById(),
         roleClaims: runtime.getRoleClaims(),
         hostNameById: runtime.getHostNames(),
-        awayAgentIds: frame.awayAgentIds,
         hoveredAgentId: runtime.getHoveredAgentId(),
         ...frameChrome(layout, synced),
       });
