@@ -16,7 +16,6 @@ import {
   type OfficeAgentStatus,
   type OfficeErrandSpot,
   type OfficeFloor,
-  type OfficeFrame,
   type OfficeLayout,
   type OfficeProp,
   type OfficeRect,
@@ -45,6 +44,8 @@ import {
   OFFICE_VIEWS,
   type OfficeDeskState,
   type OfficePlanInput,
+  type OfficeProjector,
+  type OfficeView,
 } from "@/lib/comm-graph/office/views/office-view";
 
 type Shape = "triage" | "two-hosts" | "many-roots";
@@ -366,11 +367,13 @@ function someoneSitsAt(
 }
 
 /**
- * The plate width a test can honestly report: six pixels a character plus the
- * plate's padding, the same deterministic monospace advance T2's own
- * `office-signs.test.ts` measures with. jsdom has no font metrics, and what
- * this case is about is the ANCHOR rather than the text, so the measure only
- * has to be the one the sign suite's assertions already mean.
+ * A stand-in `measure` for the I3 case below, which is about the plate's
+ * ANCHOR, not its text. `officeSignsToDraw` only calls `measure` for
+ * `sign.kind === "board" | "hq-board"`; the I3 case filters to
+ * `kind === "plate"`, so this function is never actually invoked - it exists
+ * because the parameter is required, and its value is arbitrary. Anything
+ * that genuinely measures a plate's text should take `OFFICE_SIGN_FONT_PX`
+ * and `OFFICE_SIGN_LETTER_SPACING_EM` from `office-signs.ts`, not this number.
  */
 function plateMeasure(text: string): number {
   return text.length * 6 + 8;
@@ -386,10 +389,6 @@ function grownByMargin(view: OfficeRect): OfficeRect {
   };
 }
 
-function rectKey(rect: OfficeRect): string {
-  return [rect.x, rect.y, rect.width, rect.height].join(",");
-}
-
 function rectsOverlap(left: OfficeRect, right: OfficeRect): boolean {
   return (
     left.x < right.x + right.width &&
@@ -399,43 +398,69 @@ function rectsOverlap(left: OfficeRect, right: OfficeRect): boolean {
   );
 }
 
-/**
- * The owners whose own SEAT region is in this frame.
- *
- * A frame's `hitRegions` carry a seat's box and its occupant's character box
- * under the SAME `agentId`, so a set of ids cannot tell the two apart - and a
- * seat dropped by a broken cull would still be named there by its own
- * character standing in front of it. Matching a region against the seat's
- * declared `hitBox` is what isolates the seat half, which is the half the
- * projected chunk index decides.
- */
-function seatRegionOwners(
-  frame: OfficeFrame,
-  layout: OfficeLayout,
-): Set<string> {
-  const seatBoxByOwner = new Map<string, string>();
-  for (const [agentId, desk] of layout.desks) {
-    const seat = layout.seats.get(desk.seatId);
-    if (seat === undefined || seat.hitBox === null) continue;
-    seatBoxByOwner.set(agentId, rectKey(seat.hitBox));
-  }
+/** Every seat, occupied or reserve, whose own declared `hitBox` reaches this rect. */
+function seatIdsReaching(layout: OfficeLayout, rect: OfficeRect): Set<string> {
   const found = new Set<string>();
-  for (const region of frame.hitRegions) {
-    if (seatBoxByOwner.get(region.agentId) !== rectKey(region.rect)) continue;
-    found.add(region.agentId);
+  for (const seat of layout.seats.values()) {
+    if (seat.hitBox !== null && rectsOverlap(seat.hitBox, rect)) {
+      found.add(seat.seatId);
+    }
   }
   return found;
 }
 
-/** Every occupied seat whose own PAINTED box reaches this rect. */
-function seatsReaching(layout: OfficeLayout, rect: OfficeRect): Set<string> {
-  const found = new Set<string>();
-  for (const [agentId, desk] of layout.desks) {
-    const seat = layout.seats.get(desk.seatId);
-    if (seat === undefined || seat.hitBox === null) continue;
-    if (rectsOverlap(seat.hitBox, rect)) found.add(agentId);
+/** The key `OfficeScene` dedupes a spot by: the tile its walker actually stands on. */
+function spotKey(spot: OfficeErrandSpot): string {
+  return `${spot.approachTile.col},${spot.approachTile.row}`;
+}
+
+/** Every distinct spot in the layout, deduped the same way the scene's chunk index dedupes them. */
+function dedupedSpots(layout: OfficeLayout): ReadonlyArray<OfficeErrandSpot> {
+  const byKey = new Map<string, OfficeErrandSpot>();
+  for (const floor of layout.floors) {
+    for (const spot of floor.errandSpots) byKey.set(spotKey(spot), spot);
   }
-  return found;
+  return [...byKey.values()];
+}
+
+/** A spot's own projected box: one tile at its approach point, the box the chunk index files it under. */
+function spotBoxOf(
+  projector: OfficeProjector,
+  spot: OfficeErrandSpot,
+): OfficeRect {
+  const origin = projector.project(
+    spot.approachTile.col,
+    spot.approachTile.row,
+  );
+  return { x: origin.x, y: origin.y, width: OFFICE_TILE, height: OFFICE_TILE };
+}
+
+/**
+ * `real` with its `seatProps`/`spotProps` wrapped to record every seat and
+ * spot the scene actually asks the painter to draw, while still returning
+ * exactly what the real painter returns - so wrapping changes nothing about
+ * what a frame contains, only what this test can observe about how it got
+ * there.
+ */
+function wrappedPainterView(
+  real: OfficeView,
+  seatCalls: OfficeSeat[],
+  spotCalls: OfficeErrandSpot[],
+): OfficeView {
+  return {
+    ...real,
+    painter: {
+      ...real.painter,
+      seatProps: (layout, seat, state, lod) => {
+        seatCalls.push(seat);
+        return real.painter.seatProps(layout, seat, state, lod);
+      },
+      spotProps: (layout, spot, lod) => {
+        spotCalls.push(spot);
+        return real.painter.spotProps(layout, spot, lod);
+      },
+    },
+  };
 }
 
 describe("planCampus", () => {
@@ -1030,7 +1055,7 @@ describe("planCampus", () => {
   /** A `many-roots(n)` plan, every agent `working`, for the R1/ground cases. */
   function manyRootsInput(
     n: number,
-    remapHostId?: (index: number) => string,
+    remapHostId: ((index: number) => string) | undefined,
   ): OfficePlanInput {
     const epic = makeTestEpic("many-roots", n, 1);
     const agents: ReadonlyArray<OfficeAgentInput> =
@@ -1072,7 +1097,7 @@ describe("planCampus", () => {
       { n: 100, reads: 8 },
       { n: 1000, reads: 8 },
     ])("reads bullpen.bounds $reads times at $n hosts", ({ n, reads }) => {
-      const layout = planCampus(manyRootsInput(n));
+      const layout = planCampus(manyRootsInput(n, undefined));
       const bullpen = layout.rooms.find((room) =>
         room.rootAgentId.endsWith("/bullpen"),
       );
@@ -1158,7 +1183,7 @@ describe("planCampus", () => {
     };
 
     // 1 host.
-    const layout1 = planCampus(manyRootsInput(20));
+    const layout1 = planCampus(manyRootsInput(20, undefined));
     const counts1 = { reads: 0 };
     install(layout1, counts1);
     counts1.reads = 0;
@@ -1285,31 +1310,132 @@ describe("planCampus", () => {
     }
   });
 
-  it("I1: culls seats and spots by their own PROJECTED box, not a raw tile viewport", () => {
-    // T2 F1: `chunkKeysOfBox(this.seatBox(seat))` files a seat under the
-    // chunks its PROJECTED box covers. Real Campus at 1,000 agents, over a
-    // viewport pinned to a populated corner, so this is the isometric plan
-    // itself exercising the seam rather than a hand-built layout.
+  it("I1: culls seats AND spots by their own PROJECTED box, not a raw tile viewport", () => {
+    // T2 F1: `chunkKeysOfBox(this.seatBox(seat))`/`chunkKeysOfBox(this.spotBox(spot))`
+    // file a seat/spot under the chunks its own PROJECTED box covers. Real
+    // Campus at 1,000 agents, over three populated windows - the chunk-
+    // boundary corner this case originally shipped with (which, it turns
+    // out, contains zero spots and so cannot guard the spot half at all) plus
+    // two corners that genuinely contain spots (measured on `dd72b1399`: 3
+    // seats/8 spots and 5 seats/10 spots), so inclusion and exclusion are
+    // both exercised for both seats and spots, over a world of 1,000 seats
+    // and 46 spots.
+    //
+    // A FRESH `OfficeScene` per window, never one scene panned across
+    // several: `buildSeatProps` caches a seat's/spot's own painter output by
+    // seat id/tile, so a selection that re-enters view under a cache hit
+    // would never reach `seatProps`/`spotProps` again, and this callback
+    // would miss it - exactly the gap the reviewer's own probe had to work
+    // around by reaching into the cache. A fresh scene per window has no
+    // such cache to hide behind.
+    const epic = makeTestEpic("triage", 1000, 1);
+    const statusById = new Map<string, OfficeAgentStatus>();
+    for (const agent of epic.agents) statusById.set(agent.id, "working");
+
+    const views: ReadonlyArray<OfficeRect> = [
+      { x: 950, y: 550, width: 250, height: 300 },
+      { x: 1836, y: 68, width: 64, height: 64 },
+      { x: 2012, y: 156, width: 64, height: 64 },
+    ];
+    let sawSpots = false;
+    let sawExcludedSeat = false;
+    let sawExcludedSpot = false;
+
+    for (const view of views) {
+      const seatCalls: OfficeSeat[] = [];
+      const spotCalls: OfficeErrandSpot[] = [];
+      const scene = new OfficeScene(
+        wrappedPainterView(OFFICE_VIEWS.campus, seatCalls, spotCalls),
+        null,
+      );
+      scene.sync(sceneInputFor(epic.agents, statusById));
+      const layout = scene.layout();
+      if (layout === null) throw new Error("expected a layout after sync");
+      const projector = OFFICE_VIEWS.campus.painter.projector(layout);
+      const grown = grownByMargin(view);
+
+      scene.frame(2, view);
+
+      const wantedSeats = seatIdsReaching(layout, grown);
+      const allSpots = dedupedSpots(layout);
+      const wantedSpots = new Set(
+        allSpots
+          .filter((spot) => rectsOverlap(spotBoxOf(projector, spot), grown))
+          .map(spotKey),
+      );
+      // Equal in BOTH directions - `toEqual` on a `Set` fails on either an
+      // extra or a missing member - which is what makes exclusion outside
+      // the margin non-vacuous alongside inclusion inside it.
+      expect(new Set(seatCalls.map((seat) => seat.seatId))).toEqual(
+        wantedSeats,
+      );
+      expect(new Set(spotCalls.map(spotKey))).toEqual(wantedSpots);
+
+      if (wantedSpots.size > 0) sawSpots = true;
+      if (wantedSeats.size < layout.seats.size) sawExcludedSeat = true;
+      if (wantedSpots.size < allSpots.length) sawExcludedSpot = true;
+    }
+
+    // Non-vacuous: at least one window genuinely contains spots (closing R3
+    // - the shipped window alone never could), and every window's exact
+    // match still excludes some of the world's seats and spots rather than
+    // the comparison passing because both sides happened to be everything,
+    // or both empty.
+    expect(sawSpots).toBe(true);
+    expect(sawExcludedSeat).toBe(true);
+    expect(sawExcludedSpot).toBe(true);
+  });
+
+  it("I1: a small window's spot query reads a small fraction of a whole-world one, through the index's own approachTile objects", () => {
+    // R3's read-budget half. Counting Proxies installed IN PLACE over the
+    // exact `approachTile` object each spot carries - the same objects
+    // `spotsIn`'s chunk index holds and `spotBox` reads through - so this
+    // measures the real per-tile cost of the lookup the painter is fed
+    // through, not a count taken on some other copy of the data.
     const epic = makeTestEpic("triage", 1000, 1);
     const statusById = new Map<string, OfficeAgentStatus>();
     for (const agent of epic.agents) statusById.set(agent.id, "working");
     const scene = new OfficeScene(OFFICE_VIEWS.campus, null);
     scene.sync(sceneInputFor(epic.agents, statusById));
-    const sceneLayout = scene.layout();
-    if (sceneLayout === null) throw new Error("expected a layout after sync");
+    const layout = scene.layout();
+    if (layout === null) throw new Error("expected a layout after sync");
+    // The chunk index is built lazily on its first use, inside the first
+    // `spotsIn` call - so warm it with an untracked frame BEFORE installing
+    // the counting Proxies below, or the count would include the one-time
+    // build cost (every spot, once) rather than only the QUERY cost this
+    // case is about.
+    scene.frame(2, WHOLE_WORLD);
 
-    // Straddles a 1,024 px chunk boundary (`FRAME_CHUNK_PX`) rather than
-    // sitting deep inside one - the only place a seat filed under its raw
-    // tile point instead of its own projected box can actually go missing.
-    const view: OfficeRect = { x: 950, y: 550, width: 250, height: 300 };
-    const grown = grownByMargin(view);
-    const frame = scene.frame(2, view);
-    const wanted = seatsReaching(sceneLayout, grown);
-    expect(seatRegionOwners(frame, sceneLayout)).toEqual(wanted);
-    // A corner this small is a fraction of a 1,000-agent world: the cull is
-    // doing real work rather than handing back everything or nothing.
-    expect(wanted.size).toBeGreaterThan(0);
-    expect(wanted.size).toBeLessThan(sceneLayout.desks.size);
+    const counts = { reads: 0 };
+    for (const floor of layout.floors) {
+      for (const spot of floor.errandSpots) {
+        const raw: OfficeTilePos = { ...spot.approachTile };
+        Object.defineProperty(spot, "approachTile", {
+          value: new Proxy(raw, {
+            get(target, key) {
+              counts.reads += 1;
+              return reflectGet(target, key, target);
+            },
+          }),
+          configurable: true,
+        });
+      }
+    }
+
+    counts.reads = 0;
+    scene.frame(2, { x: 1836, y: 68, width: 64, height: 64 });
+    const smallWindowReads = counts.reads;
+
+    counts.reads = 0;
+    scene.frame(2, WHOLE_WORLD);
+    const wholeWorldReads = counts.reads;
+
+    expect(smallWindowReads).toBeGreaterThan(0);
+    // Measured on 08ee4f038: 96 reads for the 64x64 window against 278 for
+    // the whole 8,000x8,000 world.
+    expect(smallWindowReads).toBe(96);
+    expect(wholeWorldReads).toBe(278);
+    expect(smallWindowReads).toBeLessThan(wholeWorldReads / 2);
   });
 
   it("I3: a cabin's plate anchors at its tile PROJECTED, never at a raw col * OFFICE_TILE", () => {

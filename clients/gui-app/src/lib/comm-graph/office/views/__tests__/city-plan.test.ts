@@ -15,9 +15,9 @@ import {
   OFFICE_TILE,
   type OfficeAgentInput,
   type OfficeAgentStatus,
+  type OfficeDrawable,
   type OfficeErrandSpot,
   type OfficeFloor,
-  type OfficeFrame,
   type OfficeLayout,
   type OfficePoint,
   type OfficeProp,
@@ -27,6 +27,7 @@ import {
   type OfficeSize,
   type OfficeTilePos,
   type OfficeTileRect,
+  type OfficeWorldDrawable,
 } from "@/lib/comm-graph/office/office-types";
 import {
   measureCity,
@@ -48,6 +49,8 @@ import {
   OFFICE_VIEWS,
   type OfficeDeskState,
   type OfficePlanInput,
+  type OfficeProjector,
+  type OfficeView,
 } from "@/lib/comm-graph/office/views/office-view";
 
 type Shape = "triage" | "two-hosts";
@@ -213,47 +216,175 @@ function grownByMargin(view: OfficeRect): OfficeRect {
   };
 }
 
-function rectKey(rect: OfficeRect): string {
-  return [rect.x, rect.y, rect.width, rect.height].join(",");
+/** Every seat, occupied or reserve, whose own declared `hitBox` reaches this rect. */
+function seatIdsReaching(layout: OfficeLayout, rect: OfficeRect): Set<string> {
+  const found = new Set<string>();
+  for (const seat of layout.seats.values()) {
+    if (seat.hitBox !== null && rectsOverlap(seat.hitBox, rect)) {
+      found.add(seat.seatId);
+    }
+  }
+  return found;
+}
+
+/** The key `OfficeScene` dedupes a spot by: the tile its walker actually stands on. */
+function spotKey(spot: OfficeErrandSpot): string {
+  return `${spot.approachTile.col},${spot.approachTile.row}`;
+}
+
+/** Every distinct spot in the layout, deduped the same way the scene's chunk index dedupes them. */
+function dedupedSpots(layout: OfficeLayout): ReadonlyArray<OfficeErrandSpot> {
+  const byKey = new Map<string, OfficeErrandSpot>();
+  for (const floor of layout.floors) {
+    for (const spot of floor.errandSpots) byKey.set(spotKey(spot), spot);
+  }
+  return [...byKey.values()];
+}
+
+/** A spot's own projected box: one tile at its approach point, the box the chunk index files it under. */
+function spotBoxOf(
+  projector: OfficeProjector,
+  spot: OfficeErrandSpot,
+): OfficeRect {
+  const origin = projector.project(
+    spot.approachTile.col,
+    spot.approachTile.row,
+  );
+  return { x: origin.x, y: origin.y, width: OFFICE_TILE, height: OFFICE_TILE };
 }
 
 /**
- * The owners whose own SEAT region is in this frame.
- *
- * A frame's `hitRegions` carry a seat's box and its occupant's character box
- * under the SAME `agentId`, so a set of ids cannot tell the two apart - and a
- * seat dropped by a broken cull would still be named there by its own
- * character standing in front of it. Matching a region against the seat's
- * declared `hitBox` is what isolates the seat half, which is the half the
- * projected chunk index decides.
+ * `real` with its `seatProps`/`spotProps` wrapped to record every seat and
+ * spot the scene actually asks the painter to draw, while still returning
+ * exactly what the real painter returns - so wrapping changes nothing about
+ * what a frame contains, only what this test can observe about how it got
+ * there.
  */
-function seatRegionOwners(
-  frame: OfficeFrame,
-  layout: OfficeLayout,
-): Set<string> {
-  const seatBoxByOwner = new Map<string, string>();
-  for (const [agentId, desk] of layout.desks) {
-    const seat = layout.seats.get(desk.seatId);
-    if (seat === undefined || seat.hitBox === null) continue;
-    seatBoxByOwner.set(agentId, rectKey(seat.hitBox));
-  }
-  const found = new Set<string>();
-  for (const region of frame.hitRegions) {
-    if (seatBoxByOwner.get(region.agentId) !== rectKey(region.rect)) continue;
-    found.add(region.agentId);
-  }
-  return found;
+function wrappedPainterView(
+  real: OfficeView,
+  seatCalls: OfficeSeat[],
+  spotCalls: OfficeErrandSpot[],
+): OfficeView {
+  return {
+    ...real,
+    painter: {
+      ...real.painter,
+      seatProps: (layout, seat, state, lod) => {
+        seatCalls.push(seat);
+        return real.painter.seatProps(layout, seat, state, lod);
+      },
+      spotProps: (layout, spot, lod) => {
+        spotCalls.push(spot);
+        return real.painter.spotProps(layout, spot, lod);
+      },
+    },
+  };
 }
 
-/** Every occupied seat whose own PAINTED box reaches this rect. */
-function seatsReaching(layout: OfficeLayout, rect: OfficeRect): Set<string> {
-  const found = new Set<string>();
-  for (const [agentId, desk] of layout.desks) {
-    const seat = layout.seats.get(desk.seatId);
-    if (seat === undefined || seat.hitBox === null) continue;
-    if (rectsOverlap(seat.hitBox, rect)) found.add(agentId);
+/** A sprite drawable's own painted box: its top-left corner plus its sprite's pixel size. */
+function spriteBoxOf(drawable: OfficeDrawable): OfficeRect {
+  if (drawable.kind !== "sprite") throw new Error("expected a sprite drawable");
+  const size = officeSpriteSize(drawable.sprite);
+  return {
+    x: drawable.x,
+    y: drawable.y,
+    width: size.width,
+    height: size.height,
+  };
+}
+
+/** A real away walker painted over a farther owner's building, found in one world stream. */
+interface WalkerOverBuilding {
+  readonly walkerId: string;
+  readonly buildingId: string;
+  readonly point: OfficePoint;
+  readonly characterIndex: number;
+  readonly buildingIndex: number;
+  readonly characterDepth: number;
+  readonly buildingDepth: number;
+}
+
+/**
+ * The front-most entry in the drawn stream whose own box contains `point` -
+ * walked in reverse, since the stream is drawn front-to-back-reversed (later
+ * entries paint on top). This is what makes a point genuinely SOMEONE's own
+ * pixel rather than merely "inside some box that happens to overlap another".
+ */
+function frontMostOwnedAt(
+  world: ReadonlyArray<OfficeWorldDrawable>,
+  point: OfficePoint,
+): OfficeWorldDrawable | undefined {
+  return [...world].reverse().find(
+    (candidate) =>
+      candidate.ownerAgentId !== null &&
+      candidate.drawable.kind === "sprite" &&
+      rectsOverlap(spriteBoxOf(candidate.drawable), {
+        x: point.x,
+        y: point.y,
+        width: 1,
+        height: 1,
+      }),
+  );
+}
+
+/**
+ * A DIFFERENT, farther, opaque-overlapping owner behind this character entry,
+ * such that the character is genuinely the front-most thing drawn at the
+ * overlap - or `null` if this character has no such building in this frame.
+ */
+function buildingBehind(
+  world: ReadonlyArray<OfficeWorldDrawable>,
+  entry: OfficeWorldDrawable,
+  characterIndex: number,
+): WalkerOverBuilding | null {
+  if (entry.drawable.kind !== "sprite" || entry.ownerAgentId === null) {
+    return null;
   }
-  return found;
+  const characterBox = spriteBoxOf(entry.drawable);
+  for (let j = 0; j < world.length; j += 1) {
+    const other = world[j];
+    if (other.drawable.kind !== "sprite") continue;
+    if (other.drawable.sprite.name === "character") continue;
+    if (other.ownerAgentId === null) continue;
+    if (other.ownerAgentId === entry.ownerAgentId) continue;
+    if (other.depth >= entry.depth) continue;
+    const buildingBox = spriteBoxOf(other.drawable);
+    if (!rectsOverlap(characterBox, buildingBox)) continue;
+    // A corner of the intersection, guaranteed inside both boxes since they
+    // are known to overlap.
+    const point: OfficePoint = {
+      x: Math.max(characterBox.x, buildingBox.x),
+      y: Math.max(characterBox.y, buildingBox.y),
+    };
+    if (frontMostOwnedAt(world, point) !== entry) continue;
+    return {
+      walkerId: entry.ownerAgentId,
+      buildingId: other.ownerAgentId,
+      point,
+      characterIndex,
+      buildingIndex: j,
+      characterDepth: entry.depth,
+      buildingDepth: other.depth,
+    };
+  }
+  return null;
+}
+
+/** The first away walker in this world stream genuinely painted over a farther building. */
+function walkerOverBuildingIn(
+  world: ReadonlyArray<OfficeWorldDrawable>,
+  awayAgentIds: ReadonlySet<string>,
+): WalkerOverBuilding | null {
+  for (let i = 0; i < world.length; i += 1) {
+    const entry = world[i];
+    if (entry.drawable.kind !== "sprite") continue;
+    if (entry.drawable.sprite.name !== "character") continue;
+    if (entry.ownerAgentId === null) continue;
+    if (!awayAgentIds.has(entry.ownerAgentId)) continue;
+    const match = buildingBehind(world, entry, i);
+    if (match !== null) return match;
+  }
+  return null;
 }
 
 function centreOf(box: OfficeRect): OfficePoint {
@@ -556,6 +687,74 @@ function someoneSitsAt(
     }
   }
   return false;
+}
+
+/**
+ * One City world's spot-read cost, windowed against whole-world, counted
+ * through the index's OWN `approachTile` objects.
+ *
+ * The Proxies go on in place, over the exact objects each spot carries - the
+ * ones `spotsIn`'s chunk index holds and `spotBox` reads through - so this is
+ * the real cost of the lookup the painter is fed through rather than a count
+ * taken on some other copy of the data. The warm-up frame before they are
+ * installed matters: the chunk index is built lazily inside the first
+ * `spotsIn` call, and counting that build would measure construction instead
+ * of the query.
+ */
+interface CitySpotReads {
+  readonly spots: number;
+  readonly windowReads: number;
+  readonly wholeReads: number;
+}
+
+function citySpotReadsOverHosts(hosts: number): CitySpotReads {
+  const epic = makeTestEpic("triage", 1000, 1);
+  const agents = epic.agents.map((agent, index) => ({
+    ...agent,
+    hostId: `host-${index % hosts}`,
+  }));
+  const statusById = new Map<string, OfficeAgentStatus>();
+  for (const agent of agents) statusById.set(agent.id, "working");
+  const scene = new OfficeScene(OFFICE_VIEWS.city, null);
+  scene.sync(sceneInputFor(agents, statusById));
+  const layout = scene.layout();
+  if (layout === null) throw new Error("expected a layout after sync");
+  const projector = OFFICE_VIEWS.city.painter.projector(layout);
+  const spots = dedupedSpots(layout);
+  // The projector's OWN bounds, not the suite's `WHOLE_WORLD` constant: a
+  // fifty-district City is wider than that 8,000 px square, and a clipped
+  // "whole world" would understate the very cost this compares against.
+  const whole = projector.bounds;
+  scene.frame(2, whole);
+
+  const counts = { reads: 0 };
+  for (const floor of layout.floors) {
+    for (const spot of floor.errandSpots) {
+      const raw: OfficeTilePos = { ...spot.approachTile };
+      Object.defineProperty(spot, "approachTile", {
+        value: new Proxy(raw, {
+          get(target, key) {
+            counts.reads += 1;
+            return reflectGet(target, key, target);
+          },
+        }),
+        configurable: true,
+      });
+    }
+  }
+
+  // A window on the first district's own first spot, so it holds spots in
+  // every spread rather than landing on empty street in the larger one.
+  const at = projector.project(
+    spots[0].approachTile.col,
+    spots[0].approachTile.row,
+  );
+  counts.reads = 0;
+  scene.frame(2, { x: at.x - 24, y: at.y - 24, width: 64, height: 64 });
+  const windowReads = counts.reads;
+  counts.reads = 0;
+  scene.frame(2, whole);
+  return { spots: spots.length, windowReads, wholeReads: counts.reads };
 }
 
 describe("planCity", () => {
@@ -1664,11 +1863,20 @@ describe("planCity", () => {
     ).toBeGreaterThan(0);
   });
 
-  it("I1: culls seats and spots by their own PROJECTED box, not a raw tile viewport", () => {
-    // T2 F1: `chunkKeysOfBox(this.seatBox(seat))` files a seat under the
-    // chunks its PROJECTED box covers. Real City at 1,000 agents, over a
-    // viewport pinned to a chunk boundary - the only place a seat filed
-    // under its raw tile point instead of its own box can go missing.
+  it("I1: culls seats AND spots by their own PROJECTED box, not a raw tile viewport", () => {
+    // T2 F1: `chunkKeysOfBox(this.seatBox(seat))`/`chunkKeysOfBox(this.spotBox(spot))`
+    // file a seat/spot under the chunks its own PROJECTED box covers. Real
+    // City at 1,000 agents, over three populated windows - the chunk-
+    // boundary corner this case originally shipped with (which contains only
+    // one spot, too thin to guard exclusion) plus two corners that genuinely
+    // contain several spots, so inclusion and exclusion are both exercised
+    // for both seats and spots.
+    //
+    // A FRESH `OfficeScene` per window, never one scene panned across
+    // several: `buildSeatProps` caches a seat's/spot's own painter output by
+    // seat id/tile, so a selection that re-enters view under a cache hit
+    // would never reach `seatProps`/`spotProps` again, and this callback
+    // would miss it.
     const epic = makeTestEpic("triage", 1000, 1);
     const statusById = new Map<string, OfficeAgentStatus>();
     const activityById = new Map<string, number>();
@@ -1676,20 +1884,96 @@ describe("planCity", () => {
       statusById.set(agent.id, "working");
       activityById.set(agent.id, 400);
     }
-    const scene = new OfficeScene(OFFICE_VIEWS.city, null);
-    scene.sync({ ...sceneInputFor(epic.agents, statusById), activityById });
-    const sceneLayout = scene.layout();
-    if (sceneLayout === null) throw new Error("expected a layout after sync");
 
-    const view: OfficeRect = { x: 950, y: 550, width: 250, height: 300 };
-    const grown = grownByMargin(view);
-    const frame = scene.frame(2, view);
-    const wanted = seatsReaching(sceneLayout, grown);
-    expect(seatRegionOwners(frame, sceneLayout)).toEqual(wanted);
-    // A corner this small is a fraction of a 1,000-agent world: the cull is
-    // doing real work rather than handing back everything or nothing.
-    expect(wanted.size).toBeGreaterThan(0);
-    expect(wanted.size).toBeLessThan(sceneLayout.desks.size);
+    const views: ReadonlyArray<OfficeRect> = [
+      { x: 950, y: 550, width: 250, height: 300 },
+      { x: 1276, y: 956, width: 64, height: 64 },
+      { x: 1356, y: 996, width: 64, height: 64 },
+    ];
+    let sawSpots = false;
+    let sawExcludedSeat = false;
+    let sawExcludedSpot = false;
+
+    for (const view of views) {
+      const seatCalls: OfficeSeat[] = [];
+      const spotCalls: OfficeErrandSpot[] = [];
+      const scene = new OfficeScene(
+        wrappedPainterView(OFFICE_VIEWS.city, seatCalls, spotCalls),
+        null,
+      );
+      scene.sync({ ...sceneInputFor(epic.agents, statusById), activityById });
+      const layout = scene.layout();
+      if (layout === null) throw new Error("expected a layout after sync");
+      const projector = OFFICE_VIEWS.city.painter.projector(layout);
+      const grown = grownByMargin(view);
+
+      scene.frame(2, view);
+
+      const wantedSeats = seatIdsReaching(layout, grown);
+      const allSpots = dedupedSpots(layout);
+      const wantedSpots = new Set(
+        allSpots
+          .filter((spot) => rectsOverlap(spotBoxOf(projector, spot), grown))
+          .map(spotKey),
+      );
+      // Equal in BOTH directions - `toEqual` on a `Set` fails on either an
+      // extra or a missing member - which is what makes exclusion outside
+      // the margin non-vacuous alongside inclusion inside it.
+      expect(new Set(seatCalls.map((seat) => seat.seatId))).toEqual(
+        wantedSeats,
+      );
+      expect(new Set(spotCalls.map(spotKey))).toEqual(wantedSpots);
+
+      if (wantedSpots.size > 0) sawSpots = true;
+      if (wantedSeats.size < layout.seats.size) sawExcludedSeat = true;
+      if (wantedSpots.size < allSpots.length) sawExcludedSpot = true;
+    }
+
+    // Non-vacuous: at least one window genuinely contains spots, and every
+    // window's exact match still excludes some of the world's seats and
+    // spots rather than the comparison passing because both sides happened
+    // to be everything, or both empty.
+    expect(sawSpots).toBe(true);
+    expect(sawExcludedSeat).toBe(true);
+    expect(sawExcludedSpot).toBe(true);
+  });
+
+  it("I1: a spot query's reads follow the VISIBLE AREA, not the size of the world", () => {
+    // R3's read-budget half, measured across two world SIZES rather than
+    // against one world's own whole-world query.
+    //
+    // A single-district City cannot show this. `triage(1000)` on one host
+    // holds 1,166 seats and only FOURTEEN distinct errand spots - every
+    // amenity in one park and one cafe - so a 64 x 64 window that reaches
+    // some of them reaches nearly all of them, and the honest numbers there
+    // are 80 reads against 84 for the whole world. That is a true
+    // inequality and a near-vacuous one: it would hold for a lookup with no
+    // locality at all.
+    //
+    // Spreading the same thousand agents over eight and then fifty hosts
+    // gives eight and fifty districts - 112 and 700 spots - and the property
+    // becomes visible: the SAME-sized window costs about the same in both
+    // worlds while the whole-world query grows with the world.
+    const spread8 = citySpotReadsOverHosts(8);
+    const spread50 = citySpotReadsOverHosts(50);
+
+    // The fixtures really are the two sizes this claims to compare.
+    expect(spread8.spots).toBeGreaterThan(100);
+    expect(spread50.spots).toBeGreaterThan(spread8.spots * 5);
+
+    // Measured on `95b4f16bd`: 8 hosts, 112 spots - 74 window reads against
+    // 680 whole-world; 50 hosts, 700 spots - 94 against 4,212.
+    expect(spread8.windowReads).toBe(74);
+    expect(spread8.wholeReads).toBe(680);
+    expect(spread50.windowReads).toBe(94);
+    expect(spread50.wholeReads).toBe(4212);
+
+    // The window's cost barely moves while the world grows six-fold, and is
+    // a small fraction of reading the world - which is the claim, rather
+    // than merely "fewer".
+    expect(spread50.windowReads).toBeLessThan(spread8.windowReads * 2);
+    expect(spread50.wholeReads).toBeGreaterThan(spread8.wholeReads * 5);
+    expect(spread50.windowReads).toBeLessThan(spread50.wholeReads / 20);
   });
 
   it("I2: hitTest resolves an overlap to whichever region the world stream drew LAST", () => {
@@ -1809,6 +2093,51 @@ describe("planCity", () => {
     const lastOwner = frame.world[lastIndex].ownerAgentId;
     expect(lastOwner).toBe("root-2");
     expect(scene.hitTest(overlapPoint)).toBe(lastOwner);
+  });
+
+  it("I2: a moving walker painted over a building resolves the pointer to the walker, not the roof", () => {
+    // T2 F4 continued: the roof-v-roof case above never moves either of its
+    // two owners, so it cannot exercise the CHARACTER half of
+    // `worldHitRegions` - a walker's own hit-region depth could be wrong
+    // while building-vs-building order stays right. Real idle City
+    // `triage(12)`, ticked until some agent's own `character` sprite
+    // genuinely overlaps a DIFFERENT owner's building sprite and paints in
+    // front of it in the merged world stream - searched for rather than
+    // pinned to a tick count, so a change to the walk timing does not make
+    // this brittle, but bounded so the search stays fast.
+    //
+    // Measured on `08ee4f038`: found at tick step 50 (the 51st tick).
+    // Walker `leaf-6`'s `character` sprite at (240,128), depth 148;
+    // `leaf-7`'s `block-left` at (248,136), depth 144.008056640625. The
+    // walker's entry is later in `frame.world` (index 69 vs 64), so it
+    // genuinely paints after the building. There is no production
+    // raster/opaque-pixel export reachable here to check true per-pixel
+    // overlap (T5's own probe needed a snapshot-only helper for that), so
+    // this checks sprite-BOX overlap plus "front-most entry in the stream at
+    // the chosen point" - an honest substitute, not the real pixel test.
+    const epic = makeTestEpic("triage", 12, 1);
+    const statusById = new Map<string, OfficeAgentStatus>();
+    for (const agent of epic.agents) statusById.set(agent.id, "idle");
+    const scene = new OfficeScene(OFFICE_VIEWS.city, null);
+    scene.sync(sceneInputFor(epic.agents, statusById));
+    // Idle wandering only starts for an agent someone can see, so the
+    // viewport has to be established with one frame before any ticking.
+    scene.frame(2, WHOLE_WORLD);
+
+    let found: (WalkerOverBuilding & { readonly step: number }) | null = null;
+    for (let step = 0; step < 400 && found === null; step += 1) {
+      scene.tick(100);
+      const frame = scene.frame(2, WHOLE_WORLD);
+      if (frame.world === null) continue;
+      const match = walkerOverBuildingIn(frame.world, frame.awayAgentIds);
+      if (match !== null) found = { ...match, step };
+    }
+
+    expect(found).not.toBeNull();
+    if (found === null) return;
+    expect(found.characterDepth).toBeGreaterThan(found.buildingDepth);
+    expect(found.characterIndex).toBeGreaterThan(found.buildingIndex);
+    expect(scene.hitTest(found.point)).toBe(found.walkerId);
   });
 
   it("I4: an unoccupied City reserve lot is painted at lod 1 and 2, and drawn as nothing at lod 0", () => {
