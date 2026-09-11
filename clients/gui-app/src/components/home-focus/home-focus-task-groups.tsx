@@ -63,8 +63,16 @@ import { cn } from "@/lib/utils";
  */
 const EXPAND_ALL_MAX_TASKS = 3;
 
+/** One group and the label its own `Stop all` needs - per TASK, because an
+ * A-only task sitting beside an A/B one in the same bucket is not split and
+ * must not claim to be. */
+export interface HomeFocusTaskGroupEntry {
+  readonly group: FocusTaskGroup;
+  readonly stopAllHostLabel: string | null;
+}
+
 export function HomeFocusTaskGroups(props: {
-  readonly groups: ReadonlyArray<FocusTaskGroup>;
+  readonly entries: ReadonlyArray<HomeFocusTaskGroupEntry>;
   readonly actions: HomeFocusRowActions;
 }): ReactNode {
   // Captured at mount, which is the literal "first entry to Tasks": this
@@ -73,16 +81,17 @@ export function HomeFocusTaskGroups(props: {
   // the view is open joins at the same default rather than re-deciding it for
   // every row already on screen.
   const [defaultExpanded] = useState<boolean>(
-    () => props.groups.length <= EXPAND_ALL_MAX_TASKS,
+    () => props.entries.length <= EXPAND_ALL_MAX_TASKS,
   );
   return (
     <>
-      {props.groups.map((group) => (
+      {props.entries.map((entry) => (
         <HomeFocusTaskGroupRow
-          key={group.epicId}
-          group={group}
+          key={entry.group.epicId}
+          group={entry.group}
           actions={props.actions}
           defaultExpanded={defaultExpanded}
+          stopAllHostLabel={entry.stopAllHostLabel}
         />
       ))}
     </>
@@ -126,6 +135,7 @@ function HomeFocusTaskGroupRow(props: {
   readonly group: FocusTaskGroup;
   readonly actions: HomeFocusRowActions;
   readonly defaultExpanded: boolean;
+  readonly stopAllHostLabel: string | null;
 }): ReactNode {
   const { group, actions } = props;
   const density = useHomeDensity();
@@ -197,13 +207,17 @@ function HomeFocusTaskGroupRow(props: {
           <TaskGroupSummary group={group} work={work} />
         </div>
         <RowStatus
-          state={focusTaskState(group.task, group.promptCount)}
+          state={focusTaskState(group.task, group.prompts.length)}
           duration={null}
         />
         {group.task === null ? (
           <RowActionsCell>{null}</RowActionsCell>
         ) : (
-          <HomeFocusTaskStopCluster row={group.task} actions={actions} />
+          <HomeFocusTaskStopCluster
+            row={group.task}
+            actions={actions}
+            hostLabel={props.stopAllHostLabel}
+          />
         )}
       </div>
       {showBody ? (
@@ -226,7 +240,7 @@ function HomeFocusTaskGroupRow(props: {
  */
 function TaskGroupGlyph(props: { readonly group: FocusTaskGroup }): ReactNode {
   const { group } = props;
-  if (props.group.promptCount > 0 || group.task?.needsYou === true) {
+  if (props.group.prompts.length > 0 || group.task?.needsYou === true) {
     return <TaskAttentionGlyph />;
   }
   return (
@@ -260,9 +274,9 @@ function TaskGroupSummary(props: {
   const coldTask = task !== null && !task.mountedHere ? task : null;
   return (
     <>
-      {group.promptCount > 0 ? (
+      {group.prompts.length > 0 ? (
         <span className={BADGE_CLASS} data-testid="home-focus-task-group-needs">
-          {group.promptCount} need you
+          {group.prompts.length} need you
         </span>
       ) : null}
       {/* A cold task keeps H3's honest sentence in place of the agent count:

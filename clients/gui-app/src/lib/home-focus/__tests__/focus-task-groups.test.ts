@@ -71,6 +71,8 @@ function agentRow(overrides: Partial<FocusAgentRow>): FocusAgentRow {
     tier: "turn",
     parentId: null,
     hostId: null,
+    hostUnattributed: false,
+    stoppable: true,
     ...overrides,
   };
 }
@@ -96,6 +98,7 @@ function backgroundRow(
     chatId: "chat-1",
     taskTitle: "Task",
     chatTitle: "Chat",
+    hostId: "host-local",
     label: "dev server",
     kind: "managed-command",
     itemKind: null,
@@ -112,6 +115,7 @@ function model(overrides: Partial<FocusModel>): FocusModel {
     background: [],
     coverage: {
       activity: "live",
+      degradedHostIds: [],
       notifications: "cloud",
       backgroundIsMountedOnly: true,
     },
@@ -191,7 +195,7 @@ describe("selectTaskGroups shape", () => {
         background: [backgroundRow({ epicId: "epic-idle" })],
       }),
     );
-    expect(groups[0].promptCount).toBe(1);
+    expect(groups[0].prompts.length).toBe(1);
   });
 
   it("adds no epic that neither a task nor a job names", () => {
@@ -220,8 +224,8 @@ describe("selectTaskGroups prompt counts", () => {
         ],
       }),
     );
-    expect(groups[0].promptCount).toBe(2);
-    expect(groups[1].promptCount).toBe(1);
+    expect(groups[0].prompts.length).toBe(2);
+    expect(groups[1].prompts.length).toBe(1);
   });
 
   // The rule the badge depends on: `needsYou` is also true when the host's
@@ -231,7 +235,7 @@ describe("selectTaskGroups prompt counts", () => {
     const groups = selectTaskGroups(
       model({ tasks: [taskRow({ epicId: "epic-a", needsYou: true })] }),
     );
-    expect(groups[0].promptCount).toBe(0);
+    expect(groups[0].prompts.length).toBe(0);
     expect(groups[0].task?.needsYou).toBe(true);
   });
 
@@ -242,7 +246,7 @@ describe("selectTaskGroups prompt counts", () => {
         prompts: [promptRow({ epicId: null }), promptRow({ epicId: "epic-a" })],
       }),
     );
-    expect(groups[0].promptCount).toBe(1);
+    expect(groups[0].prompts.length).toBe(1);
   });
 });
 
@@ -302,7 +306,7 @@ describe("selectTaskGroups jobs", () => {
     );
     expect(groups[0].jobs).toEqual([]);
     expect(groups[0].backgroundVisible).toBe(false);
-    expect(groups[0].promptCount).toBe(0);
+    expect(groups[0].prompts.length).toBe(0);
     expect(groups[0].agents).toHaveLength(1);
     expect(groups[0].agents[0].via).toBeNull();
     expect(groups[0].agents[0].agent.title).toBeNull();

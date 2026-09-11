@@ -12,6 +12,10 @@ import type { MergedNotificationRow } from "@/stores/notifications/merged-notifi
 import type { UseNotificationIndicatorsArgs } from "@/hooks/notifications/use-notification-indicators-query";
 import { useHomeBadgeCount } from "@/components/home-focus/use-home-badge-count";
 import { useFocusModel } from "@/hooks/home-focus/use-focus-model";
+
+/** The separator `focusAgentKey` joins on - the one byte no id can
+ * carry. */
+const NUL_SEPARATOR = "\u0000";
 import {
   makeApprovalPayload,
   makeMergedNotificationRow,
@@ -45,9 +49,17 @@ vi.mock("@/lib/notifications/notification-feed-mode", () => ({
   useNotificationFeedMode: () => "local",
 }));
 
+/** The cloud index, which is where `coldEpicHostIds` comes from: an epic whose
+ * chats all live on one host is attributable without any slice. */
+const { taskContextsMock } = vi.hoisted(() => ({
+  taskContextsMock: {
+    tasksById: new Map<string, { chatHostIds: ReadonlyArray<string> }>(),
+  },
+}));
+
 vi.mock("@/hooks/epic/use-epic-get-task-contexts-query", () => ({
   useEpicGetTaskContexts: () => ({
-    tasksById: new Map(),
+    tasksById: taskContextsMock.tasksById,
     isFetching: false,
     error: null,
   }),
@@ -57,16 +69,82 @@ vi.mock("@/hooks/notifications/use-notification-indicators-query", () => ({
   useNotificationIndicators: notificationIndicatorsMock,
 }));
 
+/**
+ * The warm chats this window holds, and the identities a mounted epic can
+ * resolve - both mutable, because the chat-title join is exactly an
+ * interaction between them: the hook has to ASK the projection about a chat id
+ * the activity plane never mentions.
+ *
+ * `projectionRefsMock` records what the hook asked for, which is the half a
+ * returned value cannot show.
+ */
+const { warmChatsMock, projectionMock, projectionRefsMock } = vi.hoisted(
+  () => ({
+    warmChatsMock: {
+      value: [] as ReadonlyArray<{
+        readonly epicId: string;
+        readonly chatId: string;
+        readonly hostId: string | null;
+        readonly managedCommands: ReadonlyArray<unknown>;
+        readonly backgroundItems: ReadonlyArray<unknown>;
+      }>,
+    },
+    projectionMock: {
+      mountedEpicIds: [] as ReadonlyArray<string>,
+      /** `${epicId}\u0000${agentId}` -> title. */
+      titles: new Map<string, string>(),
+    },
+    projectionRefsMock: {
+      value: [] as ReadonlyArray<{
+        readonly epicId: string;
+        readonly agentIds: ReadonlyArray<string>;
+      }>,
+    },
+  }),
+);
+
 vi.mock("@/hooks/home-focus/use-warm-chat-background", () => ({
-  useWarmChatBackground: () => [],
+  useWarmChatBackground: () => warmChatsMock.value,
 }));
 
 vi.mock("@/hooks/home-focus/use-mounted-epic-projection", () => ({
-  useMountedEpicProjection: () => ({
-    mountedEpicIds: new Set<string>(),
-    liveTitles: new Map<string, string>(),
-    agentIdentities: new Map(),
-  }),
+  useMountedEpicProjection: (
+    refs: ReadonlyArray<{
+      readonly epicId: string;
+      readonly agentIds: ReadonlyArray<string>;
+    }>,
+  ) => {
+    projectionRefsMock.value = refs;
+    const agentIdentities = new Map<
+      string,
+      {
+        readonly title: string | null;
+        readonly surface: "chat" | "terminal-agent";
+        readonly parentId: string | null;
+        readonly hostId: string | null;
+      }
+    >();
+    // Resolves ONLY the ids the hook actually asked about, the way the real
+    // projection does - so a chat the hook forgot to ask for stays nameless.
+    for (const ref of refs) {
+      for (const agentId of ref.agentIds) {
+        const key = [ref.epicId, agentId].join(NUL_SEPARATOR);
+        const title = projectionMock.titles.get(key);
+        if (title === undefined) continue;
+        agentIdentities.set(key, {
+          title,
+          surface: "chat",
+          parentId: null,
+          hostId: null,
+        });
+      }
+    }
+    return {
+      mountedEpicIds: new Set(projectionMock.mountedEpicIds),
+      liveTitles: new Map<string, string>(),
+      agentIdentities,
+    };
+  },
 }));
 
 // `useFocusModel` also resolves `coldEpicHostIds`/`activeHostId`/
@@ -123,6 +201,11 @@ beforeEach(() => {
   notificationIndicatorsMock.mockClear();
   connectableHostsMock.hostIds = [];
   connectableHostsMock.resolved = true;
+  taskContextsMock.tasksById = new Map();
+  warmChatsMock.value = [];
+  projectionMock.mountedEpicIds = [];
+  projectionMock.titles = new Map();
+  projectionRefsMock.value = [];
   __resetAgentActivityStoreForTests();
 });
 
@@ -336,6 +419,109 @@ describe("useFocusModel - multi-host activity", () => {
     ).toEqual(["agent-a", "agent-b"]);
   });
 
+  /**
+   * A cold agent's host, and the one source that cannot answer it.
+   *
+   * A slice's KEY is the host its stream was opened against. A `cloud`-served
+   * slice is that host answering for the whole FLEET, so host A's slice
+   * carries host B's agents verbatim and its key says nothing about where any
+   * of them run - reading it as attribution names the wrong machine, and does
+   * it confidently. So the cloud INDEX answers first, a `local`-served slice
+   * second, and an agent in neither is left unattributed rather than guessed
+   * onto the machine the user happens to be sitting at.
+   */
+  function setCloudSlice(
+    hostId: string,
+    epics: Record<string, { working: string[]; turn: string[] }>,
+  ): void {
+    makeHostHealthy(hostId);
+    __setHostAgentActivityStateForTests(hostId, epics, "cloud", "connected");
+  }
+
+  /** One host answering about ITSELF, so its key is the agent's host. */
+  function setLocalSlice(
+    hostId: string,
+    epics: Record<string, { working: string[]; turn: string[] }>,
+  ): void {
+    __setHostAgentActivityHealthForTests(hostId, {
+      connectionStatus: "open",
+      servedBy: "local",
+      cloudSyncStatus: null,
+      stateFrameSeenThisEpoch: true,
+    });
+    __setHostAgentActivityStateForTests(hostId, epics, "local", null);
+  }
+
+  it("does not read a cloud slice's key as attribution when it replicates another host's agent", () => {
+    taskContextsMock.tasksById = new Map([
+      ["epic-cold", { chatHostIds: ["host-b"] }],
+    ]);
+    const { result } = renderHook(() => useFocusModel());
+
+    act(() => {
+      // The SAME agent in both slices - which is what a fleet union looks
+      // like, and why neither key can be the answer.
+      setCloudSlice("host-a", {
+        "epic-cold": { working: ["agent-b"], turn: ["agent-b"] },
+      });
+      setCloudSlice("host-b", {
+        "epic-cold": { working: ["agent-b"], turn: ["agent-b"] },
+      });
+    });
+
+    expect(projectionMock.mountedEpicIds).toEqual([]);
+    expect(result.current.tasks[0]?.agents[0]?.hostId).toBe("host-b");
+    expect(result.current.tasks[0]?.agents[0]?.hostUnattributed).toBe(false);
+  });
+
+  it("trusts the cloud index over the host that served the slice", () => {
+    taskContextsMock.tasksById = new Map([
+      ["epic-cold", { chatHostIds: ["host-b"] }],
+    ]);
+    const { result } = renderHook(() => useFocusModel());
+
+    act(() => {
+      setCloudSlice("host-a", {
+        "epic-cold": { working: ["agent-b"], turn: ["agent-b"] },
+      });
+    });
+
+    expect(result.current.tasks[0]?.agents[0]?.hostId).toBe("host-b");
+  });
+
+  it("takes the key of a local-plane slice, which is not a union", () => {
+    const { result } = renderHook(() => useFocusModel());
+
+    act(() => {
+      setLocalSlice("host-a", {
+        "epic-cold": { working: ["agent-a"], turn: ["agent-a"] },
+      });
+    });
+
+    expect(result.current.tasks[0]?.agents[0]?.hostId).toBe("host-a");
+    expect(result.current.tasks[0]?.agents[0]?.hostUnattributed).toBe(false);
+  });
+
+  it("leaves an agent unattributed when only cloud slices name it and the index does not", () => {
+    const { result } = renderHook(() => useFocusModel());
+
+    act(() => {
+      setCloudSlice("host-a", {
+        "epic-cold": { working: ["agent-x"], turn: ["agent-x"] },
+      });
+      setCloudSlice("host-b", {
+        "epic-cold": { working: ["agent-x"], turn: ["agent-x"] },
+      });
+    });
+
+    const agents = result.current.tasks[0]?.agents ?? [];
+    // No host, and SAID to have none - which is what sends the row to
+    // `Unknown host` rather than to whichever machine is active.
+    expect(
+      agents.map((agent) => [agent.hostId, agent.hostUnattributed]),
+    ).toEqual([[null, true]]);
+  });
+
   it("reports the WORST host's coverage: one live host beside one whose stream is closed reads disconnected", () => {
     const { result } = renderHook(() => useFocusModel());
 
@@ -414,5 +600,97 @@ describe("useFocusModel - multi-host activity", () => {
     });
 
     expect(result.current.coverage.activity).toBe("live");
+  });
+});
+
+/**
+ * The join that names a background row's chat, and the case it is easy to get
+ * wrong: an IDLE chat.
+ *
+ * The projection resolves only the agent ids the hook asks it about, and that
+ * list was the epic's WORKING set - which a chat hosting nothing but a durable
+ * shell is not in. The row then knew its task and not the conversation it ran
+ * in, which is the pair the row grammar renders side by side.
+ */
+describe("useFocusModel background chat titles", () => {
+  const IDLE_CHAT = {
+    epicId: "epic-idle",
+    chatId: "chat-idle",
+    hostId: "host-1",
+    managedCommands: [
+      {
+        id: "cmd-1",
+        monitoring: false,
+        description: "10min heartbeat",
+        command: null,
+        cwd: null,
+        cadence: null,
+        status: { state: "running", pid: 1, startedAtMs: 0 },
+        relaunchOnHostRestart: true,
+        chatId: "chat-idle",
+        createdAtMs: 0,
+        updatedAtMs: 0,
+      },
+    ],
+    backgroundItems: [],
+  };
+  const IDLE_CHAT_KEY = ["epic-idle", "chat-idle"].join(NUL_SEPARATOR);
+
+  it("asks the projection about a warm chat with no working agent", () => {
+    warmChatsMock.value = [IDLE_CHAT];
+    projectionMock.mountedEpicIds = ["epic-idle"];
+    projectionMock.titles = new Map([
+      [IDLE_CHAT_KEY, "Greeting and Introduction"],
+    ]);
+
+    const { result } = renderHook(() => useFocusModel());
+
+    // The epic has no working agent at all, so the chat id reaches the
+    // projection only because the hook unions the warm set into its refs.
+    const ref = projectionRefsMock.value.find(
+      (entry) => entry.epicId === "epic-idle",
+    );
+    expect(ref?.agentIds).toContain("chat-idle");
+    expect(result.current.background).toHaveLength(1);
+    expect(result.current.background[0].chatTitle).toBe(
+      "Greeting and Introduction",
+    );
+    expect(result.current.background[0].label).toBe("10min heartbeat");
+  });
+
+  it("leaves the chat nameless when its epic is not mounted here", () => {
+    warmChatsMock.value = [IDLE_CHAT];
+    projectionMock.mountedEpicIds = [];
+    projectionMock.titles = new Map();
+
+    const { result } = renderHook(() => useFocusModel());
+
+    expect(result.current.background).toHaveLength(1);
+    expect(result.current.background[0].chatTitle).toBeNull();
+    // The row still renders - it just says less.
+    expect(result.current.background[0].label).toBe("10min heartbeat");
+  });
+
+  it("carries the chat's host onto the row so a section can group by it", () => {
+    warmChatsMock.value = [IDLE_CHAT];
+    const { result } = renderHook(() => useFocusModel());
+    expect(result.current.background[0].hostId).toBe("host-1");
+  });
+
+  it("picks up a rename without the warm set changing", () => {
+    warmChatsMock.value = [IDLE_CHAT];
+    projectionMock.mountedEpicIds = ["epic-idle"];
+    projectionMock.titles = new Map([
+      [IDLE_CHAT_KEY, "Greeting and Introduction"],
+    ]);
+    const { result, rerender } = renderHook(() => useFocusModel());
+    expect(result.current.background[0].chatTitle).toBe(
+      "Greeting and Introduction",
+    );
+
+    projectionMock.titles = new Map([[IDLE_CHAT_KEY, "Renamed conversation"]]);
+    rerender();
+
+    expect(result.current.background[0].chatTitle).toBe("Renamed conversation");
   });
 });

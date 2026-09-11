@@ -39,6 +39,8 @@ function agentRow(overrides: Partial<FocusAgentRow>): FocusAgentRow {
     tier: "turn",
     parentId: null,
     hostId: null,
+    hostUnattributed: false,
+    stoppable: true,
     ...overrides,
   };
 }
@@ -64,6 +66,7 @@ function backgroundRow(
     chatId: "chat-1",
     taskTitle: "Task",
     chatTitle: "Chat",
+    hostId: "host-local",
     label: "10min heartbeat",
     kind: "background-item",
     itemKind: "monitor",
@@ -80,6 +83,7 @@ function model(overrides: Partial<FocusModel>): FocusModel {
     background: [],
     coverage: {
       activity: "live",
+      degradedHostIds: [],
       notifications: "cloud",
       backgroundIsMountedOnly: true,
     },

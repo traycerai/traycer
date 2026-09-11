@@ -36,6 +36,21 @@ export interface FocusTasksInput {
   readonly mountedEpicIds: ReadonlySet<string>;
   /** `${epicId}\0${agentId}` → identity, for mounted epics only. */
   readonly agentIdentities: ReadonlyMap<string, FocusAgentIdentity>;
+  /**
+   * {@link focusAgentKey} → the host that reported the agent, from
+   * LOCAL-PLANE slices only.
+   *
+   * The restriction is the whole point. A slice's key is the host its STREAM
+   * was opened against, not where the agent runs - and a `cloud`-served slice
+   * is that host's view of the whole FLEET, so host A's cloud slice carries
+   * host B's agents verbatim. Reading the key as attribution there names the
+   * wrong machine confidently. A `local`-served slice is one host answering
+   * about itself, so its key IS the agent's host.
+   *
+   * Consulted only after the cloud index, and an agent in neither is left
+   * unattributed rather than guessed.
+   */
+  readonly activityHostIds: ReadonlyMap<string, string>;
   /** The host's per-epic indicator flags, as returned by
    * `host.notifications.indicatorState`. Epics the batch did not cover are
    * simply absent. */
@@ -104,9 +119,11 @@ export function buildFocusTasks(
           mountedHere: input.mountedEpicIds.has(epicId),
           agents,
           needsYou: taskNeedsYou(epicId, input),
-          stoppable: agents.every((agent) =>
-            agentIsStoppable(agent, epicId, input),
-          ),
+          // The fold of the agents' own answers rather than a second
+          // computation over the same inputs: a per-host row shows a SUBSET of
+          // these agents and has to answer for that subset alone, so the
+          // per-agent flag is the primitive and this is derived from it.
+          stoppable: agents.every((agent) => agent.stoppable),
         },
       ];
     },
@@ -151,20 +168,35 @@ function buildFocusAgents(
   const coldHostId = input.coldEpicHostIds.get(epicId) ?? null;
   const rows = Array.from(tiers.entries()).map(
     ([agentId, tier]): FocusAgentRow => {
-      const identity = input.agentIdentities.get(
-        focusAgentKey(epicId, agentId),
-      );
+      const key = focusAgentKey(epicId, agentId);
+      const identity = input.agentIdentities.get(key);
+      // A resolved identity is the authority even when its own host is `null`
+      // (a legacy chat that predates the field): the projection has SEEN this
+      // agent, so falling through would overwrite a known absence with an
+      // inference.
+      //
+      // Unresolved, the CLOUD INDEX answers next - it records where an epic's
+      // chats actually live. Only then the reporting slice, and only when that
+      // slice was served LOCALLY: a cloud-served slice is one host's view of
+      // the whole fleet, so its key is the machine the stream was opened
+      // against rather than the machine the agent runs on.
+      //
+      // Nothing left means nothing KNOWN. The row says so rather than falling
+      // back to the active host, which is how a task worked from two remote
+      // machines ended up filed under the user's laptop.
+      const attributed =
+        identity !== undefined
+          ? identity.hostId
+          : (coldHostId ?? input.activityHostIds.get(key) ?? null);
       return {
         agentId,
         title: identity?.title ?? null,
         surface: identity?.surface ?? null,
         tier,
         parentId: identity?.parentId ?? null,
-        // A resolved identity is the authority even when its own host is
-        // `null` (a legacy chat that predates the field): the projection has
-        // SEEN this agent, so falling through to the task-level guess would
-        // overwrite a known absence with an inference.
-        hostId: identity === undefined ? coldHostId : identity.hostId,
+        hostId: attributed,
+        hostUnattributed: identity === undefined && attributed === null,
+        stoppable: agentIsStoppable(attributed, identity !== undefined, input),
       };
     },
   );
@@ -198,17 +230,14 @@ function buildFocusAgents(
  *   empty `stoppedAgentIds` while the real agent keeps running.
  */
 function agentIsStoppable(
-  agent: FocusAgentRow,
-  epicId: string,
+  hostId: string | null,
+  resolvedByProjection: boolean,
   input: FocusTasksInput,
 ): boolean {
-  if (agent.hostId !== null) {
-    return (
-      agent.hostId === input.activeHostId ||
-      input.reachableHostIds.has(agent.hostId)
-    );
+  if (hostId !== null) {
+    return hostId === input.activeHostId || input.reachableHostIds.has(hostId);
   }
-  return input.agentIdentities.has(focusAgentKey(epicId, agent.agentId));
+  return resolvedByProjection;
 }
 
 /** The `agentIdentities` key. An epic id and an agent id are both opaque

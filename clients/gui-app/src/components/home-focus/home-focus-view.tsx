@@ -40,6 +40,20 @@ import {
   focusCounts,
   runningTasks,
 } from "@/lib/home-focus/focus-running";
+import { focusHostIds } from "@/lib/home-focus/focus-host-groups";
+import {
+  focusPromptHostId,
+  groupRowsByHost,
+  resolveFocusHostId,
+  splitTaskByHost,
+  splitTaskGroupByHost,
+} from "@/lib/home-focus/focus-host-groups";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import {
+  useHomeHostGroups,
+  type HomeHostGrouping,
+} from "@/hooks/home-focus/use-home-host-groups";
+import { HomeHostGroupedContext } from "@/components/home-focus/home-host-grouped-context";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
 import { historyTabIntent } from "@/lib/tab-navigation/intents";
 import { useLayoutStore, type HomeView } from "@/stores/settings/layout-store";
@@ -90,6 +104,40 @@ interface HomeSummarySegment {
   readonly id: string;
   readonly count: number;
   readonly label: string;
+  /** Rows behind this segment, paired with the host each belongs to, so the
+   * tooltip can break the number down without the visible line doing it. */
+  readonly perHost: ReadonlyArray<{
+    readonly hostId: string | null;
+  }>;
+}
+
+/**
+ * `Laptop 2 · remote-box 1`, for a segment's tooltip.
+ *
+ * The breakdown lives in the tooltip and NOT in the line, and that is the
+ * decision rather than an omission: the summary's whole job is to be read in
+ * one glance, and a line that named machines would stop being one. `null` when
+ * the page is not grouped by host, where the breakdown would just restate the
+ * count.
+ */
+function summaryHostBreakdown(
+  segment: HomeSummarySegment,
+  grouping: HomeHostGrouping,
+): string | null {
+  if (!grouping.enabled) return null;
+  const counts = new Map<string, number>();
+  for (const row of segment.perHost) {
+    const hostId = resolveFocusHostId(row.hostId, grouping.activeHostId);
+    counts.set(hostId, (counts.get(hostId) ?? 0) + 1);
+  }
+  if (counts.size === 0) return null;
+  return groupRowsByHost(Array.from(counts.entries()), ([hostId]) => hostId, {
+    activeHostId: grouping.activeHostId,
+    registryOrder: grouping.registryOrder,
+  })
+    .flatMap((group) => group.rows)
+    .map(([hostId, count]) => `${grouping.labelOf(hostId)} ${String(count)}`)
+    .join(" · ");
 }
 
 /**
@@ -120,33 +168,62 @@ function HomeSummaryLine(props: {
   readonly view: HomeView;
   readonly model: FocusModel;
   readonly groups: ReadonlyArray<FocusTaskGroup>;
+  readonly grouping: HomeHostGrouping;
 }): ReactNode {
-  const counts = focusCounts(props.model);
+  const { model, grouping } = props;
+  const counts = focusCounts(model);
+  const needsYou: HomeSummarySegment = {
+    id: SECTION_IDS.needsYou,
+    count: counts.needsYou,
+    label: "need you",
+    perHost: model.prompts.map((row) => ({
+      hostId: focusPromptHostId(row),
+    })),
+  };
   const segments: ReadonlyArray<HomeSummarySegment> = (
     props.view === "tasks"
       ? [
-          {
-            id: SECTION_IDS.needsYou,
-            count: counts.needsYou,
-            label: "need you",
-          },
+          needsYou,
           {
             id: SECTION_IDS.running,
             count: props.groups.length,
             label: props.groups.length === 1 ? "task" : "tasks",
+            perHost: props.groups.flatMap((group) =>
+              splitTaskGroupByHost(group, {
+                enabled: grouping.enabled,
+                activeHostId: grouping.activeHostId,
+              }).map((slice) => ({ hostId: slice.hostId })),
+            ),
           },
         ]
       : [
+          needsYou,
           {
-            id: SECTION_IDS.needsYou,
-            count: counts.needsYou,
-            label: "need you",
+            id: SECTION_IDS.running,
+            count: counts.running,
+            label: "running",
+            // One entry per task PER HOST, matching the rows the section
+            // draws: a two-host task contributes to both machines, while the
+            // visible number stays `counts.running`, which counts tasks.
+            perHost: runningTasks(
+              model.tasks,
+              epicIdsWithJobs(model.background),
+            ).flatMap((task) =>
+              splitTaskByHost(
+                task,
+                model.background.filter((job) => job.epicId === task.epicId),
+                {
+                  enabled: grouping.enabled,
+                  activeHostId: grouping.activeHostId,
+                },
+              ).map((slice) => ({ hostId: slice.hostId })),
+            ),
           },
-          { id: SECTION_IDS.running, count: counts.running, label: "running" },
           {
             id: SECTION_IDS.background,
             count: counts.background,
             label: "background",
+            perHost: model.background.map((row) => ({ hostId: row.hostId })),
           },
         ]
   ).filter((segment) => segment.count > 0);
@@ -165,16 +242,26 @@ function HomeSummaryLine(props: {
               ·
             </span>
           )}
-          <button
-            type="button"
-            onClick={() => focusSection(segment.id)}
-            className="rounded-sm px-1 py-0.5 outline-none hover:bg-foreground/8 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
-            data-testid="home-focus-summary-segment"
-            data-segment={segment.label}
-            data-target={segment.id}
+          <TooltipWrapper
+            label={summaryHostBreakdown(segment, props.grouping)}
+            side="bottom"
+            sideOffset={undefined}
+            align={undefined}
           >
-            {segment.count} {segment.label}
-          </button>
+            <button
+              type="button"
+              onClick={() => focusSection(segment.id)}
+              className="rounded-sm px-1 py-0.5 outline-none hover:bg-foreground/8 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+              data-testid="home-focus-summary-segment"
+              data-segment={segment.label}
+              data-target={segment.id}
+              data-hosts={
+                summaryHostBreakdown(segment, props.grouping) ?? undefined
+              }
+            >
+              {segment.count} {segment.label}
+            </button>
+          </TooltipWrapper>
         </span>
       ))}
     </div>
@@ -206,6 +293,7 @@ export function HomeFocusView(): ReactNode {
   // default view this is a pass over prompts and background rows that nothing
   // consumes. The frozen empty array keeps the identity stable across Focus
   // renders rather than handing consumers a fresh `[]` each time.
+  const hostGrouping = useHomeHostGroups(model);
   const groups = useMemo(
     () => (view === "tasks" ? selectTaskGroups(model) : NO_TASK_GROUPS),
     [model, view],
@@ -240,17 +328,28 @@ export function HomeFocusView(): ReactNode {
             ariaLabel="Home view"
           />
         </div>
-        <HomeSummaryLine view={view} model={model} groups={groups} />
-        <ActivityCoverageNotice activity={model.coverage.activity} />
+        <HomeSummaryLine
+          view={view}
+          model={model}
+          groups={groups}
+          grouping={hostGrouping}
+        />
+        <ActivityCoverageNotice
+          activity={model.coverage.activity}
+          attributedPerHost={degradedHostsAreVisible(model, hostGrouping)}
+        />
         {viewIsEmpty(view, model, groups) ? (
           <HomeFocusEmptyState />
         ) : (
-          <HomeFocusSections
-            view={view}
-            model={model}
-            groups={groups}
-            actions={actions}
-          />
+          <HomeHostGroupedContext.Provider value={hostGrouping.enabled}>
+            <HomeFocusSections
+              view={view}
+              model={model}
+              groups={groups}
+              actions={actions}
+              grouping={hostGrouping}
+            />
+          </HomeHostGroupedContext.Provider>
         )}
       </div>
     </section>
@@ -303,23 +402,56 @@ function HomeFocusSections(props: {
   readonly model: FocusModel;
   readonly groups: ReadonlyArray<FocusTaskGroup>;
   readonly actions: HomeFocusRowActions;
+  readonly grouping: HomeHostGrouping;
 }): ReactNode {
-  const { model, actions } = props;
+  const { model, actions, grouping } = props;
   if (props.view === "tasks") {
     return (
       <>
-        <PromptsSection model={model} actions={actions} />
-        <TaskGroupsSection groups={props.groups} actions={actions} />
+        <PromptsSection model={model} actions={actions} grouping={grouping} />
+        <TaskGroupsSection
+          groups={props.groups}
+          actions={actions}
+          grouping={grouping}
+          degradedHostIds={model.coverage.degradedHostIds}
+        />
       </>
     );
   }
   return (
     <>
-      <PromptsSection model={model} actions={actions} />
-      <TasksSection model={model} actions={actions} />
-      <BackgroundSection model={model} actions={actions} />
+      <PromptsSection model={model} actions={actions} grouping={grouping} />
+      <TasksSection model={model} actions={actions} grouping={grouping} />
+      <BackgroundSection model={model} actions={actions} grouping={grouping} />
     </>
   );
+}
+
+/**
+ * Whether every degraded host has a group on this page to carry its notice.
+ *
+ * The page-wide banner stands down only when something downstream is saying the
+ * same thing in a better place. A degraded host with NO visible rows has no
+ * group and therefore no subheading, so suppressing the banner for it would
+ * drop the warning entirely - and that host is exactly the one whose rows are
+ * missing BECAUSE its stream is degraded, which is the case the notice exists
+ * for.
+ */
+function degradedHostsAreVisible(
+  model: FocusModel,
+  grouping: HomeHostGrouping,
+): boolean {
+  if (!grouping.enabled) return false;
+  const degraded = model.coverage.degradedHostIds;
+  if (degraded.length === 0) return false;
+  const visible = focusHostIds(model, grouping.activeHostId);
+  return degraded.every((hostId) => visible.has(hostId));
+}
+
+/** The React key for one machine's share of a task. Two ids that cannot collide,
+ * joined on the byte neither can contain. */
+function hostSliceKey(epicId: string, hostId: string): string {
+  return [epicId, hostId].join("\u0000");
 }
 
 /**
@@ -330,9 +462,21 @@ function HomeFocusSections(props: {
  */
 function ActivityCoverageNotice(props: {
   readonly activity: FocusModel["coverage"]["activity"];
+  /**
+   * True when the sections are naming their machines and at least one of them
+   * is carrying this sentence already.
+   *
+   * The page-wide banner then stands down: saying "some activity may be
+   * missing" over a page that says WHICH host it is missing from is strictly
+   * less information in a louder place. It comes back the moment nothing
+   * downstream can attribute the gap - an `unknown`-shaped verdict with no
+   * degraded slice to pin it on, or a page with one host and no headings.
+   */
+  readonly attributedPerHost: boolean;
 }): ReactNode {
   const degraded =
-    props.activity === "reconnecting" || props.activity === "disconnected";
+    !props.attributedPerHost &&
+    (props.activity === "reconnecting" || props.activity === "disconnected");
   // The live region is mounted whether or not it has anything to say: a region
   // inserted together with its first content is announced far less reliably
   // than one already in the tree when the text appears. `display: contents`
@@ -373,8 +517,17 @@ function ActivityCoverageNotice(props: {
 export interface HomeFocusRowGroup {
   readonly key: string;
   /** A subheading above this group's rows, or `null` for the single unlabelled
-   * group every section renders today. */
+   * group a section renders when the page names one host. */
   readonly label: string | null;
+  /** This group's own count, beside its subheading - the section keeps its
+   * total, and the group says how much of it is here. `null` while unlabelled,
+   * where the section's own heading has already said it. */
+  readonly count: number | null;
+  /** Marks the machine the user is working on, which leads the list. */
+  readonly isActive: boolean;
+  /** A coverage caveat that belongs to THIS host, not the page: the notice
+   * moves under the heading it is about when only some hosts are degraded. */
+  readonly notice: string | null;
   readonly rows: ReactNode;
 }
 
@@ -420,12 +573,40 @@ function HomeFocusSection(props: {
           </ul>
         ) : (
           <div key={group.key} className="flex flex-col">
-            <p
-              className="px-3 pt-2 pb-1 text-ui-xs text-muted-foreground"
-              data-testid={`${props.testId}-group-label`}
+            <div
+              className="flex flex-col gap-0.5 px-3 pt-2 pb-1"
+              data-testid={`${props.testId}-group`}
+              data-host-id={group.key}
             >
-              {group.label}
-            </p>
+              <div className="flex flex-wrap items-center gap-x-2 text-ui-xs text-muted-foreground">
+                {/* `h3` under the section's `h2`: a reader stepping the heading
+                    outline gets "Background · 3" then the machines under it,
+                    which is the shape the page actually has. */}
+                <h3
+                  className="font-medium"
+                  data-testid={`${props.testId}-group-label`}
+                >
+                  {group.label}
+                  {group.count === null ? null : ` · ${String(group.count)}`}
+                </h3>
+                {group.isActive ? (
+                  <span
+                    className="rounded-sm bg-foreground/8 px-1.5 py-0.5"
+                    data-testid={`${props.testId}-group-active`}
+                  >
+                    active
+                  </span>
+                ) : null}
+              </div>
+              {group.notice === null ? null : (
+                <p
+                  className="text-ui-xs text-muted-foreground"
+                  data-testid={`${props.testId}-group-notice`}
+                >
+                  {group.notice}
+                </p>
+              )}
+            </div>
             <ul className="flex flex-col">{group.rows}</ul>
           </div>
         ),
@@ -434,14 +615,61 @@ function HomeFocusSection(props: {
   );
 }
 
-/** The single unlabelled group every section renders today. */
-function oneRowGroup(rows: ReactNode): ReadonlyArray<HomeFocusRowGroup> {
-  return [{ key: "all", label: null, rows }];
+/**
+ * A section's rows, split by machine when the page spans more than one.
+ *
+ * Falls back to {@link oneRowGroup} whenever grouping is off, so a section's
+ * call site is the same shape either way and the single-host page keeps the
+ * exact DOM it had before host grouping existed.
+ *
+ * The degraded-coverage notice moves HERE from the top of the page when only
+ * some hosts are degraded: the sentence belongs to the machine that earned it,
+ * and a page-wide banner over a page that names its machines is telling the
+ * reader less than it knows.
+ */
+interface HomeHostRowGroup<Row> extends Omit<HomeFocusRowGroup, "rows"> {
+  readonly items: ReadonlyArray<Row>;
+}
+
+function hostRowGroups<Row>(
+  rows: ReadonlyArray<Row>,
+  hostIdOf: (row: Row) => string | null,
+  context: {
+    readonly grouping: HomeHostGrouping;
+    readonly degradedHostIds: ReadonlyArray<string>;
+  },
+): ReadonlyArray<HomeHostRowGroup<Row>> {
+  const { grouping } = context;
+  if (!grouping.enabled) {
+    return [
+      {
+        key: "all",
+        label: null,
+        count: null,
+        isActive: false,
+        notice: null,
+        items: rows,
+      },
+    ];
+  }
+  const degraded = new Set(context.degradedHostIds);
+  return groupRowsByHost(rows, hostIdOf, {
+    activeHostId: grouping.activeHostId,
+    registryOrder: grouping.registryOrder,
+  }).map((group) => ({
+    key: group.hostId,
+    label: grouping.labelOf(group.hostId),
+    count: group.rows.length,
+    isActive: group.hostId === grouping.activeHostId,
+    notice: degraded.has(group.hostId) ? ACTIVITY_NOTICE : null,
+    items: group.rows,
+  }));
 }
 
 function PromptsSection(props: {
   readonly model: FocusModel;
   readonly actions: HomeFocusRowActions;
+  readonly grouping: HomeHostGrouping;
 }): ReactNode {
   const { prompts } = props.model;
   if (prompts.length === 0) return null;
@@ -456,11 +684,15 @@ function PromptsSection(props: {
       }
       testId="home-focus-section-prompts"
       id={SECTION_IDS.needsYou}
-      groups={oneRowGroup(
-        prompts.map((row) => (
+      groups={hostRowGroups(prompts, focusPromptHostId, {
+        grouping: props.grouping,
+        degradedHostIds: props.model.coverage.degradedHostIds,
+      }).map(({ items, ...group }) => ({
+        ...group,
+        rows: items.map((row) => (
           <HomeFocusPromptRow key={row.key} row={row} actions={props.actions} />
         )),
-      )}
+      }))}
     />
   );
 }
@@ -487,6 +719,7 @@ function PromptsSection(props: {
 function TasksSection(props: {
   readonly model: FocusModel;
   readonly actions: HomeFocusRowActions;
+  readonly grouping: HomeHostGrouping;
 }): ReactNode {
   const jobEpicIds = epicIdsWithJobs(props.model.background);
   const tasks = runningTasks(props.model.tasks, jobEpicIds);
@@ -498,16 +731,43 @@ function TasksSection(props: {
       caption={null}
       testId="home-focus-section-tasks"
       id={SECTION_IDS.running}
-      groups={oneRowGroup(
-        tasks.map((row) => (
+      groups={hostRowGroups(
+        // Split BEFORE grouping. An epic is cloud-homed and can be worked from
+        // several machines at once, so a task has no single host to be filed
+        // under; asking for one filed a two-host task under whichever machine
+        // the user happened to be sitting at. Each slice carries that host's
+        // agents, and a `Stop all` that reaches that host's roots only.
+        tasks.flatMap((task) =>
+          splitTaskByHost(
+            task,
+            props.model.background.filter((job) => job.epicId === task.epicId),
+            {
+              enabled: props.grouping.enabled,
+              activeHostId: props.grouping.activeHostId,
+            },
+          ),
+        ),
+        (slice) => slice.hostId,
+        {
+          grouping: props.grouping,
+          degradedHostIds: props.model.coverage.degradedHostIds,
+        },
+      ).map(({ items, ...group }) => ({
+        ...group,
+        rows: items.map((slice) => (
           <HomeFocusTaskRow
-            key={row.epicId}
-            row={row}
+            key={hostSliceKey(slice.task.epicId, slice.hostId)}
+            row={slice.task}
             actions={props.actions}
-            hasVisibleJobs={jobEpicIds.has(row.epicId)}
+            hasVisibleJobs={jobEpicIds.has(slice.task.epicId)}
+            stopAllHostLabel={
+              slice.splitAcrossHosts
+                ? props.grouping.labelOf(slice.hostId)
+                : null
+            }
           />
         )),
-      )}
+      }))}
     />
   );
 }
@@ -530,6 +790,8 @@ function TasksSection(props: {
 function TaskGroupsSection(props: {
   readonly groups: ReadonlyArray<FocusTaskGroup>;
   readonly actions: HomeFocusRowActions;
+  readonly grouping: HomeHostGrouping;
+  readonly degradedHostIds: ReadonlyArray<string>;
 }): ReactNode {
   const { groups } = props;
   if (groups.length === 0) return null;
@@ -540,9 +802,38 @@ function TaskGroupsSection(props: {
       caption={TASKS_BACKGROUND_CAPTION}
       testId="home-focus-section-task-groups"
       id={SECTION_IDS.running}
-      groups={oneRowGroup(
-        <HomeFocusTaskGroups groups={groups} actions={props.actions} />,
-      )}
+      groups={hostRowGroups(
+        // The same split one level up: a group worked from two machines
+        // appears under each, holding that host's agents, jobs and prompts. A
+        // background-only group follows each job's chat host, so it splits too.
+        groups.flatMap((group) =>
+          splitTaskGroupByHost(group, {
+            enabled: props.grouping.enabled,
+            activeHostId: props.grouping.activeHostId,
+          }),
+        ),
+        (slice) => slice.hostId,
+        {
+          grouping: props.grouping,
+          degradedHostIds: props.degradedHostIds,
+        },
+      ).map(({ items, ...group }) => ({
+        ...group,
+        rows: (
+          <HomeFocusTaskGroups
+            // Per task: only a task drawn under more than one host names the
+            // machine. A bucket-wide label made an A-only sibling of an A/B
+            // task read `Stop all on A` for a stop that was never scoped.
+            entries={items.map((slice) => ({
+              group: slice.group,
+              stopAllHostLabel: slice.splitAcrossHosts
+                ? props.grouping.labelOf(slice.hostId)
+                : null,
+            }))}
+            actions={props.actions}
+          />
+        ),
+      }))}
     />
   );
 }
@@ -550,6 +841,7 @@ function TaskGroupsSection(props: {
 function BackgroundSection(props: {
   readonly model: FocusModel;
   readonly actions: HomeFocusRowActions;
+  readonly grouping: HomeHostGrouping;
 }): ReactNode {
   const { background } = props.model;
   if (background.length === 0) return null;
@@ -560,15 +852,19 @@ function BackgroundSection(props: {
       caption={BACKGROUND_CAPTION}
       testId="home-focus-section-background"
       id={SECTION_IDS.background}
-      groups={oneRowGroup(
-        background.map((row) => (
+      groups={hostRowGroups(background, (row) => row.hostId, {
+        grouping: props.grouping,
+        degradedHostIds: props.model.coverage.degradedHostIds,
+      }).map(({ items, ...group }) => ({
+        ...group,
+        rows: items.map((row) => (
           <HomeFocusBackgroundRow
             key={row.key}
             row={row}
             actions={props.actions}
           />
         )),
-      )}
+      }))}
     />
   );
 }

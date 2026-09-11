@@ -37,6 +37,7 @@ import {
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useReactiveLocalHostEntry } from "@/hooks/host/use-reactive-local-host-entry";
 import { useHomeDensity } from "@/hooks/home-focus/use-home-density";
+import { useHomeHostGrouped } from "@/components/home-focus/home-host-grouped-context";
 import {
   homeChipRowClass,
   homeRowClass,
@@ -228,8 +229,12 @@ export function BackgroundGlyph(props: {
 function OriginHostChip(props: {
   readonly originHostId: string | null;
 }): ReactNode {
+  const grouped = useHomeHostGrouped();
   const localHost = useReactiveLocalHostEntry();
   const entry = useHostDirectoryEntry(props.originHostId);
+  // Under a host subheading the pill is the heading's own sentence repeated on
+  // every row beneath it.
+  if (grouped) return null;
   if (props.originHostId === null) return null;
   if (localHost === null) return null;
   if (props.originHostId === localHost.hostId) return null;
@@ -457,6 +462,8 @@ export function HomeFocusTaskRow(props: {
    * trace of it. See `focus-running.ts`.
    */
   readonly hasVisibleJobs: boolean;
+  /** See `HomeFocusTaskStopCluster.hostLabel`. */
+  readonly stopAllHostLabel: string | null;
 }): ReactNode {
   const { row, actions } = props;
   const density = useHomeDensity();
@@ -503,7 +510,11 @@ export function HomeFocusTaskRow(props: {
         )}
       </div>
       <RowStatus state={focusTaskState(row, 0)} duration={null} />
-      <HomeFocusTaskStopCluster row={row} actions={actions} />
+      <HomeFocusTaskStopCluster
+        row={row}
+        actions={actions}
+        hostLabel={props.stopAllHostLabel}
+      />
     </li>
   );
 }
@@ -518,6 +529,9 @@ export function HomeFocusTaskRow(props: {
 export function HomeFocusTaskStopCluster(props: {
   readonly row: FocusTaskRow;
   readonly actions: HomeFocusRowActions;
+  /** Named when this row is one machine's share of a task worked from several,
+   * so the button says whose agents it ends. `null` when the row IS the task. */
+  readonly hostLabel: string | null;
 }): ReactNode {
   const { row, actions } = props;
   const [confirmingStopAll, setConfirmingStopAll] = useState<boolean>(false);
@@ -527,6 +541,7 @@ export function HomeFocusTaskStopCluster(props: {
         <TaskStopControl
           row={row}
           actions={actions}
+          hostLabel={props.hostLabel}
           onRequestStopAll={() => setConfirmingStopAll(true)}
         />
       </RowActionsCell>
@@ -562,6 +577,7 @@ export function HomeFocusTaskStopCluster(props: {
 function TaskStopControl(props: {
   readonly row: FocusTaskRow;
   readonly actions: HomeFocusRowActions;
+  readonly hostLabel: string | null;
   readonly onRequestStopAll: () => void;
 }): ReactNode {
   const { row, actions } = props;
@@ -594,10 +610,14 @@ function TaskStopControl(props: {
   const pending = stopAllRoots(row.agents).some((agent) =>
     actions.stopping.has(agent.agentId),
   );
+  // The label names the machine only when the row is one host's SHARE of a
+  // task: two `Stop all` buttons on two rows of the same task would otherwise
+  // be indistinguishable, and each ends a different set of agents.
+  const scope = props.hostLabel === null ? null : ` on ${props.hostLabel}`;
   return (
     <FocusStopButton
-      label="Stop all"
-      ariaLabel={`Stop all agents in ${title}`}
+      label={scope === null ? "Stop all" : `Stop all${scope}`}
+      ariaLabel={`Stop all agents in ${title}${scope ?? ""}`}
       reason={reason}
       disabled={pending || !row.stoppable}
       pending={pending}

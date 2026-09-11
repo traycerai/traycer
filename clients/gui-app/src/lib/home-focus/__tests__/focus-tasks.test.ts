@@ -16,6 +16,7 @@ function baseInput(overrides: Partial<FocusTasksInput>): FocusTasksInput {
     taskTitles: new Map(),
     mountedEpicIds: new Set(),
     agentIdentities: new Map(),
+    activityHostIds: new Map(),
     indicatorEpics: {},
     promptEpicIds: new Set(),
     coldEpicHostIds: new Map(),
@@ -150,6 +151,7 @@ describe("buildFocusTasks", () => {
       // resolved by the real caller, which only populates identities for
       // mounted epics.
       agentIdentities: new Map(),
+      activityHostIds: new Map(),
     });
 
     const [task] = buildFocusTasks(input, []);
@@ -233,6 +235,7 @@ describe("buildFocusTasks", () => {
       const input = baseInput({
         byEpic: new Map([["epic-1", makeEpicAgentActivity(["agent-1"], [])]]),
         agentIdentities: new Map(),
+        activityHostIds: new Map(),
         coldEpicHostIds: new Map([["epic-1", "cold-host-1"]]),
       });
 
@@ -245,6 +248,7 @@ describe("buildFocusTasks", () => {
       const input = baseInput({
         byEpic: new Map([["epic-1", makeEpicAgentActivity(["agent-1"], [])]]),
         agentIdentities: new Map(),
+        activityHostIds: new Map(),
         coldEpicHostIds: new Map(),
       });
 
@@ -261,6 +265,7 @@ describe("buildFocusTasks", () => {
         mountedEpicIds: new Set(),
         coldEpicHostIds: new Map(),
         agentIdentities: new Map(),
+        activityHostIds: new Map(),
         activeHostId: "host-active",
       });
 

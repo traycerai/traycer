@@ -21,6 +21,27 @@ export interface FocusAgentRow {
   readonly tier: "turn" | "background";
   readonly parentId: string | null; // null when unknown
   readonly hostId: string | null; // the agent's host when known
+  /**
+   * Whether NOTHING could say which machine this agent runs on.
+   *
+   * `hostId === null` has two very different causes and only this tells them
+   * apart. A chat this window RESOLVED that records no host is a legacy chat on
+   * an epic we are already talking to, so the active host is where its stop
+   * goes and where it belongs on the page (`false`). An agent no identity, no
+   * cloud index entry and no local-plane slice could place is `true`, and it
+   * groups under `Unknown host` rather than being guessed onto whichever
+   * machine the user happens to be sitting at.
+   */
+  readonly hostUnattributed: boolean;
+  /**
+   * Whether a stop aimed at THIS agent would reach the machine it runs on.
+   *
+   * Per agent rather than only per task, because a task can be worked from
+   * several hosts at once and a row that shows one host's share of it must
+   * answer for that host alone - `FocusTaskRow.stoppable` is the fold of these,
+   * not the other way round.
+   */
+  readonly stoppable: boolean;
 }
 export interface FocusTaskRow {
   readonly epicId: string;
@@ -45,6 +66,10 @@ export interface FocusBackgroundRow {
    * limit the whole section carries.
    */
   readonly chatTitle: string | null;
+  /** The machine this job runs on, carried so the section can group by it.
+   * `null` for a session handle whose host the registry cannot name - which is
+   * also exactly when the row is unstoppable. */
+  readonly hostId: string | null;
   readonly label: string; // managed command description or background item title
   readonly kind: "managed-command" | "background-item";
   /** The background item's own kind, for the row's glyph. `null` for a managed
@@ -60,6 +85,17 @@ export interface FocusModel {
   readonly background: ReadonlyArray<FocusBackgroundRow>;
   readonly coverage: {
     readonly activity: "live" | "reconnecting" | "disconnected" | "unknown";
+    /**
+     * The hosts whose OWN activity slice is degraded, sorted, for the sections
+     * that group by host.
+     *
+     * `activity` above is the worst slice's verdict for the whole page; this is
+     * the per-host breakdown behind it, so a section grouped by host can put
+     * the notice on the one heading it belongs under instead of over the entire
+     * page. Empty whenever nothing is degraded, which is also the single-host
+     * install's steady state.
+     */
+    readonly degradedHostIds: ReadonlyArray<string>;
     readonly notifications: "local" | "cloud";
     readonly backgroundIsMountedOnly: true;
   };

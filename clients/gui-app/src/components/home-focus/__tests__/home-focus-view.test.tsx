@@ -68,6 +68,19 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => hostDirectoryEntryMock.value,
 }));
 
+/** The fleet this page sees, and which of it is active. A single unnamed host
+ * is the default, which is the ungrouped page most cases here expect. */
+const fleetMock = vi.hoisted(() => ({
+  activeHostId: null as string | null,
+  entries: [] as Array<{ hostId: string; label: string }>,
+}));
+vi.mock("@/hooks/host/use-effective-host-id", () => ({
+  useEffectiveHostId: () => fleetMock.activeHostId,
+}));
+vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
+  useHostDirectoryList: () => ({ data: fleetMock.entries }),
+}));
+
 // The REAL `trackSettingChanged`, spied rather than replaced, so a call still
 // has to survive the runtime allowlist that `sanitizeAnalyticsProperties`
 // gates - a setting id that only exists in the type drops silently otherwise.
@@ -152,6 +165,8 @@ function agentRow(overrides: Partial<FocusAgentRow>): FocusAgentRow {
     tier: "turn",
     parentId: null,
     hostId: null,
+    hostUnattributed: false,
+    stoppable: true,
     ...overrides,
   };
 }
@@ -178,6 +193,7 @@ function backgroundRow(
     chatId: "chat-1",
     taskTitle: "Task title",
     chatTitle: "Chat title",
+    hostId: "host-local",
     label: "dev server",
     kind: "managed-command",
     itemKind: null,
@@ -194,6 +210,7 @@ function model(overrides: Partial<FocusModel>): FocusModel {
     background: [],
     coverage: {
       activity: "live",
+      degradedHostIds: [],
       notifications: "cloud",
       backgroundIsMountedOnly: true,
     },
@@ -237,6 +254,8 @@ beforeEach(() => {
   hostDirectoryEntryMock.value = null;
   modelMock.value = null;
   useLayoutStore.setState({ home: DEFAULT_HOME_LAYOUT });
+  fleetMock.activeHostId = null;
+  fleetMock.entries = [];
   vi.clearAllMocks();
 });
 
@@ -859,6 +878,7 @@ describe("<HomeFocusView /> coverage notices", () => {
         tasks: [taskRow({})],
         coverage: {
           activity,
+          degradedHostIds: [],
           notifications: "cloud",
           backgroundIsMountedOnly: true,
         },
@@ -877,6 +897,7 @@ describe("<HomeFocusView /> coverage notices", () => {
         tasks: [taskRow({})],
         coverage: {
           activity,
+          degradedHostIds: [],
           notifications: "cloud",
           backgroundIsMountedOnly: true,
         },
@@ -892,6 +913,7 @@ describe("<HomeFocusView /> coverage notices", () => {
       badgeCount: 1,
       coverage: {
         activity: "live",
+        degradedHostIds: [],
         notifications: "local",
         backgroundIsMountedOnly: true,
       },
@@ -908,6 +930,7 @@ describe("<HomeFocusView /> coverage notices", () => {
       badgeCount: 1,
       coverage: {
         activity: "live",
+        degradedHostIds: [],
         notifications: "cloud",
         backgroundIsMountedOnly: true,
       },
@@ -2376,6 +2399,7 @@ describe("<HomeFocusView /> section headings", () => {
       background: [backgroundRow({})],
       coverage: {
         activity: "live",
+        degradedHostIds: [],
         notifications: "cloud",
         backgroundIsMountedOnly: true,
       },
@@ -2802,5 +2826,894 @@ describe("<HomeFocusView /> unlabelled row group", () => {
     expect(
       screen.queryByTestId("home-focus-section-background-group-label"),
     ).toBeNull();
+  });
+});
+
+// Sections name their machines, but only once there is more than one.
+describe("<HomeFocusView /> host grouping", () => {
+  function twoHostFleet(): void {
+    fleetMock.activeHostId = "host-local";
+    fleetMock.entries = [
+      { hostId: "host-remote", label: "Remote Box" },
+      { hostId: "host-local", label: "Laptop" },
+    ];
+  }
+
+  it("draws no subheading when every row resolves to one host", () => {
+    fleetMock.activeHostId = "host-local";
+    fleetMock.entries = [{ hostId: "host-local", label: "Laptop" }];
+    modelMock.value = model({
+      prompts: [promptRow({ originHostId: null })],
+      background: [backgroundRow({ hostId: "host-local" })],
+      badgeCount: 1,
+    });
+    render(<HomeFocusView />);
+
+    expect(
+      screen.queryByTestId("home-focus-section-background-group-label"),
+    ).toBeNull();
+    expect(screen.queryAllByRole("heading", { level: 3 })).toHaveLength(0);
+    // The unlabelled shape, so the DOM is what it was before H7.
+    const section = screen.getByTestId("home-focus-section-background");
+    expect(section.querySelector("ul")?.parentElement).toBe(section);
+  });
+
+  it("names each machine, active first, with its own count and an active pill", () => {
+    twoHostFleet();
+    modelMock.value = model({
+      background: [
+        backgroundRow({
+          key: "r1",
+          hostId: "host-remote",
+          label: "remote job",
+        }),
+        backgroundRow({ key: "l1", hostId: "host-local", label: "local job" }),
+        backgroundRow({
+          key: "l2",
+          hostId: "host-local",
+          label: "other local",
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    const labels = screen.getAllByTestId(
+      "home-focus-section-background-group-label",
+    );
+    expect(labels.map((label) => label.textContent)).toEqual([
+      "Laptop · 2",
+      "Remote Box · 1",
+    ]);
+    expect(labels[0].tagName).toBe("H3");
+    // The section keeps its own total above the machines that make it up.
+    expect(
+      screen.getByTestId("home-focus-section-background-heading").textContent,
+    ).toBe("Background · 3");
+    const active = screen.getAllByTestId(
+      "home-focus-section-background-group-active",
+    );
+    expect(active).toHaveLength(1);
+    expect(active[0].textContent).toBe("active");
+  });
+
+  it("falls back to the host id when the registry has no label for it", () => {
+    fleetMock.activeHostId = "host-local";
+    fleetMock.entries = [{ hostId: "host-local", label: "Laptop" }];
+    modelMock.value = model({
+      background: [
+        backgroundRow({ key: "a", hostId: "host-local" }),
+        backgroundRow({ key: "b", hostId: "pranshu-remote-host" }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    expect(
+      screen
+        .getAllByTestId("home-focus-section-background-group-label")
+        .map((label) => label.textContent),
+    ).toEqual(["Laptop · 1", "pranshu-remote-host · 1"]);
+  });
+
+  it("resolves a row with no host of its own onto the active host's group", () => {
+    twoHostFleet();
+    modelMock.value = model({
+      background: [
+        backgroundRow({ key: "unnamed", hostId: null, label: "unnamed job" }),
+        backgroundRow({ key: "remote", hostId: "host-remote" }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    const groups = screen.getAllByTestId("home-focus-section-background-group");
+    expect(groups.map((group) => group.getAttribute("data-host-id"))).toEqual([
+      "host-local",
+      "host-remote",
+    ]);
+    expect(
+      screen.getAllByTestId("home-focus-section-background-group-label")[0]
+        .textContent,
+    ).toBe("Laptop · 1");
+  });
+
+  it("drops the origin pill from rows under a heading that already says it", () => {
+    twoHostFleet();
+    localHostMock.value = hostEntry({ hostId: "host-local" });
+    hostDirectoryEntryMock.value = hostEntry({
+      hostId: "host-remote",
+      label: "Remote Box",
+    });
+    modelMock.value = model({
+      prompts: [promptRow({ originHostId: "host-remote" })],
+      background: [backgroundRow({ hostId: "host-local" })],
+      badgeCount: 1,
+    });
+    render(<HomeFocusView />);
+
+    expect(
+      screen.getByTestId("home-focus-section-prompts-group-label"),
+    ).toBeDefined();
+    expect(screen.queryByTestId("home-focus-origin-host")).toBeNull();
+  });
+
+  it("keeps the origin pill on an ungrouped page", () => {
+    fleetMock.activeHostId = "host-local";
+    localHostMock.value = hostEntry({ hostId: "host-local" });
+    hostDirectoryEntryMock.value = hostEntry({
+      hostId: "host-remote",
+      label: "Remote Box",
+    });
+    modelMock.value = model({
+      prompts: [promptRow({ originHostId: "host-remote" })],
+      badgeCount: 1,
+    });
+    render(<HomeFocusView />);
+    // One host is NAMED by a row, so the page does not group - and the pill is
+    // then the only thing saying where the prompt came from.
+    expect(screen.queryAllByRole("heading", { level: 3 })).toHaveLength(0);
+    expect(screen.getByTestId("home-focus-origin-host").textContent).toBe(
+      "Remote Box",
+    );
+  });
+
+  it("groups the Tasks view the same way", () => {
+    twoHostFleet();
+    useLayoutStore.setState({
+      home: { view: "tasks", density: "comfortable" },
+    });
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-local",
+          agents: [agentRow({ hostId: "host-local", tier: "turn" })],
+        }),
+        taskRow({
+          epicId: "epic-remote",
+          agents: [agentRow({ hostId: "host-remote", tier: "turn" })],
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    expect(
+      screen
+        .getAllByTestId("home-focus-section-task-groups-group-label")
+        .map((label) => label.textContent),
+    ).toEqual(["Laptop · 1", "Remote Box · 1"]);
+  });
+
+  it("follows the chat's host for a background-only task group", () => {
+    twoHostFleet();
+    useLayoutStore.setState({
+      home: { view: "tasks", density: "comfortable" },
+    });
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-local",
+          agents: [agentRow({ hostId: "host-local", tier: "turn" })],
+        }),
+      ],
+      background: [
+        backgroundRow({ epicId: "epic-idle", hostId: "host-remote" }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    expect(
+      screen
+        .getAllByTestId("home-focus-section-task-groups-group-label")
+        .map((label) => label.textContent),
+    ).toEqual(["Laptop · 1", "Remote Box · 1"]);
+  });
+});
+
+describe("<HomeFocusView /> per-host coverage", () => {
+  function degradedRemote(): void {
+    fleetMock.activeHostId = "host-local";
+    fleetMock.entries = [
+      { hostId: "host-local", label: "Laptop" },
+      { hostId: "host-remote", label: "Remote Box" },
+    ];
+    modelMock.value = model({
+      background: [
+        backgroundRow({ key: "l", hostId: "host-local" }),
+        backgroundRow({ key: "r", hostId: "host-remote" }),
+      ],
+      coverage: {
+        activity: "reconnecting",
+        degradedHostIds: ["host-remote"],
+        notifications: "cloud",
+        backgroundIsMountedOnly: true,
+      },
+    });
+  }
+
+  it("puts the notice under the host that earned it, and not the healthy one", () => {
+    degradedRemote();
+    render(<HomeFocusView />);
+
+    const notices = screen.getAllByTestId(
+      "home-focus-section-background-group-notice",
+    );
+    expect(notices).toHaveLength(1);
+    expect(notices[0].textContent).toBe("Some activity may be missing");
+    const groups = screen.getAllByTestId("home-focus-section-background-group");
+    expect(
+      within(groups[0]).queryByTestId(
+        "home-focus-section-background-group-notice",
+      ),
+    ).toBeNull();
+    expect(groups[1].getAttribute("data-host-id")).toBe("host-remote");
+  });
+
+  // A page-wide banner over a page that names the machine is strictly less
+  // information in a louder place.
+  it("stands the page-wide banner down once a host is carrying it", () => {
+    degradedRemote();
+    render(<HomeFocusView />);
+    expect(screen.queryByTestId("home-focus-activity-notice")).toBeNull();
+  });
+
+  it("keeps the page-wide banner when nothing downstream can attribute it", () => {
+    fleetMock.activeHostId = "host-local";
+    modelMock.value = model({
+      background: [backgroundRow({ hostId: "host-local" })],
+      coverage: {
+        activity: "disconnected",
+        degradedHostIds: [],
+        notifications: "cloud",
+        backgroundIsMountedOnly: true,
+      },
+    });
+    render(<HomeFocusView />);
+    expect(screen.getByTestId("home-focus-activity-notice")).toBeDefined();
+  });
+});
+
+describe("<HomeFocusView /> summary host breakdown", () => {
+  it("keeps host names out of the visible line and puts them in the tooltip", () => {
+    fleetMock.activeHostId = "host-local";
+    fleetMock.entries = [
+      { hostId: "host-local", label: "Laptop" },
+      { hostId: "host-remote", label: "Remote Box" },
+    ];
+    modelMock.value = model({
+      background: [
+        backgroundRow({ key: "l1", hostId: "host-local" }),
+        backgroundRow({ key: "l2", hostId: "host-local" }),
+        backgroundRow({ key: "r1", hostId: "host-remote" }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    const segment = screen.getByTestId("home-focus-summary-segment");
+    expect(segment.textContent).toBe("3 background");
+    expect(segment.getAttribute("data-hosts")).toBe("Laptop 2 · Remote Box 1");
+  });
+
+  it("offers no breakdown on an ungrouped page", () => {
+    fleetMock.activeHostId = "host-local";
+    modelMock.value = model({
+      background: [backgroundRow({ hostId: "host-local" })],
+    });
+    render(<HomeFocusView />);
+    expect(
+      screen
+        .getByTestId("home-focus-summary-segment")
+        .getAttribute("data-hosts"),
+    ).toBeNull();
+  });
+});
+
+// The review's finding: an epic is cloud-homed and can be worked from two
+// machines at once, so a task has no single host to be filed under. Asking for
+// one answered `null`, which resolved to the ACTIVE host - and a task being
+// worked from two remote boxes was filed under the laptop.
+describe("<HomeFocusView /> a task worked from two hosts", () => {
+  function twoHostTask(): void {
+    fleetMock.activeHostId = "host-local";
+    fleetMock.entries = [
+      { hostId: "host-local", label: "Laptop" },
+      { hostId: "host-a", label: "Box A" },
+      { hostId: "host-b", label: "Box B" },
+    ];
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-shared",
+          taskTitle: "Shared task",
+          agents: [
+            agentRow({
+              agentId: "agent-a",
+              title: "impl",
+              tier: "turn",
+              hostId: "host-a",
+            }),
+            agentRow({
+              agentId: "agent-b",
+              title: "reviewer",
+              tier: "turn",
+              hostId: "host-b",
+            }),
+          ],
+        }),
+      ],
+    });
+  }
+
+  it("draws it once under each machine, each holding that host's agents", () => {
+    twoHostTask();
+    render(<HomeFocusView />);
+
+    const labels = screen.getAllByTestId(
+      "home-focus-section-tasks-group-label",
+    );
+    // Never the active host: the task names two machines and neither is it.
+    expect(labels.map((label) => label.textContent)).toEqual([
+      "Box A · 1",
+      "Box B · 1",
+    ]);
+    const rows = screen.getAllByTestId("home-focus-task-row");
+    expect(rows).toHaveLength(2);
+    expect(rows[0].textContent).toContain("Shared task");
+    expect(
+      within(rows[0]).getAllByTestId("home-focus-agent-chip"),
+    ).toHaveLength(1);
+    expect(
+      within(rows[0]).getByTestId("home-focus-agent-chip").textContent,
+    ).toContain("impl");
+    expect(
+      within(rows[1]).getByTestId("home-focus-agent-chip").textContent,
+    ).toContain("reviewer");
+  });
+
+  it("names the machine on each row's Stop, and stops only that host's roots", () => {
+    twoHostTask();
+    render(<HomeFocusView />);
+
+    // One agent per slice, so each row offers the single-agent `Stop`.
+    const stops = screen.getAllByTestId("home-focus-task-stop");
+    expect(stops).toHaveLength(2);
+    fireEvent.click(stops[0]);
+    expect(actionsMock.stopAgent).toHaveBeenCalledTimes(1);
+    expect(actionsMock.stopAgent).toHaveBeenCalledWith({
+      epicId: "epic-shared",
+      agentId: "agent-a",
+      hostId: "host-a",
+      cascade: true,
+    });
+  });
+
+  it("scopes Stop all to one host and says which", () => {
+    fleetMock.activeHostId = "host-local";
+    fleetMock.entries = [
+      { hostId: "host-local", label: "Laptop" },
+      { hostId: "host-a", label: "Box A" },
+      { hostId: "host-b", label: "Box B" },
+    ];
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-shared",
+          agents: [
+            agentRow({ agentId: "a1", tier: "turn", hostId: "host-a" }),
+            agentRow({ agentId: "a2", tier: "turn", hostId: "host-a" }),
+            agentRow({ agentId: "b1", tier: "turn", hostId: "host-b" }),
+          ],
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    const stopAll = screen.getAllByTestId("home-focus-task-stop-all");
+    expect(stopAll).toHaveLength(1);
+    expect(stopAll[0].textContent).toContain("Stop all on Box A");
+    fireEvent.click(stopAll[0]);
+    fireEvent.click(screen.getByTestId("home-focus-stop-all-confirm"));
+
+    // Box A's two roots, and nothing on Box B.
+    expect(actionsMock.stopAgent).toHaveBeenCalledTimes(2);
+    for (const agentId of ["a1", "a2"]) {
+      expect(actionsMock.stopAgent).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId, hostId: "host-a" }),
+      );
+    }
+    expect(actionsMock.stopAgent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "b1" }),
+    );
+  });
+
+  it("splits the same task in the Tasks view too", () => {
+    twoHostTask();
+    useLayoutStore.setState({
+      home: { view: "tasks", density: "comfortable" },
+    });
+    render(<HomeFocusView />);
+
+    expect(
+      screen
+        .getAllByTestId("home-focus-section-task-groups-group-label")
+        .map((label) => label.textContent),
+    ).toEqual(["Box A · 1", "Box B · 1"]);
+    const groups = screen.getAllByTestId("home-focus-task-group-row");
+    expect(groups).toHaveLength(2);
+  });
+
+  it("leaves a single-host task whole, with an unscoped Stop all", () => {
+    fleetMock.activeHostId = "host-local";
+    fleetMock.entries = [
+      { hostId: "host-local", label: "Laptop" },
+      { hostId: "host-a", label: "Box A" },
+    ];
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-one",
+          agents: [
+            agentRow({ agentId: "a1", tier: "turn", hostId: "host-a" }),
+            agentRow({ agentId: "a2", tier: "turn", hostId: "host-a" }),
+          ],
+        }),
+      ],
+      background: [
+        backgroundRow({ epicId: "epic-other", hostId: "host-local" }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    expect(screen.getAllByTestId("home-focus-task-row")).toHaveLength(1);
+    expect(screen.getByTestId("home-focus-task-stop-all").textContent).toBe(
+      "Stop all",
+    );
+  });
+});
+
+describe("<HomeFocusView /> degraded host with no visible rows", () => {
+  // Suppressing the banner for a host that has no group would drop the warning
+  // entirely - and that host is precisely the one whose rows are missing
+  // BECAUSE its stream is degraded.
+  it("keeps the page-wide banner when the degraded host has no group", () => {
+    fleetMock.activeHostId = "host-local";
+    fleetMock.entries = [
+      { hostId: "host-local", label: "Laptop" },
+      { hostId: "host-remote", label: "Remote Box" },
+    ];
+    modelMock.value = model({
+      background: [
+        backgroundRow({ key: "l", hostId: "host-local" }),
+        backgroundRow({ key: "o", hostId: "host-other" }),
+      ],
+      coverage: {
+        activity: "reconnecting",
+        // Degraded, and contributing no rows at all.
+        degradedHostIds: ["host-silent"],
+        notifications: "cloud",
+        backgroundIsMountedOnly: true,
+      },
+    });
+    render(<HomeFocusView />);
+
+    expect(screen.getByTestId("home-focus-activity-notice")).toBeDefined();
+    expect(
+      screen.queryAllByTestId("home-focus-section-background-group-notice"),
+    ).toHaveLength(0);
+  });
+
+  it("still stands the banner down when every degraded host has a group", () => {
+    fleetMock.activeHostId = "host-local";
+    fleetMock.entries = [
+      { hostId: "host-local", label: "Laptop" },
+      { hostId: "host-remote", label: "Remote Box" },
+    ];
+    modelMock.value = model({
+      background: [
+        backgroundRow({ key: "l", hostId: "host-local" }),
+        backgroundRow({ key: "r", hostId: "host-remote" }),
+      ],
+      coverage: {
+        activity: "reconnecting",
+        degradedHostIds: ["host-remote"],
+        notifications: "cloud",
+        backgroundIsMountedOnly: true,
+      },
+    });
+    render(<HomeFocusView />);
+
+    expect(screen.queryByTestId("home-focus-activity-notice")).toBeNull();
+    expect(
+      screen.getAllByTestId("home-focus-section-background-group-notice"),
+    ).toHaveLength(1);
+  });
+
+  it("keeps the banner when one of two degraded hosts is silent", () => {
+    fleetMock.activeHostId = "host-local";
+    fleetMock.entries = [
+      { hostId: "host-local", label: "Laptop" },
+      { hostId: "host-remote", label: "Remote Box" },
+    ];
+    modelMock.value = model({
+      background: [
+        backgroundRow({ key: "l", hostId: "host-local" }),
+        backgroundRow({ key: "r", hostId: "host-remote" }),
+      ],
+      coverage: {
+        activity: "disconnected",
+        degradedHostIds: ["host-remote", "host-silent"],
+        notifications: "cloud",
+        backgroundIsMountedOnly: true,
+      },
+    });
+    render(<HomeFocusView />);
+    expect(screen.getByTestId("home-focus-activity-notice")).toBeDefined();
+  });
+});
+
+describe("<HomeFocusView /> rows with no host and no active host", () => {
+  it("groups them under Unknown host, last, losing none", () => {
+    fleetMock.activeHostId = null;
+    fleetMock.entries = [
+      { hostId: "host-a", label: "Box A" },
+      { hostId: "host-b", label: "Box B" },
+    ];
+    modelMock.value = model({
+      background: [
+        backgroundRow({ key: "a", hostId: "host-a" }),
+        backgroundRow({ key: "b", hostId: "host-b" }),
+        backgroundRow({ key: "none", hostId: null, label: "unattributed" }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    expect(
+      screen
+        .getAllByTestId("home-focus-section-background-group-label")
+        .map((label) => label.textContent),
+    ).toEqual(["Box A · 1", "Box B · 1", "Unknown host · 1"]);
+    // The section's own total still equals the sum of its groups.
+    expect(
+      screen.getByTestId("home-focus-section-background-heading").textContent,
+    ).toBe("Background · 3");
+    expect(screen.getAllByTestId("home-focus-background-row")).toHaveLength(3);
+  });
+});
+
+describe("<HomeFocusView /> host-group residuals", () => {
+  function twoHostFleet(): void {
+    fleetMock.activeHostId = "host-local";
+    fleetMock.entries = [
+      { hostId: "host-local", label: "Laptop" },
+      { hostId: "host-a", label: "Box A" },
+      { hostId: "host-b", label: "Box B" },
+    ];
+  }
+
+  // A prompt raised on B is not this group's business just because B has no
+  // agents in it: the badge would be counting a machine the group is not about.
+  it("drops a prompt raised on another host from a single-host group", () => {
+    twoHostFleet();
+    useLayoutStore.setState({
+      home: { view: "tasks", density: "comfortable" },
+    });
+    modelMock.value = model({
+      prompts: [
+        promptRow({
+          epicId: "epic-a",
+          originHostId: "host-b",
+          title: "from B",
+        }),
+      ],
+      tasks: [
+        taskRow({
+          epicId: "epic-a",
+          agents: [agentRow({ tier: "turn", hostId: "host-a" })],
+        }),
+      ],
+      badgeCount: 1,
+    });
+    render(<HomeFocusView />);
+
+    // The task group sits on A alone and claims nothing about B.
+    const row = screen.getByTestId("home-focus-task-group-row");
+    expect(within(row).queryByTestId("home-focus-task-group-needs")).toBeNull();
+    // The prompt is still actionable, under its own machine, in Needs you.
+    expect(
+      screen
+        .getAllByTestId("home-focus-section-prompts-group-label")
+        .map((label) => label.textContent),
+    ).toEqual(["Box B · 1"]);
+  });
+
+  it("keeps a prompt raised on the group's own host", () => {
+    twoHostFleet();
+    useLayoutStore.setState({
+      home: { view: "tasks", density: "comfortable" },
+    });
+    modelMock.value = model({
+      prompts: [promptRow({ epicId: "epic-a", originHostId: "host-a" })],
+      tasks: [
+        taskRow({
+          epicId: "epic-a",
+          agents: [agentRow({ tier: "turn", hostId: "host-a" })],
+        }),
+        taskRow({
+          epicId: "epic-b",
+          agents: [agentRow({ tier: "turn", hostId: "host-b" })],
+        }),
+      ],
+      badgeCount: 1,
+    });
+    render(<HomeFocusView />);
+
+    expect(screen.getByTestId("home-focus-task-group-needs").textContent).toBe(
+      "1 need you",
+    );
+  });
+
+  // A bucket-wide label made an A-only task read `Stop all on A` for a stop
+  // that was never scoped to begin with.
+  it("names the host only on the task that is actually split", () => {
+    twoHostFleet();
+    modelMock.value = model({
+      tasks: [
+        // Drawn under A and B.
+        taskRow({
+          epicId: "epic-split",
+          taskTitle: "Split task",
+          agents: [
+            agentRow({ agentId: "s-a1", tier: "turn", hostId: "host-a" }),
+            agentRow({ agentId: "s-a2", tier: "turn", hostId: "host-a" }),
+            agentRow({ agentId: "s-b1", tier: "turn", hostId: "host-b" }),
+          ],
+        }),
+        // A's sibling, wholly on A.
+        taskRow({
+          epicId: "epic-solo",
+          taskTitle: "Solo task",
+          agents: [
+            agentRow({ agentId: "o1", tier: "turn", hostId: "host-a" }),
+            agentRow({ agentId: "o2", tier: "turn", hostId: "host-a" }),
+          ],
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    const labels = screen
+      .getAllByTestId("home-focus-task-stop-all")
+      .map((button) => button.textContent);
+    expect(labels).toContain("Stop all on Box A");
+    expect(labels).toContain("Stop all");
+    expect(
+      labels.filter((label) => label === "Stop all on Box A"),
+    ).toHaveLength(1);
+  });
+
+  it("names the host per task in the Tasks view too", () => {
+    twoHostFleet();
+    useLayoutStore.setState({
+      home: { view: "tasks", density: "comfortable" },
+    });
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-split",
+          agents: [
+            agentRow({ agentId: "s-a1", tier: "turn", hostId: "host-a" }),
+            agentRow({ agentId: "s-a2", tier: "turn", hostId: "host-a" }),
+            agentRow({ agentId: "s-b1", tier: "turn", hostId: "host-b" }),
+          ],
+        }),
+        taskRow({
+          epicId: "epic-solo",
+          agents: [
+            agentRow({ agentId: "o1", tier: "turn", hostId: "host-a" }),
+            agentRow({ agentId: "o2", tier: "turn", hostId: "host-a" }),
+          ],
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    const labels = screen
+      .getAllByTestId("home-focus-task-stop-all")
+      .map((button) => button.textContent);
+    expect(
+      labels.filter((label) => label === "Stop all on Box A"),
+    ).toHaveLength(1);
+    expect(labels.filter((label) => label === "Stop all")).toHaveLength(1);
+  });
+});
+
+// The corrected rule: a cloud slice is a fleet union, so its key cannot
+// attribute an agent. An agent nothing could place says so, and the page files
+// it under `Unknown host` rather than onto whichever machine is active.
+describe("<HomeFocusView /> an agent nothing could attribute", () => {
+  it("groups it under Unknown host, never the active one", () => {
+    fleetMock.activeHostId = "host-local";
+    fleetMock.entries = [
+      { hostId: "host-local", label: "Laptop" },
+      { hostId: "host-a", label: "Box A" },
+    ];
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-here",
+          agents: [agentRow({ tier: "turn", hostId: "host-local" })],
+        }),
+        taskRow({
+          epicId: "epic-known",
+          agents: [agentRow({ tier: "turn", hostId: "host-a" })],
+        }),
+        taskRow({
+          epicId: "epic-cold",
+          taskTitle: "Unplaceable task",
+          mountedHere: false,
+          agents: [
+            agentRow({
+              tier: "turn",
+              surface: null,
+              hostId: null,
+              hostUnattributed: true,
+            }),
+          ],
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    const labels = screen
+      .getAllByTestId("home-focus-section-tasks-group-label")
+      .map((label) => label.textContent);
+    // The unknown bucket sorts last, and the active host's group counts ONE -
+    // the row it actually holds, not the one nothing could place.
+    expect(labels).toEqual(["Laptop · 1", "Box A · 1", "Unknown host · 1"]);
+  });
+
+  // The bucket is not a machine. A page whose only second "host" is the absence
+  // of one has nothing to compare, so it stays the flat list it was.
+  it("does not turn grouping on by itself", () => {
+    fleetMock.activeHostId = "host-local";
+    fleetMock.entries = [
+      { hostId: "host-local", label: "Laptop" },
+      { hostId: "host-a", label: "Box A" },
+    ];
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-here",
+          agents: [agentRow({ tier: "turn", hostId: "host-local" })],
+        }),
+        taskRow({
+          epicId: "epic-cold",
+          taskTitle: "Unplaceable task",
+          mountedHere: false,
+          agents: [
+            agentRow({
+              tier: "turn",
+              hostId: null,
+              hostUnattributed: true,
+            }),
+          ],
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    expect(
+      screen.queryAllByTestId("home-focus-section-tasks-group-label"),
+    ).toEqual([]);
+    // Ungrouped is not dropped: the row is still on the page.
+    expect(
+      screen
+        .getAllByTestId("home-focus-row-name")
+        .map((name) => name.textContent),
+    ).toContain("Unplaceable task");
+  });
+
+  // A narrower claim than the click makes it look. On a model the real builder
+  // produced this Stop is DISABLED: `agentIsStoppable` refuses a `null` host
+  // nothing resolved, and a task is `every` over its agents, so an unattributed
+  // task is unstoppable and the row is greyed out with a reason (covered by
+  // "disables Stop with a reason when the task is not stoppable"). The row here
+  // is handed in `stoppable: true` deliberately, to isolate the one thing host
+  // grouping could break: its ROOT INPUTS. Filing a task under `Unknown host`
+  // must not narrow the set of agents `Stop all` collects, the way the per-host
+  // split narrows it for a task that spans machines. Not knowing which machine
+  // to name is not a reason to stop a subset - it is a reason not to offer the
+  // stop at all, which is what the builder does.
+  it("preserves every root when it groups an unattributed task", () => {
+    fleetMock.activeHostId = "host-local";
+    fleetMock.entries = [
+      { hostId: "host-local", label: "Laptop" },
+      { hostId: "host-a", label: "Box A" },
+    ];
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-known",
+          agents: [agentRow({ tier: "turn", hostId: "host-a" })],
+        }),
+        taskRow({
+          epicId: "epic-cold",
+          mountedHere: false,
+          agents: [
+            agentRow({
+              agentId: "u1",
+              tier: "turn",
+              hostId: null,
+              hostUnattributed: true,
+            }),
+            agentRow({
+              agentId: "u2",
+              tier: "turn",
+              hostId: null,
+              hostUnattributed: true,
+            }),
+          ],
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    fireEvent.click(screen.getByTestId("home-focus-task-stop-all"));
+    fireEvent.click(screen.getByTestId("home-focus-stop-all-confirm"));
+    expect(actionsMock.stopAgent).toHaveBeenCalledTimes(2);
+    for (const agentId of ["u1", "u2"]) {
+      expect(actionsMock.stopAgent).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId, hostId: null, cascade: true }),
+      );
+    }
+  });
+
+  // A legacy chat this window RESOLVED still belongs to the active host: its
+  // `null` means "no recorded host", not "no idea where this runs".
+  it("keeps a resolved agent with no recorded host on the active host", () => {
+    fleetMock.activeHostId = "host-local";
+    fleetMock.entries = [
+      { hostId: "host-local", label: "Laptop" },
+      { hostId: "host-a", label: "Box A" },
+    ];
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-known",
+          agents: [agentRow({ tier: "turn", hostId: "host-a" })],
+        }),
+        taskRow({
+          epicId: "epic-legacy",
+          mountedHere: true,
+          agents: [
+            agentRow({ tier: "turn", hostId: null, hostUnattributed: false }),
+          ],
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    expect(
+      screen
+        .getAllByTestId("home-focus-section-tasks-group-label")
+        .map((label) => label.textContent),
+    ).toEqual(["Laptop · 1", "Box A · 1"]);
   });
 });

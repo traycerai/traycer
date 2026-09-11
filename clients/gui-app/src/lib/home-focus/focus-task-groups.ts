@@ -3,6 +3,7 @@ import type {
   FocusAgentRow,
   FocusBackgroundRow,
   FocusModel,
+  FocusPromptRow,
   FocusTaskRow,
 } from "@/lib/home-focus/focus-model";
 
@@ -39,13 +40,17 @@ export interface FocusTaskGroup {
    */
   readonly task: FocusTaskRow | null;
   /**
-   * Loaded prompt ROWS pointing at this task - never the task's `needsYou`
+   * The loaded prompt ROWS pointing at this task - never the task's `needsYou`
    * boolean, which is also true when the host's indicator flags say a prompt is
    * pending but the feed has not paged that row in. A badge reading "2 need
    * you" has to be countable on the page it appears on, so it counts the rows
    * the Needs you section is actually showing.
+   *
+   * The rows rather than their count, because a group split across hosts files
+   * each prompt under the machine it was RAISED on - a count could only be
+   * repeated whole under both.
    */
-  readonly promptCount: number;
+  readonly prompts: ReadonlyArray<FocusPromptRow>;
   readonly agents: ReadonlyArray<FocusTaskGroupAgent>;
   readonly jobs: ReadonlyArray<FocusBackgroundRow>;
   /**
@@ -88,10 +93,15 @@ export interface FocusTaskGroup {
 export function selectTaskGroups(
   model: FocusModel,
 ): ReadonlyArray<FocusTaskGroup> {
-  const promptCounts = new Map<string, number>();
+  const promptsByEpicId = new Map<string, FocusPromptRow[]>();
   for (const prompt of model.prompts) {
     if (prompt.epicId === null) continue;
-    promptCounts.set(prompt.epicId, (promptCounts.get(prompt.epicId) ?? 0) + 1);
+    const existing = promptsByEpicId.get(prompt.epicId);
+    if (existing === undefined) {
+      promptsByEpicId.set(prompt.epicId, [prompt]);
+    } else {
+      existing.push(prompt);
+    }
   }
   const jobsByEpicId = new Map<string, FocusBackgroundRow[]>();
   for (const job of model.background) {
@@ -109,7 +119,7 @@ export function selectTaskGroups(
       epicId: task.epicId,
       taskTitle: task.taskTitle,
       task,
-      promptCount: promptCounts.get(task.epicId) ?? 0,
+      prompts: promptsByEpicId.get(task.epicId) ?? [],
       agents: groupAgents(task.agents),
       jobs,
       backgroundVisible: jobs.length > 0,
@@ -123,7 +133,7 @@ export function selectTaskGroups(
       // epic's - there is no task row here to read it from.
       taskTitle: jobs[0].taskTitle,
       task: null,
-      promptCount: promptCounts.get(epicId) ?? 0,
+      prompts: promptsByEpicId.get(epicId) ?? [],
       agents: [],
       jobs,
       backgroundVisible: true,

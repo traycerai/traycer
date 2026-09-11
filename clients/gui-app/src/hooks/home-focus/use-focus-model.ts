@@ -68,6 +68,51 @@ const unionByEpicCache = new WeakMap<
   ReadonlyMap<string, EpicAgentActivity>
 >();
 
+/**
+ * {@link focusAgentKey} → the host that reported the agent, from LOCAL-PLANE
+ * slices only.
+ *
+ * A slice's key is the host its STREAM was opened against. On a
+ * `cloud`-served slice that host is answering for the whole FLEET
+ * (`cloud-agent-activity-view`), so A's slice carries B's agents and the key
+ * says nothing about where any of them run - reading it as attribution names
+ * the wrong machine, confidently. A `local`-served slice is one host answering
+ * about itself, and there the key IS the agent's host.
+ *
+ * The same `byHost`-keyed `WeakMap` the union above uses, for the same reason:
+ * this runs as a Zustand selector, `byHost` is replaced on every write, and a
+ * fresh map per read would re-render the whole hook on every unrelated frame.
+ *
+ * Hosts are walked in sorted order so the tiebreak is deterministic: the same
+ * agent id reported by two local slices keeps the first, and "first" is a
+ * property of the ids rather than of map insertion order.
+ */
+const activityHostIdsCache = new WeakMap<
+  ReadonlyMap<string, HostAgentActivity>,
+  ReadonlyMap<string, string>
+>();
+
+function selectActivityHostIds(
+  byHost: ReadonlyMap<string, HostAgentActivity>,
+): ReadonlyMap<string, string> {
+  const cached = activityHostIdsCache.get(byHost);
+  if (cached !== undefined) return cached;
+  const hostIds = new Map<string, string>();
+  for (const hostId of Array.from(byHost.keys()).sort(compareAscending)) {
+    const host = byHost.get(hostId);
+    if (host === undefined) continue;
+    if (host.servedBy !== "local") continue;
+    for (const [epicId, activity] of host.byEpic) {
+      for (const agentId of activity.working) {
+        const key = focusAgentKey(epicId, agentId);
+        if (!hostIds.has(key)) hostIds.set(key, hostId);
+      }
+    }
+  }
+  activityHostIdsCache.set(byHost, hostIds);
+  return hostIds;
+}
+
 function selectUnionByEpic(
   byHost: ReadonlyMap<string, HostAgentActivity>,
 ): ReadonlyMap<string, EpicAgentActivity> {
@@ -157,29 +202,37 @@ function selectActivityHealth(
   connectableHostCount: number,
   connectableHostsResolved: boolean,
 ): {
+  readonly degradedHostIds: ReadonlyArray<string>;
   readonly connectionStatus: StreamConnectionStatus;
   readonly cloudSyncStatus: AgentActivityCloudSyncStatus | null;
   readonly stateFrameSeenThisEpoch: boolean;
 } {
   let worst: HostAgentActivity | null = null;
   let worstSeverity = -1;
-  for (const host of byHost.values()) {
-    const severity =
-      COVERAGE_SEVERITY[
-        focusActivityCoverage({
-          connectionStatus: host.connectionStatus,
-          cloudSyncStatus: host.cloudSyncStatus,
-          stateFrameSeenThisEpoch: host.stateFrameSeenThisEpoch,
-          connectableHostCount,
-          connectableHostsResolved,
-        })
-      ];
+  // The same pass names the degraded hosts individually. A page grouped by
+  // host puts the notice on the heading it belongs to, and only this loop
+  // knows which slice earned it - the fold above keeps one verdict and loses
+  // the attribution.
+  const degradedHostIds: string[] = [];
+  for (const [hostId, host] of byHost) {
+    const coverage = focusActivityCoverage({
+      connectionStatus: host.connectionStatus,
+      cloudSyncStatus: host.cloudSyncStatus,
+      stateFrameSeenThisEpoch: host.stateFrameSeenThisEpoch,
+      connectableHostCount,
+      connectableHostsResolved,
+    });
+    if (coverage === "reconnecting" || coverage === "disconnected") {
+      degradedHostIds.push(hostId);
+    }
+    const severity = COVERAGE_SEVERITY[coverage];
     if (severity > worstSeverity) {
       worstSeverity = severity;
       worst = host;
     }
   }
-  return worst ?? PRE_OPEN_ACTIVITY_HEALTH;
+  degradedHostIds.sort(compareAscending);
+  return { ...(worst ?? PRE_OPEN_ACTIVITY_HEALTH), degradedHostIds };
 }
 
 /**
@@ -265,6 +318,26 @@ export function useFocusModel(): FocusModel {
         connectableHostCount,
         connectableHostsResolved,
       ).stateFrameSeenThisEpoch,
+  );
+  // Joined to a primitive for the same reason the three above pick one field:
+  // the fold allocates a fresh array per call, so selecting it directly would
+  // re-render this hook on every activity frame. The key is split back into a
+  // list in one memo below.
+  const degradedHostIdsKey = useAgentActivityStore((state) =>
+    joinList(
+      selectActivityHealth(
+        state.byHost,
+        connectableHostCount,
+        connectableHostsResolved,
+      ).degradedHostIds,
+    ),
+  );
+  const degradedHostIds = useMemo(
+    () => splitIds(degradedHostIdsKey),
+    [degradedHostIdsKey],
+  );
+  const activityHostIds = useAgentActivityStore((state) =>
+    selectActivityHostIds(state.byHost),
   );
   const notificationRows = useMergedNotificationRows();
   const feedMode = useNotificationFeedMode();
@@ -420,6 +493,7 @@ export function useFocusModel(): FocusModel {
           taskTitles,
           mountedEpicIds: projection.mountedEpicIds,
           agentIdentities: projection.agentIdentities,
+          activityHostIds,
           indicatorEpics: indicators.epics,
           coldEpicHostIds,
           activeHostId,
@@ -433,6 +507,7 @@ export function useFocusModel(): FocusModel {
           connectableHostCount: connectableHosts.hostIds.length,
           connectableHostsResolved: connectableHosts.resolved,
         },
+        degradedHostIds,
         feedMode,
       },
       previous,
@@ -446,6 +521,7 @@ export function useFocusModel(): FocusModel {
     taskTitles,
     projection.mountedEpicIds,
     projection.agentIdentities,
+    activityHostIds,
     indicators.epics,
     backgroundChats,
     coldEpicHostIds,
@@ -454,6 +530,7 @@ export function useFocusModel(): FocusModel {
     connectionStatus,
     cloudSyncStatus,
     stateFrameSeenThisEpoch,
+    degradedHostIds,
     connectableHosts.hostIds.length,
     connectableHosts.resolved,
     feedMode,
@@ -491,6 +568,12 @@ const ID_GROUP_LIST_SEPARATOR = "\u0002";
 /** Byte-order ascending, so every derived id list is stable frame to frame and
  * the indicator slice always covers the same epics. Joined on a NUL, which no
  * id can carry. */
+/** `joinIds` for an already-ordered list, whose order is the caller's answer
+ * rather than something to re-sort. */
+function joinList(ids: ReadonlyArray<string>): string {
+  return ids.join(ID_LIST_SEPARATOR);
+}
+
 function joinIds(ids: ReadonlySet<string>): string {
   return Array.from(ids).sort(compareAscending).join(ID_LIST_SEPARATOR);
 }

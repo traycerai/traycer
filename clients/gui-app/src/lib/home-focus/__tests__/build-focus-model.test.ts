@@ -17,11 +17,13 @@ function baseModelInput(
 ): BuildFocusModelInput {
   return {
     notificationRows: [],
+    degradedHostIds: [],
     tasks: {
       byEpic: new Map(),
       taskTitles: new Map(),
       mountedEpicIds: new Set(),
       agentIdentities: new Map(),
+      activityHostIds: new Map(),
       indicatorEpics: {},
       coldEpicHostIds: new Map(),
       activeHostId: null,
@@ -81,6 +83,7 @@ describe("buildFocusModel", () => {
         taskTitles: new Map(),
         mountedEpicIds: new Set(),
         agentIdentities: new Map(),
+        activityHostIds: new Map(),
         // Deliberately NOT covering epic-1: the host's indicator batch is
         // silent, so only the prompt row can supply needsYou.
         indicatorEpics: {},
@@ -103,6 +106,7 @@ describe("buildFocusModel", () => {
         taskTitles: new Map(),
         mountedEpicIds: new Set(),
         agentIdentities: new Map(),
+        activityHostIds: new Map(),
         indicatorEpics: {},
         // The agent's host resolves through the cold-epic guess (no mounted
         // identity), and that host is neither the active host nor reachable -
@@ -337,6 +341,7 @@ describe("buildFocusModel", () => {
         taskTitles: new Map(),
         mountedEpicIds: new Set(),
         agentIdentities: new Map(),
+        activityHostIds: new Map(),
         indicatorEpics: {},
         coldEpicHostIds: new Map(),
         activeHostId: null,

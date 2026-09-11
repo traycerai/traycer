@@ -2113,12 +2113,86 @@ window`. `runningTasks` is deliberately the same predicate as
       already a separate node before this change and still rendered
       `BACKGROUND · 1 Only tasks open in this window`, because it sat on the
       same baseline row - the fix is the line break, not the element.
-    - **Sections render a list of row GROUPS**, exactly one today and
-      unlabelled. The unlabelled shape renders its `<ul>` directly under the
-      section with no wrapper, so "the DOM is unchanged" is a fact rather than
-      a claim; a labelled group brings its own box. The seam exists because
-      subdividing a section by host is the next change, and it should arrive as
-      a label appearing rather than as a rewrite of every section.
+    - **Sections render a list of row GROUPS** - one unlabelled group when the
+      page names a single host, and one per machine when it names several. The
+      unlabelled shape renders its `<ul>` directly under the section with no
+      wrapper, so a single-host install's DOM is unchanged by host grouping
+      existing; a labelled group brings its own box.
+    - **Host grouping is automatic and has no setting**
+      (`focus-host-groups.ts`, `use-home-host-groups.ts`). It turns on only
+      when the model's rows name MORE THAN ONE host, counted across the whole
+      page rather than per section - headings appearing in Background and not
+      in Needs you would leave the reader working out why. A row with no host
+      of its own RESOLVES to the active host before anything is counted, since
+      that is where its stop would be sent; without that, one unresolved row
+      would split a single-host page into two groups that are the same
+      machine. A task hidden by the mid-turn rule is not counted either: it
+      must not be the reason headings appear that no visible row explains.
+    - **Ordering is active host, then registry order, then the rest by id.**
+      The active host leads because it is what the user is working on and what
+      an unnamed row resolved to; registry order follows because it is the
+      order the same machines appear in everywhere else in the app, and a
+      second ordering for this one page would make two lists of the same hosts
+      disagree. An `<h3>` carries the host's label (its id when the registry
+      has none - ugly and honest), its own count, and an `active` pill on the
+      one; the section keeps its total above them. Rows under a heading DROP
+      their origin-host pill, which would otherwise repeat the heading on every
+      line - `HomeHostGroupedContext` and its `useHomeHostGrouped` hook carry
+      that, because the answer belongs to the section and the pill is several
+      components down.
+    - **Grouping is by the ROW's own host, never by its task.** An epic is
+      cloud-homed and can be worked from several machines at once, so a task has
+      no single host to be filed under - asking for one answered `null` when its
+      agents disagreed, and `null` resolved to whichever machine the user
+      happened to be sitting at. So prompts group by origin host, agents by
+      their own `hostId`, jobs by their chat's. A task worked from two machines
+      appears once under EACH (`splitTaskByHost`, `splitTaskGroupByHost`),
+      holding only that host's agents, jobs and prompts, with that host's
+      counts; its `Stop all` reads `Stop all on <host>` and cascades over that
+      host's roots only. `FocusAgentRow.stoppable` exists for the re-fold: the
+      task's own flag is `every` over ALL agents, so a reachable host's row
+      would otherwise inherit an unreachable sibling's refusal.
+    - **A row is never dropped for having no host.** With no active host to
+      resolve against it lands in `UNKNOWN_HOST_ID`, whose group sorts last and
+      reads `Unknown host`, so a section's groups always sum to its heading. The
+      bucket is not a machine, so it never turns grouping on by itself.
+    - **A cold agent's host has a precedence, and a cloud slice is not in it.**
+      Resolved identity first; then the cloud index (`coldEpicHostIds`, from
+      `chatHostIds`); then the key of the slice that reported the agent, but
+      ONLY when that slice is `servedBy: "local"`; otherwise unattributed. The
+      restriction is the whole point: a slice's key is the host its STREAM was
+      opened against, and a cloud-served slice is that host answering for the
+      whole FLEET, so host A's slice carries host B's agents verbatim and its
+      key names the wrong machine confidently. A `local` slice is one host
+      answering about itself.
+    - **Unattributed is a state, not a `null`.** `FocusAgentRow.hostUnattributed`
+      exists because `hostId === null` has two causes: a chat this window
+      RESOLVED that records no host (a legacy chat on an epic we are already
+      talking to - the active host is where its stop goes, and where it belongs
+      on the page), versus an agent nothing could place. Only the second groups
+      under `Unknown host`; guessing it onto the active machine is the defect
+      that has appeared twice, once through a task-level host and once through
+      a cloud slice's key. **Stop stays disabled while a row is unattributed** -
+      the same rule that greys out a named host this client cannot dial, since
+      a stop aimed at a machine the model could not name is worse than one it
+      declines. What grouping guarantees is narrower: the unknown bucket does
+      not narrow a task's ROOT INPUTS the way the per-host split narrows a task
+      that spans machines, so `Stop all` there is disabled-but-complete rather
+      than enabled-but-partial.
+    - **Coverage moves under the host that earned it.** `coverage.activity` is
+      still the worst slice's verdict for the page, and
+      `coverage.degradedHostIds` is the per-host breakdown behind it. When the
+      page is grouped and EVERY degraded host has a group to carry it, the
+      notice renders under those subheadings and the page-wide banner stands
+      down - saying "some activity may be missing" over a page that names WHICH
+      host is missing is less information in a louder place. A degraded host
+      with no visible rows has no subheading, so the banner returns rather than
+      dropping the warning: that host is precisely the one whose rows are
+      missing BECAUSE its stream is degraded.
+    - **The summary line stays one glance.** Each segment's TOOLTIP carries the
+      per-host breakdown (`Laptop 2 · Remote Box 1`); the visible text never
+      names a machine. A background-only group follows the host of the chats its
+      jobs run in, and it can split across them like any other.
 - `Providers` Per-provider CLI binary selection (Codex / Claude Code / OpenCode
   / Traycer / Cursor). Left rail picks the provider (brand icons via
   `HarnessIcon`); the

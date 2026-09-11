@@ -67,6 +67,7 @@ export const EMPTY_FOCUS_MODEL: FocusModel = Object.freeze({
   background: Object.freeze<FocusBackgroundRow[]>([]),
   coverage: Object.freeze({
     activity: "unknown",
+    degradedHostIds: Object.freeze<string[]>([]),
     notifications: "local",
     backgroundIsMountedOnly: true,
   }),
@@ -94,6 +95,13 @@ export interface BuildFocusModelInput {
   readonly tasks: Omit<FocusTasksInput, "promptEpicIds">;
   readonly backgroundChats: ReadonlyArray<FocusBackgroundChat>;
   readonly activity: FocusActivityHealth;
+  /**
+   * The hosts whose OWN slice is degraded, sorted, from the fold that compared
+   * them. A separate input from `activity` rather than a field on it:
+   * `FocusActivityHealth` is the set of inputs the coverage VERDICT is computed
+   * from, and this is an attribution the verdict throws away.
+   */
+  readonly degradedHostIds: ReadonlyArray<string>;
   readonly feedMode: NotificationFeedMode;
 }
 
@@ -124,6 +132,15 @@ export function buildFocusModel(
   );
   const coverage = {
     activity: focusActivityCoverage(input.activity),
+    // Reused by identity when the set is unchanged, so a page whose hosts are
+    // all healthy frame after frame does not mint a new coverage object (and
+    // therefore a new model) on every activity frame.
+    degradedHostIds: sameIds(
+      input.degradedHostIds,
+      previous.coverage.degradedHostIds,
+    )
+      ? previous.coverage.degradedHostIds
+      : input.degradedHostIds,
     notifications: focusNotificationCoverage(input.feedMode),
     backgroundIsMountedOnly: true,
   } as const;
@@ -137,6 +154,10 @@ export function buildFocusModel(
     badgeCount: prompts.length,
   };
   return shallowEqualRow(next, previous) ? previous : next;
+}
+
+function sameIds(a: ReadonlyArray<string>, b: ReadonlyArray<string>): boolean {
+  return a.length === b.length && a.every((id, index) => id === b[index]);
 }
 
 /**
