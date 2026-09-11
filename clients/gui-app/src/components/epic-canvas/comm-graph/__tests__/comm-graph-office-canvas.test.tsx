@@ -33,8 +33,26 @@ vi.mock("@/lib/epic-selectors", async (importOriginal) => {
     // door plates; like the activity tiers above, it resolves an epic session
     // this suite deliberately renders without.
     useEpicAgentRoleClaimsByAgentId: () => ({}),
+    // The hover card resolves these per-agent, the same way the graph node
+    // does - and this suite renders no `EpicSessionProvider` for the real
+    // selector to read through.
+    useEpicNodeHostId: () => "host-1",
+    useEpicNodeOwnerKind: () => "chat",
   };
 });
+
+vi.mock("@/hooks/agent/use-host-reachability", () => ({
+  useHostReachability: () => ({ status: "reachable" }),
+}));
+
+// The shared tooltip pulls in the worktree/PR machinery through its OWN
+// deps, none of which this suite provides - and F6 only needs the TRIGGER
+// (the transparent hit target the double-click lands on) live in the tree,
+// not the card's contents. Passing the trigger straight through keeps that
+// element real while skipping everything downstream of it.
+vi.mock("@/components/epic-canvas/sidebar/agent-hover-tooltip", () => ({
+  AgentHoverTooltip: (props: { readonly trigger: ReactNode }) => props.trigger,
+}));
 
 import {
   act,
@@ -68,6 +86,7 @@ import {
   type OfficeAgentInput,
   type OfficeAgentStatus,
   type OfficeFloor,
+  type OfficeHitRegion,
   type OfficeLayout,
   type OfficeRect,
   type OfficeSceneInput,
@@ -77,6 +96,8 @@ import {
 import type { CommGraphTileViewState } from "@/stores/epics/canvas/types";
 import type { TileFindAdapter } from "@/stores/tile-find";
 import type { CommGraphOfficeCanvasProps } from "@/components/epic-canvas/comm-graph/office/comm-graph-office-canvas";
+import { OfficeDirectoryPanel } from "@/components/epic-canvas/comm-graph/office/office-directory-panel";
+import { makeTestEpic } from "@/lib/comm-graph/office/office-test-epic";
 
 const OFFICE_VIEW: CommGraphTileViewState = {
   x: 0,
@@ -85,6 +106,7 @@ const OFFICE_VIEW: CommGraphTileViewState = {
   mode: "office",
   officeView: null,
   officeAutoView: null,
+  officeCameraView: null,
 };
 
 /** Large enough to hold this suite's fixtures with room to spare. */
@@ -204,7 +226,7 @@ const STATIC_OFFICE: OfficeRenderOptions = {
 function officeElement(
   visibleIds: ReadonlySet<string>,
   options: OfficeRenderOptions,
-  overrides: Partial<CommGraphOfficeCanvasProps> = {},
+  overrides: Partial<CommGraphOfficeCanvasProps>,
 ) {
   return (
     <CommGraphOfficeCanvas
@@ -242,7 +264,7 @@ function officeElement(
 }
 
 function renderOffice(visibleIds: ReadonlySet<string>) {
-  return render(withQueryClient(officeElement(visibleIds, STATIC_OFFICE)));
+  return render(withQueryClient(officeElement(visibleIds, STATIC_OFFICE, {})));
 }
 
 /** Stubs the office canvas container's measured box and re-triggers the resize path that reads it. */
@@ -252,6 +274,64 @@ function setCanvasSize(size: { width: number; height: number }): void {
     DOMRect.fromRect(size),
   );
   fireEvent(window, new Event("resize"));
+}
+
+/**
+ * What the scene ACTUALLY framed, read back through a type guard.
+ *
+ * A `vi.spyOn` records its calls as `any`, and these frames are read field by
+ * field, which the repo's type rules refuse. Guarding at the boundary keeps
+ * every read typed without a cast and without wrapping the real method - which
+ * would mean referencing an unbound prototype method to call through to.
+ */
+interface SpiedCalls {
+  readonly mock: { readonly calls: ReadonlyArray<ReadonlyArray<unknown>> };
+}
+
+interface SpiedResults {
+  readonly mock: {
+    readonly results: ReadonlyArray<{ readonly value: unknown }>;
+  };
+}
+
+function isOfficeRect(value: unknown): value is OfficeRect {
+  if (typeof value !== "object" || value === null) return false;
+  if (!("x" in value && "y" in value)) return false;
+  if (!("width" in value && "height" in value)) return false;
+  return (
+    typeof value.x === "number" &&
+    typeof value.y === "number" &&
+    typeof value.width === "number" &&
+    typeof value.height === "number"
+  );
+}
+
+function isHitRegion(value: unknown): value is OfficeHitRegion {
+  if (typeof value !== "object" || value === null) return false;
+  if (!("agentId" in value && "rect" in value)) return false;
+  return typeof value.agentId === "string" && isOfficeRect(value.rect);
+}
+
+/** The world rect of the most recent frame, or `null` if none was drawn. */
+function lastFramedRect(spy: SpiedCalls): OfficeRect | null {
+  const view = spy.mock.calls.at(-1)?.[1];
+  return isOfficeRect(view) ? view : null;
+}
+
+/** The hit regions of the most recent frame, empty if none was drawn. */
+function lastHitRegions(spy: SpiedResults): ReadonlyArray<OfficeHitRegion> {
+  const frame = spy.mock.results.at(-1)?.value;
+  if (typeof frame !== "object" || frame === null) return [];
+  if (!("hitRegions" in frame)) return [];
+  const regions = frame.hitRegions;
+  if (!Array.isArray(regions)) return [];
+  // Built by hand rather than `.filter`: `Array.isArray` narrows to `any[]`,
+  // whose `filter` would hand back `any[]` however well the guard is typed.
+  const hits: OfficeHitRegion[] = [];
+  for (const region of regions) {
+    if (isHitRegion(region)) hits.push(region);
+  }
+  return hits;
 }
 
 function withQueryClient(children: ReactNode) {
@@ -372,6 +452,78 @@ function latestFindAdapter(): TileFindAdapter {
   return adapter;
 }
 
+/** `makeTestEpic`'s agents are `OfficeAgentInput`; the canvas takes the projection's own node shape. */
+function canvasAgent(agent: OfficeAgentInput): CommGraphAgentNode {
+  return {
+    id: agent.id,
+    name: agent.name,
+    kind: agent.kind,
+    hostId: agent.hostId,
+    parentId: agent.parentId,
+    harnessId: agent.harnessId,
+    model: agent.model,
+    archived: agent.archived,
+    archivedAt: agent.archivedAt,
+    createdAt: agent.createdAt,
+  };
+}
+
+/**
+ * A real 2d context (recording nothing usable, but not throwing) plus a
+ * controllable `requestAnimationFrame`, so the frame loop actually RUNS in
+ * jsdom instead of being permanently gated off by `get2dContext`'s null. This
+ * is what lets a case observe the camera and the frame it produces rather
+ * than only the calls made on the way there - `scene.locate` was called is a
+ * weaker claim than "the agent it names is now inside the frame".
+ */
+function installCanvas(): { readonly step: () => void } {
+  const noop = () => undefined;
+  // The proxy is typed at its SOURCE rather than asserted onto afterwards: a
+  // literal carrying three of this interface's hundred-odd members does not
+  // overlap it enough for a single assertion, and widening through `unknown`
+  // to get there is exactly what the type rules forbid. Everything the
+  // painter reaches for that is not answered here is a no-op.
+  const blank = {} as CanvasRenderingContext2D;
+  const context = new Proxy(blank, {
+    get: (_target, key): unknown => {
+      if (key === "measureText") {
+        return (text: string) => ({ width: text.length * 6 });
+      }
+      if (key === "createImageData") {
+        return (width: number, height: number) => ({
+          data: new Uint8ClampedArray(width * height * 4),
+        });
+      }
+      return noop;
+    },
+    set: () => true,
+  });
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(
+    () => context,
+  );
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+    () => new DOMRect(0, 0, 1040, 700),
+  );
+  let nextId = 0;
+  const callbacks = new Map<number, FrameRequestCallback>();
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    nextId += 1;
+    callbacks.set(nextId, callback);
+    return nextId;
+  });
+  vi.stubGlobal("cancelAnimationFrame", (id: number) => callbacks.delete(id));
+  let now = performance.now();
+  return {
+    step: () =>
+      act(() => {
+        now += 100;
+        const pending = [...callbacks.values()];
+        callbacks.clear();
+        for (const callback of pending) callback(now);
+      }),
+  };
+}
+
 afterEach(() => {
   cleanup();
   registerFindAdapterMock.mockClear();
@@ -430,7 +582,9 @@ describe("CommGraphOfficeCanvas", () => {
 
   it("closes the detail panel when its agent drops out of the as-of visible set", () => {
     const both = new Set([ORCHESTRATOR.id, REVIEWER.id]);
-    const view = render(withQueryClient(officeElement(both, STATIC_OFFICE)));
+    const view = render(
+      withQueryClient(officeElement(both, STATIC_OFFICE, {})),
+    );
 
     fireEvent.click(
       screen.getByTestId(`comm-graph-office-agent-${REVIEWER.id}`),
@@ -442,7 +596,9 @@ describe("CommGraphOfficeCanvas", () => {
     // agentIds, so the surface is handed the as-of set rather than the full
     // present-day roster.
     view.rerender(
-      withQueryClient(officeElement(new Set([ORCHESTRATOR.id]), STATIC_OFFICE)),
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id]), STATIC_OFFICE, {}),
+      ),
     );
 
     // The panel's own selection is still Reviewer's id, but that id is no
@@ -509,11 +665,13 @@ describe("CommGraphOfficeCanvas", () => {
 
   it("opens the pair thread when an envelope in flight is clicked", () => {
     const both = new Set([ORCHESTRATOR.id, REVIEWER.id]);
-    const view = render(withQueryClient(officeElement(both, STATIC_OFFICE)));
+    const view = render(
+      withQueryClient(officeElement(both, STATIC_OFFICE, {})),
+    );
     setIntersecting(true);
     // A first render with no pulse, then the row: the scene deliberately does
     // not replay the row its very first sync arrives on.
-    view.rerender(withQueryClient(officeElement(both, IN_FLIGHT)));
+    view.rerender(withQueryClient(officeElement(both, IN_FLIGHT, {})));
     const rect = envelopeRect(both);
     // The gestures live on the CANVAS, not on the wrapper - the wrapper is the
     // parent of the overlay controls, and taking pointer capture there stole
@@ -543,8 +701,10 @@ describe("CommGraphOfficeCanvas", () => {
     // must not fall through to either open path a `pointerUp` at the same
     // spot would take.
     const both = new Set([ORCHESTRATOR.id, REVIEWER.id]);
-    const view = render(withQueryClient(officeElement(both, STATIC_OFFICE)));
-    view.rerender(withQueryClient(officeElement(both, IN_FLIGHT)));
+    const view = render(
+      withQueryClient(officeElement(both, STATIC_OFFICE, {})),
+    );
+    view.rerender(withQueryClient(officeElement(both, IN_FLIGHT, {})));
     const rect = envelopeRect(both);
     const surface = screen.getByRole("img", {
       name: "Office view of the communication graph",
@@ -617,10 +777,11 @@ describe("CommGraphOfficeCanvas", () => {
   it("shows a Replaying chip when the cursor is set and playback is running", () => {
     render(
       withQueryClient(
-        officeElement(new Set([ORCHESTRATOR.id, REVIEWER.id]), {
-          ...STATIC_OFFICE,
-          playing: true,
-        }),
+        officeElement(
+          new Set([ORCHESTRATOR.id, REVIEWER.id]),
+          { ...STATIC_OFFICE, playing: true },
+          {},
+        ),
       ),
     );
 
@@ -636,7 +797,9 @@ describe("CommGraphOfficeCanvas", () => {
 
   it("suspends its scene while ineligible and resumes it exactly once on return", () => {
     const both = new Set([ORCHESTRATOR.id, REVIEWER.id]);
-    const view = render(withQueryClient(officeElement(both, STATIC_OFFICE)));
+    const view = render(
+      withQueryClient(officeElement(both, STATIC_OFFICE, {})),
+    );
     // Eligible first, so a scene exists to be suspended - a canvas that has
     // never been eligible has no scene at all, and a transition onto one
     // would go through the bare `sync` branch, not `resume`.
@@ -650,7 +813,11 @@ describe("CommGraphOfficeCanvas", () => {
     for (let change = 0; change < 20; change += 1) {
       view.rerender(
         withQueryClient(
-          officeElement(both, { ...STATIC_OFFICE, pulseKey: `row-${change}` }),
+          officeElement(
+            both,
+            { ...STATIC_OFFICE, pulseKey: `row-${change}` },
+            {},
+          ),
         ),
       );
     }
@@ -758,7 +925,7 @@ describe("CommGraphOfficeCanvas", () => {
     render(
       withQueryClient(
         officeElement(new Set([ORCHESTRATOR.id]), STATIC_OFFICE, {
-          autoChip: <OfficeAutoChip decision={decision} />,
+          autoChip: <OfficeAutoChip decision={decision} restoredView={null} />,
         }),
       ),
     );
@@ -772,7 +939,7 @@ describe("CommGraphOfficeCanvas", () => {
     render(
       withQueryClient(
         officeElement(new Set([ORCHESTRATOR.id]), STATIC_OFFICE, {
-          autoChip: <OfficeAutoChip decision={null} />,
+          autoChip: <OfficeAutoChip decision={null} restoredView={null} />,
         }),
       ),
     );
@@ -1054,6 +1221,224 @@ describe("CommGraphOfficeCanvas", () => {
     ).toBeNull();
     expect(screen.getByText("Nobody here by that name.")).toBeDefined();
   });
+
+  it("never sends a directory row click to a removed team lead (F5)", () => {
+    const fixture = makeTestEpic("one-team", 12, 1);
+    const statusById = new Map(
+      fixture.agents.map((a) => [a.id, "working" as const]),
+    );
+    const previous = partitionOfficePopulation({
+      agents: fixture.agents,
+      statusById,
+      previous: null,
+    });
+    const teams = previous.hosts.flatMap((h) => h.teams);
+    if (teams.length === 0) throw new Error("fixture has no team");
+    const team = teams[0];
+    // The lead is removed AFTER the first partition, and the team is
+    // repartitioned against that same previous partition - the exact
+    // sequence that keeps a frozen team's survivors together.
+    const agents = fixture.agents.filter((a) => a.id !== team.leadAgentId);
+    const ids = new Set(agents.map((a) => a.id));
+    const partition = partitionOfficePopulation({
+      agents,
+      statusById,
+      previous,
+    });
+    // A typed recorder rather than `select.mock.calls[0]?.[0]`, whose
+    // elements are `any` and are compared against a real id below.
+    const dispatched: { agentId: string | null } = { agentId: null };
+    const select = (agentId: string) => {
+      dispatched.agentId = agentId;
+    };
+    render(
+      <OfficeDirectoryPanel
+        partition={partition}
+        visibleAgentIds={ids}
+        statusById={statusById}
+        nameById={new Map(agents.map((a) => [a.id, a.name]))}
+        hostNameById={new Map()}
+        selectedAgentId={null}
+        onSelectAgent={select}
+        onHoverAgent={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    const row = screen.getByTestId(
+      `comm-graph-office-directory-team-${team.teamId}`,
+    );
+
+    fireEvent.click(row);
+
+    const target = dispatched.agentId;
+    if (target === null) throw new Error("the row dispatched nothing");
+    // Not the raw id of an agent that no longer exists - never rendered on
+    // the row, never dispatched from it.
+    expect(row.textContent).not.toContain(team.leadAgentId);
+    expect(target).not.toBe(team.leadAgentId);
+    expect(ids.has(target)).toBe(true);
+  });
+
+  it("zooms about a real hovered agent on double-click, same as it does an empty floor (F6)", () => {
+    const { step } = installCanvas();
+    const frames = vi.spyOn(OfficeScene.prototype, "frame");
+    render(
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id, REVIEWER.id]), STATIC_OFFICE, {
+          // A non-default view keeps auto-fit off, so the camera stays
+          // exactly what was authored: a hit region's rect (sprite space)
+          // can then be fed straight in as a screen coordinate, which an
+          // auto-fitted camera would otherwise move out from under it.
+          view: { ...OFFICE_VIEW, x: 1 },
+        }),
+      ),
+    );
+    setIntersecting(true);
+    step();
+
+    const hit = lastHitRegions(frames).find(
+      (r) => r.agentId === ORCHESTRATOR.id,
+    );
+    if (hit === undefined) throw new Error("no real agent hit region");
+    const canvas = screen.getByRole("img", {
+      name: "Office view of the communication graph",
+    });
+    const x = hit.rect.x + hit.rect.width / 2 + 1;
+    const y = hit.rect.y + hit.rect.height / 2;
+    fireEvent.pointerMove(canvas, { clientX: x, clientY: y });
+    const trigger = screen.getByTestId(
+      `comm-graph-office-hover-trigger-${ORCHESTRATOR.id}`,
+    );
+
+    fireEvent.doubleClick(trigger, { clientX: x, clientY: y });
+    step();
+
+    const afterAgent = lastFramedRect(frames);
+    // The same zoom-in a double-click over empty floor performs - the
+    // hover trigger sits ON the floor, not ahead of its gesture.
+    expect(afterAgent?.width).toBeCloseTo(1040 / 1.25);
+  });
+
+  /**
+   * Double-clicks empty floor and the agent hit target from the SAME starting
+   * camera, in two SEPARATE renders - never the same one, one after another.
+   * Two double-clicks in one render compound (the second zooms on top of the
+   * first: `1040 / 1.25²`, not `1040 / 1.25`), which is exactly how the
+   * reviewer's own probe encoded the defect it was meant to catch: its
+   * agent-then-empty "control" only agreed with the agent gesture while the
+   * agent gesture was broken and did nothing. Pinning both against EACH
+   * OTHER, not each against the bare constant, is what makes this a parity
+   * claim rather than two coincidental readings of `ZOOM_BUTTON_FACTOR`.
+   */
+  function worldWidthAfterDoubleClick(target: "empty" | "agent"): number {
+    const { step } = installCanvas();
+    const frames = vi.spyOn(OfficeScene.prototype, "frame");
+    render(
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id, REVIEWER.id]), STATIC_OFFICE, {
+          view: { ...OFFICE_VIEW, x: 1 },
+        }),
+      ),
+    );
+    setIntersecting(true);
+    step();
+    const canvas = screen.getByRole("img", {
+      name: "Office view of the communication graph",
+    });
+    if (target === "empty") {
+      fireEvent.doubleClick(canvas, { clientX: 900, clientY: 600 });
+    } else {
+      const hit = lastHitRegions(frames).find(
+        (r) => r.agentId === ORCHESTRATOR.id,
+      );
+      if (hit === undefined) throw new Error("no real agent hit region");
+      const x = hit.rect.x + hit.rect.width / 2 + 1;
+      const y = hit.rect.y + hit.rect.height / 2;
+      fireEvent.pointerMove(canvas, { clientX: x, clientY: y });
+      const trigger = screen.getByTestId(
+        `comm-graph-office-hover-trigger-${ORCHESTRATOR.id}`,
+      );
+      fireEvent.doubleClick(trigger, { clientX: x, clientY: y });
+    }
+    step();
+    const after = lastFramedRect(frames);
+    if (after === null) throw new Error("no frame");
+    const width = after.width;
+    cleanup();
+    // Only what THIS call's `installCanvas()` stubbed (the 2d context, the
+    // bounding rect, `OfficeScene.prototype.frame`) - never the outer
+    // `beforeEach`'s `IntersectionObserver` stub, which the second render
+    // still needs. `vi.unstubAllGlobals()` would take that down too.
+    vi.restoreAllMocks();
+    return width;
+  }
+
+  it("zooms the agent hit target and the empty floor by the same amount (F6)", () => {
+    const emptyWidth = worldWidthAfterDoubleClick("empty");
+    const agentWidth = worldWidthAfterDoubleClick("agent");
+
+    // Parity is the claim - each against the OTHER, not just each against
+    // the bare constant, which a compounded double zoom would satisfy too.
+    expect(agentWidth).toBeCloseTo(emptyWidth);
+    expect(agentWidth).toBeCloseTo(1040 / 1.25);
+  });
+
+  it("actually pans an off-screen directory agent into the real rendered frame (F7)", () => {
+    const { step } = installCanvas();
+    const frames = vi.spyOn(OfficeScene.prototype, "frame");
+    const locate = vi.spyOn(OfficeScene.prototype, "locate");
+    const fixture = makeTestEpic("triage", 309, 1);
+    const agents = fixture.agents.map(canvasAgent);
+    const target = agents.at(-1);
+    if (target === undefined) throw new Error("fixture empty");
+    render(
+      withQueryClient(
+        officeElement(new Set(agents.map((a) => a.id)), STATIC_OFFICE, {
+          agents,
+          view: { ...OFFICE_VIEW, x: -10000, y: -10000 },
+        }),
+      ),
+    );
+    setIntersecting(true);
+    step();
+    const before = lastFramedRect(frames);
+
+    fireEvent.change(screen.getByTestId("comm-graph-office-directory-search"), {
+      target: { value: target.name },
+    });
+    fireEvent.click(
+      screen.getByTestId(`comm-graph-office-directory-agent-${target.id}`),
+    );
+    // Guarded at the boundary: a spy's results are `any`, and this rect is
+    // read field by field.
+    const seat: unknown = locate.mock.results.at(-1)?.value;
+    if (!isOfficeRect(seat)) throw new Error("target not located");
+    const located = seat;
+    const center = {
+      x: located.x + located.width / 2,
+      y: located.y + located.height / 2,
+    };
+    for (let index = 0; index < 5; index += 1) step();
+    const after = lastFramedRect(frames);
+    if (after === null || before === null) {
+      throw new Error("no frames");
+    }
+
+    // Genuinely off-screen before the pan - not merely "locate was called".
+    expect(
+      center.x < before.x ||
+        center.x > before.x + before.width ||
+        center.y < before.y ||
+        center.y > before.y + before.height,
+    ).toBe(true);
+    // And genuinely on-screen after it: the target's own centre sits inside
+    // the frame the real animation loop produced, camera moves and all.
+    expect(center.x).toBeGreaterThanOrEqual(after.x);
+    expect(center.x).toBeLessThanOrEqual(after.x + after.width);
+    expect(center.y).toBeGreaterThanOrEqual(after.y);
+    expect(center.y).toBeLessThanOrEqual(after.y + after.height);
+    expect(screen.getByTestId("comm-graph-agent-panel")).toBeDefined();
+  });
 });
 
 /**
@@ -1131,6 +1516,7 @@ const FIXED_CAMERA_VIEW: CommGraphTileViewState = {
   mode: "office",
   officeView: null,
   officeAutoView: null,
+  officeCameraView: null,
 };
 
 function officeElementWithView(

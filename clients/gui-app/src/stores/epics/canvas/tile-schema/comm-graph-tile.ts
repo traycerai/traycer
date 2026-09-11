@@ -42,6 +42,7 @@ export const DEFAULT_COMM_GRAPH_VIEW: CommGraphTileViewState = {
   // for every tile ever opened.
   officeView: null,
   officeAutoView: null,
+  officeCameraView: null,
 };
 
 /**
@@ -153,13 +154,17 @@ export function parseCommGraphTileViewState(
   const zoom = readFiniteNumber(value.zoom, PERSISTED_COMM_GRAPH_VIEW.zoom);
   const officeView = readOfficeViewChoice(value.officeView);
   const officeAutoView = readOfficeViewId(value.officeAutoView);
+  const officeCameraView = readOfficeViewId(value.officeCameraView);
   // The camera means "this much of THAT view". Once the view it was saved
   // against has degraded away, the numbers point into a floor plan that is not
   // coming back - and keeping them would reopen the fallback view scrolled off
   // into empty space with no sign of why.
   const stale =
     degradesFrom(value.officeView, officeView) ||
-    degradesFrom(value.officeAutoView, officeAutoView);
+    degradesFrom(value.officeAutoView, officeAutoView) ||
+    // The most direct case of the rule above: the camera names the view it
+    // frames, and that view is one this build cannot draw.
+    degradesFrom(value.officeCameraView, officeCameraView);
   return {
     x: stale
       ? DEFAULT_COMM_GRAPH_VIEW.x
@@ -174,6 +179,8 @@ export function parseCommGraphTileViewState(
     mode: readCommGraphViewMode(value.mode),
     officeView,
     officeAutoView,
+    // A degraded camera frames nothing, so it claims nothing either.
+    officeCameraView: stale ? null : officeCameraView,
   };
 }
 
@@ -215,6 +222,7 @@ function serializeCommGraphTileRef(ref: CommGraphTileRef): DesktopJsonValue {
       mode: ref.view.mode,
       officeView: ref.view.officeView,
       officeAutoView: ref.view.officeAutoView,
+      officeCameraView: ref.view.officeCameraView,
     },
   };
 }

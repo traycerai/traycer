@@ -534,6 +534,19 @@ export interface CommGraphTileViewState extends CommGraphTileCamera {
    * when it was saved. Only re-picking Auto clears it.
    */
   readonly officeAutoView: OfficeViewId | null;
+  /**
+   * WHICH VIEW the saved camera was framed under, or `null` for a camera
+   * nobody framed.
+   *
+   * Pan and zoom mean "this much of THAT office", and the view underneath can
+   * change without the tile being on screen to notice: the Settings default is
+   * usually changed from Settings, with the epic closed, and the tile that
+   * follows it reopens over coordinates that addressed a different floor. The
+   * two office fields above say what to DRAW; this one says what the camera is
+   * ABOUT, which is the only way a mount can tell a framing worth keeping from
+   * one pointing into empty space.
+   */
+  readonly officeCameraView: OfficeViewId | null;
 }
 
 /**

@@ -84,7 +84,19 @@ interface DirectoryMember {
 
 interface DirectoryTeamRow {
   readonly teamId: string;
-  readonly leadAgentId: string;
+  /**
+   * Who the row's click and hover actually go to: the lead while it is on the
+   * floor, otherwise the hottest member still standing.
+   *
+   * A team OUTLIVES its lead. The population contract keeps a frozen team so
+   * its survivors stay together, and the cursor can sit before the lead
+   * existed - so a row named by its lead cannot also be actioned by its lead.
+   *
+   * Never absent: a team with nobody visible is not a row at all, so `teamRow`
+   * returns null for it rather than leaving this nullable and every consumer
+   * guarding a state that cannot be rendered.
+   */
+  readonly actionAgentId: string;
   readonly name: string;
   readonly rank: number;
   readonly members: ReadonlyArray<DirectoryMember>;
@@ -163,7 +175,7 @@ function teamRow(args: {
   readonly visibleAgentIds: ReadonlySet<string>;
   readonly nameById: ReadonlyMap<string, string>;
   readonly statusById: ReadonlyMap<string, OfficeAgentStatus>;
-}): DirectoryTeamRow {
+}): DirectoryTeamRow | null {
   const members = args.team.memberAgentIds
     .filter((agentId) => args.visibleAgentIds.has(agentId))
     .map((agentId) =>
@@ -175,13 +187,22 @@ function teamRow(args: {
       }),
     )
     .sort(byHeat);
+  // A team nobody has been created into yet, or whose members are all still
+  // ahead of the cursor, is not a team on this floor.
+  if (members.length === 0) return null;
+  const hottest = members[0];
+  // A team is named by whoever leads it, which is the name on its door - and
+  // a lead the epic no longer has is not a name, it is an id. The surviving
+  // member the row now points at is the honest second answer; a raw id is
+  // never one.
+  const leadName = args.nameById.get(args.team.leadAgentId);
   return {
     teamId: args.team.teamId,
-    leadAgentId: args.team.leadAgentId,
-    // A team is named by whoever leads it, which is the name on its door.
-    name: args.nameById.get(args.team.leadAgentId) ?? args.team.leadAgentId,
-    rank:
-      members.length === 0 ? STATUS_RANK.idle : STATUS_RANK[members[0].status],
+    actionAgentId: args.visibleAgentIds.has(args.team.leadAgentId)
+      ? args.team.leadAgentId
+      : hottest.agentId,
+    name: leadName ?? hottest.name,
+    rank: STATUS_RANK[hottest.status],
     members,
   };
 }
@@ -209,8 +230,9 @@ function buildSections(args: {
           statusById: args.statusById,
         }),
       )
-      // A team nobody has been created into yet is not a team on this floor.
-      .filter((team) => team.members.length > 0)
+      // `teamRow` already decided this: a team with nobody on the floor is not
+      // a row, and dropping it here is what makes `actionAgentId` a string.
+      .filter((team): team is DirectoryTeamRow => team !== null)
       .sort((a, b) =>
         a.rank === b.rank ? a.name.localeCompare(b.name) : a.rank - b.rank,
       );
@@ -471,14 +493,18 @@ export function OfficeDirectoryPanel(props: OfficeDirectoryPanelProps) {
                         <button
                           type="button"
                           data-testid={`comm-graph-office-directory-team-${team.teamId}`}
-                          aria-current={team.leadAgentId === selectedAgentId}
+                          aria-current={team.actionAgentId === selectedAgentId}
                           className={cn(
                             "min-w-0 flex-1 truncate rounded-sm text-left text-ui-xs",
-                            team.leadAgentId === selectedAgentId &&
+                            team.actionAgentId === selectedAgentId &&
                               "text-foreground",
                           )}
-                          onClick={() => onSelectAgent(team.leadAgentId)}
-                          onPointerEnter={() => onHoverAgent(team.leadAgentId)}
+                          // Always a visible agent: the office cannot locate an
+                          // absent one, and the detail panel cannot open one.
+                          onClick={() => onSelectAgent(team.actionAgentId)}
+                          onPointerEnter={() =>
+                            onHoverAgent(team.actionAgentId)
+                          }
                           onPointerLeave={() => onHoverAgent(null)}
                         >
                           {team.name}

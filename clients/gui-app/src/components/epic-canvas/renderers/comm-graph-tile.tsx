@@ -137,6 +137,9 @@ export function CommGraphTile(props: CommGraphTileProps) {
   const updateCamera = useEpicCanvasStore(
     (s) => s.updateCommGraphTileCameraInTab,
   );
+  const updateOfficeCamera = useEpicCanvasStore(
+    (s) => s.updateCommGraphTileOfficeCameraInTab,
+  );
   // The detail panels jump to source exactly like the timeline rows do - same
   // resolver, same degrade for `origin: null`.
   const {
@@ -173,6 +176,18 @@ export function CommGraphTile(props: CommGraphTileProps) {
   const resolvedViewId: OfficeViewId | null =
     choice === "auto" ? node.view.officeAutoView : choice;
 
+  // The OFFICE's camera write, which also records the view it frames. Safe to
+  // close over the resolved view despite the 150ms debounce: a view change
+  // remounts the canvas, and that unmount cancels the pending write - the
+  // shipped "cancels a pending camera persist on unmount" case is exactly
+  // this guarantee.
+  const handleOfficeCameraChange = useCallback(
+    (camera: CommGraphTileCamera) => {
+      updateOfficeCamera(viewTabId, node.id, camera, resolvedViewId);
+    },
+    [node.id, resolvedViewId, updateOfficeCamera, viewTabId],
+  );
+
   // Auto's own state: the measurement in hand (for the chip and the picker's
   // Auto row), and a revision that ticks on every re-pick.
   const [autoDecision, setAutoDecision] = useState<OfficeAutoDecision | null>(
@@ -183,12 +198,48 @@ export function CommGraphTile(props: CommGraphTileProps) {
   // decision reads it once. Holding it in state would re-render this tile -
   // and with it the canvas - on every event that arrives.
   const probeRef = useRef<OfficeAutoProbe | null>(null);
-  const [probeReady, setProbeReady] = useState(false);
-  const handleAutoProbe = useCallback((probe: OfficeAutoProbe) => {
-    probeRef.current = probe;
-    // Only the FIRST one is news; React bails out on the rest.
-    setProbeReady(true);
-  }, []);
+  /**
+   * WHICH CANVAS the measurement in `probeRef` came from, or `null` for none.
+   *
+   * State rather than a ref because validity is read during render, and a
+   * string rather than a boolean because that is what makes a stale
+   * measurement impossible instead of merely short-lived: a probe is valid
+   * exactly while the canvas that reported it is still the one mounted. Every
+   * later report for the SAME canvas sets the same string, which React bails
+   * out of, so a batch of rows costs no render.
+   */
+  const [probeKey, setProbeKey] = useState<string | null>(null);
+  /**
+   * WHICH CANVAS a measurement would be about: the mounted view, the Auto
+   * request that asked for it, and the mode the tile is in.
+   *
+   * The canvas withdraws its own probe when it goes, but it cannot be relied
+   * on to get the word out first - a torn-down canvas reports nothing - so the
+   * tile drops the measurement on its own transitions as well. Same string as
+   * the mount key below, deliberately: what remounts the canvas is exactly
+   * what invalidates its measurement.
+   */
+  const canvasKey = `${node.view.mode}:${resolvedViewId ?? "measuring"}:${autoRevision}`;
+
+  /**
+   * A measurement is a claim about ONE canvas, and it is WITHDRAWN when that
+   * canvas stops being the one on screen.
+   *
+   * The canvas reports `null` when it loses eligibility or unmounts - a
+   * remount, a re-pick of Auto, a switch to Graph - because merely ceasing to
+   * emit would leave the last measurement standing. A decision taken from a
+   * departed canvas is a decision about a box that is no longer there: it
+   * picked an office while the tile was hidden, wrote a neutral camera over
+   * the Graph's, and answered a re-pick from the box the detail panel had
+   * shrunk. Withdrawal is what makes the next decision wait for the new box.
+   */
+  const handleAutoProbe = useCallback(
+    (probe: OfficeAutoProbe | null) => {
+      probeRef.current = probe;
+      setProbeKey(probe === null ? null : canvasKey);
+    },
+    [canvasKey],
+  );
 
   /**
    * READY: the tile knows which view this is, and the inputs behind that are
@@ -202,7 +253,84 @@ export function CommGraphTile(props: CommGraphTileProps) {
    * taken their width.
    */
   const inputsReady =
-    agents.length > 0 && snapshot.initialHistoryCaughtUp && probeReady;
+    agents.length > 0 &&
+    snapshot.initialHistoryCaughtUp &&
+    // Derived, not stored: the moment the mounted canvas changes, the old
+    // canvas's measurement stops being about anything on screen.
+    probeKey === canvasKey &&
+    // The office is what is being measured; a tile showing the Graph has no
+    // office canvas, and the last one's numbers describe a box that is gone.
+    node.view.mode === "office";
+
+  /**
+   * A default that changes WHILE THIS TILE WATCHES owes the camera the same
+   * reset a pick does.
+   *
+   * Kept as its own rule beside the record below, because the two answer
+   * different questions. This one knows the default moved just now, so it
+   * resets whatever the record says - including a tile from before the record
+   * existed, which is the reviewer's own reproduction. The record answers the
+   * case nobody was here to see.
+   *
+   * Only a tile still FOLLOWING the default is moved - an explicit pick and
+   * its framing are nobody else's to touch - and only when the resolved view
+   * actually changes, so switching between two defaults this tile resolves
+   * identically moves nothing.
+   */
+  const followedDefaultRef = useRef<OfficeViewChoice>(settingsDefaultView);
+  useEffect(() => {
+    const previous = followedDefaultRef.current;
+    if (previous === settingsDefaultView) return;
+    followedDefaultRef.current = settingsDefaultView;
+    if (node.view.officeView !== null) return;
+    const before = previous === "auto" ? node.view.officeAutoView : previous;
+    const after =
+      settingsDefaultView === "auto"
+        ? node.view.officeAutoView
+        : settingsDefaultView;
+    if (before === after) return;
+    updateView(viewTabId, node.id, {
+      ...node.view,
+      ...NEUTRAL_CAMERA,
+      officeCameraView: after,
+    });
+  }, [node.id, node.view, settingsDefaultView, updateView, viewTabId]);
+
+  /**
+   * THE CAMERA IS ABOUT A VIEW, and stops meaning anything when that view
+   * changes underneath it.
+   *
+   * The case the effect above cannot see: the default moved while this tile
+   * was CLOSED, and it has just reopened over coordinates that addressed a
+   * different floor. Nothing in this mount witnessed the change, so the only
+   * evidence is the record the camera carries.
+   *
+   * A `null` record means nobody framed this camera, which is why a tile saved
+   * before this field existed keeps its framing rather than being reset on
+   * first sight. Equal means the numbers still describe what is drawn. The
+   * write carries the new view with it, so this settles in one pass instead of
+   * firing on every render.
+   *
+   * A PICK never reaches here: it writes the camera and the record together,
+   * so they already agree by the time this runs.
+   *
+   * ONE GAP, and it closes itself: a tile persisted before this field existed
+   * carries no record, so a default changed while it was closed keeps the old
+   * framing once. The alternative - treating "no record" as "reset" - would
+   * throw away the framing of every saved tile on the upgrade, which is the
+   * worse of the two. It self-heals on first contact: any office camera write
+   * records the view, and a default change seen while mounted resets anyway.
+   */
+  useEffect(() => {
+    if (resolvedViewId === null) return;
+    if (node.view.officeCameraView === null) return;
+    if (node.view.officeCameraView === resolvedViewId) return;
+    updateView(viewTabId, node.id, {
+      ...node.view,
+      ...NEUTRAL_CAMERA,
+      officeCameraView: resolvedViewId,
+    });
+  }, [node.id, node.view, resolvedViewId, updateView, viewTabId]);
 
   /**
    * AUTO, run ONCE per decision and persisted.
@@ -232,6 +360,10 @@ export function CommGraphTile(props: CommGraphTileProps) {
       ...node.view,
       ...camera,
       officeAutoView: decision.view,
+      // Whichever arm ran, the camera now frames THIS view - the Floor's
+      // because it was already the Floor's, the neutral one because it was
+      // just made for it.
+      officeCameraView: decision.view,
     });
   }, [choice, inputsReady, node.id, node.view, updateView, viewTabId]);
 
@@ -253,6 +385,9 @@ export function CommGraphTile(props: CommGraphTileProps) {
           ...NEUTRAL_CAMERA,
           officeView: "auto",
           officeAutoView: null,
+          // Nothing is drawn until Auto answers, so the neutral camera is
+          // about no view yet; Auto's own write names it.
+          officeCameraView: null,
         });
         return;
       }
@@ -270,6 +405,7 @@ export function CommGraphTile(props: CommGraphTileProps) {
         ...node.view,
         ...camera,
         officeView: next,
+        officeCameraView: next,
       });
     },
     [node.id, node.view, resolvedViewId, updateView, viewTabId],
@@ -365,10 +501,11 @@ export function CommGraphTile(props: CommGraphTileProps) {
             // and the new mount builds exactly one scene for exactly one view.
             // The revision is what makes a re-pick of Auto that lands on the
             // same view remount anyway.
-            key={`${resolvedViewId ?? "measuring"}:${autoRevision}`}
+            key={canvasKey}
             {...canvasProps}
+            onCameraChange={handleOfficeCameraChange}
             officeView={OFFICE_VIEWS[resolvedViewId ?? MEASURING_VIEW_ID]}
-            ready={resolvedViewId !== null}
+            ready={resolvedViewId !== null && inputsReady}
             onAutoProbe={handleAutoProbe}
             viewPicker={
               <OfficeViewPicker
@@ -380,7 +517,10 @@ export function CommGraphTile(props: CommGraphTileProps) {
             }
             autoChip={
               choice === "auto" ? (
-                <OfficeAutoChip decision={autoDecision} />
+                <OfficeAutoChip
+                  decision={autoDecision}
+                  restoredView={node.view.officeAutoView}
+                />
               ) : null
             }
           />

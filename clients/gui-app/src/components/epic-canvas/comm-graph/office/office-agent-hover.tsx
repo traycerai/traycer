@@ -16,7 +16,11 @@
  * otherwise, because this element is over it, and a drag or a wheel that
  * happens to start on a character must still pan and zoom the floor.
  */
-import type { PointerEvent as ReactPointerEvent, ReactElement } from "react";
+import type {
+  MouseEvent as ReactMouseEvent,
+  PointerEvent as ReactPointerEvent,
+  ReactElement,
+} from "react";
 import { AgentHoverTooltip } from "@/components/epic-canvas/sidebar/agent-hover-tooltip";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
@@ -37,6 +41,14 @@ export interface OfficeAgentHoverProps {
   /** The floor's own press handler, so a drag that starts here still pans. */
   readonly onPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
   /**
+   * The floor's own double-click, so the zoom works over a person too.
+   *
+   * This target sits ON the floor rather than inside it, so the gesture has to
+   * be handed across explicitly - and the handler anchors on the cursor, which
+   * is why it takes the event rather than the agent.
+   */
+  readonly onDoubleClick: (event: ReactMouseEvent<HTMLElement>) => void;
+  /**
    * This agent's claims, taken from the canvas's ONE bulk map rather than from
    * a hook here. The floor already holds every agent's claims for the plates,
    * and a second per-agent subscription opening on hover is a subscription
@@ -52,6 +64,7 @@ export function OfficeAgentHover(props: OfficeAgentHoverProps) {
     extraContent,
     name,
     onLeave,
+    onDoubleClick,
     onPointerDown,
     onSelect,
     roleClaims,
@@ -81,6 +94,11 @@ export function OfficeAgentHover(props: OfficeAgentHoverProps) {
         height: screenRect.height,
       }}
       onClick={() => onSelect(agentId)}
+      // The zoom gesture belongs to the FLOOR, and this target covers a piece
+      // of it. The canvas element is a sibling, not an ancestor, so nothing
+      // bubbles there on its own - and asking for a closer look at somebody is
+      // exactly when a person double-clicks.
+      onDoubleClick={onDoubleClick}
       onPointerDown={onPointerDown}
       onPointerLeave={onLeave}
     />

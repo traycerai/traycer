@@ -1915,7 +1915,8 @@ export interface CommGraphOfficeCanvasProps extends CommGraphCanvasProps {
    * population this canvas derives anyway, and the box the office is left
    * once the directory and any panel have taken their width.
    */
-  readonly onAutoProbe: (probe: OfficeAutoProbe) => void;
+  /** The current measurement, or `null` when this canvas no longer has one. */
+  readonly onAutoProbe: (probe: OfficeAutoProbe | null) => void;
 }
 
 export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
@@ -2206,8 +2207,17 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     [officeAgents, runtime, statusById],
   );
   useEffect(() => {
+    // NOT committed until the input is real. Whatever is committed here
+    // becomes the `previous` every later partition is frozen against, so
+    // committing a half-replayed one makes incomplete data the permanent
+    // arrival classification for this mount: a member replay turns
+    // `awaiting` keeps `hotAtArrival: false` forever, while a fresh
+    // partition of the same finished input has `true`. Gating the scene sync
+    // alone does not help - this commit happens first and poisons the input
+    // the sync later reads.
+    if (!ready) return;
     runtime.setPartition(partition);
-  }, [partition, runtime]);
+  }, [partition, ready, runtime]);
 
   // WHAT AUTO WOULD MEASURE, pushed up whenever it changes. Reported even
   // while `ready` is false - it is the thing that MAKES the tile ready - but
@@ -2215,8 +2225,14 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   // against a tile nobody can see would decide the office by the size of
   // nothing.
   useEffect(() => {
-    if (!eligible) return;
-    if (measuredBox.width <= 0 || measuredBox.height <= 0) return;
+    // WITHDRAWN, not merely unsaid. A tile that stops being eligible - hidden,
+    // switched to Graph, unmounted by a re-pick - leaves its last measurement
+    // standing unless it says so, and a decision taken from it is a decision
+    // about a box that is no longer on screen.
+    if (!eligible || measuredBox.width <= 0 || measuredBox.height <= 0) {
+      onAutoProbe(null);
+      return;
+    }
     onAutoProbe({
       input: {
         agents: officeAgents,
@@ -2239,6 +2255,20 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     onAutoProbe,
     partition,
   ]);
+
+  /**
+   * The last word from a canvas on its way out.
+   *
+   * Its OWN effect, keyed on nothing that changes, so it fires on unmount and
+   * only on unmount - folded into the reporting effect above it would withdraw
+   * and re-report on every batch of rows. An unmount is exactly the case where
+   * nothing else can speak for this canvas.
+   */
+  useEffect(() => {
+    return () => {
+      onAutoProbe(null);
+    };
+  }, [onAutoProbe]);
 
   const sceneInput = useMemo<OfficeSceneInput>(
     () => ({
@@ -3131,8 +3161,13 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
 
   // A double-click is the one gesture that reads as "closer, here" in every
   // map surface; the floor had no answer to it at all.
+  //
+  // Typed on `HTMLElement`, not the canvas: the agent hit target is a sibling
+  // element covering part of the floor, and it hands the same gesture here
+  // rather than swallowing it. Only the cursor position is read, so the
+  // element it came from does not matter.
   const handleDoubleClick = useCallback(
-    (event: ReactMouseEvent<HTMLCanvasElement>) => {
+    (event: ReactMouseEvent<HTMLElement>) => {
       const screen = toScreenPoint(event.clientX, event.clientY);
       if (screen === null) return;
       runtime.takeManualControl();
@@ -3407,6 +3442,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
             name={hoveredAgent.name}
             screenRect={hoverCard.rect}
             onPointerDown={handlePointerDown}
+            onDoubleClick={handleDoubleClick}
             roleClaims={claimsOf(roleClaimsByAgentId, hoveredAgent.id)}
             extraContent={
               <OfficeHoverSupplement

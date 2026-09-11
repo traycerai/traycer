@@ -20,6 +20,7 @@
  */
 import { v4 as uuidv4 } from "uuid";
 import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
+import type { OfficeViewId } from "@/lib/comm-graph/office/office-types";
 import { DEFAULT_TERMINAL_TITLE } from "@/lib/terminals/terminal-title";
 import type {
   CommGraphTileCamera,
@@ -1782,6 +1783,48 @@ export function updateCommGraphTileView(
  * renderer last rendered, so a pan landing after a pick - which is exactly
  * what a debounced pan does - would put the old view back.
  */
+/**
+ * The OFFICE's camera write: the numbers, plus the view they are about.
+ *
+ * Deliberately a second entry point rather than a flag on the one above. The
+ * graph renderer has no idea what an office view is, so it must not be able to
+ * say anything about one - not even `null`, which would quietly erase the
+ * framing record on every debounced pan. Two writers, two paths, each saying
+ * only what it knows.
+ */
+export function updateCommGraphTileOfficeCamera(
+  state: EpicCanvasState,
+  tileId: string,
+  camera: CommGraphTileCamera,
+  framedView: OfficeViewId | null,
+): EpicCanvasState {
+  return updateTilesWhere(
+    state,
+    (ref) => ref.id === tileId && isCommGraphTileRef(ref),
+    (ref) => {
+      if (!isCommGraphTileRef(ref)) return ref;
+      if (
+        ref.view.x === camera.x &&
+        ref.view.y === camera.y &&
+        ref.view.zoom === camera.zoom &&
+        ref.view.officeCameraView === framedView
+      ) {
+        return ref;
+      }
+      return {
+        ...ref,
+        view: {
+          ...ref.view,
+          x: camera.x,
+          y: camera.y,
+          zoom: camera.zoom,
+          officeCameraView: framedView,
+        },
+      };
+    },
+  );
+}
+
 export function updateCommGraphTileCamera(
   state: EpicCanvasState,
   tileId: string,

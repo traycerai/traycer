@@ -38,7 +38,7 @@ const CLAIM: RoleClaim = {
 
 function renderHover(
   onSelect: (agentId: string) => void,
-  roleClaims: readonly RoleClaim[] = [],
+  roleClaims: readonly RoleClaim[],
 ) {
   return render(
     <OfficeAgentHover
@@ -57,6 +57,7 @@ function renderHover(
       onSelect={onSelect}
       onLeave={vi.fn()}
       onPointerDown={vi.fn()}
+      onDoubleClick={vi.fn()}
     />,
   );
 }
@@ -81,7 +82,7 @@ afterEach(() => {
 
 describe("OfficeAgentHover", () => {
   it("renders the shared agent tooltip rather than a card of its own", () => {
-    renderHover(vi.fn());
+    renderHover(vi.fn(), []);
 
     const props = tooltipProps();
     expect(props.epicId).toBe("epic-1");
@@ -97,7 +98,7 @@ describe("OfficeAgentHover", () => {
   });
 
   it("appends the floor's own reading under the shared card", () => {
-    renderHover(vi.fn());
+    renderHover(vi.fn(), []);
 
     render(tooltipProps().extraContent as ReactElement);
     expect(
@@ -115,7 +116,7 @@ describe("OfficeAgentHover", () => {
   });
 
   it("puts the trigger exactly over the character it describes", () => {
-    renderHover(vi.fn());
+    renderHover(vi.fn(), []);
 
     render(tooltipProps().trigger as ReactElement);
     const trigger = screen.getByTestId(
@@ -131,7 +132,7 @@ describe("OfficeAgentHover", () => {
 
   it("selects the agent when the trigger is clicked", () => {
     const onSelect = vi.fn();
-    renderHover(onSelect);
+    renderHover(onSelect, []);
 
     render(tooltipProps().trigger as ReactElement);
     fireEvent.click(

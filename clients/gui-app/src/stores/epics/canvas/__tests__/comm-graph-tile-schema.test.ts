@@ -12,6 +12,7 @@ import {
 } from "@/stores/epics/canvas/tile-schema/comm-graph-tile";
 import {
   updateCommGraphTileCamera,
+  updateCommGraphTileOfficeCamera,
   updateCommGraphTileView,
 } from "@/stores/epics/canvas/actions";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
@@ -160,6 +161,38 @@ describe("comm-graph tile schema", () => {
     if (parsed === null || parsed.type !== "comm-graph") return;
     expect(parsed.view.officeView).toBe("auto");
     expect(parsed.view.officeAutoView).toBeNull();
+  });
+
+  it("degrades an officeCameraView this build does not register, resetting the camera", () => {
+    const parsed = parseTileRef({
+      id: commGraphTileId(EPIC_ID),
+      instanceId: "inst-1",
+      type: "comm-graph",
+      name: "Agent office",
+      hostId: UNKNOWN_HOST_PLACEHOLDER,
+      epicId: EPIC_ID,
+      view: {
+        x: 400,
+        y: -220,
+        zoom: 3,
+        mode: "office",
+        officeView: "towers",
+        officeAutoView: "building",
+        // Like `officeView` and `officeAutoView`, a value from a build newer
+        // than this one degrades to null - and, like them, that degrade
+        // resets the camera in the same parse rather than surviving it.
+        officeCameraView: "atrium",
+      },
+    });
+    expect(parsed?.type).toBe("comm-graph");
+    if (parsed === null || parsed.type !== "comm-graph") return;
+    expect(parsed.view.officeCameraView).toBeNull();
+    // The other two fields degrade independently.
+    expect(parsed.view.officeView).toBe("towers");
+    expect(parsed.view.officeAutoView).toBe("building");
+    expect(parsed.view.x).toBe(DEFAULT_COMM_GRAPH_VIEW.x);
+    expect(parsed.view.y).toBe(DEFAULT_COMM_GRAPH_VIEW.y);
+    expect(parsed.view.zoom).toBe(DEFAULT_COMM_GRAPH_VIEW.zoom);
   });
 
   it("keeps an absent officeView/officeAutoView as null WITHOUT resetting the camera", () => {
@@ -470,6 +503,10 @@ describe("updateCommGraphTileCamera", () => {
         mode: "graph" as const,
         officeView: "towers" as const,
         officeAutoView: "building" as const,
+        // Non-null on purpose: the case below proves this survives a plain
+        // camera write, which a starting value of `null` cannot distinguish
+        // from the field simply being absent.
+        officeCameraView: "towers" as const,
       },
     };
     return {
@@ -503,6 +540,10 @@ describe("updateCommGraphTileCamera", () => {
       x: 40,
       y: -12,
       zoom: 2.5,
+      // The GRAPH's camera path cannot touch the office's framing record -
+      // preserved here, not merely absent, since the fixture starts it
+      // non-null.
+      officeCameraView: "towers",
       mode: "graph",
       officeView: "towers",
       officeAutoView: "building",
@@ -522,5 +563,94 @@ describe("updateCommGraphTileCamera", () => {
         zoom: ref.view.zoom,
       }),
     ).toBe(state);
+  });
+});
+
+describe("updateCommGraphTileOfficeCamera", () => {
+  function stateWithChoice(): EpicCanvasState {
+    const ref = {
+      ...makeCommGraphTileRef(EPIC_ID),
+      view: {
+        ...DEFAULT_COMM_GRAPH_VIEW,
+        mode: "office" as const,
+        officeView: "towers" as const,
+        officeAutoView: "building" as const,
+        officeCameraView: "towers" as const,
+      },
+    };
+    return {
+      root: {
+        kind: "pane",
+        id: "pane-1",
+        tabInstanceIds: [ref.instanceId],
+        activeTabId: ref.instanceId,
+        previewTabId: null,
+        activationHistory: [ref.instanceId],
+      },
+      activePaneId: "pane-1",
+      tilesByInstanceId: { [ref.instanceId]: ref },
+      sizesByGroupId: {},
+    };
+  }
+
+  it("moves the camera and writes the framed view, leaving mode, officeView and officeAutoView untouched", () => {
+    const state = stateWithChoice();
+    const next = updateCommGraphTileOfficeCamera(
+      state,
+      commGraphTileId(EPIC_ID),
+      { x: 40, y: -12, zoom: 2.5 },
+      "building",
+    );
+    const ref = Object.values(next.tilesByInstanceId)[0];
+    expect(ref?.type).toBe("comm-graph");
+    if (ref === undefined || ref.type !== "comm-graph") return;
+    expect(ref.view).toEqual({
+      x: 40,
+      y: -12,
+      zoom: 2.5,
+      officeCameraView: "building",
+      mode: "office",
+      officeView: "towers",
+      officeAutoView: "building",
+    });
+  });
+
+  it("returns the same state object when neither the camera nor the framed view has changed", () => {
+    const state = stateWithChoice();
+    const ref = Object.values(state.tilesByInstanceId)[0];
+    if (ref === undefined || ref.type !== "comm-graph") {
+      throw new Error("expected a comm-graph tile");
+    }
+    expect(
+      updateCommGraphTileOfficeCamera(
+        state,
+        commGraphTileId(EPIC_ID),
+        { x: ref.view.x, y: ref.view.y, zoom: ref.view.zoom },
+        ref.view.officeCameraView,
+      ),
+    ).toBe(state);
+  });
+
+  it("writes a new state when only the framed view changed, even with an unmoved camera", () => {
+    // `officeCameraView` was added to this action's own comparison - a camera
+    // that stayed put but is now framing a DIFFERENT view (the re-pick that
+    // lands on the same numbers) must still produce a new ref, not the
+    // no-op path above.
+    const state = stateWithChoice();
+    const ref = Object.values(state.tilesByInstanceId)[0];
+    if (ref === undefined || ref.type !== "comm-graph") {
+      throw new Error("expected a comm-graph tile");
+    }
+    const next = updateCommGraphTileOfficeCamera(
+      state,
+      commGraphTileId(EPIC_ID),
+      { x: ref.view.x, y: ref.view.y, zoom: ref.view.zoom },
+      "building",
+    );
+    expect(next).not.toBe(state);
+    const nextRef = Object.values(next.tilesByInstanceId)[0];
+    expect(nextRef?.type).toBe("comm-graph");
+    if (nextRef === undefined || nextRef.type !== "comm-graph") return;
+    expect(nextRef.view.officeCameraView).toBe("building");
   });
 });

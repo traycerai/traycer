@@ -17,10 +17,23 @@ import {
   type OfficeAutoFit,
 } from "@/lib/comm-graph/office/office-auto";
 import { OFFICE_VIEWS } from "@/lib/comm-graph/office/views/office-view";
+import type { OfficeViewId } from "@/lib/comm-graph/office/office-types";
 
 export interface OfficeAutoChipProps {
-  /** `null` while the tile is still being measured. */
+  /** This session's measurement, or `null` when none is in hand. */
   readonly decision: OfficeAutoDecision | null;
+  /**
+   * The outcome READ BACK from the tile, which outlives the measurement
+   * behind it.
+   *
+   * Auto's answer is persisted; its arithmetic deliberately is not, so a tile
+   * that comes back from a remount, a mode toggle or a restart knows which
+   * office it settled on and nothing about how. That is a different state
+   * from "no answer yet", and the chip owes the reader a different sentence:
+   * saying "measuring…" about a decision that was made and will not be
+   * re-made is the one thing it must not do.
+   */
+  readonly restoredView: OfficeViewId | null;
 }
 
 /**
@@ -47,8 +60,30 @@ function autoChipText(decision: OfficeAutoDecision): string {
   return `${measured} · ${OFFICE_VIEWS[runnerUp.view].label} would be ${officeZoomLabel(runnerUp.zoom)}`;
 }
 
+/**
+ * A winner with no measurement left to quote.
+ *
+ * "measured earlier" is doing two jobs: it accounts for the numbers that are
+ * missing rather than leaving their absence to read as a bug, and it points at
+ * the re-measure the picker's Auto row offers. It invents nothing - no count,
+ * no zoom - because the only honest thing this chip still knows is which
+ * office won.
+ */
+function restoredChipText(view: OfficeViewId): string {
+  return `Auto · ${OFFICE_VIEWS[view].label} · measured earlier`;
+}
+
+function chipText(
+  decision: OfficeAutoDecision | null,
+  restoredView: OfficeViewId | null,
+): string {
+  if (decision !== null) return autoChipText(decision);
+  if (restoredView !== null) return restoredChipText(restoredView);
+  return "Auto · measuring…";
+}
+
 export function OfficeAutoChip(props: OfficeAutoChipProps) {
-  const { decision } = props;
+  const { decision, restoredView } = props;
   return (
     <div
       data-testid="comm-graph-office-auto-chip"
@@ -60,7 +95,7 @@ export function OfficeAutoChip(props: OfficeAutoChipProps) {
         "text-ui-xs text-popover-foreground tabular-nums shadow-xs",
       )}
     >
-      {decision === null ? "Auto · measuring…" : autoChipText(decision)}
+      {chipText(decision, restoredView)}
     </div>
   );
 }

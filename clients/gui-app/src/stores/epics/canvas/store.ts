@@ -13,6 +13,7 @@ import {
   type StateStorage,
 } from "zustand/middleware";
 import { v4 as uuidv4 } from "uuid";
+import type { OfficeViewId } from "@/lib/comm-graph/office/office-types";
 import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
 import type { BrowserViewViewportPresetId } from "@traycer-clients/shared/platform/browser-view";
 import { basePersistOptions, epicCanvasKey } from "@/lib/persist";
@@ -89,6 +90,7 @@ import {
   toggleSnapshotDiffBundleFileCollapsed,
   updateBrowserTileViewportPreset,
   updateCommGraphTileCamera,
+  updateCommGraphTileOfficeCamera,
   updateCommGraphTileView,
   updateGitDiffTileView,
   updateSnapshotDiffTileView,
@@ -569,6 +571,16 @@ export interface EpicCanvasStore {
     tabId: string,
     tileId: string,
     camera: CommGraphTileCamera,
+  ) => void;
+  /**
+   * The office's own camera write, carrying the view the numbers are about.
+   * The graph canvas uses the plain one above and cannot reach this field.
+   */
+  updateCommGraphTileOfficeCameraInTab: (
+    tabId: string,
+    tileId: string,
+    camera: CommGraphTileCamera,
+    framedView: OfficeViewId | null,
   ) => void;
   updatePrDiffTileViewInTab: (
     tabId: string,
@@ -2129,6 +2141,24 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           set((state) =>
             updateTabCanvas(state, tabId, (canvas) =>
               updateCommGraphTileCamera(canvas, tileId, camera),
+            ),
+          );
+        },
+
+        updateCommGraphTileOfficeCameraInTab: (
+          tabId,
+          tileId,
+          camera,
+          framedView,
+        ) => {
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) =>
+              updateCommGraphTileOfficeCamera(
+                canvas,
+                tileId,
+                camera,
+                framedView,
+              ),
             ),
           );
         },
