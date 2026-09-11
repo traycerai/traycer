@@ -141,6 +141,29 @@ describe("agent.activity.subscribe@1.1", () => {
     );
   });
 
+  // The 1.3 contract itself, asserted through the parser rather than the
+  // reference equality above: a `servedBy: "local"` frame MAY carry a real
+  // link status. A later cross-field restriction (local implies null) would
+  // keep every reference check green while breaking the merged plane's
+  // "own agents authoritative, fleet unknown" frame.
+  it("1.3 accepts a local frame stamped with a real link status", () => {
+    const frame = {
+      kind: "state",
+      servedBy: "local",
+      byEpic: {},
+      cloudSyncStatus: "disconnected",
+      hasBinaryPayload: false,
+    };
+    expect(agentActivitySubscribeV13.serverFrameSchema.parse(frame)).toEqual(
+      frame,
+    );
+    expect(
+      hostStreamRpcRegistry[
+        "agent.activity.subscribe"
+      ][1].versions[3].contract.serverFrameSchema.parse(frame),
+    ).toEqual(frame);
+  });
+
   // Read the schema OFF THE REGISTRY, not the imported symbol: a later edit
   // re-pointing `1.0` at a laxer schema must fail here, not only in the
   // protocol-compat CI gate.
