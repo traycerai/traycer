@@ -13,6 +13,14 @@ export function formatAgentListResponse(response: ListAgentsResponse): string {
   const showArchived = agents.some(hasArchiveEnrichment);
   const showRunConfig = agents.some(hasRunConfigEnrichment);
   const showOwnerHostConnectivity = agents.some(hasConnectivityEnrichment);
+  // Gated on a row actually RENDERING the token rather than on the key being
+  // present, which is the difference from the three gates above: `@9.1` makes
+  // `sessionState` a real schema field, so it is present and `null` on every
+  // row a host with nothing to report serves - and a legend entry explaining a
+  // marker that appears nowhere is worse than no entry.
+  const showSessionState = agents.some(
+    (agent) => formatSessionStateToken(agent).length > 0,
+  );
   const body =
     agents.length === 0
       ? `No agents found for scope '${response.scope}'.`
@@ -25,6 +33,7 @@ ${formatAgentListLegend(
   showArchived,
   showRunConfig,
   showOwnerHostConnectivity,
+  showSessionState,
 )}`;
 }
 
@@ -277,9 +286,41 @@ function formatAgentListLine(agent: AgentSummary, showSend: boolean): string {
   }
   const location = formatAgentLocation(agent);
   if (location.length > 0) parts.push(location);
+  const session = formatSessionStateToken(agent);
+  if (session.length > 0) parts.push(session);
   const ownerHost = formatOwnerHostToken(agent);
   if (ownerHost.length > 0) parts.push(ownerHost);
   return parts.join(" ");
+}
+
+/**
+ * The agent's session state, so a silent peer is not read as a dead one.
+ *
+ * `active` says whether the agent is executing right now and says nothing
+ * about what a `false` MEANS: an agent between turns, an agent whose session
+ * was idle-reaped, and an archived agent all looked identical, so an
+ * orchestrator enumerating its peers concluded a reaped one had died and
+ * stopped addressing it. A reaped agent resumes on the very next message.
+ *
+ * Read straight off the row, with no `in` probe - unlike `archived` and
+ * `ownerHostConnectivity`, this is a real `@9.1` schema field, so the wire
+ * carries it and the `@9.0 -> @9.1` upgrade path fills `null` for a host that
+ * predates it.
+ *
+ * `null` renders NOTHING, and the absence is the honest report: the serving
+ * host cannot know (a cross-host row, a GUI chat with no session, a record
+ * older than the facet). Printing a word there would turn "not observable"
+ * into a claim. The reason rides the `sleeping` arm only - it is the state
+ * where "how did it end" is a question anyone asks, and a `running` agent's
+ * previous exit would read as a current one.
+ */
+function formatSessionStateToken(agent: AgentSummary): string {
+  const state = agent.sessionState;
+  if (state === null) return "";
+  if (state !== "sleeping" || agent.lastExit === null) {
+    return `session: ${state}`;
+  }
+  return `session: ${state} (last exit: ${agent.lastExit})`;
 }
 
 /**
@@ -378,6 +419,7 @@ function formatAgentListLegend(
   showArchived: boolean,
   showRunConfig: boolean,
   showOwnerHostConnectivity: boolean,
+  showSessionState: boolean,
 ): string {
   const archived = showArchived
     ? "\n[archived]: the agent/chat is archived and treated as inactive until its next user or A2A message"
@@ -392,6 +434,12 @@ function formatAgentListLegend(
   const ownerHost = showOwnerHostConnectivity
     ? "\nowner host: <state>: whether the machine running the agent is reachable - connectable, offline, or unknown. It is a real answer only for your OWN hosts; a row owned by another user is always unknown, because the host directory lists only your own machines - unknown there means not observable, not down"
     : "";
+  // The "sleeping is not dead" sentence is the load-bearing half, not
+  // politeness: an orchestrator that reads a reaped peer as gone stops
+  // addressing it, which is the failure this field was added for.
+  const sessionState = showSessionState
+    ? "\nsession: <state>: the agent's own session as its binding host sees it - running (a live session), sleeping (no live session; it RESUMES on your next message or when the agent is opened, so a sleeping peer is still addressable and is not dead), or stopped (the agent is over as a record: archived or deleted). 'last exit' says how the last session ended - reaped (idle), user-stop, restart, or process-exit - and is display detail only: all four resume identically. A row with no session token is one this host cannot observe (another machine's agent, a GUI chat, or a record older than the field), which is not the same as stopped"
+    : "";
   if (!showSend) {
     return `Legend:
 [self]: this agent, i.e. the caller of agent.list${archived}
@@ -399,7 +447,7 @@ function formatAgentListLegend(
 R: the agent has a readable transcript
 -: the agent has no readable transcript
 dir: <path>: the working directory the agent runs in
-worktree: <path>: the agent runs in a dedicated git worktree${runConfig}${ownerHost}
+worktree: <path>: the agent runs in a dedicated git worktree${runConfig}${sessionState}${ownerHost}
 Sending is unavailable in this session`;
   }
   return `Legend:
@@ -410,7 +458,7 @@ S: the agent can be sent messages to
 R/S: the agent has a readable transcript and can be sent messages to
 -: no available action
 dir: <path>: the working directory the agent runs in
-worktree: <path>: the agent runs in a dedicated git worktree${runConfig}${ownerHost}`;
+worktree: <path>: the agent runs in a dedicated git worktree${runConfig}${sessionState}${ownerHost}`;
 }
 
 function hasRunConfigEnrichment(agent: AgentSummary): boolean {
