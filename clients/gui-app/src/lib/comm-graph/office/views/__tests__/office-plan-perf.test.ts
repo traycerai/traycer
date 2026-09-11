@@ -23,23 +23,28 @@ import {
   OFFICE_SPRITE_CACHE_LIMIT,
 } from "@/lib/comm-graph/office/office-pixel-art";
 import { partitionOfficePopulation } from "@/lib/comm-graph/office/office-population";
-import { OfficeScene } from "@/lib/comm-graph/office/office-scene";
+import {
+  OfficeScene,
+  OFFICE_CULL_MARGIN_PX,
+} from "@/lib/comm-graph/office/office-scene";
 import { makeTestEpic } from "@/lib/comm-graph/office/office-test-epic";
-import type {
-  OfficeAgentInput,
-  OfficeAgentStatus,
-  OfficeDrawable,
-  OfficeFrame,
-  OfficeLayout,
-  OfficeRect,
-  OfficeSceneInput,
-  OfficeSize,
-  OfficeViewId,
+import {
+  OFFICE_TILE,
+  type OfficeAgentInput,
+  type OfficeAgentStatus,
+  type OfficeDrawable,
+  type OfficeFrame,
+  type OfficeLayout,
+  type OfficeRect,
+  type OfficeSceneInput,
+  type OfficeSize,
+  type OfficeViewId,
 } from "@/lib/comm-graph/office/office-types";
 import {
   OFFICE_VIEW_IDS,
   OFFICE_VIEWS,
   type OfficePlanInput,
+  type OfficeProjector,
 } from "@/lib/comm-graph/office/views/office-view";
 import {
   planOfficeStaticChunks,
@@ -86,6 +91,14 @@ const MEASURE_BUDGET_MS = 20;
 
 /** How many runs a budget takes the best of; see `millisOf`. */
 const BUDGET_RUNS = 3;
+
+/**
+ * What one visible seat may cost a frame, and what a frame may cost with no
+ * seats in it at all (envelopes in flight, of which there are at most 24).
+ * Rule 8's own numbers; the densest view measures about 9 of the 12.
+ */
+const FRAME_DRAWABLES_PER_SEAT = 12;
+const FRAME_DRAWABLE_SLACK = 24;
 
 const EPIC = makeTestEpic("triage", SCALE, 1);
 
@@ -175,6 +188,57 @@ function distinctSpritesIn(frame: OfficeFrame): number {
     keys.add(officeSpriteCacheKey(drawable.sprite, "dark"));
   }
   return keys.size;
+}
+
+/**
+ * The layout in force, or a thrown error: `null` before the first sync is the
+ * contract, and a non-null assertion is what the type rules forbid (D23).
+ */
+function layoutOf(scene: OfficeScene): OfficeLayout {
+  const layout = scene.layout();
+  if (layout === null) throw new Error("the scene has not planned yet");
+  return layout;
+}
+
+/**
+ * The seats with somebody in them whose art the rect can reach - the scene's
+ * own cull, computed the way the scene computes it: the seat's projected box
+ * against the view grown by the cull margin.
+ *
+ * Only the OCCUPIED ones. An empty reserve seat generates nothing to draw, so
+ * counting it would inflate the budget with seats that cost nothing.
+ */
+function occupiedSeatsIn(args: {
+  readonly layout: OfficeLayout;
+  readonly projector: OfficeProjector;
+  readonly rect: OfficeRect;
+}): number {
+  const { layout, projector, rect } = args;
+  const left = rect.x - OFFICE_CULL_MARGIN_PX;
+  const top = rect.y - OFFICE_CULL_MARGIN_PX;
+  const right = rect.x + rect.width + OFFICE_CULL_MARGIN_PX;
+  const bottom = rect.y + rect.height + OFFICE_CULL_MARGIN_PX;
+  let seats = 0;
+  for (const seat of layout.desks.values()) {
+    const origin = projector.project(seat.deskTile.col, seat.deskTile.row);
+    const width = seat.hitTiles.width * OFFICE_TILE;
+    const height = seat.hitTiles.height * OFFICE_TILE;
+    if (origin.x >= right || left >= origin.x + width) continue;
+    if (origin.y >= bottom || top >= origin.y + height) continue;
+    seats += 1;
+  }
+  return seats;
+}
+
+/**
+ * How many filled rects a block map describes: every region the plan has.
+ * `room.pods` is already the recursive flattening, one entry per sub-team.
+ */
+function blockRegionsOf(layout: OfficeLayout): number {
+  let regions = layout.floors.length + layout.rooms.length;
+  for (const floor of layout.floors) regions += floor.amenities.length;
+  for (const room of layout.rooms) regions += room.pods.length;
+  return regions;
 }
 
 /** The camera positions a sweep looks at, across the whole world. */
@@ -287,6 +351,76 @@ describe.each(OFFICE_VIEW_IDS)("%s at a thousand agents", (viewId) => {
     expect(busiest).toBeGreaterThan(0);
   });
 
+  it("builds a frame from what the viewport holds, not from what the epic holds", () => {
+    // THE DENOMINATOR IS THE SEATS ON SCREEN. The floor is not in it: it is
+    // the static layer's business, bounded by the chunk budget rather than by
+    // this one, and at a thousand agents it is thousands of tiles either way.
+    // What this counts is everything the scene REBUILDS per frame - the seat
+    // props, the characters, the interleaved world stream and the overlay -
+    // and the claim is that a frame costs what is on screen. A frame that
+    // walked the population would be an order of magnitude over this.
+    const scene = new OfficeScene(view, null);
+    scene.sync(
+      sceneInputFor({ agents: EPIC.agents, statusById: EPIC.statusById }),
+    );
+    const layout = layoutOf(scene);
+    const projector = view.painter.projector(layout);
+    let worst = 0;
+
+    for (const rect of viewRectsOver(scene.worldSize())) {
+      const seats = occupiedSeatsIn({ layout, projector, rect });
+      const frame = scene.frame(1, rect);
+      const body =
+        frame.props.length +
+        frame.actors.length +
+        (frame.world === null ? 0 : frame.world.length) +
+        frame.overlay.length;
+      expect(body).toBeLessThanOrEqual(
+        FRAME_DRAWABLES_PER_SEAT * seats + FRAME_DRAWABLE_SLACK,
+      );
+      worst = Math.max(worst, body);
+    }
+
+    // Anti-vacuity: a frame that built nothing anywhere would pass every
+    // bound above and draw an empty office.
+    expect(worst).toBeGreaterThan(0);
+  });
+
+  it("is one pip per character and a block map at overview, and nothing else", () => {
+    // The whole reading of lod 0. A character is four pixels there, so no
+    // sprite is worth building and no seat prop is worth asking the painter
+    // for (D27) - which is what makes the overview of a thousand agents cost
+    // a thousand dots and a few dozen rectangles.
+    const scene = new OfficeScene(view, null);
+    scene.sync(
+      sceneInputFor({ agents: EPIC.agents, statusById: EPIC.statusById }),
+    );
+    const layout = layoutOf(scene);
+    const world = scene.worldSize();
+
+    const frame = scene.frame(0, {
+      x: 0,
+      y: 0,
+      width: world.width,
+      height: world.height,
+    });
+
+    expect(frame.props).toEqual([]);
+    expect(frame.world).toBeNull();
+    expect(frame.actors.length).toBeLessThanOrEqual(SCALE);
+    for (const actor of frame.actors) expect(actor.kind).toBe("pip");
+    for (const drawable of frame.floor) expect(drawable.kind).toBe("block");
+    // Rule 8 says `population + rooms`; a block map draws one rect per REGION
+    // the plan describes, which is its storeys and amenities and pods as well
+    // as its rooms. The claim the number carries is the one that matters
+    // either way: nothing at overview scales with the population except the
+    // one pip per character.
+    expect(frame.floor.length + frame.actors.length).toBeLessThanOrEqual(
+      SCALE + blockRegionsOf(layout),
+    );
+    expect(frame.actors.length).toBeGreaterThan(0);
+  });
+
   it("grows the path scratch once for its layout, not once per walk", () => {
     const layout = view.plan(input);
     const seats = [...layout.seats.values()].slice(0, 24);
@@ -309,17 +443,20 @@ describe.each(OFFICE_VIEW_IDS)("%s at a thousand agents", (viewId) => {
 });
 
 /**
- * PHASE 2 of this ticket adds the four budgets that need the scene changes it
- * makes, each named in Performance rule 8:
+ * WHERE THE REST OF RULE 8 LIVES. Four of its eight budgets are not in this
+ * file, and none of them is missing:
  *
- * - **Frame size.** `frame(1, 1280 x 700)` carries at most
- *   `12 x visible seats + 24` drawables, and `frame(0, world)` at most
- *   `population + rooms`.
- * - **Suspension.** After `suspend()` the static layer reports zero pixels and
- *   twenty input updates produce zero syncs.
- * - **Motion cap.** After any tick sequence at most `MAX_CONCURRENT_ERRANDS`
- *   characters are away, and none started outside the last frame's view rect.
- * - **View switch.** Ten switches leave one scene, one static layer and no
- *   retained drawable arrays from a former view; that one lives on the keyed
- *   tile in `comm-graph-office-canvas.test.tsx`.
+ * - **Suspension**, in two halves because it is two claims. That the static
+ *   layer holds no pixels once it is released is in
+ *   `comm-graph/__tests__/office-static-layer.test.ts`; that twenty input
+ *   updates to a suspended canvas produce zero syncs and exactly one on
+ *   resume is in `comm-graph/__tests__/comm-graph-office-canvas.test.tsx`,
+ *   where there is a canvas to suspend.
+ * - **View switch**, in `comm-graph/__tests__/comm-graph-tile.test.tsx`,
+ *   driven through the real picker on the real keyed tile - the only place
+ *   the thing the rule is about, the tile's `key`, actually exists.
+ * - **Motion cap** - errands never exceeding `MAX_CONCURRENT_ERRANDS` and
+ *   none starting outside the last frame's view rect - is the one budget
+ *   still to come: it waits on the scene changes of this ticket's own phase
+ *   2, since neither the cap nor the rect-local start exists to assert yet.
  */
