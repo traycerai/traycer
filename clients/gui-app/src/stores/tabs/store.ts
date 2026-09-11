@@ -1,3 +1,12 @@
+import {
+  DEFAULT_TAB_CUSTOMIZATION,
+  TAB_COLORS,
+  parseTabCustomizations,
+  parseTabGroups,
+  setLayoutTabGroup,
+  type TabCustomization,
+  type TabGroup,
+} from "./tab-groups";
 import { create } from "zustand";
 import {
   createJSONStorage,
@@ -89,6 +98,14 @@ export interface TabsStoreState extends PersistedTabsStoreState {
   separateSplit: (splitId: string) => void;
   replaceRef: (args: ReplaceRefArgs) => void;
   reorderItem: (args: ReorderItemArgs) => void;
+  setTabCustomization: (
+    ref: TabRef,
+    patch: Partial<Pick<TabCustomization, "color" | "icon">>,
+  ) => void;
+  createGroup: (ref: TabRef) => string | null;
+  setTabGroup: (ref: TabRef, groupId: string | null) => void;
+  updateGroup: (groupId: string, patch: Partial<TabGroup>) => void;
+  ungroup: (groupId: string) => void;
   repair: () => void;
 }
 
@@ -184,6 +201,8 @@ function layoutFromState(state: TabsStoreState): PersistedTabStripLayout {
     activeItemId: state.activeItemId,
     systemTabs: state.systemTabs,
     activationHistory: state.activationHistory,
+    customizations: state.customizations,
+    groups: state.groups,
   };
   // Older consumers and existing tests may still seed Zustand directly with
   // `stripOrder`. Treat such a mismatch as an external v1 compatibility write
@@ -272,6 +291,8 @@ export function migrateTabsPersistedState(
       activeItemId:
         typeof value.activeItemId === "string" ? value.activeItemId : null,
       systemTabs,
+      customizations: parseTabCustomizations(value.customizations),
+      groups: parseTabGroups(value.groups),
       activationHistory: Array.isArray(value.activationHistory)
         ? value.activationHistory.flatMap(parseTabRef)
         : undefined,
@@ -419,7 +440,7 @@ function isValidSystemTabPath(
 
 export const useTabsStore = create<TabsStoreState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       ...committedLayout(emptyTabStripLayout()),
 
       replaceLayoutForTransaction: (layout) => {
@@ -429,6 +450,8 @@ export const useTabsStore = create<TabsStoreState>()(
           activeItemId: layout.activeItemId,
           systemTabs: layout.systemTabs,
           activationHistory: layout.activationHistory,
+          customizations: layout.customizations,
+          groups: layout.groups,
         });
       },
 
@@ -440,6 +463,8 @@ export const useTabsStore = create<TabsStoreState>()(
             activeItemId: state.activeItemId,
             systemTabs: state.systemTabs,
             activationHistory: state.activationHistory,
+            customizations: state.customizations,
+            groups: state.groups,
           }),
         );
       },
@@ -605,6 +630,85 @@ export const useTabsStore = create<TabsStoreState>()(
         });
       },
 
+      setTabCustomization: (ref, patch) => {
+        set((state) => {
+          const layout = layoutFromState(state);
+          const item = findStripItemForRef(layout, ref);
+          if (item === null || itemContainsStructurallyLockedRef(item))
+            return state;
+          const key = tabRefKey(ref);
+          const customizations = {
+            ...layout.customizations,
+            [key]: {
+              ...(layout.customizations?.[key] ?? DEFAULT_TAB_CUSTOMIZATION),
+              ...patch,
+            },
+          };
+          return committedLayout({ ...layout, customizations });
+        });
+      },
+
+      createGroup: (ref) => {
+        const layout = layoutFromState(get());
+        const item = findStripItemForRef(layout, ref);
+        if (item === null || itemContainsStructurallyLockedRef(item))
+          return null;
+        const groupId = crypto.randomUUID();
+        const color =
+          TAB_COLORS[
+            Object.keys(layout.groups ?? {}).length % TAB_COLORS.length
+          ].value;
+        set(
+          committedLayout(
+            setLayoutTabGroup(
+              {
+                ...layout,
+                groups: {
+                  ...layout.groups,
+                  [groupId]: { name: "", color, collapsed: false },
+                },
+              },
+              ref,
+              groupId,
+            ),
+          ),
+        );
+        return groupId;
+      },
+
+      setTabGroup: (ref, groupId) => {
+        set((state) => {
+          const layout = layoutFromState(state);
+          const item = findStripItemForRef(layout, ref);
+          if (item === null || itemContainsStructurallyLockedRef(item))
+            return state;
+          return committedLayout(setLayoutTabGroup(layout, ref, groupId));
+        });
+      },
+
+      updateGroup: (groupId, patch) => {
+        set((state) => {
+          const group = state.groups?.[groupId];
+          if (group === undefined) return state;
+          return committedLayout({
+            ...layoutFromState(state),
+            groups: { ...state.groups, [groupId]: { ...group, ...patch } },
+          });
+        });
+      },
+
+      ungroup: (groupId) => {
+        set((state) => {
+          const customizations = Object.fromEntries(
+            Object.entries(state.customizations ?? {}).map(([key, value]) => [
+              key,
+              value.groupId === groupId ? { ...value, groupId: null } : value,
+            ]),
+          );
+          return committedLayout({ ...layoutFromState(state), customizations });
+        });
+      },
+
       repair: () => {
         set((state) => committedLayout(layoutFromState(state)));
       },
@@ -645,6 +749,8 @@ export function readTabStripLayout(): PersistedTabStripLayout {
     activeItemId: state.activeItemId,
     systemTabs: state.systemTabs,
     activationHistory: state.activationHistory,
+    customizations: state.customizations,
+    groups: state.groups,
   };
 }
 

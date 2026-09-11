@@ -48,6 +48,7 @@ const EPIC_TAB: Extract<HeaderTab, { kind: "epic" }> = {
   canClose: true,
   canDuplicate: false,
   canOpenInNewWindow: false,
+  appearance: null,
 };
 
 const noopStreamClientFactory: EpicStreamClientFactory = () => ({

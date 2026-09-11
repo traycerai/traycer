@@ -1005,7 +1005,10 @@ export class TabNavigationController {
         : null;
     }
     if (requested.kind === "new-draft") {
-      return ref.kind === "draft" ? draftTabIntent(ref.id) : null;
+      if (ref.kind !== "draft") return null;
+      if (requested.groupId !== undefined)
+        useTabsStore.getState().setTabGroup(ref, requested.groupId);
+      return draftTabIntent(ref.id);
     }
     if (requested.kind === "open-epic") {
       if (ref.kind !== "epic") return null;

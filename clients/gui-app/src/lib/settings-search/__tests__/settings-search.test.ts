@@ -84,13 +84,13 @@ describe("settings search", () => {
   });
 
   it("finds a row by its exact name", () => {
-    expect(labelsFor("minimap side", DESKTOP)[0]).toBe("Minimap side");
+    expect(labelsFor("minimap side", DESKTOP)[0]).toBe("Minimap position");
   });
 
   it("tolerates a typo", () => {
     // The whole reason this runs through Fuse rather than `includes`.
-    expect(labelsFor("minmap", DESKTOP)[0]).toBe("Minimap side");
-    expect(labelsFor("typograpy", DESKTOP)).toContain("Typography");
+    expect(labelsFor("minmap", DESKTOP)[0]).toBe("Minimap position");
+    expect(labelsFor("typograpy", DESKTOP)).toContain("Fonts and text");
   });
 
   it("finds a setting by a word its label does not contain", () => {

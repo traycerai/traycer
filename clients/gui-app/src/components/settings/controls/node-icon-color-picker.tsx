@@ -28,12 +28,12 @@ export function EpicNodeIconColorPicker(props: ArtifactIconColorPickerProps) {
     <div className="flex w-80 max-w-full flex-col gap-2">
       <div className="flex items-center justify-end gap-2">
         <span className="text-ui-sm text-muted-foreground">
-          Use type colors
+          Color icons by type
         </span>
         <Switch
           checked={enabled}
           onCheckedChange={onEnabledChange}
-          aria-label="Use artifact type colors"
+          aria-label="Color icons by type"
         />
       </div>
       {enabled ? (
@@ -75,7 +75,7 @@ export function EpicNodeIconColorPicker(props: ArtifactIconColorPickerProps) {
               size="sm"
               onClick={onReset}
               disabled={!hasCustomColors}
-              aria-label="Reset artifact icon colors"
+              aria-label="Reset icon colors"
             >
               <RotateCcw className="size-3.5" />
               Reset

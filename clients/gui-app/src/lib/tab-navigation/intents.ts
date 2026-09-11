@@ -99,7 +99,11 @@ export type TabActivationIntent =
       readonly name: string | undefined;
       readonly focus: EpicRouteFocus | undefined;
     }
-  | { readonly kind: "new-draft"; readonly settings: ChatRunSettings | null };
+  | {
+      readonly kind: "new-draft";
+      readonly settings: ChatRunSettings | null;
+      readonly groupId?: string;
+    };
 
 const DEFAULT_EPIC_FOCUS: EpicRouteFocus = {
   focusedAt: undefined,

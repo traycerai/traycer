@@ -59,6 +59,7 @@ import { setSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import type { SystemTabModalApi } from "@/stores/tabs/use-system-tab-modal";
 import { useTabsStore } from "@/stores/tabs/store";
 import type { StripItem, TabStripItem } from "@/stores/tabs/layout";
+import { useThemeLibraryStore } from "@/stores/settings/theme-library-store";
 
 type TerminalListFixture = {
   readonly sessions: ReadonlyArray<CanonicalTerminalSessionInfo>;
@@ -821,6 +822,10 @@ describe("<LandingTerminalPanel />", () => {
 
   afterEach(() => {
     cleanup();
+    useThemeLibraryStore.getState().setAppearancePreference({
+      panelAnimations: true,
+      panelAnimationDuration: 100,
+    });
     useMobileHeaderStore.setState({ rightActionEntries: new Map() });
     focusCleanups.forEach((unregister) => unregister());
     focusCleanups.length = 0;
@@ -4435,6 +4440,44 @@ describe("<LandingTerminalPanel />", () => {
     expect(
       mocks.reconcileXtermHostAfterLayoutTransition,
     ).toHaveBeenCalledOnce();
+    expect(mocks.reconcileXtermHostAfterLayoutTransition).toHaveBeenCalledWith(
+      "tab-1",
+    );
+  });
+
+  it("refits after an instant reopen when panel animations are disabled", async () => {
+    mocks.activeHostId = "host-a";
+    mocks.primaryWorkspacePath = "/workspace/project";
+    mocks.probeData = listWith([runningSession("session-1")], "/Users/dev");
+    useThemeLibraryStore.getState().setAppearancePreference({
+      panelAnimations: false,
+    });
+    useLandingPanelStore.getState().addTab({
+      kind: "terminal",
+      instanceId: "tab-1",
+      sessionId: "session-1",
+      hostId: "host-a",
+      cwd: "/workspace/project",
+      name: "project",
+      titleSource: "default",
+    });
+    useLandingPanelStore
+      .getState()
+      .setPanelWidthFraction(TEST_LANDING_PAGE_ID, 0.42);
+    useLandingPanelStore.getState().setPanelOpen(TEST_LANDING_PAGE_ID, true);
+    render(panelUi());
+
+    const panel = screen.getByTestId("landing-terminal-panel");
+    await flushAnimationFrame();
+    mocks.reconcileXtermHostAfterLayoutTransition.mockClear();
+
+    fireEvent.click(screen.getByTestId("landing-terminal-collapse"));
+    fireEvent.click(screen.getByTestId("landing-terminal-toggle"));
+    await waitFor(() => {
+      expect(panel.style.width).toBe("42%");
+    });
+    await flushAnimationFrame();
+
     expect(mocks.reconcileXtermHostAfterLayoutTransition).toHaveBeenCalledWith(
       "tab-1",
     );
