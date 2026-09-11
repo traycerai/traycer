@@ -1,3 +1,17 @@
+/**
+ * WHICH effects this component mounts, and under which gate.
+ *
+ * Placement only. The record channel's own behaviour across a park - that both
+ * 20s polls really run while the tab is merely hidden and really stop at the
+ * park, observed as `epic.listChatRecords` / `epic.listTuiAgents` frames on a
+ * real transport - lives in `epic-route-record-polls-parking.test.tsx`, which
+ * mounts the REAL hooks. It has to be a separate file because `vi.mock` is
+ * file-scoped: the mocks below are what let this file ask "is the hook mounted
+ * for an INACTIVE pane", and they are exactly what makes a poll unobservable.
+ *
+ * So do not add a claim about polling, refetching or intervals here. A hook
+ * invocation count moves with React re-renders and says nothing about either.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen } from "@testing-library/react";
@@ -7,6 +21,7 @@ import { EpicRouteSessionBody } from "@/components/epic-canvas/epic-route-sessio
 const useInitialChatHandoffMock = vi.hoisted(() => vi.fn());
 const useEpicRouteSynchronizationMock = vi.hoisted(() => vi.fn());
 const useEpicSyncChatRecordsMock = vi.hoisted(() => vi.fn());
+const useEpicSyncTuiAgentRecordsMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/components/epic-canvas/hooks/use-initial-chat-handoff", () => ({
   useInitialChatHandoff: useInitialChatHandoffMock,
@@ -26,11 +41,12 @@ vi.mock("@/hooks/chats/use-epic-chat-records", () => ({
   useEpicSyncChatRecords: useEpicSyncChatRecordsMock,
   invalidateEpicChatRecords: () => undefined,
 }));
-// The terminal-agent twin of the record sync above: same subtree, same
-// reason to stub it - it reaches the session host client, which this
-// harness does not provide.
+// The terminal-agent twin of the record sync above: same subtree, same reason
+// to stub it - it reaches the session host client, which this harness does not
+// provide. Spied rather than a bare no-op, because its PLACEMENT is the same
+// claim as the chat hook's and was previously asserted for neither.
 vi.mock("@/hooks/chats/use-epic-tui-agent-records", () => ({
-  useEpicSyncTuiAgentRecords: () => undefined,
+  useEpicSyncTuiAgentRecords: useEpicSyncTuiAgentRecordsMock,
   invalidateEpicTuiAgentRecords: () => undefined,
 }));
 
@@ -92,6 +108,7 @@ describe("<EpicRouteSessionBody />", () => {
     useInitialChatHandoffMock.mockReset();
     useEpicRouteSynchronizationMock.mockReset();
     useEpicSyncChatRecordsMock.mockReset();
+    useEpicSyncTuiAgentRecordsMock.mockReset();
   });
 
   it("keeps visual state mounted but suppresses route-global effects when inactive", () => {
@@ -104,6 +121,9 @@ describe("<EpicRouteSessionBody />", () => {
     // the sidebar tree and every open tile of a background epic, which would
     // lose their swept chats again if it stopped while another tab is in front.
     expect(useEpicSyncChatRecordsMock).toHaveBeenCalledWith("epic-a");
+    // The terminal-agent record table is mounted beside it and under the same
+    // gate, for the same reason - a background epic keeps its terminal rows.
+    expect(useEpicSyncTuiAgentRecordsMock).toHaveBeenCalledWith("epic-a");
     expect(screen.queryByTestId("epic-migration-modal")).toBeNull();
   });
 

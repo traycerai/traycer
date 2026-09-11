@@ -31,6 +31,10 @@ function createSubscribingClientHarness(): {
   const presented: Array<string | null> = [];
   const closed: number[] = [];
   const client: IHostStreamClient<HostStreamRpcRegistry> = {
+    // The cloud verdict re-key (`IHostStreamClient.notifyCloudVerdictChanged`)
+    // is part of the interface this double stands in for; the handoff never
+    // rotates a verdict, so answering it is a no-op rather than an omission.
+    notifyCloudVerdictChanged() {},
     subscribe(method, params) {
       if (method !== "browser.screencast") unusedClientMethod();
       const index = presented.length;

@@ -24,6 +24,7 @@ import { SessionConnectivityStrip } from "@/components/layout/session-connectivi
 import {
   SESSION_CONNECTIVITY_ANNOUNCE_AFTER_MS,
   SESSION_CONNECTIVITY_POLL_MS,
+  useHostSessionConnectivity,
 } from "@/lib/host/session-connectivity";
 import {
   StreamRuntimeContext,
@@ -66,9 +67,21 @@ function mountStrip(args: {
   return (
     <RunnerHostProvider runnerHost={args.runnerHost}>
       <StreamRuntimeContext value={binding}>
-        <SessionConnectivityStrip />
+        <GatedStrip />
       </StreamRuntimeContext>
     </RunnerHostProvider>
+  );
+}
+
+/**
+ * The shape `AppShell` mounts: the hook reads the verdict, the strip renders
+ * it. The gate under test lives in the HOOK, so it has to run inside the
+ * provider tree here exactly as it does in production - passing a verdict in
+ * from the test would mock away the only thing these cases assert.
+ */
+function GatedStrip(): ReactNode {
+  return (
+    <SessionConnectivityStrip connectivity={useHostSessionConnectivity()} />
   );
 }
 
@@ -143,9 +156,10 @@ describe("the strip across one interruption on a browser shell", () => {
     advance(PAST_ANNOUNCE_MS);
     expect(stripIsShown()).toBe(true);
     const strip = screen.getByTestId("session-connectivity-strip");
-    expect(strip.textContent).toContain("Reconnecting…");
-    // The accessible name still names the CONNECTION, which is what a screen
-    // reader gets: the visible line is deliberately the calmer half.
+    expect(strip.textContent).toContain("Connection interrupted");
+    // Asserted alongside the visible line because the two can drift apart:
+    // the accessible name names the CONNECTION whatever words the visual form
+    // happens to spend, and a screen reader hears only this.
     expect(strip.getAttribute("aria-label")).toBe(
       "Connection interrupted - reconnecting",
     );

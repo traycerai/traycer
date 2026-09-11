@@ -10,6 +10,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useNotificationResolveHostId } from "@/hooks/notifications/use-notification-host";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
+import { NOTIFICATIONS_PARTITIONED_INDICATOR_STATE_MINOR } from "@/lib/notifications/notification-feed-mode";
 import { notificationsQueryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
@@ -116,6 +117,27 @@ export function useHostNotificationIndicators(
       userId === null
         ? undefined
         : notificationsQueryKeys.indicatorIdentity(userId),
+    // Third member of the same class as `clearAll` and `markAllRead`:
+    // `indicatorState` has an EMPTY `downgradePathsFromLatest`, so a peer that
+    // came back below `@1.1` STRIPS `home` and answers 200 with flags computed
+    // over the whole origin - the indicator then claims unread and attention
+    // state for rows the partitioned feed does not show, and the query caches
+    // that as truth.
+    //
+    // The floor rides only a SELECTED request, so a whole-origin indicator
+    // read pays nothing. Refusing costs the refresh, not the data: TanStack
+    // keeps the last good response and retries, so the visible failure is a
+    // stale dot rather than a confidently wrong one.
+    requiredHostMethodVersion: () =>
+      args.home === undefined
+        ? null
+        : {
+            method: "host.notifications.indicatorState",
+            version: {
+              major: 1,
+              minor: NOTIFICATIONS_PARTITIONED_INDICATOR_STATE_MINOR,
+            },
+          },
     options: {
       enabled: args.enabled && userId !== null,
     },

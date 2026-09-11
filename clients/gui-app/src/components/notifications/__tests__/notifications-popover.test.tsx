@@ -77,7 +77,9 @@ const PLAN_ALLOWS_REMOTE = true;
 
 const reconnectEngine = createHostReconnectEngine();
 
-const hostRequestMock = vi.hoisted(() => vi.fn());
+const hostRequestMock = vi.hoisted(() =>
+  vi.fn<(method: string, params: unknown) => Promise<unknown>>(),
+);
 
 /**
  * `createRequesterForHostId` is not optional decoration: production resolves
@@ -88,9 +90,49 @@ const hostRequestMock = vi.hoisted(() => vi.fn());
  */
 interface StubHostClient {
   readonly request: typeof hostRequestMock;
+  /**
+   * The SECOND dispatch signature, and it has to exist here even though every
+   * assertion in this file reads `hostRequestMock`. A call carrying a version
+   * floor does not go through `request` at all - `use-host-query.ts` routes it
+   * to this method instead - so a stub that omits it drops the frame silently:
+   * the mutation rejects with "not a function", `onError` turns that into a
+   * toast, and the call simply never appears. That reads exactly like a
+   * request the subject decided not to send, which is how the mixed-feed
+   * `clearAll` case failed while the production floor was correct.
+   */
+  readonly requestWithSignalRequiringHostMethodVersion: (
+    method: string,
+    params: unknown,
+    signal: AbortSignal | undefined,
+    requirement: {
+      readonly method: string;
+      readonly version: { readonly major: number; readonly minor: number };
+    },
+  ) => Promise<unknown>;
   readonly getActiveHostId: () => string | null;
   readonly createRequesterForHostId: (hostId: string | null) => StubHostClient;
 }
+
+interface RequestedFloor {
+  readonly method: string;
+  readonly version: { readonly major: number; readonly minor: number };
+}
+
+/**
+ * Floors this fixture's host was asked for, so a dropped one is visible rather
+ * than merely absent.
+ *
+ * Typed through the factory's RETURN annotation rather than an `as` assertion
+ * on the literal. `oxlint --fix` strips a redundant-looking assertion here, and
+ * stripping it silently infers `calls: never[]` - which makes every push a type
+ * error and reads as the recorder being wrong rather than the fixer. A return
+ * annotation is not something the fixer has anything to remove.
+ */
+interface FloorsRequested {
+  calls: Array<RequestedFloor>;
+}
+
+const floorsRequested = vi.hoisted((): FloorsRequested => ({ calls: [] }));
 
 const hostBindingState = vi.hoisted(() => ({
   current: null as {
@@ -156,10 +198,20 @@ vi.mock("@/hooks/host/use-host-directory-entry", async (importOriginal) => {
   };
 });
 
-vi.mock("@/lib/notifications/notification-feed-mode", () => ({
-  useNotificationFeedMode: () => notificationFeedMode.value,
-  useNotificationFeedModeSettling: () => false,
-}));
+vi.mock("@/lib/notifications/notification-feed-mode", async (importActual) => {
+  // Spread the real module: production reads the PARTITIONED_* floor constants
+  // from here, and a factory that returns only the two hooks makes every one of
+  // them a missing export - which surfaces as a failed RPC, not as a mock error.
+  const actual =
+    await importActual<
+      typeof import("@/lib/notifications/notification-feed-mode")
+    >();
+  return {
+    ...actual,
+    useNotificationFeedMode: () => notificationFeedMode.value,
+    useNotificationFeedModeSettling: () => false,
+  };
+});
 
 /**
  * Controllable ready-session evidence, the same seam
@@ -593,6 +645,15 @@ function resetPopoverFilters(): void {
 function bindHostClient(): void {
   const hostClient: StubHostClient = {
     request: hostRequestMock,
+    requestWithSignalRequiringHostMethodVersion: (
+      method,
+      params,
+      _signal,
+      requirement,
+    ) => {
+      floorsRequested.calls.push(requirement);
+      return hostRequestMock(method, params);
+    },
     getActiveHostId: () => mockLocalHostEntry.hostId,
     createRequesterForHostId: () => hostClient,
   };
@@ -620,6 +681,15 @@ function simulateHostDisconnect(): void {
   // no host, which is exactly what an unresolved id-pinned requester reports.
   const hostClient: StubHostClient = {
     request: hostRequestMock,
+    requestWithSignalRequiringHostMethodVersion: (
+      method,
+      params,
+      _signal,
+      requirement,
+    ) => {
+      floorsRequested.calls.push(requirement);
+      return hostRequestMock(method, params);
+    },
     getActiveHostId: () => null,
     createRequesterForHostId: () => hostClient,
   };
@@ -717,6 +787,11 @@ describe("NotificationsPopover", () => {
     __resetTabNavigationControllerForTesting();
     hostRequestMock.mockReset();
     hostRequestMock.mockImplementation(defaultHostRequest);
+    // Reset BESIDE the request mock, deliberately. The floor assertion below
+    // reads these two as ONE instrument, and a recorder that outlives the mock
+    // it is joined to is exactly how that assertion first came to be
+    // satisfiable by a previous case's record.
+    floorsRequested.calls.length = 0;
     hostBindingState.current = null;
     vi.mocked(toastFromHostError).mockClear();
     vi.mocked(toast.error).mockClear();
@@ -1265,6 +1340,57 @@ describe("NotificationsPopover", () => {
           .beforeUpdatedAt,
       ).toBeTypeOf("number");
     });
+    // The partitioned clear must also CLAIM its floor. In mixed mode the frame
+    // carries `home: local`, and an `@1.0` peer would strip that and answer a
+    // whole-origin delete - so the floor riding is part of this case's claim,
+    // not incidental. Asserting it here is also what keeps the fixture's
+    // recorder live rather than a stub nothing reads.
+    // Every `clearAll` THIS case dispatched carried the floor - joined to this
+    // case's dispatches rather than read off the recorder alone. The first
+    // version filtered the recorder with no such join, and because the recorder
+    // was a hoisted array with no per-case reset, the preceding cloud-confirm
+    // case's record satisfied it: an assertion that could pass while this case
+    // dispatched nothing FLOORED. (Dispatching nothing at all was never what
+    // this catches - the `hostBeforeUpdatedAtCallParams` wait above throws on
+    // zero clearAll calls before execution ever reaches here.)
+    //
+    // The join is by CARDINALITY, not identity - sound here rather than merely
+    // convenient. The floored stub forwards to `hostRequestMock`, so EVERY
+    // clearAll dispatch lands in `mock.calls` while only floored ones land in
+    // the recorder. Building the expected array from the DISPATCHES therefore
+    // asserts two things at once: that no clearAll went out unfloored, and that
+    // each record is the whole floor. It does NOT claim a particular record
+    // belongs to a particular call; if identity is ever needed, record
+    // `{ method, params, requirement }` tuples from both stub methods instead.
+    //
+    // The record is matched COMPLETE, never on `minor` alone - `minor === 1`
+    // is equally true of `@2.1`, which is a different major and not this floor.
+    //
+    // The count is deliberately not pinned, and the reason is measured rather
+    // than suspected. An earlier version of this assertion was shaped around
+    // having seen two dispatches; instrumenting the assertion to print what it
+    // actually sees gave 2 whole-file pre-fix, 1 for the case in isolation, and
+    // 1 whole-file post-fix. So this gesture dispatches ONCE, and the second
+    // record belonged to the preceding cloud-confirmation case. The residue did
+    // not only make the old assertion borrowable - it supplied the number that
+    // argued for loosening it.
+    const clearAllDispatches = hostRequestMock.mock.calls.filter(
+      (entry) => entry[0] === "host.notifications.clearAll",
+    );
+    const clearAllFloors = floorsRequested.calls.filter(
+      (call) => call.method === "host.notifications.clearAll",
+    );
+    // Belt-and-braces only: the wait above has already established that a
+    // clearAll went out, so this cannot be the thing that catches a silent
+    // case. It is kept so the comparison below can never be satisfied by two
+    // empty arrays should that wait ever move or soften.
+    expect(clearAllDispatches.length).toBeGreaterThan(0);
+    expect(clearAllFloors).toEqual(
+      clearAllDispatches.map(() => ({
+        method: "host.notifications.clearAll",
+        version: { major: 1, minor: 1 },
+      })),
+    );
     expect(useAppLocalNotificationsStore.getState().orderedIds).toHaveLength(0);
   });
 

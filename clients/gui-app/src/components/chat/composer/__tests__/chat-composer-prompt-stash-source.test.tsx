@@ -193,6 +193,7 @@ function useChatPromptStashController(args: {
     readHashImage: () => Promise.resolve(null),
     source,
     destination,
+    hostId: null,
   });
 }
 

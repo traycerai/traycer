@@ -3,6 +3,12 @@ import type { PluginListenerHandle } from "@capacitor/core";
 import type { DeviceFlowResult } from "@traycer-clients/shared/platform/runner-host";
 import { MobileRunnerHost } from "../src/mobile-runner-host";
 import {
+  MobileAuthSheet,
+  type AppUrlOpenSlice,
+  type AuthSessionOpenResult,
+  type AuthSessionPluginSlice,
+} from "../src/auth-sheet";
+import {
   MobilePushRegistration,
   type CapacitorPushPermissionState,
   type PushNotificationAction,
@@ -250,6 +256,7 @@ function runner(returnScheme: string | null): MobileRunnerHost {
     pushRegistration: null,
     openPushSettings: null,
     returnScheme,
+    authSheet: null,
     linkCodeScanner: null,
     deviceDescriber: null,
     linkLoginDeepLinks: null,
@@ -327,6 +334,7 @@ function phoneRunner(input: {
     }),
     openPushSettings: input.openPushSettings,
     returnScheme: "traycer",
+    authSheet: null,
     linkCodeScanner: null,
     deviceDescriber: null,
     linkLoginDeepLinks: null,
@@ -336,6 +344,87 @@ function phoneRunner(input: {
     systemBack: null,
   });
 }
+
+/**
+ * `MobileAuthSheet`'s two native-boundary slices, faked at the package
+ * boundary like `FakePushPlugin` above - plain classes with `vi.fn` spies,
+ * never touching real Capacitor. `MobileAuthSheet` itself is exercised for
+ * real here (its own behavior has a dedicated suite in
+ * `auth-sheet.test.ts`); this file only cares that `MobileRunnerHost` wires
+ * it correctly.
+ */
+class FakeAuthSessionPlugin implements AuthSessionPluginSlice {
+  readonly open = vi.fn(
+    async (options: {
+      readonly url: string;
+      readonly callbackScheme: string;
+    }): Promise<AuthSessionOpenResult> => {
+      void options;
+      return { outcome: "opened" };
+    },
+  );
+  readonly close = vi.fn(async (): Promise<void> => {});
+}
+
+class FakeAppUrlOpenSlice implements AppUrlOpenSlice {
+  private readonly listeners: Array<(event: { readonly url: string }) => void> =
+    [];
+
+  addListener(
+    eventName: "appUrlOpen",
+    listener: (event: { readonly url: string }) => void,
+  ): Promise<PluginListenerHandle> {
+    void eventName;
+    this.listeners.push(listener);
+    return Promise.resolve({ remove: () => Promise.resolve() });
+  }
+
+  /** Fires `appUrlOpen`, as the OS does for an app already running. */
+  fire(url: string): void {
+    for (const listener of [...this.listeners]) {
+      listener({ url });
+    }
+  }
+}
+
+/** Lets a fire-and-forget promise chain (an `addListener` attach) settle. */
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+function runnerWithAuthSheet(
+  authSheet: MobileAuthSheet | null,
+): MobileRunnerHost {
+  return new MobileRunnerHost({
+    signInUrl: "http://localhost:32352/sign-in",
+    authnBaseUrl: "http://localhost:32350",
+    hostLabel: "test-slot",
+    relayBaseUrl: "ws://localhost:8787/attach",
+    fleetHostIds: null,
+    pushRegistration: null,
+    openPushSettings: null,
+    returnScheme: "traycer",
+    authSheet,
+    linkCodeScanner: null,
+    deviceDescriber: null,
+    linkLoginDeepLinks: null,
+    fileSave: null,
+    canCopyImages: true,
+    hasAppTabs: true,
+    systemBack: null,
+  });
+}
+
+const DEVICE_AUTHORIZE_RESPONSE = {
+  device_code: "device-code",
+  user_code: "ABCDE-FGHIJ",
+  verification_uri: "https://app.traycer.test/device",
+  verification_uri_complete:
+    "https://app.traycer.test/device?user_code=ABCDE-FGHIJ",
+  expires_in: 600,
+  interval: 1,
+};
 
 describe("MobileRunnerHost", () => {
   beforeEach(() => {
@@ -1810,6 +1899,375 @@ describe("MobileRunnerHost", () => {
       await expect(pushPermission.openSettings()).rejects.toThrow(
         "the OS refused",
       );
+    });
+  });
+
+  describe("in-app auth sheet", () => {
+    it("goes to AppLauncher.openUrl when authSheet is null - existing behavior", async () => {
+      const host = runnerWithAuthSheet(null);
+
+      await host.openExternalLink("https://example.com/whatever");
+
+      expect(nativeMocks.browserOpen).toHaveBeenCalledWith({
+        url: "https://example.com/whatever",
+      });
+    });
+
+    it("goes to AppLauncher.openUrl and never opens the sheet when there is no live device attempt", async () => {
+      const plugin = new FakeAuthSessionPlugin();
+      const app = new FakeAppUrlOpenSlice();
+      const sheet = new MobileAuthSheet(plugin, app, "traycer");
+      const host = runnerWithAuthSheet(sheet);
+
+      await host.openExternalLink(
+        "https://app.traycer.test/device?user_code=ABCDE-FGHIJ",
+      );
+
+      expect(plugin.open).not.toHaveBeenCalled();
+      expect(nativeMocks.browserOpen).toHaveBeenCalledWith({
+        url: "https://app.traycer.test/device?user_code=ABCDE-FGHIJ",
+      });
+    });
+
+    it("opens the sheet with the live verification URL and callbackScheme once a device attempt is in flight, and leaves other URLs to the browser", async () => {
+      const fetchMock = vi.fn<typeof fetch>();
+      fetchMock
+        .mockResolvedValueOnce(Response.json(DEVICE_AUTHORIZE_RESPONSE))
+        // Kept pending for the rest of the test so the attempt stays live.
+        .mockResolvedValue(new Response(null, { status: 428 }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const plugin = new FakeAuthSessionPlugin();
+      const app = new FakeAppUrlOpenSlice();
+      const sheet = new MobileAuthSheet(plugin, app, "traycer");
+      const host = runnerWithAuthSheet(sheet);
+
+      const session = await host.deviceFlow.start();
+      expect(session).not.toBeNull();
+      if (session === null) return;
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+      await host.openExternalLink(
+        session.authorization.verificationUriComplete,
+      );
+
+      expect(plugin.open).toHaveBeenCalledTimes(1);
+      expect(plugin.open).toHaveBeenCalledWith({
+        url: session.authorization.verificationUriComplete,
+        callbackScheme: "traycer",
+      });
+      expect(nativeMocks.browserOpen).not.toHaveBeenCalled();
+
+      nativeMocks.browserOpen.mockClear();
+      await host.openExternalLink("https://example.com/something-else");
+      expect(plugin.open).toHaveBeenCalledTimes(1);
+      expect(nativeMocks.browserOpen).toHaveBeenCalledWith({
+        url: "https://example.com/something-else",
+      });
+
+      session.cancel();
+    });
+
+    it("falls back to AppLauncher.openUrl with the same url when the sheet's open rejects", async () => {
+      const fetchMock = vi.fn<typeof fetch>();
+      fetchMock
+        .mockResolvedValueOnce(Response.json(DEVICE_AUTHORIZE_RESPONSE))
+        .mockResolvedValue(new Response(null, { status: 428 }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const plugin = new FakeAuthSessionPlugin();
+      plugin.open.mockRejectedValue(new Error("OS refused to present"));
+      const app = new FakeAppUrlOpenSlice();
+      const sheet = new MobileAuthSheet(plugin, app, "traycer");
+      const host = runnerWithAuthSheet(sheet);
+
+      const session = await host.deviceFlow.start();
+      expect(session).not.toBeNull();
+      if (session === null) return;
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+      await host.openExternalLink(
+        session.authorization.verificationUriComplete,
+      );
+
+      expect(nativeMocks.browserOpen).toHaveBeenCalledWith({
+        url: session.authorization.verificationUriComplete,
+      });
+
+      session.cancel();
+    });
+
+    it("onAuthCallback fires when the sheet's own completion resolves callback", async () => {
+      const plugin = new FakeAuthSessionPlugin();
+      plugin.open.mockResolvedValue({ outcome: "callback" });
+      const app = new FakeAppUrlOpenSlice();
+      const sheet = new MobileAuthSheet(plugin, app, "traycer");
+      const host = runnerWithAuthSheet(sheet);
+      const callbacks: number[] = [];
+      const subscription = host.onAuthCallback(() => callbacks.push(1));
+
+      await expect(sheet.open("https://app.traycer.test/device")).resolves.toBe(
+        true,
+      );
+
+      expect(callbacks).toEqual([1]);
+      subscription.dispose();
+    });
+
+    it("onAuthCallback fires when the fake app slice emits appUrlOpen for the return link", async () => {
+      const plugin = new FakeAuthSessionPlugin();
+      const app = new FakeAppUrlOpenSlice();
+      const sheet = new MobileAuthSheet(plugin, app, "traycer");
+      const host = runnerWithAuthSheet(sheet);
+      const callbacks: number[] = [];
+      const subscription = host.onAuthCallback(() => callbacks.push(1));
+      await flushMicrotasks();
+
+      app.fire("traycer://auth/callback");
+
+      expect(callbacks).toEqual([1]);
+      subscription.dispose();
+    });
+
+    it("stops firing after dispose - neither the sheet completion nor appUrlOpen reaches it", async () => {
+      const plugin = new FakeAuthSessionPlugin();
+      plugin.open.mockResolvedValue({ outcome: "callback" });
+      const app = new FakeAppUrlOpenSlice();
+      const sheet = new MobileAuthSheet(plugin, app, "traycer");
+      const host = runnerWithAuthSheet(sheet);
+      const callbacks: number[] = [];
+      const subscription = host.onAuthCallback(() => callbacks.push(1));
+      await flushMicrotasks();
+
+      subscription.dispose();
+
+      await sheet.open("https://app.traycer.test/device");
+      app.fire("traycer://auth/callback");
+
+      expect(callbacks).toEqual([]);
+    });
+
+    it("closes the sheet when the device poll settles authorized", async () => {
+      const fetchMock = vi.fn<typeof fetch>();
+      fetchMock
+        .mockResolvedValueOnce(Response.json(DEVICE_AUTHORIZE_RESPONSE))
+        // Kept pending until the sheet is opened, then the authorized poll.
+        .mockResolvedValueOnce(new Response(null, { status: 428 }))
+        .mockResolvedValueOnce(
+          Response.json({
+            token: "access-token",
+            refreshToken: "refresh-token",
+          }),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const plugin = new FakeAuthSessionPlugin();
+      const app = new FakeAppUrlOpenSlice();
+      const sheet = new MobileAuthSheet(plugin, app, "traycer");
+      const host = runnerWithAuthSheet(sheet);
+
+      const session = await host.deviceFlow.start();
+      expect(session).not.toBeNull();
+      if (session === null) return;
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+      // Drive the sheet open first, so `presented` is true when the poll
+      // settles - close() is now a no-op unless a sheet this object opened
+      // may still be up.
+      await host.openExternalLink(
+        session.authorization.verificationUriComplete,
+      );
+      expect(plugin.open).toHaveBeenCalledTimes(1);
+
+      const result = new Promise<DeviceFlowResult>((resolve) => {
+        session.onResult(resolve);
+      });
+      session.pollNow();
+
+      await expect(result).resolves.toEqual({
+        kind: "authorized",
+        token: "access-token",
+        refreshToken: "refresh-token",
+      });
+      expect(plugin.close).toHaveBeenCalledTimes(1);
+    });
+
+    it("closes the sheet when the device poll settles expired", async () => {
+      const fetchMock = vi.fn<typeof fetch>();
+      fetchMock
+        .mockResolvedValueOnce(Response.json(DEVICE_AUTHORIZE_RESPONSE))
+        .mockResolvedValueOnce(new Response(null, { status: 428 }))
+        .mockResolvedValueOnce(
+          Response.json({ error: "expired" }, { status: 400 }),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const plugin = new FakeAuthSessionPlugin();
+      const app = new FakeAppUrlOpenSlice();
+      const sheet = new MobileAuthSheet(plugin, app, "traycer");
+      const host = runnerWithAuthSheet(sheet);
+
+      const session = await host.deviceFlow.start();
+      expect(session).not.toBeNull();
+      if (session === null) return;
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+      await host.openExternalLink(
+        session.authorization.verificationUriComplete,
+      );
+      expect(plugin.open).toHaveBeenCalledTimes(1);
+
+      const result = new Promise<DeviceFlowResult>((resolve) => {
+        session.onResult(resolve);
+      });
+      session.pollNow();
+
+      await expect(result).resolves.toEqual({ kind: "expired" });
+      expect(plugin.close).toHaveBeenCalledTimes(1);
+    });
+
+    it("closes the sheet when the session is cancelled after opening", async () => {
+      const fetchMock = vi.fn<typeof fetch>();
+      fetchMock
+        .mockResolvedValueOnce(Response.json(DEVICE_AUTHORIZE_RESPONSE))
+        // Kept pending for the rest of the test so the attempt stays live.
+        .mockResolvedValue(new Response(null, { status: 428 }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const plugin = new FakeAuthSessionPlugin();
+      const app = new FakeAppUrlOpenSlice();
+      const sheet = new MobileAuthSheet(plugin, app, "traycer");
+      const host = runnerWithAuthSheet(sheet);
+
+      const session = await host.deviceFlow.start();
+      expect(session).not.toBeNull();
+      if (session === null) return;
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+      await host.openExternalLink(
+        session.authorization.verificationUriComplete,
+      );
+      expect(plugin.open).toHaveBeenCalledTimes(1);
+
+      session.cancel();
+
+      expect(plugin.close).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not close the sheet when the device poll settles denied", async () => {
+      const fetchMock = vi.fn<typeof fetch>();
+      fetchMock
+        .mockResolvedValueOnce(Response.json(DEVICE_AUTHORIZE_RESPONSE))
+        // Kept pending until the sheet is opened, then the denied poll.
+        .mockResolvedValueOnce(new Response(null, { status: 428 }))
+        .mockResolvedValueOnce(
+          Response.json({ error: "access_denied" }, { status: 400 }),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const plugin = new FakeAuthSessionPlugin();
+      const app = new FakeAppUrlOpenSlice();
+      const sheet = new MobileAuthSheet(plugin, app, "traycer");
+      const host = runnerWithAuthSheet(sheet);
+
+      const session = await host.deviceFlow.start();
+      expect(session).not.toBeNull();
+      if (session === null) return;
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+      // Drive the sheet open first, so `presented` is true when the poll
+      // settles - close() is now a no-op unless a sheet this object opened
+      // may still be up.
+      await host.openExternalLink(
+        session.authorization.verificationUriComplete,
+      );
+      expect(plugin.open).toHaveBeenCalledTimes(1);
+
+      const result = new Promise<DeviceFlowResult>((resolve) => {
+        session.onResult(resolve);
+      });
+      session.pollNow();
+
+      await expect(result).resolves.toEqual({ kind: "denied" });
+      expect(plugin.close).not.toHaveBeenCalled();
+    });
+
+    it("goes to AppLauncher.openUrl and does not reopen the sheet once the poll has settled authorized", async () => {
+      const fetchMock = vi.fn<typeof fetch>();
+      fetchMock
+        .mockResolvedValueOnce(Response.json(DEVICE_AUTHORIZE_RESPONSE))
+        .mockResolvedValueOnce(new Response(null, { status: 428 }))
+        .mockResolvedValueOnce(
+          Response.json({
+            token: "access-token",
+            refreshToken: "refresh-token",
+          }),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const plugin = new FakeAuthSessionPlugin();
+      const app = new FakeAppUrlOpenSlice();
+      const sheet = new MobileAuthSheet(plugin, app, "traycer");
+      const host = runnerWithAuthSheet(sheet);
+
+      const session = await host.deviceFlow.start();
+      expect(session).not.toBeNull();
+      if (session === null) return;
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+      const result = new Promise<DeviceFlowResult>((resolve) => {
+        session.onResult(resolve);
+      });
+      session.pollNow();
+      await expect(result).resolves.toEqual({
+        kind: "authorized",
+        token: "access-token",
+        refreshToken: "refresh-token",
+      });
+
+      // The session settled - isLive is now false, so this URL is no longer
+      // the live verification URL and must fall through to the browser.
+      await host.openExternalLink(
+        session.authorization.verificationUriComplete,
+      );
+
+      expect(plugin.open).not.toHaveBeenCalled();
+      expect(nativeMocks.browserOpen).toHaveBeenCalledWith({
+        url: session.authorization.verificationUriComplete,
+      });
+    });
+
+    it("goes to AppLauncher.openUrl and does not open the sheet once the session was cancelled", async () => {
+      const fetchMock = vi.fn<typeof fetch>();
+      fetchMock
+        .mockResolvedValueOnce(Response.json(DEVICE_AUTHORIZE_RESPONSE))
+        // Kept pending for the rest of the test so the attempt would stay
+        // live if not for the cancel below.
+        .mockResolvedValue(new Response(null, { status: 428 }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const plugin = new FakeAuthSessionPlugin();
+      const app = new FakeAppUrlOpenSlice();
+      const sheet = new MobileAuthSheet(plugin, app, "traycer");
+      const host = runnerWithAuthSheet(sheet);
+
+      const session = await host.deviceFlow.start();
+      expect(session).not.toBeNull();
+      if (session === null) return;
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+      session.cancel();
+
+      // The session is cancelled - isLive is now false, so this URL is no
+      // longer the live verification URL and must fall through to the browser.
+      await host.openExternalLink(
+        session.authorization.verificationUriComplete,
+      );
+
+      expect(plugin.open).not.toHaveBeenCalled();
+      expect(nativeMocks.browserOpen).toHaveBeenCalledWith({
+        url: session.authorization.verificationUriComplete,
+      });
     });
   });
 });

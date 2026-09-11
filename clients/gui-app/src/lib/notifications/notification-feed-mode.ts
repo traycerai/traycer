@@ -20,6 +20,38 @@ export type NotificationFeedMode = "local" | "cloud" | "upgrade-required";
 const NO_HOST_IDS: readonly string[] = [];
 
 /**
+ * The versions that understand `home: "local"`, for every method whose older
+ * peer STRIPS the selector instead of refusing it - which is all four.
+ *
+ * Named because TWO gates spend each of them and they must not drift: the
+ * mixed-mode admission below, which decides whether the renderer offers the
+ * partitioned feed at all, and the dispatch floors in `merged-notifications`
+ * and the indicator query, which decide whether one selector-bearing frame may
+ * land on the process that is actually there when it is written. A number
+ * inlined twice is how those two answers diverge.
+ *
+ * `list` was once excluded here on the grounds that
+ * `hostNotificationsListDowngradeV22ToV10` REFUSES a request carrying `home`,
+ * so an older peer would fail loudly. That reading was wrong, and the way it
+ * was wrong generalises: a downgrade path bridges MAJORS. A SAME-major minor
+ * rollback never reaches one. `ws-rpc-client.ts` projects the params straight
+ * through the older MINOR's own schema
+ * (`olderEntry.contract.requestSchema.safeParse`), and every list line below
+ * `@2.2` is a plain `z.object`, so the parse SUCCEEDS with `home` stripped and
+ * the peer answers 200 over the whole origin. Only a `.strict()` line (which
+ * is why `host.usage.summary` needed a major) makes that parse fail.
+ *
+ * So the test for membership is "does the older MINOR's schema strip it",
+ * never "is there a refusing downgrade". The cross-major refusal is a control
+ * that proves the loud path exists; it is not an exclusion.
+ */
+export const NOTIFICATIONS_PARTITIONED_LIST_MAJOR = 2;
+export const NOTIFICATIONS_PARTITIONED_LIST_MINOR = 2;
+export const NOTIFICATIONS_PARTITIONED_CLEAR_ALL_MINOR = 1;
+export const NOTIFICATIONS_PARTITIONED_MARK_ALL_READ_MINOR = 1;
+export const NOTIFICATIONS_PARTITIONED_INDICATOR_STATE_MINOR = 1;
+
+/**
  * Whether a negotiated UNARY version meets a floor on its own major line.
  *
  * Both non-version states answer `false`, and the difference between them does
@@ -182,18 +214,37 @@ export function useHeldNotificationFeedMode(
  * origin summaries; selecting both there would double-count replicas. In that
  * case local remains the single safe view until the host upgrades.
  *
- * FIVE methods are consulted, across BOTH transports, because RPC versions are
- * negotiated per method and the two stream minors do not imply the three unary
+ * SIX methods are consulted, across BOTH transports, because RPC versions are
+ * negotiated per method and the two stream minors do not imply the four unary
  * ones. Mixed mode is not only a subscription choice: it makes
  * `useMergedNotificationsActions` send `home: "local"` as a partition selector
- * on `host.notifications.list` and `host.notifications.markAllRead`, and
- * `useNotificationIndicators` send it on `host.notifications.indicatorState`.
- * A host below `list@2.2` / `markAllRead@1.1` / `indicatorState@1.1` parses
- * those requests against its frozen schema and STRIPS that selector, so
- * pagination merges whole-origin cloud replicas into the cloud lane, mark-all
- * reaches cloud-home rows the user never saw, and the indicator flags answer
- * for the whole origin. Selecting mixed mode on the stream minors alone is what
+ * on `host.notifications.list`, `host.notifications.markAllRead` and
+ * `host.notifications.clearAll`, and `useNotificationIndicators` send it on
+ * `host.notifications.indicatorState`.
+ * A host below `list@2.2` / `markAllRead@1.1` / `clearAll@1.1` /
+ * `indicatorState@1.1` parses those requests against its frozen schema and
+ * STRIPS that selector, so pagination merges whole-origin cloud replicas into
+ * the cloud lane, mark-all reaches cloud-home rows the user never saw, the
+ * indicator flags answer for the whole origin - and clear-all DELETES the
+ * whole origin. Selecting mixed mode on the stream minors alone is what
  * makes an unsupported selector look accepted.
+ *
+ * This floor is checked at RENDER, which closes the interval the renderer can
+ * OBSERVE and not the one that matters at send. A host process can be replaced
+ * between a settled render and the frame leaving - the gap
+ * `use-host-query.ts` documents for `epic.create` - so `clearAll` additionally
+ * carries {@link NOTIFICATIONS_PARTITIONED_CLEAR_ALL_MINOR} as a dispatch-bound
+ * floor answered by the handshake of the connection carrying the frame. Same
+ * number, two places, because they answer different questions: this one
+ * decides whether to OFFER mixed mode, that one decides whether this
+ * particular selector-bearing frame may LAND.
+ *
+ * `clearAll@1.1` is the least recoverable of the four and shipped a minor
+ * after its siblings, which is precisely how it was missed: a mixed-mode
+ * renderer was already sending `home: "local"` on the other three, so the feed
+ * it was LOOKING AT was the local partition, while its clear silently took
+ * everything. Like `indicatorState`, its selector is an optional field rather
+ * than a refusing downgrade, so an `@1.0` peer drops it and answers 200.
  *
  * `indicatorState` is the quietest of the three and the reason this floor is
  * checked HERE rather than left to the wire. `list@2.2` refuses its own
@@ -237,6 +288,10 @@ export function useNotificationFeedModeFor(
     partitionHostIds,
     "host.notifications.markAllRead",
   );
+  const clearAllVersions = useHostNegotiatedMethodVersions(
+    partitionHostIds,
+    "host.notifications.clearAll",
+  );
   const indicatorStateVersions = useHostNegotiatedMethodVersions(
     partitionHostIds,
     "host.notifications.indicatorState",
@@ -258,24 +313,36 @@ export function useNotificationFeedModeFor(
     cloudFeedVersion?.major === 1 && cloudFeedVersion.minor >= 2;
   const hasLocalProjection =
     localFeedVersion?.major === 1 && localFeedVersion.minor >= 2;
-  const hasPartitionedList = meetsHostFloor(listVersions, hostId, 2, 2);
+  const hasPartitionedList = meetsHostFloor(
+    listVersions,
+    hostId,
+    NOTIFICATIONS_PARTITIONED_LIST_MAJOR,
+    NOTIFICATIONS_PARTITIONED_LIST_MINOR,
+  );
   const hasPartitionedMarkAllRead = meetsHostFloor(
     markAllReadVersions,
     hostId,
     1,
+    NOTIFICATIONS_PARTITIONED_MARK_ALL_READ_MINOR,
+  );
+  const hasPartitionedClearAll = meetsHostFloor(
+    clearAllVersions,
+    hostId,
     1,
+    NOTIFICATIONS_PARTITIONED_CLEAR_ALL_MINOR,
   );
   const hasPartitionedIndicatorState = meetsHostFloor(
     indicatorStateVersions,
     hostId,
     1,
-    1,
+    NOTIFICATIONS_PARTITIONED_INDICATOR_STATE_MINOR,
   );
   return cloudFeedSupport === "supported" &&
     hasCloudProjection &&
     hasLocalProjection &&
     hasPartitionedList &&
     hasPartitionedMarkAllRead &&
+    hasPartitionedClearAll &&
     hasPartitionedIndicatorState
     ? "cloud"
     : "local";

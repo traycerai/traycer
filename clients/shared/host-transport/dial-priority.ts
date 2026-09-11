@@ -1,14 +1,19 @@
 /**
  * Which host sockets the dial gate (`ws-dial-gate.ts`) lets through first.
  *
- * Two values rather than a numeric rank: the gate's only decision is which
- * queue to drain next, and a number invites per-call-site tuning that nothing
- * can verify. `"background"` is a claim about the METHOD - "no rendered
- * surface is waiting on this call" - not about the moment it happens to be
- * issued in, which is why the table below is keyed by method name and lives in
- * one place instead of being threaded through the call sites.
+ * The type itself is declared in `@traycer/protocol/host-transport/dial-priority`,
+ * because it parameterizes the socket factory interfaces the runtime-neutral
+ * remote session core dials through. Re-exported here so this module stays the
+ * one import site for everything dial-priority in the client.
+ *
+ * The table below is the POLICY half, and it stays client-side: it is keyed by
+ * method name - a claim about the METHOD, "no rendered surface is waiting on
+ * this call", not about the moment it happens to be issued in - and it is
+ * drawn from renderer boot measurements that mean nothing to the other peer.
  */
-export type DialPriority = "interactive" | "background";
+import type { DialPriority } from "@traycer/protocol/host-transport/dial-priority";
+
+export type { DialPriority };
 
 /**
  * The methods that may wait.

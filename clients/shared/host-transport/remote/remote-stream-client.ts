@@ -72,6 +72,11 @@ export class RemoteStreamClient<
     this.session.notifyBearerRotated();
   }
 
+  /** Pushes the current cloud verdict in place if the host supports it. */
+  notifyCloudVerdictChanged(): void {
+    this.session.notifyCloudVerdictChanged();
+  }
+
   isClosed(): boolean {
     return this.session.isClosed();
   }

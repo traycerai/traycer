@@ -51,6 +51,7 @@ import {
 import { useEpicBatchDelete } from "@/hooks/epic/use-epic-batch-delete-mutation";
 import { useTaskDeleteWorktreeCandidates } from "@/hooks/epic/use-task-delete-worktree-candidates-query";
 import { useEpicUpdateTitle } from "@/hooks/epic/use-epic-title-mutation";
+import { useEpicPinLocalHomeSupported } from "@/hooks/epic/use-epic-pin-local-home-support";
 import {
   useEpicSetPinned,
   usePendingSetPinnedEpicIds,
@@ -79,16 +80,11 @@ import {
 import { EpicsFilterPopover } from "@/components/epics/epics-filter-popover";
 import {
   EpicsListChatHostFilterUnsupported,
-  EpicsListCloudPagePending,
-  EpicsListCloudPageUnavailable,
-  EpicsListEmpty,
   EpicsListError,
-  EpicsListFilteredEmpty,
-  EpicsListFilteringLoading,
   EpicsListHostRequiresCloudToList,
   EpicsListLoading,
+  EpicsListNoRows,
   EpicsListShowMore,
-  HistoryCompletenessNotice,
   HistoryRowLeadingIcon,
 } from "@/components/epics/epics-list-shared";
 import {
@@ -102,6 +98,7 @@ import { useHistoryOpenItem } from "@/components/epics/use-history-open-item";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useChatHostFilterSupport } from "@/hooks/home/use-chat-host-filter-support";
 import { EpicsSortMenu } from "@/components/epics/epics-sort-menu";
+import { HistoryDraftsList } from "@/components/epics/history-drafts-list";
 import { useHistoryListKeyboardNav } from "@/components/epics/use-history-list-keyboard-nav";
 import { ImportedUnseenDot } from "@/components/session-import/imported-unseen-dot";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
@@ -123,9 +120,9 @@ import {
   authorizesCloudCapability,
   useAuthStore,
 } from "@/stores/auth/auth-store";
-import type {
-  HistorySearchPatch,
-  HistorySearchState,
+import {
+  type HistorySearchPatch,
+  type HistorySearchState,
 } from "@/lib/history-search";
 import type { WorktreeHostEntryV12 } from "@traycer/protocol/host/worktree-schemas";
 import { WorktreePrPills } from "@/components/worktree/worktree-pr-metadata";
@@ -310,10 +307,10 @@ function historyPanelView(
     availableWorkspaces: data.availableWorkspaces,
     facets: data.facets,
     // `?? null` rather than a straight read: `completeness` is declared
-    // non-optional but arrives absent from partial fixtures, and the notice
+    // non-optional but arrives absent from partial fixtures, and the body
     // below dereferences it. The previous `data?.completeness ?? null` carried
     // that same coercion, so dropping it turned an omitted field into a render
-    // crash rather than a missing notice.
+    // crash.
     completeness: data.completeness ?? null,
   };
 }
@@ -414,9 +411,31 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
   const pendingSetPinnedEpicIds = usePendingSetPinnedEpicIds();
   const handleSetPinned = useCallback(
     (epicId: string, pinned: boolean) => {
-      setPinned({ epicId, pinned });
+      // Resolved HERE rather than widened into `onSetPinned`, which is
+      // declared in seven places across the desktop rows, the mobile row and
+      // both list shells. The row that rendered the control came out of this
+      // same array, so this is the reading it decided availability from, not a
+      // second derivation - and a row missing from it (an id from a stale
+      // control) reads cloud-homed, which lands on the verdict gate.
+      const isLocalHome =
+        items.find((item) => item.epicId === epicId)?.isLocalHome === true;
+      // `hostId: null` - follow the window - and here that is CORRECT by
+      // construction rather than a shortfall. History takes `isLocalHome` from
+      // `useEpicGetTaskContexts`, which dispatches on a SINGLE client
+      // (`useHostClient()`, the window's host) and merges `localHomedTaskIds`
+      // only across that host's own request chunks. So every id in that set is
+      // local-homed ON THE WINDOW'S HOST, and following the window sends the
+      // write to exactly the host that reported the row local-homed.
+      //
+      // An epic local-homed on a DIFFERENT host cannot arrive here down this
+      // arm at all: the window's host does not own it, so it never enters
+      // `localHomedTaskIds`, `isLocalHome` is false, and the row takes the
+      // cloud path every host proxies. The tab strip needs an explicit host
+      // because its readings DO span hosts (one per open tab's session); this
+      // surface's do not.
+      setPinned({ epicId, pinned, isLocalHome, hostId: null });
     },
-    [setPinned],
+    [items, setPinned],
   );
 
   const {
@@ -679,6 +698,8 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
             isFetching={isFetching}
             focusOnMount={props.autoFocusSearch}
             placement="page"
+            placeholder="Search by title, repo, branch, or PR"
+            ariaLabel="Search tasks"
           />
         ) : null}
         <PanelChromeBar
@@ -694,6 +715,8 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
                 isFetching={isFetching}
                 focusOnMount={props.autoFocusSearch}
                 placement="toolbar"
+                placeholder="Search by title, repo, branch, or PR"
+                ariaLabel="Search tasks"
               />
             ) : null
           }
@@ -743,40 +766,45 @@ function EpicsListPanelBody(props: EpicsListPanelBodyProps): ReactNode {
           refresh={{ isFetching, hostId, onRefetch: refetch }}
         />
         <NotificationIndicatorsProvider indicators={notificationIndicators}>
-          <HistoryListBody
-            variant={variant}
-            error={error}
-            isPending={isPending}
-            isFetching={isFetching}
-            hasActiveFilters={hasActiveFilters}
-            chatHostFilterUnsupported={chatHostFilterUnsupported}
-            hostRequiresCloudToList={hostRequiresCloudToList}
-            items={items}
-            onRetry={handleRetry}
-            selectionMode={selectionMode}
-            selectionEnabled={selectionEnabled}
-            selectedIds={selectedIds}
-            onToggleSelection={toggleSelection}
-            onRequestDelete={requestDelete}
-            onRequestSweep={requestSweep}
-            onSetPinned={handleSetPinned}
-            pendingSetPinnedEpicIds={pendingSetPinnedEpicIds}
-            hasNextPage={hasNextPage}
-            isFetchingNextPage={isFetchingNextPage}
-            onLoadMore={fetchNextPage}
-            onSelectEpic={onSelectEpic}
-            onOpenItem={onOpenItem}
-            onOpenInNewWindow={openInNewWindowFlow.requestOpen}
-            openInNewWindowAvailable={openInNewWindowFlow.isAvailable}
-            worktreesByEpicId={worktreesByEpicId}
-            surfaceHostId={hostId}
-            openEpicIds={openEpicIdSet}
-            completeness={view.completeness}
-            cloudPagePending={cloudPagePending}
-            rowsScopeRef={rowsScopeRef}
-            onRowKeyDown={keyboardNav.onRowKeyDown}
-            onRefresh={refreshHistory}
-          />
+          <>
+            {variant === "picker" ? null : (
+              <HistoryDraftsList hostId={hostId} onBeforeOpen={onSelectEpic} />
+            )}
+            <HistoryListBody
+              variant={variant}
+              error={error}
+              isPending={isPending}
+              isFetching={isFetching}
+              hasActiveFilters={hasActiveFilters}
+              chatHostFilterUnsupported={chatHostFilterUnsupported}
+              hostRequiresCloudToList={hostRequiresCloudToList}
+              items={items}
+              onRetry={handleRetry}
+              selectionMode={selectionMode}
+              selectionEnabled={selectionEnabled}
+              selectedIds={selectedIds}
+              onToggleSelection={toggleSelection}
+              onRequestDelete={requestDelete}
+              onRequestSweep={requestSweep}
+              onSetPinned={handleSetPinned}
+              pendingSetPinnedEpicIds={pendingSetPinnedEpicIds}
+              hasNextPage={hasNextPage}
+              isFetchingNextPage={isFetchingNextPage}
+              onLoadMore={fetchNextPage}
+              onSelectEpic={onSelectEpic}
+              onOpenItem={onOpenItem}
+              onOpenInNewWindow={openInNewWindowFlow.requestOpen}
+              openInNewWindowAvailable={openInNewWindowFlow.isAvailable}
+              worktreesByEpicId={worktreesByEpicId}
+              surfaceHostId={hostId}
+              openEpicIds={openEpicIdSet}
+              completeness={view.completeness}
+              cloudPagePending={cloudPagePending}
+              rowsScopeRef={rowsScopeRef}
+              onRowKeyDown={keyboardNav.onRowKeyDown}
+              onRefresh={refreshHistory}
+            />
+          </>
         </NotificationIndicatorsProvider>
       </section>
       <DeleteTasksDialog
@@ -860,6 +888,8 @@ interface PanelSearchInputProps {
   readonly isFetching: boolean;
   readonly focusOnMount: boolean;
   readonly placement: "page" | "toolbar";
+  readonly placeholder: string;
+  readonly ariaLabel: string;
 }
 
 function PanelSearchInput(props: PanelSearchInputProps): ReactNode {
@@ -905,8 +935,8 @@ function PanelSearchInput(props: PanelSearchInputProps): ReactNode {
             props.onChange(event.target.value);
           }}
           onKeyDown={props.onKeyDown}
-          placeholder="Search by title, repo, branch, or PR"
-          aria-label="Search tasks"
+          placeholder={props.placeholder}
+          aria-label={props.ariaLabel}
         />
         {props.value.length > 0 ? (
           <InputGroupAddon align="inline-end">
@@ -1358,58 +1388,21 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
   if (chatHostFilterUnsupported) {
     return <EpicsListChatHostFilterUnsupported />;
   }
-  // Every "there are no rows" reading, grouped under the one test they share.
-  // Ordering inside is load-bearing and unchanged; nesting only stops each arm
-  // from re-asking `items.length === 0`, and lets the last arm drop its
-  // `hasActiveFilters` re-test - the arm above it returns whenever that is
-  // false, so reaching the last one already means it is true.
+  // Every "there are no rows" reading, decided once for both responsive bodies
+  // in `EpicsListNoRows` - the ordering there is load-bearing.
   if (items.length === 0) {
-    // A pending local-first page is a renderable device snapshot, not a settled
-    // account result. Keep the distinct state ahead of every empty branch so an
-    // empty mirror never becomes the definitive "No tasks yet" claim.
-    if (cloudPagePending) {
-      return (
-        <>
-          <HistoryCompletenessNotice
-            completeness={completeness}
-            cloudPagePending={cloudPagePending}
-          />
-          <EpicsListCloudPagePending />
-        </>
-      );
-    }
-    if (!hasActiveFilters) {
-      // The notice renders HERE too, and this is the case it matters most for:
-      // an empty History with no explanation is the strongest possible claim of
-      // completeness, and it is the one a suppressed local projection or an
-      // unreachable cloud page produces. With NO cloud page the body must not
-      // make that claim either: zero local rows is not evidence of an empty
-      // account.
-      return (
-        <>
-          <HistoryCompletenessNotice
-            completeness={completeness}
-            cloudPagePending={cloudPagePending}
-          />
-          {completeness?.cloudPage === "unavailable" ? (
-            <EpicsListCloudPageUnavailable />
-          ) : (
-            <EpicsListEmpty />
-          )}
-        </>
-      );
-    }
-    if (isFetching) {
-      return (
-        <>
-          <HistoryCompletenessNotice
-            completeness={completeness}
-            cloudPagePending={cloudPagePending}
-          />
-          <EpicsListFilteringLoading />
-        </>
-      );
-    }
+    return (
+      <EpicsListNoRows
+        cloudPagePending={cloudPagePending}
+        cloudPageUnavailable={completeness?.cloudPage === "unavailable"}
+        hasActiveFilters={hasActiveFilters}
+        isFetching={isFetching}
+        onRetry={onRetry}
+        hasNextPage={hasNextPage}
+        isFetchingNextPage={isFetchingNextPage}
+        onLoadMore={onLoadMore}
+      />
+    );
   }
   const rowProps = {
     selectionMode,
@@ -1429,10 +1422,6 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
   };
   return (
     <>
-      <HistoryCompletenessNotice
-        completeness={completeness}
-        cloudPagePending={cloudPagePending}
-      />
       {preservedItems.length > 0 ? (
         <section
           className="mb-3 flex flex-col gap-2"
@@ -1487,14 +1476,11 @@ function EpicsListBody(props: EpicsListBodyProps): ReactNode {
         </ul>
       ) : null}
       {/*
-        Only when there is genuinely nothing to show. A page whose only rows
-        are preserved orphans is not an empty filter result, and telling the
-        person "no tasks match" over a section they can see would be the same
-        untruth from the other direction.
+        No "no tasks match" here: zero rows returned above through
+        `EpicsListNoRows`, and a page whose only rows are preserved orphans is
+        not an empty filter result - telling the person "no tasks match" over a
+        section they can see would be the same untruth from the other direction.
       */}
-      {ordinaryItems.length === 0 && preservedItems.length === 0 ? (
-        <EpicsListFilteredEmpty />
-      ) : null}
       <EpicsListShowMore
         hasNextPage={hasNextPage}
         isFetchingNextPage={isFetchingNextPage}
@@ -1952,11 +1938,18 @@ function HistoryPinControl(props: {
   const cloudAuthorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
+  // Also ahead of the early return, and for the same reason.
+  //
+  // `null` - the window's host - which is the host this surface's local-home
+  // readings come from in the first place; see the dispatch handler above for
+  // why that makes gate and dispatch name the same machine here.
+  const localHomePinSupported = useEpicPinLocalHomeSupported(null);
   if (props.selectionMode || props.item.taskType === "phase") return null;
   const displayTitle = historyItemDisplayTitle(props.item);
   const unavailableReason = historyPinUnavailableReason(
     props.item,
     cloudAuthorized,
+    localHomePinSupported,
   );
   const pinUnavailable = unavailableReason !== null;
   // "…is available after cloud sync" promised a sync that, for a free-tier

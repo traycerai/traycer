@@ -51,6 +51,7 @@ import {
   decodeMuxFrame,
   encodeMuxFrame,
   SESSION_CAPABILITY_BODY_COMPRESSION,
+  SESSION_CAPABILITY_CLOUD_VERDICT_UPDATE,
   type EncodeMuxFrameInput,
   type MuxFrame,
   type MuxFrameTypeValue,
@@ -355,6 +356,7 @@ class FakeRelayHost {
     schemaVersion: unknown;
     params: unknown;
     idempotencyKey: string | null;
+    callerAgentId: string | null;
     streamId: number;
   }[] = [];
   /** Answers the next REQUEST with this result payload. */
@@ -385,6 +387,13 @@ class FakeRelayHost {
    * host already condemned with a FATAL.
    */
   readonly droppedTombstonedFrames: { streamId: number; type: number }[] = [];
+  /**
+   * Every `cloudAuthorized` value from a CLOUD_VERDICT_UPDATE control frame
+   * the client sent, decoded post-reassembly (the raw `clientFrames` log
+   * carries `json: null` for a chunked body - this is the actual payload,
+   * the way `subscribeParams` is for SUBSCRIBE).
+   */
+  readonly cloudVerdictUpdates: boolean[] = [];
   /** Unexpected harness-side failures; asserted empty by the tests. */
   readonly errors: unknown[] = [];
   decideOpen: (bearer: string, openIndex: number) => OpenDecision = () => ({
@@ -682,6 +691,13 @@ class FakeRelayHost {
       this.subscribeStreamIds.push(message.streamId);
       return;
     }
+    if (message.type === MuxFrameType.CLOUD_VERDICT_UPDATE) {
+      const json = message.json;
+      if (json !== null && typeof json.cloudAuthorized === "boolean") {
+        this.cloudVerdictUpdates.push(json.cloudAuthorized);
+      }
+      return;
+    }
     if (message.type === MuxFrameType.CREDIT) {
       const json = message.json;
       const credits =
@@ -700,6 +716,8 @@ class FakeRelayHost {
         params: json.params,
         idempotencyKey:
           typeof json.idempotencyKey === "string" ? json.idempotencyKey : null,
+        callerAgentId:
+          typeof json.callerAgentId === "string" ? json.callerAgentId : null,
         streamId: message.streamId,
       });
       if (this.skipUnaryAutoRespond) {
@@ -1949,7 +1967,16 @@ describe("RemoteSession host_detached readiness evidence", () => {
         expect(session.isClosed()).toBe(false);
 
         const error: unknown = await session
-          .sendUnary("host.status", {}, null, null, undefined, false, null)
+          .sendUnary(
+            "host.status",
+            {},
+            null,
+            null,
+            null,
+            undefined,
+            false,
+            null,
+          )
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -2462,6 +2489,30 @@ describe("RemoteSession dial-failure logging", () => {
   }
 
   it(
+    "preserves the legacy missing-bearer cause when client auth is unavailable",
+    async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const relay = new FakeRelayHost();
+      const lease = new MutableBearerLease("", "user-1");
+      const session = buildSession(relay, lease, null);
+      try {
+        session.start();
+        await vi.waitFor(
+          () =>
+            expect(sessionLines(warnSpy.mock.calls)).toContainEqual(
+              expect.stringContaining("missing-bearer"),
+            ),
+          WAIT,
+        );
+      } finally {
+        session.close();
+        warnSpy.mockRestore();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
     "logs a grant-mint failure once, with its detail, and suppresses identical retries",
     async () => {
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -2621,7 +2672,7 @@ describe("RemoteSession dial-failure logging", () => {
     expect(session.isClosed()).toBe(true);
 
     const error: unknown = await session
-      .sendUnary("host.status", {}, null, null, undefined, false, null)
+      .sendUnary("host.status", {}, null, null, null, undefined, false, null)
       .then(
         () => null,
         (reason: unknown) => reason,
@@ -2675,6 +2726,7 @@ describe("RemoteSession dial-failure logging", () => {
         const resultPromise = session.sendUnary(
           "host.status",
           {},
+          null,
           null,
           null,
           undefined,
@@ -2732,7 +2784,16 @@ describe("RemoteSession dial-failure logging", () => {
       try {
         session.start();
         const error: unknown = await session
-          .sendUnary("host.status", {}, null, null, undefined, false, null)
+          .sendUnary(
+            "host.status",
+            {},
+            null,
+            null,
+            null,
+            undefined,
+            false,
+            null,
+          )
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -2764,7 +2825,16 @@ describe("RemoteSession dial-failure logging", () => {
       try {
         session.start();
         const error: unknown = await session
-          .sendUnary("host.status", {}, null, null, undefined, false, null)
+          .sendUnary(
+            "host.status",
+            {},
+            null,
+            null,
+            null,
+            undefined,
+            false,
+            null,
+          )
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -2801,6 +2871,7 @@ describe("RemoteSession dial-failure logging", () => {
           {},
           null,
           controller.signal,
+          null,
           undefined,
           false,
           null,
@@ -2850,6 +2921,7 @@ describe("RemoteSession dial-failure logging", () => {
             {},
             null,
             controller.signal,
+            null,
             undefined,
             false,
             null,
@@ -2931,7 +3003,7 @@ describe("RemoteSession negotiated-manifest publication", () => {
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
 
         const error: unknown = await session
-          .sendUnary("host.status", {}, null, null, undefined, false, {
+          .sendUnary("host.status", {}, null, null, null, undefined, false, {
             method: "epic.listTasks",
             version: { major: 1, minor: 6 },
           })
@@ -2968,7 +3040,7 @@ describe("RemoteSession negotiated-manifest publication", () => {
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
 
         const error: unknown = await session
-          .sendUnary("host.status", {}, null, null, undefined, false, {
+          .sendUnary("host.status", {}, null, null, null, undefined, false, {
             method: "epic.listTasks",
             version: { major: 1, minor: 6 },
           })
@@ -3104,6 +3176,7 @@ describe("RemoteSession absent optional method", () => {
             {},
             null,
             null,
+            null,
             undefined,
             false,
             null,
@@ -3225,6 +3298,7 @@ describe("RemoteSession fallback degrade version anchoring", () => {
         const result: unknown = await session.sendUnary(
           "host.syntheticSkewFallback",
           { label: "x" },
+          null,
           null,
           null,
           undefined,
@@ -3769,6 +3843,7 @@ describe("RemoteSession wake", () => {
         {},
         null,
         null,
+        null,
         undefined,
         false,
         null,
@@ -3812,6 +3887,7 @@ describe("RemoteSession wake", () => {
         session.sendUnary(
           "host.status",
           {},
+          null,
           null,
           null,
           undefined,
@@ -3861,6 +3937,7 @@ describe("RemoteSession wake", () => {
         {},
         null,
         controller.signal,
+        null,
         undefined,
         false,
         null,
@@ -4625,6 +4702,40 @@ describe("RemoteSession unary idempotency negotiation", () => {
       },
     });
 
+  it("puts caller attribution on the wire when a callerAgentId is supplied", async () => {
+    // Every other unary in this file passes `null`, so a transport that
+    // silently dropped the field would stay green. This is the one assertion
+    // that the REQUEST envelope actually carries the agent id the host-side
+    // dialer attributes the call to.
+    const relay = new FakeRelayHost();
+    relay.floorRpcManifest = { "host.status": { major: 1, minor: 0 } };
+    const lease = new MutableBearerLease("token", "user-1");
+    const session = new RemoteSession({
+      ...buildSessionOptions(relay, lease, null),
+      rpcRegistry: statusRegistry,
+    });
+    try {
+      session.start();
+      await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+
+      await session.sendUnary(
+        "host.status",
+        {},
+        null,
+        null,
+        "agent-7c2c45ad",
+        undefined,
+        false,
+        null,
+      );
+
+      expect(relay.unaryRequests).toHaveLength(1);
+      expect(relay.unaryRequests[0]?.callerAgentId).toBe("agent-7c2c45ad");
+    } finally {
+      session.close();
+    }
+  });
+
   it.each([
     ["legacy openAck", [] as string[], null, HostTransportFailureError],
     [
@@ -4653,6 +4764,7 @@ describe("RemoteSession unary idempotency negotiation", () => {
           "host.status",
           {},
           "requested-key",
+          null,
           null,
           10_000,
           false,
@@ -4706,6 +4818,7 @@ describe("RemoteSession unary idempotency negotiation", () => {
             "host.status",
             {},
             "requested-key",
+            null,
             null,
             10_000,
             true,
@@ -5288,7 +5401,16 @@ describe("RemoteSession ready boundary at the host's open-ack", () => {
         // dispatch. Anything that RESOLVED here would mean the session had
         // dispatched work at a host that cannot receive it.
         const parked: unknown = session
-          .sendUnary("host.status", {}, null, null, undefined, false, null)
+          .sendUnary(
+            "host.status",
+            {},
+            null,
+            null,
+            null,
+            undefined,
+            false,
+            null,
+          )
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -6061,7 +6183,16 @@ describe("RemoteSession WORKTREE_BUSY holder preservation", () => {
         session.start();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
         const error: unknown = await session
-          .sendUnary("host.status", {}, null, null, undefined, false, null)
+          .sendUnary(
+            "host.status",
+            {},
+            null,
+            null,
+            null,
+            undefined,
+            false,
+            null,
+          )
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -6094,7 +6225,16 @@ describe("RemoteSession WORKTREE_BUSY holder preservation", () => {
         session.start();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
         const error: unknown = await session
-          .sendUnary("host.status", {}, null, null, undefined, false, null)
+          .sendUnary(
+            "host.status",
+            {},
+            null,
+            null,
+            null,
+            undefined,
+            false,
+            null,
+          )
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -6127,7 +6267,16 @@ describe("RemoteSession WORKTREE_BUSY holder preservation", () => {
         session.start();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
         const error: unknown = await session
-          .sendUnary("host.status", {}, null, null, undefined, false, null)
+          .sendUnary(
+            "host.status",
+            {},
+            null,
+            null,
+            null,
+            undefined,
+            false,
+            null,
+          )
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -6165,7 +6314,16 @@ describe("RemoteSession WORKTREE_BUSY holder preservation", () => {
         session.start();
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
         const error: unknown = await session
-          .sendUnary("host.status", {}, null, null, undefined, false, null)
+          .sendUnary(
+            "host.status",
+            {},
+            null,
+            null,
+            null,
+            undefined,
+            false,
+            null,
+          )
           .then(
             () => null,
             (reason: unknown) => reason,
@@ -6240,6 +6398,7 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
           {},
           null,
           null,
+          null,
           60,
           false,
           null,
@@ -6250,6 +6409,7 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
         const defaulted = session.sendUnary(
           "host.status",
           {},
+          null,
           null,
           null,
           undefined,
@@ -6310,6 +6470,7 @@ describe("RemoteSession pending-unary FATAL rejection (S3)", () => {
         const pending = session.sendUnary(
           "host.status",
           {},
+          null,
           null,
           null,
           undefined,
@@ -7939,6 +8100,7 @@ describe("RemoteSession outbound seq continuity across a stream's CLOSE (host H1
           {},
           null,
           null,
+          null,
           60,
           false,
           null,
@@ -8058,6 +8220,103 @@ describe("RemoteSession outbound seq continuity across a client-detected inbound
         expect(relay.errors).toEqual([]);
       } finally {
         warnSpy.mockRestore();
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+/**
+ * `handleOpenAck`'s doc comment (remote-session.ts:2680-2697) names the
+ * hazard: re-opening a subscription is what makes the host construct and
+ * start a resolver, under whatever verdict the `open` payload asserted. A
+ * verdict that moves during the handshake window (after `open` is on the
+ * wire, before `openAck` arrives) had its own `notifyCloudVerdictChanged`
+ * push dropped by the `phase !== "ready"` gate, so the reconciliation has to
+ * run BEFORE the restore loop, not after it - a correction that rides the
+ * same batch as the restore arrives once every multiplexed stream has
+ * already been told to start.
+ *
+ * The finding is about ORDER, not existence: a pin that only asserts "a
+ * CLOUD_VERDICT_UPDATE frame went out" would stay green even if the order
+ * were flipped back to the wrong cut (`ae907dff6`'s own commit message
+ * describes exactly that wrong cut on this carrier). This pin asserts the
+ * ordering directly.
+ */
+describe("RemoteSession cloud verdict wire (lane 5, F1: opening-phase drop, mux carrier)", () => {
+  it(
+    "a verdict demotion landing during the opening phase reconciles BEFORE the restored subscription's SUBSCRIBE frame",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      relay.openAckCapabilities = [SESSION_CAPABILITY_CLOUD_VERDICT_UPDATE];
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const verdict = { value: true };
+      // Demote from inside `decideOpen`: by the time the relay decides how to
+      // answer, the client's `open` frame (carrying the pre-demotion `true`)
+      // is already on the wire - this is the opening-phase window itself, not
+      // a demotion before or after it.
+      relay.decideOpen = () => {
+        verdict.value = false;
+        return { kind: "ack" };
+      };
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+        cloudAuthorized: () => verdict.value,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      void stream;
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        const types = relay.clientFrames.map((frame) => frame.type);
+        const verdictIndex = types.indexOf(MuxFrameType.CLOUD_VERDICT_UPDATE);
+        const subscribeIndex = types.indexOf(MuxFrameType.SUBSCRIBE);
+        expect(verdictIndex).toBeGreaterThanOrEqual(0);
+        expect(verdictIndex).toBeLessThan(subscribeIndex);
+        expect(relay.cloudVerdictUpdates).toEqual([false]);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "positive control: an unchanged verdict sends no reconciliation frame at all",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      relay.openAckCapabilities = [SESSION_CAPABILITY_CLOUD_VERDICT_UPDATE];
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+        cloudAuthorized: () => true,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      void stream;
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        const types = relay.clientFrames.map((frame) => frame.type);
+        expect(types).not.toContain(MuxFrameType.CLOUD_VERDICT_UPDATE);
+        expect(relay.cloudVerdictUpdates).toEqual([]);
+        expect(relay.errors).toEqual([]);
+      } finally {
         session.close();
       }
     },

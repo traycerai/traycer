@@ -38,8 +38,10 @@ import type { HistoryItem } from "@/components/home/data/home-page.data";
 import type { HistoryFacets } from "@/hooks/home/use-history-query";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useHistorySearchStore } from "@/stores/home/history-search-store";
+import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { DEFAULT_HISTORY_SEARCH } from "@/lib/history-search";
+import type { JsonContent } from "@traycer/protocol/common/registry";
 import { WindowsBridgeContext } from "@/providers/windows-bridge-context";
 import { setDesktopEpicOwnershipBridge } from "@/lib/windows/desktop-epic-ownership";
 import type { DesktopWindowsBridge } from "@/lib/windows/types";
@@ -120,6 +122,10 @@ interface RenameEpicTitleVariables {
 }
 
 interface SetEpicPinnedVariables {
+  // Mirrors production's dispatch-side host. Declared locally here, which is
+  // exactly why the compile cannot flag a drift - the assertions below are the
+  // only thing that can, and only if they name the key.
+  readonly hostId: string | null;
   readonly epicId: string;
   readonly pinned: boolean;
 }
@@ -183,6 +189,13 @@ const testState = vi.hoisted(() => ({
   pendingSetPinnedEpicIds: new Set<string>(),
   refetch: vi.fn(),
   fetchNextPage: vi.fn(),
+  openLandingDraftFromHistory: vi.fn(),
+}));
+
+vi.mock("@/lib/commands/actions/open-landing-draft-from-history", () => ({
+  openLandingDraftFromHistory: (navigate: unknown, draftId: string): void => {
+    testState.openLandingDraftFromHistory(navigate, draftId);
+  },
 }));
 
 vi.mock("@/hooks/home/use-history-query", () => ({
@@ -235,6 +248,16 @@ vi.mock("@/hooks/epic/use-epic-set-pinned-mutation", () => ({
     mutate: testState.setPinnedMutate,
   }),
   usePendingSetPinnedEpicIds: () => testState.pendingSetPinnedEpicIds,
+}));
+
+/**
+ * `useEpicPinLocalHomeSupported` reads `useHostClient()`, which throws
+ * outside a `<HostRuntimeProvider>` - absent in this file. Fixed at `false`:
+ * every existing case here predates lane 9 item 5 and pins the pre-`@1.1`
+ * reading (`local-home` permanently unavailable).
+ */
+vi.mock("@/hooks/epic/use-epic-pin-local-home-support", () => ({
+  useEpicPinLocalHomeSupported: () => false,
 }));
 
 vi.mock("@/hooks/epic/use-epic-activity-status", () => ({
@@ -385,7 +408,9 @@ describe("<EpicsListPanel />", () => {
     testState.pendingSetPinnedEpicIds = new Set();
     testState.refetch.mockReset();
     testState.fetchNextPage.mockReset();
+    testState.openLandingDraftFromHistory.mockReset();
     testState.activityByEpicId.clear();
+    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
     queryClient.clear();
     // This fixture renders the panel without the application root bridge. The
     // bridge releases the controller's hydration gate in production, so make
@@ -454,6 +479,7 @@ describe("<EpicsListPanel />", () => {
     setDesktopEpicOwnershipBridge(null);
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useHistorySearchStore.setState({ search: DEFAULT_HISTORY_SEARCH });
+    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
   });
 
   it("opens landing history rows through the canonical epic tab route", async () => {
@@ -516,12 +542,70 @@ describe("<EpicsListPanel />", () => {
     };
     renderPanel("embedded", "/");
 
-    expect(
-      await screen.findByTestId("epics-list-cloud-page-unavailable"),
-    ).not.toBeNull();
+    const unavailable = await screen.findByTestId("epics-list-unavailable");
+    expect(unavailable).not.toBeNull();
     // RED before the fix: "No tasks yet" rendered under the notice, a claim
     // about an account whose tasks may all live on other devices.
     expect(screen.queryByTestId("epics-list-empty")).toBeNull();
+    expect(unavailable.getAttribute("data-remedy")).toBe("retry");
+
+    fireEvent.click(screen.getByTestId("epics-list-unavailable-retry"));
+    expect(testState.refetch).toHaveBeenCalled();
+  });
+
+  it("offers sign-in instead of a dead Retry when the session is unverified", async () => {
+    testState.items = [];
+    testState.completeness = {
+      cloudPage: "unavailable",
+      facets: "partial",
+      localRows: "none",
+      sort: "server",
+    };
+    useAuthStore.setState({ status: "unverified" });
+    renderPanel("embedded", "/");
+
+    const unavailable = await screen.findByTestId("epics-list-unavailable");
+    expect(unavailable.getAttribute("data-remedy")).toBe("sign-in");
+    expect(screen.queryByTestId("epics-list-unavailable-retry")).toBeNull();
+    expect(unavailable.textContent).toContain("Sign in again");
+    expect(screen.queryByTestId("epics-list-empty")).toBeNull();
+  });
+
+  it("does not call a filtered result empty when the listing was unavailable", async () => {
+    testState.items = [];
+    testState.completeness = {
+      cloudPage: "unavailable",
+      facets: "partial",
+      localRows: "suppressed-unprovable-filter",
+      sort: "server",
+    };
+    useHistorySearchStore.setState({
+      search: { ...DEFAULT_HISTORY_SEARCH, query: "missing" },
+    });
+    renderPanel("embedded", "/");
+
+    expect(await screen.findByTestId("epics-list-unavailable")).not.toBeNull();
+    expect(screen.queryByTestId("epics-list-filtered-empty")).toBeNull();
+    expect(screen.queryByTestId("epics-list-empty")).toBeNull();
+  });
+
+  it("shows the filtered empty state when the cloud page has settled", async () => {
+    testState.items = [];
+    testState.completeness = {
+      cloudPage: "settled",
+      facets: "server",
+      localRows: "none",
+      sort: "server",
+    };
+    useHistorySearchStore.setState({
+      search: { ...DEFAULT_HISTORY_SEARCH, query: "missing" },
+    });
+    renderPanel("embedded", "/");
+
+    expect(
+      await screen.findByTestId("epics-list-filtered-empty"),
+    ).not.toBeNull();
+    expect(screen.queryByTestId("epics-list-unavailable")).toBeNull();
   });
 
   it("shows the explicit cloud-pending state instead of an empty list", async () => {
@@ -530,12 +614,7 @@ describe("<EpicsListPanel />", () => {
     renderPanel("embedded", "/");
 
     expect(screen.queryByTestId("epics-list-empty")).toBeNull();
-    expect(
-      await screen.findByTestId("epics-list-cloud-page-pending"),
-    ).not.toBeNull();
-    expect(screen.getByTestId("epics-list-completeness").textContent).toContain(
-      "Cloud tasks are still loading",
-    );
+    expect(await screen.findByTestId("epics-list-loading")).not.toBeNull();
   });
 
   it("labels a task that is already open in the tab strip", async () => {
@@ -564,6 +643,8 @@ describe("<EpicsListPanel />", () => {
     expect(testState.setPinnedMutate).toHaveBeenCalledWith({
       epicId: "epic-from-history",
       pinned: false,
+      isLocalHome: false,
+      hostId: null,
     });
   });
 
@@ -578,6 +659,8 @@ describe("<EpicsListPanel />", () => {
     expect(testState.setPinnedMutate).toHaveBeenCalledWith({
       epicId: "epic-from-history",
       pinned: true,
+      isLocalHome: false,
+      hostId: null,
     });
   });
 
@@ -608,6 +691,8 @@ describe("<EpicsListPanel />", () => {
     expect(testState.setPinnedMutate).toHaveBeenCalledWith({
       epicId: "epic-from-history",
       pinned: true,
+      isLocalHome: false,
+      hostId: null,
     });
     // The pin control sits alongside - not inside - the row's absolute <Link>
     // overlay. A regression that nested it inside the link, or dropped the
@@ -706,48 +791,12 @@ describe("<EpicsListPanel />", () => {
     expect(rows.textContent).not.toContain("Preserved orphan");
   });
 
-  it("states what an offline page is missing instead of presenting it as complete", async () => {
+  it("never tells the user which rows came from the cloud or the device", async () => {
+    // The worst-case statement that used to render every line of the
+    // completeness notice: an unavailable cloud page, partial facets,
+    // a truncated local page and an order that is only a loaded union.
     testState.items = [
       historyItem({ id: "history-local", epicId: "local", title: "Local" }),
-    ];
-    testState.completeness = {
-      cloudPage: "unavailable",
-      facets: "partial",
-      localRows: "present",
-      sort: "loaded-union",
-    };
-    renderPanel("embedded", "/");
-
-    const notice = await screen.findByTestId("epics-list-completeness");
-    expect(notice.getAttribute("data-cloud-page")).toBe("unavailable");
-    expect(notice.textContent).toContain("Cloud tasks couldn't be reached");
-    // `facets: "partial"` means the counts describe a DIFFERENT set from the
-    // rows, so the notice may not claim they cover the listed tasks - the
-    // fixture sets exactly that, and the older wording asserted the opposite.
-    expect(notice.textContent).toContain("Order covers the tasks listed here");
-    expect(notice.textContent).toContain("filter counts may leave some");
-  });
-
-  it("keeps the complete-counts wording when only the ORDER is a loaded union", async () => {
-    testState.items = [
-      historyItem({ id: "history-local", epicId: "local", title: "Local" }),
-    ];
-    testState.completeness = {
-      cloudPage: "settled",
-      facets: "server",
-      localRows: "present",
-      sort: "loaded-union",
-    };
-    renderPanel("embedded", "/");
-
-    const notice = await screen.findByTestId("epics-list-completeness");
-    expect(notice.textContent).toContain("not everything you have");
-    expect(notice.textContent).not.toContain("filter counts may leave some");
-  });
-
-  it("says a truncated page may be missing tasks, without claiming where", async () => {
-    testState.items = [
-      historyItem({ id: "history-m1", epicId: "m1", title: "Mirror 1" }),
     ];
     testState.completeness = {
       cloudPage: "unavailable",
@@ -757,52 +806,17 @@ describe("<EpicsListPanel />", () => {
     };
     renderPanel("embedded", "/");
 
-    const notice = await screen.findByTestId("epics-list-completeness");
-    expect(notice.getAttribute("data-local-rows")).toBe("truncated");
-    // A `truncated` page that says nothing reads as covered-everything - the
-    // banner going silent is what this guards against, not one particular
-    // wording. The copy deliberately does not name WHERE the gap is:
-    // `truncated` has more than one producer (the page cap, an unprovable
-    // filter, an unread root doc), and the wire member does not distinguish
-    // them, so a client must not either.
-    expect(notice.textContent).toContain(
-      "couldn't be checked against your filters",
-    );
-  });
-
-  it("names a filter this device cannot check rather than showing an empty list", async () => {
-    testState.items = [];
-    testState.completeness = {
-      cloudPage: "unavailable",
-      facets: "partial",
-      localRows: "suppressed-unprovable-filter",
-      sort: "server",
-    };
-    renderPanel("embedded", "/");
-
-    const notice = await screen.findByTestId("epics-list-completeness");
-    expect(notice.getAttribute("data-local-rows")).toBe(
-      "suppressed-unprovable-filter",
-    );
-    expect(notice.textContent).toContain("can't be checked against tasks");
-  });
-
-  it("says nothing at all for a fully server-owned page", async () => {
-    testState.items = [
-      historyItem({ id: "history-cloud", epicId: "cloud", title: "Cloud" }),
-    ];
-    testState.completeness = {
-      cloudPage: "settled",
-      facets: "server",
-      localRows: "none",
-      sort: "server",
-    };
-    renderPanel("embedded", "/");
-
-    expect(await screen.findByText("Cloud")).not.toBeNull();
-    // A caveat that appears on a complete page is the same defect wearing the
-    // other sign.
-    expect(screen.queryByTestId("epics-list-completeness")).toBeNull();
+    const rows = await screen.findByTestId("epics-list-rows");
+    expect(rows.textContent).toContain("Local");
+    expect(screen.queryByRole("status")).toBeNull();
+    // Scoped to the list body's own container rather than the whole
+    // document: unrelated chrome (a filter chip label, for example) could
+    // otherwise fail this assertion for a reason that has nothing to do with
+    // the row or empty-state copy under test.
+    const listBody = rows.closest("section");
+    expect(listBody).not.toBeNull();
+    expect(listBody?.textContent ?? "").not.toMatch(/cloud/i);
+    expect(listBody?.textContent ?? "").not.toMatch(/device/i);
   });
 
   it("disables pin mutation for a local-home epic and names the cloud-sync boundary", async () => {
@@ -816,7 +830,7 @@ describe("<EpicsListPanel />", () => {
     renderPanel("embedded", "/");
 
     const pin = await screen.findByRole("button", {
-      name: "Pinning Local only epic needs cloud sync; it is stored on this device",
+      name: "Pinning Local only epic needs a newer host on the connected device; it is stored there",
     });
     // `aria-disabled`, not the native attribute: a natively disabled button is
     // unfocusable and swallows pointer events, so the tooltip below - the only
@@ -831,7 +845,7 @@ describe("<EpicsListPanel />", () => {
     // account never gets and a stale row has already had - see
     // `HistoryPinControl`.
     expect(tooltipTextNear(pin)).toBe(
-      "This epic is stored on this device. Pinning needs cloud sync.",
+      "This epic is stored on the connected device. Pinning it needs a newer host version there; update that device's Traycer host.",
     );
   });
 
@@ -851,13 +865,13 @@ describe("<EpicsListPanel />", () => {
     renderPanel("embedded", "/");
 
     const pin = await screen.findByRole("button", {
-      name: "Pinning Orphaned epic is unavailable; its cloud copy was deleted and only this device's edits remain",
+      name: "Pinning Orphaned epic is unavailable; its cloud copy was deleted and only the connected device's edits remain",
     });
     expect(pin.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(pin);
     expect(testState.setPinnedMutate).not.toHaveBeenCalled();
     expect(tooltipTextNear(pin)).toBe(
-      "This epic's cloud copy was deleted. Only this device's edits remain, so it can't be pinned.",
+      "This epic's cloud copy was deleted. Only the connected device's edits remain, so it can't be pinned.",
     );
   });
 
@@ -1948,4 +1962,137 @@ describe("<EpicsListPanel />", () => {
     expect(event.defaultPrevented).toBe(false);
     expect(document.activeElement).toBe(input);
   });
+
+  it("shows retained drafts above the task list without selecting a filter", async () => {
+    seedRetainedLandingDraft("abandoned prompt");
+    renderPanel("embedded", "/");
+
+    const drafts = await screen.findByTestId("history-drafts-block");
+    const tasks = await screen.findByTestId("epics-list-rows");
+    expect(screen.getByText("abandoned prompt")).not.toBeNull();
+    expect(await screen.findByText("Open from landing")).not.toBeNull();
+    expect(
+      drafts.compareDocumentPosition(tasks) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).not.toBe(0);
+  });
+
+  it("does not show a block for an empty start-task composer", async () => {
+    useLandingDraftStore.getState().createDraft(null);
+    renderPanel("embedded", "/");
+
+    expect(await screen.findByText("Open from landing")).not.toBeNull();
+    expect(screen.queryByTestId("history-drafts-block")).toBeNull();
+  });
+
+  it("does not expose drafts as a task filter", async () => {
+    seedRetainedLandingDraft("abandoned prompt");
+    renderPanel("embedded", "/");
+
+    fireEvent.click(await screen.findByRole("button", { name: /filter/i }));
+    expect(await screen.findByTestId("epics-filter-popover")).not.toBeNull();
+    expect(screen.queryByRole("checkbox", { name: /drafts/i })).toBeNull();
+  });
+
+  it("opens a retained draft through openLandingDraftFromHistory", async () => {
+    const draftId = seedRetainedLandingDraft("abandoned prompt");
+    renderPanel("embedded", "/");
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Open draft abandoned prompt",
+      }),
+    );
+
+    expect(testState.openLandingDraftFromHistory).toHaveBeenCalledTimes(1);
+    expect(testState.openLandingDraftFromHistory.mock.calls[0][1]).toBe(
+      draftId,
+    );
+  });
+
+  it("asks for confirmation before deleting a retained draft", async () => {
+    const draftId = seedRetainedLandingDraft("abandoned prompt");
+    renderPanel("embedded", "/");
+
+    expect(await screen.findByText("abandoned prompt")).not.toBeNull();
+    fireEvent.click(screen.getByTestId("history-drafts-row-delete"));
+
+    expect(
+      await screen.findByTestId("history-drafts-delete-dialog"),
+    ).not.toBeNull();
+    expect(screen.getByText('Delete "abandoned prompt"?')).not.toBeNull();
+    expect(
+      screen.getByText(/removes the start-task draft on every device/i),
+    ).not.toBeNull();
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.some((draft) => draft.id === draftId),
+    ).toBe(true);
+
+    fireEvent.click(screen.getByTestId("history-drafts-delete-cancel"));
+    await waitFor(() => {
+      expect(screen.queryByTestId("history-drafts-delete-dialog")).toBeNull();
+    });
+    expect(
+      useLandingDraftStore
+        .getState()
+        .drafts.some((draft) => draft.id === draftId),
+    ).toBe(true);
+
+    fireEvent.click(screen.getByTestId("history-drafts-row-delete"));
+    fireEvent.click(await screen.findByTestId("history-drafts-delete-confirm"));
+
+    await waitFor(() => {
+      expect(
+        useLandingDraftStore
+          .getState()
+          .drafts.some((draft) => draft.id === draftId),
+      ).toBe(false);
+    });
+    expect(screen.queryByText("abandoned prompt")).toBeNull();
+  });
+
+  it("warns that an open draft will be deleted on every device", async () => {
+    const draftId = seedRetainedLandingDraft("live tab");
+    useLandingDraftStore.getState().openDraft(draftId);
+    renderPanel("embedded", "/");
+
+    fireEvent.click(await screen.findByTestId("history-drafts-row-delete"));
+    expect(
+      await screen.findByText(/this draft is currently open/i),
+    ).not.toBeNull();
+    expect(screen.getByText(/every device/i)).not.toBeNull();
+  });
+
+  it("caps the draft block and expands it on request", async () => {
+    for (let index = 0; index < 6; index += 1) {
+      seedRetainedLandingDraft(`draft ${index}`);
+    }
+
+    renderPanel("page", "/");
+
+    expect(await screen.findAllByTestId("history-drafts-row")).toHaveLength(5);
+    fireEvent.click(screen.getByRole("button", { name: "View all 6" }));
+    expect(screen.getAllByTestId("history-drafts-row")).toHaveLength(6);
+    expect(screen.getByRole("button", { name: "Show less" })).not.toBeNull();
+  });
+
+  it("hides the drafts block in the destination picker", async () => {
+    seedRetainedLandingDraft("abandoned prompt");
+    renderPanel("picker", "/");
+
+    expect(await screen.findByText("Open from landing")).not.toBeNull();
+    expect(screen.queryByTestId("history-drafts-block")).toBeNull();
+  });
 });
+
+function seedRetainedLandingDraft(text: string): string {
+  const content: JsonContent = {
+    type: "doc",
+    content: [{ type: "paragraph", content: [{ type: "text", text }] }],
+  };
+  const id = useLandingDraftStore.getState().createDraft(null);
+  useLandingDraftStore.getState().setDraftContent(id, content, null);
+  useLandingDraftStore.getState().closeDraft(id);
+  return id;
+}

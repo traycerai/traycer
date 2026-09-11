@@ -178,6 +178,23 @@ export interface OpenEpicStoreOptions {
    */
   readonly onRetryTransport: () => void;
   /**
+   * Collapse this session's own transport backoff and re-dial NOW, keeping
+   * everything the session holds.
+   *
+   * Distinct from {@link onRetryTransport} in what it costs, which is why it is
+   * a separate seam rather than a flag on that one. A retry builds a NEW
+   * session and cannot carry the replica or the unsynced queue, so it refuses
+   * outright while the session is dirty. A wake touches no state at all: the
+   * socket is already redialing on a backoff, and this only stops it waiting.
+   * That is what makes it safe to put behind a button a user presses while
+   * looking at content they do not want to lose.
+   *
+   * Injected for the same reason the retry is: the store owns no client. The
+   * session provider holds the socket, so only it can name the connection this
+   * wakes - and it must be THIS session's, never the app-wide one.
+   */
+  readonly onWakeTransport: () => void;
+  /**
    * The spawned runtime. Constructed by the session provider, because the
    * worker needs the session's real stream client and this store never had one.
    */
@@ -627,6 +644,15 @@ export interface OpenEpicState {
    */
   retryTransport: () => void;
   /**
+   * Stops this session's transport waiting out its backoff and re-dials now.
+   *
+   * Keeps everything: no snapshot is dropped, no replica replaced, no queue
+   * cleared. The socket was already going to redial - this only declines to
+   * wait for it - so unlike { retryTransport} there is nothing to refuse
+   * over and no dirty-session gate.
+   */
+  wakeTransport: () => void;
+  /**
    * Sends a `retryMigration` client frame so the host re-runs an
    * interrupted major migration without dropping the `epic.subscribe`
    * session. The store immediately moves migration state from `error` back
@@ -729,15 +755,24 @@ export interface OpenEpicState {
   /**
    * Which STORE GENERATION the two ingest counters above belong to. The
    * counters are per-store and restart at zero when an epic session is
-   * rebuilt after eviction, while the TanStack cache can retain a list
-   * answer whose `issuedAtSeq` was captured against the PREVIOUS store - a
-   * fence from another generation is numerically meaningless here, and
-   * replayed as-is its (typically larger) value lets the omission pass
-   * retract rows the old counter never covered. The record hooks capture
-   * this WITH the fence and hand back `null` instead when the applying
-   * store is not the one the fence was read from - the same conservative
-   * "no session to read at dispatch" path, which holds omitted rows one
-   * extra pass. Module-monotonic; never reused across generations.
+   * rebuilt after eviction, while the TanStack cache outlives the store - and
+   * a fence from another generation is numerically meaningless here, since
+   * replayed as-is its (typically larger) value lets the omission pass retract
+   * rows the old counter never covered.
+   *
+   * So the record hooks put THIS VALUE IN THEIR CACHE KEY
+   * (`use-epic-chat-records.ts` / `use-epic-tui-agent-records.ts`). A cached
+   * answer therefore belongs to exactly one session: a rebuilt store is a
+   * different cache entry, its first read is a real request, and no fence can
+   * cross a generation in the first place. That also makes renderer parking
+   * (plan C, C1) honest - a park releases the session, and the show that
+   * follows re-reads instead of replaying the pre-park answer.
+   *
+   * The hooks used to carry this alongside the fence and compare the two at
+   * apply. That check is gone: with the generation in the key it could not
+   * fire, and a guard that cannot fire is not a second mechanism, only a claim
+   * a later reader would trust. Module-monotonic; never reused across
+   * generations.
    */
   ingestFenceIdentity: number;
   /**
@@ -1087,6 +1122,8 @@ export interface OpenEpicStoreHandle {
   readonly detachTransport: () => void;
   readonly requestFreshSnapshot: () => void;
   readonly retryTransport: () => void;
+  /** See {@link OpenEpicState.wakeTransport}. */
+  readonly wakeTransport: () => void;
   /**
    * True when this renderer has a loaded, locally clean snapshot and can
    * still reach the host. Cloud acknowledgement is intentionally not part of
@@ -1920,6 +1957,15 @@ export function createOpenEpicStore(
             runtime.command({ kind: "request-fresh-snapshot", payload: {} });
           },
 
+          wakeTransport: () => {
+            // Same ended guard as the retry below, and nothing else. There is
+            // no dirty-session gate here because there is nothing to trade: a
+            // wake keeps the replica, the queue and the snapshot exactly as
+            // they are, and only declines to sit out the backoff.
+            if (sessionEndedReason !== null) return;
+            options.onWakeTransport();
+          },
+
           retryTransport: () => {
             // Ended covers BOTH exits: a disposed handle has nothing to
             // rebuild, and a detached one is frozen by contract ("takes no
@@ -2551,6 +2597,9 @@ export function createOpenEpicStore(
     },
     retryTransport: () => {
       store.getState().retryTransport();
+    },
+    wakeTransport: () => {
+      store.getState().wakeTransport();
     },
     isClean: () => {
       const state = store.getState();

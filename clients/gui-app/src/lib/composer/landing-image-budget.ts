@@ -58,9 +58,10 @@ export function registerLandingDraftRootSource(
 }
 
 /**
- * Extra content hashes that must survive landing GC. Chat-composer annotation
- * crops live in this same store (hash + filename on the draft record) and are
- * not present in landing draft content.
+ * Extra content hashes that must survive landing GC: chat-composer annotation
+ * crops (hash + filename on the draft record, not present in landing draft
+ * content) and the images referenced by composer / new-chat / stash rows,
+ * which live in this same partition.
  */
 export interface ExtraImageRootSource {
   hashes(): ReadonlyArray<string>;

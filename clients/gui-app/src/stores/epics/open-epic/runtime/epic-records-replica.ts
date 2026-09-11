@@ -45,7 +45,10 @@ import type {
   ReplicaResetCause,
   RuntimeEnvironment,
 } from "@traycer-clients/shared/replica-runtime";
-import type { DeletedEpicArtifact } from "@traycer/protocol/persistence/epic/artifacts";
+import {
+  buildDeletedEpicArtifact,
+  type EpicArtifact,
+} from "@traycer/protocol/persistence/epic/artifacts";
 import { createTypedMap } from "@traycer/protocol/utils/yjs-utils";
 import { resolveReparentNode } from "@/lib/reparent-rules";
 import {
@@ -62,6 +65,9 @@ import {
   getTerminalAgentEntry,
   getTerminalAgentsMap,
   readArtifactKind,
+  readMaybeBoolean,
+  readMaybeNullableString,
+  readMaybeNumber,
   readMaybeString,
 } from "../projection-helpers";
 import type { EpicDocRecordArms } from "../projection-helpers";
@@ -857,21 +863,41 @@ export function createEpicRecordsReplica(
     if (!(entry instanceof Y.Map)) return;
     const kind = readArtifactKind(entry);
     if (kind === null) return;
-    const deletedArtifactsMap = getDeletedArtifactsMap(doc);
-    if (deletedArtifactsMap === null) return;
-    const title = readMaybeString(entry, "title");
-    const artifactRoomId = readMaybeString(entry, "artifactRoomId");
-    const deletedAt = new Date(environment.clock.now()).toISOString();
+    // SEEDED rather than skipped when absent: an epic whose doc has never
+    // carried a tombstone has no `deletedArtifacts` container, and returning
+    // here dropped the tombstone for the very first delete in that epic - the
+    // one case the cloud-delete sync above cannot recover from.
+    let deletedArtifactsMap = getDeletedArtifactsMap(doc);
+    if (deletedArtifactsMap === null) {
+      deletedArtifactsMap = new Y.Map<unknown>();
+      getEpicMap(doc).set("deletedArtifacts", deletedArtifactsMap);
+    }
+    // The FULL metadata record, not the four-field summary this used to write:
+    // the version-history UI revives from a tombstone, so anything omitted here
+    // is lost on restore rather than merely absent from the list.
     const base = {
       id: artifactId,
-      title,
-      artifactRoomId: artifactRoomId.length > 0 ? artifactRoomId : null,
-      deletedAt,
+      folderName: readMaybeString(entry, "folderName"),
+      title: readMaybeString(entry, "title"),
+      artifactRoomId: readMaybeString(entry, "artifactRoomId"),
+      createdAt: readMaybeNumber(entry, "createdAt"),
+      updatedAt: readMaybeNumber(entry, "updatedAt"),
+      createdManually: readMaybeBoolean(entry, "createdManually"),
+      parentId: readMaybeNullableString(entry, "parentId"),
     };
-    const tombstone: DeletedEpicArtifact =
+    const artifact: EpicArtifact =
       kind === "ticket" || kind === "story"
-        ? { kind, ...base, status: readTicketStatus(entry) }
-        : { kind, ...base };
+        ? {
+            ...base,
+            kind,
+            status: readTicketStatus(entry),
+            assignee: readMaybeString(entry, "assignee"),
+          }
+        : { ...base, kind };
+    const tombstone = buildDeletedEpicArtifact(
+      artifact,
+      new Date(environment.clock.now()).toISOString(),
+    );
     deletedArtifactsMap.set(artifactId, createTypedMap(tombstone));
   }
 

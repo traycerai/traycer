@@ -44,6 +44,24 @@ export type AnalyticsBlocker =
   | "setup"
   | "timeout"
   | "unsupported"
+  /**
+   * The host DECLINED the operation and said why, as data.
+   *
+   * Prefixed rather than folded into `setup` or `unsupported` because it is a
+   * different kind of fact from every member above it: those classify a
+   * FAILURE the client inferred from an error, while this one reports a
+   * refusal the host stated in a typed response arm
+   * (`epic.create@1.1`'s `refusal.kind`). Collapsing it would put a
+   * deliberate, remediable answer in the same bucket as a transport fault, and
+   * the funnel could no longer tell "we could not reach the host" from "the
+   * host told us it holds no usable local store".
+   *
+   * The `refused:` prefix carries the refusal KIND, so a new kind is a new
+   * member here rather than a silent re-use of this one - the same trade
+   * `epicCreateRefusalKindSchema` makes on the wire, where an unrecognised
+   * kind costs a minor.
+   */
+  | "refused:local-store-unavailable"
   | "unknown";
 
 export type AnalyticsCommand =

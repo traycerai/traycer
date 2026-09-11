@@ -106,6 +106,10 @@ interface RenameEpicTitleVariables {
 }
 
 interface SetEpicPinnedVariables {
+  // Mirrors production's dispatch-side host. Declared locally here, which is
+  // exactly why the compile cannot flag a drift - the assertions below are the
+  // only thing that can, and only if they name the key.
+  readonly hostId: string | null;
   readonly epicId: string;
   readonly pinned: boolean;
 }
@@ -180,6 +184,16 @@ vi.mock("@/hooks/epic/use-epic-set-pinned-mutation", () => ({
 
 vi.mock("@/hooks/epic/use-epic-activity-status", () => ({
   useEpicActivityStatus: () => "idle",
+}));
+
+/**
+ * `useEpicPinLocalHomeSupported` reads `useHostClient()`, which throws
+ * outside a `<HostRuntimeProvider>` - absent in this file. Fixed at `false`:
+ * every existing case here predates lane 9 item 5 and pins the pre-`@1.1`
+ * reading (`local-home` permanently unavailable).
+ */
+vi.mock("@/hooks/epic/use-epic-pin-local-home-support", () => ({
+  useEpicPinLocalHomeSupported: () => false,
 }));
 
 function historyItem(overrides: Partial<HistoryItem>): HistoryItem {
@@ -648,6 +662,8 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       expect(testState.setPinnedMutate).toHaveBeenCalledWith({
         epicId: "epic-from-history",
         pinned: true,
+        isLocalHome: false,
+        hostId: null,
       });
     });
 
@@ -661,7 +677,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       renderPanel("embedded", "/");
 
       const pin = await screen.findByRole("button", {
-        name: "Pinning Local only epic needs cloud sync; it is stored on this device",
+        name: "Pinning Local only epic needs a newer host on the connected device; it is stored there",
       });
       expect(pin.getAttribute("aria-disabled")).toBe("true");
 
@@ -680,7 +696,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       renderPanel("embedded", "/");
 
       const pin = await screen.findByRole("button", {
-        name: "Pinning Orphaned epic is unavailable; its cloud copy was deleted and only this device's edits remain",
+        name: "Pinning Orphaned epic is unavailable; its cloud copy was deleted and only the connected device's edits remain",
       });
       expect(pin.getAttribute("aria-disabled")).toBe("true");
 
@@ -700,7 +716,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
     });
   });
 
-  describe("completeness and pending cloud page", () => {
+  describe("unavailable and pending cloud page", () => {
     it("does not declare the account empty when the cloud page is unavailable", async () => {
       testState.items = [];
       testState.completeness = {
@@ -711,13 +727,31 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       };
       renderPanel("embedded", "/");
 
-      expect(
-        await screen.findByTestId("epics-list-cloud-page-unavailable"),
-      ).not.toBeNull();
+      const unavailable = await screen.findByTestId("epics-list-unavailable");
+      expect(unavailable).not.toBeNull();
+      expect(screen.queryByTestId("epics-list-empty")).toBeNull();
+      expect(unavailable.getAttribute("data-remedy")).toBe("retry");
+    });
+
+    it("offers sign-in instead of a dead Retry when the session is unverified", async () => {
+      testState.items = [];
+      testState.completeness = {
+        cloudPage: "unavailable",
+        facets: "partial",
+        localRows: "none",
+        sort: "server",
+      };
+      useAuthStore.setState({ status: "unverified" });
+      renderPanel("embedded", "/");
+
+      const unavailable = await screen.findByTestId("epics-list-unavailable");
+      expect(unavailable.getAttribute("data-remedy")).toBe("sign-in");
+      expect(screen.queryByTestId("epics-list-unavailable-retry")).toBeNull();
+      expect(unavailable.textContent).toContain("Sign in again");
       expect(screen.queryByTestId("epics-list-empty")).toBeNull();
     });
 
-    it("explains when cloud tasks are unavailable instead of implying a complete local list", async () => {
+    it("renders the rows with no cloud or device notice when the cloud page is unavailable", async () => {
       testState.items = [
         historyItem({ id: "history-local", epicId: "local", title: "Local" }),
       ];
@@ -729,31 +763,20 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       };
       renderPanel("embedded", "/");
 
-      const notice = await screen.findByTestId("epics-list-completeness");
-      expect(notice.getAttribute("data-cloud-page")).toBe("unavailable");
-      expect(notice.textContent).toContain("Cloud tasks couldn't be reached");
-      expect(notice.textContent).toContain(
-        "Order covers the tasks listed here",
-      );
+      const rows = await screen.findByTestId("epics-list-rows");
+      expect(rows.textContent).toContain("Local");
+      expect(screen.queryByRole("status")).toBeNull();
+      // Scoped to the list body's own container rather than the whole
+      // document: unrelated chrome (a filter chip label, for example) could
+      // otherwise fail this assertion for a reason that has nothing to do
+      // with the row or empty-state copy under test.
+      const listBody = rows.closest("section");
+      expect(listBody).not.toBeNull();
+      expect(listBody?.textContent ?? "").not.toMatch(/cloud/i);
+      expect(listBody?.textContent ?? "").not.toMatch(/device/i);
     });
 
-    it("explains when local rows are truncated, without claiming where", async () => {
-      testState.completeness = {
-        cloudPage: "settled",
-        facets: "server",
-        localRows: "truncated",
-        sort: "loaded-union",
-      };
-      renderPanel("embedded", "/");
-
-      const notice = await screen.findByTestId("epics-list-completeness");
-      expect(notice.getAttribute("data-local-rows")).toBe("truncated");
-      expect(notice.textContent).toContain(
-        "couldn't be checked against your filters",
-      );
-    });
-
-    it("explains an empty filtered result when the local filter is unprovable", async () => {
+    it("does not call a filtered result empty when the listing was unavailable", async () => {
       testState.items = [];
       testState.completeness = {
         cloudPage: "unavailable",
@@ -766,15 +789,11 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       });
       renderPanel("embedded", "/");
 
-      const notice = await screen.findByTestId("epics-list-completeness");
-      expect(notice.getAttribute("data-local-rows")).toBe(
-        "suppressed-unprovable-filter",
-      );
-      expect(notice.textContent).toContain(
-        "can't be checked against tasks stored on this device",
-      );
+      expect(
+        await screen.findByTestId("epics-list-unavailable"),
+      ).not.toBeNull();
       expect(screen.queryByTestId("epics-list-empty")).toBeNull();
-      expect(screen.getByTestId("epics-list-filtered-empty")).not.toBeNull();
+      expect(screen.queryByTestId("epics-list-filtered-empty")).toBeNull();
     });
 
     it("shows the explicit cloud-pending state when local storage is empty", async () => {
@@ -783,12 +802,7 @@ describe("<MobileHistoryList /> (via <EpicsListPanel /> at a mobile viewport)", 
       renderPanel("embedded", "/");
 
       expect(screen.queryByTestId("epics-list-empty")).toBeNull();
-      expect(
-        await screen.findByTestId("epics-list-cloud-page-pending"),
-      ).not.toBeNull();
-      expect(
-        screen.getByTestId("epics-list-completeness").textContent,
-      ).toContain("Cloud tasks are still loading");
+      expect(await screen.findByTestId("epics-list-loading")).not.toBeNull();
     });
   });
 

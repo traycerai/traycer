@@ -67,6 +67,7 @@ import {
   useAuthStore,
   type AuthStatus,
 } from "@/stores/auth/auth-store";
+import { useShellLocalPlaneAdmission } from "@/hooks/auth/use-shell-local-plane-admission";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 /** A single signed-in owner for host reachability and lifecycle state. */
@@ -537,7 +538,7 @@ export function DefaultHostReadyGate(props: {
   readonly children: ReactNode;
 }): ReactNode {
   const readiness = useSurfaceReadiness("default-host", null);
-  const authStatus = useAuthStore((state) => state.status);
+  const shellAdmission = useShellLocalPlaneAdmission();
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   });
@@ -559,7 +560,15 @@ export function DefaultHostReadyGate(props: {
     // host that can be ready, so the gate must be allowed to narrate its
     // startup rather than short-circuit to "not signed in" and mount the app
     // over a host that cannot serve it yet.
-    signedIn: admitsLocalPlane(authStatus),
+    //
+    // On a shell with no local host that premise fails, and `gateBlocksApp`'s
+    // own reason for the `!signedIn` short-circuit is exactly this case -
+    // "blocking anyone else would hide the sign-in surface behind a host that
+    // cannot exist yet". An `unverified` relay-only session cannot reach a host
+    // at all (the relay wants a cloud credential it does not have), so it must
+    // NOT be held behind a readiness card in front of the auth surface that is
+    // the only thing that can fix it.
+    signedIn: shellAdmission.admitted,
     bypassed: pathname.startsWith(GATE_BYPASS_PATH_PREFIX),
   };
   if (!gateBlocksApp(predicateInput)) return props.children;

@@ -80,6 +80,7 @@ function fakeSession(): FakeSession {
       throw new Error("not exercised by these tests");
     }),
     notifyBearerRotated: vi.fn(),
+    notifyCloudVerdictChanged: vi.fn(),
     wake: vi.fn(),
     forceReconnect: vi.fn(),
     onClosed: (listener) => {

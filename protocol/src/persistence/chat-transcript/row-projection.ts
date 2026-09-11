@@ -546,6 +546,17 @@ export interface TurnStoppedInfo {
 const EMPTY_EVENT_IDS: readonly string[] = [];
 
 /**
+ * The only context a USER row ever carries - see `completedSteer` on the
+ * schema.
+ *
+ * A module constant for `EMPTY_ROW_CONTEXT`'s reason, one value over: the
+ * context is immutable and every steered user row of every chat wants the same
+ * one, so allocating a fresh copy per row per rebuild would hand the skeleton's
+ * fingerprint memo a new key for a value that has not changed.
+ */
+const COMPLETED_STEER_CONTEXT: TranscriptRowContext = { completedSteer: true };
+
+/**
  * Event types a turn's rows RENDER WITH but are not built from.
  *
  * `turn.*` drives the elapsed counter; `checkpoint.captured` drives the restore
@@ -819,7 +830,7 @@ export function projectTranscriptRows(
         createdAt: message.timestamp,
         source: { kind: "user", messageId: message.messageId },
         context: completedSteerMessageIds.has(message.messageId)
-          ? { completedSteer: true }
+          ? COMPLETED_STEER_CONTEXT
           : EMPTY_ROW_CONTEXT,
       });
       continue;
@@ -951,7 +962,7 @@ function describeTurnRows(input: {
   // renderer falls back to its own derivation. `false` is what that derivation
   // already produces from an isolated span, so speaking it would be bytes
   // asserting the answer the reader would have reached anyway.
-  const context: TranscriptRowContext = {
+  const turnContext: TranscriptRowContext = {
     ...(turn.startedAt === null ? { legacyRowAnchorAt: rowAnchorAt } : {}),
     ...(input.sessionAnchor === null
       ? {}
@@ -960,6 +971,16 @@ function describeTurnRows(input: {
       ? { hasLaterOverlappingChanges: true }
       : {}),
   };
+  // A turn with nothing to say gets the SHARED empty context, not a fresh empty
+  // object. Every consumer already treats the two identically - "nothing to
+  // say" is tested with `Object.keys(context).length > 0` - so this changes no
+  // output. What it changes is identity, which is what a fingerprint memo keys
+  // on: an ordinary modern turn (its own `startedAt`, no session anchor, no
+  // later overlapping checkpoint) is most of a transcript, and without this
+  // every one of them hands the skeleton a brand-new object on every rebuild
+  // and is re-fingerprinted for a context that has never differed from empty.
+  const context =
+    Object.keys(turnContext).length === 0 ? EMPTY_ROW_CONTEXT : turnContext;
 
   // The turn's surviving steered user records, in block order. Computed once
   // for the whole turn because every row of it names the same set - see

@@ -38,6 +38,19 @@ import type { BrowserViewBridge } from "./browser-view";
 
 export type { StoredCredentials } from "@traycer/protocol/config/credentials";
 
+export interface RendererCrashTelemetryInput {
+  readonly appVersion: string | null;
+  readonly buildRevision: string | null;
+  readonly componentStack: string | null;
+  readonly correlationId: string;
+  readonly fingerprint: string;
+  readonly timestamp: number;
+}
+
+export interface IRendererCrashTelemetryHost {
+  persist(input: RendererCrashTelemetryInput): Promise<void>;
+}
+
 /**
  * What a shell can say about the wake it is reporting through
  * `IRunnerHost.onSystemResumed`.
@@ -91,6 +104,13 @@ export type SystemResumeEvent = {
  * register it through module-level globals.
  */
 export interface IRunnerHost {
+  /**
+   * Durable renderer-crash sink. Desktop forwards directly to its main-process
+   * file logger so a dying renderer cannot lose the boundary's component stack.
+   * Shells without a local durable sink omit the capability.
+   */
+  readonly crashTelemetry?: IRendererCrashTelemetryHost;
+
   /** Complete native browser capability, or null on shells without one. */
   readonly browserView: BrowserViewBridge | null;
 
@@ -712,7 +732,7 @@ export type PushPermissionState = "prompt" | "granted" | "denied";
 
 /**
  * Read/repair surface for the device's OS push permission, backing the
- * Settings → Notifications "this phone" row. Only reachable where
+ * Settings → Sounds "this phone" row. Only reachable where
  * `IRunnerHost.pushPermission` is non-null.
  */
 export interface IPushPermissionHost {

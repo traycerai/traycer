@@ -532,6 +532,7 @@ function createDirtyEpicHandle(
     },
     requestFreshSnapshot: () => undefined,
     retryTransport: () => undefined,
+    wakeTransport: () => undefined,
     retryMigration: () => undefined,
     // These became ASYNC when the replica moved: the queue mints ids and the
     // mutations stamp the overlay on the worker thread, so every one of them
@@ -601,6 +602,7 @@ function createDirtyEpicHandle(
     detachTransport: () => undefined,
     requestFreshSnapshot: () => undefined,
     retryTransport: () => undefined,
+    wakeTransport: () => undefined,
     isClean: () => !store.getState().isDirty,
     hotArtifactRoomIdsForTests: () => [],
     ...INERT_ROOT_STATE_PORT,

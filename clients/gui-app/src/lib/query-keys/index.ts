@@ -5,6 +5,7 @@ import { uiQueryKeys } from "@/lib/query-keys/ui-query-keys";
 export {
   cloudQueryKeys,
   isCloudEpicTasksQueryKey,
+  isEpicPinReadingQueryKey,
 } from "@/lib/query-keys/cloud-query-keys";
 export {
   hostQueryKeys,
@@ -61,6 +62,7 @@ export { notificationsQueryKeys } from "@/lib/query-keys/notifications-query-key
 export { prQueryKeys } from "@/lib/query-keys/pr-query-keys";
 export { mentionQueryKeys } from "@/lib/query-keys/mention-query-keys";
 export { imageMutationKeys } from "@/lib/query-keys/image-mutation-keys";
+export { draftsMutationKeys } from "@/lib/query-keys/drafts-mutation-keys";
 
 export const queryKeys = {
   hostBase: hostQueryKeys.base,
@@ -72,6 +74,7 @@ export const queryKeys = {
   hostUsageSummary: hostQueryKeys.usageSummary,
   hostEpicTaskContexts: hostQueryKeys.epicTaskContexts,
   cloudEpicTasks: cloudQueryKeys.epicTasks,
+  cloudEpicPinReading: cloudQueryKeys.epicPinReading,
   cloudEpicTasksLastKnown: cloudQueryKeys.epicTasksLastKnown,
   cloudEpicTasksLocalFirstRevalidation:
     cloudQueryKeys.epicTasksLocalFirstRevalidation,

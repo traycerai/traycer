@@ -65,6 +65,7 @@ export function createFakeHostStreamClient(
     isReady,
     getClosedReason: () => closedReason,
     notifyBearerRotated: () => undefined,
+    notifyCloudVerdictChanged: () => undefined,
     reconnectAll: () => undefined,
     getMethodSupport: () => "unknown",
     subscribeMethodSupport: () => () => undefined,

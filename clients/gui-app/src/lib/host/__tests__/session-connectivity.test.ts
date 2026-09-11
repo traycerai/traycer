@@ -48,6 +48,36 @@ function createControllableClock(): {
  */
 const POLL_MS = 1_000;
 
+/** A resume source that never fires - the shell never suspended. */
+const NEVER_RESUMES = (): (() => void) => () => undefined;
+
+/**
+ * A resume source a test can pull, standing in for the shell's
+ * `onSystemResumed`. `subscribe` returns the disposer the store must call on
+ * teardown.
+ */
+interface ResumeSource {
+  readonly subscribe: (listener: () => void) => () => void;
+  readonly emit: () => void;
+  readonly listenerCount: () => number;
+}
+
+function createResumeSource(): ResumeSource {
+  const listeners = new Set<() => void>();
+  return {
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    emit: () => {
+      for (const listener of [...listeners]) listener();
+    },
+    listenerCount: () => listeners.size,
+  };
+}
+
 /** Long enough that the poll never fires, isolating the episode deadlines. */
 const POLL_NEVER_MS = SESSION_CONNECTIVITY_ESCALATE_AFTER_MS * 10;
 
@@ -67,6 +97,7 @@ describe("createSessionConnectivityStore", () => {
       streamClient: null,
       isReady: () => true,
       now: clock.now,
+      subscribeResume: NEVER_RESUMES,
       pollMs: POLL_MS,
       announceAfterMs: SESSION_CONNECTIVITY_ANNOUNCE_AFTER_MS,
       escalateAfterMs: SESSION_CONNECTIVITY_ESCALATE_AFTER_MS,
@@ -91,6 +122,7 @@ describe("createSessionConnectivityStore", () => {
       streamClient: createFakeHostStreamClient(ready.isReady),
       isReady: ready.isReady,
       now: createControllableClock().now,
+      subscribeResume: NEVER_RESUMES,
       pollMs: POLL_MS,
       announceAfterMs: SESSION_CONNECTIVITY_ANNOUNCE_AFTER_MS,
       escalateAfterMs: SESSION_CONNECTIVITY_ESCALATE_AFTER_MS,
@@ -108,6 +140,7 @@ describe("createSessionConnectivityStore", () => {
       streamClient: createFakeHostStreamClient(ready.isReady),
       isReady: ready.isReady,
       now: clock.now,
+      subscribeResume: NEVER_RESUMES,
       pollMs: POLL_MS,
       announceAfterMs: SESSION_CONNECTIVITY_ANNOUNCE_AFTER_MS,
       escalateAfterMs: SESSION_CONNECTIVITY_ESCALATE_AFTER_MS,
@@ -132,6 +165,7 @@ describe("createSessionConnectivityStore", () => {
       streamClient: createFakeHostStreamClient(ready.isReady),
       isReady: ready.isReady,
       now: clock.now,
+      subscribeResume: NEVER_RESUMES,
       pollMs: POLL_MS,
       announceAfterMs: SESSION_CONNECTIVITY_ANNOUNCE_AFTER_MS,
       escalateAfterMs: SESSION_CONNECTIVITY_ESCALATE_AFTER_MS,
@@ -164,6 +198,7 @@ describe("createSessionConnectivityStore", () => {
       streamClient: client,
       isReady: ready.isReady,
       now: clock.now,
+      subscribeResume: NEVER_RESUMES,
       pollMs: POLL_NEVER_MS,
       announceAfterMs: SESSION_CONNECTIVITY_ANNOUNCE_AFTER_MS,
       escalateAfterMs: SESSION_CONNECTIVITY_ESCALATE_AFTER_MS,
@@ -189,6 +224,7 @@ describe("createSessionConnectivityStore", () => {
       streamClient: createFakeHostStreamClient(ready.isReady),
       isReady: ready.isReady,
       now: clock.now,
+      subscribeResume: NEVER_RESUMES,
       pollMs: POLL_MS,
       announceAfterMs: SESSION_CONNECTIVITY_ANNOUNCE_AFTER_MS,
       escalateAfterMs: SESSION_CONNECTIVITY_ESCALATE_AFTER_MS,
@@ -219,6 +255,7 @@ describe("createSessionConnectivityStore", () => {
       streamClient: client,
       isReady: ready.isReady,
       now: clock.now,
+      subscribeResume: NEVER_RESUMES,
       pollMs: POLL_MS,
       announceAfterMs: SESSION_CONNECTIVITY_ANNOUNCE_AFTER_MS,
       escalateAfterMs: SESSION_CONNECTIVITY_ESCALATE_AFTER_MS,
@@ -249,6 +286,7 @@ describe("createSessionConnectivityStore", () => {
       streamClient: createFakeHostStreamClient(ready.isReady),
       isReady: ready.isReady,
       now: clock.now,
+      subscribeResume: NEVER_RESUMES,
       pollMs: POLL_MS,
       announceAfterMs: SESSION_CONNECTIVITY_ANNOUNCE_AFTER_MS,
       escalateAfterMs: SESSION_CONNECTIVITY_ESCALATE_AFTER_MS,
@@ -278,6 +316,7 @@ describe("createSessionConnectivityStore", () => {
       streamClient: createFakeHostStreamClient(readyA.isReady),
       isReady: readyA.isReady,
       now: clockA.now,
+      subscribeResume: NEVER_RESUMES,
       pollMs: POLL_MS,
       announceAfterMs: SESSION_CONNECTIVITY_ANNOUNCE_AFTER_MS,
       escalateAfterMs: SESSION_CONNECTIVITY_ESCALATE_AFTER_MS,
@@ -295,6 +334,7 @@ describe("createSessionConnectivityStore", () => {
       streamClient: createFakeHostStreamClient(readyB.isReady),
       isReady: readyB.isReady,
       now: createControllableClock().now,
+      subscribeResume: NEVER_RESUMES,
       pollMs: POLL_MS,
       announceAfterMs: SESSION_CONNECTIVITY_ANNOUNCE_AFTER_MS,
       escalateAfterMs: SESSION_CONNECTIVITY_ESCALATE_AFTER_MS,
@@ -315,6 +355,7 @@ describe("createSessionConnectivityStore", () => {
       streamClient: client,
       isReady: ready.isReady,
       now: clock.now,
+      subscribeResume: NEVER_RESUMES,
       pollMs: POLL_NEVER_MS,
       announceAfterMs: SESSION_CONNECTIVITY_ANNOUNCE_AFTER_MS,
       escalateAfterMs: SESSION_CONNECTIVITY_ESCALATE_AFTER_MS,
@@ -362,6 +403,7 @@ describe("createSessionConnectivityStore", () => {
       streamClient: client,
       isReady: ready.isReady,
       now: clock.now,
+      subscribeResume: NEVER_RESUMES,
       pollMs: POLL_NEVER_MS,
       announceAfterMs: SESSION_CONNECTIVITY_ANNOUNCE_AFTER_MS,
       escalateAfterMs: SESSION_CONNECTIVITY_ESCALATE_AFTER_MS,
@@ -395,6 +437,7 @@ describe("createSessionConnectivityStore", () => {
       streamClient: client,
       isReady: ready.isReady,
       now: clock.now,
+      subscribeResume: NEVER_RESUMES,
       pollMs: POLL_MS,
       announceAfterMs: SESSION_CONNECTIVITY_ANNOUNCE_AFTER_MS,
       escalateAfterMs: SESSION_CONNECTIVITY_ESCALATE_AFTER_MS,
@@ -427,6 +470,7 @@ describe("createSessionConnectivityStore", () => {
       streamClient: client,
       isReady: ready.isReady,
       now: clock.now,
+      subscribeResume: NEVER_RESUMES,
       pollMs: POLL_NEVER_MS,
       announceAfterMs: SESSION_CONNECTIVITY_ANNOUNCE_AFTER_MS,
       escalateAfterMs: SESSION_CONNECTIVITY_ESCALATE_AFTER_MS,
@@ -454,6 +498,7 @@ describe("createSessionConnectivityStore", () => {
       streamClient: client,
       isReady: ready.isReady,
       now: createControllableClock().now,
+      subscribeResume: NEVER_RESUMES,
       pollMs: POLL_NEVER_MS,
       announceAfterMs: SESSION_CONNECTIVITY_ANNOUNCE_AFTER_MS,
       escalateAfterMs: SESSION_CONNECTIVITY_ESCALATE_AFTER_MS,
@@ -491,6 +536,9 @@ describe("fake host stream client close", () => {
       streamClient: client,
       isReady: ready.isReady,
       now: clock.now,
+      // Inert: this case is about the fake's close, and a resume edge that
+      // never fires is the honest stand-in for a shell that reports none.
+      subscribeResume: () => () => undefined,
       pollMs: POLL_NEVER_MS,
       announceAfterMs: SESSION_CONNECTIVITY_ANNOUNCE_AFTER_MS,
       escalateAfterMs: SESSION_CONNECTIVITY_ESCALATE_AFTER_MS,
@@ -519,6 +567,116 @@ describe("fake host stream client close", () => {
     expect(listener.mock.calls.length).toBe(callsAfterClose);
 
     dispose();
+  });
+});
+
+describe("createSessionConnectivityStore across a system resume", () => {
+  // The deadlines are for a person watching (see the store's own doc). A
+  // suspended WebView keeps neither its timers nor its person, yet `Date.now()`
+  // keeps counting, so on thaw `downSince` reads minutes old and the 15 s
+  // deadline - which fires as JS thaws, BEFORE the resume signal is delivered -
+  // escalates an outage nobody has watched for a second. The episode is dated
+  // from the resume, so the deadlines measure the wait since return.
+
+  function buildDownStore(resume: ResumeSource) {
+    const ready = createReadyControl(true);
+    const clock = createControllableClock();
+    const client = createFakeHostStreamClient(ready.isReady);
+    const store = createSessionConnectivityStore({
+      streamClient: client,
+      isReady: ready.isReady,
+      now: clock.now,
+      subscribeResume: resume.subscribe,
+      // No poll: every transition below is the work of an episode deadline
+      // or of the resume itself, which is what these cases are about.
+      pollMs: POLL_NEVER_MS,
+      announceAfterMs: SESSION_CONNECTIVITY_ANNOUNCE_AFTER_MS,
+      escalateAfterMs: SESSION_CONNECTIVITY_ESCALATE_AFTER_MS,
+    });
+    const unsubscribe = store.subscribe(vi.fn());
+    expect(store.getSnapshot()).toBe("ready");
+    ready.setReady(false);
+    // The close signal is what notices the drop; the episode is dated here.
+    client.fireClosed();
+    expect(store.getSnapshot()).toBe("settling");
+    return { clock, store, unsubscribe, ready };
+  }
+
+  it("re-dates the outage to the resume and clears an escalation the thaw fired", () => {
+    const resume = createResumeSource();
+    const { clock, store, unsubscribe } = buildDownStore(resume);
+    // Long past the escalate deadline, as a 3-minute background reads on thaw.
+    clock.advance(SESSION_CONNECTIVITY_ESCALATE_AFTER_MS * 12);
+    expect(store.getSnapshot()).toBe("interrupted-prolonged");
+
+    resume.emit();
+    // Back to the start of an episode: inside the announce window.
+    expect(store.getSnapshot()).toBe("settling");
+    clock.advance(SESSION_CONNECTIVITY_ANNOUNCE_AFTER_MS);
+    expect(store.getSnapshot()).toBe("interrupted");
+    clock.advance(
+      SESSION_CONNECTIVITY_ESCALATE_AFTER_MS -
+        SESSION_CONNECTIVITY_ANNOUNCE_AFTER_MS -
+        1,
+    );
+    expect(store.getSnapshot()).toBe("interrupted");
+    clock.advance(1);
+    expect(store.getSnapshot()).toBe("interrupted-prolonged");
+    unsubscribe();
+  });
+
+  it("restarts the wait even when the deadline had not yet passed", () => {
+    const resume = createResumeSource();
+    const { clock, store, unsubscribe } = buildDownStore(resume);
+    clock.advance(SESSION_CONNECTIVITY_ESCALATE_AFTER_MS * 0.7);
+    expect(store.getSnapshot()).toBe("interrupted");
+    resume.emit();
+    clock.advance(SESSION_CONNECTIVITY_ESCALATE_AFTER_MS * 0.7);
+    // 1.4 deadlines since the drop, 0.7 since the resume.
+    expect(store.getSnapshot()).toBe("interrupted");
+    clock.advance(SESSION_CONNECTIVITY_ESCALATE_AFTER_MS * 0.3);
+    expect(store.getSnapshot()).toBe("interrupted-prolonged");
+    unsubscribe();
+  });
+
+  it("does nothing on a resume while the session is ready", () => {
+    const resume = createResumeSource();
+    const clock = createControllableClock();
+    const ready = createReadyControl(true);
+    const store = createSessionConnectivityStore({
+      streamClient: createFakeHostStreamClient(ready.isReady),
+      isReady: ready.isReady,
+      now: clock.now,
+      subscribeResume: resume.subscribe,
+      pollMs: POLL_NEVER_MS,
+      announceAfterMs: SESSION_CONNECTIVITY_ANNOUNCE_AFTER_MS,
+      escalateAfterMs: SESSION_CONNECTIVITY_ESCALATE_AFTER_MS,
+    });
+    const unsubscribe = store.subscribe(vi.fn());
+    expect(store.getSnapshot()).toBe("ready");
+    resume.emit();
+    expect(store.getSnapshot()).toBe("ready");
+    unsubscribe();
+  });
+
+  it("subscribes to the resume signal with the other signals and releases it with them", () => {
+    const resume = createResumeSource();
+    const clock = createControllableClock();
+    const ready = createReadyControl(true);
+    const store = createSessionConnectivityStore({
+      streamClient: createFakeHostStreamClient(ready.isReady),
+      isReady: ready.isReady,
+      now: clock.now,
+      subscribeResume: resume.subscribe,
+      pollMs: POLL_NEVER_MS,
+      announceAfterMs: SESSION_CONNECTIVITY_ANNOUNCE_AFTER_MS,
+      escalateAfterMs: SESSION_CONNECTIVITY_ESCALATE_AFTER_MS,
+    });
+    expect(resume.listenerCount()).toBe(0);
+    const unsubscribe = store.subscribe(vi.fn());
+    expect(resume.listenerCount()).toBe(1);
+    unsubscribe();
+    expect(resume.listenerCount()).toBe(0);
   });
 });
 

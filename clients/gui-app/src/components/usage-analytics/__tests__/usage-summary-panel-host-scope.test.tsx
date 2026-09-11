@@ -156,6 +156,7 @@ function renderPanel(input: {
       client={client}
       hostNames={input.hostNames}
       currentHostId={mockLocalHostEntry.hostId}
+      plane={null}
     />,
     { wrapper },
   );
