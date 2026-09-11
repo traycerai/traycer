@@ -278,7 +278,7 @@ describe("tab recovery history", () => {
     batchHeaderTabRecovery(() => {
       recordClosedHeaderTab(two);
       withoutTabRecovery(() => recordClosedHeaderTab(three));
-    });
+    }, null);
 
     const entries = useTabRecoveryHistory.getState().entries;
     expect(entries).toHaveLength(2);
@@ -300,7 +300,7 @@ describe("tab recovery history", () => {
         index: 0,
       });
       recordClosedHeaderTab(draftItem);
-    });
+    }, null);
     const before = canvasWithTwoTiles();
     const afterA = closeTab(before, "p1", SPEC_A.instanceId);
     const after = closeTab(afterA, "p1", SPEC_B.instanceId);

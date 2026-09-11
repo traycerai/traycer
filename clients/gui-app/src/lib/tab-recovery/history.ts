@@ -1,4 +1,3 @@
-import { readTabStripLayout } from "@/stores/tabs/store";
 import {
   findStripItemForRef,
   type PersistedTabStripLayout,
@@ -86,18 +85,13 @@ export type LegacyRecoveryDraft = Pick<
   | "composerMode"
   | "workspace"
 >;
-// Registered tab kinds load source stores that also use this journal. Resolve
-// their placement validator lazily, when a persisted entry is actually parsed.
 const headerSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("epic"),
     tab: tabSchema,
     canvas: canvasSchema,
     index: z.number().int().nonnegative(),
-    placement: z
-      .lazy(() => closedHeaderPlacementSchema)
-      .optional()
-      .catch(undefined),
+    placement: closedHeaderPlacementSchema.optional().catch(undefined),
   }),
   z.object({
     kind: z.literal("draft"),
@@ -105,10 +99,7 @@ const headerSchema = z.discriminatedUnion("kind", [
     hostId: z.string().nullable(),
     legacyDraft: draftSchema.optional(),
     index: z.number().int().nonnegative(),
-    placement: z
-      .lazy(() => closedHeaderPlacementSchema)
-      .optional()
-      .catch(undefined),
+    placement: closedHeaderPlacementSchema.optional().catch(undefined),
   }),
 ]);
 const currentEntrySchema = z.discriminatedUnion("kind", [
@@ -366,13 +357,16 @@ export function withoutTabRecovery<T>(run: () => T): T {
     suppressed -= 1;
   }
 }
-export function batchHeaderTabRecovery(run: () => void): void {
+export function batchHeaderTabRecovery(
+  run: () => void,
+  layout: PersistedTabStripLayout | null,
+): void {
   if (batch !== null) {
     run();
     return;
   }
   batch = [];
-  batchLayout = readTabStripLayout();
+  batchLayout = layout;
   try {
     run();
   } finally {

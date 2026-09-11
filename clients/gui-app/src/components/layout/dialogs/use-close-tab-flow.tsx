@@ -95,7 +95,7 @@ export function useCloseTabFlow(): CloseTabFlow {
             });
           }
         }
-      });
+      }, layout);
       if (skipped.length > 0) {
         const detail =
           skipped.length === 1 ? `"${skipped[0]}"` : `${skipped.length} tabs`;
@@ -135,7 +135,7 @@ export function useCloseTabFlow(): CloseTabFlow {
             // Capture the neighbor after the other group members are gone.
             finalizeCloseTab(active);
           }
-        });
+        }, readTabStripLayout());
         if (skipped > 0)
           toast.warning(`Kept ${skipped} tabs open with unsynced edits`, {
             description:

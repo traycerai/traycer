@@ -295,7 +295,7 @@ function installBridge(reopen: () => Promise<void>): void {
       batchHeaderTabRecovery(() => {
         for (const ref of refs)
           tabCommandCoordinator.closeRefAfterConfirmed(ref);
-      });
+      }, readTabStripLayout());
     },
     seedTopLevelSplit: (
       leftTaskId: string,

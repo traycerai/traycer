@@ -15,15 +15,17 @@ import {
   type TabCustomization,
   type TabGroup,
 } from "@/stores/tabs/tab-groups";
-import { isRegisteredTabKind } from "@/stores/tabs/registry";
 import type { TabRef } from "@/stores/tabs/types";
 
-const refSchema = z.object({
-  kind: z.custom<TabRef["kind"]>(
-    (kind) => typeof kind === "string" && isRegisteredTabKind(kind),
-  ),
-  id: z.string(),
-});
+// Keep journal parsing independent of the UI registry's source-store imports.
+// This mapping must cover every registered kind, checked against its type.
+const persistedKinds = {
+  epic: "epic",
+  draft: "draft",
+  history: "history",
+  settings: "settings",
+} as const satisfies { [Kind in TabRef["kind"]]: Kind };
+const refSchema = z.object({ kind: z.enum(persistedKinds), id: z.string() });
 const sideSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("tab"), ref: refSchema }),
   z.object({ kind: z.literal("empty") }),

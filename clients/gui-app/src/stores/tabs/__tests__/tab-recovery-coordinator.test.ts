@@ -33,7 +33,7 @@ import {
   type PersistedTabStripLayout,
 } from "@/stores/tabs/layout";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
-import { useTabsStore } from "@/stores/tabs/store";
+import { readTabStripLayout, useTabsStore } from "@/stores/tabs/store";
 import type { TabRef } from "@/stores/tabs/types";
 
 function resetStores(): void {
@@ -262,7 +262,7 @@ describe("tab recovery through the command coordinator", () => {
     batchHeaderTabRecovery(() => {
       expect(tabCommandCoordinator.closeRefAfterConfirmed(refB)).toBe(true);
       expect(tabCommandCoordinator.closeRefAfterConfirmed(draftRef)).toBe(true);
-    });
+    }, readTabStripLayout());
 
     const entries = useTabRecoveryHistory.getState().entries;
     expect(entries).toHaveLength(1);
@@ -490,7 +490,7 @@ describe("tab recovery through the command coordinator", () => {
     batchHeaderTabRecovery(() => {
       expect(tabCommandCoordinator.closeRefAfterConfirmed(textRef)).toBe(true);
       expect(tabCommandCoordinator.closeRefAfterConfirmed(imageRef)).toBe(true);
-    });
+    }, readTabStripLayout());
     const recovery = useTabRecoveryHistory.getState().entries.at(0);
     if (recovery === undefined || recovery.kind !== "header") {
       throw new Error("expected the closed draft recovery entry");
@@ -533,7 +533,7 @@ describe("tab recovery through the command coordinator", () => {
     batchHeaderTabRecovery(() => {
       expect(tabCommandCoordinator.closeRefAfterConfirmed(refA)).toBe(true);
       expect(tabCommandCoordinator.closeRefAfterConfirmed(refB)).toBe(true);
-    });
+    }, readTabStripLayout());
     const recovery = useTabRecoveryHistory.getState().entries.at(0);
     if (recovery === undefined || recovery.kind !== "header") {
       throw new Error("expected the bulk task recovery entry");
@@ -652,7 +652,7 @@ describe("tab recovery through the command coordinator", () => {
     batchHeaderTabRecovery(() => {
       expect(tabCommandCoordinator.closeRefAfterConfirmed(refA)).toBe(true);
       expect(tabCommandCoordinator.closeRefAfterConfirmed(refB)).toBe(true);
-    });
+    }, readTabStripLayout());
     const entry = useTabRecoveryHistory.getState().entries.at(0);
     if (entry === undefined || entry.kind !== "header") {
       throw new Error("expected a bulk group recovery entry");
@@ -761,7 +761,7 @@ describe("tab recovery through the command coordinator", () => {
     batchHeaderTabRecovery(() => {
       expect(tabCommandCoordinator.closeRefAfterConfirmed(refA)).toBe(true);
       expect(tabCommandCoordinator.closeRefAfterConfirmed(refC)).toBe(true);
-    });
+    }, readTabStripLayout());
     const entry = useTabRecoveryHistory.getState().entries.at(0);
     if (entry === undefined || entry.kind !== "header") {
       throw new Error("expected a mixed recovery entry");
@@ -801,7 +801,7 @@ describe("tab recovery through the command coordinator", () => {
       expect(tabCommandCoordinator.closeRefAfterConfirmed(refA)).toBe(true);
       expect(tabCommandCoordinator.closeRefAfterConfirmed(refB)).toBe(true);
       expect(tabCommandCoordinator.closeRefAfterConfirmed(refC)).toBe(true);
-    });
+    }, readTabStripLayout());
     const entry = useTabRecoveryHistory.getState().entries.at(0);
     if (entry === undefined || entry.kind !== "header") {
       throw new Error("expected a full split batch recovery entry");
