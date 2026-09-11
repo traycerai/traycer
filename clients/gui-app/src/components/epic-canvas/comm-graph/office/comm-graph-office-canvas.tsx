@@ -1573,7 +1573,7 @@ function drawNameTags(args: {
   readonly selectedAgentId: string | null;
   readonly searchMatchIds: ReadonlySet<string>;
   readonly lod: OfficeLod;
-}): void {
+}): ReadonlySet<string> {
   const {
     backings,
     camera,
@@ -1585,11 +1585,12 @@ function drawNameTags(args: {
     searchMatchIds,
     selectedAgentId,
   } = args;
+  const named = new Set<string>();
   // SEMANTIC ZOOM. At overview a name is a smear over a five-pixel pip, so
   // there are none; in the middle band only the agents the reader has actually
   // pointed at get one, because a floor of four hundred names is a wall of text
   // that hides the office it describes; at close-up everything is named.
-  if (lod === 0) return;
+  if (lod === 0) return named;
   const candidates = resetScratch(nameTagScratch);
   ctx.font = LABEL_FONT;
   for (const label of labels) {
@@ -1617,6 +1618,7 @@ function drawNameTags(args: {
     candidates.push({
       text: label.text,
       tone: label.tone,
+      ownerAgentId: owner,
       centerX: label.x * camera.zoom + camera.x,
       baselineY: label.y * camera.zoom + camera.y,
       width: measuredWidth(ctx, label.text),
@@ -1632,7 +1634,12 @@ function drawNameTags(args: {
       backing: backings[placed.tone],
       alpha: 1,
     });
+    // PLACED, not merely offered. A tag with nowhere to go is dropped rather
+    // than drawn over its neighbour, and an agent whose tag was dropped has
+    // not been named by this path.
+    if (placed.ownerAgentId !== null) named.add(placed.ownerAgentId);
   }
+  return named;
 }
 
 function drawOfficeFrame(args: DrawFrameArgs): void {
@@ -1778,7 +1785,7 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
   drawSignLabels({ ctx, signs, camera, palette, lod });
-  drawNameTags({
+  const alreadyNamed = drawNameTags({
     ctx,
     labels,
     camera,
@@ -1807,6 +1814,7 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
     nameById,
     searchMatchIds,
     lod,
+    alreadyNamed,
   });
 }
 
@@ -1827,6 +1835,14 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
  *
  * The ring is not a name and stays at every zoom: at overview it is the only
  * thing that can say where a match is.
+ *
+ * THE NAME IS THE TAG PATH'S unless that path did not draw one. A matched
+ * agent qualifies for an ordinary name tag, so drawing a Find label beside it
+ * put two names at the same anchor - which read as one slightly bold name and
+ * hid itself whenever the tag was truncated and the two strings stopped
+ * matching. `drawNameTags` reports who it actually placed, and Find names only
+ * the agents it did not: one whose tag was dropped for collision, or whose
+ * view emitted no label drawable for it at all.
  */
 function drawFindOverlay(args: {
   readonly ctx: CanvasRenderingContext2D;
@@ -1838,8 +1854,11 @@ function drawFindOverlay(args: {
   readonly nameById: ReadonlyMap<string, string>;
   readonly searchMatchIds: ReadonlySet<string>;
   readonly lod: OfficeLod;
+  /** Agents the ordinary name-tag path has already put a name on screen for. */
+  readonly alreadyNamed: ReadonlySet<string>;
 }): void {
   const {
+    alreadyNamed,
     backing,
     camera,
     ctx,
@@ -1887,6 +1906,10 @@ function drawFindOverlay(args: {
     // NO NAMES AT OVERVIEW, the same rule every other name on this canvas
     // obeys. The ring above has already said where the match is.
     if (lod === 0) continue;
+    // ONE NAME. The office has already named this agent, laid out against its
+    // neighbours and truncated to fit; a second copy at the same anchor is not
+    // a second piece of information.
+    if (alreadyNamed.has(agentId)) continue;
     const name = nameById.get(agentId);
     if (name === undefined) continue;
     const anchor = anchors.get(agentId);

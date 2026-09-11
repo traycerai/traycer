@@ -2205,12 +2205,14 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
      * "Agent 10", ... - searching one of those matches several agents and the
      * counts below stop being about one agent's parts.
      */
-    const ONLY_MATCH = "Quilfeather Zarrowmere";
+    const ONLY_MATCH = "Quilfeather";
+    /** Long enough that the ordinary tag truncates it; same first word. */
+    const LONG_MATCH = "Quilfeather Zarrowmere";
 
-    function realCity() {
+    function realCity(name: string) {
       const fixture = makeTestEpic("one-team", 12, 9);
       const agents = fixture.agents.map(canvasAgent);
-      const matched = { ...agents[0], name: ONLY_MATCH };
+      const matched = { ...agents[0], name };
       return {
         agents: [matched, ...agents.slice(1)],
         matched,
@@ -2221,8 +2223,8 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     /** One `drawScreenLabel` is four backing passes plus one text pass. */
     const PASSES_PER_LABEL = 5;
 
-    function renderCity(zoom: number) {
-      const { agents, ids, matched } = realCity();
+    function renderCity(zoom: number, name: string) {
+      const { agents, ids, matched } = realCity(name);
       render(
         withQueryClient(
           cloneElement(
@@ -2246,13 +2248,28 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
       });
     }
 
-    /** Every `fillText` call carrying this exact name. */
+    /**
+     * Every `fillText` pass that NAMES this agent, truncation included.
+     *
+     * The ordinary tag cuts a long name to fit - "Quilfeather Zarrowmere" is
+     * painted "Quilfeather Z…" - so counting exact matches misses the very
+     * label this case is about. That is how the shipped fixup-3 case passed
+     * while two names were being drawn: the long name hid the truncated tag,
+     * and only Find's untruncated copy was counted.
+     *
+     * Case-sensitive on purpose. A cabin's own plate is set in capitals
+     * ("QUILFEATHER…"), and that is signage naming a room, not a name tag.
+     */
     function namePaints(name: string): number {
-      return paintedText().filter((text) => text === name).length;
+      return paintedText().filter(
+        (text) =>
+          text === name ||
+          (text.endsWith("…") && name.startsWith(text.slice(0, -1))),
+      ).length;
     }
 
     it("paints a matched agent's name once, not once per hit region", async () => {
-      const matched = renderCity(1);
+      const matched = renderCity(1, ONLY_MATCH);
       await findFor(matched.name);
       calls.length = 0;
       // ONE frame. Every count below is per frame, and a flush is a frame.
@@ -2263,15 +2280,57 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
       // its body and its seat backstop - thirty-two labels stacked four pixels
       // apart, 160 passes where the reviewer allowed ten.
       expect(namePaints(matched.name)).toBe(PASSES_PER_LABEL);
-      // City emits no name-tag drawable for this agent, so Find's label is the
-      // only name it has - which is why Find keeps a label of its own rather
-      // than deferring wholesale to the name-tag path. What it borrows from
-      // that path is the RULE, not the drawing.
-      expect(namePaints(matched.name)).toBeGreaterThan(0);
+    });
+
+    it("keeps one name when the ordinary tag TRUNCATES it", async () => {
+      const matched = renderCity(1, LONG_MATCH);
+      await findFor(matched.name);
+      calls.length = 0;
+      // ONE frame. Every count below is per frame, and a flush is a frame.
+      flushRaf(1);
+
+      // The control this case exists to be. A long name is painted
+      // "Quilfeather Z…" by the tag path and in full by Find, so the two
+      // strings differ and an exact-match count sees only one of them - which
+      // is exactly how the fixup-3 case passed while two names were on screen.
+      expect(namePaints(matched.name)).toBe(PASSES_PER_LABEL);
+      // And the one that survived is the tag's, truncated to fit its
+      // neighbours - not Find's untruncated copy over the top of it.
+      const painted = paintedText().filter((text) => text.endsWith("…"));
+      expect(painted).toContain("Quilfeather Z…");
+      expect(paintedText()).not.toContain(LONG_MATCH);
+    });
+
+    it("keeps one name on a matched agent whose anchor is moving", async () => {
+      const matched = renderCity(1, ONLY_MATCH);
+      await findFor(matched.name);
+
+      // Several consecutive frames of a live office. A duplicate that tracks
+      // the same anchor is invisible to a single still frame - both copies sit
+      // on top of each other - so the count has to hold while the anchor moves.
+      const anchors: number[] = [];
+      for (let frame = 0; frame < 6; frame += 1) {
+        calls.length = 0;
+        flushRaf(1);
+        expect(namePaints(matched.name)).toBe(PASSES_PER_LABEL);
+        const painted = calls.find(
+          (call) =>
+            call.method === "fillText" &&
+            typeof call.args[0] === "string" &&
+            call.args[0].startsWith(ONLY_MATCH.slice(0, 6)),
+        );
+        if (painted !== undefined && typeof painted.args[1] === "number") {
+          anchors.push(painted.args[1]);
+        }
+      }
+      // The office really did move under it, so the frames above were not six
+      // copies of one still picture.
+      expect(anchors.length).toBeGreaterThan(0);
+      expect(new Set(anchors).size).toBeGreaterThan(1);
     });
 
     it("draws no Find name at overview, where the office draws no names at all", async () => {
-      const matched = renderCity(0.5);
+      const matched = renderCity(0.5, ONLY_MATCH);
       await findFor(matched.name);
       calls.length = 0;
       // ONE frame. Every count below is per frame, and a flush is a frame.
@@ -2287,7 +2346,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     });
 
     it("paints nothing for an empty match", async () => {
-      const matched = renderCity(1);
+      const matched = renderCity(1, ONLY_MATCH);
       await findFor("no-such-agent-anywhere");
       calls.length = 0;
       // ONE frame. Every count below is per frame, and a flush is a frame.
@@ -2299,7 +2358,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     });
 
     it("rings a matched agent once over all of its parts", async () => {
-      const matched = renderCity(1);
+      const matched = renderCity(1, ONLY_MATCH);
       await findFor(matched.name);
       calls.length = 0;
       // ONE frame. Every count below is per frame, and a flush is a frame.
