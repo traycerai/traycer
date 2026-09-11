@@ -15,6 +15,14 @@
  * CLAIM: a local-plane frame, or a `1.0` host that predates the field. A
  * consumer must never read `null` as "connected".
  *
+ * A host serving the MERGED plane (origin store plus other hosts' entries)
+ * uses the same two words: `servedBy: "cloud"` only while its union reaches
+ * the fleet (`cloudSyncStatus: "connected"`), and `servedBy: "local"` under
+ * the real link stamp otherwise - so a `"local"` frame may carry a non-null
+ * status. Read `servedBy` together with the stamp: fleet coverage is the
+ * `"cloud"` + `connected` pair, and a `"local"` frame stays authoritative for
+ * the sending host's own agents whatever the stamp says about its link.
+ *
  * `1.0` is frozen below (`agentActivitySubscribeServerFrameSchemaV10`) - it
  * has shipped, and `canBridgeStream()` needs the `{1,0}` line registered to
  * bridge a `1.1` client down to a `1.0` host. Do not add fields to it.
