@@ -111,10 +111,24 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import * as Y from "yjs";
 import { CommGraphTile } from "@/components/epic-canvas/renderers/comm-graph-tile";
 import * as officeAutoModule from "@/lib/comm-graph/office/office-auto";
+import { OfficeScene } from "@/lib/comm-graph/office/office-scene";
+import type { OfficeViewId } from "@/lib/comm-graph/office/office-types";
+import {
+  OFFICE_VIEWS,
+  OFFICE_VIEW_IDS,
+} from "@/lib/comm-graph/office/views/office-view";
 import { __setCommGraphSubscriptionOpenerForTests } from "@/lib/comm-graph/comm-graph-opener-override";
 import type {
   CommGraphSubscriptionHandlers,
@@ -329,6 +343,35 @@ function TileFromStore() {
   const tile = commGraphTileIn(useEpicCanvas(AUTO_TAB_ID));
   if (tile === null) return null;
   return <CommGraphTile node={tile} viewTabId={AUTO_TAB_ID} />;
+}
+
+/** Radix opens on pointerdown, not click - a bare click leaves the menu shut. */
+function openPicker(): void {
+  fireEvent.pointerDown(screen.getByTestId("comm-graph-office-view-picker"), {
+    button: 0,
+    ctrlKey: false,
+    pointerType: "mouse",
+  });
+}
+
+/**
+ * Reaches Auto's resolved Floor, through the real store and the real canvas:
+ * the state every pick below starts from.
+ */
+async function reachAutoFloor(): Promise<void> {
+  await renderOfficeTile();
+  await waitFor(() => {
+    expect(Array.from(openedByHost.keys()).sort()).toEqual([HOST_A, HOST_B]);
+  });
+  setIntersecting(true);
+  setOfficeCanvasSize({ width: 1040, height: 700 });
+  act(() => {
+    openedByHost.get(HOST_A)?.onSnapshot([], null);
+    openedByHost.get(HOST_B)?.onSnapshot([], null);
+  });
+  await waitFor(() => {
+    expect(storedView()?.officeAutoView).toBe("floor");
+  });
 }
 
 /**
@@ -751,38 +794,6 @@ describe("CommGraphTile", () => {
   });
 
   describe("picking a view", () => {
-    /** Reaches Auto's resolved Floor, through the real store and the real canvas. */
-    async function reachAutoFloor(): Promise<void> {
-      await renderOfficeTile();
-      await waitFor(() => {
-        expect(Array.from(openedByHost.keys()).sort()).toEqual([
-          HOST_A,
-          HOST_B,
-        ]);
-      });
-      setIntersecting(true);
-      setOfficeCanvasSize({ width: 1040, height: 700 });
-      act(() => {
-        openedByHost.get(HOST_A)?.onSnapshot([], null);
-        openedByHost.get(HOST_B)?.onSnapshot([], null);
-      });
-      await waitFor(() => {
-        expect(storedView()?.officeAutoView).toBe("floor");
-      });
-    }
-
-    /** Radix opens on pointerdown, not click - a bare click leaves the menu shut. */
-    function openPicker(): void {
-      fireEvent.pointerDown(
-        screen.getByTestId("comm-graph-office-view-picker"),
-        {
-          button: 0,
-          ctrlKey: false,
-          pointerType: "mouse",
-        },
-      );
-    }
-
     it("picking the already-resolved view records the choice without moving the camera", async () => {
       // `handleOfficeViewChange` used to compare `next` against the STORED
       // `officeView`, which is null on a tile still following Auto - so
@@ -838,6 +849,187 @@ describe("CommGraphTile", () => {
       expect(storedView()?.x).toBe(DEFAULT_COMM_GRAPH_VIEW.x);
       expect(storedView()?.y).toBe(DEFAULT_COMM_GRAPH_VIEW.y);
       expect(storedView()?.zoom).toBe(DEFAULT_COMM_GRAPH_VIEW.zoom);
+    });
+  });
+
+  /**
+   * ONE VIEW ALIVE PER TILE, driven through the real picker on the real keyed
+   * tile: [Performance rule 1](the plan's performance artifact), whose whole
+   * mechanism is that a view change is an unmount and a mount rather than a
+   * scene swapped underneath a canvas that stays put.
+   *
+   * WHAT jsdom CAN SEE of that, and what it cannot. There is no 2D context
+   * here, so the canvas's frame loop never starts and its static layer is
+   * never even constructed - "one static layer" and "a sprite cache within
+   * its cap" are not observable from a tile in this environment, and are
+   * pinned where they are observable instead (`office-static-layer.test.ts`
+   * for the layer's own budget and release, `views/__tests__/
+   * office-plan-perf.test.ts` for the sprite working set). What survives the
+   * missing context is the scene: it is built and synced by an effect that
+   * needs no context at all, so how many scenes a tile has, and which of them
+   * are still live, is exactly answerable - and it is the half of the rule
+   * that could actually regress, since the canvas holds its scene in a ref
+   * keyed by EPIC id alone and it is the tile's `key` that retires it.
+   */
+  describe("switching views", () => {
+    /** One round of the rule's own cycle. */
+    const VIEW_CYCLE: ReadonlyArray<OfficeViewId> = [
+      "building",
+      "city",
+      "floor",
+    ];
+    const SWITCH_ROUNDS = 10;
+
+    /**
+     * Picks a view and hands the canvas that replaces the old one what it
+     * needs to be alive: a remount starts with no intersection state and no
+     * measured box of its own.
+     */
+    async function pickView(viewId: OfficeViewId): Promise<void> {
+      openPicker();
+      await act(async () => {
+        fireEvent.click(screen.getByTestId(`comm-graph-office-view-${viewId}`));
+        await Promise.resolve();
+      });
+      setIntersecting(true);
+      setOfficeCanvasSize({ width: 1040, height: 700 });
+      await act(async () => {
+        await Promise.resolve();
+      });
+    }
+
+    /** The distinct scene instances a spy has seen sync. */
+    function scenesSeen(spy: MockInstance<OfficeScene["sync"]>): number {
+      return new Set(spy.mock.contexts).size;
+    }
+
+    it("reaches every registered view, and the picker says which one it is on", async () => {
+      await reachAutoFloor();
+
+      for (const viewId of OFFICE_VIEW_IDS) {
+        await pickView(viewId);
+
+        expect(storedView()?.officeView).toBe(viewId);
+        // The trigger is the surface's own answer to "which office is this",
+        // and a view registered tomorrow has to be reachable through it.
+        expect(
+          screen.getByTestId("comm-graph-office-view-picker").textContent,
+        ).toContain(OFFICE_VIEWS[viewId].label);
+        expect(screen.getAllByTestId("comm-graph-office-canvas")).toHaveLength(
+          1,
+        );
+      }
+    });
+
+    it("builds one scene per real change and none for a pick that changes nothing", async () => {
+      await reachAutoFloor();
+      const syncSpy = vi.spyOn(OfficeScene.prototype, "sync");
+      // The Floor is already on screen, resolved by Auto; pinning it writes
+      // the choice without changing the view, so the canvas's key does not
+      // move and the scene in hand is the one that stays.
+      await pickView("floor");
+      expect(scenesSeen(syncSpy)).toBe(1);
+
+      await pickView("towers");
+
+      // A different view is a different office: a new canvas, and with it a
+      // new scene, rather than the Floor's scene handed a Towers layout.
+      expect(scenesSeen(syncSpy)).toBe(2);
+    });
+
+    it("leaves exactly one scene alive after ten Floor, Building, City rounds", async () => {
+      await reachAutoFloor();
+      const built = vi.spyOn(OfficeScene.prototype, "sync");
+      for (let round = 0; round < SWITCH_ROUNDS; round += 1) {
+        for (const viewId of VIEW_CYCLE) {
+          await pickView(viewId);
+        }
+      }
+
+      // Every switch was real, so every switch built its own scene: a tile
+      // that reused one canvas across the picks would show ONE here, which is
+      // the regression this cycle exists to catch. The Floor's scene from
+      // before the spy went in is not among them - the first pick retires it
+      // without it ever syncing again, which is itself the rule working.
+      expect(scenesSeen(built)).toBe(SWITCH_ROUNDS * VIEW_CYCLE.length);
+      expect(screen.getAllByTestId("comm-graph-office-canvas")).toHaveLength(1);
+      expect(storedView()?.officeView).toBe("floor");
+
+      // And every one of them but the last is GONE, rather than merely
+      // unreferenced by the canvas that replaced it: a scene left behind by a
+      // leaked mount would still be listening, and would sync along with the
+      // live one the moment the tile came back into view. Cleared rather than
+      // re-spied: `vi.spyOn` hands back the spy already on the method, so a
+      // second one would carry the first one's thirty contexts with it.
+      built.mockClear();
+      setIntersecting(false);
+      setIntersecting(true);
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(scenesSeen(built)).toBe(1);
+    });
+  });
+
+  /**
+   * THE DEV BENCH. A thousand agents is the scale every number in the plan is
+   * quoted at and the one nobody has an epic for, so the acceptance pass opens
+   * `?officeBench=<n>` instead - and what makes those numbers mean anything is
+   * that the bench enters through the tile's ORDINARY input path, upstream of
+   * the projection, the partition and the plan.
+   */
+  describe("the dev bench", () => {
+    function benchAt(search: string): () => void {
+      const original = `${window.location.pathname}${window.location.search}`;
+      window.history.replaceState({}, "", search);
+      return () => {
+        window.history.replaceState({}, "", original);
+      };
+    }
+
+    it("draws an office for an epic with no agents in it at all", async () => {
+      // The whole point of the bench: no epic, no host, no chats - and a floor
+      // with a thousand desks on it if you ask for one.
+      harness.teardown();
+      harness.install(seedEmptyDoc, "owner");
+      const restore = benchAt("?officeBench=12");
+      try {
+        await renderOfficeTile();
+        setIntersecting(true);
+        setOfficeCanvasSize({ width: 1040, height: 700 });
+        await act(async () => {
+          await Promise.resolve();
+        });
+
+        expect(screen.queryByTestId("comm-graph-empty")).toBeNull();
+        expect(screen.getByTestId("comm-graph-office-canvas")).toBeDefined();
+        // The accessible list is one entry per agent the floor is showing, so
+        // it is the bench's population as the office actually received it.
+        expect(screen.getAllByTestId(/^comm-graph-office-agent-/)).toHaveLength(
+          12,
+        );
+      } finally {
+        restore();
+      }
+    });
+
+    it("leaves the epic's own agents alone when nothing asks for a bench", async () => {
+      // The gate is the URL and nothing else: the fixture's four agents are
+      // what this tile draws on every other case in this file.
+      await renderOfficeTile();
+      setIntersecting(true);
+      setOfficeCanvasSize({ width: 1040, height: 700 });
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(
+        screen.getByTestId(`comm-graph-office-agent-${CHAT_ID}`),
+      ).toBeDefined();
+      expect(screen.getAllByTestId(/^comm-graph-office-agent-/)).toHaveLength(
+        4,
+      );
     });
   });
 });

@@ -42,6 +42,7 @@ import {
 } from "@/lib/comm-graph/office/office-auto";
 import type { OfficeViewId } from "@/lib/comm-graph/office/office-types";
 import { OfficeAutoChip } from "@/components/epic-canvas/comm-graph/office/office-auto-chip";
+import { officeBenchOverride } from "@/components/epic-canvas/comm-graph/office/office-bench";
 import { OfficeViewPicker } from "@/components/epic-canvas/comm-graph/office/office-view-picker";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { CommGraphViewModeToggle } from "@/components/epic-canvas/comm-graph/comm-graph-view-mode-toggle";
@@ -115,7 +116,13 @@ function EmptyCommGraph(props: { readonly tileInstanceId: string }) {
 
 export function CommGraphTile(props: CommGraphTileProps) {
   const { node, viewTabId } = props;
-  const { nodes: agents, hostIds } = useCommGraphAgents();
+  const { nodes: epicAgents, hostIds } = useCommGraphAgents();
+  // THE DEV BENCH, substituted as far upstream as there is: everything below -
+  // the timeline projection, the visible set, the partition, the plan - runs on
+  // whatever this is, so a benched office is the office. `null` in production,
+  // where the whole thing folds away. The SUBSCRIPTIONS stay on the real epic's
+  // hosts: a synthetic agent's host is a label, not a machine to dial.
+  const agents = officeBenchOverride() ?? epicAgents;
   // The Epic SESSION's host - the machine this epic tab rides. NOT
   // `useTabHostId()`: this tile's own binding is the inert placeholder.
   const tabHostId = useEpicSessionHostId();
