@@ -274,10 +274,89 @@ function stripProviderPrefix(label: string, providerLabel: string): string {
 
 const NO_REASONING_OPTIONS: ReadonlyArray<ReasoningLevelOption> = [];
 
+/**
+ * Standard reasoning effort levels for Kimi K3 / coding models.
+ *
+ * Used as a client-side fallback for catalog rows (e.g. on `kimi` and `hermes`
+ * harnesses) that shipped no `supportedReasoningEfforts` metadata in the host
+ * response (issue #1236).
+ */
+export const KIMI_K3_DEFAULT_REASONING_OPTIONS: ReadonlyArray<ReasoningLevelOption> =
+  [
+    {
+      id: "off",
+      label: "Off",
+      description: "Standard execution without extended reasoning",
+    },
+    {
+      id: "low",
+      label: "Low",
+      description: "Fast reasoning pass",
+    },
+    {
+      id: "high",
+      label: "High",
+      description: "Deep reasoning pass",
+    },
+    {
+      id: "max",
+      label: "Max",
+      description: "Maximum reasoning effort",
+    },
+  ];
+
+const KIMI_K3_HARNESS_IDS = new Set(["kimi", "hermes", "omp"]);
+
+/**
+ * Checks whether a given model selection matches a known Kimi K3 / Kimi-coding
+ * model identity.
+ *
+ * @param model - The model option or selection descriptor to test.
+ * @returns `true` if the model is a recognized Kimi K3 / coding variant.
+ */
+export function isKimiK3Model(model: {
+  readonly harnessId: string;
+  readonly slug: string;
+  readonly label?: string | null;
+}): boolean {
+  if (!KIMI_K3_HARNESS_IDS.has(model.harnessId)) {
+    return false;
+  }
+  const slugLower = model.slug.toLowerCase();
+  const labelLower = (model.label ?? "").toLowerCase();
+
+  return (
+    slugLower.includes("k3") ||
+    slugLower.includes("kimi-for-coding") ||
+    slugLower.includes("kimi-coding") ||
+    slugLower.includes("kimi-code") ||
+    labelLower.includes("k3") ||
+    labelLower.includes("kimi-for-coding") ||
+    labelLower.includes("kimi-coding")
+  );
+}
+
+/**
+ * Finds the reasoning effort options available for a model.
+ *
+ * If the host catalog provided explicit options, those are returned.
+ * If empty and the model is recognized as a Kimi K3 model, returns the default
+ * K3 reasoning effort options (`off`, `low`, `high`, `max`).
+ *
+ * @param model - The model option to inspect.
+ * @returns An array of supported reasoning level options.
+ */
 export function findReasoningOptionsForModel(
   model: ModelOption | null,
 ): ReadonlyArray<ReasoningLevelOption> {
-  return model?.supportedReasoningEfforts ?? NO_REASONING_OPTIONS;
+  if (model === null) return NO_REASONING_OPTIONS;
+  if (model.supportedReasoningEfforts.length > 0) {
+    return model.supportedReasoningEfforts;
+  }
+  if (isKimiK3Model(model)) {
+    return KIMI_K3_DEFAULT_REASONING_OPTIONS;
+  }
+  return NO_REASONING_OPTIONS;
 }
 
 export function normalizeReasoningForModel(
