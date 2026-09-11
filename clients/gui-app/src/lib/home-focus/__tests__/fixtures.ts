@@ -179,6 +179,7 @@ export function makeFocusBackgroundChat(
   return {
     hostId: "host-1",
     taskTitle: null,
+    chatTitle: null,
     managedCommands: [],
     backgroundItems: [],
     ...overrides,

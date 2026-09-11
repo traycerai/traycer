@@ -35,6 +35,11 @@ import {
   selectTaskGroups,
   type FocusTaskGroup,
 } from "@/lib/home-focus/focus-task-groups";
+import {
+  epicIdsWithJobs,
+  focusCounts,
+  runningTasks,
+} from "@/lib/home-focus/focus-running";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
 import { historyTabIntent } from "@/lib/tab-navigation/intents";
 import { useLayoutStore, type HomeView } from "@/stores/settings/layout-store";
@@ -66,6 +71,130 @@ const HOME_VIEW_OPTIONS: ReadonlyArray<SettingsSegmentedOption<HomeView>> = [
 /** What Focus hands `viewIsEmpty` and `HomeFocusSections` in place of a
  * grouping neither of them reads. */
 const NO_TASK_GROUPS: ReadonlyArray<FocusTaskGroup> = Object.freeze([]);
+
+/**
+ * The anchors the summary line jumps to.
+ *
+ * `running` is one id across both views on purpose: Focus's `Running` and
+ * Tasks's `Tasks` are the same band of the page answering the same question,
+ * and only one of them is ever mounted, so a segment that means "take me to the
+ * work" needs one target rather than a branch.
+ */
+const SECTION_IDS = {
+  needsYou: "home-focus-needs-you",
+  running: "home-focus-running",
+  background: "home-focus-background",
+} as const;
+
+interface HomeSummarySegment {
+  readonly id: string;
+  readonly count: number;
+  readonly label: string;
+}
+
+/**
+ * The whole page in one line, and the one line a user reads before deciding
+ * whether to read the page.
+ *
+ * **It names only sections the CURRENT VIEW renders**, which is why it takes
+ * the view rather than just the model. Focus draws three sections and gets
+ * three segments. Tasks draws two - the global Needs you, and one Tasks section
+ * where running work and background work are grouped together - so it gets
+ * `N need you · N tasks`, with the task count being the groups it actually
+ * lists. A `background` segment there pointed at a region Tasks never mounts,
+ * so the click found no element and did nothing at all; on a background-only
+ * account it was the only button on the line and it was inert.
+ *
+ * Each segment is a real button that moves focus to its section rather than an
+ * anchor that only scrolls: on a long Home the keyboard user is the one who
+ * most needs to skip, and `scroll-mt-4` on the section keeps the heading clear
+ * of the top edge when it lands.
+ *
+ * A zero segment is omitted rather than greyed - "0 background" is a fact
+ * nobody came here for, and always-present segments would make the ones that
+ * matter harder to find. Counts come from `focusCounts` and from the same
+ * grouping the Tasks section renders, so a segment can never promise a section
+ * that is not there.
+ */
+function HomeSummaryLine(props: {
+  readonly view: HomeView;
+  readonly model: FocusModel;
+  readonly groups: ReadonlyArray<FocusTaskGroup>;
+}): ReactNode {
+  const counts = focusCounts(props.model);
+  const segments: ReadonlyArray<HomeSummarySegment> = (
+    props.view === "tasks"
+      ? [
+          {
+            id: SECTION_IDS.needsYou,
+            count: counts.needsYou,
+            label: "need you",
+          },
+          {
+            id: SECTION_IDS.running,
+            count: props.groups.length,
+            label: props.groups.length === 1 ? "task" : "tasks",
+          },
+        ]
+      : [
+          {
+            id: SECTION_IDS.needsYou,
+            count: counts.needsYou,
+            label: "need you",
+          },
+          { id: SECTION_IDS.running, count: counts.running, label: "running" },
+          {
+            id: SECTION_IDS.background,
+            count: counts.background,
+            label: "background",
+          },
+        ]
+  ).filter((segment) => segment.count > 0);
+  if (segments.length === 0) return null;
+  return (
+    <div
+      aria-label="Summary"
+      role="group"
+      data-testid="home-focus-summary"
+      className="flex flex-wrap items-center gap-x-1 gap-y-1 px-3 text-ui-xs text-muted-foreground"
+    >
+      {segments.map((segment, index) => (
+        <span key={segment.id} className="flex items-center gap-1">
+          {index === 0 ? null : (
+            <span aria-hidden className="text-muted-foreground/60">
+              ·
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={() => focusSection(segment.id)}
+            className="rounded-sm px-1 py-0.5 outline-none hover:bg-foreground/8 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+            data-testid="home-focus-summary-segment"
+            data-segment={segment.label}
+            data-target={segment.id}
+          >
+            {segment.count} {segment.label}
+          </button>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Moves the page to a section and puts focus on it.
+ *
+ * The section carries `tabIndex={-1}`, so focus lands on the region itself and
+ * a screen reader reads its heading on arrival - which is the half a bare
+ * scroll leaves out. `focus()` alone also scrolls, but not with the section's
+ * own `scroll-mt`, so the explicit `scrollIntoView` runs first.
+ */
+function focusSection(id: string): void {
+  const section = document.getElementById(id);
+  if (section === null) return;
+  section.scrollIntoView({ block: "start", behavior: "smooth" });
+  section.focus({ preventScroll: true });
+}
 
 export function HomeFocusView(): ReactNode {
   const model = useFocusModel();
@@ -111,6 +240,7 @@ export function HomeFocusView(): ReactNode {
             ariaLabel="Home view"
           />
         </div>
+        <HomeSummaryLine view={view} model={model} groups={groups} />
         <ActivityCoverageNotice activity={model.coverage.activity} />
         {viewIsEmpty(view, model, groups) ? (
           <HomeFocusEmptyState />
@@ -223,29 +353,90 @@ function ActivityCoverageNotice(props: {
   );
 }
 
+/**
+ * One band of rows under a heading.
+ *
+ * The heading is COUNT ONLY, and the caption is a block-level sibling under it
+ * rather than a flex neighbour beside it. Both halves of that matter and the
+ * second is what was wrong: the caption was already a separate `<p>`, but it
+ * sat on the same baseline row as the `<h2>`, so the band rendered
+ * `BACKGROUND · 1 Only tasks open in this window` and read as one sentence.
+ * Its own line, at `text-ui-xs`, is what makes the count scannable and the
+ * caveat still available.
+ *
+ * Rows arrive as GROUPS rather than as children. There is exactly one group
+ * today, unlabelled, so the DOM is what it was - the seam exists because the
+ * next change subdivides these sections by host, and a section that already
+ * renders a list of groups takes that as a label appearing rather than as a
+ * rewrite of every section on the page.
+ */
+export interface HomeFocusRowGroup {
+  readonly key: string;
+  /** A subheading above this group's rows, or `null` for the single unlabelled
+   * group every section renders today. */
+  readonly label: string | null;
+  readonly rows: ReactNode;
+}
+
 function HomeFocusSection(props: {
   readonly title: string;
   readonly count: string;
   readonly caption: string | null;
   readonly testId: string;
-  readonly children: ReactNode;
+  readonly id: string;
+  readonly groups: ReadonlyArray<HomeFocusRowGroup>;
 }): ReactNode {
   return (
-    <div data-testid={props.testId} className="flex flex-col gap-1">
-      {/* The caption is a SIBLING of the heading, not inside it: a screen
-          reader's heading outline should read "Background · 2", not
-          "Background · 2 Only tasks open in this window". */}
-      <div className="flex flex-wrap items-baseline gap-x-2 px-3 pt-4 pb-1 text-ui-xs text-muted-foreground">
-        <h2 className="tracking-[0.08em] uppercase">
+    <section
+      data-testid={props.testId}
+      id={props.id}
+      aria-labelledby={`${props.id}-heading`}
+      tabIndex={-1}
+      // `@container`: the rows' duration hides on a narrow ROW rather than a
+      // narrow viewport, so a slim Home tile in a wide window behaves like the
+      // slim thing it is.
+      className="@container flex scroll-mt-4 flex-col gap-1 outline-none"
+    >
+      <div className="flex flex-col gap-0.5 px-3 pt-4 pb-1 text-ui-xs text-muted-foreground">
+        <h2
+          id={`${props.id}-heading`}
+          className="tracking-[0.08em] uppercase"
+          data-testid={`${props.testId}-heading`}
+        >
           {props.title} · {props.count}
         </h2>
         {props.caption === null ? null : (
           <p data-testid={`${props.testId}-caption`}>{props.caption}</p>
         )}
       </div>
-      <ul className="flex flex-col">{props.children}</ul>
-    </div>
+      {props.groups.map((group) =>
+        // No wrapper for the unlabelled shape: today's single group has to
+        // render byte-for-byte what the section rendered before the seam
+        // existed, or "one group today, so the DOM is unchanged" is a claim
+        // rather than a fact. A labelled group brings its own box with it.
+        group.label === null ? (
+          <ul key={group.key} className="flex flex-col">
+            {group.rows}
+          </ul>
+        ) : (
+          <div key={group.key} className="flex flex-col">
+            <p
+              className="px-3 pt-2 pb-1 text-ui-xs text-muted-foreground"
+              data-testid={`${props.testId}-group-label`}
+            >
+              {group.label}
+            </p>
+            <ul className="flex flex-col">{group.rows}</ul>
+          </div>
+        ),
+      )}
+    </section>
   );
+}
+
+/** The single unlabelled group every section renders today. */
+function oneRowGroup(rows: ReactNode): ReadonlyArray<HomeFocusRowGroup> {
+  return [{ key: "all", label: null, rows }];
 }
 
 function PromptsSection(props: {
@@ -264,19 +455,41 @@ function PromptsSection(props: {
           : null
       }
       testId="home-focus-section-prompts"
-    >
-      {prompts.map((row) => (
-        <HomeFocusPromptRow key={row.key} row={row} actions={props.actions} />
-      ))}
-    </HomeFocusSection>
+      id={SECTION_IDS.needsYou}
+      groups={oneRowGroup(
+        prompts.map((row) => (
+          <HomeFocusPromptRow key={row.key} row={row} actions={props.actions} />
+        )),
+      )}
+    />
   );
 }
 
+/**
+ * Running is MID-TURN AGENTS ONLY, wherever Background can show the rest.
+ *
+ * A WARM task whose agents are all background-tier is not a Running row: its
+ * work is a set of durable jobs, and those are listed once, in Background,
+ * under their own names. Listing it here as well is what made the page show
+ * `Running · Greeting and Introduction · background` and
+ * `Background · 10min heartbeat · running 5h` about one monitor.
+ *
+ * A task this window has no job row for is the other case, and it keeps its
+ * Running row: nothing in Background could stand in for it, so dropping it
+ * would take the task off the page rather than de-duplicate it. That is the
+ * cold background-only task, reading `background` beside H3's own
+ * `n agents · not open in this window`.
+ *
+ * The heading counts this list rather than `model.tasks`, because a count that
+ * included tasks the section does not draw is the same duplication in smaller
+ * type.
+ */
 function TasksSection(props: {
   readonly model: FocusModel;
   readonly actions: HomeFocusRowActions;
 }): ReactNode {
-  const { tasks } = props.model;
+  const jobEpicIds = epicIdsWithJobs(props.model.background);
+  const tasks = runningTasks(props.model.tasks, jobEpicIds);
   if (tasks.length === 0) return null;
   return (
     <HomeFocusSection
@@ -284,11 +497,18 @@ function TasksSection(props: {
       count={tasks.length === 1 ? "1 task" : `${tasks.length} tasks`}
       caption={null}
       testId="home-focus-section-tasks"
-    >
-      {tasks.map((row) => (
-        <HomeFocusTaskRow key={row.epicId} row={row} actions={props.actions} />
-      ))}
-    </HomeFocusSection>
+      id={SECTION_IDS.running}
+      groups={oneRowGroup(
+        tasks.map((row) => (
+          <HomeFocusTaskRow
+            key={row.epicId}
+            row={row}
+            actions={props.actions}
+            hasVisibleJobs={jobEpicIds.has(row.epicId)}
+          />
+        )),
+      )}
+    />
   );
 }
 
@@ -319,9 +539,11 @@ function TaskGroupsSection(props: {
       count={groups.length === 1 ? "1 task" : `${groups.length} tasks`}
       caption={TASKS_BACKGROUND_CAPTION}
       testId="home-focus-section-task-groups"
-    >
-      <HomeFocusTaskGroups groups={groups} actions={props.actions} />
-    </HomeFocusSection>
+      id={SECTION_IDS.running}
+      groups={oneRowGroup(
+        <HomeFocusTaskGroups groups={groups} actions={props.actions} />,
+      )}
+    />
   );
 }
 
@@ -337,15 +559,17 @@ function BackgroundSection(props: {
       count={String(background.length)}
       caption={BACKGROUND_CAPTION}
       testId="home-focus-section-background"
-    >
-      {background.map((row) => (
-        <HomeFocusBackgroundRow
-          key={row.key}
-          row={row}
-          actions={props.actions}
-        />
-      ))}
-    </HomeFocusSection>
+      id={SECTION_IDS.background}
+      groups={oneRowGroup(
+        background.map((row) => (
+          <HomeFocusBackgroundRow
+            key={row.key}
+            row={row}
+            actions={props.actions}
+          />
+        )),
+      )}
+    />
   );
 }
 

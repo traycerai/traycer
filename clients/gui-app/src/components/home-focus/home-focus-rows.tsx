@@ -41,7 +41,6 @@ import {
   homeChipRowClass,
   homeRowClass,
   ROW_BODY_CLASS,
-  TASK_TITLE_CLASS,
 } from "@/components/home-focus/home-focus-row-style";
 import { EPIC_NODE_ICONS } from "@/lib/artifacts/node-display";
 import { BACKGROUND_KIND_ICONS } from "@/lib/chat/background-kind-icon";
@@ -50,10 +49,19 @@ import {
   focusTaskTitleOf,
 } from "@/lib/home-focus/focus-row-labels";
 import {
-  formatCompactRelativeTime,
-  useRelativeTimestamp,
-  useSampledNow,
-} from "@/lib/relative-time";
+  RowActionsCell,
+  RowContext,
+  RowItemName,
+  RowStatus,
+  RowStatusDuration,
+} from "@/components/home-focus/home-focus-row-parts";
+import {
+  focusAgentState,
+  focusJobState,
+  focusTaskState,
+  FOCUS_ROW_STATES,
+} from "@/lib/home-focus/focus-row-status";
+import { visibleAgents } from "@/lib/home-focus/focus-running";
 import { cn } from "@/lib/utils";
 import type {
   FocusAgentRow,
@@ -205,37 +213,6 @@ export function BackgroundGlyph(props: {
   );
 }
 
-/** Isolated leaf so the shared 60s clock repaints the label and not the row
- * around it (same reason `NotificationTimestamp` is its own component). */
-function FocusRelativeTime(props: { readonly createdAt: number }): ReactNode {
-  const label = useRelativeTimestamp(props.createdAt);
-  return (
-    <span
-      className="shrink-0 text-ui-xs text-muted-foreground"
-      data-testid="home-focus-relative-time"
-    >
-      {label}
-    </span>
-  );
-}
-
-/** Elapsed time for a background job, on the same shared clock. "just started"
- * rather than "running now", which reads as a state rather than a duration. */
-export function FocusRunningDuration(props: {
-  readonly startedAtMs: number;
-}): ReactNode {
-  const now = useSampledNow();
-  const elapsed = formatCompactRelativeTime(props.startedAtMs, now);
-  return (
-    <span
-      className="shrink-0 text-ui-xs text-muted-foreground"
-      data-testid="home-focus-running-duration"
-    >
-      {elapsed === "now" ? "just started" : `running ${elapsed}`}
-    </span>
-  );
-}
-
 /**
  * Names the machine a prompt came from, and only when that is not THIS
  * machine - on a single-host install the chip never renders.
@@ -285,45 +262,31 @@ export function HomeFocusPromptRow(props: {
         data-testid="home-focus-prompt-open-body"
       >
         <PromptGlyph kind={row.kind} />
-        <span className={TASK_TITLE_CLASS}>
-          {focusTaskTitleOf(row.taskTitle)}
-        </span>
-        <span className="min-w-0 flex-1 truncate text-muted-foreground">
-          <span className="text-foreground">{row.title}</span>
-          {row.body === "" ? null : <span> — {row.body}</span>}
-        </span>
+        {/* The prompt's own text LEADS: it is what the row is, and what the
+            user decides from. The task it belongs to follows as context, which
+            is the inverse of how this row read before - task first, prompt
+            second, the two running together. */}
+        <RowItemName testId="home-focus-row-name">
+          {row.title}
+          {row.body === "" ? null : (
+            <span className="text-muted-foreground"> — {row.body}</span>
+          )}
+        </RowItemName>
+        <RowContext
+          parts={[{ role: "task", title: row.taskTitle }]}
+          testId="home-focus-row-context"
+        />
         <OriginHostChip originHostId={row.originHostId} />
-        <FocusRelativeTime createdAt={row.createdAt} />
       </button>
+      <RowStatus
+        state="needs-you"
+        duration={<RowStatusDuration startedAtMs={row.createdAt} />}
+      />
+      {/* Nothing to stop, and the track is reserved anyway: this row has to
+          spend the same width on actions as the rows around it, or their
+          status column moves relative to this one. */}
+      <RowActionsCell>{null}</RowActionsCell>
     </li>
-  );
-}
-
-/**
- * Trailing control cluster. `relative` lifts it above the body button's
- * stretched hit area so its own clicks land on it.
- *
- * That is an invariant, not a detail, and it has two directions. The overlay is
- * an absolutely positioned box belonging to the body button, so it stretches
- * across the WHOLE row and paints in step 8 of the painting order along with
- * every other `z-index: auto` positioned box - in tree order:
- *
- * - AFTER the body button (here, and `AgentChip`): the control is later in tree
- *   order, so bare `relative` puts it above the overlay.
- * - BEFORE the body button (the Tasks view's disclosure twisty): the overlay
- *   belongs to a LATER sibling and paints last, so `relative` ties and loses.
- *   Such a control needs a real `z-10`, the same way `epics-list-panel`'s row
- *   content sits over its own stretched link.
- *
- * A control with no position at all paints in step 7 and is under the overlay
- * from either side. Every control in a row belongs here, or in a positioned
- * wrapper of its own, or - if it leads the row - carries `z-10`.
- */
-function RowActions(props: { readonly children: ReactNode }): ReactNode {
-  return (
-    <div className="relative flex shrink-0 items-center gap-1.5">
-      {props.children}
-    </div>
   );
 }
 
@@ -452,8 +415,11 @@ function AgentChip(props: {
       <ActivityDot tier={agent.tier} />
       <AgentGlyph surface={agent.surface} className="size-3" />
       <span className="truncate text-foreground">{name}</span>
+      {/* Through the shared registry rather than `agent.tier` directly: the
+          chip and the status column say the same word about the same agent,
+          and routing both through one table is what keeps that true. */}
       <span className="shrink-0 text-ui-xs text-muted-foreground">
-        {agent.tier}
+        {FOCUS_ROW_STATES[focusAgentState(agent)].word}
       </span>
     </button>
   );
@@ -485,10 +451,17 @@ export function ColdTaskAgents(props: {
 export function HomeFocusTaskRow(props: {
   readonly row: FocusTaskRow;
   readonly actions: HomeFocusRowActions;
+  /**
+   * Whether this window shows background rows for this task, which decides
+   * whether a background-tier agent is a DUPLICATE of a job row or the only
+   * trace of it. See `focus-running.ts`.
+   */
+  readonly hasVisibleJobs: boolean;
 }): ReactNode {
   const { row, actions } = props;
   const density = useHomeDensity();
   const title = focusTaskTitleOf(row.taskTitle);
+  const agents = visibleAgents(row.agents, props.hasVisibleJobs);
   return (
     <li
       className={homeRowClass(density)}
@@ -509,7 +482,7 @@ export function HomeFocusTaskRow(props: {
             className="size-4 shrink-0 text-muted-foreground"
           />
         )}
-        <span className={TASK_TITLE_CLASS}>{title}</span>
+        <RowItemName testId="home-focus-row-name">{title}</RowItemName>
       </button>
       {/* Deliberately NOT `relative`: the body button's stretched overlay must
           stay above this container so a click on the row's blank space opens
@@ -517,7 +490,7 @@ export function HomeFocusTaskRow(props: {
           overlay. */}
       <div className={homeChipRowClass(density)}>
         {row.mountedHere ? (
-          row.agents.map((agent) => (
+          agents.map((agent) => (
             <AgentChip
               key={agent.agentId}
               epicId={row.epicId}
@@ -529,6 +502,7 @@ export function HomeFocusTaskRow(props: {
           <ColdTaskAgents agents={row.agents} />
         )}
       </div>
+      <RowStatus state={focusTaskState(row, 0)} duration={null} />
       <HomeFocusTaskStopCluster row={row} actions={actions} />
     </li>
   );
@@ -549,13 +523,13 @@ export function HomeFocusTaskStopCluster(props: {
   const [confirmingStopAll, setConfirmingStopAll] = useState<boolean>(false);
   return (
     <>
-      <RowActions>
+      <RowActionsCell>
         <TaskStopControl
           row={row}
           actions={actions}
           onRequestStopAll={() => setConfirmingStopAll(true)}
         />
-      </RowActions>
+      </RowActionsCell>
       <StopAllDialog
         row={row}
         open={confirmingStopAll}
@@ -709,17 +683,28 @@ export function HomeFocusBackgroundRow(props: {
         data-testid="home-focus-background-open-body"
       >
         <BackgroundGlyph row={row} />
-        <span className={TASK_TITLE_CLASS}>
-          {focusTaskTitleOf(row.taskTitle)}
-        </span>
-        <span className="min-w-0 flex-1 truncate text-foreground">
-          {row.label}
-        </span>
-        {row.startedAtMs === null ? null : (
-          <FocusRunningDuration startedAtMs={row.startedAtMs} />
-        )}
+        {/* The job's own name first, then the conversation hosting it, then
+            that conversation's task. Three different things, three nodes, two
+            tones - the row this replaced put the task and the job side by side
+            in the same weight and read as one name. */}
+        <RowItemName testId="home-focus-row-name">{row.label}</RowItemName>
+        <RowContext
+          parts={[
+            { role: "chat", title: row.chatTitle },
+            { role: "task", title: row.taskTitle },
+          ]}
+          testId="home-focus-row-context"
+        />
       </button>
-      <RowActions>
+      <RowStatus
+        state={focusJobState(row)}
+        duration={
+          row.startedAtMs === null ? null : (
+            <RowStatusDuration startedAtMs={row.startedAtMs} />
+          )
+        }
+      />
+      <RowActionsCell>
         <FocusStopButton
           label="Stop"
           ariaLabel={`Stop ${row.label}`}
@@ -729,7 +714,7 @@ export function HomeFocusBackgroundRow(props: {
           onClick={() => actions.stopManagedCommand(row)}
           testId="home-focus-background-stop"
         />
-      </RowActions>
+      </RowActionsCell>
     </li>
   );
 }

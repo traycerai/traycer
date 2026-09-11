@@ -48,6 +48,32 @@ export const ROW_BODY_CLASS =
 
 export const TASK_TITLE_CLASS = "shrink-0 truncate font-medium text-foreground";
 
+/**
+ * The two right-hand TRACKS every row in a section reserves, whether or not it
+ * has anything to put in them.
+ *
+ * This is what makes the status a COLUMN rather than three separately
+ * right-aligned cells. Without fixed tracks the status floats left by whatever
+ * the row's own trailing control happens to measure - `Stop all` is wider than
+ * `Stop`, which is wider than nothing - so a section of mixed rows staircases
+ * exactly where it is supposed to be scannable. Reserving both widths puts
+ * every status's left edge at `row - actions - status`, identical for every row
+ * of every shape, including the nested ones: a nested list is indented on its
+ * LEFT only, so its right edge is the parent's and its tracks line up with the
+ * parent's.
+ *
+ * These are fixed widths, which the fluid-sizing rule otherwise forbids, and
+ * the argument is the same one the status-bar preview's `w-[480px]` makes: a
+ * column track is not a layout surface that should adapt to its content - its
+ * whole job is to NOT adapt, so that the rows either side of it agree. `w-32
+ * sm:w-36` fits `needs you · 30m`; `w-24` fits a `Stop all` ghost button with
+ * its glyph. A label that outgrows either track truncates rather than shifting
+ * the column, which is the failure this trades for.
+ */
+export const ROW_STATUS_CELL_CLASS = "w-32 shrink-0 sm:w-36";
+
+export const ROW_ACTIONS_CELL_CLASS = "w-24 shrink-0";
+
 const CHIP_ROW_CLASS =
   "flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1";
 

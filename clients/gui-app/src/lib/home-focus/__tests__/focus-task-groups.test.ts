@@ -95,6 +95,7 @@ function backgroundRow(
     epicId: "epic-1",
     chatId: "chat-1",
     taskTitle: "Task",
+    chatTitle: "Chat",
     label: "dev server",
     kind: "managed-command",
     itemKind: null,

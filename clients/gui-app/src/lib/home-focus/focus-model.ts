@@ -35,6 +35,16 @@ export interface FocusBackgroundRow {
   readonly epicId: string;
   readonly chatId: string;
   readonly taskTitle: string | null;
+  /**
+   * The name of the CHAT this job runs in, when this window knows it.
+   *
+   * A job's row names three things that are not the same - the job, the
+   * conversation hosting it, and the task that conversation belongs to - and
+   * the chat is the one a reader needs to find it again. `null` for a chat
+   * whose epic has no live projection here, which is the same window-local
+   * limit the whole section carries.
+   */
+  readonly chatTitle: string | null;
   readonly label: string; // managed command description or background item title
   readonly kind: "managed-command" | "background-item";
   /** The background item's own kind, for the row's glyph. `null` for a managed

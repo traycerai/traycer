@@ -17,20 +17,30 @@
 import { useState, type ReactNode } from "react";
 import { ChevronRight, Layers } from "lucide-react";
 import {
-  ActivityDot,
   AgentGlyph,
   BackgroundGlyph,
   ColdTaskAgents,
-  FocusRunningDuration,
   HomeFocusTaskStopCluster,
   TaskAttentionGlyph,
   type HomeFocusRowActions,
 } from "@/components/home-focus/home-focus-rows";
 import {
+  RowActionsCell,
+  RowContext,
+  RowItemName,
+  RowStatus,
+  RowStatusDuration,
+} from "@/components/home-focus/home-focus-row-parts";
+import {
+  focusAgentState,
+  focusJobState,
+  focusTaskState,
+} from "@/lib/home-focus/focus-row-status";
+import { visibleAgents } from "@/lib/home-focus/focus-running";
+import {
   homeChipRowClass,
   homeRowClass,
   ROW_BODY_CLASS,
-  TASK_TITLE_CLASS,
 } from "@/components/home-focus/home-focus-row-style";
 import { useHomeDensity } from "@/hooks/home-focus/use-home-density";
 import {
@@ -95,7 +105,21 @@ function groupWorkRows(group: FocusTaskGroup): {
   readonly jobs: ReadonlyArray<FocusBackgroundRow>;
 } {
   const cold = group.task !== null && !group.task.mountedHere;
-  return { agents: cold ? [] : group.agents, jobs: group.jobs };
+  if (cold) return { agents: [], jobs: group.jobs };
+  // Mid-turn agents, plus any background-tier agent whose work this window has
+  // no job row for. A background-tier agent beside its own job rows is the
+  // duplicate decision 7 removes: the chat is not itself doing anything, the
+  // monitor it hosts is, and the monitor has a row of its own below.
+  const shown = new Set(
+    visibleAgents(
+      group.agents.map((entry) => entry.agent),
+      group.backgroundVisible,
+    ).map((agent) => agent.agentId),
+  );
+  return {
+    agents: group.agents.filter((entry) => shown.has(entry.agent.agentId)),
+    jobs: group.jobs,
+  };
 }
 
 function HomeFocusTaskGroupRow(props: {
@@ -167,12 +191,18 @@ function HomeFocusTaskGroupRow(props: {
           data-testid="home-focus-task-group-open-body"
         >
           <TaskGroupGlyph group={group} />
-          <span className={TASK_TITLE_CLASS}>{title}</span>
+          <RowItemName testId="home-focus-row-name">{title}</RowItemName>
         </button>
         <div className={homeChipRowClass(density)}>
-          <TaskGroupSummary group={group} />
+          <TaskGroupSummary group={group} work={work} />
         </div>
-        {group.task === null ? null : (
+        <RowStatus
+          state={focusTaskState(group.task, group.promptCount)}
+          duration={null}
+        />
+        {group.task === null ? (
+          <RowActionsCell>{null}</RowActionsCell>
+        ) : (
           <HomeFocusTaskStopCluster row={group.task} actions={actions} />
         )}
       </div>
@@ -220,6 +250,10 @@ const BADGE_CLASS =
  */
 function TaskGroupSummary(props: {
   readonly group: FocusTaskGroup;
+  readonly work: {
+    readonly agents: ReadonlyArray<FocusTaskGroupAgent>;
+    readonly jobs: ReadonlyArray<FocusBackgroundRow>;
+  };
 }): ReactNode {
   const { group } = props;
   const { task } = group;
@@ -234,12 +268,14 @@ function TaskGroupSummary(props: {
       {/* A cold task keeps H3's honest sentence in place of the agent count:
           it has agents, and no names for them. */}
       {coldTask === null ? null : <ColdTaskAgents agents={coldTask.agents} />}
-      {task === null || coldTask !== null ? null : (
+      {task === null ||
+      coldTask !== null ||
+      props.work.agents.length === 0 ? null : (
         <span
           className={BADGE_CLASS}
           data-testid="home-focus-task-group-active"
         >
-          {group.agents.length} active
+          {props.work.agents.length} active
         </span>
       )}
       {group.backgroundVisible ? (
@@ -304,22 +340,23 @@ function TaskGroupAgentRow(props: {
         data-testid="home-focus-task-group-agent-body"
       >
         <AgentGlyph surface={agent.surface} className="size-4" />
-        <ActivityDot tier={agent.tier} />
-        <span className="truncate text-foreground">
+        {/* No `in <task>`: the row directly above names the task, and repeating
+            it on every child is the concatenation this design removes. `via`
+            is a different fact - which agent started this one - and stays. */}
+        <RowItemName testId="home-focus-row-name">
           {focusAgentDisplayName(agent)}
-        </span>
-        <span className="shrink-0 text-ui-xs text-muted-foreground">
-          {agent.tier}
-        </span>
+        </RowItemName>
         {entry.via === null ? null : (
           <span
-            className="min-w-0 truncate text-ui-xs text-muted-foreground"
+            className="min-w-0 shrink truncate text-ui-xs text-muted-foreground"
             data-testid="home-focus-task-group-agent-via"
           >
             via {entry.via}
           </span>
         )}
       </button>
+      <RowStatus state={focusAgentState(agent)} duration={null} />
+      <RowActionsCell>{null}</RowActionsCell>
     </li>
   );
 }
@@ -343,13 +380,23 @@ function TaskGroupJobRow(props: {
         data-testid="home-focus-task-group-job-body"
       >
         <BackgroundGlyph row={job} />
-        <span className="min-w-0 flex-1 truncate text-foreground">
-          {job.label}
-        </span>
-        {job.startedAtMs === null ? null : (
-          <FocusRunningDuration startedAtMs={job.startedAtMs} />
-        )}
+        <RowItemName testId="home-focus-row-name">{job.label}</RowItemName>
+        {/* The task is the row above; the CHAT is not, and it is what the job's
+            Stop targets, so it stays as the one piece of context. */}
+        <RowContext
+          parts={[{ role: "chat", title: job.chatTitle }]}
+          testId="home-focus-row-context"
+        />
       </button>
+      <RowStatus
+        state={focusJobState(job)}
+        duration={
+          job.startedAtMs === null ? null : (
+            <RowStatusDuration startedAtMs={job.startedAtMs} />
+          )
+        }
+      />
+      <RowActionsCell>{null}</RowActionsCell>
     </li>
   );
 }

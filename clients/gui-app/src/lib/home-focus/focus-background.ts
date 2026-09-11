@@ -21,6 +21,10 @@ export interface FocusBackgroundChat {
    * therefore unstoppable. */
   readonly hostId: string | null;
   readonly taskTitle: string | null;
+  /** The chat's own title, from this window's live projection. `null` when the
+   * epic is not mounted here, which is the same limit that makes this whole
+   * list window-local. */
+  readonly chatTitle: string | null;
   /** Running commands only - the caller filters, because "running" is a
    * property of the live status rather than of the row. */
   readonly managedCommands: ReadonlyArray<ManagedCommand>;
@@ -75,6 +79,7 @@ export function buildFocusBackground(
       epicId: chat.epicId,
       chatId: chat.chatId,
       taskTitle: chat.taskTitle,
+      chatTitle: chat.chatTitle,
       label: command.description,
       kind: "managed-command",
       itemKind: null,
@@ -89,6 +94,7 @@ export function buildFocusBackground(
         epicId: chat.epicId,
         chatId: chat.chatId,
         taskTitle: chat.taskTitle,
+        chatTitle: chat.chatTitle,
         label: item.title,
         kind: "background-item",
         itemKind: item.kind,

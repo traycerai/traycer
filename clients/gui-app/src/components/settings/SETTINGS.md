@@ -2015,7 +2015,8 @@ panel visibility` is enabled there - and reachable only from the rail.
       noninteractive attention glyph and a count of LOADED prompt rows
       (`selectTaskGroups`, never the `needsYou` boolean, which is also true for
       a prompt the feed has not paged in). A cold task degrades to one summary
-      row with no agent names and no exposed disclosure. `N bg` renders only
+      row with no agent names and no exposed disclosure, and keeps a disclosure
+      only for jobs this window can still see. `N bg` renders only
       where this window can SEE the task's background - the warm-chat set the
       jobs come from, never `mountedHere`, which is the wider "has a live Y.Doc
       projection here" and would read `0 bg` at a task whose chats were simply
@@ -2028,6 +2029,96 @@ panel visibility` is enabled there - and reachable only from the rail.
       spans the card and opens the same thing, so the second control was one
       extra tab stop per row announcing a verb the row had already offered.
       Stop / Stop all stay.
+    - **One row grammar, everywhere**:
+      `[kind icon] [item name] [· in <context>] … [status] [actions]`
+      (`home-focus-row-parts.tsx`). The item name is what the row IS - the
+      prompt's text, the agent's name, the job's name - in `text-foreground`;
+      everything after it is muted CONTEXT, each part truncating on its own.
+      Two names are never concatenated: the row that produced this rule read
+      `General Conversation History 10min heartbeat`, a task and a monitor with
+      a space between them and nothing saying which was which. A job names its
+      chat before its task (`10min heartbeat · in Greeting and Introduction ·
+General Conversation History`) because the chat is what its Stop targets. A
+      child row under a task row omits the `in …` part - the row above it
+      already said it.
+    - **One status column** (`focus-row-status.ts`): a `size-2` dot in the
+      state tone, the state word, and `· <duration>` where the model has a
+      timestamp. `needs you` is warning-toned, `turn` / `running` carry a
+      primary dot, `background` / `waiting` a hollow muted one; every WORD is
+      muted except needs-you, because a column of coloured words is a column
+      nobody scans. Agents have no start time on the activity plane, so their
+      cell shows the word alone rather than an invented duration. `held` is a
+      RESERVED slot in the registry - real in the vocabulary, unreachable from
+      today's rows, because no field carries the flag and inventing one is new
+      data.
+    - **It is a column because the track is fixed**, not because each cell is
+      right-aligned (`ROW_STATUS_CELL_CLASS` / `ROW_ACTIONS_CELL_CLASS` in
+      `home-focus-row-style.ts`). Every row in a section reserves both
+      right-hand tracks whether or not it has anything to put in them - the
+      prompt row with nothing to stop still spends the width a `Stop all` takes
+      two rows below it. Without that, `Stop all` is wider than `Stop` is wider
+      than nothing and the column staircases down a section of mixed rows,
+      which is the one thing it exists not to do. Nested rows use the same
+      tracks: a nested list is indented on its LEFT only, so its right edge is
+      the parent's. These are deliberately fixed widths against the
+      fluid-sizing rule, on the same argument as the status-bar preview's
+      `w-[480px]` - a column track's whole job is to NOT adapt to its content,
+      and a label that outgrows one truncates rather than moving the column.
+      The cell's content is LEFT-aligned inside that track, which is what
+      freezes the dot and the word: right-aligning pins only the cell's right
+      edge, so a row carrying `· 41m` pushes its word left of a row carrying
+      none. `tabular-nums` keeps a ticking duration from rewidthing itself; it
+      was never what held the word still. The status cell is a DOM sibling of
+      the body button so it stays out of that button's accessible name, but it
+      is unpositioned and therefore still under its stretched overlay - by
+      design, since everything that is not a control opens the row.
+    - **The duration hides on a narrow ROW, under Compact only.** An
+      `@container` on the section and `@max-sm:hidden` on the duration, not a
+      viewport breakpoint: a slim Home tile inside a wide window is exactly the
+      case a viewport query gets backwards, and Comfortable's contract is that
+      it never drops the duration at any width. The state word always survives.
+    - **Running is mid-turn agents only, wherever Background can show the rest**,
+      and this is the rule the others defer to (`focus-running.ts`). An agent
+      whose tier is `background` - an idle chat that merely hosts a running
+      monitor - is not a Running row, because its work is already a Background
+      row under its own name; the page used to show both and they were one
+      monitor. De-duplicating only makes sense against a row that EXISTS, so the
+      condition is not "is it mid-turn" but "does this window have a job row for
+      that task": with none, the agents stay and so does the Running row. That
+      is the cold background-only task, which would otherwise appear in neither
+      section - it reads `background` beside H3's `n agents · not open in this
+window`. `runningTasks` is deliberately the same predicate as
+      `visibleAgents` rather than a second one beside it, so a section and its
+      rows cannot disagree about what is running; `Running · N tasks` counts
+      that list, and in the Tasks view a group's children are its mid-turn
+      agents plus its jobs. None of this filters the MODEL -
+      `FocusTaskRow.agents` stays whole, because `Stop all` cascades over every
+      agent including background-tier ones, and a stop that honoured a
+      presentation rule would leave work running that the confirmation promised
+      to end.
+    - **Summary line** under the view control, and it names only sections the
+      CURRENT VIEW renders. Focus draws three sections and reads `2 need you ·
+3 running · 1 background`; Tasks draws two, so it reads `2 need you ·
+4 tasks` - running and background fold into the group count, because that
+      is where Tasks puts both. A `background` segment under Tasks pointed at a
+      region that view never mounts, so the click found no element and did
+      nothing; on a background-only account it was the only button on the line.
+      Each segment is a button that scrolls to its section and moves focus onto
+      it (the sections are `tabIndex={-1}` regions with `scroll-mt-4`, so a
+      screen reader hears the heading on arrival). Zero segments are omitted;
+      all-zero is the empty state instead. Counts come from `focusCounts` and
+      from the grouping the Tasks section itself renders.
+    - **Section headings are count-only.** `NEEDS YOU · 2`, and any coverage
+      caption is a block-level `<p>` on its own line beneath it. The caption was
+      already a separate node before this change and still rendered
+      `BACKGROUND · 1 Only tasks open in this window`, because it sat on the
+      same baseline row - the fix is the line break, not the element.
+    - **Sections render a list of row GROUPS**, exactly one today and
+      unlabelled. The unlabelled shape renders its `<ul>` directly under the
+      section with no wrapper, so "the DOM is unchanged" is a fact rather than
+      a claim; a labelled group brings its own box. The seam exists because
+      subdividing a section by host is the next change, and it should arrive as
+      a label appearing rather than as a rewrite of every section.
 - `Providers` Per-provider CLI binary selection (Codex / Claude Code / OpenCode
   / Traycer / Cursor). Left rail picks the provider (brand icons via
   `HarnessIcon`); the

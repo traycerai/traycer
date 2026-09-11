@@ -30,6 +30,7 @@ import {
 import { compareAscending } from "@/lib/home-focus/focus-identity";
 import type { FocusModel } from "@/lib/home-focus/focus-model";
 import { pendingPromptEpicIds } from "@/lib/home-focus/focus-prompts";
+import { focusAgentKey } from "@/lib/home-focus/focus-tasks";
 import type { FocusBackgroundChat } from "@/lib/home-focus/focus-background";
 import {
   useMountedEpicProjection,
@@ -309,16 +310,40 @@ export function useFocusModel(): FocusModel {
       ),
     [activeEpicIdsKey, promptEpicIdsKey],
   );
+  // The warm chats of each epic, so a chat whose only activity is a durable
+  // shell still gets a NAME. `agentIds` below is otherwise the working set, and
+  // a fully idle chat hosting a running command has no working agent at all -
+  // its background rows would then name the task and nothing else. A chat
+  // agent's id IS its chat id, so these resolve through the same projection
+  // lookup; ids it does not know are simply unresolved.
+  const warmChatIdsByEpicId = useMemo(() => {
+    const byEpicId = new Map<string, Set<string>>();
+    for (const chat of warmChats) {
+      const existing = byEpicId.get(chat.epicId);
+      if (existing === undefined) {
+        byEpicId.set(chat.epicId, new Set([chat.chatId]));
+      } else {
+        existing.add(chat.chatId);
+      }
+    }
+    return byEpicId;
+  }, [warmChats]);
   const agentRefsKey = useMemo(
     () =>
       titleEpicIds
         .map((epicId) =>
-          [epicId, joinIds(byEpic.get(epicId)?.working ?? EMPTY_ID_SET)].join(
-            ID_GROUP_SEPARATOR,
-          ),
+          [
+            epicId,
+            joinIds(
+              new Set([
+                ...(byEpic.get(epicId)?.working ?? EMPTY_ID_SET),
+                ...(warmChatIdsByEpicId.get(epicId) ?? EMPTY_ID_SET),
+              ]),
+            ),
+          ].join(ID_GROUP_SEPARATOR),
         )
         .join(ID_GROUP_LIST_SEPARATOR),
-    [titleEpicIds, byEpic],
+    [titleEpicIds, byEpic, warmChatIdsByEpicId],
   );
   const agentRefs = useMemo<ReadonlyArray<MountedEpicRef>>(
     () => decodeAgentRefs(agentRefsKey),
@@ -360,8 +385,17 @@ export function useFocusModel(): FocusModel {
       warmChats.map((chat) => ({
         ...chat,
         taskTitle: taskTitles.get(chat.epicId) ?? null,
+        // A CHAT agent's id IS its chat id (`liveAgentIdentity` reads
+        // `state.chats.byId[agentId]`), so the identity map the task rows are
+        // already built from answers "what is this conversation called" with no
+        // second projection read. `null` for an epic not mounted here, which is
+        // the same window-local limit that produced the row in the first place.
+        chatTitle:
+          projection.agentIdentities.get(
+            focusAgentKey(chat.epicId, chat.chatId),
+          )?.title ?? null,
       })),
-    [warmChats, taskTitles],
+    [warmChats, taskTitles, projection.agentIdentities],
   );
 
   // The previous model, so the builders can hand back their own unchanged rows

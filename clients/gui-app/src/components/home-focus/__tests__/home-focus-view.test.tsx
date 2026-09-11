@@ -177,6 +177,7 @@ function backgroundRow(
     epicId: "epic-1",
     chatId: "chat-1",
     taskTitle: "Task title",
+    chatTitle: "Chat title",
     label: "dev server",
     kind: "managed-command",
     itemKind: null,
@@ -941,16 +942,16 @@ describe("<HomeFocusView /> relative time ticking", () => {
     modelMock.value = model({ prompts: [row], badgeCount: 1 });
     render(<HomeFocusView />);
 
-    const timeNode = screen.getByTestId("home-focus-relative-time");
-    expect(timeNode.textContent).toBe("Just now");
+    const timeNode = screen.getByTestId("home-focus-row-status-duration");
+    expect(timeNode.textContent).toBe("· just now");
 
     act(() => {
       vi.advanceTimersByTime(60_000);
     });
 
-    const timeNodeAfter = screen.getByTestId("home-focus-relative-time");
+    const timeNodeAfter = screen.getByTestId("home-focus-row-status-duration");
     expect(timeNodeAfter).toBe(timeNode);
-    expect(timeNodeAfter.textContent).toBe("1m ago");
+    expect(timeNodeAfter.textContent).toBe("· 1m");
   });
 });
 
@@ -991,9 +992,15 @@ describe("<HomeFocusView /> background rows", () => {
     expect(
       screen.getByTestId("home-focus-background-row").textContent,
     ).toContain("dev server");
-    expect(screen.getByTestId("home-focus-running-duration").textContent).toBe(
-      "running 41m",
-    );
+    const status = screen.getByTestId("home-focus-row-status");
+    expect(status.getAttribute("data-state")).toBe("running");
+    expect(status.textContent).toBe("running· 41m");
+    // A DOM sibling of the body button, in its own track. It is still UNDER
+    // that button's stretched overlay, and deliberately so - clicking the
+    // status opens the row, like clicking anywhere else that is not a control.
+    expect(
+      screen.getByTestId("home-focus-background-open-body").contains(status),
+    ).toBe(false);
   });
 
   it("shows a stop button when stoppable and calls stopManagedCommand with the row", () => {
@@ -1068,7 +1075,7 @@ describe("<HomeFocusView /> background rows", () => {
       ],
     });
     render(<HomeFocusView />);
-    expect(screen.queryByTestId("home-focus-running-duration")).toBeNull();
+    expect(screen.queryByTestId("home-focus-row-status-duration")).toBeNull();
   });
 
   it("reads 'just started' under a minute rather than 'running now'", () => {
@@ -1076,9 +1083,9 @@ describe("<HomeFocusView /> background rows", () => {
       background: [backgroundRow({ startedAtMs: Date.now() - 5_000 })],
     });
     render(<HomeFocusView />);
-    expect(screen.getByTestId("home-focus-running-duration").textContent).toBe(
-      "just started",
-    );
+    expect(
+      screen.getByTestId("home-focus-row-status-duration").textContent,
+    ).toBe("· just now");
   });
 });
 
@@ -1374,7 +1381,7 @@ describe("<HomeFocusView /> Tasks view nesting", () => {
             agentRow({
               agentId: "child",
               title: "reviewer",
-              tier: "background",
+              tier: "turn",
               parentId: "root",
             }),
           ],
@@ -1955,5 +1962,845 @@ describe("<HomeFocusView /> row icon vocabulary", () => {
     for (const heading of screen.getAllByRole("heading", { level: 2 })) {
       expect(heading.querySelector("svg")).toBeNull();
     }
+  });
+});
+
+// One activity, one row - the rule the rest of this file defers to. It was a
+// real report: one monitor listed twice, as `Running · Greeting and
+// Introduction · background` and `Background · 10min heartbeat · running 5h`.
+describe("<HomeFocusView /> no duplicate rows for one activity", () => {
+  function idleChatHostingAMonitor(): FocusModel {
+    return model({
+      tasks: [
+        taskRow({
+          epicId: "epic-1",
+          taskTitle: "General Conversation History",
+          agents: [
+            agentRow({
+              agentId: "chat-1",
+              title: "Greeting and Introduction",
+              tier: "background",
+            }),
+          ],
+        }),
+      ],
+      background: [
+        backgroundRow({
+          epicId: "epic-1",
+          chatId: "chat-1",
+          taskTitle: "General Conversation History",
+          chatTitle: "Greeting and Introduction",
+          label: "10min heartbeat",
+          itemKind: "monitor",
+          kind: "background-item",
+          startedAtMs: null,
+        }),
+      ],
+    });
+  }
+
+  it("keeps a background-tier agent out of Running, leaving its job the only row", () => {
+    modelMock.value = idleChatHostingAMonitor();
+    render(<HomeFocusView />);
+
+    expect(screen.queryByTestId("home-focus-section-tasks")).toBeNull();
+    expect(screen.queryByTestId("home-focus-task-row")).toBeNull();
+    const rows = screen.getAllByTestId("home-focus-background-row");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].textContent).toContain("10min heartbeat");
+  });
+
+  // The asymmetry: de-duplicating against a Background row only makes sense
+  // where that row exists. A cold task has none - neither section could show
+  // it - so it keeps its Running row and says what little it honestly can.
+  it("keeps a cold background-only task in Running, with no job row to replace it", () => {
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-cold",
+          taskTitle: "Archived conversation",
+          mountedHere: false,
+          agents: [
+            agentRow({ tier: "background", surface: null }),
+            agentRow({ tier: "background", surface: null }),
+          ],
+        }),
+      ],
+      background: [backgroundRow({ epicId: "epic-elsewhere" })],
+    });
+    render(<HomeFocusView />);
+
+    const row = screen.getByTestId("home-focus-task-row");
+    expect(row.textContent).toContain("Archived conversation");
+    expect(
+      within(row)
+        .getByTestId("home-focus-row-status")
+        .getAttribute("data-state"),
+    ).toBe("background");
+    // `ColdTaskAgents` keeps the count and the caveat in separate nodes, so
+    // they are asserted separately rather than as one run-together string.
+    const cold = screen.getByTestId("home-focus-cold-agents");
+    expect(cold.textContent).toContain("2 agents");
+    expect(cold.textContent).toContain("not open in this window");
+    expect(
+      screen.getByTestId("home-focus-section-tasks-heading").textContent,
+    ).toBe("Running · 1 task");
+  });
+
+  it("drops a warm background-only task, whose jobs carry it in Background", () => {
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-warm",
+          mountedHere: true,
+          agents: [agentRow({ tier: "background" })],
+        }),
+      ],
+      background: [
+        backgroundRow({ epicId: "epic-warm", label: "10min heartbeat" }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    expect(screen.queryByTestId("home-focus-section-tasks")).toBeNull();
+    expect(
+      screen.getByTestId("home-focus-background-row").textContent,
+    ).toContain("10min heartbeat");
+  });
+
+  it("counts Running by the tasks it actually draws", () => {
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-idle",
+          agents: [agentRow({ tier: "background" })],
+        }),
+        taskRow({
+          epicId: "epic-busy",
+          agents: [agentRow({ tier: "turn" })],
+        }),
+      ],
+      background: [backgroundRow({ epicId: "epic-idle" })],
+    });
+    render(<HomeFocusView />);
+
+    expect(
+      screen.getByTestId("home-focus-section-tasks-heading").textContent,
+    ).toBe("Running · 1 task");
+    expect(screen.getAllByTestId("home-focus-task-row")).toHaveLength(1);
+  });
+
+  it("drops a background-tier chip from a task that also has a mid-turn agent", () => {
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-1",
+          agents: [
+            agentRow({ agentId: "busy", title: "impl", tier: "turn" }),
+            agentRow({
+              agentId: "idle",
+              title: "shell host",
+              tier: "background",
+            }),
+          ],
+        }),
+      ],
+      background: [backgroundRow({ epicId: "epic-1" })],
+    });
+    render(<HomeFocusView />);
+
+    const chips = screen.getAllByTestId("home-focus-agent-chip");
+    expect(chips.map((chip) => chip.getAttribute("data-agent-id"))).toEqual([
+      "busy",
+    ]);
+  });
+
+  // The exception, and it is the honest one: with no job row for this task,
+  // hiding the agent would lose the work rather than de-duplicate it.
+  it("keeps a background-tier agent when this window has no job row for its task", () => {
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-1",
+          agents: [
+            agentRow({ agentId: "busy", title: "impl", tier: "turn" }),
+            agentRow({
+              agentId: "idle",
+              title: "shell host",
+              tier: "background",
+            }),
+          ],
+        }),
+      ],
+      background: [backgroundRow({ epicId: "epic-elsewhere" })],
+    });
+    render(<HomeFocusView />);
+
+    expect(
+      screen
+        .getAllByTestId("home-focus-agent-chip")
+        .map((chip) => chip.getAttribute("data-agent-id")),
+    ).toEqual(["busy", "idle"]);
+  });
+
+  it("still cascades Stop all over the agents it does not draw", () => {
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-1",
+          agents: [
+            agentRow({ agentId: "busy", title: "impl", tier: "turn" }),
+            agentRow({
+              agentId: "idle",
+              title: "shell host",
+              tier: "background",
+            }),
+          ],
+        }),
+      ],
+      background: [backgroundRow({ epicId: "epic-1" })],
+    });
+    render(<HomeFocusView />);
+
+    // One chip is drawn, but the stop is the task's, not the chip's: two roots
+    // go down, including the agent this view deliberately hides.
+    fireEvent.click(screen.getByTestId("home-focus-task-stop-all"));
+    fireEvent.click(screen.getByTestId("home-focus-stop-all-confirm"));
+    expect(actionsMock.stopAgent).toHaveBeenCalledTimes(2);
+    expect(actionsMock.stopAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "idle", cascade: true }),
+    );
+  });
+
+  it("lists the mid-turn agents and the jobs as a task's children in Tasks view", () => {
+    useLayoutStore.setState({
+      home: { view: "tasks", density: "comfortable" },
+    });
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-1",
+          agents: [
+            agentRow({ agentId: "busy", title: "impl", tier: "turn" }),
+            agentRow({
+              agentId: "idle",
+              title: "shell host",
+              tier: "background",
+            }),
+          ],
+        }),
+      ],
+      background: [
+        backgroundRow({ epicId: "epic-1", label: "10min heartbeat" }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    const body = screen.getByTestId("home-focus-task-group-body");
+    expect(
+      within(body)
+        .getAllByTestId("home-focus-task-group-agent")
+        .map((row) => row.getAttribute("data-agent-id")),
+    ).toEqual(["busy"]);
+    expect(
+      within(body).getAllByTestId("home-focus-task-group-job"),
+    ).toHaveLength(1);
+    expect(screen.getByTestId("home-focus-task-group-active").textContent).toBe(
+      "1 active",
+    );
+  });
+});
+
+describe("<HomeFocusView /> row grammar", () => {
+  it("names the job, then its chat, then its task - never one run-together string", () => {
+    modelMock.value = model({
+      background: [
+        backgroundRow({
+          label: "10min heartbeat",
+          chatTitle: "Greeting and Introduction",
+          taskTitle: "General Conversation History",
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    const name = screen.getByTestId("home-focus-row-name");
+    const context = screen.getByTestId("home-focus-row-context");
+    expect(name.textContent).toBe("10min heartbeat");
+    expect(name.className).toContain("text-foreground");
+    expect(context.textContent).toBe(
+      "·in Greeting and Introduction·General Conversation History",
+    );
+    expect(context.className).toContain("text-muted-foreground");
+    // Separate nodes, so the two names can never be read as one.
+    expect(name.contains(context)).toBe(false);
+  });
+
+  it("leads a prompt row with the prompt, and puts its task in the context", () => {
+    modelMock.value = model({
+      prompts: [
+        promptRow({
+          title: "Approve: run bun test",
+          body: "",
+          taskTitle: "Ship the parser",
+        }),
+      ],
+      badgeCount: 1,
+    });
+    render(<HomeFocusView />);
+
+    expect(screen.getByTestId("home-focus-row-name").textContent).toBe(
+      "Approve: run bun test",
+    );
+    expect(screen.getByTestId("home-focus-row-context").textContent).toBe(
+      "·in Ship the parser",
+    );
+  });
+
+  it("drops the context entirely rather than naming a task it cannot name", () => {
+    modelMock.value = model({
+      prompts: [promptRow({ taskTitle: null })],
+      badgeCount: 1,
+    });
+    render(<HomeFocusView />);
+    expect(screen.queryByTestId("home-focus-row-context")).toBeNull();
+  });
+
+  it("omits the `in <task>` part on a task's child rows", () => {
+    useLayoutStore.setState({
+      home: { view: "tasks", density: "comfortable" },
+    });
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-1",
+          taskTitle: "General Conversation History",
+          agents: [agentRow({ agentId: "busy", title: "impl", tier: "turn" })],
+        }),
+      ],
+      background: [
+        backgroundRow({
+          epicId: "epic-1",
+          label: "10min heartbeat",
+          chatTitle: "Greeting and Introduction",
+          taskTitle: "General Conversation History",
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    const body = screen.getByTestId("home-focus-task-group-body");
+    const agent = within(body).getByTestId("home-focus-task-group-agent");
+    expect(within(agent).queryByTestId("home-focus-row-context")).toBeNull();
+    // The job keeps its CHAT, which the task row above does not name.
+    const job = within(body).getByTestId("home-focus-task-group-job");
+    expect(within(job).getByTestId("home-focus-row-context").textContent).toBe(
+      "·in Greeting and Introduction",
+    );
+    expect(
+      within(job).getByTestId("home-focus-row-context").textContent,
+    ).not.toContain("General Conversation History");
+  });
+});
+
+describe("<HomeFocusView /> status column", () => {
+  it("reads `needs you` in the warning tone on a prompt row", () => {
+    modelMock.value = model({ prompts: [promptRow({})], badgeCount: 1 });
+    render(<HomeFocusView />);
+
+    const status = screen.getByTestId("home-focus-row-status");
+    expect(status.getAttribute("data-state")).toBe("needs-you");
+    expect(status.textContent).toContain("needs you");
+    expect(screen.getByTestId("home-focus-row-status-dot").className).toContain(
+      "bg-warning-foreground",
+    );
+  });
+
+  it.each([
+    ["turn", "turn", "bg-primary"],
+    ["background", "background", "border-muted-foreground"],
+  ] as const)("reads a %s-tier agent as `%s`", (tier, word, dotClass) => {
+    useLayoutStore.setState({
+      home: { view: "tasks", density: "comfortable" },
+    });
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-1",
+          agents: [agentRow({ agentId: "a", title: "impl", tier })],
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    const row = screen.getByTestId("home-focus-task-group-agent");
+    const status = within(row).getByTestId("home-focus-row-status");
+    expect(status.textContent).toBe(word);
+    expect(
+      within(row).getByTestId("home-focus-row-status-dot").className,
+    ).toContain(dotClass);
+  });
+
+  it("gives a task with no agent of its own the waiting state", () => {
+    useLayoutStore.setState({
+      home: { view: "tasks", density: "comfortable" },
+    });
+    modelMock.value = model({
+      tasks: [],
+      background: [backgroundRow({ epicId: "epic-idle" })],
+    });
+    render(<HomeFocusView />);
+
+    const row = screen.getByTestId("home-focus-task-group-row");
+    expect(
+      within(row)
+        .getByTestId("home-focus-row-status")
+        .getAttribute("data-state"),
+    ).toBe("waiting");
+  });
+
+  it("shows a state word with no duration where the model has no timestamp", () => {
+    modelMock.value = model({
+      background: [backgroundRow({ startedAtMs: null })],
+    });
+    render(<HomeFocusView />);
+    expect(screen.getByTestId("home-focus-row-status").textContent).toBe(
+      "running",
+    );
+  });
+});
+
+describe("<HomeFocusView /> section headings", () => {
+  it("keeps the caption out of the heading and on its own line", () => {
+    modelMock.value = model({
+      background: [backgroundRow({})],
+      coverage: {
+        activity: "live",
+        notifications: "cloud",
+        backgroundIsMountedOnly: true,
+      },
+    });
+    render(<HomeFocusView />);
+
+    const heading = screen.getByTestId("home-focus-section-background-heading");
+    const caption = screen.getByTestId("home-focus-section-background-caption");
+    expect(heading.textContent).toBe("Background · 1");
+    expect(heading.contains(caption)).toBe(false);
+    expect(caption.tagName).toBe("P");
+    // Its own line: the caption is not a flex sibling on the heading's
+    // baseline row, which is how it rendered as one string.
+    expect(heading.parentElement?.className).toContain("flex-col");
+  });
+
+  it("names every section's heading by count alone", () => {
+    modelMock.value = model({
+      prompts: [promptRow({}), promptRow({})],
+      tasks: [taskRow({})],
+      background: [backgroundRow({})],
+      badgeCount: 2,
+    });
+    render(<HomeFocusView />);
+
+    expect(
+      screen.getByTestId("home-focus-section-prompts-heading").textContent,
+    ).toBe("Needs you · 2");
+    expect(
+      screen.getByTestId("home-focus-section-tasks-heading").textContent,
+    ).toBe("Running · 1 task");
+    expect(
+      screen.getByTestId("home-focus-section-background-heading").textContent,
+    ).toBe("Background · 1");
+  });
+});
+
+describe("<HomeFocusView /> summary line", () => {
+  it("reports every non-zero count in one line", () => {
+    modelMock.value = model({
+      prompts: [promptRow({}), promptRow({})],
+      tasks: [taskRow({ epicId: "epic-1" })],
+      background: [backgroundRow({ epicId: "epic-1" })],
+      badgeCount: 2,
+    });
+    render(<HomeFocusView />);
+
+    const summary = screen.getByRole("group", { name: "Summary" });
+    expect(
+      within(summary)
+        .getAllByTestId("home-focus-summary-segment")
+        .map((segment) => segment.textContent),
+    ).toEqual(["2 need you", "1 running", "1 background"]);
+  });
+
+  it("omits a segment whose count is zero", () => {
+    modelMock.value = model({
+      background: [backgroundRow({})],
+    });
+    render(<HomeFocusView />);
+    expect(
+      screen
+        .getAllByTestId("home-focus-summary-segment")
+        .map((segment) => segment.getAttribute("data-segment")),
+    ).toEqual(["background"]);
+  });
+
+  it("counts running by the same rule the section draws", () => {
+    modelMock.value = model({
+      tasks: [
+        // Warm and background-only, with its own job row below - so Background
+        // carries it and Running does not.
+        taskRow({
+          epicId: "epic-idle",
+          agents: [agentRow({ tier: "background" })],
+        }),
+      ],
+      background: [backgroundRow({ epicId: "epic-idle" })],
+    });
+    render(<HomeFocusView />);
+    expect(
+      screen
+        .getAllByTestId("home-focus-summary-segment")
+        .map((segment) => segment.getAttribute("data-segment")),
+    ).toEqual(["background"]);
+  });
+
+  it("is replaced by the empty state when everything is zero", () => {
+    modelMock.value = model({});
+    render(<HomeFocusView />);
+    expect(screen.queryByTestId("home-focus-summary")).toBeNull();
+    expect(screen.getByTestId("home-focus-empty")).toBeDefined();
+  });
+
+  it("moves focus to the section a segment names", () => {
+    modelMock.value = model({
+      prompts: [promptRow({})],
+      background: [backgroundRow({})],
+      badgeCount: 1,
+    });
+    render(<HomeFocusView />);
+
+    const background = screen
+      .getAllByTestId("home-focus-summary-segment")
+      .find((segment) => segment.getAttribute("data-segment") === "background");
+    fireEvent.click(background ?? screen.getByTestId("home-focus-summary"));
+    expect(document.activeElement).toBe(
+      screen.getByTestId("home-focus-section-background"),
+    );
+  });
+});
+
+// Decisions 2 and 5 are about GEOMETRY, and jsdom has none - so what is pinned
+// here is the structure that produces it: every row of a section reserves both
+// right-hand tracks, whatever it has to put in them. Without that, `Stop all`
+// is wider than `Stop` is wider than nothing, and the status column staircases
+// down a section of mixed rows.
+describe("<HomeFocusView /> shared status and action columns", () => {
+  const STATUS_TRACK = ["w-32", "sm:w-36"];
+  const ACTIONS_TRACK = ["w-24"];
+
+  function expectTracks(scope: HTMLElement): void {
+    const status = within(scope).getByTestId("home-focus-row-status");
+    for (const cls of STATUS_TRACK) {
+      expect(status.className.split(" ")).toContain(cls);
+    }
+    const actions = within(scope).getByTestId("home-focus-row-actions");
+    for (const cls of ACTIONS_TRACK) {
+      expect(actions.className.split(" ")).toContain(cls);
+    }
+  }
+
+  it("gives every Focus row both tracks, across one-agent, multi-agent and no-action shapes", () => {
+    modelMock.value = model({
+      prompts: [promptRow({ epicId: "epic-1" })],
+      tasks: [
+        // One agent -> `Stop`.
+        taskRow({ epicId: "epic-one", agents: [agentRow({ tier: "turn" })] }),
+        // Several -> the wider `Stop all`.
+        taskRow({
+          epicId: "epic-many",
+          agents: [
+            agentRow({ agentId: "a", tier: "turn" }),
+            agentRow({ agentId: "b", tier: "turn" }),
+          ],
+        }),
+      ],
+      background: [backgroundRow({ epicId: "epic-bg" })],
+      badgeCount: 1,
+    });
+    render(<HomeFocusView />);
+
+    expect(screen.getByTestId("home-focus-task-stop")).toBeDefined();
+    expect(screen.getByTestId("home-focus-task-stop-all")).toBeDefined();
+    for (const testId of [
+      "home-focus-prompt-row",
+      "home-focus-background-row",
+    ]) {
+      expectTracks(screen.getByTestId(testId));
+    }
+    for (const row of screen.getAllByTestId("home-focus-task-row")) {
+      expectTracks(row);
+    }
+  });
+
+  it("reserves the action track on a row that has nothing to stop", () => {
+    modelMock.value = model({ prompts: [promptRow({})], badgeCount: 1 });
+    render(<HomeFocusView />);
+
+    const actions = screen.getByTestId("home-focus-row-actions");
+    expect(actions.textContent).toBe("");
+    expect(actions.className.split(" ")).toContain("w-24");
+  });
+
+  it("gives the Tasks view's group rows and nested rows the same tracks", () => {
+    useLayoutStore.setState({
+      home: { view: "tasks", density: "comfortable" },
+    });
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-1",
+          agents: [agentRow({ agentId: "busy", title: "impl", tier: "turn" })],
+        }),
+      ],
+      background: [backgroundRow({ epicId: "epic-1" })],
+    });
+    render(<HomeFocusView />);
+
+    expectTracks(screen.getByTestId("home-focus-task-group-row"));
+    expectTracks(screen.getByTestId("home-focus-task-group-agent"));
+    expectTracks(screen.getByTestId("home-focus-task-group-job"));
+  });
+
+  it("reserves the action track on a group row with no task to stop", () => {
+    useLayoutStore.setState({
+      home: { view: "tasks", density: "comfortable" },
+    });
+    modelMock.value = model({
+      tasks: [],
+      background: [backgroundRow({ epicId: "epic-idle" })],
+    });
+    render(<HomeFocusView />);
+
+    const row = screen.getByTestId("home-focus-task-group-row");
+    expect(within(row).queryByTestId("home-focus-task-stop-all")).toBeNull();
+    expectTracks(row);
+  });
+
+  // A sibling so it is not part of the open control's ACCESSIBLE NAME - the
+  // row already announces enough. It stays inside the body's stretched hit
+  // area, which is intended: everything that is not a control opens the row.
+  it("keeps the status cell out of the body button's accessible name", () => {
+    modelMock.value = model({ background: [backgroundRow({})] });
+    render(<HomeFocusView />);
+
+    const body = screen.getByTestId("home-focus-background-open-body");
+    const status = screen.getByTestId("home-focus-row-status");
+    expect(body.contains(status)).toBe(false);
+    expect(body.textContent).not.toContain("running");
+    // Unpositioned, so the body's overlay still covers it and a click there
+    // opens the row rather than landing on inert text.
+    expect(status.className.split(" ")).not.toContain("relative");
+    expect(status.className.split(" ")).not.toContain("z-10");
+  });
+
+  // Left-aligned INSIDE the fixed track is what actually freezes the dot and
+  // the word: right alignment pins only the cell's right edge, so a row
+  // carrying `· 41m` would push its word left of a row carrying none.
+  it("anchors the dot and word at the track's left edge, with the duration trailing", () => {
+    modelMock.value = model({
+      background: [
+        backgroundRow({ key: "with", startedAtMs: Date.now() - 41 * 60_000 }),
+        backgroundRow({ key: "without", startedAtMs: null }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    const cells = screen.getAllByTestId("home-focus-row-status");
+    expect(cells).toHaveLength(2);
+    for (const cell of cells) {
+      expect(cell.className.split(" ")).toContain("justify-start");
+      expect(cell.className.split(" ")).not.toContain("justify-end");
+      // The dot leads, the word follows, the duration is last or absent.
+      expect(cell.firstElementChild?.getAttribute("data-testid")).toBe(
+        "home-focus-row-status-dot",
+      );
+    }
+    expect(cells[0].textContent).toBe("running· 41m");
+    expect(cells[1].textContent).toBe("running");
+  });
+
+  it("keeps the duration numerals tabular so a tick cannot rewidth it", () => {
+    modelMock.value = model({ background: [backgroundRow({})] });
+    render(<HomeFocusView />);
+    expect(
+      screen.getByTestId("home-focus-row-status").className.split(" "),
+    ).toContain("tabular-nums");
+  });
+});
+
+describe("<HomeFocusView /> summary line per view", () => {
+  it("folds running and background into one task count in Tasks view", () => {
+    useLayoutStore.setState({
+      home: { view: "tasks", density: "comfortable" },
+    });
+    modelMock.value = model({
+      prompts: [promptRow({ epicId: "epic-1" })],
+      tasks: [
+        taskRow({ epicId: "epic-1", agents: [agentRow({ tier: "turn" })] }),
+      ],
+      background: [backgroundRow({ epicId: "epic-other" })],
+      badgeCount: 1,
+    });
+    render(<HomeFocusView />);
+
+    const segments = screen.getAllByTestId("home-focus-summary-segment");
+    expect(segments.map((segment) => segment.textContent)).toEqual([
+      "1 need you",
+      "2 tasks",
+    ]);
+    // Every segment names a section this view actually mounts.
+    for (const segment of segments) {
+      expect(
+        document.getElementById(segment.getAttribute("data-target") ?? ""),
+      ).not.toBeNull();
+    }
+  });
+
+  it("singularises the task segment", () => {
+    useLayoutStore.setState({
+      home: { view: "tasks", density: "comfortable" },
+    });
+    modelMock.value = model({
+      tasks: [
+        taskRow({ epicId: "epic-1", agents: [agentRow({ tier: "turn" })] }),
+      ],
+    });
+    render(<HomeFocusView />);
+    expect(screen.getByTestId("home-focus-summary-segment").textContent).toBe(
+      "1 task",
+    );
+  });
+
+  // The blocking case: a background-only account in Tasks view had one summary
+  // button and it pointed at a section Tasks never renders.
+  it("moves focus to the Tasks section from a background-only model", () => {
+    useLayoutStore.setState({
+      home: { view: "tasks", density: "comfortable" },
+    });
+    modelMock.value = model({
+      tasks: [],
+      background: [backgroundRow({ epicId: "epic-idle" })],
+    });
+    render(<HomeFocusView />);
+
+    const segment = screen.getByTestId("home-focus-summary-segment");
+    expect(segment.textContent).toBe("1 task");
+    fireEvent.click(segment);
+    expect(document.activeElement).toBe(
+      screen.getByTestId("home-focus-section-task-groups"),
+    );
+  });
+
+  it("still names all three sections in Focus view, and each one exists", () => {
+    modelMock.value = model({
+      prompts: [promptRow({ epicId: "epic-1" })],
+      tasks: [
+        taskRow({ epicId: "epic-1", agents: [agentRow({ tier: "turn" })] }),
+      ],
+      background: [backgroundRow({ epicId: "epic-1" })],
+      badgeCount: 1,
+    });
+    render(<HomeFocusView />);
+
+    const segments = screen.getAllByTestId("home-focus-summary-segment");
+    expect(
+      segments.map((segment) => segment.getAttribute("data-segment")),
+    ).toEqual(["need you", "running", "background"]);
+    for (const segment of segments) {
+      expect(
+        document.getElementById(segment.getAttribute("data-target") ?? ""),
+      ).not.toBeNull();
+    }
+  });
+});
+
+describe("<HomeFocusView /> duration hiding", () => {
+  it("never hides the duration under Comfortable, at any width", () => {
+    modelMock.value = model({ background: [backgroundRow({})] });
+    render(<HomeFocusView />);
+
+    const duration = screen.getByTestId("home-focus-row-status-duration");
+    expect(duration.getAttribute("data-density")).toBe("comfortable");
+    expect(duration.className).not.toContain("hidden");
+  });
+
+  // A container query on the section, not a viewport one: a narrow Home tile
+  // in a wide window is the case `max-sm:` gets backwards.
+  it("hides it under Compact on a narrow ROW rather than a narrow viewport", () => {
+    useLayoutStore.setState({ home: { view: "focus", density: "compact" } });
+    modelMock.value = model({ background: [backgroundRow({})] });
+    render(<HomeFocusView />);
+
+    const duration = screen.getByTestId("home-focus-row-status-duration");
+    expect(duration.getAttribute("data-density")).toBe("compact");
+    expect(duration.className.split(" ")).toContain("@max-sm:hidden");
+    expect(duration.className).not.toContain("max-sm:hidden ");
+    expect(
+      screen.getByTestId("home-focus-section-background").className.split(" "),
+    ).toContain("@container");
+  });
+
+  it("keeps the state word in both densities", () => {
+    for (const density of ["comfortable", "compact"] as const) {
+      useLayoutStore.setState({ home: { view: "focus", density } });
+      modelMock.value = model({ background: [backgroundRow({})] });
+      const view = render(<HomeFocusView />);
+      expect(screen.getByTestId("home-focus-row-status").textContent).toContain(
+        "running",
+      );
+      view.unmount();
+    }
+  });
+});
+
+describe("<HomeFocusView /> context keys", () => {
+  // A chat and its task can be called the same thing and are still two
+  // different objects, so the row keys them by ROLE and renders both.
+  it("renders both context parts when the chat and the task share a title", () => {
+    modelMock.value = model({
+      background: [
+        backgroundRow({
+          label: "10min heartbeat",
+          chatTitle: "General Conversation History",
+          taskTitle: "General Conversation History",
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    const context = screen.getByTestId("home-focus-row-context");
+    expect(
+      Array.from(context.querySelectorAll("[data-role]")).map((part) =>
+        part.getAttribute("data-role"),
+      ),
+    ).toEqual(["chat", "task"]);
+    expect(context.textContent).toBe(
+      "·in General Conversation History·General Conversation History",
+    );
+  });
+});
+
+describe("<HomeFocusView /> unlabelled row group", () => {
+  it("renders the rows directly under the section, with no wrapper", () => {
+    modelMock.value = model({ background: [backgroundRow({})] });
+    render(<HomeFocusView />);
+
+    const section = screen.getByTestId("home-focus-section-background");
+    const list = section.querySelector("ul");
+    expect(list).not.toBeNull();
+    // The list is the section's own child, not nested in a group box.
+    expect(list?.parentElement).toBe(section);
+    expect(
+      screen.queryByTestId("home-focus-section-background-group-label"),
+    ).toBeNull();
   });
 });
