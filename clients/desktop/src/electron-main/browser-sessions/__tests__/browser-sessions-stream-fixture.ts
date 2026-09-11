@@ -293,6 +293,8 @@ export function createTabRecorder(): TabRecorder {
           errorText: null,
         });
       },
+      applyElectronTabViewport: () =>
+        Promise.resolve({ width: 1, height: 1, dpr: 1 }),
       onNativeTabStatusChange: (listener) => {
         statusListeners.add(listener);
         return () => {

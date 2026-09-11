@@ -7,6 +7,7 @@ import { fakeMediaStream as fakeStream } from "@/components/browser-tile/__tests
 const jpegPreview: PipPreview = {
   src: "blob:pip-frame",
   frameSize: { width: 800, height: 600 },
+  logicalViewport: null,
   cursor: null,
 };
 
@@ -36,10 +37,20 @@ describe("PipPreviewSurface", () => {
 
   it("attaches the shared track and hides the JPEG once it decodes", () => {
     const stream = fakeStream("track-1");
-    render(<PipPreviewSurface preview={jpegPreview} stream={stream} />);
+    render(
+      <PipPreviewSurface
+        preview={{
+          ...jpegPreview,
+          logicalViewport: { width: 390, height: 844 },
+        }}
+        stream={stream}
+      />,
+    );
 
     const video = previewVideo();
     expect(video.srcObject).toBe(stream);
+    expect(video.dataset.viewportWidth).toBe("800");
+    expect(video.dataset.viewportHeight).toBe("600");
     // Mounted to decode, but transparent until it has: the JPEG underneath
     // keeps painting, so there is no black-tile window.
     expect(video.className).toContain("opacity-0");
@@ -48,6 +59,8 @@ describe("PipPreviewSurface", () => {
     fireEvent.loadedData(video);
 
     expect(video.className).not.toContain("opacity-0");
+    expect(video.dataset.viewportWidth).toBe("390");
+    expect(video.dataset.viewportHeight).toBe("844");
     expect(previewImage()?.hidden).toBe(true);
   });
 
@@ -86,7 +99,12 @@ describe("PipPreviewSurface", () => {
   it("shows the spinner only while neither plane has pixels", () => {
     const view = render(
       <PipPreviewSurface
-        preview={{ src: null, frameSize: null, cursor: null }}
+        preview={{
+          src: null,
+          frameSize: null,
+          logicalViewport: null,
+          cursor: null,
+        }}
         stream={null}
       />,
     );
@@ -94,7 +112,12 @@ describe("PipPreviewSurface", () => {
 
     view.rerender(
       <PipPreviewSurface
-        preview={{ src: null, frameSize: null, cursor: null }}
+        preview={{
+          src: null,
+          frameSize: null,
+          logicalViewport: null,
+          cursor: null,
+        }}
         stream={fakeStream("track-3")}
       />,
     );
