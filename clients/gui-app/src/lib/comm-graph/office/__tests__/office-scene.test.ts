@@ -9,10 +9,12 @@ import {
   OFFICE_CULL_MARGIN_PX,
   OfficeScene,
 } from "@/lib/comm-graph/office/office-scene";
+import { OfficeSeatBook } from "@/lib/comm-graph/office/office-seat-book";
 import { makeTestEpic } from "@/lib/comm-graph/office/office-test-epic";
 import {
   OFFICE_VIEW_IDS,
   OFFICE_VIEWS,
+  type OfficeDeskState,
   type OfficeProjector,
   type OfficeView,
 } from "@/lib/comm-graph/office/views/office-view";
@@ -38,6 +40,7 @@ import {
   type OfficeSpriteRef,
   type OfficeTilePos,
   type OfficeTileRect,
+  type OfficeWorldDrawable,
 } from "@/lib/comm-graph/office/office-types";
 
 /**
@@ -360,7 +363,7 @@ function characterSpriteAt(
   frame: OfficeFrame,
   rect: OfficeRect,
 ): OfficeSpriteRef | null {
-  for (const drawable of frame.actors) {
+  for (const drawable of visibleDrawables(frame)) {
     if (drawable.kind !== "sprite") continue;
     if (drawable.sprite.name !== "character") continue;
     if (drawable.x !== rect.x || drawable.y !== rect.y) continue;
@@ -4401,7 +4404,13 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
     );
     const target = epic.agents.find((person) => person.parentId !== null);
     if (target === undefined) throw new Error("expected a team member");
+    const secondTarget = epic.agents.find(
+      (person) => person.parentId !== null && person.id !== target.id,
+    );
+    if (secondTarget === undefined)
+      throw new Error("expected a second team member");
     const scene = newScene();
+    const occupancySpy = vi.spyOn(OfficeSeatBook.prototype, "occupancy");
     const visibleAgentIds = new Set(epic.agents.map((person) => person.id));
     scene.sync(
       sceneInput({
@@ -4427,6 +4436,27 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
     const reserveRects = reserves.map((seat) =>
       footRect(coldLayout, seat.chairTile),
     );
+    const reserveFront = (frame: OfficeFrame, seat: OfficeSeat) =>
+      frame.world?.find(
+        (entry) =>
+          entry.drawable.kind === "sprite" &&
+          entry.drawable.sprite.name === "desk-front" &&
+          entry.drawable.x === seat.deskTile.col * OFFICE_TILE &&
+          entry.drawable.y === seat.deskTile.row * OFFICE_TILE + 24,
+      );
+    for (const lod of [1, 2] as const) {
+      const reserveEntry = reserveFront(
+        scene.frame(lod, WHOLE_WORLD),
+        reserves[0],
+      );
+      if (reserveEntry === undefined) {
+        throw new Error(`expected an empty reserve at lod ${lod}`);
+      }
+      expect(reserveEntry.ownerAgentId).toBeNull();
+    }
+    expect(
+      sprites(visibleDrawables(scene.frame(0, WHOLE_WORLD)), "desk-front"),
+    ).toHaveLength(0);
 
     const hot = new Map(cold).set(target.id, "working");
     scene.sync(
@@ -4437,36 +4467,70 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
         reducedMotion: false,
       }),
     );
-    const outboundSamples: OfficeRect[] = [];
-    let walkedToReserve = false;
-    let reachedReserve = -1;
-    for (let step = 0; step < 400; step += 1) {
-      const frame = frameOf(scene);
-      const character = buildingCharacterRect(frame, target.id);
-      outboundSamples.push(character);
-      if (
-        !walkedToReserve &&
-        JSON.stringify(character) !== JSON.stringify(cubbyRect) &&
-        !reserveRects.some(
+    const observeOutbound = () => {
+      const outboundSamples: OfficeRect[] = [];
+      const reserveFurnitureSeenWhileWalking = new Set<string>();
+      let walkedToReserve = false;
+      let reachedReserve = -1;
+      for (let step = 0; step < 400; step += 1) {
+        const frame = frameOf(scene);
+        const character = buildingCharacterRect(frame, target.id);
+        outboundSamples.push(character);
+        const intermediate =
+          JSON.stringify(character) !== JSON.stringify(cubbyRect) &&
+          !reserveRects.some(
+            (reserveRect) =>
+              JSON.stringify(reserveRect) === JSON.stringify(character),
+          );
+        if (!walkedToReserve && intermediate) {
+          walkedToReserve = true;
+        }
+        if (intermediate) {
+          for (const reserve of reserves) {
+            if (reserveFront(frame, reserve) !== undefined) {
+              reserveFurnitureSeenWhileWalking.add(reserve.seatId);
+            }
+          }
+        }
+        reachedReserve = reserveRects.findIndex(
           (reserveRect) =>
             JSON.stringify(reserveRect) === JSON.stringify(character),
-        )
-      ) {
-        walkedToReserve = true;
+        );
+        if (reachedReserve >= 0) break;
+        scene.tick(100);
       }
-      reachedReserve = reserveRects.findIndex(
-        (reserveRect) =>
-          JSON.stringify(reserveRect) === JSON.stringify(character),
-      );
-      if (reachedReserve >= 0) break;
-      scene.tick(100);
-    }
+      return {
+        outboundSamples,
+        reserveFurnitureSeenWhileWalking,
+        walkedToReserve,
+        reachedReserve,
+      };
+    };
+    const {
+      outboundSamples,
+      reserveFurnitureSeenWhileWalking,
+      walkedToReserve,
+      reachedReserve,
+    } = observeOutbound();
     expect(walkedToReserve).toBe(true);
     expect(reachedReserve).toBeGreaterThanOrEqual(0);
+    const chosenReserve = reserves.at(reachedReserve);
+    if (chosenReserve === undefined)
+      throw new Error("expected a chosen reserve");
+    expect(reserveFurnitureSeenWhileWalking.has(chosenReserve.seatId)).toBe(
+      true,
+    );
+    const observedSeatBook: unknown = occupancySpy.mock.contexts.at(0);
+    if (!(observedSeatBook instanceof OfficeSeatBook)) {
+      throw new Error("expected the scene seat book");
+    }
+    const currentOccupancy = (): ReadonlyMap<string, string> =>
+      observedSeatBook.occupancy();
+    expect(currentOccupancy().get(chosenReserve.seatId)).toBe(target.id);
     const reservePath = findOfficePath(
       coldLayout,
       cubby.chairTile,
-      reserves[reachedReserve].chairTile,
+      chosenReserve.chairTile,
     );
     expect(reservePath).not.toBeNull();
     expect(reservePath?.length).toBeGreaterThan(1);
@@ -4489,41 +4553,246 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
     const returnSamples: OfficeRect[] = [];
     const returnPath = findOfficePath(
       coldLayout,
-      reserves[reachedReserve].chairTile,
+      chosenReserve.chairTile,
       cubby.chairTile,
     );
     expect(returnPath).not.toBeNull();
     if (returnPath === null) throw new Error("expected a return path");
-    const fullReturnPath = [reserves[reachedReserve].chairTile, ...returnPath];
-    let walkedBack = false;
-    let returnedToCubby = false;
-    for (let step = 0; step < 400; step += 1) {
-      const frame = frameOf(scene);
-      const character = buildingCharacterRect(frame, target.id);
-      returnSamples.push(character);
-      if (
-        JSON.stringify(character) !== JSON.stringify(cubbyRect) &&
-        !reserveRects.some(
-          (reserveRect) =>
-            JSON.stringify(reserveRect) === JSON.stringify(character),
-        )
-      ) {
-        walkedBack = true;
+    const fullReturnPath = [chosenReserve.chairTile, ...returnPath];
+    expect(currentOccupancy().get(chosenReserve.seatId)).toBe(target.id);
+    const observeReturn = () => {
+      let walkedBack = false;
+      let returnedToCubby = false;
+      for (let step = 0; step < 400; step += 1) {
+        const frame = frameOf(scene);
+        const character = buildingCharacterRect(frame, target.id);
+        returnSamples.push(character);
+        if (
+          JSON.stringify(character) !== JSON.stringify(cubbyRect) &&
+          !reserveRects.some(
+            (reserveRect) =>
+              JSON.stringify(reserveRect) === JSON.stringify(character),
+          )
+        ) {
+          walkedBack = true;
+        }
+        if (JSON.stringify(character) === JSON.stringify(cubbyRect)) {
+          returnedToCubby = true;
+          break;
+        }
+        expect(currentOccupancy().get(chosenReserve.seatId)).toBe(target.id);
+        scene.tick(100);
       }
-      if (JSON.stringify(character) === JSON.stringify(cubbyRect)) {
-        returnedToCubby = true;
-        break;
-      }
-      scene.tick(100);
-    }
+      return { walkedBack, returnedToCubby };
+    };
+    const { walkedBack, returnedToCubby } = observeReturn();
     expect(walkedBack).toBe(true);
     expect(returnedToCubby).toBe(true);
+    expect(currentOccupancy().get(chosenReserve.seatId)).toBeUndefined();
     expect(
       returnSamples.every((sample) =>
         rectOnProjectedPath(coldLayout, fullReturnPath, sample),
       ),
     ).toBe(true);
     expect(scene.whereabouts(target.id)).toBe("Quiet stack");
+    const secondCubby = coldLayout.desks.get(secondTarget.id);
+    if (secondCubby === undefined) throw new Error("expected a second cubby");
+    expect(secondCubby.kind).toBe("cubby");
+    scene.sync(
+      sceneInput({
+        agents: epic.agents,
+        visibleAgentIds,
+        statusById: new Map(cold).set(secondTarget.id, "working"),
+        reducedMotion: false,
+      }),
+    );
+    let secondAtReleasedReserve = false;
+    for (let step = 0; step < 400 && !secondAtReleasedReserve; step += 1) {
+      secondAtReleasedReserve =
+        JSON.stringify(characterRect(frameOf(scene), secondTarget.id)) ===
+        JSON.stringify(footRect(coldLayout, chosenReserve.chairTile));
+      if (!secondAtReleasedReserve) scene.tick(100);
+    }
+    expect(secondAtReleasedReserve).toBe(true);
+    occupancySpy.mockRestore();
+  });
+
+  it("R3 keeps a waking Building cubby drawn until its character leaves", (context) => {
+    if (viewId !== "building") {
+      context.skip("only Building has cubby-to-reserve continuity");
+      return;
+    }
+    const epic = makeTestEpic("triage", 24, 9);
+    const cold = new Map<string, OfficeAgentStatus>(
+      epic.agents.map((person) => [person.id, "idle"]),
+    );
+    cold.set("team-0-lead", "working");
+    const target = epic.agents.find((person) => person.id.startsWith("leaf-"));
+    if (target === undefined) throw new Error("expected a team member");
+    const visibleAgentIds = new Set(epic.agents.map((person) => person.id));
+    const scene = newScene();
+    scene.sync(
+      sceneInput({
+        agents: epic.agents,
+        visibleAgentIds,
+        statusById: cold,
+        reducedMotion: false,
+      }),
+    );
+    const cubby = layoutOf(scene).desks.get(target.id);
+    if (cubby === undefined) throw new Error("expected a cubby assignment");
+    expect(cubby.kind).toBe("cubby");
+    const assignedSeatIds = new Set(
+      Array.from(layoutOf(scene).desks.values()).map((desk) => desk.seatId),
+    );
+    const liveLead = layoutOf(scene).desks.get("team-0-lead");
+    if (liveLead === undefined) throw new Error("expected a live team room");
+    expect(liveLead.kind).toBe("desk");
+    const reserve = Array.from(layoutOf(scene).seats.values()).find(
+      (seat) =>
+        seat.kind === "desk" &&
+        seat.roomId === liveLead.roomId &&
+        !assignedSeatIds.has(seat.seatId),
+    );
+    if (reserve === undefined) throw new Error("expected a reserve seat");
+    const originalSeatProps = view.painter.seatProps;
+    const reserveSeatPropsCalls: Array<{
+      readonly lod: 0 | 1 | 2;
+      readonly state: OfficeDeskState;
+      readonly props: ReadonlyArray<OfficeWorldDrawable>;
+    }> = [];
+    const seatPropsSpy = vi
+      .spyOn(view.painter, "seatProps")
+      .mockImplementation((layout, seat, state, lod) => {
+        const props = originalSeatProps(layout, seat, state, lod);
+        if (seat.seatId === reserve.seatId) {
+          reserveSeatPropsCalls.push({ lod, state, props });
+        }
+        return props;
+      });
+    scene.frame(0, WHOLE_WORLD);
+    expect(seatPropsSpy).not.toHaveBeenCalled();
+    scene.frame(1, WHOLE_WORLD);
+    scene.frame(2, WHOLE_WORLD);
+    for (const lod of [1, 2] as const) {
+      const call = reserveSeatPropsCalls.find((entry) => entry.lod === lod);
+      if (call === undefined)
+        throw new Error(`expected reserve props at lod ${lod}`);
+      expect(call.state.agentId).toBeNull();
+      const front = call.props.find(
+        (entry) =>
+          entry.drawable.kind === "sprite" &&
+          entry.drawable.sprite.name === "desk-front",
+      );
+      if (front === undefined || front.drawable.kind !== "sprite") {
+        throw new Error(`expected reserve desk front at lod ${lod}`);
+      }
+      expect(front.drawable.alpha).toBe(0.45);
+      if (lod === 2) {
+        const label = call.props.find(
+          (entry) =>
+            entry.drawable.kind === "label" &&
+            entry.drawable.text === "reserve",
+        );
+        expect(label).toBeDefined();
+      }
+    }
+    seatPropsSpy.mockRestore();
+    scene.sync(
+      sceneInput({
+        agents: epic.agents,
+        visibleAgentIds,
+        statusById: new Map(cold).set(target.id, "working"),
+        reducedMotion: false,
+      }),
+    );
+    const cubbyAtWake = frameOf(scene).world?.some(
+      (entry) =>
+        entry.ownerAgentId === target.id &&
+        entry.drawable.kind === "sprite" &&
+        entry.drawable.sprite.name === "cubby" &&
+        entry.drawable.x === cubby.deskTile.col * OFFICE_TILE &&
+        entry.drawable.y === cubby.deskTile.row * OFFICE_TILE,
+    );
+    expect(cubbyAtWake).toBe(true);
+  });
+
+  it("gives aliased Building storeys one physical reception queue", (context) => {
+    if (viewId !== "building") {
+      context.skip("only Building aliases reception tiles across storeys");
+      return;
+    }
+    const epic = makeTestEpic("one-team", 60, 4);
+    const visibleAgentIds = new Set(epic.agents.map((person) => person.id));
+    const scene = newScene();
+    const allWorking = new Map<string, OfficeAgentStatus>(
+      epic.agents.map((person) => [person.id, "working"]),
+    );
+    scene.sync(
+      sceneInput({
+        agents: epic.agents,
+        visibleAgentIds,
+        statusById: allWorking,
+      }),
+    );
+    const initial = layoutOf(scene);
+    const assignments = epic.agents.flatMap((person) => {
+      const seat = initial.desks.get(person.id);
+      return seat === undefined ? [] : [{ person, seat }];
+    });
+    const first = assignments.at(0);
+    if (first === undefined) throw new Error("expected a first storey seat");
+    const second = assignments.find(
+      ({ seat }) =>
+        seat.floorIndex !== first.seat.floorIndex &&
+        initial.floors[seat.floorIndex].receptionQueueTiles.length > 0,
+    );
+    if (second === undefined) throw new Error("expected a second storey seat");
+    const firstFloor = initial.floors[first.seat.floorIndex];
+    const secondFloor = initial.floors[second.seat.floorIndex];
+    const firstQueueTile = firstFloor.receptionQueueTiles.at(0);
+    const secondQueueTile = secondFloor.receptionQueueTiles.at(0);
+    if (firstQueueTile === undefined || secondQueueTile === undefined) {
+      throw new Error("expected reception queue tiles");
+    }
+    const secondQueueStand = secondFloor.receptionQueueTiles.at(1);
+    if (secondQueueStand === undefined) {
+      throw new Error("expected a second reception queue tile");
+    }
+    expect(firstQueueTile).toEqual(secondQueueTile);
+
+    const firstAttention = new Map<string, OfficeAgentStatus>([
+      [first.person.id, "attention"],
+    ]);
+    scene.sync(
+      sceneInput({
+        agents: epic.agents,
+        visibleAgentIds,
+        statusById: firstAttention,
+        reducedMotion: true,
+      }),
+    );
+    scene.sync(
+      sceneInput({
+        agents: epic.agents,
+        visibleAgentIds,
+        statusById: new Map<string, OfficeAgentStatus>([
+          [first.person.id, "attention"],
+          [second.person.id, "attention"],
+        ]),
+        reducedMotion: true,
+      }),
+    );
+    const queued = frameOf(scene);
+    expect(characterRect(queued, first.person.id)).toEqual(
+      footRect(initial, firstQueueTile),
+    );
+    expect(characterRect(queued, second.person.id)).toEqual(
+      footRect(initial, secondQueueStand),
+    );
+    expect(characterRect(queued, first.person.id)).not.toEqual(
+      characterRect(queued, second.person.id),
+    );
   });
 
   it("keeps host plazas disconnected without Building's skybridge", (context) => {
@@ -5430,23 +5699,38 @@ describe("OfficeScene fixup 1 - F2 uniform shift keeps an errand", () => {
     const epic = makeTestEpic("one-team", 60, 3);
     const full = epic.agents;
     const scene = new OfficeScene(OFFICE_VIEWS.towers, null);
+    const control = new OfficeScene(OFFICE_VIEWS.towers, null);
+    const initialAgents = full.slice(0, 3);
+    const initialVisible = new Set(initialAgents.map((person) => person.id));
     scene.sync(
       sceneInput({
-        agents: full.slice(0, 3),
-        visibleAgentIds: new Set(full.slice(0, 3).map((person) => person.id)),
+        agents: initialAgents,
+        visibleAgentIds: initialVisible,
       }),
+    );
+    control.sync(
+      sceneInput({ agents: initialAgents, visibleAgentIds: initialVisible }),
     );
     const target = full[0].id;
 
     let away = false;
     for (let step = 0; step < 500 && !away; step += 1) {
       scene.tick(100);
+      control.tick(100);
       away = frameOf(scene).awayAgentIds.has(target);
     }
     expect(away).toBe(true);
-    for (let step = 0; step < 5; step += 1) scene.tick(100);
+    for (let step = 0; step < 5; step += 1) {
+      scene.tick(100);
+      control.tick(100);
+    }
+    const beforeGrowth = frameOf(scene);
+    const beforeRect = characterRect(beforeGrowth, target);
+    const beforeSprite = characterSpriteAt(beforeGrowth, beforeRect);
+    if (beforeSprite === null) throw new Error("expected a walking character");
 
     let sawShift = false;
+    let reportedShift: OfficePoint | null = null;
     for (let count = 4; count <= 28; count += 1) {
       scene.sync(
         sceneInput({
@@ -5459,12 +5743,35 @@ describe("OfficeScene fixup 1 - F2 uniform shift keeps an errand", () => {
       );
       if (layoutOf(scene).shiftFromPrevious !== null) {
         sawShift = true;
+        reportedShift = scene.takeShift();
+        expect(reportedShift).not.toBeNull();
+        expect(scene.takeShift()).toBeNull();
+        const afterGrowth = frameOf(scene);
+        expect(afterGrowth.awayAgentIds.has(target)).toBe(true);
+        const afterRect = characterRect(afterGrowth, target);
+        expect(afterRect).not.toEqual(beforeRect);
+        const afterSprite = characterSpriteAt(afterGrowth, afterRect);
+        if (afterSprite === null)
+          throw new Error("expected a shifted character");
+        expect(afterSprite.pose).toBe(beforeSprite.pose);
         break;
       }
     }
     expect(sawShift).toBe(true);
+    expect(reportedShift).not.toBeNull();
+    if (reportedShift === null) throw new Error("expected a projected shift");
 
-    for (let step = 0; step < 60; step += 1) scene.tick(100);
+    for (let step = 0; step < 12; step += 1) {
+      scene.tick(100);
+      control.tick(100);
+      const grownRect = characterRect(frameOf(scene), target);
+      const controlRect = characterRect(frameOf(control), target);
+      expect(grownRect.x - controlRect.x).toBeCloseTo(reportedShift.x, 8);
+      expect(grownRect.y - controlRect.y).toBeCloseTo(reportedShift.y, 8);
+      expect(frameOf(scene).awayAgentIds.has(target)).toBe(true);
+    }
+
+    for (let step = 0; step < 48; step += 1) scene.tick(100);
     expect(frameOf(scene).awayAgentIds.has(target)).toBe(true);
   });
 });

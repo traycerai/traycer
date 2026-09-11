@@ -63,7 +63,7 @@ import {
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ReactNode } from "react";
+import { cloneElement, type ReactNode } from "react";
 import { CommGraphOfficeCanvas } from "@/components/epic-canvas/comm-graph/office/comm-graph-office-canvas";
 import { OfficeAutoChip } from "@/components/epic-canvas/comm-graph/office/office-auto-chip";
 import type { OfficeAutoDecision } from "@/lib/comm-graph/office/office-auto";
@@ -1842,5 +1842,211 @@ describe("CommGraphOfficeCanvas fixup 1 - renderer projection and semantic zoom 
     // same over an identical roster - the unfixed renderer gives both boards
     // the same officeBoardSummary text.
     expect(plateTexts[0]).not.toBe(plateTexts[1]);
+  });
+});
+
+describe("CommGraphOfficeCanvas fixup 2 - real Towers semantic zoom", () => {
+  let rafQueue: Array<{
+    readonly id: number;
+    readonly callback: FrameRequestCallback;
+  }> = [];
+  let nextRafId = 1;
+  let canceledRafIds = new Set<number>();
+  let calls: RecordedCall[] = [];
+  let restoreGetContext: (() => void) | null = null;
+
+  function flushRaf(times: number): void {
+    for (let step = 0; step < times; step += 1) {
+      const pending = rafQueue;
+      rafQueue = [];
+      act(() => {
+        for (const queued of pending) {
+          if (!canceledRafIds.has(queued.id))
+            queued.callback(performance.now());
+        }
+      });
+    }
+  }
+
+  beforeEach(() => {
+    activeObserverCallbacks = [];
+    vi.stubGlobal("IntersectionObserver", ControllableIntersectionObserver);
+    calls = [];
+    rafQueue = [];
+    canceledRafIds = new Set();
+    nextRafId = 1;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      const id = nextRafId;
+      nextRafId += 1;
+      rafQueue.push({ id, callback });
+      return id;
+    });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => {
+      canceledRafIds.add(id);
+    });
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue(
+      BOUNDING_RECT_STUB,
+    );
+    restoreGetContext = stubGetContext(() => createRecordingContext(calls));
+  });
+
+  afterEach(() => {
+    cleanup();
+    restoreGetContext?.();
+    restoreGetContext = null;
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  const REAL_TOWERS_AGENTS = [
+    ORCHESTRATOR,
+    REVIEWER,
+    HOST_B_LEAD,
+    HOST_B_MEMBER,
+  ];
+
+  function realTowersAtZoom(zoom: number) {
+    return cloneElement(
+      officeElementWithView(
+        OFFICE_VIEWS.towers,
+        new Set(REAL_TOWERS_AGENTS.map((person) => person.id)),
+        REAL_TOWERS_AGENTS,
+      ),
+      { view: { ...FIXED_CAMERA_VIEW, zoom } },
+    );
+  }
+
+  function realTowersFocusedAtZoom(zoom: number) {
+    const agents = REAL_TOWERS_AGENTS.map(officeAgentInput);
+    const statusById = new Map<string, OfficeAgentStatus>();
+    const scene = new OfficeScene(OFFICE_VIEWS.towers, null);
+    scene.sync({
+      agents,
+      visibleAgentIds: new Set(agents.map((person) => person.id)),
+      statusById,
+      partition: partitionOfficePopulation({
+        agents,
+        statusById,
+        previous: null,
+      }),
+      activityById: new Map(),
+      viewport: { width: 1200, height: 800 },
+      pulse: null,
+      pulseKey: null,
+      stepMs: BASE_STEP_MS,
+      cursorMs: null,
+      clockMs: 0,
+      openRequestsByReceiver: new Map(),
+      playing: false,
+      reducedMotion: false,
+    });
+    const focus = scene.locate(ORCHESTRATOR.id);
+    if (focus === null) throw new Error("expected a real Towers character");
+    return cloneElement(
+      officeElementWithView(
+        OFFICE_VIEWS.towers,
+        new Set(REAL_TOWERS_AGENTS.map((person) => person.id)),
+        REAL_TOWERS_AGENTS,
+      ),
+      {
+        view: {
+          ...FIXED_CAMERA_VIEW,
+          zoom,
+          x: 600 - (focus.x + focus.width / 2) * zoom,
+          y: 400 - (focus.y + focus.height / 2) * zoom,
+        },
+      },
+    );
+  }
+
+  function realAgentNameCalls(): ReadonlyArray<RecordedCall> {
+    return calls.filter(
+      (call) =>
+        call.method === "fillText" &&
+        REAL_TOWERS_AGENTS.some((person) => call.args[0] === person.name),
+    );
+  }
+
+  it("draws no host or agent text for real two-host Towers at LOD 0", () => {
+    render(withQueryClient(realTowersAtZoom(0.5)));
+    setIntersecting(true);
+    flushRaf(4);
+    expect(calls.filter((call) => call.method === "fillText")).toHaveLength(0);
+  });
+
+  it("draws a qualified real Towers name at LOD 1 when selected", () => {
+    render(withQueryClient(realTowersFocusedAtZoom(1)));
+    fireEvent.click(
+      screen.getByTestId(`comm-graph-office-agent-${ORCHESTRATOR.id}`),
+    );
+    setIntersecting(true);
+    flushRaf(4);
+    expect(
+      calls.filter(
+        (call) =>
+          call.method === "fillText" && call.args[0] === ORCHESTRATOR.name,
+      ),
+    ).not.toHaveLength(0);
+  });
+
+  it("draws a qualified real Towers name at LOD 1 when hovered", () => {
+    render(withQueryClient(realTowersFocusedAtZoom(1)));
+    fireEvent.pointerEnter(
+      screen.getByTestId(
+        `comm-graph-office-directory-agent-${ORCHESTRATOR.id}`,
+      ),
+    );
+    setIntersecting(true);
+    flushRaf(4);
+    expect(
+      realAgentNameCalls().some((call) => call.args[0] === ORCHESTRATOR.name),
+    ).toBe(true);
+  });
+
+  it("draws a qualified real Towers name when Find matches it", async () => {
+    render(withQueryClient(realTowersFocusedAtZoom(1)));
+    await act(async () => {
+      await latestFindAdapter().search({
+        requestId: 101,
+        query: ORCHESTRATOR.name,
+        matchCase: true,
+      });
+    });
+    setIntersecting(true);
+    flushRaf(4);
+    expect(
+      calls.filter(
+        (call) =>
+          call.method === "fillText" && call.args[0] === ORCHESTRATOR.name,
+      ),
+    ).not.toHaveLength(0);
+  });
+
+  it("draws every visible real Towers name at LOD 2", () => {
+    render(withQueryClient(realTowersAtZoom(2)));
+    setIntersecting(true);
+    flushRaf(4);
+    const names = new Set(realAgentNameCalls().map((call) => call.args[0]));
+    for (const person of REAL_TOWERS_AGENTS)
+      expect(names.has(person.name)).toBe(true);
+  });
+
+  it("does not draw unqualified real Towers name tags at office lod", () => {
+    const agents = [ORCHESTRATOR, REVIEWER, HOST_B_LEAD, HOST_B_MEMBER];
+    const visibleIds = new Set(agents.map((person) => person.id));
+    render(
+      withQueryClient(
+        officeElementWithView(OFFICE_VIEWS.towers, visibleIds, agents),
+      ),
+    );
+    setIntersecting(true);
+    flushRaf(4);
+
+    const nameCalls = calls.filter(
+      (call) =>
+        call.method === "fillText" &&
+        agents.some((person) => call.args[0] === person.name),
+    );
+    expect(nameCalls).toHaveLength(0);
   });
 });
