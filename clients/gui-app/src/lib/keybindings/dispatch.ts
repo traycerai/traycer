@@ -730,7 +730,7 @@ function openBlankTabInActiveGroup(router: KeybindingRouter): boolean {
       .getState()
       .prepareOpenBlankTabInPaneFocusTarget(tab.tabId, groupId),
   );
-  requestPaneOpenerFocus(groupId);
+  requestPaneOpenerFocus(tab.tabId, groupId);
   return true;
 }
 

@@ -37,6 +37,9 @@ opener's keyboard focus after the render unless the user has moved focus.
 The initial empty-task fallback creates an empty pane showing the picker, not a
 blank tab. New Tab gestures focus the existing picker in an empty pane; in a
 populated pane they reuse its blank tab (even if inactive) or create one.
+Explicit New Tab focus is delivered by the active picker when its input mounts,
+without frame retries. Requests are scoped to the task tab and pane, and user
+interaction cancels a pending request.
 Closing a blank tab, including a blank-only Close All, leaves its pane intact.
 Explicit Close Group removes the pane. Loading older canvases retires blank-only
 tabs and duplicate picker tabs without removing their panes or changing splits.

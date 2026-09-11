@@ -288,7 +288,7 @@ export const TabGroupView = memo(function TabGroupView(
       navigateNested(epicId, tabId, () =>
         prepareOpenBlankTabInPaneFocusTarget(tabId, groupId),
       );
-      requestPaneOpenerFocus(groupId);
+      requestPaneOpenerFocus(tabId, groupId);
     },
     [epicId, navigateNested, prepareOpenBlankTabInPaneFocusTarget, tabId],
   );

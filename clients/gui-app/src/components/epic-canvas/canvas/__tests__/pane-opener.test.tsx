@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cleanup,
@@ -155,9 +156,16 @@ vi.mock("@/components/command-palette/command-palette-context", () => ({
 }));
 
 import { PaneOpener } from "@/components/epic-canvas/canvas/pane-opener";
+import {
+  requestPaneOpenerFocus,
+  resetPaneOpenerFocusForTests,
+} from "@/lib/canvas/focus-pane-opener";
 
 afterEach(() => {
   cleanup();
+  resetPaneOpenerFocusForTests();
+  stubCoarsePointer(false);
+  vi.useRealTimers();
   vi.clearAllMocks();
 });
 
@@ -168,6 +176,24 @@ afterEach(() => {
  */
 function searchInput(): HTMLElement {
   return screen.getByRole("combobox", { name: "Open into pane" });
+}
+
+/** Keep the global media-query shim deterministic across focus tests. */
+function stubCoarsePointer(coarse: boolean): void {
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    writable: true,
+    value: (query: string) => ({
+      matches: coarse && query === "(pointer: coarse)",
+      media: query,
+      onchange: null,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      dispatchEvent: () => false,
+    }),
+  });
 }
 
 describe("PaneOpener", () => {
@@ -193,28 +219,6 @@ describe("PaneOpener", () => {
     expect(document.activeElement).toBe(input);
   });
 
-  /**
-   * The global test shim answers every media query with `matches: false`,
-   * which is the fine-pointer arm. This narrows the coarse-pointer query alone
-   * so the rest of the app's queries keep the shim's answer.
-   */
-  function stubCoarsePointer(coarse: boolean): void {
-    Object.defineProperty(window, "matchMedia", {
-      configurable: true,
-      writable: true,
-      value: (query: string) => ({
-        matches: coarse && query === "(pointer: coarse)",
-        media: query,
-        onchange: null,
-        addEventListener: () => undefined,
-        removeEventListener: () => undefined,
-        addListener: () => undefined,
-        removeListener: () => undefined,
-        dispatchEvent: () => false,
-      }),
-    });
-  }
-
   // Opening an empty pane on a touch device is a tap on a layout, not a
   // request to type: focusing the opener's search would raise a software
   // keyboard over the very list of things to open. The INPUT decides, not the
@@ -230,6 +234,324 @@ describe("PaneOpener", () => {
     // The opener is inline chrome, not a Radix layer, so nothing was going to
     // be focused on its behalf and focus is left exactly where it was.
     expect(document.activeElement).toBe(document.body);
+  });
+
+  it("explicitly refocuses an already-mounted active picker, including on coarse pointers", () => {
+    stubCoarsePointer(true);
+    render(
+      <>
+        <button type="button" data-testid="focus-anchor">
+          Focus anchor
+        </button>
+        <PaneOpener
+          epicId="epic-1"
+          tabId="tab-mounted"
+          groupId="pane-mounted"
+          active
+        />
+      </>,
+    );
+    const anchor = screen.getByTestId("focus-anchor");
+    anchor.focus();
+
+    requestPaneOpenerFocus("tab-mounted", "pane-mounted");
+
+    expect(document.activeElement).toBe(searchInput());
+  });
+
+  it("keeps a request pending until an active picker mounts later", async () => {
+    stubCoarsePointer(true);
+    const rendered = render(
+      <button type="button" data-testid="focus-anchor">
+        Focus anchor
+      </button>,
+    );
+    const anchor = screen.getByTestId("focus-anchor");
+    anchor.focus();
+    vi.useFakeTimers();
+    requestPaneOpenerFocus("tab-delayed", "pane-delayed");
+
+    // Mount after the old ten-frame retry window would have expired.
+    await vi.advanceTimersByTimeAsync(1000);
+    vi.useRealTimers();
+    rendered.rerender(
+      <>
+        <button type="button" data-testid="focus-anchor">
+          Focus anchor
+        </button>
+        <PaneOpener
+          epicId="epic-1"
+          tabId="tab-delayed"
+          groupId="pane-delayed"
+          active
+        />
+      </>,
+    );
+
+    expect(document.activeElement).toBe(searchInput());
+  });
+
+  it("does not consume a request for the same pane id in another task", () => {
+    stubCoarsePointer(true);
+    const rendered = render(
+      <>
+        <button type="button" data-testid="focus-anchor">
+          Focus anchor
+        </button>
+        <PaneOpener
+          epicId="epic-1"
+          tabId="tab-a"
+          groupId="shared-pane"
+          active={false}
+        />
+        <PaneOpener
+          epicId="epic-2"
+          tabId="tab-b"
+          groupId="shared-pane"
+          active={false}
+        />
+      </>,
+    );
+    const anchor = screen.getByTestId("focus-anchor");
+    anchor.focus();
+    requestPaneOpenerFocus("tab-a", "shared-pane");
+
+    rendered.rerender(
+      <>
+        <button type="button" data-testid="focus-anchor">
+          Focus anchor
+        </button>
+        <PaneOpener
+          epicId="epic-1"
+          tabId="tab-a"
+          groupId="shared-pane"
+          active
+        />
+        <PaneOpener
+          epicId="epic-2"
+          tabId="tab-b"
+          groupId="shared-pane"
+          active={false}
+        />
+      </>,
+    );
+
+    const panes = screen.getAllByTestId("pane-opener");
+    expect(within(panes[0]).getByRole("combobox")).toBe(document.activeElement);
+    expect(within(panes[1]).getByRole("combobox")).not.toBe(
+      document.activeElement,
+    );
+  });
+
+  it.each([
+    ["pointerdown", (element: HTMLElement) => fireEvent.pointerDown(element)],
+    [
+      "keydown",
+      (element: HTMLElement) =>
+        fireEvent.keyDown(element, { key: "ArrowRight" }),
+    ],
+    ["focusin", (element: HTMLElement) => fireEvent.focusIn(element)],
+    [
+      "window blur",
+      (_element: HTMLElement) => window.dispatchEvent(new Event("blur")),
+    ],
+  ] as const)(
+    "cancels a pending request on %s before mount",
+    (_name, cancel) => {
+      stubCoarsePointer(false);
+      const rendered = render(
+        <button type="button" data-testid="focus-anchor">
+          Focus anchor
+        </button>,
+      );
+      const anchor = screen.getByTestId("focus-anchor");
+      anchor.focus();
+      requestPaneOpenerFocus("tab-cancel", "pane-cancel");
+      cancel(anchor);
+
+      rendered.rerender(
+        <>
+          <button type="button" data-testid="focus-anchor">
+            Focus anchor
+          </button>
+          <PaneOpener
+            epicId="epic-1"
+            tabId="tab-cancel"
+            groupId="pane-cancel"
+            active
+          />
+        </>,
+      );
+
+      expect(document.activeElement).toBe(screen.getByTestId("focus-anchor"));
+    },
+  );
+
+  it("lets the newer request supersede an older request", () => {
+    stubCoarsePointer(true);
+    const rendered = render(
+      <>
+        <button type="button" data-testid="focus-anchor">
+          Focus anchor
+        </button>
+        <PaneOpener
+          epicId="epic-1"
+          tabId="tab-old"
+          groupId="pane-old"
+          active={false}
+        />
+        <PaneOpener
+          epicId="epic-1"
+          tabId="tab-new"
+          groupId="pane-new"
+          active={false}
+        />
+      </>,
+    );
+    const anchor = screen.getByTestId("focus-anchor");
+    anchor.focus();
+    requestPaneOpenerFocus("tab-old", "pane-old");
+    requestPaneOpenerFocus("tab-new", "pane-new");
+
+    rendered.rerender(
+      <>
+        <button type="button" data-testid="focus-anchor">
+          Focus anchor
+        </button>
+        <PaneOpener epicId="epic-1" tabId="tab-old" groupId="pane-old" active />
+        <PaneOpener
+          epicId="epic-1"
+          tabId="tab-new"
+          groupId="pane-new"
+          active={false}
+        />
+      </>,
+    );
+    expect(document.activeElement).toBe(anchor);
+
+    rendered.rerender(
+      <>
+        <button type="button" data-testid="focus-anchor">
+          Focus anchor
+        </button>
+        <PaneOpener
+          epicId="epic-1"
+          tabId="tab-old"
+          groupId="pane-old"
+          active={false}
+        />
+        <PaneOpener epicId="epic-1" tabId="tab-new" groupId="pane-new" active />
+      </>,
+    );
+    expect(document.activeElement).toBe(
+      within(screen.getAllByTestId("pane-opener")[1]).getByRole("combobox"),
+    );
+  });
+
+  it("does not steal focus when a canceled mount replays under StrictMode", () => {
+    stubCoarsePointer(false);
+    const rendered = render(
+      <button type="button" data-testid="focus-anchor">
+        Focus anchor
+      </button>,
+    );
+    const anchor = screen.getByTestId("focus-anchor");
+    anchor.focus();
+    requestPaneOpenerFocus("tab-strict", "pane-strict");
+    fireEvent.pointerDown(anchor);
+
+    rendered.rerender(
+      <>
+        <button type="button" data-testid="focus-anchor">
+          Focus anchor
+        </button>
+        <StrictMode>
+          <PaneOpener
+            epicId="epic-1"
+            tabId="tab-strict"
+            groupId="pane-strict"
+            active
+          />
+        </StrictMode>
+      </>,
+    );
+
+    expect(document.activeElement).toBe(screen.getByTestId("focus-anchor"));
+  });
+
+  it("waits to focus an inactive picker until it becomes active", () => {
+    stubCoarsePointer(true);
+    const rendered = render(
+      <>
+        <button type="button" data-testid="focus-anchor">
+          Focus anchor
+        </button>
+        <PaneOpener
+          epicId="epic-1"
+          tabId="tab-inactive"
+          groupId="pane-inactive"
+          active={false}
+        />
+      </>,
+    );
+    const anchor = screen.getByTestId("focus-anchor");
+    anchor.focus();
+    requestPaneOpenerFocus("tab-inactive", "pane-inactive");
+
+    expect(document.activeElement).toBe(anchor);
+
+    rendered.rerender(
+      <>
+        <button type="button" data-testid="focus-anchor">
+          Focus anchor
+        </button>
+        <PaneOpener
+          epicId="epic-1"
+          tabId="tab-inactive"
+          groupId="pane-inactive"
+          active
+        />
+      </>,
+    );
+
+    expect(document.activeElement).toBe(searchInput());
+  });
+
+  it("suppresses normal autofocus when an inactive request is canceled", () => {
+    stubCoarsePointer(false);
+    const rendered = render(
+      <>
+        <button type="button" data-testid="focus-anchor">
+          Focus anchor
+        </button>
+        <PaneOpener
+          epicId="epic-1"
+          tabId="tab-inactive-canceled"
+          groupId="pane-inactive-canceled"
+          active={false}
+        />
+      </>,
+    );
+    const anchor = screen.getByTestId("focus-anchor");
+    anchor.focus();
+    requestPaneOpenerFocus("tab-inactive-canceled", "pane-inactive-canceled");
+    fireEvent.focusIn(anchor);
+
+    rendered.rerender(
+      <>
+        <button type="button" data-testid="focus-anchor">
+          Focus anchor
+        </button>
+        <PaneOpener
+          epicId="epic-1"
+          tabId="tab-inactive-canceled"
+          groupId="pane-inactive-canceled"
+          active
+        />
+      </>,
+    );
+
+    expect(document.activeElement).toBe(screen.getByTestId("focus-anchor"));
   });
 
   it("does not steal focus when the pane is not the active group", () => {
