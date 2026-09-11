@@ -147,6 +147,7 @@ import type {
   CommGraphTileRef,
   CommGraphTileViewState,
   EpicCanvasState,
+  OfficeViewChoice,
 } from "@/stores/epics/canvas/types";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useEpicCanvas } from "@/stores/epics/canvas/canvas-selectors";
@@ -163,6 +164,7 @@ import { partitionOfficePopulation } from "@/lib/comm-graph/office/office-popula
 import type { CommGraphEvent } from "@/lib/comm-graph/comm-graph-events";
 import type { OfficeRect } from "@/lib/comm-graph/office/office-types";
 import { useCommGraphAgents } from "@/components/epic-canvas/comm-graph/use-comm-graph-agents";
+import { __resetCommGraphRegistryForTests } from "@/lib/comm-graph/comm-graph-registry";
 
 const EPIC_ID = "epic-comm-graph";
 const CHAT_ID = "chat-1";
@@ -405,6 +407,18 @@ async function pickView(viewId: OfficeViewId): Promise<void> {
   await act(async () => {
     await Promise.resolve();
   });
+}
+
+/**
+ * Picks a choice through the REAL picker without settling a scene afterwards
+ * - the synchronous half of `pickView` above, for cases that need to inspect
+ * what the pick's own write did BEFORE anything else runs. Takes the full
+ * `OfficeViewChoice` (Auto included) because the picker's Auto row shares the
+ * same `comm-graph-office-view-<id>` naming as a concrete view's row.
+ */
+function chooseView(choice: OfficeViewChoice): void {
+  openPicker();
+  fireEvent.click(screen.getByTestId(`comm-graph-office-view-${choice}`));
 }
 
 /**
@@ -1637,6 +1651,314 @@ describe("CommGraphTile", () => {
         x: stored.x,
         y: stored.y,
         zoom: stored.zoom,
+      });
+    });
+  });
+
+  describe("a Settings change under an unresolved Auto (fixup 4, R1)", () => {
+    // Fixup 3's witness armed on the SHAPE of the move: any `null` on
+    // either side, or a record that already disagreed with the arriving
+    // view. Both readings were wrong about the one writer that matters
+    // here. `resolvedViewId` is also `null` when the Settings default is
+    // Auto and replay has not produced a measurement yet - and from
+    // there, a Settings change to a CONCRETE view moves the resolved view
+    // with no atomic write behind it at all, exactly like a live default
+    // change moves it. The witness sat that transition out because it
+    // starts and ends on `null` on one side, so the reset only happened in
+    // the later default-change effect, a frame after the replacement
+    // runtime had already captured the stale camera.
+    //
+    // It also failed when the record ALREADY named the arriving view - a
+    // tile saved under a Settings default of Towers, reopened while the
+    // default is Auto, then Settings -> Towers again - because a record
+    // can name a view for reasons that have nothing to do with a writer
+    // having just run. So the rule cannot read the VALUE at all; it has
+    // to read WHICH WRITER moved the resolved view. What arms the witness
+    // now is the Settings default changing between one render and the
+    // next; Auto's answer, a re-pick of Auto and an explicit pick each
+    // write their own camera in the same store write, so none of them
+    // arm it.
+
+    // The per-epic comm-graph subscription manager is retained (a bounded
+    // MRU, not per-test) across every case in this file, keyed on
+    // `EPIC_ID` - so a manager an EARLIER case already caught up for this
+    // epic survives into a later one and answers `initialHistoryCaughtUp`
+    // before this describe's own `caughtUp()` ever runs. Every case here
+    // depends on catching that transition mid-flight, so each gets a fresh
+    // manager rather than inheriting whatever state the file's run order
+    // left behind.
+    beforeEach(() => {
+      __resetCommGraphRegistryForTests();
+    });
+
+    it.each(["towers", "campus"] as const)(
+      "resets the runtime camera when Settings moves from an unresolved Auto to %s",
+      async (target) => {
+        const { step } = installCanvas();
+        const decide = vi.spyOn(officeAutoModule, "decideOfficeView");
+        const frames = vi.spyOn(OfficeScene.prototype, "frame");
+        const sync = vi.spyOn(OfficeScene.prototype, "sync");
+        useSettingsStore.getState().setAgentOfficeDefaultView("auto");
+        await renderSeededOfficeInLoadedSession({
+          ...DEFAULT_COMM_GRAPH_VIEW,
+          x: -10000,
+          y: -20000,
+          zoom: 4,
+          officeCameraView: null,
+        });
+        setOfficeCanvasSize({ width: 1040, height: 700 });
+        setIntersecting(true);
+        // Replay still pending - Auto has nothing to decide from, which is
+        // what keeps the resolved view at `null` here.
+        expect(decide).not.toHaveBeenCalled();
+        expect(storedView()).toMatchObject({
+          x: -10000,
+          y: -20000,
+          zoom: 4,
+          officeCameraView: null,
+        });
+
+        act(() =>
+          useSettingsStore.getState().setAgentOfficeDefaultView(target),
+        );
+        setOfficeCanvasSize({ width: 1040, height: 700 });
+        setIntersecting(true);
+        caughtUp();
+        step();
+
+        // The default is concrete now, so Auto still never runs - there was
+        // never a measurement for it to make.
+        expect(decide).not.toHaveBeenCalled();
+        expect(storedView()).toMatchObject({
+          x: 0,
+          y: 0,
+          zoom: 1,
+          officeCameraView: target,
+        });
+        const state = lastFrameAndBounds(frames, sync);
+        const center = {
+          x: state.bounds.x + state.bounds.width / 2,
+          y: state.bounds.y + state.bounds.height / 2,
+        };
+        expect(center.x).toBeGreaterThanOrEqual(state.frame.x);
+        expect(center.x).toBeLessThanOrEqual(state.frame.x + state.frame.width);
+        expect(center.y).toBeGreaterThanOrEqual(state.frame.y);
+        expect(center.y).toBeLessThanOrEqual(
+          state.frame.y + state.frame.height,
+        );
+
+        fireEvent.wheel(screen.getByTestId("comm-graph-office-canvas"), {
+          deltaX: 20,
+          deltaY: 30,
+        });
+        step();
+        await act(async () => {
+          await new Promise((resolve) => window.setTimeout(resolve, 180));
+        });
+        expect(storedView()).toMatchObject({ officeCameraView: target });
+        expect(storedView()?.x).not.toBe(-10020);
+        expect(storedView()?.y).not.toBe(-20030);
+      },
+    );
+
+    it("resets the runtime camera even when the record already names the arriving view", async () => {
+      // The record alone was never enough to answer this: it can already
+      // read "towers" from before the tile was ever reopened, over a
+      // camera nothing has reframed since. The record describes where the
+      // camera has BEEN; only the witness can say a writer has framed it
+      // FOR the view arriving now. This is the case that rules out "record
+      // !== resolvedView" as the trigger - a rule keyed on the value alone
+      // would have waved this one through.
+      const { step } = installCanvas();
+      const decide = vi.spyOn(officeAutoModule, "decideOfficeView");
+      const frames = vi.spyOn(OfficeScene.prototype, "frame");
+      const sync = vi.spyOn(OfficeScene.prototype, "sync");
+      useSettingsStore.getState().setAgentOfficeDefaultView("auto");
+      await renderSeededOfficeInLoadedSession({
+        ...DEFAULT_COMM_GRAPH_VIEW,
+        x: -10000,
+        y: -20000,
+        zoom: 4,
+        officeCameraView: "towers",
+      });
+      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setIntersecting(true);
+      expect(decide).not.toHaveBeenCalled();
+      expect(storedView()).toMatchObject({
+        x: -10000,
+        y: -20000,
+        zoom: 4,
+        officeCameraView: "towers",
+      });
+
+      act(() =>
+        useSettingsStore.getState().setAgentOfficeDefaultView("towers"),
+      );
+      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setIntersecting(true);
+      caughtUp();
+      step();
+
+      expect(decide).not.toHaveBeenCalled();
+      expect(storedView()).toMatchObject({
+        x: 0,
+        y: 0,
+        zoom: 1,
+        officeCameraView: "towers",
+      });
+      const state = lastFrameAndBounds(frames, sync);
+      const center = {
+        x: state.bounds.x + state.bounds.width / 2,
+        y: state.bounds.y + state.bounds.height / 2,
+      };
+      expect(center.x).toBeGreaterThanOrEqual(state.frame.x);
+      expect(center.x).toBeLessThanOrEqual(state.frame.x + state.frame.width);
+      expect(center.y).toBeGreaterThanOrEqual(state.frame.y);
+      expect(center.y).toBeLessThanOrEqual(state.frame.y + state.frame.height);
+
+      fireEvent.wheel(screen.getByTestId("comm-graph-office-canvas"), {
+        deltaX: 20,
+        deltaY: 30,
+      });
+      step();
+      await act(async () => {
+        await new Promise((resolve) => window.setTimeout(resolve, 180));
+      });
+      expect(storedView()).toMatchObject({ officeCameraView: "towers" });
+      expect(storedView()?.x).not.toBe(-10020);
+      expect(storedView()?.y).not.toBe(-20030);
+    });
+
+    it("leaves an explicit pick's own reset alone - the pick's write did it, not the witness", async () => {
+      const { step } = installCanvas();
+      const frames = vi.spyOn(OfficeScene.prototype, "frame");
+      const sync = vi.spyOn(OfficeScene.prototype, "sync");
+      useSettingsStore.getState().setAgentOfficeDefaultView("auto");
+      await renderSeededOfficeInLoadedSession({
+        ...DEFAULT_COMM_GRAPH_VIEW,
+        x: -10000,
+        y: -20000,
+        zoom: 4,
+        officeCameraView: null,
+      });
+      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setIntersecting(true);
+      expect(storedView()).toMatchObject({
+        x: -10000,
+        y: -20000,
+        zoom: 4,
+        officeCameraView: null,
+      });
+
+      chooseView("towers");
+
+      // The pick's own write already reset the camera the store holds -
+      // this is a fact about `handleOfficeViewChange`, nothing the witness
+      // is even eligible to touch (an explicit pick never arms it).
+      expect(storedView()).toMatchObject({
+        officeView: "towers",
+        officeCameraView: "towers",
+        x: 0,
+        y: 0,
+        zoom: 1,
+      });
+
+      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setIntersecting(true);
+      caughtUp();
+      step();
+      const state = lastFrameAndBounds(frames, sync);
+      const center = {
+        x: state.bounds.x + state.bounds.width / 2,
+        y: state.bounds.y + state.bounds.height / 2,
+      };
+      expect(center.x).toBeGreaterThanOrEqual(state.frame.x);
+      expect(center.x).toBeLessThanOrEqual(state.frame.x + state.frame.width);
+      expect(center.y).toBeGreaterThanOrEqual(state.frame.y);
+      expect(center.y).toBeLessThanOrEqual(state.frame.y + state.frame.height);
+    });
+
+    it("keeps a resolved Floor camera when Auto answers - the witness must not overrule a preserved camera", async () => {
+      // Same "no measurement yet" seed as the two defect cases above, but
+      // replay is let finish here instead of held back, so Auto answers
+      // Floor on its own atomic write. If the witness ever armed on a
+      // plain `null -> concrete` move - the over-broad fix this case
+      // exists to catch - it would have already thrown this camera away by
+      // the time the assertions below run, and the frame would land on the
+      // neutral camera's numbers instead of these.
+      const { step } = installCanvas();
+      const frames = vi.spyOn(OfficeScene.prototype, "frame");
+      const sync = vi.spyOn(OfficeScene.prototype, "sync");
+      useSettingsStore.getState().setAgentOfficeDefaultView("auto");
+      await renderSeededOfficeInLoadedSession({
+        ...DEFAULT_COMM_GRAPH_VIEW,
+        x: -10000,
+        y: -20000,
+        zoom: 4,
+        officeCameraView: null,
+      });
+      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setIntersecting(true);
+      caughtUp();
+      step();
+
+      expect(storedView()).toMatchObject({
+        x: -10000,
+        y: -20000,
+        zoom: 4,
+        officeAutoView: "floor",
+        officeCameraView: "floor",
+      });
+      // Auto's decision remounts the canvas (measuring -> floor), and that
+      // remount only reports its own eligibility on the frame this `step()`
+      // drives - the sync loop it then starts needs one more of its own.
+      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setIntersecting(true);
+      step();
+      const state = lastFrameAndBounds(frames, sync);
+      expect(state.frame).toEqual({
+        x: 2500,
+        y: 5000,
+        width: 260,
+        height: 175,
+      });
+    });
+
+    it("neutralises the camera on a re-pick of Auto - the re-pick's own write did it, not the witness", async () => {
+      const { step } = installCanvas();
+      useSettingsStore.getState().setAgentOfficeDefaultView("auto");
+      await renderSeededOfficeInLoadedSession({
+        ...DEFAULT_COMM_GRAPH_VIEW,
+        officeView: "floor",
+        officeCameraView: "floor",
+        x: 155,
+        y: 266,
+        zoom: 2,
+      });
+      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setIntersecting(true);
+      caughtUp();
+      step();
+      expect(storedView()).toMatchObject({
+        officeView: "floor",
+        officeCameraView: "floor",
+        x: 155,
+        y: 266,
+        zoom: 2,
+      });
+
+      chooseView("auto");
+
+      // The re-pick neutralised the resolved view AND the camera in the
+      // same write; the resolved view landing on `null` here is not
+      // something the witness gets to act on.
+      expect(storedView()).toMatchObject({
+        officeView: "auto",
+        officeAutoView: null,
+        officeCameraView: null,
+        x: 0,
+        y: 0,
+        zoom: 1,
       });
     });
   });

@@ -87,18 +87,60 @@ const NEUTRAL_CAMERA: CommGraphTileCamera = {
 
 /**
  * WHAT THIS MOUNT WATCHED HAPPEN: the resolved view its last render handed the
- * canvas a camera for, and whether that camera still owes the current view a
- * reset.
+ * canvas a camera for, the Settings default it resolved through, and the
+ * stored view as it stood when a default change moved that resolved view.
  *
  * The record on the view state answers the change NOBODY saw. It cannot answer
  * the change this tile watched happen over a camera saved before the record
  * existed: that camera carries `null`, which at render is indistinguishable
  * from a tile whose default never moved. The two differ by a fact about this
  * mount, so this mount is what holds it.
+ *
+ * `armedOn` holds the stored VIEW OBJECT rather than a flag, because "is the
+ * camera still the old one" and "does the record name this view" are different
+ * questions and only the first one is the one being asked. A record can
+ * already name the arriving view without any writer having framed a camera for
+ * it - a tile saved under a Settings default of Towers, reopened while the
+ * default is Auto, carries `officeCameraView: "towers"` over a camera nothing
+ * has touched. Identity answers it exactly: every writer that replaces the
+ * camera replaces this object, and a Settings change - which writes nothing to
+ * this tile at all - does not.
  */
 interface OfficeCameraWitness {
   readonly view: OfficeViewId | null;
-  readonly owed: boolean;
+  readonly defaultChoice: OfficeViewChoice;
+  readonly armedOn: CommGraphTileViewState | null;
+}
+
+/**
+ * WHICH WRITER moved the resolved view, which is the whole question.
+ *
+ * Auto's answer, a re-pick of Auto and an explicit pick each write the camera
+ * they mean in the SAME store write, so nothing is owed once one of them has
+ * landed. A Settings default change is not a write to this tile: it moves the
+ * resolved view from outside, and the reset that follows is an effect - a
+ * commit too late for the runtime it was meant for. So the default moving is
+ * what arms this, and it is not inferred from the shape of the value (whether
+ * the record differs, whether either side of the move is `null`), which is
+ * what the two previous versions of this rule got wrong.
+ */
+function nextArmedOn(
+  witness: OfficeCameraWitness,
+  resolvedViewId: OfficeViewId | null,
+  defaultChoice: OfficeViewChoice,
+  view: CommGraphTileViewState,
+): CommGraphTileViewState | null {
+  if (witness.view !== resolvedViewId) {
+    return witness.defaultChoice === defaultChoice ? null : view;
+  }
+  if (witness.armedOn === null) return null;
+  // Released once a writer has spoken FOR the arriving view. Both halves are
+  // needed: a write on its own can be about something else (a Graph pan while
+  // the move waits for the office to come back), and a record on its own can
+  // have named this view since before the move.
+  if (view === witness.armedOn) return witness.armedOn;
+  if (view.officeCameraView !== resolvedViewId) return witness.armedOn;
+  return null;
 }
 
 /**
@@ -109,24 +151,18 @@ interface OfficeCameraWitness {
 function nextOfficeCameraWitness(
   witness: OfficeCameraWitness,
   resolvedViewId: OfficeViewId | null,
-  cameraView: OfficeViewId | null,
+  defaultChoice: OfficeViewChoice,
+  view: CommGraphTileViewState,
 ): OfficeCameraWitness {
-  if (witness.view === resolvedViewId) {
-    if (!witness.owed) return witness;
-    // The store has caught up. A reset that has LANDED is the record's to
-    // remember from here on; leaving it owed would neutralise the camera all
-    // over again on the render after the next pan.
-    if (cameraView !== resolvedViewId) return witness;
-    return { view: resolvedViewId, owed: false };
+  const armedOn = nextArmedOn(witness, resolvedViewId, defaultChoice, view);
+  if (
+    witness.view === resolvedViewId &&
+    witness.defaultChoice === defaultChoice &&
+    witness.armedOn === armedOn
+  ) {
+    return witness;
   }
-  // A move BETWEEN two views is the transition a camera does not survive.
-  // Arriving from `null` is Auto answering for the first time and leaving for
-  // `null` is a re-pick of Auto - both write the camera they mean in the same
-  // breath, so neither is this rule's to reset.
-  const moved = witness.view !== null && resolvedViewId !== null;
-  // A PICK also writes the camera and the record together, so by the time the
-  // view it chose renders there is already nothing owed.
-  return { view: resolvedViewId, owed: moved && cameraView !== resolvedViewId };
+  return { view: resolvedViewId, defaultChoice, armedOn };
 }
 
 /**
@@ -141,17 +177,24 @@ function nextOfficeCameraWitness(
  */
 function useWitnessedOfficeViewMove(
   resolvedViewId: OfficeViewId | null,
-  cameraView: OfficeViewId | null,
+  defaultChoice: OfficeViewChoice,
+  view: CommGraphTileViewState,
 ): boolean {
   const [witness, setWitness] = useState<OfficeCameraWitness>(() => ({
     view: resolvedViewId,
+    defaultChoice,
     // A fresh mount watched nothing happen: what its camera frames is the
     // record's question, and D52 answers a `null` one by keeping the framing.
-    owed: false,
+    armedOn: null,
   }));
-  const next = nextOfficeCameraWitness(witness, resolvedViewId, cameraView);
+  const next = nextOfficeCameraWitness(
+    witness,
+    resolvedViewId,
+    defaultChoice,
+    view,
+  );
   if (next !== witness) setWitness(next);
-  return next.owed;
+  return next.armedOn !== null;
 }
 
 /**
@@ -172,6 +215,11 @@ function useWitnessedOfficeViewMove(
  * that watched the default move has, and is the only evidence a camera saved
  * before the record existed leaves behind. A `null` record on its own still
  * means "nobody framed this", which D52 keeps rather than reset.
+ *
+ * They are read as an OR rather than folded together on purpose: the witness
+ * fires on a default change whatever the record says, including a record that
+ * already names the arriving view, because a record is about the camera's past
+ * and the witness is about a writer that has not run yet.
  *
  * OFFICE ONLY. The same view object is handed to the Graph canvas, where the
  * camera belongs to the Graph - neutralising it there would erase a framing
@@ -372,9 +420,13 @@ export function CommGraphTile(props: CommGraphTileProps) {
 
   // The live half of the evidence below: a `null` record cannot carry a
   // default change this tile is watching happen, so the tile remembers it.
+  // The raw Settings value, not `choice`: a tile with its own pick does not
+  // resolve through the default, so a default that moves under one never
+  // reaches the branch that arms this.
   const witnessedMove = useWitnessedOfficeViewMove(
     resolvedViewId,
-    node.view.officeCameraView,
+    settingsDefaultView,
+    node.view,
   );
 
   const viewForCanvas = useMemo(
