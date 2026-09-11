@@ -287,7 +287,11 @@ export type AnalyticsSetting =
   | "preventSleepWhileRunning"
   | "quoteReplyEnabled"
   | "showGlobalResourceMonitor"
+  | "showGreeting"
   | "showNavigatorResourceStats"
+  | "showRecentHistory"
+  | "startPageWallpaper"
+  | "startPageWallpaperTint"
   | "steerOnModEnterEnabled"
   | "summonHotkeyChord"
   | "summonHotkeyEnabled"
@@ -1158,7 +1162,11 @@ const ANALYTICS_SETTINGS = new Set<string>([
   "preventSleepWhileRunning",
   "quoteReplyEnabled",
   "showGlobalResourceMonitor",
+  "showGreeting",
   "showNavigatorResourceStats",
+  "showRecentHistory",
+  "startPageWallpaper",
+  "startPageWallpaperTint",
   "terminalCursorBlink",
   "terminalCursorStyle",
   "terminalFontFamily",

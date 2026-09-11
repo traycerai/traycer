@@ -270,6 +270,7 @@ function EpicLeftPanelRailContent(props: EpicLeftPanelRailContentProps) {
             role="toolbar"
             aria-label="Epic left panels"
             aria-orientation={orientation}
+            data-epic-sidebar-rail
             data-testid="epic-sidebar-rail"
             data-orientation={orientation}
             className={cn(

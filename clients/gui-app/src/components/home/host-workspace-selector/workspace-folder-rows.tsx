@@ -1,10 +1,11 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { FolderPlus, RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import type { HostRpcRegistry } from "@/lib/host";
+import { useDialogOverlayBoundaryEl } from "@/providers/dialog-overlay-boundary-context";
 import { cn } from "@/lib/utils";
 import { FolderRow } from "./folder-row";
 import type { WorkspaceRunItem } from "./workspace-run-item";
@@ -41,19 +42,9 @@ export function WorkspaceFolderRows(props: {
   /** Recent tier; null for read-only and terminal-agent binding surfaces. */
   readonly recentWorkspaces: ReactNode;
   readonly moveToRecent: boolean;
-  // True only when the rows live inside a popover (in-epic): nested popovers
-  // (branch form + its source dropdown) then portal into — and are collision-
-  // bounded by — this container so they stay inside the parent popover and a
-  // click inside them isn't treated as "interact outside". Inline (landing) it
-  // must stay false, else the short inline container collision-clips the source
-  // dropdown to near-zero height (it renders but reads as "missing").
-  readonly nestedInPopover: boolean;
 }) {
   const { items } = props;
-  // Captured so the branch-form's nested source dropdown uses this container as
-  // its collision boundary (in-epic, where the rows live inside a popover).
-  const [boundaryEl, setBoundaryEl] = useState<HTMLDivElement | null>(null);
-  const nestedBoundaryEl = props.nestedInPopover ? boundaryEl : null;
+  const nestedBoundaryEl = useDialogOverlayBoundaryEl();
 
   // Per-worktree uncommitted counts for the Location submenu annotation. Shares
   // the warm host-wide `worktree.listAllForHost` query key (same source as
@@ -165,7 +156,6 @@ export function WorkspaceFolderRows(props: {
 
   return (
     <div
-      ref={setBoundaryEl}
       className="flex w-full min-w-0 items-start gap-3"
       data-testid="workspace-folder-rows"
     >

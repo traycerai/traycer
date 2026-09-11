@@ -408,6 +408,7 @@ describe("<EpicRootDragOverlayContent />", () => {
           index: 0,
         },
         480,
+        null,
       );
       renderOverlay();
 
@@ -428,6 +429,7 @@ describe("<EpicRootDragOverlayContent />", () => {
           index: 0,
         },
         480,
+        null,
       );
       renderOverlay();
 
@@ -439,11 +441,47 @@ describe("<EpicRootDragOverlayContent />", () => {
       const underline = within(overlay).getByTestId(
         "split-tab-group-underline-right-split-1",
       );
-      expect(underline.className).not.toContain("bg-primary");
+      expect(underline.className).not.toContain("bg-current");
       const leftUnderline = within(overlay).getByTestId(
         "split-tab-group-underline-left-split-1",
       );
-      expect(leftUnderline.className).toContain("bg-primary");
+      expect(leftUnderline.className).toContain("bg-current");
+    });
+
+    it("carries the captured manual appearance and notification snapshot into the split preview", () => {
+      seedSplitGroup("left", { kind: "tab" });
+      useEpicDndStore.getState().headerTabDragStarted(
+        {
+          kind: "header-tab",
+          stripItemId: "split-1",
+          tabKind: "epic",
+          tabId: "epic-left",
+          index: 0,
+        },
+        480,
+        {
+          appearance: { color: "#654321", icon: "🚀" },
+          indicatorState: {
+            unreadFailure: false,
+            unreadNonTerminalFailure: false,
+            unreadTerminalFailure: false,
+            pendingFork: false,
+            pendingApproval: true,
+            pendingInterview: false,
+            unreadDone: false,
+          },
+        },
+      );
+      renderOverlay();
+
+      const overlay = screen.getByTestId("header-tab-drag-overlay");
+      expect(within(overlay).getByText("🚀")).toBeTruthy();
+      expect(
+        within(overlay).getByTestId("tab-chrome-center").style.borderTopColor,
+      ).toBe("rgb(101, 67, 33)");
+      expect(
+        within(overlay).getByTestId("header-tab-approval-epic-left"),
+      ).toBeTruthy();
     });
 
     it("preserves an unavailable placeholder member instead of collapsing it", () => {
@@ -457,6 +495,7 @@ describe("<EpicRootDragOverlayContent />", () => {
           index: 0,
         },
         480,
+        null,
       );
       renderOverlay();
 
@@ -507,6 +546,7 @@ describe("<EpicRootDragOverlayContent />", () => {
             index: 0,
           },
           480,
+          null,
         );
         renderOverlay();
 
@@ -550,6 +590,7 @@ describe("<EpicRootDragOverlayContent />", () => {
           index: 0,
         },
         220,
+        null,
       );
       renderOverlay();
 
@@ -607,6 +648,7 @@ describe("<EpicRootDragOverlayContent />", () => {
           index: 0,
         },
         480,
+        null,
       );
       renderOverlay();
 
@@ -622,8 +664,8 @@ describe("<EpicRootDragOverlayContent />", () => {
       const rightUnderline = within(overlay).getByTestId(
         "split-tab-group-underline-right-split-1",
       );
-      expect(leftUnderline.className).toContain("bg-primary");
-      expect(rightUnderline.className).toContain("bg-primary");
+      expect(leftUnderline.className).toContain("bg-current");
+      expect(rightUnderline.className).toContain("bg-current");
       expect(within(overlay).queryByTestId("tab-chrome-center")).toBeNull();
 
       act(() => {
@@ -633,8 +675,8 @@ describe("<EpicRootDragOverlayContent />", () => {
       expect(
         within(overlay).queryByTestId("split-tab-divider-split-1"),
       ).toBeNull();
-      expect(leftUnderline.className).toContain("bg-primary");
-      expect(rightUnderline.className).not.toContain("bg-primary");
+      expect(leftUnderline.className).toContain("bg-current");
+      expect(rightUnderline.className).not.toContain("bg-current");
       expect(within(overlay).getByTestId("tab-chrome-center")).toBeTruthy();
     });
 
@@ -674,6 +716,7 @@ describe("<EpicRootDragOverlayContent />", () => {
               index: 0,
             },
             480,
+            null,
           );
           renderOverlay();
           const overlay = screen.getByTestId("header-tab-drag-overlay");
@@ -729,6 +772,7 @@ describe("<EpicRootDragOverlayContent />", () => {
           index: 0,
         },
         480,
+        null,
       );
       useEpicDndStore.getState().headerTearOffPreviewChanged(true);
       expect(useEpicDndStore.getState().headerTearOffPreview).toBe(true);
@@ -742,6 +786,7 @@ describe("<EpicRootDragOverlayContent />", () => {
           index: 0,
         },
         480,
+        null,
       );
       expect(useEpicDndStore.getState().headerTearOffPreview).toBe(false);
 
@@ -902,6 +947,7 @@ describe("<EpicRootDragOverlayContent />", () => {
           index: 0,
         },
         400,
+        null,
       );
     }
 
@@ -1038,6 +1084,7 @@ describe("<EpicRootDragOverlayContent />", () => {
           index: 0,
         },
         400,
+        null,
       );
       renderOverlay();
 

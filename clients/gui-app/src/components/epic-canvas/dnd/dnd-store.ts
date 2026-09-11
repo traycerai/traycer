@@ -16,17 +16,80 @@ import type {
 import {
   EPIC_CANVAS_DND_SOURCE_TYPES,
   LEFT_PANEL_RAIL_ITEM_DND_TYPE,
+  isRecord,
   type EpicCanvasDragSourceData,
   type EpicCanvasDropPreview,
   type EpicCanvasLeftPanelRailDragData,
 } from "@/components/epic-canvas/dnd/dnd";
 import type { HeaderTabDragData } from "@/components/layout/tabs/header-tab-dnd";
-import type { TabRef } from "@/stores/tabs/types";
+import type { HeaderTabAppearance, TabRef } from "@/stores/tabs/types";
 import type {
   DropPosition,
   EpicCanvasTileRef,
 } from "@/stores/epics/canvas/types";
 import type { RootCreatePanelId } from "@/stores/epics/left-panel-store";
+import {
+  EMPTY_NOTIFICATION_INDICATOR_STATE,
+  type NotificationIndicatorState,
+} from "@/stores/notifications/notification-indicator-state";
+
+/** Presentation captured at drag start so the overlay matches its source tab. */
+export interface HeaderTabDragGhost {
+  readonly appearance: HeaderTabAppearance | null;
+  readonly indicatorState: NotificationIndicatorState;
+}
+
+function isHeaderTabAppearance(value: unknown): value is HeaderTabAppearance {
+  if (!isRecord(value)) return false;
+  return (
+    (value.color === null || typeof value.color === "string") &&
+    // ponytail: shallow-checked (record-or-null, not the full discriminated
+    // `icon.kind` union / `scope` shape) - this payload never crosses a real
+    // serialization boundary (same dnd-kit `data` reference the source
+    // component built), so a deep re-validation buys nothing a malformed
+    // value wouldn't already survive as harmlessly (the ghost skips the logo
+    // for that one gesture). Upgrade to full field checks if this payload
+    // ever starts crossing a process/window boundary.
+    (value.icon === null || isRecord(value.icon)) &&
+    (value.scope === null || isRecord(value.scope)) &&
+    typeof value.assetRefreshKey === "number" &&
+    typeof value.iconRejected === "boolean"
+  );
+}
+
+function isNotificationIndicatorState(
+  value: unknown,
+): value is NotificationIndicatorState {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.unreadFailure === "boolean" &&
+    typeof value.pendingFork === "boolean" &&
+    typeof value.pendingApproval === "boolean" &&
+    typeof value.pendingInterview === "boolean" &&
+    typeof value.unreadDone === "boolean"
+  );
+}
+
+/**
+ * Reads the ghost snapshot a header-tab draggable attached to its dnd-kit
+ * `data` payload. `null` only when the payload carries no `ghost` key at all
+ * (not a header-tab drag, or a drag begun before a hot reload swapped this
+ * module) - a malformed individual field degrades to its empty value instead
+ * of discarding the whole ghost, so a partially-stale payload still shows
+ * whatever part of it parsed.
+ */
+export function readHeaderTabDragGhost(
+  value: unknown,
+): HeaderTabDragGhost | null {
+  if (!isRecord(value) || !isRecord(value.ghost)) return null;
+  const { appearance, indicatorState } = value.ghost;
+  return {
+    appearance: isHeaderTabAppearance(appearance) ? appearance : null,
+    indicatorState: isNotificationIndicatorState(indicatorState)
+      ? indicatorState
+      : EMPTY_NOTIFICATION_INDICATOR_STATE,
+  };
+}
 
 function matchingArtifactDropPreviewEqual(
   left: NonNullable<EpicCanvasDropPreview>,
@@ -165,22 +228,25 @@ function headerStripDragStateEqual(
  */
 function isDragStateIdle(state: EpicDndState): boolean {
   return (
-    state.activeSource === null &&
-    state.activeOverlayTile === null &&
-    state.activeHeaderTab === null &&
     !state.headerTearOffPreview &&
-    state.dropPreview === null &&
-    state.headerStripDropIndex === null &&
-    state.headerStripDragState === null &&
-    state.headerStripSourceWidth === null &&
     state.headerStripOffsets.size === 0 &&
     state.tileStripOffsets.size === 0 &&
-    state.tileSourceWidth === null &&
-    state.topLevelStripPairPreview === null &&
-    state.reparentTargetNodeId === null &&
-    state.reparentTargetViewTabId === null &&
-    state.reparentRootPanelId === null &&
-    state.reparentRootViewTabId === null
+    [
+      state.activeSource,
+      state.activeOverlayTile,
+      state.activeHeaderTab,
+      state.activeHeaderTabGhost,
+      state.dropPreview,
+      state.headerStripDropIndex,
+      state.headerStripDragState,
+      state.headerStripSourceWidth,
+      state.tileSourceWidth,
+      state.topLevelStripPairPreview,
+      state.reparentTargetNodeId,
+      state.reparentTargetViewTabId,
+      state.reparentRootPanelId,
+      state.reparentRootViewTabId,
+    ].every((value) => value === null)
   );
 }
 
@@ -194,6 +260,13 @@ interface EpicDndState {
   readonly activeOverlayTile: EpicCanvasTileRef | null;
   /** Header-tab reorder source, null when no header-tab drag is active. */
   readonly activeHeaderTab: HeaderTabDragData | null;
+  /**
+   * Render-ready ghost enrichment for `activeHeaderTab`, resolved ONCE at
+   * drag start from the drag source's own dnd-kit payload (see
+   * `HeaderTabDragGhost` above) - content-derived, never re-resolved during
+   * the gesture, mirroring `activeOverlayTile`.
+   */
+  readonly activeHeaderTabGhost: HeaderTabDragGhost | null;
   /** Whether the header preview depicts a detached member. */
   readonly headerTearOffPreview: boolean;
   /** Current canvas-side drop preview (strip / body / empty-shell / rail). */
@@ -259,6 +332,7 @@ interface EpicDndState {
   readonly headerTabDragStarted: (
     tab: HeaderTabDragData,
     sourceWidth: number | null,
+    ghost: HeaderTabDragGhost | null,
   ) => void;
   readonly headerTearOffPreviewChanged: (active: boolean) => void;
   readonly dropPreviewChanged: (preview: EpicCanvasDropPreview) => void;
@@ -290,6 +364,7 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
   activeSource: null,
   activeOverlayTile: null,
   activeHeaderTab: null,
+  activeHeaderTabGhost: null,
   headerTearOffPreview: false,
   dropPreview: null,
   headerStripDropIndex: null,
@@ -308,6 +383,7 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
       activeSource: source,
       activeOverlayTile: overlayTile,
       activeHeaderTab: null,
+      activeHeaderTabGhost: null,
       headerTearOffPreview: false,
       dropPreview: null,
       headerStripDropIndex: null,
@@ -323,11 +399,12 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
       reparentRootViewTabId: null,
     });
   },
-  headerTabDragStarted: (tab, sourceWidth) => {
+  headerTabDragStarted: (tab, sourceWidth, ghost) => {
     set({
       activeSource: null,
       activeOverlayTile: null,
       activeHeaderTab: tab,
+      activeHeaderTabGhost: ghost,
       headerTearOffPreview: false,
       dropPreview: null,
       headerStripDropIndex: null,
@@ -421,6 +498,7 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
       activeSource: null,
       activeOverlayTile: null,
       activeHeaderTab: null,
+      activeHeaderTabGhost: null,
       headerTearOffPreview: false,
       dropPreview: null,
       headerStripDropIndex: null,
@@ -499,6 +577,10 @@ export function useHeaderStripDropIndex(): number | null {
 
 export function useActiveHeaderTab(): HeaderTabDragData | null {
   return useEpicDndStore((s) => s.activeHeaderTab);
+}
+
+export function useActiveHeaderTabGhost(): HeaderTabDragGhost | null {
+  return useEpicDndStore((s) => s.activeHeaderTabGhost);
 }
 
 export function useHeaderStripOffsets(): ReadonlyMap<string, number> {

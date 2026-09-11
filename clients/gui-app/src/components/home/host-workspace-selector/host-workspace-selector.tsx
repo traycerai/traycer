@@ -1254,9 +1254,6 @@ function HomeWorkspaceRows(props: {
           discardDisabled={false}
           onEditEnvironment={handleEditEnvironment}
           readOnly={false}
-          // Rendered inline in the fork / add-node dialogs, never inside a
-          // popover, so nested branch/source dropdowns portal to the body.
-          nestedInPopover={false}
           // Home folder list is a synchronous local draft, never an async binding
           // snapshot — an empty list is a genuine "no folders linked yet", so the
           // row shows the add affordance rather than an indefinite spinner.
@@ -1316,7 +1313,7 @@ function HomeWorkspaceSummaryControl(props: {
           onEditEnvironment={props.onEditEnvironment}
           refresh={props.refresh}
           popoverTestId="home-workspace-rows-popover"
-          popoverSide="top"
+          popoverSide="bottom"
           recentWorkspaces={props.recentWorkspaces}
           recentWorkspaceCount={props.recentWorkspaceCount}
           moveToRecent={props.moveToRecent}

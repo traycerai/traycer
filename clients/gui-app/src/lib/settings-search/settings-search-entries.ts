@@ -28,7 +28,7 @@ export const MOD_ENTER_LABEL = `${modLabel()}+Enter`;
  * What a search hit IS, which is also what clicking it can promise.
  *
  * - `section` — a whole settings page. Lands at the top of it.
- * - `group` — a titled card inside a page ("Typography", "Running agents"),
+ * - `group` — a titled card inside a page ("Fonts and text", "Running agents"),
  *   or a named region of a bespoke page that has no card.
  * - `setting` — one row, the thing a user actually came to change.
  *
@@ -337,19 +337,21 @@ export const SETTINGS_SEARCH_ENTRIES: ReadonlyArray<SettingsSearchEntry> = [
     kind: "section",
     availableWhen: alwaysAvailable,
     label: "Appearance",
-    description: "Theme, typography, and focused visual customization.",
+    description: "Themes, fonts, and display preferences.",
     group: null,
     keywords: [
       "look",
       "style",
       "visual",
       "ui",
-      // The theme gallery and "More appearance options" are bespoke, not
-      // rows, so their vocabulary lands on the page.
+      // Controls without search anchors land on the Appearance page.
       "theme",
       "dark mode",
       "light mode",
       "color scheme",
+      "theme mode",
+      "follow device",
+      "background opacity",
       "palette",
       "preset",
       "gruvbox",
@@ -388,9 +390,9 @@ export const SETTINGS_SEARCH_ENTRIES: ReadonlyArray<SettingsSearchEntry> = [
     anchor: "appearance-pointer-cursors",
     kind: "setting",
     availableWhen: alwaysAvailable,
-    label: "Use pointer cursors",
+    label: "Show a hand cursor over clickable controls",
     description:
-      "Change the cursor to a pointer when hovering over interactive elements.",
+      "Use a hand cursor over buttons, links, and other clickable controls.",
     group: "Interface",
     keywords: ["cursor", "mouse", "hand", "hover"],
   },
@@ -399,30 +401,30 @@ export const SETTINGS_SEARCH_ENTRIES: ReadonlyArray<SettingsSearchEntry> = [
     anchor: "appearance-minimap-side",
     kind: "setting",
     availableWhen: alwaysAvailable,
-    label: "Minimap side",
+    label: "Minimap position",
     description:
-      "Place chat and artifact minimaps on the left or right, or hide both.",
+      "Minimaps are compact overviews for navigating chats and artifacts. Choose where they appear, or hide them.",
     group: "Interface",
-    keywords: ["minimap", "overview", "left", "right", "hide"],
+    keywords: ["minimap", "side", "overview", "left", "right", "hide"],
   },
   {
     section: "appearance",
     anchor: "appearance-typography",
     kind: "group",
     availableWhen: alwaysAvailable,
-    label: "Typography",
+    label: "Fonts and text",
     description: null,
     group: null,
-    keywords: ["font", "text", "size", "typeface"],
+    keywords: ["font", "text", "size", "typeface", "typography"],
   },
   {
     section: "appearance",
     anchor: "appearance-ui-font",
     kind: "setting",
     availableWhen: alwaysAvailable,
-    label: "UI font",
+    label: "Interface font",
     description: "Font and size used across the Traycer interface.",
-    group: "Typography",
+    group: "Fonts and text",
     keywords: ["font", "typeface", "text size", "interface"],
   },
   {
@@ -431,8 +433,8 @@ export const SETTINGS_SEARCH_ENTRIES: ReadonlyArray<SettingsSearchEntry> = [
     kind: "setting",
     availableWhen: alwaysAvailable,
     label: "Code font",
-    description: "Font and size used for code across agents and diffs.",
-    group: "Typography",
+    description: "Font and size used for code blocks and diffs.",
+    group: "Fonts and text",
     keywords: ["font", "monospace", "mono", "diff", "editor"],
   },
   {
@@ -481,7 +483,7 @@ export const SETTINGS_SEARCH_ENTRIES: ReadonlyArray<SettingsSearchEntry> = [
     anchor: "appearance-artifact-icons",
     kind: "group",
     availableWhen: alwaysAvailable,
-    label: "Artifact icons",
+    label: "Icon colors",
     description: null,
     group: null,
     keywords: ["icons", "artifacts", "files", "color"],
@@ -491,9 +493,10 @@ export const SETTINGS_SEARCH_ENTRIES: ReadonlyArray<SettingsSearchEntry> = [
     anchor: "appearance-artifact-icon-colors",
     kind: "setting",
     availableWhen: alwaysAvailable,
-    label: "Artifact icon colors",
-    description: "Turn on type-specific colors, or leave node icons neutral.",
-    group: "Artifact icons",
+    label: "Color icons by type",
+    description:
+      "Give chats, agents, terminals, and artifacts distinct icon colors. Turn off to use neutral icons.",
+    group: "Icon colors",
     keywords: ["icons", "color", "file type", "monochrome", "neutral"],
   },
 
