@@ -37,6 +37,9 @@ import {
   type OpenEpicStoreHandle,
 } from "@/stores/epics/open-epic/store";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
+import { SESSION_SILENCE_TIMEOUT_MS } from "@traycer-clients/shared/host-transport/remote/config";
+import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -112,6 +115,14 @@ const OWNER_IDENTITY_STABLE: OwnerIdentityVerdict = { kind: "stable" };
 
 /** Passed to `reconnectAll` so a hand-driven wake is distinguishable in logs. */
 const EPIC_SESSION_WAKE_REASON = "user-retry";
+
+/**
+ * The failure card's Retry forcing a re-dial on a transport that reports
+ * itself silent. A DIFFERENT reason from the wake above on purpose: this one
+ * names an escalation the session's own verdict earned, and a support bundle
+ * has to be able to tell the two apart.
+ */
+const EPIC_RETRY_FORCE_RECONNECT_REASON = "epic-retry";
 
 /**
  * INVARIANT (R-1): a tuple's `ownerIdentityKey` is the owner identity OF its
@@ -425,6 +436,18 @@ export function EpicSessionProvider(
   const [session, setSession] = useState<MountedSessionState | null>(null);
   const sessionRef = useRef<MountedSessionState | null>(null);
   const originalHostIdRef = useRef<string | null>(null);
+  /**
+   * THIS epic session's socket, for the one question `retryRepoint` has to ask
+   * it: is the transport behind the failure card actually dead?
+   *
+   * A ref rather than state because nothing renders off it - it is read once,
+   * inside a click handler - and because the provider rebuilds its transport
+   * per handle, so the value must track the LIVE one rather than whichever was
+   * current when a callback was memoised. Nulled when the handle that owns it
+   * closes, so a click landing after a repoint escalates nothing.
+   */
+  const epicStreamClientRef =
+    useRef<IHostStreamClient<HostStreamRpcRegistry> | null>(null);
   // Seeded from the create-host memory for an epic THIS renderer just
   // created: `epic.create` is local-first on the create host - the cloud
   // record is written by that host's deferred background connect - so until
@@ -573,6 +596,32 @@ export function EpicSessionProvider(
     if (seededCreateHostRef.current) {
       seededCreateHostRef.current = false;
       setRequestedHostId(null);
+    }
+    // The re-acquire pass below reuses a WARM handle on the same host, which
+    // is the right answer for every failure this card reports except one: a
+    // transport whose host has stopped answering. Re-acquiring there hands the
+    // person the same dead session they just complained about, so ask the
+    // socket first and force a re-dial when it says it is silent.
+    //
+    // The gate is the transport's own verdict (`isSilentFor` includes
+    // readiness), never a bare "retry means redial": forcing against a host
+    // that is merely detached at the relay would put a fresh handshake in
+    // front of a blip and bank its timeout as a refusal. `?.` twice over -
+    // no handle, or a local transport that does not measure silence - both
+    // read as "not silent", i.e. today's behaviour.
+    //
+    // The re-presentation that follows shows `ready` while the transport
+    // redials, and the tiles show `reconnecting` through their own status.
+    // Accepted: the pane the person clicked was the failure card, which the
+    // re-presentation replaces.
+    if (
+      epicStreamClientRef.current?.isSilentFor?.(SESSION_SILENCE_TIMEOUT_MS) ===
+      true
+    ) {
+      epicStreamClientRef.current.reconnectAll(
+        EPIC_RETRY_FORCE_RECONNECT_REASON,
+        { probeFirst: false, wakeProbe: null },
+      );
     }
     setRetryGeneration((generation) => generation + 1);
   }, [planRestrictedSessionRebuildBackoff]);
@@ -801,6 +850,13 @@ export function EpicSessionProvider(
       ): void => {
         if (transportClosed) return;
         transportClosed = true;
+        // Only if it is still OURS: a repoint closes the old handle's
+        // transport after the new one has already published itself, and
+        // clearing unconditionally there would blind the silence gate to a
+        // live socket.
+        if (epicStreamClientRef.current === wsStreamClient) {
+          epicStreamClientRef.current = null;
+        }
         // Before `transport.close()`, so the timer cannot outlive the socket
         // it exists to rebuild.
         detachReprobe();
@@ -1018,6 +1074,11 @@ export function EpicSessionProvider(
           windowLabel: epicId,
         });
 
+        // Published beside the wake wiring below, and for the same socket: the
+        // provider rebuilds `wsStreamClient` per handle, so `retryRepoint`'s
+        // silence gate must read the LIVE one rather than whichever existed
+        // when its callback was memoised. Cleared by `closeSessionTransport`.
+        epicStreamClientRef.current = wsStreamClient;
         const created = createOpenEpicStore({
           epicId,
           userId: sessionUserId,

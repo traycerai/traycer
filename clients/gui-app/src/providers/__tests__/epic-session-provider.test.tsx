@@ -229,6 +229,7 @@ import {
   fakeDurableStreamTransports,
   resetFakeDurableStreamTransports,
 } from "@/lib/host/test-support/fake-durable-stream-transport";
+import { FakeStreamClient } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
 import {
   createInProcessEpicRuntimeWorker,
   createProxiedInProcessEpicRuntimeWorker,
@@ -3338,6 +3339,60 @@ describe("<EpicSessionProvider />", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("retryRepoint forces reconnectAll epic-retry when the injected client reports silent, and does not when it does not", async () => {
+    const fake = new FakeStreamClient(true);
+    const reconnectAll = vi.spyOn(fake, "reconnectAll");
+    fakeDurableStreamTransports().opener = (_hostId) => ({
+      wsStreamClient: fake,
+      close: () => {
+        fake.close();
+      },
+      closeWithReason: () => {
+        fake.close();
+      },
+    });
+    installStreamFactory(() => ({
+      applyUpdate: () => undefined,
+      awareness: () => undefined,
+      applyArtifactRoomUpdate: () => undefined,
+      artifactRoomAwareness: () => undefined,
+      retryMigration: () => undefined,
+      close: () => undefined,
+    }));
+
+    const presentations: Array<EpicSessionPresentation | null> = [];
+    render(
+      <EpicSessionProvider
+        epicId="epic-retry-silence"
+        tabId="epic-retry-silence"
+      >
+        <PresentationProbe
+          onPresentation={(presentation) => presentations.push(presentation)}
+        />
+      </EpicSessionProvider>,
+    );
+    await act(() => Promise.resolve());
+    await waitFor(() => {
+      expect(presentations.at(-1)?.kind).toBe("ready");
+    });
+
+    fake.silentFor = true;
+    act(() => {
+      presentations.at(-1)?.retry();
+    });
+    expect(reconnectAll).toHaveBeenCalledWith("epic-retry", {
+      probeFirst: false,
+      wakeProbe: null,
+    });
+
+    reconnectAll.mockClear();
+    fake.silentFor = false;
+    act(() => {
+      presentations.at(-1)?.retry();
+    });
+    expect(reconnectAll).not.toHaveBeenCalled();
   });
 
   it("retires the handle a worker fatal killed, so Retry rebuilds instead of re-presenting the corpse", async () => {
