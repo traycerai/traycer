@@ -5,6 +5,7 @@ import type {
   AgentSender,
   ChatEvent,
   ChatSessionAnchor,
+  ContentBlock,
   Message,
   UserMessageSender,
 } from "@traycer/protocol/persistence/epic/schemas";
@@ -344,7 +345,7 @@ function persistedPlanBlock(input: {
   readonly revision: number;
   readonly preview: string;
   readonly timestamp: number;
-}): Extract<Message, { role: "assistant" }>["blocks"][number] {
+}): Extract<ContentBlock, { type: "plan" }> {
   return {
     type: "plan",
     blockId: "plan:block-1",
@@ -1626,6 +1627,7 @@ describe("useRenderedMessages", () => {
         {
           type: "autonomous_resume",
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed",
           timestamp: 2003,
           triggers: [
@@ -1692,6 +1694,7 @@ describe("useRenderedMessages", () => {
         {
           type: "autonomous_resume",
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed",
           timestamp: 2003,
           triggers: [
@@ -1755,6 +1758,7 @@ describe("useRenderedMessages", () => {
         {
           type: "autonomous_resume",
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed",
           timestamp: 2004,
           triggers: [
@@ -1831,6 +1835,7 @@ describe("useRenderedMessages", () => {
           // must catch by comparing against the visible (post-nesting) order.
           type: "autonomous_resume",
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed",
           timestamp: 2003,
           triggers: [
@@ -3723,6 +3728,38 @@ describe("useRenderedMessages setup card integration", () => {
     expect(indicator?.id).toBe("assistant:turn-setup");
   });
 
+  it("threads the active turn's real startedAt onto the pre-turn indicator, distinct from its createdAt list anchor", () => {
+    const { result } = renderRenderedMessages({
+      activeTurn: { ...RUNNING_ACTIVE_TURN, startedAt: 5000 },
+      runStatus: "running",
+    });
+
+    const indicator = result.current.find(
+      (message) => message.role === "assistant",
+    );
+    // `createdAt` stays the list anchor (`max(rendered.createdAt) + 1`, here
+    // `0 + 1` on an empty transcript) - it must not be reused as the elapsed
+    // clock's start, which is why 5000 was chosen to be unmistakably not 1.
+    expect(indicator?.createdAt).toBe(1);
+    expect(indicator?.elapsedStartedAt).toBe(5000);
+    expect(indicator?.elapsedStartedAt).not.toBe(indicator?.createdAt);
+  });
+
+  it("omits elapsedStartedAt from the pre-turn indicator when no active turn exists yet", () => {
+    const { result } = renderRenderedMessages({
+      activeTurn: null,
+      runStatus: "running",
+    });
+
+    const indicator = result.current.find(
+      (message) => message.role === "assistant",
+    );
+    // Same list anchor as the active-turn case above - only the presence of
+    // `elapsedStartedAt` differs, since there is genuinely no known start.
+    expect(indicator?.createdAt).toBe(1);
+    expect(indicator?.elapsedStartedAt).toBeUndefined();
+  });
+
   it("still shows the Working indicator when setup has already completed", () => {
     const { result } = renderRenderedMessages({
       events: [
@@ -4302,6 +4339,7 @@ describe("useRenderedMessages turn.stopped", () => {
         {
           type: "autonomous_resume" as const,
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed" as const,
           timestamp: 12_000,
           triggers: [],
@@ -4367,6 +4405,402 @@ describe("useRenderedMessages turn.stopped", () => {
     );
   });
 
+  it("infers an in-turn placement when legacy delivery follows assistant work", () => {
+    const steeredUser = userMessageAt("steered-placement", 11_500);
+    const assistant = {
+      ...assistantMessage("turn-legacy-placement", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        textBlock("text-before-delivery", 11_000, "Still working."),
+        steerBlock("steer-before-delivery", steeredUser.messageId, 11_500),
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-in-turn",
+          deliveryPlacement: null,
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+      ],
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant, steeredUser],
+    });
+    const deliveryRow = result.current.find(
+      (message) =>
+        message.role === "assistant" &&
+        message.segments.some(
+          (segment) => segment.kind === "autonomous_resume",
+        ),
+    );
+    const delivery = deliveryRow?.segments.find(
+      (segment) => segment.kind === "autonomous_resume",
+    );
+    expect(delivery?.kind).toBe("autonomous_resume");
+    if (delivery?.kind === "autonomous_resume") {
+      expect(delivery.deliveryPlacement).toBe("in_turn");
+    }
+  });
+
+  it("honors an explicit turn-start placement after assistant prose", () => {
+    const assistant = {
+      ...assistantMessage("turn-explicit-placement", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        textBlock("text-before-start", 11_000, "Previous response."),
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-at-start",
+          status: "completed" as const,
+          timestamp: 12_000,
+          deliveryPlacement: "turn_start" as const,
+          triggers: [],
+        },
+      ],
+    };
+
+    const { result } = renderRenderedMessages({ messages: [assistant] });
+    const row = result.current.find((message) => message.role === "assistant");
+    const delivery = row?.segments.find(
+      (segment) => segment.kind === "autonomous_resume",
+    );
+    expect(delivery?.kind).toBe("autonomous_resume");
+    if (delivery?.kind === "autonomous_resume") {
+      expect(delivery.deliveryPlacement).toBe("turn_start");
+    }
+  });
+
+  const legacyPlacementBlocks: Array<[string, ContentBlock]> = [
+    ["file_change", fileChangeBlock("/repo/src/app.ts")],
+    [
+      "subagent",
+      {
+        type: "subagent" as const,
+        agentType: null,
+        blockId: "agent-placement",
+        name: "Investigate placement",
+        task: "Check the placement regression.",
+        progressUpdates: [],
+        result: "Done.",
+        status: "completed" as const,
+        timestamp: 11_500,
+        startedAt: 11_000,
+        spawnToolCallId: null,
+        stopped: false,
+        workflowMeta: null,
+      },
+    ],
+    [
+      "approval",
+      {
+        type: "approval" as const,
+        blockId: "approval-placement",
+        status: "completed" as const,
+        timestamp: 11_500,
+        toolName: "Shell",
+        description: "Run the placement check",
+        ...approvalInputFields("Shell", { command: "pwd" }),
+        decision: null,
+      },
+    ],
+    [
+      "plan",
+      persistedPlanBlock({
+        contentHash: "placement-plan",
+        revision: 1,
+        preview: "## Placement plan",
+        timestamp: 11_500,
+      }),
+    ],
+  ];
+
+  it.each(legacyPlacementBlocks)(
+    "infers in-turn placement after a visible %s block",
+    (_, workBlock) => {
+      const assistant = {
+        ...assistantMessage(
+          `turn-legacy-${String(workBlock.type)}-placement`,
+          10_000,
+        ),
+        timestamp: 12_000,
+        blocks: [
+          workBlock,
+          {
+            type: "autonomous_resume" as const,
+            blockId: `resume-after-${String(workBlock.type)}`,
+            deliveryPlacement: null,
+            status: "completed" as const,
+            timestamp: 12_000,
+            triggers: [],
+          },
+        ],
+      };
+
+      const { result } = renderRenderedMessages({ messages: [assistant] });
+      const row = result.current.find(
+        (message) => message.role === "assistant",
+      );
+      const delivery = row?.segments.find(
+        (segment) => segment.kind === "autonomous_resume",
+      );
+      expect(delivery?.kind).toBe("autonomous_resume");
+      if (delivery?.kind === "autonomous_resume") {
+        expect(delivery.deliveryPlacement).toBe("in_turn");
+      }
+    },
+  );
+
+  const nonRenderablePlacementBlocks: Array<[string, ContentBlock]> = [
+    [
+      "empty text",
+      {
+        type: "text",
+        blockId: "empty-text-placement",
+        status: "completed",
+        timestamp: 11_500,
+        text: "",
+        providerNotice: null,
+      },
+    ],
+    [
+      "empty reasoning",
+      {
+        type: "reasoning",
+        blockId: "empty-reasoning-placement",
+        status: "completed",
+        timestamp: 11_500,
+        content: "",
+        startedAt: null,
+      },
+    ],
+    [
+      "empty plan",
+      {
+        ...persistedPlanBlock({
+          contentHash: "empty-plan-placement",
+          revision: 1,
+          preview: "",
+          timestamp: 11_500,
+        }),
+        fullContentRef: null,
+        steps: [],
+      },
+    ],
+    [
+      "non-renderable subagent",
+      {
+        type: "subagent",
+        agentType: null,
+        blockId: "empty-subagent-placement",
+        name: "background command",
+        task: null,
+        progressUpdates: [],
+        result: "finished",
+        status: "completed",
+        timestamp: 11_500,
+        startedAt: 11_000,
+        spawnToolCallId: null,
+        stopped: false,
+        workflowMeta: null,
+      },
+    ],
+  ];
+
+  it.each(nonRenderablePlacementBlocks)(
+    "keeps legacy placement at turn start after a non-renderable %s block",
+    (_, nonRenderableBlock) => {
+      const assistant = {
+        ...assistantMessage(
+          `turn-legacy-empty-${String(nonRenderableBlock.type)}-placement`,
+          10_000,
+        ),
+        timestamp: 12_000,
+        blocks: [
+          nonRenderableBlock,
+          {
+            type: "autonomous_resume" as const,
+            blockId: `resume-after-empty-${String(nonRenderableBlock.type)}`,
+            deliveryPlacement: null,
+            status: "completed" as const,
+            timestamp: 12_000,
+            triggers: [],
+          },
+        ],
+      };
+
+      const { result } = renderRenderedMessages({ messages: [assistant] });
+      const row = result.current.find(
+        (message) => message.role === "assistant",
+      );
+      const delivery = row?.segments.find(
+        (segment) => segment.kind === "autonomous_resume",
+      );
+      expect(delivery?.kind).toBe("autonomous_resume");
+      if (delivery?.kind === "autonomous_resume") {
+        expect(delivery.deliveryPlacement).toBe("turn_start");
+      }
+    },
+  );
+
+  it("ignores steer and notification blocks when inferring legacy placement", () => {
+    const steeredUser = userMessageAt("legacy-steer-placement", 11_500);
+    const assistant = {
+      ...assistantMessage("turn-legacy-notification-placement", 10_000),
+      timestamp: 12_000,
+      blocks: [
+        steerBlock("steer-only-placement", steeredUser.messageId, 11_000),
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-before-notification",
+          deliveryPlacement: null,
+          status: "completed" as const,
+          timestamp: 11_500,
+          triggers: [],
+        },
+        {
+          type: "autonomous_resume" as const,
+          blockId: "resume-after-notification",
+          deliveryPlacement: null,
+          status: "completed" as const,
+          timestamp: 12_000,
+          triggers: [],
+        },
+      ],
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [assistant, steeredUser],
+    });
+    const row = result.current.find(
+      (message) =>
+        message.role === "assistant" &&
+        message.segments.some(
+          (segment) => segment.kind === "autonomous_resume",
+        ),
+    );
+    const deliveries =
+      row?.segments.filter((segment) => segment.kind === "autonomous_resume") ??
+      [];
+    expect(deliveries).toHaveLength(2);
+    expect(deliveries.map((segment) => segment.deliveryPlacement)).toEqual([
+      "turn_start",
+      "turn_start",
+    ]);
+  });
+
+  it.each([
+    {
+      placement: "in_turn",
+      withLaterProse: false,
+      includeStart: true,
+      showFooter: true,
+      turnHasOnlyAutonomousResumeSegments: false,
+    },
+    {
+      placement: "in_turn",
+      withLaterProse: true,
+      includeStart: true,
+      showFooter: true,
+      turnHasOnlyAutonomousResumeSegments: false,
+    },
+    {
+      placement: "in_turn",
+      withLaterProse: false,
+      includeStart: false,
+      showFooter: false,
+      turnHasOnlyAutonomousResumeSegments: false,
+    },
+    {
+      placement: "turn_start",
+      withLaterProse: false,
+      includeStart: false,
+      showFooter: false,
+      turnHasOnlyAutonomousResumeSegments: true,
+    },
+  ] as const)(
+    "uses the correct lifecycle for each placement case",
+    (testCase) => {
+      const {
+        placement,
+        withLaterProse,
+        includeStart,
+        showFooter,
+        turnHasOnlyAutonomousResumeSegments,
+      } = testCase;
+      const turnId = `turn-explicit-${placement}-${withLaterProse}`;
+      const assistant = {
+        ...assistantMessage(turnId, 10_000),
+        timestamp: 15_000,
+        blocks: [
+          {
+            type: "autonomous_resume" as const,
+            blockId: `resume-explicit-${placement}`,
+            deliveryPlacement: placement,
+            status: "completed" as const,
+            timestamp: 12_000,
+            triggers: [
+              {
+                kind: "monitor" as const,
+                title: "Build watch",
+                status: "completed" as const,
+                summary: "2 new log lines",
+                blockId: "watched-command",
+                live: true,
+                outputFile: null,
+                mcp: null,
+                managedCommand: null,
+              },
+            ],
+          },
+          ...(withLaterProse
+            ? [textBlock("text-after-explicit-resume", 14_000, "Finished.")]
+            : []),
+        ],
+      };
+
+      const events = [
+        ...(includeStart
+          ? [
+              terminalEvent({
+                type: "turn.started" as const,
+                turnId,
+                timestamp: 10_000,
+                message: null,
+                severity: "info" as const,
+                metadata: null,
+              }),
+            ]
+          : []),
+        terminalEvent({
+          type: "turn.completed",
+          timestamp: 15_000,
+          turnId,
+          message: "Turn completed.",
+          severity: "info",
+          metadata: null,
+        }),
+      ];
+
+      const { result } = renderRenderedMessages({
+        messages: [assistant],
+        events,
+      });
+
+      const row = result.current.find(
+        (message) => message.role === "assistant",
+      );
+      expect(row?.elapsedStartedAt ?? row?.createdAt).toBe(10_000);
+      expect(row?.showCompletionFooter).toBe(showFooter);
+      expect(row?.turnHasOnlyAutonomousResumeSegments).toBe(
+        turnHasOnlyAutonomousResumeSegments,
+      );
+      if (showFooter) {
+        expect(row?.completedAt).toBe(15_000);
+      }
+    },
+  );
+
   it("keeps an adopted start without a terminal event footerless", () => {
     const assistant = {
       ...assistantMessage("turn-resume", 10_000),
@@ -4375,6 +4809,7 @@ describe("useRenderedMessages turn.stopped", () => {
         {
           type: "autonomous_resume" as const,
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed" as const,
           timestamp: 12_000,
           triggers: [],
@@ -4417,6 +4852,7 @@ describe("useRenderedMessages turn.stopped", () => {
         {
           type: "autonomous_resume" as const,
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed" as const,
           timestamp: 12_000,
           triggers: [],
@@ -4469,6 +4905,7 @@ describe("useRenderedMessages turn.stopped", () => {
         {
           type: "autonomous_resume" as const,
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed" as const,
           timestamp: 12_000,
           triggers: [],
@@ -4546,6 +4983,7 @@ describe("useRenderedMessages turn.stopped", () => {
         {
           type: "autonomous_resume" as const,
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed" as const,
           timestamp: 12_000,
           triggers: [],
@@ -4606,6 +5044,7 @@ describe("useRenderedMessages turn.stopped", () => {
         {
           type: "autonomous_resume" as const,
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed" as const,
           timestamp: 12_000,
           triggers: [],
@@ -4657,6 +5096,7 @@ describe("useRenderedMessages turn.stopped", () => {
         {
           type: "autonomous_resume" as const,
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed" as const,
           timestamp: 12_000,
           triggers: [],
@@ -4706,6 +5146,7 @@ describe("useRenderedMessages turn.stopped", () => {
         {
           type: "autonomous_resume" as const,
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed" as const,
           timestamp: 12_000,
           triggers: [],
@@ -4747,6 +5188,7 @@ describe("useRenderedMessages turn.stopped", () => {
         {
           type: "autonomous_resume" as const,
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed" as const,
           timestamp: 12_000,
           triggers: [],
@@ -4790,6 +5232,7 @@ describe("useRenderedMessages turn.stopped", () => {
         {
           type: "autonomous_resume" as const,
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed" as const,
           timestamp: 12_000,
           triggers: [],
@@ -4835,6 +5278,7 @@ describe("useRenderedMessages turn.stopped", () => {
         {
           type: "autonomous_resume" as const,
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed" as const,
           timestamp: 14_000,
           triggers: [],
@@ -4885,6 +5329,7 @@ describe("useRenderedMessages turn.stopped", () => {
         {
           type: "autonomous_resume" as const,
           blockId: "resume-1",
+          deliveryPlacement: null,
           status: "completed" as const,
           timestamp: 12_000,
           triggers: [],
@@ -5314,6 +5759,56 @@ describe("useRenderedMessages turn.stopped", () => {
     expect(
       collectAssistantReplyText(trailingRow.stopped?.turnReplySegments ?? []),
     ).toBe("");
+  });
+
+  it("preserves the real send instant on an orphaned steer row's sentAt while re-anchoring createdAt to the turn start", () => {
+    // No persisted user message for "steer-msg-1" - renderSteerBlockUserMessage
+    // falls through to the orphaned (renderSteeredUserMessage) branch.
+    const assistant = {
+      ...assistantMessage("turn-1", 10_000),
+      timestamp: 100_500,
+      blocks: [steerBlock("block-1", "steer-msg-1", 100_000)],
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant],
+    });
+
+    const steerRow = result.current.find(
+      (row) => row.id === "steer:queue:block-1",
+    );
+    // A turn that started at 10_000 carries a steer actually sent at 100_000 -
+    // the gap is deliberately large so the two values can never be confused.
+    expect(steerRow?.sentAt).toBe(100_000);
+    // createdAt still anchors to the turn start (the sort position), not the
+    // real send time - re-deriving it from sentAt would reorder the row out
+    // of its turn.
+    expect(steerRow?.createdAt).toBe(10_000);
+    expect(steerRow?.sentAt).not.toBe(steerRow?.createdAt);
+  });
+
+  it("preserves the real send instant on a persisted-message steer row's sentAt while re-anchoring createdAt to the turn start", () => {
+    // A persisted user message for the steer exists - renderSteerBlockUserMessage
+    // takes the renderUserMessage branch instead of the orphaned one above.
+    const steeredUser = userMessageAt("m2", 100_000);
+    const assistant = {
+      ...assistantMessage("turn-1", 10_000),
+      timestamp: 100_500,
+      blocks: [steerBlock("block-1", steeredUser.messageId, 100_000)],
+    };
+
+    const { result } = renderRenderedMessages({
+      messages: [userMessage("m1"), assistant, steeredUser],
+    });
+
+    const steerRow = result.current.find(
+      (row) => row.id === steeredUser.messageId,
+    );
+    // Same large, unmistakable gap between the turn's start and the steer's
+    // real send time as the orphaned-branch case above.
+    expect(steerRow?.sentAt).toBe(100_000);
+    expect(steerRow?.createdAt).toBe(10_000);
+    expect(steerRow?.sentAt).not.toBe(steerRow?.createdAt);
   });
 
   it("shows the stopped marker only once the turn.stopped event actually lands, across a rerender", () => {

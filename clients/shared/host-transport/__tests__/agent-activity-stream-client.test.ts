@@ -7,7 +7,11 @@ import type {
   StatusChangeHandler,
   StreamCloseReason,
 } from "../i-stream-session";
-import { AgentActivityStreamClient } from "../agent-activity-stream-client";
+import type { IHostStreamClient } from "../host-stream-client";
+import {
+  AGENT_ACTIVITY_LOCAL_ONLY_MINOR,
+  AgentActivityStreamClient,
+} from "../agent-activity-stream-client";
 import { WsStreamClient } from "../ws-stream-client";
 import { NO_TRANSPORT_EVIDENCE } from "@traycer-clients/shared/host-selection/transport-evidence";
 import { TEST_CLIENT_IDENTITY } from "@traycer-clients/shared/test-fixtures/client-identity";
@@ -75,7 +79,48 @@ function makeWsStreamClient(
     maxBackoffMs: 1_000,
   });
   vi.spyOn(client, "subscribe").mockReturnValue(session);
+  vi.spyOn(client, "subscribeAtVersion").mockReturnValue(session);
   return client;
+}
+
+/**
+ * A transport that structurally omits `subscribeAtVersion` altogether (the
+ * method stays OPTIONAL on `IStreamClient` for exactly a transport like this
+ * one) - the constructor's pre-send guard for a SELECTED plane against such a
+ * transport, distinct from a transport that has the method but whose peer
+ * refuses the version (case 1's dispatch-time path, not this constructor-time
+ * one).
+ */
+function makeTransportWithoutVersionPin(): IHostStreamClient<
+  typeof hostStreamRpcRegistry
+> {
+  return {
+    subscribe: () => {
+      throw new Error("unexpected subscribe on a version-pin-less transport");
+    },
+    subscribeWithParamsProvider: () => {
+      throw new Error(
+        "unexpected subscribeWithParamsProvider on a version-pin-less transport",
+      );
+    },
+    getMethodSchemaVersion: () => null,
+    close: () => undefined,
+    isClosed: () => false,
+    getClosedReason: () => null,
+    onClosed: () => () => undefined,
+    instanceId: "stub-transport-no-version-pin",
+    notifyBearerRotated: () => undefined,
+    // Arrived with another lane's cloud-capability verdict work, which added
+    // it as a REQUIRED member of `IHostStreamClient` after this literal was
+    // written. Neither lane's compile could see the break: this fixture
+    // post-dates their interface read, and their widening post-dates ours.
+    notifyCloudVerdictChanged: () => undefined,
+    reconnectAll: () => undefined,
+    isReady: () => true,
+    getMethodSupport: () => "unknown",
+    subscribeMethodSupport: () => () => undefined,
+    subscribeAvailabilityRecovered: () => () => undefined,
+  };
 }
 
 describe("AgentActivityStreamClient", () => {
@@ -86,9 +131,13 @@ describe("AgentActivityStreamClient", () => {
     const onConnectionStatus = vi.fn();
     const client = new AgentActivityStreamClient({
       wsStreamClient,
+      plane: null,
       callbacks: { onState, onConnectionStatus },
     });
 
+    // `null` leaves the plane to the host, and must put NO key on the wire:
+    // `plane` is an optional enum, so a literal `null` would fail the host's
+    // parse rather than read as "no preference".
     expect(wsStreamClient.subscribe).toHaveBeenCalledWith(
       "agent.activity.subscribe",
       {},
@@ -125,5 +174,65 @@ describe("AgentActivityStreamClient", () => {
     client.close();
     client.close();
     expect(session.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("pins a selected plane to the local-only minor via subscribeAtVersion, never plain subscribe", () => {
+    const session = new StubSession();
+    const wsStreamClient = makeWsStreamClient(session);
+    const onState = vi.fn();
+    const onConnectionStatus = vi.fn();
+
+    new AgentActivityStreamClient({
+      wsStreamClient,
+      plane: "local-only",
+      callbacks: { onState, onConnectionStatus },
+    });
+
+    // The version object itself is the pin: a call that named the right
+    // method but the wrong minor would still read as "subscribeAtVersion was
+    // used" on a looser assertion.
+    expect(wsStreamClient.subscribeAtVersion).toHaveBeenCalledWith(
+      "agent.activity.subscribe",
+      { major: 1, minor: AGENT_ACTIVITY_LOCAL_ONLY_MINOR },
+      { plane: "local-only" },
+    );
+    expect(wsStreamClient.subscribe).not.toHaveBeenCalled();
+  });
+
+  it("leaves an unselected plane on plain subscribe with an empty open request - the pin is scoped, not unconditional", () => {
+    // Non-vacuity for the case above: the only variable that moved is
+    // `plane`, and the pinned path stands down in favour of the exact
+    // pre-existing call this suite's first case already asserts on.
+    const session = new StubSession();
+    const wsStreamClient = makeWsStreamClient(session);
+    const onState = vi.fn();
+    const onConnectionStatus = vi.fn();
+
+    new AgentActivityStreamClient({
+      wsStreamClient,
+      plane: null,
+      callbacks: { onState, onConnectionStatus },
+    });
+
+    expect(wsStreamClient.subscribe).toHaveBeenCalledWith(
+      "agent.activity.subscribe",
+      {},
+    );
+    expect(wsStreamClient.subscribeAtVersion).not.toHaveBeenCalled();
+  });
+
+  it("throws at construction when a selected plane meets a transport with no subscribeAtVersion", () => {
+    const wsStreamClient = makeTransportWithoutVersionPin();
+    const onState = vi.fn();
+    const onConnectionStatus = vi.fn();
+
+    expect(
+      () =>
+        new AgentActivityStreamClient({
+          wsStreamClient,
+          plane: "local-only",
+          callbacks: { onState, onConnectionStatus },
+        }),
+    ).toThrow("This stream transport cannot pin a schema version");
   });
 });

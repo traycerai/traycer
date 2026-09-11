@@ -1,7 +1,7 @@
 import { useEffect, useMemo } from "react";
 import type { QueryClient } from "@tanstack/react-query";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
-import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-records";
+import type { ChatRecordSummaryV12 } from "@traycer/protocol/host/epic/chat-records";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
@@ -19,26 +19,42 @@ import { GUI_PROJECTS_EPIC_DOC_REPLICA } from "@/stores/epics/open-epic/projecti
  */
 interface ChatRecordListAnswer {
   /**
-   * The `@1.1` row, NOT the base one. The base row is assignable to it in the
-   * wrong direction, so typing this as `ChatRecordSummary` is a silent
-   * narrowing rather than a type error: the request asks for the doc-resident
-   * remainder and the cache then drops `docResident`, the one field that says
-   * which rows those are. What is lost surfaces on the WRITE, not the render -
-   * a rename routed to `epic.renameChat` with an id naming no registry chat.
+   * The `@1.2` row, NOT the base one and not `@1.1`'s. A narrower row is
+   * assignable to this in the wrong direction, so typing it down is a silent
+   * narrowing rather than a type error, and each dropped field fails
+   * somewhere different:
+   *
+   *  - without `docResident` (the `@1.1` field), the request asks for the
+   *    doc-resident remainder and the cache then drops the one field that
+   *    says which rows those are. What is lost surfaces on the WRITE, not the
+   *    render - a rename routed to `epic.renameChat` with an id naming no
+   *    registry chat.
+   *  - without `head` (the `@1.2` field), a host that serves the cloud
+   *    publication stamp never reaches the store with it, and the
+   *    published-copy tile is back to one read per mount.
+   *
+   * A host on an older minor upgrades with `head` absent, which the head
+   * plane treats as "nothing to say about the head" rather than as a
+   * retraction.
    */
-  readonly chats: readonly ChatRecordSummaryV11[];
-  readonly issuedAtSeq: number | null;
+  readonly chats: readonly ChatRecordSummaryV12[];
   /**
-   * WHICH store's counter `issuedAtSeq` was read from
-   * (`OpenEpicState.ingestFenceIdentity`). The cache outlives a store: an
-   * epic evicted and reopened gets a fresh store whose counter restarts at
-   * zero, and a cached answer's fence from the old store is numerically
-   * meaningless there - typically larger, letting the omission pass retract
-   * rows the answer never actually covered. The applying effect compares
-   * this against the CURRENT store and degrades the fence to `null` (the
-   * conservative no-session path) on mismatch.
+   * Always this store's own counter, because the store GENERATION is part of
+   * the cache key - see the `cacheKeyIdentity` this hook builds. An entry
+   * therefore belongs to exactly one session, and a fence read from another
+   * generation (numerically meaningless here, and typically larger, which let
+   * the omission pass retract rows the answer never covered) cannot reach the
+   * applying effect.
+   *
+   * This used to carry a `fenceIdentity` beside it and the applying effect
+   * compared the two, degrading the fence to `null` on mismatch. That check is
+   * gone rather than kept as a second mechanism: with the generation in the
+   * key it could not fire, and an unreachable guard is not defence in depth -
+   * it is a claim about the code that the next reader would rely on. What
+   * holds the guarantee is the key, and the pin that reddens if the key ever
+   * stops carrying the generation.
    */
-  readonly fenceIdentity: number | null;
+  readonly issuedAtSeq: number | null;
 }
 
 /**
@@ -101,13 +117,36 @@ export function useEpicSyncChatRecords(epicId: string): void {
   // correct answers and must never share a cache slot.
   const viewerUserId = useCloudChatViewerId();
   const store = handle?.store ?? null;
+  // The session GENERATION this answer belongs to, in the CACHE KEY -
+  // `OpenEpicState.ingestFenceIdentity`, minted once per store construction.
+  //
+  // Without it a cached answer outlives the store it was read for and is
+  // served to the NEXT one, which is not a hypothetical: renderer parking
+  // (plan C, C1) unmounts this hook, releases the session, and remounts it
+  // against a fresh store the moment the tab is shown again. Inside
+  // `staleTime` that remount is served entirely from cache - no request, and
+  // a chat deleted at the host while the epic was parked reappears as though
+  // it still existed. `refetchOnMount: "always"` would fix the missing
+  // request and not the reappearance, because TanStack hands the observer the
+  // cached rows first and refetches behind them.
+  //
+  // Keying on the generation states the actual relationship: the cached
+  // representation of this request is generation-scoped (its fence is read
+  // from one specific store), so a new generation is a different cache entry
+  // and its first read is a real request. Bounded - the superseded entry is
+  // unobserved and is collected on the normal `gcTime`.
+  //
+  // Read straight through rather than memoized: never written after
+  // construction, so for a given `store` it is a constant, and a number needs
+  // no referential stability to key a query.
+  const fenceIdentity = store?.getState().ingestFenceIdentity ?? null;
   const query = useHostQueryWithResponseMap<
     HostRpcRegistry,
     "epic.listChatRecords",
     ChatRecordListAnswer,
-    { readonly seq: number; readonly fenceIdentity: number } | null
+    { readonly seq: number } | null
   >({
-    cacheKeyIdentity: [viewerUserId],
+    cacheKeyIdentity: [viewerUserId, fenceIdentity],
     client,
     method: "epic.listChatRecords",
     params,
@@ -129,18 +168,13 @@ export function useEpicSyncChatRecords(epicId: string): void {
     // the store knows the answer could not have carried that row.
     captureRequestContext: () => {
       if (store === null) return null;
-      const state = store.getState();
-      return {
-        seq: state.peekChatIngestSeq(),
-        fenceIdentity: state.ingestFenceIdentity,
-      };
+      return { seq: store.getState().peekChatIngestSeq() };
     },
     mapResponse: ({ response, requestContext }) => {
       const context = requestContext ?? null;
       return {
         chats: response.chats,
         issuedAtSeq: context === null ? null : context.seq,
-        fenceIdentity: context === null ? null : context.fenceIdentity,
       };
     },
   });
@@ -152,14 +186,9 @@ export function useEpicSyncChatRecords(epicId: string): void {
   useEffect(() => {
     if (store === null || !recordListAuthoritative) return;
     if (answer !== null) {
-      // A cached answer can outlive the store its fence was read from - see
-      // `ChatRecordListAnswer.fenceIdentity`. A cross-generation fence is
-      // degraded to `null`, never trusted.
-      const fence =
-        answer.fenceIdentity === store.getState().ingestFenceIdentity
-          ? answer.issuedAtSeq
-          : null;
-      store.getState().applyChatRecords(answer.chats, fence);
+      // The fence is used as captured. It was read from THIS store, because
+      // the generation is in the cache key - see `ChatRecordListAnswer`.
+      store.getState().applyChatRecords(answer.chats, answer.issuedAtSeq);
     }
     store.getState().markChatRecordListAuthoritative();
   }, [answer, recordListAuthoritative, store]);

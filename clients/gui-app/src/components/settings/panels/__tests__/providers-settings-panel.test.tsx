@@ -191,6 +191,20 @@ const providerMocks = vi.hoisted(() => ({
   openLink: vi.fn(),
 }));
 
+// The auto-judge row the panel now renders reaches TanStack Query for the
+// harness catalog and the set-judge mutation. This suite renders the panel
+// without a `QueryClientProvider` (every other data hook it uses is mocked at
+// this same seam), and the row is not what any test here asserts, so both go
+// the same way. `use-gui-harness-catalog` is stubbed with only the member this
+// subtree calls.
+vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
+  useGuiHarnessesQuery: () => ({ data: undefined, isPending: false }),
+}));
+
+vi.mock("@/hooks/providers/use-providers-set-auto-judge-mutation", () => ({
+  useProvidersSetAutoJudge: () => ({ mutate: vi.fn(), isPending: false }),
+}));
+
 vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   useProvidersList: () => providerMocks.listResult,
 }));

@@ -300,7 +300,22 @@ async function fetchUserResponseOnce(
   // gets back.
   const serverTime = readServerTimeObservation(response);
 
-  if (response.status === 401 || response.status === 404) {
+  // 403 joins 401/404 here, closing an asymmetry that predates this ticket and
+  // was invisible because the two halves are read separately: the REFRESH path
+  // has always treated 403 as a rejection, while this one let it fall through
+  // to `network-error` below - so a forbidden `/api/v3/user` was retried into
+  // the recovery backoff FOREVER, never settling and never reaching the rotate
+  // that would classify it. A 403 is a verdict, not an outage.
+  //
+  // This function reads ONLY `response.status` - it parses no error body - so it
+  // deliberately does not try to say WHAT kind of verdict. That discrimination
+  // happens on the refresh spend, where the payload carries `revocation_scope`;
+  // `rejected` here just means "stop retrying and go ask the rotate".
+  if (
+    response.status === 401 ||
+    response.status === 403 ||
+    response.status === 404
+  ) {
     return { kind: "failed", result: { kind: "rejected" }, serverTime };
   }
 
@@ -352,6 +367,65 @@ export async function refreshOnceAbortable(args: {
   );
 }
 
+/**
+ * Narrowing guard for an unknown JSON body. A type predicate rather than the
+ * `body as Record<string, unknown>` cast this file uses further down: the
+ * predicate is checkable at every call site and needs no assertion at all.
+ */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+/**
+ * Reads the additive `revocation_scope` off a `needs_reauth` refresh reject.
+ *
+ * authn stamps it ONLY on the per-user epoch gate — the routine "sign out
+ * everywhere" tokenVersion bump — and deliberately omits it on the
+ * fork-suspicious rejects (burned replay past grace, family kill), so ABSENCE
+ * is itself the signal that something unusual happened.
+ *
+ * DIRECTION OF THE UNKNOWN CASE, and it is copied rather than re-derived. The
+ * host already settled this at `traycer-host/src/coordination/coordination-api.ts`
+ * (`readRevocationScope`): an exact match on `"user_epoch"`, and `null` for
+ * absent, malformed OR unrecognised values — so an unknown scope falls in with
+ * the fork-suspicious ones and fails toward paging. Writing this as
+ * `scope === "user_epoch" ? routine : ...` and letting everything else read as
+ * routine inverts that: a scope value added to authn tomorrow would silently
+ * downgrade an unfamiliar rejection to the benign branch on every older client.
+ * Two readers of one wire field disagreeing about the unknown case is the same
+ * defect class as two surfaces disagreeing about entitlement.
+ *
+ * Body-read failures also return `null`. A rejection is already terminal for
+ * this credential; being unable to parse its body must not upgrade the
+ * classification, and it must never throw into the refresh path.
+ */
+async function readRefreshRejectionScope(
+  response: Response,
+): Promise<"user-epoch" | null> {
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    return null;
+  }
+  if (!isRecord(payload)) {
+    return null;
+  }
+  if (payload.revocation_scope === "user_epoch") {
+    return "user-epoch";
+  }
+  // The host reads a nested `error.revocation_scope` too - authn's error
+  // serializer has emitted both shapes - so the client honours the same pair
+  // rather than seeing a routine sign-out as unspecified on one of them.
+  if (
+    isRecord(payload.error) &&
+    payload.error.revocation_scope === "user_epoch"
+  ) {
+    return "user-epoch";
+  }
+  return null;
+}
+
 async function refreshAuthTokenOnceViaHttp(
   authnBaseUrl: string,
   token: string,
@@ -387,13 +461,35 @@ async function refreshAuthTokenOnceViaHttp(
     return { kind: "network-error" };
   }
 
-  if (
-    response.status === 400 ||
-    response.status === 401 ||
-    response.status === 403 ||
-    response.status === 404
-  ) {
-    return { kind: "rejected" };
+  // These four used to collapse into one `rejected`, and the collapse was the
+  // defect: three layers up, the renderer has to decide whether to keep serving
+  // this machine's own epics from disk, and by then the status is gone. What
+  // the rejection is ABOUT is only knowable here.
+  //
+  //   401/400 -> CREDENTIAL. A dead or malformed token. The person at the
+  //     keyboard is still whoever the stored identity names, so the local plane
+  //     is held (`unverified`) and only the cloud session ends.
+  //   403/404 -> ACCOUNT. Forbidden, or the user row is gone (authn's
+  //     `UserNotFoundError` is a 404). There is no longer an identity on disk to
+  //     hold a plane FOR, so it clears.
+  //
+  // Ambiguity resolves toward HOLDING, deliberately: wrongly clearing a
+  // legitimate user's offline access is the severe error this ticket exists to
+  // fix, while retaining read access to already-on-disk data slightly past a
+  // termination is mild. 409 is handled above (mid-rotation, retriable) and
+  // every other non-2xx falls through to `network-error`, which also holds.
+  if (response.status === 403 || response.status === 404) {
+    return { kind: "rejected", rejection: { kind: "account" } };
+  }
+
+  if (response.status === 400 || response.status === 401) {
+    return {
+      kind: "rejected",
+      rejection: {
+        kind: "credential",
+        revocation: await readRefreshRejectionScope(response),
+      },
+    };
   }
 
   if (response.status < 200 || response.status >= 300) {
@@ -405,7 +501,16 @@ async function refreshAuthTokenOnceViaHttp(
     return { kind: "network-error" };
   }
   if (rotated.kind === "invalid") {
-    return { kind: "rejected" };
+    // A 2xx whose body is unusable. It stays `rejected` (a settled earlier
+    // decision - the pair cannot be adopted, so this credential is finished),
+    // and it classifies as CREDENTIAL: the server said nothing whatsoever about
+    // the account, so the only honest reading is "this token got us nowhere".
+    // Clearing local data on a response we could not even parse is precisely
+    // the over-reaction the credential/account line exists to prevent.
+    return {
+      kind: "rejected",
+      rejection: { kind: "credential", revocation: null },
+    };
   }
   return {
     kind: "refreshed",

@@ -3,9 +3,10 @@
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/figtree";
 @import "./editor-core/styles/editor.css";
-@import "./styles/terminal-themes.css";
 @import "./styles/usage-analytics-chart.css";
 @import "./styles/image-preview.css";
+@import "./styles/theme-fallback.css";
+@import "./styles/theme-surfaces.css";
 
 @custom-variant dark (&:is(.dark *));
 /* Window Controls Overlay: active only when Chromium reports the
@@ -28,16 +29,25 @@
    `lib/animation/status-animation-clock.ts` instead. Do not add
    `animation:` back to these rules. */
 
-/* Indeterminate host-progress bar: a segment sweeping across the track, for a
-   stage that is RUNNING but reports no percentage (verify, extract, swap,
-   service-start). Plain CSS - no motion runtime, so it animates regardless of
-   the LazyMotion provider - and a short-lived surface (one install), unlike the
-   run indicator above.
+/* Indeterminate progress: a segment sweeping across the track, for work that is
+   RUNNING but reports no percentage. Plain CSS - no motion runtime, so it
+   animates regardless of the LazyMotion provider.
 
-   It must MOVE. A static full-width fill was the previous behaviour here and it
-   was a lie: the progress carry-forward used to leak a completed download's 100%
-   into the next stage, so the card sat at a full bar for minutes of real work. A
-   motionless indeterminate bar would be that same claim in a new costume.
+   ONE keyframe, two directions BY DECLARATION. The host-install bars
+   (`local-host-loading`, `update-progress-bar`) run it one-way; the
+   stream-syncing strip below runs the same travel with
+   `animation-direction: alternate`, so the segment returns instead of wrapping.
+   The declaration is where the two differ - do not add a second keyframe for a
+   direction a call site can ask for.
+
+   It must MOVE. A static full-width fill was the previous behaviour on the
+   install bars and it was a lie: the progress carry-forward used to leak a
+   completed download's 100% into the next stage, so the card sat at a full bar
+   for minutes of real work. A motionless indeterminate bar would be that same
+   claim in a new costume. (Under reduced motion a full-width line IS what the
+   syncing strip falls back to - see `.stream-syncing-sweep` - but there it is
+   not a progress claim: it carries no percentage semantics and the word
+   "Syncing…" beside it is what the reader is actually reading.)
 
    `transform` only, so it composites without laying out - this runs for the whole
    multi-minute extract. */
@@ -46,7 +56,52 @@
     transform: translateX(-100%);
   }
   to {
-    transform: translateX(340%);
+    transform: translateX(var(--host-progress-sweep-end, 340%));
+  }
+}
+
+/* The stream-syncing strip's travelling segment. A CLASS, not the inline
+   `animation` style the two install bars use, for one reason: an inline style
+   cannot be reached by a `motion-reduce:` variant, so those two do not honour
+   reduced motion at all. This one does, below.
+
+   The strip drops this class entirely once it escalates, falling back to plain
+   `w-full opacity-45` utilities - the same still form the media query produces,
+   reached by an unrelated question. So the animation is bounded twice over: by
+   the reader's motion preference, and by how long one resync may run. */
+.stream-syncing-sweep {
+  /* The segment is `w-2/5`, so it clears the right edge at 250% of its own
+     width. The shared default overshoots to 340%, which parks it fully outside
+     the track at BOTH ends of the alternating cycle: measured at 880ms of every
+     2.8s round trip with nothing on screen at all. On an install bar that runs
+     for minutes the gap reads as pacing; on an indicator that lives two to four
+     seconds it can be most of what the user sees, and it is what makes the
+     motion read as restarting rather than travelling. The install bars keep the
+     old value through the fallback in the keyframe. */
+  --host-progress-sweep-end: 250%;
+  animation: host-progress-indeterminate 1.4s ease-in-out infinite alternate;
+  /* The one moving element on screen during a reconnect, and a bar this thin
+     shows compositor jitter plainly. Promoting it keeps the sweep off the main
+     thread's paint path; it is bounded by the escalation, so the layer is not
+     held indefinitely. */
+  will-change: transform;
+}
+
+/* The base layer's blanket reduced-motion rule collapses every animation to
+   0.01ms with one iteration, which would park this segment on its END frame -
+   translated clean off the track, so the bar would simply be missing. Travel is
+   therefore replaced by PRESENCE: a full-width line at low alpha. It reads as
+   "this strip is here", not as "finished", because the strip carries no
+   percentage and the "Syncing…" beside it is the actual claim.
+
+   `width` is restated here rather than left to the utility: the segment's
+   fractional width only means something while it is travelling. */
+@media (prefers-reduced-motion: reduce) {
+  .stream-syncing-sweep {
+    animation: none;
+    transform: none;
+    width: 100%;
+    opacity: 0.45;
   }
 }
 
@@ -284,6 +339,20 @@
     padding-left: var(--safe-area-inset-left);
   }
 
+  /*
+   * The reservation above is PADDING on `#root`, which means the strips it
+   * reserves belong to `#root` and no descendant can paint them. That is
+   * invisible for every ordinary surface, whose ground matches the app's - but
+   * the mobile boot cover is deliberately the launch image's dark, so those
+   * strips would frame it in a different colour for the length of a launch.
+   *
+   * Scoped to the marker rather than applied to `#root` generally: this is the
+   * pre-binding phase only, and the app's own ground must return with the app.
+   */
+  #root:has(> [data-boot-ground]) {
+    background-color: var(--color-zinc-950);
+  }
+
   ::selection {
     background: color-mix(in oklch, var(--primary) 35%, transparent);
   }
@@ -501,609 +570,12 @@
     monospace;
 
   --app-background: var(--background);
-  --background: oklch(0.985 0 0);
-  --foreground: oklch(0.145 0 0);
-  --canvas: oklch(1 0 0);
-  --canvas-foreground: oklch(0.145 0 0);
-  --canvas-border: oklch(0.922 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --success: oklch(0.58 0.13 142);
-  /*
-   * Standalone success/completion foreground for icon-only status
-   * indicators (WCAG 2.2 non-text contrast, >=3:1). Unlike `--success`
-   * (tuned per preset for tint/fill use), this is intentionally NOT
-   * overridden per preset - the same pattern as `--warning-foreground`
-   * below, verified >=3:1 against every preset's `--background` and
-   * `--canvas` in both light and dark.
-   */
-  --success-foreground: oklch(0.42 0.13 145);
-  --warning: oklch(0.68 0.16 75);
-  --warning-foreground: oklch(0.38 0.11 65);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
+
   --radius: 0.375rem;
 }
 
-.dark {
+:root.dark {
   --press-scrim: #ffffff1a;
-  --background: oklch(0.205 0 0);
-  --foreground: oklch(0.985 0 0);
-  --canvas: oklch(0.145 0 0);
-  --canvas-foreground: oklch(0.985 0 0);
-  --canvas-border: oklch(1 0 0 / 10%);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --success: oklch(0.72 0.14 142);
-  --success-foreground: oklch(0.75 0.15 145);
-  --warning: oklch(0.78 0.14 80);
-  --warning-foreground: oklch(0.9 0.08 85);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-}
-
-/* Accent-only presets: override --primary on top of base light/dark palette. */
-[data-theme="rose"],
-.dark[data-theme="rose"] {
-  --primary: oklch(0.645 0.246 16.439);
-  --primary-foreground: oklch(0.969 0.015 12.422);
-  --ring: oklch(0.645 0.246 16.439);
-}
-
-[data-theme="blue"],
-.dark[data-theme="blue"] {
-  --primary: oklch(0.546 0.245 262.881);
-  --primary-foreground: oklch(0.97 0.014 254.604);
-  --ring: oklch(0.546 0.245 262.881);
-}
-
-[data-theme="violet"],
-.dark[data-theme="violet"] {
-  --primary: oklch(0.606 0.25 292.717);
-  --primary-foreground: oklch(0.969 0.016 293.756);
-  --ring: oklch(0.606 0.25 292.717);
-}
-
-[data-theme="green"],
-.dark[data-theme="green"] {
-  --primary: oklch(0.648 0.15 160.19);
-  --primary-foreground: oklch(0.982 0.018 155.826);
-  --ring: oklch(0.648 0.15 160.19);
-}
-
-[data-theme="orange"],
-.dark[data-theme="orange"] {
-  --primary: oklch(0.705 0.213 47.604);
-  --primary-foreground: oklch(0.98 0.016 73.684);
-  --ring: oklch(0.705 0.213 47.604);
-}
-
-[data-theme="pink"],
-.dark[data-theme="pink"] {
-  --primary: oklch(0.656 0.241 354.308);
-  --primary-foreground: oklch(0.971 0.014 343.198);
-  --ring: oklch(0.656 0.241 354.308);
-}
-
-/* Full-palette presets: override the whole surface in both light and dark. */
-[data-theme="amoled"] {
-  --background: #fafafa;
-  --foreground: #171717;
-  --canvas: #ffffff;
-  --canvas-foreground: #171717;
-  --canvas-border: #ebebeb;
-  --card: #ffffff;
-  --card-foreground: #171717;
-  --popover: #ffffff;
-  --popover-foreground: #171717;
-  --primary: #171717;
-  --primary-foreground: #ffffff;
-  --secondary: #f2f2f2;
-  --secondary-foreground: #171717;
-  --muted: #f2f2f2;
-  --muted-foreground: #7d7d7d;
-  --accent: #ebebeb;
-  --accent-foreground: #171717;
-  --border: #e6e6e6;
-  --input: #ebebeb;
-  --ring: #006bff;
-  --success: #28a948;
-}
-.dark[data-theme="amoled"] {
-  --background: #000000;
-  --foreground: #ededed;
-  --canvas: #000000;
-  --canvas-foreground: #ededed;
-  --canvas-border: #292929;
-  --card: #1a1a1a;
-  --card-foreground: #ededed;
-  --popover: #1a1a1a;
-  --popover-foreground: #ededed;
-  --primary: #ededed;
-  --primary-foreground: #000000;
-  --secondary: #1a1a1a;
-  --secondary-foreground: #ededed;
-  --muted: #1a1a1a;
-  --muted-foreground: #a0a0a0;
-  --accent: #1f1f1f;
-  --accent-foreground: #ededed;
-  --border: #292929;
-  --input: #2e2e2e;
-  --ring: #006efe;
-  --success: #00ac3a;
-}
-
-/*
- * Traycer Green brand preset.
- * Palette - Primary: Onyx #0F0F0F, White #FFFFFF, Traycer Blue #0059FF, Traycer Light #7FBDCC.
- * Secondary: Dark Green #1A2421, Dark Grey #666666, Green White #EAEAEA, Traycer Sky #00CDFF, Traycer Green #257174.
- */
-[data-theme="traycer-green"] {
-  --brand-onyx: #0f0f0f;
-  --brand-white: #ffffff;
-  --brand-blue: #0059ff;
-  --brand-light: #7fbdcc;
-  --brand-sky: #00cdff;
-  --brand-green: #257174;
-  --brand-dark-green: #1a2421;
-  --brand-dark-grey: #666666;
-  --brand-green-white: #eaeaea;
-  --background: #f6f9f8;
-  --foreground: #0f0f0f;
-  --canvas: #ffffff;
-  --canvas-foreground: #0f0f0f;
-  --canvas-border: #eaeaea;
-  --card: #ffffff;
-  --card-foreground: #0f0f0f;
-  --popover: #ffffff;
-  --popover-foreground: #0f0f0f;
-  --primary: #257174;
-  --primary-foreground: #ffffff;
-  --secondary: #eaeaea;
-  --secondary-foreground: #0f0f0f;
-  --muted: #eaeaea;
-  --muted-foreground: #666666;
-  --accent: #eaeaea;
-  --accent-foreground: #0f0f0f;
-  --border: #dce7e4;
-  --input: #eaeaea;
-  --ring: #257174;
-  --success: oklch(0.58 0.13 142);
-  --brand-gradient: linear-gradient(180deg, #1a2421 0%, #257174 100%);
-}
-.dark[data-theme="traycer-green"] {
-  --background: #121715;
-  --foreground: #ffffff;
-  --canvas: #0f0f0f;
-  --canvas-foreground: #ffffff;
-  --canvas-border: #33433d;
-  --card: #1a2421;
-  --card-foreground: #ffffff;
-  --popover: #1a2421;
-  --popover-foreground: #ffffff;
-  --primary: #257174;
-  --primary-foreground: #ffffff;
-  --secondary: #1a2421;
-  --secondary-foreground: #ffffff;
-  --muted: #1a2421;
-  --muted-foreground: #a8a8a8;
-  --accent: #257174;
-  --accent-foreground: #ffffff;
-  --border: #33433d;
-  --input: #33433d;
-  --ring: #257174;
-  --success: oklch(0.72 0.14 142);
-  --brand-gradient: linear-gradient(180deg, #1a2421 0%, #257174 100%);
-}
-
-[data-theme="dracula"] {
-  --background: #efefef;
-  --foreground: #282a36;
-  --canvas: #f8f8f2;
-  --canvas-foreground: #282a36;
-  --canvas-border: #d8d8de;
-  --card: #ffffff;
-  --card-foreground: #282a36;
-  --popover: #ffffff;
-  --popover-foreground: #282a36;
-  --primary: #6272a4;
-  --primary-foreground: #ffffff;
-  --secondary: #eaeaee;
-  --secondary-foreground: #282a36;
-  --muted: #f0f0f4;
-  --muted-foreground: #4f5d86;
-  --accent: #eaeaee;
-  --accent-foreground: #282a36;
-  --border: #d8d8de;
-  --input: #d8d8de;
-  --ring: #6272a4;
-  --success: oklch(0.74 0.15 145);
-}
-.dark[data-theme="dracula"] {
-  --background: #21222c;
-  --foreground: #f8f8f2;
-  --canvas: #282a36;
-  --canvas-foreground: #f8f8f2;
-  --canvas-border: #44475a;
-  --card: #343746;
-  --card-foreground: #f8f8f2;
-  --popover: #343746;
-  --popover-foreground: #f8f8f2;
-  --primary: #bd93f9;
-  --primary-foreground: #282a36;
-  --secondary: #44475a;
-  --secondary-foreground: #f8f8f2;
-  --muted: #343746;
-  --muted-foreground: #a1a8c3;
-  --accent: #44475a;
-  --accent-foreground: #f8f8f2;
-  --border: #44475a;
-  --input: #44475a;
-  --ring: #bd93f9;
-  --success: oklch(0.8 0.17 145);
-}
-
-[data-theme="catppuccin"] {
-  --background: #e6e9ef;
-  --foreground: #4c4f69;
-  --canvas: #eff1f5;
-  --canvas-foreground: #4c4f69;
-  --canvas-border: #bcc0cc;
-  --card: #e6e9ef;
-  --card-foreground: #4c4f69;
-  --popover: #e6e9ef;
-  --popover-foreground: #4c4f69;
-  --primary: #8839ef;
-  --primary-foreground: #ffffff;
-  --secondary: #ccd0da;
-  --secondary-foreground: #4c4f69;
-  --muted: #dce0e8;
-  --muted-foreground: #5c6074;
-  --accent: #ccd0da;
-  --accent-foreground: #4c4f69;
-  --border: #bcc0cc;
-  --input: #bcc0cc;
-  --ring: #8839ef;
-  --success: oklch(0.7 0.13 145);
-}
-.dark[data-theme="catppuccin"] {
-  --background: #181825;
-  --foreground: #cdd6f4;
-  --canvas: #1e1e2e;
-  --canvas-foreground: #cdd6f4;
-  --canvas-border: #45475a;
-  --card: #313244;
-  --card-foreground: #cdd6f4;
-  --popover: #313244;
-  --popover-foreground: #cdd6f4;
-  --primary: #cba6f7;
-  --primary-foreground: #1e1e2e;
-  --secondary: #45475a;
-  --secondary-foreground: #cdd6f4;
-  --muted: #313244;
-  --muted-foreground: #a6adc8;
-  --accent: #45475a;
-  --accent-foreground: #cdd6f4;
-  --border: #45475a;
-  --input: #45475a;
-  --ring: #cba6f7;
-  --success: oklch(0.79 0.15 145);
-}
-
-[data-theme="github"] {
-  --background: #f6f8fa;
-  --foreground: #24292f;
-  --canvas: #ffffff;
-  --canvas-foreground: #24292f;
-  --canvas-border: #d0d7de;
-  --card: #f6f8fa;
-  --card-foreground: #24292f;
-  --popover: #ffffff;
-  --popover-foreground: #24292f;
-  --primary: #0969da;
-  --primary-foreground: #ffffff;
-  --secondary: #eaeef2;
-  --secondary-foreground: #24292f;
-  --muted: #f6f8fa;
-  --muted-foreground: #656d76;
-  --accent: #eaeef2;
-  --accent-foreground: #24292f;
-  --border: #d0d7de;
-  --input: #d0d7de;
-  --ring: #0969da;
-  --success: oklch(0.55 0.14 145);
-}
-.dark[data-theme="github"] {
-  --background: #010409;
-  --foreground: #c9d1d9;
-  --canvas: #0d1117;
-  --canvas-foreground: #c9d1d9;
-  --canvas-border: #30363d;
-  --card: #161b22;
-  --card-foreground: #c9d1d9;
-  --popover: #161b22;
-  --popover-foreground: #c9d1d9;
-  --primary: #58a6ff;
-  --primary-foreground: #0d1117;
-  --secondary: #21262d;
-  --secondary-foreground: #c9d1d9;
-  --muted: #161b22;
-  --muted-foreground: #8b949e;
-  --accent: #21262d;
-  --accent-foreground: #c9d1d9;
-  --border: #30363d;
-  --input: #30363d;
-  --ring: #58a6ff;
-  --success: oklch(0.7 0.15 145);
-}
-
-[data-theme="gruvbox"] {
-  --background: #f2e5bc;
-  --foreground: #3c3836;
-  --canvas: #fbf1c7;
-  --canvas-foreground: #3c3836;
-  --canvas-border: #d5c4a1;
-  --card: #f2e5bc;
-  --card-foreground: #3c3836;
-  --popover: #f2e5bc;
-  --popover-foreground: #3c3836;
-  --primary: #8f5902;
-  --primary-foreground: #fbf1c7;
-  --secondary: #ebdbb2;
-  --secondary-foreground: #3c3836;
-  --muted: #f2e5bc;
-  --muted-foreground: #665c54;
-  --accent: #ebdbb2;
-  --accent-foreground: #3c3836;
-  --border: #d5c4a1;
-  --input: #d5c4a1;
-  --ring: #8f5902;
-  --success: oklch(0.6 0.13 130);
-}
-.dark[data-theme="gruvbox"] {
-  --background: #1d2021;
-  --foreground: #ebdbb2;
-  --canvas: #282828;
-  --canvas-foreground: #ebdbb2;
-  --canvas-border: #504945;
-  --card: #32302f;
-  --card-foreground: #ebdbb2;
-  --popover: #32302f;
-  --popover-foreground: #ebdbb2;
-  --primary: #fabd2f;
-  --primary-foreground: #282828;
-  --secondary: #3c3836;
-  --secondary-foreground: #ebdbb2;
-  --muted: #32302f;
-  --muted-foreground: #a89984;
-  --accent: #3c3836;
-  --accent-foreground: #ebdbb2;
-  --border: #504945;
-  --input: #504945;
-  --ring: #fabd2f;
-  --success: oklch(0.74 0.14 130);
-}
-
-[data-theme="tokyo-night"] {
-  --background: #d0d5e3;
-  --foreground: #233f8e;
-  --canvas: #e1e2e7;
-  --canvas-foreground: #233f8e;
-  --canvas-border: #a8aecb;
-  --card: #d0d5e3;
-  --card-foreground: #233f8e;
-  --popover: #d0d5e3;
-  --popover-foreground: #233f8e;
-  --primary: #256bd4;
-  --primary-foreground: #ffffff;
-  --secondary: #b7c1e3;
-  --secondary-foreground: #233f8e;
-  --muted: #d0d5e3;
-  --muted-foreground: #3f528f;
-  --accent: #b7c1e3;
-  --accent-foreground: #233f8e;
-  --border: #a8aecb;
-  --input: #a8aecb;
-  --ring: #256bd4;
-  --success: oklch(0.71 0.13 152);
-}
-.dark[data-theme="tokyo-night"] {
-  --background: #16161e;
-  --foreground: #c0caf5;
-  --canvas: #1a1b26;
-  --canvas-foreground: #c0caf5;
-  --canvas-border: #3b4261;
-  --card: #24283b;
-  --card-foreground: #c0caf5;
-  --popover: #24283b;
-  --popover-foreground: #c0caf5;
-  --primary: #7aa2f7;
-  --primary-foreground: #1a1b26;
-  --secondary: #2a2e41;
-  --secondary-foreground: #c0caf5;
-  --muted: #24283b;
-  --muted-foreground: #9aa5ce;
-  --accent: #2a2e41;
-  --accent-foreground: #c0caf5;
-  --border: #3b4261;
-  --input: #3b4261;
-  --ring: #7aa2f7;
-  --success: oklch(0.77 0.14 152);
-}
-
-[data-theme="nord"] {
-  --background: #e5e9f0;
-  --foreground: #2e3440;
-  --canvas: #eceff4;
-  --canvas-foreground: #2e3440;
-  --canvas-border: #c0c5cf;
-  --card: #e5e9f0;
-  --card-foreground: #2e3440;
-  --popover: #e5e9f0;
-  --popover-foreground: #2e3440;
-  --primary: #52739b;
-  --primary-foreground: #ffffff;
-  --secondary: #d8dee9;
-  --secondary-foreground: #2e3440;
-  --muted: #e5e9f0;
-  --muted-foreground: #4c566a;
-  --accent: #d8dee9;
-  --accent-foreground: #2e3440;
-  --border: #c0c5cf;
-  --input: #c0c5cf;
-  --ring: #52739b;
-  --success: oklch(0.74 0.1 150);
-}
-.dark[data-theme="nord"] {
-  --background: #242933;
-  --foreground: #eceff4;
-  --canvas: #2e3440;
-  --canvas-foreground: #eceff4;
-  --canvas-border: #4c566a;
-  --card: #3b4252;
-  --card-foreground: #eceff4;
-  --popover: #3b4252;
-  --popover-foreground: #eceff4;
-  --primary: #88c0d0;
-  --primary-foreground: #2e3440;
-  --secondary: #434c5e;
-  --secondary-foreground: #eceff4;
-  --muted: #3b4252;
-  --muted-foreground: #d8dee9;
-  --accent: #434c5e;
-  --accent-foreground: #eceff4;
-  --border: #4c566a;
-  --input: #4c566a;
-  --ring: #88c0d0;
-  --success: oklch(0.8 0.11 150);
-}
-
-[data-theme="ayu"] {
-  --background: #f8f9fa;
-  --foreground: #5c6166;
-  --canvas: #fcfcfc;
-  --canvas-foreground: #5c6166;
-  --canvas-border: #e7eaed;
-  --card: #f8f9fa;
-  --card-foreground: #5c6166;
-  --popover: #f8f9fa;
-  --popover-foreground: #5c6166;
-  --primary: #ff9940;
-  --primary-foreground: #0b0e14;
-  --secondary: #eef0f3;
-  --secondary-foreground: #5c6166;
-  --muted: #f0f1f3;
-  --muted-foreground: #626a73;
-  --accent: #eef0f3;
-  --accent-foreground: #5c6166;
-  --border: #e7eaed;
-  --input: #e7eaed;
-  --ring: #ff9940;
-  --success: oklch(0.72 0.16 140);
-}
-.dark[data-theme="ayu"] {
-  --background: #080b10;
-  --foreground: #bfbdb6;
-  --canvas: #0b0e14;
-  --canvas-foreground: #bfbdb6;
-  --canvas-border: #1c222b;
-  --card: #11151c;
-  --card-foreground: #bfbdb6;
-  --popover: #11151c;
-  --popover-foreground: #bfbdb6;
-  --primary: #e6b450;
-  --primary-foreground: #0b0e14;
-  --secondary: #1c222b;
-  --secondary-foreground: #bfbdb6;
-  --muted: #11151c;
-  --muted-foreground: #828890;
-  --accent: #1c222b;
-  --accent-foreground: #bfbdb6;
-  --border: #1c222b;
-  --input: #1c222b;
-  --ring: #e6b450;
-  --success: oklch(0.78 0.17 140);
-}
-
-[data-theme="everforest"] {
-  --background: #f4f0d9;
-  --foreground: #5c6a72;
-  --canvas: #fdf6e3;
-  --canvas-foreground: #5c6a72;
-  --canvas-border: #e0dcc7;
-  --card: #f4f0d9;
-  --card-foreground: #5c6a72;
-  --popover: #f4f0d9;
-  --popover-foreground: #5c6a72;
-  --primary: #8da101;
-  --primary-foreground: #232a2e;
-  --secondary: #efebd4;
-  --secondary-foreground: #5c6a72;
-  --muted: #f4f0d9;
-  --muted-foreground: #5f6b62;
-  --accent: #efebd4;
-  --accent-foreground: #5c6a72;
-  --border: #e0dcc7;
-  --input: #e0dcc7;
-  --ring: #8da101;
-  --success: oklch(0.68 0.11 135);
-}
-.dark[data-theme="everforest"] {
-  --background: #232a2e;
-  --foreground: #d3c6aa;
-  --canvas: #2d353b;
-  --canvas-foreground: #d3c6aa;
-  --canvas-border: #475258;
-  --card: #343f44;
-  --card-foreground: #d3c6aa;
-  --popover: #343f44;
-  --popover-foreground: #d3c6aa;
-  --primary: #a7c080;
-  --primary-foreground: #2d353b;
-  --secondary: #3d484d;
-  --secondary-foreground: #d3c6aa;
-  --muted: #343f44;
-  --muted-foreground: #a4afa7;
-  --accent: #3d484d;
-  --accent-foreground: #d3c6aa;
-  --border: #475258;
-  --input: #475258;
-  --ring: #a7c080;
-  --success: oklch(0.76 0.12 135);
 }
 
 /*

@@ -127,7 +127,7 @@ import {
 } from "@/stores/session-import/session-import-run-store";
 import { hostQueryKeys, sessionImportQueryKeys } from "@/lib/query-keys";
 import type { HostRpcRegistry } from "@/lib/host";
-import { sessionImportRunV11 } from "@traycer/protocol/host/session-import/run";
+import { sessionImportRunV12 } from "@traycer/protocol/host/session-import/run";
 import type { ListGuiHarnessesResponse } from "@traycer/protocol/host/index";
 
 const SELECTION: SessionImportSelection = {
@@ -168,6 +168,7 @@ function fakeWsStreamClient(): IHostStreamClient<HostStreamRpcRegistry> {
     isClosed: () => false,
     isReady: () => true,
     notifyBearerRotated: () => undefined,
+    notifyCloudVerdictChanged: () => undefined,
     reconnectAll: () => undefined,
     getMethodSupport: () => "unknown",
     subscribeMethodSupport: () => () => undefined,
@@ -851,7 +852,7 @@ describe("<SessionImportRunController />", () => {
     it("sends auto unchanged when the negotiated sessionImport.run version proves the host knows it", () => {
       streamBinding.current = createStreamBindingWithSchemaVersion(
         "host-auto-negotiated",
-        sessionImportRunV11.schemaVersion,
+        sessionImportRunV12.schemaVersion,
       );
       useSettingsStore.setState({ defaultPermission: "auto" });
       render(<SessionImportRunController />);

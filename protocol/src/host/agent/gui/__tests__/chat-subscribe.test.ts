@@ -16,6 +16,7 @@ import {
   chatSubscribeV17,
   chatSubscribeV18,
   chatSubscribeV19,
+  chatSubscribeV110,
   createImageResolutionUpdatedFrame,
   chatApprovalStateSchema,
   chatApprovalStateSchemaPreAuto,
@@ -2277,13 +2278,14 @@ describe("chat.subscribe registry membership", () => {
   it("registers chat.subscribe major 1 latestMinor 9 as chatSubscribeV19", () => {
     const entry = hostStreamRpcRegistry["chat.subscribe"];
     expect(entry).toBeDefined();
-    // Registering `8` IS the switch to the windowed line: a stream minor
+    // Registering `8` was the switch to the windowed line: a stream minor
     // negotiates to the highest the peers share, so that line flipping to `8`
-    // is the moment `1.8`-capable peers start exchanging windowed frames. `9`
-    // does not switch anything - it is the auto-mode line, and its shapes are
-    // `8`'s by reference (see `chatSubscribeV19`). What it switches is the
-    // host's willingness to SERVE an `auto` chat at all.
-    expect(entry[1].latestMinor).toBe(9);
+    // was the moment `1.8`-capable peers started exchanging windowed frames.
+    // `9` is windowed too - it differs from `8` only in the session-anchor
+    // union reachable through `rowContext`. `10` does not switch anything
+    // either: it is the auto-mode line, and what it switches is the host's
+    // willingness to SERVE an `auto` chat at all.
+    expect(entry[1].latestMinor).toBe(10);
     expect(entry[1].versions[6].contract).toBe(chatSubscribeV16);
     expect(entry[1].versions[7].contract).toBe(chatSubscribeV17);
     expect(entry[1].versions[8].contract).toBe(chatSubscribeV18);
@@ -2291,6 +2293,8 @@ describe("chat.subscribe registry membership", () => {
     expect(chatSubscribeV17.schemaVersion).toEqual({ major: 1, minor: 7 });
     expect(chatSubscribeV18.schemaVersion).toEqual({ major: 1, minor: 8 });
     expect(chatSubscribeV19.schemaVersion).toEqual({ major: 1, minor: 9 });
+    expect(entry[1].versions[10].contract).toBe(chatSubscribeV110);
+    expect(chatSubscribeV110.schemaVersion).toEqual({ major: 1, minor: 10 });
   });
 
   it("keeps the judge fields off every RELEASED chat.subscribe line", () => {
@@ -2350,6 +2354,58 @@ describe("chat.subscribe registry membership", () => {
         reviewing: "thinking",
       }),
     ).toThrow();
+    expect(chatSubscribeV19.schemaVersion).toEqual({ major: 1, minor: 9 });
+  });
+
+  // `cli-v1.3.0` / `host-v1.3.0` shipped `@1.8`, so it is frozen at the
+  // twenty-arm session-anchor union those peers strict-decode. `@1.9` is the
+  // first minor whose `rowContext` may carry the Antigravity arm. Streams have
+  // no downgrade bridge, so the host projects the field away for a `<1.9`
+  // subscriber (`chat-session-manager.ts`'s `projectWindowedFrameForVersion`)
+  // rather than sending a frame that fails the peer's whole parse.
+  it("keeps an antigravity session anchor out of the released @1.8 frame", () => {
+    const rangeFrame = {
+      kind: "range" as const,
+      hasBinaryPayload: false as const,
+      epicId: "epic-1",
+      chatId: "chat-1",
+      range: {
+        requestId: "req-1",
+        epoch: 1,
+        fromOrdinal: 0,
+        rowIds: ["row-1"],
+        incompleteRowIds: [],
+        messages: [],
+        events: [],
+        rowContext: {
+          "row-1": {
+            sessionAnchor: {
+              harnessId: "antigravity" as const,
+              hostId: "test-host",
+              sessionId: "agy-session-1",
+              sessionWorkspaceSnapshot: {
+                workspaceKind: "session-snapshot" as const,
+                primaryWorkspace: "/repo",
+                secondaryWorkspaces: [],
+              },
+              createdAt: 1,
+              coveredUntilMessageId: null,
+              profileId: null,
+              profileLabel: null,
+            },
+          },
+        },
+        reachedStart: true,
+        reachedEnd: true,
+      },
+    };
+
+    expect(
+      chatSubscribeV18.serverFrameSchema.safeParse(rangeFrame).success,
+    ).toBe(false);
+    expect(
+      chatSubscribeV19.serverFrameSchema.safeParse(rangeFrame).success,
+    ).toBe(true);
   });
 });
 
@@ -2443,6 +2499,61 @@ describe("chat.subscribe Reasonix anchor versioning", () => {
       event: {
         type: "user_message.anchor_resolved",
         anchor: { harnessId: "reasonix" },
+      },
+    });
+  });
+});
+
+describe("chat.subscribe Antigravity anchor versioning", () => {
+  // No vendor-named second session-id field, unlike its ACP siblings
+  // (`reasonixSessionId`, `ompSessionId`, ...): `agy_acp_server`'s
+  // `session/new` id IS the anchor's `sessionId`.
+  const antigravityAnchorResolvedFrame = {
+    kind: "blockDelta" as const,
+    hasBinaryPayload: false,
+    epicId: "epic-1",
+    chatId: "chat-1",
+    event: {
+      type: "user_message.anchor_resolved" as const,
+      blockId: "message-1",
+      timestamp: 1000,
+      messageId: "message-1",
+      anchor: {
+        harnessId: "antigravity" as const,
+        sessionId: "antigravity-session-1",
+      },
+    },
+  };
+
+  it.each([
+    ["1.0", chatSubscribeV10],
+    ["1.1", chatSubscribeV11],
+    ["1.2", chatSubscribeV12],
+    ["1.3", chatSubscribeV13],
+    ["1.4", chatSubscribeV14],
+    ["1.5", chatSubscribeV15],
+    ["1.6", chatSubscribeV16],
+  ])(
+    "keeps an Antigravity anchor-resolved event off released %s frames",
+    (_version, contract) => {
+      expect(
+        contract.serverFrameSchema.safeParse(antigravityAnchorResolvedFrame)
+          .success,
+      ).toBe(false);
+    },
+  );
+
+  it("carries an Antigravity anchor-resolved event on the unreleased 1.7 line", () => {
+    expect(
+      chatSubscribeV17.serverFrameSchema.parse(antigravityAnchorResolvedFrame),
+    ).toMatchObject({
+      kind: "blockDelta",
+      event: {
+        type: "user_message.anchor_resolved",
+        anchor: {
+          harnessId: "antigravity",
+          sessionId: "antigravity-session-1",
+        },
       },
     });
   });

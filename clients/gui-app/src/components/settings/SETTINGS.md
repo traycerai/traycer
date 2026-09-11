@@ -735,7 +735,15 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     (`conversation`) and **Browsers** (`browser`) - product nouns for what the
     user opens, not the store's category words. Browser alone adds **Picture
     in picture** (`BrowserTilePlacement`) because the other two have no PiP
-    host. Defaults content=tab, conversation=tab, browser=split;
+    host. A fourth row, **Side chats** (`sideChat`), covers the `/btw` /
+    `/side` aside: it is a plain `chat` tile, so no tile kind maps to the
+    row - the open carries it as a `beside` placement
+    (`ExplicitTilePlacement`) naming the source chat's pane, and the row
+    decides only how "beside" is drawn ("As a tab of the source chat" /
+    "In a split beside the source chat"). Its own row rather than Agents &
+    terminals because an aside is read next to its conversation whatever
+    the user chose for new agents. Defaults content=tab, conversation=tab,
+    browser=split, sideChat=split;
     `tilePlacementForCategory` resolves a category against the default. On a
     single-tile viewport (`useIsMobileViewport()`) the row gains the
     DESCRIPTION "Narrow windows show one tile at a time, so everything opens
@@ -2201,6 +2209,157 @@ aria-live="polite"` carrying the equivalent text for
       call sites in `host-workspace-selector.tsx` and the cached-default path
       in `use-landing-composer-actions.ts`; entirely client-local, no host
       RPC or protocol change.
+  - **Automatic cleanup** (`worktree-auto-cleanup-chip.tsx`) — ONE chip in the
+    inventory toolbar's leading slot, opening a popover that holds the opt-in
+    letting this host delete proven-safe, long-idle worktrees unattended.
+    **Default off**, per HOST identity (not per signed-in user), and backed
+    entirely by the host: `worktree.getAutoCleanupPolicy` /
+    `setAutoCleanupPolicy` through `useHostQuery` / `useHostMutation`. Nothing
+    here schedules, retries, or simulates cleanup client-side — deletion
+    authority is the host's, and a local fallback would be a second scheduler
+    nobody asked for.
+    - **Why a chip.** This was a card above the inventory (a two-line summary
+      over a `Collapsible` threshold). The panel is a fixed height, so every
+      row that card spent was a worktree the list below could not show — and it
+      spent them unconditionally, for a policy consulted rarely and changed
+      almost never. A chip costs the list nothing: it rides in a toolbar row
+      that already exists. The panel header's subtitle went with it, so the
+      list card is the only child of the fill-height column in BOTH views
+      (inventory and cleanup history).
+    - **Five states, decided by one pure function** (`resolveAutoCleanupGate`,
+      exported for its own test): `absent` (no resolved host — the inventory's
+      own `HostScopeGate` names that state, and a second copy of it in the
+      toolbar would be two answers to one question, so the chip renders
+      nothing), `checking`, `offline`, `unsupported`, `ready`. The ladder fails
+      OPEN into `checking` on `useHostMethodSupport`'s `null`: telling someone
+      their host is too old because no handshake has completed yet is a claim
+      about a fact not in evidence. In the standalone-toolbar path the chip
+      sits ABOVE the gate, so it makes the gate's two checks — scope usability
+      and reachability — itself before mounting any host read. The three
+      non-`ready`, non-`absent` states render the chip INERT with their
+      sentence in a Tooltip and no popover; `offline` and `unsupported` stay
+      deliberately different sentences, one calling for starting a machine and
+      the other for updating it. Inertness is `aria-disabled`, not the
+      `disabled` attribute: a disabled button takes neither pointer events nor
+      focus, which would make the one sentence the chip exists to deliver
+      unreachable by mouse AND by keyboard.
+    - **The chip states the policy at a glance**: `Cleanup · On · 7d` with a
+      green dot, `Cleanup off` with a grey one, and a bare `Cleanup` with NO
+      dot until the read lands — an unknown policy must not paint "off", which
+      is a real state. So the policy read is mounted eagerly with the chip
+      rather than on open, and a read that FAILS leaves the chip live (the
+      error is a line inside the popover, not a reason to withhold the
+      control). Accessible name is `Automatic cleanup settings`, and
+      `aria-expanded` comes from the Radix trigger.
+    - **Writes carry the revision they read.** `expectedRevision` is required by
+      the contract, so the toggle stays disabled until the policy read lands.
+      A mismatch comes back as `AUTO_CLEANUP_POLICY_REVISION_CONFLICT`, which
+      is NOT toasted as a transport error: the hook re-reads the policy and the
+      popover explains inline that the setting moved somewhere else. The
+      success response IS the fresh policy state, so it is written straight
+      into the read query's slot and no second round trip is needed.
+    - **The popover** (Radix `Popover`, `align="start"`, `w-[min(88vw,20rem)]`)
+      is: the title + the switch on one row (plus the pending-write spinner);
+      then, enabled only, the safety sentence, the threshold, and a footer
+      carrying the schedule and a **History** link. Switched off it collapses
+      to one muted line, "Nothing is deleted automatically." — a policy that
+      deletes nothing has nothing to configure, so the threshold and the
+      footer are ABSENT rather than disabled controls over an inert setting.
+      Toggling the switch does not close the popover. Open state is
+      component-local (`useState(false)`) and never persisted, and the chip is
+      keyed by host: a remount, a host switch or a re-entry into Settings
+      starts closed.
+    - **Threshold** (in the popover, under the safety explanation): presets
+      7 / 14 / 30 / 60 / 90 days plus a free value validated against the host's
+      own `bounds` (`autoCleanupDaysError`), never a constant here — a host
+      that moves its bounds needs no client release, and the control can never
+      offer a value the host is about to refuse. The presets wrap to two rows
+      inside the popover; that is the intended shape, not an overflow.
+    - **Arriving from a Sweep.** The per-Task **Sweep worktrees** dialog
+      (`components/epics/sweep-worktrees-dialog.tsx`) shows one muted line in
+      its Choose state — "Proven-safe worktrees can be removed automatically."
+      plus a link-styled **Set up automatic cleanup** button — only while the
+      census settled with at least one `defaultChecked` row AND that dialog's
+      latched host both advertises `worktree.getAutoCleanupPolicy` and reads
+      back `enabled: false`. A loading, failed, unsupported or enabled policy
+      renders nothing, and the capability is checked BEFORE the read is
+      mounted, so nothing about the sweep ever waits on it. Enabling the policy
+      is the whole frequency cap: no dismissal, nothing persisted. The link
+      goes through `lib/worktree/open-auto-cleanup-settings.ts`, which reuses
+      the notification router's three seams in the same order —
+      `carryViewedHostIntoSettingsScope` (the policy is per host),
+      `selectWorktreeCleanupView("settings", null)` (the inventory, never
+      history), and then `ensureSettingsTab` — plus a third hint of its own,
+      `requestAutoCleanupFocus(hostId)`. That request is one-shot exactly like
+      `focusedRunId`, and it NAMES ITS HOST (`autoCleanupFocusHostId`, not a
+      bare boolean): the policy is per host and the chip administers exactly
+      one, so a request whose host never mounts a chip — offline, too old, or
+      Settings never opened — must not be spent on whichever host is scoped
+      next. The chip consumes it only while `scope.hostId` matches, by OPENING
+      its popover (Radix's mount autofocus then puts the caret on the switch,
+      the first tabbable inside), and clears it immediately after. The open is
+      applied during RENDER rather than in an effect — `react-hooks/
+set-state-in-effect` forbids the effect form, and an effect would also
+      arrive a commit too late for the mount autofocus — while the store clear
+      stays in an effect, where an external write belongs. `openHistory` drops
+      the request because a chip-focus request is stale the moment the panel
+      leaves the inventory, and a caller with no host to name asks for no focus
+      at all.
+      The line's own `useNavigate` lives in the innermost component, which
+      mounts only once the capability is proven AND the policy came back off —
+      so a Sweep dialog rendered without a `RouterProvider` never reaches the
+      router hook, rather than relying on TanStack warning and carrying on.
+    - **Paused** states render the reason in plain English
+      (`AUTO_CLEANUP_PAUSED_COPY`, a `Record` over the closed wire enum so a new
+      arm fails to compile rather than rendering as silence) and offer NO repair
+      affordance: every arm clears without the user acting. `nextEvaluationAt`
+      is `null` while paused, and reads as "Next check: paused" — a real state,
+      not a missing timestamp. That line is why the pause copy exists at all: a
+      stale "last checked" must never be the only evidence nothing is happening.
+  - **Cleanup history** (`worktree-cleanup-history.tsx`) — a SUB-VIEW, not a
+    second card: it replaces the panel body and carries a back control. Reached
+    from the cleanup popover's **History** link (which closes the popover on
+    the way, since history is the full-panel view), or arrived at directly from
+    an automatic-cleanup notification. Cursor-paginated newest-first over
+    `worktree.listAutoCleanupRuns` with an explicit **Load more** (no
+    auto-advance: history holds up to 200 runs and the user asked for the newest
+    ones); expanding a run fetches its targets through
+    `worktree.getAutoCleanupRun`, so a page costs one request rather than one
+    per row.
+    - **The presentation rule is a product decision, not styling**
+      (`worktree-auto-cleanup-copy.ts`). A `skipped` target is the safety engine
+      WORKING — it lost eligibility between selection and deletion — so it reads
+      "No longer eligible" in neutral styling. An `interrupted` one is honestly
+      unconfirmed ("Unconfirmed — Host stopped during cleanup"): the row may not
+      claim a deletion just because the directory is gone now, nor a failure
+      that never happened. **Only `failed` wears failure styling.** Putting the
+      other two in red trains people to ignore the one state that means Traycer
+      could not do something it was authorized to do.
+    - The host's `displayMessage` wins wherever it exists: `reasonCode` is an
+      OPEN string by contract, so a code this build has never heard of still
+      renders host-composed prose.
+    - **Every target row stands alone.** A later re-selection of the same path is
+      an ordinary new row, never folded into the attempt before it.
+      `worktreePath` renders verbatim — it names a directory on the very host
+      the panel is already talking to, which is why history never leaves it.
+    - **Arriving from a notification.** A `worktree_auto_cleanup` row routes
+      through the `hostSurface` family with `view: "cleanupHistory"`, the run id
+      as its focus hint, AND the run's `hostId`.
+      `routeHostSurfaceNotification` applies both BEFORE navigating, so the
+      panel reads them on its first render rather than flashing the wrong host
+      or the wrong sub-view: `carryViewedHostIntoSettingsScope` (history is
+      host-local, so the destination is only well defined once Settings is
+      administering the host the run happened on) and `selectWorktreeCleanupView`
+      (`stores/settings/worktree-cleanup-view-store` — not persisted, mirroring
+      `settings-host-scope-store`). The focus hint is consumed ONCE, on arrival,
+      so re-entering history later never silently re-expands a run the user
+      closed. Manual `worktree_deletion` rows carry NEITHER field, which is
+      exactly why their behavior is unchanged: they select the inventory for
+      whichever host is already being administered.
+    - `run: null` from `getAutoCleanupRun` is an ordinary outcome, not an error:
+      retention GC bounds history, so a notification can outlive the run it
+      names and the honest answer is "this run is no longer in this host's
+      history".
   - **Worktree inventory.** Host-wide management of the git worktrees Traycer
     creates under `~/.traycer/worktrees/`, presented as a calm
     inspection-and-cleanup list, not a delete console - own bordered card,
@@ -2478,19 +2637,86 @@ aria-live="polite"` carrying the equivalent text for
       `waiting-to-activate` ("Update installed — restart host to finish") and
       `waiting-for-work` ("Update waits for N sessions to finish")
       kinds, AFTER the coarse marker and before `idle`, and like every park
-      they hold no lifecycle gate and earn no fast poll. The card offers
+      they hold no lifecycle gate and earn no fast poll.
+      **A CLI-floored `waiting-for-work` park says so instead of naming a
+      count** ("Update waits for Traycer's command-line tools to be updated —
+      see installation help"). Observed on real hardware: an rc-era CLI in the
+      slot, a host sitting `Online · Idle`, and the card reading "Update waits
+      for 0 sessions to finish" while the host's reconciler refused the resume
+      every tick. The floor outranks the count at ANY count, including a
+      positive one - finishing the work resumes nothing while no CLI on that
+      machine can carry the release - and it points at the remedy row's
+      existing `Show installation help` rather than restating it, the same
+      shape as "Update status unavailable — see Diagnostics". The WORK park
+      only: `waiting-to-activate` names a restart into bytes already placed,
+      which no CLI upgrade unblocks. The landing banner passes `false` and
+      keeps the count, because it has no floor lane and so no affordance for
+      the substituted sentence to point at.
+      **THREE conditions, and the first shipped version had none of them
+      right** (it asked only whether the summary walk found a floor):
+      (1) the remedy row is actually RENDERED - the region short-circuits to
+      its degraded notice on `degrade` and the whole region sits behind
+      `usable`, neither of which gates the card, so a floor read while healthy
+      could leave the sentence pointing at a button that had since gone;
+      (2) the floor is the PARK's version, read by the same `readCliFloor` on
+      that version rather than on the walk's candidate - a manifest carrying a
+      floored rc.4 above an installable rc.3 must not make a park on rc.3 claim
+      a floor; (3) this card is offering no working force control for the park.
+      That last one is why the withheld-Force claim is the CALLER's finding and
+      not a property of the floor: it holds for the record-derived staged wait,
+      whose Force the floor gate withholds (a floored stage is not
+      `stagedEntryOfferable`), and NOT for a bound attempt, whose Force
+      dispatches `host.update.continue` against the host's own bound-intent
+      floor - a different floor from the catalog's per-version requirement,
+      answered by the host itself with `cli-failed {cli-too-old}`, and
+      deliberately not folded into this gate. `offersForceRestart` is half of
+      that test because it decides whether the button RENDERS at all: at a zero
+      count it does not, which is the observed case and still substitutes.
+      **A TERMINAL attempt that is not `failed` yields the operation slot to
+      BOTH of these parks** (D-49): `complete` and `superseded` let the
+      records answer first, so "another actor delivered the version and this
+      host is not running it" - which the executor ends as `superseded` with
+      no error - still renders the debt sentence and its Restart, and a stage
+      that is still waiting still renders its own park and its Force. A
+      terminal attempt does not make a stage stop waiting any more than it
+      makes an install stop needing a restart: the records describe what is
+      still owed, the attempt describes what is over. Reaching that is NOT
+      left to the host: whether `projectUpdateOperation` withholds terminal
+      records from `host.status` is a projection detail that can change under
+      us, and a sentence derived from the RECORDS must be reachable whenever
+      the records say a park. `failed` is excluded, because its cause is the
+      one thing a terminal attempt can say that the records cannot say for it.
+      It is a fall-BACK rather than a substitution: with no park the attempt
+      arm still answers, so `superseded` keeps projecting `idle` and
+      `complete` keeps projecting `complete` - the landing banner's completion
+      acknowledgement is rendered off that kind, and its leg passes
+      `legacyFacts: null`, so a blanket substitution would have deleted that
+      surface rather than reordering it. A park outranking a `complete` whose
+      records disagree with the running version is deliberate: that IS
+      "delivered, not running it". The yield sits ABOVE the attempt arm's
+      staleness decay and is not a bypass of it - the park itself decays, so a
+      status read that aged while the installation read stayed healthy renders
+      the park as "last seen", never as live. The card offers
       **Restart** on the debt FACT rather than on the view kind, so a retained
       `failed` marker beside real debt keeps its failure text and still shows
       the way forward, and **Force update…** on a staged wait with a positive
       count, which confirms through `HostBusyForceDeferDialog` and dispatches
       `host.update.install {version: staged, force: true}` through the page's
-      one install mutation. The offer and the dispatch share ONE predicate
-      (`stagedEntryOfferable`, the refusal `describeForceUpdateRefusal`
-      derives for the staged version): the catalog must still list it, not
-      withdrawn, with an asset this page can resolve (a host whose record
-      carries no platform is not offered Force against a multi-platform
-      entry - a deliberate narrowing; the CLI's own `host update --force`
-      still works there) and no CLI floor. A
+      one install mutation. The offer and the dispatch share ONE catalog
+      predicate (`stagedEntryOfferable`, the refusal
+      `describeForceUpdateRefusal` derives for the staged version): the
+      catalog must still list it, not withdrawn, with an asset this page can
+      resolve (a host whose record carries no platform is not offered Force
+      against a multi-platform entry - a deliberate narrowing; the CLI's own
+      `host update --force` still works there) and no CLI floor. The
+      store-format floor adds a second gate on both: a staged DOWNGRADE whose
+      row would show "Install anyway" (a blocked, unknown or failed chat-store
+      survey) is still offered, its dialog carries that row's loss sentence as
+      a separate paragraph (`stagedStoreFormatConfirmation`), and confirming
+      dispatches `acceptStoreFormatLoss: true` as the row's Install anyway
+      would; a stage whose restriction has no confirmation (survey pending, or
+      a peer that cannot honour consent) is withheld, and `prepareInstall`
+      re-reads the row's evidence at dispatch either way. A
       withdrawn stage is neither offered nor dispatched (the CLI would purge
       the parked stage and then refuse the version) and carries no floor
       remedy, since no CLI version installs a yanked release; an asset the
@@ -2547,6 +2773,155 @@ aria-live="polite"` carrying the equivalent text for
       settlement or when this page's host stops being this machine's. The Overview is the only leg that derives: the landing
       banner keeps its desktop-status debt arm, and the fleet legs pass
       `legacyFacts: null`, which the projector reads as "not observed".
+    - **An ATTEMPT's park is resumed through a BOUND METHOD, not a version.**
+      `host.update.activate {attemptId, force}` and
+      `host.update.continue {attemptId, force}` name the attempt the record
+      already describes; the operation comes from its continuation, so no
+      version crosses the wire and nothing here consults the release catalog
+      (`describeForceUpdateRefusal` is deliberately not applied: `activate`
+      places no bytes, and `continue` resumes bytes the attempt was authorized
+      to fetch when it was created — a downgrade park re-downloads the same
+      version it was created for, which is the case a staged-version force
+      cannot even express). The same holds for the store-format floor's
+      consent: neither bound request carries `acceptStoreFormatLoss`, because
+      the CLI records the consent an attempt was created under on the
+      attempt's claim (`HostUpdateAttemptClaimBaseline.acceptStoreFormatLoss`,
+      beside `allowDowngrade`) and a resume acts on that recorded authority,
+      so a downgrade dispatched from a row's Install anyway that parks on a
+      busy host finishes through Force update without a second consent — and
+      its dialog names no loss, for the same reason it does not re-ask the
+      downgrade. They are METHODS rather than an intent field
+      precisely so an older host, which has neither, is refused at dispatch by
+      the transport: `useHostSupportsMethod` withholds the control per method
+      and the page keeps today's `host.restart` / `installForce` routes. Each
+      control is gated on its OWN method — two authorizations, and a host may
+      advertise one without the other, and both sit behind the region's own
+      gates beside the two legacy controls (`updates.degrade`, `anyPending`,
+      and a live status read) — see the recheck bullet below. All three
+      update dispatches share
+      `hostMaintenanceMutationKeys.updateInstall()` and one pending flag, so a
+      second dispatch is never offered beside one already in flight.
+      Outcomes (D18): `dispatch-indeterminate` maps `nothing-to-do` →
+      "already up to date", `recovered-complete` / `recovered-failed` → what
+      the last run did, every `refused-attempt-gone` /
+      `refused-unverifiable` / `refused-install-changed` → "the host changed
+      while the update was being prepared", anything else → today's
+      "couldn't confirm" WITH the reason; `cli-failed {cli-too-old}` → "this
+      computer's Traycer CLI is too old to resume the update". All of them
+      release the accepted latch; only the indeterminate arm re-reads.
+    - **The card's controls come from the ATTEMPT when there is one.**
+      `waiting-to-activate` renders **Restart**, which opens the activation
+      dialog and dispatches `activate {force: true}` — locally AND remotely,
+      where the legacy busy verdict could only ever be answered on a
+      Desktop-local host and toasted "declined" elsewhere. `waiting-for-work`
+      renders **Force update…**, which dispatches `continue {force: true}`;
+      `force` is the user's consent to end the live work the dialog counted,
+      and it is what gets the CLI past its own busy gate. **Force update… —
+      and only it — still requires the host to have REPORTED a positive session
+      count** (`offersForceRestart` is unchanged by this cutover): a
+      `waiting-for-work` park with a null or zero count renders no control.
+      Restart has no such condition; it renders whenever the card has an
+      `onRestart`, which is what lets an idle host that has finished installing
+      be restarted. Both fall back to the record-derived controls above on a
+      host without the methods — and the fallback is not a second chance: a
+      bound control withheld by the gates below leaves the card without that
+      control rather than routing the attempt through `host.restart`.
+      `holdsLifecycleGate` is untouched; the withdrawal is the one the two
+      legacy controls take (`statusLive`, `updates.degrade`, `anyPending`),
+      because a control whose confirm the render-time rules would close in
+      the same commit is not a control.
+    - **The activation dialog opens ITSELF, once, for a dispatch this page
+      made.** A per-host slot in the write-latch store records
+      `{attemptId, dispatchedAt, incarnation, seen}` on an `accepted` answer
+      with an attempt id, from any of the three dispatches. `incarnation` is a
+      token minted per `HostOverviewPanel` mount: an install's settle
+      deliberately outlives the mount (that is how the latch settles and the
+      reads are invalidated for a swap the user navigated away from), and the
+      ownership write is the one part of it that must not, because its only
+      consumer is a modal a mount opens. `seen` flips on the first
+      `host.status` frame naming that attempt, which is what stops the cache
+      still serving the PREVIOUS attempt from being read as this dispatch's
+      answer. The dialog then opens on the first `waiting-to-activate` view for
+      that attempt — never for another window's dispatch, never for a park that
+      was already there, never for `waiting-for-work`, never on an unusable
+      scope, never without `host.update.activate` — and exactly once
+      (`autoOpenedFor`): Defer, Escape and a scope change all close it and none
+      re-opens it, because a modal that returned on the next poll would be one
+      a person cannot dismiss for as long as the park lasts. An open offer is
+      closed by the same render-time rules the staged-wait Force confirm
+      takes — the page-wide gate arming for anything but its own dispatch,
+      the region retiring, an unusable scope — plus one of its own: the
+      attempt it names no longer being the one on screen. The auto-open WAITS
+      on the first two rather than firing into them: a shot fired while either
+      holds is closed in the same render pass, before anyone saw it, with
+      `autoOpenedFor` already recorded. Both are transient — the page-wide
+      gate is the accepted dispatch's own latch, and `updates.degrade` is a
+      RECOVERABLE retirement (`check.sticky` is read off the latest answer,
+      `installDiscovered` is cleared by refutation, and the CLI-recovery poll
+      lane re-asks at 5 s so a reinstalled CLI revives the region unprompted).
+      Waiting costs a poll; firing into them costs the shot for the life of
+      the park. Its confirmation is
+      the shared `HostBusyForceDeferDialog` with `purpose="update"` on both
+      legs, because Force here dispatches a bound UPDATE method even when the
+      activation leg's effect is a restart, and with its own heading (an
+      activation park is typically an idle host waiting to be restarted, so
+      "Host is busy" would contradict the sentence under it). The slot clears on
+      a terminal frame for its id, on a frame naming a different id once `seen`
+      is true, 60 s after a dispatch no frame ever named, and on an ACCEPTED
+      `host.service.deregister` for that host — the service the dispatch was
+      made about is being removed, and keeping the slot would let a
+      re-register under the same `hostId` inherit its activation offer. That
+      last one fires on the accepted ANSWER, not beside the pessimistic
+      dispatch-time arm of `deregisterAcceptedAt`: over-locking controls for a
+      bounded moment is safe, discarding ownership is not, and a refused
+      deregister leaves a dispatch that is still good. A scope flip is
+      deliberately NOT one of them: that flip releases the latches, which guard
+      a window of time, while ownership is a fact about who asked.
+    - **A local record can show `restarting`, and the proof EXPIRES.** For the
+      Desktop-local host the Overview reads the same durable-record leg the
+      landing banner does (`useLocalAttemptRecordObservation` →
+      `projectLocalUpdate`, one shared precedence-plus-projection; a remote
+      host keeps the status-only observation). A record observation carries
+      Desktop's own probed `liveness` and the clock at that probe, and phase
+      `restarting` with `liveness: "live"` projects the LIVE `restarting` kind
+      — bar, lifecycle gate — only while
+      `0 - one tick ≤ nowMs - livenessObservedAtMs ≤ 5 s`
+      (`LOCAL_LIVENESS_PROOF_MS`; the slack absorbs the tick's own
+      quantisation, and a real backward clock step is still refused). Every
+      other record read keeps `unknown` + last-known, outside the gate. That
+      deadline is measured against a one-second renderer tick and NOT any
+      query's `dataUpdatedAt`: the host being down is exactly when
+      `host.status` stops advancing, and Desktop's broadcaster keeps its idle
+      loop running through a failing `publish()` — so nothing new lands in a
+      controller query with `staleTime: Infinity` and a deadline measured
+      against either timestamp would never arrive. Expiry therefore lands on
+      the first tick after the deadline rather than at an exact five-second
+      wall, and releases the gate while keeping the last-seen sentence.
+      **The tick is the RECORD leg's clock alone** (`LocalUpdateClock`, two
+      named instants). The WIRE leg keeps the instant its own read was taken
+      at, because `observationFromCanonicalRead` already folded the query's
+      health into `freshUntilMs` — so a healthy read is fresh until health says
+      otherwise, never until the round trip runs long. Feeding the tick to both
+      made one `host.status` slower than the fresh window (2.5 × the poll
+      delay, so 5 s while the accelerator holds the poll at 2 s) demote a live
+      attempt to "Last seen", drop the page-wide gate and disengage the poll
+      accelerator, once per cycle. Precedence between the two legs
+      (`preferLiveOverRecord`): a healthy wire read always wins; once it is
+      stale, the same attempt is ordered by `(generation, sequence)` — so a
+      repeated read of one unchanged record can never outrank a live frame —
+      and a different attempt falls back to the record's own `updatedAt` as a
+      sanity bound, with an unparseable or future stamp losing. No query's read
+      time is an input. This is a THIRD leg beside the status and installation
+      reads, and it keeps their rule rather than restating it: the wire leg's
+      liveness is `canonicalReadIsLive` over the status read's health
+      (`statusLive`), the installation leg's is its own (`installationLive`),
+      and the record leg's is Desktop's probe with the expiry above. The
+      support flip is what decides whether the record leg is CONSULTED —
+      `usable` is not, because the whole point of the leg is the window in
+      which the scope cannot reach the host — while the proof deadline
+      decides whether what it says is live. `activationDebt.live` joins the
+      two READ legs (`installationLive && statusLive`) and is untouched by
+      the record leg, which carries no installation record.
     - **A CLI requirement has a remedy in the card.** The best target's
       projected unavailable asset is the executing CLI's verdict, recognized
       by `HOST_CLIENT_FLOOR_REASON_PREFIX` from the shared

@@ -1498,6 +1498,78 @@ describe("update-progress-marker", () => {
     );
   });
 
+  describe("updateProgressRecordWrittenByThisProcess", () => {
+    // The ship-path predicate of ticket 07's detective half, and until now
+    // exercised by NOTHING (cold review C): its two siblings above have
+    // describes, and the executor suite that drives the fence MOCKS this
+    // module, supplying its own `record.writerId === "test-writer"` in place
+    // of the real comparison. Mutating the real function left that suite
+    // 165/165 green, which is the definition of an unpinned function.
+    //
+    // Both directions matter and they fail differently: read ours as foreign
+    // and every healthy update aborts on its own mirror writes; read a
+    // stranger's as ours and the fence detects nothing at all.
+    it("a record this process built reads as ours - identity, so a REWRITE still reads as ours", async () => {
+      const { progressRecord, updateProgressRecordWrittenByThisProcess } =
+        await import("../update-progress-marker");
+      const mine = progressRecord({
+        state: "updating",
+        error: null,
+        targetVersion: "1.4.0",
+      });
+      expect(mine.writerId).toMatch(
+        new RegExp(`^${process.pid}-[0-9a-f]{12}$`),
+      );
+      expect(updateProgressRecordWrittenByThisProcess(mine)).toBe(true);
+      // The property the mirror leans on: the id is minted once per process,
+      // not per record, so the executor's repeated writes stay ours. An
+      // equality-with-a-remembered-value implementation reddens here.
+      const rewrite = progressRecord({
+        state: "failed",
+        error: "stage lost",
+        targetVersion: "9.9.9",
+      });
+      expect(rewrite.writerId).toBe(mine.writerId);
+      expect(updateProgressRecordWrittenByThisProcess(rewrite)).toBe(true);
+    });
+
+    it("another writer's record reads as FOREIGN", async () => {
+      const { updateProgressRecordWrittenByThisProcess } =
+        await import("../update-progress-marker");
+      expect(
+        updateProgressRecordWrittenByThisProcess({
+          state: "updating",
+          error: null,
+          targetVersion: "1.4.0",
+          updatedAt: "2026-07-03T00:00:00.000Z",
+          // Our own pid, a different hex: two `host update` runs can share a
+          // pid across a recycle, so the random half is what separates them.
+          writerId: `${process.pid}-000000000000`,
+          writerStartIdentity: null,
+        }),
+      ).toBe(false);
+    });
+
+    it("a NULL writer id reads as FOREIGN, not as 'unknown, assume ours'", async () => {
+      const { updateProgressRecordWrittenByThisProcess } =
+        await import("../update-progress-marker");
+      // The row that decides whether the fence works at all: a marker with no
+      // writer id is one written by a CLI predating the field, which is
+      // precisely the lock-blind pre-1.3.0 actor the fence exists to detect.
+      // A fail-open reading here would blind the detector to its only target.
+      expect(
+        updateProgressRecordWrittenByThisProcess({
+          state: "updating",
+          error: null,
+          targetVersion: "1.4.0",
+          updatedAt: "2026-07-03T00:00:00.000Z",
+          writerId: null,
+          writerStartIdentity: null,
+        }),
+      ).toBe(false);
+    });
+  });
+
   // A file that is there but cannot be READ (a marker a `sudo traycer host
   // update` left root-owned; here, mode 000) is neither absent nor a record
   // this CLI can compare. Nothing is replaced: the create answers `exists`

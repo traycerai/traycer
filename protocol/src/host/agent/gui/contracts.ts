@@ -20,8 +20,9 @@ import {
   listGuiHarnessesResponseSchemaV50,
   listGuiHarnessesResponseSchemaV60,
   listGuiHarnessesResponseSchemaV71,
-  listGuiHarnessesResponseSchemaV70,
   listGuiHarnessesResponseSchemaV80,
+  listGuiHarnessesResponseSchemaV90,
+  listGuiHarnessesResponseSchemaV70,
   guiHarnessOptionSchemaV10,
   guiHarnessOptionSchemaV21,
   guiHarnessOptionSchemaV30,
@@ -29,6 +30,7 @@ import {
   guiHarnessOptionSchemaV50,
   guiHarnessOptionSchemaV60,
   guiHarnessOptionSchemaV71,
+  guiHarnessOptionSchemaV80,
   type GuiHarnessOption,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import {
@@ -42,6 +44,7 @@ import {
   chatSubscribeV17,
   chatSubscribeV18,
   chatSubscribeV19,
+  chatSubscribeV110,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 
 // ─── GUI-surface catalog (`agent.gui.*`) ──────────────────────────────────
@@ -529,8 +532,11 @@ export const agentGuiListHarnessesV80 = defineRpcContract({
   method: "agent.gui.listHarnesses",
   schemaVersion: { major: 8, minor: 0 } as const,
   requestSchema: listGuiHarnessesRequestSchema,
-  // Frozen at the pre-`auto` row when 8.1 opened, exactly as 7.0 froze when
-  // 7.1 opened. See `listGuiHarnessesResponseSchemaV80`.
+  // Frozen: `cli-v1.3.0` / `host-v1.3.0` shipped this line, so it must serve
+  // the twenty-id row those peers negotiate rather than the live one. Until
+  // 1.3.0 was tagged this pointed at the canonical schema, which is how
+  // Antigravity - added to the live enum after the release branch was cut -
+  // reached a line already in the field. v9.0 is the head line now.
   responseSchema: listGuiHarnessesResponseSchemaV80,
 });
 
@@ -561,23 +567,23 @@ export const agentGuiListHarnessesUpgradeV71ToV80 = defineUpgradePath<
  * annotation is load-bearing - the validator refuses it if the growth is ever
  * removed.
  */
-export const agentGuiListHarnessesV81 = defineRpcContract({
+export const agentGuiListHarnessesV91 = defineRpcContract({
   method: "agent.gui.listHarnesses",
-  schemaVersion: { major: 8, minor: 1 } as const,
+  schemaVersion: { major: 9, minor: 1 } as const,
   requestSchema: listGuiHarnessesRequestSchema,
   responseSchema: listGuiHarnessesResponseSchema,
 });
 
-export const agentGuiListHarnessesUpgradeV80ToV81 = defineUpgradePath<
-  typeof agentGuiListHarnessesV80,
-  typeof agentGuiListHarnessesV81
+export const agentGuiListHarnessesUpgradeV90ToV91 = defineUpgradePath<
+  typeof agentGuiListHarnessesV90,
+  typeof agentGuiListHarnessesV91
 >({
-  from: { major: 8, minor: 0 },
-  to: { major: 8, minor: 1 },
+  from: { major: 9, minor: 0 },
+  to: { major: 9, minor: 1 },
   upgradeRequest: (request) => request,
   // A pre-`auto` mode array is already a valid 8.1 array, so only the new key
   // needs filling. `false` is the pre-feature reading, not a guess: a host that
-  // predates 8.1 has no native-judge concept at all, so no row it returns has
+  // predates 9.1 has no native-judge concept at all, so no row it returns has
   // one. Filled explicitly rather than left to the schema default - an upgrade
   // path returns the OUTPUT type, where a defaulted key is required.
   upgradeResponse: (response) => ({
@@ -615,15 +621,192 @@ function projectHarnessRowPreAuto(
 }
 
 export const agentGuiListHarnessesDowngradeV8ToV7 = defineDowngradePath<
-  typeof agentGuiListHarnessesV81,
+  typeof agentGuiListHarnessesV80,
   typeof agentGuiListHarnessesV71
 >({
-  from: { major: 8, minor: 1 },
+  from: { major: 8, minor: 0 },
   to: { major: 7, minor: 1 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   // Drop Reasonix so an already-shipped major-7 client's strict decode never
   // sees it. Lands on 7.1, major 7's latest installed minor; a frozen-7.0
   // caller's own contract parse then strips the 7.1-only `authStatus` key.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listGuiHarnessesResponseSchemaV71.parse({
+      harnesses: response.harnesses.filter(
+        (harness) => guiHarnessOptionSchemaV71.safeParse(harness).success,
+      ),
+    }),
+  }),
+});
+
+export const agentGuiListHarnessesDowngradeV8ToV6 = defineDowngradePath<
+  typeof agentGuiListHarnessesV80,
+  typeof agentGuiListHarnessesV60
+>({
+  from: { major: 8, minor: 0 },
+  to: { major: 6, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  // Drop Hugging Face/Reasonix so an already-shipped v6.0 client's strict
+  // decode never sees them.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listGuiHarnessesResponseSchemaV60.parse({
+      harnesses: response.harnesses.filter(
+        (harness) => guiHarnessOptionSchemaV60.safeParse(harness).success,
+      ),
+    }),
+  }),
+});
+
+export const agentGuiListHarnessesDowngradeV8ToV5 = defineDowngradePath<
+  typeof agentGuiListHarnessesV80,
+  typeof agentGuiListHarnessesV50
+>({
+  from: { major: 8, minor: 0 },
+  to: { major: 5, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  // Drop omp/Hugging Face/Reasonix so an already-shipped v5.0 client's strict
+  // decode never sees them.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listGuiHarnessesResponseSchemaV50.parse({
+      harnesses: response.harnesses.filter(
+        (harness) => guiHarnessOptionSchemaV50.safeParse(harness).success,
+      ),
+    }),
+  }),
+});
+
+export const agentGuiListHarnessesDowngradeV8ToV4 = defineDowngradePath<
+  typeof agentGuiListHarnessesV80,
+  typeof agentGuiListHarnessesV40
+>({
+  from: { major: 8, minor: 0 },
+  to: { major: 4, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  // Drop Hermes/omp/Hugging Face/Reasonix so an already-shipped v4.0 client's
+  // strict decode never sees them.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listGuiHarnessesResponseSchemaV40.parse({
+      harnesses: response.harnesses.filter(
+        (harness) => guiHarnessOptionSchemaV40.safeParse(harness).success,
+      ),
+    }),
+  }),
+});
+
+export const agentGuiListHarnessesDowngradeV8ToV3 = defineDowngradePath<
+  typeof agentGuiListHarnessesV80,
+  typeof agentGuiListHarnessesV30
+>({
+  from: { major: 8, minor: 0 },
+  to: { major: 3, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  // Drop Devin/Pi/Hermes/omp/Hugging Face/Reasonix so an already-shipped v3.0
+  // client's strict decode never sees them.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listGuiHarnessesResponseSchemaV30.parse({
+      harnesses: response.harnesses.filter(
+        (harness) => guiHarnessOptionSchemaV30.safeParse(harness).success,
+      ),
+    }),
+  }),
+});
+
+export const agentGuiListHarnessesDowngradeV8ToV2 = defineDowngradePath<
+  typeof agentGuiListHarnessesV80,
+  typeof agentGuiListHarnessesV21
+>({
+  from: { major: 8, minor: 0 },
+  // Lands on 2.1, major 2's latest installed minor; a frozen-2.0 caller's
+  // contract parse then strips the 2.1-only `enabled` field.
+  to: { major: 2, minor: 1 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listGuiHarnessesResponseSchemaV21.parse({
+      harnesses: response.harnesses.filter(
+        (harness) => guiHarnessOptionSchemaV21.safeParse(harness).success,
+      ),
+    }),
+  }),
+});
+
+export const agentGuiListHarnessesDowngradeV8ToV1 = defineDowngradePath<
+  typeof agentGuiListHarnessesV80,
+  typeof agentGuiListHarnessesV10
+>({
+  from: { major: 8, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listGuiHarnessesResponseSchemaV10.parse({
+      harnesses: response.harnesses.filter(
+        (harness) => guiHarnessOptionSchemaV10.safeParse(harness).success,
+      ),
+    }),
+  }),
+});
+
+// ── Major 9: the head line, where Antigravity actually rides ───────────────
+//
+// v8.0 froze above because 1.3.0 shipped it. Every bridge below is the v8
+// bridge one major up: same filter, same landing minor, one more id dropped.
+export const agentGuiListHarnessesV90 = defineRpcContract({
+  method: "agent.gui.listHarnesses",
+  schemaVersion: { major: 9, minor: 0 } as const,
+  requestSchema: listGuiHarnessesRequestSchema,
+  // Frozen at the pre-`auto` row when 9.1 opened, exactly as 8.0 froze when
+  // 9.0 opened. See `listGuiHarnessesResponseSchemaV90`.
+  responseSchema: listGuiHarnessesResponseSchemaV90,
+});
+
+export const agentGuiListHarnessesUpgradeV80ToV90 = defineUpgradePath<
+  typeof agentGuiListHarnessesV80,
+  typeof agentGuiListHarnessesV90
+>({
+  from: { major: 8, minor: 0 },
+  to: { major: 9, minor: 0 },
+  // Request shape is identical; a v8.0 response without Antigravity is a valid
+  // v9.0 response (purely additive), so both upgrades are identity.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const agentGuiListHarnessesDowngradeV9ToV8 = defineDowngradePath<
+  typeof agentGuiListHarnessesV91,
+  typeof agentGuiListHarnessesV80
+>({
+  from: { major: 9, minor: 1 },
+  to: { major: 8, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  // Drop Antigravity so an already-shipped major-8 client's strict decode
+  // never sees it.
+  downgradeResponse: (response) => ({
+    ok: true,
+    value: listGuiHarnessesResponseSchemaV80.parse({
+      harnesses: response.harnesses
+        .map(projectHarnessRowPreAuto)
+        .filter(
+          (harness) => guiHarnessOptionSchemaV80.safeParse(harness).success,
+        ),
+    }),
+  }),
+});
+
+export const agentGuiListHarnessesDowngradeV9ToV7 = defineDowngradePath<
+  typeof agentGuiListHarnessesV91,
+  typeof agentGuiListHarnessesV71
+>({
+  from: { major: 9, minor: 1 },
+  // Lands on 7.1, major 7's latest installed minor; a frozen-7.0 caller's own
+  // contract parse then strips the 7.1-only `authStatus` key.
+  to: { major: 7, minor: 1 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
     ok: true,
     value: listGuiHarnessesResponseSchemaV71.parse({
@@ -636,15 +819,13 @@ export const agentGuiListHarnessesDowngradeV8ToV7 = defineDowngradePath<
   }),
 });
 
-export const agentGuiListHarnessesDowngradeV8ToV6 = defineDowngradePath<
-  typeof agentGuiListHarnessesV81,
+export const agentGuiListHarnessesDowngradeV9ToV6 = defineDowngradePath<
+  typeof agentGuiListHarnessesV91,
   typeof agentGuiListHarnessesV60
 >({
-  from: { major: 8, minor: 1 },
+  from: { major: 9, minor: 1 },
   to: { major: 6, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
-  // Drop Hugging Face/Reasonix so an already-shipped v6.0 client's strict
-  // decode never sees them.
   downgradeResponse: (response) => ({
     ok: true,
     value: listGuiHarnessesResponseSchemaV60.parse({
@@ -657,15 +838,13 @@ export const agentGuiListHarnessesDowngradeV8ToV6 = defineDowngradePath<
   }),
 });
 
-export const agentGuiListHarnessesDowngradeV8ToV5 = defineDowngradePath<
-  typeof agentGuiListHarnessesV81,
+export const agentGuiListHarnessesDowngradeV9ToV5 = defineDowngradePath<
+  typeof agentGuiListHarnessesV91,
   typeof agentGuiListHarnessesV50
 >({
-  from: { major: 8, minor: 1 },
+  from: { major: 9, minor: 1 },
   to: { major: 5, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
-  // Drop omp/Hugging Face/Reasonix so an already-shipped v5.0 client's strict
-  // decode never sees them.
   downgradeResponse: (response) => ({
     ok: true,
     value: listGuiHarnessesResponseSchemaV50.parse({
@@ -678,15 +857,13 @@ export const agentGuiListHarnessesDowngradeV8ToV5 = defineDowngradePath<
   }),
 });
 
-export const agentGuiListHarnessesDowngradeV8ToV4 = defineDowngradePath<
-  typeof agentGuiListHarnessesV81,
+export const agentGuiListHarnessesDowngradeV9ToV4 = defineDowngradePath<
+  typeof agentGuiListHarnessesV91,
   typeof agentGuiListHarnessesV40
 >({
-  from: { major: 8, minor: 1 },
+  from: { major: 9, minor: 1 },
   to: { major: 4, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
-  // Drop Hermes/omp/Hugging Face/Reasonix so an already-shipped v4.0 client's
-  // strict decode never sees them.
   downgradeResponse: (response) => ({
     ok: true,
     value: listGuiHarnessesResponseSchemaV40.parse({
@@ -699,15 +876,13 @@ export const agentGuiListHarnessesDowngradeV8ToV4 = defineDowngradePath<
   }),
 });
 
-export const agentGuiListHarnessesDowngradeV8ToV3 = defineDowngradePath<
-  typeof agentGuiListHarnessesV81,
+export const agentGuiListHarnessesDowngradeV9ToV3 = defineDowngradePath<
+  typeof agentGuiListHarnessesV91,
   typeof agentGuiListHarnessesV30
 >({
-  from: { major: 8, minor: 1 },
+  from: { major: 9, minor: 1 },
   to: { major: 3, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
-  // Drop Devin/Pi/Hermes/omp/Hugging Face/Reasonix so an already-shipped v3.0
-  // client's strict decode never sees them.
   downgradeResponse: (response) => ({
     ok: true,
     value: listGuiHarnessesResponseSchemaV30.parse({
@@ -720,11 +895,11 @@ export const agentGuiListHarnessesDowngradeV8ToV3 = defineDowngradePath<
   }),
 });
 
-export const agentGuiListHarnessesDowngradeV8ToV2 = defineDowngradePath<
-  typeof agentGuiListHarnessesV81,
+export const agentGuiListHarnessesDowngradeV9ToV2 = defineDowngradePath<
+  typeof agentGuiListHarnessesV91,
   typeof agentGuiListHarnessesV21
 >({
-  from: { major: 8, minor: 1 },
+  from: { major: 9, minor: 1 },
   // Lands on 2.1, major 2's latest installed minor; a frozen-2.0 caller's
   // contract parse then strips the 2.1-only `enabled` field.
   to: { major: 2, minor: 1 },
@@ -741,11 +916,11 @@ export const agentGuiListHarnessesDowngradeV8ToV2 = defineDowngradePath<
   }),
 });
 
-export const agentGuiListHarnessesDowngradeV8ToV1 = defineDowngradePath<
-  typeof agentGuiListHarnessesV81,
+export const agentGuiListHarnessesDowngradeV9ToV1 = defineDowngradePath<
+  typeof agentGuiListHarnessesV91,
   typeof agentGuiListHarnessesV10
 >({
-  from: { major: 8, minor: 1 },
+  from: { major: 9, minor: 1 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -919,4 +1094,5 @@ export {
   chatSubscribeV17,
   chatSubscribeV18,
   chatSubscribeV19,
+  chatSubscribeV110,
 };

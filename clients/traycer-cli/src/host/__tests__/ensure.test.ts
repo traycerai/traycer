@@ -22,9 +22,18 @@ const mocks = vi.hoisted(() => ({
   createBytesOnlyInstallLifecycleMock: vi.fn(),
   withCliLockMock: vi.fn(),
   assertHostNotBusyMock: vi.fn(),
+  gateStoreFormatFloorMock: vi.fn(),
+  isVersionYankedMock: vi.fn(),
 }));
 
 vi.mock("../../installer", () => ({
+  // The two swap barriers this command observes: none. Inlined rather than
+  // re-exported from the real module so this factory keeps the installer out
+  // of the module graph entirely, which is what it exists for.
+  NO_INSTALL_PHASE_HOOKS: {
+    beforeSwapCommit: async () => {},
+    afterSwap: async () => {},
+  },
   stageHostInstallSource: async (
     ...callArgs: Parameters<typeof mocks.stageHostInstallSourceMock>
   ) => {
@@ -68,6 +77,22 @@ vi.mock("../../installer/bundled-host", () => ({
 vi.mock("../../manifest/host-install", () => ({
   readHostInstallRecord: mocks.readHostInstallRecordMock,
 }));
+
+// `ensureHost` calls the real `provisionHost`, which calls
+// `gateStoreFormatFloor` - unmocked, that resolves `hostHomeDir` from
+// `os.homedir()` at module load and walks it for real. This suite pins the
+// ensure state machine, not the floor's own semantics (that is
+// `store-format-floor.test.ts`, against an explicit temp `hostHome`), so the
+// gate is mocked here.
+vi.mock("../store-format-floor", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../store-format-floor")>();
+  return {
+    ...actual,
+    gateStoreFormatFloor: (
+      ...callArgs: Parameters<typeof mocks.gateStoreFormatFloorMock>
+    ) => mocks.gateStoreFormatFloorMock(...callArgs),
+  };
+});
 
 vi.mock("../../service", () => ({
   createServiceController: mocks.createServiceControllerMock,
@@ -116,6 +141,7 @@ const {
   createBytesOnlyInstallLifecycleMock,
   withCliLockMock,
   assertHostNotBusyMock,
+  isVersionYankedMock,
 } = mocks;
 
 import { ensureHost, type EnsureHostOptions } from "../ensure";
@@ -144,6 +170,14 @@ function makeOpts(overrides: Partial<EnsureHostOptions>): EnsureHostOptions {
     allowSelfInvocation: true,
     noServiceRegister: false,
     force: false,
+    acceptStoreFormatLoss: false,
+    // Through the seam, never the real lookup: the "regression: installed
+    // 1.2.0, pin 1.3.0-rc.4, --keep-installed" case below is the one path
+    // that asks whether the installed version is yanked, and the real
+    // lookup's manifest fetch runs under a 10 s watchdog - twice vitest's
+    // default - so a runner with no egress would time the test out.
+    yankLookup: { isVersionYanked: mocks.isVersionYankedMock },
+    keepInstalled: false,
     onProgress: null,
     adoption: undefined,
     beforeMutate: null,
@@ -213,6 +247,7 @@ beforeEach(() => {
     args: [],
   });
   resolveBundledHostArchiveMock.mockResolvedValue(null);
+  isVersionYankedMock.mockResolvedValue(false);
   withCliLockMock.mockImplementation(
     async (_opts: unknown, fn: () => Promise<unknown>) => {
       mocks.callOrder.push("lock-enter");
@@ -230,18 +265,25 @@ beforeEach(() => {
     },
     lifecycle: {
       beforeSwap: vi.fn(),
+      beforeSwapCommit: vi.fn(),
       afterSwap: vi.fn(),
       swapLockRecovery: null,
     },
   }));
   createBytesOnlyInstallLifecycleMock.mockImplementation(() => ({
     beforeSwap: vi.fn(),
+    beforeSwapCommit: vi.fn(),
     afterSwap: vi.fn(),
     swapLockRecovery: null,
   }));
   stageHostInstallSourceMock.mockResolvedValue({
     stagingDir: "/tmp/staged",
     version: "1.6.0",
+    // The staged source's own provenance. This fixture carried only the two
+    // fields the suite asserted on; the real `StagedHostInstallSource` always
+    // has it, and the install branch's "replacing a different installed
+    // version" line reads it (Q7).
+    source: { kind: "registry", value: "1.6.0" },
   });
   commitHostInstallSourceMock.mockResolvedValue({
     record: {
@@ -254,6 +296,12 @@ beforeEach(() => {
   });
   assertHostNotBusyMock.mockResolvedValue(undefined);
   mocks.currentInstallPlatformMock.mockReturnValue("darwin");
+  mocks.gateStoreFormatFloorMock.mockResolvedValue({
+    clearedVersion: null,
+    publishedStoreFormats: null,
+    acceptStoreFormatLoss: false,
+    site: "host ensure",
+  });
 });
 
 afterEach(() => {
@@ -659,6 +707,48 @@ describe("ensureHost", () => {
     );
   });
 
+  // Q7 wiring. The core's own rows (`provision.test.ts`, "own-build-minimum
+  // satisfaction") prove what that policy DOES with a newer install; this is
+  // the half they cannot see - that an own-build source still asks for it.
+  // Reverting this mapping to `exact` reinstates the revert with every core
+  // row still green, which is exactly how the churn survived review the first
+  // time. Asserted on the target-computed line, before any install decision,
+  // so no yank lookup is reached and the pin costs one log read.
+  it.each([
+    ["the packaged archive", { fromPath: null }],
+    // The Windows desktop passes its bundled archive as `--from`, so the two
+    // platforms would otherwise disagree about whether a user's newer host
+    // survives a convergence.
+    ["an explicit --from", { fromPath: "/elsewhere/host.tar.gz" }],
+  ])(
+    "asks for `own-build-minimum` for %s, never `exact`",
+    async (_label, overrides) => {
+      config.supportedHostVersion = "1.7.2";
+      readHostInstallRecordMock.mockResolvedValue(null);
+      resolveBundledHostArchiveMock.mockResolvedValue("/bundle/host.tar.gz");
+      createServiceControllerMock.mockReturnValue(
+        makeController("not-installed"),
+      );
+      const debug = vi.fn();
+
+      await ensureHost(
+        makeOpts({
+          ...overrides,
+          runtime: { ...makeRuntime(), logger: { ...noopLogger, debug } },
+        }),
+      );
+
+      expect(debug).toHaveBeenCalledWith(
+        "Host ensure provisioning target computed",
+        expect.objectContaining({
+          sourceKind: "local-file",
+          satisfactionKind: "own-build-minimum",
+          satisfactionVersion: config.version,
+        }),
+      );
+    },
+  );
+
   it("keeps explicit latest as a live registry request even when a default version is configured", async () => {
     config.supportedHostVersion = "1.7.2";
     readHostInstallRecordMock.mockResolvedValue(null);
@@ -687,6 +777,23 @@ describe("ensureHost", () => {
         source: { kind: "registry", versionRequest: "1.6.0" },
       }),
     );
+  });
+
+  // Ticket 1/2 regression: the exact downgrade-revert RCA shape - a viable
+  // OLDER install must not be reinstalled to the build's preferred pin just
+  // because `--keep-installed` is threaded all the way through `ensureHost`.
+  it("regression: installed 1.2.0, pin 1.3.0-rc.4, --keep-installed - no-op, no reinstall", async () => {
+    config.supportedHostVersion = "1.3.0-rc.4";
+    readHostInstallRecordMock.mockResolvedValue({ version: "1.2.0" });
+    const controller = makeController("running");
+    createServiceControllerMock.mockReturnValue(controller);
+
+    const result = await ensureHost(makeOpts({ keepInstalled: true }));
+
+    expect(result.action).toBe("noop");
+    expect(stageHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(commitHostInstallSourceMock).not.toHaveBeenCalled();
+    expect(controller.install).not.toHaveBeenCalled();
   });
 
   it("a lost race (locked recheck finds the host already provisioned by another actor) discards the pre-staged temp and never commits", async () => {

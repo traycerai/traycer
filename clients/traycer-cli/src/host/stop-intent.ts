@@ -239,10 +239,43 @@ export async function hasActionableStopIntent(
   nowMs: number,
   servedAtStartup: StopIntentIdentity | null,
 ): Promise<boolean> {
+  return (
+    (await actionableStopIntentReason(environment, nowMs, servedAtStartup)) !==
+    null
+  );
+}
+
+/**
+ * The same question, answered with WHY rather than whether (Q13).
+ *
+ * The supervisor's exit code depends on which stop this was, and the two
+ * answers must come from ONE read: a boolean followed by a second read for
+ * the reason could straddle a record that changed in between, and decide the
+ * refusal from one stop and the exit code from another.
+ *
+ * `"restart"` is the reason that promises a comeback - the protocol type says
+ * so in as many words - and it is what a `stopForRestart` announces, which is
+ * every update's pre-swap stop. A supervisor that exits 0 for it tells the
+ * service manager the job finished successfully, and on a CLI-only install
+ * nothing then brings the host back if the CLI that promised the restart dies
+ * first.
+ *
+ * `"install-swap"` is deliberately NOT in that class despite its name: it
+ * "deliberately promises no comeback, because a CLI swap's relaunch is
+ * unbounded" (`protocol/config/host-stop-intent.ts`). It rides the RPC leg,
+ * not a service stop, and re-arming a manager for it would contradict what it
+ * announces.
+ */
+export async function actionableStopIntentReason(
+  environment: Environment | undefined,
+  nowMs: number,
+  servedAtStartup: StopIntentIdentity | null,
+): Promise<StopIntentReason | null> {
   const intent = await readStopIntent(environment);
-  if (intent === null) return false;
-  if (!isStopIntentFresh(intent, nowMs)) return false;
-  return !isSameStopIntent(intent, servedAtStartup);
+  if (intent === null) return null;
+  if (!isStopIntentFresh(intent, nowMs)) return null;
+  if (isSameStopIntent(intent, servedAtStartup)) return null;
+  return intent.reason;
 }
 
 /**

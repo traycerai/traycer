@@ -77,6 +77,7 @@ export const guiHarnessIdSchema = z.enum([
   "omp",
   "huggingface",
   "reasonix",
+  "antigravity",
 ]);
 export type GuiHarnessId = z.infer<typeof guiHarnessIdSchema>;
 
@@ -114,6 +115,46 @@ export const guiHarnessIdSchemaPreReasonix = z.enum([
 ]);
 export type GuiHarnessIdPreReasonix = z.infer<
   typeof guiHarnessIdSchemaPreReasonix
+>;
+
+/**
+ * Frozen copy of the persisted harness enum as `cli-v1.3.0` / `host-v1.3.0`
+ * shipped it - everything before Antigravity, which first rides
+ * `chat.subscribe@1.9`, `sessionImport.scan@1.2` and `sessionImport.run@1.1`.
+ *
+ * Taken because 1.3.0 was cut from a branch that predates Antigravity while
+ * `main` had already added the id to the LIVE enum above: every stream frame
+ * that embeds this enum was therefore advertising a value the released peers
+ * strict-decode against a twenty-id set. Freezing here is what lets those
+ * released minors keep serializing exactly what they shipped with.
+ *
+ * Do NOT add new harnesses here - extend `guiHarnessIdSchema` above and gate
+ * emission on the negotiated minor (streams have no downgrade bridge).
+ */
+export const guiHarnessIdSchemaPreAntigravity = z.enum([
+  "claude",
+  "codex",
+  "opencode",
+  "traycer",
+  "cursor",
+  "grok",
+  "qwen",
+  "kiro",
+  "droid",
+  "kimi",
+  "copilot",
+  "kilocode",
+  "openrouter",
+  "amp",
+  "devin",
+  "pi",
+  "hermes",
+  "omp",
+  "huggingface",
+  "reasonix",
+]);
+export type GuiHarnessIdPreAntigravity = z.infer<
+  typeof guiHarnessIdSchemaPreAntigravity
 >;
 
 // Cursor remains a reserved compatibility value: it shipped in this persisted
@@ -254,6 +295,30 @@ export type ChatRunSettingsPreReasonix = z.infer<
 // `epic.updateChatProfile`); there is deliberately no narrow model/harness
 // update - changing the model invalidates the reasoning/thinking/tier
 // selection, so it is only expressible as a full tuple.
+/**
+ * Wire-freeze copy of the LIVE settings tuple with `permissionMode` pinned
+ * pre-`auto`.
+ *
+ * Distinct from `chatRunSettingsSchemaPreReasonix`, which is also pre-auto but
+ * additionally pins the harness roster: this one is for the lines that DO carry
+ * the current harness enum and merely predate the mode - `chat.subscribe@1.7`
+ * and `@1.8`, which `cli-v1.3.0` shipped. Hand-frozen field-for-field rather
+ * than `.extend()`ed, so a later required field on the live tuple cannot leak
+ * onto those released lines.
+ */
+export const chatRunSettingsSchemaPreAuto = z.object({
+  harnessId: guiHarnessIdSchema,
+  model: z.string().min(1),
+  permissionMode: permissionModeSchemaPreAuto,
+  reasoningEffort: z.string().nullable(),
+  serviceTier: z.string().nullable().default(null),
+  agentMode: agentModeSchema,
+  profileId: z.string().nullable().default(null),
+});
+export type ChatRunSettingsPreAuto = z.infer<
+  typeof chatRunSettingsSchemaPreAuto
+>;
+
 export const chatRunSettingsStrictSchema = z.object({
   harnessId: guiHarnessIdSchema,
   model: z.string().min(1),

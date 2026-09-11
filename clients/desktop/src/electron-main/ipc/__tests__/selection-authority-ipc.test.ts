@@ -18,8 +18,10 @@ import type {
   ApplyStagedOk,
   ApplyStagedTrigger,
   ConvergeReadyOk,
+  ConvergeReadyVersionPolicy,
   HostControllerStatus,
   LifecycleAdmissionBlock,
+  LocalHostMutationIntent,
   InstallVersionOk,
   MutationOutcome,
   MutationProgress,
@@ -28,6 +30,7 @@ import type {
   UninstallOk,
 } from "../../host/host-controller-types";
 import { DesktopAuthSession } from "../../auth/desktop-auth-session";
+import type { DesktopAuthSessionSnapshot } from "../../../ipc-contracts/window-types";
 import { EpicWindowOwnership } from "../../windows/epic-window-ownership";
 import { PerWindowState } from "../../windows/per-window-state";
 import type { WindowSummary } from "../../../ipc-contracts/window-types";
@@ -245,6 +248,8 @@ class FakeHostController implements IpcHostController {
   }
   async convergeReady(
     _force: boolean,
+    _intent: LocalHostMutationIntent,
+    _versionPolicy: ConvergeReadyVersionPolicy,
   ): Promise<MutationOutcome<ConvergeReadyOk>> {
     return { kind: "ok", value: { running: true, version: "1.0.0" } };
   }
@@ -255,7 +260,7 @@ class FakeHostController implements IpcHostController {
   ): Promise<MutationOutcome<ApplyStagedOk>> {
     return {
       kind: "ok",
-      value: { appliedVersion: "1.0.0", runningActivated: true },
+      value: { appliedVersion: "1.0.0", runningActivated: true, applied: true },
     };
   }
   async activateInstalled(
@@ -472,6 +477,28 @@ function buildHostListItem(hostId: string): HostListItem {
   };
 }
 
+/**
+ * Install a signed-in session the way PRODUCTION does.
+ *
+ * `set` alone leaves `verified: false` - main marks a bearer verified only
+ * after checking it against JWKS (`auth-ipc`'s `authSessionSet` calls
+ * `beginSet` then `setVerified`). These fixtures used the bare `set`, so each
+ * described a session main does not vouch for. That was invisible until a
+ * consumer started reading the flag: `DesktopHostFleetSource` now declines its
+ * cloud registry read on exactly `verified`, and every bridge built here goes
+ * through that source.
+ *
+ * Same helper, same reason, as the one in
+ * `selection/__tests__/desktop-selection-ports.test.ts` - the fixture pattern
+ * is shared, so the correction has to be.
+ */
+function setVerifiedSession(
+  session: DesktopAuthSession,
+  snapshot: DesktopAuthSessionSnapshot,
+): void {
+  session.setVerified(snapshot, session.beginSet());
+}
+
 function signedInSnapshot(userId: string, token: string) {
   return {
     status: "signed-in" as const,
@@ -577,7 +604,8 @@ async function buildBridge(options: {
   const registry = new FakeWindowRegistry();
   const authSession = new DesktopAuthSession();
   if (options.signedIn !== undefined) {
-    authSession.set(
+    setVerifiedSession(
+      authSession,
       signedInSnapshot(options.signedIn.userId, options.signedIn.token),
     );
   }
@@ -1049,7 +1077,7 @@ describe("selection authority IPC binding", () => {
 
     // An identity change is the simplest trigger for reattachRequired (it
     // rides the mandatory post-transition transaction).
-    authSession.set(signedInSnapshot("user-b", "token-2"));
+    setVerifiedSession(authSession, signedInSnapshot("user-b", "token-2"));
 
     for (const window of [windowA, windowB]) {
       await lastMessageOn(window, RunnerHostEvent.selectionReattachRequired);
@@ -1292,7 +1320,7 @@ describe("selection authority IPC binding", () => {
     ).toBe(0);
 
     windowA.sentMessages.length = 0;
-    authSession.set(signedInSnapshot("user-b", "token-2"));
+    setVerifiedSession(authSession, signedInSnapshot("user-b", "token-2"));
     await flushIo();
     expect(windowA.sentMessages).toEqual([]);
   });
@@ -1389,7 +1417,18 @@ describe("selection authority IPC binding", () => {
       registry.add("window-a", 101, windowA);
       bridge.install();
 
-      expect(appState.listeners.get("render-process-gone")?.size).toBe(1);
+      // TWO app-level subscribers now, and both are the bridge's: the
+      // selection-authority detachment this suite is about, and the
+      // epic-visibility row clear in `epic-visibility-ipc.ts` (a crashed
+      // renderer must stop claiming to show its Epics, and the browser-view
+      // listener that would otherwise cover it is attached only for windows
+      // that have opened a browser tile).
+      //
+      // The count is the weaker half of this pin. The invariant that matters
+      // is the one below - `dispose()` removes EVERY listener the bridge
+      // registered - because a subscription surviving dispose is what leaks a
+      // dead bridge into the next one.
+      expect(appState.listeners.get("render-process-gone")?.size).toBe(2);
 
       bridge.dispose();
 

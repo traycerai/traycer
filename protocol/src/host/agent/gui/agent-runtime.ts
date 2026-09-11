@@ -19,6 +19,7 @@ import {
   interviewAnswerSchemaPreSettlement,
   interviewQuestionOptionSchema,
   interviewQuestionSchema,
+  interviewQuestionSchemaPreCustomAnswer,
 } from "@traycer/protocol/persistence/epic/schemas";
 import { permissionModeSchema } from "@traycer/protocol/persistence/epic/foundation";
 import {
@@ -353,6 +354,17 @@ export const runtimeInterviewQuestionSchema = interviewQuestionSchema;
 export type RuntimeInterviewQuestion = z.infer<
   typeof runtimeInterviewQuestionSchema
 >;
+
+// Wire-freeze alias of the question shape from before `allowsCustomAnswer`.
+// Bound to every `chat.subscribe` line through `@1.6`, matching the answer-side
+// freeze directly above; `@1.7`+ observe the field.
+//
+// The question shape is shared with persistence on purpose (see the comment
+// above), which is exactly why it needs an alias here: a field added for the
+// current line otherwise reaches all ten released server-frame surfaces at
+// once, including `@1.0`.
+export const runtimeInterviewQuestionSchemaPreCustomAnswer =
+  interviewQuestionSchemaPreCustomAnswer;
 
 export const runtimeInterviewAnswerSchema = interviewAnswerSchema;
 export type RuntimeInterviewAnswer = z.infer<
@@ -747,6 +759,26 @@ export const interviewRequestedEventSchema = z.object({
 export type InterviewRequestedEvent = z.infer<
   typeof interviewRequestedEventSchema
 >;
+
+// Wire-freeze copy of `interview.requested` from before `allowsCustomAnswer`,
+// carrying the frozen question shape. Bound to every `chat.subscribe` line
+// through `@1.6` via the frozen `blockDelta` unions below - the questions-side
+// counterpart to `interviewResolvedEventSchemaPreSettlement`, which freezes
+// answers across exactly the same lines.
+//
+// Hand-frozen field-for-field rather than spread from the live event, matching
+// the convention the frozen unions below already state: the freeze must not
+// silently absorb a later field.
+export const interviewRequestedEventSchemaPreCustomAnswer = z.object({
+  ...baseRuntimeEventFields,
+  type: z.literal("interview.requested"),
+  toolName: z.string(),
+  title: z.string().optional(),
+  description: z.string().optional(),
+  questions: z.array(runtimeInterviewQuestionSchemaPreCustomAnswer),
+  input: z.unknown().optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+});
 
 export const interviewResolvedEventSchema = z.object({
   ...baseRuntimeEventFields,
@@ -1250,6 +1282,14 @@ export const reasonixUserMessageAnchorResolvedSchema = z.object({
   reasonixSessionId: z.string().nullable(),
 });
 
+// No second session-id field, unlike its ACP siblings: `agy_acp_server`'s
+// `session/new` id IS the anchor's `sessionId`, so a vendor-named copy of the
+// same string would be a field that can never disagree with the one beside it.
+export const antigravityUserMessageAnchorResolvedSchema = z.object({
+  harnessId: z.literal("antigravity"),
+  sessionId: z.string(),
+});
+
 export const userMessageAnchorResolvedEventSchema = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("user_message.anchor_resolved"),
@@ -1275,6 +1315,7 @@ export const userMessageAnchorResolvedEventSchema = z.object({
     ompUserMessageAnchorResolvedSchema,
     huggingFaceUserMessageAnchorResolvedSchema,
     reasonixUserMessageAnchorResolvedSchema,
+    antigravityUserMessageAnchorResolvedSchema,
   ]),
 });
 export type UserMessageAnchorResolvedEvent = z.infer<
@@ -1282,9 +1323,9 @@ export type UserMessageAnchorResolvedEvent = z.infer<
 >;
 
 // Wire-freeze copy for released `chat.subscribe@1.0–1.6` blockDelta frames.
-// Reasonix first rides the unreleased 1.7 line; keeping its discriminant out of
-// this union prevents a newer host from sending an anchor an installed older
-// client cannot decode.
+// Reasonix and Antigravity both first ride the unreleased 1.7 line; keeping
+// their discriminants out of this union prevents a newer host from sending an
+// anchor an installed older client cannot decode.
 const userMessageAnchorResolvedEventSchemaPreReasonix = z.object({
   ...baseRuntimeEventFields,
   type: z.literal("user_message.anchor_resolved"),
@@ -1558,7 +1599,7 @@ export const runtimeEventSchemaPreImage = z.discriminatedUnion("type", [
   compactionStartedEventSchema,
   compactionCompletedEventSchema,
   compactionErroredEventSchema,
-  interviewRequestedEventSchema,
+  interviewRequestedEventSchemaPreCustomAnswer,
   interviewResolvedEventSchemaPreSettlement,
   interviewErroredEventSchema,
   subAgentStartedEventSchema,
@@ -1609,7 +1650,7 @@ export const runtimeEventSchemaV12PreInReplyTo = z.discriminatedUnion("type", [
   compactionStartedEventSchema,
   compactionCompletedEventSchema,
   compactionErroredEventSchema,
-  interviewRequestedEventSchema,
+  interviewRequestedEventSchemaPreCustomAnswer,
   interviewResolvedEventSchemaPreSettlement,
   interviewErroredEventSchema,
   subAgentStartedEventSchema,
@@ -1669,7 +1710,7 @@ export const runtimeEventSchemaPreSettlement = z.discriminatedUnion("type", [
   compactionStartedEventSchema,
   compactionCompletedEventSchema,
   compactionErroredEventSchema,
-  interviewRequestedEventSchema,
+  interviewRequestedEventSchemaPreCustomAnswer,
   interviewResolvedEventSchemaPreSettlement,
   interviewErroredEventSchema,
   subAgentStartedEventSchema,

@@ -21,6 +21,7 @@ import {
   listGuiHarnessesResponseSchemaV70,
   listGuiHarnessesResponseSchemaV71,
   listGuiHarnessesResponseSchemaV80,
+  listGuiHarnessesResponseSchemaV90,
   listGuiHarnessesResponseSchema,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import {
@@ -28,6 +29,7 @@ import {
   providersListRequestSchemaBeforeV70,
   providersListResponseSchema,
   providersListResponseSchemaV70,
+  providersListResponseSchemaV90,
   providersListResponseSchemaV80,
   providersListResponseSchemaV10,
   providersListResponseSchemaV20,
@@ -39,6 +41,7 @@ import {
 import {
   getChatRunSettingsResponseSchema,
   getChatRunSettingsResponseSchemaV10,
+  getChatRunSettingsResponseSchemaV20,
 } from "@traycer/protocol/host/epic/chat-records";
 import { FROZEN_CATALOG_LINE_SNAPSHOTS } from "./__fixtures__/frozen-catalog-lines";
 
@@ -82,7 +85,8 @@ const LIVE_FROZEN_EXPORTS = {
   "agent.gui.listHarnesses@8.0": listGuiHarnessesResponseSchemaV80,
   // The head line, holding 8.0's old job: it names the LIVE schema, so the next
   // attempt to grow the row fails here first.
-  "agent.gui.listHarnesses@8.1": listGuiHarnessesResponseSchema,
+  "agent.gui.listHarnesses@9.0": listGuiHarnessesResponseSchemaV90,
+  "agent.gui.listHarnesses@9.1": listGuiHarnessesResponseSchema,
   "agent.list@1.0": listAgentsResponseSchemaV10,
   "agent.list@2.0": listAgentsResponseSchemaV20,
   "agent.list@3.0": listAgentsResponseSchemaV30,
@@ -112,8 +116,27 @@ const LIVE_FROZEN_EXPORTS = {
   // not un-freeze it.
   "providers.list@7.0": providersListResponseSchemaV70,
   // The head line now, holding v7.0's old job: it names the LIVE schema, so
-  // the next attempt to grow it fails here first. Same response - freeze the
-  // line that stopped being head, open the next one, do not regenerate.
+  // the next attempt to grow it fails here first.
+  //
+  // What that red means depends on whether the line has SHIPPED, and the two
+  // answers are opposites - read this before reaching for either:
+  //
+  //  - RELEASED (it appears in a non-rc `host-v*`/`cli-v*`/`desktop-v*` tag at
+  //    or above `support-floor.json`): peers in the field already speak it, so
+  //    the response it serves is fixed forever. Freeze the line that stopped
+  //    being head under reserved `VNN` names, open the next one against live,
+  //    and do NOT regenerate. That is what v7.0 above records.
+  //  - UNRELEASED (the case for 8.0 today - `host-v1.2.0` registers
+  //    `providers.list` 1.0 through 7.0 and no 8.0, and RCs are excluded by
+  //    `includeReleaseCandidates: false`): no peer can have negotiated it, so
+  //    there is no contract to break, and additive growth regenerates this
+  //    fixture. `enabled` and `launchCommand` on `providerProfileSchema` both
+  //    did exactly that, and `launchCommand`'s comment says so at the field.
+  //
+  // So the red is a PROMPT to check release status, not a verdict on its own.
+  // Confirm with `git show <newest non-rc tag>:protocol/src/host/registry.ts`
+  // rather than from this file - once 8.0 ships, the first bullet governs and
+  // regenerating it would be the exact mistake the row exists to catch.
   //
   // There is no `providers.list@7.1` row because there is no such line: the
   // enablement pair was its entire delta over 7.0 and both were removed. This
@@ -126,7 +149,8 @@ const LIVE_FROZEN_EXPORTS = {
   "providers.list@8.0": providersListResponseSchemaV80,
   // The head line, holding 8.0's old job: it names the LIVE schema, so the next
   // attempt to grow the provider state fails here first.
-  "providers.list@8.1": providersListResponseSchema,
+  "providers.list@9.0": providersListResponseSchemaV90,
+  "providers.list@9.1": providersListResponseSchema,
   // The fourth method (see the snapshot script for why it is here): its
   // response carries the PERSISTED harness enum, it is off the released floor,
   // and nothing local guarded it until Reasonix grew it and only the tag gate
@@ -139,7 +163,8 @@ const LIVE_FROZEN_EXPORTS = {
   // pre-`auto` pin on `chatRunSettingsSchemaV10` plus the V2->V1 bridge's
   // existing `DOWNGRADE_UNSUPPORTED` refusal, which now covers the mode
   // dimension for free.
-  "epic.getChatRunSettings@2.0": getChatRunSettingsResponseSchema,
+  "epic.getChatRunSettings@2.0": getChatRunSettingsResponseSchemaV20,
+  "epic.getChatRunSettings@3.0": getChatRunSettingsResponseSchema,
   "providers.list@1.0..6.0 request": providersListRequestSchemaBeforeV70,
   "providers.list@7.0 request": providersListRequestSchema,
 } as const;

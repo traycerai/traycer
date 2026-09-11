@@ -111,8 +111,15 @@ describe("validateVersionedStreamRpcRegistry", () => {
     expect(() => {
       validateVersionedStreamRpcRegistry(hostStreamRpcRegistry);
     }).not.toThrow();
-    expect(hostStreamRpcRegistry["epic.subscribe"][1].latestMinor).toBe(3);
-    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(9);
+    // This branch's three status minors re-minted ABOVE the mainline's
+    // delta-seed minor (@1.3): durability @1.4, promotion @1.5, s5 pass @1.6.
+    // Mainline's own `epic.subscribe` work landed as a new MAJOR (@2.0), so it
+    // does not move this number.
+    expect(hostStreamRpcRegistry["epic.subscribe"][1].latestMinor).toBe(6);
+    // Chat minors arrived entirely from mainline (@1.9, the record-head
+    // live-sync minor) until the auto-mode line: `1.10` is this branch's,
+    // and it is the first chat minor it has added.
+    expect(hostStreamRpcRegistry["chat.subscribe"][1].latestMinor).toBe(10);
     expect(hostStreamRpcRegistry["terminal.subscribe"][1].latestMinor).toBe(6);
     expect(hostStreamRpcRegistry["worktree.deleteByPath"][1].latestMinor).toBe(
       2,

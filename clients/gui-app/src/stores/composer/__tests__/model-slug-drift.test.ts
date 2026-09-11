@@ -163,10 +163,12 @@ describe("composer toolbar model slug drift", () => {
       );
 
     // KNOWN, DELIBERATELY UNFIXED GAP: the old decorated form is in neither
-    // the exact slug nor resolvedModel field, so the two-pass resolver misses.
+    // the exact slug nor resolvedModel field, so the two-pass resolver misses
+    // and Default is presented in its place - display only, never persisted.
     expect(store.getState().selection.modelSlug).toBe("default");
-    expect(store.getState().values.selection.modelSlug).toBe("default");
-    expect(emitted).toEqual(["default"]);
+    expect(store.getState().selectionHealedForDisplay).toBe(true);
+    expect(store.getState().values.selection.modelSlug).toBe("opus[1m]");
+    expect(emitted).toEqual([]);
   });
 
   it("does not rewrite an ambiguous alias, while the read side still resolves a row", () => {
@@ -241,7 +243,10 @@ describe("composer toolbar model slug drift", () => {
     expect(store.getState().values.selection.modelSlug).toBe("");
   });
 
-  it("heals a genuinely delisted slug to Default", () => {
+  it("presents a genuinely delisted slug as Default for display only", () => {
+    // The substitute is what renders and what a Send launches on; the raw
+    // sticky slug is untouched and nothing is emitted, so one catalog that
+    // fails to list the model never rewrites the chat's persisted model.
     const emitted: string[] = [];
     const store = createStore("delisted-slug", (modelSlug) => {
       emitted.push(modelSlug);
@@ -257,7 +262,35 @@ describe("composer toolbar model slug drift", () => {
       );
 
     expect(store.getState().selection.modelSlug).toBe("default");
-    expect(store.getState().values.selection.modelSlug).toBe("default");
+    expect(store.getState().selectionHealedForDisplay).toBe(true);
+    expect(store.getState().selectionCatalogConfirmed).toBe(false);
+    expect(store.getState().values.selection.modelSlug).toBe("delisted-slug");
+    expect(emitted).toEqual([]);
+  });
+
+  it("keeps a display-only substitute out of a deferred emit until the user picks a model", () => {
+    const emitted: string[] = [];
+    const store = createStore("delisted-slug", (modelSlug) => {
+      emitted.push(modelSlug);
+    });
+    store.getState().setCatalog(catalog([model("default", null, "Default")]));
+    expect(store.getState().selection.modelSlug).toBe("default");
+
+    // An edit made while the substitute is presented is deferred, exactly like
+    // an edit under a surface reroute: emitting it would carry the substitute
+    // into the chat's persisted model.
+    store.getState().setPermission("full_access");
+    expect(store.getState().permission).toBe("full_access");
+    expect(store.getState().pendingSettingsEmit).toBe(true);
+    expect(emitted).toEqual([]);
+
+    // The user's explicit pick flushes it with the real choice.
+    store.getState().setSelection({
+      harnessId: "claude",
+      modelSlug: "default",
+      profileId: null,
+    });
+    expect(store.getState().pendingSettingsEmit).toBe(false);
     expect(emitted).toEqual(["default"]);
   });
 });

@@ -973,7 +973,7 @@ describe("preload new-capability wiring", () => {
       sendSyncFn: undefined,
     });
     const key = {
-      epicId: "epic-1",
+      scope: { kind: "epic", epicId: "epic-1" } as const,
       hostId: "host-1",
       identityKey: "identity-1",
     };

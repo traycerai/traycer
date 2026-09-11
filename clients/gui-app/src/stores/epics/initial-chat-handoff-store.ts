@@ -175,6 +175,9 @@ function readPersistedPlacement(value: unknown): ExplicitTilePlacement | null {
   if (value.kind === "split" && isEdgeDropPosition(value.edge)) {
     return { kind: "split", paneId: value.paneId, edge: value.edge };
   }
+  if (value.kind === "beside" && value.category === "side-chat") {
+    return { kind: "beside", paneId: value.paneId, category: "side-chat" };
+  }
   return null;
 }
 

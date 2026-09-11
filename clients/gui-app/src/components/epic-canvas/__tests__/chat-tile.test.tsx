@@ -54,11 +54,14 @@ const EMPTY_BROWSER_SESSIONS_STATE: BrowserSessionsState = {
   lifecycle: "live",
   inventoryReady: true,
   canMaterializeElectron: false,
+  connectionGeneration: 0,
   items: [],
   errorMessage: null,
   retry: () => undefined,
   openTab: () => Promise.reject(new Error("not used")),
   closeTab: () => Promise.resolve(),
+  attachTab: () => Promise.reject(new Error("not used")),
+  moveTab: () => Promise.reject(new Error("not used")),
 };
 
 vi.mock(
@@ -109,6 +112,13 @@ const MOCK_HOST_DIRECTORY = {
     hostId === MOCK_HOST_ENTRY.hostId ? MOCK_HOST_ENTRY : null,
 };
 
+// ENUMERATES deliberately - do NOT convert to an `importOriginal` spread.
+// `@/lib/host` is a barrel of provider-coupled hooks, so the un-overridden
+// residue is not inert: spreading leaks the real `useAuthService` into
+// `EpicSessionProvider` -> `useStreamAuthRevalidator`, which throws "Host
+// runtime hooks must be used inside a <HostRuntimeProvider>" from deep inside
+// an unrelated component (~55 tests across these files). Enumeration fails the
+// useful way instead: vitest names the missing export and the module.
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
   useHostDirectory: () => MOCK_HOST_DIRECTORY,
@@ -935,6 +945,7 @@ function streamingInterviewAssistantMessage(): Message {
               { label: "Option B", description: null, preview: null },
             ],
             multiSelect: false,
+            allowsCustomAnswer: null,
           },
         ],
         answers: [],
@@ -984,6 +995,7 @@ function answeredInterviewAssistantMessage(): Message {
               { label: "Option B", description: null, preview: null },
             ],
             multiSelect: false,
+            allowsCustomAnswer: null,
           },
         ],
         answers: [
@@ -1231,6 +1243,15 @@ describe("<ChatTile />", () => {
           browserAnnotations: [],
           resetEpoch: 0,
           revision: 0,
+          draftId: null,
+          hostRevision: 0,
+          targetEpicId: null,
+          lastTouchedAt: 0,
+          generation: 0,
+          syncedGeneration: 0,
+          ownerHostId: null,
+          origin: null,
+          publication: null,
         },
       },
     });

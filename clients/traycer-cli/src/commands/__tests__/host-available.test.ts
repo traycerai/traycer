@@ -55,6 +55,8 @@ import {
   buildHostAvailableListing,
   resolveIncludePreReleases,
 } from "../host-available";
+import { isPreReleaseVersion } from "@traycer-clients/shared/host-version/release-line";
+import type { HostIncludePreReleasesSource } from "@traycer/protocol/host/maintenance/schemas";
 import type { HostInstallRecord } from "../../manifest/host-install";
 import type { CommandContext } from "../../runner/runner";
 import { HOST_CLIENT_FLOOR_REASON_PREFIX } from "@traycer-clients/shared/host-version/client-floor-reason";
@@ -80,6 +82,7 @@ function createEntry(version: string): HostVersionEntry {
     deprecationReason: null,
     requiredCliVersion: null,
     minimumEpoch: null,
+    storeFormats: null,
     platforms: {
       "darwin-arm64": AVAILABLE_ASSET,
     },
@@ -273,6 +276,90 @@ describe("buildHostAvailableListing", () => {
     ]);
     expect(listing.human).toContain("1.3.0-rc.2");
     expect(listing.human).toContain("1.2.0-beta.1");
+  });
+});
+
+// Regression coverage for the bug `filterHostAvailableVersions` used to ship:
+// the staging exemption was folded into the shared predicate, so it applied
+// to EVERY caller including a user who explicitly excluded pre-releases with
+// `--no-include-pre-releases` - both the JSON (`includePreReleases: false`)
+// and the human output claimed exclusion while every `-staging.*` row still
+// came back. `stable-default` and `explicit-exclude` differ ONLY in whether a
+// canonical staging row survives; the other two sources both include
+// everything and exist here to pin that neither of those was quietly broken
+// by the same fix.
+describe("buildHostAvailableListing per includePreReleasesSource (staging exemption regression)", () => {
+  const STABLE = "1.8.0";
+  const STAGING = "1.8.1-staging.42.gabcdef1";
+  const RC = "1.9.0-rc.1";
+  const manifest = createManifest([STABLE, STAGING, RC]);
+
+  // The protocol's own type rather than a re-spelled union: a source added to
+  // or removed from `HostIncludePreReleasesSource` has to be reckoned with
+  // here, where the whole point is that the four sources filter differently.
+  function listingFor(
+    source: HostIncludePreReleasesSource,
+    includePreReleases: boolean,
+  ) {
+    return buildHostAvailableListing({
+      manifest,
+      manifestUrl: "https://example.com/versions.json",
+      platformKey: "darwin-arm64",
+      includePreReleases,
+      includePreReleasesSource: source,
+      cliVersion: "9.9.9",
+    });
+  }
+
+  it("stable-default: hides the rc but keeps the canonical staging row", () => {
+    const listing = listingFor("stable-default", false);
+    expect(listing.manifest.versions.map((entry) => entry.version)).toEqual([
+      STABLE,
+      STAGING,
+    ]);
+  });
+
+  it("explicit-exclude: hides the staging row too - the regression this pins", () => {
+    const listing = listingFor("explicit-exclude", false);
+    expect(listing.manifest.versions.map((entry) => entry.version)).toEqual([
+      STABLE,
+    ]);
+  });
+
+  it("explicit-include: returns every row", () => {
+    const listing = listingFor("explicit-include", true);
+    expect(listing.manifest.versions.map((entry) => entry.version)).toEqual([
+      STABLE,
+      STAGING,
+      RC,
+    ]);
+  });
+
+  it("installed-rc: returns every row", () => {
+    const listing = listingFor("installed-rc", true);
+    expect(listing.manifest.versions.map((entry) => entry.version)).toEqual([
+      STABLE,
+      STAGING,
+      RC,
+    ]);
+  });
+
+  it("self-consistency: an explicit exclusion returns no row that is a pre-release by shape", () => {
+    // Derived from the returned rows rather than a hardcoded version list, so
+    // this keeps holding if the fixture above changes. Scoped to
+    // `explicit-exclude` specifically, not every source reporting
+    // `includePreReleases: false`: `stable-default` legitimately keeps the
+    // canonical staging row even though it IS a pre-release by shape - that
+    // exemption is the feature, not a bug, and only exists for the unstated
+    // default. `explicit-exclude` is the one source with zero exemptions, so
+    // it is the one place "no row satisfies isPreReleaseVersion" is actually
+    // true; asserting it for `stable-default` too would encode the staging
+    // purge this whole file exists to prevent.
+    const listing = listingFor("explicit-exclude", false);
+    expect(listing.manifest.versions.length).toBeGreaterThan(0);
+    for (const entry of listing.manifest.versions) {
+      expect(isPreReleaseVersion(entry.version)).toBe(false);
+    }
   });
 });
 
@@ -481,6 +568,25 @@ describe("buildHostAvailableCommand's derived catalog default", () => {
     ]);
   });
 
+  it("keeps canonical staging rows in the stable-default catalog", async () => {
+    mocks.fetchManifestMock.mockResolvedValue(
+      createManifest(["1.2.3-staging.4.gabcdef1", "1.2.3-rc.1", "1.2.0"]),
+    );
+    mocks.readHostInstallRecordMock.mockResolvedValue(installRecord("1.2.0"));
+
+    const command = buildHostAvailableCommand({ includePreReleases: null });
+    const result = await command(fakeCtx());
+
+    expect(result.data).toMatchObject({
+      includePreReleases: false,
+      includePreReleasesSource: "stable-default",
+    });
+    expect(parseAvailableSnapshotLikeDesktop(result.data).versions).toEqual([
+      { version: "1.2.3-staging.4.gabcdef1", available: true },
+      { version: "1.2.0", available: true },
+    ]);
+  });
+
   it("still lists the registry when the install record is corrupt", async () => {
     // A corrupt `install.json` is exactly when someone needs to see which
     // versions exist. `readHostInstallRecord` throws rather than overwrite a
@@ -584,6 +690,7 @@ describe("buildHostAvailableCommand's real data envelope against desktop's parse
           deprecationReason: null,
           requiredCliVersion: null,
           minimumEpoch: null,
+          storeFormats: null,
           platforms: {
             "linux-x64": AVAILABLE_ASSET,
           },
@@ -638,6 +745,7 @@ function createMultiPlatformManifest(
         deprecationReason: null,
         requiredCliVersion: null,
         minimumEpoch: null,
+        storeFormats: null,
         platforms,
       },
     ],
@@ -702,5 +810,47 @@ describe("buildHostAvailableListing platform scoping", () => {
       latest: "1.2.0",
       versions: [{ version: "1.2.0", available: true }],
     });
+  });
+
+  it("carries storeFormats verbatim through the projection", () => {
+    // A regression pin: `storeFormats` passes through
+    // `projectPlatformAsset`/`projectClientFloor`'s entry spread today, but
+    // nothing else asserts on it - a future projection rewrite that builds
+    // the entry field-by-field instead of spreading could silently drop it.
+    const manifest = createMultiPlatformManifest({
+      "darwin-arm64": AVAILABLE_ASSET,
+    });
+    const withFormats = {
+      ...manifest,
+      versions: [{ ...manifest.versions[0], storeFormats: { chatDb: 9 } }],
+    };
+
+    const listing = buildHostAvailableListing({
+      manifest: withFormats,
+      manifestUrl: "https://example.com/versions.json",
+      platformKey: "darwin-arm64",
+      includePreReleases: false,
+      includePreReleasesSource: "explicit-exclude",
+      cliVersion: "9.9.9",
+    });
+
+    expect(listing.manifest.versions[0].storeFormats).toEqual({ chatDb: 9 });
+  });
+
+  it("carries a null storeFormats through the projection", () => {
+    const manifest = createMultiPlatformManifest({
+      "darwin-arm64": AVAILABLE_ASSET,
+    });
+
+    const listing = buildHostAvailableListing({
+      manifest,
+      manifestUrl: "https://example.com/versions.json",
+      platformKey: "darwin-arm64",
+      includePreReleases: false,
+      includePreReleasesSource: "explicit-exclude",
+      cliVersion: "9.9.9",
+    });
+
+    expect(listing.manifest.versions[0].storeFormats).toBeNull();
   });
 });

@@ -138,6 +138,9 @@ export function observationFromStatus(input: {
     // test asserts the returned deadline is always finite.
     freshUntilMs: Number.POSITIVE_INFINITY,
     operation: input.status.updateOperation,
+    // Off the SAME response as `operation` above, which is the only way this
+    // field is worth anything — see its declaration.
+    runningVersion: input.status.hostVersion,
     transaction: input.status.updateTransaction,
     coarseProgress: input.status.updateProgress,
     legacyFacts: input.legacyFacts,

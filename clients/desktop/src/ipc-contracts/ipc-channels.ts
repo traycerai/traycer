@@ -130,12 +130,16 @@ export const RunnerHostInvoke = {
   ownershipSnapshot: "runnerHost:windows:ownership:snapshot",
   ownershipClaim: "runnerHost:windows:ownership:claim",
   ownershipRelease: "runnerHost:windows:ownership:release",
+  epicVisibilitySnapshot: "runnerHost:windows:epicVisibility:snapshot",
+  epicVisibilityReport: "runnerHost:windows:epicVisibility:report",
+  windowVisibilitySnapshot: "runnerHost:windows:windowVisibility:snapshot",
   perWindowStateGet: "runnerHost:windows:perWindowState:get",
   perWindowStateCapabilities: "runnerHost:windows:perWindowState:capabilities",
   perWindowStateUpdate: "runnerHost:windows:perWindowState:update",
   perWindowStateClear: "runnerHost:windows:perWindowState:clear",
   authSessionGet: "runnerHost:windows:authSession:get",
   authSessionSet: "runnerHost:windows:authSession:set",
+  authSessionRevoke: "runnerHost:windows:authSession:revoke",
   supportSnapshotGet: "runnerHost:support:snapshot:get",
   supportRevealLog: "runnerHost:support:log:reveal",
   supportSubmitReport: "runnerHost:support:report:submit",
@@ -193,6 +197,7 @@ export const RunnerHostInvoke = {
   diagnosticsMeasureJsHeaps: "runnerHost:diagnostics:measureJsHeaps",
   diagnosticsTraceStart: "runnerHost:diagnostics:trace:start",
   diagnosticsTraceStop: "runnerHost:diagnostics:trace:stop",
+  rendererCrashPersist: "runnerHost:rendererCrash:persist",
   appUpdateGetSnapshot: "runnerHost:appUpdate:getSnapshot",
   appUpdateCheck: "runnerHost:appUpdate:check",
   appUpdateSetAllowPrerelease: "runnerHost:appUpdate:setAllowPrerelease",
@@ -410,8 +415,28 @@ export const RunnerHostEvent = {
   getFreshUnsyncedSnapshot: "runnerHost:event:getFreshUnsyncedSnapshot",
   windowsChange: "runnerHost:event:windows:change",
   ownershipChange: "runnerHost:event:windows:ownership:change",
+  epicVisibilityChange: "runnerHost:event:windows:epicVisibility:change",
+  windowVisibilityChange: "runnerHost:event:windows:windowVisibility:change",
   perWindowStateChange: "runnerHost:event:windows:perWindowState:change",
   authSessionChange: "runnerHost:event:windows:authSession:change",
+  /**
+   * A terminal verdict loss, fanned to EVERY window.
+   *
+   * Its own channel because `authSessionChange` structurally cannot carry
+   * this: main answers a revoke by dropping its verification and fanning the
+   * session out UNCHANGED, so siblings see a byte-identical snapshot and
+   * treat it as an echo - while their own auth stores still read `signed-in`
+   * and keep spending the rejected bearer on cloud work. Flattening the
+   * revoke into a status instead would sign every window out, which is the
+   * outcome `unverified` exists to avoid.
+   *
+   * Carries the rejected bearer so each window can FENCE the demotion to that
+   * session: windows' IPC is unordered, so a revoke can arrive after a
+   * sibling's fresh sign-in, and one that names a bearer a window no longer
+   * holds must leave it alone (`DesktopAuthSession.revokeVerification` fences
+   * main's own copy by the same rule).
+   */
+  authVerificationRevoked: "runnerHost:event:windows:authSession:revoked",
   menuCommand: "runnerHost:event:menu:command",
   migrationRunChange: "runnerHost:event:migration:runChange",
   accessibilityThemeChange: "runnerHost:event:accessibilityTheme:change",

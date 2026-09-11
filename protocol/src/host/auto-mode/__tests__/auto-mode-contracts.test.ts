@@ -162,9 +162,9 @@ describe("auto-mode protocol change", () => {
   it("publishes the stored judge on the head providers.list line only", () => {
     // `providers.setAutoJudge` writes; without this read half the Providers >
     // General switch could not show its own value after a reload.
-    const majorEight = hostRpcRegistry["providers.list"][8];
-    const head = majorEight.versions[majorEight.latestMinor].contract;
-    const frozen = majorEight.versions[0].contract;
+    const majorNine = hostRpcRegistry["providers.list"][9];
+    const head = majorNine.versions[majorNine.latestMinor].contract;
+    const frozen = majorNine.versions[0].contract;
 
     const withJudge = {
       ...providerStateFixture(),
@@ -176,7 +176,7 @@ describe("auto-mode protocol change", () => {
     });
     expect(headParsed.providers[0].autoJudge).toBe("provider");
 
-    // 8.0 needs no bridge: a new KEY is STRIPPED by the within-major re-parse,
+    // 9.0 needs no bridge: a new KEY is STRIPPED by the within-major re-parse,
     // unlike a new enum member, which would fail the whole response. That is
     // the entire reason this rides a minor with no emission gating.
     const frozenParsed = frozen.responseSchema.parse({

@@ -18,6 +18,7 @@ import {
   Lock,
   SplitSquareHorizontal,
   SplitSquareVertical,
+  Trash2,
   X,
 } from "lucide-react";
 import {
@@ -287,9 +288,25 @@ export function TabStrip(props: TabStripProps) {
       ),
     [tabs],
   );
+  // Every chat and terminal-agent tab on this strip belongs to the strip's
+  // epic; naming the owner lets each host layer ask for its exact
+  // `home: local` partition in mixed mode instead of the pendingFork-only
+  // import a whole-origin answer permits.
+  const chatEpicIds = useMemo<Readonly<Record<string, string>>>(
+    () =>
+      Object.fromEntries(
+        indicatorScopes.flatMap((scope) =>
+          scope.chatIds.map((chatId): readonly [string, string] => [
+            chatId,
+            epicId,
+          ]),
+        ),
+      ),
+    [indicatorScopes, epicId],
+  );
 
   return (
-    <ChatIndicatorHostScopes scopes={indicatorScopes}>
+    <ChatIndicatorHostScopes scopes={indicatorScopes} chatEpicIds={chatEpicIds}>
       <div
         ref={stripRef}
         data-testid="tab-strip"
@@ -766,7 +783,6 @@ function TabItemBody(
     if (rename.isEditing) return;
     onSelect(groupId, tab.instanceId);
     if (
-      isActive &&
       consumeNotificationEntity !== null &&
       (tab.type === "chat" ||
         tab.type === "terminal" ||
@@ -781,7 +797,6 @@ function TabItemBody(
     consumeNotificationEntity,
     epicId,
     groupId,
-    isActive,
     onSelect,
     rename.isEditing,
     tab,
@@ -1259,6 +1274,8 @@ function renderFixedTabIcon(
       return <CommGraphTileIcon className="size-3.5" />;
     case "published-chat":
       return <Lock className="size-3.5 shrink-0 text-muted-foreground" />;
+    case "deleted-artifacts":
+      return <Trash2 className="size-3.5 shrink-0 text-muted-foreground" />;
     default:
       return null;
   }

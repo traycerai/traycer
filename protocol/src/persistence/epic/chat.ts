@@ -6,10 +6,12 @@ import {
 } from "@traycer/protocol/persistence/epic/chat-events";
 import {
   chatRunSettingsSchema,
+  chatRunSettingsSchemaPreAuto,
   chatRunSettingsSchemaPreReasonix,
 } from "@traycer/protocol/persistence/epic/foundation";
 import {
   messageSchema,
+  messageSchemaV18,
   messageSchemaPreImage,
   messageSchemaPreInReplyTo,
   messageSchemaPreReasonix,
@@ -79,7 +81,9 @@ const claudePendingWakeSchemaPreRetryDeadline = z.object({
  * clone-not-migrate; this id is the clone source.
  */
 
-export const chatSchema = z.object({
+// Historical field set for chat.subscribe 1.7/1.8. New fields belong on
+// the live extension below, not on this shared historical base.
+export const chatSchemaV18 = z.object({
   parentId: z.string().nullable(),
   id: z.string(),
   userId: z.string(),
@@ -93,10 +97,12 @@ export const chatSchema = z.object({
   createdAt: z.number(),
   updatedAt: z.number(),
   isTitleEditedByUser: z.boolean(),
-  settings: chatRunSettingsSchema.nullable().default(null),
+  // Pre-`auto`: `chat.subscribe@1.7`/`@1.8` embed this record and both are
+  // RELEASED, so an `auto` chat served on either would fail the whole frame.
+  settings: chatRunSettingsSchemaPreAuto.nullable().default(null),
   activeSessionChain: activeSessionChainSchema.nullable().default(null),
   claudePendingWakes: z.array(claudePendingWakeSchema).default([]),
-  messages: z.array(messageSchema),
+  messages: z.array(messageSchemaV18),
   events: z.array(chatEventSchema).default([]),
   /**
    * Wall-clock ms when this chat was archived, or `null` while active.
@@ -135,6 +141,13 @@ export const chatSchema = z.object({
    * this contract.
    */
   lastDeliveredRolesDigest: z.string().nullable().default(null),
+});
+export const chatSchema = chatSchemaV18.extend({
+  messages: z.array(messageSchema),
+  // Re-widened to the live tuple. `chatSchemaV18` pins `permissionMode`
+  // pre-`auto` because `chat.subscribe@1.7`/`@1.8` embed it and both shipped in
+  // `cli-v1.3.0`; only the lines that bind THIS schema may carry the mode.
+  settings: chatRunSettingsSchema.nullable().default(null),
 });
 export type Chat = z.infer<typeof chatSchema>;
 

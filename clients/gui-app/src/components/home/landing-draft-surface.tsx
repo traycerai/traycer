@@ -12,17 +12,13 @@ import { parseSystemTabOverlayView } from "@/lib/system-tab-overlay-search";
 import { useDraftSurfaceId } from "@/providers/draft-surface-hooks";
 import { useLandingDraftShell } from "@/stores/home/landing-draft-store";
 import { LandingTerminalPaneAnchor } from "@/components/home/terminal-panel/landing-terminal-host";
+import { CloudDraftsSection } from "@/components/drafts/cloud-drafts-section";
+import { useOptionalHostClient } from "@/lib/host";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 import "./home-touch-targets.css";
-import { focusRegisteredActiveComposer } from "@/lib/composer/composer-focus-registry";
 import { isMobileApp } from "@/lib/mobile-app";
-import { focusTerminalInstance } from "@/lib/terminals/terminal-focus-registry";
-import {
-  landingTerminalLayoutFor,
-  UNBOUND_LANDING_PAGE_ID,
-  useLandingTerminalStore,
-} from "@/stores/home/landing-terminal-store";
+import { restoreLandingSurfaceFocus } from "@/components/home/landing-surface-focus-restore";
 import { usePaneActivationFocusIntent } from "@/components/epic-canvas/pane-activation";
 
 /**
@@ -33,6 +29,13 @@ export function LandingDraftSurface() {
   const draftId = useDraftSurfaceId();
   const { workspaceFolders, settings } = useLandingDraftShell(draftId);
   const activity = useTabSurfaceActivity();
+  // Optional on purpose: the top-level tab host mounts this surface without a
+  // `HostRuntimeProvider`, and the cloud-drafts section is the only consumer
+  // here that wants a client at all - it already treats `null` as "no
+  // directory to read". A throwing read would make one section's data need
+  // decide whether the landing page can render.
+  const hostClient = useOptionalHostClient();
+  const hostId = hostClient?.getActiveHostId() ?? null;
   const paneActivationFocusIntent = usePaneActivationFocusIntent();
 
   // Pre-mint the mount identity for the null-draft landing so the first
@@ -174,6 +177,15 @@ export function LandingDraftSurface() {
             </SurfaceActivityProvider>
           </div>
 
+          {/* Drafts another host owns, read from the cloud backup. Rendered at
+              every width: the phone is the reader this section exists for.
+              Mounted only with a host runtime above us: with no client there
+              is no directory to read, and the section's own host query would
+              otherwise demand a Query client from a surface that renders
+              bare. */}
+          {hostClient === null ? null : (
+            <CloudDraftsSection client={hostClient} hostId={hostId} />
+          )}
           {isMobile ? (
             /* Recent tasks live in the hamburger drawer at this width, which is
                not discoverable from a landing page that is otherwise empty
@@ -212,55 +224,6 @@ export function LandingDraftSurface() {
       )}
     </div>
   );
-}
-
-/**
- * Puts the caret back where this surface last had it, in the order the surface
- * itself ranks its endpoints: a maximized terminal owns the pane outright, then
- * the element that actually held focus, then the active composer.
- *
- * A module function rather than an inline effect body so the effect above stays
- * a list of GUARDS - who may restore, and when - with the ranking read on its
- * own.
- */
-function restoreLandingSurfaceFocus(
-  draftId: string | null,
-  surface: HTMLDivElement | null,
-  previous: HTMLElement | null,
-): void {
-  const terminalState = useLandingTerminalStore.getState();
-  const layout = landingTerminalLayoutFor(
-    terminalState,
-    draftId ?? UNBOUND_LANDING_PAGE_ID,
-  );
-  if (layout.panelOpen && layout.maximized) {
-    const instanceId = terminalState.activeInstanceId;
-    if (instanceId !== null) {
-      focusTerminalInstance(instanceId);
-      return;
-    }
-  }
-
-  if (
-    surface !== null &&
-    previous !== null &&
-    previous.isConnected &&
-    surface.contains(previous)
-  ) {
-    previous.focus({ preventScroll: true });
-    if (
-      document.activeElement === previous ||
-      (document.activeElement !== null &&
-        previous.contains(document.activeElement))
-    ) {
-      return;
-    }
-  }
-  // The local Tiptap editor may not have registered yet
-  // (`immediatelyRender: false`). Never fall back to a retained inactive split
-  // partner here; if no active endpoint exists, the local editor's own
-  // autofocus effect will run as soon as it registers.
-  focusRegisteredActiveComposer();
 }
 
 function renderLandingWorkspaceControls(

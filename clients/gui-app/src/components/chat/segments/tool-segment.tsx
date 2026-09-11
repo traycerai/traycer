@@ -29,7 +29,7 @@ import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { cn, formatSingleLine } from "@/lib/utils";
 import { AgentHeaderLink } from "./agent-header-link";
 import { AgentMessageBody } from "./agent-message-body";
-import { ReplyExpectedBadge } from "./reply-expected-badge";
+import { ReplyExpectedIcon, ReplyExpectedNote } from "./reply-expected";
 import { SegmentCard } from "./segment-card";
 import { SegmentPanel } from "./segment-panel";
 import { SegmentRow } from "./segment-row";
@@ -728,22 +728,11 @@ function A2ASendToolSegment(
     });
   };
 
-  const receiver = (
-    // flex-wrap lets the badge drop to a second line on narrow (mobile)
-    // widths; the name group truncates last, so the receiver stays visible
-    // and tappable instead of collapsing to "to agent …".
-    <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-1.5 gap-y-1 text-ui-sm">
-      <span className="flex min-w-0 items-center gap-1">
-        <span className="shrink-0 text-muted-foreground">to agent</span>
-        <AgentHeaderLink
-          name={receiverName}
-          onOpen={openTarget !== null ? openReceiverTab : null}
-        />
-      </span>
-      {send.expectReply ? <ReplyExpectedBadge /> : null}
-    </span>
-  );
-
+  // The header is one row and the receiver name is the only element allowed
+  // to shrink, so every fixed-width neighbour costs name characters on a
+  // phone card or a narrow desktop tile. "Sent message" is spoken, not
+  // painted: the icon and "to" already say it. The reply-expected marker is
+  // an icon for the same reason (see `ReplyExpectedIcon`).
   const header = (
     <>
       <SendHorizontal
@@ -753,13 +742,15 @@ function A2ASendToolSegment(
         )}
         aria-hidden
       />
-      <span className="shrink-0 text-ui-sm font-medium text-foreground/85">
-        Sent message
+      <span className="sr-only">Sent message</span>
+      <span className="flex min-w-0 flex-1 items-center gap-1.5 text-ui-sm">
+        <span className="shrink-0 text-muted-foreground">to</span>
+        <AgentHeaderLink
+          name={receiverName}
+          onOpen={openTarget !== null ? openReceiverTab : null}
+        />
+        {send.expectReply ? <ReplyExpectedIcon /> : null}
       </span>
-      <span aria-hidden className="shrink-0 text-muted-foreground/40">
-        ·
-      </span>
-      {receiver}
       <ToolBadge state={badgeState} endState={endState} />
     </>
   );
@@ -767,6 +758,7 @@ function A2ASendToolSegment(
   const preview = <AgentMessagePreview message={send.message} tone="primary" />;
   const body = open ? (
     <div className="flex flex-col gap-2">
+      {send.expectReply ? <ReplyExpectedNote /> : null}
       <AgentMessageBody
         value={send.message}
         bodyFindUnitId={bodyFindUnitId}

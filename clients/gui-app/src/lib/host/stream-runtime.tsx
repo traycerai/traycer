@@ -21,6 +21,7 @@ import {
   remoteAwareOwnerIdentity,
 } from "@/lib/host/transport-key";
 import { buildHostStreamClient } from "@/hooks/host/use-host-stream-client-for";
+import { useCloudCapabilityRestored } from "@/hooks/host/use-cloud-capability-restored";
 import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
 import { StreamRuntimeContext } from "@/lib/host/stream-runtime-context";
 import type { StreamRuntimeBinding } from "@/lib/host/stream-runtime-context";
@@ -34,6 +35,10 @@ import {
   wireAvailabilityRecovery,
 } from "@/lib/host/availability-recovery";
 import { appLogger } from "@/lib/logger";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 
 export interface HostStreamProviderProps {
   readonly children: ReactNode;
@@ -163,6 +168,8 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
       target,
       endpoint: () => appHostClient?.getActiveHost() ?? null,
       bearer: () => binding.hostClient.getRequestContext()?.credentials ?? null,
+      cloudAuthorized: () =>
+        authorizesCloudCapability(useAuthStore.getState().status),
       authnBaseUrl,
       auth,
       userId: requestContextUserId,
@@ -319,6 +326,20 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
       }
     };
   }, [value, rebuildBackoff]);
+  // Same wake as `useHostStreamClientBindingFor`'s, and here for the same
+  // reason: this provider holds its own pacer over its own client, so a
+  // demotion walks THIS streak to the ceiling too and the promotion back moves
+  // none of this effect's dependencies. The app-wide client dials whichever
+  // host is effective, which is a relay endpoint whenever that host is remote -
+  // so "app-wide" is not "local, and therefore indifferent to cloud
+  // authorization". Fixing only the per-surface hook would leave the same
+  // 30-second dark window on the surfaces that read this provider.
+  useCloudCapabilityRestored(
+    useCallback(() => {
+      rebuildBackoff.clearStreak();
+      setRebuildNonce((nonce) => nonce + 1);
+    }, [rebuildBackoff]),
+  );
   useStreamWakeReconnect(value?.wsStreamClient ?? null);
   useReconnectStreamOnEndpointChange(
     value?.wsStreamClient ?? null,
@@ -336,6 +357,24 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
     }
     return hostClient.onBearerRotated(() => {
       wsStreamClient.notifyBearerRotated();
+    });
+  }, [wsStreamClient, hostClient]);
+
+  // On an in-place cloud-verdict change (a same-user demotion, or the promotion
+  // back), push the new verdict onto the app-wide stream client's open sessions
+  // so the host stops - or resumes - spending on this session's behalf without
+  // a reconnect.
+  //
+  // A SEPARATE EFFECT from the rotation forward above, not an addition to it.
+  // The demotion path rotates as it withdraws, so folding the two would look
+  // like it worked; the promotion path asserts a verdict on a bearer that did
+  // not move, and would be silently lost.
+  useEffect(() => {
+    if (wsStreamClient === null || hostClient === null) {
+      return;
+    }
+    return hostClient.onCloudVerdictChanged(() => {
+      wsStreamClient.notifyCloudVerdictChanged();
     });
   }, [wsStreamClient, hostClient]);
 

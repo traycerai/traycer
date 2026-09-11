@@ -73,9 +73,15 @@ describe("cli config store", () => {
     expect(await readCliConfig()).toEqual(EMPTY_CLI_CONFIG);
   });
 
-  it("defaults agent roles off when feature settings are missing", async () => {
-    expect(await readFeatureSettings()).toEqual({ agentRoles: false });
-    expect(readFeatureSettingsSync()).toEqual({ agentRoles: false });
+  it("defaults feature settings off when they are missing", async () => {
+    expect(await readFeatureSettings()).toEqual({
+      agentRoles: false,
+      artifactVersioning: false,
+    });
+    expect(readFeatureSettingsSync()).toEqual({
+      agentRoles: false,
+      artifactVersioning: false,
+    });
   });
 
   it("round-trips a written config through the schema", async () => {
@@ -88,7 +94,7 @@ describe("cli config store", () => {
       },
       envOverrides: { FOO: "bar" },
       logs: { cliLogLevel: "info" as const, hostLogLevel: "info" as const },
-      features: { agentRoles: false },
+      features: { agentRoles: false, artifactVersioning: false },
     };
     await writeCliConfig(cfg);
     expect(await readCliConfig()).toEqual(cfg);
@@ -156,7 +162,10 @@ describe("cli config store", () => {
 
   it("fails closed for malformed and future-version feature config reads", async () => {
     await writeRaw("{ not json");
-    expect(readFeatureSettingsSync()).toEqual({ agentRoles: false });
+    expect(readFeatureSettingsSync()).toEqual({
+      agentRoles: false,
+      artifactVersioning: false,
+    });
 
     await writeRaw(
       JSON.stringify({
@@ -166,7 +175,10 @@ describe("cli config store", () => {
         features: { agentRoles: true },
       }),
     );
-    expect(readFeatureSettingsSync()).toEqual({ agentRoles: false });
+    expect(readFeatureSettingsSync()).toEqual({
+      agentRoles: false,
+      artifactVersioning: false,
+    });
 
     await writeRaw(
       JSON.stringify({
@@ -176,7 +188,10 @@ describe("cli config store", () => {
         features: { agentRoles: "yes" },
       }),
     );
-    expect(readFeatureSettingsSync()).toEqual({ agentRoles: false });
+    expect(readFeatureSettingsSync()).toEqual({
+      agentRoles: false,
+      artifactVersioning: false,
+    });
   });
 
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
@@ -190,7 +205,10 @@ describe("cli config store", () => {
       );
       await chmod(cliConfigPath(), 0o000);
       try {
-        expect(readFeatureSettingsSync()).toEqual({ agentRoles: false });
+        expect(readFeatureSettingsSync()).toEqual({
+          agentRoles: false,
+          artifactVersioning: false,
+        });
       } finally {
         await chmod(cliConfigPath(), 0o600);
       }
@@ -203,7 +221,10 @@ describe("cli config store", () => {
     await setLogLevels("debug", "warn");
 
     await setAgentRolesEnabled(true);
-    expect(await readFeatureSettings()).toEqual({ agentRoles: true });
+    expect(await readFeatureSettings()).toEqual({
+      agentRoles: true,
+      artifactVersioning: false,
+    });
     expect(await readCliConfig()).toMatchObject({
       shell: {
         path: "/bin/fish",
@@ -215,7 +236,10 @@ describe("cli config store", () => {
     });
 
     await setAgentRolesEnabled(false);
-    expect(await readFeatureSettings()).toEqual({ agentRoles: false });
+    expect(await readFeatureSettings()).toEqual({
+      agentRoles: false,
+      artifactVersioning: false,
+    });
     expect(await readCliConfig()).toMatchObject({
       shell: {
         path: "/bin/fish",
@@ -223,7 +247,7 @@ describe("cli config store", () => {
       },
       envOverrides: { FOO: "bar" },
       logs: { cliLogLevel: "debug", hostLogLevel: "warn" },
-      features: { agentRoles: false },
+      features: { agentRoles: false, artifactVersioning: false },
     });
   });
 
@@ -296,7 +320,7 @@ describe("cli config store", () => {
       shell: { path: "/bin/zsh", args: null, entries: [] },
       envOverrides: {},
       logs: { cliLogLevel: "info", hostLogLevel: "info" },
-      features: { agentRoles: false },
+      features: { agentRoles: false, artifactVersioning: false },
     });
   });
 

@@ -38,6 +38,10 @@ import {
 import { managedCommandSchema } from "@traycer/protocol/host/managed-command/unary-schemas";
 import type { BrowserSessionInfo } from "@traycer/protocol/host/browser/contracts";
 import {
+  sessionInfo,
+  tabInfo,
+} from "@/lib/browser-view/sessions/__tests__/browser-session-test-kit";
+import {
   BrowserSessionsContext,
   type BrowserSessionsState,
 } from "@/components/epic-canvas/renderers/browser-sessions-context";
@@ -228,11 +232,14 @@ function browserSessionsState(
     lifecycle: "live",
     inventoryReady: true,
     canMaterializeElectron: false,
+    connectionGeneration: 0,
     items,
     errorMessage: null,
     retry: () => undefined,
     openTab: () => Promise.reject(new Error("not used")),
     closeTab: () => Promise.resolve(),
+    attachTab: () => Promise.reject(new Error("not used")),
+    moveTab: () => Promise.reject(new Error("not used")),
   };
 }
 
@@ -281,6 +288,7 @@ function renderTabStrip(input: {
 function renderTabStripForTab(
   tab: EpicCanvasTileRef,
   input: {
+    readonly inactive?: boolean;
     readonly onClose: (groupId: string, tabId: string) => void;
     readonly onMenuClose?: (groupId: string, tabId: string) => void;
     readonly onPromotePreview: (groupId: string) => void;
@@ -296,6 +304,25 @@ function renderTabStripForTab(
     testState.browserSessionsByHost.set(session.hostId, [...current, session]);
   }
   seedActivePreviewTab(tab);
+  if (input.inactive === true) {
+    const canvas = useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID];
+    if (canvas === undefined) throw new Error("Expected seeded canvas");
+    if (canvas.root?.kind !== "pane") {
+      throw new Error("Expected a seeded root pane");
+    }
+    useEpicCanvasStore.setState({
+      canvasByTabId: {
+        [VIEW_TAB_ID]: {
+          ...canvas,
+          root: {
+            ...canvas.root,
+            activeTabId: null,
+            previewTabId: null,
+          },
+        },
+      },
+    });
+  }
   const queryClient = createQueryClient();
   const onSplit = input.onSplit === undefined ? () => undefined : input.onSplit;
   render(
@@ -421,25 +448,21 @@ describe("<TabStrip />", () => {
         onSplit: () => undefined,
       },
       [
-        {
+        sessionInfo({
           sessionId: "session-1",
-          epicId: "epic-1",
           hostId: "host-A",
-          profile: "primary",
           lastActivityAt: 2,
           runtime: { kind: "electron", revision: 0 },
           tabs: [
-            {
+            tabInfo({
               tabId: "browser-tab-1",
               url: "https://thepier5.com/",
               originTier: "external",
-              status: "ready",
               title: "Waterfront Hotel in Baltimore | Pier 5 Hotel",
               viewed: true,
-              drivenBy: [],
-            },
+            }),
           ],
-        },
+        }),
       ],
     );
 
@@ -466,25 +489,21 @@ describe("<TabStrip />", () => {
       viewportPreset: "responsive",
     };
     testState.browserSessionsByHost.set("host-B", [
-      {
+      sessionInfo({
         sessionId: "session-1",
-        epicId: "epic-1",
         hostId: "host-B",
-        profile: "primary",
         lastActivityAt: 2,
         runtime: { kind: "electron", revision: 0 },
         tabs: [
-          {
+          tabInfo({
             tabId: "browser-tab-1",
             url: "https://thepier5.com/",
             originTier: "external",
-            status: "ready",
             title: "Waterfront Hotel in Baltimore | Pier 5 Hotel",
             viewed: true,
-            drivenBy: [],
-          },
+          }),
         ],
-      },
+      }),
     ]);
     renderTabStripForTab(
       browserTab,
@@ -548,6 +567,27 @@ describe("<TabStrip />", () => {
     renderTabStripForTab(
       CHAT_TAB,
       {
+        onClose: () => undefined,
+        onPromotePreview: () => undefined,
+        onOpenBlankTab: () => undefined,
+        onSplit: undefined,
+      },
+      [],
+    );
+
+    fireEvent.click(screen.getByRole("tab", { name: /Agent chat/ }));
+
+    expect(consumeNotificationEntity).toHaveBeenCalledWith({
+      originHostId: "host-B",
+      entity: { epicId: "epic-1", chatId: "chat-1" },
+    });
+  });
+
+  it("marks an inactive chat tab's notifications read when selecting it", () => {
+    renderTabStripForTab(
+      CHAT_TAB,
+      {
+        inactive: true,
         onClose: () => undefined,
         onPromotePreview: () => undefined,
         onOpenBlankTab: () => undefined,

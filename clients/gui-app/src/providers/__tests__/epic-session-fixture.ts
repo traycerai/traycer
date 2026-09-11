@@ -13,8 +13,9 @@ import type {
   ParamsOf,
   StreamMethodSupport,
 } from "@traycer-clients/shared/host-transport/ws-stream-client";
-import { epicStateSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/state-subscribe";
-import { epicStatusSubscribeServerFrameSchemaV10 } from "@traycer/protocol/host/epic/status-subscribe";
+import type { StreamParamsProvider } from "@traycer-clients/shared/host-transport/i-stream-client";
+import { epicStateSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/state-subscribe";
+import { epicStatusSubscribeServerFrameSchemaV11 } from "@traycer/protocol/host/epic/status-subscribe";
 import { fakeDurableStreamTransports } from "@/lib/host/test-support/fake-durable-stream-transport";
 
 export type EpicSessionFixtureArm = "legacy" | "lanes";
@@ -77,7 +78,7 @@ function stateSnapshot(sourceRoot: Y.Doc): EpicStateSnapshotFrame {
   if (typeof title !== "string") {
     throw new Error("expected the source root to hold an epic title");
   }
-  const parsed = epicStateSubscribeServerFrameSchemaV10.parse({
+  const parsed = epicStateSubscribeServerFrameSchemaV11.parse({
     kind: "snapshot",
     hasBinaryPayload: false,
     authorityEpoch: AUTHORITY_EPOCH,
@@ -100,7 +101,7 @@ function stateSnapshot(sourceRoot: Y.Doc): EpicStateSnapshotFrame {
 }
 
 function statusSnapshot(): EpicStatusSnapshotFrame {
-  const parsed = epicStatusSubscribeServerFrameSchemaV10.parse({
+  const parsed = epicStatusSubscribeServerFrameSchemaV11.parse({
     kind: "snapshot",
     hasBinaryPayload: false,
     authorityEpoch: AUTHORITY_EPOCH,
@@ -192,7 +193,7 @@ export function createEpicSessionFixture(
       Method extends keyof HostStreamRpcRegistry & string,
     >(
       method: Method,
-      paramsProvider: () => ParamsOf<HostStreamRpcRegistry, Method>,
+      paramsProvider: StreamParamsProvider<HostStreamRpcRegistry, Method>,
     ): IStreamSession =>
       capture(() =>
         recording.client.subscribeWithParamsProvider(method, paramsProvider),

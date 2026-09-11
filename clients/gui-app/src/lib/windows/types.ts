@@ -34,6 +34,17 @@ export type DesktopOwnershipClaimResult =
   | { readonly ok: true }
   | { readonly ok: false; readonly currentOwner: string };
 
+/**
+ * One window's currently VISIBLE Epics. Distinct from
+ * {@link DesktopOwnershipEntry}, which is per tab and counts hidden tabs too -
+ * see the desktop-side `EpicVisibilityEntry` for why reading ownership as
+ * visibility would disable parking for every multi-window case.
+ */
+export interface DesktopEpicVisibilityEntry {
+  readonly windowId: string;
+  readonly epicIds: readonly string[];
+}
+
 export interface DesktopPerWindowEpicViewTab {
   readonly id: string;
   readonly epicId: string;
@@ -71,6 +82,12 @@ export interface DesktopPerWindowLandingDraft {
   readonly settings: DesktopJsonValue | null;
   readonly composerMode: string | null;
   readonly workspace: DesktopJsonValue | null;
+  /**
+   * Tab-strip membership. Older snapshots omit it (`null` = open).
+   * Closed drafts are persisted so reload can keep them out of the strip
+   * without dropping their image-hash roots.
+   */
+  readonly closed: boolean | null;
 }
 
 export interface DesktopPerWindowSnapshot {
@@ -271,6 +288,7 @@ export interface DesktopSupportFreezeEvidenceInput {
 
 export interface DesktopSupportFreezeEvidenceResult {
   readonly reportId: string;
+  readonly contactEmail: string | null;
 }
 
 /**
@@ -655,7 +673,7 @@ export interface DesktopReportIssueForm {
   // D7: only non-null when the user actively changed the pre-filled
   // "Where did this happen?" selector away from its default.
   readonly location: string | null;
-  // G1: identity is attached to the private report only when this is true.
+  // Retained for older clients. Signed-in email always accompanies private reports.
   readonly allowContact: boolean;
   // Consent panel's two log toggles (default on): withholds the tail from
   // the private submission / diagnostic bundle when false.
@@ -761,6 +779,47 @@ export interface DesktopWindowsBridge {
       dispose(): void;
     };
   };
+  /**
+   * Which Epics each window currently SHOWS - renderer parking's cross-window
+   * answer (plan C, decision C6). Each window reports its own roll-up; main
+   * fans the whole per-window map back so a window can ask about the others.
+   *
+   * Optional + capability-probed, like `perWindowState.clear`: a preload built
+   * before this channel existed has no `epicVisibility`, and requiring it in
+   * `isDesktopWindowsBridge` would fail the WHOLE bridge on a renderer/preload
+   * skew - costing canvas persistence to fix a parking heuristic. Absent, the
+   * decider degrades to this window's own panes, which is exactly the browser
+   * behaviour (where there is no second window) and the pre-channel desktop
+   * behaviour. Probed at the install site
+   * (`lib/epics/cross-window-epic-visibility.ts`).
+   */
+  epicVisibility?: {
+    snapshot(): Promise<readonly DesktopEpicVisibilityEntry[]>;
+    report(epicIds: readonly string[]): Promise<void>;
+    onChange(
+      handler: (entries: readonly DesktopEpicVisibilityEntry[]) => void,
+    ): {
+      dispose(): void;
+    };
+  };
+  /**
+   * Whether THIS window is on screen (shown and not minimised) as main sees
+   * it. Renderer parking's window-level input: the Page Visibility API is
+   * inert in the desktop app because every window runs with
+   * `backgroundThrottling: false`, so minimising changes nothing the renderer
+   * can observe on its own.
+   *
+   * Optional + capability-probed like `epicVisibility`, for the same skew
+   * reason. Absent, the renderer keeps answering "visible" and parking waits
+   * for a tab hide, which is the pre-channel behaviour. Probed at the install
+   * site (`lib/epics/desktop-window-visibility.ts`).
+   */
+  windowVisibility?: {
+    snapshot(): Promise<boolean>;
+    onChange(handler: (onScreen: boolean) => void): {
+      dispose(): void;
+    };
+  };
   perWindowState: {
     get(): Promise<DesktopPerWindowSnapshot>;
     capabilities?(): Promise<DesktopPerWindowStateCapabilities>;
@@ -781,7 +840,39 @@ export interface DesktopWindowsBridge {
     set(
       snapshot: DesktopAuthSessionSnapshot,
     ): Promise<DesktopAuthSessionSetResult>;
+    /**
+     * Withdraws main's verification of the session it holds - the renderer's
+     * TERMINAL verdict loss, which `set` cannot carry because the status an
+     * `unverified` flattens to signs sibling windows out. Optional +
+     * capability-probed like `perWindowState.clear`: a desktop shell built
+     * before the channel existed has no `revoke`, and the bridge degrades to
+     * the pre-channel behaviour (main keeps its verification until the
+     * bearer expires) rather than failing the `isDesktopWindowsBridge` guard.
+     * Names the rejected bearer: main applies it only while that is still
+     * the session it holds, so a revoke racing a sibling window's fresh
+     * sign-in cannot strip the new session.
+     */
+    revoke?(rejectedToken: string): Promise<void>;
     onChange(handler: (snapshot: DesktopAuthSessionSnapshot) => void): {
+      dispose(): void;
+    };
+    /**
+     * The verdict-loss edge fanned to EVERY window, including the one that
+     * raised it.
+     *
+     * `onChange` structurally cannot deliver this: main answers a revoke by
+     * dropping its own verification and republishing the SAME snapshot, which
+     * every window's latch discards as an echo - so a sibling never learned
+     * its bearer had been refused and kept spending it on cloud work until it
+     * revalidated on its own schedule.
+     *
+     * Optional and capability-probed for the same reason as `revoke`: a
+     * desktop shell built before the channel existed does not have it, and
+     * the bridge degrades to the pre-channel behaviour rather than failing
+     * the `isDesktopWindowsBridge` guard. Carries the rejected bearer so each
+     * window fences the demotion to the session it actually holds.
+     */
+    onVerificationRevoked?(handler: (rejectedToken: string) => void): {
       dispose(): void;
     };
   };

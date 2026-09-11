@@ -328,6 +328,8 @@ describe("useHostQuery auth readiness", () => {
             busyBreakdown: null,
             updateOperation: null,
             updateTransaction: null,
+            storeFormats: null,
+            install: null,
           };
         },
       },
@@ -420,6 +422,45 @@ describe("useHostQuery auth readiness", () => {
 describe("host query/mutation HostRpcError boundary", () => {
   afterEach(() => {
     cleanup();
+  });
+
+  it("refuses a dispatch when preflight throws, sending nothing", async () => {
+    const fixture = createHostQueryFixture();
+    fixture.client.setRequestContext(
+      createRequestContextFixture({
+        origin: "renderer",
+        bearerToken: "tok-1",
+      }),
+    );
+    const client = fixture.client.createRequester(mockLocalHostEntry);
+    const request = vi.spyOn(client, "requestWithSignal");
+
+    const rendered = renderHook(
+      () =>
+        useHostQueryWithResponseMap({
+          cacheKeyIdentity: undefined,
+          client,
+          method: "host.status",
+          params: {},
+          options: null,
+          preflight: () => {
+            throw new Error("verdict withdrawn");
+          },
+          mapResponse: (mapArgs) => mapArgs.response,
+        }),
+      { wrapper: fixture.Wrapper },
+    );
+
+    await waitFor(() => {
+      expect(rendered.result.current.error).not.toBeNull();
+    });
+    expect(rendered.result.current.error).toBeInstanceOf(HostRpcError);
+    expect(rendered.result.current.error).toMatchObject({
+      code: "RPC_ERROR",
+      method: "host.status",
+      message: "verdict withdrawn",
+    });
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("normalizes a bare throw from mapResponse into a HostRpcError", async () => {
@@ -875,6 +916,8 @@ function createHostQueryFixture(): {
             // which is exactly what host.status@1.2-and-older peers send.
             updateOperation: null,
             updateTransaction: null,
+            storeFormats: null,
+            install: null,
           };
         },
       },
@@ -929,6 +972,8 @@ function createEndpointGatedHostQueryFixture(): {
             busyBreakdown: null,
             updateOperation: null,
             updateTransaction: null,
+            storeFormats: null,
+            install: null,
           };
         },
       },

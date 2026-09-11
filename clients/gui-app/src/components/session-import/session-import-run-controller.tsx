@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef } from "react";
 import type { PermissionMode } from "@traycer/protocol/persistence/epic/schemas";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { sessionImportRunV11 } from "@traycer/protocol/host/session-import/run";
+import { sessionImportRunV12 } from "@traycer/protocol/host/session-import/run";
 import type { ListGuiHarnessesResponse } from "@traycer/protocol/host/index";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import type { IStreamClient } from "@traycer-clients/shared/host-transport/i-stream-client";
@@ -51,11 +51,11 @@ function newChatPermissionModeFor(hostId: string): PermissionMode {
  * `auto`.
  *
  * `permissionMode` rides in the `sessionImport.run` OPEN request, and that
- * request's schema is shared by `1.0` and `1.1` byte for byte - the slot binds
+ * request's schema is shared by `1.0` through `1.2` byte for byte - the slot binds
  * the live enum, so `auto` became expressible on `1.0` the moment the enum
- * widened. A `1.0` host therefore accepts the frame and rejects the VALUE, as
+ * widened. A pre-`1.2` host therefore accepts the frame and rejects the VALUE, as
  * a validation error, after the user has picked their sessions. That failure
- * is the whole reason `sessionImportRunV11` exists, so the client owes the
+ * is the whole reason `sessionImportRunV12` exists, so the client owes the
  * check rather than the wire.
  *
  * Demotion is one-way and never elevates: `auto` is `auto_accept_edits` plus a
@@ -114,7 +114,7 @@ function hostUnderstandsAutoPermissionMode(input: {
 }): boolean {
   const negotiated =
     input.wsStreamClient.getMethodSchemaVersion("sessionImport.run");
-  const required = sessionImportRunV11.schemaVersion;
+  const required = sessionImportRunV12.schemaVersion;
   if (
     negotiated !== null &&
     negotiated.major === required.major &&

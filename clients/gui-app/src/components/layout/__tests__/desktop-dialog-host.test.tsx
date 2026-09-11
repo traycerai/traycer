@@ -192,7 +192,8 @@ function createSupportBridgeFixture(input: {
     revealLog: input.revealLog,
     submitReport: input.submitReport,
     tailLog: input.tailLog,
-    freezeEvidence: () => Promise.resolve({ reportId: "rpt_test" }),
+    freezeEvidence: () =>
+      Promise.resolve({ reportId: "rpt_test", contactEmail: null }),
     discardFrozenEvidence: () => Promise.resolve(),
     readFrozenLogTail: (frozenInput) =>
       Promise.resolve({
@@ -374,7 +375,11 @@ function createBaseRunnerHost(): IRunnerHost {
       get: () => Promise.resolve(null),
       signIn: () => Promise.resolve(),
       rotate: () =>
-        Promise.resolve({ outcome: "deleted" as const, pair: null }),
+        Promise.resolve({
+          outcome: "deleted" as const,
+          pair: null,
+          rejection: null,
+        }),
       delete: () => Promise.resolve(),
       deleteIfToken: () => Promise.resolve("kept" as const),
       subscribe: () => ({ dispose: () => undefined }),
@@ -465,6 +470,7 @@ function createDirtyEpicHandle(
     tuiAgentIngestSeq: 0,
     ...EMPTY_PROJECTED_SLICES,
     chatRecords: EMPTY_CHATS_SLICE,
+    chatRecordHeads: {},
     chatRecordListAuthoritative: true,
     chatRetractions: {},
     tuiAgentRecords: EMPTY_PROJECTED_SLICES.tuiAgents,
@@ -484,6 +490,15 @@ function createDirtyEpicHandle(
     hostTransportStatus: "open",
     recordsTransportStatus: "open",
     cloudSyncStatus: "connected",
+    durabilityStatus: null,
+    durabilityPauseReason: null,
+    durabilityPromotionState: null,
+    localProtection: null,
+    cloudFreshness: null,
+    durabilityLegsNegotiated: false,
+    durabilityStatusNegotiated: false,
+    retainedDurabilityStatus: null,
+    retainedDurabilityPauseReason: null,
     hasFreshCloudSyncStatus: true,
     hasConnectedOnce: true,
     accessLost: false,
@@ -516,6 +531,7 @@ function createDirtyEpicHandle(
     },
     requestFreshSnapshot: () => undefined,
     retryTransport: () => undefined,
+    wakeTransport: () => undefined,
     retryMigration: () => undefined,
     // These became ASYNC when the replica moved: the queue mints ids and the
     // mutations stamp the overlay on the worker thread, so every one of them
@@ -585,6 +601,7 @@ function createDirtyEpicHandle(
     detachTransport: () => undefined,
     requestFreshSnapshot: () => undefined,
     retryTransport: () => undefined,
+    wakeTransport: () => undefined,
     isClean: () => !store.getState().isDirty,
     hotArtifactRoomIdsForTests: () => [],
     ...INERT_ROOT_STATE_PORT,

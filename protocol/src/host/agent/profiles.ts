@@ -27,6 +27,7 @@ import {
   providerIdSchemaV50,
   providerIdSchemaV60,
   providerIdSchemaV70,
+  providerIdSchemaV80,
   providerProfileRateLimitStatusSchema,
 } from "@traycer/protocol/host/provider-schemas";
 import {
@@ -38,6 +39,7 @@ import {
   providerRateLimitsSchemaV50,
   providerRateLimitsSchemaV60,
   providerRateLimitsSchemaV70,
+  providerRateLimitsSchemaV80,
 } from "@traycer/protocol/host/rate-limit/schemas";
 import {
   agentFacingHarnessIdSchema,
@@ -47,6 +49,7 @@ import {
   guiHarnessIdSchemaV50,
   guiHarnessIdSchemaV60,
   guiHarnessIdSchemaV70,
+  guiHarnessIdSchemaV80,
 } from "@traycer/protocol/host/agent/shared";
 
 // ─── `agent.listProviderProfiles@1.0` ─────────────────────────────────────
@@ -207,11 +210,120 @@ export const agentListProviderProfilesV40 = defineRpcContract({
   responseSchema: agentListProviderProfilesResponseSchemaV4,
 });
 
+/**
+ * Frozen `agent.listProviderProfiles@5.0` response, pinned to the
+ * pre-Antigravity provider id set (`providerIdSchemaV80`).
+ *
+ * This line IS released - `cli-v1.3.0` / `host-v1.3.0` shipped it, cut from a
+ * branch that predates Antigravity. Until then it pointed at the live schema,
+ * the same defect that let `omp` first try to ride v2.0, `huggingface` v3.0
+ * and `reasonix` v4.0. v6.0 now carries the live schema.
+ */
+export const agentListProviderProfilesResponseSchemaV5 = z.object({
+  providerId: providerIdSchemaV80,
+  profiles: z.array(agentProviderProfileSummarySchema),
+});
+export type AgentListProviderProfilesResponseV5 = z.infer<
+  typeof agentListProviderProfilesResponseSchemaV5
+>;
+
 export const agentListProviderProfilesV50 = defineRpcContract({
   method: "agent.listProviderProfiles",
   schemaVersion: { major: 5, minor: 0 } as const,
   requestSchema: agentListProviderProfilesRequestSchema,
+  responseSchema: agentListProviderProfilesResponseSchemaV5,
+});
+
+export const agentListProviderProfilesV60 = defineRpcContract({
+  method: "agent.listProviderProfiles",
+  schemaVersion: { major: 6, minor: 0 } as const,
+  requestSchema: agentListProviderProfilesRequestSchema,
   responseSchema: agentListProviderProfilesResponseSchema,
+});
+
+export const agentListProviderProfilesUpgradeV50ToV60 = defineUpgradePath<
+  typeof agentListProviderProfilesV50,
+  typeof agentListProviderProfilesV60
+>({
+  from: { major: 5, minor: 0 },
+  to: { major: 6, minor: 0 },
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const agentListProviderProfilesDowngradeV60ToV50 = defineDowngradePath<
+  typeof agentListProviderProfilesV60,
+  typeof agentListProviderProfilesV50
+>({
+  from: { major: 6, minor: 0 },
+  to: { major: 5, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    // Same fail-closed rule as the v5->v4 bridge below: this response carries
+    // exactly one provider, so there is nothing to filter and the only honest
+    // options are pass-through or refuse.
+    const parsed =
+      agentListProviderProfilesResponseSchemaV5.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Listing this provider's profiles requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
+export const agentListProviderProfilesDowngradeV60ToV40 = defineDowngradePath<
+  typeof agentListProviderProfilesV60,
+  typeof agentListProviderProfilesV40
+>({
+  from: { major: 6, minor: 0 },
+  to: { major: 4, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    const parsed =
+      agentListProviderProfilesResponseSchemaV4.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Listing this provider's profiles requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
+export const agentListProviderProfilesDowngradeV60ToV30 = defineDowngradePath<
+  typeof agentListProviderProfilesV60,
+  typeof agentListProviderProfilesV30
+>({
+  from: { major: 6, minor: 0 },
+  to: { major: 3, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    const parsed =
+      agentListProviderProfilesResponseSchemaV3.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Listing this provider's profiles requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
 });
 
 export const agentListProviderProfilesUpgradeV10ToV20 = defineUpgradePath<
@@ -425,7 +537,7 @@ export const agentListProviderProfilesUpgradeV40ToV50 = defineUpgradePath<
   from: { major: 4, minor: 0 },
   to: { major: 5, minor: 0 },
   // Request shape is identical across both majors - only the response's
-  // `providerId` enum grows (reasonix).
+  // `providerId` enum grows (reasonix, antigravity).
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
@@ -470,7 +582,8 @@ export const agentListProviderProfilesDowngradeV50ToV30 = defineDowngradePath<
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => {
     // Same fail-closed rule as the v5->v4 bridge, against the narrower v3.0
-    // enum: anything post-v6.0 (huggingface, reasonix) is unrepresentable here.
+    // enum: anything post-v6.0 (huggingface, reasonix, antigravity) is
+    // unrepresentable here.
     const parsed =
       agentListProviderProfilesResponseSchemaV3.safeParse(response);
     if (!parsed.success) {
@@ -496,7 +609,7 @@ export const agentListProviderProfilesDowngradeV50ToV20 = defineDowngradePath<
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => {
     // Same fail-closed rule against the narrower v2.0 enum: anything post-v5.0
-    // (omp, huggingface, reasonix) is unrepresentable here.
+    // (omp, huggingface, reasonix, antigravity) is unrepresentable here.
     const parsed =
       agentListProviderProfilesResponseSchemaV2.safeParse(response);
     if (!parsed.success) {
@@ -522,7 +635,56 @@ export const agentListProviderProfilesDowngradeV50ToV10 = defineDowngradePath<
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => {
     // Same fail-closed rule against the narrowest enum: anything post-v4.0
-    // (Hermes, omp, huggingface, reasonix) is unrepresentable here.
+    // (Hermes, omp, huggingface, reasonix, antigravity) is unrepresentable
+    // here.
+    const parsed =
+      agentListProviderProfilesResponseSchemaV1.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Listing this provider's profiles requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
+export const agentListProviderProfilesDowngradeV60ToV20 = defineDowngradePath<
+  typeof agentListProviderProfilesV60,
+  typeof agentListProviderProfilesV20
+>({
+  from: { major: 6, minor: 0 },
+  to: { major: 2, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    const parsed =
+      agentListProviderProfilesResponseSchemaV2.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Listing this provider's profiles requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
+export const agentListProviderProfilesDowngradeV60ToV10 = defineDowngradePath<
+  typeof agentListProviderProfilesV60,
+  typeof agentListProviderProfilesV10
+>({
+  from: { major: 6, minor: 0 },
+  to: { major: 1, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
     const parsed =
       agentListProviderProfilesResponseSchemaV1.safeParse(response);
     if (!parsed.success) {
@@ -683,13 +845,14 @@ export const agentGetProviderProfileRateLimitsV40 = defineRpcContract({
   responseSchema: agentGetProviderProfileRateLimitsResponseSchemaV4,
 });
 
-// The LIVE line: ranges over `providerRateLimitsSchema` rather than a frozen
-// snapshot, because `5` is the newest major and no released peer has ever
-// negotiated it (the newest released baseline tops out at `4`). It stops being
-// the live line the moment a tag ships it - see the v4.0 block above for what
-// that costs when it is missed.
+// Frozen `@5.0`: the `1.3.0` tags shipped this line, so it ranges over
+// `providerRateLimitsSchemaV80` rather than the live union. Its comment used to
+// read "`5` is the newest major and no released peer has ever negotiated it" -
+// the sentence the v4.0 block above already records as the exact thing that
+// stops being true the moment a tag ships. It happened again here, and
+// Antigravity is the id that reached the released wire through it.
 export const agentGetProviderProfileRateLimitsResponseSchemaV5 = z.object({
-  rateLimits: providerRateLimitsSchema,
+  rateLimits: providerRateLimitsSchemaV80,
   usageUpdatedAt: z.number().nullable(),
 });
 
@@ -699,6 +862,172 @@ export const agentGetProviderProfileRateLimitsV50 = defineRpcContract({
   requestSchema: agentGetProviderProfileRateLimitsRequestSchema,
   responseSchema: agentGetProviderProfileRateLimitsResponseSchemaV5,
 });
+
+// The LIVE line. Ranges over `providerRateLimitsSchema`; the moment a tag
+// ships `6`, freeze it against a `V90` union and open `7` - do not edit this
+// comment to say the line is safe because it is newest.
+//
+// This method deliberately does NOT follow its siblings, where the head
+// contract names the un-suffixed base schema. Here the head gets its own
+// `...ResponseSchemaVN` object and the base name
+// `agentGetProviderProfileRateLimitsResponseSchema` stays a structurally
+// identical but DISTINCT object that is canonical for nothing. That is not an
+// oversight: it is the fixture
+// `clients/traycer-cli/src/internal/__tests__/host-rpc.test.ts` uses to prove
+// the CLI's `assertCanonicalResponseSchema` backstop actually fires. Collapse
+// the two and that test has nothing left to falsify with.
+export const agentGetProviderProfileRateLimitsResponseSchemaV6 = z.object({
+  rateLimits: providerRateLimitsSchema,
+  usageUpdatedAt: z.number().nullable(),
+});
+
+export const agentGetProviderProfileRateLimitsV60 = defineRpcContract({
+  method: "agent.getProviderProfileRateLimits",
+  schemaVersion: { major: 6, minor: 0 } as const,
+  requestSchema: agentGetProviderProfileRateLimitsRequestSchema,
+  responseSchema: agentGetProviderProfileRateLimitsResponseSchemaV6,
+});
+
+export const agentGetProviderProfileRateLimitsUpgradeV50ToV60 =
+  defineUpgradePath<
+    typeof agentGetProviderProfileRateLimitsV50,
+    typeof agentGetProviderProfileRateLimitsV60
+  >({
+    from: { major: 5, minor: 0 },
+    to: { major: 6, minor: 0 },
+    // Request shape is identical - only the response's `rateLimits.provider`
+    // enum grows (antigravity).
+    upgradeRequest: (request) => request,
+    upgradeResponse: (response) => response,
+  });
+
+export const agentGetProviderProfileRateLimitsDowngradeV60ToV50 =
+  defineDowngradePath<
+    typeof agentGetProviderProfileRateLimitsV60,
+    typeof agentGetProviderProfileRateLimitsV50
+  >({
+    from: { major: 6, minor: 0 },
+    to: { major: 5, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) => {
+      // One provider per response, so there is nothing to filter: pass through
+      // or refuse. The message names no provider so it stays honest as the
+      // enum grows.
+      const parsed =
+        agentGetProviderProfileRateLimitsResponseSchemaV5.safeParse(response);
+      if (!parsed.success) {
+        return {
+          ok: false,
+          error: {
+            code: "DOWNGRADE_UNSUPPORTED",
+            message:
+              "Reading this provider's rate limits requires a newer Traycer client.",
+          },
+        };
+      }
+      return { ok: true, value: parsed.data };
+    },
+  });
+
+export const agentGetProviderProfileRateLimitsDowngradeV60ToV40 =
+  defineDowngradePath<
+    typeof agentGetProviderProfileRateLimitsV60,
+    typeof agentGetProviderProfileRateLimitsV40
+  >({
+    from: { major: 6, minor: 0 },
+    to: { major: 4, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) => {
+      const parsed =
+        agentGetProviderProfileRateLimitsResponseSchemaV4.safeParse(response);
+      if (!parsed.success) {
+        return {
+          ok: false,
+          error: {
+            code: "DOWNGRADE_UNSUPPORTED",
+            message:
+              "Reading this provider's rate limits requires a newer Traycer client.",
+          },
+        };
+      }
+      return { ok: true, value: parsed.data };
+    },
+  });
+
+export const agentGetProviderProfileRateLimitsDowngradeV60ToV30 =
+  defineDowngradePath<
+    typeof agentGetProviderProfileRateLimitsV60,
+    typeof agentGetProviderProfileRateLimitsV30
+  >({
+    from: { major: 6, minor: 0 },
+    to: { major: 3, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) => {
+      const parsed =
+        agentGetProviderProfileRateLimitsResponseSchemaV3.safeParse(response);
+      if (!parsed.success) {
+        return {
+          ok: false,
+          error: {
+            code: "DOWNGRADE_UNSUPPORTED",
+            message:
+              "Reading this provider's rate limits requires a newer Traycer client.",
+          },
+        };
+      }
+      return { ok: true, value: parsed.data };
+    },
+  });
+
+export const agentGetProviderProfileRateLimitsDowngradeV60ToV20 =
+  defineDowngradePath<
+    typeof agentGetProviderProfileRateLimitsV60,
+    typeof agentGetProviderProfileRateLimitsV20
+  >({
+    from: { major: 6, minor: 0 },
+    to: { major: 2, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) => {
+      const parsed =
+        agentGetProviderProfileRateLimitsResponseSchemaV2.safeParse(response);
+      if (!parsed.success) {
+        return {
+          ok: false,
+          error: {
+            code: "DOWNGRADE_UNSUPPORTED",
+            message:
+              "Reading this provider's rate limits requires a newer Traycer client.",
+          },
+        };
+      }
+      return { ok: true, value: parsed.data };
+    },
+  });
+
+export const agentGetProviderProfileRateLimitsDowngradeV60ToV10 =
+  defineDowngradePath<
+    typeof agentGetProviderProfileRateLimitsV60,
+    typeof agentGetProviderProfileRateLimitsV10
+  >({
+    from: { major: 6, minor: 0 },
+    to: { major: 1, minor: 0 },
+    downgradeRequest: (request) => ({ ok: true, value: request }),
+    downgradeResponse: (response) => {
+      const parsed =
+        agentGetProviderProfileRateLimitsResponseSchemaV1.safeParse(response);
+      if (!parsed.success) {
+        return {
+          ok: false,
+          error: {
+            code: "DOWNGRADE_UNSUPPORTED",
+            message:
+              "Reading this provider's rate limits requires a newer Traycer client.",
+          },
+        };
+      }
+      return { ok: true, value: parsed.data };
+    },
+  });
 
 export const agentGetProviderProfileRateLimitsUpgradeV10ToV20 =
   defineUpgradePath<
@@ -962,7 +1291,7 @@ export const agentGetProviderProfileRateLimitsUpgradeV40ToV50 =
     from: { major: 4, minor: 0 },
     to: { major: 5, minor: 0 },
     // Request shape is identical across both majors - only the response's
-    // `rateLimits.provider` enum grows (reasonix).
+    // `rateLimits.provider` enum grows (reasonix, antigravity).
     upgradeRequest: (request) => request,
     upgradeResponse: (response) => response,
   });
@@ -980,9 +1309,9 @@ export const agentGetProviderProfileRateLimitsDowngradeV50ToV40 =
       // keeps every available arm the live union carries at this cut (grok,
       // huggingface, opencode and cursor all shipped on 4.0), so an available
       // snapshot reparses as-is. Only a post-v7.0 provider is unrepresentable,
-      // and it can only ever arrive on the `available: false` arm - Reasonix
-      // exposes no queryable quota API and is outside
-      // `rateLimitCapableProviderIdSchema`. This response carries exactly one
+      // and it can only ever arrive on the `available: false` arm - neither
+      // Reasonix nor Antigravity exposes a queryable quota API, so both sit
+      // outside `rateLimitCapableProviderIdSchema`. This response carries one
       // provider, so fail closed rather than mis-decode. The message names no
       // provider so it stays honest as the enum grows.
       const parsed =
@@ -1012,7 +1341,7 @@ export const agentGetProviderProfileRateLimitsDowngradeV50ToV30 =
     downgradeResponse: (response) => {
       // Same shape as the v4->v3 bridge: the frozen v3.0 union keeps grok, so
       // only OpenCode/cursor degrade, and anything post-v6.0 (huggingface,
-      // reasonix) fails closed.
+      // reasonix, antigravity) fails closed.
       const parsed =
         agentGetProviderProfileRateLimitsResponseSchemaV3.safeParse({
           ...response,
@@ -1044,8 +1373,9 @@ export const agentGetProviderProfileRateLimitsDowngradeV50ToV20 =
     downgradeRequest: (request) => ({ ok: true, value: request }),
     downgradeResponse: (response) => {
       // Same rule against the narrower v2.0 enum: the frozen v2.0 union keeps
-      // grok, so only post-v5.0 providers (omp, huggingface, reasonix) fail
-      // closed. Cursor and OpenCode degrade as they do above.
+      // grok, so only post-v5.0 providers (omp, huggingface, reasonix,
+      // antigravity) fail closed. Cursor and OpenCode degrade as they do
+      // above.
       const parsed =
         agentGetProviderProfileRateLimitsResponseSchemaV2.safeParse({
           ...response,
@@ -1078,7 +1408,8 @@ export const agentGetProviderProfileRateLimitsDowngradeV50ToV10 =
     downgradeResponse: (response) => {
       // Like the v4->v1 bridge this one also degrades grok: the frozen v1.0
       // union predates the grok available arm. Post-v4.0 providers (Hermes,
-      // omp, huggingface, reasonix) stay unrepresentable and fail closed.
+      // omp, huggingface, reasonix, antigravity) stay unrepresentable and fail
+      // closed.
       const rateLimits = mapGrokAvailableToUnavailable(
         mapCursorAvailableToUnavailable(
           mapOpenCodeAvailableToUnavailable(response.rateLimits),
@@ -1343,11 +1674,139 @@ export const agentConfigureV40 = defineRpcContract({
   responseSchema: agentConfigureResponseSchemaV4,
 });
 
+/**
+ * Frozen `agent.configure@5.0` settings/response, pinned to the
+ * pre-Antigravity harness id set (`guiHarnessIdSchemaV80`).
+ *
+ * This line IS released - `cli-v1.3.0` / `host-v1.3.0` shipped it, cut from a
+ * branch that predates Antigravity. Until then it pointed at the live
+ * schemas, which is how the id reached it. v6.0 carries the live schemas.
+ *
+ * Only the RESPONSE is frozen; the request keeps the live enum for the reason
+ * the v4.0 freeze gives - it is a client→host slot.
+ */
+export const agentConfigureSettingsSchemaV5 = z.object({
+  harnessId: guiHarnessIdSchemaV80,
+  model: z.string().min(1),
+  profileSelection: concreteProfileSelectionSchema,
+  reasoningEffort: z.string().nullable(),
+  fastMode: z.boolean(),
+  // Pinned pre-`auto` on the same asymmetry as the four freezes above: 5.0 is
+  // RELEASED, and its caller decodes this response strictly. The REQUEST keeps
+  // the live mode enum deliberately - an A2A caller asking for `auto` against
+  // a host too old to know it gets a clean validation error, which is the
+  // documented behaviour.
+  permissionMode: permissionModeSchemaPreAuto,
+  agentMode: agentModeSchema,
+});
+export type AgentConfigureSettingsV5 = z.infer<
+  typeof agentConfigureSettingsSchemaV5
+>;
+
+export const agentConfigureResponseSchemaV5 = z.object({
+  settings: agentConfigureSettingsSchemaV5,
+  warnings: z.array(z.string()),
+});
+export type AgentConfigureResponseV5 = z.infer<
+  typeof agentConfigureResponseSchemaV5
+>;
+
 export const agentConfigureV50 = defineRpcContract({
   method: "agent.configure",
   schemaVersion: { major: 5, minor: 0 } as const,
   requestSchema: agentConfigureRequestSchemaV20,
+  responseSchema: agentConfigureResponseSchemaV5,
+});
+
+export const agentConfigureV60 = defineRpcContract({
+  method: "agent.configure",
+  schemaVersion: { major: 6, minor: 0 } as const,
+  requestSchema: agentConfigureRequestSchemaV20,
   responseSchema: agentConfigureResponseSchema,
+});
+
+export const agentConfigureUpgradeV50ToV60 = defineUpgradePath<
+  typeof agentConfigureV50,
+  typeof agentConfigureV60
+>({
+  from: { major: 5, minor: 0 },
+  to: { major: 6, minor: 0 },
+  // v6.0 adds no field; it only widens the response harness enum, and a v5.0
+  // response is already a valid v6.0 one.
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});
+
+export const agentConfigureDowngradeV60ToV50 = defineDowngradePath<
+  typeof agentConfigureV60,
+  typeof agentConfigureV50
+>({
+  from: { major: 6, minor: 0 },
+  to: { major: 5, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    // Fails closed for a post-v8.0 harness (antigravity) - see the v5->v4
+    // bridge below for the full reasoning. The message names no harness so it
+    // stays honest as the enum grows.
+    const parsed = agentConfigureResponseSchemaV5.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Configuring an agent on this harness requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
+export const agentConfigureDowngradeV60ToV40 = defineDowngradePath<
+  typeof agentConfigureV60,
+  typeof agentConfigureV40
+>({
+  from: { major: 6, minor: 0 },
+  to: { major: 4, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    const parsed = agentConfigureResponseSchemaV4.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Configuring an agent on this harness requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
+export const agentConfigureDowngradeV60ToV30 = defineDowngradePath<
+  typeof agentConfigureV60,
+  typeof agentConfigureV30
+>({
+  from: { major: 6, minor: 0 },
+  to: { major: 3, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    const parsed = agentConfigureResponseSchemaV3.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Configuring an agent on this harness requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
 });
 
 export const agentConfigureUpgradeV10ToV20 = defineUpgradePath<
@@ -1549,7 +2008,7 @@ export const agentConfigureUpgradeV40ToV50 = defineUpgradePath<
   to: { major: 5, minor: 0 },
   // Request shape is identical across both majors (both reuse
   // `agentConfigureRequestSchemaV20`) - only the response's `harnessId` enum
-  // grows (reasonix). Both upgrades are identity.
+  // grows (reasonix, antigravity). Both upgrades are identity.
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
@@ -1595,8 +2054,8 @@ export const agentConfigureDowngradeV50ToV30 = defineDowngradePath<
   to: { major: 3, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => {
-    // Fails closed for any post-v6.0 harness (huggingface, reasonix) - see the
-    // v5->v4 bridge above for the full reasoning.
+    // Fails closed for any post-v6.0 harness (huggingface, reasonix,
+    // antigravity) - see the v5->v4 bridge above for the full reasoning.
     const parsed = agentConfigureResponseSchemaV3.safeParse(response);
     if (!parsed.success) {
       return {
@@ -1604,6 +2063,60 @@ export const agentConfigureDowngradeV50ToV30 = defineDowngradePath<
         error: {
           code: "DOWNGRADE_UNSUPPORTED",
           message: "Configuring this agent requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
+export const agentConfigureDowngradeV60ToV20 = defineDowngradePath<
+  typeof agentConfigureV60,
+  typeof agentConfigureV20
+>({
+  from: { major: 6, minor: 0 },
+  to: { major: 2, minor: 0 },
+  downgradeRequest: (request) => ({ ok: true, value: request }),
+  downgradeResponse: (response) => {
+    const parsed = agentConfigureResponseSchemaV2.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Configuring an agent on this harness requires a newer Traycer client.",
+        },
+      };
+    }
+    return { ok: true, value: parsed.data };
+  },
+});
+
+export const agentConfigureDowngradeV60ToV10 = defineDowngradePath<
+  typeof agentConfigureV60,
+  typeof agentConfigureV10
+>({
+  from: { major: 6, minor: 0 },
+  to: { major: 1, minor: 0 },
+  // Same refusal as every other bridge onto v1.0 - see the v5->v1 bridge.
+  downgradeRequest: () => ({
+    ok: false,
+    error: {
+      code: "DOWNGRADE_UNSUPPORTED",
+      message:
+        "Selecting an agent permission mode requires a newer Traycer host. Upgrade the host before configuring this agent.",
+    },
+  }),
+  downgradeResponse: (response) => {
+    const parsed = agentConfigureResponseSchemaV1.safeParse(response);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "DOWNGRADE_UNSUPPORTED",
+          message:
+            "Configuring an agent on this harness requires a newer Traycer client.",
         },
       };
     }
@@ -1619,7 +2132,8 @@ export const agentConfigureDowngradeV50ToV20 = defineDowngradePath<
   to: { major: 2, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => {
-    // Fails closed for any post-v5.0 harness (omp, huggingface, reasonix).
+    // Fails closed for any post-v5.0 harness (omp, huggingface, reasonix,
+    // antigravity).
     const parsed = agentConfigureResponseSchemaV2.safeParse(response);
     if (!parsed.success) {
       return {
@@ -1653,7 +2167,7 @@ export const agentConfigureDowngradeV50ToV10 = defineDowngradePath<
   }),
   downgradeResponse: (response) => {
     // Fails closed for any post-v4.0 harness (Hermes, omp, huggingface,
-    // reasonix).
+    // reasonix, antigravity).
     const parsed = agentConfigureResponseSchemaV1.safeParse(response);
     if (!parsed.success) {
       return {

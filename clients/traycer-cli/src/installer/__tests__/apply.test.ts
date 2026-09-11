@@ -10,6 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { HostStartAdoptionPublisher } from "../../host/host-start-adoption";
 
 type Environment = "dev" | "production";
 
@@ -53,6 +54,17 @@ const mocks = vi.hoisted(() => ({
   // a single assertion can pin the hook strictly between the busy check
   // and the commit machinery.
   callOrder: [] as string[],
+  // Counts calls into the mocked `requireCliUpdateMutationCapability` below
+  // - proof that a test went through the real `applyHostWithAttempt`
+  // wrapper (`host/update-mutation.ts`), not a bypassed `applyHost` call.
+  verifyCapabilityCalls: 0,
+  // Whatever `apply.ts` handed the lifecycle through
+  // `setHostStartAdoptionPublisher`. Non-null only when the caller supplied
+  // a publisher at all, which is exactly what the contender wrapper does
+  // and a direct `applyHost` call does not.
+  hostStartAdoptionPublisher: null as HostStartAdoptionPublisher | null,
+  assertHostStoreFormatFloorMock: vi.fn(),
+  serviceManagerMayRespawnMock: vi.fn(),
 }));
 
 // `store/paths` computes `TRAYCER_HOME` from `os.homedir()` once at module
@@ -70,6 +82,25 @@ vi.mock("node:os", async (importOriginal) => {
   };
 });
 
+// `observeSwapQuiescence`'s post-stop check asks `serviceManagerMayRespawn`
+// (the `service/index.ts` facade - `swap-quiescence.ts` never reaches into
+// `platforms/` directly), which shells out to `launchctl print` /
+// `systemctl --user is-active` for real when it reaches the "no process right
+// now" arms - unmocked, this suite reads the developer's OWN launchd/systemd
+// state, and on a machine with a loaded, crash-throttled Traycer agent that
+// refuses every commit this file drives. `false` keeps the existing fixtures
+// clearing as an ordinary quiescent machine would.
+vi.mock("../../service", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../service")>();
+  return {
+    ...actual,
+    serviceManagerMayRespawn: (
+      ...callArgs: Parameters<typeof actual.serviceManagerMayRespawn>
+    ) => mocks.serviceManagerMayRespawnMock(...callArgs),
+  };
+});
+mocks.serviceManagerMayRespawnMock.mockResolvedValue(false);
+
 vi.mock("../../host/busy-check", () => ({
   assertHostNotBusy: async () => {
     mocks.callOrder.push("busy-check");
@@ -79,11 +110,38 @@ vi.mock("../../host/busy-check", () => ({
   },
 }));
 
+// Real by default - the sandboxed `hostHomeDir` above points it at an empty
+// temp tree, which the floor clears unconditionally, so every existing test
+// here runs the genuine gate. Only the one test proving "the gate runs BEFORE
+// the busy check" configures a rejection.
+vi.mock("../../host/store-format-floor", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../host/store-format-floor")>();
+  return {
+    ...actual,
+    assertHostStoreFormatFloor: async (
+      ...callArgs: Parameters<typeof actual.assertHostStoreFormatFloor>
+    ) => {
+      if (mocks.assertHostStoreFormatFloorMock.getMockImplementation()) {
+        return mocks.assertHostStoreFormatFloorMock(...callArgs);
+      }
+      // No override configured: still record the call (for the ordering/
+      // operand assertions) but delegate to the real gate.
+      mocks.assertHostStoreFormatFloorMock(...callArgs);
+      return actual.assertHostStoreFormatFloor(...callArgs);
+    },
+  };
+});
+
 vi.mock("../../service/install-lifecycle", () => ({
   createServiceInstallLifecycle: (options: {
     bootstrap: unknown;
     force: boolean;
     onWillStopHost: (() => void) | null;
+    hooks: {
+      beforeSwapCommit: () => Promise<void>;
+      afterSwap: () => Promise<void>;
+    };
   }) => {
     mocks.callOrder.push("lifecycle-created");
     mocks.lifecycleCalls.push({
@@ -100,13 +158,30 @@ vi.mock("../../service/install-lifecycle", () => ({
     return {
       state,
       lifecycle: {
+        // Present so `apply.ts`'s optional-chained
+        // `setHostStartAdoptionPublisher?.(...)` is a real call rather than
+        // a silent no-op - without it the wrapper's adoption wiring is
+        // unobservable from this suite. Recording only; the four
+        // `onWillCommitStaged` pins call `applyHost` directly, pass no
+        // publisher, and therefore never reach this.
+        setHostStartAdoptionPublisher: (
+          publish: HostStartAdoptionPublisher,
+        ) => {
+          mocks.hostStartAdoptionPublisher = publish;
+        },
         beforeSwap: async () => {
           if (mocks.lifecycleBeforeSwapShouldThrow) {
             throw new Error("simulated stop failure");
           }
           state.stoppedBeforeSwap = true;
         },
+        // Forwarded exactly as the real `createServiceInstallLifecycle`
+        // does, so the barrier pins observe the production call sites in
+        // `commitInstallFromSource` rather than this stub's own bookkeeping.
+        beforeSwapCommit: () => options.hooks.beforeSwapCommit(),
         afterSwap: async () => {
+          // At the TOP, as the real lifecycle runs it.
+          await options.hooks.afterSwap();
           state.postSwapAction = mocks.lifecyclePostSwapAction;
           state.postSwapError = mocks.lifecyclePostSwapError;
         },
@@ -115,6 +190,26 @@ vi.mock("../../service/install-lifecycle", () => ({
     };
   },
 }));
+
+// `applyHostWithAttempt` (the real `host/update-mutation.ts` wrapper) checks
+// a live `UpdateMutationCapability` through this function - a brand only its
+// own module can mint, so a plain test-authored object literal cannot pass
+// the real check. Stubbing this one function (and nothing else in the
+// module - the executor facades, adoption helpers, etc. are untouched) lets
+// the wrapper-level describe block below exercise the REAL
+// `applyHostWithAttempt` -> `applyHost` call path with a fake capability,
+// without rebuilding the lock/contender machinery `update-contender.ts`
+// exists to own.
+vi.mock("../../host/update-contender", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../host/update-contender")>();
+  return {
+    ...actual,
+    requireCliUpdateMutationCapability: async (): Promise<void> => {
+      mocks.verifyCapabilityCalls += 1;
+    },
+  };
+});
 
 vi.mock("../../store/paths", async () => {
   const actual =
@@ -142,7 +237,15 @@ vi.mock("../../store/paths", async () => {
 });
 
 import { applyHost as applyHostWithAuthority } from "../apply";
-import { currentInstallArch, currentInstallPlatform } from "../install";
+import {
+  currentInstallArch,
+  currentInstallPlatform,
+  NO_INSTALL_PHASE_HOOKS,
+  type InstallPhaseHooks,
+} from "../install";
+import { applyHostWithAttempt } from "../../host/update-mutation";
+import type { WithCliUpdateContenderOptions } from "../../host/update-contender";
+import type { UpdateMutationCapability } from "@traycer-clients/shared/host-update";
 import { readHostInstallRecord } from "../../manifest/host-install";
 import {
   HOST_STAGED_RECORD_SCHEMA_VERSION,
@@ -151,6 +254,37 @@ import {
 } from "../../manifest/host-staged";
 import { writeHostInstallRecord } from "../../manifest/host-install";
 import type { HostInstallRecord } from "../../manifest/host-install";
+import { EPIC_STATE_DIRNAME } from "../../host/chat-store-survey";
+
+// Written the same way `chat-store-survey.test.ts` writes its fixtures - the
+// real on-disk shape the host itself produces, at
+// `<hostHome>/epic-state/<epicId>/chat/chat.db`.
+async function writeStampedChatDbFor(
+  environment: Environment,
+  epicId: string,
+  schemaVersion: number,
+): Promise<void> {
+  const dir = join(
+    hostHomeFor(environment),
+    EPIC_STATE_DIRNAME,
+    epicId,
+    "chat",
+  );
+  mkdirSync(dir, { recursive: true });
+  const { DatabaseSync } = await import("node:sqlite");
+  const db = new DatabaseSync(join(dir, "chat.db"));
+  try {
+    db.exec(
+      "CREATE TABLE chat_db_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+    );
+    db.prepare("INSERT INTO chat_db_meta (key, value) VALUES (?, ?)").run(
+      "schema_version",
+      String(schemaVersion),
+    );
+  } finally {
+    db.close();
+  }
+}
 
 const testMutationVerifier = async (): Promise<void> => undefined;
 type ApplyOptions = Parameters<typeof applyHostWithAuthority>[0];
@@ -160,7 +294,9 @@ type ApplyDefaultedOptions =
   | "verifyMutationCapability"
   | "expectedStagedVersion"
   | "onWillCommitStaged"
-  | "onWillDisruptHost";
+  | "onWillDisruptHost"
+  | "hooks"
+  | "acceptStoreFormatLoss";
 const applyHost = (
   options: Omit<ApplyOptions, ApplyDefaultedOptions> &
     Partial<Pick<ApplyOptions, ApplyDefaultedOptions>>,
@@ -172,6 +308,8 @@ const applyHost = (
     expectedStagedVersion: options.expectedStagedVersion ?? null,
     onWillCommitStaged: options.onWillCommitStaged ?? null,
     onWillDisruptHost: options.onWillDisruptHost ?? null,
+    hooks: options.hooks ?? NO_INSTALL_PHASE_HOOKS,
+    acceptStoreFormatLoss: options.acceptStoreFormatLoss ?? false,
   });
 
 const ENV: Environment = "production";
@@ -247,6 +385,9 @@ describe("applyHost", () => {
     mocks.lifecyclePostSwapError = null;
     mocks.callOrder = [];
     mocks.lifecycleStopHooks = [];
+    mocks.verifyCapabilityCalls = 0;
+    mocks.hostStartAdoptionPublisher = null;
+    mocks.assertHostStoreFormatFloorMock.mockReset();
     rmSync(sandboxRoot, { recursive: true, force: true });
   });
 
@@ -263,6 +404,125 @@ describe("applyHost", () => {
 
     expect(result).toEqual({ outcome: "no-op", installedVersion: "1.0.0" });
     expect(mocks.lifecycleCalls).toHaveLength(0);
+  });
+
+  it("consults the store-format floor BEFORE the busy check, and refuses without ever probing busy when the floor refuses - even with force: true", async () => {
+    await writeInstall("1.0.0", {});
+    await writeStaged("1.2.0", {});
+    mocks.assertHostStoreFormatFloorMock.mockRejectedValue(
+      Object.assign(new Error("host apply: refusing to install host 1.2.0"), {
+        code: "E_HOST_STORE_FORMAT_FLOOR",
+      }),
+    );
+
+    await expect(
+      applyHost({
+        environment: ENV,
+        force: true,
+        noService: false,
+        expectedStageFingerprint: null,
+        onProgress: () => {},
+      }),
+    ).rejects.toMatchObject({ code: "E_HOST_STORE_FORMAT_FLOOR" });
+
+    expect(mocks.assertHostStoreFormatFloorMock).toHaveBeenCalledTimes(1);
+    expect(
+      mocks.assertHostStoreFormatFloorMock.mock.calls[0]?.[0],
+    ).toMatchObject({
+      targetVersion: "1.2.0",
+      site: "host apply",
+    });
+    // `--force` bypasses the busy PROBE, never the floor - "busy-check"
+    // must not appear in the order at all.
+    expect(mocks.callOrder).not.toContain("busy-check");
+    expect(mocks.lifecycleCalls).toHaveLength(0);
+  });
+
+  describe("targetVersion resolution at the staged-apply gate - the floor runs genuinely, not mocked", () => {
+    // Unlike `host install --from` (Task C, `install.test.ts`),
+    // `HostStagedRecord.version` is schema-validated as strict SemVer
+    // (`hostStagedRecordSchema` in `@traycer/protocol/config/installation-records`
+    // - `readTolerantRecord` silently discards anything that fails it, which
+    // is why a `local-<basename>-<timestamp>` staged record reads back as
+    // "nothing staged" rather than as a stage to judge). So the on-disk
+    // `staged/` promotion path this describe block exercises can never carry
+    // the exact synthetic string `host install --from` produces - only
+    // `commitInstallFromSource`'s direct callers can. What IS reachable, and
+    // what these tests pin instead, is `apply.ts`'s own wiring of
+    // `storeFormatFloorTargetVersion(staged.runtimeVersion, staged.version)`:
+    // a staged record's own declared runtime stamp must be the version the
+    // gate judges, not the record's `version` field, whenever the two
+    // diverge.
+    it("judges by staged.runtimeVersion, not staged.version, when they diverge - falsified by a silent clear if the wiring regresses", async () => {
+      await writeInstall("1.3.0-rc.4", {});
+      // If `apply.ts` judged `staged.version` ("1.4.0" - an upgrade, chatDb
+      // 9) instead of `runtimeVersion` ("1.2.0" - a downgrade, chatDb 8),
+      // this would resolve silently with no error at all: 1.4.0 clears
+      // WITHOUT even walking disk (`storeFloorClearedByFormats`), so a
+      // wiring regression here does not merely pick the wrong message - it
+      // stops refusing altogether.
+      await writeStaged("1.4.0", { runtimeVersion: "1.2.0" });
+      await writeStampedChatDbFor(ENV, "epic-on-disk", 9);
+      const onWillCommitStaged = vi.fn(async () => undefined);
+
+      await expect(
+        applyHost({
+          environment: ENV,
+          force: false,
+          noService: false,
+          expectedStageFingerprint: null,
+          onProgress: () => {},
+          onWillCommitStaged,
+        }),
+      ).rejects.toMatchObject({ code: "E_HOST_STORE_FORMAT_FLOOR" });
+
+      expect(
+        mocks.assertHostStoreFormatFloorMock.mock.calls[0]?.[0],
+      ).toMatchObject({ targetVersion: "1.2.0", site: "host apply" });
+      expect(onWillCommitStaged).not.toHaveBeenCalled();
+      expect(mocks.callOrder).not.toContain("busy-check");
+      expect(mocks.lifecycleCalls).toHaveLength(0);
+    });
+
+    it("applies when the staged tree's own version.json declares a storeFormats that clears the chat store on disk", async () => {
+      // Deliberately the SAME fixture as the negative test right above -
+      // installed 1.3.0-rc.4, staged 1.4.0 with runtimeVersion 1.2.0, a v9
+      // store on disk - so the target genuinely resolves to 1.2.0 (chatDb 8
+      // from the fixed table) and the gate genuinely runs. The declared
+      // storeFormats sidecar is the ONLY variable between the two tests.
+      //
+      // An earlier version of this test used installed "1.0.0" staged
+      // "1.2.0" (no runtimeVersion) to dodge reconcile's stale-or-equal
+      // deletion rule - and that fixture is an UPGRADE
+      // (`storeFloorApplicability` returns `target-not-older`), so neither
+      // gate ever ran. Deleting the sidecar entirely still passed. Reusing
+      // the adjacent refusal's fixture is what keeps this test in the
+      // branch its comment claims to cover.
+      await writeInstall("1.3.0-rc.4", {});
+      await writeStaged("1.4.0", { runtimeVersion: "1.2.0" });
+      writeFileSync(
+        join(stagedDirFor(ENV), "version.json"),
+        JSON.stringify({ version: "1.2.0", storeFormats: { chatDb: 9 } }),
+      );
+      await writeStampedChatDbFor(ENV, "epic-on-disk", 9);
+
+      const result = await applyHost({
+        environment: ENV,
+        force: false,
+        noService: false,
+        expectedStageFingerprint: null,
+        onProgress: () => {},
+      });
+
+      expect(result.outcome).toBe("applied");
+      expect(
+        mocks.assertHostStoreFormatFloorMock.mock.calls[0]?.[0],
+      ).toMatchObject({
+        targetVersion: "1.2.0",
+        declaredStoreFormats: { chatDb: 9 },
+        site: "host apply",
+      });
+    });
   });
 
   it("rejects a different staged handoff under the apply lock without consuming it", async () => {
@@ -854,5 +1114,159 @@ describe("applyHost", () => {
       expect(onWillDisruptHost).not.toHaveBeenCalled();
       expect((await readHostInstallRecord(ENV))?.version).toBe("1.0.0");
     });
+  });
+});
+
+// Ticket 03 acceptance: the barrier sequence pinned through `applyHost`
+// above must also hold through the REAL contender wrapper,
+// `host/update-mutation.ts`'s `applyHostWithAttempt` - not only the lower
+// installer. A new describe block (rather than folding this into
+// `describe("applyHost", ...)` above) keeps the four `onWillCommitStaged`
+// position pins in that suite untouched: this block adds one extra mock
+// (`../../host/update-contender`) that those pins never needed and must not
+// be coupled to.
+describe("applyHostWithAttempt (through the real host/update-mutation wrapper)", () => {
+  beforeEach(() => {
+    sandboxRoot = mkdtempSync(join(tmpdir(), "traycer-apply-test-"));
+    mocks.sandboxHome = sandboxRoot;
+  });
+
+  afterEach(() => {
+    mocks.platformOverride = null;
+    mocks.busyOverride = null;
+    mocks.lifecycleCalls = [];
+    mocks.lifecycleBeforeSwapShouldThrow = false;
+    mocks.lifecyclePostSwapAction = "restart";
+    mocks.lifecyclePostSwapError = null;
+    mocks.callOrder = [];
+    mocks.lifecycleStopHooks = [];
+    mocks.verifyCapabilityCalls = 0;
+    mocks.hostStartAdoptionPublisher = null;
+    mocks.assertHostStoreFormatFloorMock.mockReset();
+    rmSync(sandboxRoot, { recursive: true, force: true });
+  });
+
+  // The capability itself carries no brand a plain object literal could
+  // forge in production (`UpdateMutationCapability`'s doc comment says so
+  // explicitly) - it is only usable here because the module-level mock
+  // above replaces the one function that would otherwise check it.
+  const fakeCapability: UpdateMutationCapability = { hostHomeDir: "unused" };
+  const fakeContenderOptions: WithCliUpdateContenderOptions = {
+    environment: ENV,
+    reason: "test-apply-through-wrapper",
+    waitMs: 0,
+    pollIntervalMs: 0,
+    admission: "legacy-update-shadow",
+  };
+
+  it("runs busy pre-check -> onWillCommitStaged -> stop -> beforeSwapCommit -> swap -> afterSwap -> start, with the wrapper's capability verifier invoked", async () => {
+    await writeInstall("1.0.0", {});
+    await writeStaged("2.0.0", {});
+    const onWillCommitStaged = vi.fn(async (): Promise<void> => {
+      mocks.callOrder.push("onWillCommitStaged");
+    });
+    const hooks: InstallPhaseHooks = {
+      beforeSwapCommit: async () => {
+        mocks.callOrder.push("beforeSwapCommit");
+      },
+      afterSwap: async () => {
+        mocks.callOrder.push("afterSwap");
+      },
+    };
+
+    const result = await applyHostWithAttempt(
+      fakeCapability,
+      fakeContenderOptions,
+      {
+        environment: ENV,
+        force: false,
+        noService: false,
+        expectedStageFingerprint: null,
+        expectedStagedVersion: null,
+        onProgress: (info) => {
+          if (
+            info.stage === "service-stop" ||
+            info.stage === "swap" ||
+            info.stage === "service-start"
+          ) {
+            mocks.callOrder.push(`progress:${info.stage}`);
+          }
+        },
+        onWillCommitStaged,
+        onWillDisruptHost: null,
+        hooks,
+        acceptStoreFormatLoss: false,
+      },
+    );
+
+    expect(result.outcome).toBe("applied");
+    expect(mocks.callOrder).toEqual([
+      "busy-check",
+      "onWillCommitStaged",
+      "lifecycle-created",
+      "progress:service-stop",
+      "beforeSwapCommit",
+      "progress:swap",
+      // `commitInstallFromSource` emits the "service-start" progress event
+      // BEFORE calling `lifecycle.afterSwap()` - the stub's `afterSwap`
+      // (mirroring the real `createServiceInstallLifecycle`) is what
+      // forwards `hooks.afterSwap()` at its own top.
+      "progress:service-start",
+      "afterSwap",
+    ]);
+    // Proof the REAL wrapper ran (not a call to `applyHost` that skipped
+    // it): its capability verifier fires at least once, and the adoption
+    // publisher it builds around the capability reached the lifecycle. Both
+    // are things only `applyHostWithAttempt` supplies - `applyHost` called
+    // directly leaves `publishHostStartAdoption` undefined, so `apply.ts`'s
+    // optional-chained `setHostStartAdoptionPublisher?.(...)` never runs.
+    expect(mocks.verifyCapabilityCalls).toBeGreaterThan(0);
+    expect(mocks.hostStartAdoptionPublisher).not.toBeNull();
+    // Falsification: call `applyHost` directly instead of
+    // `applyHostWithAttempt` and `verifyCapabilityCalls` stays 0 and the
+    // publisher stays null, while every other assertion above still passes.
+  });
+
+  it("denies the stop after onWillCommitStaged and never reaches beforeSwapCommit, even through the wrapper", async () => {
+    await writeInstall("1.0.0", {});
+    await writeStaged("2.0.0", {});
+    mocks.lifecycleBeforeSwapShouldThrow = true;
+    const onWillCommitStaged = vi.fn(async (): Promise<void> => {
+      mocks.callOrder.push("onWillCommitStaged");
+    });
+    let beforeSwapCommitCalled = false;
+    const hooks: InstallPhaseHooks = {
+      beforeSwapCommit: async () => {
+        beforeSwapCommitCalled = true;
+      },
+      afterSwap: async () => {},
+    };
+
+    await expect(
+      applyHostWithAttempt(fakeCapability, fakeContenderOptions, {
+        environment: ENV,
+        force: false,
+        noService: false,
+        expectedStageFingerprint: null,
+        expectedStagedVersion: null,
+        onProgress: () => {},
+        onWillCommitStaged,
+        onWillDisruptHost: null,
+        hooks,
+        acceptStoreFormatLoss: false,
+      }),
+    ).rejects.toThrow("simulated stop failure");
+
+    expect(onWillCommitStaged).toHaveBeenCalledTimes(1);
+    expect(beforeSwapCommitCalled).toBe(false);
+    // Pre-commit failure - stage intact, install intact (recovery table),
+    // same as the existing `lifecycleBeforeSwapShouldThrow` seam's pin
+    // above, now proven through the real wrapper too.
+    expect(existsSync(stagedDirFor(ENV))).toBe(true);
+    const stored = await readHostInstallRecord(ENV);
+    expect(stored?.version).toBe("1.0.0");
+    // Falsification: move `beforeSwapCommit`'s await ahead of the stop (or
+    // swallow the stop's rejection) and `beforeSwapCommitCalled` flips to
+    // `true`.
   });
 });

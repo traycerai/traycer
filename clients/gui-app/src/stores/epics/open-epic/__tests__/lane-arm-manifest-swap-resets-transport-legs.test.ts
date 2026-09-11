@@ -166,7 +166,8 @@ describe("a manifest-driven arm swap resets the transport legs", () => {
     // Support known UNSUPPORTED at start: the legacy arm installs directly.
     rig.setSupport("unsupported");
     rig.runtime.start();
-    rig.legacyCallbacks().onConnectionStatus("open", null);
+    // A host the legacy arm serves negotiated no durability pair.
+    rig.legacyCallbacks().onConnectionStatus("open", null, false);
     expect(rig.projection().hostTransportStatus).toBe("open");
     expect(rig.projection().recordsTransportStatus).toBe("open");
 

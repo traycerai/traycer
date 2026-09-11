@@ -56,6 +56,7 @@ import {
   dispatchedWorktreeIntentForDisplay,
   projectQueueWithPendingCancellations,
   type ChatSessionStoreHandle,
+  type PreSnapshotRetryEvidence,
   type SentChatMessageAction,
 } from "@/stores/chats/chat-session-store";
 import { buildAttachmentsFromJSONContent } from "@/lib/composer/tiptap-json-content";
@@ -79,6 +80,7 @@ import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import {
   readInterviewDraftSnapshot,
   useInterviewDraftStore,
+  type StoredInterviewDraft,
 } from "@/stores/composer/interview-draft-store";
 import { isOptimisticQueuedItem } from "@/stores/chats/optimistic-queue";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
@@ -116,6 +118,30 @@ function sendTestMessage(
 const EPIC_ID = "epic-1";
 const CHAT_ID = "chat-1";
 const OWNER_ID = "owner-1";
+
+function expectPersistedInterviewDraft(
+  actual: StoredInterviewDraft | null,
+  payload: {
+    readonly pageIndex: number;
+    readonly answers: StoredInterviewDraft["answers"];
+  },
+): void {
+  expect(actual).not.toBeNull();
+  if (actual === null) return;
+  expect(typeof actual.draftId).toBe("string");
+  expect(actual.draftId.length).toBeGreaterThan(0);
+  expect(typeof actual.lastTouchedAt).toBe("number");
+  expect(actual).toEqual({
+    pageIndex: payload.pageIndex,
+    answers: payload.answers,
+    draftId: actual.draftId,
+    hostRevision: 0,
+    targetEpicId: null,
+    lastTouchedAt: actual.lastTouchedAt,
+    generation: actual.generation,
+    syncedGeneration: 0,
+  });
+}
 
 const CONTENT: JsonContent = {
   type: "doc",
@@ -394,6 +420,7 @@ function createHarness(): Harness {
     userId: OWNER_ID,
     onAuthError: null,
     onProviderAuthError: null,
+    wakeTransport: null,
     streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
     streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
       callbacks = nextCallbacks;
@@ -431,6 +458,7 @@ function createProtocolChainHarness(
     userId: OWNER_ID,
     onAuthError: null,
     onProviderAuthError: null,
+    wakeTransport: null,
     streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
     streamClientFactory: (epicId, chatId, nextCallbacks) => {
       const client = new ChatStreamClient({
@@ -929,6 +957,7 @@ function persistedInterviewMessage(
             header: null,
             options: [],
             multiSelect: false,
+            allowsCustomAnswer: null,
           },
         ],
         answers: [
@@ -1120,6 +1149,7 @@ describe("createChatSessionStore", () => {
       userId: OWNER_ID,
       onAuthError: null,
       onProviderAuthError: null,
+      wakeTransport: null,
       streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
       streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
         factoryCalls += 1;
@@ -1175,6 +1205,7 @@ describe("createChatSessionStore", () => {
       userId: OWNER_ID,
       onAuthError: null,
       onProviderAuthError: null,
+      wakeTransport: null,
       streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
       streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
         lastCallbacks = nextCallbacks;
@@ -2385,7 +2416,13 @@ describe("createChatSessionStore", () => {
       expect(harness.handle.store.getState().pendingInterviews).toEqual([
         { blockId, requestedAt: 2 },
       ]);
-      expect(readInterviewDraftSnapshot(CHAT_ID, blockId)).toEqual(draft);
+      // The stored row also carries the host-mirror bookkeeping (draftId /
+      // hostRevision / generation / ...), which this test says nothing
+      // about; the helper asserts the payload it does own.
+      expectPersistedInterviewDraft(
+        readInterviewDraftSnapshot(CHAT_ID, blockId),
+        draft,
+      );
     };
 
     callbacks.onInterviewAnswered({
@@ -4724,7 +4761,10 @@ describe("createChatSessionStore", () => {
     // Once the pane has actually shown it, it is ordinary history again and
     // ages out like anything else - the exemption is a delivery guarantee,
     // not a permanent pin.
-    harness.handle.store.getState().markNoticeDelivered(frame.clientActionId);
+    const shown = restoredNotice();
+    if (shown === undefined)
+      throw new Error("Expected the SEND_RESTORED notice");
+    harness.handle.store.getState().markNoticeDelivered(shown);
     flood(1000);
     expect(restoredNotice()).toBeUndefined();
   });
@@ -4808,7 +4848,7 @@ describe("createChatSessionStore", () => {
     expect(spoken.message).toContain("model");
 
     // The pane was active, so the toast layer showed it and said so.
-    harness.handle.store.getState().markNoticeDelivered(rejected);
+    harness.handle.store.getState().markNoticeDelivered(spoken);
     harness.handle.store.getState().ackFailedSendRestoration(rejected);
 
     expect(
@@ -7361,6 +7401,101 @@ describe("createChatSessionStore", () => {
     ).toEqual([]);
   });
 
+  it("retires an accepted queue cancellation on a reconnect snapshot whose queue no longer holds the row", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const queuedItem = {
+      kind: "managed-command" as const,
+      queueItemId: "queue-command-snapshot",
+      commandId: "command-snapshot",
+      description: "bun test --watch",
+      monitoring: true,
+      delivery: "next_turn" as const,
+      targetTurnId: null,
+      status: "pending" as const,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "running", items: [queuedItem] },
+      pendingFileEditApprovals: [],
+    });
+
+    const cancelActionId = harness.handle.store
+      .getState()
+      .queueCancel(queuedItem.queueItemId);
+    if (cancelActionId === null)
+      throw new Error("Expected queue cancel action");
+    acceptLastAction(harness);
+    expect(
+      harness.handle.store.getState().acceptedActions[cancelActionId],
+    ).toMatchObject({ action: "queueCancel" });
+
+    // A reconnect snapshot - not `queueChanged` - is the door this pin
+    // guards: `withoutResolvedAcceptedQueueCancellations` used to run only on
+    // the `queueChanged` frame, so a cancellation accepted just before a
+    // reconnect kept its record through every later snapshot.
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "idle", items: [] },
+      pendingFileEditApprovals: [],
+    });
+
+    expect(
+      harness.handle.store.getState().acceptedActions[cancelActionId],
+    ).toBeUndefined();
+  });
+
+  it("keeps an accepted queue cancellation whose row the reconnect snapshot's queue still holds", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+    const queuedItem = {
+      kind: "managed-command" as const,
+      queueItemId: "queue-command-snapshot-keep",
+      commandId: "command-snapshot-keep",
+      description: "bun test --watch",
+      monitoring: true,
+      delivery: "next_turn" as const,
+      targetTurnId: null,
+      status: "pending" as const,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "running", items: [queuedItem] },
+      pendingFileEditApprovals: [],
+    });
+
+    const cancelActionId = harness.handle.store
+      .getState()
+      .queueCancel(queuedItem.queueItemId);
+    if (cancelActionId === null)
+      throw new Error("Expected queue cancel action");
+    acceptLastAction(harness);
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    emitSnapshotFrame({
+      callbacks,
+      access: "owner",
+      messages: [],
+      queue: { status: "running", items: [queuedItem] },
+      pendingFileEditApprovals: [],
+    });
+
+    expect(
+      harness.handle.store.getState().acceptedActions[cancelActionId],
+    ).toMatchObject({ action: "queueCancel" });
+  });
+
   it("retains accepted send records when pruning accepted action records by cap", () => {
     const harness = createHarness();
     emitSnapshot(harness.callbacks(), "owner");
@@ -7385,8 +7520,15 @@ describe("createChatSessionStore", () => {
     );
 
     const acceptedActions = harness.handle.store.getState().acceptedActions;
+    // The unconfirmed send is LIFECYCLE-LOCKED, not merely sorted to the front
+    // of the retained window, so it sits OUTSIDE the cap rather than inside it:
+    // the cap still admits exactly `MAX_ACCEPTED_CHAT_ACTION_RECORDS` prunable
+    // records and the send is one more. It used to be ranked highest among
+    // prunable records instead, which survives this fixture and does not
+    // survive the real one - enough unrelated traffic evicts it and the prompt
+    // it is the last copy of goes with it.
     expect(Object.keys(acceptedActions)).toHaveLength(
-      MAX_ACCEPTED_CHAT_ACTION_RECORDS,
+      MAX_ACCEPTED_CHAT_ACTION_RECORDS + 1,
     );
     expect(acceptedActions[sent.clientActionId]).toMatchObject({
       action: "send",
@@ -7396,7 +7538,7 @@ describe("createChatSessionStore", () => {
       nonSendActionIds.filter((actionId) =>
         Object.hasOwn(acceptedActions, actionId),
       ),
-    ).toHaveLength(MAX_ACCEPTED_CHAT_ACTION_RECORDS - 1);
+    ).toHaveLength(MAX_ACCEPTED_CHAT_ACTION_RECORDS);
   });
 
   it("clears a pending send when reconnect snapshot contains the queued prompt", () => {
@@ -8606,9 +8748,11 @@ describe("createChatSessionStore", () => {
     expect(harness.handle.store.getState().pendingInterviews).toEqual([
       { blockId, requestedAt: 2 },
     ]);
-    expect(
-      useInterviewDraftStore.getState().draftsByChat[CHAT_ID]?.[blockId],
-    ).toEqual(draft);
+    expectPersistedInterviewDraft(
+      useInterviewDraftStore.getState().draftsByChat[CHAT_ID]?.[blockId] ??
+        null,
+      draft,
+    );
   });
 
   it("refuses a second interviewAnswer while the first is still in flight", () => {
@@ -8694,7 +8838,10 @@ describe("createChatSessionStore", () => {
     expect(harness.handle.store.getState().pendingInterviews).toEqual([
       { blockId, requestedAt: 2 },
     ]);
-    expect(readInterviewDraftSnapshot(CHAT_ID, blockId)).toEqual(draft);
+    expectPersistedInterviewDraft(
+      readInterviewDraftSnapshot(CHAT_ID, blockId),
+      draft,
+    );
 
     const retryId = harness.handle.store
       .getState()
@@ -8795,7 +8942,10 @@ describe("createChatSessionStore", () => {
       pendingInterviews: [{ blockId: keepBlock, requestedAt: 2 }],
     });
 
-    expect(readInterviewDraftSnapshot(CHAT_ID, keepBlock)).toEqual(keepDraft);
+    expectPersistedInterviewDraft(
+      readInterviewDraftSnapshot(CHAT_ID, keepBlock),
+      keepDraft,
+    );
     expect(readInterviewDraftSnapshot(CHAT_ID, dropBlock)).toBeNull();
     expect(
       window.localStorage.getItem(interviewDraftKey(CHAT_ID, keepBlock)),
@@ -11791,6 +11941,7 @@ function createCoalesceHarness(): CoalesceHarness {
     userId: OWNER_ID,
     onAuthError: null,
     onProviderAuthError: null,
+    wakeTransport: null,
     streamFlushCoordinator: manual.coordinator,
     streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
       callbacks = nextCallbacks;
@@ -12191,6 +12342,7 @@ describe("surface visibility rollup", () => {
       userId: OWNER_ID,
       onAuthError: null,
       onProviderAuthError: null,
+      wakeTransport: null,
       streamFlushCoordinator: coordinator,
       streamClientFactory: () => ({
         sendAction: () => undefined,
@@ -12651,6 +12803,7 @@ describe("createChatSessionStore - persisted auth-error provider nudge", () => {
       onProviderAuthError: () => {
         nudges += 1;
       },
+      wakeTransport: null,
       streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
       streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
         callbacks = nextCallbacks;
@@ -13274,6 +13427,137 @@ describe("the chat's held updates", () => {
     expect(
       harness.handle.store.getState().heldUpdates.map((h) => h.commandId),
     ).toEqual(["cmd-live"]);
+    harness.handle.dispose();
+  });
+});
+
+function preSnapshotRetries(harness: Harness): PreSnapshotRetryEvidence {
+  const retries = harness.handle.store.getState().preSnapshotRetries;
+  if (retries === null) throw new Error("Expected preSnapshotRetries");
+  return retries;
+}
+
+/**
+ * `PreSnapshotRetryEvidence` (see the field's own doc on `ChatSessionState`)
+ * is what lets the chat tile's bounded loading gate tell a stalled load from
+ * an ordinary spinner: it counts every `reconnecting` transition observed
+ * before this session's first snapshot lands. `retry()` deliberately does NOT
+ * clear the streak - the failures are evidence about the host, and dropping
+ * them on a click would put the reader back on the spinner they just escaped.
+ */
+describe("preSnapshotRetries", () => {
+  it("counts consecutive pre-snapshot reconnects with a single stable firstAt", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    const first = preSnapshotRetries(harness);
+    // The `firstAt` below is self-referential - it proves STABILITY across the
+    // two reads, not that a clock was ever read - so pin down that it is a
+    // real instant here. Without this the whole assertion would pass on a
+    // `NaN` or an `Infinity`, and the gate's elapsed arm compares against it.
+    expect(Number.isFinite(first.firstAt)).toBe(true);
+    expect(first).toEqual({
+      count: 1,
+      firstAt: first.firstAt,
+      code: null,
+      reason: null,
+    });
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    const second = preSnapshotRetries(harness);
+    expect(second).toEqual({
+      count: 2,
+      firstAt: first.firstAt,
+      code: null,
+      reason: null,
+    });
+    harness.handle.dispose();
+  });
+
+  it("records the host's code and reason from a retryable fatal", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+
+    callbacks.onConnectionStatus("reconnecting", {
+      kind: "fatalError",
+      details: {
+        code: "CHAT_OPEN_FAILED",
+        reason: "CHAT_OPEN_FAILED: host refused to open this chat",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+        retryable: true,
+      },
+    });
+
+    const retries = preSnapshotRetries(harness);
+    expect(retries).toEqual({
+      count: 1,
+      firstAt: retries.firstAt,
+      code: "CHAT_OPEN_FAILED",
+      reason: "CHAT_OPEN_FAILED: host refused to open this chat",
+    });
+    harness.handle.dispose();
+  });
+
+  it("resets to null once a snapshot lands, and a later reconnect is not counted as a stalled load", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    expect(harness.handle.store.getState().preSnapshotRetries).not.toBeNull();
+
+    emitSnapshot(callbacks, "owner");
+    expect(harness.handle.store.getState().preSnapshotRetries).toBeNull();
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    expect(harness.handle.store.getState().preSnapshotRetries).toBeNull();
+    harness.handle.dispose();
+  });
+
+  it("does not count a caller-initiated close or a terminal fatal close", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+
+    callbacks.onConnectionStatus("closed", { kind: "caller" });
+    expect(harness.handle.store.getState().preSnapshotRetries).toBeNull();
+
+    callbacks.onConnectionStatus("closed", {
+      kind: "fatalError",
+      details: {
+        code: "UNAUTHORIZED",
+        reason: "CHAT_INVALID: nope",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+    expect(harness.handle.store.getState().preSnapshotRetries).toBeNull();
+    harness.handle.dispose();
+  });
+
+  it("retry() keeps the streak going instead of restarting it", () => {
+    const harness = createHarness();
+    const callbacks = harness.callbacks();
+
+    callbacks.onConnectionStatus("reconnecting", null);
+    callbacks.onConnectionStatus("reconnecting", null);
+    const beforeRetry = preSnapshotRetries(harness);
+    expect(beforeRetry.count).toBe(2);
+
+    harness.handle.store.getState().retry();
+    expect(harness.handle.store.getState().snapshotLoaded).toBe(false);
+    // retry() clears fatalClose/connectionStatus but must not touch the
+    // streak - the whole point of the "deliberately does NOT clear" rule.
+    expect(preSnapshotRetries(harness)).toEqual(beforeRetry);
+
+    const recoveredCallbacks = harness.callbacks();
+    recoveredCallbacks.onConnectionStatus("reconnecting", null);
+    expect(preSnapshotRetries(harness)).toEqual({
+      count: 3,
+      firstAt: beforeRetry.firstAt,
+      code: null,
+      reason: null,
+    });
     harness.handle.dispose();
   });
 });

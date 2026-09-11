@@ -7,8 +7,18 @@ import {
   epicTabRightActionsKey,
   useMobileHeaderStore,
 } from "@/stores/layout/mobile-header-store";
-import { useMobileSwitcherStore } from "@/stores/epics/mobile-switcher-store";
-import { useRegisteredEpicPermissionRole } from "@/lib/epic-selectors";
+import {
+  useIsMobileSwitcherMounted,
+  useMobileSwitcherStore,
+} from "@/stores/epics/mobile-switcher-store";
+import {
+  useRegisteredEpicLocalHome,
+  useRegisteredEpicPermissionRole,
+} from "@/lib/epic-selectors";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -31,6 +41,17 @@ import {
  * this trigger renders from the app provider stack, OUTSIDE the epic session
  * tree.
  *
+ * Disabled until a sheet is actually mounted for this tab. The header slot is
+ * bound for the whole epic PANE, but the sheet only mounts from the canvas
+ * branches that have a session and a loaded snapshot - so while the epic is
+ * still loading (header titled, body a skeleton), and on the fetch-error and
+ * repoint-failure branches, this control is on screen with nothing listening.
+ * It used to accept the tap anyway and write the open flag into the store,
+ * which read as a dead button and then popped the sheet open unasked once the
+ * canvas mounted and picked the stale flag up. Natively `disabled`, not
+ * `aria-disabled`: the tap must not reach `setOpen` at all, and the base button
+ * variant already carries the muted `disabled:opacity-50` treatment.
+ *
  * Ungated by permission: switching tabs reads, it does not mutate, so a viewer
  * gets the same trigger. The create actions inside the sheet carry their own
  * editor gate.
@@ -38,6 +59,7 @@ import {
 export function EpicMobileSwitcherTrigger(props: { readonly tabId: string }) {
   const { tabId } = props;
   const setOpen = useMobileSwitcherStore((state) => state.setOpen);
+  const mounted = useIsMobileSwitcherMounted(tabId);
   return (
     <Button
       type="button"
@@ -45,6 +67,7 @@ export function EpicMobileSwitcherTrigger(props: { readonly tabId: string }) {
       size="icon-sm"
       aria-label="Switch tab"
       data-testid="mobile-epic-switcher-trigger"
+      disabled={!mounted}
       onClick={() => setOpen(tabId, true)}
       className="shrink-0 text-muted-foreground hover:text-foreground"
     >
@@ -71,11 +94,33 @@ export function MobileEpicHeaderTitle(props: {
   readonly title: string;
 }): ReactNode {
   const { epicId, title } = props;
-  const canEdit = isEditableRole(useRegisteredEpicPermissionRole(epicId));
+  // Renaming a cloud-homed epic is a CLOUD write (`epic.updateTitle` carries
+  // the CloudData `epic.update` contract) sent over the local-host connection,
+  // which does not carry the renderer's verdict. So the role alone is not
+  // admission: a session demoted to `unverified` keeps this Epic open but must
+  // not spend the retained credential on a rename. A local-homed epic renames
+  // on this machine's own disk and stays editable - the same rule and the
+  // same exemption as the History rows and the desktop tab strip.
+  const localHome = useRegisteredEpicLocalHome(epicId);
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
+  const canEdit =
+    isEditableRole(useRegisteredEpicPermissionRole(epicId)) &&
+    (localHome || cloudAuthorized);
   const updateTitle = useEpicUpdateTitle();
   const queryClient = useQueryClient();
   const handleCommit = useCallback(
     async (next: string) => {
+      // Re-checked at COMMIT, not only at admission: an edit opened before a
+      // demotion would otherwise land on the retained credential after the
+      // verdict was withdrawn. Same exemption as the gate above.
+      if (
+        !localHome &&
+        !authorizesCloudCapability(useAuthStore.getState().status)
+      ) {
+        return;
+      }
       // Optimistic overlay, so this control behaves identically to the wide
       // viewport's tab strip. Both were RPC-only here until 1.1, which meant
       // the SAME user on the SAME device got different feedback either side of
@@ -147,7 +192,7 @@ export function MobileEpicHeaderTitle(props: {
           () => {},
         );
     },
-    [epicId, queryClient, updateTitle],
+    [epicId, localHome, queryClient, updateTitle],
   );
   return (
     <InlineTitleField

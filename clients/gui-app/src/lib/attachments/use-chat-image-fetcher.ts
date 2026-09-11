@@ -13,9 +13,90 @@ import type {
 } from "@/lib/attachments/image-blob-cache";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import { base64ToBytes } from "@/lib/composer/image-base64";
+import { getImageBytes } from "@/lib/composer/landing-image-store";
 import { readHeldEpicAttachmentBytes } from "@/lib/epic-replica-reads";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
+import { isLocalHomedEpicHandle } from "@/lib/epic-selectors";
+import { readNegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
+import {
+  authorizesCloudCapability,
+  useAuthStore,
+} from "@/stores/auth/auth-store";
+
+/**
+ * The `epic.readChatAttachment` minor whose request carries
+ * `plane: "local-only"` - the selector that lets a caller ask for the DISK leg
+ * without the bearer pass-through behind it.
+ */
+export const READ_CHAT_ATTACHMENT_LOCAL_ONLY_MINOR = 1;
+
+/**
+ * Whether this host can be asked for the disk leg alone.
+ *
+ * A DISPATCH-time read of the negotiated registry, not a hook: this runs
+ * inside the fetcher, and the fetcher is not a component. Fails closed on both
+ * `null` (no handshake settled) and `false` (method absent).
+ */
+function hostServesLocalOnlyAttachmentRead(
+  scope: ChatAttachmentScopeValue,
+): boolean {
+  const version = readNegotiatedMethodVersion(
+    scope.hostId,
+    "epic.readChatAttachment",
+  );
+  if (version === null || version === false) return false;
+  return (
+    version.major === 1 &&
+    version.minor >= READ_CHAT_ATTACHMENT_LOCAL_ONLY_MINOR
+  );
+}
+
+/**
+ * Whether the chat-plane leg may be dispatched for this read.
+ *
+ * `epic.readChatAttachment` serves from the host's own disk store first, but
+ * for an attachment another host published it is a bearer pass-through to the
+ * cloud blob. On the released `@1.0` line the request carries no plane
+ * selector, so the host cannot be told to stop at its disk, and the host
+ * connection carries no renderer verdict either. So for a session without a
+ * cloud verdict the leg is skipped for a cloud-homed epic: the retained bearer
+ * must not read published bytes after the verdict was withdrawn. A local-homed
+ * epic (`local` / `promoting`, read LIVE from the session's
+ * current-then-retained durability statement, the same selection every other
+ * local-home gate reads) has no cloud task the host could fall back to, so its
+ * disk-served images keep rendering either way.
+ *
+ * `@1.1` is what removes the cost. The host CAN be told to stop at its disk,
+ * so an unverified session gets its cloud-homed epic's disk-served images
+ * back, and a hash the disk does not hold comes back `missing` - the same
+ * answer, and the same rendered marker, as asking a host with no copy.
+ *
+ * The two arms must stay in agreement, which is why the plane is derived from
+ * the same inputs rather than passed alongside: admitting the leg without
+ * sending the selector is precisely the request this gate exists to prevent.
+ */
+function chatPlaneLegAdmitted(
+  handle: OpenEpicStoreHandle | null,
+  scope: ChatAttachmentScopeValue | null,
+): boolean {
+  if (authorizesCloudCapability(useAuthStore.getState().status)) return true;
+  if (scope !== null && hostServesLocalOnlyAttachmentRead(scope)) return true;
+  return isLocalHomedEpicHandle(handle);
+}
+
+/**
+ * The selector this read should carry, or `null` for the released two-leg
+ * chain. Derived from the SAME verdict + negotiation the admission above is,
+ * so there is no path that admits an unverified session and then asks the
+ * host for the cloud leg anyway.
+ */
+function chatPlaneReadSelector(
+  scope: ChatAttachmentScopeValue,
+): "local-only" | null {
+  if (authorizesCloudCapability(useAuthStore.getState().status)) return null;
+  return hostServesLocalOnlyAttachmentRead(scope) ? "local-only" : null;
+}
 
 /**
  * How long a one-shot byte read (clipboard re-inline, prompt stash) waits before
@@ -112,12 +193,42 @@ async function readChatAttachmentFromHost(
   if (buildKey !== null && hostBuildsWithoutChatAttachmentRead.has(buildKey)) {
     return null;
   }
+  // `plane` is omitted rather than sent as `null` when there is no selector:
+  // it is an OPTIONAL literal on the wire, so a null would fail the host's
+  // parse instead of reading as "no preference".
+  const plane = chatPlaneReadSelector(scope);
+  const request =
+    plane === null
+      ? { epicId: scope.epicId, chatId: scope.chatId, hash }
+      : { epicId: scope.epicId, chatId: scope.chatId, hash, plane };
   try {
-    const response = await scope.client.requestWithSignal(
-      "epic.readChatAttachment",
-      { epicId: scope.epicId, chatId: scope.chatId, hash },
-      signal,
-    );
+    // A SELECTED request carries its floor to the wire; an unselected one pays
+    // none. The capability read above happens before the send, and the process
+    // it described can be replaced in between - `plane` is an OPTIONAL literal
+    // on the released `@1.0` line, so the replacement STRIPS it and quietly
+    // restores the cloud fallback the selector existed to refuse: a bearer
+    // spent by a session that asked for the disk leg precisely because it may
+    // hold none. Binding the floor to the frame is the only check the
+    // replacement cannot outrun.
+    const response =
+      plane === null
+        ? await scope.client.requestWithSignal(
+            "epic.readChatAttachment",
+            request,
+            signal,
+          )
+        : await scope.client.requestWithSignalRequiringHostMethodVersion(
+            "epic.readChatAttachment",
+            request,
+            signal,
+            {
+              method: "epic.readChatAttachment",
+              version: {
+                major: 1,
+                minor: READ_CHAT_ATTACHMENT_LOCAL_ONLY_MINOR,
+              },
+            },
+          );
     if (!response.ok) return null;
     const bytes = base64ToBytes(response.bytesBase64);
     if (bytes === null) {
@@ -196,14 +307,22 @@ export function useChatImageFetcher(): ScopedImageBytesFetcher {
   const handle = useMaybeOpenEpicHandle();
   const fetch = useCallback<ImageBytesFetcher>(
     async (hash, signal) => {
-      const fromChatPlane = await readChatAttachmentFromHost(
-        scope,
-        hash,
-        signal,
-      );
+      // Re-read per fetch, not captured at hook time: a Retry or a late
+      // render after a demotion must see the verdict as it is now.
+      const fromChatPlane = chatPlaneLegAdmitted(handle, scope)
+        ? await readChatAttachmentFromHost(scope, hash, signal)
+        : null;
       if (fromChatPlane !== null) return fromChatPlane;
       const fromDoc = await readAttachmentFromEpicDoc(handle, hash);
       if (fromDoc !== null) return fromDoc;
+      try {
+        const fromLanding = await getImageBytes(hash);
+        if (fromLanding !== undefined) {
+          return { bytes: fromLanding, mediaType: null };
+        }
+      } catch {
+        // Partition missing (tests, no IndexedDB) is hash-only unavailable.
+      }
       throw new Error(`Image attachment ${hash} unavailable`);
     },
     [scope, handle],

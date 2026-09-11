@@ -10,7 +10,6 @@ import {
 } from "react";
 import { Button } from "@/components/ui/button";
 import type { ChatRecordRemovalReason } from "@traycer/protocol/host/epic/chat-records";
-import type { HostUnavailability } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
@@ -24,6 +23,7 @@ import {
 import { useExistingChatSessionFatalClose } from "@/lib/registries/chat-session-registry";
 import {
   cloudChatListAuthorizesRecordSweep,
+  useCloudChatHasCloudAuthorization,
   useCloudChatList,
 } from "@/hooks/chats/use-cloud-chat-queries";
 import { cloudRowIsViewersOwn } from "@/lib/chats/unified-chat-list";
@@ -666,7 +666,8 @@ const noopClone = (): void => undefined;
 
 interface ChatFallbackDecision {
   readonly substitute: boolean;
-  readonly reason: ChatDeadTileBannerReason;
+  /** The banner the canvas mounts above the copy; `null` leaves it to the copy tile. */
+  readonly bannerReason: ChatDeadTileBannerReason | null;
   readonly ownerUserId: string | null;
 }
 
@@ -682,7 +683,6 @@ function resolveChatFallbackDecision(args: {
   readonly isChat: boolean;
   readonly isSameHost: boolean;
   readonly hostUnreachable: boolean;
-  readonly unavailability: HostUnavailability | null;
   readonly confirmedAbsent: boolean;
   readonly cloudChatOwnerUserId: string | null;
   readonly liveArtifactOwnerUserId: string | null;
@@ -705,44 +705,37 @@ function resolveChatFallbackDecision(args: {
     args.isSameHost && sameHostCloudCopyAvailable && absent;
   const crossHostFallback = !args.isSameHost && absent;
   const substitute = args.isChat && (crossHostFallback || sameHostFallback);
-  const reason = deadTileBannerReason({
+  const bannerReason = substitutionBannerReason({
     hostUnreachable: args.hostUnreachable,
-    unavailability: args.unavailability,
     isSameHost: args.isSameHost,
   });
   const ownerUserId = args.liveArtifactOwnerUserId ?? args.cloudChatOwnerUserId;
-  return { substitute, reason, ownerUserId };
+  return { substitute, bannerReason, ownerUserId };
 }
 
 /**
- * WHICH of the two triggers above fired, and whose host answered.
+ * The banner the canvas itself mounts above a substituted copy, or `null`.
  *
- * The banner says three different things (see `ChatDeadTileBannerReason`) and
- * picking the wrong one is how this surface came to name a healthy local
- * machine as unreachable on 2026-08-11.
+ * The published-chat tile under the substitution already reads the owner's
+ * reachability for its own footer, and draws the unreachable-owner banner
+ * (offline or plan-restricted) from that same read - so for an unreachable
+ * host the canvas draws nothing, or the reader gets the sentence twice with
+ * two Clone buttons. Unreachability outranks a `CHAT_NOT_VISIBLE` terminate
+ * on purpose: the terminate is a fact from an earlier moment, reachability is
+ * the state right now, and a reader whose host has since gone away needs the
+ * host sentence, not a report about a subscribe that is no longer possible.
  *
- * Unreachability outranks a `CHAT_NOT_VISIBLE` terminate on purpose: the
- * terminate is a fact from an earlier moment, reachability is the state right
- * now, and a reader whose host has since gone away needs the host sentence,
- * not a report about a subscribe that is no longer possible. Below it the
- * split is simply whose machine spoke - a host that answers "not here" about
- * ITSELF is reporting a missing chat, not a device the reader has to go wake.
+ * What the canvas alone knows is that a REACHABLE host answered "not here",
+ * and whose machine spoke: a host that says so about ITSELF is reporting a
+ * missing chat, not a device the reader has to go wake - picking the wrong
+ * sentence there is how this surface came to name a healthy local machine as
+ * unreachable on 2026-08-11.
  */
-function deadTileBannerReason(input: {
+function substitutionBannerReason(input: {
   readonly hostUnreachable: boolean;
-  readonly unavailability: HostUnavailability | null;
   readonly isSameHost: boolean;
-}): ChatDeadTileBannerReason {
-  if (input.hostUnreachable) {
-    // The hook's reason, not a constant - collapsing every unreachable
-    // result to `host-offline` is how a `plan-restricted` host (running
-    // fine, just with no remote route on this account's plan) got reported
-    // to its owner as being off. Same fix as `chat-tile.tsx`'s live-render
-    // path.
-    return input.unavailability === "plan-restricted"
-      ? "host-plan-restricted"
-      : "host-offline";
-  }
+}): ChatDeadTileBannerReason | null {
+  if (input.hostUnreachable) return null;
   return input.isSameHost ? "chat-not-on-this-host" : "chat-not-visible";
 }
 
@@ -765,7 +758,7 @@ function usePublishedChatFallbackRef(args: {
    */
   readonly fallbackRef: PublishedChatTileRef | null;
   readonly ownerHostLabel: string;
-  readonly reason: ChatDeadTileBannerReason;
+  readonly bannerReason: ChatDeadTileBannerReason | null;
   readonly isCloudKnown: boolean;
   readonly cloudListAuthorizesChatAbsence: boolean;
 } {
@@ -797,6 +790,11 @@ function usePublishedChatFallbackRef(args: {
     taskId: epicId,
     enabled: wantsCloudChatFallback,
   });
+  // The verdict the list above was gated on, handed to the absence guard below
+  // so the pair cannot disagree. Without it an `unverified` session - whose
+  // list is DISABLED rather than answered - would read "no cloud row" as proof
+  // that this chat is gone and let the tab be treated as absent.
+  const cloudChatsCloudAuthorized = useCloudChatHasCloudAuthorization();
   const cloudChatRecord = wantsCloudChatFallback
     ? (cloudChats.data?.chats.find(
         // The OWNER is half the identity, not a refinement of the id: `chatId`
@@ -817,12 +815,11 @@ function usePublishedChatFallbackRef(args: {
     isChat,
     isSameHost,
     hostUnreachable: reachability.status === "unreachable",
-    unavailability: reachability.unavailability,
     confirmedAbsent,
     cloudChatOwnerUserId: cloudChatRecord?.identity.ownerUserId ?? null,
     liveArtifactOwnerUserId,
   });
-  const { substitute, reason, ownerUserId } = decision;
+  const { substitute, bannerReason, ownerUserId } = decision;
   // The SERVING host is chosen once, when this fallback first opens, and then
   // held. `activeHostId` has to stay reactive for the decision above it (the
   // record gate and `isSameHost` are questions about the projection this render
@@ -865,10 +862,12 @@ function usePublishedChatFallbackRef(args: {
   return {
     fallbackRef,
     ownerHostLabel: reachability.hostLabel,
-    reason,
+    bannerReason,
     isCloudKnown: cloudChatRecord !== null,
-    cloudListAuthorizesChatAbsence:
-      cloudChatListAuthorizesRecordSweep(cloudChats),
+    cloudListAuthorizesChatAbsence: cloudChatListAuthorizesRecordSweep(
+      cloudChats,
+      cloudChatsCloudAuthorized,
+    ),
   };
 }
 
@@ -926,7 +925,7 @@ export function ActiveTabBody(props: ActiveTabBodyProps) {
   const {
     fallbackRef: publishedFallbackRef,
     ownerHostLabel,
-    reason: deadTileBannerReason,
+    bannerReason: substitutionBanner,
     isCloudKnown,
     cloudListAuthorizesChatAbsence,
   } = usePublishedChatFallbackRef({
@@ -1068,21 +1067,23 @@ export function ActiveTabBody(props: ActiveTabBodyProps) {
   if (publishedFallbackRef !== null) {
     return (
       <div className="flex h-full min-h-0 flex-1 flex-col">
-        <ChatDeadTileBannerContainer
-          epicId={epicId}
-          tabId={tabId}
-          chatId={activeTab.id}
-          sourceHostId={activeTab.hostId}
-          hostLabel={ownerHostLabel}
-          reason={deadTileBannerReason}
-          showsPublishedCopy
-          testId={`chat-dead-tile-${activeTab.id}`}
-          // The owner the opening row already resolved (the fallback ref is
-          // only built once one exists) - threading it means the banner's
-          // ownership verdict cannot disagree with the copy rendered under
-          // it, and does not depend on the container's own cloud lookup.
-          sourceOwnerUserId={publishedFallbackRef.ownerUserId}
-        />
+        {substitutionBanner !== null ? (
+          <ChatDeadTileBannerContainer
+            epicId={epicId}
+            tabId={tabId}
+            chatId={activeTab.id}
+            sourceHostId={activeTab.hostId}
+            hostLabel={ownerHostLabel}
+            reason={substitutionBanner}
+            showsPublishedCopy
+            testId={`chat-dead-tile-${activeTab.id}`}
+            // The owner the opening row already resolved (the fallback ref is
+            // only built once one exists) - threading it means the banner's
+            // ownership verdict cannot disagree with the copy rendered under
+            // it, and does not depend on the container's own cloud lookup.
+            sourceOwnerUserId={publishedFallbackRef.ownerUserId}
+          />
+        ) : null}
         <EpicNodeTile
           node={publishedFallbackRef}
           viewTabId={tabId}

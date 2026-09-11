@@ -3,6 +3,9 @@ import type { VersionedStreamRpcRegistry } from "@traycer/protocol/framework/ver
 import type { IStreamSession } from "./i-stream-session";
 import type { ParamsOf } from "./ws-stream-client";
 
+import type { StreamParamsProvider } from "@traycer/protocol/host-transport/remote/stream-codec";
+export type { StreamParamsProvider };
+
 /**
  * Subscribe-only seam over a streaming transport (transport-seam spike).
  *
@@ -59,10 +62,13 @@ export interface IStreamClient<Registry extends VersionedStreamRpcRegistry> {
    * client state, but must not create transport or application state as a
    * side effect. `WsStreamClient` and `RemoteStreamClient` both implement it,
    * and both re-invoke it on reconnect.
+   *
+   * The provider is handed the version it is about to be declared at - see
+   * {@link StreamParamsProvider}.
    */
   subscribeWithParamsProvider<Method extends keyof Registry & string>(
     method: Method,
-    paramsProvider: () => ParamsOf<Registry, Method>,
+    paramsProvider: StreamParamsProvider<Registry, Method>,
   ): IStreamSession;
 
   /**
@@ -72,10 +78,9 @@ export interface IStreamClient<Registry extends VersionedStreamRpcRegistry> {
    *
    * Part of this seam rather than the concrete `WsStreamClient` because those
    * wrappers depend on the interface: leaving it off would make a wrapper that
-   * gates on a minor version non-substitutable over a remote transport.
-   * `RemoteStreamClient` answers `null` (the mux carries no per-method
-   * negotiation), so a gated feature degrades to "unsupported" over a remote
-   * host instead of being falsely advertised.
+   * gates on a minor version non-substitutable over a remote transport. A
+   * remote mux returns `null` before its `openAck`, then derives the selected
+   * version from that peer manifest using the same path a subscription uses.
    */
   getMethodSchemaVersion<Method extends keyof Registry & string>(
     method: Method,

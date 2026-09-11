@@ -5,6 +5,16 @@ import {
   unrecoverableSendNotice,
   pruneAcceptedActions,
   withoutResolvedAcceptedQueueCancellations,
+  withoutSettledAcceptedQueueStatusActions,
+  restoreOutcomesFrom,
+  retransmittableRestoreActions,
+  settleObservedRestoreSlot,
+  settleRestoreAttemptsByEvidence,
+  type SettledRestoreCompletion,
+  consumeSettledRestoreCompletion,
+  withoutSettledRestoreCompletionsBefore,
+  withoutEarliestAcceptedRestoreActionFor,
+  withRetransmittedRestoreActions,
   reconcileQueueChange,
   reconcileSnapshotChange,
   reconcileTurnSettled,
@@ -354,6 +364,18 @@ export interface PendingChatAction {
   readonly action: ChatOwnerActionFrame["kind"];
   /** Queue row targeted by a queue mutation; populated for queueCancel. */
   readonly queueItemId: string | null;
+  /**
+   * Checkpoint targeted by a `restoreCheckpoint`; `null` for every other
+   * action. With `revertArtifacts` it is the whole restore frame, so the
+   * accepted record can RETRANSMIT the action after a reconnect: the host
+   * answers a retried client action id from its durable outcome (or runs the
+   * restore again when it never finished), which is the only completion
+   * evidence a windowed reconnect can recover - its snapshot carries hydrated
+   * transcript rows, and the restore outcome is not one.
+   */
+  readonly checkpointId: string | null;
+  /** See {@link PendingChatAction.checkpointId}; `null` for every other action. */
+  readonly revertArtifacts: boolean | null;
   // For `interviewAnswer` / `interviewError`, the interview block this action
   // targets; `null` for every other action. Lets the UI gate exactly the card
   // whose answer/skip is in flight (or accepted-but-unresolved) rather than all
@@ -493,6 +515,10 @@ export interface AcceptedChatAction {
   readonly action: ChatOwnerActionFrame["kind"];
   /** Carries an accepted queueCancel projection until host queue truth lands. */
   readonly queueItemId: string | null;
+  /** See {@link PendingChatAction.checkpointId}. */
+  readonly checkpointId: string | null;
+  /** See {@link PendingChatAction.checkpointId}. */
+  readonly revertArtifacts: boolean | null;
   // Carried over from the originating `PendingChatAction` so an accepted-but-
   // unresolved interview answer/skip keeps gating its card. `null` for every
   // non-interview action.
@@ -660,6 +686,64 @@ function chatRecordWithoutTranscript(chat: Chat): ChatSessionRecord {
   return record;
 }
 
+/**
+ * What the connection attempts BEFORE the first snapshot have produced - the
+ * evidence the chat tile's bounded loading gate reads.
+ *
+ * It exists because a stream can fail forever without ever going terminal. A
+ * host that refuses `chat.subscribe` with a RETRYABLE fatal (host 1.2.0 on a
+ * chat store a 1.3 host migrated answers `CHAT_OPEN_FAILED` that way, per open
+ * attempt, indefinitely) is handled inside the transport as an ordinary drop:
+ * it reconnects on its own backoff, so `fatalClose` stays `null` and
+ * `snapshotLoaded` stays `false` with nothing to end the spinner. Counting the
+ * attempts here - where they are already observed - is what lets the tile say
+ * so.
+ */
+export interface PreSnapshotRetryEvidence {
+  /** Failed attempts observed while this session had no snapshot. */
+  readonly count: number;
+  /** When the first of them was observed (epoch ms). */
+  readonly firstAt: number;
+  /**
+   * The host's own code and reason from the most recent attempt that carried
+   * them - an attempt that carries none leaves the last pair standing rather
+   * than erasing it.
+   *
+   * `null` in the case this evidence exists for, and that is not an oversight:
+   * `WsStreamClient.handleFatalErrorFrame` consumes a retryable fatal and
+   * reports the drop as `reconnecting` with no reason at all (the remote
+   * transport re-keys the stream just as silently), so the host's sentence
+   * never leaves the transport. They are kept on the shape because a close
+   * that DOES arrive with details should be recorded rather than counted
+   * anonymously, and because an additive transport change that surfaces the
+   * retryable reason later then needs nothing here.
+   */
+  readonly code: string | null;
+  readonly reason: string | null;
+}
+
+/**
+ * The streak after one more failed pre-snapshot attempt.
+ *
+ * `now` is passed in rather than read here so the fold stays pure - the clock
+ * read belongs to the caller that observed the failure.
+ */
+function countPreSnapshotRetry(
+  previous: PreSnapshotRetryEvidence | null,
+  details: FatalErrorDetails | null,
+  now: number,
+): PreSnapshotRetryEvidence {
+  return {
+    count: (previous?.count ?? 0) + 1,
+    // Stamped by the FIRST failure and never moved: it anchors the elapsed
+    // arm of the tile's gate, which asks how long this load has been failing,
+    // not how long ago the newest attempt died.
+    firstAt: previous?.firstAt ?? now,
+    code: details?.code ?? previous?.code ?? null,
+    reason: details?.reason ?? previous?.reason ?? null,
+  };
+}
+
 export interface ChatSessionState {
   readonly epicId: string;
   readonly chatId: string;
@@ -673,6 +757,11 @@ export interface ChatSessionState {
    */
   readonly fatalClose: FatalErrorDetails | null;
   readonly snapshotLoaded: boolean;
+  /**
+   * See {@link PreSnapshotRetryEvidence}. `null` while nothing has failed -
+   * a fresh session, or one whose snapshot has landed.
+   */
+  readonly preSnapshotRetries: PreSnapshotRetryEvidence | null;
   /**
    * The connection whose authoritative snapshot established the CURRENT
    * transcript, or `NO_TRANSCRIPT_BASELINE` before the first one lands.
@@ -916,6 +1005,14 @@ export interface ChatSessionState {
     readonly turnId: string | null;
   } | null;
   readonly restore: ChatRestoreSlot | null;
+  /**
+   * Restore attempts whose record the durable outcome retired ahead of their
+   * `restoreCompleted` frame - the frames still owed on this connection.
+   * `onRestoreCompleted` answers a frame from here before it retires a
+   * record, so a completion the event already settled does not retire a
+   * later attempt's record. See {@link SettledRestoreCompletion}.
+   */
+  readonly settledRestoreCompletions: ReadonlyArray<SettledRestoreCompletion>;
   readonly pendingActions: Readonly<Record<string, PendingChatAction>>;
   readonly acceptedActions: Readonly<Record<string, AcceptedChatAction>>;
   readonly pendingUserMessages: ReadonlyArray<PendingUserMessage>;
@@ -931,6 +1028,26 @@ export interface ChatSessionState {
    * grows for the life of a chat.
    */
   readonly deliveredNoticeActionIds: ReadonlySet<string>;
+  /**
+   * Actions whose LAST-COPY notice (`noticeCarriesOnlyCopy`) the toast layer
+   * has shown - the parking hold's release, and only that.
+   *
+   * A separate axis from {@link deliveredNoticeActionIds} on both counts
+   * that matter to a hold. Key: that set answers "did ANY speaker for this
+   * action reach the user", and a rejection's own `ACTION_REJECTED` toast
+   * shown while the pane was focused answers yes for an action whose
+   * `SEND_NOT_RECORDED` notice was stated a moment later, after focus left -
+   * so the draft it carries was never seen and the hold read it as released
+   * (Codex on 4df091443). Lifetime: that set is a FIFO, and a flood of
+   * ordinary notices forgets a draft that WAS shown while its record stays
+   * in the ring (last-copy records are never evicted), which turns a shown
+   * draft into a permanent veto no refocus can repair - the toaster's own
+   * retained tracker suppresses the repeat that would re-mark it. This set
+   * is deliberately UNBOUNDED, the same lifetime as the records it answers
+   * for and the toaster's `retainedClientActionIds`: one entry per settled
+   * send, deduped on insert, and a session loses drafts in ones.
+   */
+  readonly deliveredLastCopyActionIds: ReadonlySet<string>;
   /**
    * Block ids this session has already OPENED a subagent/workflow card for.
    *
@@ -1021,6 +1138,14 @@ export interface ChatSessionState {
   /** See the implementation - names the ordinal a pending jump is waiting on. */
   requestTranscriptOrdinal: (ordinal: number | null) => void;
   retry: () => void;
+  /**
+   * Stops this session's transport waiting out its backoff and re-dials now.
+   *
+   * Keeps the transcript, the snapshot and every pending action exactly as
+   * they are - see {@link ChatSessionStoreOptions.wakeTransport} for why that
+   * distinction matters, and why this is not {@link retry}.
+   */
+  wake: () => void;
   /**
    * Which ordinals the transcript viewport is currently showing, from the
    * timeline's viewability pass - the second obligation
@@ -1134,10 +1259,16 @@ export interface ChatSessionState {
   ackAcceptedAction: (clientActionId: string) => void;
   ackFailedSendRestoration: (clientActionId: string) => void;
   /**
-   * Record that a notice reached the screen. Called by the toast layer, which
-   * is the only thing that knows - see {@link ChatSessionState.deliveredNoticeActionIds}.
+   * Record that THIS notice reached the screen. Called by the toast layer,
+   * which is the only thing that knows - see
+   * {@link ChatSessionState.deliveredNoticeActionIds}. Takes the notice, not
+   * its action id, because the store keeps two delivery axes and the
+   * notice's code decides which it writes: every notice marks its action
+   * delivered (any speaker), and a last-copy notice also marks
+   * {@link ChatSessionState.deliveredLastCopyActionIds}, the parking hold's
+   * release. A notice without an action id has nothing to mark.
    */
-  markNoticeDelivered: (clientActionId: string) => void;
+  markNoticeDelivered: (notice: ChatErrorNotice) => void;
   /**
    * Settle the restoration slot by STATING its prompt instead of handing it to
    * the composer - see {@link displacedRestorationNotice}. Used when the
@@ -1205,6 +1336,25 @@ export interface ChatSessionStoreOptions {
    * the Traycer *session* auth (an unauthorized stream close).
    */
   readonly onProviderAuthError: (() => void) | null;
+  /**
+   * Collapse this session's own transport backoff and re-dial NOW, keeping
+   * everything the session holds.
+   *
+   * Deliberately NOT {@link ChatSessionState.retry}, and the difference is what
+   * makes it safe behind a button someone presses while reading. `retry()`
+   * tears the stream down and clears `snapshotLoaded`, so the transcript on
+   * screen is replaced by its loading state - and any surface gating on
+   * "content is showing" loses its own precondition at the same moment. A wake
+   * touches no state at all: the socket is already redialing on a backoff, and
+   * this only declines to wait for it.
+   *
+   * Injected because the session owns its transport but the store does not see
+   * it. The registry builds the socket, so only the registry can name the
+   * connection this wakes - and it must be THIS chat's, never the app-wide one.
+   * `null` where no transport was built (a test factory), which reads as
+   * nothing to wake.
+   */
+  readonly wakeTransport: (() => void) | null;
 }
 
 /**
@@ -2415,6 +2565,9 @@ export function createChatSessionStoreWithNotificationDependencies(
       );
       let restoredWorktreeIntentForSnapshot: StagedWorktreeIntentSource | null =
         null;
+      // Filled by the updater, sent after it: the frames go out only once the
+      // records are re-stamped, so a re-entrant snapshot cannot send them twice.
+      let retransmitRestoreActions: ReadonlyArray<AcceptedChatAction> = [];
       set((state) => {
         const previousTurnId = snapshotPreviousTurnId(
           state.activeTurn,
@@ -2502,29 +2655,91 @@ export function createChatSessionStoreWithNotificationDependencies(
           state.liveAssistantMessage,
           null,
         );
-        const acceptedActions = withoutSupersededInterviewDeliveryRetryActions(
-          pruneAcceptedActions(
-            {
-              ...withoutSettledAcceptedActions(
-                state.acceptedActions,
-                // BOTH passes retire records: the snapshot pass for sends it
-                // settled itself, the settled pass for rows it recovered.
-                new Set([
-                  ...pending.settledAcceptedActionIds,
-                  ...settled.settledAcceptedActionIds,
-                ]),
-              ),
-              // Confirmation stamps first, then this pass's own additions -
-              // an id cannot be in both, but ordering the merge makes that
-              // independent of whether it ever could be.
-              ...pending.confirmedAcceptedActions,
-              ...pending.acceptedActions,
-            },
-            now,
-          ),
-          messages,
-          state.liveAssistantMessage,
+        // Restore attempts, in three steps. (1) Evidence: on the legacy line
+        // the snapshot's events carry the durable `checkpoint.restored`
+        // outcome for a completion frame that was lost, and it retires the
+        // record and completes the spinner from the recorded result; the
+        // windowed line's tail is hydrated rows and never carries it, which
+        // is what step 3 is for. (2) The spinner, AFTER the evidence so a
+        // completion the evidence proved is kept for the toast consumers: an
+        // in-flight slot still stamped on an older connection is swept - its
+        // frames died with that connection. (3) Retransmit: every surviving
+        // record dispatched on an older connection is re-sent after this
+        // pass (`retransmitRestoreActions`) so the host re-answers it from
+        // its journal, and re-stamped here so a record is retried once per
+        // reconnect, not once per snapshot.
+        // The completion ledger is scoped to a connection: an entry from an
+        // older one waited for a frame that died with it, so it goes before
+        // this snapshot's evidence can add entries for the current one.
+        const settledRestores = settleRestoreAttemptsByEvidence(
+          {
+            acceptedActions: state.acceptedActions,
+            restore: state.restore,
+            settledRestoreCompletions: withoutSettledRestoreCompletionsBefore(
+              state.settledRestoreCompletions,
+              connectionEpoch,
+            ),
+          },
+          restoreOutcomesFrom(frame.snapshot.chat.events),
           connectionEpoch,
+        );
+        const restoreSettlement = {
+          acceptedActions: settledRestores.acceptedActions,
+          restore: sweepStaleRestoreSlot(
+            settledRestores.restore,
+            connectionEpoch,
+          ),
+          settledRestoreCompletions: settledRestores.settledRestoreCompletions,
+        };
+        const restoreRetransmits = retransmittableRestoreActions(
+          restoreSettlement.acceptedActions,
+          connectionEpoch,
+        );
+        retransmitRestoreActions = restoreRetransmits;
+        // The resolved-cancellation retirement runs on BOTH doors now. It used
+        // to be on `queueChanged` only, so a `queueCancel` accepted just before
+        // a reconnect kept its record through every later snapshot: the cap and
+        // the retention window skip it (it is lifecycle-locked), and the one
+        // pass that retires it was never reached from here. Same authoritative
+        // queue, same rule, so the record expires whichever door delivers the
+        // truth.
+        const acceptedActions = withoutSettledAcceptedQueueStatusActions(
+          withoutResolvedAcceptedQueueCancellations(
+            withoutSupersededInterviewDeliveryRetryActions(
+              pruneAcceptedActions(
+                {
+                  ...withoutSettledAcceptedActions(
+                    // Restore attempts settled by the snapshot's evidence,
+                    // and the survivors re-stamped for retransmission - see
+                    // `restoreSettlement` above.
+                    withRetransmittedRestoreActions(
+                      restoreSettlement.acceptedActions,
+                      restoreRetransmits,
+                      connectionEpoch,
+                    ),
+                    // BOTH passes retire records: the snapshot pass for sends
+                    // it settled itself, the settled pass for rows it
+                    // recovered.
+                    new Set([
+                      ...pending.settledAcceptedActionIds,
+                      ...settled.settledAcceptedActionIds,
+                    ]),
+                  ),
+                  // Confirmation stamps first, then this pass's own additions -
+                  // an id cannot be in both, but ordering the merge makes that
+                  // independent of whether it ever could be.
+                  ...pending.confirmedAcceptedActions,
+                  ...pending.acceptedActions,
+                },
+                now,
+              ),
+              messages,
+              state.liveAssistantMessage,
+              connectionEpoch,
+            ),
+            frame.snapshot.queue,
+          ),
+          frame.snapshot.queue,
         );
         return {
           // Destructured rather than spread-and-overwritten: the point is
@@ -2604,8 +2819,16 @@ export function createChatSessionStoreWithNotificationDependencies(
             [...pending.appendedErrorNotices, ...settled.appendedErrorNotices],
             state.deliveredNoticeActionIds,
           ),
-          restore: sweepStaleRestoreSlot(state.restore, connectionEpoch),
+          restore: restoreSettlement.restore,
+          settledRestoreCompletions:
+            restoreSettlement.settledRestoreCompletions,
           snapshotLoaded: true,
+          // The load this session was waiting on has arrived, so whatever it
+          // took to get here is no longer evidence of anything - the next
+          // stalled load has to accumulate its own. Cleared HERE rather than
+          // on the `open` status because a connection that opens and then
+          // never delivers is precisely the failure the gate exists for.
+          preSnapshotRetries: null,
           // Stamped with the CONNECTION, not a per-snapshot counter: a
           // reconnect's backfill re-baselines transcript consumers, while a
           // steady-state refresh on this same connection does not.
@@ -2631,6 +2854,28 @@ export function createChatSessionStoreWithNotificationDependencies(
           ...extra,
         };
       });
+      // The retransmit itself, after the records are re-stamped. The same
+      // frame the action first went out as - same client action id, so the
+      // host's journal recognises the command - through the client's raw send
+      // rather than `sendAction`: this is not a new pending action, and the
+      // accepted ack it earns is a no-op on a record that already exists.
+      // The client is non-null here: a snapshot only arrives through it.
+      if (retransmitRestoreActions.length > 0 && streamClient !== null) {
+        for (const action of retransmitRestoreActions) {
+          if (action.checkpointId === null || action.revertArtifacts === null) {
+            continue;
+          }
+          streamClient.sendAction({
+            kind: "restoreCheckpoint",
+            hasBinaryPayload: false,
+            epicId: options.epicId,
+            chatId: options.chatId,
+            clientActionId: action.clientActionId,
+            checkpointId: action.checkpointId,
+            revertArtifacts: action.revertArtifacts,
+          });
+        }
+      }
       // A prompt handed back to the composer takes its staged worktree with
       // it, or the resubmit silently runs against the chat's previous
       // binding.
@@ -5176,6 +5421,15 @@ export function createChatSessionStoreWithNotificationDependencies(
               state.queue,
               frame.clientActionId,
             ),
+            // A rejection naming an ACCEPTED restore is the host refusing its
+            // retransmit (`retransmittableRestoreActions`): no restore under
+            // this action id is running or will run, so the record and its
+            // spinner settle here - the fourth evidence door.
+            ...settleRestoreAttemptsByEvidence(
+              state,
+              [{ clientActionId: frame.clientActionId, kind: "refusal" }],
+              connectionEpoch,
+            ),
             // Single slot, first writer wins until `ackFailedSendRestoration`
             // clears it - the same rule `reconcileSnapshotChange` and the
             // settled-turn pass already follow. Two rejections landing before
@@ -5295,16 +5549,20 @@ export function createChatSessionStoreWithNotificationDependencies(
               new Set(Object.keys(patch.pendingActions)),
             ),
             pendingActions: patch.pendingActions,
-            acceptedActions: withoutResolvedAcceptedQueueCancellations(
-              pruneAcceptedActions(
-                {
-                  ...state.acceptedActions,
-                  // Confirmation stamps for records that were already accepted
-                  // when this frame arrived, then this pass's own transitions.
-                  ...patch.confirmedAcceptedActions,
-                  ...patch.acceptedActions,
-                },
-                now,
+            acceptedActions: withoutSettledAcceptedQueueStatusActions(
+              withoutResolvedAcceptedQueueCancellations(
+                pruneAcceptedActions(
+                  {
+                    ...state.acceptedActions,
+                    // Confirmation stamps for records that were already
+                    // accepted when this frame arrived, then this pass's own
+                    // transitions.
+                    ...patch.confirmedAcceptedActions,
+                    ...patch.acceptedActions,
+                  },
+                  now,
+                ),
+                frame.queue,
               ),
               frame.queue,
             ),
@@ -5815,6 +6073,28 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
         }
+        // The durable outcome of a restore names its action, so it retires
+        // the accepted `restoreCheckpoint` record exactly - the door for a
+        // `restoreCompleted` frame that never arrives. Before the transcript
+        // arms below, which differ by line; the record is line-independent.
+        if (frame.event.type === "checkpoint.restored") {
+          set((state) => {
+            const evidence = restoreOutcomesFrom([frame.event]);
+            const settled = settleRestoreAttemptsByEvidence(
+              state,
+              evidence,
+              connectionEpoch,
+            );
+            return {
+              acceptedActions: settled.acceptedActions,
+              settledRestoreCompletions: settled.settledRestoreCompletions,
+              // Also for a spinner this window did not originate (no record
+              // to match through): a live outcome is in order, so it is the
+              // slot's own attempt.
+              restore: settleObservedRestoreSlot(settled.restore, evidence),
+            };
+          });
+        }
         if (windowedLine) {
           takeLiveRecords({ messages: [], events: [frame.event] });
           return;
@@ -5833,6 +6113,14 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
         }
+        // The accepted `restoreCheckpoint` record is NOT retired here. This
+        // slot is the spinner, and a reconnect snapshot sweeps it
+        // (`sweepStaleRestoreSlot`); the record is the parking hold, and it
+        // keeps holding until completion evidence (`onRestoreCompleted`, the
+        // durable `checkpoint.restored` event, an error notice for the
+        // action). Retiring it at the start handed the hold to a slot that
+        // did not survive the reconnect, and the epic parked over a restore
+        // still writing files.
         set({
           restore: {
             kind: "in-flight",
@@ -5881,13 +6169,36 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (disposed || !matchesChat(options, frame.epicId, frame.chatId)) {
           return;
         }
-        set({
-          restore: {
-            kind: "completed",
-            checkpointId: frame.checkpointId,
-            finishedAt: frame.finishedAt,
-            results: [...frame.results],
-          },
+        set((state) => {
+          // One attempt finished. The frame carries no client action id, so
+          // the ledger answers first: a completion whose durable outcome
+          // reached this client ahead of the frame (a snapshot serialized in
+          // the host's journal-then-broadcast gap) has already retired its
+          // record exactly, and retiring "the earliest for this checkpoint"
+          // here would take a second attempt's record instead (Codex on
+          // ad9f99fb8). Otherwise retire ONE record, the earliest accepted,
+          // which is the attempt the host reached first; a second attempt
+          // accepted behind it keeps its own record until its own completion.
+          const answered = consumeSettledRestoreCompletion(
+            state.settledRestoreCompletions,
+            frame.checkpointId,
+            frame.finishedAt,
+          );
+          return {
+            restore: {
+              kind: "completed",
+              checkpointId: frame.checkpointId,
+              finishedAt: frame.finishedAt,
+              results: [...frame.results],
+            },
+            settledRestoreCompletions: answered.entries,
+            acceptedActions: answered.consumed
+              ? state.acceptedActions
+              : withoutEarliestAcceptedRestoreActionFor(
+                  state.acceptedActions,
+                  frame.checkpointId,
+                ),
+          };
         });
       },
       onErrorNotice: (frame) => {
@@ -5900,6 +6211,22 @@ export function createChatSessionStoreWithNotificationDependencies(
             frame.notice,
             state.deliveredNoticeActionIds,
           ),
+          // A notice naming an accepted restore is the host saying that
+          // attempt is over without a completion - the third retirement
+          // door, so a failed restore does not hold the epic resident. Its
+          // spinner goes with it.
+          ...(frame.notice.clientActionId === null
+            ? {}
+            : settleRestoreAttemptsByEvidence(
+                state,
+                [
+                  {
+                    clientActionId: frame.notice.clientActionId,
+                    kind: "refusal",
+                  },
+                ],
+                connectionEpoch,
+              )),
         }));
       },
       onConnectionStatus: (status, reason) => {
@@ -5939,6 +6266,34 @@ export function createChatSessionStoreWithNotificationDependencies(
             }
             return false;
           };
+          // One attempt that failed before delivering a snapshot, counted for
+          // the tile's bounded loading gate (see `PreSnapshotRetryEvidence`).
+          //
+          // `reconnecting` is the whole trigger because it is what every such
+          // failure looks like from here: the transport publishes it once per
+          // dropped socket, failed dial and swallowed retryable fatal, and
+          // then re-dials. The two statuses that are NOT counted each already
+          // have their own surface - a terminal `closed` carries
+          // `fatalClose`, and `open`/`connecting` are attempts still in
+          // flight.
+          //
+          // Only before the first snapshot: after one has landed the tile is
+          // rendering the transcript and an ordinary reconnect is not a
+          // stalled load. `retry()` clears `snapshotLoaded`, so a session the
+          // user re-dials is counted again - and it deliberately does NOT
+          // clear the streak, because the failures are evidence about the host
+          // and dropping them on a click would put the reader back on the
+          // spinner they just escaped.
+          const resolvePreSnapshotRetries = () => {
+            if (state.snapshotLoaded || status !== "reconnecting") {
+              return state.preSnapshotRetries;
+            }
+            return countPreSnapshotRetry(
+              state.preSnapshotRetries,
+              reason?.kind === "fatalError" ? reason.details : null,
+              Date.now(),
+            );
+          };
           return {
             connectionStatus: status,
             runStatus: status === "closed" ? "idle" : state.runStatus,
@@ -5947,6 +6302,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             interviewDeliveryRetryProtocolSupported:
               resolveInterviewDeliveryRetryProtocolSupported(),
             fatalClose: resolveFatalClose(),
+            preSnapshotRetries: resolvePreSnapshotRetries(),
           };
         });
         if (
@@ -6102,6 +6458,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       connectionStatus: "connecting",
       fatalClose: null,
       snapshotLoaded: false,
+      preSnapshotRetries: null,
       transcriptBaselineEpoch: NO_TRANSCRIPT_BASELINE,
       transcriptHydrationSequence: 0,
       transcriptRowContext: {},
@@ -6134,11 +6491,13 @@ export function createChatSessionStoreWithNotificationDependencies(
       pendingBackgroundStopAll: null,
       pendingBackgroundSessionStop: null,
       restore: null,
+      settledRestoreCompletions: [],
       pendingActions: {},
       acceptedActions: {},
       pendingUserMessages: [],
       errorNotices: [],
       deliveredNoticeActionIds: new Set<string>(),
+      deliveredLastCopyActionIds: new Set<string>(),
       openedSubagentCardBlockIds: new Set<string>(),
       failedSendRestoration: null,
       currentComposerSettings: null,
@@ -6164,6 +6523,15 @@ export function createChatSessionStoreWithNotificationDependencies(
         if (get().jumpTargetOrdinal === ordinal) return;
         set({ jumpTargetOrdinal: ordinal });
         if (ordinal !== null) requestPlannedHydration();
+      },
+      wake: () => {
+        if (disposed) return;
+        // No state written, deliberately. The status stays whatever the
+        // transport reports; if the re-dial succeeds the stream reports `open`
+        // through its normal callback, and if it fails the backoff re-arms.
+        // Writing an optimistic "connecting" here would claim progress this
+        // has no way to observe.
+        options.wakeTransport?.();
       },
       retry: () => {
         if (disposed) return;
@@ -6272,6 +6640,8 @@ export function createChatSessionStoreWithNotificationDependencies(
             clientActionId,
             action: "send",
             queueItemId: null,
+            checkpointId: null,
+            revertArtifacts: null,
             interviewBlockId: null,
             interviewDeliveryRetry: null,
             messageId,
@@ -6398,6 +6768,8 @@ export function createChatSessionStoreWithNotificationDependencies(
             clientActionId: input.clientActionId,
             action: "send",
             queueItemId: null,
+            checkpointId: null,
+            revertArtifacts: null,
             interviewBlockId: null,
             interviewDeliveryRetry: null,
             messageId: input.messageId,
@@ -6506,6 +6878,8 @@ export function createChatSessionStoreWithNotificationDependencies(
             clientActionId,
             action: "editUserMessage",
             queueItemId: null,
+            checkpointId: null,
+            revertArtifacts: null,
             interviewBlockId: null,
             interviewDeliveryRetry: null,
             messageId,
@@ -6581,6 +6955,8 @@ export function createChatSessionStoreWithNotificationDependencies(
             clientActionId,
             action: "stop",
             queueItemId: null,
+            checkpointId: null,
+            revertArtifacts: null,
             interviewBlockId: null,
             interviewDeliveryRetry: null,
             messageId: null,
@@ -6980,7 +7356,11 @@ export function createChatSessionStoreWithNotificationDependencies(
           set,
           get,
           frame,
-          pending: basicPending(clientActionId, "restoreCheckpoint"),
+          pending: {
+            ...basicPending(clientActionId, "restoreCheckpoint"),
+            checkpointId,
+            revertArtifacts,
+          },
           pendingUserMessage: null,
         });
       },
@@ -7083,16 +7463,41 @@ export function createChatSessionStoreWithNotificationDependencies(
           return { acceptedActions: next };
         });
       },
-      markNoticeDelivered: (clientActionId) => {
+      markNoticeDelivered: (notice) => {
+        const clientActionId = notice.clientActionId;
+        if (clientActionId === null) return;
         set((state) => {
-          if (state.deliveredNoticeActionIds.has(clientActionId)) return {};
-          const next = new Set(state.deliveredNoticeActionIds);
-          addWithFifoEviction(
-            next,
-            clientActionId,
-            MAX_DELIVERED_CLIENT_ACTION_IDS,
-          );
-          return { deliveredNoticeActionIds: next };
+          let deliveredNoticeActionIds = state.deliveredNoticeActionIds;
+          if (!deliveredNoticeActionIds.has(clientActionId)) {
+            const next = new Set(deliveredNoticeActionIds);
+            addWithFifoEviction(
+              next,
+              clientActionId,
+              MAX_DELIVERED_CLIENT_ACTION_IDS,
+            );
+            deliveredNoticeActionIds = next;
+          }
+          // The hold's release: unbounded, see the field. A store write even
+          // when the action-wide set already had the id, because that set
+          // may have been written by another speaker for the action, and
+          // this write is what the parking watcher re-evaluates on.
+          let deliveredLastCopyActionIds = state.deliveredLastCopyActionIds;
+          if (
+            noticeCarriesOnlyCopy(notice) &&
+            !deliveredLastCopyActionIds.has(clientActionId)
+          ) {
+            deliveredLastCopyActionIds = new Set([
+              ...deliveredLastCopyActionIds,
+              clientActionId,
+            ]);
+          }
+          if (
+            deliveredNoticeActionIds === state.deliveredNoticeActionIds &&
+            deliveredLastCopyActionIds === state.deliveredLastCopyActionIds
+          ) {
+            return {};
+          }
+          return { deliveredNoticeActionIds, deliveredLastCopyActionIds };
         });
       },
       stateFailedSendRestoration: (clientActionId) => {
@@ -7339,6 +7744,8 @@ function basicPending(
     clientActionId,
     action,
     queueItemId: null,
+    checkpointId: null,
+    revertArtifacts: null,
     interviewBlockId: null,
     interviewDeliveryRetry: null,
     messageId: null,

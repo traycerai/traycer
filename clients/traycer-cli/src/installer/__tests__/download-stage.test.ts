@@ -5,6 +5,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { platform as osPlatform } from "node:os";
@@ -85,7 +86,12 @@ import {
   writeHostInstallRecord,
   type HostInstallRecord,
 } from "../../manifest/host-install";
-import { readHostStagedRecord } from "../../manifest/host-staged";
+import {
+  readHostStagedRecord,
+  writeHostStagedRecordAt,
+  HOST_STAGED_RECORD_SCHEMA_VERSION,
+  type HostStagedRecord,
+} from "../../manifest/host-staged";
 import { currentHostPlatformKey } from "../../registry";
 import type {
   HostPlatformAsset,
@@ -98,11 +104,18 @@ import { acquireCliLock } from "../../store/cli-lock";
 import {
   decideHostDownloadPromotion,
   downloadAndStageHost,
+  resolveUpdatePlan,
 } from "../download-stage";
 import {
   updateAttemptRecordPath,
+  type HostUpdateAttemptIdentity,
   type HostUpdateAttemptRecord,
 } from "@traycer-clients/shared/host-update";
+import { encodeInstallGeneration } from "@traycer-clients/shared/host-version/install-generation";
+import {
+  expectReached,
+  expectStillGated,
+} from "../../__tests__/support/barrier-gate";
 
 const ENV: Environment = "production";
 let archiveTmpDir = "";
@@ -147,6 +160,7 @@ function buildManifest(opts: FakeClientOptions): HostVersionsManifest {
       deprecationReason: v.yanked ? "test-yanked" : null,
       requiredCliVersion: null,
       minimumEpoch: null,
+      storeFormats: null,
       platforms: { [platformKey]: asset },
     };
   });
@@ -271,6 +285,25 @@ function unresolvableArchiveRegistryClient(
   };
 }
 
+// Every method throws - the `resolveUpdatePlan` seam for proving an intent
+// that must complete with the registry unreachable never actually calls it.
+// A `RegistryClient` the plan never touches is the only honest way to prove
+// "never touches the registry": a spy that merely counts calls would still
+// let the plan reach the network in a real run.
+function unreachableRegistryClient(): RegistryClient {
+  return {
+    async fetchManifest() {
+      throw new Error("resolveUpdatePlan must not call fetchManifest here");
+    },
+    async resolveAsset() {
+      throw new Error("resolveUpdatePlan must not call resolveAsset here");
+    },
+    async downloadAndVerify() {
+      throw new Error("resolveUpdatePlan must not call downloadAndVerify here");
+    },
+  };
+}
+
 function throwingRegistryClient(base: RegistryClient): RegistryClient {
   return {
     ...base,
@@ -361,6 +394,29 @@ function writeAttemptRecord(overrides: Partial<HostUpdateAttemptRecord>): void {
   );
 }
 
+// Recursive path->content snapshot of a directory tree, for `resolveUpdatePlan`'s
+// no-writes pin: a plan that reads the install/staged records and the
+// registry must leave every byte on disk exactly as it found it. Returns
+// `{}` for a directory that does not exist, so "the host home was never
+// created" and "the host home was created but left empty" both snapshot
+// identically, matching what a genuine no-write function does either way.
+function snapshotTree(root: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!existsSync(root)) return out;
+  const walk = (dir: string): void => {
+    for (const name of readdirSync(dir)) {
+      const entryPath = join(dir, name);
+      if (statSync(entryPath).isDirectory()) {
+        walk(entryPath);
+      } else {
+        out[entryPath] = readFileSync(entryPath, "utf8");
+      }
+    }
+  };
+  walk(root);
+  return out;
+}
+
 // A manually-releasable gate for simulating a slow download. Stored as an
 // object property (rather than a bare `let` reassigned inside the promise
 // executor) so `release()` stays soundly typed as `() => void` at every
@@ -414,6 +470,8 @@ describe("downloadAndStageHost", () => {
         onProgress: noopProgress,
         registryClient: client,
         onWillDownload: null,
+        beforeExtract: async () => {},
+        ownAttempt: null,
       }),
     ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_NOT_INSTALLED });
   });
@@ -438,6 +496,8 @@ describe("downloadAndStageHost", () => {
         onProgress: noopProgress,
         registryClient: client,
         onWillDownload: null,
+        beforeExtract: async () => {},
+        ownAttempt: null,
       }),
     ).rejects.toMatchObject({ code: CLI_ERROR_CODES.REGISTRY_UNAVAILABLE });
     expect(downloadStarted).toBe(false);
@@ -461,6 +521,8 @@ describe("downloadAndStageHost", () => {
       onProgress: noopProgress,
       registryClient: client,
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     expect(outcome).toMatchObject({
       outcome: "short-circuit",
@@ -494,6 +556,8 @@ describe("downloadAndStageHost", () => {
         onWillDownload: async () => {
           announced = true;
         },
+        beforeExtract: async () => {},
+        ownAttempt: null,
       }),
     ).rejects.toMatchObject({
       code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
@@ -528,6 +592,8 @@ describe("downloadAndStageHost", () => {
           },
         }),
         onWillDownload: null,
+        beforeExtract: async () => {},
+        ownAttempt: null,
       }),
     ).rejects.toMatchObject({
       code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
@@ -552,6 +618,8 @@ describe("downloadAndStageHost", () => {
         onDownloadStart: null,
       }),
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     expect(outcome).toMatchObject({
       outcome: "short-circuit",
@@ -577,6 +645,8 @@ describe("downloadAndStageHost", () => {
         },
       }),
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     expect(outcome).toMatchObject({
       outcome: "short-circuit",
@@ -605,6 +675,8 @@ describe("downloadAndStageHost", () => {
         onDownloadStart: null,
       }),
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     expect((await readHostStagedRecord(ENV))?.version).toBe("1.5.0");
 
@@ -622,6 +694,8 @@ describe("downloadAndStageHost", () => {
         },
       }),
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     expect(outcome).toMatchObject({
       outcome: "short-circuit",
@@ -648,6 +722,8 @@ describe("downloadAndStageHost", () => {
         onDownloadStart: null,
       }),
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     const recordPath = join(stagedDirFor(ENV), "staged.json");
     const legacy = JSON.parse(readFileSync(recordPath, "utf8")) as {
@@ -671,6 +747,8 @@ describe("downloadAndStageHost", () => {
         },
       }),
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
 
     expect(outcome).toMatchObject({
@@ -699,6 +777,8 @@ describe("downloadAndStageHost", () => {
       onProgress: noopProgress,
       registryClient: client,
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     expect(outcome).toMatchObject({
       outcome: "promoted",
@@ -730,6 +810,8 @@ describe("downloadAndStageHost", () => {
       onProgress: noopProgress,
       registryClient: client,
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     // The archive now lives in the SHARED download cache keyed by
     // version+sha (registry/download-cache.ts), so the consumer must drop
@@ -769,6 +851,8 @@ describe("downloadAndStageHost", () => {
         onProgress: noopProgress,
         registryClient: client,
         onWillDownload: null,
+        beforeExtract: async () => {},
+        ownAttempt: null,
       }),
     ).rejects.toThrow(/expected executable/);
     // These bytes already cleared sha256 AND minisign. Whatever failed
@@ -798,6 +882,8 @@ describe("downloadAndStageHost", () => {
         onDownloadStart: null,
       }),
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     expect((await readHostStagedRecord(ENV))?.version).toBe("1.5.0");
 
@@ -821,6 +907,8 @@ describe("downloadAndStageHost", () => {
         },
       }),
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     expect(downloadStarted).toBe(false);
     expect(outcome).toMatchObject({
@@ -847,6 +935,8 @@ describe("downloadAndStageHost", () => {
         onDownloadStart: null,
       }),
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     expect((await readHostStagedRecord(ENV))?.version).toBe("1.5.0");
 
@@ -867,6 +957,8 @@ describe("downloadAndStageHost", () => {
         onDownloadStart: null,
       }),
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     expect(outcome).toMatchObject({
       outcome: "promoted",
@@ -896,6 +988,8 @@ describe("downloadAndStageHost", () => {
         },
       }),
       onWillDownload,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     expect(outcome).toMatchObject({
       outcome: "short-circuit",
@@ -918,6 +1012,8 @@ describe("downloadAndStageHost", () => {
         onDownloadStart: null,
       }),
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     expect(outcome).toMatchObject({
       outcome: "promoted",
@@ -946,6 +1042,8 @@ describe("downloadAndStageHost", () => {
       onProgress: noopProgress,
       registryClient: client,
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     await started.promise;
     // Simulate a concurrent, faster `host install 2.0.0` completing while
@@ -982,6 +1080,8 @@ describe("downloadAndStageHost", () => {
       onProgress: noopProgress,
       registryClient: client,
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     await started.promise;
     // Simulate a concurrent local-file install swapping in an
@@ -1017,6 +1117,8 @@ describe("downloadAndStageHost", () => {
         onDownloadStart: null,
       }),
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     expect((await readHostStagedRecord(ENV))?.version).toBe("1.5.0");
 
@@ -1032,6 +1134,8 @@ describe("downloadAndStageHost", () => {
         onDownloadStart: null,
       }),
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     expect(outcome).toMatchObject({
       outcome: "promoted",
@@ -1073,6 +1177,8 @@ describe("downloadAndStageHost", () => {
       onProgress: noopProgress,
       registryClient: slowClient,
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     await slowStarted.promise;
     const firstFastAttempt = downloadAndStageHost({
@@ -1082,6 +1188,8 @@ describe("downloadAndStageHost", () => {
       onProgress: noopProgress,
       registryClient: fastClient,
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     const firstFastResult = firstFastAttempt.then(
       (outcome) => ({ kind: "outcome" as const, outcome }),
@@ -1117,6 +1225,8 @@ describe("downloadAndStageHost", () => {
       onProgress: noopProgress,
       registryClient: fastClient,
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     expect(fastOutcome).toMatchObject({
       outcome: "promoted",
@@ -1176,6 +1286,8 @@ describe("downloadAndStageHost", () => {
       onProgress: noopProgress,
       registryClient: client,
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     await started.promise;
     // Simulate a concurrent `host uninstall` completing while the download
@@ -1227,6 +1339,8 @@ describe("downloadAndStageHost", () => {
       onProgress: noopProgress,
       registryClient: client,
       onWillDownload: null,
+      beforeExtract: async () => {},
+      ownAttempt: null,
     });
     expect(lockAcquiredDuringTransfer).toBe(true);
   });
@@ -1250,6 +1364,8 @@ describe("downloadAndStageHost", () => {
         onProgress: noopProgress,
         registryClient: throwingRegistryClient(base),
         onWillDownload: null,
+        beforeExtract: async () => {},
+        ownAttempt: null,
       }),
     ).rejects.toThrow(/simulated download failure/);
 
@@ -1296,6 +1412,8 @@ describe("downloadAndStageHost", () => {
           onDownloadStart: null,
         }),
         onWillDownload: null,
+        beforeExtract: async () => {},
+        ownAttempt: null,
       });
       const stagedBefore = await readHostStagedRecord(ENV);
       expect(stagedBefore?.version).toBe("1.2.0");
@@ -1317,6 +1435,8 @@ describe("downloadAndStageHost", () => {
         onProgress: noopProgress,
         registryClient: client,
         onWillDownload: null,
+        beforeExtract: async () => {},
+        ownAttempt: null,
       });
       await started.promise;
       // Promote-time STATE INJECTION after the outer admission snapshot and
@@ -1377,6 +1497,8 @@ describe("downloadAndStageHost", () => {
           onDownloadStart: null,
         }),
         onWillDownload: null,
+        beforeExtract: async () => {},
+        ownAttempt: null,
       });
       const stagedBefore = await readHostStagedRecord(ENV);
       const executablePath = join(stagedDirFor(ENV), executableBasename());
@@ -1396,6 +1518,8 @@ describe("downloadAndStageHost", () => {
           onDownloadStart: () => started.release(),
         }),
         onWillDownload: null,
+        beforeExtract: async () => {},
+        ownAttempt: null,
       });
       await started.promise;
       writeFileSync(
@@ -1442,6 +1566,8 @@ describe("downloadAndStageHost", () => {
           onDownloadStart: null,
         }),
         onWillDownload: null,
+        beforeExtract: async () => {},
+        ownAttempt: null,
       });
 
       const gate = makeGate();
@@ -1459,6 +1585,8 @@ describe("downloadAndStageHost", () => {
         onProgress: noopProgress,
         registryClient: client,
         onWillDownload: null,
+        beforeExtract: async () => {},
+        ownAttempt: null,
       });
       await started.promise;
       // Same timing as the positive case above - only `phase`/`execution`
@@ -1501,6 +1629,8 @@ describe("downloadAndStageHost", () => {
           onDownloadStart: null,
         }),
         onWillDownload: null,
+        beforeExtract: async () => {},
+        ownAttempt: null,
       });
       const stagedBefore = await readHostStagedRecord(ENV);
       const executablePath = join(stagedDirFor(ENV), executableBasename());
@@ -1525,6 +1655,8 @@ describe("downloadAndStageHost", () => {
         onProgress: noopProgress,
         registryClient: client,
         onWillDownload: null,
+        beforeExtract: async () => {},
+        ownAttempt: null,
       });
       await started.promise;
       writeAttemptRecord({
@@ -1578,6 +1710,8 @@ describe("downloadAndStageHost", () => {
           onDownloadStart: null,
         }),
         onWillDownload: null,
+        beforeExtract: async () => {},
+        ownAttempt: null,
       });
 
       const gate = makeGate();
@@ -1595,6 +1729,8 @@ describe("downloadAndStageHost", () => {
         onProgress: noopProgress,
         registryClient: client,
         onWillDownload: null,
+        beforeExtract: async () => {},
+        ownAttempt: null,
       });
       await started.promise;
       writeAttemptRecord({
@@ -1620,6 +1756,764 @@ describe("downloadAndStageHost", () => {
     // existing stage, even a newer one" tests above - every test in this
     // file before this `describe` block runs with no attempt record ever
     // written, so those promotions already prove the absent direction.
+
+    it("promotes over its own nonterminal attempt when ownAttempt names the same attemptId AND the candidate target", async () => {
+      await writeInstall("1.0.0", {});
+      const versions = [
+        { version: "1.0.0", yanked: false },
+        { version: "1.5.0", yanked: false },
+      ];
+      const gate = makeGate();
+      const started = makeGate();
+      const client = fakeRegistryClient({
+        latest: "1.5.0",
+        versions,
+        downloadGate: gate.promise,
+        onDownloadStart: () => started.release(),
+      });
+      const ownAttempt: HostUpdateAttemptIdentity = {
+        attemptId: "own-attempt-1",
+        generation: 1,
+        sequence: 1,
+      };
+      const downloadPromise = downloadAndStageHost({
+        environment: ENV,
+        versionRequest: null,
+        automatic: true,
+        onProgress: noopProgress,
+        registryClient: client,
+        onWillDownload: null,
+        beforeExtract: async () => {},
+        ownAttempt,
+      });
+      await started.promise;
+      // The record this run is itself advancing - same attemptId, same
+      // target as the candidate. Generation/sequence are deliberately
+      // mismatched from `ownAttempt` above: the guard's identity is the
+      // attempt id and target only, per the ticket's own-attempt rule.
+      writeAttemptRecord({
+        attemptId: "own-attempt-1",
+        generation: 9,
+        sequence: 9,
+        targetVersion: "1.5.0",
+        phase: "downloading",
+        execution: "active",
+        continuation: null,
+      });
+      gate.release();
+
+      const outcome = await downloadPromise;
+      expect(outcome).toMatchObject({
+        outcome: "promoted",
+        stagedVersion: "1.5.0",
+      });
+      expect((await readHostStagedRecord(ENV))?.version).toBe("1.5.0");
+      // Falsification: drop the target-match half of the exemption (compare
+      // only `attemptId`) and this still passes, but the next test - same
+      // id, DIFFERENT target - would wrongly promote too.
+    });
+
+    it("yields HOST_UPDATE_ATTEMPT_ACTIVE when ownAttempt's attemptId matches but the record's target does not", async () => {
+      await writeInstall("1.0.0", {});
+      const versions = [
+        { version: "1.0.0", yanked: false },
+        { version: "1.2.0", yanked: false },
+        { version: "1.5.0", yanked: false },
+      ];
+      const gate = makeGate();
+      const started = makeGate();
+      const client = fakeRegistryClient({
+        latest: "1.5.0",
+        versions,
+        downloadGate: gate.promise,
+        onDownloadStart: () => started.release(),
+      });
+      const ownAttempt: HostUpdateAttemptIdentity = {
+        attemptId: "own-attempt-2",
+        generation: 1,
+        sequence: 1,
+      };
+      const downloadPromise = downloadAndStageHost({
+        environment: ENV,
+        versionRequest: null,
+        automatic: true,
+        onProgress: noopProgress,
+        registryClient: client,
+        onWillDownload: null,
+        beforeExtract: async () => {},
+        ownAttempt,
+      });
+      await started.promise;
+      // Same attemptId as `ownAttempt`, but pointed at a DIFFERENT target
+      // (1.2.0, not the 1.5.0 candidate) - this run has moved on from
+      // whatever that record describes, so it is not "this run's own work".
+      writeAttemptRecord({
+        attemptId: "own-attempt-2",
+        targetVersion: "1.2.0",
+        phase: "downloading",
+        execution: "active",
+        continuation: null,
+      });
+      gate.release();
+
+      const result = await downloadPromise.then(
+        (outcome) => ({ kind: "outcome" as const, outcome }),
+        (error: unknown) => ({ kind: "error" as const, error }),
+      );
+
+      expect(result).toMatchObject({
+        kind: "error",
+        error: {
+          code: CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE,
+          details: expect.objectContaining({
+            disposition: "yield",
+            attemptId: "own-attempt-2",
+            targetVersion: "1.2.0",
+            candidateVersion: "1.5.0",
+          }),
+        },
+      });
+      // Falsification: drop the target comparison from the guard (own-id
+      // match alone exempts) and this reddens with a "promoted" outcome.
+    });
+
+    it("yields HOST_UPDATE_ATTEMPT_ACTIVE for a foreign nonterminal attempt even when ownAttempt is set to a different id", async () => {
+      await writeInstall("1.0.0", {});
+      const versions = [
+        { version: "1.0.0", yanked: false },
+        { version: "1.5.0", yanked: false },
+      ];
+      const gate = makeGate();
+      const started = makeGate();
+      const client = fakeRegistryClient({
+        latest: "1.5.0",
+        versions,
+        downloadGate: gate.promise,
+        onDownloadStart: () => started.release(),
+      });
+      const ownAttempt: HostUpdateAttemptIdentity = {
+        attemptId: "own-attempt-3",
+        generation: 1,
+        sequence: 1,
+      };
+      const downloadPromise = downloadAndStageHost({
+        environment: ENV,
+        versionRequest: null,
+        automatic: true,
+        onProgress: noopProgress,
+        registryClient: client,
+        onWillDownload: null,
+        beforeExtract: async () => {},
+        ownAttempt,
+      });
+      await started.promise;
+      // A DIFFERENT attemptId at the very same target this run is staging -
+      // a foreign contender, not this run's own work.
+      writeAttemptRecord({
+        attemptId: "foreign-attempt-1",
+        targetVersion: "1.5.0",
+        phase: "downloading",
+        execution: "active",
+        continuation: null,
+      });
+      gate.release();
+
+      const result = await downloadPromise.then(
+        (outcome) => ({ kind: "outcome" as const, outcome }),
+        (error: unknown) => ({ kind: "error" as const, error }),
+      );
+
+      expect(result).toMatchObject({
+        kind: "error",
+        error: {
+          code: CLI_ERROR_CODES.HOST_UPDATE_ATTEMPT_ACTIVE,
+          details: expect.objectContaining({
+            disposition: "yield",
+            attemptId: "foreign-attempt-1",
+            targetVersion: "1.5.0",
+            candidateVersion: "1.5.0",
+          }),
+        },
+      });
+      // Falsification: exempt on target match alone (ignore attemptId) and
+      // this reddens with a "promoted" outcome.
+    });
+
+    it("ablation: a TERMINAL attempt never yields even when ownAttempt is set and does not match it", async () => {
+      await writeInstall("1.0.0", {});
+      const versions = [
+        { version: "1.0.0", yanked: false },
+        { version: "1.5.0", yanked: false },
+      ];
+      const gate = makeGate();
+      const started = makeGate();
+      const client = fakeRegistryClient({
+        latest: "1.5.0",
+        versions,
+        downloadGate: gate.promise,
+        onDownloadStart: () => started.release(),
+      });
+      const ownAttempt: HostUpdateAttemptIdentity = {
+        attemptId: "own-attempt-4",
+        generation: 1,
+        sequence: 1,
+      };
+      const downloadPromise = downloadAndStageHost({
+        environment: ENV,
+        versionRequest: null,
+        automatic: true,
+        onProgress: noopProgress,
+        registryClient: client,
+        onWillDownload: null,
+        beforeExtract: async () => {},
+        ownAttempt,
+      });
+      await started.promise;
+      writeAttemptRecord({
+        attemptId: "finished-attempt-3",
+        targetVersion: "1.5.0",
+        phase: "complete",
+        execution: "terminal",
+        continuation: null,
+        completedAt: "2026-01-01T00:05:00.000Z",
+      });
+      gate.release();
+
+      const outcome = await downloadPromise;
+      expect(outcome).toMatchObject({
+        outcome: "promoted",
+        stagedVersion: "1.5.0",
+      });
+    });
+  });
+
+  describe("beforeExtract barrier (shared with stageHostInstallSource)", () => {
+    it("blocks extraction until the hook RESOLVES, after downloadAndVerify has returned", async () => {
+      await writeInstall("1.0.0", {});
+      const versions = [
+        { version: "1.0.0", yanked: false },
+        { version: "1.5.0", yanked: false },
+      ];
+      const order: string[] = [];
+      const downloadGate = makeGate();
+      const downloadStarted = makeGate();
+      // Released by the FIRST `extract` progress event, which
+      // `stageVerifiedSource` emits immediately before `extractHostSource`.
+      // While the hook is pending this must never fire.
+      const extractionStarted = makeGate();
+      const hookEntered = makeGate();
+      const hookGate = makeGate();
+      const client = fakeRegistryClient({
+        latest: "1.5.0",
+        versions,
+        downloadGate: downloadGate.promise,
+        onDownloadStart: () => {
+          order.push("download-start");
+          downloadStarted.release();
+        },
+      });
+
+      const downloadPromise = downloadAndStageHost({
+        environment: ENV,
+        versionRequest: null,
+        automatic: true,
+        onProgress: (info) => {
+          // `createExtractHeartbeat` emits its own "extract" ticks per entry
+          // on top of that single boundary event, so only the FIRST one
+          // marks the edge - dedupe consecutive repeats.
+          if (
+            info.stage === "extract" &&
+            order[order.length - 1] !== "progress-extract"
+          ) {
+            order.push("progress-extract");
+            extractionStarted.release();
+          }
+        },
+        registryClient: client,
+        onWillDownload: null,
+        beforeExtract: async () => {
+          order.push("before-extract");
+          // The AFTER-verification edge: `downloadAndVerify` has already
+          // RETURNED (sha256 in the transport, minisign in the registry
+          // client both happen inside it), so its verified archive is on
+          // disk by the time this runs.
+          expect(existsSync(lastFakeArchivePath)).toBe(true);
+          hookEntered.release();
+          await hookGate.promise;
+        },
+        ownAttempt: null,
+      });
+
+      await downloadStarted.promise;
+      downloadGate.release();
+      await expectReached(hookEntered.promise, "beforeExtract");
+      // The BEFORE-extraction edge, and the one an ordering array cannot
+      // prove on its own: while this hook is pending, extraction has not
+      // begun. An unawaited call would have raced ahead by now.
+      await expectStillGated(extractionStarted.promise, "extraction started");
+      expect(order).toEqual(["download-start", "before-extract"]);
+
+      hookGate.release();
+      const outcome = await downloadPromise;
+
+      expect(outcome).toMatchObject({
+        outcome: "promoted",
+        stagedVersion: "1.5.0",
+      });
+      expect(order).toEqual([
+        "download-start",
+        "before-extract",
+        "progress-extract",
+      ]);
+      // Falsification: change `await opts.beforeExtract()` in
+      // `stageVerifiedSource` to `void opts.beforeExtract()` and extraction
+      // runs while this hook is still pending - `expectStillGated` above
+      // sees "fired" and the interim `order` assertion also reddens.
+    });
+
+    it("propagates a rejecting hook, extracts nothing, and leaves no owned temp behind", async () => {
+      await writeInstall("1.0.0", {});
+      const versions = [
+        { version: "1.0.0", yanked: false },
+        { version: "1.5.0", yanked: false },
+      ];
+      let extractProgressSeen = false;
+      const client = fakeRegistryClient({
+        latest: "1.5.0",
+        versions,
+        downloadGate: null,
+        onDownloadStart: null,
+      });
+
+      await expect(
+        downloadAndStageHost({
+          environment: ENV,
+          versionRequest: null,
+          automatic: true,
+          onProgress: (info) => {
+            if (info.stage === "extract") extractProgressSeen = true;
+          },
+          registryClient: client,
+          onWillDownload: null,
+          beforeExtract: async () => {
+            throw new Error("the writer refused the preparing phase");
+          },
+          ownAttempt: null,
+        }),
+      ).rejects.toThrow("the writer refused the preparing phase");
+
+      // Nothing was extracted and nothing was promoted: the barrier is
+      // upstream of both.
+      expect(extractProgressSeen).toBe(false);
+      expect(await readHostStagedRecord(ENV)).toBeNull();
+      // The `finally` cleanup owns the owner-tokened temp on every throw
+      // path, this new one included - a hook that refuses must not leak a
+      // staging tree.
+      expect(readdirSync(stagingRootFor(ENV))).toEqual([]);
+      // Falsification: swallow the hook's rejection in `stageVerifiedSource`
+      // (call it inside a `try {} catch {}`) and this resolves `promoted`
+      // with `extractProgressSeen` true.
+    });
+  });
+
+  describe("resolveUpdatePlan", () => {
+    it("reports not-installed with no install record at all", async () => {
+      const plan = await resolveUpdatePlan({
+        environment: ENV,
+        request: {
+          intent: "install",
+          versionRequest: null,
+          allowDowngrade: false,
+        },
+        onProgress: noopProgress,
+        registryClient: unreachableRegistryClient(),
+      });
+      expect(plan).toEqual({ kind: "not-installed" });
+    });
+
+    it("activate: never touches the registry and returns the identity facts", async () => {
+      const installed = await writeInstall("1.2.0", {});
+      const before = snapshotTree(hostHomeFor(ENV));
+
+      const plan = await resolveUpdatePlan({
+        environment: ENV,
+        request: { intent: "activate" },
+        onProgress: noopProgress,
+        registryClient: unreachableRegistryClient(),
+      });
+
+      expect(plan).toEqual({
+        kind: "activate",
+        identity: {
+          installedVersion: "1.2.0",
+          installGeneration: encodeInstallGeneration({
+            installId: installed.installId,
+            installedAt: installed.installedAt,
+            archiveSha256: installed.archiveSha256,
+            version: installed.version,
+          }),
+          installedRuntimeVersion: installed.runtimeVersion,
+          stagedVersion: null,
+          stageFingerprint: null,
+        },
+      });
+      expect(snapshotTree(hostHomeFor(ENV))).toEqual(before);
+      // Falsification: have `resolveUpdatePlan` call `planRegistryClient`
+      // unconditionally (even on `activate`) and this throws instead of
+      // resolving.
+    });
+
+    it("continue with needsTransfer: false: never touches the registry", async () => {
+      await writeInstall("1.2.0", {});
+      const before = snapshotTree(hostHomeFor(ENV));
+
+      const plan = await resolveUpdatePlan({
+        environment: ENV,
+        request: {
+          intent: "continue",
+          targetVersion: "1.5.0",
+          needsTransfer: false,
+        },
+        onProgress: noopProgress,
+        registryClient: unreachableRegistryClient(),
+      });
+
+      expect(plan).toMatchObject({
+        kind: "resume",
+        targetVersion: "1.5.0",
+        entry: null,
+        asset: null,
+      });
+      expect(snapshotTree(hostHomeFor(ENV))).toEqual(before);
+    });
+
+    it("continue with needsTransfer: true resolves the manifest/asset for the resumed target", async () => {
+      await writeInstall("1.0.0", {});
+      const versions = [
+        { version: "1.0.0", yanked: false },
+        { version: "1.5.0", yanked: false },
+      ];
+      const plan = await resolveUpdatePlan({
+        environment: ENV,
+        request: {
+          intent: "continue",
+          targetVersion: "1.5.0",
+          needsTransfer: true,
+        },
+        onProgress: noopProgress,
+        registryClient: fakeRegistryClient({
+          latest: "1.5.0",
+          versions,
+          downloadGate: null,
+          onDownloadStart: null,
+        }),
+      });
+
+      expect(plan).toMatchObject({ kind: "resume", targetVersion: "1.5.0" });
+      if (plan.kind === "resume") {
+        expect(plan.entry?.version).toBe("1.5.0");
+        expect(plan.asset).not.toBeNull();
+      }
+    });
+
+    it("install: an EXPLICIT request BELOW the installed record is REFUSED, not a no-op - the request delivered nothing (#1752 round 14)", async () => {
+      // The rule this replaces read "installed is at or above the target ->
+      // no-op", which answered `host update --version 1.0.0` with exit 0 over
+      // a host at 1.5.0, having delivered nothing the caller asked for. It is
+      // the same "a request for X is never answered `already at Y`" the apply
+      // binding and the under-lock activation check enforce, applied at the
+      // first place the executor can see it. Falsification: drop the
+      // `explicitOtherArtifact` guard and this resolves `no-op` again.
+      await writeInstall("1.5.0", {});
+      const versions = [
+        { version: "1.0.0", yanked: false },
+        { version: "1.5.0", yanked: false },
+      ];
+      const before = snapshotTree(hostHomeFor(ENV));
+
+      await expect(
+        resolveUpdatePlan({
+          environment: ENV,
+          request: {
+            intent: "install",
+            versionRequest: "1.0.0",
+            allowDowngrade: false,
+          },
+          onProgress: noopProgress,
+          registryClient: fakeRegistryClient({
+            latest: "1.5.0",
+            versions,
+            downloadGate: null,
+            onDownloadStart: null,
+          }),
+        }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+        details: { installedVersion: "1.5.0", targetVersion: "1.0.0" },
+      });
+      // Refused before anything is fetched, staged or written.
+      expect(snapshotTree(hostHomeFor(ENV))).toEqual(before);
+    });
+
+    it("install: an IMPLICIT latest at or above the installed record IS the no-op - the binding is the explicit request's alone", async () => {
+      await writeInstall("1.5.0", {});
+      const before = snapshotTree(hostHomeFor(ENV));
+
+      const plan = await resolveUpdatePlan({
+        environment: ENV,
+        request: {
+          intent: "install",
+          versionRequest: null,
+          allowDowngrade: false,
+        },
+        onProgress: noopProgress,
+        registryClient: fakeRegistryClient({
+          latest: "1.5.0",
+          versions: [{ version: "1.5.0", yanked: false }],
+          downloadGate: null,
+          onDownloadStart: null,
+        }),
+      });
+
+      expect(plan).toMatchObject({ kind: "no-op", targetVersion: "1.5.0" });
+      expect(snapshotTree(hostHomeFor(ENV))).toEqual(before);
+    });
+
+    it("install: an EXPLICIT request for the installed record's OWN STRING is the no-op (control)", async () => {
+      // The separator between this and the refusal above is string equality,
+      // not the comparator: it is what makes the two `2.0.0+…` cases below
+      // land on opposite sides.
+      await writeInstall("1.5.0", {});
+
+      const plan = await resolveUpdatePlan({
+        environment: ENV,
+        request: {
+          intent: "install",
+          versionRequest: "1.5.0",
+          allowDowngrade: false,
+        },
+        onProgress: noopProgress,
+        registryClient: fakeRegistryClient({
+          latest: "1.5.0",
+          versions: [{ version: "1.5.0", yanked: false }],
+          downloadGate: null,
+          onDownloadStart: null,
+        }),
+      });
+
+      expect(plan).toMatchObject({ kind: "no-op", targetVersion: "1.5.0" });
+    });
+
+    it("install: ANOTHER BUILD of the installed release (2.0.0+foo over 2.0.0+bar) is refused without consent and takes the OWNED installer with it", async () => {
+      // The comparator orders these two EQUAL - it ignores build metadata -
+      // so the old at-or-above reading called it up to date and the requested
+      // artifact was never delivered. Identity is the STRING. With consent
+      // the owned installer takes it, because the shared monotonic stage
+      // would refuse to promote a candidate that is not strictly newer.
+      // Falsification: compare with `compareHostVersions` instead of `===`
+      // and both halves collapse into `no-op`.
+      await writeInstall("2.0.0+bar", {});
+      const registry = {
+        latest: "2.0.0+foo",
+        versions: [{ version: "2.0.0+foo", yanked: false }],
+        downloadGate: null,
+        onDownloadStart: null,
+      };
+
+      await expect(
+        resolveUpdatePlan({
+          environment: ENV,
+          request: {
+            intent: "install",
+            versionRequest: "2.0.0+foo",
+            allowDowngrade: false,
+          },
+          onProgress: noopProgress,
+          registryClient: fakeRegistryClient(registry),
+        }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+      });
+
+      const consented = await resolveUpdatePlan({
+        environment: ENV,
+        request: {
+          intent: "install",
+          versionRequest: "2.0.0+foo",
+          allowDowngrade: true,
+        },
+        onProgress: noopProgress,
+        registryClient: fakeRegistryClient(registry),
+      });
+      expect(consented).toMatchObject({
+        kind: "downgrade",
+        targetVersion: "2.0.0+foo",
+      });
+    });
+
+    it("install: --allow-downgrade on the record's OWN STRING stays the no-op - the installer never runs (control)", async () => {
+      await writeInstall("2.0.0+bar", {});
+
+      const plan = await resolveUpdatePlan({
+        environment: ENV,
+        request: {
+          intent: "install",
+          versionRequest: "2.0.0+bar",
+          allowDowngrade: true,
+        },
+        onProgress: noopProgress,
+        registryClient: fakeRegistryClient({
+          latest: "2.0.0+bar",
+          versions: [{ version: "2.0.0+bar", yanked: false }],
+          downloadGate: null,
+          onDownloadStart: null,
+        }),
+      });
+
+      expect(plan).toMatchObject({ kind: "no-op", targetVersion: "2.0.0+bar" });
+    });
+
+    it("install: already-staged when the target is already staged and promotable", async () => {
+      const installed = await writeInstall("1.0.0", {});
+      const stagedDir = stagedDirFor(ENV);
+      mkdirSync(stagedDir, { recursive: true });
+      const stagedRecord: HostStagedRecord = {
+        schemaVersion: HOST_STAGED_RECORD_SCHEMA_VERSION,
+        stageId: "test-stage-id",
+        version: "1.5.0",
+        runtimeVersion: null,
+        archiveSha256: "b".repeat(64),
+        sizeBytes: 1,
+        source: { kind: "registry", value: "1.5.0" },
+        signatureKeyId: "test-key",
+        signatureVerifiedAt: new Date().toISOString(),
+        executablePath: executableBasename(),
+        platform: currentInstallPlatform(),
+        arch: currentInstallArch(),
+        executableSha256: null,
+      };
+      await writeHostStagedRecordAt(stagedDir, stagedRecord);
+      const versions = [
+        { version: "1.0.0", yanked: false },
+        { version: "1.5.0", yanked: false },
+      ];
+      const before = snapshotTree(hostHomeFor(ENV));
+
+      const plan = await resolveUpdatePlan({
+        environment: ENV,
+        request: {
+          intent: "install",
+          versionRequest: "1.5.0",
+          allowDowngrade: false,
+        },
+        onProgress: noopProgress,
+        registryClient: fakeRegistryClient({
+          latest: "1.5.0",
+          versions,
+          downloadGate: null,
+          onDownloadStart: null,
+        }),
+      });
+
+      expect(plan).toEqual({
+        kind: "already-staged",
+        targetVersion: "1.5.0",
+        identity: {
+          installedVersion: "1.0.0",
+          installGeneration: encodeInstallGeneration({
+            installId: installed.installId,
+            installedAt: installed.installedAt,
+            archiveSha256: installed.archiveSha256,
+            version: installed.version,
+          }),
+          installedRuntimeVersion: installed.runtimeVersion,
+          stagedVersion: "1.5.0",
+          stageFingerprint: "test-stage-id",
+        },
+      });
+      expect(snapshotTree(hostHomeFor(ENV))).toEqual(before);
+    });
+
+    it("install: upgrade when the target is newer and nothing is staged for it", async () => {
+      await writeInstall("1.0.0", {});
+      const versions = [
+        { version: "1.0.0", yanked: false },
+        { version: "1.5.0", yanked: false },
+      ];
+      const before = snapshotTree(hostHomeFor(ENV));
+
+      const plan = await resolveUpdatePlan({
+        environment: ENV,
+        request: {
+          intent: "install",
+          versionRequest: null,
+          allowDowngrade: false,
+        },
+        onProgress: noopProgress,
+        registryClient: fakeRegistryClient({
+          latest: "1.5.0",
+          versions,
+          downloadGate: null,
+          onDownloadStart: null,
+        }),
+      });
+
+      expect(plan).toMatchObject({ kind: "upgrade", targetVersion: "1.5.0" });
+      expect(snapshotTree(hostHomeFor(ENV))).toEqual(before);
+    });
+
+    it("install: downgrade requires BOTH allowDowngrade and an explicit versionRequest below installed", async () => {
+      await writeInstall("2.0.0", {});
+      const versions = [
+        { version: "1.0.0", yanked: false },
+        { version: "2.0.0", yanked: false },
+      ];
+      const before = snapshotTree(hostHomeFor(ENV));
+
+      const downgradePlan = await resolveUpdatePlan({
+        environment: ENV,
+        request: {
+          intent: "install",
+          versionRequest: "1.0.0",
+          allowDowngrade: true,
+        },
+        onProgress: noopProgress,
+        registryClient: fakeRegistryClient({
+          latest: "2.0.0",
+          versions,
+          downloadGate: null,
+          onDownloadStart: null,
+        }),
+      });
+      expect(downgradePlan).toMatchObject({
+        kind: "downgrade",
+        targetVersion: "1.0.0",
+      });
+      expect(snapshotTree(hostHomeFor(ENV))).toEqual(before);
+
+      // `allowDowngrade` alone, resolving `latest` (which stays at or below
+      // installed) is still up to date - the flag is not itself a downgrade
+      // request without an EXPLICIT below-installed version.
+      const noOpPlan = await resolveUpdatePlan({
+        environment: ENV,
+        request: {
+          intent: "install",
+          versionRequest: null,
+          allowDowngrade: true,
+        },
+        onProgress: noopProgress,
+        registryClient: fakeRegistryClient({
+          latest: "1.0.0",
+          versions,
+          downloadGate: null,
+          onDownloadStart: null,
+        }),
+      });
+      expect(noOpPlan).toMatchObject({ kind: "no-op", targetVersion: "1.0.0" });
+      // Falsification: drop the `request.versionRequest !== null` clause
+      // from the downgrade branch and `noOpPlan` reddens to `kind:
+      // "downgrade"`.
+    });
   });
 
   // `onWillDownload` (Host Update Layer Redesign - busy park + early
@@ -1659,6 +2553,8 @@ describe("downloadAndStageHost", () => {
           expect(targetVersion).toBe("1.5.0");
           order.push("will-download");
         },
+        beforeExtract: async () => {},
+        ownAttempt: null,
       });
       expect(willDownloadCalls).toBe(1);
       expect(order).toEqual([
@@ -1689,6 +2585,8 @@ describe("downloadAndStageHost", () => {
         onWillDownload: async () => {
           called = true;
         },
+        beforeExtract: async () => {},
+        ownAttempt: null,
       });
       expect(outcome).toMatchObject({
         outcome: "short-circuit",
@@ -1717,6 +2615,8 @@ describe("downloadAndStageHost", () => {
           onDownloadStart: null,
         }),
         onWillDownload: null,
+        beforeExtract: async () => {},
+        ownAttempt: null,
       });
       let called = false;
       const outcome = await downloadAndStageHost({
@@ -1733,6 +2633,8 @@ describe("downloadAndStageHost", () => {
         onWillDownload: async () => {
           called = true;
         },
+        beforeExtract: async () => {},
+        ownAttempt: null,
       });
       expect(outcome).toMatchObject({
         outcome: "short-circuit",
@@ -1761,6 +2663,8 @@ describe("downloadAndStageHost", () => {
           onWillDownload: async () => {
             called = true;
           },
+          beforeExtract: async () => {},
+          ownAttempt: null,
         }),
       ).rejects.toMatchObject({ code: CLI_ERROR_CODES.REGISTRY_UNAVAILABLE });
       // Falsification: move the manifest-validity check below the hook call
@@ -1791,6 +2695,8 @@ describe("downloadAndStageHost", () => {
           onWillDownload: async () => {
             throw new Error("hook failed");
           },
+          beforeExtract: async () => {},
+          ownAttempt: null,
         }),
       ).rejects.toThrow("hook failed");
       // Falsification: swallow the hook's rejection (e.g. wrap the `await

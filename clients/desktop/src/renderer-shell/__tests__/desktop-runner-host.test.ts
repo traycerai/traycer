@@ -100,7 +100,11 @@ function buildFakeBridge(
             user: identity,
           };
         },
-        rotate: async () => ({ outcome: "deleted", pair: null }),
+        rotate: async () => ({
+          outcome: "deleted",
+          pair: null,
+          rejection: null,
+        }),
         delete: async () => {
           stored = null;
         },
@@ -405,6 +409,7 @@ function buildFakeBridge(
           profile: null,
         }),
         set: async () => ({ outcome: "accepted" as const }),
+        revoke: async () => undefined,
         onChange: (_handler) => ({ dispose: () => undefined }),
       },
     },
@@ -449,6 +454,9 @@ function buildFakeBridge(
       onChange: () => ({ dispose: () => undefined }),
     },
     platform: {
+      crashTelemetry: {
+        persist: () => Promise.resolve(),
+      },
       recentDocuments: { add: async () => undefined },
       window: {
         flashFrame: async () => undefined,

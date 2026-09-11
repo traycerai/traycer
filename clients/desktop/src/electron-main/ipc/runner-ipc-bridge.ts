@@ -74,6 +74,13 @@ import { registerDeviceFlowIpc } from "./device-flow-ipc";
 import { registerTrayIpc } from "./tray-ipc";
 import { registerWindowsIpc } from "./windows-ipc";
 import { registerOwnershipIpc } from "./ownership-ipc";
+import { registerEpicVisibilityIpc } from "./epic-visibility-ipc";
+import {
+  registerWindowVisibilityIpc,
+  windowOnScreen,
+  WindowVisibilityTold,
+} from "./window-visibility-ipc";
+import { EpicWindowVisibility } from "../windows/epic-window-visibility";
 import { registerPerWindowStateIpc } from "./per-window-state-ipc";
 import { registerHostIpc } from "./host-ipc";
 import { registerHostManagementIpc } from "./host-management-ipc";
@@ -104,6 +111,7 @@ import type {
   ApplyStagedOk,
   ApplyStagedTrigger,
   ConvergeReadyOk,
+  ConvergeReadyVersionPolicy,
   GuardedMutationOutcome,
   HostControllerStatus,
   LifecycleAdmissionBlock,
@@ -124,6 +132,12 @@ export interface IpcManagedWindow {
   isDestroyed(): boolean;
   isFocused(): boolean;
   isVisible(): boolean;
+  /**
+   * Optional because a double may not model it; a real `BrowserWindow` always
+   * has it. `window-visibility-ipc.ts` treats an absent method as "not
+   * minimised", which fails toward NOT parking.
+   */
+  isMinimized?(): boolean;
   show(): void;
   focus(): void;
   readonly webContents: {
@@ -215,10 +229,26 @@ export interface IpcDesktopAuthSession {
   get(): VerifiedDesktopAuthSessionSnapshot;
   set(snapshot: DesktopAuthSessionSnapshot): void;
   /**
-   * Adopts a session whose bearer main verified itself. Only the auth IPC,
-   * which runs the verification, calls it.
+   * Begins a deferred (verified) set; the generation it returns fences that
+   * set's commit against any set begun after it. See
+   * `DesktopAuthSession.beginSet`.
    */
-  setVerified(snapshot: DesktopAuthSessionSnapshot): void;
+  beginSet(): number;
+  /**
+   * Adopts a session whose bearer main verified itself. Only the auth IPC,
+   * which runs the verification, calls it, with the generation it took from
+   * `beginSet` before verifying. `false` when a newer set had already
+   * committed and this one was dropped.
+   */
+  setVerified(
+    snapshot: DesktopAuthSessionSnapshot,
+    generation: number,
+  ): boolean;
+  /**
+   * Drops the verification alone, and only while `rejectedToken` is still the
+   * bearer held; see `DesktopAuthSession.revokeVerification`.
+   */
+  revokeVerification(rejectedToken: string): void;
   on(event: "change", listener: IpcAuthSessionChangeListener): void;
   off(event: "change", listener: IpcAuthSessionChangeListener): void;
 }
@@ -400,6 +430,7 @@ export interface IpcHostController {
   convergeReady(
     force: boolean,
     intent: LocalHostMutationIntent,
+    versionPolicy: ConvergeReadyVersionPolicy,
   ): Promise<GuardedMutationOutcome<ConvergeReadyOk>>;
   stageLatest(): Promise<void>;
   applyStaged(
@@ -408,6 +439,14 @@ export interface IpcHostController {
   ): Promise<MutationOutcome<ApplyStagedOk>>;
   activateInstalled(
     force: boolean,
+    // When false, activate the installed bytes WITHOUT promoting a ready newer
+    // stage. The implicit launch reconcile passes false for EVERY launch
+    // activation (a known-ready update is handled by its own apply branch under
+    // the CLI hold guard; a stage that only becomes ready mid-activation must
+    // not be promoted here, or it could revert a held downgrade). Explicit
+    // callers (a GUI "Update"/activate click) pass true and keep the
+    // "ready update supersedes activation debt" behaviour.
+    promoteReadyStage: boolean,
   ): Promise<MutationOutcome<ActivateInstalledOk>>;
   installVersion(
     pin: string,
@@ -494,6 +533,17 @@ export class RunnerIpcBridge {
   readonly options: RunnerIpcBridgeOptions;
   readonly windowRegistry: IpcWindowRegistry;
   readonly ownership: IpcEpicWindowOwnership;
+  /**
+   * Live per-window visible-Epic state (plan C, decision C6).
+   *
+   * CONSTRUCTED here rather than injected like `ownership`, because unlike
+   * every other collaborator on this bridge it has no second owner and no
+   * durable side: nothing persists it, nothing restores it, and no startup path
+   * seeds it. Injecting it would be a parameter every construction site has to
+   * carry to say the same thing this line says.
+   */
+  readonly epicVisibility = new EpicWindowVisibility();
+  readonly windowVisibilityTold = new WindowVisibilityTold();
   readonly perWindowState: IpcPerWindowState;
   readonly authSession: IpcDesktopAuthSession;
   readonly authTokenStore: IpcAuthTokenStore;
@@ -555,6 +605,8 @@ export class RunnerIpcBridge {
     registerLifecycleIpc(this);
     registerWindowsIpc(this);
     registerOwnershipIpc(this);
+    registerEpicVisibilityIpc(this);
+    registerWindowVisibilityIpc(this);
     registerPerWindowStateIpc(this);
     registerSupportIpc(this);
     registerHostIpc(this);
@@ -855,6 +907,13 @@ export class RunnerIpcBridge {
 
   markRendererUnavailable(windowId: string): void {
     this.appLifecycleReadyWindowIds.delete(windowId);
+    // A renderer that died stops reporting, and `retainWindows` cannot help:
+    // it prunes by window REGISTRATION, which this window still has. Left
+    // alone, this window's last visible-Epic report would stand forever and
+    // block every OTHER window from ever parking those Epics. An empty report
+    // is how a row is removed, so this is the same path a window that stopped
+    // showing anything takes.
+    this.epicVisibility.report(windowId, []);
     this.rejectQuitDecisionWaitersForWindow(
       windowId,
       new Error("Renderer reset before resolving quit interception"),
@@ -1182,6 +1241,31 @@ export class RunnerIpcBridge {
       RunnerHostEvent.ownershipChange,
       this.ownership.snapshot(),
     );
+    // A window that joins mid-session has to learn what the OTHERS are showing;
+    // the fan-out only carries changes, and a window whose visible set has been
+    // stable since before this one existed emits nothing to catch it up.
+    this.safeSendToWindow(
+      windowId,
+      RunnerHostEvent.epicVisibilityChange,
+      this.epicVisibility.snapshot(),
+    );
+    // This window's OWN on-screen state (minimised / hidden, as main sees it).
+    // The Page Visibility API never reports hidden in this app because every
+    // window runs with `backgroundThrottling: false`, so the renderer has no
+    // other way to learn it.
+    const ownRecord = this.windowRegistry.getRecordById(windowId);
+    if (ownRecord !== null) {
+      const onScreen = windowOnScreen(ownRecord.window);
+      if (
+        this.safeSendToWindow(
+          windowId,
+          RunnerHostEvent.windowVisibilityChange,
+          onScreen,
+        )
+      ) {
+        this.windowVisibilityTold.record(windowId, onScreen);
+      }
+    }
     this.safeSendToWindow(
       windowId,
       RunnerHostEvent.perWindowStateChange,
@@ -1292,6 +1376,11 @@ export class RunnerIpcBridge {
     // lifecycle owner for the native tabs that window held, so one left open
     // would hold their placement against a window that is gone.
     this.browserSessions?.retainWindows(liveWindowIds);
+    // A closed window's last visible-Epic report would otherwise stand for
+    // ever - it is live state with no expiry, and the renderer that would have
+    // corrected it is destroyed. Every surviving window would read that Epic as
+    // shown somewhere and never park it.
+    this.epicVisibility.retainWindows(liveWindowIds);
   }
 
   removeQuitDecisionWaiter(requestId: string): QuitDecisionWaiter | null {
@@ -1463,7 +1552,7 @@ class NullAuthTokenStore implements IpcAuthTokenStore {
   }
 
   rotate(): Promise<TokenRotateResult> {
-    return Promise.resolve({ outcome: "deleted", pair: null });
+    return Promise.resolve({ outcome: "deleted", pair: null, rejection: null });
   }
 
   delete(): Promise<void> {

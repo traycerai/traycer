@@ -8,6 +8,7 @@ import {
   guiHarnessIdSchemaV50,
   guiHarnessIdSchemaV60,
   guiHarnessIdSchemaV70,
+  guiHarnessIdSchemaV80,
 } from "@traycer/protocol/host/agent/shared";
 import { PROVIDER_AUTH_STATUS_SCHEMA } from "@traycer/protocol/host/provider-schemas";
 import {
@@ -435,24 +436,19 @@ export type ListGuiHarnessesResponseV71 = z.infer<
   typeof listGuiHarnessesResponseSchemaV71
 >;
 
-// ── Frozen protocol-v8.0 catalog row + response (pre-`auto`) ───────────────
-// 8.0 is the Reasonix line: the live id enum over the hand-frozen 7.1 body. It
-// stopped being the head line when 8.1 opened for the `auto` permission mode
-// and the `nativeAutoJudge` row field, and is frozen here the way 7.0 was
-// frozen when 7.1 opened - same response, same reason.
+// ── Frozen protocol-v8.0 catalog row + response ────────────────────────────
+// v8.0 shipped in `cli-v1.3.0` / `host-v1.3.0`, which was cut from a branch
+// that predates Antigravity. Until now v8.0 bound the LIVE row, on the (then
+// true) reading that it was the unreleased head line - so the id added to the
+// live enum afterwards silently widened a line already in the field.
 //
-// The delta 8.1 carries is of BOTH kinds, and they degrade differently for an
-// 8.0 peer, which is why the freeze has to be explicit rather than implied:
-// `nativeAutoJudge` is a new KEY, and a within-major re-parse strips it for
-// free; `auto` in `supportedPermissionModes` is a new ENUM MEMBER, and the same
-// re-parse REJECTS it - the whole response, not the field. So 8.1 declares
-// `responseGrowthProjectionGated` in the registry and the host filters the mode
-// out of what it serves an 8.0 peer. Nothing here degrades that automatically.
-//
-// Do NOT add fields or modes here; add them to `guiHarnessOptionSchema` above,
-// which only 8.1 (the head line) binds.
+// The BODY is `guiHarnessOptionBaseShapeV71`, not the live row: that shape is
+// byte-identical to the live body at this cut, and binding it here is what
+// keeps v8.0 from drifting the next time a field is added above - the exact
+// half-frozen row the V70 note describes. Do NOT add fields or ids here; add
+// fields to `guiHarnessOptionSchema`, which only v9.0 (the head line) binds.
 export const guiHarnessOptionSchemaV80 = z.object({
-  id: guiHarnessIdSchema,
+  id: guiHarnessIdSchemaV80,
   ...guiHarnessOptionBaseShapeV71,
 });
 export const listGuiHarnessesResponseSchemaV80 = z.object({
@@ -460,6 +456,38 @@ export const listGuiHarnessesResponseSchemaV80 = z.object({
 });
 export type ListGuiHarnessesResponseV80 = z.infer<
   typeof listGuiHarnessesResponseSchemaV80
+>;
+
+// ── Frozen protocol-v9.0 catalog row + response (pre-`auto`) ───────────────
+// 9.0 is the Antigravity line: the live id enum over the hand-frozen 7.1 body.
+// It stopped being the head line when 9.1 opened for the `auto` permission mode
+// and the `nativeAutoJudge` row field, and is frozen here the way 8.0 was
+// frozen when 9.0 opened - same response, same reason. (This freeze was
+// authored against 8.0 and moved up one major on the merge to main, which had
+// opened 9.0 for Antigravity in the meantime.)
+//
+// The delta 9.1 carries is of BOTH kinds, and they degrade differently for a
+// 9.0 peer, which is why the freeze has to be explicit rather than implied:
+// `nativeAutoJudge` is a new KEY, and a within-major re-parse strips it for
+// free; `auto` in `supportedPermissionModes` is a new ENUM MEMBER, and the same
+// re-parse REJECTS it - the whole response, not the field. So 9.1 declares
+// `responseGrowthProjectionGated` in the registry and the host filters the mode
+// out of what it serves a 9.0 peer. Nothing here degrades that automatically.
+//
+// The id enum stays LIVE here, unlike 8.0's pin: 9.0 is the line Antigravity
+// rides, so narrowing it would undo the very addition that opened this major.
+//
+// Do NOT add fields or modes here; add them to `guiHarnessOptionSchema` above,
+// which only 9.1 (the head line) binds.
+export const guiHarnessOptionSchemaV90 = z.object({
+  id: guiHarnessIdSchema,
+  ...guiHarnessOptionBaseShapeV71,
+});
+export const listGuiHarnessesResponseSchemaV90 = z.object({
+  harnesses: z.array(guiHarnessOptionSchemaV90),
+});
+export type ListGuiHarnessesResponseV90 = z.infer<
+  typeof listGuiHarnessesResponseSchemaV90
 >;
 
 export type ListGuiHarnessesResponse = z.infer<

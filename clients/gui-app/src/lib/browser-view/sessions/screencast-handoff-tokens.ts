@@ -1,0 +1,101 @@
+/**
+ * The handoff tokens this client has been answered with, by the tab each one
+ * names.
+ *
+ * A successful `openTab` that took a shared session off the desktop's native
+ * runtime answers with a token (`BrowserOpenedTab.handoffToken`), and the host
+ * keeps that session where THIS client can see it until a `browser.screencast`
+ * presenting the token receives pixels. The open travels on the
+ * `browser.sessions` stream and the watching on a `browser.screencast` one -
+ * different sockets, held by different owners, so the host cannot pair them
+ * itself - and the token crosses between them here rather than through props:
+ * the coordinator records it as the open's answer lands, and every screencast
+ * this client opens on that tab presents whatever is recorded. A token the host
+ * has already spent is inert there, so presenting it again on a re-subscribe
+ * costs nothing, and a viewer with none recorded presents `null` and is a
+ * bystander.
+ *
+ * Module state rather than a store: nothing renders from it. Its reader asks
+ * at subscribe time and, for the one ordering the host cannot rule out, is told
+ * when a token lands AFTER it subscribed ({@link onHandoffTokenRecorded}): the
+ * device's inventory can list the new tab before the open's own answer arrives
+ * on the same stream, and a tile mounted from that inventory has already
+ * presented `null`. Entries live as long as the coordinator that recorded them
+ * knows the session - it forgets them on `sessionClosed` and when it disposes,
+ * at which point the host has released the open's claim anyway.
+ */
+
+export interface ScreencastHandoffTab {
+  readonly hostId: string;
+  readonly sessionId: string;
+  readonly tabId: string;
+}
+
+const tokensByTab = new Map<string, string>();
+const listenersByTab = new Map<string, Set<() => void>>();
+
+function tabKey(tab: ScreencastHandoffTab): string {
+  return `${tab.hostId}\0${tab.sessionId}\0${tab.tabId}`;
+}
+
+function sessionPrefix(hostId: string, sessionId: string): string {
+  return `${hostId}\0${sessionId}\0`;
+}
+
+/** The answer to an open this client made: presented by its screencast of `tab`. */
+export function recordHandoffToken(
+  tab: ScreencastHandoffTab,
+  handoffToken: string,
+): void {
+  const key = tabKey(tab);
+  tokensByTab.set(key, handoffToken);
+  // Copied first: a listener may unsubscribe from inside its own call.
+  for (const listener of [...(listenersByTab.get(key) ?? [])]) listener();
+}
+
+/** What a screencast of `tab` from this client presents; `null` for a bystander. */
+export function handoffTokenFor(tab: ScreencastHandoffTab): string | null {
+  return tokensByTab.get(tabKey(tab)) ?? null;
+}
+
+/**
+ * Runs `listener` each time a token is recorded for `tab` from now on, so a
+ * screencast already open on the tab can re-subscribe presenting it. Returns
+ * the unsubscribe. Not replayed: a token already recorded is what
+ * {@link handoffTokenFor} answers, and the caller reads that itself.
+ */
+export function onHandoffTokenRecorded(
+  tab: ScreencastHandoffTab,
+  listener: () => void,
+): () => void {
+  const key = tabKey(tab);
+  let listeners = listenersByTab.get(key);
+  if (listeners === undefined) {
+    listeners = new Set();
+    listenersByTab.set(key, listeners);
+  }
+  const registered = listeners;
+  registered.add(listener);
+  return () => {
+    registered.delete(listener);
+    if (registered.size === 0 && listenersByTab.get(key) === registered) {
+      listenersByTab.delete(key);
+    }
+  };
+}
+
+/** The session is gone from this client's inventory; nothing can present its tokens now. */
+export function forgetHandoffTokensForSession(
+  hostId: string,
+  sessionId: string,
+): void {
+  const prefix = sessionPrefix(hostId, sessionId);
+  for (const key of tokensByTab.keys()) {
+    if (key.startsWith(prefix)) tokensByTab.delete(key);
+  }
+}
+
+/** Tokens only: listeners belong to mounted hooks, which unsubscribe themselves. */
+export function resetHandoffTokensForTests(): void {
+  tokensByTab.clear();
+}

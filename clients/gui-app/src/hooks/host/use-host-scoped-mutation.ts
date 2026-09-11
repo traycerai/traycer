@@ -1,4 +1,8 @@
-import { useQueryClient, type UseMutationResult } from "@tanstack/react-query";
+import {
+  useQueryClient,
+  type MutationScope,
+  type UseMutationResult,
+} from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type {
   HostRpcError,
@@ -86,6 +90,20 @@ interface UseHostScopedMutationArgs<
    * skipped so the user is not told to "stop the run" AND asked to confirm.
    */
   readonly silentCodes?: readonly HostRpcError["code"][];
+  /**
+   * TanStack mutation scope. Mutations sharing a scope id run one at a time,
+   * in the order they were fired.
+   *
+   * For mutations whose ARRIVAL order at the host carries meaning, which the
+   * host-side scheduling policy cannot supply: `HostRequestCoordinator` keys
+   * its queues by `[hostId, userId, method, params]`, so it orders a method
+   * against itself and never two different methods against each other. A
+   * set/clear pair for the same resource is the shape that needs this.
+   *
+   * Omit it unless that ordering is load-bearing - a shared scope also
+   * serializes unrelated calls that happen to use the same hook.
+   */
+  readonly scope?: MutationScope | undefined;
 }
 
 /**
@@ -131,6 +149,7 @@ export function useHostScopedMutationForClient<
     mapVariables: (variables) => variables,
     options: {
       mutationKey: args.mutationKey,
+      scope: args.scope,
       onMutate: (variables) => ({
         hostId: client?.getActiveHostId() ?? null,
         // `undefined` is what `Captured` IS when no capture was asked for;
@@ -169,6 +188,14 @@ const PROVIDER_MUTATION_OPERATIONS: Readonly<
   [providersMutationKeys.setEnabled()[0]]: "enabled",
   [providersMutationKeys.setApiKey()[0]]: "api_key",
   [providersMutationKeys.clearApiKey()[0]]: "api_key",
+  // The per-profile twins report the SAME operation as the provider-wide pair
+  // above. `api_key` answers "did this user configure a key", and where the
+  // credential is scoped does not change that - splitting them into a second
+  // operation would break the metric's continuity for no analytical gain,
+  // while leaving them out undercounts every provider whose key is per-account
+  // (today: Antigravity, whose key has no provider-wide form at all).
+  [providersMutationKeys.setProfileApiKey()[0]]: "api_key",
+  [providersMutationKeys.clearProfileApiKey()[0]]: "api_key",
   [providersMutationKeys.setTerminalAgentArgs()[0]]: "terminal_args",
   [providersMutationKeys.setEnvOverride()[0]]: "env_override",
   [providersMutationKeys.deleteEnvOverride()[0]]: "env_override",
