@@ -297,6 +297,53 @@ function resolveAttemptAuthPhase(input: {
 const ONBOARDING_CODE_PASTE_KEEPALIVE_MS = 60_000;
 const ONBOARDING_COPY_RESET_MS = 1600;
 
+function useOnboardingWaitingCodePaste(args: {
+  readonly providerId: ProviderId;
+  readonly loginCapability: ProviderCliState["loginCapability"];
+  readonly loginUrl: string | null;
+  readonly userCode: string | null;
+}): ProviderProfileLoginFlowCodePaste {
+  const { providerId, loginCapability, loginUrl, userCode } = args;
+  const submitLoginCode = useProvidersSubmitLoginCode();
+  const touchLogin = useProvidersTouchLogin();
+  const codePasteEnabled = (loginCapability?.codePaste ?? null) !== null;
+  const touchLoginMutate = touchLogin.mutate;
+  const attemptKey = `${loginUrl ?? ""}|${userCode ?? ""}`;
+  const [acceptedAttempt, setAcceptedAttempt] = useState<string | null>(null);
+  useEffect(() => {
+    if (!codePasteEnabled || userCode !== null) return;
+    const intervalId = window.setInterval(() => {
+      touchLoginMutate({ providerId, profileId: null });
+    }, ONBOARDING_CODE_PASTE_KEEPALIVE_MS);
+    return () => window.clearInterval(intervalId);
+  }, [codePasteEnabled, providerId, touchLoginMutate, userCode]);
+  let phase: ProviderProfileLoginFlowCodePaste["phase"] = "idle";
+  if (submitLoginCode.isPending) phase = "submitting";
+  else if (acceptedAttempt === attemptKey) phase = "verifying";
+  return {
+    enabled: codePasteEnabled,
+    attemptId: 0,
+    restartNotice: null,
+    phase,
+    submitError: submitLoginCode.error,
+    submit: (code) => {
+      submitLoginCode.mutate(
+        { providerId, profileId: null, code },
+        {
+          onSuccess: (result) => {
+            if (result.outcome === "accepted") {
+              setAcceptedAttempt(attemptKey);
+            }
+          },
+        },
+      );
+    },
+    touch: () => {
+      touchLoginMutate({ providerId, profileId: null });
+    },
+  };
+}
+
 /**
  * URL, device code, and Claude paste field for onboarding's ambient sign-in.
  * The Sign in & enable button stays mounted (its enable-on-success callback
@@ -313,8 +360,6 @@ function OnboardingLoginWaiting(props: {
   const { providerId, loginCapability, loginUrl, userCode, isLocalHost } =
     props;
   const openLink = useOpenLink();
-  const submitLoginCode = useProvidersSubmitLoginCode();
-  const touchLogin = useProvidersTouchLogin();
   const autoOpen = useAutoOpenLoginUrl(
     isLocalHost,
     userCode,
@@ -328,28 +373,12 @@ function OnboardingLoginWaiting(props: {
     onSuccess: null,
     onError: handleSignInLinkCopyError,
   });
-  const codePasteEnabled = (loginCapability?.codePaste ?? null) !== null;
-  const touchLoginMutate = touchLogin.mutate;
-  useEffect(() => {
-    if (!codePasteEnabled || userCode !== null) return;
-    const intervalId = window.setInterval(() => {
-      touchLoginMutate({ providerId, profileId: null });
-    }, ONBOARDING_CODE_PASTE_KEEPALIVE_MS);
-    return () => window.clearInterval(intervalId);
-  }, [codePasteEnabled, providerId, touchLoginMutate, userCode]);
-  const codePaste: ProviderProfileLoginFlowCodePaste = {
-    enabled: codePasteEnabled,
-    attemptId: 0,
-    restartNotice: null,
-    phase: submitLoginCode.isPending ? "submitting" : "idle",
-    submitError: submitLoginCode.error,
-    submit: (code) => {
-      submitLoginCode.mutate({ providerId, profileId: null, code });
-    },
-    touch: () => {
-      touchLoginMutate({ providerId, profileId: null });
-    },
-  };
+  const codePaste = useOnboardingWaitingCodePaste({
+    providerId,
+    loginCapability,
+    loginUrl,
+    userCode,
+  });
   const processingCode = codePaste.phase !== "idle";
   const { title, guidance } = waitingStepCopy({
     phase: codePaste.phase,
