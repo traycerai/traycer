@@ -3883,6 +3883,12 @@ describe("terminal-agent row session-state badge", () => {
     testState.records = [];
     testState.tuiHarnessIds = {};
     testState.tuiAgentById = {};
+    // The archive knobs too, because this block is OUTSIDE the top describe
+    // whose `beforeEach` resets them - the archived-row case below sets both,
+    // and a leaked "all" visibility makes the `chat row archive` block's
+    // hidden-subtree assertions find rows that should not be on screen.
+    testState.archivedIds = [];
+    testState.archiveVisibility = "unarchived";
   });
 
   it('renders "Asleep" for a sleeping agent, with the process-exit sentence only for that reason', () => {
@@ -3950,6 +3956,44 @@ describe("terminal-agent row session-state badge", () => {
     const badge = screen.getByTestId("chat-row-session-state-agent-root");
     expect(badge.textContent).toBe("Stopped");
     expect(badge.getAttribute("data-session-state")).toBe("stopped");
+  });
+
+  it('says "Stopped" once, not twice, on a row that already reads Archived', () => {
+    seedChatTree();
+    // The only way a row normally reaches `stopped`: the archive mutation
+    // writes it, and a delete tombstones the row before anything could. So
+    // this pairing is the COMMON case for the badge, not an edge one - and
+    // "Archived · Stopped" would be the same fact said twice.
+    testState.archivedIds = ["agent-root"];
+    testState.archiveVisibility = "all";
+    testState.tuiAgentById = {
+      "agent-root": {
+        hostId: "host-1",
+        profileId: null,
+        sessionState: "stopped",
+        lastExit: null,
+      },
+    };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    // The prefix still renders - suppressing the badge must not cost the row
+    // the state it does still need to show.
+    expect(
+      screen.getAllByTestId("chat-row-archived-label").length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.queryByTestId("chat-row-session-state-agent-root"),
+    ).toBeNull();
+    // And the same suppression in the ACCESSIBLE NAME, which replaces the
+    // row's subtree: a badge hidden visually while the name still said both
+    // would leave the repeat only for the reader who cannot see the row.
+    const rowName =
+      screen
+        .getByTestId("epic-sidebar-item-agent-root")
+        .getAttribute("aria-label") ?? "";
+    expect(rowName).toContain("archived");
+    expect(rowName).not.toContain("stopped");
   });
 
   it("renders NO badge for `null` (unknown) or `running` - the same row as before the facet shipped", () => {

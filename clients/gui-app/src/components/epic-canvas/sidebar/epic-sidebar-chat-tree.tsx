@@ -2929,12 +2929,19 @@ function describeOfflineLockForAria(
  * replaces its subtree, so without this line the one state a reader most needs
  * - the agent is asleep, not gone - would be visible and unspoken. `null`
  * (unknown) and `running` add nothing: the row already reads as a live agent.
+ *
+ * `stopped` is dropped under an archived row for the reason the badge is: the
+ * name already opens with "archived", and `stopped` is written only by the
+ * archive mutation, so "archived, stopped" would be one fact said twice - to
+ * the reader with the least context to discard the repeat. Suppressing it in
+ * only one of the two channels would be worse than in neither.
  */
 function describeSessionStateForAria(
   sessionState: AgentSessionState | null,
+  isArchived: boolean,
 ): string | null {
   if (sessionState === "sleeping") return "asleep";
-  if (sessionState === "stopped") return "stopped";
+  if (sessionState === "stopped" && !isArchived) return "stopped";
   return null;
 }
 
@@ -2947,7 +2954,7 @@ function chatRowAriaLabel(input: {
 }): string {
   const stateSuffix = [
     input.isArchived ? "archived" : null,
-    describeSessionStateForAria(input.sessionState),
+    describeSessionStateForAria(input.sessionState, input.isArchived),
     input.sharedWithTask ? "shared with task" : null,
     describeOfflineLockForAria(input.offlineLock),
   ]
@@ -3054,11 +3061,24 @@ function sleepingAgentTooltip(lastExit: AgentSessionLastExit | null): string {
  *
  * "Stopped" gets no tooltip, matching {@link ArchivedTitlePrefix}: it states a
  * terminal fact with no follow-on action, where "Asleep" has to say what wakes
- * it.
+ * it - and it is SUPPRESSED under a row that already reads Archived, because
+ * on that row the two are the same fact twice. `stopped` is written only by the
+ * archive mutation (a delete tombstones the row before the lifecycle could
+ * stamp it), so an archived row is the only one that normally carries it. The
+ * badge is kept for the unarchived case rather than dropped: a `stopped` row
+ * with no Archived prefix should not exist, and if one ever does it is better
+ * seen than swallowed.
+ *
+ * `isArchived` is the ROW's own prop - the same value that renders the prefix -
+ * not a second read of the store, so the prefix and the suppression cannot
+ * disagree by a render.
  */
-function AgentSessionStateBadge(props: { readonly nodeId: string }) {
+function AgentSessionStateBadge(props: {
+  readonly nodeId: string;
+  readonly isArchived: boolean;
+}) {
   const facet = useEpicAgentSessionFacet(props.nodeId);
-  if (facet.sessionState === "stopped") {
+  if (facet.sessionState === "stopped" && !props.isArchived) {
     return (
       <span
         className="shrink-0 text-ui-xs text-muted-foreground"
@@ -3371,7 +3391,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
         <span className="flex min-w-0 items-center gap-1.5">
           {isArchived ? <ArchivedTitlePrefix /> : null}
           <span className="min-w-0 flex-1 truncate">{nodeName}</span>
-          <AgentSessionStateBadge nodeId={nodeId} />
+          <AgentSessionStateBadge nodeId={nodeId} isArchived={isArchived} />
           {showSharedIndicator ? (
             <TooltipWrapper
               label={SHARED_WITH_TASK_TOOLTIP}
