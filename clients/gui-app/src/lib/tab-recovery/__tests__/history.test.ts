@@ -225,9 +225,10 @@ describe("tab recovery history", () => {
 
     await resetTabRecoveryHistory();
     setWindow(WINDOW_ONE);
-    vi.mocked(idbKeyval.get).mockRejectedValueOnce(
-      new Error("temporary IndexedDB read failure"),
-    );
+    vi.mocked(idbKeyval.get)
+      .mockRejectedValueOnce(new Error("temporary IndexedDB read failure"))
+      .mockRejectedValueOnce(new Error("temporary IndexedDB read failure"))
+      .mockRejectedValueOnce(new Error("temporary IndexedDB read failure"));
     await configureTabRecoveryHistory(ACCOUNT_ONE);
 
     expect(useTabRecoveryHistory.getState().ready).toBe(false);
@@ -266,6 +267,73 @@ describe("tab recovery history", () => {
       throw new Error("expected the retried journal to contain entries");
     }
     expect(diskAfterRetry.entries).toHaveLength(2);
+  });
+
+  it("automatically succeeds after one transient storage read failure", async () => {
+    const recovered = draft("automatic-retry", textContent("automatic"));
+    const store = createStore(persistKey("tab-recovery"), "history");
+    await set(
+      tabRecoveryKey(ACCOUNT_ONE, WINDOW_ONE),
+      {
+        version: 2,
+        entries: [
+          { kind: "header", id: "automatic", bulk: false, items: [recovered] },
+        ],
+      },
+      store,
+    );
+
+    await resetTabRecoveryHistory();
+    setWindow(WINDOW_ONE);
+    const get = vi.mocked(idbKeyval.get);
+    get.mockClear();
+    get.mockRejectedValueOnce(new Error("temporary IndexedDB read failure"));
+
+    await configureTabRecoveryHistory(ACCOUNT_ONE);
+
+    expect(useTabRecoveryHistory.getState().ready).toBe(true);
+    expect(useTabRecoveryHistory.getState().entries).toHaveLength(1);
+    expect(useTabRecoveryHistory.getState().entries[0]).toMatchObject({
+      kind: "header",
+      items: [recovered],
+    });
+    expect(get).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not publish a queued retry after switching accounts", async () => {
+    const oldEntry = draft("old-account-entry", textContent("old"));
+    const store = createStore(persistKey("tab-recovery"), "history");
+    await set(
+      tabRecoveryKey(ACCOUNT_ONE, WINDOW_ONE),
+      {
+        version: 2,
+        entries: [
+          { kind: "header", id: "old", bulk: false, items: [oldEntry] },
+        ],
+      },
+      store,
+    );
+
+    await resetTabRecoveryHistory();
+    setWindow(WINDOW_ONE);
+    const get = vi.mocked(idbKeyval.get);
+    get.mockClear();
+    get.mockRejectedValueOnce(new Error("temporary IndexedDB read failure"));
+    const oldAccountHydration = configureTabRecoveryHistory(ACCOUNT_ONE);
+    await vi.waitFor(() => expect(get).toHaveBeenCalled());
+
+    await configureTabRecoveryHistory(ACCOUNT_TWO);
+    const newEntry = draft("new-account-entry", textContent("new"));
+    recordClosedHeaderTab(newEntry);
+    await oldAccountHydration;
+
+    expect(useTabRecoveryHistory.getState().ready).toBe(true);
+    expect(useTabRecoveryHistory.getState().entries).toEqual([
+      expect.objectContaining({
+        kind: "header",
+        items: [newEntry],
+      }),
+    ]);
   });
 
   it("batches header closes into one bulk entry and suppresses internal closes", () => {

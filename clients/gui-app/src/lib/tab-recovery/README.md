@@ -14,9 +14,14 @@ cancelling leaves the group intact, and unrelated closes are separate actions. A
 captures one task view and its canvas, not individual child closes. Moves,
 submission of a new-task draft, and confirmed content deletions are excluded.
 Confirmed deletions prune saved references; unavailability is not deletion.
+Record-backed tiles closed during creation use the existing preserved pending-create
+payload for liveness, so an authoritative snapshot that has not received the new
+record yet does not erase recovery. Explicit deletion still takes precedence.
 Host-confirmed deletion also prunes an evicted local mirror; an unknown local
 delete request does not remove recovery history.
-A failed history read leaves persistence disabled for that bucket until a
+Initial history reads retry at most twice (after 100 ms and 300 ms), reopening
+a failed database connection and checking the account generation before each
+attempt. Exhausted reads leave persistence disabled for that bucket until a
 successful hydration. Retrying configuration merges pending closes and applies
 pending deletions without overwriting the unread journal.
 

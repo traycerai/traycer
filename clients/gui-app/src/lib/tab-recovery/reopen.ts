@@ -18,6 +18,7 @@ import { parseEpicCanvasState } from "@/stores/epics/canvas/migrate-canvas";
 import type {
   EpicCanvasState,
   EpicCanvasTileRef,
+  EpicViewTab,
 } from "@/stores/epics/canvas/types";
 import {
   useTabRecoveryHistory,
@@ -30,21 +31,37 @@ import {
 } from "./history";
 
 let reopening = false;
-function tileIsRecoverable(tile: EpicCanvasTileRef, epicId: string): boolean {
+function tileIsRecoverable(tile: EpicCanvasTileRef, tab: EpicViewTab): boolean {
   const state = useEpicCanvasStore.getState();
   if (state.selfDeletedArtifactIds.has(tile.id)) return false;
-  if (rejectClosedPlainTerminalRestore({ queryClient, epicId, node: tile }))
+  if (
+    rejectClosedPlainTerminalRestore({
+      queryClient,
+      epicId: tab.epicId,
+      node: tile,
+    })
+  )
     return false;
+  const preserved =
+    state.closedTilePayloadsByTabId[tab.tabId]?.[tile.instanceId];
   return preservedTileRecordIsLive(
-    { node: tile, pendingCreate: state.pendingCreateArtifactIds.has(tile.id) },
-    epicId,
+    {
+      node: tile,
+      pendingCreate:
+        preserved?.pendingCreate === true ||
+        state.pendingCreateArtifactIds.has(tile.id),
+    },
+    tab.epicId,
     state.pendingCreateArtifactIds,
   );
 }
-function cleanCanvas(canvas: EpicCanvasState, epicId: string): EpicCanvasState {
+function cleanCanvas(
+  canvas: EpicCanvasState,
+  tab: EpicViewTab,
+): EpicCanvasState {
   const tilesByInstanceId = Object.fromEntries(
     Object.entries(canvas.tilesByInstanceId).filter(
-      ([, tile]) => tile !== undefined && tileIsRecoverable(tile, epicId),
+      ([, tile]) => tile !== undefined && tileIsRecoverable(tile, tab),
     ),
   );
   return parseEpicCanvasState({ ...canvas, tilesByInstanceId }) ?? canvas;
@@ -111,7 +128,7 @@ async function prepareHeaderItem(
   }
   const canvas =
     useEpicCanvasStore.getState().canvasByTabId[item.tab.tabId] ?? item.canvas;
-  return { ...item, canvas: cleanCanvas(canvas, item.tab.epicId) };
+  return { ...item, canvas: cleanCanvas(canvas, item.tab) };
 }
 async function restoreHeader(
   entry: Extract<TabRecoveryEntry, { kind: "header" }>,
@@ -158,7 +175,7 @@ async function restoreHeader(
       const canvas =
         useEpicCanvasStore.getState().canvasByTabId[item.tab.tabId] ??
         (latest?.kind === "epic" ? latest.canvas : item.canvas);
-      return { ...item, canvas: cleanCanvas(canvas, item.tab.epicId) };
+      return { ...item, canvas: cleanCanvas(canvas, item.tab) };
     });
   const retained = failed.filter(
     (item) => keys.has(headerKey(item)) && !headerIsOpen(item),
@@ -240,7 +257,7 @@ function canvasRecoveryTargets(
     return (
       !liveIds.has(id) &&
       tile !== undefined &&
-      tileIsRecoverable(tile, entry.tab.epicId)
+      tileIsRecoverable(tile, entry.tab)
     );
   });
   const paneIds = (entry.paneIds ?? []).filter(
@@ -282,7 +299,7 @@ function restoreCanvas(
             tab: entry.tab,
             canvas: cleanCanvas(
               state.canvasByTabId[entry.tab.tabId] ?? entry.after,
-              entry.tab.epicId,
+              entry.tab,
             ),
             index: state.openTabOrder.length,
           },

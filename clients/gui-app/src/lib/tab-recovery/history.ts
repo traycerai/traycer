@@ -282,6 +282,39 @@ function replaceEntries(entries: readonly TabRecoveryEntry[]): void {
   useTabRecoveryHistory.setState({ entries: bounded(entries) });
   persistHistory();
 }
+// A failed open is cached inside idb-keyval's store closure. Retry with a fresh
+// connection, closing the old one when possible, without modifying its data.
+async function discardFailedHistoryConnection(): Promise<void> {
+  const connection = recoveryDatabase;
+  recoveryDatabase = null;
+  if (connection === null) return;
+  await connection("readonly", (transaction) => {
+    transaction.transaction.db.close();
+    return Promise.resolve();
+  }).catch(() => undefined);
+}
+
+const HISTORY_READ_RETRY_DELAYS = [100, 300] as const;
+async function readRecoveryJournal(
+  key: string,
+  token: number,
+): Promise<unknown> {
+  for (let attempt = 0; ; attempt += 1) {
+    if (token !== generation) return undefined;
+    try {
+      await persistedRecoveryImageRootHashes();
+      if (token !== generation) return undefined;
+      return await get(key, database());
+    } catch (error) {
+      if (token !== generation) return undefined;
+      const delay = HISTORY_READ_RETRY_DELAYS.at(attempt);
+      if (delay === undefined) throw error;
+      await discardFailedHistoryConnection();
+      await new Promise<void>((resolve) => setTimeout(resolve, delay));
+    }
+  }
+}
+
 export async function configureTabRecoveryHistory(
   identity: string | null,
 ): Promise<void> {
@@ -312,8 +345,7 @@ export async function configureTabRecoveryHistory(
   }
   let restored: TabRecoveryEntry[] = [];
   try {
-    await persistedRecoveryImageRootHashes();
-    const raw: unknown = await get(next, database());
+    const raw = await readRecoveryJournal(next, token);
     const envelope = z
       .object({
         version: z.union([z.literal(1), z.literal(2)]),

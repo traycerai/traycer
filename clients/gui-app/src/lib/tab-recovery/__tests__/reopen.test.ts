@@ -19,6 +19,15 @@ import { reopenClosedTab } from "@/lib/tab-recovery/reopen";
 const mocks = vi.hoisted(() => {
   const tabsById: Record<string, EpicViewTab | undefined> = {};
   const canvasByTabId: Record<string, EpicCanvasState | undefined> = {};
+  const closedTilePayloadsByTabId: Record<
+    string,
+    Readonly<
+      Record<
+        string,
+        { readonly node: typeof SPEC_A; readonly pendingCreate: boolean }
+      >
+    >
+  > = {};
   return {
     restoreClosedHeaderTabs:
       vi.fn<
@@ -28,6 +37,14 @@ const mocks = vi.hoisted(() => {
         ) => void
       >(),
     navigateToTabIntent: vi.fn<(intent: unknown) => void>(),
+    preservedTileRecordIsLive:
+      vi.fn<
+        (
+          preserved: { readonly pendingCreate: boolean },
+          epicId: string,
+          pendingCreateArtifactIds: ReadonlySet<string>,
+        ) => boolean
+      >(),
     prepareSavedDraft:
       vi.fn<
         (item: ClosedHeaderTab, stillCurrent: () => boolean) => Promise<boolean>
@@ -42,6 +59,7 @@ const mocks = vi.hoisted(() => {
       openTabOrder: [] as string[],
       tabsById,
       canvasByTabId,
+      closedTilePayloadsByTabId,
       selfDeletedArtifactIds: new Set<string>(),
       pendingCreateArtifactIds: new Set<string>(),
       restoreCanvasForRecovery: vi.fn<
@@ -98,7 +116,7 @@ vi.mock("@/lib/tab-navigation/intents", () => ({
 }));
 
 vi.mock("@/lib/commands/actions/history-navigation", () => ({
-  preservedTileRecordIsLive: vi.fn(() => true),
+  preservedTileRecordIsLive: mocks.preservedTileRecordIsLive,
 }));
 
 vi.mock("@/lib/terminals/plain-terminal-presentation-invalidation", () => ({
@@ -248,6 +266,8 @@ function nextAnimationFrame(): Promise<void> {
 beforeEach(() => {
   mocks.restoreClosedHeaderTabs.mockReset();
   mocks.navigateToTabIntent.mockReset();
+  mocks.preservedTileRecordIsLive.mockReset();
+  mocks.preservedTileRecordIsLive.mockImplementation(() => true);
   mocks.prepareSavedDraft.mockReset();
   mocks.prepareSavedDraft.mockResolvedValue(true);
   mocks.landingDrafts.length = 0;
@@ -258,6 +278,10 @@ beforeEach(() => {
     delete mocks.canvasState.tabsById[key];
   for (const key of Object.keys(mocks.canvasState.canvasByTabId))
     delete mocks.canvasState.canvasByTabId[key];
+  for (const key of Object.keys(mocks.canvasState.closedTilePayloadsByTabId))
+    delete mocks.canvasState.closedTilePayloadsByTabId[key];
+  mocks.canvasState.selfDeletedArtifactIds.clear();
+  mocks.canvasState.pendingCreateArtifactIds.clear();
   mocks.canvasState.restoreCanvasForRecovery.mockReset();
   useTabRecoveryHistory.setState({ entries: [], ready: true });
 });
@@ -591,6 +615,57 @@ describe("reopenClosedTab", () => {
       [expect.objectContaining({ canvas: entry.after })],
       null,
     );
+  });
+
+  it("restores a pending tile from its preserved payload when the snapshot no longer has it", async () => {
+    const entry = canvasEntry({ id: "entry-1", bulk: false });
+    mocks.canvasState.tabsById["tab-1"] = {
+      tabId: "tab-1",
+      epicId: "epic-1",
+      name: "Task",
+    };
+    mocks.canvasState.canvasByTabId["tab-1"] = canvasSnapshot([]);
+    mocks.canvasState.closedTilePayloadsByTabId["tab-1"] = {
+      [SPEC_A.instanceId]: { node: SPEC_A, pendingCreate: true },
+    };
+    mocks.preservedTileRecordIsLive.mockImplementation(
+      (preserved) => preserved.pendingCreate,
+    );
+    useTabRecoveryHistory.setState({ entries: [entry], ready: true });
+
+    await reopenClosedTab(router("/epics/other/other-tab", undefined));
+
+    expect(mocks.preservedTileRecordIsLive).toHaveBeenCalledWith(
+      expect.objectContaining({ node: SPEC_A, pendingCreate: true }),
+      "epic-1",
+      mocks.canvasState.pendingCreateArtifactIds,
+    );
+    expect(mocks.canvasState.restoreCanvasForRecovery).toHaveBeenCalledWith(
+      "tab-1",
+      expect.objectContaining({ instanceIds: [SPEC_A.instanceId] }),
+    );
+    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not restore a pending tile that was explicitly self-deleted", async () => {
+    const entry = canvasEntry({ id: "entry-1", bulk: false });
+    mocks.canvasState.tabsById["tab-1"] = {
+      tabId: "tab-1",
+      epicId: "epic-1",
+      name: "Task",
+    };
+    mocks.canvasState.canvasByTabId["tab-1"] = canvasSnapshot([]);
+    mocks.canvasState.closedTilePayloadsByTabId["tab-1"] = {
+      [SPEC_A.instanceId]: { node: SPEC_A, pendingCreate: true },
+    };
+    mocks.canvasState.selfDeletedArtifactIds.add(SPEC_A.id);
+    useTabRecoveryHistory.setState({ entries: [entry], ready: true });
+
+    await reopenClosedTab(router("/epics/other/other-tab", undefined));
+
+    expect(mocks.preservedTileRecordIsLive).not.toHaveBeenCalled();
+    expect(mocks.canvasState.restoreCanvasForRecovery).not.toHaveBeenCalled();
+    expect(mocks.navigateToTabIntent).not.toHaveBeenCalled();
   });
 
   it("does not restore a draft removed while its image is being prepared", async () => {
