@@ -302,16 +302,21 @@ describe("<LayoutSettingsPanel />", () => {
     expect(useLayoutStore.getState().statusBar.placement).toBe("status-bar");
   });
 
-  it("renders the groups in their fixed order, Status bar first and Sidebar last", () => {
-    // The order a control keeps as groups arrive: Status bar, then Tabs, then
-    // Composer when it has rows, then Chat, then Sidebar. Asserted on the
+  it("renders the groups in their fixed order, Presets first and Sidebar last", () => {
+    // The order a control keeps as groups arrive: Presets, then Status bar,
+    // then Tabs, then Composer, then Chat, then Sidebar. Asserted on the
     // rendered document rather than trusted to a JSX read, since each group is
     // now its own file mounted from one line here.
     render(<LayoutSettingsPanel />);
 
-    const order = ["status-bar", "tabs", "chat", "sidebar"].map((group) =>
-      screen.getByTestId(`layout-${group}-group`),
-    );
+    const order = [
+      "presets",
+      "status-bar",
+      "tabs",
+      "composer",
+      "chat",
+      "sidebar",
+    ].map((group) => screen.getByTestId(`layout-${group}-group`));
 
     for (let index = 1; index < order.length; index += 1) {
       expect(

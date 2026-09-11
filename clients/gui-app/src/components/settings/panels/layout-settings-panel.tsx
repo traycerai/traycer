@@ -12,6 +12,7 @@ import { SettingsSubgroup } from "@/components/settings/controls/settings-subgro
 import { SettingsToggleChips } from "@/components/settings/controls/settings-toggle-chips";
 import { ComposerLayoutGroup } from "@/components/settings/panels/layout/composer-layout-group";
 import { ContextUsagePreview } from "@/components/settings/panels/layout/context-usage-preview";
+import { PresetsLayoutGroup } from "@/components/settings/panels/layout/presets-layout-group";
 import { SidebarLayoutGroup } from "@/components/settings/panels/layout/sidebar-layout-group";
 import { StatusBarLayoutGroup } from "@/components/settings/panels/layout/status-bar-layout-group";
 import { TabsLayoutGroup } from "@/components/settings/panels/layout/tabs-layout-group";
@@ -36,9 +37,12 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
  * Appearance's ("where does this live", not "what does it look like") and
  * because they accumulate: a per-provider, per-window visibility list needs
  * room, and General and Appearance were already collecting layout toggles one
- * at a time. Group order is fixed - Status bar, then Tabs, then Composer when it
- * has rows, then Chat, then Sidebar - so a control keeps its place as groups
- * arrive.
+ * at a time. Group order is fixed - Presets, then Status bar, then Tabs, then
+ * Composer, then Chat, then Sidebar - so a control keeps its place as groups
+ * arrive. Presets leads because it is the coarsest control here: it writes the
+ * same store keys the groups below it write, so the page after a click is one
+ * the reader could have reached by hand, and a reader after a single row
+ * scrolls past one card to get to it.
  *
  * Each group is one file, mounted here on one line. That is what lets a group
  * grow a preview, a nested list or a host binding of its own without this file
@@ -54,6 +58,7 @@ export function LayoutSettingsPanel(): ReactNode {
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
       <div className={cn("flex flex-col", compact ? "gap-3.5" : "gap-5")}>
+        <PresetsLayoutGroup />
         <StatusBarLayoutGroup />
         <TabsLayoutGroup />
         <ComposerLayoutGroup />

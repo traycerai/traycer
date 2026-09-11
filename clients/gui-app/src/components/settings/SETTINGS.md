@@ -1291,8 +1291,8 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
   Appearance because its controls answer "where does this live", not "what does
   it look like" - and because a per-provider, per-window rate-limit list needs
   room Appearance does not have. Group order is fixed so a control keeps its
-  place as groups arrive: **Status bar** · **Tabs** · **Composer** · **Chat** ·
-  **Sidebar**.
+  place as groups arrive: **Presets** · **Status bar** · **Tabs** ·
+  **Composer** · **Chat** · **Sidebar**.
   - **Ownership.** This page is where a layout control belongs from now on, and
     four rows were relocated onto it from General and one from Appearance.
     Store keys and setters are unchanged (`settings-store`), so there is no
@@ -1305,7 +1305,7 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     | Show resource monitor in header | General ▸ Running agents  | Status bar |
     | Home tab                        | General ▸ Layout          | Tabs       |
     | Pin context breakdown           | General ▸ Chat & composer | Chat       |
-    | Minimap side                    | Appearance                | Chat       |
+    | Minimap position                | Appearance                | Chat       |
     | Resource chips on sidebar rows  | General ▸ Running agents  | Sidebar    |
 
     Their search entries moved with them
@@ -1323,6 +1323,85 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     the order the groups come in. `trackLayoutSetting`
     (`panels/layout/track-layout-setting.ts`) is shared so a group added later
     cannot report under a different analytics section.
+  - **Presets** (`panels/layout/presets-layout-group.tsx`, bundles in
+    `lib/layout-presets.ts`). One row: a segmented `Default · Compact ·
+Detailed`, and a `Reset to defaults` button that applies Default and is
+    disabled while the page already holds it. First on the page because it is
+    the coarsest control on it, and it writes the same store keys the groups
+    below write - so the page after a click is one a reader could have reached
+    by hand.
+    - **No new persisted field.** A preset is a COMPLETE assignment of the
+      values it covers, applied through the stores' own setters, and the
+      pressed segment is `matchLayoutPreset` over the live stores on every
+      render. So editing any row below flips the control to **Custom** at
+      once, with no "selected preset" to go stale. `Custom` is a fourth,
+      unpressable state drawn beside the segments rather than a fourth
+      segment: it is a verdict, not a choice, and an options list that grew a
+      member when you touched a switch would read as a glitch.
+    - **One object per surface, each from one store** (`statusBar`,
+      `composer`, `home` from `layout-store`; `chat`, `sidebar` from
+      `settings-store`). That shape is what lets a branch without a slice drop
+      it - the `home` slice is the live example - rather than unpicking fields
+      from a flat bundle.
+    - **Default is read from the `DEFAULT_*` constants**, never restated, so a
+      default that changes carries the preset and the suite's "Default is the
+      defaults" assertion with it. `DEFAULT_PIN_CONTEXT_USAGE_BREAKDOWN` was
+      added to `settings-store` for the one value that had no constant.
+
+      |                     | Default              | Compact                                          | Detailed                    |
+      | ------------------- | -------------------- | ------------------------------------------------ | --------------------------- |
+      | Mode word/bar/timer | on                   | all off                                          | all on                      |
+      | Percent mode        | Used                 | Used                                             | Used                        |
+      | Providers           | tightest limit       | tightest limit, none hidden                      | tightest limit, none hidden |
+      | Resource metrics    | CPU/Memory/Processes | CPU                                              | all four (adds RAM share)   |
+      | Composer rows       | visible              | three docks + access compact, image & mic hidden | all visible                 |
+      | Reasoning           | Text                 | Bars                                             | Bars + text                 |
+      | Home density        | Comfortable          | Compact                                          | Comfortable                 |
+      | Pin breakdown       | off                  | off                                              | on, all fields              |
+      | Context indicator   | Text                 | Ring only                                        | Text                        |
+      | Sidebar chips       | none                 | none                                             | CPU/Memory/Processes        |
+
+    - **What a preset never touches**: `homeTabEnabled` (a feature flag),
+      Home's `view` (the page's own navigation choice) and the status bar's
+      per-host visibility picks - none of those are levels of DETAIL.
+      **Minimap position is not in that list**: every bundle
+      carries it and every preset writes it back to `DEFAULT_MINIMAP_SIDE`,
+      since it is a Chat-group row the match reads like any other. Moving the
+      minimap therefore reads `Custom`, and any preset puts it back.
+    - **The two STRUCTURAL settings are restored by Reset only**: the status
+      bar's `placement`, and the sidebar's panel order + per-panel visibility
+      (the latter through the same two resets the Sidebar group's own buttons
+      call). Both answer "which surface hosts this" / "how is the rail
+      arranged" rather than "how much detail", so NO bundle carries them -
+      `Default` included. A reader on footer placement who asks for a density
+      gets that density, not their header back, whichever of the three they
+      pick. They are absent from the match for the same reason: a Compact
+      install with the strip in the footer and a reordered rail is still
+      **Compact**, and a page on default densities reads **Default** wherever
+      its strip lives. That is why `LayoutPresetStatusBarValues` is the slice's
+      two subjects rather than the whole `StatusBarLayoutPreferences`.
+    - **So the segment and the button are different gestures**, deliberately.
+      `Default` is the third density bundle (`applyLayoutPreset("default")`);
+      `Reset to defaults` is that bundle PLUS the structural pair
+      (`resetLayoutToDefaults`). The button therefore stays enabled on a page
+      already reading `Default` whose strip has been moved or whose rail
+      rearranged - `useLayoutIsFullyDefault` is the match AND those two, which
+      is a different question from the one the segment answers. Both report
+      `layout.preset.default`: one gesture's worth of intent, differing in what
+      they restore rather than in what they are about.
+    - **Slice setters.** `layout-store` grew `setStatusBarPreferences` /
+      `setComposerPreferences` and `settings-store` grew
+      `setNavigatorResourceMetrics` / `setPinnedContextBreakdownFields`,
+      because two of the values a bundle carries (`providers`,
+      `hiddenProviders`) have only toggles, and a whole-slice assignment
+      expressed as a diff would be several writes in an order that matters.
+      The list setters keep the toggles' own guarantees (canonical order, and
+      the field list never empty), so a preset cannot write a shape the rows
+      below it could not produce.
+    - Analytics: one id per preset (`layout.preset.default` / `.compact` /
+      `.detailed`), because `setting_changed` carries a fixed `source` /
+      `section` / `setting` payload. Reset reports under `.default`, which is
+      what it applies.
   - **Status bar** (`panels/layout/status-bar-layout-group.tsx`; one
     `SettingsGroup`, and INSIDE it a `SettingsSubgroup` per subject rather than
     a flat row list - the bar is ONE layout slice, and its subjects nest two

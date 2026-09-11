@@ -156,6 +156,26 @@ interface LayoutStoreState {
   readonly home: HomeLayoutPreferences;
   // Setters stay flat and are namespaced by their slice, so a call site names
   // the surface it is configuring and two slices can never collide on a verb.
+  /**
+   * The whole status-bar slice at once, for a caller that has a complete
+   * assignment of it rather than one row's answer - Layout's presets and its
+   * reset (`lib/layout-presets.ts`).
+   *
+   * A slice setter rather than a walk over the row setters, because two of
+   * this slice's values are not reachable that way: `providers` and
+   * `hiddenProviders` have only TOGGLES (a deny-list and a per-provider
+   * selection), so "every provider on automatic, none hidden" would have to be
+   * expressed as a diff against whatever is there - several writes, several
+   * persists, and an ordering that matters because those toggles refuse to
+   * leave a provider with nothing selected.
+   */
+  readonly setStatusBarPreferences: (
+    preferences: StatusBarLayoutPreferences,
+  ) => void;
+  /** The whole composer slice at once. Same caller, same reason. */
+  readonly setComposerPreferences: (
+    preferences: ComposerLayoutPreferences,
+  ) => void;
   readonly setStatusBarPlacement: (placement: UsageControlsPlacement) => void;
   readonly setStatusBarRateLimitsEnabled: (enabled: boolean) => void;
   /** Flips one provider's membership in the deny-list. */
@@ -606,6 +626,12 @@ export const useLayoutStore = create<LayoutStoreState>()(
       statusBar: DEFAULT_STATUS_BAR_LAYOUT,
       composer: DEFAULT_COMPOSER_LAYOUT,
       home: DEFAULT_HOME_LAYOUT,
+      setStatusBarPreferences: (preferences) => {
+        set({ statusBar: preferences });
+      },
+      setComposerPreferences: (preferences) => {
+        set({ composer: preferences });
+      },
       setStatusBarPlacement: (placement) => {
         const statusBar = get().statusBar;
         if (statusBar.placement === placement) return;

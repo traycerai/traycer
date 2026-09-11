@@ -207,6 +207,13 @@ export const DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS: ReadonlyArray<ContextBreak
 export type ContextIndicatorStyle = "text" | "ring" | "ring-only";
 export const DEFAULT_CONTEXT_INDICATOR_STYLE: ContextIndicatorStyle = "text";
 
+/**
+ * The pin is off until asked for. A constant rather than a literal in the
+ * initial state, so Layout's Default preset can BE the default rather than a
+ * copy of it (`lib/layout-presets.ts`).
+ */
+export const DEFAULT_PIN_CONTEXT_USAGE_BREAKDOWN = false;
+
 export interface SettingsState {
   startPageWallpaper: StartPageWallpaper | null;
   showGreeting: boolean;
@@ -349,6 +356,15 @@ export interface SettingsState {
   setShowGlobalResourceMonitor: (value: boolean) => void;
   /** Adds or removes one reading; the list keeps chip order either way. */
   toggleNavigatorResourceMetric: (metric: NavigatorResourceMetric) => void;
+  /**
+   * The whole list at once, for a caller holding a complete answer rather than
+   * one chip's - Layout's presets and its reset. Normalized to chip order like
+   * the toggle, so the two writers cannot leave the list in two different
+   * shapes.
+   */
+  setNavigatorResourceMetrics: (
+    metrics: ReadonlyArray<NavigatorResourceMetric>,
+  ) => void;
   setPinContextUsageBreakdown: (value: boolean) => void;
   setMinimapSide: (value: MinimapPlacement) => void;
   setPointerCursors: (value: boolean) => void;
@@ -383,6 +399,15 @@ export interface SettingsState {
   ) => void;
   setHomeTabEnabled: (value: boolean) => void;
   togglePinnedContextBreakdownField: (field: ContextBreakdownField) => void;
+  /**
+   * The whole field list at once, same caller as
+   * `setNavigatorResourceMetrics`. Keeps both of the toggle's guarantees - the
+   * strip's own order, and never empty - so a preset cannot write a shape the
+   * row below it could not produce.
+   */
+  setPinnedContextBreakdownFields: (
+    fields: ReadonlyArray<ContextBreakdownField>,
+  ) => void;
   setContextIndicatorStyle: (style: ContextIndicatorStyle) => void;
 }
 
@@ -532,7 +557,7 @@ export const useSettingsStore = create<SettingsState>()(
       preventSleepWhileRunning: false,
       showGlobalResourceMonitor: true,
       navigatorResourceMetrics: DEFAULT_NAVIGATOR_RESOURCE_METRICS,
-      pinContextUsageBreakdown: false,
+      pinContextUsageBreakdown: DEFAULT_PIN_CONTEXT_USAGE_BREAKDOWN,
       chatTurnMinimapSide: DEFAULT_MINIMAP_SIDE,
       pointerCursors: true,
       uiFontSize: DEFAULT_UI_FONT_SIZE,
@@ -585,6 +610,14 @@ export const useSettingsStore = create<SettingsState>()(
               (candidate) => selected.has(candidate),
             ),
           };
+        });
+      },
+      setNavigatorResourceMetrics: (metrics) => {
+        const selected = new Set(metrics);
+        set({
+          navigatorResourceMetrics: NAVIGATOR_RESOURCE_METRICS.filter(
+            (candidate) => selected.has(candidate),
+          ),
         });
       },
       setPinContextUsageBreakdown: makeSetter(set, "pinContextUsageBreakdown"),
@@ -706,6 +739,19 @@ export const useSettingsStore = create<SettingsState>()(
               (candidate) => selected.has(candidate),
             ),
           };
+        });
+      },
+      setPinnedContextBreakdownFields: (fields) => {
+        const selected = new Set(fields);
+        const next = CONTEXT_USAGE_ROW_KEYS.filter((candidate) =>
+          selected.has(candidate),
+        );
+        // An empty list is not a shape the strip has: unpinning is what hides
+        // it, so a caller that names no field gets the full set rather than a
+        // strip that draws its label and nothing else.
+        set({
+          pinnedContextBreakdownFields:
+            next.length === 0 ? DEFAULT_PINNED_CONTEXT_BREAKDOWN_FIELDS : next,
         });
       },
       setContextIndicatorStyle: makeSetter(set, "contextIndicatorStyle"),

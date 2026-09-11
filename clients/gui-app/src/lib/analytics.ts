@@ -296,6 +296,13 @@ export type AnalyticsSetting =
   // reports under the same run as the row beside it.
   | "layout.home.density"
   | "layout.home.view"
+  // One id per preset rather than one `layout.preset` carrying the choice as a
+  // property: `setting_changed` has a fixed payload (`source`, `section`,
+  // `setting`), and every id here already names what changed rather than what
+  // it became. Reset reports under `default`, which is what it applies.
+  | "layout.preset.compact"
+  | "layout.preset.default"
+  | "layout.preset.detailed"
   | "layout.sidebar.panelOrder"
   | "layout.sidebar.panelVisibility"
   | "layout.sidebar.resetOrder"
@@ -1215,6 +1222,9 @@ const ANALYTICS_SETTINGS = new Set<string>(
     homeTabEnabled: true,
     "layout.home.density": true,
     "layout.home.view": true,
+    "layout.preset.compact": true,
+    "layout.preset.default": true,
+    "layout.preset.detailed": true,
     "layout.sidebar.panelOrder": true,
     "layout.sidebar.panelVisibility": true,
     "layout.sidebar.resetOrder": true,

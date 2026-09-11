@@ -30,6 +30,36 @@ export const LAYOUT = defineSettingsSection("layout", {
       "visibility",
     ],
   },
+  // First on the page: the coarsest control here, writing the same store keys
+  // every group below writes.
+  presets: {
+    kind: "group",
+    search: { anchor: "layout-presets" },
+    label: "Presets",
+    description: null,
+    breadcrumb: null,
+    availableWhen: alwaysAvailable,
+    keywords: ["preset", "compact", "detailed", "reset", "defaults", "bundle"],
+  },
+  presetChoice: {
+    kind: "row",
+    group: "presets",
+    search: { anchor: "layout-presets-choice" },
+    label: "Preset",
+    description:
+      "Apply one set of detail preferences to every group below. Placement and the sidebar's panel arrangement are left as they are - only Reset restores those. Custom means the current values match no preset.",
+    availableWhen: alwaysAvailable,
+    keywords: [
+      "preset",
+      "compact",
+      "detailed",
+      "reset",
+      "defaults",
+      "bundle",
+      "density",
+      "custom",
+    ],
+  },
   statusBar: {
     kind: "group",
     search: { anchor: "layout-status-bar" },
