@@ -14,6 +14,7 @@
  * the whole budget for free.
  */
 import { describe, expect, it, vi } from "vitest";
+import { countingArrayCtor } from "@/lib/comm-graph/office/__tests__/counting-array-ctor";
 import {
   findOfficePath,
   officePathScratch,
@@ -791,32 +792,6 @@ describe.each(["campus", "city"] as const)(
     });
   },
 );
-
-/**
- * A stand-in for a typed-array constructor that counts how often it is
- * actually constructed, and behaves exactly like the real one otherwise.
- *
- * The counting is the point: the scratch's own capacity and growth counters
- * are bookkeeping that a version allocating a fresh pair of buffers per
- * search leaves perfectly intact, so a guard reading only those counters
- * passes the very regression it exists to catch. This watches the
- * constructor itself.
- *
- * Everything but construction falls through the proxy untouched, statics
- * included, so the code under test cannot tell the difference.
- */
-function countingArrayCtor<T extends object>(
-  ctor: new (length: number) => T,
-  onConstruct: () => void,
-): new (length: number) => T {
-  return new Proxy(ctor, {
-    construct(target, argArray) {
-      onConstruct();
-      const first: unknown = argArray[0];
-      return new target(typeof first === "number" ? first : 0);
-    },
-  });
-}
 
 describe("the Campus pan the cold review actually found", () => {
   it("draws a block over the corner point the review reported empty", () => {

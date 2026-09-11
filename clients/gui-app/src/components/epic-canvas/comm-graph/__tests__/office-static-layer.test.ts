@@ -508,6 +508,86 @@ describe("OfficeStaticLayer", () => {
     // The square nothing is wrong with is cached like any other.
     expect(elsewhere).toHaveLength(1);
   });
+
+  it("forgets a chunk's failure once the layer key changes under it", () => {
+    // A refusal is remembered by `chunkCol,chunkRow` alone, but a coordinate
+    // only names one SQUARE while the key that produced it holds: the world
+    // size is part of the key, so the same coordinates under a new width or
+    // height are a different square, of a different size, that this host has
+    // never actually been asked to make. Keeping the old refusal there
+    // refuses a chunk on a flag no chunk could clear - the whole-layer latch
+    // this suite already regressed once, reintroduced one coordinate at a
+    // time instead of across the whole mount.
+    const attempted: string[] = [];
+    const layer = new OfficeStaticLayer((width, height) => {
+      attempted.push(`${width}x${height}`);
+      // The OLD key's square at (1, 0) is a full, uncropped 512x512 chunk,
+      // and this host cannot make one; every other size below succeeds.
+      if (width === 512 && height === 512) return null;
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      if (ctx === null) throw new Error("the stub returned no context");
+      return { canvas, ctx };
+    });
+    const chunk: OfficeStaticChunk = { chunkCol: 1, chunkRow: 0 };
+    const failingKey: OfficeStaticLayerKey = {
+      ...KEY,
+      width: 1024,
+      height: 512,
+    };
+
+    const first = layer.sync({
+      key: failingKey,
+      chunks: [chunk],
+      paint: () => undefined,
+    });
+
+    // INVARIANT, kept green: no partial floor. A chunk this host cannot make
+    // draws nothing at all, never a hole where it would have gone.
+    expect(first).toEqual([]);
+    expect(attempted).toEqual(["512x512"]);
+
+    const again = layer.sync({
+      key: failingKey,
+      chunks: [chunk],
+      paint: () => undefined,
+    });
+
+    // INVARIANT, kept green: no re-attempt at frame cadence for the SAME
+    // failed key. A platform that cannot make one 512-square does not grow
+    // one between frames, so asking again would only allocate and throw away
+    // a canvas a second.
+    expect(again).toEqual([]);
+    expect(attempted).toEqual(["512x512"]);
+
+    // THE FIX: a NEW key - here a narrower world, which is enough on its own
+    // for `officeStaticLayerKeysMatch` to call it a different key - names a
+    // different square at the very same (chunkCol, chunkRow): cropped to 88
+    // wide against the old key's full 512. The failure recorded under the old
+    // key says nothing about this square.
+    const succeedingKey: OfficeStaticLayerKey = {
+      ...KEY,
+      width: 600,
+      height: 512,
+    };
+
+    const drawn = layer.sync({
+      key: succeedingKey,
+      chunks: [chunk],
+      paint: () => undefined,
+    });
+
+    // The factory IS asked for the replacement square, and it succeeds.
+    expect(attempted).toEqual(["512x512", "88x512"]);
+    expect(drawn).toHaveLength(1);
+    expect(drawn[0].x).toBe(512);
+    expect(drawn[0].y).toBe(0);
+    expect(drawn[0].canvas.width).toBe(88);
+    expect(drawn[0].canvas.height).toBe(512);
+    expect(layer.chunkCount).toBe(1);
+  });
 });
 
 // ---- The planner ------------------------------------------------------- //

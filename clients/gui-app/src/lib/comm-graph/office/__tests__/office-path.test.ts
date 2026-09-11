@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { countingArrayCtor } from "@/lib/comm-graph/office/__tests__/counting-array-ctor";
 import { layoutOffice } from "@/lib/comm-graph/office/office-layout";
 import {
   findOfficePath,
@@ -64,32 +65,6 @@ function sealedLayout(): OfficeLayout {
 
 function isAdjacent(left: OfficeTilePos, right: OfficeTilePos): boolean {
   return Math.abs(left.col - right.col) + Math.abs(left.row - right.row) === 1;
-}
-
-/**
- * A stand-in for a typed-array constructor that counts how often it is
- * actually constructed, and behaves exactly like the real one otherwise.
- *
- * The counting is the point: the scratch's own capacity and growth counters
- * are bookkeeping that a version allocating a fresh pair of buffers per
- * search leaves perfectly intact, so a guard reading only those counters
- * passes the very regression it exists to catch. This watches the
- * constructor itself.
- *
- * Everything but construction falls through the proxy untouched, statics
- * included, so the code under test cannot tell the difference.
- */
-function countingArrayCtor<T extends object>(
-  ctor: new (length: number) => T,
-  onConstruct: () => void,
-): new (length: number) => T {
-  return new Proxy(ctor, {
-    construct(target, argArray) {
-      onConstruct();
-      const first: unknown = argArray[0];
-      return new target(typeof first === "number" ? first : 0);
-    },
-  });
 }
 
 describe("findOfficePath", () => {
@@ -253,6 +228,47 @@ describe("findOfficePath", () => {
     const after = officePathScratch();
     expect(after.capacity).toBe(before.capacity);
     expect(after.growths).toBe(before.growths);
+  });
+
+  it("counts every constructor form, not only the length one", () => {
+    // The guards above are only sound while the stand-in is INVISIBLE, and a
+    // version that forwarded `new Ctor(length)` alone was not: an array, a
+    // typed array or a buffer view all came back empty, and nothing in this
+    // file would have said so - the counts it exists to produce were right.
+    // These are the four forms, plus a native method over the result.
+    const intCtor = Int32Array;
+    const buffer = new ArrayBuffer(16);
+    new Int32Array(buffer).set([5, 20, 30, 40]);
+    let ints = 0;
+
+    vi.stubGlobal(
+      "Int32Array",
+      countingArrayCtor(intCtor, () => {
+        ints += 1;
+      }),
+    );
+    try {
+      expect([...new Int32Array(3)]).toEqual([0, 0, 0]);
+      expect([...new Int32Array([7, 11])]).toEqual([7, 11]);
+      expect([...new Int32Array(new Int32Array([7, 11]))]).toEqual([7, 11]);
+
+      // A view keeps its offset and its BUFFER, which is the form a stub that
+      // rebuilt from a length silently turned into two zeroes.
+      const view = new Int32Array(buffer, 4, 2);
+      expect([...view]).toEqual([20, 30]);
+      expect(view.byteOffset).toBe(4);
+      expect(view.buffer).toBe(buffer);
+
+      expect([
+        ...new Int32Array([1, 2, 3]).filter((value) => value > 1),
+      ]).toEqual([2, 3]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    // Six `new` expressions above, one of them nested; `filter` builds its
+    // result through the real constructor on the prototype, not the stub.
+    expect(ints).toBe(6);
   });
 
   it("finds the same route whichever search ran before it", () => {

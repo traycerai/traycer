@@ -314,24 +314,39 @@ function tileRectsOverlap(
 const DIAMOND_TO_RECT = Math.SQRT1_2;
 
 /**
- * How far the widest block on this layout reaches past its own tile diamond.
+ * How far the widest block on this layout reaches past the tiles it stands for.
  *
- * THE CORNERS ARE THE PROBLEM. The rect above has the diamond's area but not
- * its shape: its corners sit outside the diamond's slanted sides, so a block
- * paints over pixels that none of the tiles it stands for projects to. The
- * scene finds the floor for a rectangle by running the projection backwards
+ * THE CORNERS ARE THE PROBLEM. The rect above has the projected region's area
+ * but not its shape: its corners sit outside the region's slanted sides, so a
+ * block paints over pixels that none of the tiles it stands for projects to.
+ * The scene finds the floor for a rectangle by running the projection backwards
  * into tiles, and a query tight to the tiles therefore finds no block at all
- * for a corner that is plainly on screen - a storey's lower-right shoulder on
- * a panned Campus, drawn by a whole-world frame and missing from a real one.
+ * for a corner that is plainly on screen - a storey's lower-right shoulder on a
+ * panned Campus, drawn by a whole-world frame and missing from a real one.
  *
- * The distance is geometry, not a guess. A block corner sits at
- * `(SQRT1_2·halfWidth, SQRT1_2·halfHeight)` from the centre, and the diamond's
- * edge is the line `x/halfWidth + y/halfHeight = 1`; the corner evaluates to
- * `SQRT2`, so it is `SQRT2 - 1` past the edge, and dividing by the line's own
- * normal turns that into pixels. It scales with the REGION, which is why this
- * is a function of the layout and not a constant: the storey is the widest
- * block a plan draws, and a hundred-tile storey overhangs by a couple of
- * hundred pixels where a six-tile cabin overhangs by ten.
+ * The distance is geometry, not a guess, and the geometry is a PARALLELOGRAM.
+ * A tile rect of `cols × rows` projects to a box `span` wide and `span` tall in
+ * tile units, `span` being `cols + rows`; inside that box the region's four
+ * edges are the lines `X + Y = narrow` and `X - Y = ±narrow` (and their
+ * partners), where `narrow` is the SMALLER of the two tile dimensions. Only
+ * when the rect is square is `narrow` half the span and the shape the symmetric
+ * diamond it looks like - and a diamond is what this used to assume. City
+ * freezes a district's width across appends, so a real district grows steadily
+ * narrower against its height and steadily less diamond-like. At 18 × 410 the
+ * gap a diamond accounts for is a third of the true one, and a query widened by
+ * it still lost six points of a storey that was plainly on screen.
+ *
+ * So, measured across that box in tile units: the block's far corner puts
+ * `X + Y` at `span · SQRT1_2`, the region's own edge puts it at `narrow`, and
+ * the difference between the two becomes pixels through the edge's own normal,
+ * which is what `ISO_EDGE_TO_PX` is.
+ *
+ * It scales with the REGION, which is why this is a function of the layout and
+ * not a constant: a storey is the widest block a plan draws, and the widest on
+ * a thousand-agent Campus overhangs by 372 px where a six-tile cabin overhangs
+ * by ten. Squareness is the other half of the scale - that same Campus is
+ * 105 × 117 and a diamond was only 12% short of it, where the 18 × 410 district
+ * needs 2,037 px against the diamond's 634.
  */
 function isoBlockOverhang(layout: OfficeLayout): number {
   let worst = 0;
@@ -347,13 +362,26 @@ function isoBlockOverhang(layout: OfficeLayout): number {
   return worst;
 }
 
+/**
+ * A projected edge's offset, in pixels per unit of the tile-unit box.
+ *
+ * The region's edges are lines of constant `X ± Y` in tile units. Scaling those
+ * units to the projection's own half-tile makes the perpendicular distance
+ * `offset · halfWidth · halfHeight / hypot(halfWidth, halfHeight)`, and the
+ * halves cancel against the box, so the whole conversion is this one ratio.
+ */
+const ISO_EDGE_TO_PX =
+  (ISO_HALF_WIDTH * ISO_HALF_HEIGHT) /
+  Math.hypot(ISO_HALF_WIDTH, ISO_HALF_HEIGHT);
+
 function cornerOverhangOf(bounds: OfficeTileRect): number {
   const span = bounds.cols + bounds.rows;
-  const halfWidth = (span * ISO_HALF_WIDTH) / 2;
-  const halfHeight = (span * ISO_HALF_HEIGHT) / 2;
-  if (halfWidth <= 0 || halfHeight <= 0) return 0;
-  const beyond = Math.SQRT2 - 1;
-  return (beyond * halfWidth * halfHeight) / Math.hypot(halfWidth, halfHeight);
+  if (span <= 0) return 0;
+  // The NARROW dimension names the near edge. A square rect makes this half the
+  // span and recovers the symmetric-diamond answer exactly; anything flatter
+  // puts an edge closer in, which is the whole finding.
+  const narrow = Math.min(bounds.cols, bounds.rows);
+  return Math.max(0, (Math.SQRT1_2 * span - narrow) * ISO_EDGE_TO_PX);
 }
 
 function blockOf(

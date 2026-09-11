@@ -1043,6 +1043,12 @@ interface CachedFloor {
   readonly drawables: ReadonlyArray<OfficeDrawable>;
 }
 
+/** The painter's declared block overhang, and the plan it was measured on. */
+interface CachedOverhang {
+  readonly version: number;
+  readonly px: number;
+}
+
 /** What a floor was asked for: the plan, the band, and the rectangle of it. */
 function floorKeyOf(
   layoutVersion: number,
@@ -1459,6 +1465,18 @@ export class OfficeScene {
    */
   private floorCache: CachedFloor | null = null;
   /**
+   * The painter's block overhang for the current plan, measured once.
+   *
+   * A PROPERTY OF THE LAYOUT, asked for on every overview frame. The isometric
+   * painter derives it by walking every floor, amenity and room, so asking per
+   * frame put the whole room population back in front of the floor cache -
+   * 2,505 room reads across five identical empty frames at a thousand agents,
+   * every one of them arriving at the same number. It is cached here rather
+   * than in the painter because a painter is a value, held in a registry and
+   * shared; the scene is the thing that knows when a plan has been replaced.
+   */
+  private overhangCache: CachedOverhang | null = null;
+  /**
    * The rect the last frame drew, cull margin included, or `null` before the
    * first one. What `updateErrandStarts` sends people walking inside.
    *
@@ -1532,6 +1550,7 @@ export class OfficeScene {
     this.spotPropCache.clear();
     this.seatPropVersion = -1;
     this.floorCache = null;
+    this.overhangCache = null;
   }
 
   /**
@@ -1663,9 +1682,7 @@ export class OfficeScene {
         // the painter is the only thing that knows by how much. Three of the
         // four answer zero and pay nothing.
         bleedPx:
-          lod === 0
-            ? this.view.painter.blockOverhangPx(layout)
-            : OFFICE_PROJECTION_BLEED_PX,
+          lod === 0 ? this.blockOverhangPx(layout) : OFFICE_PROJECTION_BLEED_PX,
       }),
       lod,
     );
@@ -4031,6 +4048,23 @@ export class OfficeScene {
    * by an order of magnitude. Handing back the SAME array is also what tells
    * the renderer's bitmap cache it has nothing to repaint.
    */
+  /**
+   * How far this painter's blocks reach past their tiles, on this plan.
+   *
+   * Keyed on `layoutVersion` exactly as the floor is: the number is a function
+   * of the layout and of nothing else the frame carries, so the camera moving
+   * must not cost a second walk of the rooms.
+   */
+  private blockOverhangPx(layout: OfficeLayout): number {
+    const cached = this.overhangCache;
+    if (cached !== null && cached.version === this.layoutVersion) {
+      return cached.px;
+    }
+    const px = this.view.painter.blockOverhangPx(layout);
+    this.overhangCache = { version: this.layoutVersion, px };
+    return px;
+  }
+
   private floorIn(
     layout: OfficeLayout,
     tiles: OfficeTileRect,

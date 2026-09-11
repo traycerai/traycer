@@ -325,8 +325,13 @@ export class OfficeStaticLayer {
    * refusal is not evidence about the OTHER squares: latching the whole layer
    * meant one null answer retired the cache for the life of the mount, and
    * every later frame returned before it had looked at the camera, the key or
-   * the factory at all. `release()` forgets them, in case the layer is reused
-   * somewhere they work.
+   * the factory at all.
+   *
+   * Held only for as long as the KEY that gave those coordinates their meaning,
+   * and dropped with the bitmaps whenever it changes - a coordinate under a new
+   * world size names a different square, of a different size, that this host
+   * has never been asked for. `release()` forgets them too, in case the layer
+   * is reused somewhere they work.
    */
   private readonly unsupportedChunks = new Set<string>();
   /** Counts chunk repaints, so a test can prove a frame did NOT cause one. */
@@ -377,6 +382,13 @@ export class OfficeStaticLayer {
     const current = this.key;
     if (current === null || !officeStaticLayerKeysMatch(current, key)) {
       this.releaseChunks();
+      // AND EVERY REFUSAL WITH THEM. A refusal is remembered by coordinate, but
+      // a coordinate only names a chunk while the key holds: the world's size
+      // is part of the key, so the square at a given column and row under the
+      // new one is a different square of a different size - an 88-wide strip
+      // where a 512 failed, say. Keeping the old answer refuses a chunk this
+      // host was never asked to make.
+      this.unsupportedChunks.clear();
       this.key = key;
     }
     if (chunks.length === 0 || chunks.length > OFFICE_STATIC_CHUNK_BUDGET) {
