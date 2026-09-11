@@ -1087,6 +1087,13 @@ export class RemoteSession<
    * a stream re-keyed, closed or restored under that id since arming is a
    * no-op. They raise a candidate; they never reopen a stream, because a
    * subscribe with no first frame is not per-stream evidence.
+   *
+   * The bound is "this subscribe is unanswered AND the whole session has been
+   * silent for `SESSION_SILENCE_TIMEOUT_MS`", so a timer that fires into a
+   * session which spoke to SOMEONE ELSE inside its window RE-ARMS for the
+   * remainder instead of retiring - see {@link armFirstFrameDeadline}. The
+   * entry is re-`set` under the same `streamId` on each re-arm, so the eager
+   * clear on this stream's own first frame still finds it.
    */
   private readonly firstFrameDeadlines = new Map<number, TimerHandle>();
 
@@ -2949,11 +2956,19 @@ export class RemoteSession<
         this.notifyCloudVerdictChanged();
       }
     }
+    // BEFORE the re-subscribe fan-out, not after. This ack is the in-channel
+    // frame, and the loop below arms each stream's first-frame deadline off
+    // the clock it sets - stamping afterwards left every one of those
+    // deadlines a few hundred microseconds "early" and their candidates
+    // refused for insufficient silence. The re-arm in
+    // `armFirstFrameDeadline` covers that case anyway (an unrelated frame
+    // mid-window does the same thing and cannot be ordered away), but there is
+    // no reason to hand it an off-by-ε it can avoid.
+    this.noteInChannelEvidence(connection);
     for (const stream of this.subscriptions.values()) {
       this.openSubscription(connection, stream);
     }
     this.startReauthLoop();
-    this.noteInChannelEvidence(connection);
     this.maybeReachReadyBoundary();
     this.armRestoreStallTimer(generation);
     // The session can carry frames from here: release every `sendUnary`
@@ -3211,6 +3226,11 @@ export class RemoteSession<
    * threw, a payload that would not encode. Those reject with the counter
    * unchanged, and treating them as death would condemn a healthy host for a
    * client-side fault - so they cancel the verdict instead.
+   *
+   * Every settle that reaches here cancels the verdict timer, and cancelling it
+   * also cancels the "answered during the liveness probe" line it would have
+   * written - so a probe that ends here must say so itself, or a support bundle
+   * shows a probe start and nothing after it.
    */
   private settleSilenceProbe(
     verdictTimer: TimerHandle,
@@ -3236,6 +3256,11 @@ export class RemoteSession<
       console.info(
         `[remote-session] remote session (host ${this.options.hostId}) liveness probe could not be sent ` +
           `(origin ${origin}) - no silence verdict`,
+      );
+    } else {
+      console.info(
+        `[remote-session] remote session (host ${this.options.hostId}) liveness probe settled ` +
+          `(origin ${origin}, ${rejected ? "answered-error" : "resolved"}) - no silence verdict`,
       );
     }
     this.clearSilenceProbe();
@@ -3311,11 +3336,26 @@ export class RemoteSession<
    * this was armed, and enumerating every one of those paths is the kind of
    * census that goes stale. The eager clears that do exist (a delivered frame,
    * a connection teardown) only keep a retired arm from sitting in the map.
+   *
+   * IT RE-ARMS FOR THE SILENCE THAT IS LEFT, and that is what makes the
+   * deadline mean what its map doc says: "while this subscribe is unanswered,
+   * watch for `SESSION_SILENCE_TIMEOUT_MS` of WHOLE-SESSION silence". A frame
+   * for some other stream - or this attach's own open-ack tail, which stamps
+   * the clock microseconds AFTER this loop armed - says nothing about whether
+   * THIS subscribe was heard, so the window it interrupts has to be re-run
+   * rather than abandoned. Dropping it instead was a real hole: a host that
+   * went mute right after `OPEN_ACK` had no bound left but the 15-minute
+   * standing watchdog, which is the exact symptom this deadline exists to
+   * close.
+   *
+   * `delayMs` is explicit at both call sites - the full window from
+   * `openSubscription`, the remainder from the re-arm below.
    */
   private armFirstFrameDeadline(
     generation: number,
     streamId: number,
     method: string,
+    delayMs: number,
   ): void {
     if (this.options.livenessProbe === null) {
       // A session with no discriminator makes no silence claims, so this timer
@@ -3335,8 +3375,29 @@ export class RemoteSession<
       ) {
         return;
       }
+      const connection = this.connection;
+      const remainingMs =
+        connection === null
+          ? 0
+          : SESSION_SILENCE_TIMEOUT_MS -
+            (Date.now() - connection.lastInChannelInboundAt);
+      if (
+        remainingMs > 0 &&
+        connection !== null &&
+        this.isCurrent(generation) &&
+        this.isReady()
+      ) {
+        // INSUFFICIENT SILENCE IS THE ONLY CONDITION WORTH WAITING OUT. Every
+        // other reason `raiseSilenceCandidate` would refuse is settled
+        // elsewhere: a stale generation is torn down (and its map cleared), a
+        // detached host has its own recovery, and a probe already in flight is
+        // asking this very question for the whole session. Re-arming for those
+        // would be a timer that never retires.
+        this.armFirstFrameDeadline(generation, streamId, method, remainingMs);
+        return;
+      }
       this.raiseSilenceCandidate(generation, `subscribe:${method}#${streamId}`);
-    }, SESSION_SILENCE_TIMEOUT_MS);
+    }, delayMs);
     this.firstFrameDeadlines.set(streamId, timer);
   }
 
@@ -3453,6 +3514,7 @@ export class RemoteSession<
       connection.generation,
       stream.streamId,
       stream.method,
+      SESSION_SILENCE_TIMEOUT_MS,
     );
     if (this.stallReopenedStreamIds.has(stream.streamId)) {
       // A stall-reopened stream's resolver provably emits (the stall verdict

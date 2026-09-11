@@ -282,13 +282,17 @@ outcome that speaks about the host.
 
 A socket drop, a `peer_gone`/`killed`, and a proven session silence (§11) reach
 the same full attach. `peer_gone`/`killed` reason `revoked` is **terminal**.
-`host_gone` / `reauth_timeout` → full-resume with ordinary backoff.
+`host_gone` / `reauth_timeout` → full-resume with ordinary backoff. These two
+name the HOST's leg — it left, or it failed to re-present standing — so they are
+the only relay kills reported on the `host-transport-plane`, and a handshake
+timeout on the redial that follows is a refusal.
 `session_reset` (the host asked the relay to drop this client leg because it can
 no longer serve the Noise session behind it) → full-resume at the ladder's
 **current** rung: the host is alive and waiting for a re-handshake.
 `policy_violation` and every unknown/future reason → full-resume at the capped
-backoff rung. All of these report an indeterminate relay loss, never a host
-refusal.
+backoff rung. `session_reset`, `policy_violation` and the unknown reasons report
+an indeterminate relay loss, never a host refusal: they describe the relay's
+handling of this leg, not the host's willingness to serve it.
 
 ## 10. Re-auth & peer-enforced host standing (R4-D2)
 

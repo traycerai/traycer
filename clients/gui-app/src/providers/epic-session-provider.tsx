@@ -37,9 +37,7 @@ import {
   type OpenEpicStoreHandle,
 } from "@/stores/epics/open-epic/store";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import { SESSION_SILENCE_TIMEOUT_MS } from "@traycer-clients/shared/host-transport/remote/config";
-import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
 import { useDurableStreamTransportFactory } from "@/lib/host/use-durable-stream-transport";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -70,6 +68,7 @@ import {
   getOpenEpicRegistry,
   handleHostClients,
   handleHostIds,
+  handleStreamClients,
   isEpicSessionHandleDead,
   releaseOpenEpicSessionIfUnused,
   trackEpicSessionHandleLiveness,
@@ -436,18 +435,6 @@ export function EpicSessionProvider(
   const [session, setSession] = useState<MountedSessionState | null>(null);
   const sessionRef = useRef<MountedSessionState | null>(null);
   const originalHostIdRef = useRef<string | null>(null);
-  /**
-   * THIS epic session's socket, for the one question `retryRepoint` has to ask
-   * it: is the transport behind the failure card actually dead?
-   *
-   * A ref rather than state because nothing renders off it - it is read once,
-   * inside a click handler - and because the provider rebuilds its transport
-   * per handle, so the value must track the LIVE one rather than whichever was
-   * current when a callback was memoised. Nulled when the handle that owns it
-   * closes, so a click landing after a repoint escalates nothing.
-   */
-  const epicStreamClientRef =
-    useRef<IHostStreamClient<HostStreamRpcRegistry> | null>(null);
   // Seeded from the create-host memory for an epic THIS renderer just
   // created: `epic.create` is local-first on the create host - the cloud
   // record is written by that host's deferred background connect - so until
@@ -610,18 +597,26 @@ export function EpicSessionProvider(
     // no handle, or a local transport that does not measure silence - both
     // read as "not silent", i.e. today's behaviour.
     //
+    // Read off the MOUNTED HANDLE, not a provider-local ref: this provider
+    // may never have constructed the transport it is retrying. A remount onto
+    // a handle the registry kept warm runs no factory, and the loser of an
+    // adoption race hands back the winner's handle - in both cases a ref
+    // would be null and the gate would silently stop forcing.
+    //
     // The re-presentation that follows shows `ready` while the transport
     // redials, and the tiles show `reconnecting` through their own status.
     // Accepted: the pane the person clicked was the failure card, which the
     // re-presentation replaces.
-    if (
-      epicStreamClientRef.current?.isSilentFor?.(SESSION_SILENCE_TIMEOUT_MS) ===
-      true
-    ) {
-      epicStreamClientRef.current.reconnectAll(
-        EPIC_RETRY_FORCE_RECONNECT_REASON,
-        { probeFirst: false, wakeProbe: null },
-      );
+    const mountedHandle = sessionRef.current?.handle;
+    const streamClient =
+      mountedHandle === undefined
+        ? undefined
+        : handleStreamClients.get(mountedHandle);
+    if (streamClient?.isSilentFor?.(SESSION_SILENCE_TIMEOUT_MS) === true) {
+      streamClient.reconnectAll(EPIC_RETRY_FORCE_RECONNECT_REASON, {
+        probeFirst: false,
+        wakeProbe: null,
+      });
     }
     setRetryGeneration((generation) => generation + 1);
   }, [planRestrictedSessionRebuildBackoff]);
@@ -835,6 +830,11 @@ export function EpicSessionProvider(
       // retro-fire, so a deadline that landed during construction would be
       // lost if this attached afterwards.
       let reprobeHandle: OpenEpicStoreHandle | null = null;
+      // The handle this run stamped into `handleStreamClients`, so the close
+      // below can un-stamp it. A slot for the same reason `reprobeHandle` is
+      // one: the close is composed before the handle exists, and a
+      // construction that throws must leave no entry behind.
+      let streamStampedHandle: OpenEpicStoreHandle | null = null;
       const detachReprobe = attachPlanRestrictedReprobe(wsStreamClient, () => {
         const deniedHandle = reprobeHandle;
         if (deniedHandle === null) return;
@@ -853,9 +853,14 @@ export function EpicSessionProvider(
         // Only if it is still OURS: a repoint closes the old handle's
         // transport after the new one has already published itself, and
         // clearing unconditionally there would blind the silence gate to a
-        // live socket.
-        if (epicStreamClientRef.current === wsStreamClient) {
-          epicStreamClientRef.current = null;
+        // live socket. Keyed by handle, so the two sessions cannot collide in
+        // the first place - the value check is what keeps that true if a
+        // handle is ever re-stamped.
+        if (
+          streamStampedHandle !== null &&
+          handleStreamClients.get(streamStampedHandle) === wsStreamClient
+        ) {
+          handleStreamClients.delete(streamStampedHandle);
         }
         // Before `transport.close()`, so the timer cannot outlive the socket
         // it exists to rebuild.
@@ -1074,11 +1079,6 @@ export function EpicSessionProvider(
           windowLabel: epicId,
         });
 
-        // Published beside the wake wiring below, and for the same socket: the
-        // provider rebuilds `wsStreamClient` per handle, so `retryRepoint`'s
-        // silence gate must read the LIVE one rather than whichever existed
-        // when its callback was memoised. Cleared by `closeSessionTransport`.
-        epicStreamClientRef.current = wsStreamClient;
         const created = createOpenEpicStore({
           epicId,
           userId: sessionUserId,
@@ -1217,6 +1217,14 @@ export function EpicSessionProvider(
         // stamp is what routes RPCs and capability answers to the host that owns
         // the stream (F1).
         handleHostIds.set(handle, targetHostId);
+        // Stamped on the SAME escaping handle and for the same reason: this is
+        // the socket `retryRepoint`'s silence gate asks, and it must travel
+        // with the session rather than with the provider that happened to
+        // build it - a warm remount and an adopted sibling both reach this
+        // handle and neither re-runs this factory. Removed by
+        // `closeSessionTransport`.
+        handleStreamClients.set(handle, wsStreamClient);
+        streamStampedHandle = handle;
         // Armed now that there is something to rebuild. `retryTransport` is
         // the handle's, not `created`'s: the wrapper is what owns this
         // session's transport close, and a reprobe that rebuilt the inner

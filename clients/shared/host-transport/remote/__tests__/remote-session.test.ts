@@ -768,10 +768,6 @@ class FakeRelayHost {
       ) {
         return;
       }
-      this.unaryResponses.push({
-        method,
-        error: this.unaryError,
-      });
       await this.sendMux(connection, {
         type: MuxFrameType.RESPONSE,
         streamId: message.streamId,
@@ -783,6 +779,16 @@ class FakeRelayHost {
           error: this.unaryError,
         },
         binary: null,
+      });
+      // AFTER the send resolves, so this records DELIVERY and not the
+      // intention to deliver. `sendMux` awaits WebCrypto encryption, and a
+      // test that waits on this entry and then jumps virtual time through a
+      // verdict window would otherwise race the threadpool: the frame lands
+      // after the jump, the verdict finds the counter unmoved, and a control
+      // manufactures the very silence drop it exists to disprove.
+      this.unaryResponses.push({
+        method,
+        error: this.unaryError,
       });
       return;
     }
@@ -9191,6 +9197,307 @@ describe("RemoteSession probed silence verdict (D4)", () => {
         expect(recorder.callsNamed("sessionEstablished")).toHaveLength(1);
         expect(relay.errors).toEqual([]);
       } finally {
+        session.close();
+        infoSpy.mockRestore();
+        vi.useRealTimers();
+      }
+    },
+    SILENCE_PIN_BUDGET_MS,
+  );
+
+  it(
+    "an unrelated in-channel frame mid-window re-arms the first-frame deadline instead of retiring it, and the deadline eventually rebuilds the session",
+    async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      // The evidence recorder cannot name a LOSS REASON, so the verdict's own
+      // warning is what distinguishes "rebuilt because the session was judged
+      // silent" from any other teardown that would also produce a second
+      // generation.
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const relay = new FakeRelayHost();
+      applySilenceFloor(relay, SILENCE_FLOOR_METHODS);
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      relay.silentMethods = new Set(["host.status"]);
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const recorder = new RecordingEvidence();
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        rpcRegistry: silenceProbeRegistry(),
+        streamRegistry: cursorStreamRegistry,
+        livenessProbe: HOST_STATUS_LIVENESS_PROBE,
+        evidence: recorder,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+
+        // The subscribe's own first-frame deadline is armed for the full
+        // SESSION_SILENCE_TIMEOUT_MS window. At ~T+10s, one unrelated
+        // in-channel frame (an auto-answered unary, NOT the subscribed
+        // stream) lands - the base at 4f7fb2927 treats that as "not silent
+        // for the full window" and drops the deadline forever.
+        await vi.advanceTimersByTimeAsync(10_000);
+        const answered = sendBindingUnary(session);
+        await vi.waitFor(
+          () =>
+            expect(
+              relay.unaryResponses.some(
+                (response) => response.method === "worktree.getBinding",
+              ),
+            ).toBe(true),
+          WAIT,
+        );
+        await answered;
+        expect(hostStatusRequests(relay)).toHaveLength(0);
+
+        // The original deadline fires at ~T+20s, finds only 10s of silence
+        // since the frame above, and (with the fix) re-arms for the
+        // remaining ~10s rather than retiring. That re-armed timer fires at
+        // ~T+30s, which is now a full SESSION_SILENCE_TIMEOUT_MS after the
+        // last in-channel frame, and raises the probe.
+        await vi.advanceTimersByTimeAsync(20_000);
+        await vi.waitFor(
+          () => expect(hostStatusRequests(relay)).toHaveLength(1),
+          WAIT,
+        );
+
+        const dialsBefore = relay.openBearers.length;
+        await vi.advanceTimersByTimeAsync(SESSION_LIVENESS_PROBE_TIMEOUT_MS);
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        expect(relay.openBearers.length).toBeGreaterThan(dialsBefore);
+        expect(
+          recorder.callsNamed("sessionEstablished").length,
+        ).toBeGreaterThanOrEqual(2);
+        expect(
+          recorder.callsNamed("reportDialIndeterminate").length,
+        ).toBeGreaterThanOrEqual(1);
+        expect(recorder.callsNamed("reportDialRefusal")).toHaveLength(0);
+        expect(
+          warnSpy.mock.calls.some(
+            (call) =>
+              String(call[0]).includes("is silent: no in-channel frame") &&
+              String(call[0]).includes("unanswered liveness probe"),
+          ),
+        ).toBe(true);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        stream.close();
+        session.close();
+        warnSpy.mockRestore();
+        vi.useRealTimers();
+      }
+    },
+    SILENCE_PIN_BUDGET_MS,
+  );
+
+  it(
+    "a 1ms shortfall against the full silence window still leaves the deadline re-armed and probing, not retired",
+    async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const relay = new FakeRelayHost();
+      applySilenceFloor(relay, SILENCE_FLOOR_METHODS);
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      relay.silentMethods = new Set(["host.status"]);
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const recorder = new RecordingEvidence();
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        rpcRegistry: silenceProbeRegistry(),
+        streamRegistry: cursorStreamRegistry,
+        livenessProbe: HOST_STATUS_LIVENESS_PROBE,
+        evidence: recorder,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+
+        // The ε case: the deadline arms at subscribe time, then ε=1ms later
+        // one in-channel frame lands - just enough to leave the window ε ms
+        // short of full silence at the deadline's first fire.
+        await vi.advanceTimersByTimeAsync(1);
+        const answered = sendBindingUnary(session);
+        await vi.waitFor(
+          () =>
+            expect(
+              relay.unaryResponses.some(
+                (response) => response.method === "worktree.getBinding",
+              ),
+            ).toBe(true),
+          WAIT,
+        );
+        await answered;
+
+        // A few ms of real-clock drift (shouldAdvanceTime) cannot reach the
+        // 20s window, so this negative is safe without asserting an exact
+        // fake-time boundary.
+        expect(hostStatusRequests(relay)).toHaveLength(0);
+
+        await vi.advanceTimersByTimeAsync(SESSION_SILENCE_TIMEOUT_MS + 50);
+        await vi.waitFor(
+          () => expect(hostStatusRequests(relay)).toHaveLength(1),
+          WAIT,
+        );
+      } finally {
+        stream.close();
+        session.close();
+        vi.useRealTimers();
+      }
+    },
+    SILENCE_PIN_BUDGET_MS,
+  );
+
+  it(
+    "the stream's own first frame clears a re-armed first-frame deadline - no probe follows (control, green with and without the fix)",
+    async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const relay = new FakeRelayHost();
+      applySilenceFloor(relay, SILENCE_FLOOR_METHODS);
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      relay.silentMethods = new Set(["host.status"]);
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const recorder = new RecordingEvidence();
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        rpcRegistry: silenceProbeRegistry(),
+        streamRegistry: cursorStreamRegistry,
+        livenessProbe: HOST_STATUS_LIVENESS_PROBE,
+        evidence: recorder,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      // A registered handler is what makes `deliverServerFrame` return
+      // `true` and actually run `markStreamRestored` - the eager clear this
+      // control is pinning.
+      stream.onServerFrame(() => {});
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        const streamId = relay.subscribeStreamIds[0];
+
+        // Drive the same re-arm as the pin above, but with the unrelated
+        // frame placed LATE in the window (~T+18s): the re-armed remainder
+        // is then ~18s (SESSION_SILENCE_TIMEOUT_MS minus how long we waited
+        // to send it), leaving a wide margin to land the stream's own frame
+        // inside it without racing the shouldAdvanceTime real-clock drift
+        // this suite's other pins warn about.
+        await vi.advanceTimersByTimeAsync(18_000);
+        const answered = sendBindingUnary(session);
+        await vi.waitFor(
+          () =>
+            expect(
+              relay.unaryResponses.some(
+                (response) => response.method === "worktree.getBinding",
+              ),
+            ).toBe(true),
+          WAIT,
+        );
+        await answered;
+
+        // Land inside the re-armed window (~T+25s, i.e. past the ~T+20s
+        // first fire/re-arm but comfortably before the ~T+38s re-armed
+        // fire), then deliver the SUBSCRIBED stream's own first data frame.
+        await vi.advanceTimersByTimeAsync(7_000);
+        await relay.sendStreamFrame(
+          streamId,
+          { kind: "snapshot", hasBinaryPayload: false },
+          null,
+          QosClass.INTERACTIVE,
+        );
+
+        // The re-armed timer is cleared by the stream's own first frame -
+        // no probe follows within a further 60s.
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(hostStatusRequests(relay)).toHaveLength(0);
+        expect(session.isReady()).toBe(true);
+        expect(recorder.callsNamed("sessionEstablished")).toHaveLength(1);
+        expect(relay.errors).toEqual([]);
+      } finally {
+        stream.close();
+        session.close();
+        vi.useRealTimers();
+      }
+    },
+    SILENCE_PIN_BUDGET_MS,
+  );
+
+  it(
+    "the verdict abandons itself when the in-channel counter moved on a different stream while the probe stayed unanswered",
+    async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+      const relay = new FakeRelayHost();
+      applySilenceFloor(relay, SILENCE_FLOOR_METHODS);
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      relay.silentMethods = new Set(["worktree.getBinding", "host.status"]);
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const recorder = new RecordingEvidence();
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        rpcRegistry: silenceProbeRegistry(),
+        streamRegistry: cursorStreamRegistry,
+        livenessProbe: HOST_STATUS_LIVENESS_PROBE,
+        evidence: recorder,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        const streamId = relay.subscribeStreamIds[0];
+
+        // The subscribe's own first-frame deadline raises the candidate at
+        // ~T+20s; the probe REQUEST goes out and is withheld.
+        await vi.advanceTimersByTimeAsync(SESSION_SILENCE_TIMEOUT_MS);
+        await vi.waitFor(
+          () => expect(hostStatusRequests(relay)).toHaveLength(1),
+          WAIT,
+        );
+
+        // A DIFFERENT stream (the same subscribed cursor stream, distinct
+        // from the probe itself) advances the in-channel counter while the
+        // probe stays unanswered.
+        await relay.sendStreamFrame(
+          streamId,
+          { kind: "snapshot", hasBinaryPayload: false },
+          null,
+          QosClass.INTERACTIVE,
+        );
+
+        await vi.advanceTimersByTimeAsync(SESSION_LIVENESS_PROBE_TIMEOUT_MS);
+        expect(session.isReady()).toBe(true);
+        expect(recorder.callsNamed("sessionEstablished")).toHaveLength(1);
+        expect(relay.errors).toEqual([]);
+        expect(
+          infoSpy.mock.calls.some((call) =>
+            String(call[0]).includes("answered during the liveness probe"),
+          ),
+        ).toBe(true);
+      } finally {
+        stream.close();
         session.close();
         infoSpy.mockRestore();
         vi.useRealTimers();

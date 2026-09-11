@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createChatSessionStore } from "@/stores/chats/chat-session-store";
+import {
+  createChatSessionStore,
+  type ChatSessionStoreHandle,
+} from "@/stores/chats/chat-session-store";
 import { IMMEDIATE_STREAM_FLUSH_COORDINATOR } from "@/stores/chats/stream-flush-coordinator";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
@@ -11,7 +14,7 @@ function createRetryStore(input: {
   readonly wakeTransport: (() => void) | null;
   readonly transportSilentFor?: ((ms: number) => boolean) | null;
 }): {
-  readonly handle: ReturnType<typeof createChatSessionStore>;
+  readonly handle: ChatSessionStoreHandle;
   readonly factoryCalls: () => number;
   readonly order: readonly string[];
 } {
