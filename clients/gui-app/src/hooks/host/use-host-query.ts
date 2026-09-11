@@ -111,7 +111,8 @@ export interface UseHostQueryWithResponseMapOptions<
     readonly queryClient: QueryClient;
     readonly queryKey: QueryKey;
     readonly requestContext: TRequestContext | undefined;
-  }) => TData;
+    readonly signal: AbortSignal;
+  }) => TData | Promise<TData>;
 }
 
 /**
@@ -225,7 +226,13 @@ export function useHostQueryWithResponseMap<
       args.preflight?.();
       const requestContext = args.captureRequestContext?.();
       const response = await client.requestWithSignal(method, params, signal);
-      return mapResponse({ response, queryClient, queryKey, requestContext });
+      return mapResponse({
+        response,
+        queryClient,
+        queryKey,
+        requestContext,
+        signal,
+      });
     });
 
   return useQuery<TData, HostRpcError, TData>(

@@ -58,7 +58,11 @@ import {
   leaderDigitFor,
   leaderHint,
 } from "@/components/ui/leader-digit-shortcuts";
-import { useTopLevelStripPairPreview } from "@/components/epic-canvas/dnd/dnd-store";
+import {
+  useTopLevelStripPairPreview,
+  type HeaderTabDragGhost,
+} from "@/components/epic-canvas/dnd/dnd-store";
+import { useSurfaceNotificationIndicatorState } from "@/components/notifications/notification-indicator-context";
 import { HeaderTabVisual } from "./header-tab-visual";
 import { useHeaderTabTitle } from "./header-tab-presentation";
 import {
@@ -67,10 +71,11 @@ import {
 } from "@/components/layout/tabs/tab-chrome-tokens";
 import { mergeRefs } from "@/lib/merge-refs";
 import { TabContextMenuContent } from "@/components/layout/tabs/tab-strip-context-menu";
+import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type { TabSplitCommandId } from "@/stores/tabs/tab-split-commands";
 import { tabResolveIntent } from "@/stores/tabs/registry";
 import type { HeaderTabKind } from "@/stores/tabs/registry";
-import type { HeaderTab } from "@/stores/tabs/types";
+import { tabAppearance, type HeaderTab } from "@/stores/tabs/types";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
@@ -147,6 +152,26 @@ function epicRenameClient(
   return buildDialableHostClient(appClient, entry);
 }
 
+/**
+ * A cloud-homed epic's rename is a CLOUD write sent over the local-host
+ * connection, which does not carry the renderer's verdict - so the role
+ * alone is not admission once the session is `unverified`. A local-homed
+ * epic renames on this machine's own disk and stays editable. Same rule and
+ * exemption as the History rows and the mobile header.
+ */
+function canEditEpicTabTitle(input: {
+  readonly isEpicTab: boolean;
+  readonly permissionRole: PermissionRole | null;
+  readonly localHome: boolean;
+  readonly cloudAuthorized: boolean;
+}): boolean {
+  return (
+    input.isEpicTab &&
+    isEditableRole(input.permissionRole) &&
+    (input.localHome || input.cloudAuthorized)
+  );
+}
+
 export const TabItem = memo(function TabItem(props: TabItemProps) {
   const {
     tab,
@@ -169,11 +194,60 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
     isTaskPinPending,
     onSetTaskPinned,
   } = props;
+  const tabEpicId = tab.kind === "epic" ? tab.epicId : null;
+  const appearance = tabAppearance(tab);
+  // Read once here rather than inside `TabLeadingIcon`, so the SAME resolved
+  // value can also ride the drag payload below - the strip item is the drag
+  // source, and at the moment a drag starts it already holds everything the
+  // ghost needs.
+  const indicatorState = useSurfaceNotificationIndicatorState(
+    { epicId: tabEpicId ?? tab.id },
+    null,
+  );
+  // `selectNotificationIndicatorState` returns a fresh object on every render
+  // once any field is set, so a memo that closed over `indicatorState` itself
+  // would recompute - and cascade into the draggable's `data` - on every
+  // unrelated re-render. Destructured to locals here so the memo below closes
+  // over the primitives it actually depends on, which is the same thing
+  // `exhaustive-deps` then verifies rather than something it has to be told.
+  const {
+    unreadFailure,
+    unreadNonTerminalFailure,
+    unreadTerminalFailure,
+    pendingFork,
+    pendingApproval,
+    pendingInterview,
+    unreadDone,
+  } = indicatorState;
+  const dragGhost = useMemo<HeaderTabDragGhost>(
+    () => ({
+      appearance,
+      indicatorState: {
+        unreadFailure,
+        unreadNonTerminalFailure,
+        unreadTerminalFailure,
+        pendingFork,
+        pendingApproval,
+        pendingInterview,
+        unreadDone,
+      },
+    }),
+    [
+      appearance,
+      unreadFailure,
+      unreadNonTerminalFailure,
+      unreadTerminalFailure,
+      pendingFork,
+      pendingApproval,
+      pendingInterview,
+      unreadDone,
+    ],
+  );
   const {
     ref: dndRef,
     listeners,
     isDragging,
-  } = useHeaderTabDnd(tab.kind, tab.id, dnd);
+  } = useHeaderTabDnd(tab.kind, tab.id, dnd, dragGhost);
   const tabRef = useRef<HTMLDivElement | null>(null);
   const scrollActiveTabIntoView = useCallback(
     (element: HTMLDivElement | null) => {
@@ -193,19 +267,16 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
   const { resolvedTabName, displayName } = useHeaderTabTitle(tab);
   const registeredEpicId = tab.kind === "epic" ? tab.epicId : null;
   const permissionRole = useRegisteredEpicPermissionRole(registeredEpicId);
-  // A cloud-homed epic's rename is a CLOUD write sent over the local-host
-  // connection, which does not carry the renderer's verdict - so the role
-  // alone is not admission once the session is `unverified`. A local-homed
-  // epic renames on this machine's own disk and stays editable. Same rule
-  // and exemption as the History rows and the mobile header.
   const localHome = useRegisteredEpicLocalHome(registeredEpicId);
   const cloudAuthorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
-  const canEditTitle =
-    tab.kind === "epic" &&
-    isEditableRole(permissionRole) &&
-    (localHome || cloudAuthorized);
+  const canEditTitle = canEditEpicTabTitle({
+    isEpicTab: tab.kind === "epic",
+    permissionRole,
+    localHome,
+    cloudAuthorized,
+  });
   const canClose = tab.kind !== "epic" || tab.canClose;
   const displayTab = useMemo(
     () =>
@@ -429,6 +500,8 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
           />
           <HeaderTabVisual
             tab={tab}
+            appearance={appearance}
+            indicatorState={indicatorState}
             displayName={displayName}
             chrome={chrome}
             isActive={isActive}
@@ -503,16 +576,24 @@ function useHeaderTabDnd(
   tabKind: HeaderTabKind,
   tabId: string,
   config: HeaderTabDndConfig | null,
+  ghost: HeaderTabDragGhost,
 ): UseHeaderTabDndReturn {
-  const dragData = useMemo<HeaderTabDragData>(
+  const dragData = useMemo<
+    HeaderTabDragData & { readonly ghost: HeaderTabDragGhost }
+  >(
     () => ({
       kind: HEADER_TAB_DND_TYPE,
       stripItemId: config?.stripItemId ?? `member:${tabKind}:${tabId}`,
       tabKind,
       tabId,
       index: config?.index ?? 0,
+      // Render-ready enrichment for the drag ghost - read once, right here,
+      // where the strip already holds it resolved. `root-dnd-provider.tsx`
+      // reads it back via `readHeaderTabDragGhost` at drag start, so the
+      // overlay never re-derives it with a host RPC / notifications query.
+      ghost,
     }),
-    [config, tabId, tabKind],
+    [config, tabId, tabKind, ghost],
   );
   // A `tab:` strip item is already unique per tab, so it keys on the tab id
   // alone. A split member shares its tab id with nothing but must stay distinct

@@ -1,6 +1,9 @@
 import { type Transition } from "motion/react";
 import * as m from "motion/react-m";
-import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
+import {
+  useEpicDndStore,
+  type HeaderTabDragGhost,
+} from "@/components/epic-canvas/dnd/dnd-store";
 import { cn } from "@/lib/utils";
 import type { HeaderTab } from "@/stores/tabs/types";
 import { HeaderTabPreview } from "./header-tab-visual";
@@ -15,12 +18,21 @@ const HEADER_TAB_OVERLAY_TRANSITION = {
 
 interface HeaderTabDragOverlayProps {
   readonly tab: HeaderTab;
+  /**
+   * Render-ready enrichment (`appearance`, `indicatorState`)
+   * resolved ONCE at drag start from the strip item's own drag payload - see
+   * `HeaderTabDragGhost` in `dnd-store.ts` for why this exists and what it
+   * deliberately does not keep live. `null` only when no header-tab drag is
+   * active, or the payload came from a drag begun before a hot reload.
+   */
+  readonly ghost: HeaderTabDragGhost | null;
   /** Source tab's measured width, so the dragged object is the tab itself. */
   readonly width: number | null;
 }
 
+/** Captured appearance and notifications with live activity status. */
 export function HeaderTabDragOverlay(props: HeaderTabDragOverlayProps) {
-  const { tab } = props;
+  const tab = props.tab;
   // While a merge target is highlighted the overlay ghosts: the highlight sits
   // on the approach half of the target tab, which is exactly where this
   // overlay is - opaque, it would cover the one signal the gesture shows.
@@ -45,7 +57,7 @@ export function HeaderTabDragOverlay(props: HeaderTabDragOverlayProps) {
         "pointer-events-none cursor-grabbing select-none",
       )}
     >
-      <HeaderTabPreview tab={tab} chrome="own" isActive />
+      <HeaderTabPreview tab={tab} ghost={props.ghost} chrome="own" isActive />
     </m.div>
   );
 }

@@ -1,4 +1,10 @@
 import {
+  decodeBitmap,
+  createBitmapCanvas,
+  bitmapCanvasToBlob,
+  type DecodedBitmap,
+} from "@/lib/images/bitmap-codec";
+import {
   canonicalImageMimeType,
   sniffImageMimeType,
   type CanonicalImageMimeType,
@@ -14,12 +20,7 @@ const SCALE_STEPS = [1, 0.75, 0.55] as const;
 
 export type { CanonicalImageMimeType };
 
-export interface PromptStashDecodedImage {
-  readonly width: number;
-  readonly height: number;
-  readonly source: CanvasImageSource;
-  readonly close: () => void;
-}
+export type PromptStashDecodedImage = DecodedBitmap;
 
 export interface PromptStashImageCodec {
   readonly decode: (args: {
@@ -413,21 +414,10 @@ const browserPromptStashImageCodec: PromptStashImageCodec = {
     if (typeof createImageBitmap !== "function") {
       throw new Error("This browser cannot decode images for stashing.");
     }
-    const bitmap = await createImageBitmap(
-      new Blob([bytes], { type: mimeType }),
-      {
-        imageOrientation: "from-image",
-      },
-    );
-    return {
-      width: bitmap.width,
-      height: bitmap.height,
-      source: bitmap,
-      close: () => bitmap.close(),
-    };
+    return decodeBitmap(new Blob([bytes], { type: mimeType }));
   },
   encode: async (args) => {
-    const canvas = createCanvas(args.width, args.height);
+    const canvas = createBitmapCanvas(args.width, args.height);
     try {
       const context = canvas.getContext("2d");
       if (context === null) return null;
@@ -436,7 +426,11 @@ const browserPromptStashImageCodec: PromptStashImageCodec = {
         context.fillRect(0, 0, args.width, args.height);
       }
       context.drawImage(args.image.source, 0, 0, args.width, args.height);
-      const blob = await canvasToBlob(canvas, args.mimeType, args.quality);
+      const blob = await bitmapCanvasToBlob(
+        canvas,
+        args.mimeType,
+        args.quality,
+      );
       if (blob === null || blob.type !== args.mimeType) return null;
       return new Uint8Array(await blob.arrayBuffer());
     } finally {
@@ -445,9 +439,13 @@ const browserPromptStashImageCodec: PromptStashImageCodec = {
     }
   },
   supportsWebP: async () => {
-    const canvas = createCanvas(1, 1);
+    const canvas = createBitmapCanvas(1, 1);
     try {
-      const blob = await canvasToBlob(canvas, "image/webp", QUALITY_STEPS[0]);
+      const blob = await bitmapCanvasToBlob(
+        canvas,
+        "image/webp",
+        QUALITY_STEPS[0],
+      );
       return blob?.type === "image/webp";
     } finally {
       canvas.width = 0;
@@ -455,21 +453,3 @@ const browserPromptStashImageCodec: PromptStashImageCodec = {
     }
   },
 };
-
-function createCanvas(width: number, height: number): HTMLCanvasElement {
-  if (typeof document === "undefined") {
-    throw new Error("This browser cannot encode images for stashing.");
-  }
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  return canvas;
-}
-
-function canvasToBlob(
-  canvas: HTMLCanvasElement,
-  mimeType: string,
-  quality: number,
-): Promise<Blob | null> {
-  return new Promise((resolve) => canvas.toBlob(resolve, mimeType, quality));
-}
