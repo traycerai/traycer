@@ -45,7 +45,13 @@ Generated — don't hand-edit: `src/routeTree.gen.ts`, `dist/`, `.tanstack/`.
 - **`cn(...)`** from `@/lib/utils` for all composed `className`s. No template
   literals / `+` / `.join(" ")`. Static single strings OK.
 - **Fluid layout sizing** — `w-full`, `max-w-*`, viewport caps. No fixed px/rem
-  for layout surfaces (icons / touch targets OK).
+  for layout surfaces (icons / touch targets OK). One recorded exception:
+  Settings ▸ Layout's status-bar preview frame
+  (`panels/layout/status-bar-preview.tsx`) is a SIMULATED viewport whose width
+  control names a pixel width, so it draws `w-[480px]` / `w-[880px]` /
+  `w-[920px]` — always under `max-w-full`, since a frame wider than the
+  ~944px Settings pane silently pushes the strip's right-hand cluster
+  off-screen. A new fixed-px layout width needs the same kind of argument.
 - **Safe area** — never write `env(safe-area-inset-*)`; `index.css` owns the
   only reads. `#root` reserves the top and both horizontal insets app-wide
   (landscape is supported, so the sensor housing can be on either side), which

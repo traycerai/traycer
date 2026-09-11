@@ -1470,11 +1470,38 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     dynamic action handler. The whole frame is `inert` + `aria-hidden`: every
     control in it is a real one that would be a dead end there, and the rows
     below are where each is actually configured.
-  - **So the preview is honest rather than idealised.** A provider with no
-    reading yet draws its cold track, an account with none draws the strip's
-    "connect a provider" line, and with no global resource stream mounted (the
-    `header` placement with the header monitor off) the resource segment draws
-    its dashes. Wherever the strip is not the surface currently drawn the frame
+  - **So the preview is honest rather than idealised.** An account with no
+    provider draws the strip's "connect a provider" line, a cold provider
+    beside a live one draws its cold track, and with no global resource stream
+    mounted (the `header` placement with the header monitor off) the resource
+    segment draws its dashes. The one exception is a cluster with NO reading
+    in it whose empty providers are COLD - the steady state under `header`
+    placement for the http-lane providers (opencode, cursor) that nothing but
+    the popover ever fetches. A cold track is an icon over an empty bar that
+    ignores every switch on the page, so a preview of nothing but cold tracks
+    previews nothing: the first two COLD providers get a fixed SAMPLE reading
+    (`57% used 4h 15m`, `82% used 2d`, built from the strip's own window shape
+    and classifier), and a `status-bar-preview-sample-note` caption says so
+    and where a live number comes from. Everything else in the cluster is
+    passed through untouched - providers past the second keep their cold
+    track, and the substitution walks the CLUSTER rather than the two
+    readings, so the provider count, the icon set, the strip order, the
+    per-provider switches and the `+N` fold's arithmetic are the ones the
+    strip would have. An `unavailable` provider is never sampled: it has
+    ANSWERED that it cannot report usage, so a percentage over it is a
+    stronger invention than the cold case and the caption's own sentence
+    would be false for it - it keeps its dash and its note, and a cluster
+    with nothing cold in it gets no sample at all. The per-provider
+    "no reading yet" lines for the SAMPLED providers are dropped while the
+    caption speaks for them (the two would otherwise contradict each other
+    under one frame), and a `Folded:` line carrying an invented number is
+    marked `(sample)`, since a fold takes that reading off the strip the
+    caption sits above. The reset instants are taken from the same 60s clock
+    the countdowns read, so the sample never ticks; the passive reader is
+    unchanged, so it never fetches; and one live or degraded reading anywhere
+    in the cluster puts the host's own readings back, cold tracks included -
+    invented numbers beside a real one would be indistinguishable from the
+    strip having fetched them. Wherever the strip is not the surface currently drawn the frame
     is greyed rather than hidden - a preview that vanished would read as the
     settings having no effect - and the caption says WHICH reason: `Shown when
 placement is Status bar.` in `header` placement, and `The strip is not shown
@@ -1501,17 +1528,36 @@ at this window width; the header keeps its controls.` below `md`, where the
     the 1 Hz IPC poll - so that half is its own component mounted under `Show
 resource monitor`, never a gated result. Both dim whenever the frame does,
     and both are absent when there is nothing to explain.
-  - **The width control's three options are the three DENSITY RUNGS**, not
-    three arbitrary widths, and the frame's border is why they land where they
-    do: `max-w-[480px]` measures 478 (`icon-only`), `max-w-[900px]` measures
-    898 (`compact`), and only the uncapped `Wide` can measure past 900 and
-    reach `full`. Density is read from the box the strip's padding sits inside,
-    which is where `AppStatusBar` reads its own. It defaults to **Wide** - at the
-    `compact` ceiling the ladder drops the mode word, the mini bar and the
-    countdown whatever the store says, so opening at Normal would answer "this
-    switch does nothing" to the first three Display switches a user tries. It
-    is component state, never persisted: a way of LOOKING at the strip rather
-    than a preference about it.
+  - **The width control names a NOMINAL width, and the frame is drawn at
+    exactly that width** - `w-[480px]` / `w-[880px]` / `w-[920px]` on the
+    `inert` frame, one per density band (`< 500` icon-only, `< 900` compact,
+    else full) - under a `max-w-full` that is the honest half of it: every
+    Settings surface caps at `max-w-5xl`, so this box is at most ~944px wide
+    however large the window is, and a frame drawn past that would push the
+    resource cluster off the right edge with nothing on screen saying so -
+    the reported bug moved one cluster over, and reproducing at 100% rather
+    than under ~1560px. Wide is **920** for the same reason: a nominal no
+    pane can draw is not a width, and 920 is still `≥ 900`, so the `full`
+    ceiling and every Display switch survive. Density comes from that nominal
+    width through `statusBarDensityForWidth`, NEVER from a measured box:
+    inside the Settings modal that box is `min(pane, 1024) − chrome`, which is
+    `compact` on any window under ~1560px, and at the `compact` ceiling the
+    ladder drops the mode word, the mini bar and the countdown whatever the
+    store says. A preview that measured itself answered "this switch does
+    nothing" to the first three Display switches a user tried - in the modal
+    only, since the promoted tab has less padding and reached `full`, so the
+    same switches worked in one Settings surface and not the other. What is
+    still MEASURED is the ladder's own `roomRef` on the usage slot inside the
+    frame, which the frame's width is what sizes, so the rungs and the `+N`
+    fold answer "does this fit the strip in front of me" exactly as they do in
+    the footer - and on a pane narrower than the nominal they answer it about
+    the narrower strip actually drawn, which is the honest reading. It
+    defaults to **Wide**, so the first thing a reader sees is every switch
+    doing something. It is component state, never persisted: a way of LOOKING
+    at the strip rather than a preference about it. The three fixed-px widths
+    are the one sanctioned exception to the fluid-sizing rule, recorded in
+    `gui-app/AGENTS.md`: the box IS a simulated viewport, and a control that
+    names a pixel width has to draw one.
   - **The preview's ladder measures a stretching box**, the same two-box shape
     the strip uses: the usage slot is `min-w-0 flex-1` and carries `roomRef`,
     the readings inside stay `shrink-0` under `contentRef`, and there is no

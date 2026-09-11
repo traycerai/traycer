@@ -1,8 +1,9 @@
 import { useCallback, useRef, useState, type ReactNode } from "react";
+import { classifyProviderRateLimitWindow } from "@traycer/protocol/host/rate-limit";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
 import { SettingsSegmentedControl } from "@/components/settings/controls/settings-segmented-control";
 import {
-  useStatusBarDensity,
+  statusBarDensityForWidth,
   type StatusBarDensity,
 } from "@/components/layout/status-bar/status-bar-density";
 import { StatusBarResourceSegment } from "@/components/layout/status-bar/status-bar-resource-segment";
@@ -28,8 +29,13 @@ import { useRateLimitProfileSelection } from "@/hooks/rate-limits/use-rate-limit
 import {
   useStatusBarRateLimitSegments,
   useStatusBarWindowedProviders,
+  type StatusBarProviderSegmentModel,
   type StatusBarRateLimitCluster,
+  type StatusBarRateLimitWindow,
 } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
+import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
+import type { RateLimitWindowKind } from "@/lib/rate-limits/rate-limit-window-catalog";
+import { useSampledNow } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import { useLayoutStore } from "@/stores/settings/layout-store";
@@ -39,24 +45,42 @@ import { useLayoutStore } from "@/stores/settings/layout-store";
  * a way of LOOKING at the strip, not a preference about it, and a persisted
  * copy would outlive the question it was asked for.
  *
- * The three options are the strip's three DENSITY RUNGS rather than three
- * arbitrary widths, which is why the frame's own chrome does not spoil them:
- * the strip's thresholds are `< 500` icon-only and `< 900` compact, and the
- * frame's border takes 2px off whatever it is capped at - so 480 measures 478
- * (`icon-only`), 900 measures 898 (`compact`), and only the uncapped option
- * can measure past 900 and reach `full`.
+ * Each option is a NOMINAL width, and the frame is drawn at exactly that width
+ * whenever the settings pane has room for it. That is what makes the control
+ * mean what it says. Density (`statusBarDensityForWidth`) is read from the
+ * nominal width, never from the frame's measured box: inside the Settings
+ * modal that box is `min(pane, 1024) − chrome`, which is `compact` on any
+ * window under ~1560px, and at the `compact` ceiling the ladder drops the mode
+ * word, the mini bar and the countdown whatever the store says. A preview
+ * measuring itself there answered "these switches do nothing" to the first
+ * three switches a user tries - in the modal only, since the promoted tab has
+ * less padding and reached `full`.
  *
- * `wide` is therefore the default. At `compact` the ladder ceiling is
- * `no-timers`, where the mode word, the mini bar and the countdown are all off
- * whatever the store says - so a preview that opened there would answer "these
- * switches do nothing" to the first three switches a user tries.
+ * The three widths sit inside the strip's three density bands (`< 500`
+ * icon-only, `< 900` compact, else full): 480 is a narrow window, 880 a normal
+ * one just short of `full`, 920 a wide one. Wide is 920 rather than a number
+ * that looks wide, because every Settings surface caps at `max-w-5xl` and
+ * leaves the frame ~944px at most: a nominal the pane can never draw would put
+ * the resource cluster off the right edge at the DEFAULT width, which is the
+ * reported bug moved one cluster over. `wide` is the default, so the first
+ * thing a reader sees is every switch doing something.
  */
 export type StatusBarPreviewWidth = "narrow" | "normal" | "wide";
 
-const PREVIEW_WIDTH_CLASS: Record<StatusBarPreviewWidth, string> = {
-  narrow: "max-w-[480px]",
-  normal: "max-w-[900px]",
-  wide: "max-w-full",
+interface StatusBarPreviewWidthOption {
+  /** The width the strip is drawn at, and the one its density is read from. */
+  readonly widthPx: number;
+  /** `widthPx` as the frame's class. A pair, so the two cannot drift. */
+  readonly frameClass: string;
+}
+
+const PREVIEW_WIDTHS: Record<
+  StatusBarPreviewWidth,
+  StatusBarPreviewWidthOption
+> = {
+  narrow: { widthPx: 480, frameClass: "w-[480px]" },
+  normal: { widthPx: 880, frameClass: "w-[880px]" },
+  wide: { widthPx: 920, frameClass: "w-[920px]" },
 };
 
 /**
@@ -87,11 +111,22 @@ const PREVIEW_WIDTH_CLASS: Record<StatusBarPreviewWidth, string> = {
  *   cannot print); only `useGlobalResourcesPreCheckUnsupported` answers for the
  *   ambient host, and it only chooses which sentence a DASHED metric gets.
  *
- * That also makes it honest rather than idealised: a provider with no reading
- * yet renders its cold track here, an account with none renders the strip's
- * "connect a provider" line, and with no global resource stream mounted the
- * resource segment renders its dashes. A preview that fetched to fill those in
- * would be showing a strip the user does not have.
+ * That also makes it honest rather than idealised: an account with no provider
+ * renders the strip's "connect a provider" line, and with no global resource
+ * stream mounted the resource segment renders its dashes. A preview that
+ * fetched to fill those in would be showing a strip the user does not have.
+ *
+ * The one place it draws numbers the host has not reported is a cluster with
+ * NO reading in it at all, where the providers that have none are COLD - which
+ * is the steady state under `header` placement for the http-lane providers
+ * nothing but the popover ever fetches. A cold segment is an icon over an
+ * empty track and ignores every switch on this page, so a preview of nothing
+ * but cold tracks is a preview of nothing. It gives the first two cold
+ * providers a fixed SAMPLE reading instead, says so in a caption, and still
+ * fetches nothing. An `unavailable` provider is not touched: it has ANSWERED
+ * that it cannot report usage, so a percentage over it would be a stronger
+ * invention than the cold case and the caption's own sentence would be false
+ * for it.
  */
 export function StatusBarPreview(props: {
   readonly scope: HostScope;
@@ -108,10 +143,16 @@ export function StatusBarPreview(props: {
   const narrowViewport = useIsMobileViewport();
   const stripDrawn = placement === "status-bar" && !narrowViewport;
   const { sentinelRef, stickyRef } = useStuckAttribute();
-  const stripRef = useRef<HTMLDivElement | null>(null);
-  const density = useStatusBarDensity(stripRef);
+  const widthOption = PREVIEW_WIDTHS[width];
+  const density = statusBarDensityForWidth(widthOption.widthPx);
   const display = useStatusBarUsageDisplay();
-  const cluster = usePreviewCluster();
+  const liveCluster = usePreviewCluster();
+  // The same 60s clock the countdowns read, so the sample's reset instants are
+  // always the same distance from the `now` they are formatted against and the
+  // sample never ticks.
+  const now = useSampledNow();
+  const sample = statusBarPreviewSample(liveCluster, now);
+  const cluster = sample?.cluster ?? liveCluster;
   const segments = statusBarClusterSegments(cluster);
   // Stepped HERE rather than inside the frame, because both halves of the
   // preview need the verdict: the frame draws the rung, and the notes outside
@@ -213,15 +254,26 @@ export function StatusBarPreview(props: {
           keeps a screen reader from reading the strip's contents a second time
           under a control that does nothing. What those tooltips would have
           said is in the caption below instead - see `StatusBarPreviewNotes`.
+
+          The frame is the SIMULATED VIEWPORT, so the option's width is on it:
+          the border hugs the strip the control named, and `max-w-full` is what
+          keeps that honest. Every Settings surface caps at `max-w-5xl`, so the
+          box this sits in is at most ~944px wide however large the window is -
+          a frame drawn wider than that would push the resource cluster off the
+          right edge with nothing on screen saying so, which is the reported
+          bug again one cluster to the right. Capped, the drawn strip is
+          narrower than the nominal width on a small pane and the ladder folds
+          against the room it can actually see.
         */}
         <div
           inert
           aria-hidden
           data-testid="status-bar-preview-frame"
           data-preview-width={width}
+          data-preview-density={density}
           className={cn(
-            "w-full overflow-hidden rounded-md border border-border/70 bg-canvas text-canvas-foreground",
-            PREVIEW_WIDTH_CLASS[width],
+            "max-w-full overflow-hidden rounded-md border border-border/70 bg-canvas text-canvas-foreground",
+            widthOption.frameClass,
             // Greyed, not hidden: wherever the strip is not the surface currently
             // drawn - header placement, or a window too narrow for it - these
             // settings still describe a real strip, and a preview that vanished
@@ -230,12 +282,11 @@ export function StatusBarPreview(props: {
           )}
         >
           {/*
-            The measured box, and the counterpart of the strip's own outer div:
-            density is a fact about how much room the bar HAS, so it is read
-            from the box the padding sits inside rather than from the padded row
-            - exactly where `AppStatusBar` reads it.
+            The counterpart of the strip's own outer div, and no longer a
+            measured one: density is a fact about the width the control named,
+            and what the ladder measures is the usage slot inside this box.
           */}
-          <div ref={stripRef} data-testid="status-bar-preview">
+          <div data-testid="status-bar-preview">
             <StatusBarPreviewStrip
               density={density}
               scope={props.scope}
@@ -246,6 +297,14 @@ export function StatusBarPreview(props: {
             />
           </div>
         </div>
+        {sample === null ? null : (
+          <p
+            data-testid="status-bar-preview-sample-note"
+            className={cn(NOTE_CLASS, !stripDrawn && "opacity-50")}
+          >
+            {SAMPLE_READINGS_CAPTION}
+          </p>
+        )}
         {/*
           Dimmed with the frame whenever the frame is, for the same reason it
           is: they explain a strip that is not the one currently drawn, and
@@ -256,7 +315,9 @@ export function StatusBarPreview(props: {
           density={density}
           scope={props.scope}
           hasExplicitPick={props.hasExplicitPick}
-          cluster={cluster}
+          liveCluster={liveCluster}
+          drawnCluster={cluster}
+          sampledProviderIds={sample?.providerIds ?? NO_SAMPLED_PROVIDERS}
           display={display}
           stop={ladder.stop}
           dimmed={!stripDrawn}
@@ -334,10 +395,10 @@ function useStuckAttribute(): StuckAttribute {
 /**
  * The strip itself, at the same `h-6` and with the same two clusters.
  *
- * Density is measured from THIS box rather than from the window, which is what
- * makes the width control mean something: the ladder answers the same question
- * it answers in the real strip - "does what I am holding fit the room I have" -
- * against a container the user just resized.
+ * Its density arrives as a prop, read from the width the control named; what
+ * the ladder measures is the usage slot inside THIS box, so it answers the
+ * same question it answers in the real strip - "does what I am holding fit the
+ * room I have" - against the room a strip that wide would actually have.
  */
 function StatusBarPreviewStrip(props: {
   readonly density: StatusBarDensity;
@@ -456,7 +517,12 @@ function StatusBarPreviewNotes(props: {
   readonly density: StatusBarDensity;
   readonly scope: HostScope;
   readonly hasExplicitPick: boolean;
-  readonly cluster: StatusBarRateLimitCluster;
+  /** The host's own cluster - the one whose readings need explaining. */
+  readonly liveCluster: StatusBarRateLimitCluster;
+  /** The cluster in the frame, which the sample may have stood in for. */
+  readonly drawnCluster: StatusBarRateLimitCluster;
+  /** The providers whose reading in the frame is invented. Usually empty. */
+  readonly sampledProviderIds: ReadonlyArray<RateLimitProviderId>;
   readonly display: StatusBarUsageDisplay;
   /** The rung the frame settled on, and with it which providers it folded. */
   readonly stop: StatusBarUsageStop;
@@ -473,7 +539,13 @@ function StatusBarPreviewNotes(props: {
     (state) => state.statusBar.resources.enabled,
   );
   const usageNotes = rateLimitsEnabled
-    ? statusBarPreviewUsageNotes(props.cluster, props.stop, props.display)
+    ? statusBarPreviewUsageNotes({
+        liveCluster: props.liveCluster,
+        drawnCluster: props.drawnCluster,
+        sampledProviderIds: props.sampledProviderIds,
+        stop: props.stop,
+        display: props.display,
+      })
     : NO_NOTES;
   return (
     <>
@@ -507,22 +579,52 @@ function StatusBarPreviewNotes(props: {
  * no way to see which two is at its worst at the Narrow width, which is the one
  * width a reader picks precisely to find out what folds - and it is built from
  * the chip's own `providerReadingText`, so the two can never disagree.
+ *
+ * Two clusters because they can differ: the first half explains the HOST's
+ * readings, which are still cold or unavailable while the sample stands in for
+ * them, and the fold is a property of whatever the frame is actually drawing.
+ *
+ * A provider the sample spoke for is left out of the first half: the caption
+ * above already says those readings were never fetched, and `Codex · no
+ * reading yet` under a frame showing `57% used` reads as the two disagreeing.
+ * A provider the sample did NOT speak for keeps its line - an `unavailable`
+ * one is drawing its own dash in there, and that dash is what the line
+ * explains.
  */
-function statusBarPreviewUsageNotes(
-  cluster: StatusBarRateLimitCluster,
-  stop: StatusBarUsageStop,
-  display: StatusBarUsageDisplay,
-): ReadonlyArray<string> {
-  const segments = statusBarClusterSegments(cluster);
-  const notes = segments
-    .filter((segment) => segment.state !== "live")
+function statusBarPreviewUsageNotes(input: {
+  readonly liveCluster: StatusBarRateLimitCluster;
+  readonly drawnCluster: StatusBarRateLimitCluster;
+  readonly sampledProviderIds: ReadonlyArray<RateLimitProviderId>;
+  readonly stop: StatusBarUsageStop;
+  readonly display: StatusBarUsageDisplay;
+}): ReadonlyArray<string> {
+  const notes = statusBarClusterSegments(input.liveCluster)
+    .filter(
+      (segment) =>
+        segment.state !== "live" &&
+        !input.sampledProviderIds.includes(segment.providerId),
+    )
     .map(statusBarSegmentTooltip);
-  if (stop.foldedCount === 0) return notes;
-  const folded = segments
-    .slice(segments.length - stop.foldedCount)
-    .map((segment) => providerReadingText(segment, display.percentMode));
-  return [...notes, `Folded: ${folded.join(", ")}`];
+  if (input.stop.foldedCount === 0) return notes;
+  const drawn = statusBarClusterSegments(input.drawnCluster);
+  const folded = drawn.slice(drawn.length - input.stop.foldedCount);
+  const readings = folded.map((segment) =>
+    providerReadingText(segment, input.display.percentMode),
+  );
+  // Marked when one of the numbers in it is invented, since this line is the
+  // one place a folded reading appears and the caption above it names
+  // providers the fold has just taken off the strip.
+  const sampled = folded.some((segment) =>
+    input.sampledProviderIds.includes(segment.providerId),
+  );
+  return [
+    ...notes,
+    `Folded: ${readings.join(", ")}${sampled ? " (sample)" : ""}`,
+  ];
 }
+
+/** One empty list, for the usual case of a preview drawing real readings. */
+const NO_SAMPLED_PROVIDERS: ReadonlyArray<RateLimitProviderId> = [];
 
 /** One empty list, so a preview with nothing to explain re-renders for nothing. */
 const NO_NOTES: ReadonlyArray<string> = [];
@@ -591,4 +693,129 @@ function usePreviewCluster(): StatusBarRateLimitCluster {
     mode: "passive",
   });
   return cluster;
+}
+
+const SAMPLE_READINGS_CAPTION =
+  "Sample readings — no usage has been fetched for these providers yet. Open the usage panel or switch placement to Status bar for live numbers.";
+
+const MINUTE_MS = 60_000;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
+
+interface StatusBarPreviewSampleReading {
+  readonly usedPercent: number;
+  /** The static name the countdown gives way to when the timer is off. */
+  readonly label: string;
+  readonly kind: RateLimitWindowKind;
+  readonly durationMinutes: number;
+  /**
+   * How far from `now` the reset sits. Half a bucket past the figure it is
+   * meant to print, so the countdown lands on that figure exactly rather than
+   * one minute under it.
+   */
+  readonly resetsInMs: number;
+}
+
+/**
+ * Two readings that look like readings: a session window part-way through and
+ * a weekly one further along, so the mode word, the bar, the countdown and the
+ * Used/Remaining flip all have something to change.
+ */
+const SAMPLE_READINGS: ReadonlyArray<StatusBarPreviewSampleReading> = [
+  {
+    usedPercent: 57,
+    label: "5h",
+    kind: "session",
+    durationMinutes: 5 * 60,
+    resetsInMs: 4 * HOUR_MS + 15 * MINUTE_MS + 30_000,
+  },
+  {
+    usedPercent: 82,
+    label: "wk",
+    kind: "weekly",
+    durationMinutes: 7 * 24 * 60,
+    resetsInMs: 2 * DAY_MS + 12 * HOUR_MS,
+  },
+];
+
+/** The frame's cluster while the sample is speaking, and who it spoke for. */
+interface StatusBarPreviewSample {
+  readonly cluster: StatusBarRateLimitCluster;
+  readonly providerIds: ReadonlyArray<RateLimitProviderId>;
+}
+
+/**
+ * The sample, or `null` when the host's own readings are worth drawing.
+ *
+ * Two conditions, and both are narrow on purpose. Nothing in the cluster may
+ * be `live` or `degraded`: one real number is a number, and a preview that put
+ * invented ones beside it would be indistinguishable from the strip having
+ * fetched them. And something in it must be `cold` - a cluster of nothing but
+ * `unavailable` providers is a cluster of providers that ANSWERED, and the
+ * caption's "no usage has been fetched" would be false for every one of them.
+ *
+ * Every segment is kept and every one stays in the strip's own order: the
+ * substitution walks the cluster rather than the readings, so the provider
+ * count, the icon set, each provider's own switches and the `+N` fold's
+ * arithmetic are the ones the strip would have. `SAMPLE_READINGS` runs out
+ * after two, and the cold providers past them keep their cold track - two
+ * invented numbers are enough to answer every switch on this page, and a
+ * strip of six identical ones would look like data.
+ */
+function statusBarPreviewSample(
+  cluster: StatusBarRateLimitCluster,
+  now: number,
+): StatusBarPreviewSample | null {
+  if (cluster.kind !== "segments") return null;
+  const hasReading = cluster.segments.some(
+    (segment) => segment.state === "live" || segment.state === "degraded",
+  );
+  if (hasReading) return null;
+  if (!cluster.segments.some((segment) => segment.state === "cold")) {
+    return null;
+  }
+  // Resolved as a list first, then applied: one segment per provider, so the
+  // position of a provider in this list is also which reading it gets, and the
+  // notes below need the same list to know whose line the caption now covers.
+  const providerIds = cluster.segments
+    .filter((segment) => segment.state === "cold")
+    .slice(0, SAMPLE_READINGS.length)
+    .map((segment) => segment.providerId);
+  const segments = cluster.segments.map((segment) => {
+    const index = providerIds.indexOf(segment.providerId);
+    return index === -1
+      ? segment
+      : sampleSegment(segment.providerId, SAMPLE_READINGS[index], now);
+  });
+  return { cluster: { kind: "segments", segments }, providerIds };
+}
+
+function sampleSegment(
+  providerId: RateLimitProviderId,
+  reading: StatusBarPreviewSampleReading,
+  now: number,
+): StatusBarProviderSegmentModel {
+  const resetsAt = now + reading.resetsInMs;
+  const window: StatusBarRateLimitWindow = {
+    windowKey: `${providerId}:sample`,
+    label: reading.label,
+    labelIsDuration: true,
+    kind: reading.kind,
+    usedPercent: reading.usedPercent,
+    resetsAt,
+    // The strip's own classifier over the same three numbers, so the sample
+    // is tinted exactly as a real reading of that size would be.
+    severity: classifyProviderRateLimitWindow({
+      usedPercent: reading.usedPercent,
+      resetsAt,
+      durationMinutes: reading.durationMinutes,
+    }),
+  };
+  return {
+    providerId,
+    state: "live",
+    reason: null,
+    windows: [window],
+    tightest: window,
+  };
 }

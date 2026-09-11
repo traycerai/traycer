@@ -523,8 +523,14 @@ describe("<StatusBarPreview />", () => {
     });
 
     it("names a provider whose reading is not live, and stops once it is", () => {
-      mocks.providers = [configuredProvider("codex", "ephemeralProcess")];
-      mocks.envelopes = {};
+      // A live sibling, so the cluster has a real reading in it and the sample
+      // stays out of the way - a cluster with NO reading is the sample's case
+      // and it speaks for those providers in one caption instead.
+      mocks.providers = [
+        configuredProvider("codex", "ephemeralProcess"),
+        configuredProvider("claude-code", "ephemeralProcess"),
+      ];
+      mocks.envelopes = { "claude-code": envelopeFor(claudeRateLimits(22)) };
 
       const { rerender } = render(
         <StatusBarPreview
@@ -538,6 +544,7 @@ describe("<StatusBarPreview />", () => {
       ).toContain("Codex · no reading yet");
 
       mocks.envelopes = {
+        "claude-code": envelopeFor(claudeRateLimits(22)),
         codex: envelopeFor(
           codexRateLimits({
             usedPercent: 40,
@@ -609,34 +616,125 @@ describe("<StatusBarPreview />", () => {
   });
 
   describe("width control", () => {
-    it("defaults to Wide - the only option that can measure past the compact threshold", () => {
-      // Wide rather than Normal because `max-w-[900px]` minus the frame's
-      // border and padding measures 882, which is `compact`, whose ladder
-      // ceiling drops the mode word, the mini bar and the countdown whatever
-      // the store says. Opening there would answer "this does nothing" to the
-      // first three Display switches a user tries.
+    it("defaults to Wide, the one option whose ceiling lets every Display switch show", () => {
+      // At the `compact` ceiling the ladder drops the mode word, the mini bar
+      // and the countdown whatever the store says, so opening at Normal would
+      // answer "this does nothing" to the first three Display switches a user
+      // tries.
       renderPreview(false);
       const frame = screen.getByTestId("status-bar-preview-frame");
 
       expect(frame.getAttribute("data-preview-width")).toBe("wide");
-      expect(frame.className).toContain("max-w-full");
+      expect(frame.getAttribute("data-preview-density")).toBe("full");
+      expect(frame.className).toContain("w-[920px]");
     });
 
-    it("changes data-preview-width and the applied max-width class", () => {
+    it("draws the frame at the option's nominal width, capped at the pane it sits in", () => {
       renderPreview(false);
       const frame = () => screen.getByTestId("status-bar-preview-frame");
 
+      // Every Settings surface caps at `max-w-5xl`, leaving this box ~944px at
+      // most, so a nominal width is a width to draw UP TO. Uncapped, Wide
+      // would push the resource cluster off the right edge at the default
+      // width, with nothing on screen saying there was more to see.
+      expect(frame().className).toContain("max-w-full");
+      expect(frame().className).toContain("overflow-hidden");
+
       fireEvent.click(screen.getByRole("button", { name: "Narrow" }));
       expect(frame().getAttribute("data-preview-width")).toBe("narrow");
-      expect(frame().className).toContain("max-w-[480px]");
+      expect(frame().className).toContain("w-[480px]");
 
       fireEvent.click(screen.getByRole("button", { name: "Normal" }));
       expect(frame().getAttribute("data-preview-width")).toBe("normal");
-      expect(frame().className).toContain("max-w-[900px]");
+      expect(frame().className).toContain("w-[880px]");
 
       fireEvent.click(screen.getByRole("button", { name: "Wide" }));
       expect(frame().getAttribute("data-preview-width")).toBe("wide");
-      expect(frame().className).toContain("max-w-full");
+      expect(frame().className).toContain("w-[920px]");
+    });
+
+    it("reads density from the nominal width and never from the frame's measured box", () => {
+      // The bug this guards: inside the Settings modal the frame measures
+      // `min(pane, 1024) − chrome`, which is `compact` on any window under
+      // ~1560px, and a preview measuring itself there could never reach the
+      // rung at which the three Display switches do anything. No observer is
+      // delivered here at all - the density has to come from the control.
+      const resetsAt = Date.now() + (4 * 60 + 15) * 60_000 + 5_000;
+      mocks.providers = [configuredProvider("codex", "ephemeralProcess")];
+      mocks.envelopes = {
+        codex: envelopeFor(
+          codexRateLimits({ usedPercent: 40, resetsAt, durationMinutes: 300 }),
+        ),
+      };
+
+      renderPreview(false);
+      const frame = () => screen.getByTestId("status-bar-preview-frame");
+      const strip = screen.getByTestId("status-bar-preview");
+      expect(
+        resizeObserverInstances.some((instance) =>
+          instance.observed.has(strip),
+        ),
+      ).toBe(false);
+
+      expect(frame().getAttribute("data-preview-density")).toBe("full");
+      expect(windowText("codex:primary")).toBe("40% used 4h 15m");
+      expect(screen.getByTestId("status-bar-provider-mini-bar")).toBeTruthy();
+
+      // `compact` caps the ladder at `no-timers`: mode word, bar and countdown
+      // all go, with the store still asking for all three.
+      fireEvent.click(screen.getByRole("button", { name: "Normal" }));
+      expect(frame().getAttribute("data-preview-density")).toBe("compact");
+      expect(windowText("codex:primary")).toBe("40% 5h");
+      expect(screen.queryByTestId("status-bar-provider-mini-bar")).toBeNull();
+
+      // `icon-only`: the icon alone, still without a single resize delivered.
+      fireEvent.click(screen.getByRole("button", { name: "Narrow" }));
+      expect(frame().getAttribute("data-preview-density")).toBe("icon-only");
+      expect(
+        screen.getByTestId("status-bar-provider-segment-codex"),
+      ).toBeTruthy();
+      expect(
+        screen.queryByTestId("status-bar-window-codex:primary"),
+      ).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "Wide" }));
+      expect(frame().getAttribute("data-preview-density")).toBe("full");
+      expect(windowText("codex:primary")).toBe("40% used 4h 15m");
+    });
+
+    it("at Wide, each of the three Display switches changes the rendered reading", () => {
+      const resetsAt = Date.now() + (4 * 60 + 15) * 60_000 + 5_000;
+      mocks.providers = [configuredProvider("codex", "ephemeralProcess")];
+      mocks.envelopes = {
+        codex: envelopeFor(
+          codexRateLimits({ usedPercent: 40, resetsAt, durationMinutes: 300 }),
+        ),
+      };
+
+      renderPreview(false);
+      fireEvent.click(screen.getByRole("button", { name: "Wide" }));
+      expect(windowText("codex:primary")).toBe("40% used 4h 15m");
+
+      act(() => {
+        useLayoutStore.getState().setStatusBarShowModeWord(false);
+      });
+      expect(windowText("codex:primary")).toBe("40% 4h 15m");
+
+      expect(screen.getByTestId("status-bar-provider-mini-bar")).toBeTruthy();
+      act(() => {
+        useLayoutStore.getState().setStatusBarShowBar(false);
+      });
+      expect(screen.queryByTestId("status-bar-provider-mini-bar")).toBeNull();
+
+      act(() => {
+        useLayoutStore.getState().setStatusBarShowTimer(false);
+      });
+      expect(windowText("codex:primary")).toBe("40% 5h");
+
+      act(() => {
+        useLayoutStore.getState().setStatusBarPercentMode("remaining");
+      });
+      expect(windowText("codex:primary")).toBe("60% 5h");
     });
   });
 
@@ -651,13 +749,232 @@ describe("<StatusBarPreview />", () => {
       ).toBeTruthy();
     });
 
-    it("renders the cold track for a configured provider with no envelope yet", () => {
-      mocks.providers = [configuredProvider("codex", "ephemeralProcess")];
+    it("keeps a cold provider's track beside a live one", () => {
+      // One real reading is enough to draw the host's own cluster: invented
+      // numbers beside a real one would be indistinguishable from the strip
+      // having fetched them.
+      mocks.providers = [
+        configuredProvider("codex", "ephemeralProcess"),
+        configuredProvider("opencode", "httpFetch"),
+      ];
+      mocks.envelopes = {
+        codex: envelopeFor(
+          codexRateLimits({
+            usedPercent: 40,
+            resetsAt: null,
+            durationMinutes: 300,
+          }),
+        ),
+      };
+
+      renderPreview(false);
+
+      expect(windowText("codex:primary")).toBe("40% used 5h");
+      expect(screen.getByTestId("status-bar-provider-cold-track")).toBeTruthy();
+      expect(screen.queryByTestId("status-bar-preview-sample-note")).toBeNull();
+    });
+  });
+
+  describe("sample readings", () => {
+    const SAMPLE_CAPTION =
+      "Sample readings — no usage has been fetched for these providers yet. Open the usage panel or switch placement to Status bar for live numbers.";
+
+    it("stands two fixed readings in for a cluster with no reading in it, on the account's own providers, without fetching", () => {
+      // The steady state under `header` placement for an http-lane provider:
+      // nothing but the popover ever fetches it, so the preview would show an
+      // icon over an empty track that ignores every switch on the page.
+      mocks.providers = [
+        configuredProvider("codex", "ephemeralProcess"),
+        configuredProvider("opencode", "httpFetch"),
+      ];
       mocks.envelopes = {};
 
       renderPreview(false);
 
+      expect(windowText("codex:sample")).toBe("57% used 4h 15m");
+      expect(windowText("opencode:sample")).toBe("82% used 2d");
+      expect(screen.queryByTestId("status-bar-provider-cold-track")).toBeNull();
+      const note = screen.getByTestId("status-bar-preview-sample-note");
+      expect(note.textContent).toBe(SAMPLE_CAPTION);
+      expect(
+        screen.getByTestId("status-bar-preview-frame").contains(note),
+      ).toBe(false);
+      // The caption speaks for both, so the per-provider "no reading yet"
+      // lines would only contradict the frame above them.
+      expect(screen.queryByTestId("status-bar-preview-notes")).toBeNull();
+      // Still a passive reader: the sample is drawn, never fetched.
+      expect(mocks.recordedEnabled.some((enabled) => enabled)).toBe(false);
+    });
+
+    it("keeps every provider past the second, on its own cold track", () => {
+      // The substitution walks the CLUSTER, not the two readings: provider
+      // count, icon set, order and the `+N` fold's arithmetic all have to be
+      // the ones the strip would have.
+      mocks.providers = [
+        configuredProvider("claude-code", "ephemeralProcess"),
+        configuredProvider("codex", "ephemeralProcess"),
+        configuredProvider("opencode", "httpFetch"),
+      ];
+      mocks.envelopes = {};
+
+      renderPreview(false);
+
+      // Strip order (`PROVIDER_ID_ORDER`), not fixture order: codex, then
+      // claude-code, then opencode.
+      expect(windowText("codex:sample")).toBe("57% used 4h 15m");
+      expect(windowText("claude-code:sample")).toBe("82% used 2d");
+      expect(
+        screen.getByTestId("status-bar-provider-segment-opencode"),
+      ).toBeTruthy();
+      expect(
+        screen.queryByTestId("status-bar-window-opencode:sample"),
+      ).toBeNull();
       expect(screen.getByTestId("status-bar-provider-cold-track")).toBeTruthy();
+      // The third provider still has a reading nobody fetched, and the caption
+      // does not speak for it.
+      expect(
+        screen.getByTestId("status-bar-preview-notes").textContent,
+      ).toContain("OpenCode · no reading yet");
+    });
+
+    it("answers every Display switch, which a cold track never could", () => {
+      mocks.providers = [configuredProvider("opencode", "httpFetch")];
+      mocks.envelopes = {};
+
+      renderPreview(false);
+      expect(windowText("opencode:sample")).toBe("57% used 4h 15m");
+      expect(screen.getByTestId("status-bar-provider-mini-bar")).toBeTruthy();
+
+      act(() => {
+        useLayoutStore.getState().setStatusBarShowModeWord(false);
+      });
+      expect(windowText("opencode:sample")).toBe("57% 4h 15m");
+
+      act(() => {
+        useLayoutStore.getState().setStatusBarShowBar(false);
+      });
+      expect(screen.queryByTestId("status-bar-provider-mini-bar")).toBeNull();
+
+      act(() => {
+        useLayoutStore.getState().setStatusBarShowTimer(false);
+      });
+      expect(windowText("opencode:sample")).toBe("57% 5h");
+
+      act(() => {
+        useLayoutStore.getState().setStatusBarPercentMode("remaining");
+      });
+      expect(windowText("opencode:sample")).toBe("43% 5h");
+    });
+
+    it("leaves an unavailable provider alone: it has answered, and the caption would be false for it", () => {
+      // Three surfaces would otherwise disagree about one provider in one
+      // viewport - the frame saying `57% used`, the caption saying nothing has
+      // been fetched, and the note saying the CLI was not found.
+      mocks.providers = [configuredProvider("codex", "ephemeralProcess")];
+      mocks.envelopes = {
+        codex: envelopeFor({
+          provider: "codex",
+          available: false,
+          reason: "cli_not_found",
+        }),
+      };
+
+      renderPreview(false);
+
+      expect(screen.queryByTestId("status-bar-window-codex:sample")).toBeNull();
+      expect(
+        screen.getByTestId("status-bar-provider-unavailable"),
+      ).toBeTruthy();
+      expect(screen.queryByTestId("status-bar-preview-sample-note")).toBeNull();
+      expect(
+        screen.getByTestId("status-bar-preview-notes").textContent,
+      ).toContain("Codex · the CLI isn't installed");
+    });
+
+    it("samples the cold provider beside an unavailable one, and keeps only the unavailable one's note", () => {
+      mocks.providers = [
+        configuredProvider("codex", "ephemeralProcess"),
+        configuredProvider("opencode", "httpFetch"),
+      ];
+      mocks.envelopes = {
+        codex: envelopeFor({
+          provider: "codex",
+          available: false,
+          reason: "cli_not_found",
+        }),
+      };
+
+      renderPreview(false);
+
+      expect(screen.queryByTestId("status-bar-window-codex:sample")).toBeNull();
+      expect(
+        screen.getByTestId("status-bar-provider-unavailable"),
+      ).toBeTruthy();
+      // The cold one takes the FIRST reading: the readings are handed out over
+      // the cold providers, not over every segment.
+      expect(windowText("opencode:sample")).toBe("57% used 4h 15m");
+      expect(screen.getByTestId("status-bar-preview-sample-note")).toBeTruthy();
+      const notes = screen.getByTestId("status-bar-preview-notes").textContent;
+      expect(notes).toContain("Codex · the CLI isn't installed");
+      expect(notes).not.toContain("OpenCode");
+    });
+
+    it("gives way the moment a reading arrives", () => {
+      mocks.providers = [configuredProvider("codex", "ephemeralProcess")];
+      mocks.envelopes = {};
+
+      const { rerender } = render(
+        <StatusBarPreview
+          scope={hostScopeFixture({})}
+          hasExplicitPick={false}
+        />,
+      );
+
+      expect(windowText("codex:sample")).toBe("57% used 4h 15m");
+      expect(screen.getByTestId("status-bar-preview-sample-note")).toBeTruthy();
+
+      mocks.envelopes = {
+        codex: envelopeFor(
+          codexRateLimits({
+            usedPercent: 40,
+            resetsAt: null,
+            durationMinutes: 300,
+          }),
+        ),
+      };
+      rerender(
+        <StatusBarPreview
+          scope={hostScopeFixture({})}
+          hasExplicitPick={false}
+        />,
+      );
+
+      expect(screen.queryByTestId("status-bar-window-codex:sample")).toBeNull();
+      expect(windowText("codex:primary")).toBe("40% used 5h");
+      expect(screen.queryByTestId("status-bar-preview-sample-note")).toBeNull();
+    });
+
+    it("still collapses at Narrow", () => {
+      mocks.providers = [configuredProvider("codex", "ephemeralProcess")];
+      mocks.envelopes = {};
+
+      renderPreview(false);
+      // Rendered first, so "collapsed" can be told apart from "never drawn" -
+      // an absence assertion alone passes on a tree with no sample at all.
+      expect(windowText("codex:sample")).toBe("57% used 4h 15m");
+
+      fireEvent.click(screen.getByRole("button", { name: "Narrow" }));
+
+      expect(
+        screen
+          .getByTestId("status-bar-preview-frame")
+          .getAttribute("data-preview-density"),
+      ).toBe("icon-only");
+      expect(
+        screen.getByTestId("status-bar-provider-segment-codex"),
+      ).toBeTruthy();
+      expect(screen.queryByTestId("status-bar-window-codex:sample")).toBeNull();
+      expect(screen.getByTestId("status-bar-preview-sample-note")).toBeTruthy();
     });
   });
 
@@ -928,6 +1245,29 @@ describe("<StatusBarPreview /> folded providers", () => {
       false,
     );
   });
+
+  it("marks the folded line as a sample when the number in it is an invented one", () => {
+    // The fold takes the sampled provider off the strip, so this line is the
+    // only place its reading still appears - and the caption that explains the
+    // invention is above a strip that no longer shows it.
+    mocks.providers = [
+      configuredProvider("codex", "ephemeralProcess"),
+      configuredProvider("claude-code", "ephemeralProcess"),
+    ];
+    mocks.envelopes = {};
+
+    renderPreview(false);
+    for (let index = 0; index < 8; index += 1) {
+      fireRoomResize();
+    }
+
+    expect(screen.getByTestId("status-bar-folded-providers").textContent).toBe(
+      "+1",
+    );
+    expect(
+      screen.getByTestId("status-bar-preview-notes").textContent,
+    ).toContain("Folded: Claude Code 82% used (sample)");
+  });
 });
 
 /**
@@ -941,8 +1281,11 @@ describe("<StatusBarPreview /> folded providers", () => {
  * and the recorded width can never be beaten, so Narrow is a one-way trip and
  * the preview stays collapsed until Settings is closed and reopened.
  *
- * Density is deliberately NOT driven here (its own observer is left idle), so
- * the ceiling stays `full` and what the rungs answer to is the ROOM.
+ * The option sets BOTH the ceiling and the room here, as it does in the
+ * preview, and the test asserts them separately: Narrow lands on `icon-only`
+ * from the ceiling alone, before any measurement is delivered, and only then
+ * does the room fold a provider away - the one step the ceiling can never
+ * take, and the one the return leg has to give back.
  */
 describe("<StatusBarPreview /> ladder - coupled layout", () => {
   const ROOM_TESTID = "status-bar-preview-usage";
@@ -976,29 +1319,29 @@ describe("<StatusBarPreview /> ladder - coupled layout", () => {
     return typeof value === "number" ? value : 0;
   }
 
-  /** What each width option leaves the room, once the frame's chrome is off. */
+  /** What each option's frame leaves the room, once the row's padding is off. */
   const ROOM_WIDTH_PX: Record<string, number> = {
-    narrow: 478,
-    normal: 898,
-    wide: 5000,
+    narrow: 464,
+    normal: 864,
+    wide: 904,
   };
 
   /**
-   * A stand-in for real text metrics: how wide one provider's reading is at
+   * A stand-in for real text metrics: how wide two providers' readings are at
    * each rung. Not calibrated to any font - only the ORDERING is load-bearing,
-   * with one exception. `percent-only` sits between the Narrow room (478) and
-   * what the ladder actually measures against it (478 − 24), so it is the rung
+   * with one exception. `icon-only` sits between the Narrow room (464) and
+   * what the ladder actually measures against it (464 − 24), so it is the rung
    * that can tell the reserved box apart from nothing at all: drop the
-   * placeholder and this width fits, and the preview keeps a rung the strip has
-   * already given up.
+   * placeholder and this width fits, and the preview keeps both providers where
+   * the strip has already folded one.
    */
   const DETAIL_CONTENT_WIDTH: Record<string, number> = {
-    full: 900,
-    "no-mode-word": 800,
-    "no-bars": 700,
-    "no-timers": 600,
-    "percent-only": 470,
-    "icon-only": 200,
+    full: 840,
+    "no-mode-word": 760,
+    "no-bars": 690,
+    "no-timers": 620,
+    "percent-only": 500,
+    "icon-only": 450,
   };
 
   function currentDetail(): string | null {
@@ -1087,8 +1430,11 @@ describe("<StatusBarPreview /> ladder - coupled layout", () => {
     }
   }
 
-  it("collapses down the ladder on Narrow and climbs all the way back on Wide", () => {
-    mocks.providers = [configuredProvider("codex", "ephemeralProcess")];
+  it("folds a provider on Narrow and gives it back, all the way up to full, on Wide", () => {
+    mocks.providers = [
+      configuredProvider("codex", "ephemeralProcess"),
+      configuredProvider("claude-code", "ephemeralProcess"),
+    ];
     mocks.envelopes = {
       codex: envelopeFor(
         codexRateLimits({
@@ -1097,26 +1443,45 @@ describe("<StatusBarPreview /> ladder - coupled layout", () => {
           durationMinutes: 300,
         }),
       ),
+      "claude-code": envelopeFor(claudeRateLimits(22)),
     };
 
     renderPreview(false);
     expect(currentDetail()).toBe("full");
+    expect(screen.queryByTestId("status-bar-folded-providers")).toBeNull();
 
-    // `icon-only` rather than `percent-only`, and the 24px reserved box is the
-    // whole difference: 470 fits the Narrow room and does not fit the room less
-    // the box the strip's `↻` occupies. A preview that reserved nothing would
-    // stop a rung above the strip, at the one width the control exists to show
-    // what collapses first.
+    // The CEILING half, before a single measurement is delivered: clicking
+    // Narrow puts the ladder on `icon-only` by itself, which is the half a
+    // room stub cannot produce and the half the old measured-frame preview
+    // could never reach inside the modal.
+    fireEvent.click(screen.getByRole("button", { name: "Narrow" }));
+    expect(
+      screen
+        .getByTestId("status-bar-preview-frame")
+        .getAttribute("data-preview-density"),
+    ).toBe("icon-only");
+    expect(currentDetail()).toBe("icon-only");
+    expect(screen.queryByTestId("status-bar-folded-providers")).toBeNull();
+
+    // And the ROOM half: a fold rather than two bare icons, where the 24px
+    // reserved box is the whole difference - 450 fits the Narrow room and does
+    // not fit the room less the box the strip's `↻` occupies. A preview that
+    // reserved nothing would stop a step above the strip, at the one width the
+    // control exists to show what collapses first.
     pickWidth("Narrow");
     expect(currentDetail()).toBe("icon-only");
+    expect(screen.getByTestId("status-bar-folded-providers").textContent).toBe(
+      "+1",
+    );
 
     // The return leg, and the whole point of measuring the room rather than
     // the readings. Against a content-sized room this stays where it is: once
-    // `percent-only` fits, a shrink-to-fit box reports its own 400 forever,
-    // which never beats the 478 recorded on the way down, so the step is never
+    // the fold fits, a shrink-to-fit box reports its own content forever,
+    // which never beats the 440 recorded on the way down, so the step is never
     // given back. Stubbing this block's room width as `Math.min(room,
     // content)` - what such a box really reports - is what makes this fail.
     pickWidth("Wide");
     expect(currentDetail()).toBe("full");
+    expect(screen.queryByTestId("status-bar-folded-providers")).toBeNull();
   });
 });
