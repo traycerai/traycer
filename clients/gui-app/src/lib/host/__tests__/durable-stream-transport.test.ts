@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import type { StreamAuthRevalidator } from "@traycer-clients/shared/auth/bearer-revalidator";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { AvailabilityRecoveryKind } from "@traycer-clients/shared/host-transport/availability-recovery-kind";
 
 // `openDurableStreamTransport` is the single place "durable stream = transport +
 // auth + bearer rotation + wake" is assembled. These tests pin its load-bearing
@@ -50,7 +51,8 @@ const FAKE_TARGET: HostDirectoryEntry = {
 
 function buildParams(closeWs: () => void) {
   const order: string[] = [];
-  let availabilityListener: (() => void) | null = null;
+  let availabilityListener: ((kind: AvailabilityRecoveryKind) => void) | null =
+    null;
   const fakeWs = {
     close: vi.fn(() => {
       order.push("ws");
@@ -59,12 +61,14 @@ function buildParams(closeWs: () => void) {
     reconnectAll: vi.fn(),
     isReady: () => true,
     notifyBearerRotated: vi.fn(),
-    subscribeAvailabilityRecovered: vi.fn((listener: () => void) => {
-      availabilityListener = listener;
-      return () => {
-        availabilityListener = null;
-      };
-    }),
+    subscribeAvailabilityRecovered: vi.fn(
+      (listener: (kind: AvailabilityRecoveryKind) => void) => {
+        availabilityListener = listener;
+        return () => {
+          availabilityListener = null;
+        };
+      },
+    ),
   };
   mocks.buildHostStreamClient.mockReturnValue(fakeWs);
   const notifyRecoveredForNamedHost = vi.fn();
@@ -72,8 +76,8 @@ function buildParams(closeWs: () => void) {
     order,
     fakeWs,
     notifyRecoveredForNamedHost,
-    fireAvailabilityRecovered: (): void => {
-      availabilityListener?.();
+    fireAvailabilityRecovered: (kind: AvailabilityRecoveryKind): void => {
+      availabilityListener?.(kind);
     },
     params: {
       target: FAKE_TARGET,
@@ -200,11 +204,14 @@ describe("openDurableStreamTransport", () => {
     expect(built.fakeWs.subscribeAvailabilityRecovered).toHaveBeenCalledTimes(
       1,
     );
-    built.fireAvailabilityRecovered();
+    built.fireAvailabilityRecovered("stall");
     expect(built.notifyRecoveredForNamedHost).toHaveBeenCalledTimes(1);
+    // The kind is the transport's, passed through: a stall reported as a
+    // reconnect would re-ask every settled read on the host.
+    expect(built.notifyRecoveredForNamedHost).toHaveBeenCalledWith("stall");
 
     transport.close();
-    built.fireAvailabilityRecovered();
+    built.fireAvailabilityRecovered("reconnect");
     expect(built.notifyRecoveredForNamedHost).toHaveBeenCalledTimes(1);
   });
 

@@ -2225,6 +2225,8 @@ describe("WsStreamClient", () => {
     expect(sockets).toHaveLength(2);
     completeHandshake(sockets[1].socket);
     expect(recovered).toHaveBeenCalledTimes(1);
+    // A new socket: the host may have restarted behind it.
+    expect(recovered).toHaveBeenCalledWith("reconnect");
 
     session.close();
     vi.useRealTimers();
@@ -2264,6 +2266,8 @@ describe("WsStreamClient", () => {
     vi.advanceTimersByTime(10_000);
     socket.fireText({ kind: "pong", hasBinaryPayload: false });
     expect(recovered).toHaveBeenCalledTimes(1);
+    // The socket survived, so the same process answered: a stall.
+    expect(recovered).toHaveBeenCalledWith("stall");
     expect(socket.closed).toBeNull();
 
     session.close();
@@ -2341,6 +2345,7 @@ describe("WsStreamClient", () => {
     socket.fireText({ kind: "pong", hasBinaryPayload: false });
 
     expect(recovered).toHaveBeenCalledTimes(1);
+    expect(recovered).toHaveBeenCalledWith("stall");
     expect(socket.closed).toBeNull();
 
     session.close();
@@ -5883,6 +5888,8 @@ describe("WsStreamClient wake probe vs the stale heartbeat deadline", () => {
 
     stub.fireText({ kind: "pong", hasBinaryPayload: false });
     expect(recovered).toHaveBeenCalledTimes(1);
+    // The probe went out on the socket that survived the sleep: a stall.
+    expect(recovered).toHaveBeenCalledWith("stall");
     expect(stub.closed).toBeNull();
 
     // Healthy-cadence pongs after the probe settled stay silent.

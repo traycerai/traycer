@@ -1956,8 +1956,10 @@ describe("RemoteSession availability-recovered evidence", () => {
       const session = buildSession(relay, lease, null);
       const streamClient = new RemoteStreamClient(session, () => null);
       let recoveredEvents = 0;
-      streamClient.subscribeAvailabilityRecovered(() => {
+      const recoveredKinds: string[] = [];
+      streamClient.subscribeAvailabilityRecovered((kind) => {
         recoveredEvents += 1;
+        recoveredKinds.push(kind);
       });
       let closedEvents = 0;
       streamClient.onClosed(() => {
@@ -1973,11 +1975,62 @@ describe("RemoteSession availability-recovered evidence", () => {
 
         relay.dropCurrentConnection();
         await vi.waitFor(() => expect(recoveredEvents).toBe(2), WAIT);
+        // Both are reconnects: each follows a new attach, so the host may
+        // have restarted behind it.
+        expect(recoveredKinds).toEqual(["reconnect", "reconnect"]);
         // The second emission was a reconnect, not a terminal close.
         expect(session.isReady()).toBe(true);
         expect(closedEvents).toBe(0);
         expect(relay.openBearers).toEqual(["valid-token", "valid-token"]);
         expect(relay.errors).toEqual([]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+});
+
+describe("RemoteSession unary in flight at a connection drop", () => {
+  // G4: a recovery sweep no longer re-issues a read whose attempt is still in
+  // flight, which is safe only if an attempt cannot outlive its connection.
+  // The drop has to fail it, where the query layer and the next sweep can see
+  // it, rather than leave it to `UNARY_RESPONSE_TIMEOUT_MS`.
+  it(
+    "rejects a unary still awaiting its response the moment the connection drops",
+    async () => {
+      const relay = new FakeRelayHost();
+      applySilenceFloor(relay, ["worktree.getBinding"]);
+      relay.skipUnaryAutoRespond = true;
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        rpcRegistry: bindingOnlyRegistry(),
+      });
+      try {
+        session.start();
+        await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
+        const settled = sendBindingUnary(session);
+        await vi.waitFor(
+          () => expect(relay.unaryRequests).toHaveLength(1),
+          WAIT,
+        );
+
+        const droppedAt = Date.now();
+        relay.dropCurrentConnection();
+        const error = await settled;
+
+        // Unkeyed, so the outcome is ambiguous and the class says so. What
+        // this pins is WHEN it arrives, and the message says it was the drop
+        // and not the response timeout that ended it.
+        expect(error).toBeInstanceOf(HostTransportFailureError);
+        expect(error).not.toBeInstanceOf(RetryableTransportError);
+        expect(error instanceof Error ? error.message : "").toContain(
+          "dropped before the response arrived",
+        );
+        expect(Date.now() - droppedAt).toBeLessThan(
+          UNARY_RESPONSE_TIMEOUT_MS / 10,
+        );
       } finally {
         session.close();
       }

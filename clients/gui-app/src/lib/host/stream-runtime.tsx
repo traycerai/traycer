@@ -391,9 +391,10 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
   // stalled host would stay errored with no path back, and nothing would
   // fail. `notifyHostAvailabilityRecovered(hostId)` says the same thing about
   // a host the caller can actually name, which here is the host this stream
-  // is heartbeating against. The target member below carries no argument for
-  // the same reason it is now spelled `notifyRecoveredForNamedHost`: the host
-  // is captured in this closure, not read from anywhere.
+  // is heartbeating against. The target member below carries no host argument
+  // for the same reason it is now spelled `notifyRecoveredForNamedHost`: the
+  // host is captured in this closure, not read from anywhere. The kind it does
+  // carry is the transport's, passed through untouched.
   const recoveredHostId = readiness.hostId;
   useEffect(() => {
     if (
@@ -406,8 +407,8 @@ export function HostStreamProvider(props: HostStreamProviderProps): ReactNode {
     return wireAvailabilityRecovery({
       wsStreamClient,
       target: {
-        notifyRecoveredForNamedHost: () => {
-          hostClient.notifyHostAvailabilityRecovered(recoveredHostId);
+        notifyRecoveredForNamedHost: (kind) => {
+          hostClient.notifyHostAvailabilityRecovered(recoveredHostId, kind);
         },
       },
       cooldownMs: AVAILABILITY_RECOVERY_COOLDOWN_MS,

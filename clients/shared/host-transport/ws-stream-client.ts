@@ -78,6 +78,7 @@ import type {
 import type { WebSocketCloseEvent, WebSocketErrorEvent } from "./ws-factory";
 import type { IntervalHandle, TimerHandle } from "./timer-handle";
 import type { ReconnectAllOptions } from "./host-stream-client";
+import type { AvailabilityRecoveryKind } from "./availability-recovery-kind";
 import { backoffFor } from "./backoff";
 
 /**
@@ -422,7 +423,9 @@ export class WsStreamClient<
     string,
     PendingHostCredentialProvision
   >();
-  private readonly availabilityRecoveredListeners = new Set<() => void>();
+  private readonly availabilityRecoveredListeners = new Set<
+    (kind: AvailabilityRecoveryKind) => void
+  >();
   private closed = false;
   private closedReason: string | null = null;
 
@@ -539,8 +542,8 @@ export class WsStreamClient<
       // compatibility abort, so it fires on EVERY state-carrying ack rather
       // than only the ones whose method version also happened to negotiate.
       onHostCredentialState: this.options.onHostCredentialState,
-      onAvailabilityRecovered: () => {
-        this.emitAvailabilityRecovered();
+      onAvailabilityRecovered: (kind) => {
+        this.emitAvailabilityRecovered(kind);
       },
     });
     removeSession = () => {
@@ -748,16 +751,20 @@ export class WsStreamClient<
    * Subscribes to positive evidence that the host endpoint just RECOVERED
    * availability after a period of being unreachable or unresponsive. Fired by
    * any owned session when (a) it re-opens after a drop (its status was
-   * `"reconnecting"` when the handshake completed), or (b) a heartbeat pong
-   * lands after a stall-length gap WITHOUT the socket ever dropping - the
-   * host-event-loop-stall case, where an established stream survives the
-   * 60s pong cutoff while fresh unary dials time out and strand their
-   * queries in a permanent error state. Consumers use this to drive
-   * `HostClient.notifyHostAvailabilityRecovered(hostId)` so those stranded
-   * queries refetch; multiple sessions recovering at once each fire, so
-   * consumers should coalesce.
+   * `"reconnecting"` when the handshake completed), reported as
+   * `"reconnect"`, or (b) a heartbeat pong lands after a stall-length gap
+   * WITHOUT the socket ever dropping - the host-event-loop-stall case, where
+   * an established stream survives the 60s pong cutoff while fresh unary
+   * dials time out and strand their queries in a permanent error state - or
+   * answers a wake probe, both reported as `"stall"`: the socket survived,
+   * so the process answering is the one that answered before. Consumers use
+   * this to drive `HostClient.notifyHostAvailabilityRecovered(hostId, kind)`
+   * so those stranded queries refetch; multiple sessions recovering at once
+   * each fire, so consumers should coalesce.
    */
-  subscribeAvailabilityRecovered(listener: () => void): () => void {
+  subscribeAvailabilityRecovered(
+    listener: (kind: AvailabilityRecoveryKind) => void,
+  ): () => void {
     this.availabilityRecoveredListeners.add(listener);
     return () => {
       this.availabilityRecoveredListeners.delete(listener);
@@ -1120,7 +1127,7 @@ export class WsStreamClient<
     return false;
   }
 
-  private emitAvailabilityRecovered(): void {
+  private emitAvailabilityRecovered(kind: AvailabilityRecoveryKind): void {
     if (this.closed) {
       return;
     }
@@ -1129,7 +1136,7 @@ export class WsStreamClient<
     // the socket's message processing or the other listeners.
     for (const listener of Array.from(this.availabilityRecoveredListeners)) {
       try {
-        listener();
+        listener(kind);
       } catch (error) {
         console.error(
           `[stream] availability-recovered listener threw (client=${this.instanceId})`,
@@ -1500,11 +1507,12 @@ interface StreamSessionOptions<Registry extends VersionedStreamRpcRegistry> {
     | ((hostId: string, state: HostCredentialState) => void)
     | null;
   /**
-   * Reports positive host-recovery evidence to the owning client - see
+   * Reports positive host-recovery evidence to the owning client, with the
+   * kind of edge that produced it - see
    * `WsStreamClient.subscribeAvailabilityRecovered` for the two emission
-   * sites and why they exist.
+   * sites, why they exist, and which kind each reports.
    */
-  readonly onAvailabilityRecovered: () => void;
+  readonly onAvailabilityRecovered: (kind: AvailabilityRecoveryKind) => void;
 }
 
 /**
@@ -2365,7 +2373,12 @@ class StreamSession<
         // once was the client's late ping, not a host outage (see
         // `PONG_GAP_RECOVERY_SLACK_MS`), and a sweep on it refetches queries
         // nothing stranded.
-        this.config.onAvailabilityRecovered();
+        //
+        // Both edges are a `"stall"`: the socket survived, so the process
+        // answering is the one that answered before, and what it already
+        // answered still stands. Only the reads that failed in the gap are
+        // stranded, and the sweep this feeds re-asks only those.
+        this.config.onAvailabilityRecovered("stall");
       } else if (stallLengthGap) {
         console.debug(
           `[stream] pong gap of ${pongGapMs}ms was the client's own late ping (host answered in ${hostAnswerMs ?? -1}ms) - no recovery`,
@@ -2602,7 +2615,10 @@ class StreamSession<
     this.armHealthyDwell();
     this.transitionTo("open", null, null);
     if (recoveredFromUnavailable) {
-      this.config.onAvailabilityRecovered();
+      // A `"reconnect"`: the host may have restarted while this socket was
+      // down, so a read that settled before the drop may describe a process
+      // that is gone.
+      this.config.onAvailabilityRecovered("reconnect");
     }
     // If the bearer rotated DURING the handshake - after the open frame was sent
     // but before we became `subscribed` - that rotation's `notifyBearerRotated`

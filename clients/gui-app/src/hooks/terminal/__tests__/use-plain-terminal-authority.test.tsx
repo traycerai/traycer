@@ -1259,7 +1259,9 @@ describe("usePlainTerminalAuthority integration", () => {
 
     // Renamed to take the host explicitly once the no-arg form (which read
     // the runtime slot) was removed with it (redesign P4.2).
-    act(() => test.client.notifyHostAvailabilityRecovered(HOST_ID));
+    act(() =>
+      test.client.notifyHostAvailabilityRecovered(HOST_ID, "reconnect"),
+    );
     await waitFor(() => {
       expect(
         test.messenger.calls.filter(
