@@ -319,6 +319,7 @@ export type AnalyticsSetting =
   | "layout.composer.access"
   | "layout.composer.mic"
   | "layout.composer.compactButton"
+  | "layout.composer.reasoningIndicator"
   | "layout.sidebar.resourceMetrics"
   | "linkOpen"
   | "pinContextUsageBreakdown"
@@ -1237,6 +1238,7 @@ const ANALYTICS_SETTINGS = new Set<string>(
     "layout.composer.access": true,
     "layout.composer.mic": true,
     "layout.composer.compactButton": true,
+    "layout.composer.reasoningIndicator": true,
     "layout.sidebar.resourceMetrics": true,
     linkOpen: true,
     pinContextUsageBreakdown: true,

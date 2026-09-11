@@ -308,6 +308,23 @@ export const LAYOUT = defineSettingsSection("layout", {
     availableWhen: isStatusBarControlsAvailable,
     keywords: ["cpu", "memory", "processes", "ram share", "chips"],
   },
+  composerReasoning: {
+    kind: "row",
+    group: "composer",
+    search: { anchor: "layout-composer-reasoning-indicator" },
+    label: "Reasoning level",
+    description:
+      "How the model chip shows the thinking effort. Bars draws one bar per level the model offers, filled up to the current one; the level's name stays in the chip's tooltip.",
+    availableWhen: alwaysAvailable,
+    keywords: [
+      "thinking",
+      "effort",
+      "reasoning",
+      "bars",
+      "signal",
+      "model chip",
+    ],
+  },
   chat: {
     kind: "group",
     search: { anchor: "layout-chat" },

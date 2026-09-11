@@ -85,6 +85,14 @@ export type ComposerCompactableMode = "visible" | "compact";
  */
 export type ComposerHideableMode = "visible" | "hidden";
 
+/**
+ * How the model chip shows the thinking effort: the level's name, a
+ * signal-bars glyph (one bar per level the model exposes, filled up to the
+ * current one), or both. A third shape rather than a hide switch, because the
+ * effort is something a send runs under, and the glyph is the compact form.
+ */
+export type ComposerReasoningIndicator = "text" | "bars" | "bars-text";
+
 export interface ComposerLayoutPreferences {
   readonly filesChanged: ComposerCompactableMode;
   readonly activeAgents: ComposerCompactableMode;
@@ -93,6 +101,7 @@ export interface ComposerLayoutPreferences {
   readonly access: ComposerCompactableMode;
   readonly mic: ComposerHideableMode;
   readonly compactButton: ComposerHideableMode;
+  readonly reasoningIndicator: ComposerReasoningIndicator;
 }
 
 /**
@@ -149,6 +158,9 @@ interface LayoutStoreState {
   readonly setComposerAccess: (mode: ComposerCompactableMode) => void;
   readonly setComposerMic: (mode: ComposerHideableMode) => void;
   readonly setComposerCompactButton: (mode: ComposerHideableMode) => void;
+  readonly setComposerReasoningIndicator: (
+    indicator: ComposerReasoningIndicator,
+  ) => void;
   readonly setHomeView: (view: HomeView) => void;
   readonly setHomeDensity: (density: HomeDensity) => void;
 }
@@ -197,6 +209,7 @@ export const DEFAULT_COMPOSER_LAYOUT: ComposerLayoutPreferences = {
   access: "visible",
   mic: "visible",
   compactButton: "visible",
+  reasoningIndicator: "text",
 };
 
 /**
@@ -381,6 +394,19 @@ function hideable(
   return isComposerHideableMode(value) ? value : fallback;
 }
 
+function isComposerReasoningIndicator(
+  value: unknown,
+): value is ComposerReasoningIndicator {
+  return value === "text" || value === "bars" || value === "bars-text";
+}
+
+function reasoningIndicator(
+  value: unknown,
+  fallback: ComposerReasoningIndicator,
+): ComposerReasoningIndicator {
+  return isComposerReasoningIndicator(value) ? value : fallback;
+}
+
 /**
  * Field by field, like the status bar slice above and for the same reason: each
  * value picks a branch on a render path, and the two unions are NOT
@@ -411,6 +437,10 @@ function resolvePersistedComposer(value: unknown): ComposerLayoutPreferences {
     compactButton: hideable(
       stored.compactButton,
       DEFAULT_COMPOSER_LAYOUT.compactButton,
+    ),
+    reasoningIndicator: reasoningIndicator(
+      stored.reasoningIndicator,
+      DEFAULT_COMPOSER_LAYOUT.reasoningIndicator,
     ),
   };
 }
@@ -630,6 +660,11 @@ export const useLayoutStore = create<LayoutStoreState>()(
         const composer = get().composer;
         if (composer.compactButton === mode) return;
         set({ composer: { ...composer, compactButton: mode } });
+      },
+      setComposerReasoningIndicator: (indicator) => {
+        const composer = get().composer;
+        if (composer.reasoningIndicator === indicator) return;
+        set({ composer: { ...composer, reasoningIndicator: indicator } });
       },
       setHomeView: (view) => {
         const home = get().home;

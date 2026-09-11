@@ -159,6 +159,31 @@ describe("<ComposerLayoutGroup />", () => {
     await expectSettingIdAccepted("layout.composer.compactButton");
   });
 
+  it("writes Reasoning level to the store and tracks layout.composer.reasoningIndicator", async () => {
+    const { trackSettingChanged } = await import("@/lib/analytics");
+    render(<ComposerLayoutGroup />);
+
+    const group = screen.getByRole("group", { name: "Reasoning level" });
+    expect(
+      within(group)
+        .getByRole("button", { name: "Text" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    fireEvent.click(within(group).getByRole("button", { name: "Bars + text" }));
+
+    expect(useLayoutStore.getState().composer.reasoningIndicator).toBe(
+      "bars-text",
+    );
+    expect(trackSettingChanged).toHaveBeenCalledWith(
+      "layout",
+      "layout.composer.reasoningIndicator",
+    );
+    await expectSettingIdAccepted("layout.composer.reasoningIndicator");
+
+    fireEvent.click(within(group).getByRole("button", { name: "Bars" }));
+    expect(useLayoutStore.getState().composer.reasoningIndicator).toBe("bars");
+  });
+
   it("does not track or write when the already-active option is clicked again", async () => {
     const { trackSettingChanged } = await import("@/lib/analytics");
     render(<ComposerLayoutGroup />);

@@ -1628,6 +1628,33 @@ md:top-0`): positioned against the nearest scrollport - the settings
     (`Hidden` here is NOT `voiceInputEnabled` off), and the palette and
     `/compact` compact a conversation. The row's own description names that
     route, so the user can see what they keep.
+  - **Reasoning level** (`composer.reasoningIndicator`: `text`, `bars` or
+    `bars-text`, default `text`) is the one row with a third shape rather
+    than a floor: the model chip shows the thinking effort as its name, as a
+    signal-bars glyph (`pickers/reasoning-bars-glyph.tsx`), or both. The
+    picker derives the position (`reasoningStep` in
+    `harness-model-picker-presentation.ts`) from the same option list its
+    footer already lists and reads the setting itself, so the chat composer and
+    the terminal launcher - the two surfaces that mount it - cannot disagree.
+    The tooltip's Effort row spells out `High (3 of 4)` while the glyph shows,
+    and the bare name in `text`, which renders exactly today's chip.
+  - **The glyph's slot per bar is fixed, and the box grows sideways**
+    (`h-3.5 w-auto`, `viewBox` width = count × slot). Harnesses advertise
+    anywhere from two graded levels to seven, and dividing a fixed width by
+    the count would shave a seven-bar glyph into hairlines while a two-bar one
+    drew slabs. Bars rise from a minimum height to full so the shortest is
+    still a visible mark; a lone level is one full-height bar of the same
+    width, not a block.
+  - **A no-thinking level is OFF, not the bottom rung.** Ids in a small closed
+    set (`off`, `none`) are excluded from the ladder the glyph counts, because
+    the ids are a harness convention rather than an enum - amp advertises its
+    ladder without a `none` at all, pi ships `off` beside six graded levels.
+    So pi reads `1 of 6` at its lowest real effort, and selecting `off` lights
+    nothing: every bar empty, named `Thinking: Off`, with the level's name
+    kept beside the glyph. The same fallback covers a value that names no
+    level the model exposes (one remembered from another model, before
+    normalization catches up), and a model whose levels are ALL zero-effort
+    has no ladder at all, so its chip falls back to the name in every mode.
   - **Expanding a chip is per tile, and is never written back.** `compact` says
     how a chat OPENS; one glance at a folded row must not redefine that for
     every chat, so the reveal is component state in

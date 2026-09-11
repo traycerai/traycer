@@ -397,6 +397,7 @@ describe("useLayoutStore", () => {
       store.setComposerAccess("compact");
       store.setComposerMic("hidden");
       store.setComposerCompactButton("hidden");
+      store.setComposerReasoningIndicator("bars");
 
       expect(useLayoutStore.getState().composer).toEqual({
         filesChanged: "compact",
@@ -406,6 +407,7 @@ describe("useLayoutStore", () => {
         access: "compact",
         mic: "hidden",
         compactButton: "hidden",
+        reasoningIndicator: "bars",
       });
     });
 
@@ -428,6 +430,7 @@ describe("useLayoutStore", () => {
           access: "compact",
           mic: "hidden",
           compactButton: "hidden",
+          reasoningIndicator: "bars-text",
         },
       });
 
@@ -439,6 +442,7 @@ describe("useLayoutStore", () => {
         access: "compact",
         mic: "hidden",
         compactButton: "hidden",
+        reasoningIndicator: "bars-text",
       });
     });
 
@@ -467,6 +471,7 @@ describe("useLayoutStore", () => {
           access: null,
           mic: "loud",
           compactButton: "hidden",
+          reasoningIndicator: "dots",
         },
       });
 
@@ -478,7 +483,36 @@ describe("useLayoutStore", () => {
         access: "visible",
         mic: "visible",
         compactButton: "hidden",
+        reasoningIndicator: "text",
       });
+    });
+
+    it.each(["text", "bars", "bars-text"] as const)(
+      "round-trips reasoningIndicator %s through the persisted slice",
+      async (indicator) => {
+        useLayoutStore.getState().setComposerReasoningIndicator(indicator);
+        expect(useLayoutStore.getState().composer.reasoningIndicator).toBe(
+          indicator,
+        );
+
+        await rehydrateFrom({ composer: { reasoningIndicator: indicator } });
+
+        expect(useLayoutStore.getState().composer).toEqual({
+          ...DEFAULT_COMPOSER_LAYOUT,
+          reasoningIndicator: indicator,
+        });
+      },
+    );
+
+    // The names of the chip's other unions are not levels of this one: a
+    // persisted `"visible"` or `"hidden"` here would reach a three-way switch
+    // on the chip with no branch for it.
+    it("rejects a mode from the visibility unions as a reasoning indicator", async () => {
+      await rehydrateFrom({ composer: { reasoningIndicator: "hidden" } });
+
+      expect(useLayoutStore.getState().composer.reasoningIndicator).toBe(
+        "text",
+      );
     });
 
     // The two unions are not interchangeable. `filesChanged` only ever
