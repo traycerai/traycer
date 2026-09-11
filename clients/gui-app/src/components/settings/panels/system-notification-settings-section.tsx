@@ -4,24 +4,35 @@ import { SettingsRow } from "@/components/settings/settings-row";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { useNotificationSystemSettingsOpenMutation } from "@/hooks/runner/use-notification-system-settings-open-mutation";
-import { useRunnerHost } from "@/providers/use-runner-host";
+import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
+import { isSystemNotificationsGroupAvailable } from "@/lib/settings/settings-availability";
 
-/** Desktop pointer to native banner, badge and delivery preferences. */
+/**
+ * Desktop pointer to native banner, badge and delivery preferences.
+ *
+ * The gate is the only thing rendered above it: every hook the group uses
+ * reaches the runner host, which throws in a host-less shell, so they live in
+ * the child and run only once the gate has passed.
+ */
 export function SystemNotificationSettingsSection(): ReactNode {
-  const systemSettings = useRunnerHost().notifications.systemSettings;
+  const availability = useSettingsAvailabilityContext();
+  if (!isSystemNotificationsGroupAvailable(availability)) return null;
+  return <SystemNotificationSettingsGroup />;
+}
+
+function SystemNotificationSettingsGroup(): ReactNode {
   const openSettings = useNotificationSystemSettingsOpenMutation();
-
-  if (systemSettings === null) return null;
-
   return (
     <SettingsGroup
       title="System"
+      anchor="app-notifications-system"
       tone="default"
       dataTestId="system-notification-settings-section"
       fill={false}
     >
       <SettingsRow
         label="OS notifications"
+        anchor="app-notifications-os"
         description="Banners, badges, and delivery are managed by your operating system."
         control={
           <Button

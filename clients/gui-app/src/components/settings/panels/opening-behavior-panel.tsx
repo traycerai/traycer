@@ -119,12 +119,14 @@ export function OpeningBehaviorPanel(): ReactNode {
       <div className={cn("flex flex-col", compact ? "gap-3.5" : "gap-5")}>
         <SettingsGroup
           title="Links"
+          anchor="opening-links"
           tone="default"
           dataTestId="settings-opening-links"
           fill={false}
         >
           <SettingsRow
             label="Open links"
+            anchor="opening-links-default"
             control={
               <EnumSelect
                 labels={LINK_OPEN_DEFAULT_LABELS}
@@ -178,12 +180,14 @@ export function OpeningBehaviorPanel(): ReactNode {
 
         <SettingsGroup
           title="Tile placement"
+          anchor="opening-tile-placement"
           tone="default"
           dataTestId="settings-opening-tiles"
           fill={false}
         >
           <SettingsRow
             label="Open new tiles"
+            anchor="opening-tiles-default"
             description={
               singleTileViewport ? SINGLE_TILE_VIEWPORT_NOTE : undefined
             }
@@ -270,6 +274,7 @@ export function OpeningBehaviorPanel(): ReactNode {
           ) : null}
           <SettingsRow
             label="Agent-opened tabs"
+            anchor="opening-tiles-agent-opened"
             description="When an agent or a page opens a browser tab without you clicking anything."
             control={
               <EnumSelect
