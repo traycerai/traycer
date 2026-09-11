@@ -7,6 +7,7 @@ import type {
 import type {
   FocusAgentRow,
   FocusBackgroundRow,
+  FocusBrowserRow,
   FocusModel,
   FocusPromptRow,
   FocusTaskRow,
@@ -216,6 +217,22 @@ export function splitTaskGroupByHost(
     if (existing === undefined) jobsByHost.set(hostId, [job]);
     else existing.push(job);
   }
+  // A browser session is host-local for life, so its tab is filed under the
+  // machine the page is actually open on - and a task browsing from two
+  // machines splits on that, like every other row.
+  //
+  // These are plain rows carrying no `via`: the label names a VISIBLE sibling,
+  // and this split is one of the two places the sibling set narrows, so it is
+  // resolved after both (`resolveBrowserVia`). A slice must never inherit a
+  // label for an agent that stayed on the other machine.
+  const browsersByHost = new Map<string, FocusBrowserRow[]>();
+  for (const browser of group.browsers) {
+    const hostId = browser.hostId;
+    hostIds.add(hostId);
+    const existing = browsersByHost.get(hostId);
+    if (existing === undefined) browsersByHost.set(hostId, [browser]);
+    else existing.push(browser);
+  }
   const promptsByHost = new Map<string, FocusPromptRow[]>();
   for (const prompt of group.prompts) {
     const hostId = resolveFocusHostId(prompt.originHostId, activeHostId);
@@ -260,6 +277,7 @@ export function splitTaskGroupByHost(
         agents,
         jobs,
         prompts,
+        browsers: browsersByHost.get(hostId) ?? [],
         backgroundVisible: jobs.length > 0,
         task:
           group.task === null
@@ -290,6 +308,34 @@ export function focusPromptHostId(prompt: FocusPromptRow): string | null {
  * and not the next, and the reader would have to work out why.
  */
 export function focusHostIds(
+  model: FocusModel,
+  activeHostId: string | null,
+): ReadonlySet<string> {
+  const hostIds = new Set(focusActivityHostIds(model, activeHostId));
+  // A browser session is host-local for life and its inventory names the
+  // machine, so these are never unresolved - and they count, because a page
+  // open on a second machine is exactly the fleet fact the headings exist to
+  // report.
+  for (const row of model.browsers) {
+    if (!isUnknownHostId(row.hostId)) hostIds.add(row.hostId);
+  }
+  return hostIds;
+}
+
+/**
+ * The subset of {@link focusHostIds} whose rows come from the ACTIVITY plane -
+ * prompts, agents and jobs.
+ *
+ * Separate because the coverage notice is about that plane and nothing else. A
+ * host whose activity stream is degraded but whose only visible rows are
+ * browser tabs has a heading on the page and still cannot carry the sentence:
+ * "some activity may be missing" under a list of browser tabs would be
+ * attributing the gap to the one section that does not have it, and would let
+ * the page-wide banner stand down on the strength of a group that is not
+ * saying anything. Browsers ride their own stream, so they are not evidence
+ * either way.
+ */
+export function focusActivityHostIds(
   model: FocusModel,
   activeHostId: string | null,
 ): ReadonlySet<string> {

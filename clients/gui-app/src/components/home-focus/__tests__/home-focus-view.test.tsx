@@ -13,6 +13,7 @@ import { HomeFocusView } from "@/components/home-focus/home-focus-view";
 import type {
   FocusAgentRow,
   FocusBackgroundRow,
+  FocusBrowserRow,
   FocusModel,
   FocusPromptRow,
   FocusTaskRow,
@@ -34,6 +35,7 @@ const actionsMock = vi.hoisted(() => ({
   openAgent: vi.fn(),
   openTask: vi.fn(),
   openBackground: vi.fn(),
+  openBrowser: vi.fn(),
   stopAgent: vi.fn(),
   stopManagedCommand: vi.fn(),
   stopping: new Set<string>(),
@@ -149,6 +151,7 @@ function promptRow(overrides: Partial<FocusPromptRow>): FocusPromptRow {
     body: "The agent wants to run a command.",
     createdAt: Date.now(),
     originHostId: null,
+    browserTabTitle: null,
     activation: activationRow({ feedId: key }),
     ...overrides,
   };
@@ -203,16 +206,37 @@ function backgroundRow(
   };
 }
 
+function browserRow(overrides: Partial<FocusBrowserRow>): FocusBrowserRow {
+  const tabId = overrides.tabId ?? nextId("tab");
+  return {
+    key: overrides.key ?? `host-local\u001fsession-1\u001f${tabId}`,
+    epicId: "epic-1",
+    taskTitle: "Storefront",
+    hostId: "host-local",
+    sessionId: "session-1",
+    tabId,
+    title: "Checkout",
+    urlHost: "shop.example.com",
+    url: "https://shop.example.com/checkout",
+    status: "live",
+    drivenByChatId: null,
+    drivenByAgentName: null,
+    ...overrides,
+  };
+}
+
 function model(overrides: Partial<FocusModel>): FocusModel {
   return {
     prompts: [],
     tasks: [],
     background: [],
+    browsers: [],
     coverage: {
       activity: "live",
       degradedHostIds: [],
       notifications: "cloud",
       backgroundIsMountedOnly: true,
+      browsersAreMountedOnly: true,
     },
     badgeCount: 0,
     ...overrides,
@@ -244,6 +268,7 @@ beforeEach(() => {
   actionsMock.openPrompt.mockReset();
   actionsMock.openAgent.mockReset();
   actionsMock.openTask.mockReset();
+  actionsMock.openBrowser.mockReset();
   actionsMock.openBackground.mockReset();
   actionsMock.stopAgent.mockReset();
   actionsMock.stopManagedCommand.mockReset();
@@ -881,6 +906,7 @@ describe("<HomeFocusView /> coverage notices", () => {
           degradedHostIds: [],
           notifications: "cloud",
           backgroundIsMountedOnly: true,
+          browsersAreMountedOnly: true,
         },
       });
       render(<HomeFocusView />);
@@ -900,6 +926,7 @@ describe("<HomeFocusView /> coverage notices", () => {
           degradedHostIds: [],
           notifications: "cloud",
           backgroundIsMountedOnly: true,
+          browsersAreMountedOnly: true,
         },
       });
       render(<HomeFocusView />);
@@ -916,6 +943,7 @@ describe("<HomeFocusView /> coverage notices", () => {
         degradedHostIds: [],
         notifications: "local",
         backgroundIsMountedOnly: true,
+        browsersAreMountedOnly: true,
       },
     });
     render(<HomeFocusView />);
@@ -933,6 +961,7 @@ describe("<HomeFocusView /> coverage notices", () => {
         degradedHostIds: [],
         notifications: "cloud",
         backgroundIsMountedOnly: true,
+        browsersAreMountedOnly: true,
       },
     });
     render(<HomeFocusView />);
@@ -2402,6 +2431,7 @@ describe("<HomeFocusView /> section headings", () => {
         degradedHostIds: [],
         notifications: "cloud",
         backgroundIsMountedOnly: true,
+        browsersAreMountedOnly: true,
       },
     });
     render(<HomeFocusView />);
@@ -3044,6 +3074,7 @@ describe("<HomeFocusView /> per-host coverage", () => {
         degradedHostIds: ["host-remote"],
         notifications: "cloud",
         backgroundIsMountedOnly: true,
+        browsersAreMountedOnly: true,
       },
     });
   }
@@ -3083,6 +3114,7 @@ describe("<HomeFocusView /> per-host coverage", () => {
         degradedHostIds: [],
         notifications: "cloud",
         backgroundIsMountedOnly: true,
+        browsersAreMountedOnly: true,
       },
     });
     render(<HomeFocusView />);
@@ -3309,6 +3341,7 @@ describe("<HomeFocusView /> degraded host with no visible rows", () => {
         degradedHostIds: ["host-silent"],
         notifications: "cloud",
         backgroundIsMountedOnly: true,
+        browsersAreMountedOnly: true,
       },
     });
     render(<HomeFocusView />);
@@ -3335,6 +3368,7 @@ describe("<HomeFocusView /> degraded host with no visible rows", () => {
         degradedHostIds: ["host-remote"],
         notifications: "cloud",
         backgroundIsMountedOnly: true,
+        browsersAreMountedOnly: true,
       },
     });
     render(<HomeFocusView />);
@@ -3361,6 +3395,7 @@ describe("<HomeFocusView /> degraded host with no visible rows", () => {
         degradedHostIds: ["host-remote", "host-silent"],
         notifications: "cloud",
         backgroundIsMountedOnly: true,
+        browsersAreMountedOnly: true,
       },
     });
     render(<HomeFocusView />);
@@ -3715,5 +3750,536 @@ describe("<HomeFocusView /> an agent nothing could attribute", () => {
         .getAllByTestId("home-focus-section-tasks-group-label")
         .map((label) => label.textContent),
     ).toEqual(["Laptop · 1", "Box A · 1"]);
+  });
+});
+
+// H8: browsers are their own plane, listed one row per TAB, and the click on a
+// row goes to that tab rather than to the task it happens to live in.
+describe("<HomeFocusView /> browsers", () => {
+  it("lists one row per tab, after Background", () => {
+    modelMock.value = model({
+      // All four sections, so the order is genuinely decided by this render.
+      prompts: [promptRow({})],
+      tasks: [taskRow({ agents: [agentRow({ tier: "turn" })] })],
+      background: [backgroundRow({})],
+      browsers: [
+        browserRow({ tabId: "t1", title: "Checkout" }),
+        browserRow({ tabId: "t2", title: "Cart" }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    expect(
+      screen.getByTestId("home-focus-section-browsers-heading").textContent,
+    ).toBe("Browsers · 2");
+    expect(screen.getAllByTestId("home-focus-browser-row")).toHaveLength(2);
+    // Last section on the page, in DOM order: a page is not waiting on anyone,
+    // not burning a turn and not going away, so it sits under Background.
+    expect(
+      Array.from(
+        screen
+          .getByTestId("home-focus-view")
+          .querySelectorAll("section[data-testid^='home-focus-section-']"),
+      ).map((node) => node.getAttribute("data-testid")),
+    ).toEqual([
+      "home-focus-section-prompts",
+      "home-focus-section-tasks",
+      "home-focus-section-background",
+      "home-focus-section-browsers",
+    ]);
+  });
+
+  it("is omitted entirely when nothing is open", () => {
+    modelMock.value = model({ tasks: [taskRow({})] });
+    render(<HomeFocusView />);
+
+    expect(screen.queryByTestId("home-focus-section-browsers")).toBeNull();
+  });
+
+  it("declares the window-local limit in its caption", () => {
+    modelMock.value = model({ browsers: [browserRow({})] });
+    render(<HomeFocusView />);
+
+    expect(
+      screen.getByTestId("home-focus-section-browsers-caption").textContent,
+    ).toBe("Only tasks open in this window");
+  });
+
+  it("names the page and then the site it is on", () => {
+    modelMock.value = model({ browsers: [browserRow({})] });
+    render(<HomeFocusView />);
+
+    expect(screen.getByTestId("home-focus-row-name").textContent).toBe(
+      "Checkout",
+    );
+    expect(screen.getByTestId("home-focus-browser-url-host").textContent).toBe(
+      "shop.example.com",
+    );
+  });
+
+  it("clicking the row body goes to that TAB", () => {
+    const row = browserRow({ tabId: "t9" });
+    modelMock.value = model({ browsers: [row] });
+    render(<HomeFocusView />);
+
+    fireEvent.click(screen.getByTestId("home-focus-browser-open-body"));
+    expect(actionsMock.openBrowser).toHaveBeenCalledWith(row);
+  });
+
+  it("has no stop control, and still spends the actions track", () => {
+    modelMock.value = model({ browsers: [browserRow({})] });
+    render(<HomeFocusView />);
+
+    // Closing a tab is a canvas action on the tile; the reserved cell keeps
+    // the status column from moving relative to the rows around it.
+    expect(screen.getAllByTestId("home-focus-row-actions").length).toBe(1);
+    expect(screen.queryByRole("button", { name: /^Stop/ })).toBeNull();
+  });
+
+  it("says who is driving a tab in the status cell", () => {
+    modelMock.value = model({
+      browsers: [
+        browserRow({ drivenByChatId: "chat-1", drivenByAgentName: "Reviewer" }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    expect(screen.getByTestId("home-focus-row-status").dataset.state).toBe(
+      "live",
+    );
+    expect(
+      screen.getByTestId("home-focus-row-status-note").textContent,
+    ).toContain("driven by Reviewer");
+  });
+
+  it("colours a crashed tab, because nothing else on the page reports it", () => {
+    modelMock.value = model({
+      browsers: [browserRow({ status: "crashed" })],
+    });
+    render(<HomeFocusView />);
+
+    const status = screen.getByTestId("home-focus-row-status");
+    expect(status.dataset.state).toBe("crashed");
+    // The one word outside `needs you` that is coloured, dot and text both: a
+    // crashed tab raises no prompt and no notification, so the column is the
+    // only place it surfaces. A muted word in a muted column is not one.
+    expect(screen.getByTestId("home-focus-row-status-dot").className).toContain(
+      "bg-destructive",
+    );
+    expect(status.textContent).toContain("crashed");
+    expect(status.querySelector(".text-destructive")?.textContent).toBe(
+      "crashed",
+    );
+  });
+
+  it("does not colour a live or dormant tab", () => {
+    modelMock.value = model({
+      browsers: [
+        browserRow({ tabId: "t1", status: "live" }),
+        browserRow({ tabId: "t2", status: "dormant" }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    const dots = screen.getAllByTestId("home-focus-row-status-dot");
+    // `live` is solid because the tab is attached; `dormant` is the hollow
+    // ring every "present rather than in flight" row on this page carries.
+    expect(dots[0]?.className).toContain("bg-primary");
+    expect(dots[1]?.className).toContain("border-muted-foreground");
+    expect(
+      screen
+        .getAllByTestId("home-focus-row-status")
+        .some((status) => status.querySelector(".text-destructive") !== null),
+    ).toBe(false);
+  });
+
+  it("counts browsers in the summary line", () => {
+    modelMock.value = model({
+      browsers: [browserRow({ tabId: "t1" }), browserRow({ tabId: "t2" })],
+    });
+    render(<HomeFocusView />);
+
+    expect(
+      screen
+        .getAllByTestId("home-focus-summary-segment")
+        .map((segment) => segment.textContent),
+    ).toContain("2 browsers");
+  });
+
+  it("keeps the empty state away from a page whose only content is a browser", () => {
+    modelMock.value = model({ browsers: [browserRow({})] });
+    render(<HomeFocusView />);
+
+    expect(screen.queryByTestId("home-focus-empty")).toBeNull();
+  });
+
+  it("groups by the machine the page is open on", () => {
+    fleetMock.activeHostId = "host-local";
+    fleetMock.entries = [
+      { hostId: "host-local", label: "Laptop" },
+      { hostId: "host-a", label: "Box A" },
+    ];
+    modelMock.value = model({
+      browsers: [
+        browserRow({ tabId: "t1", hostId: "host-local" }),
+        browserRow({ tabId: "t2", hostId: "host-a" }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    expect(
+      screen
+        .getAllByTestId("home-focus-section-browsers-group-label")
+        .map((label) => label.textContent),
+    ).toEqual(["Laptop · 1", "Box A · 1"]);
+  });
+
+  // The coverage notice belongs to the ACTIVITY plane. A browser inventory
+  // rides its own stream, so a browsers heading is not somewhere that sentence
+  // can be said - and the page-wide banner has to stay instead.
+  it("keeps the page banner when a degraded host has only browser rows", () => {
+    fleetMock.activeHostId = "host-local";
+    fleetMock.entries = [
+      { hostId: "host-local", label: "Laptop" },
+      { hostId: "host-a", label: "Box A" },
+    ];
+    modelMock.value = model({
+      background: [backgroundRow({ hostId: "host-local" })],
+      browsers: [browserRow({ hostId: "host-a" })],
+      coverage: {
+        activity: "reconnecting",
+        degradedHostIds: ["host-a"],
+        notifications: "cloud",
+        backgroundIsMountedOnly: true,
+        browsersAreMountedOnly: true,
+      },
+    });
+    render(<HomeFocusView />);
+
+    expect(screen.getByTestId("home-focus-activity-notice")).toBeDefined();
+    expect(
+      screen.queryByTestId("home-focus-section-browsers-group-notice"),
+    ).toBeNull();
+  });
+});
+
+// Which part of a context trail says `in` is each part's own answer, and the
+// one thing that cannot be read off the part alone is that a `null` title is
+// DROPPED - so the second location becomes the first one rendered.
+describe("<HomeFocusView /> a job row's context trail", () => {
+  it("reads `in <chat> · <task>` when this window can name the chat", () => {
+    modelMock.value = model({
+      background: [
+        backgroundRow({
+          label: "dev server",
+          chatTitle: "Greeting and Introduction",
+          taskTitle: "Storefront",
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    expect(
+      Array.from(
+        screen
+          .getByTestId("home-focus-row-context")
+          .querySelectorAll("[data-role]"),
+      ).map((node) => [node.getAttribute("data-role"), node.textContent]),
+    ).toEqual([
+      ["chat", "in Greeting and Introduction"],
+      ["task", "Storefront"],
+    ]);
+  });
+
+  it("moves the `in` to the task when the chat has no name here", () => {
+    modelMock.value = model({
+      background: [
+        backgroundRow({
+          label: "dev server",
+          // The epic has no live projection in this window, which is the same
+          // limit that produced the row.
+          chatTitle: null,
+          taskTitle: "Storefront",
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    // Not `· Storefront`, which names a place without saying the job is in it.
+    expect(
+      Array.from(
+        screen
+          .getByTestId("home-focus-row-context")
+          .querySelectorAll("[data-role]"),
+      ).map((node) => [node.getAttribute("data-role"), node.textContent]),
+    ).toEqual([["task", "in Storefront"]]);
+  });
+});
+
+// H8 decision 4: a browser hand-off names a session and a tab and nothing a
+// reader recognises, until the plane can put a page name on it.
+describe("<HomeFocusView /> a browser prompt", () => {
+  it("names the tab it is waiting in, before the task", () => {
+    modelMock.value = model({
+      prompts: [
+        promptRow({
+          kind: "browser",
+          title: "Needs you in the browser",
+          body: "",
+          taskTitle: "Storefront",
+          browserTabTitle: "Checkout",
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    expect(
+      Array.from(
+        screen
+          .getByTestId("home-focus-row-context")
+          .querySelectorAll("[data-role]"),
+      ).map((node) => [node.getAttribute("data-role"), node.textContent]),
+    ).toEqual([
+      // The tab is the page the prompt is ABOUT, so it takes no `in`; the task
+      // is where that page lives, so it does.
+      ["browser-tab", "Checkout"],
+      ["task", "in Storefront"],
+    ]);
+  });
+
+  it("reads exactly as before for a prompt whose tab this window cannot see", () => {
+    modelMock.value = model({
+      prompts: [
+        promptRow({
+          kind: "browser",
+          taskTitle: "Storefront",
+          browserTabTitle: null,
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    expect(
+      Array.from(
+        screen
+          .getByTestId("home-focus-row-context")
+          .querySelectorAll("[data-role]"),
+      ).map((node) => [node.getAttribute("data-role"), node.textContent]),
+    ).toEqual([["task", "in Storefront"]]);
+  });
+});
+
+// H8 decision 3: under Tasks, a page is a child of its task - and of the agent
+// driving it when one is.
+describe("<HomeFocusView /> browsers under Tasks", () => {
+  beforeEach(() => {
+    useLayoutStore.setState({
+      home: { view: "tasks", density: "comfortable" },
+    });
+  });
+
+  it("nests tabs under their task, after the jobs", () => {
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-1",
+          agents: [agentRow({ agentId: "a1", tier: "turn" })],
+        }),
+      ],
+      background: [backgroundRow({ epicId: "epic-1" })],
+      browsers: [browserRow({ epicId: "epic-1", tabId: "t1" })],
+    });
+    render(<HomeFocusView />);
+
+    const body = screen.getByTestId("home-focus-task-group-body");
+    // All three kinds present, so the order is actually decided here: who is
+    // working, then what is running, then where some of that work happens.
+    expect(
+      Array.from(body.children).map((node) => node.getAttribute("data-testid")),
+    ).toEqual([
+      "home-focus-task-group-agent",
+      "home-focus-task-group-job",
+      "home-focus-task-group-browser",
+    ]);
+  });
+
+  // Finding 1: the agent set narrows AFTER the group is built, and a `via`
+  // computed before that pointed at a row the reader could not see.
+  it("drops `via` when the mid-turn rule hides the driving agent", () => {
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-1",
+          agents: [
+            agentRow({ agentId: "a1", tier: "turn" }),
+            // Background-tier, and this window HAS a job row for the task - so
+            // `visibleAgents` hides it to avoid listing one activity twice.
+            agentRow({
+              agentId: "chat-1",
+              title: "Monitor",
+              tier: "background",
+            }),
+          ],
+        }),
+      ],
+      background: [backgroundRow({ epicId: "epic-1" })],
+      browsers: [
+        browserRow({
+          epicId: "epic-1",
+          drivenByChatId: "chat-1",
+          drivenByAgentName: "Monitor",
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    expect(
+      screen
+        .getAllByTestId("home-focus-task-group-agent")
+        .map((node) => node.getAttribute("data-agent-id")),
+    ).toEqual(["a1"]);
+    expect(
+      screen.queryByTestId("home-focus-task-group-browser-via"),
+    ).toBeNull();
+    // Attribution is a different question and stays in the status cell.
+    expect(
+      screen
+        .getAllByTestId("home-focus-row-status-note")
+        .map((note) => note.textContent),
+    ).toContain("· driven by Monitor");
+  });
+
+  it("drops `via` when the host split leaves the driver on another machine", () => {
+    fleetMock.activeHostId = "host-a";
+    fleetMock.entries = [
+      { hostId: "host-a", label: "Laptop" },
+      { hostId: "host-b", label: "Box B" },
+    ];
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-1",
+          agents: [
+            agentRow({
+              agentId: "chat-1",
+              title: "Reviewer",
+              tier: "turn",
+              hostId: "host-a",
+            }),
+          ],
+        }),
+      ],
+      browsers: [
+        browserRow({
+          epicId: "epic-1",
+          hostId: "host-b",
+          drivenByChatId: "chat-1",
+          drivenByAgentName: "Reviewer",
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    // The page is open on B, the agent runs on A. B's slice has no Reviewer
+    // row, so the tab there must not claim one.
+    expect(
+      screen.queryByTestId("home-focus-task-group-browser-via"),
+    ).toBeNull();
+  });
+
+  it("reads a driven tab under the agent driving it", () => {
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-1",
+          agents: [
+            agentRow({ agentId: "chat-1", title: "Reviewer", tier: "turn" }),
+          ],
+        }),
+      ],
+      browsers: [
+        browserRow({
+          epicId: "epic-1",
+          drivenByChatId: "chat-1",
+          drivenByAgentName: "Reviewer",
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    expect(
+      screen.getByTestId("home-focus-task-group-browser-via").textContent,
+    ).toBe("via Reviewer");
+  });
+
+  it("leaves a tab at task level when its driver is not a row here", () => {
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-1",
+          agents: [agentRow({ agentId: "a1", tier: "turn" })],
+        }),
+      ],
+      browsers: [
+        browserRow({
+          epicId: "epic-1",
+          drivenByChatId: "chat-elsewhere",
+          drivenByAgentName: "Idle chat",
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    // A `via` pointing at a row the reader cannot see is worse than none.
+    expect(
+      screen.queryByTestId("home-focus-task-group-browser-via"),
+    ).toBeNull();
+  });
+
+  it("badges the count on the collapsed row", () => {
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-1",
+          agents: [agentRow({ agentId: "a1", tier: "turn" })],
+        }),
+      ],
+      browsers: [
+        browserRow({ epicId: "epic-1", tabId: "t1" }),
+        browserRow({ epicId: "epic-1", tabId: "t2" }),
+      ],
+    });
+    render(<HomeFocusView />);
+
+    expect(
+      screen.getByTestId("home-focus-task-group-browsers").textContent,
+    ).toBe("2 browsers");
+  });
+
+  it("gives a task whose only activity is a browser a group of its own", () => {
+    modelMock.value = model({
+      browsers: [browserRow({ epicId: "epic-browser-only" })],
+    });
+    render(<HomeFocusView />);
+
+    // No Browsers section under Tasks, so an intersection would drop the row
+    // and leave the page blank.
+    expect(screen.queryByTestId("home-focus-empty")).toBeNull();
+    expect(screen.getAllByTestId("home-focus-task-group")).toHaveLength(1);
+  });
+
+  it("has no browsers segment on the summary line", () => {
+    modelMock.value = model({
+      browsers: [browserRow({ epicId: "epic-1" })],
+    });
+    render(<HomeFocusView />);
+
+    // Tasks draws no Browsers section, so a segment pointing at one would
+    // find no element and do nothing at all.
+    expect(
+      screen
+        .queryAllByTestId("home-focus-summary-segment")
+        .map((segment) => segment.textContent),
+    ).not.toContain("1 browser");
   });
 });

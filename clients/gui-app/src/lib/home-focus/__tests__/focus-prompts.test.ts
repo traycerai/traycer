@@ -41,6 +41,7 @@ describe("buildFocusPrompts", () => {
     const prompts = buildFocusPrompts(
       [approvalRow, interviewRow, browserRow, agentStoppedRow],
       new Map(),
+      new Map(),
       [],
     );
 
@@ -61,7 +62,9 @@ describe("buildFocusPrompts", () => {
       payload: makeApprovalPayload("epic-1", "chat-1"),
     });
 
-    expect(buildFocusPrompts([resolved], new Map(), [])).toHaveLength(0);
+    expect(
+      buildFocusPrompts([resolved], new Map(), new Map(), []),
+    ).toHaveLength(0);
   });
 
   it("excludes a row with readAt !== null (the lifecycle classifier reads it as recent)", () => {
@@ -74,7 +77,7 @@ describe("buildFocusPrompts", () => {
       payload: makeApprovalPayload("epic-1", "chat-1"),
     });
 
-    expect(buildFocusPrompts([read], new Map(), [])).toHaveLength(0);
+    expect(buildFocusPrompts([read], new Map(), new Map(), [])).toHaveLength(0);
   });
 
   it("orders blocking before failure, newest createdAt first within a tier, ascending feedId as the tie-break", () => {
@@ -120,6 +123,7 @@ describe("buildFocusPrompts", () => {
     const prompts = buildFocusPrompts(
       [failureNewest, blockingOld, blockingTieB, blockingNew, blockingTieA],
       new Map(),
+      new Map(),
       [],
     );
 
@@ -160,6 +164,7 @@ describe("buildFocusPrompts", () => {
 
     const prompts = buildFocusPrompts(
       [approvalRow, interviewRow, browserRow, nullPayloadRow],
+      new Map(),
       new Map(),
       [],
     );
@@ -202,7 +207,12 @@ describe("buildFocusPrompts", () => {
     });
     const titles = new Map([["epic-1", "Epic One"]]);
 
-    const prompts = buildFocusPrompts([withTitle, withoutTitle], titles, []);
+    const prompts = buildFocusPrompts(
+      [withTitle, withoutTitle],
+      titles,
+      new Map(),
+      [],
+    );
     const byKey = new Map(prompts.map((prompt) => [prompt.key, prompt]));
 
     expect(byKey.get("host:a")?.taskTitle).toBe("Epic One");
@@ -217,7 +227,7 @@ describe("buildFocusPrompts", () => {
       payload: makeApprovalPayload("epic-1", "chat-1"),
     });
 
-    const [prompt] = buildFocusPrompts([row], new Map(), []);
+    const [prompt] = buildFocusPrompts([row], new Map(), new Map(), []);
 
     expect(prompt.activation).toBe(row);
   });
@@ -230,8 +240,8 @@ describe("buildFocusPrompts", () => {
       payload: makeApprovalPayload("epic-1", "chat-1"),
     });
 
-    const first = buildFocusPrompts([row], new Map(), []);
-    const second = buildFocusPrompts([row], new Map(), first);
+    const first = buildFocusPrompts([row], new Map(), new Map(), []);
+    const second = buildFocusPrompts([row], new Map(), new Map(), first);
 
     expect(second).toBe(first);
   });
@@ -247,7 +257,7 @@ describe("buildFocusPrompts", () => {
         createdAt: 42,
         payload: makeApprovalPayload("epic-1", "chat-1"),
       });
-      const first = buildFocusPrompts([original], new Map(), []);
+      const first = buildFocusPrompts([original], new Map(), new Map(), []);
 
       // A FRESH object, same feedId/title/body/createdAt - the store re-mints
       // rows like this on any unrelated notification frame.
@@ -262,7 +272,12 @@ describe("buildFocusPrompts", () => {
       });
       expect(freshEqual).not.toBe(original);
 
-      const second = buildFocusPrompts([freshEqual], new Map(), first);
+      const second = buildFocusPrompts(
+        [freshEqual],
+        new Map(),
+        new Map(),
+        first,
+      );
 
       expect(second).toBe(first);
       expect(second[0]?.activation).toBe(original);
@@ -277,7 +292,7 @@ describe("buildFocusPrompts", () => {
         title: "Approve the plan",
         payload: makeApprovalPayload("epic-1", "chat-1"),
       });
-      const first = buildFocusPrompts([original], new Map(), []);
+      const first = buildFocusPrompts([original], new Map(), new Map(), []);
 
       const retitled = makeMergedNotificationRow({
         feedId: "host:a",
@@ -286,7 +301,7 @@ describe("buildFocusPrompts", () => {
         title: "Approve the REVISED plan",
         payload: makeApprovalPayload("epic-1", "chat-1"),
       });
-      const second = buildFocusPrompts([retitled], new Map(), first);
+      const second = buildFocusPrompts([retitled], new Map(), new Map(), first);
 
       expect(second).not.toBe(first);
       expect(second[0]?.title).toBe("Approve the REVISED plan");
@@ -294,7 +309,7 @@ describe("buildFocusPrompts", () => {
     });
   });
 
-  it("countPendingPromptRows(rows) equals buildFocusPrompts(rows, new Map(), []).length across a mixed fixture", () => {
+  it("countPendingPromptRows(rows) equals buildFocusPrompts(rows, new Map(), new Map(), []).length across a mixed fixture", () => {
     const eligible = makeMergedNotificationRow({
       feedId: "host:approval-1",
       hostKind: "approval.requested",
@@ -329,7 +344,7 @@ describe("buildFocusPrompts", () => {
     const rows = [eligible, wrongKind, resolved, alreadyRead, anotherEligible];
 
     expect(countPendingPromptRows(rows)).toBe(
-      buildFocusPrompts(rows, new Map(), []).length,
+      buildFocusPrompts(rows, new Map(), new Map(), []).length,
     );
     expect(countPendingPromptRows(rows)).toBe(2);
   });
@@ -354,7 +369,7 @@ describe("buildFocusPrompts", () => {
     });
     const rows = [approvalRow, interviewRow, agentStoppedRow];
 
-    const prompts = buildFocusPrompts(rows, new Map(), []);
+    const prompts = buildFocusPrompts(rows, new Map(), new Map(), []);
 
     expect(pendingPromptEpicIds(rows)).toEqual(focusPromptEpicIds(prompts));
     expect(pendingPromptEpicIds(rows)).toEqual(new Set(["epic-1", "epic-2"]));

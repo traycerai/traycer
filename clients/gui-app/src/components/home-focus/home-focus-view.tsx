@@ -22,6 +22,7 @@ import {
 } from "@/components/settings/controls/settings-segmented-control";
 import {
   HomeFocusBackgroundRow,
+  HomeFocusBrowserRow,
   HomeFocusPromptRow,
   HomeFocusTaskRow,
   type HomeFocusRowActions,
@@ -40,7 +41,7 @@ import {
   focusCounts,
   runningTasks,
 } from "@/lib/home-focus/focus-running";
-import { focusHostIds } from "@/lib/home-focus/focus-host-groups";
+import { focusActivityHostIds } from "@/lib/home-focus/focus-host-groups";
 import {
   focusPromptHostId,
   groupRowsByHost,
@@ -60,6 +61,10 @@ import { useLayoutStore, type HomeView } from "@/stores/settings/layout-store";
 import type { FocusModel } from "@/lib/home-focus/focus-model";
 
 const BACKGROUND_CAPTION = "Only tasks open in this window";
+/** The Browsers section makes the same window-local claim, in the same words:
+ * a browser inventory rides a coordinator a mounted canvas holds, so a task
+ * nobody has opened here contributes no pages. */
+const BROWSERS_CAPTION = BACKGROUND_CAPTION;
 /**
  * The same window-local limit, said the way the Tasks section needs it said.
  *
@@ -86,6 +91,9 @@ const HOME_VIEW_OPTIONS: ReadonlyArray<SettingsSegmentedOption<HomeView>> = [
  * grouping neither of them reads. */
 const NO_TASK_GROUPS: ReadonlyArray<FocusTaskGroup> = Object.freeze([]);
 
+/** For a section whose rows cannot be evidence of an activity-plane gap. */
+const NO_DEGRADED_HOSTS: ReadonlyArray<string> = Object.freeze([]);
+
 /**
  * The anchors the summary line jumps to.
  *
@@ -98,6 +106,7 @@ const SECTION_IDS = {
   needsYou: "home-focus-needs-you",
   running: "home-focus-running",
   background: "home-focus-background",
+  browsers: "home-focus-browsers",
 } as const;
 
 interface HomeSummarySegment {
@@ -224,6 +233,12 @@ function HomeSummaryLine(props: {
             count: counts.background,
             label: "background",
             perHost: model.background.map((row) => ({ hostId: row.hostId })),
+          },
+          {
+            id: SECTION_IDS.browsers,
+            count: counts.browsers,
+            label: counts.browsers === 1 ? "browser" : "browsers",
+            perHost: model.browsers.map((row) => ({ hostId: row.hostId })),
           },
         ]
   ).filter((segment) => segment.count > 0);
@@ -385,7 +400,11 @@ function viewIsEmpty(
 ): boolean {
   if (model.prompts.length > 0) return false;
   if (view === "tasks") return groups.length === 0;
-  return model.tasks.length === 0 && model.background.length === 0;
+  return (
+    model.tasks.length === 0 &&
+    model.background.length === 0 &&
+    model.browsers.length === 0
+  );
 }
 
 /**
@@ -423,6 +442,7 @@ function HomeFocusSections(props: {
       <PromptsSection model={model} actions={actions} grouping={grouping} />
       <TasksSection model={model} actions={actions} grouping={grouping} />
       <BackgroundSection model={model} actions={actions} grouping={grouping} />
+      <BrowsersSection model={model} actions={actions} grouping={grouping} />
     </>
   );
 }
@@ -444,7 +464,10 @@ function degradedHostsAreVisible(
   if (!grouping.enabled) return false;
   const degraded = model.coverage.degradedHostIds;
   if (degraded.length === 0) return false;
-  const visible = focusHostIds(model, grouping.activeHostId);
+  // The ACTIVITY hosts, not every host on the page: a degraded host whose only
+  // rows here are browser tabs has a heading and still cannot carry this
+  // sentence, so the banner has to stay.
+  const visible = focusActivityHostIds(model, grouping.activeHostId);
   return degraded.every((hostId) => visible.has(hostId));
 }
 
@@ -859,6 +882,53 @@ function BackgroundSection(props: {
         ...group,
         rows: items.map((row) => (
           <HomeFocusBackgroundRow
+            key={row.key}
+            row={row}
+            actions={props.actions}
+          />
+        )),
+      }))}
+    />
+  );
+}
+
+/**
+ * Every browser tab open in this window, one row per page.
+ *
+ * LAST, under Background, and that placement is the claim: a page is the least
+ * urgent thing on this list. It is not waiting on anyone, not burning a turn,
+ * and not going away - it is there so that a user who knows an agent was
+ * working in a browser can find that browser without opening the task and
+ * hunting the canvas for it.
+ *
+ * Grouped by host like every other section, because a browser session is
+ * host-local for life: a page open on the remote box is genuinely somewhere
+ * else, and clicking it takes you there.
+ */
+function BrowsersSection(props: {
+  readonly model: FocusModel;
+  readonly actions: HomeFocusRowActions;
+  readonly grouping: HomeHostGrouping;
+}): ReactNode {
+  const { browsers } = props.model;
+  if (browsers.length === 0) return null;
+  return (
+    <HomeFocusSection
+      title="Browsers"
+      count={String(browsers.length)}
+      caption={BROWSERS_CAPTION}
+      testId="home-focus-section-browsers"
+      id={SECTION_IDS.browsers}
+      groups={hostRowGroups(browsers, (row) => row.hostId, {
+        grouping: props.grouping,
+        // No coverage notice under these headings: it is the ACTIVITY plane's
+        // sentence, and a browser inventory rides its own stream. Saying it
+        // here would attribute a gap to the one section that does not have it.
+        degradedHostIds: NO_DEGRADED_HOSTS,
+      }).map(({ items, ...group }) => ({
+        ...group,
+        rows: items.map((row) => (
+          <HomeFocusBrowserRow
             key={row.key}
             row={row}
             actions={props.actions}

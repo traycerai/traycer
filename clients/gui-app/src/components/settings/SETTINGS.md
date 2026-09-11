@@ -1978,7 +1978,8 @@ panel visibility` is enabled there - and reachable only from the rail.
       last selection, so the page comes back as you left it, but the question
       "which reading am I looking at" is answered where the reading is - a row
       here would be a second answer to it, reachable only by leaving Home.
-      `Focus` is today's flat page (Needs you · Running · Background). `Tasks`
+      `Focus` is today's flat page (Needs you · Running · Background ·
+      Browsers). `Tasks`
       keeps Needs you global and first, then regroups Running and Background
       under one collapsible row per task; there is no separate Background
       section under it, because a job belongs to the task it runs in and
@@ -2193,6 +2194,91 @@ window`. `runningTasks` is deliberately the same predicate as
       per-host breakdown (`Laptop 2 · Remote Box 1`); the visible text never
       names a machine. A background-only group follows the host of the chats its
       jobs run in, and it can split across them like any other.
+    - **Browsers are their own plane, and the row is a TAB.** `BROWSERS · N`
+      is the last section under Focus - a page is not waiting on anyone, not
+      burning a turn, and not going away, so it sits below Background. Sessions
+      are deliberately NOT a level: a task running two browsers over four pages
+      is four rows, each with its own title and site, because the ask this
+      answers is "even if multiple browsers are running inside some task, I
+      should be able to view and directly click to go there". The row body
+      routes through the browser-session deep link
+      (`routeNotificationForHost`, `{kind: "browserSession", epicId, sessionId,
+tabId}`), which focuses the parked tile where it is already open and
+      opens the task on it otherwise - the same path the bell's own browser
+      hand-off takes. It is the ONE action on this page that passes an origin
+      host, because a session is host-local for life and a match without it
+      would accept a same-id tile on another machine.
+    - **The browser plane is read, never acquired.** Home subscribes to the
+      coordinator REGISTRY (`subscribeToBrowserSessionsCoordinators` +
+      `browserSessionsCoordinatorEntries`) and never calls
+      `acquireBrowserSessionsCoordinator`: acquiring opens a `browser.sessions`
+      stream and holds it, so a page that merely LISTS browsers would open one
+      per task, on every host in the fleet, the moment the tab was opened. The
+      consequence is the caption - `Only tasks open in this window`, the same
+      sentence Background carries, recorded in the type as
+      `coverage.browsersAreMountedOnly` - and closing the last canvas that owned
+      a coordinator takes the rows with it, which is the honest reading of a
+      window-local inventory.
+    - **Three states, from six on the wire.** `provisioning`, `ready`,
+      `navigating` and `closing` are moments in one tab's ordinary life and
+      collapse into `live`; a page flickering between them would be reporting
+      the host's bookkeeping. `dormant` and `crashed` survive because they
+      change what a reader does next. `live` is deliberately not `running`:
+      `running` means work in flight, and a page sits there until something
+      touches it. `crashed` is the only word outside `needs-you` that is
+      COLOURED, because a crashed tab is otherwise silent - no prompt, no
+      notification - and the status column is the only place it can be found.
+      The status cell's trailing slot carries `· driven by <agent>` where a
+      chat is working the page.
+    - **Under Tasks a tab is a child of its task, or of the agent driving it.**
+      Browsers come after the jobs, and a driven tab reads `via <agent>` at the
+      same depth rather than taking a third indent - the same two-level rule
+      the agent rows follow. That `via` is resolved against the group's OWN
+      agent rows **after both filters that narrow them** - the mid-turn rule and
+      the host split - and never against `FocusBrowserRow.drivenByAgentName`:
+      the model resolves that name for any chat open in this window, and a `via`
+      pointing at a row the reader cannot see is worse than none. So
+      `FocusTaskGroup.browsers` carries plain rows and `resolveBrowserVia` pairs
+      them at the render site; there is deliberately no earlier value that could
+      go stale. `driven by <agent>` in the status cell is the other half and is
+      unaffected - it is attribution, not navigation, and survives a hidden or
+      remote driver. The collapsed row
+      badges `N browsers`, omitted at zero - a zero here would mean "no
+      coordinator in this window" rather than "no pages open", which is not a
+      fact about the task. `selectTaskGroups` therefore unions THREE sets, and
+      a task whose only activity is a browser is a group of its own.
+    - **The summary segment is Focus-only.** `N browsers` joins the line under
+      Focus; Tasks draws no Browsers section, so a segment there would point at
+      a region that is never mounted and do nothing at all - the same defect
+      the `background` segment had before it was removed from that view.
+    - **A browser prompt names its tab.** A `browser.human.needed` row reads
+      `Needs you in the browser · <tab title> · in <task>`, with the tab as the
+      NEARER context, joined from the browser rows this same model carries
+      (`focusBrowserTabTitles`) so a prompt can never name a page the section
+      below it is not showing. Absent for a prompt whose task is not open here,
+      where the row reads exactly as it did before.
+    - **`in` is per context part, not "the first one".** `RowContextPart`
+      carries its own `preposition`, because the two rules coincided for a job
+      (`in <chat> · <task>`) and came apart here: a tab is not somewhere a
+      prompt lives, it is the page the prompt is ABOUT, while the task after it
+      still is a location. The positional rule silently produced
+      `in Checkout · Storefront`, which reads as a prompt inside a page inside
+      nothing. The one thing a part cannot answer alone is that a `null` title
+      is DROPPED, so the next location becomes the first one rendered - a job
+      row whose chat this window cannot name gives the `in` to its task
+      (`row.chatTitle === null ? "in" : null`), rather than reading
+      `· Storefront` and naming a place without saying the job is in it.
+    - **Host grouping applies, and the coverage notice does not.** A tab is
+      filed under its session's host, and a browser on a second machine turns
+      grouping on like any other row. But `focusActivityHostIds` - not
+      `focusHostIds` - decides whether the page-wide `Some activity may be
+missing` banner may stand down: a degraded host whose only visible rows
+      are browser tabs has a heading and still cannot carry that sentence,
+      because browsers ride their own stream and are evidence about neither.
+    - **No Stop on a browser row**, in either view, and the actions track is
+      reserved anyway so the status column does not move. Closing a tab is a
+      canvas action on the tile itself; a cross-task page offering to close
+      pages it cannot show would be destroying state the reader cannot see.
 - `Providers` Per-provider CLI binary selection (Codex / Claude Code / OpenCode
   / Traycer / Cursor). Left rail picks the provider (brand icons via
   `HarnessIcon`); the

@@ -32,10 +32,12 @@ import type { FocusModel } from "@/lib/home-focus/focus-model";
 import { pendingPromptEpicIds } from "@/lib/home-focus/focus-prompts";
 import { focusAgentKey } from "@/lib/home-focus/focus-tasks";
 import type { FocusBackgroundChat } from "@/lib/home-focus/focus-background";
+import type { FocusBrowserEpic } from "@/lib/home-focus/focus-browsers";
 import {
   useMountedEpicProjection,
   type MountedEpicRef,
 } from "@/hooks/home-focus/use-mounted-epic-projection";
+import { useBrowserSessionsPlane } from "@/hooks/home-focus/use-browser-sessions-plane";
 import { useWarmChatBackground } from "@/hooks/home-focus/use-warm-chat-background";
 
 /**
@@ -346,6 +348,10 @@ export function useFocusModel(): FocusModel {
     authorizesCloudCapability(state.status),
   );
   const warmChats = useWarmChatBackground();
+  // Registry-only: this SUBSCRIBES to the browser coordinators other surfaces
+  // hold and never acquires one, so Home lists browsers without opening a
+  // single `browser.sessions` stream of its own. See the hook's own docblock.
+  const browserEpics = useBrowserSessionsPlane();
   const activeHostId = useEffectiveHostId();
 
   // Every derived id list is memoized on a JOINED KEY rather than on the store
@@ -368,12 +374,25 @@ export function useFocusModel(): FocusModel {
     () => joinIds(new Set(warmChats.map((chat) => chat.epicId))),
     [warmChats],
   );
+  const browserEpicIdsKey = useMemo(
+    () => joinIds(new Set(browserEpics.map((epic) => epic.epicId))),
+    [browserEpics],
+  );
   // Titles are needed for every epic the page can name: the running tasks, the
-  // tasks a prompt points at, and the tasks whose warm chats contribute
-  // background rows.
+  // tasks a prompt points at, the tasks whose warm chats contribute background
+  // rows, and the tasks with a live browser. The last is its own set rather
+  // than a subset of the others: an epic whose canvas is open with a browser
+  // tile and no chat clicked into has no working agent and no warm chat, so
+  // without this its browser rows would read `in <nothing>`.
   const titleEpicIds = useMemo(
-    () => unionIds([activeEpicIdsKey, promptEpicIdsKey, warmEpicIdsKey]),
-    [activeEpicIdsKey, promptEpicIdsKey, warmEpicIdsKey],
+    () =>
+      unionIds([
+        activeEpicIdsKey,
+        promptEpicIdsKey,
+        warmEpicIdsKey,
+        browserEpicIdsKey,
+      ]),
+    [activeEpicIdsKey, promptEpicIdsKey, warmEpicIdsKey, browserEpicIdsKey],
   );
   const indicatorEpicIds = useMemo(
     () =>
@@ -401,6 +420,21 @@ export function useFocusModel(): FocusModel {
     }
     return byEpicId;
   }, [warmChats]);
+  // The chats DRIVING a browser tab, for the same reason: a browser row names
+  // the conversation working the page, and that chat need not be warm here or
+  // mid-turn - an agent that navigated once and is now thinking has an idle
+  // chat and a tab it still owns. Its id joins the projection's refs so the
+  // row can say `driven by <name>` instead of `driven by` and a uuid.
+  const drivingChatIdsByEpicId = useMemo(() => {
+    const byEpicId = new Map<string, Set<string>>();
+    for (const epic of browserEpics) {
+      const chatIds = epic.sessions.flatMap((session) =>
+        session.tabs.flatMap((tab) => tab.drivenBy.map((d) => d.chatId)),
+      );
+      if (chatIds.length > 0) byEpicId.set(epic.epicId, new Set(chatIds));
+    }
+    return byEpicId;
+  }, [browserEpics]);
   const agentRefsKey = useMemo(
     () =>
       titleEpicIds
@@ -411,12 +445,13 @@ export function useFocusModel(): FocusModel {
               new Set([
                 ...(byEpic.get(epicId)?.working ?? EMPTY_ID_SET),
                 ...(warmChatIdsByEpicId.get(epicId) ?? EMPTY_ID_SET),
+                ...(drivingChatIdsByEpicId.get(epicId) ?? EMPTY_ID_SET),
               ]),
             ),
           ].join(ID_GROUP_SEPARATOR),
         )
         .join(ID_GROUP_LIST_SEPARATOR),
-    [titleEpicIds, byEpic, warmChatIdsByEpicId],
+    [titleEpicIds, byEpic, warmChatIdsByEpicId, drivingChatIdsByEpicId],
   );
   const agentRefs = useMemo<ReadonlyArray<MountedEpicRef>>(
     () => decodeAgentRefs(agentRefsKey),
@@ -470,6 +505,19 @@ export function useFocusModel(): FocusModel {
       })),
     [warmChats, taskTitles, projection.agentIdentities],
   );
+  const browsers = useMemo(
+    () => ({
+      epics: browserEpics.map((epic): FocusBrowserEpic => ({
+        epicId: epic.epicId,
+        taskTitle: taskTitles.get(epic.epicId) ?? null,
+        sessions: epic.sessions,
+      })),
+      // The same identity map the background rows read their chat names from -
+      // a chat agent's id IS its chat id, so one projection answers both.
+      agentIdentities: projection.agentIdentities,
+    }),
+    [browserEpics, taskTitles, projection.agentIdentities],
+  );
 
   // The previous model, so the builders can hand back their own unchanged rows
   // rather than rebuilding every section whenever one of them moves. `useMemo`
@@ -500,6 +548,7 @@ export function useFocusModel(): FocusModel {
           reachableHostIds,
         },
         backgroundChats,
+        browsers,
         activity: {
           connectionStatus,
           cloudSyncStatus,
@@ -524,6 +573,7 @@ export function useFocusModel(): FocusModel {
     activityHostIds,
     indicators.epics,
     backgroundChats,
+    browsers,
     coldEpicHostIds,
     activeHostId,
     reachableHostIds,

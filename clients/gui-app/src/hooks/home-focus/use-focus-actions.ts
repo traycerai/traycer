@@ -13,6 +13,7 @@ import { useMergedNotificationsActions } from "@/stores/notifications/merged-not
 import { parseManagedCommandRowKey } from "@/lib/home-focus/focus-background";
 import type {
   FocusBackgroundRow,
+  FocusBrowserRow,
   FocusPromptRow,
 } from "@/lib/home-focus/focus-model";
 
@@ -41,6 +42,17 @@ export interface FocusActions {
    * `stoppable` is false for one here).
    */
   readonly openBackground: (row: FocusBackgroundRow) => void;
+  /**
+   * Opens the browser tab itself - the parked tile, focused where it is already
+   * open, else the task's tab opened on it.
+   *
+   * The one action on this page that passes an ORIGIN HOST, and it has to. A
+   * browser session is host-local for life, so `browserSession` routing matches
+   * a tile only when its host matches too; without the origin a same-id tile on
+   * another machine would satisfy the match. Contrast `openChat`, where the id
+   * names an agent and any tile holding it is the right one.
+   */
+  readonly openBrowser: (row: FocusBrowserRow) => void;
   readonly openTask: (epicId: string) => void;
   /**
    * `agent.stop`, sent to the AGENT's host (`FocusAgentRow.hostId`) rather than
@@ -175,6 +187,23 @@ export function useFocusActions(): FocusActions {
     [openChat],
   );
 
+  const openBrowser = useCallback(
+    (row: FocusBrowserRow) => {
+      routeNotificationForHost(
+        navigate,
+        {
+          kind: "browserSession",
+          epicId: row.epicId,
+          sessionId: row.sessionId,
+          tabId: row.tabId,
+        },
+        Date.now(),
+        { originHostId: row.hostId, effectiveHostId },
+      );
+    },
+    [navigate, effectiveHostId],
+  );
+
   const openTask = useCallback(
     (epicId: string) => {
       routeNotificationForHost(navigate, { kind: "epic", epicId }, Date.now(), {
@@ -218,6 +247,7 @@ export function useFocusActions(): FocusActions {
       openPrompt,
       openAgent,
       openBackground,
+      openBrowser,
       openTask,
       stopAgent,
       stopManagedCommand,
@@ -227,6 +257,7 @@ export function useFocusActions(): FocusActions {
       openPrompt,
       openAgent,
       openBackground,
+      openBrowser,
       openTask,
       stopAgent,
       stopManagedCommand,

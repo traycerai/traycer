@@ -89,12 +89,13 @@ export function epicIdsWithJobs(
   return new Set(background.map((row) => row.epicId));
 }
 
-/** The three numbers the summary line reports, from the same model the sections
+/** The numbers the summary line reports, from the same model the sections
  * render - so a segment can never name a count no section will draw. */
 export interface FocusCounts {
   readonly needsYou: number;
   readonly running: number;
   readonly background: number;
+  readonly browsers: number;
 }
 
 export function focusCounts(model: FocusModel): FocusCounts {
@@ -103,5 +104,6 @@ export function focusCounts(model: FocusModel): FocusCounts {
     running: runningTasks(model.tasks, epicIdsWithJobs(model.background))
       .length,
     background: model.background.length,
+    browsers: model.browsers.length,
   };
 }

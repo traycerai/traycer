@@ -5,6 +5,7 @@ import {
   type NotificationAttentionTier,
 } from "@/lib/notifications/notification-lifecycle";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
+import { browserTabTitleKey } from "@/lib/home-focus/focus-browsers";
 import {
   shallowEqualRow,
   stabilizeRows,
@@ -56,6 +57,10 @@ const PROMPT_KIND_BY_HOST_KIND: Readonly<Record<string, FocusPromptKind>> = {
 export function buildFocusPrompts(
   rows: ReadonlyArray<MergedNotificationRow>,
   taskTitles: ReadonlyMap<string, string>,
+  /** {@link browserTabTitleKey} → the tab's title, from the browser rows this
+   * same model is carrying. A browser prompt names a session and a tab and
+   * nothing a reader recognises; this is what turns that into a page name. */
+  browserTabTitles: ReadonlyMap<string, string>,
   previous: ReadonlyArray<FocusPromptRow>,
 ): ReadonlyArray<FocusPromptRow> {
   const candidates = selectPromptCandidates(rows);
@@ -78,6 +83,15 @@ export function buildFocusPrompts(
       body: row.body,
       createdAt: row.createdAt,
       originHostId: row.originHostId,
+      browserTabTitle:
+        target.browserTab === null
+          ? null
+          : (browserTabTitles.get(
+              browserTabTitleKey(
+                target.browserTab.sessionId,
+                target.browserTab.tabId,
+              ),
+            ) ?? null),
       activation: row,
     };
   });
@@ -195,24 +209,49 @@ function focusPromptKind(row: MergedNotificationRow): FocusPromptKind | null {
  *
  * A browser prompt names a session rather than a chat, so its `chatId` is
  * `null` - the row still opens (the activation payload carries the session and
- * tab), it just has no chat to attribute.
+ * tab), it just has no chat to attribute. It names a TAB instead, which is the
+ * one thing a reader recognises once the browser plane can put a title on it.
  */
-function promptTarget(row: MergedNotificationRow): {
+interface PromptTarget {
   readonly epicId: string | null;
   readonly chatId: string | null;
-} {
+  readonly browserTab: {
+    readonly sessionId: string;
+    readonly tabId: string;
+  } | null;
+}
+
+function promptTarget(row: MergedNotificationRow): PromptTarget {
   const payload = row.payload;
-  if (payload === null) return { epicId: null, chatId: null };
+  if (payload === null) return NO_PROMPT_TARGET;
   if (payload.kind === "approval") {
     // An approval payload's ids are optional on the wire; absent stays absent
     // rather than becoming an empty-string id nothing can open.
-    return { epicId: payload.epicId ?? null, chatId: payload.chatId ?? null };
+    return {
+      epicId: payload.epicId ?? null,
+      chatId: payload.chatId ?? null,
+      browserTab: null,
+    };
   }
   if (payload.kind === "interview") {
-    return { epicId: payload.epicId, chatId: payload.chatId };
+    return {
+      epicId: payload.epicId,
+      chatId: payload.chatId,
+      browserTab: null,
+    };
   }
   if (payload.kind === "browserSession") {
-    return { epicId: payload.epicId, chatId: null };
+    return {
+      epicId: payload.epicId,
+      chatId: null,
+      browserTab: { sessionId: payload.sessionId, tabId: payload.tabId },
+    };
   }
-  return { epicId: null, chatId: null };
+  return NO_PROMPT_TARGET;
 }
+
+const NO_PROMPT_TARGET: PromptTarget = {
+  epicId: null,
+  chatId: null,
+  browserTab: null,
+};

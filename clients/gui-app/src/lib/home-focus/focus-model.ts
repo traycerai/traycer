@@ -12,6 +12,18 @@ export interface FocusPromptRow {
   readonly body: string;
   readonly createdAt: number;
   readonly originHostId: string | null;
+  /**
+   * The BROWSER TAB a `browser` prompt is waiting in, when this window has that
+   * tab live. `null` for every other kind, and for a browser prompt whose task
+   * is not open here.
+   *
+   * A browser hand-off names a session and a tab and nothing a reader knows, so
+   * the row said "Needs you in the browser" and left them to guess which of
+   * their pages it meant. The title only exists where the tab does - the same
+   * mounted-only limit the whole browser plane carries - so it decorates the row
+   * rather than replacing anything on it.
+   */
+  readonly browserTabTitle: string | null;
   readonly activation: MergedNotificationRow; // handed to useNotificationActivation
 }
 export interface FocusAgentRow {
@@ -79,10 +91,66 @@ export interface FocusBackgroundRow {
   readonly startedAtMs: number | null; // managed commands only
   readonly stoppable: boolean;
 }
+/**
+ * What a browser tab is DOING, in the three states a reader acts on.
+ *
+ * The wire has six (`browserSessionStatusSchema`), and four of them -
+ * `provisioning`, `ready`, `navigating`, `closing` - are moments in one tab's
+ * ordinary life. A page that flickered between them would be reporting the
+ * host's bookkeeping rather than anything the user can decide from, so they
+ * collapse into `live`. The two that survive are the two that change what a
+ * reader does next: a `crashed` tab needs reopening, and a `dormant` one is a
+ * durable tab with no runtime attached, still addressable and costing nothing.
+ */
+export type FocusBrowserStatus = "live" | "dormant" | "crashed";
+
+/**
+ * One browser TAB, which is the unit a person thinks in.
+ *
+ * Sessions are the host's grouping - tabs sharing a browser profile - and they
+ * are deliberately not a level on this page: a task with two browsers and four
+ * pages is four rows with four titles, not two rows the reader has to expand.
+ *
+ * Browsers are their own plane, neither agents nor background items (the
+ * background-item kinds carry no browser kind), and they reach this client only
+ * through live coordinators - so the section covers tasks whose canvas is open
+ * in this window, and says so.
+ */
+export interface FocusBrowserRow {
+  readonly key: string;
+  readonly epicId: string;
+  readonly taskTitle: string | null;
+  /** The session's own host. Never `null`: a browser session is host-local for
+   * life and the inventory that produced this row names the machine. */
+  readonly hostId: string;
+  readonly sessionId: string;
+  readonly tabId: string;
+  /** The tab's document title, falling back to its url host and then to
+   * `Browser` - the same chain every other browser-tab reference resolves
+   * (`resolveTabTitle`), so a tab reads the same here as in the sidebar. */
+  readonly title: string;
+  /**
+   * The url's host, as the row's muted second part - and `null` when it would
+   * only repeat {@link FocusBrowserRow.title}, which is exactly the stale-title
+   * case where the title already IS the host.
+   */
+  readonly urlHost: string | null;
+  readonly url: string;
+  readonly status: FocusBrowserStatus;
+  /** The chat driving this tab right now, when one is. Attribution only - it
+   * grants no lock, and the tab is the user's to touch either way. */
+  readonly drivenByChatId: string | null;
+  /** That chat's name, `null` when this window cannot resolve it. Same
+   * mounted-only limit as every other name on this page. */
+  readonly drivenByAgentName: string | null;
+}
 export interface FocusModel {
   readonly prompts: ReadonlyArray<FocusPromptRow>; // attention order (blocking first, newest first)
   readonly tasks: ReadonlyArray<FocusTaskRow>; // tasks with ≥1 running agent; needsYou first, then most agents in turn
   readonly background: ReadonlyArray<FocusBackgroundRow>;
+  /** One row per browser tab of every task with a live coordinator in this
+   * window, grouped by task and ordered session then tab. */
+  readonly browsers: ReadonlyArray<FocusBrowserRow>;
   readonly coverage: {
     readonly activity: "live" | "reconnecting" | "disconnected" | "unknown";
     /**
@@ -98,6 +166,12 @@ export interface FocusModel {
     readonly degradedHostIds: ReadonlyArray<string>;
     readonly notifications: "local" | "cloud";
     readonly backgroundIsMountedOnly: true;
+    /** The same literal-`true` shape, for the same reason: browser inventory
+     * rides a live coordinator, so a task whose canvas no window has open
+     * contributes no rows and cannot be made to. A source that ever covers
+     * unmounted tasks fails to compile here rather than quietly outliving the
+     * caption that declares this limit. */
+    readonly browsersAreMountedOnly: true;
   };
   readonly badgeCount: number; // prompts.length
 }

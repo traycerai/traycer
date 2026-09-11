@@ -81,11 +81,13 @@ function model(overrides: Partial<FocusModel>): FocusModel {
     prompts: [],
     tasks: [],
     background: [],
+    browsers: [],
     coverage: {
       activity: "live",
       degradedHostIds: [],
       notifications: "cloud",
       backgroundIsMountedOnly: true,
+      browsersAreMountedOnly: true,
     },
     badgeCount: 0,
     ...overrides,
@@ -218,7 +220,7 @@ describe("focusCounts", () => {
           background: [backgroundRow({ epicId: "epic-idle" })],
         }),
       ),
-    ).toEqual({ needsYou: 0, running: 1, background: 1 });
+    ).toEqual({ needsYou: 0, running: 1, background: 1, browsers: 0 });
   });
 
   it("counts a background-only task with no job row of its own as running", () => {
@@ -235,7 +237,7 @@ describe("focusCounts", () => {
           background: [backgroundRow({ epicId: "epic-elsewhere" })],
         }),
       ),
-    ).toEqual({ needsYou: 0, running: 1, background: 1 });
+    ).toEqual({ needsYou: 0, running: 1, background: 1, browsers: 0 });
   });
 });
 

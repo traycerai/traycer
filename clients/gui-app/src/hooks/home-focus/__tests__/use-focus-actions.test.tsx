@@ -1,6 +1,9 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { FocusBackgroundRow } from "@/lib/home-focus/focus-model";
+import type {
+  FocusBackgroundRow,
+  FocusBrowserRow,
+} from "@/lib/home-focus/focus-model";
 import type { NotificationActivationOutcome } from "@/hooks/notifications/use-notification-activation";
 import type { FocusStopAgentInput } from "@/hooks/home-focus/use-focus-actions";
 import type { ManagedCommandLifecycleVariables } from "@/hooks/managed-command/use-managed-command-lifecycle-mutations";
@@ -324,6 +327,61 @@ describe("useFocusActions", () => {
     });
   });
 
+  describe("openBrowser", () => {
+    /** A browser session is host-local for life, so the row carries its host
+     * and the route must be told which machine to match a tile on. */
+    function browserRow(hostId: string): FocusBrowserRow {
+      return {
+        key: `${hostId}-session-1-tab-1`,
+        epicId: "epic-1",
+        taskTitle: "Storefront",
+        hostId,
+        sessionId: "session-1",
+        tabId: "tab-1",
+        title: "Checkout",
+        urlHost: "shop.example.com",
+        url: "https://shop.example.com/checkout",
+        status: "live",
+        drivenByChatId: null,
+        drivenByAgentName: null,
+      };
+    }
+
+    it("routes to the TAB, not to the task it lives in", () => {
+      const result = renderActions();
+
+      result.current.openBrowser(browserRow("host-a"));
+
+      expect(routeNotificationForHostMock).toHaveBeenCalledExactlyOnceWith(
+        navigateMock,
+        {
+          kind: "browserSession",
+          epicId: "epic-1",
+          sessionId: "session-1",
+          tabId: "tab-1",
+        },
+        expect.any(Number),
+        { originHostId: "host-a", effectiveHostId: "effective-host-1" },
+      );
+    });
+
+    it("passes the row's OWN host as the origin", () => {
+      const result = renderActions();
+
+      result.current.openBrowser(browserRow("host-elsewhere"));
+
+      // Without it a same-id tile on another machine would satisfy the match.
+      // This is the one action on the page that needs an origin host, and the
+      // reason is that a session id names a host-local object.
+      expect(routeNotificationForHostMock).toHaveBeenCalledWith(
+        navigateMock,
+        expect.objectContaining({ kind: "browserSession" }),
+        expect.any(Number),
+        expect.objectContaining({ originHostId: "host-elsewhere" }),
+      );
+    });
+  });
+
   describe("openPrompt", () => {
     it("calls activate with the row's payload/feedId/originHostId", () => {
       const payload = makeApprovalPayload("epic-1", "chat-1");
@@ -342,6 +400,7 @@ describe("useFocusActions", () => {
         epicId: "epic-1",
         chatId: "chat-1",
         taskTitle: null,
+        browserTabTitle: null,
         title: activation.title,
         body: activation.body,
         createdAt: activation.createdAt,
@@ -379,6 +438,7 @@ describe("useFocusActions", () => {
         epicId: null,
         chatId: null,
         taskTitle: null,
+        browserTabTitle: null,
         title: activation.title,
         body: activation.body,
         createdAt: activation.createdAt,

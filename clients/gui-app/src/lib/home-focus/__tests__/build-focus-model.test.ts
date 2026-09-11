@@ -8,6 +8,7 @@ import {
 } from "@/lib/home-focus/build-focus-model";
 import {
   makeApprovalPayload,
+  makeBrowserSessionPayload,
   makeEpicAgentActivity,
   makeMergedNotificationRow,
 } from "@/lib/home-focus/__tests__/fixtures";
@@ -18,6 +19,7 @@ function baseModelInput(
   return {
     notificationRows: [],
     degradedHostIds: [],
+    browsers: { epics: [], agentIdentities: new Map() },
     tasks: {
       byEpic: new Map(),
       taskTitles: new Map(),
@@ -353,5 +355,66 @@ describe("buildFocusModel", () => {
     const second = buildFocusModel(input, first);
 
     expect(second).toBe(first);
+  });
+
+  // The browser plane is window-local for the same shape of reason the
+  // background plane is, and the literal `true` is what puts that in the type.
+  it("declares both mounted-only limits in its coverage", () => {
+    const model = buildFocusModel(baseModelInput({}), EMPTY_FOCUS_MODEL);
+
+    expect(model.coverage.backgroundIsMountedOnly).toBe(true);
+    expect(model.coverage.browsersAreMountedOnly).toBe(true);
+  });
+
+  it("decorates a browser prompt with the tab title from its own browser rows", () => {
+    const model = buildFocusModel(
+      baseModelInput({
+        notificationRows: [
+          makeMergedNotificationRow({
+            feedId: "host:browser-1",
+            hostKind: "browser.human.needed",
+            severity: "needs_action",
+            payload: makeBrowserSessionPayload("epic-1", "session-1", "tab-1"),
+          }),
+        ],
+        browsers: {
+          epics: [
+            {
+              epicId: "epic-1",
+              taskTitle: "Storefront",
+              sessions: [
+                {
+                  sessionId: "session-1",
+                  scope: { kind: "epic", epicId: "epic-1" },
+                  hostId: "host-a",
+                  profile: "primary",
+                  lastActivityAt: 0,
+                  runtime: { kind: "headless", revision: 1 },
+                  tabs: [
+                    {
+                      tabId: "tab-1",
+                      url: "https://shop.example.com/checkout",
+                      originTier: "external",
+                      status: "ready",
+                      title: "Checkout",
+                      viewed: false,
+                      drivenBy: [],
+                      boundWindowId: null,
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+          agentIdentities: new Map(),
+        },
+      }),
+      EMPTY_FOCUS_MODEL,
+    );
+
+    // Built from the rows the page is showing, so the prompt can never name a
+    // tab the section below it is not listing.
+    expect(model.prompts[0]?.browserTabTitle).toBe("Checkout");
+    expect(model.browsers).toHaveLength(1);
   });
 });

@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { selectTaskGroups } from "@/lib/home-focus/focus-task-groups";
+import {
+  resolveBrowserVia,
+  selectTaskGroups,
+  type FocusTaskGroupAgent,
+} from "@/lib/home-focus/focus-task-groups";
 import type {
   FocusAgentRow,
   FocusBackgroundRow,
+  FocusBrowserRow,
   FocusModel,
   FocusPromptRow,
   FocusTaskRow,
@@ -58,6 +63,7 @@ function promptRow(overrides: Partial<FocusPromptRow>): FocusPromptRow {
     body: "",
     createdAt: 0,
     originHostId: null,
+    browserTabTitle: null,
     activation: activation(key),
     ...overrides,
   };
@@ -108,16 +114,37 @@ function backgroundRow(
   };
 }
 
+function browserRow(overrides: Partial<FocusBrowserRow>): FocusBrowserRow {
+  const tabId = overrides.tabId ?? nextId("tab");
+  return {
+    key: nextId("browser"),
+    epicId: "epic-1",
+    taskTitle: "Task",
+    hostId: "host-local",
+    sessionId: "session-1",
+    tabId,
+    title: "Checkout",
+    urlHost: "example.com",
+    url: "https://example.com/checkout",
+    status: "live",
+    drivenByChatId: null,
+    drivenByAgentName: null,
+    ...overrides,
+  };
+}
+
 function model(overrides: Partial<FocusModel>): FocusModel {
   return {
     prompts: [],
     tasks: [],
     background: [],
+    browsers: [],
     coverage: {
       activity: "live",
       degradedHostIds: [],
       notifications: "cloud",
       backgroundIsMountedOnly: true,
+      browsersAreMountedOnly: true,
     },
     badgeCount: 0,
     ...overrides,
@@ -388,5 +415,122 @@ describe("selectTaskGroups via labels", () => {
       "impl",
       "reviewer",
     ]);
+  });
+});
+
+// H8: browsers join the union, and a driven tab hangs off the agent driving it.
+describe("selectTaskGroups and browsers", () => {
+  it("attaches a task's tabs to its group", () => {
+    const groups = selectTaskGroups(
+      model({
+        tasks: [taskRow({ epicId: "epic-a" })],
+        browsers: [browserRow({ epicId: "epic-a", tabId: "t1" })],
+      }),
+    );
+
+    expect(groups[0]?.browsers.map((row) => row.tabId)).toEqual(["t1"]);
+  });
+
+  it("groups an epic whose only activity is a browser", () => {
+    const groups = selectTaskGroups(
+      model({ browsers: [browserRow({ epicId: "epic-browser-only" })] }),
+    );
+
+    // There is no Browsers section under Tasks, so an intersection would drop
+    // the row silently.
+    expect(groups.map((group) => group.epicId)).toEqual(["epic-browser-only"]);
+    expect(groups[0]?.task).toBeNull();
+    expect(groups[0]?.backgroundVisible).toBe(false);
+  });
+
+  it("lists a browser-only epic after the background-only ones", () => {
+    const groups = selectTaskGroups(
+      model({
+        tasks: [taskRow({ epicId: "epic-task" })],
+        background: [backgroundRow({ epicId: "epic-job" })],
+        browsers: [browserRow({ epicId: "epic-page" })],
+      }),
+    );
+
+    expect(groups.map((group) => group.epicId)).toEqual([
+      "epic-task",
+      "epic-job",
+      "epic-page",
+    ]);
+  });
+
+  it("does not list an epic twice when it has both a job and a browser", () => {
+    const groups = selectTaskGroups(
+      model({
+        background: [backgroundRow({ epicId: "epic-both" })],
+        browsers: [browserRow({ epicId: "epic-both" })],
+      }),
+    );
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.jobs).toHaveLength(1);
+    expect(groups[0]?.browsers).toHaveLength(1);
+  });
+
+  it("carries plain rows, so no `via` can be computed before the agents settle", () => {
+    const groups = selectTaskGroups(
+      model({
+        tasks: [
+          taskRow({
+            epicId: "epic-a",
+            agents: [agentRow({ agentId: "chat-1", title: "Reviewer" })],
+          }),
+        ],
+        browsers: [browserRow({ epicId: "epic-a", drivenByChatId: "chat-1" })],
+      }),
+    );
+
+    // The agent set narrows twice after this point - the mid-turn rule and the
+    // host split - so the label is resolved at the render site instead. There
+    // is deliberately no earlier value here to go stale.
+    expect(groups[0]?.browsers[0]).not.toHaveProperty("via");
+  });
+});
+
+describe("resolveBrowserVia", () => {
+  function agentEntry(agentId: string, title: string): FocusTaskGroupAgent {
+    return { agent: agentRow({ agentId, title }), via: null };
+  }
+
+  it("names the driving agent when it is one of the rows being drawn", () => {
+    const paired = resolveBrowserVia(
+      [browserRow({ drivenByChatId: "chat-1" })],
+      [agentEntry("chat-1", "Reviewer")],
+    );
+
+    expect(paired[0]?.via).toBe("Reviewer");
+  });
+
+  it("clears `via` when the driver was filtered out of the visible rows", () => {
+    const paired = resolveBrowserVia(
+      [
+        browserRow({
+          drivenByChatId: "chat-1",
+          // The model resolved a name - the chat IS open in this window - and
+          // the label still has to go, because the row it would point at is
+          // not being drawn.
+          drivenByAgentName: "Reviewer",
+        }),
+      ],
+      [],
+    );
+
+    expect(paired[0]?.via).toBeNull();
+    // Attribution is a different question from navigation, and survives.
+    expect(paired[0]?.browser.drivenByAgentName).toBe("Reviewer");
+  });
+
+  it("leaves an undriven tab at task level", () => {
+    const paired = resolveBrowserVia(
+      [browserRow({ drivenByChatId: null })],
+      [agentEntry("chat-1", "Reviewer")],
+    );
+
+    expect(paired[0]?.via).toBeNull();
   });
 });

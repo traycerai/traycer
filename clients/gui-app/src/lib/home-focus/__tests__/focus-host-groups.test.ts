@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  focusActivityHostIds,
   focusHostIds,
+  splitTaskGroupByHost,
   focusPromptHostId,
   groupRowsByHost,
   isUnknownHostId,
@@ -12,10 +14,12 @@ import {
 import type {
   FocusAgentRow,
   FocusBackgroundRow,
+  FocusBrowserRow,
   FocusModel,
   FocusPromptRow,
   FocusTaskRow,
 } from "@/lib/home-focus/focus-model";
+import { resolveBrowserVia } from "@/lib/home-focus/focus-task-groups";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 
 let seq = 0;
@@ -59,6 +63,7 @@ function promptRow(overrides: Partial<FocusPromptRow>): FocusPromptRow {
     body: "",
     createdAt: 0,
     originHostId: null,
+    browserTabTitle: null,
     activation: activation(key),
     ...overrides,
   };
@@ -109,16 +114,36 @@ function backgroundRow(
   };
 }
 
+function browserRow(overrides: Partial<FocusBrowserRow>): FocusBrowserRow {
+  return {
+    key: nextId("browser"),
+    epicId: "epic-1",
+    taskTitle: "Task",
+    hostId: "host-a",
+    sessionId: "session-1",
+    tabId: "tab-1",
+    title: "Checkout",
+    urlHost: "example.com",
+    url: "https://example.com/checkout",
+    status: "live",
+    drivenByChatId: null,
+    drivenByAgentName: null,
+    ...overrides,
+  };
+}
+
 function model(overrides: Partial<FocusModel>): FocusModel {
   return {
     prompts: [],
     tasks: [],
     background: [],
+    browsers: [],
     coverage: {
       activity: "live",
       degradedHostIds: [],
       notifications: "cloud",
       backgroundIsMountedOnly: true,
+      browsersAreMountedOnly: true,
     },
     badgeCount: 0,
     ...overrides,
@@ -446,5 +471,132 @@ describe("focusPromptHostId", () => {
       "host-b",
     );
     expect(focusPromptHostId(promptRow({ originHostId: null }))).toBeNull();
+  });
+});
+
+// A page open on a second machine is a fleet fact the headings report, but
+// it is NOT evidence about the activity plane's coverage.
+describe("focusHostIds and the browser plane", () => {
+  it("groups once a browser names a second host", () => {
+    const hostIds = focusHostIds(
+      model({
+        tasks: [
+          taskRow({
+            epicId: "epic-1",
+            agents: [agentRow({ hostId: "host-a", tier: "turn" })],
+          }),
+        ],
+        browsers: [browserRow({ hostId: "host-b" })],
+      }),
+      "host-a",
+    );
+
+    expect([...hostIds].sort()).toEqual(["host-a", "host-b"]);
+    expect(shouldGroupByHost(hostIds)).toBe(true);
+  });
+
+  it("leaves a browser host out of the ACTIVITY hosts", () => {
+    const pageModel = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-1",
+          agents: [agentRow({ hostId: "host-a", tier: "turn" })],
+        }),
+      ],
+      browsers: [browserRow({ hostId: "host-b" })],
+    });
+
+    // A host whose only rows here are browser tabs has a heading and still
+    // cannot carry "some activity may be missing" - browsers ride their own
+    // stream, so that heading is not evidence either way.
+    expect([...focusActivityHostIds(pageModel, "host-a")]).toEqual(["host-a"]);
+  });
+});
+
+describe("splitTaskGroupByHost and browsers", () => {
+  it("files each tab under the machine its page is open on", () => {
+    const group = {
+      epicId: "epic-1",
+      taskTitle: "Task",
+      task: null,
+      prompts: [],
+      agents: [],
+      jobs: [backgroundRow({ epicId: "epic-1", hostId: "host-a" })],
+      browsers: [
+        browserRow({ hostId: "host-a", tabId: "t1" }),
+        browserRow({ hostId: "host-b", tabId: "t2" }),
+      ],
+      backgroundVisible: true,
+    };
+
+    const slices = splitTaskGroupByHost(group, {
+      enabled: true,
+      activeHostId: "host-a",
+    });
+
+    expect(
+      slices.map((slice) => [
+        slice.hostId,
+        slice.group.browsers.map((row) => row.tabId),
+      ]),
+    ).toEqual([
+      ["host-a", ["t1"]],
+      ["host-b", ["t2"]],
+    ]);
+  });
+
+  // The split is one of the two places the agent set narrows, so a slice must
+  // not be able to inherit a label for an agent that stayed on the other
+  // machine. It carries plain rows for exactly that reason.
+  it("hands each slice plain rows, never a label from the unsplit group", () => {
+    const group = {
+      epicId: "epic-1",
+      taskTitle: "Task",
+      task: taskRow({
+        epicId: "epic-1",
+        agents: [agentRow({ agentId: "chat-1", hostId: "host-a" })],
+      }),
+      prompts: [],
+      agents: [
+        {
+          agent: agentRow({
+            agentId: "chat-1",
+            hostId: "host-a",
+            title: "Reviewer",
+          }),
+          via: null,
+        },
+      ],
+      jobs: [],
+      browsers: [
+        browserRow({
+          hostId: "host-b",
+          tabId: "t-remote",
+          drivenByChatId: "chat-1",
+          drivenByAgentName: "Reviewer",
+        }),
+      ],
+      backgroundVisible: false,
+    };
+
+    const slices = splitTaskGroupByHost(group, {
+      enabled: true,
+      activeHostId: "host-a",
+    });
+    const remote = slices.find((slice) => slice.hostId === "host-b");
+
+    // The driver is on A; the page is on B. B's slice has no Reviewer row, and
+    // `resolveBrowserVia` at the render site is what will say so - there is no
+    // `via` here to carry over.
+    expect(remote?.group.agents).toEqual([]);
+    expect(remote?.group.browsers.map((row) => row.tabId)).toEqual([
+      "t-remote",
+    ]);
+    expect(
+      resolveBrowserVia(
+        remote?.group.browsers ?? [],
+        remote?.group.agents ?? [],
+      ).map((entry) => entry.via),
+    ).toEqual([null]);
   });
 });

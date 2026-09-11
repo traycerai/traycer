@@ -6,8 +6,14 @@ import {
   buildFocusBackground,
   type FocusBackgroundChat,
 } from "@/lib/home-focus/focus-background";
+import {
+  buildFocusBrowsers,
+  focusBrowserTabTitles,
+  type FocusBrowsersInput,
+} from "@/lib/home-focus/focus-browsers";
 import type {
   FocusBackgroundRow,
+  FocusBrowserRow,
   FocusModel,
   FocusPromptRow,
   FocusTaskRow,
@@ -42,6 +48,11 @@ import { shallowEqualRow } from "@/lib/home-focus/focus-identity";
  *   `true` rather than a boolean, which puts that limit in the TYPE: a source
  *   that ever covers unmounted tasks cannot be widened into this field without
  *   failing to compile here, where the caption's premise is decided.
+ * - `browsers` covers the same narrow set for the same shape of reason: a
+ *   browser inventory arrives on a `browser.sessions` stream held by a mounted
+ *   canvas, and Home reads that registry without acquiring one of its own
+ *   (`use-browser-sessions-plane`). `coverage.browsersAreMountedOnly` records it
+ *   in the type the same way.
  *
  * What is missing is missing for a reason, not by omission: there are no agent
  * start timestamps on the activity plane (so no elapsed time), and a received
@@ -65,11 +76,13 @@ export const EMPTY_FOCUS_MODEL: FocusModel = Object.freeze({
   prompts: Object.freeze<FocusPromptRow[]>([]),
   tasks: Object.freeze<FocusTaskRow[]>([]),
   background: Object.freeze<FocusBackgroundRow[]>([]),
+  browsers: Object.freeze<FocusBrowserRow[]>([]),
   coverage: Object.freeze({
     activity: "unknown",
     degradedHostIds: Object.freeze<string[]>([]),
     notifications: "local",
     backgroundIsMountedOnly: true,
+    browsersAreMountedOnly: true,
   }),
   badgeCount: 0,
 });
@@ -94,6 +107,7 @@ export interface BuildFocusModelInput {
   readonly notificationRows: ReadonlyArray<MergedNotificationRow>;
   readonly tasks: Omit<FocusTasksInput, "promptEpicIds">;
   readonly backgroundChats: ReadonlyArray<FocusBackgroundChat>;
+  readonly browsers: FocusBrowsersInput;
   readonly activity: FocusActivityHealth;
   /**
    * The hosts whose OWN slice is degraded, sorted, from the fold that compared
@@ -112,14 +126,22 @@ export interface BuildFocusModelInput {
  * Prompts are built first because the task rows read their epic ids: a task
  * whose prompt row is loaded reads `needsYou` even when the host's indicator
  * batch did not cover it.
+ *
+ * Browsers are built BEFORE prompts for the mirror-image reason: a browser
+ * hand-off names a session and a tab, and the tab's title exists only in the
+ * browser rows - so the prompt reads the tab from the section below it rather
+ * than resolving the plane a second time and risking a name the page is not
+ * showing.
  */
 export function buildFocusModel(
   input: BuildFocusModelInput,
   previous: FocusModel,
 ): FocusModel {
+  const browsers = buildFocusBrowsers(input.browsers, previous.browsers);
   const prompts = buildFocusPrompts(
     input.notificationRows,
     input.tasks.taskTitles,
+    focusBrowserTabTitles(browsers),
     previous.prompts,
   );
   const tasks = buildFocusTasks(
@@ -143,11 +165,13 @@ export function buildFocusModel(
       : input.degradedHostIds,
     notifications: focusNotificationCoverage(input.feedMode),
     backgroundIsMountedOnly: true,
+    browsersAreMountedOnly: true,
   } as const;
   const next: FocusModel = {
     prompts,
     tasks,
     background,
+    browsers,
     coverage: shallowEqualRow(coverage, previous.coverage)
       ? previous.coverage
       : coverage,

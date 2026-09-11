@@ -1,6 +1,6 @@
 /**
- * The three row shapes Home renders: a pending prompt, a task with its running
- * agents, and a background job.
+ * The four row shapes Home renders: a pending prompt, a task with its running
+ * agents, a background job, and a browser tab.
  *
  * They share the History list's row language (`epics-list-panel`'s row card) so
  * a task reads the same here as it does in History: one rounded card, `p-3`
@@ -55,9 +55,11 @@ import {
   RowItemName,
   RowStatus,
   RowStatusDuration,
+  RowStatusNote,
 } from "@/components/home-focus/home-focus-row-parts";
 import {
   focusAgentState,
+  focusBrowserState,
   focusJobState,
   focusTaskState,
   FOCUS_ROW_STATES,
@@ -67,6 +69,7 @@ import { cn } from "@/lib/utils";
 import type {
   FocusAgentRow,
   FocusBackgroundRow,
+  FocusBrowserRow,
   FocusPromptKind,
   FocusPromptRow,
   FocusTaskRow,
@@ -87,6 +90,9 @@ export interface HomeFocusRowActions {
   /** The job's own chat, not just its task - a background row names a shell in
    * one conversation, and landing on the task would make the user find it. */
   readonly openBackground: (row: FocusBackgroundRow) => void;
+  /** The parked tile for this tab, on the tab's OWN host - which is the whole
+   * point of the row. */
+  readonly openBrowser: (row: FocusBrowserRow) => void;
   /** One object, carrying the agent's own host: the stop has to be routed to
    * the machine the agent runs on, not to whichever host this window is on. */
   readonly stopAgent: (input: {
@@ -277,15 +283,30 @@ export function HomeFocusPromptRow(props: {
             <span className="text-muted-foreground"> — {row.body}</span>
           )}
         </RowItemName>
+        {/* The browser tab comes BEFORE the task, because it is the nearer
+            context - "Needs you in the browser · Checkout · in Storefront"
+            names the page first and the task it belongs to second, the same
+            nearest-first order a job row's chat and task follow. It is present
+            only where the plane has the tab, which is the same mounted-only
+            limit the Browsers section carries. */}
         <RowContext
-          parts={[{ role: "task", title: row.taskTitle }]}
+          parts={[
+            // No `in`: the tab is not somewhere the prompt lives, it is the
+            // page the prompt is about.
+            {
+              role: "browser-tab",
+              title: row.browserTabTitle,
+              preposition: null,
+            },
+            { role: "task", title: row.taskTitle, preposition: "in" },
+          ]}
           testId="home-focus-row-context"
         />
         <OriginHostChip originHostId={row.originHostId} />
       </button>
       <RowStatus
         state="needs-you"
-        duration={<RowStatusDuration startedAtMs={row.createdAt} />}
+        detail={<RowStatusDuration startedAtMs={row.createdAt} />}
       />
       {/* Nothing to stop, and the track is reserved anyway: this row has to
           spend the same width on actions as the rows around it, or their
@@ -509,7 +530,7 @@ export function HomeFocusTaskRow(props: {
           <ColdTaskAgents agents={row.agents} />
         )}
       </div>
-      <RowStatus state={focusTaskState(row, 0)} duration={null} />
+      <RowStatus state={focusTaskState(row, 0)} detail={null} />
       <HomeFocusTaskStopCluster
         row={row}
         actions={actions}
@@ -710,15 +731,24 @@ export function HomeFocusBackgroundRow(props: {
         <RowItemName testId="home-focus-row-name">{row.label}</RowItemName>
         <RowContext
           parts={[
-            { role: "chat", title: row.chatTitle },
-            { role: "task", title: row.taskTitle },
+            { role: "chat", title: row.chatTitle, preposition: "in" },
+            // `in` belongs to the FIRST location actually rendered, and a part
+            // with no title is dropped - so on a job whose chat this window
+            // cannot name, the task is that first location and takes the word.
+            // Without this the row read `· Storefront`, which names a place and
+            // does not say the job is in it.
+            {
+              role: "task",
+              title: row.taskTitle,
+              preposition: row.chatTitle === null ? "in" : null,
+            },
           ]}
           testId="home-focus-row-context"
         />
       </button>
       <RowStatus
         state={focusJobState(row)}
-        duration={
+        detail={
           row.startedAtMs === null ? null : (
             <RowStatusDuration startedAtMs={row.startedAtMs} />
           )
@@ -735,6 +765,102 @@ export function HomeFocusBackgroundRow(props: {
           testId="home-focus-background-stop"
         />
       </RowActionsCell>
+    </li>
+  );
+}
+
+/**
+ * What a browser tab IS: its page title, then the site it is on.
+ *
+ * Two nodes in two tones rather than one string, the same grammar every other
+ * row follows - a title and a hostname run together read as one odd name. The
+ * url host is dropped by the model when it would only repeat the title, which
+ * is the stale-title case, so this renders whatever it is given.
+ */
+export function BrowserTabName(props: {
+  readonly row: FocusBrowserRow;
+}): ReactNode {
+  return (
+    <>
+      <RowItemName testId="home-focus-row-name">{props.row.title}</RowItemName>
+      {props.row.urlHost === null ? null : (
+        <span
+          className="min-w-0 shrink truncate text-ui-xs text-muted-foreground"
+          data-testid="home-focus-browser-url-host"
+        >
+          {props.row.urlHost}
+        </span>
+      )}
+    </>
+  );
+}
+
+/** `driven by <agent>`, when a conversation is working this page right now. */
+export function BrowserStatusDetail(props: {
+  readonly row: FocusBrowserRow;
+}): ReactNode {
+  if (props.row.drivenByAgentName === null) return null;
+  return <RowStatusNote text={`driven by ${props.row.drivenByAgentName}`} />;
+}
+
+/**
+ * One browser tab, and the click that goes there.
+ *
+ * The row body routes through the browser-session deep link, which focuses the
+ * parked tile wherever it already is and opens the task on it otherwise - the
+ * same path the bell's own browser hand-off takes, so a tab reached from Home
+ * lands exactly where a tab reached from a notification does.
+ *
+ * NO stop control, and the actions cell is reserved anyway: closing a tab is a
+ * canvas action on the tile, and every row on this page has to spend the same
+ * width on actions or the status column above it moves.
+ */
+export function HomeFocusBrowserRow(props: {
+  readonly row: FocusBrowserRow;
+  readonly actions: HomeFocusRowActions;
+}): ReactNode {
+  const { row, actions } = props;
+  const density = useHomeDensity();
+  return (
+    <li
+      className={homeRowClass(density)}
+      data-density={density}
+      data-testid="home-focus-browser-row"
+      data-status={row.status}
+    >
+      {/* The full url, which the row deliberately does not spend a line on:
+          the host is what identifies a page at a glance, the path is what you
+          check when you are unsure it is the right one. `asChild`, so the
+          tooltip adds no node between the `<li>` and its body button and the
+          row's grid is untouched. */}
+      <TooltipWrapper
+        label={row.url}
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
+      >
+        <button
+          type="button"
+          onClick={() => actions.openBrowser(row)}
+          className={ROW_BODY_CLASS}
+          data-testid="home-focus-browser-open-body"
+        >
+          <Globe
+            aria-hidden
+            className="size-4 shrink-0 text-muted-foreground"
+          />
+          <BrowserTabName row={row} />
+          <RowContext
+            parts={[{ role: "task", title: row.taskTitle, preposition: "in" }]}
+            testId="home-focus-row-context"
+          />
+        </button>
+      </TooltipWrapper>
+      <RowStatus
+        state={focusBrowserState(row)}
+        detail={<BrowserStatusDetail row={row} />}
+      />
+      <RowActionsCell>{null}</RowActionsCell>
     </li>
   );
 }

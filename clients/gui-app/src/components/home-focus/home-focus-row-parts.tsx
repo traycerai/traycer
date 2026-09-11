@@ -51,18 +51,32 @@ export function RowItemName(props: {
  * the name in it: a chat and its task can be called the same thing, and they
  * are still two different objects that both have to render. */
 export interface RowContextPart {
-  readonly role: "chat" | "task";
+  readonly role: "chat" | "task" | "browser-tab";
   readonly title: string | null;
+  /**
+   * Whether this part names WHERE the row's subject lives, and so reads
+   * `in <name>`.
+   *
+   * Per part rather than "the first one gets it", which is what this replaces.
+   * The two happened to coincide for a job - `in <chat> · <task>` - and came
+   * apart the moment a browser prompt needed `· <tab> · in <task>`: the tab is
+   * not somewhere the prompt lives, it is the thing the prompt is ABOUT, and
+   * the task after it still is a location. A positional rule cannot express
+   * that, and quietly produced `in Checkout · Storefront` - which reads as the
+   * prompt being inside a page inside nothing.
+   */
+  readonly preposition: "in" | null;
 }
 
 /**
- * Where the row's subject lives: `· in <chat> · <task>`, muted, each part
+ * What surrounds the row's subject: `· in <chat> · <task>`, muted, each part
  * truncating on its own.
  *
  * `in` is a real word rather than another separator because two adjacent names
- * with a dot between them is exactly what read as one name. The leading `·` is
- * `aria-hidden`: it separates for the eye, and a reader hears "Ten minute
- * heartbeat, in Greeting and Introduction".
+ * with a dot between them is exactly what read as one name. Which parts carry
+ * it is each caller's answer ({@link RowContextPart.preposition}), not this
+ * component's. The leading `·` is `aria-hidden`: it separates for the eye, and
+ * a reader hears "Ten minute heartbeat, in Greeting and Introduction".
  */
 export function RowContext(props: {
   /** Nearest first - the conversation before the task, because the nearer one
@@ -78,13 +92,15 @@ export function RowContext(props: {
       className="flex min-w-0 shrink items-center gap-1 text-muted-foreground"
       data-testid={props.testId}
     >
-      {parts.map((part, index) => (
+      {parts.map((part) => (
         <span key={part.role} className="flex min-w-0 items-center gap-1">
           <span aria-hidden className="shrink-0">
             ·
           </span>
           <span className="min-w-0 truncate" data-role={part.role}>
-            {index === 0 ? `in ${part.title}` : part.title}
+            {part.preposition === null
+              ? part.title
+              : `${part.preposition} ${part.title}`}
           </span>
         </span>
       ))}
@@ -103,10 +119,18 @@ export function RowContext(props: {
  */
 export function RowStatus(props: {
   readonly state: FocusRowState;
-  /** Rendered after the word as `· <duration>`. `null` where the model has no
-   * timestamp - agents have none on the activity plane, and inventing one is
-   * the kind of confident guess this page exists to stop making. */
-  readonly duration: ReactNode;
+  /**
+   * Rendered after the word as `· <detail>`, and `null` wherever the model has
+   * nothing to add - agents have no start timestamp on the activity plane, and
+   * inventing one is the kind of confident guess this page exists to stop
+   * making.
+   *
+   * A slot rather than a duration: how long a thing has been running is the
+   * commonest answer ({@link RowStatusDuration}), but a browser tab's is who is
+   * driving it ({@link RowStatusNote}), and both belong in the same place after
+   * the same word for the column to stay one column.
+   */
+  readonly detail: ReactNode;
 }): ReactNode {
   const style = FOCUS_ROW_STATES[props.state];
   return (
@@ -132,7 +156,31 @@ export function RowStatus(props: {
         data-testid="home-focus-row-status-dot"
       />
       <span className={cn("truncate", style.wordClassName)}>{style.word}</span>
-      {props.duration}
+      {props.detail}
+    </span>
+  );
+}
+
+/**
+ * The `· driven by Reviewer` half of a status cell: a fixed fact rather than a
+ * ticking one.
+ *
+ * Hides on a narrow row under Compact exactly as {@link RowStatusDuration}
+ * does, and for the same reason - the word is what must survive - but holds no
+ * clock, because nothing about it changes between frames.
+ */
+export function RowStatusNote(props: { readonly text: string }): ReactNode {
+  const density = useHomeDensity();
+  return (
+    <span
+      className={cn(
+        "min-w-0 truncate text-muted-foreground",
+        density === "compact" && "@max-sm:hidden",
+      )}
+      data-testid="home-focus-row-status-note"
+      data-density={density}
+    >
+      · {props.text}
     </span>
   );
 }

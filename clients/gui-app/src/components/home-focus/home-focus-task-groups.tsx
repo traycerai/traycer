@@ -1,10 +1,12 @@
 /**
  * The Tasks view's second section: one disclosure row per task, grouping the
- * agents running in it and the background jobs it has warm in this window.
+ * agents running in it, the background jobs it has warm in this window, and the
+ * browser tabs it has open here.
  *
- * Two levels and no more. A task expands into WORK ROWS - agents, then jobs -
- * and an agent started by another agent stays at that level, saying `via
- * <parent>` instead of taking a third indent. The section above this one
+ * Two levels and no more. A task expands into WORK ROWS - agents, then jobs,
+ * then browser tabs - and a row hanging off another row stays at that level,
+ * saying `via <parent>` instead of taking a third indent. That covers both
+ * nestings: an agent another agent started, and a page an agent is driving. The section above this one
  * ("Needs you") is never duplicated here: a task that wants the user carries a
  * noninteractive glyph and a count, and the actionable rows stay in the one
  * place they can be acted on.
@@ -15,10 +17,12 @@
  * task that comes back comes back at the section's default.
  */
 import { useState, type ReactNode } from "react";
-import { ChevronRight, Layers } from "lucide-react";
+import { ChevronRight, Globe, Layers } from "lucide-react";
 import {
   AgentGlyph,
   BackgroundGlyph,
+  BrowserStatusDetail,
+  BrowserTabName,
   ColdTaskAgents,
   HomeFocusTaskStopCluster,
   TaskAttentionGlyph,
@@ -33,6 +37,7 @@ import {
 } from "@/components/home-focus/home-focus-row-parts";
 import {
   focusAgentState,
+  focusBrowserState,
   focusJobState,
   focusTaskState,
 } from "@/lib/home-focus/focus-row-status";
@@ -42,14 +47,17 @@ import {
   homeRowClass,
   ROW_BODY_CLASS,
 } from "@/components/home-focus/home-focus-row-style";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { useHomeDensity } from "@/hooks/home-focus/use-home-density";
 import {
   focusAgentDisplayName,
   focusTaskTitleOf,
 } from "@/lib/home-focus/focus-row-labels";
-import type {
-  FocusTaskGroup,
-  FocusTaskGroupAgent,
+import {
+  resolveBrowserVia,
+  type FocusTaskGroup,
+  type FocusTaskGroupAgent,
+  type FocusTaskGroupBrowser,
 } from "@/lib/home-focus/focus-task-groups";
 import type { FocusBackgroundRow } from "@/lib/home-focus/focus-model";
 import { cn } from "@/lib/utils";
@@ -112,9 +120,20 @@ export function HomeFocusTaskGroups(props: {
 function groupWorkRows(group: FocusTaskGroup): {
   readonly agents: ReadonlyArray<FocusTaskGroupAgent>;
   readonly jobs: ReadonlyArray<FocusBackgroundRow>;
+  readonly browsers: ReadonlyArray<FocusTaskGroupBrowser>;
 } {
   const cold = group.task !== null && !group.task.mountedHere;
-  if (cold) return { agents: [], jobs: group.jobs };
+  // A cold task names no agents, but its browsers are not derived from names -
+  // they come from a live coordinator, and a task can have one open with
+  // nothing mounted in the projection. So the pages stay, and every `via` is
+  // `null`, because there is no agent row here to point one at.
+  if (cold) {
+    return {
+      agents: [],
+      jobs: group.jobs,
+      browsers: resolveBrowserVia(group.browsers, []),
+    };
+  }
   // Mid-turn agents, plus any background-tier agent whose work this window has
   // no job row for. A background-tier agent beside its own job rows is the
   // duplicate decision 7 removes: the chat is not itself doing anything, the
@@ -125,9 +144,15 @@ function groupWorkRows(group: FocusTaskGroup): {
       group.backgroundVisible,
     ).map((agent) => agent.agentId),
   );
+  const agents = group.agents.filter((entry) => shown.has(entry.agent.agentId));
   return {
-    agents: group.agents.filter((entry) => shown.has(entry.agent.agentId)),
+    agents,
     jobs: group.jobs,
+    // AFTER the filter, which is the point: this function is the last thing
+    // that narrows the agent set, so it is the only place that can say which
+    // rows a `via` may name. A tab driven by an agent the line above just hid
+    // reads without one rather than pointing at a row that is not there.
+    browsers: resolveBrowserVia(group.browsers, agents),
   };
 }
 
@@ -142,7 +167,8 @@ function HomeFocusTaskGroupRow(props: {
   const [expanded, setExpanded] = useState<boolean>(props.defaultExpanded);
   const title = focusTaskTitleOf(group.taskTitle);
   const work = groupWorkRows(group);
-  const hasBody = work.agents.length > 0 || work.jobs.length > 0;
+  const hasBody =
+    work.agents.length > 0 || work.jobs.length > 0 || work.browsers.length > 0;
   const showBody = hasBody && expanded;
   const bodyId = `home-focus-task-group-${group.epicId}`;
   return (
@@ -208,7 +234,7 @@ function HomeFocusTaskGroupRow(props: {
         </div>
         <RowStatus
           state={focusTaskState(group.task, group.prompts.length)}
-          duration={null}
+          detail={null}
         />
         {group.task === null ? (
           <RowActionsCell>{null}</RowActionsCell>
@@ -226,6 +252,7 @@ function HomeFocusTaskGroupRow(props: {
           epicId={group.epicId}
           agents={work.agents}
           jobs={work.jobs}
+          browsers={work.browsers}
           actions={actions}
         />
       ) : null}
@@ -267,6 +294,7 @@ function TaskGroupSummary(props: {
   readonly work: {
     readonly agents: ReadonlyArray<FocusTaskGroupAgent>;
     readonly jobs: ReadonlyArray<FocusBackgroundRow>;
+    readonly browsers: ReadonlyArray<FocusTaskGroupBrowser>;
   };
 }): ReactNode {
   const { group } = props;
@@ -297,6 +325,20 @@ function TaskGroupSummary(props: {
           {group.jobs.length} bg
         </span>
       ) : null}
+      {/* Omitted at zero rather than shown as `0 browsers`, and for a sharper
+          reason than the other badges: this plane is mounted-only, so a zero
+          here would not mean "no pages open" - it would mean "no coordinator in
+          this window", which is not a fact about the task at all. */}
+      {props.work.browsers.length === 0 ? null : (
+        <span
+          className={BADGE_CLASS}
+          data-testid="home-focus-task-group-browsers"
+        >
+          {props.work.browsers.length === 1
+            ? "1 browser"
+            : `${props.work.browsers.length} browsers`}
+        </span>
+      )}
     </>
   );
 }
@@ -308,6 +350,7 @@ function TaskGroupBody(props: {
   readonly epicId: string;
   readonly agents: ReadonlyArray<FocusTaskGroupAgent>;
   readonly jobs: ReadonlyArray<FocusBackgroundRow>;
+  readonly browsers: ReadonlyArray<FocusTaskGroupBrowser>;
   readonly actions: HomeFocusRowActions;
 }): ReactNode {
   const { actions } = props;
@@ -327,6 +370,15 @@ function TaskGroupBody(props: {
       ))}
       {props.jobs.map((job) => (
         <TaskGroupJobRow key={job.key} job={job} actions={actions} />
+      ))}
+      {/* Pages last: agents are who is working, jobs are what is running, and
+          a browser tab is where some of that work is happening. */}
+      {props.browsers.map((entry) => (
+        <TaskGroupBrowserRow
+          key={entry.browser.key}
+          entry={entry}
+          actions={actions}
+        />
       ))}
     </ul>
   );
@@ -369,7 +421,7 @@ function TaskGroupAgentRow(props: {
           </span>
         )}
       </button>
-      <RowStatus state={focusAgentState(agent)} duration={null} />
+      <RowStatus state={focusAgentState(agent)} detail={null} />
       <RowActionsCell>{null}</RowActionsCell>
     </li>
   );
@@ -398,17 +450,79 @@ function TaskGroupJobRow(props: {
         {/* The task is the row above; the CHAT is not, and it is what the job's
             Stop targets, so it stays as the one piece of context. */}
         <RowContext
-          parts={[{ role: "chat", title: job.chatTitle }]}
+          parts={[{ role: "chat", title: job.chatTitle, preposition: "in" }]}
           testId="home-focus-row-context"
         />
       </button>
       <RowStatus
         state={focusJobState(job)}
-        duration={
+        detail={
           job.startedAtMs === null ? null : (
             <RowStatusDuration startedAtMs={job.startedAtMs} />
           )
         }
+      />
+      <RowActionsCell>{null}</RowActionsCell>
+    </li>
+  );
+}
+
+/**
+ * One browser tab under the task it belongs to, or under the agent driving it.
+ *
+ * No `in <task>`: the row above names the task, exactly as it does for agents
+ * and jobs. `via <agent>` IS the extra fact - which conversation is working
+ * this page - and it is resolved against the group's own agent rows, so it can
+ * only name a row the reader can actually see.
+ */
+function TaskGroupBrowserRow(props: {
+  readonly entry: FocusTaskGroupBrowser;
+  readonly actions: HomeFocusRowActions;
+}): ReactNode {
+  const { entry, actions } = props;
+  const { browser } = entry;
+  const density = useHomeDensity();
+  return (
+    <li
+      className={homeRowClass(density)}
+      data-density={density}
+      data-testid="home-focus-task-group-browser"
+      data-status={browser.status}
+    >
+      <TooltipWrapper
+        label={browser.url}
+        side="top"
+        sideOffset={undefined}
+        align={undefined}
+      >
+        <button
+          type="button"
+          onClick={() => actions.openBrowser(browser)}
+          className={ROW_BODY_CLASS}
+          data-testid="home-focus-task-group-browser-body"
+        >
+          <Globe
+            aria-hidden
+            className="size-4 shrink-0 text-muted-foreground"
+          />
+          <BrowserTabName row={browser} />
+          {entry.via === null ? null : (
+            <span
+              className="min-w-0 shrink truncate text-ui-xs text-muted-foreground"
+              data-testid="home-focus-task-group-browser-via"
+            >
+              via {entry.via}
+            </span>
+          )}
+        </button>
+      </TooltipWrapper>
+      {/* The status cell keeps `driven by` even where `via` already said it:
+          one is the row's PLACEMENT on the page, the other is the column every
+          row answers in, and a column with a hole in it stops being scannable.
+          They agree by construction - both read the same driving chat. */}
+      <RowStatus
+        state={focusBrowserState(browser)}
+        detail={<BrowserStatusDetail row={browser} />}
       />
       <RowActionsCell>{null}</RowActionsCell>
     </li>

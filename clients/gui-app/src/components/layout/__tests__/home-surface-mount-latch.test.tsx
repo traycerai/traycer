@@ -16,6 +16,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { NavigateOptions } from "@tanstack/react-router";
 import { TopLevelTabHost } from "@/components/layout/top-level-tab-host";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
@@ -89,6 +90,18 @@ function selectItem(activeItemId: string | null): void {
   });
 }
 
+/** The surface reads the browser-sessions plane through Query. */
+function renderHost() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <TopLevelTabHost />
+    </QueryClientProvider>,
+  );
+}
+
 describe("the Home surface's mount", () => {
   beforeEach(async () => {
     resetStores();
@@ -106,7 +119,7 @@ describe("the Home surface's mount", () => {
 
   it("runs nothing in a window that has the tab on but never opens it", async () => {
     selectItem("tab:epic:working");
-    render(<TopLevelTabHost />);
+    renderHost();
 
     // The surface's chunk resolves in a microtask, so flushing one is what
     // makes this a real absence rather than a race with the lazy import.
@@ -120,7 +133,7 @@ describe("the Home surface's mount", () => {
 
   it("stays mounted after the first visit, including once the user switches away", async () => {
     selectItem("tab:epic:working");
-    render(<TopLevelTabHost />);
+    renderHost();
 
     selectItem(null);
     // The surface itself is behind a `lazy()`, so the model starts running a
@@ -134,7 +147,7 @@ describe("the Home surface's mount", () => {
   });
 
   it("unmounts when the tab is turned off", async () => {
-    render(<TopLevelTabHost />);
+    renderHost();
     await waitFor(() => {
       expect(screen.getByTestId(HOME_SURFACE)).toBeDefined();
     });

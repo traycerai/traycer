@@ -1,6 +1,7 @@
 import type {
   FocusAgentRow,
   FocusBackgroundRow,
+  FocusBrowserRow,
   FocusTaskRow,
 } from "@/lib/home-focus/focus-model";
 
@@ -24,7 +25,10 @@ export type FocusRowState =
   | "running"
   | "held"
   | "background"
-  | "waiting";
+  | "waiting"
+  | "live"
+  | "dormant"
+  | "crashed";
 
 export interface FocusRowStateStyle {
   readonly word: string;
@@ -80,6 +84,42 @@ export const FOCUS_ROW_STATES: Readonly<
     dotClassName: "border border-muted-foreground bg-transparent",
     wordClassName: "text-muted-foreground",
   },
+  /**
+   * A browser tab that is attached and usable.
+   *
+   * Deliberately NOT `running`, even though the dot is the same. `running`
+   * means work in flight - an agent's turn, a durable job - and a page is not
+   * work: it sits there until someone or something touches it. Reusing the word
+   * would tell a reader scanning the column that four tabs are four things
+   * happening, which is exactly the over-reporting the Running rule removed.
+   */
+  live: {
+    word: "live",
+    dotClassName: "bg-primary",
+    wordClassName: "text-muted-foreground",
+  },
+  /** A durable tab with no runtime attached: addressable, costing nothing, and
+   * one click from being live again. The hollow dot is the same "present rather
+   * than in flight" mark `background` and `waiting` carry. */
+  dormant: {
+    word: "dormant",
+    dotClassName: "border border-muted-foreground bg-transparent",
+    wordClassName: "text-muted-foreground",
+  },
+  /**
+   * The one browser state that is a PROBLEM, and the only row on this page
+   * outside `needs-you` whose word is coloured.
+   *
+   * That is the whole reason for the exception: a crashed tab is silent - no
+   * prompt, no notification, nothing else on Home says the agent's page died
+   * under it - so the column is where a reader can find out, and a muted word
+   * in a muted column is not somewhere anyone looks.
+   */
+  crashed: {
+    word: "crashed",
+    dotClassName: "bg-destructive",
+    wordClassName: "text-destructive",
+  },
 };
 
 /** An agent's tier IS its state - the two unions line up one to one, which is
@@ -97,6 +137,12 @@ export function focusAgentState(agent: FocusAgentRow): FocusRowState {
  */
 export function focusJobState(_row: FocusBackgroundRow): FocusRowState {
   return "running";
+}
+
+/** A browser tab's status IS its state - the two unions line up one to one, the
+ * same way an agent's tier does, which is why no row maps it by hand. */
+export function focusBrowserState(row: FocusBrowserRow): FocusRowState {
+  return row.status;
 }
 
 /**
