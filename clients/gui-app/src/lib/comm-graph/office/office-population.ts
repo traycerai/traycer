@@ -48,6 +48,11 @@ export interface OfficePopulationMember {
    * team whose accent it carries - a member stranded on another host keeps its
    * team's colour so the two read as one team across two buildings - and
    * `null` for a solo that belongs to no team at all.
+   *
+   * THIS IS THE ACCENT SOURCE, and it outlives the roster. A team whose last
+   * `team`-class member is gone stops appearing in `hosts[].teams`, and the
+   * stranded solos it left behind still carry its id here. Read the colour
+   * from this field; `teamOf(id)?.teamId` is not a substitute for it.
    */
   readonly teamId: string | null;
   /** Hot AS OF this partition: recomputed every time, never frozen. */
@@ -89,7 +94,17 @@ export interface OfficePopulation {
   readonly members: ReadonlyMap<string, OfficePopulationMember>;
   /** `null` for an id this partition has never seen. */
   classOf(agentId: string): OfficeAgentClass | null;
-  /** The team an agent is in, or the one whose accent a stranded solo carries. */
+  /**
+   * A CURRENT-ROSTER lookup: the team this agent belongs to while that team
+   * still has one, and `null` otherwise.
+   *
+   * `null` therefore does NOT mean "no team". A stranded solo whose team has
+   * lost its last `team`-class member keeps `members.get(id).teamId` and
+   * answers `null` here, because no roster exists to return and an empty one
+   * is never invented to carry an accent. Anything drawing a colour reads
+   * `members.get(id).teamId`; this answers "is there a room, and who is in
+   * it".
+   */
   teamOf(agentId: string): OfficeTeam | null;
 }
 
@@ -461,13 +476,26 @@ function strandCrossHostMembers(
   }
 }
 
+/** Whether this draft says its agent is a `team`-class member of that team. */
+function isMemberOfTeam(draft: Draft | undefined, teamId: string): boolean {
+  if (draft === undefined) return false;
+  return draft.agentClass === "team" && draft.teamId === teamId;
+}
+
 /**
  * WHICH BUILDING A TEAM IS IN, asked of the drafts, before anything is sealed.
  *
- * The lead answers it while the lead is here. When it is not, the team is not
- * homeless - it is still sitting wherever its surviving members are sitting,
- * and asking only the lead is what let a remote arrival into a lead-less team's
- * roster and left its own building with no placement for it at all.
+ * The whole answer comes from MEMBERSHIP, never from the existence of an agent
+ * with the right id. A lead who has come back as an orphan, or who the office
+ * has since seated somewhere else, is an agent named `L` who is not in team L,
+ * and taking its host as the team's is how a roster gets built around somebody
+ * standing outside it - the fabricated-team bug, wearing a different hat.
+ *
+ * So, in order: the lead while the lead is actually IN the team; then the
+ * surviving members, because a team whose lead is gone is not homeless - it is
+ * still sitting wherever they are sitting; then what the previous partition
+ * recorded for the team itself, which is the only thing left once the last
+ * local member goes in the same breath as an arrival turns up.
  *
  * Only agents `previous` already knew count as surviving members. An arrival is
  * exactly the thing being placed by the caller, so letting arrivals vote here
@@ -484,19 +512,42 @@ function teamHomeHostOf(
   previous: OfficePopulation | null,
 ): { readonly resolved: boolean; readonly hostId: string | null } {
   const lead = lineage.byId.get(teamId);
-  if (lead !== undefined) return { resolved: true, hostId: lead.hostId };
+  if (lead !== undefined && isMemberOfTeam(drafts.get(teamId), teamId)) {
+    return { resolved: true, hostId: lead.hostId };
+  }
   for (const candidate of lineage.ordered) {
     if (previous === null || !previous.members.has(candidate.id)) continue;
-    const draft = drafts.get(candidate.id);
-    if (draft === undefined || draft.teamId !== teamId) continue;
-    if (draft.agentClass !== "team") continue;
+    if (!isMemberOfTeam(drafts.get(candidate.id), teamId)) continue;
     return { resolved: true, hostId: candidate.hostId };
   }
-  // A team the previous partition remembered but that nobody here is in any
-  // more. Its host is still on the record, and a `null` one is a real answer.
-  const remembered = previous?.members.get(teamId);
-  if (remembered !== undefined) {
-    return { resolved: true, hostId: remembered.hostId };
+  return rememberedTeamHomeOf(previous, teamId);
+}
+
+/**
+ * The building the LAST partition put this team in.
+ *
+ * Reached when nobody here is in the team any more - the lead gone and the last
+ * local member leaving in the same step an arrival turns up. The team's own
+ * record outlives its roster, so the arrival joins the team where it has been
+ * all along instead of being stranded from a room it is standing in.
+ *
+ * The TEAM's record is the only thing asked for, deliberately. Falling back to
+ * "wherever the last partition had an agent by that name" is the same mistake
+ * as reading the lead out of the current set: an agent named `L` that was a
+ * solo back then is no more evidence of where team L lived than one that is a
+ * solo now. A lead that WAS in its own team put the team in `hosts[].teams`,
+ * so this loop already has the answer in that case.
+ */
+function rememberedTeamHomeOf(
+  previous: OfficePopulation | null,
+  teamId: string,
+): { readonly resolved: boolean; readonly hostId: string | null } {
+  if (previous === null) return { resolved: false, hostId: null };
+  for (const host of previous.hosts) {
+    for (const team of host.teams) {
+      if (team.teamId !== teamId) continue;
+      return { resolved: true, hostId: team.hostId };
+    }
   }
   return { resolved: false, hostId: null };
 }

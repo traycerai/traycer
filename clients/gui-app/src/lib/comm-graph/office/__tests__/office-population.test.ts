@@ -95,6 +95,55 @@ function assertEveryAgentPlacedExactlyOnce(
     expect(total).toBe(agentsByHostKey.get(key) ?? 0);
   }
   expect(seen.size).toBe(agents.length);
+  assertPlacementsMatchAgentHosts(partition);
+  assertPresentLeadsAreInTheirOwnRoster(agents, partition);
+}
+
+/**
+ * A host's roster only ever lists agents that actually live there.
+ *
+ * The count check above cannot see this on its own: swapping a member between
+ * two hosts of equal size leaves every total intact. That swap is exactly what
+ * a team resolved to the wrong building produces.
+ */
+function assertPlacementsMatchAgentHosts(partition: OfficePopulation): void {
+  for (const host of partition.hosts) {
+    if (host.hqAgentId !== null) {
+      expect(partition.members.get(host.hqAgentId)?.hostId).toBe(host.hostId);
+    }
+    for (const team of host.teams) {
+      for (const memberId of team.memberAgentIds) {
+        expect(partition.members.get(memberId)?.hostId).toBe(host.hostId);
+      }
+    }
+    for (const solo of host.solos) {
+      expect(solo.hostId).toBe(host.hostId);
+    }
+  }
+}
+
+/**
+ * A LEAD THAT IS STILL IN THE EPIC SITS IN THE TEAM IT LEADS.
+ *
+ * This has now been broken three separate ways - a team fabricated around a
+ * frozen solo, one built from a removed lead's id, one built because an agent
+ * merely shared the lead's id - so it is asserted by every case in this file
+ * rather than by whichever case happens to remember it. A lead that has left
+ * the epic is a different thing and stays allowed: the headless team keeps its
+ * name and its surviving members.
+ */
+function assertPresentLeadsAreInTheirOwnRoster(
+  agents: ReadonlyArray<OfficeAgentInput>,
+  partition: OfficePopulation,
+): void {
+  const present = new Set(agents.map((candidate) => candidate.id));
+  for (const host of partition.hosts) {
+    for (const team of host.teams) {
+      expect(team.memberAgentIds.length).toBeGreaterThan(0);
+      if (!present.has(team.leadAgentId)) continue;
+      expect(team.memberAgentIds).toContain(team.leadAgentId);
+    }
+  }
 }
 
 const SHAPES: ReadonlyArray<OfficeTestEpicShape> = [
@@ -702,33 +751,6 @@ describe("partitionOfficePopulation", () => {
       agent({ id: "M", parentId: "L", hostId: "host-a", createdAt: 2 }),
     ];
 
-    /**
-     * The invariant N3 actually broke: a host's roster must only ever list
-     * agents that actually live there. `assertEveryAgentPlacedExactlyOnce`
-     * only proves the per-host COUNTS line up, which cannot see a member
-     * swapped between two hosts of equal size - host-a listing a member that
-     * lives on host-b is exactly that kind of swap.
-     */
-    function assertPlacementHostMatchesAgentHost(
-      partition: OfficePopulation,
-    ): void {
-      for (const host of partition.hosts) {
-        if (host.hqAgentId !== null) {
-          expect(partition.members.get(host.hqAgentId)?.hostId).toBe(
-            host.hostId,
-          );
-        }
-        for (const team of host.teams) {
-          for (const memberId of team.memberAgentIds) {
-            expect(partition.members.get(memberId)?.hostId).toBe(host.hostId);
-          }
-        }
-        for (const solo of host.solos) {
-          expect(solo.hostId).toBe(host.hostId);
-        }
-      }
-    }
-
     it.each([
       { label: "a different host", remoteHostId: "host-b" },
       { label: "a null host", remoteHostId: null },
@@ -781,7 +803,6 @@ describe("partitionOfficePopulation", () => {
         expect(remoteHost?.teams).toEqual([]);
         expect(remoteHost?.solos.map((solo) => solo.agentId)).toEqual(["N"]);
 
-        assertPlacementHostMatchesAgentHost(after);
         assertEveryAgentPlacedExactlyOnce(grownAgents, after);
       },
     );
@@ -815,7 +836,6 @@ describe("partitionOfficePopulation", () => {
       const hostB = after.hosts.find((host) => host.hostId === "host-b");
       expect(hostB?.solos.map((solo) => solo.agentId)).toEqual(["N"]);
 
-      assertPlacementHostMatchesAgentHost(after);
       assertEveryAgentPlacedExactlyOnce(grownAgents, after);
     });
 
@@ -852,7 +872,6 @@ describe("partitionOfficePopulation", () => {
       expect(hostA?.teams[0]?.memberAgentIds).toEqual(["M", "N"]);
       expect(hostA?.solos).toEqual([]);
 
-      assertPlacementHostMatchesAgentHost(after);
       assertEveryAgentPlacedExactlyOnce(grownAgents, after);
     });
   });
@@ -977,5 +996,220 @@ describe("partitionOfficePopulation", () => {
       expect(hostB?.solos.map((solo) => solo.agentId)).toEqual(["M", "N"]);
       assertEveryAgentPlacedExactlyOnce(grownAgents, after);
     });
+  });
+
+  describe("N5: a returning orphan lead does not become the nonmember lead of a fabricated team", () => {
+    it("keeps the returning lead a teamless solo, and its stranded child's arrival a solo carrying only the accent", () => {
+      const base: ReadonlyArray<OfficeAgentInput> = [
+        agent({ id: "R", hostId: "host-a", createdAt: 0 }),
+        agent({ id: "L", parentId: "R", hostId: "host-a", createdAt: 1 }),
+        agent({ id: "M", parentId: "L", hostId: "host-b", createdAt: 2 }),
+      ];
+      const withLeadAndRoot = partitionOfficePopulation({
+        agents: base,
+        statusById: statusMap([]),
+        previous: null,
+      });
+      expect(withLeadAndRoot.classOf("M")).toBe("solo");
+      expect(withLeadAndRoot.members.get("M")?.teamId).toBe("L");
+
+      // R and L are both removed; only the stranded M survives.
+      const onlyM: ReadonlyArray<OfficeAgentInput> = [base[2]];
+      const rootAndLeadGone = partitionOfficePopulation({
+        agents: onlyM,
+        statusById: statusMap([]),
+        previous: withLeadAndRoot,
+      });
+      expect(rootAndLeadGone.classOf("M")).toBe("solo");
+
+      // L returns with its original parentId "R", but R is still absent,
+      // so L is now an orphan. M is unchanged, and N arrives under M on
+      // host-a - a different host than the one M actually lives on.
+      const grownAgents: ReadonlyArray<OfficeAgentInput> = [
+        agent({ id: "L", parentId: "R", hostId: "host-a", createdAt: 1 }),
+        base[2],
+        agent({ id: "N", parentId: "M", hostId: "host-a", createdAt: 3 }),
+      ];
+      const after = partitionOfficePopulation({
+        agents: grownAgents,
+        statusById: statusMap([]),
+        previous: rootAndLeadGone,
+      });
+
+      // A returning orphan lead is not a team.
+      expect(after.classOf("L")).toBe("solo");
+      expect(after.members.get("L")?.teamId).toBeNull();
+
+      // N's accent survives; its membership in a team L never actually
+      // held does not.
+      expect(after.classOf("N")).toBe("solo");
+      expect(after.members.get("N")?.teamId).toBe("L");
+
+      const hostA = after.hosts.find((host) => host.hostId === "host-a");
+      expect(hostA?.teams).toEqual([]);
+      expect(hostA?.solos.map((solo) => solo.agentId)).toEqual(["L", "N"]);
+
+      const hostB = after.hosts.find((host) => host.hostId === "host-b");
+      expect(hostB?.solos.map((solo) => solo.agentId)).toEqual(["M"]);
+      expect(hostB?.solos[0]?.teamId).toBe("L");
+
+      assertEveryAgentPlacedExactlyOnce(grownAgents, after);
+    });
+
+    it("will not take a lead the PREVIOUS partition knew as a solo for a team either", () => {
+      // N5 one step further on. Once the returning lead has settled as an
+      // orphan solo, the only thing left anywhere that names a host for team
+      // L is the previous partition's record of an agent CALLED L - and that
+      // agent was a solo there, which says nothing about where team L ever
+      // was. Reading it anyway rebuilds exactly the roster N5 just removed,
+      // one partition later, which is why the resolver asks the previous
+      // partition about the TEAM and never about an agent sharing its name.
+      const base: ReadonlyArray<OfficeAgentInput> = [
+        agent({ id: "R", hostId: "host-a", createdAt: 0 }),
+        agent({ id: "L", parentId: "R", hostId: "host-a", createdAt: 1 }),
+        agent({ id: "M", parentId: "L", hostId: "host-b", createdAt: 2 }),
+      ];
+      const first = partitionOfficePopulation({
+        agents: base,
+        statusById: statusMap([]),
+        previous: null,
+      });
+      const rootAndLeadGone = partitionOfficePopulation({
+        agents: [base[2]],
+        statusById: statusMap([]),
+        previous: first,
+      });
+      const returned: ReadonlyArray<OfficeAgentInput> = [
+        base[1],
+        base[2],
+        agent({ id: "N", parentId: "M", hostId: "host-a", createdAt: 3 }),
+      ];
+      const withReturnedLead = partitionOfficePopulation({
+        agents: returned,
+        statusById: statusMap([]),
+        previous: rootAndLeadGone,
+      });
+      // The state N5 settles on: L a teamless solo, N carrying the accent.
+      expect(withReturnedLead.members.get("L")?.teamId).toBeNull();
+      expect(withReturnedLead.members.get("N")?.teamId).toBe("L");
+
+      const grownAgents: ReadonlyArray<OfficeAgentInput> = [
+        ...returned,
+        agent({ id: "P", parentId: "N", hostId: "host-a", createdAt: 4 }),
+      ];
+      const after = partitionOfficePopulation({
+        agents: grownAgents,
+        statusById: statusMap([]),
+        previous: withReturnedLead,
+      });
+
+      expect(after.classOf("P")).toBe("solo");
+      expect(after.members.get("P")?.teamId).toBe("L");
+      const hostA = after.hosts.find((host) => host.hostId === "host-a");
+      expect(hostA?.teams).toEqual([]);
+      assertEveryAgentPlacedExactlyOnce(grownAgents, after);
+    });
+  });
+
+  describe("N6: an arrival on a team's recorded home host joins it, even when the last local member leaves in the same step", () => {
+    it.each([
+      { label: "a named home host", home: "host-a" },
+      { label: "a null home host", home: null },
+    ])(
+      "consults the previous partition's own team record before declaring the home unknown ($label)",
+      ({ home }) => {
+        const base: ReadonlyArray<OfficeAgentInput> = [
+          agent({ id: "R", hostId: home, createdAt: 0 }),
+          agent({ id: "L", parentId: "R", hostId: home, createdAt: 1 }),
+          agent({ id: "M", parentId: "L", hostId: home, createdAt: 2 }),
+          agent({ id: "S", parentId: "L", hostId: "host-far", createdAt: 3 }),
+        ];
+        const withLead = partitionOfficePopulation({
+          agents: base,
+          statusById: statusMap([]),
+          previous: null,
+        });
+        expect(withLead.teamOf("M")?.teamId).toBe("L");
+        expect(withLead.classOf("S")).toBe("solo");
+
+        // L is removed; team L survives with roster [M] on its home
+        // host (F5b), and S stays a stranded solo carrying the accent.
+        const leadRemoved: ReadonlyArray<OfficeAgentInput> = [
+          base[0],
+          base[2],
+          base[3],
+        ];
+        const withoutLead = partitionOfficePopulation({
+          agents: leadRemoved,
+          statusById: statusMap([]),
+          previous: withLead,
+        });
+        expect(withoutLead.teamOf("M")?.teamId).toBe("L");
+        expect(withoutLead.teamOf("M")?.hostId).toBe(home);
+        expect(withoutLead.teamOf("M")?.memberAgentIds).toEqual(["M"]);
+
+        // M leaves and N arrives under S, on the team's recorded home
+        // host, in the same step.
+        const grownAgents: ReadonlyArray<OfficeAgentInput> = [
+          base[0],
+          base[3],
+          agent({ id: "N", parentId: "S", hostId: home, createdAt: 4 }),
+        ];
+        const after = partitionOfficePopulation({
+          agents: grownAgents,
+          statusById: statusMap([]),
+          previous: withoutLead,
+        });
+
+        // N joins team L on its recorded home rather than being stranded
+        // from a room it is standing in.
+        expect(after.classOf("N")).toBe("team");
+        expect(after.teamOf("N")?.teamId).toBe("L");
+
+        const homeHost = after.hosts.find((host) => host.hostId === home);
+        expect(homeHost?.teams).toHaveLength(1);
+        expect(homeHost?.teams[0]?.teamId).toBe("L");
+        expect(homeHost?.teams[0]?.memberAgentIds).toEqual(["N"]);
+
+        assertEveryAgentPlacedExactlyOnce(grownAgents, after);
+      },
+    );
+  });
+
+  it("pins teamOf against member.teamId: a stranded solo keeps its accent though no team exists to look up", () => {
+    // Same shape as N4's stranded-solo case: M carries teamId "L" from
+    // the moment it is first seen. Removing L leaves that accent on
+    // member.teamId, but there is no team-class roster left for teamOf
+    // to return - the documented distinction, pinned directly rather
+    // than only implied by a case built for something else.
+    const base: ReadonlyArray<OfficeAgentInput> = [
+      agent({ id: "R", hostId: "host-a", createdAt: 0 }),
+      agent({ id: "L", parentId: "R", hostId: "host-a", createdAt: 1 }),
+      agent({ id: "M", parentId: "L", hostId: "host-b", createdAt: 2 }),
+    ];
+    const withLead = partitionOfficePopulation({
+      agents: base,
+      statusById: statusMap([]),
+      previous: null,
+    });
+    expect(withLead.classOf("M")).toBe("solo");
+    expect(withLead.members.get("M")?.teamId).toBe("L");
+
+    const leadRemoved: ReadonlyArray<OfficeAgentInput> = [base[0], base[2]];
+    const after = partitionOfficePopulation({
+      agents: leadRemoved,
+      statusById: statusMap([]),
+      previous: withLead,
+    });
+
+    // The accent survives on the member...
+    expect(after.members.get("M")?.teamId).toBe("L");
+    // ...but no team-class roster exists anywhere to carry it, so
+    // teamOf answers null rather than an empty team being invented.
+    expect(after.teamOf("M")).toBeNull();
+    for (const host of after.hosts) {
+      expect(host.teams).toEqual([]);
+    }
+    assertEveryAgentPlacedExactlyOnce(leadRemoved, after);
   });
 });
