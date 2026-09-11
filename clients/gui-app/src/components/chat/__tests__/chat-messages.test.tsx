@@ -124,30 +124,39 @@ vi.mock("@/stores/epics/canvas/tile-instance-liveness", () => ({
 
 // Lightweight rows: ChatMessages mounts real ChatTimeline/LegendList; full
 // ChatMessage UI is heavy and unrelated to scroll-policy assertions.
-vi.mock("@/components/chat/chat-message", () => ({
-  ChatMessage: function MockChatMessage(props: {
-    message: ChatMessageModel;
-  }): ReactElement {
-    const interview = props.message.segments.find(
-      (segment): segment is InterviewSegment => segment.kind === "interview",
-    );
-    const answer = interview?.answers[0]?.values[0] ?? null;
-    const interviewUnitId =
-      interview === undefined || answer === null
-        ? null
-        : `interview:${interview.id}:question:0:answer:value:0`;
-    return (
-      <div data-testid={`mock-message-${props.message.id}`}>
-        {props.message.role}:{props.message.id}
-        {interviewUnitId === null ? (
-          props.message.content
-        ) : (
-          <span data-chat-find-unit={interviewUnitId}>{answer}</span>
-        )}
-      </div>
-    );
-  },
-}));
+vi.mock("@/components/chat/chat-message", async () => {
+  const { ChatBlockNavigationAnchor } =
+    await import("@/components/chat/chat-navigation-highlight");
+  return {
+    ChatMessage: function MockChatMessage(props: {
+      message: ChatMessageModel;
+    }): ReactElement {
+      const interview = props.message.segments.find(
+        (segment): segment is InterviewSegment => segment.kind === "interview",
+      );
+      const answer = interview?.answers[0]?.values[0] ?? null;
+      const interviewUnitId =
+        interview === undefined || answer === null
+          ? null
+          : `interview:${interview.id}:question:0:answer:value:0`;
+      return (
+        <div data-testid={`mock-message-${props.message.id}`}>
+          {props.message.segments.map((segment) => (
+            <ChatBlockNavigationAnchor key={segment.id} blockId={segment.id}>
+              {null}
+            </ChatBlockNavigationAnchor>
+          ))}
+          {props.message.role}:{props.message.id}
+          {interviewUnitId === null ? (
+            props.message.content
+          ) : (
+            <span data-chat-find-unit={interviewUnitId}>{answer}</span>
+          )}
+        </div>
+      );
+    },
+  };
+});
 
 // Ticket 17 (review round 2, finding 2 residual): a thin, behavior-preserving
 // pass-through around the REAL `LegendList` component - re-exports everything
@@ -2901,6 +2910,69 @@ describe("ChatMessages scroll policy", () => {
       expect(activityGroupOpenIds.setOpenCalls.length).toBe(callsAfterFirst);
       // Dedup: scroll position not re-driven by a second navigateToMessage.
       expect(getScrollNode().scrollTop).toBe(scrollAfterFirst);
+    });
+
+    it("highlights the named block instead of the whole assistant row", async () => {
+      const blockId = "text-block-1";
+      const assistant = {
+        ...makeAssistantMessage("assistant-target", "act-1"),
+        segments: [
+          {
+            id: blockId,
+            kind: "text" as const,
+            markdown: "Hello",
+            isStreaming: false,
+          },
+        ],
+        completedAt: 1,
+      };
+      const messages: ReadonlyArray<ChatMessageModel> = [
+        makeMessage(0, "user"),
+        assistant,
+      ];
+      const { rerenderWith } = renderChatMessages({
+        messages,
+        scrollStateKey: "scroll-req-block-highlight",
+      });
+      await settleLegendList();
+
+      rerenderWith({
+        scrollRequest: {
+          kind: "message",
+          messageId: assistant.id,
+          blockId,
+          requestId: 43,
+        },
+      });
+
+      const targetRow = document.querySelector<HTMLElement>(
+        `[data-message-id="${assistant.id}"]`,
+      );
+      expect(targetRow).not.toBeNull();
+      expect(targetRow?.dataset.navigationHighlighted).toBeUndefined();
+      const block = document.querySelector<HTMLElement>(
+        `[data-block-id="${blockId}"]`,
+      );
+      expect(block).not.toBeNull();
+      expect(block?.dataset.navigationHighlighted).toBe("true");
+      const scrollIntoView = vi.spyOn(block as HTMLElement, "scrollIntoView");
+      await act(async () => {
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              resolve();
+            });
+          });
+        });
+      });
+      expect(scrollIntoView).not.toHaveBeenCalled();
+
+      await waitFor(() => {
+        act(() => {
+          getScrollNode().dispatchEvent(new Event("scrollend"));
+        });
+        expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      });
     });
   });
 

@@ -160,12 +160,14 @@ const INTERVIEW: ChatLowerInterviewState = {
   onAnswer: () => null,
   onSkip: () => null,
   onFork: null,
+  highlightedBlockId: null,
 };
 const APPROVALS: ChatLowerApprovalsState = {
   pendingFileEditApprovals: [],
   pendingApprovals: [],
   onFileEditDecision: () => undefined,
   onApprovalDecision: () => undefined,
+  highlightedApprovalId: null,
 };
 const QUEUE: ChatLowerQueueState = {
   editingItem: null,
@@ -289,6 +291,21 @@ describe("composer isolation from per-token dock churn", () => {
 
     // Run status flips idle -> running: a genuine composer input change.
     rerender(<ChatLowerInteractionSurfaces {...props(TURN_RUNNING, 1)} />);
+    expect(composerRenderCount).toBe(2);
+  });
+
+  it("re-renders the composer when only the navigation highlight id changes", () => {
+    const { rerender } = render(
+      <ChatLowerInteractionSurfaces {...props(TURN_IDLE, 0)} />,
+    );
+    expect(composerRenderCount).toBe(1);
+
+    rerender(
+      <ChatLowerInteractionSurfaces
+        {...props(TURN_IDLE, 0)}
+        interview={{ ...INTERVIEW, highlightedBlockId: "q1:interview" }}
+      />,
+    );
     expect(composerRenderCount).toBe(2);
   });
 
