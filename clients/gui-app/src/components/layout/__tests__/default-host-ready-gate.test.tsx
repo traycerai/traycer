@@ -771,18 +771,18 @@ describe("<HostReadyGate />", () => {
     expect(
       screen.getAllByRole("button", { name: "Open settings" }),
     ).toHaveLength(1);
-    // Nothing is starting: no spinner, no boot headline.
-    expect(screen.queryByTestId("local-host-loading-spinner")).toBeNull();
+    // Nothing is starting: no boot headline.
+    expect(screen.queryByTestId("local-host-loading-stage")).toBeNull();
     expect(screen.queryByText("Starting Traycer…")).toBeNull();
   });
 
-  it("draws restoring-request-context as the shared boot surface: idle heading, spinner, indeterminate bar, Show details and Open settings", () => {
+  it("draws restoring-request-context as the shared boot surface: idle heading, no bar, Show details and Open settings", () => {
     // A WAIT, not a terminal, and it can sit between the attach cover and the
     // narrator's card on any launch. It used to be a bare "Restoring
-    // authenticated session…" line with no spinner and no controls - a fourth
-    // card shape in a launch that must have one. Now it is the same card, the
-    // same idle sentence, the same bar and the same footer pair as the
-    // surfaces on either side of it, so the hand-off is invisible. The
+    // authenticated session…" line with no controls - a fourth card shape in
+    // a launch that must have one. Now it is the same card, the same idle
+    // sentence and the same footer pair as the surfaces on either side of it,
+    // so the hand-off is invisible. The
     // testids are the boot BODY's own (`local-host-loading-*`): the surface
     // is that body with no lane, not a look-alike.
     renderGateWithCli(
@@ -795,13 +795,11 @@ describe("<HostReadyGate />", () => {
       "host-ready-gate-restoring-request-context",
     );
     expect(card.getAttribute("data-surface")).toBe(HOST_BOOT_CARD_SURFACE);
-    expect(screen.getByTestId("local-host-loading-spinner")).toBeTruthy();
     expect(screen.getByTestId("local-host-loading-stage").textContent).toBe(
       "Starting Traycer…",
     );
-    expect(
-      screen.getByTestId("local-host-download-progress").dataset.indeterminate,
-    ).toBe("true");
+    // No lane, so no measured position and no bar.
+    expect(screen.queryByRole("progressbar")).toBeNull();
     expect(screen.queryByText("Restoring authenticated session…")).toBeNull();
     expect(
       screen.getByTestId("local-host-loading-toggle-details"),

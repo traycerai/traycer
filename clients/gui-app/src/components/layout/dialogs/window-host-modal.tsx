@@ -413,7 +413,8 @@ function WindowHostModalBody(props: {
  * the full boot body (`buildBootBody`), and drawing this boxed line there
  * instead was the "weird-looking Setting up Traycer" report - a bordered
  * strip with a truncated heading and a percentage where every other phase of
- * the launch draws the headline, the bar and the details footer.
+ * the launch draws the headline, the bar when there is a percentage, and the
+ * details footer.
  *
  * Heading and percentage ONLY - the same two things the boot body's bar says.
  * The lane's byte count and its own message line (`transferLabel`, `detail`)
