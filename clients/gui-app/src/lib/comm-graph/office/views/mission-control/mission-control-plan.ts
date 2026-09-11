@@ -507,6 +507,46 @@ function pinOccupancy(
   }
 }
 
+/**
+ * Keep last plan's assignments when occupancy is empty (a status-only replan
+ * still passes `previous`). Occupancy wins where it already named a seat.
+ */
+function pinPreviousDesks(
+  previousLayout: OfficeLayout | null,
+  input: OfficePlanInput,
+  byId: ReadonlyMap<string, OfficeAgentInput>,
+  fills: SlotFill[],
+): void {
+  if (previousLayout === null) return;
+  for (const desk of previousLayout.desks.values()) {
+    if (desk.kind !== "console") continue;
+    if (!byId.has(desk.agentId)) continue;
+    const index = consoleIndexFromSeatId(desk.seatId);
+    if (index === null || index >= fills.length) continue;
+    if (fills[index].agentId !== null) continue;
+    fills[index] = {
+      agentId: desk.agentId,
+      teamId: teamOfAgent(input, desk.agentId),
+      hostId: hostOfAgent(input, desk.agentId),
+      reserveForTeamId: null,
+    };
+  }
+}
+
+function copyPreviousEmptyHosts(
+  previousLayout: OfficeLayout | null,
+  fills: SlotFill[],
+): void {
+  if (previousLayout === null) return;
+  for (const seat of previousLayout.seats.values()) {
+    if (seat.kind !== "console") continue;
+    const index = consoleIndexFromSeatId(seat.seatId);
+    if (index === null || index >= fills.length) continue;
+    if (fills[index].agentId !== null) continue;
+    fills[index].hostId = seat.hostId;
+  }
+}
+
 function restoreTeamReserves(
   previous: MissionControlFrozen,
   fills: SlotFill[],
@@ -576,12 +616,14 @@ function packFromPrevious(
   let slots = buildSlots(counts, centerCol);
   const fills = emptyFills(slots.length);
   pinOccupancy(input, byId, fills);
+  pinPreviousDesks(input.previous, input, byId, fills);
 
   const takenAgents = new Set<string>();
   for (const fill of fills) {
     if (fill.agentId !== null) takenAgents.add(fill.agentId);
   }
   const reserveByTeam = restoreTeamReserves(previous, fills);
+  copyPreviousEmptyHosts(input.previous, fills);
 
   for (const agent of arrivals) {
     if (takenAgents.has(agent.id)) continue;
