@@ -4111,6 +4111,49 @@ describe("<ChatTile />", () => {
     expect(chatHarness.sent).toHaveLength(1);
   });
 
+  it("the pane Retry reaches retryFromUser", async () => {
+    chatHarness.installDeferred();
+    renderChatTile();
+    await waitFor(() => {
+      expect(screen.getByTestId("chat-tile")).toBeTruthy();
+    });
+    await waitFor(() => {
+      expect(() => chatHarness.callbacks()).not.toThrow();
+    });
+
+    const handle = __getChatSessionRegistryForTests().peek(
+      EPIC_ID,
+      CHAT_ARTIFACT.id,
+      HOST_ID,
+    );
+    if (handle === null) {
+      throw new Error("expected chat session handle");
+    }
+    const retryFromUser = vi.fn();
+    const original = handle.store.getState().retryFromUser;
+    handle.store.setState({
+      retryFromUser: () => {
+        retryFromUser();
+        original();
+      },
+    });
+
+    act(() => {
+      chatHarness.callbacks().onConnectionStatus("closed", {
+        kind: "fatalError",
+        details: {
+          code: "UNAUTHORIZED",
+          reason: "CHAT_INVALID: gone",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
+      });
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    expect(retryFromUser).toHaveBeenCalledTimes(1);
+  });
+
   // The composer render-count proof lives in `chat-tile-composer-rerender.test.tsx`
   // (it instruments composer renders directly). Behaviour coverage for the
   // stop/running transitions is exercised by the other tests above.

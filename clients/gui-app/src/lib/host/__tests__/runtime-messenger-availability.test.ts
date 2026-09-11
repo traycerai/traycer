@@ -129,6 +129,8 @@ function controllableSession(): ControllableSession {
     // view's release, not a terminal close.
     isClosed: () => terminallyClosed,
     isReady: () => session.ready,
+    // Structural member: this fake models readiness, never silence.
+    isSilentFor: () => false,
     sendUnary: vi.fn(() => Promise.resolve({}) as never),
     subscribe: vi.fn(() => {
       throw new Error("not exercised by this test");
