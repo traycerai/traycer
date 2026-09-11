@@ -2,19 +2,26 @@ import { describe, expect, it } from "vitest";
 import { officeSpriteSize } from "@/lib/comm-graph/office/office-pixel-art";
 import { findOfficePath } from "@/lib/comm-graph/office/office-path";
 import { partitionOfficePopulation } from "@/lib/comm-graph/office/office-population";
-import { OfficeScene } from "@/lib/comm-graph/office/office-scene";
+import {
+  OfficeScene,
+  OFFICE_CULL_MARGIN_PX,
+} from "@/lib/comm-graph/office/office-scene";
+import { officeSignsToDraw } from "@/lib/comm-graph/office/office-signs";
 import { makeTestEpic } from "@/lib/comm-graph/office/office-test-epic";
 import {
   OFFICE_CHARACTER_HEIGHT,
   OFFICE_CHARACTER_WIDTH,
   OFFICE_TILE,
+  type OfficeAgentInput,
   type OfficeAgentStatus,
   type OfficeErrandSpot,
   type OfficeFloor,
+  type OfficeFrame,
   type OfficeLayout,
   type OfficeProp,
   type OfficeRect,
   type OfficeSceneInput,
+  type OfficeSeat,
   type OfficeSize,
   type OfficeTilePos,
   type OfficeTileRect,
@@ -36,10 +43,11 @@ import {
 } from "@/lib/comm-graph/office/views/isometric/iso-projector";
 import {
   OFFICE_VIEWS,
+  type OfficeDeskState,
   type OfficePlanInput,
 } from "@/lib/comm-graph/office/views/office-view";
 
-type Shape = "triage" | "two-hosts";
+type Shape = "triage" | "two-hosts" | "many-roots";
 
 function inputFor(
   shape: Shape,
@@ -355,6 +363,68 @@ function someoneSitsAt(
     }
   }
   return false;
+}
+
+/** A viewport as the scene culls to it: grown by its own margin. */
+function grownByMargin(view: OfficeRect): OfficeRect {
+  return {
+    x: view.x - OFFICE_CULL_MARGIN_PX,
+    y: view.y - OFFICE_CULL_MARGIN_PX,
+    width: view.width + OFFICE_CULL_MARGIN_PX * 2,
+    height: view.height + OFFICE_CULL_MARGIN_PX * 2,
+  };
+}
+
+function rectKey(rect: OfficeRect): string {
+  return [rect.x, rect.y, rect.width, rect.height].join(",");
+}
+
+function rectsOverlap(left: OfficeRect, right: OfficeRect): boolean {
+  return (
+    left.x < right.x + right.width &&
+    right.x < left.x + left.width &&
+    left.y < right.y + right.height &&
+    right.y < left.y + left.height
+  );
+}
+
+/**
+ * The owners whose own SEAT region is in this frame.
+ *
+ * A frame's `hitRegions` carry a seat's box and its occupant's character box
+ * under the SAME `agentId`, so a set of ids cannot tell the two apart - and a
+ * seat dropped by a broken cull would still be named there by its own
+ * character standing in front of it. Matching a region against the seat's
+ * declared `hitBox` is what isolates the seat half, which is the half the
+ * projected chunk index decides.
+ */
+function seatRegionOwners(
+  frame: OfficeFrame,
+  layout: OfficeLayout,
+): Set<string> {
+  const seatBoxByOwner = new Map<string, string>();
+  for (const [agentId, desk] of layout.desks) {
+    const seat = layout.seats.get(desk.seatId);
+    if (seat === undefined || seat.hitBox === null) continue;
+    seatBoxByOwner.set(agentId, rectKey(seat.hitBox));
+  }
+  const found = new Set<string>();
+  for (const region of frame.hitRegions) {
+    if (seatBoxByOwner.get(region.agentId) !== rectKey(region.rect)) continue;
+    found.add(region.agentId);
+  }
+  return found;
+}
+
+/** Every occupied seat whose own PAINTED box reaches this rect. */
+function seatsReaching(layout: OfficeLayout, rect: OfficeRect): Set<string> {
+  const found = new Set<string>();
+  for (const [agentId, desk] of layout.desks) {
+    const seat = layout.seats.get(desk.seatId);
+    if (seat === undefined || seat.hitBox === null) continue;
+    if (rectsOverlap(seat.hitBox, rect)) found.add(agentId);
+  }
+  return found;
 }
 
 describe("planCampus", () => {
@@ -944,5 +1014,326 @@ describe("planCampus", () => {
     expect(
       ISO_PAINTER.seatProps(layout, seat, state, 2).length,
     ).toBeGreaterThan(0);
+  });
+
+  /** A `many-roots(n)` plan, every agent `working`, for the R1/ground cases. */
+  function manyRootsInput(
+    n: number,
+    remapHostId?: (index: number) => string,
+  ): OfficePlanInput {
+    const epic = makeTestEpic("many-roots", n, 1);
+    const agents: ReadonlyArray<OfficeAgentInput> =
+      remapHostId === undefined
+        ? epic.agents
+        : epic.agents.map((agent, index) => ({
+            ...agent,
+            hostId: remapHostId(index),
+          }));
+    const statusById = new Map<string, OfficeAgentStatus>();
+    for (const agent of agents) statusById.set(agent.id, "working");
+    const partition = partitionOfficePopulation({
+      agents,
+      statusById,
+      previous: null,
+    });
+    const activityById = new Map<string, number>();
+    for (const agent of agents) activityById.set(agent.id, 0);
+    return {
+      agents,
+      partition,
+      occupancy: new Map<string, string>(),
+      needsCapacity: [],
+      activityById,
+      viewport: VIEWPORT_1280,
+      previous: null,
+    };
+  }
+
+  describe("R1: pushRoomWalls reads only the bullpen's own bounds, flat in host count", () => {
+    // The old walk read every returned room's WHOLE perimeter to answer a
+    // one-tile interior query - `bounds.cols`/`bounds.rows` read tile by
+    // tile around the room. The clamp reads the bounds a handful of times
+    // regardless of how big the bullpen is: measured 11, 8 and 8 reads at
+    // 10, 100 and 1,000 hosts (10 reads a touch higher, since its window
+    // sits close enough to an edge to walk a few wall tiles).
+    it.each([
+      { n: 10, reads: 11 },
+      { n: 100, reads: 8 },
+      { n: 1000, reads: 8 },
+    ])("reads bullpen.bounds $reads times at $n hosts", ({ n, reads }) => {
+      const layout = planCampus(manyRootsInput(n));
+      const bullpen = layout.rooms.find((room) =>
+        room.rootAgentId.endsWith("/bullpen"),
+      );
+      if (bullpen === undefined) throw new Error("expected a bullpen room");
+      const tiles: OfficeTileRect = {
+        col: bullpen.bounds.col + 2,
+        row: bullpen.bounds.row + 2,
+        cols: 1,
+        rows: 1,
+      };
+      // Installed AFTER planning and indexing, over the SAME room objects
+      // the index holds - the index bypasses `layout.rooms` (the array),
+      // which is exactly why a guard on that array alone would miss this.
+      const counts = { reads: 0 };
+      for (const room of layout.rooms) {
+        const raw: OfficeTileRect = { ...room.bounds };
+        Object.defineProperty(room, "bounds", {
+          value: new Proxy(raw, {
+            get(target, key) {
+              counts.reads += 1;
+              return reflectGet(target, key, target);
+            },
+          }),
+          configurable: true,
+        });
+      }
+      counts.reads = 0;
+      const out = ISO_PAINTER.floor(layout, tiles, 2);
+      // One ground diamond for the one tile asked about, tile for tile the
+      // same as the old per-tile filter would have produced.
+      expect(out).toHaveLength(1);
+      expect(out[0].kind).toBe("sprite");
+      expect(counts.reads).toBe(reads);
+    });
+  });
+
+  it("costs the same per tile at 1 host and at 50, for the ground question", () => {
+    // `groundSpriteAt`/`isoGroundAt`'s O(1)-per-tile claim, pinned by
+    // wrapping every floor's bounds and amenities in counting proxies -
+    // installed in place, over the same `OfficeFloor` OBJECTS the index
+    // holds, so the count is observable at all.
+    const install = (layout: OfficeLayout, counts: { reads: number }): void => {
+      for (const floor of layout.floors) {
+        const rawBounds: OfficeTileRect = { ...floor.bounds };
+        Object.defineProperty(floor, "bounds", {
+          value: new Proxy(rawBounds, {
+            get(target, key) {
+              counts.reads += 1;
+              return reflectGet(target, key, target);
+            },
+          }),
+          configurable: true,
+        });
+        const rawAmenities = floor.amenities;
+        for (const amenity of rawAmenities) {
+          const rawAmenityBounds: OfficeTileRect = { ...amenity.bounds };
+          Object.defineProperty(amenity, "bounds", {
+            value: new Proxy(rawAmenityBounds, {
+              get(target, key) {
+                counts.reads += 1;
+                return reflectGet(target, key, target);
+              },
+            }),
+            configurable: true,
+          });
+        }
+        Object.defineProperty(floor, "amenities", {
+          value: new Proxy(rawAmenities, {
+            get(target, prop, receiver) {
+              if (typeof prop === "string" && /^\d+$/.test(prop)) {
+                counts.reads += 1;
+              }
+              return reflectGet(target, prop, receiver);
+            },
+          }),
+          configurable: true,
+        });
+      }
+    };
+    const window = (layout: OfficeLayout): OfficeTileRect => {
+      const last = layout.floors[layout.floors.length - 1];
+      return { col: last.bounds.col, row: last.bounds.row, cols: 32, rows: 32 };
+    };
+
+    // 1 host.
+    const layout1 = planCampus(manyRootsInput(20));
+    const counts1 = { reads: 0 };
+    install(layout1, counts1);
+    counts1.reads = 0;
+    ISO_PAINTER.floor(layout1, window(layout1), 2);
+    // Measured: 5,695 reads over the 1,024-tile window - 5.56/tile.
+    expect(counts1.reads).toBe(5695);
+
+    // 50 hosts at the same density - 1,000 agents dealt round-robin across
+    // fifty host bands, so each district holds the same twenty agents the
+    // one-host plan above does and only the DISTRICT count differs.
+    const layout50 = planCampus(
+      manyRootsInput(1000, (index) => `host-${index % 50}`),
+    );
+    expect(layout50.floors.length).toBe(50);
+    const counts50 = { reads: 0 };
+    install(layout50, counts50);
+    counts50.reads = 0;
+    ISO_PAINTER.floor(layout50, window(layout50), 2);
+    // Measured: 6,223 reads - 6.08/tile, a small constant over the 1-host
+    // cost rather than the ~50x it would be walking every district.
+    expect(counts50.reads).toBe(6223);
+    expect(counts50.reads / counts1.reads).toBeLessThan(2);
+
+    // Without the index (the walk this replaced), the same 50-host window
+    // costs an order of magnitude more - the comparison the index exists
+    // to make untrue.
+    const unindexed: OfficeLayout = { ...layout50, frozen: null };
+    const countsUnindexed = { reads: 0 };
+    install(unindexed, countsUnindexed);
+    countsUnindexed.reads = 0;
+    ISO_PAINTER.floor(unindexed, window(unindexed), 2);
+    expect(countsUnindexed.reads).toBeGreaterThan(counts50.reads * 5);
+  });
+
+  /** The bounding box over a set of sprite rects: min corner to max corner. */
+  function unionOf(boxes: ReadonlyArray<OfficeRect>): OfficeRect {
+    const minX = Math.min(...boxes.map((box) => box.x));
+    const minY = Math.min(...boxes.map((box) => box.y));
+    const maxX = Math.max(...boxes.map((box) => box.x + box.width));
+    const maxY = Math.max(...boxes.map((box) => box.y + box.height));
+    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+  }
+
+  function containsBox(outer: OfficeRect, inner: OfficeRect): boolean {
+    return (
+      inner.x >= outer.x &&
+      inner.y >= outer.y &&
+      inner.x + inner.width <= outer.x + outer.width &&
+      inner.y + inner.height <= outer.y + outer.height
+    );
+  }
+
+  function spriteBoxesOf(
+    layout: OfficeLayout,
+    seat: OfficeSeat,
+    state: OfficeDeskState,
+  ): ReadonlyArray<OfficeRect> {
+    return ISO_PAINTER.seatProps(layout, seat, state, 2)
+      .filter((entry) => entry.drawable.kind === "sprite")
+      .map((entry) => {
+        if (entry.drawable.kind !== "sprite") throw new Error("unreachable");
+        const size = officeSpriteSize(entry.drawable.sprite);
+        return {
+          x: entry.drawable.x,
+          y: entry.drawable.y,
+          width: size.width,
+          height: size.height,
+        };
+      });
+  }
+
+  it("declares every isometric seat a non-null D53 hitBox", () => {
+    const layout = planCampus(inputFor("triage", 60, VIEWPORT_1280));
+    const missing: string[] = [];
+    for (const seat of layout.seats.values()) {
+      if (seat.hitBox === null) missing.push(seat.seatId);
+    }
+    expect(missing).toEqual([]);
+  });
+
+  it("makes hitBox the painted union for every Campus desk, occupied or not", () => {
+    const layout = planCampus(inputFor("triage", 60, VIEWPORT_1280));
+    const occupantBySeatId = new Map(
+      [...layout.desks.entries()].map(([agentId, desk]) => [
+        desk.seatId,
+        agentId,
+      ]),
+    );
+    for (const seat of layout.seats.values()) {
+      if (seat.hitBox === null) throw new Error(`no hitBox on ${seat.seatId}`);
+      const occupantId = occupantBySeatId.get(seat.seatId) ?? null;
+      // Occupied, not sheeted, `openRequests: 3` - the union the ticket
+      // measures the box against.
+      const occupiedBoxes = spriteBoxesOf(layout, seat, {
+        agentId: occupantId,
+        name: occupantId,
+        status: "working",
+        sheeted: false,
+        openRequests: 3,
+        screenFrame: 0,
+        harnessId: null,
+        modelTier: "medium",
+        accentId: null,
+      });
+      expect(unionOf(occupiedBoxes)).toEqual(seat.hitBox);
+
+      // Sheeted and unoccupied still paint entirely inside that same box.
+      for (const sheeted of [true, false]) {
+        for (const agentId of [occupantId, null]) {
+          const otherBoxes = spriteBoxesOf(layout, seat, {
+            agentId,
+            name: agentId,
+            status: "working",
+            sheeted,
+            openRequests: 3,
+            screenFrame: 0,
+            harnessId: null,
+            modelTier: "medium",
+            accentId: null,
+          });
+          expect(containsBox(seat.hitBox, unionOf(otherBoxes))).toBe(true);
+        }
+      }
+    }
+  });
+
+  it("I1: culls seats and spots by their own PROJECTED box, not a raw tile viewport", () => {
+    // T2 F1: `chunkKeysOfBox(this.seatBox(seat))` files a seat under the
+    // chunks its PROJECTED box covers. Real Campus at 1,000 agents, over a
+    // viewport pinned to a populated corner, so this is the isometric plan
+    // itself exercising the seam rather than a hand-built layout.
+    const epic = makeTestEpic("triage", 1000, 1);
+    const statusById = new Map<string, OfficeAgentStatus>();
+    for (const agent of epic.agents) statusById.set(agent.id, "working");
+    const scene = new OfficeScene(OFFICE_VIEWS.campus, null);
+    scene.sync(sceneInputFor(epic.agents, statusById));
+    const sceneLayout = scene.layout();
+    if (sceneLayout === null) throw new Error("expected a layout after sync");
+
+    // Straddles a 1,024 px chunk boundary (`FRAME_CHUNK_PX`) rather than
+    // sitting deep inside one - the only place a seat filed under its raw
+    // tile point instead of its own projected box can actually go missing.
+    const view: OfficeRect = { x: 950, y: 550, width: 250, height: 300 };
+    const grown = grownByMargin(view);
+    const frame = scene.frame(2, view);
+    const wanted = seatsReaching(sceneLayout, grown);
+    expect(seatRegionOwners(frame, sceneLayout)).toEqual(wanted);
+    // A corner this small is a fraction of a 1,000-agent world: the cull is
+    // doing real work rather than handing back everything or nothing.
+    expect(wanted.size).toBeGreaterThan(0);
+    expect(wanted.size).toBeLessThan(sceneLayout.desks.size);
+  });
+
+  it("I3: a cabin's plate anchors at its tile PROJECTED, never at a raw col * OFFICE_TILE", () => {
+    // T2 F5: `officeSignsToDraw` anchors every sign at
+    // `projector.project(sign.tile.col, sign.tile.row)`. Real Campus cabins
+    // at lod 2, so every plate a real plan hands the painter is checked, not
+    // one hand-built sign object.
+    const layout = planCampus(inputFor("triage", 309, VIEWPORT_1280));
+    const projector = ISO_PAINTER.projector(layout);
+    const plates = layout.signs.filter((sign) => sign.kind === "plate");
+    expect(plates.length).toBeGreaterThan(0);
+    for (const sign of plates) {
+      const anchor = projector.project(sign.tile.col, sign.tile.row);
+      const raw = {
+        x: sign.tile.col * OFFICE_TILE,
+        y: sign.tile.row * OFFICE_TILE,
+      };
+      // On an isometric projector these two disagree almost everywhere -
+      // asserted so this case cannot pass by the raw formula coinciding
+      // with the projected one by accident.
+      expect(anchor).not.toEqual(raw);
+      // What the painter actually reads: the officeSignsToDraw entry for
+      // this sign anchors identically to a direct `projector.project` call.
+      const drawn = officeSignsToDraw({
+        signs: [sign],
+        visibleAgentIds: new Set(layout.desks.keys()),
+        statusById: new Map(),
+        nameById: new Map(),
+        hostNameById: new Map(),
+        roleClaims: {},
+        projector,
+        lod: 2,
+      });
+      expect(drawn).toHaveLength(1);
+      expect(drawn[0].anchor).toEqual(anchor);
+    }
   });
 });

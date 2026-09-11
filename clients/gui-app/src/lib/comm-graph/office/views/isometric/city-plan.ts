@@ -38,7 +38,10 @@ import {
   type OfficeTileRect,
 } from "@/lib/comm-graph/office/office-types";
 import type { OfficeHostPopulation } from "@/lib/comm-graph/office/office-population";
-import { ISO_PAINTER } from "@/lib/comm-graph/office/views/isometric/iso-painter";
+import {
+  isoCityBuildingBox,
+  ISO_PAINTER,
+} from "@/lib/comm-graph/office/views/isometric/iso-painter";
 import {
   buildIsoCafe,
   buildIsoCourtyard,
@@ -69,10 +72,12 @@ import {
   type IsoShelfCursor,
 } from "@/lib/comm-graph/office/views/isometric/iso-plan-core";
 import {
+  isoProjectAt,
   ISO_HALF_HEIGHT,
   ISO_HALF_WIDTH,
   ISO_SPIRE_LIFT,
   ISO_STOREY_HEIGHT,
+  type IsoOrigin,
 } from "@/lib/comm-graph/office/views/isometric/iso-projector";
 import type {
   OfficePlanInput,
@@ -790,6 +795,10 @@ function buildDistrict(
     name: "Cafe",
   });
 
+  // The skyline is raised before a single building is built, so the plan can
+  // say where each one is PAINTED (D53) while it is still laying them out.
+  const origin: IsoOrigin = { rows: pack.rows, stackHeight: pack.stackHeight };
+
   const rooms: OfficeRoom[] = [];
   const desks: OfficeDesk[] = [];
   const seats: OfficeSeat[] = [];
@@ -804,6 +813,11 @@ function buildDistrict(
       const tiles = cityLotTiles(block, index);
       blocked.push(tiles.building, tiles.door);
       const seatId = seatIdOf(block, index);
+      // A building is centred on its occupant's own anchor - the door tile's
+      // foot, which is where the scene stands the character - and rises from
+      // its lot's corner, so its clickable box is neither the lot nor the
+      // door but the column the painter draws between them.
+      const storeys = pack.storeysBySeatId.get(seatId) ?? CITY_MIN_STOREYS;
       const seat: OfficeSeat = {
         seatId,
         kind: "desk",
@@ -811,7 +825,11 @@ function buildDistrict(
         chairTile: tiles.door,
         facing: "down",
         hitTiles: { width: 1, height: LOT_ROWS },
-        hitBox: null,
+        hitBox: isoCityBuildingBox(
+          isoProjectAt(origin, tiles.building.col, tiles.building.row),
+          isoProjectAt(origin, tiles.door.col + 0.5, tiles.door.row + 1).x,
+          storeys,
+        ),
         floorIndex,
         roomId: block.blockId,
         hostId: block.hostId,
@@ -928,6 +946,7 @@ export function planCity(input: OfficePlanInput): OfficeLayout {
     index: buildIsoIndex({
       props,
       rooms,
+      floors,
       spots: floors.flatMap((floor) => floor.errandSpots),
     }),
     districts: pack.districts.map((district) => district.frozen),

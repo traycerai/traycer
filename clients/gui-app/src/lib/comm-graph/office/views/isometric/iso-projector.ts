@@ -116,13 +116,39 @@ export interface IsoProjectorSpec {
   readonly seatLift: (seat: OfficeSeat) => number;
 }
 
+/**
+ * The two numbers `project` actually needs.
+ *
+ * A PLAN has these before it has a projector - it computed them - and it has
+ * geometry questions of its own to answer while it is still building the
+ * layout a projector would be made from: where a seat is painted (D53's
+ * `hitBox`) is the one this exists for. Deriving that from a second copy of
+ * the formula is how the painted box and the clickable box drift apart, so
+ * there is one formula and `createIsoProjector` calls it too.
+ */
+export interface IsoOrigin {
+  readonly rows: number;
+  readonly stackHeight: number;
+}
+
+export function isoProjectAt(
+  origin: IsoOrigin,
+  col: number,
+  row: number,
+): OfficePoint {
+  return {
+    x: (col - row) * ISO_HALF_WIDTH + origin.rows * ISO_HALF_WIDTH,
+    y: (col + row) * ISO_HALF_HEIGHT + origin.stackHeight,
+  };
+}
+
 export function createIsoProjector(spec: IsoProjectorSpec): OfficeProjector {
-  const originX = spec.rows * ISO_HALF_WIDTH;
-  const originY = spec.stackHeight;
-  const project = (col: number, row: number): OfficePoint => ({
-    x: (col - row) * ISO_HALF_WIDTH + originX,
-    y: (col + row) * ISO_HALF_HEIGHT + originY,
-  });
+  const origin: IsoOrigin = {
+    rows: spec.rows,
+    stackHeight: spec.stackHeight,
+  };
+  const project = (col: number, row: number): OfficePoint =>
+    isoProjectAt(origin, col, row);
   const bounds: OfficeRect = {
     x: 0,
     y: 0,

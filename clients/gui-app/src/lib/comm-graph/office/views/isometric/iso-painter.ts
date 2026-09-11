@@ -29,6 +29,7 @@ import {
   type OfficeLod,
   type OfficeModelTier,
   type OfficePoint,
+  type OfficeRect,
   type OfficeSeat,
   type OfficeSpriteName,
   type OfficeTilePos,
@@ -37,6 +38,7 @@ import {
 } from "@/lib/comm-graph/office/office-types";
 import {
   cityRoofLift,
+  isoGroundAt,
   isoPropsIn,
   isoRoomsIn,
   isoSpotDraws,
@@ -161,25 +163,24 @@ interface FloorScan {
   readonly tiles: OfficeTileRect;
 }
 
-/** Grass under a courtyard or a park; paving everywhere else in a district. */
+/**
+ * Grass under a courtyard or a park; paving everywhere else in a district.
+ *
+ * The checker runs off `col + row` rather than off anything the index holds,
+ * because it is a fact about the TILE and not about the district it lands in:
+ * two neighbouring districts still alternate across the street between them.
+ */
 function groundSpriteAt(
   layout: OfficeLayout,
   tile: OfficeTilePos,
 ): OfficeSpriteName | null {
-  let inDistrict = false;
-  for (const floor of layout.floors) {
-    if (!isoWithinRect(floor.bounds, tile)) continue;
-    inDistrict = true;
-    for (const amenity of floor.amenities) {
-      if (amenity.kind !== "garden") continue;
-      if (!isoWithinRect(amenity.bounds, tile)) continue;
-      return (tile.col + tile.row) % 2 === 0
-        ? "floor-grass-iso-a"
-        : "floor-grass-iso-b";
-    }
+  const ground = isoGroundAt(layout, tile);
+  if (ground === null) return null;
+  const even = (tile.col + tile.row) % 2 === 0;
+  if (ground === "grass") {
+    return even ? "floor-grass-iso-a" : "floor-grass-iso-b";
   }
-  if (!inDistrict) return null;
-  return (tile.col + tile.row) % 2 === 0 ? "floor-iso-a" : "floor-iso-b";
+  return even ? "floor-iso-a" : "floor-iso-b";
 }
 
 /**
@@ -190,29 +191,41 @@ function groundSpriteAt(
 function pushRoomWalls(scan: FloorScan, out: OfficeDrawable[]): void {
   if (scan.layout.view !== "campus") return;
   const { tiles } = scan;
+  const lastCol = tiles.col + tiles.cols;
+  const lastRow = tiles.row + tiles.rows;
   for (const room of isoRoomsIn(scan.layout, tiles)) {
     const { bounds } = room;
-    for (let col = bounds.col; col < bounds.col + bounds.cols; col += 1) {
-      const tile: OfficeTilePos = { col, row: bounds.row };
-      if (!isoWithinRect(tiles, tile)) continue;
-      const corner = cornerOf(scan.projector, tile);
-      out.push({
-        kind: "sprite",
-        sprite: { name: "wall-iso-right" },
-        x: corner.x,
-        y: corner.y - WALL_LIFT,
-      });
+    // Only the stretch of each edge the window actually holds. A room the
+    // index returns overlaps the window SOMEWHERE, which says nothing about
+    // its back walls: a bullpen at a thousand agents is ninety-odd tiles on a
+    // side, and a one-tile query in the middle of it crosses neither edge.
+    // Walking the perimeter to reject it tile by tile put the work back that
+    // the index was added to remove.
+    if (bounds.row >= tiles.row && bounds.row < lastRow) {
+      const from = Math.max(bounds.col, tiles.col);
+      const to = Math.min(bounds.col + bounds.cols, lastCol);
+      for (let col = from; col < to; col += 1) {
+        const corner = cornerOf(scan.projector, { col, row: bounds.row });
+        out.push({
+          kind: "sprite",
+          sprite: { name: "wall-iso-right" },
+          x: corner.x,
+          y: corner.y - WALL_LIFT,
+        });
+      }
     }
-    for (let row = bounds.row; row < bounds.row + bounds.rows; row += 1) {
-      const tile: OfficeTilePos = { col: bounds.col, row };
-      if (!isoWithinRect(tiles, tile)) continue;
-      const corner = cornerOf(scan.projector, tile);
-      out.push({
-        kind: "sprite",
-        sprite: { name: "wall-iso-left" },
-        x: corner.x - ISO_HALF_WIDTH,
-        y: corner.y - WALL_LIFT,
-      });
+    if (bounds.col >= tiles.col && bounds.col < lastCol) {
+      const from = Math.max(bounds.row, tiles.row);
+      const to = Math.min(bounds.row + bounds.rows, lastRow);
+      for (let row = from; row < to; row += 1) {
+        const corner = cornerOf(scan.projector, { col: bounds.col, row });
+        out.push({
+          kind: "sprite",
+          sprite: { name: "wall-iso-left" },
+          x: corner.x - ISO_HALF_WIDTH,
+          y: corner.y - WALL_LIFT,
+        });
+      }
     }
   }
 }
@@ -407,6 +420,62 @@ function envelopeStackOf(openRequests: number): OfficeSpriteName | null {
   if (openRequests === 1) return "envelope-stack-1";
   if (openRequests === 2) return "envelope-stack-2";
   return "envelope-stack-3";
+}
+
+/**
+ * WHERE A SEAT IS PAINTED, for the plan to put in `hitBox` (D53).
+ *
+ * These two live here, next to the drawing they measure, because the box a
+ * click has to land on is the box the painter puts on the screen and nothing
+ * else. `hitTiles` describes a Floor seat - a rectangle of TILES around the
+ * desk - and an isometric seat is not shaped like that: a campus desk is a
+ * 32 x 32 sprite stack hanging off its tile's corner, and a City building is
+ * a column that rises eight pixels per storey and is centred on its
+ * occupant's anchor rather than on its lot. The scene derived the region from
+ * `hitTiles` alone and missed every roof in the City by up to 56 px, which is
+ * the seam T2 closed by letting a seat say where it is actually painted.
+ *
+ * Both take the tile CORNER the painter starts from, so a caller that has an
+ * origin but no projector can answer with `isoProjectAt`.
+ */
+
+/**
+ * The union over every state a campus desk is drawn in: the slab is the
+ * widest part, the monitor the tallest, and the dust sheet, the box and the
+ * envelope stack all sit inside those two.
+ */
+export function isoCampusSeatBox(corner: OfficePoint): OfficeRect {
+  const top = corner.y + ISO_HALF_HEIGHT - MONITOR_LIFT - OFFICE_TILE / 2;
+  return {
+    x: corner.x - DESK_ISO_WIDTH / 2,
+    y: top,
+    width: DESK_ISO_WIDTH,
+    height: corner.y + ISO_HALF_HEIGHT - top,
+  };
+}
+
+/**
+ * A City building: its column of slabs and the roof capping them.
+ *
+ * The MAST is deliberately out. It is 8 px wide on a 32 px box, so taking it
+ * in would make a 32 x 16 band of empty sky above HQ's roof answer clicks in
+ * order to catch a spike drawn up the middle of it - a worse answer than the
+ * mast not being clickable. Every other part a seat draws is inside this box
+ * in every state, the dust sheet that caps a vacated building included.
+ */
+export function isoCityBuildingBox(
+  corner: OfficePoint,
+  centreX: number,
+  storeys: number,
+): OfficeRect {
+  const roofY = corner.y - storeys * ISO_STOREY_HEIGHT;
+  const slab = officeSpriteSize({ name: "block-left" });
+  return {
+    x: centreX - ISO_HALF_WIDTH,
+    y: roofY,
+    width: ISO_HALF_WIDTH * 2,
+    height: corner.y + slab.height - roofY,
+  };
 }
 
 /** A campus desk: the slab, the screen on its back edge, the pile on it. */

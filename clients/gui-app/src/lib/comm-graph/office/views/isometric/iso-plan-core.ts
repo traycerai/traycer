@@ -847,6 +847,8 @@ export class IsoPlanIndex {
   /** Rooms by coarse cell, because a room is a rect and a tile map of one
    * would hold every interior tile it covers. */
   readonly roomsByCell: Map<string, IsoIndexedRoom[]>;
+  /** Districts by the same coarse cell, for the ground question below. */
+  readonly floorsByCell: Map<string, OfficeFloor[]>;
   /** The one spot per fixture tile that draws it; the rest only sit at it. */
   readonly drawingSpots: Set<string>;
   /** The widest and tallest sprite indexed, in TILES, rounded up. */
@@ -854,6 +856,7 @@ export class IsoPlanIndex {
   constructor() {
     this.propsByTile = new Map();
     this.roomsByCell = new Map();
+    this.floorsByCell = new Map();
     this.drawingSpots = new Set();
     this.propMargin = 0;
   }
@@ -863,6 +866,7 @@ export interface IsoIndexArgs {
   readonly props: ReadonlyArray<OfficeProp>;
   readonly rooms: ReadonlyArray<OfficeRoom>;
   readonly spots: ReadonlyArray<OfficeErrandSpot>;
+  readonly floors: ReadonlyArray<OfficeFloor>;
 }
 
 /** A spot's own name, stable across the two places that build one. */
@@ -877,6 +881,19 @@ function isoSpotKey(spot: OfficeErrandSpot): string {
 
 function cellKey(col: number, row: number): string {
   return `${col}:${row}`;
+}
+
+/** Every coarse cell a rect touches, once each, in row-major order. */
+function eachCell(bounds: OfficeTileRect, visit: (key: string) => void): void {
+  const firstCol = Math.floor(bounds.col / ISO_INDEX_CELL);
+  const lastCol = Math.floor((bounds.col + bounds.cols - 1) / ISO_INDEX_CELL);
+  const firstRow = Math.floor(bounds.row / ISO_INDEX_CELL);
+  const lastRow = Math.floor((bounds.row + bounds.rows - 1) / ISO_INDEX_CELL);
+  for (let row = firstRow; row <= lastRow; row += 1) {
+    for (let col = firstCol; col <= lastCol; col += 1) {
+      visit(cellKey(col, row));
+    }
+  }
 }
 
 export function buildIsoIndex(args: IsoIndexArgs): IsoPlanIndex {
@@ -919,19 +936,23 @@ export function buildIsoIndex(args: IsoIndexArgs): IsoPlanIndex {
   index.propMargin = margin;
 
   for (const [order, room] of args.rooms.entries()) {
-    const { bounds } = room;
-    const firstCol = Math.floor(bounds.col / ISO_INDEX_CELL);
-    const lastCol = Math.floor((bounds.col + bounds.cols - 1) / ISO_INDEX_CELL);
-    const firstRow = Math.floor(bounds.row / ISO_INDEX_CELL);
-    const lastRow = Math.floor((bounds.row + bounds.rows - 1) / ISO_INDEX_CELL);
-    for (let row = firstRow; row <= lastRow; row += 1) {
-      for (let col = firstCol; col <= lastCol; col += 1) {
-        const key = cellKey(col, row);
-        const bucket = index.roomsByCell.get(key);
-        if (bucket === undefined) index.roomsByCell.set(key, [{ room, order }]);
-        else bucket.push({ room, order });
-      }
-    }
+    eachCell(room.bounds, (key) => {
+      const bucket = index.roomsByCell.get(key);
+      if (bucket === undefined) index.roomsByCell.set(key, [{ room, order }]);
+      else bucket.push({ room, order });
+    });
+  }
+
+  // The floor OBJECT, not a copy of its bounds: the painter asks this index a
+  // ground question per visible tile, and a guard that wants to count what
+  // that costs has to be able to see the reads. An index that copied the
+  // rects out at build time would answer from numbers nothing can observe.
+  for (const floor of args.floors) {
+    eachCell(floor.bounds, (key) => {
+      const bucket = index.floorsByCell.get(key);
+      if (bucket === undefined) index.floorsByCell.set(key, [floor]);
+      else bucket.push(floor);
+    });
   }
   return index;
 }
@@ -1031,6 +1052,47 @@ function isoPropReaches(tiles: OfficeTileRect, prop: OfficeProp): boolean {
     top < maxY &&
     top + size.height > minY
   );
+}
+
+/** What a tile stands on: a garden's grass, a district's paving, or nothing. */
+export type IsoGroundKind = "grass" | "paved";
+
+/**
+ * The ground under ONE tile, in O(1) whatever the world holds.
+ *
+ * This is the hottest question the painter asks. A 32 x 32 chunk is 1,024
+ * tiles, and answering each by walking every district and then the amenities
+ * inside the one it lands in costs fifty hosts' worth of rects per tile just
+ * to lay one chunk of pavement. The coarse cell holds the one or two
+ * districts that can possibly cover the tile, and a district holds a handful
+ * of amenities, so the answer costs the same at fifty hosts as at one.
+ *
+ * A layout with no index still gets an answer, by the walk this replaced.
+ */
+export function isoGroundAt(
+  layout: OfficeLayout,
+  tile: OfficeTilePos,
+): IsoGroundKind | null {
+  const index = readIsoIndex(layout);
+  const floors =
+    index === null
+      ? layout.floors
+      : (index.floorsByCell.get(
+          cellKey(
+            Math.floor(tile.col / ISO_INDEX_CELL),
+            Math.floor(tile.row / ISO_INDEX_CELL),
+          ),
+        ) ?? []);
+  let inDistrict = false;
+  for (const floor of floors) {
+    if (!isoWithinRect(floor.bounds, tile)) continue;
+    inDistrict = true;
+    for (const amenity of floor.amenities) {
+      if (amenity.kind !== "garden") continue;
+      if (isoWithinRect(amenity.bounds, tile)) return "grass";
+    }
+  }
+  return inDistrict ? "paved" : null;
 }
 
 /** The rooms whose bounds touch this window, in the plan's own order. */

@@ -49,10 +49,15 @@ import {
   type OfficeTileRect,
 } from "@/lib/comm-graph/office/office-types";
 import {
+  isoProjectAt,
   ISO_HALF_HEIGHT,
   ISO_HALF_WIDTH,
+  type IsoOrigin,
 } from "@/lib/comm-graph/office/views/isometric/iso-projector";
-import { ISO_PAINTER } from "@/lib/comm-graph/office/views/isometric/iso-painter";
+import {
+  isoCampusSeatBox,
+  ISO_PAINTER,
+} from "@/lib/comm-graph/office/views/isometric/iso-painter";
 import {
   buildIsoCafe,
   buildIsoCourtyard,
@@ -360,12 +365,17 @@ interface RoomBuild {
  * chair belongs to one agent, and the path finder grants the exception for its
  * own goal - and the aisle row under it is what the chair reaches out to.
  */
-function buildRoom(
-  plan: CampusRoomPlan,
-  placed: IsoPlacedBlock,
-  floorIndex: number,
-  hostId: string | null,
-): RoomBuild {
+interface RoomBuildArgs {
+  readonly plan: CampusRoomPlan;
+  readonly placed: IsoPlacedBlock;
+  readonly floorIndex: number;
+  readonly hostId: string | null;
+  /** The world's own origin, so a desk can say where it is painted (D53). */
+  readonly origin: IsoOrigin;
+}
+
+function buildRoom(args: RoomBuildArgs): RoomBuild {
+  const { plan, placed, floorIndex, hostId, origin } = args;
   const bounds: OfficeTileRect = {
     col: placed.col,
     row: placed.row,
@@ -405,7 +415,9 @@ function buildRoom(
       chairTile,
       facing: "up",
       hitTiles: { width: DESK_WIDTH_TILES, height: SEAT_HIT_ROWS },
-      hitBox: null,
+      hitBox: isoCampusSeatBox(
+        isoProjectAt(origin, deskTile.col, deskTile.row),
+      ),
       floorIndex,
       roomId: plan.roomId,
       hostId,
@@ -497,6 +509,7 @@ interface DistrictBuilt {
 function buildDistrict(
   plan: CampusDistrictPlan & { readonly col: number },
   floorIndex: number,
+  origin: IsoOrigin,
 ): DistrictBuilt {
   const originCol = plan.col + ISO_DISTRICT_RING;
   const originRow = ISO_DISTRICT_RING;
@@ -535,7 +548,13 @@ function buildDistrict(
   for (const roomPlan of plan.rooms) {
     const placed = byId.get(roomPlan.blockId);
     if (placed === undefined) continue;
-    const built = buildRoom(roomPlan, placed, floorIndex, plan.hostId);
+    const built = buildRoom({
+      plan: roomPlan,
+      placed,
+      floorIndex,
+      hostId: plan.hostId,
+      origin,
+    });
     rooms.push(built.room);
     desks.push(...built.desks);
     blocked.push(...built.blocked);
@@ -577,9 +596,16 @@ function buildDistrict(
 export function planCampus(input: OfficePlanInput): OfficeLayout {
   const world = planWorld(input);
   const grid: IsoGrid = isoBlankGrid(world.cols, world.rows);
+  // The whole world is measured before a desk is placed, which is what lets a
+  // seat carry the projected box it is painted in (D53) rather than a
+  // rectangle of tiles the painter never draws to.
+  const origin: IsoOrigin = {
+    rows: world.rows,
+    stackHeight: ISO_CAMPUS_STACK_HEIGHT,
+  };
   const builds: DistrictBuilt[] = [];
   for (const [floorIndex, district] of world.districts.entries()) {
-    builds.push(buildDistrict(district, floorIndex));
+    builds.push(buildDistrict(district, floorIndex, origin));
   }
   for (const built of builds) isoPaintDistrict(grid, built.build);
 
@@ -634,6 +660,7 @@ export function planCampus(input: OfficePlanInput): OfficeLayout {
       index: buildIsoIndex({
         props,
         rooms,
+        floors,
         spots: floors.flatMap((floor) => floor.errandSpots),
       }),
     } satisfies CampusFrozen,
