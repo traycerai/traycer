@@ -4398,14 +4398,15 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
       context.skip("only Building has cubby-to-reserve wake semantics");
       return;
     }
-    const epic = makeTestEpic("one-team", 12, 9);
+    const epic = makeTestEpic("triage", 24, 9);
     const cold = new Map<string, OfficeAgentStatus>(
       epic.agents.map((person) => [person.id, "idle"]),
     );
-    const target = epic.agents.find((person) => person.parentId !== null);
+    cold.set("team-0-lead", "working");
+    const target = epic.agents.find((person) => person.id.startsWith("leaf-"));
     if (target === undefined) throw new Error("expected a team member");
     const secondTarget = epic.agents.find(
-      (person) => person.parentId !== null && person.id !== target.id,
+      (person) => person.id.startsWith("leaf-") && person.id !== target.id,
     );
     if (secondTarget === undefined)
       throw new Error("expected a second team member");
