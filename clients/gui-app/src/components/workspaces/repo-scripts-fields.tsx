@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type {
@@ -21,21 +21,24 @@ export function RepoScriptsFields(props: {
 }) {
   const { value, onChange } = props;
   return (
-    <div className="flex flex-col gap-4">
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
       <ScriptField
         label="Setup script"
         type="setup"
-        description="Runs at the project root on worktree creation."
+        description="At the project root when a worktree is created."
         form={value.setup}
         onChange={(setup) => onChange({ ...value, setup })}
       />
       <ScriptField
         label="Teardown script"
         type="teardown"
-        description="Runs at the project root before worktree cleanup."
+        description="At the project root before a worktree is removed."
         form={value.teardown}
         onChange={(teardown) => onChange({ ...value, teardown })}
       />
+      <p className="text-ui-xs text-muted-foreground md:col-span-2">
+        Platform scripts override Default. Leave blank to use Default.
+      </p>
     </div>
   );
 }
@@ -63,23 +66,33 @@ function ScriptField(props: {
   readonly onChange: (next: OsForm) => void;
 }) {
   const { label, type, description, form, onChange } = props;
+  const descriptionId = useId();
   // Tab selection is view-only state; the value lives in `form`. A plain
   // string avoids narrowing `onValueChange` - the typed `keyof OsForm` binding
   // comes from the `OS_TABS` entry inside each panel.
   const [activeOs, setActiveOs] = useState<string>("default");
   return (
-    <div className="space-y-2">
+    <div className="min-w-0 space-y-2.5">
       <div className="space-y-0.5">
         <div className="text-ui-sm font-medium text-foreground">{label}</div>
-        <p className="text-ui-xs text-muted-foreground">{description}</p>
+        <p id={descriptionId} className="text-ui-xs text-muted-foreground">
+          {description}
+        </p>
       </div>
-      <Tabs value={activeOs} onValueChange={setActiveOs} className="gap-1">
-        <TabsList>
+      <Tabs
+        value={activeOs}
+        onValueChange={setActiveOs}
+        className="gap-0 overflow-hidden rounded-lg border border-foreground/15 bg-foreground/3 focus-within:border-ring"
+      >
+        <TabsList
+          aria-label={`${label} platform`}
+          className="w-full justify-start rounded-none border-b border-foreground/10 bg-foreground/5 p-1 group-data-[orientation=horizontal]/tabs:h-auto"
+        >
           {OS_TABS.map((tab) => (
             <TabsTrigger
               key={tab.key}
               value={tab.key}
-              className="flex-none px-3 text-ui-xs"
+              className="min-h-8 px-2 text-ui-xs"
             >
               <span>{tab.label}</span>
               {tab.key !== "default" && form[tab.key].trim().length > 0 ? (
@@ -95,13 +108,14 @@ function ScriptField(props: {
           <TabsContent key={tab.key} value={tab.key}>
             <Textarea
               value={form[tab.key]}
-              rows={4}
+              rows={3}
               spellCheck={false}
               placeholder={
                 type === "setup" ? SETUP_PLACEHOLDER : TEARDOWN_PLACEHOLDER
               }
               aria-label={`${label} (${tab.label})`}
-              className="font-mono text-code-xs"
+              aria-describedby={descriptionId}
+              className="field-sizing-fixed resize-y rounded-none border-0 bg-transparent px-3 py-3 font-mono text-code-xs leading-relaxed placeholder:text-muted-foreground/50 focus-visible:ring-inset dark:bg-transparent"
               onChange={(event) =>
                 onChange({ ...form, [tab.key]: event.target.value })
               }

@@ -3432,7 +3432,7 @@ describe("<ProvidersSettingsPanel />", () => {
     ).toBe("false");
   });
 
-  it("renders profile rows with duplicate, drift, and unauthenticated states", () => {
+  it("renders profile rows with duplicate and unauthenticated states", () => {
     providerMocks.listResult.data = {
       providers: [
         providerState({
@@ -3488,28 +3488,21 @@ describe("<ProvidersSettingsPanel />", () => {
     openProfilesTab();
 
     // Defaults to the ambient profile and shows its persisted label, along
-    // with its drift notice, tier, and redacted email.
+    // with its tier and redacted email. A leftover ambientDriftNotice on the
+    // wire must not render.
     expect(screen.getAllByText("Terminal account").length).toBeGreaterThan(0);
     expect(
-      screen.getByText(
-        // Drift notice redacts both emails - "current@example.test" ->
-        // "c•••@e…", "previous@example.test" -> "p•••@e…".
-        "Terminal account is now c•••@e…; was p•••@e….",
-      ),
-    ).toBeDefined();
+      screen.queryByText("Terminal account is now c•••@e…; was p•••@e…."),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", {
+        name: "Dismiss ambient account change notice",
+      }),
+    ).toBeNull();
     expect(screen.getByText("Pro")).toBeDefined();
     // The identity line redacts the email by default (reveal toggle tested
     // separately) - "current@example.test" -> "c•••@e…".
     expect(screen.getAllByText("c•••@e…").length).toBeGreaterThan(0);
-
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: "Dismiss ambient account change notice",
-      }),
-    );
-    expect(
-      screen.queryByText("Terminal account is now c•••@e…; was p•••@e…."),
-    ).toBeNull();
 
     // Select "Work" - its own duplicate-account warning and tier.
     fireEvent.click(screen.getByRole("menuitem", { name: "Work" }));

@@ -6,6 +6,8 @@ const SPLIT_ROW_PADDING_CLASS = "pr-[clamp(0.75rem,5%,1.5rem)] pl-2";
 const SPLIT_CONTROL_WIDTH_CLASS = "w-11";
 
 interface SplitTabLayoutProps {
+  readonly leftColor: string | null;
+  readonly rightColor: string | null;
   readonly splitId: string;
   readonly selectedSide: "left" | "right" | null;
   readonly control: ReactNode;
@@ -46,6 +48,8 @@ export function SplitTabLayout(props: SplitTabLayoutProps): ReactNode {
         </div>
       </div>
       <SplitGroupUnderline
+        leftColor={props.leftColor}
+        rightColor={props.rightColor}
         splitId={props.splitId}
         selectedSide={props.selectedSide}
       />
@@ -54,6 +58,8 @@ export function SplitTabLayout(props: SplitTabLayoutProps): ReactNode {
 }
 
 function SplitGroupUnderline(props: {
+  readonly leftColor: string | null;
+  readonly rightColor: string | null;
   readonly splitId: string;
   readonly selectedSide: "left" | "right" | null;
 }): ReactNode {
@@ -61,42 +67,45 @@ function SplitGroupUnderline(props: {
     <span
       aria-hidden="true"
       data-testid={`split-tab-group-underline-${props.splitId}`}
+      style={{ color: "var(--color-primary)" }}
       className={cn(
-        "pointer-events-none absolute inset-x-0 bottom-0 z-30 flex h-px",
+        "pointer-events-none absolute inset-x-0 bottom-0 z-30 flex h-[1.5px]",
         SPLIT_ROW_PADDING_CLASS,
       )}
     >
       <span
         data-testid={`split-tab-group-underline-control-${props.splitId}`}
         className={cn(
-          "relative shrink-0 rounded-l-full bg-primary",
+          "relative shrink-0 rounded-l-full bg-current",
           SPLIT_CONTROL_WIDTH_CLASS,
           props.selectedSide === "left" &&
-            "after:absolute after:inset-y-0 after:-right-0.5 after:w-0.5 after:bg-primary",
+            "after:absolute after:inset-y-0 after:-right-0.5 after:w-0.5 after:bg-current",
         )}
       />
       <span
         data-testid={`split-tab-group-underline-left-${props.splitId}`}
+        style={{ color: props.leftColor ?? "var(--color-primary)" }}
         className={cn(
           "relative min-w-0 flex-1 rounded-l-full",
-          props.selectedSide !== "left" && "bg-primary",
+          props.selectedSide !== "left" && "bg-current",
           props.selectedSide === "right" &&
-            "after:absolute after:inset-y-0 after:-right-0.5 after:w-0.5 after:bg-primary",
+            "after:absolute after:inset-y-0 after:-right-0.5 after:w-0.5 after:bg-current",
         )}
       />
       <span
         className={cn(
           "shrink-0",
-          props.selectedSide === null ? "w-px bg-primary" : "w-0",
+          props.selectedSide === null ? "w-px bg-current" : "w-0",
         )}
       />
       <span
         data-testid={`split-tab-group-underline-right-${props.splitId}`}
+        style={{ color: props.rightColor ?? "var(--color-primary)" }}
         className={cn(
           "relative min-w-0 flex-1 rounded-r-full",
-          props.selectedSide !== "right" && "bg-primary",
+          props.selectedSide !== "right" && "bg-current",
           props.selectedSide === "left" &&
-            "before:absolute before:inset-y-0 before:-left-0.5 before:w-0.5 before:bg-primary",
+            "before:absolute before:inset-y-0 before:-left-0.5 before:w-0.5 before:bg-current",
         )}
       />
     </span>
@@ -151,12 +160,15 @@ export function SplitFocusIcon(props: {
  * the same raised silhouette as an ordinary selected tab; group membership is
  * communicated independently by the split group's accent underline.
  */
-export function SplitMemberChrome(props: { readonly focused: boolean }) {
+export function SplitMemberChrome(props: {
+  readonly focused: boolean;
+  readonly color: string | null;
+}) {
   if (props.focused) {
     return (
       <TabChromeBackground
         fill="var(--color-background)"
-        borderColor="var(--color-primary)"
+        borderColor={props.color ?? "var(--color-primary)"}
         coversBaseline
         className={undefined}
       />
