@@ -2371,6 +2371,160 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
       expect(rings).toHaveLength(1);
     });
   });
+
+  /**
+   * `drawNameTags` reports the agents it PLACED a tag for, not the agents it
+   * OFFERED one to: `layoutNameTags` is greedy and drops a tag with nowhere
+   * free rather than drawing it over a neighbour, so an agent can qualify for
+   * a tag, be offered one, and still end up unnamed by that path. Find is
+   * supposed to fill in for exactly that agent - never for one whose tag was
+   * actually drawn, which would just be a second name at the same anchor.
+   *
+   * Real desks are not close enough for this on their own: Towers, Building,
+   * Mission Control, Campus and City all space a room's chairs several tiles
+   * apart (checked directly against `layoutNameTags`, fed the real projected
+   * anchors of a real `one-team(12)` office in every registered view, with
+   * every candidate's name forced to the 14-character cap `truncate` allows
+   * - nothing ever collided). So this cluster is a small HAND-BUILT Floor
+   * layout, the same pattern `F5`/`F10`/`walkInView` above already use to get
+   * exact control over tile positions - real `OfficeScene`, real
+   * `drawNameTags`, real `layoutNameTags`, real `drawFindOverlay`, nothing
+   * stubbed - just four desks one tile apart instead of a real plan's wider
+   * spacing.
+   */
+  describe("CommGraphOfficeCanvas fixup 4 - a tag DROPPED for collision still gets exactly one name, from Find", () => {
+    /**
+     * Four desks, one tile apart, all in the same row. Each name is well
+     * past `MAX_LABEL_CHARS` (14), so every tag truncates to the same
+     * 14-character width - the exact shape `office-name-tags.test.ts`'s own
+     * "skips a tag with nowhere free" case uses, just reached through the
+     * real renderer instead of `layoutNameTags` directly. `layoutNameTags`
+     * places in ascending `centerX` order and has three slots (the anchor
+     * plus two shifts); a one-tile pitch at zoom 1.6 puts even the two
+     * FARTHEST apart of these four within the tag's own width, so all six
+     * pairs overlap and the fourth (rightmost) is the one left with nowhere
+     * to go.
+     */
+    const CLUSTER_NAMES: ReadonlyArray<string> = [
+      "Zebra Overflow Name",
+      "Yellow Clutter Agent",
+      "Xenon Packed Mesh Name",
+      "Walrus Dense Tag Name",
+    ];
+    const CLUSTER_CAMERA_VIEW: CommGraphTileViewState = {
+      ...FIXED_CAMERA_VIEW,
+      zoom: 1.6,
+    };
+    /** One `drawScreenLabel` is four backing passes plus one text pass. */
+    const PASSES_PER_LABEL = 5;
+
+    function clusterLayout(): OfficeLayout {
+      const seats = CLUSTER_NAMES.map((_, index) =>
+        seatAt({ seatId: `h/0/cluster-${index}`, col: 4 + index, row: 5 }),
+      );
+      return {
+        view: "floor",
+        cols: 16,
+        rows: 16,
+        desks: new Map(
+          seats.map((seat, index) => [
+            `cluster-${index}`,
+            { ...seat, agentId: `cluster-${index}` },
+          ]),
+        ),
+        seats: new Map(seats.map((seat) => [seat.seatId, seat])),
+        signs: [],
+        rooms: [],
+        floors: [emptyFloor()],
+        doorTile: { col: 0, row: 0 },
+        lobbyTile: { col: 0, row: 1 },
+        props: [],
+        walkable: allWalkable(16, 16),
+        frozen: null,
+        shiftFromPrevious: null,
+        stable: true,
+      };
+    }
+
+    function clusterAgents(): ReadonlyArray<CommGraphAgentNode> {
+      return CLUSTER_NAMES.map((name, index) =>
+        agent(`cluster-${index}`, name),
+      );
+    }
+
+    function renderCluster(): void {
+      const layout = clusterLayout();
+      const view: OfficeView = { ...OFFICE_VIEWS.floor, plan: () => layout };
+      const clusterAgentNodes = clusterAgents();
+      render(
+        withQueryClient(
+          cloneElement(
+            officeElementWithView(
+              view,
+              new Set(clusterAgentNodes.map((person) => person.id)),
+              clusterAgentNodes,
+              {},
+            ),
+            { view: CLUSTER_CAMERA_VIEW },
+          ),
+        ),
+      );
+      setIntersecting(true);
+      flushRaf(3);
+    }
+
+    async function findFor(query: string): Promise<void> {
+      await act(async () => {
+        await latestFindAdapter().search({
+          requestId: 1,
+          query,
+          matchCase: false,
+        });
+      });
+    }
+
+    /**
+     * Every `fillText` pass that NAMES this agent, truncation included - the
+     * same shape as N1's `namePaints`, reused here because the tag path
+     * truncates a long name while Find does not, and an exact-match count
+     * would miss the truncated tag exactly as it did before N1's fixup.
+     */
+    function namePaints(name: string): number {
+      return paintedText().filter(
+        (text) =>
+          text === name ||
+          (text.endsWith("…") && name.startsWith(text.slice(0, -1))),
+      ).length;
+    }
+
+    it("names the DROPPED agent through Find, exactly once", async () => {
+      renderCluster();
+      // The rightmost desk (highest centerX): `layoutNameTags` sorts
+      // ascending and has exhausted both shifts on its three neighbours by
+      // the time it is reached, so its ordinary tag never gets a slot.
+      const dropped = "Walrus Dense Tag Name";
+      await findFor(dropped);
+      calls.length = 0;
+      // ONE frame. Every count below is per frame, and a flush is a frame.
+      flushRaf(1);
+
+      expect(namePaints(dropped)).toBe(PASSES_PER_LABEL);
+    });
+
+    it("control: a PLACED agent's tag is not doubled by Find", async () => {
+      renderCluster();
+      // The leftmost desk takes the first slot at its own anchor and is
+      // never displaced - `drawNameTags` reports it as placed, so Find must
+      // stay silent for it.
+      const placed = "Zebra Overflow Name";
+      await findFor(placed);
+      calls.length = 0;
+      // ONE frame. Every count below is per frame, and a flush is a frame.
+      flushRaf(1);
+
+      expect(namePaints(placed)).toBe(PASSES_PER_LABEL);
+    });
+  });
 });
 
 describe("CommGraphOfficeCanvas fixup 2 - real Towers semantic zoom", () => {
