@@ -5300,6 +5300,16 @@ describe("OfficeScene fixup 1 - F4 hit order matches the world stream", () => {
     expect(scene.hitTest({ x: 106, y: 188 })).toBe(frontMost.ownerAgentId);
   });
 
+  /**
+   * A CONTROL, not a proof: this one never reproduced F4.
+   *
+   * Building's real depth is its foot y, which stays monotonic with the
+   * row/col/id comparator the old code sorted by, in every scenario tried -
+   * all-agents, same-row pairs, active motion. So the bug does not reach an
+   * oblique view, and this case asserts the invariant holds there rather than
+   * demonstrating it once did not. City below is the one that fails without
+   * the fix; a non-identity projector is what surfaces this.
+   */
   it("orders Building's real world-depth painter and its hit regions consistently while agents are mid-walk", () => {
     const epic = makeTestEpic("one-team", 60, 4);
     const scene = new OfficeScene(OFFICE_VIEWS.building, null);
@@ -6206,6 +6216,116 @@ describe("OfficeScene fixup 1 - F17 isometric growth reports a projected shift",
 
     for (let step = 0; step < 5; step += 1) scene.tick(100);
     expect(frameOf(scene).awayAgentIds.has(target)).toBe(true);
+  });
+});
+
+describe("OfficeScene fixup 1 - F19 a waking cubby stays under its occupant", () => {
+  interface SeatCall {
+    readonly seatId: string;
+    readonly agentId: string | null;
+  }
+
+  interface WakingCubby {
+    readonly scene: OfficeScene;
+    readonly calls: SeatCall[];
+    readonly sleeper: string;
+    readonly cubbySeatId: string;
+    readonly wake: () => void;
+  }
+
+  /**
+   * A real Building with one cold agent in a cubby, and the sync that wakes it.
+   *
+   * Motion is NOT reduced on purpose: with it the walk collapses into sitting
+   * down, the character arrives in the same call that claimed the seat, and
+   * the window this finding lives in - claimed there, still standing here -
+   * never opens.
+   */
+  function wakingCubby(): WakingCubby {
+    const epic = makeTestEpic("one-team", 12, 9);
+    const cold = new Map<string, OfficeAgentStatus>(
+      epic.agents.map((person) => [person.id, "idle"]),
+    );
+    const calls: SeatCall[] = [];
+    const view: OfficeView = {
+      ...OFFICE_VIEWS.building,
+      painter: {
+        ...OFFICE_VIEWS.building.painter,
+        seatProps: (planLayout, seat, state, lod) => {
+          calls.push({ seatId: seat.seatId, agentId: state.agentId });
+          return OFFICE_VIEWS.building.painter.seatProps(
+            planLayout,
+            seat,
+            state,
+            lod,
+          );
+        },
+      },
+    };
+    const visibleAgentIds = new Set(epic.agents.map((person) => person.id));
+    const scene = new OfficeScene(view, null);
+    scene.sync(
+      sceneInput({ agents: epic.agents, visibleAgentIds, statusById: cold }),
+    );
+    const layout = layoutOf(scene);
+    const cubby = Array.from(layout.desks.values()).find(
+      (desk) => desk.kind === "cubby",
+    );
+    if (cubby === undefined) throw new Error("expected a cubby on Building");
+    const hot = new Map(cold);
+    hot.set(cubby.agentId, "working");
+    return {
+      scene,
+      calls,
+      sleeper: cubby.agentId,
+      cubbySeatId: cubby.seatId,
+      wake: () => {
+        scene.sync(
+          sceneInput({ agents: epic.agents, visibleAgentIds, statusById: hot }),
+        );
+      },
+    };
+  }
+
+  it("paints the cubby with its occupant on the sync that wakes it", () => {
+    const { calls, cubbySeatId, scene, sleeper, wake } = wakingCubby();
+
+    calls.length = 0;
+    scene.frame(1, WHOLE_WORLD);
+    // Asleep in it: this is what the wake has to preserve, and a fixture whose
+    // cubby was never painted would prove nothing about the wake.
+    expect(calls.find((call) => call.seatId === cubbySeatId)).toEqual({
+      seatId: cubbySeatId,
+      agentId: sleeper,
+    });
+
+    wake();
+    calls.length = 0;
+    scene.frame(1, WHOLE_WORLD);
+
+    expect(calls.find((call) => call.seatId === cubbySeatId)).toEqual({
+      seatId: cubbySeatId,
+      agentId: sleeper,
+    });
+  });
+
+  it("lets the cubby go once its occupant has reached the seat it woke onto", () => {
+    const { calls, cubbySeatId, scene, sleeper, wake } = wakingCubby();
+    wake();
+
+    // Walk it all the way to the reserve it claimed. `awayAgentIds` is the
+    // scene's own word for "not in its chair", so the loop ends on the same
+    // boundary the seat release does rather than on a tick count.
+    let arrived = false;
+    for (let step = 0; step < 400 && !arrived; step += 1) {
+      scene.tick(100);
+      arrived = !frameOf(scene).awayAgentIds.has(sleeper);
+    }
+    expect(arrived).toBe(true);
+
+    calls.length = 0;
+    scene.frame(1, WHOLE_WORLD);
+    expect(calls.some((call) => call.seatId === cubbySeatId)).toBe(false);
   });
 });
 

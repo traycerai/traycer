@@ -75,6 +75,8 @@ export class OfficeSeatBook {
   private readonly claimShortfall = new Set<string>();
   /** Effective seat, inverted. Injective over agents by construction. */
   private occupantBySeat: ReadonlyMap<string, string> = new Map();
+  /** Assignment, inverted. `reassign` hands one seat to one agent, so injective too. */
+  private assigneeBySeat: ReadonlyMap<string, string> = new Map();
   private claimSequence = 0;
 
   /**
@@ -145,6 +147,17 @@ export class OfficeSeatBook {
   /** Who is sitting in this seat right now, or `null` while it is empty. */
   occupant(seatId: string): string | null {
     return this.occupantBySeat.get(seatId) ?? null;
+  }
+
+  /**
+   * Whose seat this IS, whether or not they are in it.
+   *
+   * The inverse of `assignedSeat`, and the difference from `occupant` is the
+   * one the wake opens: an agent that has claimed a reserve occupies THAT and
+   * still owns the cubby it has not walked out of yet.
+   */
+  assignee(seatId: string): string | null {
+    return this.assigneeBySeat.get(seatId) ?? null;
   }
 
   /**
@@ -413,12 +426,16 @@ export class OfficeSeatBook {
   /** One pass over the known agents: the effective seat of each, inverted. */
   private refresh(): void {
     const occupants = new Map<string, string>();
+    const assignees = new Map<string, string>();
     for (const agentId of this.known) {
+      const assigned = this.assignedSeat(agentId);
+      if (assigned !== null) assignees.set(assigned.seatId, agentId);
       const seat = this.effectiveSeat(agentId);
       if (seat === null) continue;
       occupants.set(seat.seatId, agentId);
     }
     this.occupantBySeat = occupants;
+    this.assigneeBySeat = assignees;
   }
 
   /**

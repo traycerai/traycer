@@ -3718,7 +3718,7 @@ export class OfficeScene {
       if (bucket === undefined) continue;
       for (const seat of bucket) {
         if (seen.has(seat.seatId)) continue;
-        const agentId = this.seats.occupant(seat.seatId);
+        const agentId = this.occupantToPaint(seat);
         if (agentId === null && !index.reserves.has(seat.seatId)) continue;
         if (agentId !== null && !this.visibleAgentIds.has(agentId)) continue;
         if (!rectsOverlap(this.seatBox(seat), rect)) continue;
@@ -3776,6 +3776,29 @@ export class OfficeScene {
       }
     }
     return found;
+  }
+
+  /**
+   * Who a seat is drawn WITH, which is not always who the book says is in it.
+   *
+   * A waking agent's effective seat becomes the reserve it claimed the moment
+   * it claims it, and its cubby - assigned, so never an unclaimed reserve -
+   * would go out of the frame from under a character that has not taken a
+   * step yet. So the seat keeps its agent while that agent is out of a chair,
+   * and lets go on the same boundary a claim does: the character settles
+   * somewhere, and `vacated` ends the other half of the same handover.
+   *
+   * A seat whose agent does not exist at this cursor is still nobody's - a
+   * future arrival's desk stays unpainted, which is what it was for.
+   */
+  private occupantToPaint(seat: OfficeSeat): string | null {
+    const occupant = this.seats.occupant(seat.seatId);
+    if (occupant !== null) return occupant;
+    const assignee = this.seats.assignee(seat.seatId);
+    if (assignee === null || !this.visibleAgentIds.has(assignee)) return null;
+    const character = this.characters.get(assignee);
+    if (character === undefined || character.seated) return null;
+    return assignee;
   }
 
   /** A seat's projected box - what the rect test and the hit region both use. */
