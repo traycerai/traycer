@@ -17,7 +17,11 @@ import type {
   ChatRecordSummary,
   ChatRecordSummaryStreamV13,
 } from "@traycer/protocol/host/epic/chat-records";
-import type { TuiAgentRecordSummary } from "@traycer/protocol/host/epic/tui-agent-records";
+import type {
+  TuiAgentRecordSummary,
+  TuiAgentRecordSummaryV13Registry,
+} from "@traycer/protocol/host/epic/tui-agent-records";
+import type { RecordListRevision } from "@traycer/protocol/host/epic/record-list-revision";
 import type { SchemaVersion } from "@traycer/protocol/framework/versioned-stream-rpc";
 import type {
   IStreamSession,
@@ -180,6 +184,13 @@ interface StatusCall {
 interface Harness {
   readonly session: StubSession;
   readonly deltas: ChatRecordsStreamDelta[];
+  /**
+   * The second `onDelta` argument, one entry per delivered delta - kept
+   * alongside `deltas` (not merged into it) because `listRevision` is a fact
+   * about the ENVELOPE, not the delta, exactly as the production callback
+   * type keeps them apart.
+   */
+  readonly listRevisions: (RecordListRevision | null)[];
   readonly client: ChatRecordsStreamClient;
   readonly statuses: StatusCall[];
   readonly wsStreamClient: WsStreamClient<typeof hostStreamRpcRegistry>;
@@ -189,15 +200,39 @@ function harness(): Harness {
   const session = new StubSession();
   const wsStreamClient = makeWsStreamClient(session);
   const deltas: ChatRecordsStreamDelta[] = [];
+  const listRevisions: (RecordListRevision | null)[] = [];
   const statuses: StatusCall[] = [];
   const client = new ChatRecordsStreamClient({
     wsStreamClient,
     callbacks: {
-      onDelta: (delta) => deltas.push(delta),
+      onDelta: (delta, listRevision) => {
+        deltas.push(delta);
+        listRevisions.push(listRevision);
+      },
       onConnectionStatus: (status, reason) => statuses.push({ status, reason }),
     },
   });
-  return { session, deltas, client, statuses, wsStreamClient };
+  return { session, deltas, listRevisions, client, statuses, wsStreamClient };
+}
+
+function listRevision(
+  overrides: Partial<RecordListRevision>,
+): RecordListRevision {
+  return { epoch: "epoch-1", revision: 1, ...overrides };
+}
+
+/** The `@1.3` registry row plus the session facet - the `@1.4` `tuiUpsert` row. */
+function tuiRowV13(
+  overrides: Partial<TuiAgentRecordSummaryV13Registry>,
+): TuiAgentRecordSummaryV13Registry {
+  return {
+    ...tuiRow(overrides),
+    origin: "registry",
+    docResident: false,
+    sessionState: null,
+    lastExit: null,
+    ...overrides,
+  };
 }
 
 describe("ChatRecordsStreamClient", () => {
@@ -270,6 +305,8 @@ describe("ChatRecordsStreamClient", () => {
         kind: "tuiUpsert",
         epicId: "epic-1",
         record: { ...record, docResident: false, origin: "registry" },
+        // No `sessionState` key on an `@1.1` row - "not stated", not "unknown".
+        sessionFacet: null,
       },
       {
         kind: "tuiRemove",
@@ -305,6 +342,7 @@ describe("ChatRecordsStreamClient", () => {
         kind: "tuiUpsert",
         epicId: "epic-1",
         record: { ...record, docResident: false, origin: "registry" },
+        sessionFacet: null,
       },
     ]);
     h.client.close();
@@ -339,7 +377,9 @@ describe("ChatRecordsStreamClient", () => {
       record,
     });
 
-    expect(h.deltas).toEqual([{ kind: "tuiUpsert", epicId: "epic-1", record }]);
+    expect(h.deltas).toEqual([
+      { kind: "tuiUpsert", epicId: "epic-1", record, sessionFacet: null },
+    ]);
     h.client.close();
   });
 
@@ -564,6 +604,122 @@ describe("ChatRecordsStreamClient", () => {
       });
 
       expect(h.deltas).toEqual([]);
+      h.client.close();
+    });
+  });
+
+  describe("the @1.4 list revision stamp and session facet", () => {
+    it("delivers `listRevision` and a stated session facet on a tuiUpsert at @1.4", () => {
+      const h = harness();
+      h.session.negotiatedSchemaVersion = { major: 1, minor: 4 };
+      const record = tuiRowV13({
+        tuiAgentId: "tui-a",
+        revision: 9,
+        sessionState: "sleeping",
+        lastExit: "process-exit",
+      });
+      const stamp = listRevision({ revision: 5 });
+      h.session.emitFrame({
+        kind: "tuiUpsert",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        tuiAgentId: "tui-a",
+        revision: 9,
+        listRevision: stamp,
+        record,
+      });
+
+      expect(h.deltas).toEqual([
+        {
+          kind: "tuiUpsert",
+          epicId: "epic-1",
+          record,
+          sessionFacet: { sessionState: "sleeping", lastExit: "process-exit" },
+        },
+      ]);
+      expect(h.listRevisions).toEqual([stamp]);
+      h.client.close();
+    });
+
+    it("STRIPS `listRevision` and the session facet at @1.3 - the older schema has no field for either", () => {
+      // THE REGRESSION THE @1.4 ARM EXISTS TO PREVENT. A GUI negotiating @1.4
+      // but a host that only stamped @1.3-shaped frames (or a client parsing
+      // with the wrong arm) would silently lose both facts while the delta
+      // still arrived, leaving stage 2 inert but looking healthy.
+      const h = harness();
+      h.session.negotiatedSchemaVersion = { major: 1, minor: 3 };
+      const record = tuiRowV13({
+        tuiAgentId: "tui-a",
+        revision: 9,
+        sessionState: "sleeping",
+        lastExit: "process-exit",
+      });
+      h.session.emitFrame({
+        kind: "tuiUpsert",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        tuiAgentId: "tui-a",
+        revision: 9,
+        listRevision: listRevision({ revision: 5 }),
+        record,
+      });
+
+      expect(h.deltas).toHaveLength(1);
+      const delta = h.deltas[0];
+      if (delta.kind !== "tuiUpsert") throw new Error("expected tuiUpsert");
+      expect(delta.sessionFacet).toBeNull();
+      expect(delta.record).not.toHaveProperty("sessionState");
+      expect(delta.record).not.toHaveProperty("lastExit");
+      expect(h.listRevisions).toEqual([null]);
+      h.client.close();
+    });
+
+    it("delivers no delta at all for a `pong` at @1.4 - a liveness frame, not a record change", () => {
+      const h = harness();
+      h.session.negotiatedSchemaVersion = { major: 1, minor: 4 };
+      h.session.emitFrame({ kind: "pong", hasBinaryPayload: false });
+      expect(h.deltas).toEqual([]);
+      expect(h.listRevisions).toEqual([]);
+      h.client.close();
+    });
+
+    it("carries `listRevision` on a @1.4 `remove` and `tuiRemove`", () => {
+      const h = harness();
+      h.session.negotiatedSchemaVersion = { major: 1, minor: 4 };
+      const removeStamp = listRevision({ revision: 6 });
+      const tuiRemoveStamp = listRevision({ revision: 7 });
+      h.session.emitFrame({
+        kind: "remove",
+        hasBinaryPayload: false,
+        epicId: "epic-1",
+        chatId: "chat-a",
+        listRevision: removeStamp,
+        reason: "revoked",
+      });
+      h.session.emitFrame({
+        kind: "tuiRemove",
+        hasBinaryPayload: false,
+        epicId: "epic-2",
+        tuiAgentId: "tui-b",
+        listRevision: tuiRemoveStamp,
+        reason: "deleted",
+      });
+
+      expect(h.deltas).toEqual([
+        {
+          kind: "remove",
+          epicId: "epic-1",
+          chatId: "chat-a",
+          reason: "revoked",
+        },
+        {
+          kind: "tuiRemove",
+          epicId: "epic-2",
+          tuiAgentId: "tui-b",
+          reason: "deleted",
+        },
+      ]);
+      expect(h.listRevisions).toEqual([removeStamp, tuiRemoveStamp]);
       h.client.close();
     });
   });

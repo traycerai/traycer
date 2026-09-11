@@ -62,6 +62,7 @@ import {
   invalidateEpicTuiAgentRecords,
   useEpicSyncTuiAgentRecords,
 } from "@/hooks/chats/use-epic-tui-agent-records";
+import { publishRecordListDeltaStamp } from "@/lib/records/record-list-delta-stamps";
 
 const EPIC_ID = "epic-revision-gating";
 const VIEWER_ID = "viewer-1";
@@ -220,7 +221,10 @@ function newSession(): OpenedStoreForTest {
 }
 
 interface HandlerBox<Req, Res> {
-  impl: (params: Req) => Res;
+  // `| Promise<Res>` so a case can hold a dispatch in flight (R8's
+  // in-flight-refetch case) without every other case's synchronous handler
+  // having to wrap its answer.
+  impl: (params: Req) => Res | Promise<Res>;
 }
 
 interface Fixture {
@@ -818,5 +822,247 @@ describe("R7 - a session-handle swap under a MOUNTED hook also resets to null", 
 
     view.unmount();
     newHandle.store.getState().dispose();
+  });
+});
+
+/**
+ * R8 - Stage 2: `useRecordListStreamStamp` keeps a held stamp current from the
+ * PUSH channel (`publishRecordListDeltaStamp`), so an ordinary change stops
+ * costing a snapshot. Reuses R1-R7's harness verbatim: the same fixture, the
+ * same real hooks, the same `chatCalls`/`tuiCalls` dispatch log - the only new
+ * ingredient is publishing directly onto the per-epic channel the mount would
+ * otherwise announce on, since this file has no `ChatRecordsStreamMount`
+ * mounted.
+ */
+describe("R8 - the push stream's stamp", () => {
+  it("advances the held stamp on the immediate successor, with no refetch, and the next dispatch carries it", async () => {
+    const chatStamp: RecordListStamp = {
+      epoch: "E",
+      revision: 1,
+      touchRevision: 3,
+    };
+    fixture.chatHandler.impl = () => ({
+      kind: "snapshot",
+      listStamp: chatStamp,
+      chats: [chatRow({ chatId: "chat-a" })],
+    });
+
+    const view = renderHook(useBothRecordSyncHooks, {
+      wrapper: fixture.Wrapper,
+    });
+    await waitFor(() => {
+      expect(chatCalls(fixture.messenger)).toHaveLength(1);
+    });
+    await waitFor(() => {
+      expect(fixture.handle.store.getState().chats.allIds).toContain("chat-a");
+    });
+
+    // The immediate successor: same epoch, `held.revision + 1`.
+    publishRecordListDeltaStamp(EPIC_ID, { epoch: "E", revision: 2 });
+    // No refetch fires from the publish alone - `publish` is synchronous, so
+    // if a refetch had been queued it would already have been dispatched by
+    // the time this assertion runs.
+    expect(chatCalls(fixture.messenger)).toHaveLength(1);
+
+    invalidateEpicChatRecords(fixture.queryClient, HOST_ID);
+    await waitFor(() => {
+      expect(chatCalls(fixture.messenger)).toHaveLength(2);
+    });
+    // The advanced revision, with `touchRevision` carried through UNCHANGED -
+    // the delta reports a list change, never a quiet write.
+    expect(chatCalls(fixture.messenger)[1]?.knownRevision).toEqual({
+      epoch: "E",
+      revision: 2,
+      touchRevision: 3,
+    });
+
+    view.unmount();
+  });
+
+  it("advances the TERMINAL-AGENT plane's held stamp from a delta announced for the SAME epic - the per-epic channel, not a per-plane one", async () => {
+    // The channel is per (viewer, epic), not per list method: both planes
+    // answer with the same composite revision, so one announcement - whatever
+    // kind of row actually changed - must move BOTH held stamps.
+    const tuiStamp: RecordListStamp = {
+      epoch: "F",
+      revision: 1,
+      touchRevision: 1,
+    };
+    fixture.tuiHandler.impl = () => ({
+      kind: "snapshot",
+      listStamp: tuiStamp,
+      tuiAgents: [tuiRow({ tuiAgentId: "tui-a" })],
+    });
+
+    renderHook(useBothRecordSyncHooks, { wrapper: fixture.Wrapper });
+    await waitFor(() => {
+      expect(tuiCalls(fixture.messenger)).toHaveLength(1);
+    });
+    await waitFor(() => {
+      expect(fixture.handle.store.getState().tuiAgents.allIds).toContain(
+        "tui-a",
+      );
+    });
+
+    publishRecordListDeltaStamp(EPIC_ID, { epoch: "F", revision: 2 });
+
+    invalidateEpicTuiAgentRecords(fixture.queryClient, HOST_ID);
+    await waitFor(() => {
+      expect(tuiCalls(fixture.messenger)).toHaveLength(2);
+    });
+    expect(tuiCalls(fixture.messenger)[1]?.knownRevision).toEqual({
+      epoch: "F",
+      revision: 2,
+      touchRevision: 1,
+    });
+  });
+
+  it("triggers exactly one refetch for a delta at held + 2 - a gap, not a jump to follow", async () => {
+    const chatStamp: RecordListStamp = {
+      epoch: "E",
+      revision: 1,
+      touchRevision: 1,
+    };
+    fixture.chatHandler.impl = () => ({
+      kind: "snapshot",
+      listStamp: chatStamp,
+      chats: [chatRow({ chatId: "chat-a" })],
+    });
+
+    renderHook(useBothRecordSyncHooks, { wrapper: fixture.Wrapper });
+    await waitFor(() => {
+      expect(chatCalls(fixture.messenger)).toHaveLength(1);
+    });
+    await waitFor(() => {
+      expect(fixture.handle.store.getState().chats.allIds).toContain("chat-a");
+    });
+
+    // A gap: `held.revision + 2`, not the immediate successor. The in-between
+    // change is exactly what this client has no other way to learn about, so
+    // the rule must re-read rather than silently skip it.
+    publishRecordListDeltaStamp(EPIC_ID, { epoch: "E", revision: 3 });
+
+    await waitFor(() => {
+      expect(chatCalls(fixture.messenger)).toHaveLength(2);
+    });
+    // Settle and assert no THIRD dispatch follows from the same publish.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(chatCalls(fixture.messenger)).toHaveLength(2);
+  });
+
+  it("triggers exactly one refetch when the epoch differs, even though the revision happens to equal held + 1", async () => {
+    const chatStamp: RecordListStamp = {
+      epoch: "E",
+      revision: 1,
+      touchRevision: 1,
+    };
+    fixture.chatHandler.impl = () => ({
+      kind: "snapshot",
+      listStamp: chatStamp,
+      chats: [chatRow({ chatId: "chat-a" })],
+    });
+
+    renderHook(useBothRecordSyncHooks, { wrapper: fixture.Wrapper });
+    await waitFor(() => {
+      expect(chatCalls(fixture.messenger)).toHaveLength(1);
+    });
+    await waitFor(() => {
+      expect(fixture.handle.store.getState().chats.allIds).toContain("chat-a");
+    });
+
+    // Revisions from two epochs do not compare - this is a host restart or a
+    // re-hydrate, not "the very next change", however the bare number reads.
+    publishRecordListDeltaStamp(EPIC_ID, { epoch: "OTHER-EPOCH", revision: 2 });
+
+    await waitFor(() => {
+      expect(chatCalls(fixture.messenger)).toHaveLength(2);
+    });
+    expect(chatCalls(fixture.messenger)[1]?.knownRevision).toBeNull();
+  });
+
+  it("a plane holding null ignores a delta entirely: no refetch, nothing held", async () => {
+    // The `@1.2` upgrade path (R4): a snapshot with no revision to report
+    // leaves the plane on `knownRevision: null`, which already asks for a
+    // snapshot on every dispatch - a delta has nothing to tell it.
+    fixture.chatHandler.impl = () => ({
+      kind: "snapshot",
+      listStamp: null,
+      chats: [chatRow({ chatId: "chat-a" })],
+    });
+
+    renderHook(useBothRecordSyncHooks, { wrapper: fixture.Wrapper });
+    await waitFor(() => {
+      expect(chatCalls(fixture.messenger)).toHaveLength(1);
+    });
+    await waitFor(() => {
+      expect(fixture.handle.store.getState().chats.allIds).toContain("chat-a");
+    });
+
+    publishRecordListDeltaStamp(EPIC_ID, { epoch: "E", revision: 2 });
+    // Settle any microtask a (wrongly) queued refetch would need.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(chatCalls(fixture.messenger)).toHaveLength(1);
+
+    invalidateEpicChatRecords(fixture.queryClient, HOST_ID);
+    await waitFor(() => {
+      expect(chatCalls(fixture.messenger)).toHaveLength(2);
+    });
+    expect(chatCalls(fixture.messenger)[1]?.knownRevision).toBeNull();
+  });
+
+  it("a second delta arriving while the gap's refetch is still in flight triggers no further refetch - the stamp was dropped", async () => {
+    const chatStamp: RecordListStamp = {
+      epoch: "E",
+      revision: 1,
+      touchRevision: 1,
+    };
+    const refetchLatch: { resolve: (() => void) | null } = { resolve: null };
+    fixture.chatHandler.impl = () => ({
+      kind: "snapshot",
+      listStamp: chatStamp,
+      chats: [chatRow({ chatId: "chat-a" })],
+    });
+
+    renderHook(useBothRecordSyncHooks, { wrapper: fixture.Wrapper });
+    await waitFor(() => {
+      expect(chatCalls(fixture.messenger)).toHaveLength(1);
+    });
+    await waitFor(() => {
+      expect(fixture.handle.store.getState().chats.allIds).toContain("chat-a");
+    });
+
+    // The refetch this gap triggers will hang until `refetchLatch.resolve` runs.
+    fixture.chatHandler.impl = () =>
+      new Promise((resolve) => {
+        refetchLatch.resolve = () => {
+          resolve({
+            kind: "snapshot",
+            listStamp: { epoch: "E", revision: 3, touchRevision: 1 },
+            chats: [chatRow({ chatId: "chat-a" })],
+          });
+        };
+      });
+
+    publishRecordListDeltaStamp(EPIC_ID, { epoch: "E", revision: 3 });
+    await waitFor(() => {
+      expect(chatCalls(fixture.messenger)).toHaveLength(2);
+    });
+    expect(refetchLatch.resolve).not.toBeNull();
+
+    // A second delta lands while the first refetch is still in flight. The
+    // stamp was already dropped to `null` by the first one, so this must find
+    // `currentStamp === null` and do nothing - no third dispatch.
+    publishRecordListDeltaStamp(EPIC_ID, { epoch: "E", revision: 4 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(chatCalls(fixture.messenger)).toHaveLength(2);
+
+    refetchLatch.resolve?.();
+    await waitFor(() => {
+      expect(
+        fixture.handle.store.getState().chats.byId["chat-a"],
+      ).toBeDefined();
+    });
+    // Still exactly two dispatches once the in-flight refetch resolves.
+    expect(chatCalls(fixture.messenger)).toHaveLength(2);
   });
 });

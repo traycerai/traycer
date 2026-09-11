@@ -13,6 +13,10 @@ import { forwardRef, type ReactNode } from "react";
 import type { Mock } from "vitest";
 import type { ProviderId } from "@/components/home/data/landing-options";
 import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
+import type {
+  AgentSessionLastExit,
+  AgentSessionState,
+} from "@traycer/protocol/host/agent-session-state";
 import {
   createChatSessionStore,
   type ChatSessionStoreHandle,
@@ -143,6 +147,14 @@ interface TestState {
         {
           readonly hostId: string;
           readonly profileId: string | null;
+          /**
+           * The session facet (`@1.3`'s `sessionState`/`lastExit`), for the
+           * "Asleep"/"Stopped" sidebar badge. Optional and defaulted to `null`
+           * in the store mock below - every fixture that predates the badge
+           * never sets these, and `null` is the honest "not stated" answer.
+           */
+          readonly sessionState?: AgentSessionState | null;
+          readonly lastExit?: AgentSessionLastExit | null;
         }
       >
     >
@@ -890,6 +902,18 @@ vi.mock("@/lib/epic-selectors", () => ({
     testState.tree.childrenByParent[parentId] ?? [],
   useEpicActiveAgentIds: () => testState.activeAgentIds,
   useEpicAgentRoleClaims: () => [],
+  // The row's session facet, sourced from the same `tuiAgentById` fixture the
+  // `useEpicStore` mock builds `tuiAgents.byId` from - one source, so the
+  // badge (this selector) and the row's aria-label (which reads the same
+  // facet through `useEpicStore`, per the production comment on that read)
+  // cannot disagree in a fixture.
+  useEpicAgentSessionFacet: (nodeId: string) => {
+    const agent = testState.tuiAgentById[nodeId];
+    return {
+      sessionState: agent?.sessionState ?? null,
+      lastExit: agent?.lastExit ?? null,
+    };
+  },
   // Awareness reports a tier per working agent. An agent whose host did not
   // classify it reads as "turn", so tests that only set `activeAgentIds` keep
   // their pre-tier behaviour.
@@ -1010,6 +1034,8 @@ vi.mock("@/hooks/use-epic-store", () => ({
                   id,
                   hostId: agent.hostId,
                   profileId: agent.profileId,
+                  sessionState: agent.sessionState ?? null,
+                  lastExit: agent.lastExit ?? null,
                 },
               ],
             ];
@@ -3844,6 +3870,110 @@ describe("sidebar leading identity icon", () => {
     // Identity-only icons carry no status role to announce in the first place.
     const harnessSlot = screen.getByTestId("sidebar-agent-harness-agent-root");
     expect(harnessSlot.getAttribute("role")).toBeNull();
+  });
+});
+
+describe("terminal-agent row session-state badge", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+    testState.activePanelId = "chats";
+    testState.expandedIds = new Set<string>();
+    testState.tree = { rootIds: [], childrenByParent: {}, nodeById: {} };
+    testState.records = [];
+    testState.tuiHarnessIds = {};
+    testState.tuiAgentById = {};
+  });
+
+  it('renders "Asleep" for a sleeping agent, with the process-exit sentence only for that reason', () => {
+    seedChatTree();
+    testState.tuiAgentById = {
+      "agent-root": {
+        hostId: "host-1",
+        profileId: null,
+        sessionState: "sleeping",
+        lastExit: "process-exit",
+      },
+    };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    const badge = screen.getByTestId("chat-row-session-state-agent-root");
+    expect(badge.textContent).toBe("Asleep");
+    expect(badge.getAttribute("data-session-state")).toBe("sleeping");
+    // Focus, not hover: Radix honours it immediately, where pointer-enter
+    // sits behind the provider's open delay. `getAllByRole` and a filter,
+    // rather than `getByRole`, because the focus event bubbles to the row's
+    // own ancestor tooltip triggers (e.g. the offline lock) as well.
+    fireEvent.focus(badge);
+    const tooltips = screen.getAllByRole("tooltip").map((el) => el.textContent);
+    expect(tooltips).toContain(
+      "Sleeping. Resumes on the next message or when you open it. Last run exited on its own.",
+    );
+
+    // The other three reasons resume identically and are deliberately not
+    // spelled out - only `process-exit` contradicts what a reader would
+    // otherwise assume.
+    for (const lastExit of ["reaped", "user-stop", "restart"] as const) {
+      cleanup();
+      testState.tuiAgentById = {
+        "agent-root": {
+          hostId: "host-1",
+          profileId: null,
+          sessionState: "sleeping",
+          lastExit,
+        },
+      };
+      render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+      const rowBadge = screen.getByTestId("chat-row-session-state-agent-root");
+      expect(rowBadge.textContent).toBe("Asleep");
+      fireEvent.focus(rowBadge);
+      expect(
+        screen.getAllByRole("tooltip").map((el) => el.textContent),
+      ).toContain("Sleeping. Resumes on the next message or when you open it.");
+    }
+  });
+
+  it('renders "Stopped" for an agent whose record is over', () => {
+    seedChatTree();
+    testState.tuiAgentById = {
+      "agent-root": {
+        hostId: "host-1",
+        profileId: null,
+        sessionState: "stopped",
+        lastExit: null,
+      },
+    };
+
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+
+    const badge = screen.getByTestId("chat-row-session-state-agent-root");
+    expect(badge.textContent).toBe("Stopped");
+    expect(badge.getAttribute("data-session-state")).toBe("stopped");
+  });
+
+  it("renders NO badge for `null` (unknown) or `running` - the same row as before the facet shipped", () => {
+    seedChatTree();
+    testState.tuiAgentById = {
+      "agent-root": { hostId: "host-1", profileId: null, sessionState: null },
+    };
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+    expect(
+      screen.queryByTestId("chat-row-session-state-agent-root"),
+    ).toBeNull();
+
+    cleanup();
+    testState.tuiAgentById = {
+      "agent-root": {
+        hostId: "host-1",
+        profileId: null,
+        sessionState: "running",
+      },
+    };
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} side="left" />);
+    expect(
+      screen.queryByTestId("chat-row-session-state-agent-root"),
+    ).toBeNull();
   });
 });
 

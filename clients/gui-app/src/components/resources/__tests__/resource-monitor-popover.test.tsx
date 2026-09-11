@@ -862,7 +862,9 @@ function renderPopover(): void {
 afterEach(() => {
   cleanup();
   resourcesKillMock.mutate.mockClear();
+  stopTerminalOwnerMock.mutate.mockClear();
   managedCommandStopMock.mutate.mockClear();
+  agentSessionCountsMock.byEpicId = new Map();
   openLinkMock.mockClear();
   Reflect.deleteProperty(globalThis, "runnerHost");
   routerMock.navigate.mockReset();
@@ -1060,16 +1062,19 @@ describe("ResourceMonitorPopover", () => {
     expect(screen.queryByText("Resource Task")).toBeNull();
     expect(screen.queryByText("Terminal Alpha")).toBeNull();
 
-    resourcesKillMock.mutate.mockClear();
+    // The visible owner is a `terminal` row, so its top-level action is now
+    // STOP, not kill - see `ownerSnapshotActionTarget`.
+    stopTerminalOwnerMock.mutate.mockClear();
     fireEvent.click(
       screen.getByRole("button", { name: "Select processes to kill" }),
     );
     fireEvent.click(screen.getByRole("button", { name: "Select all" }));
-    fireEvent.click(screen.getByRole("button", { name: "Kill 1 selected" }));
-    expect(resourcesKillMock.mutate).toHaveBeenCalledWith({
+    fireEvent.click(screen.getByRole("button", { name: "Stop 1 selected" }));
+    expect(stopTerminalOwnerMock.mutate).toHaveBeenCalledWith({
       hostId: "host-1",
-      pids: [200],
+      sessionId: "term-closed",
     });
+    expect(resourcesKillMock.mutate).not.toHaveBeenCalled();
 
     fireEvent.click(
       screen.getByRole("button", { name: "Clear resource search" }),
@@ -1431,9 +1436,12 @@ describe("ResourceMonitorPopover", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Select processes to kill" }),
     );
+    // The first checkbox is the OWNER row's, and the owner is `terminal` (the
+    // `owner()` fixture's default kind), so selecting it selects a STOP
+    // target, not a kill one - see `ownerSnapshotActionTarget`.
     fireEvent.click(screen.getAllByRole("checkbox")[0]);
     expect(
-      screen.getByRole("button", { name: "Kill 1 selected" }),
+      screen.getByRole("button", { name: "Stop 1 selected" }),
     ).not.toBeNull();
 
     fireEvent.change(
@@ -1443,6 +1451,9 @@ describe("ResourceMonitorPopover", () => {
       },
     );
 
+    // A fully empty selection defaults to the KILL copy regardless of what
+    // was selected before - `selectionActionCopy(0, 0)` takes the
+    // `stopCount === 0` branch.
     const killZero = screen.getByRole("button", { name: "Kill 0 selected" });
     expect(killZero.hasAttribute("disabled")).toBe(true);
   });
@@ -1474,9 +1485,11 @@ describe("ResourceMonitorPopover", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Select processes to kill" }),
     );
+    // The owner row's checkbox - a `terminal` owner, so this is a STOP
+    // target (see the previous test's note).
     fireEvent.click(screen.getAllByRole("checkbox")[0]);
     expect(
-      screen.getByRole("button", { name: "Kill 1 selected" }),
+      screen.getByRole("button", { name: "Stop 1 selected" }),
     ).not.toBeNull();
 
     act(() => {
@@ -1488,6 +1501,7 @@ describe("ResourceMonitorPopover", () => {
     });
 
     expect(screen.queryByText("Terminal Alpha")).toBeNull();
+    // Pruned to an empty selection defaults to the KILL copy - same as above.
     const killZero = screen.getByRole("button", { name: "Kill 0 selected" });
     expect(killZero.hasAttribute("disabled")).toBe(true);
 
@@ -1659,28 +1673,31 @@ describe("ResourceMonitorPopover", () => {
     expect(document.activeElement).toBe(ownerRow);
 
     // Delete arms but does not run; Escape dismisses the inline switch.
-    resourcesKillMock.mutate.mockClear();
+    // Verb is "stop", not "kill" - the owner is `terminal` (the `owner()`
+    // fixture's default kind), which routes to `terminal.kill`.
+    stopTerminalOwnerMock.mutate.mockClear();
     fireEvent.keyDown(ownerRow, { key: "Delete" });
     const firstConfirm = screen.getByRole("button", {
-      name: "Confirm kill Terminal Alpha",
+      name: "Confirm stop Terminal Alpha",
     });
     expect(document.activeElement).toBe(firstConfirm);
-    expect(resourcesKillMock.mutate).not.toHaveBeenCalled();
+    expect(stopTerminalOwnerMock.mutate).not.toHaveBeenCalled();
     fireEvent.keyDown(firstConfirm, { key: "Escape" });
     expect(
-      screen.queryByRole("button", { name: "Confirm kill Terminal Alpha" }),
+      screen.queryByRole("button", { name: "Confirm stop Terminal Alpha" }),
     ).toBeNull();
 
     // Backspace uses the same arm path; Enter is the separate confirmation.
     fireEvent.keyDown(ownerRow, { key: "Backspace" });
     const secondConfirm = screen.getByRole("button", {
-      name: "Confirm kill Terminal Alpha",
+      name: "Confirm stop Terminal Alpha",
     });
     fireEvent.keyDown(secondConfirm, { key: "Enter" });
-    expect(resourcesKillMock.mutate).toHaveBeenCalledWith({
+    expect(stopTerminalOwnerMock.mutate).toHaveBeenCalledWith({
       hostId: "host-1",
-      pids: [100],
+      sessionId: "term-1",
     });
+    expect(resourcesKillMock.mutate).not.toHaveBeenCalled();
 
     // The panel stays open after the action; Enter on the selected result
     // follows its owner and closes the popover.
@@ -4077,6 +4094,20 @@ describe("ResourceMonitorPopover · shells nested under their creator", () => {
     expect(rowButton("Monitor · deploy watcher").textContent).toContain("6.0%");
   });
 
+  it("offers no action - stop or kill - on a Synthetic Agent Row", () => {
+    // `rootPids: []` on the synthetic row: `ownerSnapshotActionTarget` checks
+    // that BEFORE the terminal-kind branch, so a Synthetic Agent Row standing
+    // in for a `chat` owner never returns a Stop target either - there is no
+    // session for `terminal.kill` to end.
+    emitOwners([deployWatcher("chat-1")]);
+    expect(
+      screen.queryByRole("button", { name: "Kill Agent Chat" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Stop Agent Chat" }),
+    ).toBeNull();
+  });
+
   it("drops the Synthetic Agent Row once its last shell exits", () => {
     const stub = emitOwners([deployWatcher("chat-1")]);
     expect(screen.getByText("Agent Chat")).not.toBeNull();
@@ -4223,9 +4254,11 @@ describe("ResourceMonitorPopover · shells nested under their creator", () => {
       screen.getByRole("button", { name: "Select processes to kill" }),
     );
     fireEvent.click(screen.getByRole("button", { name: "Select all" }));
-    // One chat and one shell: two rows, two different verbs.
+    // One chat and one shell: two rows, two different verbs. "item", not
+    // "shell": a terminal owner stops too now, so the stop half of a mixed
+    // selection is not always a shell.
     expect(
-      screen.getByRole("button", { name: "Stop 1 shell, kill 1 process" }),
+      screen.getByRole("button", { name: "Stop 1 item, kill 1 process" }),
     ).not.toBeNull();
   });
 });
@@ -4384,6 +4417,66 @@ describe("ResourceMonitorPopover · stopping a shell rather than killing it", ()
     expect(managedCommandStopMock.mutate).not.toHaveBeenCalled();
   });
 
+  function terminalAgentOwner(): OwnerResourceSnapshotWireV15 {
+    return owner({
+      owner: {
+        kind: "terminal-agent",
+        hostId: "host-1",
+        epicId: "epic-1",
+        ownerId: "agent-session-1",
+      },
+      harnessId: "claude",
+      activeProcessName: "claude",
+      rootPids: [400],
+      processCount: 1,
+      cpuPercent: 2,
+      rssBytes: 10 * MiB,
+      processes: [
+        resourceProcess({
+          pid: 400,
+          rootPid: 400,
+          name: "claude",
+          command: "claude",
+          cpuPercent: 2,
+          rssBytes: 10 * MiB,
+        }),
+      ],
+    });
+  }
+
+  it("routes a terminal-agent owner row's action through terminal.kill, not resources.kill", () => {
+    // The ticket's named acceptance case: `ownerSnapshotActionTarget` routes
+    // BOTH terminal kinds (`terminal`, `terminal-agent`) to `stopAgent`, keyed
+    // by the SESSION id (`ResourceOwnerRef.ownerId`), not the pids.
+    openWith([terminalAgentOwner()]);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select processes to kill" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    fireEvent.click(screen.getByRole("button", { name: "Stop 1 selected" }));
+
+    expect(stopTerminalOwnerMock.mutate).toHaveBeenCalledWith({
+      hostId: "host-1",
+      sessionId: "agent-session-1",
+    });
+    expect(resourcesKillMock.mutate).not.toHaveBeenCalled();
+  });
+
+  it("still kills a chat owner row on its pids - the route did not move for non-terminal owners", () => {
+    openWith([chatOwner()]);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select processes to kill" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    fireEvent.click(screen.getByRole("button", { name: "Kill 1 selected" }));
+
+    expect(resourcesKillMock.mutate).toHaveBeenCalledWith({
+      hostId: "host-1",
+      pids: [200],
+    });
+    expect(stopTerminalOwnerMock.mutate).not.toHaveBeenCalled();
+  });
+
   it("stops the shells and kills the processes in one mixed selection", () => {
     openWith([chatOwner(), shellOwner([bash()])]);
     expandCreator();
@@ -4393,7 +4486,7 @@ describe("ResourceMonitorPopover · stopping a shell rather than killing it", ()
     fireEvent.click(screen.getByRole("button", { name: "Select all" }));
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Stop 1 shell, kill 1 process" }),
+      screen.getByRole("button", { name: "Stop 1 item, kill 1 process" }),
     );
 
     expect(managedCommandStopMock.mutate).toHaveBeenCalledWith({
@@ -5009,5 +5102,43 @@ describe("ResourceMonitorPopover · host picker", () => {
       expect.objectContaining({ instanceId: "tile-term-shared-a" }),
       expect.anything(),
     );
+  });
+});
+
+/**
+ * The task header's "N running · M sleeping" tally - the record plane's
+ * answer to the same question the process list cannot ask (a sleeping agent
+ * owns no process to report).
+ */
+describe("ResourceMonitorPopover · task agent session tally", () => {
+  it('renders "N running · M sleeping" from the record plane', () => {
+    agentSessionCountsMock.byEpicId = new Map([
+      ["epic-1", { running: 2, sleeping: 3 }],
+    ]);
+    const stub = installStubFactory();
+    renderPopover();
+    act(() => {
+      stub.emit().onSnapshot(projection({ owners: [owner({})] }));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+
+    const tally = screen.getByTestId("resource-task-agent-sessions");
+    expect(tally.textContent).toBe("2 running · 3 sleeping");
+  });
+
+  it("renders nothing when the epic has no sleeping agents", () => {
+    agentSessionCountsMock.byEpicId = new Map([
+      ["epic-1", { running: 4, sleeping: 0 }],
+    ]);
+    const stub = installStubFactory();
+    renderPopover();
+    act(() => {
+      stub.emit().onSnapshot(projection({ owners: [owner({})] }));
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Resources" }));
+
+    expect(screen.queryByTestId("resource-task-agent-sessions")).toBeNull();
   });
 });

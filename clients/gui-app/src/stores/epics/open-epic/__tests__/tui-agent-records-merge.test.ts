@@ -31,6 +31,11 @@ import {
   openStoreForTest,
   type OpenedStoreForTest,
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
+import {
+  terminalAgentProjectionsEq,
+  tuiAgentProjectionFromRecord,
+} from "@/stores/epics/open-epic/projection-helpers";
+import type { TuiAgentProjection } from "@/stores/epics/open-epic/types";
 
 const USER = "user-a";
 
@@ -527,6 +532,55 @@ describe("applyTuiAgentRecords merges rather than replaces", () => {
   });
 });
 
+describe("applyTuiAgentRecordDelta carries the session facet, held or stated", () => {
+  it("writes a STATED facet onto the retained row", () => {
+    signedInAs(USER);
+    const handle = newSession();
+    handle.store.getState().applyTuiAgentRecordDelta({
+      kind: "tuiUpsert",
+      sessionFacet: { sessionState: "sleeping", lastExit: "reaped" },
+      epicId: "epic-test",
+      record: row({ tuiAgentId: "tui-1" }),
+    });
+
+    const applied = handle.store.getState().tuiAgentRecords.byId["tui-1"];
+    expect(applied.sessionState).toBe("sleeping");
+    expect(applied.lastExit).toBe("reaped");
+  });
+
+  it("carries the HELD facet forward when the frame's minor could not state one", () => {
+    // Below `@1.4` `sessionFacet` is `null` - not the row's own "unknown", but
+    // "this minor had no field for it". Blanking the facet on every unrelated
+    // rename would report a sleeping agent as unknown until the next snapshot,
+    // exactly the regression `docResident`'s carry-forward already guards.
+    signedInAs(USER);
+    const handle = newSession();
+    const state = handle.store.getState();
+    state.applyTuiAgentRecordDelta({
+      kind: "tuiUpsert",
+      sessionFacet: { sessionState: "sleeping", lastExit: "reaped" },
+      epicId: "epic-test",
+      record: row({ tuiAgentId: "tui-1", revision: 1 }),
+    });
+
+    state.applyTuiAgentRecordDelta({
+      kind: "tuiUpsert",
+      sessionFacet: null,
+      epicId: "epic-test",
+      record: row({
+        tuiAgentId: "tui-1",
+        revision: 2,
+        title: "Renamed, unrelated to the session",
+      }),
+    });
+
+    const applied = handle.store.getState().tuiAgentRecords.byId["tui-1"];
+    expect(applied.title).toBe("Renamed, unrelated to the session");
+    expect(applied.sessionState).toBe("sleeping");
+    expect(applied.lastExit).toBe("reaped");
+  });
+});
+
 describe("applyTuiAgentRecordDelta takes the row's own provenance", () => {
   it("preserves what the frame stated, rather than re-deriving it", () => {
     // THIS USED TO STAMP `docResident: false` unconditionally, and that was
@@ -884,5 +938,53 @@ describe("terminal-agent merge puts AUTHORITY before revision", () => {
     expect(handle.store.getState().tuiAgentRecords.byId["tui-1"].title).toBe(
       "newer",
     );
+  });
+});
+
+/**
+ * `terminalAgentProjectionsEq` is the store's own CHANGE GATE - the projector
+ * publishes a new slice only when a row's fields actually differ, so a field
+ * missing from the comparison freezes it behind the gate forever, however
+ * often the wire restates it. The facet is the sharpest case: a spawn or a
+ * reap moves `sessionState`/`lastExit` and NOTHING else, so without these two
+ * in the comparison the sidebar badge and the tile's asleep state would freeze
+ * on the first answer of the session.
+ */
+describe("terminalAgentProjectionsEq treats the session facet as a change", () => {
+  function projection(
+    overrides: Partial<
+      Pick<
+        Extract<TuiAgentRecordSummaryV13, { origin: "registry" }>,
+        "sessionState" | "lastExit"
+      >
+    >,
+  ): TuiAgentProjection {
+    const record = row({ tuiAgentId: "tui-1" });
+    const projected = tuiAgentProjectionFromRecord({
+      ...record,
+      sessionState: null,
+      lastExit: null,
+      ...overrides,
+    });
+    if (projected === null) throw new Error("expected a projection");
+    return projected;
+  }
+
+  it("returns false when only sessionState differs", () => {
+    const a = projection({ sessionState: null });
+    const b = projection({ sessionState: "sleeping" });
+    expect(terminalAgentProjectionsEq(a, b)).toBe(false);
+  });
+
+  it("returns false when only lastExit differs", () => {
+    const a = projection({ sessionState: "sleeping", lastExit: null });
+    const b = projection({ sessionState: "sleeping", lastExit: "reaped" });
+    expect(terminalAgentProjectionsEq(a, b)).toBe(false);
+  });
+
+  it("returns true when the facet is unchanged and nothing else differs", () => {
+    const a = projection({ sessionState: "sleeping", lastExit: "reaped" });
+    const b = projection({ sessionState: "sleeping", lastExit: "reaped" });
+    expect(terminalAgentProjectionsEq(a, b)).toBe(true);
   });
 });
