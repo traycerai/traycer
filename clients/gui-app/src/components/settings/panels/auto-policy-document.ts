@@ -9,6 +9,29 @@
  * `react(only-export-components)` fails the build over it. These are also the
  * pieces worth testing without rendering anything.
  */
+import type {
+  AutoPolicyGetResponse,
+  AutoPolicyReadState,
+} from "@traycer/protocol/host/auto-mode/contracts";
+
+/**
+ * How far the host's answer can be trusted, with the one fallback an older
+ * host forces spelled in exactly one place.
+ *
+ * `readState` rode into `autoPolicy.get@1.0` IN PLACE rather than on a minor of
+ * its own, so the negotiated version does not say whether the host on the other
+ * end fills it: a response without the property is a host whose resolver
+ * predates it. `fresh` is the only honest answer for that host - it reproduces
+ * this panel's behaviour before the field existed, and the two states it stands
+ * in for ("stale", "unreadable") are ones that host cannot detect either. The
+ * same shape as `providerAutoJudgeFor`'s `?? "traycer"`, for the same reason.
+ */
+export function autoPolicyReadStateFor(
+  response: AutoPolicyGetResponse,
+): AutoPolicyReadState {
+  return response.readState ?? "fresh";
+}
+
 /**
  * The four headings the judge's prompt builder reads a policy under. Prefilled
  * for an empty policy and nothing more: the guidance about what belongs under

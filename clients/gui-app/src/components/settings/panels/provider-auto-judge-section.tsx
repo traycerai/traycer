@@ -75,11 +75,17 @@ export function ProviderAutoJudgeSection({
 
   return (
     <div className="mt-3 flex flex-col gap-2 rounded-lg border border-border/60 p-3">
+      {/* Not "Auto mode judge": the row under Settings ▸ Agents carries that
+          name too, and THIS is the one that wins - `isProviderJudgedExecution`
+          reads the provider's own `autoJudge` alone. Interpolated rather than
+          hardcoded to "Claude Code" because the row draws for any provider
+          whose catalog entry reports `nativeAutoJudge`; today that is Claude
+          Code alone, so it renders exactly that. */}
       <label
         htmlFor={selectId}
         className="text-ui-sm font-medium text-foreground"
       >
-        Auto mode judge
+        Who reviews {providerName}&apos;s commands
       </label>
       <div className="flex items-center gap-2">
         <Select
@@ -112,12 +118,21 @@ export function ProviderAutoJudgeSection({
         </Select>
         {setAutoJudge.isPending ? <MutedAgentSpinner /> : null}
       </div>
+      {/* The appended sentence is the precedence one, and it is on THIS row
+          because this is the switch that decides: a provider set to its own
+          classifier is not "also using" Traycer's judge with a different
+          model, it bypasses the judge and the policy entirely. Without it a
+          user who has written an Auto mode policy under Agents has no way to
+          learn that this control turns it off for this provider. */}
       <p className="text-ui-xs text-muted-foreground">
         Who reviews commands while a conversation runs in Auto mode.
         Traycer&apos;s judge works the same way on every provider and follows
         your Auto mode policy; {providerName}&apos;s own classifier decides
         inside the agent, so it is faster and costs nothing extra, and its
-        refusals still come to you as an approval.
+        refusals still come to you as an approval. Choosing {providerName}
+        &apos;s classifier means Auto mode chats on this provider skip
+        Traycer&apos;s judge entirely — the judge and the policy you set under
+        Agents don&apos;t apply here.
       </p>
     </div>
   );

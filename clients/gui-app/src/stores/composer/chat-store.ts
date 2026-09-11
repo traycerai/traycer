@@ -435,6 +435,19 @@ export type MessageSegment =
     }
   | {
       id: string;
+      kind: "auto-judge-unattended-denial";
+      /**
+       * Synthesized in `rendered-messages` from an `approval.denied` event
+       * whose auto-mode journal metadata says nobody was there to ask - the
+       * event itself is the record. Both fields are `null` when the journal
+       * recorded no rule or reason; the row exists on the attendance fact
+       * alone.
+       */
+      rule: string | null;
+      reason: string | null;
+    }
+  | {
+      id: string;
       kind: "imported-chat-marker";
       /**
        * Synthesized in `rendered-messages` from the chat's `chat.imported`

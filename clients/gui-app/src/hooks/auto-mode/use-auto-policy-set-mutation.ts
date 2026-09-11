@@ -58,6 +58,17 @@ export function useAutoPolicySetMutation(): UseMutationResult<
             body: variables.body,
             updatedAt: data.updatedAt,
             source: previous?.source ?? "account",
+            // A completed write is the strongest evidence of a current record
+            // there is - the host wrote it and seeded its own cache with it -
+            // so this is the one place a `stale` or `unreadable` read state is
+            // legitimately replaced rather than carried forward.
+            readState: "fresh",
+            // Carried, not re-derived: the shipped rules are bundled with the
+            // host and have nothing to do with this write. Dropping them here
+            // would make the "what the judge already blocks" row vanish the
+            // moment somebody saved a policy, which is exactly when they have
+            // most reason to look at it.
+            shippedDefaults: previous?.shippedDefaults,
           }),
         );
       },

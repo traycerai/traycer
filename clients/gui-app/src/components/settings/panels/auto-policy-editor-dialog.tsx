@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { TriangleAlert } from "lucide-react";
+import type { AutoPolicyReadState } from "@traycer/protocol/host/auto-mode/contracts";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
@@ -34,6 +35,17 @@ export function AutoPolicyEditorDialog(props: {
   readonly loadedUpdatedAt: string | null;
   /** `updatedAt` as it reads NOW - a later save from another device moves it. */
   readonly currentUpdatedAt: string | null;
+  /**
+   * How far the record behind `initialBody` can be trusted.
+   *
+   * The settings row refuses to OPEN this dialog on an `unreadable` read, so
+   * the state that matters here is the one that arrives while it is already
+   * open: a refetch behind the dialog can turn a policy this session loaded
+   * cleanly into one the host can no longer read, and saving then overwrites a
+   * record nobody can currently see. Save is disabled rather than warned
+   * about, because the loss it prevents is unrecoverable.
+   */
+  readonly readState: AutoPolicyReadState;
   readonly saving: boolean;
   readonly onCancel: () => void;
   readonly onSave: (body: string) => void;
@@ -54,6 +66,7 @@ export function AutoPolicyEditorDialog(props: {
     props.loadedUpdatedAt,
     props.currentUpdatedAt,
   );
+  const unreadable = props.readState === "unreadable";
 
   return (
     <Dialog
@@ -70,12 +83,28 @@ export function AutoPolicyEditorDialog(props: {
             Say what this machine is under <em>Environment</em>, what to approve
             without asking under <em>Allow</em>, what to always ask about under
             <em> Soft deny</em>, and what to never approve under{" "}
-            <em>Hard deny</em>. It applies to your account on every device;
-            Traycer&apos;s own hard-block rules always apply on top of it, and a
-            repository with a <code>.traycer/auto-policy.md</code> file uses
-            that file instead.
+            <em>Hard deny</em>. It applies to your account on every device, and
+            a repository with a <code>.traycer/auto-policy.md</code> file uses
+            that file instead. Some of Traycer&apos;s own rules always apply on
+            top of yours. You&apos;ll still be asked about those, and your
+            policy can&apos;t turn them off.
           </DialogDescription>
         </DialogHeader>
+
+        {unreadable ? (
+          <div
+            role="status"
+            data-testid="auto-policy-unreadable-warning"
+            className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-amber-700 text-ui-sm dark:text-amber-300"
+          >
+            <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
+            <span>
+              Traycer can&apos;t read your saved policy right now, so saving is
+              turned off - a save from here would replace a policy nobody can
+              currently see. Reopen Settings to try again.
+            </span>
+          </div>
+        ) : null}
 
         {stale ? (
           <div
@@ -125,7 +154,7 @@ export function AutoPolicyEditorDialog(props: {
               variant="default"
               size="sm"
               data-testid="auto-policy-save"
-              disabled={props.saving || overCap || !dirty}
+              disabled={props.saving || overCap || !dirty || unreadable}
               onClick={() => props.onSave(body)}
             >
               {props.saving ? (

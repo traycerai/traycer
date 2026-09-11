@@ -11,6 +11,7 @@ import { singleSpecialSegment } from "./chat-special-segment";
 import { UserMessageBody } from "./chat-message-user-body";
 import { ForkedChatLinkSegment } from "./segments/forked-chat-link-segment";
 import { ImportedChatMarkerSegment } from "./segments/imported-chat-marker-segment";
+import { AutoJudgeUnattendedDenialSegment } from "./segments/auto-judge-unattended-denial-segment";
 import type { InterviewDeliveryRetryAction } from "./segments/interview-delivery-retry-action";
 import { SetupCardSegment } from "./segments/setup-card-segment";
 import type { NextStepActionHandler } from "./segments/next-steps-action-group";
@@ -146,6 +147,16 @@ function renderSingleSpecialSegment(
           sourceProvider={segment.sourceProvider}
           importedAt={segment.importedAt}
           sourceCwd={segment.sourceCwd}
+        />
+      </div>
+    );
+  }
+  if (segment.kind === "auto-judge-unattended-denial") {
+    return (
+      <div data-chat-find-unit={chatFindSegmentUnitId(segment.id)}>
+        <AutoJudgeUnattendedDenialSegment
+          rule={segment.rule}
+          reason={segment.reason}
         />
       </div>
     );

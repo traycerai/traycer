@@ -12,8 +12,16 @@ export function visibleComposerApprovals(
  * The row is VISIBLE in that state - a tool that has gone quiet for a minute
  * with nothing on screen is indistinguishable from a hung one - but it is not a
  * question anyone can answer: the card carries no buttons while a judge runs
- * (plan decision 19), and the state rides the subscribe frame, so it clears
- * itself when the judge allows the call or releases it as a real approval.
+ * (plan decision 19).
+ *
+ * Nothing about this row clears ITSELF. It rides the subscribe frame, and it
+ * goes when the host sends a frame that removes it: an escalation replaces it
+ * by id with the real card, and every other exit - the allow, a Stop during
+ * stage 2, a failed journal write, the agents-only denial - is retired by a
+ * resolution frame the seam emits on purpose. The earlier reading of this
+ * comment, that an allowed call disposed of its own row, described a frame
+ * that was not being sent, and every allowed command left a permanent
+ * "Checking…" row behind.
  */
 export function approvalAwaitingJudge(approval: ChatApprovalState): boolean {
   return approval.reviewing !== null;

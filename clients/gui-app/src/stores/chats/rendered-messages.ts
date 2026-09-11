@@ -22,6 +22,7 @@ import { steeredMessageIdsFromEvents } from "@traycer/protocol/persistence/chat-
 // second, locally-written `a.createdAt - b.createdAt` here would be a silent
 // way for the two sides to disagree about which row an ordinal names.
 import {
+  autoJudgeUnattendedDenialRowSource,
   compareCanonicalRowOrder,
   forkedChatLinkRowSource,
   importedChatMarkerRowSource,
@@ -42,6 +43,7 @@ import {
   assistantRowTurnKey,
   assistantSliceRowId,
   assistantTurnNeedsTrailingRow,
+  autoJudgeUnattendedDenialRowId,
   chatTranscriptEventRowId,
   forkedChatLinkRowId,
   importedChatMarkerRowId,
@@ -1032,6 +1034,11 @@ export function useRenderedMessages(
     [input.events],
   );
 
+  const autoJudgeUnattendedDenialMessages = useMemo(
+    () => buildAutoJudgeUnattendedDenialMessages(input.events),
+    [input.events],
+  );
+
   const importedChatMarkerMessages = useMemo(
     () => buildImportedChatMarkerMessages(input.events),
     [input.events],
@@ -1321,6 +1328,10 @@ export function useRenderedMessages(
       ...stoppedWithoutAssistantRecords,
       ...forkedChatLinkMessages,
       ...notificationAnchorMessages,
+      // After the anchors, because `projectTranscriptRows` appends its passes
+      // in this same order and a tie between two events sharing a timestamp is
+      // resolved by that order alone. Moving either list moves ordinals.
+      ...autoJudgeUnattendedDenialMessages,
       ...trailing,
     ];
 
@@ -1403,6 +1414,7 @@ export function useRenderedMessages(
     forkedChatLinkMessages,
     importedChatMarkerMessages,
     notificationAnchorMessages,
+    autoJudgeUnattendedDenialMessages,
     setupCardRows,
     setupCardEntries,
     activeRunState,
@@ -1632,6 +1644,60 @@ function buildNotificationAnchorMessages(
             message: anchor.message,
             recoverable: false,
             code: anchor.code,
+          },
+        ],
+        structuredContent: null,
+        attachments: [],
+        settings: null,
+        createdAt: event.timestamp,
+        completedAt: null,
+        stopped: null,
+        persistentMessageId: null,
+        senderLabel: null,
+        assistantMeta: null,
+        statusLabel: null,
+        runState: null,
+        agentSenderInfo: null,
+        agentMessage: null,
+        sessionAnchor: null,
+        steerBadge: null,
+      },
+    ];
+  });
+}
+
+/**
+ * Project an auto-mode refusal that nobody was there to be asked about.
+ *
+ * Under the attendance rule a chat running for another agent is refused rather
+ * than parked: the model reads a tool error and the human reads nothing, so a
+ * person opening that chat tomorrow cannot tell "refused without asking
+ * anyone" from "a judge refused". This row is the only reader that arm will
+ * ever have.
+ *
+ * Filtered and identified THROUGH the projection's own helper, like the fork
+ * link and the provenance marker above it - the host numbers this row's
+ * ordinal from `autoJudgeUnattendedDenialRowSource`, and a row that existed
+ * here but not there is exactly what a windowed transcript loses.
+ */
+function buildAutoJudgeUnattendedDenialMessages(
+  events: ReadonlyArray<ChatEvent>,
+): ReadonlyArray<ChatMessageModel> {
+  return events.flatMap((event) => {
+    const denial = autoJudgeUnattendedDenialRowSource(event);
+    if (denial === null) return [];
+    const id = autoJudgeUnattendedDenialRowId(event.eventId);
+    return [
+      {
+        id,
+        role: "system",
+        content: "",
+        segments: [
+          {
+            id: `${id}:denial`,
+            kind: "auto-judge-unattended-denial",
+            rule: denial.rule,
+            reason: denial.reason,
           },
         ],
         structuredContent: null,

@@ -1050,8 +1050,19 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     Claude/OpenCode, but BEFORE Codex's `resume` subcommand). The launch picker
     pre-fills this value as a cosmetic default; an untouched pre-fill launches
     with `null` so the host resolves the current saved value itself.
-  - **Auto mode judge** (`provider-auto-judge-section.tsx`), directly under the
-    CLI-arguments field. A two-option `Select` - Traycer's judge, or this
+  - **Who reviews &lt;provider&gt;'s commands**
+    (`provider-auto-judge-section.tsx`), directly under the CLI-arguments
+    field. Labelled by provider rather than "Auto mode judge" because the row
+    under Agents carries that name too and THIS is the one that wins
+    (`isProviderJudgedExecution` reads the provider's own `autoJudge` alone),
+    so both rows now name whose judge they are about; the provider name is
+    interpolated, which renders "Who reviews Claude Code's commands" today and
+    does not lie if a second provider ever reports `nativeAutoJudge`. Its
+    description ends with the precedence sentence - choosing the provider's
+    classifier means chats on this provider skip Traycer's judge AND the Auto
+    mode policy entirely - because this control is where that is decided and
+    a user who has written a policy under Agents has no other way to learn it.
+    A two-option `Select` - Traycer's judge, or this
     provider's own classifier - written through `providers.setAutoJudge` and
     persisted as `autoJudge` in `provider-overrides.json`, beside
     `terminalAgentArgs`, so it takes that neighbour's scoping and invalidation
@@ -1901,8 +1912,10 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
 
   Above the editor sits the **Auto mode** block
   (`auto-mode-settings-section.tsx`): two rows for the settings the `auto`
-  permission mode depends on, both host RPCs, both scoped by the same sidebar
-  picker as the guide. They are here because the judge is stored PER HOST and
+  permission mode depends on - plus, under the policy row, a read-only view of
+  the rules that apply before either of them - both host RPCs, both scoped by
+  the same sidebar picker as the guide. They are here because the judge is
+  stored PER HOST and
   because it answers the same question the page already asks - which agent
   Traycer reaches for on your behalf. The mode's app-wide DEFAULT is not here;
   it is a General row (see "Scope: the organising idea").
@@ -1925,7 +1938,7 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     draft; accepted, because the judge row holds no draft and the policy dialog
     is an explicit, explicitly-saved editing session rather than the
     always-open editor Activity was introduced for.
-  - **Auto mode judge** reuses the composer's `HarnessModelPicker`
+  - **Traycer's auto mode judge** reuses the composer's `HarnessModelPicker`
     (`auto-judge-picker.tsx`) with BOTH footers off - `withServiceTier={false}`
     and the new `withReasoning={false}` - because the stored record is
     `(harnessId, model, profileId)` and the judge request carries no effort or
@@ -1947,6 +1960,24 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     adapter for (a newer host, an older app - the protocol keeps that field a
     checked string precisely so it decodes) is named in an amber line instead of
     being presented as some other provider.
+  - **The self-billing warning** sits beside those amber lines, on one rule:
+    `harnessId !== "traycer"`. `traycer` is the only harness metered against
+    Traycer credits; every other one routes through that vendor's CLI on the
+    user's own credential, so no catalog field and no protocol minor are
+    needed - `autoJudgeSelfBillingWarning` (`lib/auto-mode/auto-judge-billing.ts`)
+    is the one place that decides. What VARIES is the severity: Copilot gets a
+    number, because it is the only harness whose billing unit is a fixed
+    monthly allotment of premium requests, and the sentence quotes TRAYCER'S
+    OWN call rate ("one per command reviewed, so an hour of Auto mode can use
+    60-350 of your monthly allowance") rather than GitHub's allotment - the
+    rate is a fact about our behaviour that we control and that cannot go stale
+    when GitHub reprices. Every other non-`traycer` harness gets the generic
+    line, whose "on top of your chat replies" clause is the load-bearing half:
+    the sharpest case is a user picking the SAME harness for chat and judge,
+    which is the natural thing to reach for and doubles the spend on one
+    account. It reads the STORED selection, not the presented one - the host
+    bills what it has stored, and the composer's own meta line reads the same
+    record, so the two surfaces cannot disagree about which pocket is spent.
   - **Auto mode policy** is a summary plus a button that opens
     `auto-policy-editor-dialog.tsx`, over `autoPolicy.get` / `autoPolicy.set`.
     A dialog rather than an inline editor because the panel's height is already
@@ -1964,6 +1995,35 @@ deny`, `Hard deny`) and nothing else - the guidance about what belongs under
     64 KiB cap is checked in UTF-8 BYTES as a courtesy pre-flight only, the
     server being the enforcement (the authoritative constant lives in the
     closed-source service and reaches no client contract).
+  - **The row reads `readState`, not `body`, first.** `autoPolicy.get` answers
+    `readState: "fresh" | "stale" | "unreadable"` alongside the body, because
+    `body: null` was doing two jobs: "never saved" and "the host could not
+    read it". On `unreadable` the summary says "Couldn't read your policy",
+    the button stays "Edit policy" and is DISABLED, and the editor - the only
+    route to Save - is therefore unreachable; Save is additionally disabled
+    inside the dialog for the case where the read fails while the dialog is
+    already open, with a banner saying why. The clobber this closes is narrow
+    and real: a read that fails while the WRITE path is healthy (an expired
+    lease on the GET, a 5xx from a read replica), where "Not set / Write a
+    policy" invited the user to overwrite a policy they could not see. The
+    property is `.optional()` on the wire and rode into `1.0` in place, so a
+    host that predates the resolver half sends nothing and
+    `autoPolicyReadStateFor` (`auto-policy-document.ts`) resolves that to
+    `fresh` - the behaviour this row had before the field existed - in the one
+    place the fallback is spelled.
+  - **What the judge already blocks** (`auto-policy-shipped-dialog.tsx`) is a
+    read-only view of the rules the judge applies before any policy of the
+    user's, rendered from `shippedDefaults` - the host's whole bundled
+    `auto-judge/defaults.md`, also `.optional()` on the same response. The row
+    is drawn only when that document arrives AND this build can find a tier in
+    it (`auto-policy-shipped-document.ts`), which is what keeps the view
+    invisible on a host that does not send it rather than showing a card with
+    three empty headings. The bullets are the host's document verbatim, so the
+    view can never describe rules that host is not running; only the HEADINGS
+    are replaced, because the document's own are prompt text addressed to the
+    judge and "non-overridable" over-promises to a person, who can always
+    approve the action on the card. The out-of-scope note is the one piece of
+    prose written here rather than taken from the document.
 
 - `Keybindings` Keyboard shortcut customization.
 - `Shell` Shell binary + args used for every terminal PTY

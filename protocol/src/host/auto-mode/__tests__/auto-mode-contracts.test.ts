@@ -210,4 +210,79 @@ describe("auto-mode protocol change", () => {
       }).success,
     ).toBe(true);
   });
+
+  it("distinguishes an unreadable read from a stale one, and both from an absent readState", () => {
+    // Three responses that could easily collapse to the same decoded shape if
+    // `readState` were defaulted instead of left optional - the panel treats
+    // all three as different situations, so the schema must keep them apart.
+    const neverWrittenOrOlderHost = autoPolicyGetV10.responseSchema.parse({
+      body: null,
+      updatedAt: null,
+      source: "account",
+    });
+    const unreadable = autoPolicyGetV10.responseSchema.parse({
+      body: null,
+      updatedAt: null,
+      source: "account",
+      readState: "unreadable",
+    });
+    const stale = autoPolicyGetV10.responseSchema.parse({
+      body: "a cached policy body",
+      updatedAt: null,
+      source: "account",
+      readState: "stale",
+    });
+
+    expect(unreadable.readState).toBe("unreadable");
+    expect(stale.readState).toBe("stale");
+    expect(stale.body).toBe("a cached policy body");
+    // `neverWrittenOrOlderHost` and `unreadable` share body/updatedAt exactly -
+    // the only wire signal that tells them apart is whether `readState` is
+    // present at all.
+    expect(neverWrittenOrOlderHost.body).toBe(unreadable.body);
+    expect(neverWrittenOrOlderHost.updatedAt).toBe(unreadable.updatedAt);
+  });
+
+  it("decodes a response without `readState` with the property absent, not defaulted", () => {
+    // `.optional()`, not `.default("fresh")`: the fallback belongs to the
+    // READER (`autoPolicyReadStateFor`), because a schema-level default would
+    // make an older host's response indistinguishable, on the wire, from one
+    // that positively answered "fresh".
+    const parsed = autoPolicyGetV10.responseSchema.parse({
+      body: "hello",
+      updatedAt: "2026-09-10T00:00:00.000Z",
+      source: "account",
+    });
+    expect(Object.hasOwn(parsed, "readState")).toBe(false);
+    expect(parsed.readState).toBeUndefined();
+  });
+
+  it("rejects an unknown read state", () => {
+    expect(
+      autoPolicyGetV10.responseSchema.safeParse({
+        body: null,
+        updatedAt: null,
+        source: "account",
+        readState: "corrupted",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("round-trips `shippedDefaults` verbatim and leaves it absent when not sent", () => {
+    const document = "## Allow exceptions\n\n- Read files in the workspace.\n";
+    const withShipped = autoPolicyGetV10.responseSchema.parse({
+      body: null,
+      updatedAt: null,
+      source: "account",
+      shippedDefaults: document,
+    });
+    expect(withShipped.shippedDefaults).toBe(document);
+
+    const withoutShipped = autoPolicyGetV10.responseSchema.parse({
+      body: null,
+      updatedAt: null,
+      source: "account",
+    });
+    expect(Object.hasOwn(withoutShipped, "shippedDefaults")).toBe(false);
+  });
 });

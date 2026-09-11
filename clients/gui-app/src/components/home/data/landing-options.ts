@@ -83,11 +83,19 @@ const AUTO_ACCEPT_EDITS_PERMISSION_OPTION: PermissionOption = {
   description: "Auto-approve edits, ask before other actions.",
   icon: FileCheck2,
 };
+// Three things the previous string ("…asks you only when unsure") got wrong,
+// all of them verified against the seam: a BLOCK verdict cards, an
+// UNAVAILABLE judge cards (`applyJudgeEscalation` is reached for both), and
+// the mode spends money that only Settings mentioned. The phrasing below is
+// deliberately not a list of three cases dressed as prose - ALLOW is the only
+// silent path, and "asks you whenever it can't clearly approve" states exactly
+// that invariant, so a user who reads only the first clause still holds a true
+// belief. The three words after the dash are its instances.
 const AUTO_PERMISSION_OPTION: PermissionOption = {
   id: "auto",
   label: "Auto",
   description:
-    "Auto-approve edits; a judge reviews commands and asks you only when unsure.",
+    "Auto-approve edits. A judge reviews each command and asks you whenever it can't clearly approve — risky, unsure, or unavailable.",
   icon: Gavel,
 };
 const FULL_ACCESS_PERMISSION_OPTION: PermissionOption = {
@@ -213,6 +221,77 @@ function findSafestSupportedPermissionMode(
     if (supportedModes.has(option.id)) return option.id;
   }
   return null;
+}
+
+/**
+ * Every permission mode ANY harness on this host honors - the union across the
+ * catalog, not one row's set.
+ *
+ * This is what separates a HOST constraint from a PROVIDER one. A picker holds
+ * the selected harness's `supportedPermissionModes` and cannot tell "this host
+ * predates `auto`" (absent from every row) from "this provider declines it"
+ * (amp, cursor), so it reported both as "Not supported by <provider>" and sent
+ * users to file a provider bug whose fix was "update your host".
+ *
+ * `undefined` harnesses (catalog still loading) answer `null` - nothing is
+ * known, so callers keep today's copy. An EMPTY catalog answers `null` too,
+ * matching {@link normalizePermissionMode}'s treatment of an empty supported
+ * set: a list that constrains nothing is not evidence that a mode is missing.
+ */
+export function catalogSupportedPermissionModes(
+  harnesses: ReadonlyArray<HarnessOption> | undefined,
+): ReadonlyArray<PermissionMode> | null {
+  if (harnesses === undefined || harnesses.length === 0) return null;
+  const union = new Set<PermissionMode>();
+  for (const harness of harnesses) {
+    for (const mode of harness.supportedPermissionModes) union.add(mode);
+  }
+  if (union.size === 0) return null;
+  return PERMISSION_OPTIONS.filter((option) => union.has(option.id)).map(
+    (option) => option.id,
+  );
+}
+
+/**
+ * What the `auto` row says when the user is mid-turn and about to switch INTO
+ * it.
+ *
+ * The second sentence is the load-bearing one. `ActiveExecution.autoJudge`
+ * stays `null` on a mid-turn flip, so the rest of that turn behaves exactly as
+ * `auto_accept_edits` did - without it a user reads the first sentence as "the
+ * judge starts soon" and waits for a change that never arrives in this turn.
+ *
+ * It lives in the PICKER rather than as a chat notice deliberately: the user's
+ * attention is in the menu at the moment of the choice, and this is a
+ * prediction about a choice not yet committed. A chat notice would arrive
+ * after the fact, and the host has no reason to learn about a renderer gesture
+ * that changes nothing it does.
+ */
+export const AUTO_MID_TURN_NOTICE =
+  "The judge starts on your next message. This turn keeps running as it is.";
+
+/**
+ * What a disabled option says, and WHO it blames.
+ *
+ * Shared by the desktop dropdown and the phone sheet so the two can never
+ * disagree about it - the sheet's own doc already commits to reading the
+ * desktop picker's registries rather than restating them.
+ *
+ * A mode absent from the whole catalog is a host that predates it; a mode
+ * present elsewhere but not here is the provider declining it. `null`
+ * `catalogSupportedModes` is "not known yet" and keeps the provider string, so
+ * a catalog still loading never accuses the host.
+ */
+export function unsupportedPermissionModeCopy(input: {
+  readonly mode: PermissionMode;
+  readonly harnessLabel: string | null;
+  readonly catalogSupportedModes: ReadonlyArray<PermissionMode> | null;
+}): string {
+  const { mode, harnessLabel, catalogSupportedModes } = input;
+  if (catalogSupportedModes !== null && !catalogSupportedModes.includes(mode)) {
+    return "Needs a newer Traycer on this machine.";
+  }
+  return `Not supported by ${harnessLabel ?? "this provider"}.`;
 }
 
 export function isReasoningLevel(value: string): value is ReasoningLevel {

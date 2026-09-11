@@ -133,7 +133,12 @@ describe("<ProviderAutoJudgeSection />", () => {
 
     render(<ProviderAutoJudgeSection state={providerState()} />);
 
-    expect(screen.getByText("Auto mode judge")).toBeTruthy();
+    // Spelled out rather than built from `PROVIDER_DISPLAY_NAMES`: this is the
+    // label a user reads, and the row is deliberately NOT called "Auto mode
+    // judge" any more - the row under Settings ▸ Agents carries that name and
+    // THIS is the one that wins. An assertion derived from the same constant
+    // the component interpolates would follow a rename instead of catching it.
+    expect(screen.getByText("Who reviews Claude Code's commands")).toBeTruthy();
   });
 
   it("renders Traycer's judge selected when the stored state has no autoJudge key", () => {

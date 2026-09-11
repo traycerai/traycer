@@ -148,6 +148,29 @@ export const autoJudgeSetV10 = defineRpcContract({
 export const autoPolicySourceSchema = z.enum(["account"]);
 export type AutoPolicySource = z.infer<typeof autoPolicySourceSchema>;
 
+/**
+ * How much this answer can be TRUSTED, independent of what it says.
+ *
+ * Orthogonal to `source`, which answers *which policy this is* and whose doc
+ * above reserves it for a future `project` arm: folding availability into that
+ * enum would make one field carry two axes.
+ *
+ * - `fresh` - read or refreshed successfully; `body` and `updatedAt` are
+ *   current.
+ * - `stale` - a cached copy a refresh could not confirm. `body` may be behind
+ *   another device, and `updatedAt` is withheld for that reason, which is why
+ *   a null stamp means "cannot tell" rather than "never edited".
+ * - `unreadable` - there was no cached copy AND the fetch failed. `body: null`
+ *   here means NOTHING; it is not "never saved". A panel must not offer to
+ *   write over a policy it could not read.
+ */
+export const autoPolicyReadStateSchema = z.enum([
+  "fresh",
+  "stale",
+  "unreadable",
+]);
+export type AutoPolicyReadState = z.infer<typeof autoPolicyReadStateSchema>;
+
 export const autoPolicyGetRequestSchema = z.object({});
 export type AutoPolicyGetRequest = z.infer<typeof autoPolicyGetRequestSchema>;
 
@@ -162,6 +185,35 @@ export const autoPolicyGetResponseSchema = z.object({
    */
   updatedAt: z.string().nullable(),
   source: autoPolicySourceSchema,
+  /**
+   * See {@link autoPolicyReadStateSchema}.
+   *
+   * `.optional()`, not required and not `.default("fresh")`, because this
+   * property was added to `1.0` IN PLACE - the line is unreleased, so it takes
+   * no minor of its own, and the consequence of that is that nothing on the
+   * wire distinguishes a host whose resolver fills this field from one that
+   * predates it. The negotiated version is `1.0` either way, so the READER has
+   * to spell the fallback (`autoPolicyReadStateFor` in the GUI), exactly as
+   * `ProviderCliState.autoJudge` makes its reader spell `?? "traycer"`. The
+   * fallback is `fresh`: it reproduces the panel's behaviour before the field
+   * existed, which is the only behaviour an older host can support.
+   */
+  readState: autoPolicyReadStateSchema.optional(),
+  /**
+   * The WHOLE shipped judge policy this host would apply, verbatim.
+   *
+   * The document, not a parsed tier: the client renders sections of it under
+   * user-facing labels, and parsing it on the wire would freeze the section
+   * list into the contract - every edit to the shipped policy would then be a
+   * protocol change. It is bundled with the host
+   * (`resources/auto-judge/defaults.md`) rather than fetched, so it is
+   * readable even when the account policy above is not.
+   *
+   * `.optional()` for the same reason as `readState`. A client that does not
+   * receive it renders no shipped-policy view at all - the right direction,
+   * since a view is only honest about rules the host actually applies.
+   */
+  shippedDefaults: z.string().optional(),
 });
 export type AutoPolicyGetResponse = z.infer<typeof autoPolicyGetResponseSchema>;
 

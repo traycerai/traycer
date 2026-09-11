@@ -24,6 +24,10 @@ import {
   useGuiHarnessesQueryForClient,
 } from "@/hooks/harnesses/use-gui-harness-catalog";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import {
+  autoJudgeBillingFor,
+  autoJudgeSelfBillingWarning,
+} from "@/lib/auto-mode/auto-judge-billing";
 
 const EMPTY_JUDGE_MODELS: ReadonlyArray<ModelOption> = [];
 
@@ -148,6 +152,14 @@ export function AutoJudgePicker(props: {
     props.selection !== null &&
     seed.unrecognizedHarnessId === null &&
     presentedHarnessId !== storedHarnessId;
+  // Read off the STORED record, not the presented harness, for two reasons:
+  // the host bills whatever it has stored (the presented id can be a display
+  // reroute off an unavailable harness, which the line above already names),
+  // and the composer's own meta line reads the same record - so the two
+  // surfaces cannot disagree about which pocket is being spent.
+  const selfBilling = autoJudgeSelfBillingWarning(
+    autoJudgeBillingFor(props.selection?.harnessId ?? null),
+  );
   return (
     <div
       className="flex min-w-0 flex-col items-end gap-1"
@@ -175,6 +187,14 @@ export function AutoJudgePicker(props: {
       {props.selection === null ? (
         <span className="text-ui-xs text-muted-foreground">
           Using Traycer&apos;s default judge
+        </span>
+      ) : null}
+      {selfBilling !== null ? (
+        <span
+          data-testid="auto-judge-self-billing"
+          className="max-w-full text-pretty text-right text-ui-xs text-amber-700 dark:text-amber-300"
+        >
+          {selfBilling}
         </span>
       ) : null}
       {seed.unrecognizedHarnessId !== null ? (

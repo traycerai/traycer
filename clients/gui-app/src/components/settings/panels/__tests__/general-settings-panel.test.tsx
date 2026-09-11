@@ -738,9 +738,15 @@ describe("GeneralSettingsPanel", () => {
     // edits" option, and this menu's DropdownMenuRadioItem concatenates the
     // label AND description into one accessible name, so a name matcher of
     // "Auto" or /Auto/ ambiguously matches both radio items.
+    // Spelled out rather than imported from `PERMISSION_OPTIONS`: this is the
+    // sentence a user reads before turning the mode on, and the previous
+    // wording ("asks you only when unsure") was wrong three ways over - a
+    // block cards, an unavailable judge cards, and the mode spends money. An
+    // assertion derived from the option registry would have followed that
+    // copy fix silently instead of making someone re-read it.
     fireEvent.click(
       screen.getByRole("menuitemradio", {
-        name: /Auto-approve edits; a judge reviews commands and asks you only when unsure\./,
+        name: /Auto-approve edits\. A judge reviews each command and asks you whenever it can't clearly approve — risky, unsure, or unavailable\./,
       }),
     );
 

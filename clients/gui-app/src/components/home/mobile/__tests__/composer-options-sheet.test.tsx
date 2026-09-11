@@ -26,6 +26,14 @@ function renderSheet(overrides: {
       onPermissionChange={overrides.onPermissionChange}
       supportedPermissionModes={overrides.supportedPermissionModes}
       harnessLabel="Cursor"
+      // Today's-behaviour values: no catalog to union, no turn in flight and no
+      // host whose judge this fixture could name, so every row renders exactly
+      // what it rendered before these three props existed. The branches they
+      // open are covered against the desktop picker, which shares the two pure
+      // helpers this sheet calls.
+      catalogSupportedModes={null}
+      turnActive={false}
+      judgeBilling={null}
       settingsLocked={overrides.settingsLocked}
     />,
   );

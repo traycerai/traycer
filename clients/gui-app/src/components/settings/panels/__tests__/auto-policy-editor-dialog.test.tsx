@@ -63,6 +63,7 @@ describe("<AutoPolicyEditorDialog />", () => {
         initialBody={null}
         loadedUpdatedAt={null}
         currentUpdatedAt={null}
+        readState="fresh"
         saving={false}
         onCancel={vi.fn()}
         onSave={vi.fn()}
@@ -85,6 +86,7 @@ describe("<AutoPolicyEditorDialog />", () => {
         initialBody="## Environment\n"
         loadedUpdatedAt={null}
         currentUpdatedAt={null}
+        readState="fresh"
         saving={false}
         onCancel={vi.fn()}
         onSave={vi.fn()}
@@ -108,6 +110,7 @@ describe("<AutoPolicyEditorDialog />", () => {
         initialBody="short"
         loadedUpdatedAt={null}
         currentUpdatedAt={null}
+        readState="fresh"
         saving={false}
         onCancel={vi.fn()}
         onSave={vi.fn()}
@@ -131,6 +134,7 @@ describe("<AutoPolicyEditorDialog />", () => {
         initialBody="short"
         loadedUpdatedAt={null}
         currentUpdatedAt={null}
+        readState="fresh"
         saving={false}
         onCancel={vi.fn()}
         onSave={onSave}
@@ -150,6 +154,7 @@ describe("<AutoPolicyEditorDialog />", () => {
         initialBody="short"
         loadedUpdatedAt="2026-09-10T00:00:00.000Z"
         currentUpdatedAt="2026-09-10T00:05:00.000Z"
+        readState="fresh"
         saving={false}
         onCancel={vi.fn()}
         onSave={vi.fn()}
@@ -165,6 +170,7 @@ describe("<AutoPolicyEditorDialog />", () => {
         initialBody="short"
         loadedUpdatedAt={null}
         currentUpdatedAt="2026-09-10T00:05:00.000Z"
+        readState="fresh"
         saving={false}
         onCancel={vi.fn()}
         onSave={vi.fn()}
@@ -173,4 +179,75 @@ describe("<AutoPolicyEditorDialog />", () => {
 
     expect(screen.queryByTestId("auto-policy-stale-warning")).toBeNull();
   });
+});
+
+describe('<AutoPolicyEditorDialog /> readState="unreadable"', () => {
+  it("disables Save even when the text is dirty and under the byte cap", () => {
+    render(
+      <AutoPolicyEditorDialog
+        initialBody="short"
+        loadedUpdatedAt={null}
+        currentUpdatedAt={null}
+        readState="unreadable"
+        saving={false}
+        onCancel={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+
+    const textarea = screen.getByTestId("auto-policy-input");
+    fireEvent.change(textarea, { target: { value: "short and edited" } });
+
+    const saveButton = screen.getByTestId(
+      "auto-policy-save",
+    ) as HTMLButtonElement;
+    expect(saveButton.disabled).toBe(true);
+  });
+
+  it("renders the unreadable-policy warning banner", () => {
+    render(
+      <AutoPolicyEditorDialog
+        initialBody="short"
+        loadedUpdatedAt={null}
+        currentUpdatedAt={null}
+        readState="unreadable"
+        saving={false}
+        onCancel={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId("auto-policy-unreadable-warning")).toBeTruthy();
+  });
+});
+
+describe("<AutoPolicyEditorDialog /> readable read states", () => {
+  it.each(["fresh", "stale"] as const)(
+    "hides the unreadable-policy banner and lets Save enable normally for readState=%s",
+    (readState) => {
+      render(
+        <AutoPolicyEditorDialog
+          initialBody="short"
+          loadedUpdatedAt={null}
+          currentUpdatedAt={null}
+          readState={readState}
+          saving={false}
+          onCancel={vi.fn()}
+          onSave={vi.fn()}
+        />,
+      );
+
+      expect(screen.queryByTestId("auto-policy-unreadable-warning")).toBeNull();
+
+      const saveButtonBeforeEdit = screen.getByTestId(
+        "auto-policy-save",
+      ) as HTMLButtonElement;
+      expect(saveButtonBeforeEdit.disabled).toBe(true);
+
+      const textarea = screen.getByTestId("auto-policy-input");
+      fireEvent.change(textarea, { target: { value: "short and edited" } });
+
+      expect(saveButtonBeforeEdit.disabled).toBe(false);
+    },
+  );
 });

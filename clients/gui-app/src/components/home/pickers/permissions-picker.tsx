@@ -10,13 +10,19 @@ import { NarrowOnlyTooltip } from "@/components/home/toolbar/narrow-only-tooltip
 import { ToolbarPillButton } from "@/components/home/toolbar/toolbar-buttons";
 import { focusActiveComposer } from "@/lib/composer/composer-focus-registry";
 import {
+  AUTO_MID_TURN_NOTICE,
   PERMISSION_OPTIONS,
   findPermissionLabel,
   findPermissionOption,
   isPermissionMode,
   normalizePermissionMode,
+  unsupportedPermissionModeCopy,
   type PermissionMode,
 } from "@/components/home/data/landing-options";
+import {
+  autoJudgeMetaLine,
+  type AutoJudgeBilling,
+} from "@/lib/auto-mode/auto-judge-billing";
 
 interface PermissionsPickerProps {
   value: PermissionMode;
@@ -39,6 +45,29 @@ interface PermissionsPickerProps {
    */
   harnessLabel: string | null;
   /**
+   * Every permission mode ANY harness in this host's catalog honors - the
+   * union, not one row's set. It is what tells a HOST constraint from a
+   * PROVIDER one on a disabled option: a mode absent from every row means the
+   * host predates it, which is a different sentence and a different fix.
+   *
+   * `null` (catalog still loading, or a harness-agnostic surface) keeps
+   * today's provider-blaming string, so nothing accuses the host on a fact not
+   * yet in evidence. See `unsupportedPermissionModeCopy`.
+   */
+  catalogSupportedModes: ReadonlyArray<PermissionMode> | null;
+  /**
+   * Whether a turn is running on this composer's chat right now. Drives the
+   * `auto` row's mid-turn notice only; `false` is every surface with no turn
+   * to speak of (the landing composer, the Settings default-permission row).
+   */
+  turnActive: boolean;
+  /**
+   * Which pocket this host's judge is charged to, for the `auto` row's meta
+   * line. `null` - still loading, or a host that has no notion of a judge -
+   * renders no meta line at all, which is exactly today's behaviour.
+   */
+  judgeBilling: AutoJudgeBilling | null;
+  /**
    * Where focus lands when the menu closes.
    *
    * `"composer"` hands it back to the composer editor so the user can keep
@@ -58,9 +87,11 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
     onChange,
     supportedPermissionModes,
     harnessLabel,
+    catalogSupportedModes,
+    turnActive,
+    judgeBilling,
     closeFocus,
   } = props;
-  const unsupportedSuffix = harnessLabel ?? "this provider";
   // Display value is the *normalized* one: when the sticky value isn't in the
   // active harness's supported set (rehydration of a saved chat, the one-frame
   // window between a harness swap and the parent's clamp commit, or any race
@@ -148,21 +179,78 @@ export function PermissionsPicker(props: PermissionsPickerProps) {
                 className="items-start gap-2 py-2 pr-8 pl-2 data-[state=checked]:bg-accent/70"
               >
                 <OptionIcon className="mt-0.5 size-4 text-muted-foreground" />
-                <span className="min-w-0">
-                  <span className="block font-medium leading-5 text-foreground">
-                    {option.label}
-                  </span>
-                  <span className="block leading-5 text-muted-foreground">
-                    {isSupported
+                <PermissionOptionBody
+                  label={option.label}
+                  description={
+                    isSupported
                       ? option.description
-                      : `Not supported by ${unsupportedSuffix}.`}
-                  </span>
-                </span>
+                      : unsupportedPermissionModeCopy({
+                          mode: option.id,
+                          harnessLabel,
+                          catalogSupportedModes,
+                        })
+                  }
+                  metaLine={
+                    isSupported && option.id === "auto" && judgeBilling !== null
+                      ? autoJudgeMetaLine(judgeBilling)
+                      : null
+                  }
+                  notice={
+                    isSupported &&
+                    option.id === "auto" &&
+                    turnActive &&
+                    displayValue !== "auto"
+                      ? AUTO_MID_TURN_NOTICE
+                      : null
+                  }
+                />
               </DropdownMenuRadioItem>
             );
           })}
         </DropdownMenuRadioGroup>
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/**
+ * One option's text column: name, what it does, and - on `auto` only - which
+ * pocket it spends and what a mid-turn switch actually does.
+ *
+ * Extracted so the `auto` row's two extra lines do not push the map callback
+ * above the complexity ceiling; it renders nothing for `metaLine` / `notice`
+ * on every other row, which is what keeps their absence the default.
+ */
+function PermissionOptionBody(props: {
+  readonly label: string;
+  readonly description: string;
+  readonly metaLine: string | null;
+  readonly notice: string | null;
+}) {
+  return (
+    <span className="min-w-0">
+      <span className="block font-medium leading-5 text-foreground">
+        {props.label}
+      </span>
+      <span className="block leading-5 text-muted-foreground">
+        {props.description}
+      </span>
+      {props.metaLine !== null ? (
+        <span
+          data-testid="permission-option-meta"
+          className="block leading-5 text-ui-xs text-muted-foreground"
+        >
+          {props.metaLine}
+        </span>
+      ) : null}
+      {props.notice !== null ? (
+        <span
+          data-testid="permission-option-mid-turn-notice"
+          className="mt-1 block text-pretty leading-5 text-ui-xs text-muted-foreground"
+        >
+          {props.notice}
+        </span>
+      ) : null}
+    </span>
   );
 }

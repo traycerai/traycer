@@ -68,6 +68,13 @@ describe("<ComposerToolbarLeft />", () => {
             "full_access",
           ]}
           harnessLabel="Cursor"
+          // `null` catalog is what keeps this case about the PROVIDER: the
+          // union is unknown, so the copy blames Cursor rather than the host.
+          // The host-blaming branch has its own coverage in
+          // `pickers/__tests__/permissions-picker.test.tsx`.
+          catalogSupportedModes={null}
+          turnActive={false}
+          judgeBilling={null}
           showNextTurnPermissionNote={false}
           settingsLocked={false}
         />
@@ -104,6 +111,12 @@ function renderToolbar(
         onPermissionChange={onPermissionChange}
         supportedPermissionModes={null}
         harnessLabel={null}
+        // Today's-behaviour values: no catalog to union, no turn in flight and
+        // no host whose judge this fixture could name, so the picker renders
+        // exactly what it rendered before these three props existed.
+        catalogSupportedModes={null}
+        turnActive={false}
+        judgeBilling={null}
         showNextTurnPermissionNote={false}
         settingsLocked={settingsLocked}
       />

@@ -1,12 +1,14 @@
-import { memo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { useStore } from "zustand";
 
 import { ComposerSendButton } from "@/components/home/composer/composer-send-button";
 import { ComposerOptionsSheet } from "@/components/home/mobile/composer-options-sheet";
 import {
+  catalogSupportedPermissionModes,
   findPermissionOption,
   normalizePermissionMode,
 } from "@/components/home/data/landing-options";
+import { useAutoJudgeBilling } from "@/hooks/auto-mode/use-auto-judge-billing";
 import { HarnessModelPicker } from "@/components/home/pickers/harness-model-picker";
 import {
   ComposerMicButton,
@@ -80,6 +82,14 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
   );
   const harnessLabel = useStore(store, (s) => s.harnessLabel);
   const setPermission = useStore(store, (s) => s.setPermission);
+  // Same two inputs the desktop toolbar computes, from the same helpers - see
+  // `ComposerToolbar`.
+  const harnesses = useStore(store, (s) => s.catalog.harnesses);
+  const catalogSupportedModes = useMemo(
+    () => catalogSupportedPermissionModes(harnesses),
+    [harnesses],
+  );
+  const judgeBilling = useAutoJudgeBilling(runTargetHostId);
   // Same gate as `ComposerToolbarRight`: an empty slug is the transient
   // "catalog still loading" marker and must never reach the wire as `model: ""`.
   const modelResolved = useStore(
@@ -176,6 +186,9 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
         onPermissionChange={setPermission}
         supportedPermissionModes={supportedPermissionModes}
         harnessLabel={harnessLabel}
+        catalogSupportedModes={catalogSupportedModes}
+        turnActive={activeTurnStatus !== null && !settingsLocked}
+        judgeBilling={judgeBilling}
         settingsLocked={settingsLocked}
       />
     </div>

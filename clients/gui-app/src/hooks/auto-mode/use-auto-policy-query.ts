@@ -15,7 +15,15 @@ const AUTO_POLICY_GET_PARAMS = {};
  * traycer-server so it follows the user across machines, and the host proxies
  * it so what the panel edits is what the judge on that machine will actually
  * apply (a host that could not refresh its cached copy answers with the copy it
- * has, and `updatedAt: null` to say so).
+ * has, and `readState: "stale"` to say so).
+ *
+ * The response is three answers, not one: `body`/`updatedAt` say what the
+ * policy is, `readState` says how far that can be trusted - including the case
+ * where `body: null` means "could not look" rather than "never saved" - and
+ * `shippedDefaults` carries the host's own bundled judge policy, which is
+ * readable even when the account record is not. Both of the latter are optional
+ * on the wire; `autoPolicyReadStateFor` is where the absent-`readState`
+ * fallback is spelled.
  *
  * `refetchOnMount: "always"` because the record is shared: another device may
  * have saved since this window last looked, and `updatedAt` is what the editor

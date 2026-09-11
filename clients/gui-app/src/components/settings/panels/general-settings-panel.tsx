@@ -109,6 +109,13 @@ export function GeneralSettingsPanel() {
                 // actually selected.
                 supportedPermissionModes={null}
                 harnessLabel={null}
+                // Install-wide and harness-agnostic, so there is no catalog to
+                // union, no turn to be mid-way through, and no one host whose
+                // judge this row could name: all three stay at the values that
+                // render exactly what this row rendered before them.
+                catalogSupportedModes={null}
+                turnActive={false}
+                judgeBilling={null}
                 closeFocus="trigger"
               />
             }
