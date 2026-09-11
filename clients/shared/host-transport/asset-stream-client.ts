@@ -1,5 +1,5 @@
 import {
-  assetStreamServerFrameSchemaV11,
+  assetStreamServerFrameSchemaV12,
   MAX_ASSET_BYTES,
   type AssetMediaType,
   type AssetStreamErrorReason,
@@ -180,7 +180,7 @@ export class AssetStreamClient<
     // a header this client's protocol copy cannot represent should never
     // arrive (the host emission-gates on the negotiated minor), and every
     // older minor's frames are a subset of the latest schema by additivity.
-    const parsed = assetStreamServerFrameSchemaV11.safeParse(envelope);
+    const parsed = assetStreamServerFrameSchemaV12.safeParse(envelope);
     if (!parsed.success) {
       this.fail({ reason: "fatal", message: "received an invalid frame" });
       return;

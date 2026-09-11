@@ -33,15 +33,14 @@ import "pdfjs-dist/web/pdf_viewer.css";
 // leak that skews the text/annotation layers (see the file's comment).
 import "./pdf-preview.css";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import { ChevronDown, ChevronUp, X } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { appLogger } from "@/lib/logger";
 import { useOpenLink } from "@/lib/links/open-link";
+import type { DocumentViewerProps } from "@/components/epic-canvas/document-preview/lazy-document-viewer";
+import { DocumentSearchBar } from "@/components/epic-canvas/document-preview/document-search-bar";
+import { DocumentPreviewToolbar } from "@/components/epic-canvas/document-preview/document-preview-toolbar";
 import { pdfDataFileUrls } from "./pdf-asset-urls";
 import { PdfOutlinePanel, type PdfOutlineEntry } from "./pdf-outline-panel";
-import { PdfPreviewToolbar } from "./pdf-preview-toolbar";
 
 // Same-origin worker chunk emitted by Vite - `script-src 'self'` already
 // covers it. Assigned at module scope so a second mount never races the
@@ -64,26 +63,8 @@ const ZOOM_STEP = 1.1;
 const MIN_SCALE = 0.25;
 const MAX_SCALE = 5;
 
-export interface PdfPreviewProps {
-  /** Blob URL of the validated PDF bytes (from `useFileAsset`). */
-  readonly url: string;
-  /** Toolbar caption; surfaces pass their path-like label of choice. */
-  readonly fileName: string;
-  /** Compact mode drops the toolbar label - for surfaces with their own title. */
-  readonly compact: boolean;
-  /**
-   * Host-surface actions appended to the toolbar (e.g. the tile's Open
-   * Externally button), so the viewer bar can be the surface's ONLY bar.
-   */
-  readonly toolbarActions: ReactNode;
-  /**
-   * Bytes reached a blob URL but pdf.js could not parse them as a PDF -
-   * the exact counterpart of `ImagePreview`'s `onDecodeError`: the caller
-   * (the hook's `reportDecodeFailure`) discards the cache entry and flips
-   * the tile to the uniform fallback.
-   */
-  readonly onRenderFailure: () => void;
-}
+/** The shared document-viewer contract - see `lazy-document-viewer.tsx`. */
+export type PdfPreviewProps = DocumentViewerProps;
 
 type ViewerBinding = {
   readonly viewer: PDFViewer;
@@ -99,7 +80,6 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
   const [documentReady, setDocumentReady] = useState(false);
   const [pageCount, setPageCount] = useState(0);
   const [pageNumber, setPageNumber] = useState(1);
-  const [pageInput, setPageInput] = useState("1");
   const [scalePercent, setScalePercent] = useState<number | null>(null);
   const [outline, setOutline] = useState<readonly PdfOutlineEntry[]>([]);
   const [outlineOpen, setOutlineOpen] = useState(false);
@@ -153,7 +133,6 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
     setDocumentReady(false);
     setPageCount(0);
     setPageNumber(1);
-    setPageInput("1");
     setScalePercent(null);
     setOutline([]);
     setMatchState(null);
@@ -220,7 +199,6 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
       });
       eventBus.on("pagechanging", (evt: { readonly pageNumber: number }) => {
         setPageNumber(evt.pageNumber);
-        setPageInput(String(evt.pageNumber));
       });
       eventBus.on("scalechanging", (evt: { readonly scale: number }) => {
         setScalePercent(Math.round(evt.scale * 100));
@@ -311,24 +289,6 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
     binding.viewer.currentPageNumber = clamped;
   }, []);
 
-  const handlePageInputCommit = useCallback(() => {
-    const parsed = Number.parseInt(pageInput, 10);
-    if (Number.isNaN(parsed)) {
-      setPageInput(String(pageNumber));
-      return;
-    }
-    goToPage(parsed);
-    // `goToPage` clamps, and when the clamped page IS the current page pdf.js
-    // emits no `pagechanging` - so the field would keep the typed
-    // out-of-range value ("99" on a 5-page doc). Resync it here.
-    const binding = bindingRef.current;
-    if (binding !== null) {
-      setPageInput(
-        String(Math.min(Math.max(parsed, 1), binding.document.numPages)),
-      );
-    }
-  }, [goToPage, pageInput, pageNumber]);
-
   const zoomBy = useCallback((factor: number) => {
     const binding = bindingRef.current;
     if (binding === null) return;
@@ -415,6 +375,11 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
     return () => clearTimeout(timer);
   }, [query, searchOpen]);
 
+  const stepMatch = useCallback(
+    (previous: boolean) => dispatchFind("again", previous),
+    [dispatchFind],
+  );
+
   const closeSearch = useCallback(() => {
     setSearchOpen(false);
     setQuery("");
@@ -469,80 +434,36 @@ export default function PdfPreview(props: PdfPreviewProps): ReactNode {
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col">
-      <PdfPreviewToolbar
+      <DocumentPreviewToolbar
+        ariaLabel="PDF preview controls"
         fileName={props.fileName}
         compact={props.compact}
         toolbarActions={props.toolbarActions}
         documentReady={documentReady}
         pageNumber={pageNumber}
         pageCount={pageCount}
-        pageInput={pageInput}
-        onPageInputChange={setPageInput}
-        onPageInputCommit={handlePageInputCommit}
         onGoToPage={goToPage}
         scalePercent={scalePercent}
         onZoomIn={handleZoomIn}
         onZoomOut={handleZoomOut}
         onFitWidth={handleFitWidth}
         onRotate={handleRotate}
-        hasOutline={hasOutline}
-        outlineOpen={outlineOpen}
-        onToggleOutline={toggleOutline}
+        outline={
+          hasOutline ? { open: outlineOpen, onToggle: toggleOutline } : null
+        }
+        searchSupported
         searchOpen={searchOpen}
         onToggleSearch={toggleSearch}
       />
       {searchOpen ? (
-        <div className="flex h-8 shrink-0 items-center gap-1 border-b border-canvas-border/70 px-2">
-          <Input
-            ref={searchInputRef}
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && query !== "") {
-                dispatchFind("again", event.shiftKey);
-              }
-              if (event.key === "Escape") closeSearch();
-            }}
-            placeholder="Find in document"
-            aria-label="Find in document"
-            className="h-6 min-w-0 flex-1 px-2 text-ui-xs"
-          />
-          <span
-            className="whitespace-nowrap text-ui-xs text-muted-foreground"
-            aria-live="polite"
-          >
-            {matchCountLabel}
-          </span>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            disabled={query === ""}
-            onClick={() => dispatchFind("again", true)}
-            aria-label="Previous match"
-          >
-            <ChevronUp className="size-4" />
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            disabled={query === ""}
-            onClick={() => dispatchFind("again", false)}
-            aria-label="Next match"
-          >
-            <ChevronDown className="size-4" />
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            onClick={closeSearch}
-            aria-label="Close search"
-          >
-            <X className="size-4" />
-          </Button>
-        </div>
+        <DocumentSearchBar
+          inputRef={searchInputRef}
+          query={query}
+          onQueryChange={setQuery}
+          onStep={stepMatch}
+          onClose={closeSearch}
+          matchCountLabel={matchCountLabel}
+        />
       ) : null}
       <div className="flex min-h-0 flex-1">
         {outlineOpen && hasOutline ? (

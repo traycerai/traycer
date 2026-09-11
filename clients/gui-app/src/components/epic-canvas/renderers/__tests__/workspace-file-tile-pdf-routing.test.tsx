@@ -69,14 +69,14 @@ vi.mock("@/hooks/assets/use-file-asset", () => ({
 }));
 
 // `workspace-file-tile.tsx` itself no longer imports
-// `useHostMethodSchemaVersion` - the PDF *route* has no host-version gate
-// left. But `WorkspacePdfFileTile` still calls `usePdfOpenExternallyTarget`
-// (`use-pdf-open-target.ts`) for its Open Externally target, and THAT hook
-// still reads `editor.openPaths`'s negotiated version - an unrelated,
-// still-live gate this suite does not assert on, so a fixed "supported"
-// version keeps it out of the way. `useHostSupportsMethod` remains a live
-// seam too (the writeFile-support check in `WorkspaceFileTileLive`, which
-// the PDF tile never mounts).
+// `useHostMethodSchemaVersion` - the document *route* has no host-version
+// gate left. But `WorkspaceDocumentFileTile` still calls
+// `useDocumentOpenExternallyTarget` (`use-document-open-target.ts`) for its
+// Open Externally target, and THAT hook still reads `editor.openPaths`'s
+// negotiated version - an unrelated, still-live gate this suite does not
+// assert on, so a fixed version keeps it out of the way.
+// `useHostSupportsMethod` remains a live seam too (the writeFile-support
+// check in `WorkspaceFileTileLive`, which a document tile never mounts).
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostSupportsMethod: () => false,
   useHostMethodSchemaVersion: () => ({ major: 1, minor: 1 }),
@@ -248,6 +248,33 @@ vi.mock("@/components/epic-canvas/pdf-preview/pdf-preview-lazy", () => ({
   },
 }));
 
+// Same treatment for the Word viewer: the real module pulls in docx-preview
+// and JSZip, neither of which this routing test needs. The stub mirrors the
+// real `DocxPreview`'s accessible landmark (`role="toolbar"`,
+// `aria-label="Word document preview controls"` - docx-preview.tsx),
+// so "the Word viewer mounted" is asserted through the same accessible
+// contract as the PDF one above.
+vi.mock("@/components/epic-canvas/docx-preview/docx-preview-lazy", () => ({
+  DOCX_VIEWER_UNAVAILABLE_REASON:
+    "The Word document viewer could not be loaded on this device.",
+  DocxPreviewLazy: (props: {
+    readonly url: string;
+    readonly onUnavailable: () => void;
+  }) => {
+    const { onUnavailable } = props;
+    useEffect(() => {
+      if (state.viewerUnavailable) onUnavailable();
+    }, [onUnavailable]);
+    return (
+      <div
+        role="toolbar"
+        aria-label="Word document preview controls"
+        data-url={props.url}
+      />
+    );
+  },
+}));
+
 import { WorkspaceFileTile } from "../workspace-file-tile";
 
 function nodeFor(filePath: string): WorkspaceFileRef {
@@ -361,6 +388,82 @@ describe("workspace file tile PDF routing", () => {
     expect(screen.getByTestId("workspace-image-preview")).toBeTruthy();
     expect(
       screen.queryByRole("toolbar", { name: "PDF preview controls" }),
+    ).toBeNull();
+  });
+
+  // Each document format routes to its OWN viewer - the router keys off
+  // `documentAssetKindOf`, so a `.docx` must reach the Word viewer and never
+  // the pdf.js one.
+  it("routes every .docx to the Word viewer, streaming instead of reading text", () => {
+    renderTile(nodeFor("docs/brief.docx"));
+
+    const preview = screen.getByRole("toolbar", {
+      name: "Word document preview controls",
+    });
+    expect(preview.getAttribute("data-url")).toBe("blob:pdf");
+    expect(state.readFileCalls).toBe(0);
+    expect(state.assetRequests).toEqual([
+      {
+        method: "workspace",
+        workspacePath: "/work/repo",
+        filePath: "docs/brief.docx",
+      },
+    ]);
+    expect(
+      screen.queryByRole("toolbar", { name: "PDF preview controls" }),
+    ).toBeNull();
+    expect(screen.queryByTestId("workspace-file-toolbar")).toBeNull();
+  });
+
+  it("renders the shared placeholder with the hook's Word document copy on fallback", () => {
+    state.asset = {
+      status: "fallback",
+      url: null,
+      meta: null,
+      reason: "This Word document is too large to preview.",
+      totalBytes: null,
+      servedFromCache: false,
+    };
+    renderTile(nodeFor("docs/brief.docx"));
+
+    expect(
+      screen.getByText("This Word document is too large to preview."),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("toolbar", { name: "Word document preview controls" }),
+    ).toBeNull();
+    expect(screen.getByTestId("workspace-file-toolbar")).toBeTruthy();
+  });
+
+  it("swaps to the shared placeholder when the Word viewer reports itself unavailable", () => {
+    state.viewerUnavailable = true;
+    renderTile(nodeFor("docs/brief.docx"));
+
+    expect(
+      screen.getByText(
+        "The Word document viewer could not be loaded on this device.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByTestId("workspace-file-toolbar")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Open Externally" }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("toolbar", { name: "Word document preview controls" }),
+    ).toBeNull();
+  });
+
+  // Legacy `.doc` is a different (binary OLE) format with no viewer here, and
+  // the one-character gap from `.docx` is exactly the kind of thing a prefix
+  // match would swallow - it must keep the untouched text path.
+  it("leaves a legacy .doc on the plain text path", () => {
+    renderTile(nodeFor("docs/legacy.doc"));
+
+    expect(screen.getByTestId("workspace-source-renderer")).toBeTruthy();
+    expect(state.readFileCalls).toBeGreaterThan(0);
+    expect(state.assetRequests).toEqual([]);
+    expect(
+      screen.queryByRole("toolbar", { name: "Word document preview controls" }),
     ).toBeNull();
   });
 });

@@ -227,6 +227,41 @@ describe("<AutonomousResumeSegment />", () => {
     ).toBe(false);
   });
 
+  // The gate is the document union, not the PDF extension - a Word document
+  // output takes the identical path.
+  it("renders only the output path for a .docx output file, without fetching it", () => {
+    render(
+      <AutonomousResumeSegment
+        triggers={[
+          {
+            kind: "command",
+            title: "generate brief",
+            status: "completed",
+            summary: "Command finished",
+            blockId: "tool-4",
+            outputFile: {
+              workspacePath: "/tmp/traycer-output",
+              filePath: "/tmp/traycer-output/brief.docx",
+            },
+            mcp: null,
+            managedCommand: null,
+            live: false,
+          },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Command completed/ }));
+
+    expect(screen.getByText("/tmp/traycer-output/brief.docx")).toBeTruthy();
+    expect(
+      hostQueryMock.calls.some(
+        (call) =>
+          call.method === "workspace.readFile" && call.options.enabled === true,
+      ),
+    ).toBe(false);
+  });
+
   it("renders command triggers without output files as non-expandable cards", () => {
     render(
       <AutonomousResumeSegment

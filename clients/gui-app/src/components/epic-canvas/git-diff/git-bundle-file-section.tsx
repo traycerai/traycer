@@ -16,10 +16,10 @@ import {
   gitImageDiffRevisionKey,
   gitImageDiffRouting,
   gitImageDiffSides,
-  gitRoutesToPdfDiffCards,
+  gitRoutesToDocumentDiffBlock,
 } from "@/lib/git/git-diff-tile";
 import { ImageDiffView } from "@/components/epic-canvas/image-preview/image-diff-view";
-import { PdfDiffView } from "@/components/epic-canvas/pdf-preview/pdf-diff-view";
+import { DocumentDiffView } from "@/components/epic-canvas/document-diff/document-diff-view";
 import { DiffContentLoadingSkeleton } from "./diff-content-loading-skeleton";
 import {
   DiffBundleCollapseChevron,
@@ -159,10 +159,11 @@ function BundleFileSectionBody(props: BundleFileSectionBodyProps): ReactNode {
   // registry records, so such a gate can never positively know a host is
   // old; the opened tile's own stream negotiation is the authority, and an
   // old host's refusal degrades there to the shared placeholder.
-  const routeToPdfCards =
-    !routeToImageDiff && gitRoutesToPdfDiffCards(props.file);
+  const routeToDocumentBlock =
+    !routeToImageDiff && gitRoutesToDocumentDiffBlock(props.file);
   useEffect(() => {
-    if (!props.file.isBinary && !routeToImageDiff && !routeToPdfCards) return;
+    if (!props.file.isBinary && !routeToImageDiff && !routeToDocumentBlock)
+      return;
     bundleFindRegistration.registerCoverageState(
       props.bundleFindFileId,
       "binary",
@@ -172,7 +173,7 @@ function BundleFileSectionBody(props: BundleFileSectionBodyProps): ReactNode {
     props.bundleFindFileId,
     props.file.isBinary,
     routeToImageDiff,
-    routeToPdfCards,
+    routeToDocumentBlock,
   ]);
 
   if (routeToImageDiff) {
@@ -200,13 +201,13 @@ function BundleFileSectionBody(props: BundleFileSectionBodyProps): ReactNode {
       />
     );
   }
-  if (routeToPdfCards) {
+  if (routeToDocumentBlock) {
     const sides = gitImageDiffSides(props.file);
     // Same compact block as the single-file tile - the bundle row composes
     // the rich per-type views (the image branch above is the precedent), it
     // does not fall back to a poorer rendering.
     return (
-      <PdfDiffView
+      <DocumentDiffView
         hostId={props.node.hostId}
         viewTabId={props.viewTabId}
         runningDir={props.node.diff.runningDir}

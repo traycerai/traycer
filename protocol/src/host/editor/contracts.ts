@@ -40,3 +40,27 @@ export const editorOpenPathsUpgradeV10ToV11 = defineUpgradePath<
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
 });
+
+/**
+ * 1.2 changes no schema: it is a BEHAVIOR minor. A 1.1 host accepts the
+ * `"system"` target for `.pdf` paths only; from 1.2 it also accepts `.docx`
+ * (`validateSystemOpenPath`). The bump exists so a client can tell the two
+ * hosts apart at the handshake and keep sending an older host the editor
+ * target for a Word file, instead of a request that host would reject.
+ */
+export const editorOpenPathsV12 = defineRpcContract({
+  method: "editor.openPaths",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: openPathsRequestSchemaV11,
+  responseSchema: openPathsResponseSchema,
+});
+
+export const editorOpenPathsUpgradeV11ToV12 = defineUpgradePath<
+  typeof editorOpenPathsV11,
+  typeof editorOpenPathsV12
+>({
+  from: editorOpenPathsV11.schemaVersion,
+  to: editorOpenPathsV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => response,
+});

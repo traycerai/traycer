@@ -1,14 +1,21 @@
 /**
- * The viewer's toolbar, in three tiers keyed on the TOOLBAR's own width (a
- * container query - a narrow split pane on a desktop has exactly the phone's
- * problem, so the viewport is the wrong thing to ask). Wide: every control
- * inline. Narrow (under `@lg`, 32rem): fit-width, rotate, outline and search
- * move into one "More actions" menu with the same labels. Narrowest (under
- * `@sm`, 24rem - a tile pane can be dragged to 240px): zoom folds into the
- * menu too, leaving page nav and the surface's own actions (Open Externally)
- * inline - the escape hatch must never fold away.
+ * The one toolbar both document viewers (PDF, Word) render, so the two read
+ * as the same surface: page navigation, zoom, fit-to-width and search in the
+ * same places, folding the same way. What differs per viewer is declared,
+ * not forked: an outline toggle and a rotate action exist only where the
+ * renderer offers them (`outline`, `onRotate`), and search is withheld on an
+ * engine that cannot paint it (`searchSupported`).
+ *
+ * Three tiers keyed on the TOOLBAR's own width (a container query - a narrow
+ * split pane on a desktop has exactly the phone's problem, so the viewport
+ * is the wrong thing to ask). Wide: every control inline. Narrow (under
+ * `@lg`, 32rem): fit-width, rotate, outline and search move into one "More
+ * actions" menu with the same labels. Narrowest (under `@sm`, 24rem - a tile
+ * pane can be dragged to 240px): zoom folds into the menu too, leaving page
+ * nav and the surface's own actions (Open Externally) inline - the escape
+ * hatch must never fold away.
  */
-import { useRef, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -33,38 +40,48 @@ import { Input } from "@/components/ui/input";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 
-export interface PdfPreviewToolbarProps {
+export interface DocumentOutlineToggle {
+  readonly open: boolean;
+  readonly onToggle: () => void;
+}
+
+export interface DocumentPreviewToolbarProps {
+  /** The landmark's accessible name, e.g. "PDF preview controls". */
+  readonly ariaLabel: string;
   readonly fileName: string;
   readonly compact: boolean;
   readonly toolbarActions: ReactNode;
   readonly documentReady: boolean;
+  /** 1-based; the viewer keeps it current as the user scrolls. */
   readonly pageNumber: number;
+  /** `0` until the document is ready. */
   readonly pageCount: number;
-  readonly pageInput: string;
-  readonly onPageInputChange: (value: string) => void;
-  readonly onPageInputCommit: () => void;
   readonly onGoToPage: (page: number) => void;
   readonly scalePercent: number | null;
   readonly onZoomIn: () => void;
   readonly onZoomOut: () => void;
   readonly onFitWidth: () => void;
-  readonly onRotate: () => void;
-  readonly hasOutline: boolean;
-  readonly outlineOpen: boolean;
-  readonly onToggleOutline: () => void;
+  /** `null` on a renderer that cannot rotate pages. */
+  readonly onRotate: (() => void) | null;
+  /** `null` when the document has no outline to show. */
+  readonly outline: DocumentOutlineToggle | null;
+  /** `false` on an engine without document search - the control is not offered at all. */
+  readonly searchSupported: boolean;
   readonly searchOpen: boolean;
   readonly onToggleSearch: () => void;
 }
 
-export function PdfPreviewToolbar(props: PdfPreviewToolbarProps): ReactNode {
+export function DocumentPreviewToolbar(
+  props: DocumentPreviewToolbarProps,
+): ReactNode {
   return (
     <div
       role="toolbar"
-      aria-label="PDF preview controls"
+      aria-label={props.ariaLabel}
       className="@container relative z-10 flex h-8 shrink-0 items-center justify-between gap-2 border-b border-canvas-border/70 px-2"
     >
       <div className="flex min-w-0 flex-1 items-center gap-1">
-        {props.hasOutline ? (
+        {props.outline === null ? null : (
           <TooltipWrapper
             label="Document outline"
             side="top"
@@ -75,15 +92,15 @@ export function PdfPreviewToolbar(props: PdfPreviewToolbarProps): ReactNode {
               type="button"
               variant="ghost"
               size="icon-sm"
-              aria-pressed={props.outlineOpen}
-              onClick={props.onToggleOutline}
+              aria-pressed={props.outline.open}
+              onClick={props.outline.onToggle}
               aria-label="Document outline"
               className="@max-lg:hidden"
             >
               <ListTree className="size-4" />
             </Button>
           </TooltipWrapper>
-        ) : null}
+        )}
         {props.compact ? null : (
           <StartTruncatedText className="min-w-0 flex-1 text-ui-xs text-muted-foreground">
             {props.fileName}
@@ -108,25 +125,12 @@ export function PdfPreviewToolbar(props: PdfPreviewToolbarProps): ReactNode {
             <ChevronLeft className="size-4" />
           </Button>
         </TooltipWrapper>
-        <div className="flex items-center gap-1 text-ui-xs text-muted-foreground">
-          <Input
-            // Empty until pagesinit - a "1" next to "/ 0" reads as a
-            // contradictory state, not a loading one.
-            value={props.documentReady ? props.pageInput : ""}
-            disabled={!props.documentReady}
-            onChange={(event) => props.onPageInputChange(event.target.value)}
-            onBlur={props.onPageInputCommit}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") props.onPageInputCommit();
-            }}
-            inputMode="numeric"
-            aria-label="Page number"
-            className="h-6 w-10 px-1 text-center text-ui-xs"
-          />
-          <span className="whitespace-nowrap">
-            / {props.pageCount > 0 ? props.pageCount : "–"}
-          </span>
-        </div>
+        <PageNumberField
+          documentReady={props.documentReady}
+          pageNumber={props.pageNumber}
+          pageCount={props.pageCount}
+          onGoToPage={props.onGoToPage}
+        />
         <TooltipWrapper
           label="Next page"
           side="top"
@@ -210,50 +214,107 @@ export function PdfPreviewToolbar(props: PdfPreviewToolbarProps): ReactNode {
             <Scan className="size-4" />
           </Button>
         </TooltipWrapper>
-        <TooltipWrapper
-          label="Rotate 90°"
-          side="top"
-          sideOffset={undefined}
-          align={undefined}
-        >
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            disabled={!props.documentReady}
-            onClick={props.onRotate}
-            aria-label="Rotate"
-            className="@max-lg:hidden"
+        {props.onRotate === null ? null : (
+          <TooltipWrapper
+            label="Rotate 90°"
+            side="top"
+            sideOffset={undefined}
+            align={undefined}
           >
-            <RotateCw className="size-4" />
-          </Button>
-        </TooltipWrapper>
-        <div
-          className="mx-0.5 h-4 w-px bg-border @max-lg:hidden"
-          aria-hidden="true"
-        />
-        <TooltipWrapper
-          label="Search document"
-          side="top"
-          sideOffset={undefined}
-          align={undefined}
-        >
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            disabled={!props.documentReady}
-            aria-pressed={props.searchOpen}
-            onClick={props.onToggleSearch}
-            aria-label="Search document"
-            className="@max-lg:hidden"
-          >
-            <Search className="size-4" />
-          </Button>
-        </TooltipWrapper>
-        <PdfPreviewOverflowMenu {...props} />
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              disabled={!props.documentReady}
+              onClick={props.onRotate}
+              aria-label="Rotate"
+              className="@max-lg:hidden"
+            >
+              <RotateCw className="size-4" />
+            </Button>
+          </TooltipWrapper>
+        )}
+        {props.searchSupported ? (
+          <>
+            <div
+              className="mx-0.5 h-4 w-px bg-border @max-lg:hidden"
+              aria-hidden="true"
+            />
+            <TooltipWrapper
+              label="Search document"
+              side="top"
+              sideOffset={undefined}
+              align={undefined}
+            >
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                disabled={!props.documentReady}
+                aria-pressed={props.searchOpen}
+                onClick={props.onToggleSearch}
+                aria-label="Search document"
+                className="@max-lg:hidden"
+              >
+                <Search className="size-4" />
+              </Button>
+            </TooltipWrapper>
+          </>
+        ) : null}
+        <DocumentPreviewOverflowMenu {...props} />
         {props.toolbarActions}
       </div>
+    </div>
+  );
+}
+
+interface PageNumberFieldProps {
+  readonly documentReady: boolean;
+  readonly pageNumber: number;
+  readonly pageCount: number;
+  readonly onGoToPage: (page: number) => void;
+}
+
+/**
+ * The "n / N" field. While the user is typing, the field shows their draft;
+ * otherwise it mirrors the viewer's current page. A commit (Enter or blur)
+ * clamps the draft into range and hands it to the viewer - clamping here,
+ * not only in the viewer, because a commit that lands on the page already
+ * shown produces no page change to resync the field from, and "99" would
+ * otherwise stay on a 5-page document.
+ */
+function PageNumberField(props: PageNumberFieldProps): ReactNode {
+  const [draft, setDraft] = useState<string | null>(null);
+
+  const commit = (): void => {
+    if (draft === null) return;
+    setDraft(null);
+    const parsed = Number.parseInt(draft, 10);
+    if (Number.isNaN(parsed)) return;
+    props.onGoToPage(Math.min(Math.max(parsed, 1), props.pageCount));
+  };
+
+  // Empty until the document is ready - a "1" next to "/ –" reads as a
+  // contradictory state, not a loading one.
+  const shown = props.documentReady ? (draft ?? String(props.pageNumber)) : "";
+
+  return (
+    <div className="flex items-center gap-1 text-ui-xs text-muted-foreground">
+      <Input
+        value={shown}
+        disabled={!props.documentReady}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") commit();
+        }}
+        inputMode="numeric"
+        aria-label="Page number"
+        className="h-6 w-10 px-1 text-center text-ui-xs"
+      />
+      <span className="whitespace-nowrap">
+        / {props.pageCount > 0 ? props.pageCount : "–"}
+      </span>
     </div>
   );
 }
@@ -266,7 +327,9 @@ export function PdfPreviewToolbar(props: PdfPreviewToolbarProps): ReactNode {
  * menu content is portalled out of the toolbar, so no container query can
  * reach it, and a duplicate zoom entry in the 24-32rem band is harmless.
  */
-function PdfPreviewOverflowMenu(props: PdfPreviewToolbarProps): ReactNode {
+function DocumentPreviewOverflowMenu(
+  props: DocumentPreviewToolbarProps,
+): ReactNode {
   // Picking Search opens a row whose input takes focus in the same commit.
   // Two Radix behaviors would steal it back: the close-time return of focus
   // to the trigger (prevented below), and - verified live - a MODAL menu's
@@ -333,33 +396,37 @@ function PdfPreviewOverflowMenu(props: PdfPreviewToolbarProps): ReactNode {
           <Scan className="size-4" />
           Fit to width
         </DropdownMenuItem>
-        <DropdownMenuItem
-          disabled={!props.documentReady}
-          onSelect={props.onRotate}
-        >
-          <RotateCw className="size-4" />
-          Rotate 90°
-        </DropdownMenuItem>
-        {props.hasOutline ? (
+        {props.onRotate === null ? null : (
+          <DropdownMenuItem
+            disabled={!props.documentReady}
+            onSelect={props.onRotate}
+          >
+            <RotateCw className="size-4" />
+            Rotate 90°
+          </DropdownMenuItem>
+        )}
+        {props.outline === null ? null : (
           <DropdownMenuCheckboxItem
-            checked={props.outlineOpen}
-            onCheckedChange={props.onToggleOutline}
+            checked={props.outline.open}
+            onCheckedChange={props.outline.onToggle}
           >
             <ListTree className="size-4" />
             Document outline
           </DropdownMenuCheckboxItem>
+        )}
+        {props.searchSupported ? (
+          <DropdownMenuCheckboxItem
+            disabled={!props.documentReady}
+            checked={props.searchOpen}
+            onCheckedChange={() => {
+              keepFocusAwayRef.current = !props.searchOpen;
+              props.onToggleSearch();
+            }}
+          >
+            <Search className="size-4" />
+            Search document
+          </DropdownMenuCheckboxItem>
         ) : null}
-        <DropdownMenuCheckboxItem
-          disabled={!props.documentReady}
-          checked={props.searchOpen}
-          onCheckedChange={() => {
-            keepFocusAwayRef.current = !props.searchOpen;
-            props.onToggleSearch();
-          }}
-        >
-          <Search className="size-4" />
-          Search document
-        </DropdownMenuCheckboxItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );

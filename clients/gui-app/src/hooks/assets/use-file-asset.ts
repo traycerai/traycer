@@ -20,7 +20,11 @@ import {
   type ImageBytesFetcher,
   type ImageBytesResult,
 } from "@/lib/attachments/image-blob-cache";
-import { isPdfAssetPath } from "@/lib/assets/image-extension-allowlist";
+import {
+  DOCUMENT_ASSET_LABELS,
+  documentAssetKindOf,
+  type DocumentAssetKind,
+} from "@/lib/assets/image-extension-allowlist";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 /**
@@ -107,17 +111,18 @@ const LOADING_STATE: FileAssetState = {
 
 /**
  * What the asset renders AS on the client - decides failure copy (and the
- * PdfPreview vs ImagePreview routing at the surfaces). Derived from the
- * request's extension, mirroring the same extension gate the surfaces use.
+ * document-viewer vs ImagePreview routing at the surfaces). Derived from the
+ * request's extension, mirroring the same extension gate the surfaces use:
+ * an image, or one of the document formats with its own viewer.
  */
-export type FileAssetRenderKind = "image" | "document";
+export type FileAssetRenderKind = "image" | DocumentAssetKind;
 
 /**
  * Every `AssetStreamFailureReason` maps to the SAME uniform fallback UI
  * (image-preview decision log, decision #14) - this is only the one-line
- * message shown alongside it, per render kind so a PDF failure never reads
- * as an image bug ("not one of the supported image formats" next to a PDF
- * that the app usually previews would read as broken, not as a limit).
+ * message shown alongside it, per render kind so a document failure never
+ * reads as an image bug ("not one of the supported image formats" next to a
+ * PDF that the app usually previews would read as broken, not as a limit).
  */
 const IMAGE_FAILURE_MESSAGES: Record<AssetStreamFailureReason, string> = {
   "unsupported-method": "This host does not support image previews yet.",
@@ -132,37 +137,60 @@ const IMAGE_FAILURE_MESSAGES: Record<AssetStreamFailureReason, string> = {
   "read-failed": "This image could not be read.",
 };
 
-const DOCUMENT_FAILURE_MESSAGES: Record<AssetStreamFailureReason, string> = {
-  "unsupported-method": "This host does not support PDF previews yet.",
-  fatal: "This PDF could not be loaded.",
-  interrupted: "The file transfer was interrupted.",
-  "length-mismatch": "The file transfer did not complete.",
-  "not-found": "This file could not be found.",
-  // The wire literal is historical ("unsupported asset type") - for a PDF
-  // request it means the host refused admission, i.e. it negotiated below
-  // 1.1. The client-side version gate should prevent this ever rendering;
-  // honest copy in case a gap lets it through.
-  "not-image": "This host does not support PDF previews yet.",
-  mismatch: "This file's contents do not match its extension.",
-  "too-large": "This PDF is too large to preview.",
-  // Host never emits this for a PDF (raster-specific check) - generic copy.
-  "too-many-pixels": "This PDF could not be previewed.",
-  "read-failed": "This PDF could not be read.",
-};
+function documentFailureMessages(
+  kind: DocumentAssetKind,
+): Record<AssetStreamFailureReason, string> {
+  const label = DOCUMENT_ASSET_LABELS[kind];
+  return {
+    "unsupported-method": `This host does not support ${label} previews yet.`,
+    fatal: `This ${label} could not be loaded.`,
+    interrupted: "The file transfer was interrupted.",
+    "length-mismatch": "The file transfer did not complete.",
+    "not-found": "This file could not be found.",
+    // The wire literal is historical ("unsupported asset type") - for a
+    // document request it means the host refused admission, i.e. it
+    // negotiated below the minor that added the format. Honest copy: the
+    // stream's own negotiation is the only gate, so this IS the old-host
+    // path.
+    "not-image": `This host does not support ${label} previews yet.`,
+    mismatch: "This file's contents do not match its extension.",
+    "too-large": `This ${label} is too large to preview.`,
+    // Host never emits this for a document (raster-specific check) -
+    // generic copy.
+    "too-many-pixels": `This ${label} could not be previewed.`,
+    "read-failed": `This ${label} could not be read.`,
+  };
+}
 
 function describeFailure(
   failure: AssetStreamFailure,
   renderKind: FileAssetRenderKind,
 ): string {
-  return renderKind === "document"
-    ? DOCUMENT_FAILURE_MESSAGES[failure.reason]
-    : IMAGE_FAILURE_MESSAGES[failure.reason];
+  return renderKind === "image"
+    ? IMAGE_FAILURE_MESSAGES[failure.reason]
+    : documentFailureMessages(renderKind)[failure.reason];
 }
 
-const DECODE_FAILURE_REASONS: Record<FileAssetRenderKind, string> = {
-  image: "This image could not be decoded.",
-  document: "This PDF could not be rendered.",
+function decodeFailureReason(renderKind: FileAssetRenderKind): string {
+  return renderKind === "image"
+    ? "This image could not be decoded."
+    : `This ${DOCUMENT_ASSET_LABELS[renderKind]} could not be rendered.`;
+}
+
+/**
+ * Over-cap telemetry per document format (PDF product decision, Q6): the
+ * 20 MiB cap is accepted for v1 on the strength of "Open Externally covers
+ * it" - these events are the evidence stream for revisiting that (range
+ * streaming / a per-type cap) if real users hit the wall.
+ */
+const TOO_LARGE_EVENT_BY_KIND: Record<DocumentAssetKind, AnalyticsEvent> = {
+  pdf: AnalyticsEvent.PdfPreviewTooLarge,
+  docx: AnalyticsEvent.DocxPreviewTooLarge,
 };
+
+function renderKindFor(request: FileAssetRequest): FileAssetRenderKind {
+  return documentAssetKindOf(renderPathFor(request)) ?? "image";
+}
 
 function assetSourceFor(request: FileAssetRequest): FileAssetSource {
   if (request.method === "workspace") return "workspace";
@@ -461,17 +489,12 @@ function acquireSharedAssetSubscription(
       onFailure: (failure) => {
         sharedAssetSubscriptions.delete(sharedKey);
         unpin();
-        // Over-cap telemetry (PDF product decision, Q6): the 20 MiB cap is
-        // accepted for v1 on the strength of "Open Externally covers it" -
-        // this event is the evidence stream for revisiting that (range
-        // streaming / a per-type cap) if real users hit the wall. Recorded
-        // HERE, the stream's single failure path, so N coalesced consumers
-        // of one shared stream record one event, not one each.
-        if (
-          isPdfAssetPath(renderPathFor(request)) &&
-          failure.reason === "too-large"
-        ) {
-          Analytics.getInstance().track(AnalyticsEvent.PdfPreviewTooLarge, {
+        // Over-cap telemetry (`TOO_LARGE_EVENT_BY_KIND`) is recorded HERE,
+        // the stream's single failure path, so N coalesced consumers of one
+        // shared stream record one event, not one each.
+        const documentKind = documentAssetKindOf(renderPathFor(request));
+        if (documentKind !== null && failure.reason === "too-large") {
+          Analytics.getInstance().track(TOO_LARGE_EVENT_BY_KIND[documentKind], {
             surface: assetSourceFor(request),
           });
         }
@@ -566,9 +589,7 @@ export function useFileAsset(
   });
   const isWorktreeBacked = request !== null && isWorktreeBackedRequest(request);
   const renderKind: FileAssetRenderKind =
-    request !== null && isPdfAssetPath(renderPathFor(request))
-      ? "document"
-      : "image";
+    request === null ? "image" : renderKindFor(request);
 
   // Re-stat on refocus (decision #11): only a worktree-backed request bumps
   // this on the pane's blurred->focused transition, so a still-mounted tile
@@ -662,7 +683,7 @@ export function useFileAsset(
         status: "fallback",
         url: null,
         meta: null,
-        reason: DECODE_FAILURE_REASONS[renderKind],
+        reason: decodeFailureReason(renderKind),
         totalBytes: null,
         servedFromCache: false,
       },
@@ -681,11 +702,7 @@ export function useFileAsset(
     // Derived inside the effect from ITS request (not the component-scope
     // `renderKind`) so the closure can never pair a stale kind with a new
     // request's callbacks.
-    const streamRenderKind: FileAssetRenderKind = isPdfAssetPath(
-      renderPathFor(normalizedRequest),
-    )
-      ? "document"
-      : "image";
+    const streamRenderKind = renderKindFor(normalizedRequest);
     isMountedRef.current = true;
     cacheKeyRef.current = null;
     requestKeyRef.current = requestKey;
