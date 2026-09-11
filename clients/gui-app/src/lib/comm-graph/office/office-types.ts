@@ -200,7 +200,13 @@ export type OfficeSpriteName =
   | "bubble-notice"
   | "bubble-hello"
   | "bubble-sleep"
-  | "sparkle";
+  | "sparkle"
+  /** Raised slab under a Mission control console row. */
+  | "tier-step"
+  /** The orchestrator's two-tile station below the big board. */
+  | "podium"
+  /** Amphitheatre workstation: two tiles, metal, facing the board. */
+  | "console";
 
 /**
  * Names one rasterized sprite. `facing`, `pose` and `appearance` only apply to
@@ -254,7 +260,7 @@ export interface OfficeTileRect {
  * the picker, the persisted choice and the shared suites all follow one list
  * and a half-registered view cannot exist.
  */
-export type OfficeViewId = "floor" | "towers" | "building";
+export type OfficeViewId = "floor" | "towers" | "building" | "mission-control";
 
 /**
  * Semantic zoom, decided by the camera: `0` overview (pips with state glyphs),

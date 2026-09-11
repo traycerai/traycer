@@ -107,6 +107,9 @@ const ALL_SPRITE_NAMES: Readonly<Record<OfficeSpriteName, true>> = {
   "bubble-hello": true,
   "bubble-sleep": true,
   sparkle: true,
+  "tier-step": true,
+  podium: true,
+  console: true,
 };
 
 function mapNamed(name: OfficeSpriteName): ReadonlyArray<string> {

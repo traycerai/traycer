@@ -1711,3 +1711,70 @@ export const ROOF_EDGE_MAP: SpriteMap = [
   "llllllllllllllll",
   "LLLLLLLLLLLLLLLL",
 ];
+
+/** One-tile riser under a Mission control console row. */
+export const TIER_STEP_MAP: SpriteMap = [
+  "................",
+  "................",
+  "................",
+  "................",
+  "LLLLLLLLLLLLLLLL",
+  "LffffffffffffffL",
+  "LfFFFFFFFFFFFFfL",
+  "LffffffffffffffL",
+  "LLLLLLLLLLLLLLLL",
+  "LllllllllllllllL",
+  "LlLLLLLLLLLLLLlL",
+  "LllllllllllllllL",
+  "LLLLLLLLLLLLLLLL",
+  "................",
+  "................",
+  "................",
+];
+
+/**
+ * The orchestrator's station: wood like a desk, but a raised lip and no
+ * keyboard mug, so it reads as a lectern rather than another console.
+ */
+export const PODIUM_MAP: SpriteMap = [
+  "OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO",
+  "OwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwO",
+  "OwWWWWWWWWWWWWWWWWWWWWWWWWWWWWwO",
+  "OwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwO",
+  "OwWWWWWWWWWWWWWWWWWWWWWWWWWWWWwO",
+  "OwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwO",
+  "OwwOOOOOOOOOOOOOOOOOOOOOOOOOOwwO",
+  "OwwOmmmmmmmmmmmmmmmmmmmmmmmmOwwO",
+  "OwwOmMmMmMmMmMmMmMmMmMmMmMmMOwwO",
+  "OwwOmmmmmmmmmmmmmmmmmmmmmmmmOwwO",
+  "OwwOOOOOOOOOOOOOOOOOOOOOOOOOOwwO",
+  "OwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwO",
+  "OWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWO",
+  "OWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWO",
+  "OWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWO",
+  "OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO",
+];
+
+/**
+ * A Mission control workstation. Metal rather than wood, dual wells along the
+ * back edge for the monitor the painter sits there, keyboard on the left tile
+ * where the chair is.
+ */
+export const CONSOLE_MAP: SpriteMap = [
+  "OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO",
+  "OMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMO",
+  "OMmmmmmmmmmmmmmmmmmmmmmmmmmmmmMO",
+  "OMmOOOOOOOOOOOmmOOOOOOOOOOOOmmMO",
+  "OMmOdddddddddOmmOddddddddddOmmMO",
+  "OMmOdccccccdOOmmOdcccccccdOOmmMO",
+  "OMmOdddddddddOmmOddddddddddOmmMO",
+  "OMmOOOOOOOOOOOmmOOOOOOOOOOOOmmMO",
+  "OMmmmmmmmmmmmmmmmmmmmmmmmmmmmmMO",
+  "OMmOOOOOOOOOOOOOOOOOmmmmmmmmmmMO",
+  "OMmOMMMMMMMMMMMMMMMOmmmmmmmmmmMO",
+  "OMmOMmmmmmmmmmmmmmMOmmmmmmmmmmMO",
+  "OMmOOOOOOOOOOOOOOOOOmmmmmmmmmmMO",
+  "OMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMO",
+  "OMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMO",
+  "OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO",
+];

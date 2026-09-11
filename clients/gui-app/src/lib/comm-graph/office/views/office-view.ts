@@ -26,6 +26,7 @@ import {
 import { floorPainter } from "@/lib/comm-graph/office/views/floor/floor-painter";
 import { measureFloor } from "@/lib/comm-graph/office/views/floor/floor-measure";
 import { planFloor } from "@/lib/comm-graph/office/views/floor/floor-plan";
+import { MISSION_CONTROL_VIEW } from "@/lib/comm-graph/office/views/mission-control/mission-control-view";
 import type {
   OfficeAgentInput,
   OfficeAgentStatus,
@@ -195,6 +196,7 @@ export const OFFICE_VIEWS: Readonly<Record<OfficeViewId, OfficeView>> = {
   },
   towers: TOWERS_VIEW,
   building: BUILDING_VIEW,
+  "mission-control": MISSION_CONTROL_VIEW,
 };
 
 /**

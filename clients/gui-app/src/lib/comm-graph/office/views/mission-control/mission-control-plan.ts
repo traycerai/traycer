@@ -1,0 +1,1426 @@
+/**
+ * Mission control: one amphitheatre, one floor, console tiers facing a board.
+ *
+ * Geometry, top to bottom: a four-row `big-board` with a lounge beside it, the
+ * HQ occupant at a podium facing the room, then tiers of 12+2r consoles. A
+ * team is a contiguous run; its lead sits at the aisle end. Growth appends a
+ * tier at the bottom and never moves a seat that already exists.
+ */
+import { compareByCreation } from "@/lib/comm-graph/office/office-layout";
+import { OFFICE_TILE } from "@/lib/comm-graph/office/office-types";
+import type { OfficePopulation } from "@/lib/comm-graph/office/office-population";
+import type { OfficePlanInput } from "@/lib/comm-graph/office/views/office-view";
+import type {
+  OfficeAgentInput,
+  OfficeAmenity,
+  OfficeAreaSign,
+  OfficeDesk,
+  OfficeErrandSpot,
+  OfficeFacing,
+  OfficeFloor,
+  OfficeLayout,
+  OfficeProp,
+  OfficeRoom,
+  OfficeSeat,
+  OfficeSign,
+  OfficeSize,
+  OfficeSpriteName,
+  OfficeTilePos,
+} from "@/lib/comm-graph/office/office-types";
+
+const VIEW_ID = "mission-control" as const;
+const ROOM_ID = "hall";
+const SEAT_ID_NONE = "-";
+const FLOOR_INDEX = 0;
+
+export const TIER_BASE_SEATS = 12;
+export const TIER_SEAT_GROWTH = 2;
+const AISLE_EVERY = 12;
+export const ROWS_PER_TIER = 3;
+const CONSOLE_WIDTH_TILES = 2;
+const MIN_SIDE_TILES = 2;
+
+const BOARD_ROWS = 4;
+const BOARD_COLS = 24;
+const LOUNGE_COLS = 18;
+const WHITEBOARD_WIDTH_TILES = 2;
+
+const HQ_CHAIR_ROW = 5;
+const PODIUM_ROW = 6;
+const WALKWAY_ROW = 7;
+export const TIERS_ORIGIN_ROW = 8;
+const FOOT_ROWS = 2;
+
+const QUEUE_FACING: OfficeFacing = "down";
+const CONSOLE_FACING: OfficeFacing = "up";
+const PODIUM_FACING: OfficeFacing = "down";
+
+const QUEUE_LENGTH = 4;
+const ROOM_SIGN_WIDTH_TILES = 2;
+const PLATE_WIDTH_TILES = 1;
+const HOST_SIGN_WIDTH_TILES = 2;
+
+export interface MissionControlTeamReserve {
+  readonly teamId: string;
+  readonly seatId: string;
+}
+
+export interface MissionControlFrozen {
+  readonly tierSeatCounts: ReadonlyArray<number>;
+  readonly centerCol: number;
+  readonly teamReserveSeatIds: ReadonlyArray<MissionControlTeamReserve>;
+}
+
+interface ConsoleSlot {
+  readonly index: number;
+  readonly tier: number;
+  readonly indexInTier: number;
+  readonly deskTile: OfficeTilePos;
+  readonly chairTile: OfficeTilePos;
+  readonly aisleEnd: boolean;
+}
+
+interface SlotFill {
+  agentId: string | null;
+  teamId: string | null;
+  hostId: string | null;
+  reserveForTeamId: string | null;
+}
+
+interface Placement {
+  readonly agentId: string | null;
+  readonly teamId: string | null;
+  readonly hostId: string | null;
+  readonly reserveForTeamId: string | null;
+}
+
+interface LoungeFixture {
+  readonly sprite: OfficeSpriteName;
+  readonly col: number;
+  readonly row: number;
+  readonly widthTiles: number;
+  readonly occupiable: boolean;
+}
+
+function tileKey(tile: OfficeTilePos): string {
+  return `${tile.col},${tile.row}`;
+}
+
+function sameTile(left: OfficeTilePos, right: OfficeTilePos): boolean {
+  return left.col === right.col && left.row === right.row;
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isTeamReserve(value: unknown): value is MissionControlTeamReserve {
+  if (value === null || typeof value !== "object") return false;
+  if (!("teamId" in value) || !("seatId" in value)) return false;
+  return typeof value.teamId === "string" && typeof value.seatId === "string";
+}
+
+export function isMissionControlFrozen(
+  value: unknown,
+): value is MissionControlFrozen {
+  if (value === null || typeof value !== "object") return false;
+  if (
+    !("tierSeatCounts" in value) ||
+    !("centerCol" in value) ||
+    !("teamReserveSeatIds" in value)
+  ) {
+    return false;
+  }
+  if (!Array.isArray(value.tierSeatCounts)) return false;
+  if (!value.tierSeatCounts.every(isFiniteNumber)) return false;
+  if (!isFiniteNumber(value.centerCol)) return false;
+  if (!Array.isArray(value.teamReserveSeatIds)) return false;
+  return value.teamReserveSeatIds.every(isTeamReserve);
+}
+
+export function frozenOf(
+  layout: OfficeLayout | null,
+): MissionControlFrozen | null {
+  if (layout === null || layout.view !== VIEW_ID) return null;
+  if (!isMissionControlFrozen(layout.frozen)) return null;
+  return layout.frozen;
+}
+
+export function seatingWidth(seatCount: number): number {
+  if (seatCount <= 0) return 0;
+  const gaps = Math.floor((seatCount - 1) / AISLE_EVERY);
+  return seatCount * CONSOLE_WIDTH_TILES + gaps;
+}
+
+export function tierSeatCount(tier: number): number {
+  return TIER_BASE_SEATS + TIER_SEAT_GROWTH * tier;
+}
+
+function tiersToHold(seats: number): number[] {
+  if (seats <= 0) return [];
+  const counts: number[] = [];
+  let capacity = 0;
+  while (capacity < seats) {
+    const next = tierSeatCount(counts.length);
+    counts.push(next);
+    capacity += next;
+  }
+  return counts;
+}
+
+function deskColInTier(indexInTier: number, originCol: number): number {
+  const gapsBefore = Math.floor(indexInTier / AISLE_EVERY);
+  return originCol + indexInTier * CONSOLE_WIDTH_TILES + gapsBefore;
+}
+
+export function originColFor(seatCount: number, centerCol: number): number {
+  const width = seatingWidth(seatCount);
+  return Math.max(MIN_SIDE_TILES, centerCol - Math.floor(width / 2));
+}
+
+function isAisleEnd(indexInTier: number, seatCount: number): boolean {
+  if (indexInTier === 0 || indexInTier === seatCount - 1) return true;
+  const inGroup = indexInTier % AISLE_EVERY;
+  return inGroup === 0 || inGroup === AISLE_EVERY - 1;
+}
+
+function consoleSeatId(index: number): string {
+  return `${SEAT_ID_NONE}/${FLOOR_INDEX}/${ROOM_ID}/${index}`;
+}
+
+function podiumSeatId(): string {
+  return `${SEAT_ID_NONE}/${FLOOR_INDEX}/${ROOM_ID}/podium`;
+}
+
+function agentsById(
+  agents: ReadonlyArray<OfficeAgentInput>,
+): ReadonlyMap<string, OfficeAgentInput> {
+  return new Map(agents.map((agent) => [agent.id, agent]));
+}
+
+function podiumAgentId(
+  partition: OfficePopulation,
+  byId: ReadonlyMap<string, OfficeAgentInput>,
+): string | null {
+  let best: OfficeAgentInput | null = null;
+  for (const member of partition.members.values()) {
+    if (member.agentClass !== "hq") continue;
+    const agent = byId.get(member.agentId);
+    if (agent === undefined) continue;
+    if (best === null || compareByCreation(agent, best) < 0) best = agent;
+  }
+  return best === null ? null : best.id;
+}
+
+function placementsFor(
+  input: OfficePlanInput,
+  hqId: string | null,
+): ReadonlyArray<Placement> {
+  const placements: Placement[] = [];
+  for (const host of input.partition.hosts) {
+    if (host.hqAgentId !== null && host.hqAgentId !== hqId) {
+      placements.push({
+        agentId: host.hqAgentId,
+        teamId: null,
+        hostId: host.hostId,
+        reserveForTeamId: null,
+      });
+    }
+    for (const team of host.teams) {
+      for (const memberId of team.memberAgentIds) {
+        if (memberId === hqId) continue;
+        placements.push({
+          agentId: memberId,
+          teamId: team.teamId,
+          hostId: host.hostId,
+          reserveForTeamId: null,
+        });
+      }
+      placements.push({
+        agentId: null,
+        teamId: team.teamId,
+        hostId: host.hostId,
+        reserveForTeamId: team.teamId,
+      });
+    }
+    for (const solo of host.solos) {
+      if (solo.agentId === hqId) continue;
+      placements.push({
+        agentId: solo.agentId,
+        teamId: solo.teamId,
+        hostId: host.hostId,
+        reserveForTeamId: null,
+      });
+    }
+  }
+  return placements;
+}
+
+function initialCenterCol(tierCounts: ReadonlyArray<number>): number {
+  let widest = BOARD_COLS + 1 + LOUNGE_COLS;
+  for (const count of tierCounts) {
+    widest = Math.max(widest, seatingWidth(count));
+  }
+  return Math.floor((widest + 2 * MIN_SIDE_TILES) / 2);
+}
+
+function colsFor(tierCounts: ReadonlyArray<number>, centerCol: number): number {
+  let right = BOARD_COLS + 1 + LOUNGE_COLS + MIN_SIDE_TILES;
+  const boardOrigin = Math.max(1, centerCol - Math.floor(BOARD_COLS / 2));
+  right = Math.max(right, boardOrigin + BOARD_COLS + 1 + LOUNGE_COLS);
+  for (const count of tierCounts) {
+    const origin = originColFor(count, centerCol);
+    right = Math.max(right, origin + seatingWidth(count) + MIN_SIDE_TILES);
+  }
+  return Math.max(right + 1, 16);
+}
+
+function rowsFor(tierCount: number): number {
+  return TIERS_ORIGIN_ROW + tierCount * ROWS_PER_TIER + FOOT_ROWS;
+}
+
+function buildSlots(
+  tierCounts: ReadonlyArray<number>,
+  centerCol: number,
+): ReadonlyArray<ConsoleSlot> {
+  const slots: ConsoleSlot[] = [];
+  let index = 0;
+  for (let tier = 0; tier < tierCounts.length; tier += 1) {
+    const count = tierCounts[tier];
+    const origin = originColFor(count, centerCol);
+    const consoleRow = TIERS_ORIGIN_ROW + tier * ROWS_PER_TIER;
+    const chairRow = consoleRow + 1;
+    for (let i = 0; i < count; i += 1) {
+      const col = deskColInTier(i, origin);
+      slots.push({
+        index,
+        tier,
+        indexInTier: i,
+        deskTile: { col, row: consoleRow },
+        chairTile: { col, row: chairRow },
+        aisleEnd: isAisleEnd(i, count),
+      });
+      index += 1;
+    }
+  }
+  return slots;
+}
+
+function preferAisleEnd(left: ConsoleSlot, right: ConsoleSlot): ConsoleSlot {
+  if (left.aisleEnd && !right.aisleEnd) return left;
+  if (right.aisleEnd && !left.aisleEnd) return right;
+  return left;
+}
+
+function emptyFills(count: number): SlotFill[] {
+  const fills: SlotFill[] = [];
+  for (let i = 0; i < count; i += 1) {
+    fills.push({
+      agentId: null,
+      teamId: null,
+      hostId: null,
+      reserveForTeamId: null,
+    });
+  }
+  return fills;
+}
+
+function fillRun(
+  fills: SlotFill[],
+  slots: ReadonlyArray<ConsoleSlot>,
+  start: number,
+  run: ReadonlyArray<Placement>,
+): void {
+  const end = start + run.length - 1;
+  const left = slots[start];
+  const right = slots[end];
+  const leadPlacement = run.find(
+    (placement) =>
+      placement.agentId !== null && placement.reserveForTeamId === null,
+  );
+  const reserve = run.find((placement) => placement.reserveForTeamId !== null);
+  const members = run.filter(
+    (placement) => placement !== leadPlacement && placement !== reserve,
+  );
+  const leadSlot = preferAisleEnd(left, right);
+  const leadAtLeft = leadSlot.index === left.index;
+  const ordered: Placement[] = [];
+  if (leadAtLeft) {
+    if (leadPlacement !== undefined) ordered.push(leadPlacement);
+    ordered.push(...members);
+    if (reserve !== undefined) ordered.push(reserve);
+  } else {
+    if (reserve !== undefined) ordered.push(reserve);
+    ordered.push(...members);
+    if (leadPlacement !== undefined) ordered.push(leadPlacement);
+  }
+  for (let offset = 0; offset < ordered.length; offset += 1) {
+    const placement = ordered[offset];
+    fills[start + offset] = {
+      agentId: placement.agentId,
+      teamId: placement.teamId,
+      hostId: placement.hostId,
+      reserveForTeamId: placement.reserveForTeamId,
+    };
+  }
+}
+
+function fillPacked(
+  fills: SlotFill[],
+  slots: ReadonlyArray<ConsoleSlot>,
+  placements: ReadonlyArray<Placement>,
+): void {
+  let cursor = 0;
+  let index = 0;
+  while (index < placements.length && cursor < fills.length) {
+    const current = placements[index];
+    if (current.teamId !== null && current.reserveForTeamId === null) {
+      const teamId = current.teamId;
+      const run: Placement[] = [];
+      while (index < placements.length && placements[index].teamId === teamId) {
+        run.push(placements[index]);
+        index += 1;
+      }
+      if (cursor + run.length > fills.length) break;
+      fillRun(fills, slots, cursor, run);
+      cursor += run.length;
+      continue;
+    }
+    fills[cursor] = {
+      agentId: current.agentId,
+      teamId: current.teamId,
+      hostId: current.hostId,
+      reserveForTeamId: current.reserveForTeamId,
+    };
+    cursor += 1;
+    index += 1;
+  }
+}
+
+function occupiedAgentIds(
+  occupancy: ReadonlyMap<string, string>,
+): ReadonlySet<string> {
+  return new Set(occupancy.values());
+}
+
+function appendTiersUntil(counts: number[], needed: number): void {
+  let capacity = 0;
+  for (const count of counts) capacity += count;
+  while (capacity < needed) {
+    const next = tierSeatCount(counts.length);
+    counts.push(next);
+    capacity += next;
+  }
+}
+
+function hostOfAgent(input: OfficePlanInput, agentId: string): string | null {
+  return input.partition.members.get(agentId)?.hostId ?? null;
+}
+
+function teamOfAgent(input: OfficePlanInput, agentId: string): string | null {
+  return input.partition.members.get(agentId)?.teamId ?? null;
+}
+
+interface Packing {
+  readonly tierCounts: ReadonlyArray<number>;
+  readonly centerCol: number;
+  readonly cols: number;
+  readonly rows: number;
+  readonly slots: ReadonlyArray<ConsoleSlot>;
+  readonly fills: ReadonlyArray<SlotFill>;
+  readonly hqId: string | null;
+  readonly podiumCol: number;
+  readonly boardOriginCol: number;
+  readonly loungeOriginCol: number;
+  readonly teamReserves: ReadonlyArray<MissionControlTeamReserve>;
+}
+
+function packFresh(input: OfficePlanInput): Packing {
+  const byId = agentsById(input.agents);
+  const hqId = podiumAgentId(input.partition, byId);
+  const placements = placementsFor(input, hqId);
+  const tierCounts = tiersToHold(placements.length);
+  const centerCol = initialCenterCol(tierCounts);
+  const cols = colsFor(tierCounts, centerCol);
+  const rows = rowsFor(tierCounts.length);
+  const slots = buildSlots(tierCounts, centerCol);
+  const fills = emptyFills(slots.length);
+  fillPacked(fills, slots, placements);
+  return finishPacking({
+    tierCounts,
+    centerCol,
+    cols,
+    rows,
+    slots,
+    fills,
+    hqId,
+  });
+}
+
+function consoleIndexFromSeatId(seatId: string): number | null {
+  const prefix = `${SEAT_ID_NONE}/${FLOOR_INDEX}/${ROOM_ID}/`;
+  if (!seatId.startsWith(prefix)) return null;
+  const raw = seatId.slice(prefix.length);
+  if (raw === "podium") return null;
+  const index = Number.parseInt(raw, 10);
+  if (!Number.isFinite(index) || index < 0) return null;
+  return index;
+}
+
+function collectArrivals(
+  input: OfficePlanInput,
+  byId: ReadonlyMap<string, OfficeAgentInput>,
+  hqId: string | null,
+): ReadonlyArray<OfficeAgentInput> {
+  const spokenFor = occupiedAgentIds(input.occupancy);
+  const arrivals: OfficeAgentInput[] = [];
+  for (const agent of input.agents) {
+    if (agent.id === hqId) continue;
+    if (spokenFor.has(agent.id)) continue;
+    arrivals.push(agent);
+  }
+  for (const agentId of input.needsCapacity) {
+    if (agentId === hqId) continue;
+    if (spokenFor.has(agentId)) continue;
+    if (arrivals.some((agent) => agent.id === agentId)) continue;
+    const agent = byId.get(agentId);
+    if (agent !== undefined) arrivals.push(agent);
+  }
+  return arrivals;
+}
+
+function pinOccupancy(
+  input: OfficePlanInput,
+  byId: ReadonlyMap<string, OfficeAgentInput>,
+  fills: SlotFill[],
+): void {
+  for (const [seatId, agentId] of input.occupancy) {
+    if (!byId.has(agentId)) continue;
+    const index = consoleIndexFromSeatId(seatId);
+    if (index === null || index >= fills.length) continue;
+    fills[index] = {
+      agentId,
+      teamId: teamOfAgent(input, agentId),
+      hostId: hostOfAgent(input, agentId),
+      reserveForTeamId: null,
+    };
+  }
+}
+
+function restoreTeamReserves(
+  previous: MissionControlFrozen,
+  fills: SlotFill[],
+): Map<string, number> {
+  const reserveByTeam = new Map<string, number>();
+  for (const entry of previous.teamReserveSeatIds) {
+    const index = consoleIndexFromSeatId(entry.seatId);
+    if (index === null || index >= fills.length) continue;
+    reserveByTeam.set(entry.teamId, index);
+    if (fills[index].agentId === null) {
+      fills[index].reserveForTeamId = entry.teamId;
+      fills[index].teamId = entry.teamId;
+    }
+  }
+  return reserveByTeam;
+}
+
+function firstOpenFill(fills: ReadonlyArray<SlotFill>, start: number): number {
+  for (let i = start; i < fills.length; i += 1) {
+    if (fills[i].agentId === null && fills[i].reserveForTeamId === null) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+function lastTierStartIndex(slots: ReadonlyArray<ConsoleSlot>): number {
+  if (slots.length === 0) return 0;
+  const last = slots[slots.length - 1];
+  return last.index - last.indexInTier;
+}
+
+function extendFillsTo(fills: SlotFill[], count: number): void {
+  while (fills.length < count) {
+    fills.push({
+      agentId: null,
+      teamId: null,
+      hostId: null,
+      reserveForTeamId: null,
+    });
+  }
+}
+
+function reserveIndexFor(
+  fills: ReadonlyArray<SlotFill>,
+  reserveByTeam: ReadonlyMap<string, number>,
+  teamId: string | null,
+): number {
+  if (teamId === null) return -1;
+  const reserved = reserveByTeam.get(teamId);
+  if (reserved === undefined) return -1;
+  if (reserved < 0 || reserved >= fills.length) return -1;
+  if (fills[reserved].agentId !== null) return -1;
+  return reserved;
+}
+
+function packFromPrevious(
+  input: OfficePlanInput,
+  previous: MissionControlFrozen,
+): Packing {
+  const byId = agentsById(input.agents);
+  const hqId = podiumAgentId(input.partition, byId);
+  const counts = [...previous.tierSeatCounts];
+  const centerCol = previous.centerCol;
+  const arrivals = collectArrivals(input, byId, hqId);
+
+  let slots = buildSlots(counts, centerCol);
+  const fills = emptyFills(slots.length);
+  pinOccupancy(input, byId, fills);
+
+  const takenAgents = new Set<string>();
+  for (const fill of fills) {
+    if (fill.agentId !== null) takenAgents.add(fill.agentId);
+  }
+  const reserveByTeam = restoreTeamReserves(previous, fills);
+
+  for (const agent of arrivals) {
+    if (takenAgents.has(agent.id)) continue;
+    const member = input.partition.members.get(agent.id);
+    const teamId = member?.agentClass === "team" ? member.teamId : null;
+    let index = reserveIndexFor(fills, reserveByTeam, teamId);
+    if (index < 0) index = firstOpenFill(fills, lastTierStartIndex(slots));
+    if (index < 0) {
+      const previousLength = fills.length;
+      appendTiersUntil(counts, slots.length + 1);
+      slots = buildSlots(counts, centerCol);
+      extendFillsTo(fills, slots.length);
+      index = firstOpenFill(fills, previousLength);
+    }
+    if (index < 0) continue;
+    fills[index] = {
+      agentId: agent.id,
+      teamId: teamId ?? member?.teamId ?? null,
+      hostId: hostOfAgent(input, agent.id),
+      reserveForTeamId: null,
+    };
+    takenAgents.add(agent.id);
+    if (teamId !== null && reserveByTeam.get(teamId) === index) {
+      reserveByTeam.delete(teamId);
+    }
+  }
+
+  return finishPacking({
+    tierCounts: counts,
+    centerCol,
+    cols: colsFor(counts, centerCol),
+    rows: rowsFor(counts.length),
+    slots,
+    fills,
+    hqId,
+  });
+}
+
+function finishPacking(request: {
+  readonly tierCounts: ReadonlyArray<number>;
+  readonly centerCol: number;
+  readonly cols: number;
+  readonly rows: number;
+  readonly slots: ReadonlyArray<ConsoleSlot>;
+  readonly fills: ReadonlyArray<SlotFill>;
+  readonly hqId: string | null;
+}): Packing {
+  const boardOriginCol = Math.max(
+    1,
+    request.centerCol - Math.floor(BOARD_COLS / 2),
+  );
+  const loungeOriginCol = boardOriginCol + BOARD_COLS + 1;
+  const podiumCol = Math.max(1, request.centerCol - 1);
+  const teamReserves: MissionControlTeamReserve[] = [];
+  const seen = new Set<string>();
+  for (let i = 0; i < request.fills.length; i += 1) {
+    const fill = request.fills[i];
+    if (fill.reserveForTeamId === null) continue;
+    if (fill.agentId !== null) continue;
+    if (seen.has(fill.reserveForTeamId)) continue;
+    seen.add(fill.reserveForTeamId);
+    teamReserves.push({
+      teamId: fill.reserveForTeamId,
+      seatId: consoleSeatId(i),
+    });
+  }
+  return {
+    tierCounts: request.tierCounts,
+    centerCol: request.centerCol,
+    cols: request.cols,
+    rows: request.rows,
+    slots: request.slots,
+    fills: request.fills,
+    hqId: request.hqId,
+    podiumCol,
+    boardOriginCol,
+    loungeOriginCol,
+    teamReserves,
+  };
+}
+
+function pack(input: OfficePlanInput): Packing {
+  const previous = frozenOf(input.previous);
+  if (previous !== null) return packFromPrevious(input, previous);
+  return packFresh(input);
+}
+
+function inBounds(cols: number, rows: number, tile: OfficeTilePos): boolean {
+  return tile.col >= 0 && tile.row >= 0 && tile.col < cols && tile.row < rows;
+}
+
+function blankWalkable(cols: number, rows: number): boolean[][] {
+  const grid: boolean[][] = [];
+  for (let row = 0; row < rows; row += 1) {
+    const line: boolean[] = [];
+    for (let col = 0; col < cols; col += 1) line.push(true);
+    grid.push(line);
+  }
+  return grid;
+}
+
+function blockTile(
+  walkable: boolean[][],
+  cols: number,
+  rows: number,
+  tile: OfficeTilePos,
+): void {
+  if (!inBounds(cols, rows, tile)) return;
+  walkable[tile.row][tile.col] = false;
+}
+
+function loungeFixtures(loungeOriginCol: number): ReadonlyArray<LoungeFixture> {
+  const c = loungeOriginCol;
+  return [
+    {
+      sprite: "reception",
+      col: c + 3,
+      row: 1,
+      widthTiles: 2,
+      occupiable: false,
+    },
+    {
+      sprite: "coffee-machine",
+      col: c + 10,
+      row: 2,
+      widthTiles: 1,
+      occupiable: false,
+    },
+    {
+      sprite: "water-cooler",
+      col: c + 12,
+      row: 2,
+      widthTiles: 1,
+      occupiable: false,
+    },
+    { sprite: "plant", col: c + 14, row: 2, widthTiles: 1, occupiable: false },
+    {
+      sprite: "cafe-table",
+      col: c + 1,
+      row: 3,
+      widthTiles: 2,
+      occupiable: false,
+    },
+    {
+      sprite: "cafe-table",
+      col: c + 5,
+      row: 3,
+      widthTiles: 2,
+      occupiable: false,
+    },
+    { sprite: "bin", col: c + 16, row: 3, widthTiles: 1, occupiable: false },
+    { sprite: "sofa", col: c + 1, row: 5, widthTiles: 2, occupiable: false },
+    { sprite: "armchair", col: c + 5, row: 5, widthTiles: 1, occupiable: true },
+    {
+      sprite: "bookcase",
+      col: c + 7,
+      row: 5,
+      widthTiles: 1,
+      occupiable: false,
+    },
+    {
+      sprite: "sleep-bag",
+      col: c + 10,
+      row: 5,
+      widthTiles: 1,
+      occupiable: true,
+    },
+    {
+      sprite: "sleep-bag",
+      col: c + 12,
+      row: 5,
+      widthTiles: 1,
+      occupiable: true,
+    },
+    {
+      sprite: "pingpong-table",
+      col: c + 8,
+      row: 6,
+      widthTiles: 2,
+      occupiable: false,
+    },
+    {
+      sprite: "treadmill",
+      col: c + 12,
+      row: 6,
+      widthTiles: 1,
+      occupiable: true,
+    },
+  ];
+}
+
+function blockFixture(
+  walkable: boolean[][],
+  cols: number,
+  rows: number,
+  fixture: LoungeFixture,
+): void {
+  if (fixture.occupiable) return;
+  for (let offset = 0; offset < fixture.widthTiles; offset += 1) {
+    blockTile(walkable, cols, rows, {
+      col: fixture.col + offset,
+      row: fixture.row,
+    });
+  }
+}
+
+function buildWalkable(packing: Packing): boolean[][] {
+  const { cols, rows } = packing;
+  const walkable = blankWalkable(cols, rows);
+  for (
+    let col = packing.boardOriginCol;
+    col < packing.boardOriginCol + BOARD_COLS;
+    col += 1
+  ) {
+    for (let row = 0; row < BOARD_ROWS; row += 1) {
+      blockTile(walkable, cols, rows, { col, row });
+    }
+  }
+  blockTile(walkable, cols, rows, {
+    col: packing.podiumCol,
+    row: PODIUM_ROW,
+  });
+  blockTile(walkable, cols, rows, {
+    col: packing.podiumCol + 1,
+    row: PODIUM_ROW,
+  });
+  blockTile(walkable, cols, rows, {
+    col: packing.podiumCol,
+    row: HQ_CHAIR_ROW,
+  });
+  for (const slot of packing.slots) {
+    blockTile(walkable, cols, rows, slot.deskTile);
+    blockTile(walkable, cols, rows, {
+      col: slot.deskTile.col + 1,
+      row: slot.deskTile.row,
+    });
+    blockTile(walkable, cols, rows, slot.chairTile);
+  }
+  for (const fixture of loungeFixtures(packing.loungeOriginCol)) {
+    blockFixture(walkable, cols, rows, fixture);
+  }
+  const spine = packing.loungeOriginCol;
+  for (let row = 0; row <= WALKWAY_ROW; row += 1) {
+    if (inBounds(cols, rows, { col: spine, row })) {
+      walkable[row][spine] = true;
+    }
+  }
+  blockTile(walkable, cols, rows, {
+    col: packing.podiumCol,
+    row: HQ_CHAIR_ROW,
+  });
+  return walkable;
+}
+
+interface SpotSink {
+  readonly spots: OfficeErrandSpot[];
+  readonly used: Set<string>;
+  readonly walkable: boolean[][];
+  readonly cols: number;
+  readonly rows: number;
+}
+
+interface SpotSpec {
+  readonly kind: OfficeErrandSpot["kind"];
+  readonly tile: OfficeTilePos;
+  readonly facing: OfficeFacing;
+  readonly fixtureId: string;
+  readonly actionTile: OfficeTilePos | null;
+}
+
+function addSpot(sink: SpotSink, spec: SpotSpec): void {
+  if (!inBounds(sink.cols, sink.rows, spec.tile)) return;
+  if (!sink.walkable[spec.tile.row][spec.tile.col]) return;
+  const key = tileKey(spec.tile);
+  if (sink.used.has(key)) return;
+  sink.used.add(key);
+  sink.spots.push({
+    kind: spec.kind,
+    tile: spec.tile,
+    facing: spec.facing,
+    audience: { kind: "floor" },
+    fixtureId: spec.fixtureId,
+    approachTile: spec.tile,
+    actionTile: spec.actionTile,
+    floorIndex: FLOOR_INDEX,
+  });
+}
+
+function loungeSpotSpecs(loungeOriginCol: number): ReadonlyArray<SpotSpec> {
+  const c = loungeOriginCol;
+  return [
+    {
+      kind: "coffee",
+      tile: { col: c + 10, row: 3 },
+      facing: "up",
+      fixtureId: "lounge/coffee",
+      actionTile: { col: c + 10, row: 2 },
+    },
+    {
+      kind: "cooler",
+      tile: { col: c + 11, row: 2 },
+      facing: "right",
+      fixtureId: "lounge/cooler",
+      actionTile: { col: c + 12, row: 2 },
+    },
+    {
+      kind: "cooler",
+      tile: { col: c + 13, row: 2 },
+      facing: "left",
+      fixtureId: "lounge/cooler",
+      actionTile: { col: c + 12, row: 2 },
+    },
+    {
+      kind: "water-plant",
+      tile: { col: c + 14, row: 3 },
+      facing: "up",
+      fixtureId: "lounge/plant",
+      actionTile: { col: c + 14, row: 2 },
+    },
+    {
+      kind: "cafe",
+      tile: { col: c + 1, row: 4 },
+      facing: "up",
+      fixtureId: "lounge/cafe/0",
+      actionTile: { col: c + 1, row: 3 },
+    },
+    {
+      kind: "cafe",
+      tile: { col: c + 2, row: 4 },
+      facing: "up",
+      fixtureId: "lounge/cafe/0",
+      actionTile: { col: c + 1, row: 3 },
+    },
+    {
+      kind: "cafe",
+      tile: { col: c + 5, row: 4 },
+      facing: "up",
+      fixtureId: "lounge/cafe/1",
+      actionTile: { col: c + 5, row: 3 },
+    },
+    {
+      kind: "cafe",
+      tile: { col: c + 6, row: 4 },
+      facing: "up",
+      fixtureId: "lounge/cafe/1",
+      actionTile: { col: c + 5, row: 3 },
+    },
+    {
+      kind: "bin",
+      tile: { col: c + 16, row: 4 },
+      facing: "up",
+      fixtureId: "lounge/bin",
+      actionTile: { col: c + 16, row: 3 },
+    },
+    {
+      kind: "sofa",
+      tile: { col: c + 1, row: 6 },
+      facing: "up",
+      fixtureId: "lounge/sofa",
+      actionTile: { col: c + 1, row: 5 },
+    },
+    {
+      kind: "sofa",
+      tile: { col: c + 2, row: 6 },
+      facing: "up",
+      fixtureId: "lounge/sofa",
+      actionTile: { col: c + 1, row: 5 },
+    },
+    {
+      kind: "read",
+      tile: { col: c + 5, row: 5 },
+      facing: "down",
+      fixtureId: "lounge/read",
+      actionTile: { col: c + 7, row: 5 },
+    },
+    {
+      kind: "nap",
+      tile: { col: c + 10, row: 5 },
+      facing: "down",
+      fixtureId: "lounge/nap/0",
+      actionTile: null,
+    },
+    {
+      kind: "nap",
+      tile: { col: c + 12, row: 5 },
+      facing: "down",
+      fixtureId: "lounge/nap/1",
+      actionTile: null,
+    },
+    {
+      kind: "pingpong",
+      tile: { col: c + 7, row: 6 },
+      facing: "right",
+      fixtureId: "lounge/pingpong",
+      actionTile: { col: c + 8, row: 6 },
+    },
+    {
+      kind: "pingpong",
+      tile: { col: c + 10, row: 6 },
+      facing: "left",
+      fixtureId: "lounge/pingpong",
+      actionTile: { col: c + 8, row: 6 },
+    },
+    {
+      kind: "treadmill",
+      tile: { col: c + 12, row: 6 },
+      facing: "up",
+      fixtureId: "lounge/treadmill",
+      actionTile: null,
+    },
+  ];
+}
+
+function buildSpots(
+  packing: Packing,
+  walkable: boolean[][],
+  reserved: ReadonlySet<string>,
+): ReadonlyArray<OfficeErrandSpot> {
+  const spots: OfficeErrandSpot[] = [];
+  const sink: SpotSink = {
+    spots,
+    used: new Set(reserved),
+    walkable,
+    cols: packing.cols,
+    rows: packing.rows,
+  };
+  for (const spec of loungeSpotSpecs(packing.loungeOriginCol)) {
+    addSpot(sink, spec);
+  }
+  for (
+    let col = packing.boardOriginCol;
+    col < packing.boardOriginCol + BOARD_COLS;
+    col += 4
+  ) {
+    addSpot(sink, {
+      kind: "whiteboard",
+      tile: { col, row: BOARD_ROWS },
+      facing: "up",
+      fixtureId: `board/whiteboard/${col}`,
+      actionTile: { col, row: BOARD_ROWS - 1 },
+    });
+  }
+  return spots;
+}
+
+function buildProps(packing: Packing): ReadonlyArray<OfficeProp> {
+  const props: OfficeProp[] = [];
+  for (let row = 0; row < BOARD_ROWS; row += 1) {
+    for (
+      let col = packing.boardOriginCol;
+      col < packing.boardOriginCol + BOARD_COLS;
+      col += WHITEBOARD_WIDTH_TILES
+    ) {
+      props.push({ sprite: { name: "whiteboard" }, tile: { col, row } });
+    }
+  }
+  for (const fixture of loungeFixtures(packing.loungeOriginCol)) {
+    props.push({
+      sprite: { name: fixture.sprite },
+      tile: { col: fixture.col, row: fixture.row },
+    });
+  }
+  return props;
+}
+
+function corridorTilesOf(
+  packing: Packing,
+  walkable: boolean[][],
+  reserved: ReadonlySet<string>,
+): ReadonlyArray<OfficeTilePos> {
+  const tiles: OfficeTilePos[] = [];
+  for (let tier = 0; tier < packing.tierCounts.length; tier += 1) {
+    const aisleRow = TIERS_ORIGIN_ROW + tier * ROWS_PER_TIER + 2;
+    for (let col = 1; col < packing.cols - 1; col += 1) {
+      if (!walkable[aisleRow][col]) continue;
+      const tile: OfficeTilePos = { col, row: aisleRow };
+      if (reserved.has(tileKey(tile))) continue;
+      tiles.push(tile);
+    }
+  }
+  for (let col = 1; col < packing.cols - 1; col += 1) {
+    if (!walkable[WALKWAY_ROW][col]) continue;
+    const tile: OfficeTilePos = { col, row: WALKWAY_ROW };
+    if (reserved.has(tileKey(tile))) continue;
+    tiles.push(tile);
+  }
+  return tiles;
+}
+
+function queueTiles(request: {
+  readonly packing: Packing;
+  readonly walkable: boolean[][];
+  readonly reception: OfficeTilePos;
+  readonly door: OfficeTilePos;
+  readonly lobby: OfficeTilePos;
+}): ReadonlyArray<OfficeTilePos> {
+  const { packing, walkable, reception, door, lobby } = request;
+  const candidates: OfficeTilePos[] = [
+    { col: reception.col, row: reception.row + 1 },
+    { col: reception.col + 1, row: reception.row + 1 },
+    { col: reception.col + 2, row: reception.row },
+    { col: reception.col + 2, row: reception.row + 1 },
+    { col: reception.col - 1, row: reception.row },
+    { col: reception.col - 1, row: reception.row + 1 },
+    { col: reception.col, row: reception.row + 2 },
+    { col: reception.col + 1, row: reception.row + 2 },
+  ];
+  const tiles: OfficeTilePos[] = [];
+  for (const tile of candidates) {
+    if (tiles.length >= QUEUE_LENGTH) break;
+    if (!inBounds(packing.cols, packing.rows, tile)) continue;
+    if (!walkable[tile.row][tile.col]) continue;
+    if (sameTile(tile, door) || sameTile(tile, lobby)) continue;
+    if (tiles.some((chosen) => sameTile(chosen, tile))) continue;
+    tiles.push(tile);
+  }
+  return tiles;
+}
+
+function uniqueHosts(input: OfficePlanInput): ReadonlyArray<string | null> {
+  const hosts: Array<string | null> = [];
+  for (const host of input.partition.hosts) {
+    hosts.push(host.hostId);
+  }
+  if (hosts.length === 0) hosts.push(null);
+  return hosts;
+}
+
+function buildSigns(
+  packing: Packing,
+  input: OfficePlanInput,
+  byId: ReadonlyMap<string, OfficeAgentInput>,
+): ReadonlyArray<OfficeSign> {
+  const signs: OfficeSign[] = [];
+  const agentIds = input.agents.map((agent) => agent.id);
+  const hq = packing.hqId === null ? null : byId.get(packing.hqId);
+  signs.push({
+    kind: "hq-board",
+    tile: { col: packing.boardOriginCol, row: 0 },
+    widthTiles: Math.min(8, BOARD_COLS),
+    text: hq === undefined || hq === null ? "" : hq.name,
+    ownerAgentId: packing.hqId,
+    hostId: hq === undefined || hq === null ? null : hq.hostId,
+    agentIds,
+  });
+  signs.push({
+    kind: "area",
+    tile: { col: packing.loungeOriginCol, row: 0 },
+    widthTiles: ROOM_SIGN_WIDTH_TILES,
+    text: "Lounge",
+    ownerAgentId: null,
+    hostId: null,
+    agentIds: [],
+  });
+  const leadPlates = new Map<string, OfficeTilePos>();
+  for (let i = 0; i < packing.slots.length; i += 1) {
+    const fill = packing.fills[i];
+    if (fill.agentId === null || fill.teamId === null) continue;
+    if (fill.agentId !== fill.teamId) continue;
+    const slot = packing.slots[i];
+    const towardAisle =
+      slot.indexInTier === 0 || slot.aisleEnd
+        ? { col: slot.deskTile.col - 1, row: slot.chairTile.row }
+        : {
+            col: slot.deskTile.col + CONSOLE_WIDTH_TILES,
+            row: slot.chairTile.row,
+          };
+    leadPlates.set(fill.teamId, towardAisle);
+  }
+  for (const [teamId, tile] of leadPlates) {
+    const lead = byId.get(teamId);
+    signs.push({
+      kind: "plate",
+      tile,
+      widthTiles: PLATE_WIDTH_TILES,
+      text: lead === undefined ? teamId : lead.name,
+      ownerAgentId: teamId,
+      hostId: lead === undefined ? null : lead.hostId,
+      agentIds: [],
+    });
+  }
+  const hosts = uniqueHosts(input);
+  const footRow = packing.rows - 1;
+  const startCol = Math.max(
+    1,
+    packing.centerCol - hosts.length * (HOST_SIGN_WIDTH_TILES + 1),
+  );
+  for (let i = 0; i < hosts.length; i += 1) {
+    signs.push({
+      kind: "host",
+      tile: {
+        col: startCol + i * (HOST_SIGN_WIDTH_TILES + 2),
+        row: footRow,
+      },
+      widthTiles: HOST_SIGN_WIDTH_TILES,
+      text: "",
+      ownerAgentId: null,
+      hostId: hosts[i],
+      agentIds: [],
+    });
+  }
+  return signs;
+}
+
+function teamPods(
+  packing: Packing,
+  byId: ReadonlyMap<string, OfficeAgentInput>,
+): OfficeRoom["pods"] {
+  const byTeam = new Map<string, OfficeTilePos[]>();
+  for (let i = 0; i < packing.slots.length; i += 1) {
+    const fill = packing.fills[i];
+    if (fill.teamId === null) continue;
+    const slot = packing.slots[i];
+    const tiles = byTeam.get(fill.teamId) ?? [];
+    tiles.push(slot.deskTile, slot.chairTile);
+    byTeam.set(fill.teamId, tiles);
+  }
+  const pods: OfficeRoom["pods"][number][] = [];
+  let depthIndex = 0;
+  for (const [teamId, tiles] of byTeam) {
+    if (tiles.length === 0) continue;
+    let minCol = tiles[0].col;
+    let maxCol = tiles[0].col;
+    let minRow = tiles[0].row;
+    let maxRow = tiles[0].row;
+    for (const tile of tiles) {
+      minCol = Math.min(minCol, tile.col);
+      maxCol = Math.max(maxCol, tile.col);
+      minRow = Math.min(minRow, tile.row);
+      maxRow = Math.max(maxRow, tile.row);
+    }
+    const lead = byId.get(teamId);
+    pods.push({
+      leadAgentId: teamId,
+      name: lead === undefined ? teamId : lead.name,
+      depth: 1,
+      bounds: {
+        col: minCol,
+        row: minRow,
+        cols: maxCol - minCol + CONSOLE_WIDTH_TILES,
+        rows: maxRow - minRow + 1,
+      },
+      plateTile: { col: minCol - 1, row: minRow + 1 },
+      style: depthIndex % 2 === 0 ? "glass" : "planters",
+      tint: depthIndex % 2 === 0 ? "cool" : "warm",
+    });
+    depthIndex += 1;
+  }
+  return pods;
+}
+
+function buildDesks(
+  packing: Packing,
+  byId: ReadonlyMap<string, OfficeAgentInput>,
+): {
+  readonly desks: ReadonlyMap<string, OfficeDesk>;
+  readonly seats: ReadonlyMap<string, OfficeSeat>;
+} {
+  const desks = new Map<string, OfficeDesk>();
+  const seats = new Map<string, OfficeSeat>();
+  if (packing.hqId !== null) {
+    const hq = byId.get(packing.hqId);
+    const seat: OfficeDesk = {
+      seatId: podiumSeatId(),
+      kind: "desk",
+      deskTile: { col: packing.podiumCol, row: PODIUM_ROW },
+      chairTile: { col: packing.podiumCol, row: HQ_CHAIR_ROW },
+      facing: PODIUM_FACING,
+      hitTiles: { width: CONSOLE_WIDTH_TILES, height: 1 },
+      floorIndex: FLOOR_INDEX,
+      roomId: ROOM_ID,
+      hostId: hq === undefined ? null : hq.hostId,
+      manager: true,
+      agentId: packing.hqId,
+    };
+    desks.set(packing.hqId, seat);
+    seats.set(seat.seatId, seat);
+  } else {
+    const reserve: OfficeSeat = {
+      seatId: podiumSeatId(),
+      kind: "desk",
+      deskTile: { col: packing.podiumCol, row: PODIUM_ROW },
+      chairTile: { col: packing.podiumCol, row: HQ_CHAIR_ROW },
+      facing: PODIUM_FACING,
+      hitTiles: { width: CONSOLE_WIDTH_TILES, height: 1 },
+      floorIndex: FLOOR_INDEX,
+      roomId: ROOM_ID,
+      hostId: null,
+      manager: true,
+    };
+    seats.set(reserve.seatId, reserve);
+  }
+  for (let i = 0; i < packing.slots.length; i += 1) {
+    const slot = packing.slots[i];
+    const fill = packing.fills[i];
+    const base: OfficeSeat = {
+      seatId: consoleSeatId(i),
+      kind: "console",
+      deskTile: slot.deskTile,
+      chairTile: slot.chairTile,
+      facing: CONSOLE_FACING,
+      hitTiles: { width: CONSOLE_WIDTH_TILES, height: 1 },
+      floorIndex: FLOOR_INDEX,
+      roomId: ROOM_ID,
+      hostId: fill.hostId,
+      manager: false,
+    };
+    seats.set(base.seatId, base);
+    if (fill.agentId === null) continue;
+    const desk: OfficeDesk = { ...base, agentId: fill.agentId };
+    desks.set(fill.agentId, desk);
+    seats.set(base.seatId, desk);
+  }
+  return { desks, seats };
+}
+
+function visitTileOf(
+  packing: Packing,
+  walkable: boolean[][],
+): OfficeTilePos | null {
+  const candidates: OfficeTilePos[] = [
+    { col: packing.podiumCol, row: WALKWAY_ROW },
+    { col: packing.podiumCol - 1, row: WALKWAY_ROW },
+    { col: packing.podiumCol + 2, row: WALKWAY_ROW },
+    { col: packing.podiumCol - 1, row: HQ_CHAIR_ROW },
+    { col: packing.podiumCol + 2, row: HQ_CHAIR_ROW },
+  ];
+  for (const tile of candidates) {
+    if (!inBounds(packing.cols, packing.rows, tile)) continue;
+    if (walkable[tile.row][tile.col]) return tile;
+  }
+  return null;
+}
+
+export function planMissionControl(input: OfficePlanInput): OfficeLayout {
+  const packing = pack(input);
+  const byId = agentsById(input.agents);
+  const walkable = buildWalkable(packing);
+  const doorTile: OfficeTilePos = {
+    col: packing.loungeOriginCol,
+    row: 0,
+  };
+  if (inBounds(packing.cols, packing.rows, doorTile)) {
+    walkable[doorTile.row][doorTile.col] = true;
+  }
+  const lobbyTile: OfficeTilePos = {
+    col: packing.loungeOriginCol,
+    row: 1,
+  };
+  const receptionTile: OfficeTilePos = {
+    col: packing.loungeOriginCol + 3,
+    row: 1,
+  };
+  const receptionQueueTiles = queueTiles({
+    packing,
+    walkable,
+    reception: receptionTile,
+    door: doorTile,
+    lobby: lobbyTile,
+  });
+  const reserved = new Set<string>([
+    tileKey(doorTile),
+    tileKey(lobbyTile),
+    ...receptionQueueTiles.map(tileKey),
+  ]);
+  const errandSpots = buildSpots(packing, walkable, reserved);
+  for (const spot of errandSpots) reserved.add(tileKey(spot.approachTile));
+  const corridorTiles = corridorTilesOf(packing, walkable, reserved);
+  const { desks, seats } = buildDesks(packing, byId);
+  const signs = buildSigns(packing, input, byId);
+  const visitTile = visitTileOf(packing, walkable);
+  const hq = packing.hqId === null ? null : byId.get(packing.hqId);
+  const room: OfficeRoom = {
+    rootAgentId: ROOM_ID,
+    name: hq === undefined || hq === null ? "Mission control" : hq.name,
+    bounds: {
+      col: 0,
+      row: 0,
+      cols: packing.cols,
+      rows: packing.rows,
+    },
+    doorTile,
+    signTile: { col: packing.boardOriginCol, row: 0 },
+    pods: teamPods(packing, byId),
+    visitTile,
+  };
+  const areaSigns: ReadonlyArray<OfficeAreaSign> = [
+    { name: "Lounge", signTile: { col: packing.loungeOriginCol, row: 0 } },
+  ];
+  const amenities: ReadonlyArray<OfficeAmenity> = [];
+  const hosts = uniqueHosts(input);
+  const floor: OfficeFloor = {
+    hostId: hosts.length === 1 ? hosts[0] : null,
+    bounds: { col: 0, row: 0, cols: packing.cols, rows: packing.rows },
+    doorTile,
+    lobbyTile,
+    receptionTile,
+    receptionQueueTiles,
+    queueFacing: QUEUE_FACING,
+    corridorTiles,
+    clockTile: {
+      col: packing.boardOriginCol + BOARD_COLS - 1,
+      row: 0,
+    },
+    stairsTile: null,
+    errandSpots,
+    cafeteria: null,
+    gameRoom: null,
+    areaSigns,
+    amenities,
+  };
+  const frozen: MissionControlFrozen = {
+    tierSeatCounts: packing.tierCounts,
+    centerCol: packing.centerCol,
+    teamReserveSeatIds: packing.teamReserves,
+  };
+  return {
+    view: VIEW_ID,
+    cols: packing.cols,
+    rows: packing.rows,
+    desks,
+    seats,
+    signs,
+    rooms: [room],
+    floors: [floor],
+    doorTile,
+    lobbyTile,
+    props: buildProps(packing),
+    walkable,
+    frozen,
+    shiftFromPrevious: null,
+    stable: true,
+  };
+}
+
+export function measureMissionControl(input: OfficePlanInput): OfficeSize {
+  const packing = pack(input);
+  return {
+    width: packing.cols * OFFICE_TILE,
+    height: packing.rows * OFFICE_TILE,
+  };
+}

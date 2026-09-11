@@ -56,6 +56,7 @@ import {
   CHAIR_MAP,
   CLOCK_MAP,
   COFFEE_MACHINE_MAP,
+  CONSOLE_MAP,
   DESK_MAP,
   DOOR_MAP,
   DUST_SHEET_MAP,
@@ -78,6 +79,7 @@ import {
   NAMEPLATE_MAP,
   PARTITION_MAP,
   PLANT_MAP,
+  PODIUM_MAP,
   RECEPTION_MAP,
   RUG_MAP,
   SIGN_MAP,
@@ -96,6 +98,7 @@ import {
   SHELF_MAP,
   SLEEP_BAG_MAP,
   SOFA_MAP,
+  TIER_STEP_MAP,
   TREADMILL_MAP,
   TREE_MAP,
   TV_MAP,
@@ -363,6 +366,9 @@ const SPRITE_SIZES: Readonly<Record<OfficeSpriteName, OfficeSize>> = {
   "bubble-hello": { width: 14, height: 12 },
   "bubble-sleep": { width: 14, height: 12 },
   sparkle: { width: 8, height: 8 },
+  "tier-step": { width: 16, height: 16 },
+  podium: { width: 32, height: 16 },
+  console: { width: 32, height: 16 },
 };
 
 const PROP_MAPS: Readonly<Record<OfficeSpriteName, SpriteMap>> = {
@@ -448,6 +454,9 @@ const PROP_MAPS: Readonly<Record<OfficeSpriteName, SpriteMap>> = {
   "bubble-hello": BUBBLE_HELLO_MAP,
   "bubble-sleep": BUBBLE_SLEEP_MAP,
   sparkle: SPARKLE_MAP,
+  "tier-step": TIER_STEP_MAP,
+  podium: PODIUM_MAP,
+  console: CONSOLE_MAP,
 };
 
 /**

@@ -139,6 +139,9 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
         const floor = layout.floors[desk.floorIndex];
         expect(floor).toBeDefined();
         expect(floorBandContains(floor, desk.deskTile.row)).toBe(true);
+        // Mission control is one mixed hall: seats keep their host, the floor
+        // does not. Floor (and every per-host-storey view) still match.
+        if (view.id === "mission-control") continue;
         expect(desk.hostId).toBe(floor.hostId);
       }
     });
@@ -188,6 +191,9 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
     // Folded: "keeps every corridor tile inside its own storey and outside
     // every room and amenity".
     it("keeps every corridor tile inside its own storey and outside every room and amenity", () => {
+      // Mission control's one hall room IS the amphitheatre; aisle corridors
+      // sit inside it. Floor-shaped "outside every cabin" does not apply.
+      if (view.id === "mission-control") return;
       for (const floor of layout.floors) {
         for (const corridorTile of floor.corridorTiles) {
           expect(floorBandContains(floor, corridorTile.row)).toBe(true);
@@ -342,6 +348,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
     );
 
     it("carries each floor's own hostId on every seat that floor owns", () => {
+      if (view.id === "mission-control") return;
       expect(layout.floors.length).toBeGreaterThanOrEqual(2);
       for (const seat of layout.seats.values()) {
         const floor = layout.floors[seat.floorIndex];
@@ -369,8 +376,21 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
       if (rootDesk === undefined) return;
       expect(rootDesk.hostId).toBe("host-a");
       const floor = layout.floors[rootDesk.floorIndex];
+      if (view.id === "mission-control") {
+        expect(floor.hostId).toBeNull();
+        expect(floorBandContains(floor, rootDesk.deskTile.row)).toBe(true);
+        return;
+      }
       expect(floor.hostId).toBe("host-a");
       expect(floorBandContains(floor, rootDesk.deskTile.row)).toBe(true);
+    });
+
+    it("has no walkable path between host plazas that is not a skybridge", () => {
+      if (view.id === "mission-control") return;
+      if (layout.floors.length < 2) return;
+      const first = layout.floors[0].doorTile;
+      const second = layout.floors[1].doorTile;
+      expect(findOfficePath(layout, first, second)).toBeNull();
     });
 
     /**
