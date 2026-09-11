@@ -1341,6 +1341,7 @@ describe("TopLevelTabHost: a background epic's pending interview card cannot sna
                     onSubmit={() => null}
                     onSkip={null}
                     onFork={null}
+                    navigationHighlighted={false}
                   />
                 </TooltipProvider>
               </TabBodySelectedContext.Provider>

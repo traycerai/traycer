@@ -45,6 +45,7 @@ import {
   ChatScrollToBlockContext,
   type ChatScrollCardKind,
 } from "@/components/chat/chat-scroll-to-block";
+import { CHAT_NAVIGATION_HIGHLIGHT_DURATION_MS } from "@/components/chat/chat-navigation-highlight";
 import {
   ChatPlanActionsContext,
   type ChatPlanActionsContextValue,
@@ -151,7 +152,9 @@ import {
   coldJumpOrdinal,
   hostLocatorForJumpTarget,
   messageIdForBlock,
+  isStreamingInterviewBlock,
   landingBlockIdForJumpTarget,
+  resolveApprovalJumpLanding,
   messageIdForTranscriptTarget,
   sentMessageAnchorId,
 } from "@/components/epic-canvas/renderers/chat-tile-jump-logic";
@@ -793,7 +796,10 @@ function transcriptJumpCardKind(
 }
 
 export function ChatTileSessionView(props: ChatTileSessionViewProps) {
-  const view = useChatTileSessionViewModel(props);
+  const [composerHighlightBlockId, setComposerHighlightBlockId] = useState<
+    string | null
+  >(null);
+  const view = useChatTileSessionViewModel(props, composerHighlightBlockId);
   // Viewport → hydration bridge: `ChatMessages` computes which ordinals the
   // reader is looking at; the session store turns that into range requests.
   // Keyed on the handle so a reconnected store keeps receiving reports.
@@ -850,6 +856,34 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
   const [backgroundScrollRequest, setBackgroundScrollRequest] =
     useState<ChatMessageScrollRequest | null>(null);
   const backgroundScrollRequestIdRef = useRef(0);
+  const composerHighlightTimeoutRef = useRef<number | null>(null);
+  const clearComposerHighlight = useCallback((): void => {
+    if (composerHighlightTimeoutRef.current !== null) {
+      window.clearTimeout(composerHighlightTimeoutRef.current);
+      composerHighlightTimeoutRef.current = null;
+    }
+    setComposerHighlightBlockId(null);
+  }, []);
+  const highlightComposerBlock = useCallback((blockId: string): void => {
+    if (composerHighlightTimeoutRef.current !== null) {
+      window.clearTimeout(composerHighlightTimeoutRef.current);
+    }
+    setComposerHighlightBlockId(blockId);
+    composerHighlightTimeoutRef.current = window.setTimeout(() => {
+      composerHighlightTimeoutRef.current = null;
+      setComposerHighlightBlockId(null);
+    }, CHAT_NAVIGATION_HIGHLIGHT_DURATION_MS);
+  }, []);
+  useEffect(
+    () => () => {
+      if (composerHighlightTimeoutRef.current !== null) {
+        window.clearTimeout(composerHighlightTimeoutRef.current);
+      }
+    },
+    [],
+  );
+  const pendingComposerInterviewBlockId =
+    view.lower.interview.pending?.blockId ?? null;
   // The composer + queue/pinned/agents/background dock now overlays the
   // transcript (decision log #3, #13) instead of pushing it via flex height,
   // so its reply stream can flow visually behind it. Measuring the whole
@@ -869,17 +903,26 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
   // here so the two navigations behave identically.
   const scrollToBlock = useCallback(
     (blockId: string, card: ChatScrollCardKind): void => {
+      if (
+        pendingComposerInterviewBlockId === blockId ||
+        isStreamingInterviewBlock(view.messages, blockId)
+      ) {
+        highlightComposerBlock(blockId);
+        return;
+      }
+      clearComposerHighlight();
       const messageId = messageIdForBlock(view.messages, blockId);
       if (messageId === null) return;
       if (card === "subagent") {
         useSubagentOpenStore
           .getState()
           .setOpen(props.node.instanceId, blockId, true);
-      } else {
+      } else if (card === "tool") {
         useToolOpenStore
           .getState()
           .setOpen(props.node.instanceId, blockId, true);
       }
+      // `plan`: the inline plan card is already visible; no collapsible to open.
       backgroundScrollRequestIdRef.current += 1;
       setBackgroundScrollRequest({
         kind: "message",
@@ -888,7 +931,13 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
         requestId: backgroundScrollRequestIdRef.current,
       });
     },
-    [props.node.instanceId, view.messages],
+    [
+      clearComposerHighlight,
+      highlightComposerBlock,
+      pendingComposerInterviewBlockId,
+      props.node.instanceId,
+      view.messages,
+    ],
   );
   const scrollToBackgroundItem = useCallback(
     (item: BackgroundItem): void => {
@@ -903,15 +952,19 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
   // Anchor on a message rather than on a card. The transcript's scroll request
   // wants a message id either way; `blockId: null` says "there is no card to
   // expand here", which is the shape a delivered A2A message has.
-  const scrollToMessage = useCallback((messageId: string): void => {
-    backgroundScrollRequestIdRef.current += 1;
-    setBackgroundScrollRequest({
-      kind: "message",
-      messageId,
-      blockId: null,
-      requestId: backgroundScrollRequestIdRef.current,
-    });
-  }, []);
+  const scrollToMessage = useCallback(
+    (messageId: string): void => {
+      clearComposerHighlight();
+      backgroundScrollRequestIdRef.current += 1;
+      setBackgroundScrollRequest({
+        kind: "message",
+        messageId,
+        blockId: null,
+        requestId: backgroundScrollRequestIdRef.current,
+      });
+    },
+    [clearComposerHighlight],
+  );
   const scrollToTranscriptEnd = useCallback((): void => {
     backgroundScrollRequestIdRef.current += 1;
     setBackgroundScrollRequest({
@@ -949,8 +1002,10 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
       target: transcriptJump.target,
       transcriptWindow: view.transcriptWindow,
       messages: view.messages,
+      pendingInterviewBlockId: pendingComposerInterviewBlockId,
     });
   }, [
+    pendingComposerInterviewBlockId,
     transcriptJump,
     view.messages,
     view.snapshotLoaded,
@@ -980,8 +1035,47 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
     if (transcriptJump === undefined) return;
     if (!view.snapshotLoaded) return;
     const target = transcriptJump.target;
+    if (
+      target.kind === "block" &&
+      (pendingComposerInterviewBlockId === target.blockId ||
+        isStreamingInterviewBlock(view.messages, target.blockId))
+    ) {
+      queueMicrotask(() => {
+        highlightComposerBlock(target.blockId);
+      });
+      consumeTranscriptJump(hostId, props.node.id, transcriptJump.requestId);
+      requestTranscriptOrdinal(null);
+      return;
+    }
+    if (target.kind === "approval") {
+      const landing = resolveApprovalJumpLanding({
+        approvalId: target.approvalId,
+        pendingApprovals: view.lower.approvals.pendingApprovals,
+        pendingFileEditApprovals: view.lower.approvals.pendingFileEditApprovals,
+        messages: view.messages,
+      });
+      if (landing.kind === "hold") {
+        // Not in the composer queue and no plan card yet: hold until one
+        // appears, same as every other unresolved jump.
+        return;
+      }
+      if (landing.kind === "composer") {
+        queueMicrotask(() => {
+          highlightComposerBlock(landing.approvalId);
+        });
+      } else {
+        queueMicrotask(() => {
+          scrollToBlock(landing.blockId, "plan");
+        });
+      }
+      consumeTranscriptJump(hostId, props.node.id, transcriptJump.requestId);
+      requestTranscriptOrdinal(null);
+      return;
+    }
     if (target.kind === "end") {
-      scrollToTranscriptEnd();
+      queueMicrotask(() => {
+        scrollToTranscriptEnd();
+      });
       consumeTranscriptJump(hostId, props.node.id, transcriptJump.requestId);
       // Same release as the resolved-target path below, and it returns before
       // reaching it. An `end` jump that REPLACED a parked request is the case:
@@ -1055,17 +1149,20 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
       return;
     }
     if (landingBlockId !== null) {
-      scrollToBlock(
-        landingBlockId,
-        transcriptJumpCardKind(
+      queueMicrotask(() => {
+        scrollToBlock(
           landingBlockId,
-          view.lower.backgroundItems ?? [],
-        ),
-      );
+          transcriptJumpCardKind(
+            landingBlockId,
+            view.lower.backgroundItems ?? [],
+          ),
+        );
+      });
     } else {
-      // Both a delivered-message anchor and a resolved sent-message anchor
-      // land the same way: scroll to the owning row, no card to expand.
-      scrollToMessage(messageId);
+      // Row-landing kinds: delivered A2A, user prompts, events, first-message.
+      queueMicrotask(() => {
+        scrollToMessage(messageId);
+      });
     }
     consumeTranscriptJump(hostId, props.node.id, transcriptJump.requestId);
     // The jump is done, so the ordinal it was holding open is released. Doing
@@ -1074,17 +1171,21 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
     requestTranscriptOrdinal(null);
   }, [
     consumeTranscriptJump,
+    highlightComposerBlock,
     hostId,
     // The host's answer arrives asynchronously, so it is the retry signal for
     // the two target kinds that need it - exactly as `view.messages` is for
     // every other kind.
     hostLocatedOrdinal,
+    pendingComposerInterviewBlockId,
     props.node.id,
     requestTranscriptOrdinal,
     scrollToBlock,
     scrollToMessage,
     scrollToTranscriptEnd,
     transcriptJump,
+    view.lower.approvals.pendingApprovals,
+    view.lower.approvals.pendingFileEditApprovals,
     view.lower.backgroundItems,
     view.messages,
     view.snapshotLoaded,
@@ -1249,6 +1350,7 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
             data-chat-keyboard-scroll-scope=""
             data-active={props.isActive ? "true" : "false"}
             className="flex h-full min-h-0 flex-col"
+            onPointerDownCapture={clearComposerHighlight}
           >
             {/* A flex CONTAINER (not just an item): ChatSessionMessagesSurface's
              * transcript root relies on `flex-1` from ITS immediate parent to
@@ -1417,7 +1519,10 @@ type GatedChatSend = {
 const NO_LIVE_SEND_REFUSAL = (): string | null => null;
 
 // eslint-disable-next-line complexity
-function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
+function useChatTileSessionViewModel(
+  props: ChatTileSessionViewProps,
+  composerHighlightBlockId: string | null,
+) {
   const { handle, node, viewTabId, tileId, isActive, currentEpicId } = props;
   const viewModelHostId = useTabHostId();
   const projectedChatTitle = useEpicLiveArtifactTitle(node.id);
@@ -2984,8 +3089,10 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       onAnswer: handleInterviewAnswer,
       onSkip: handleInterviewSkip,
       onFork: forkFromPendingInterview,
+      highlightedBlockId: composerHighlightBlockId,
     }),
     [
+      composerHighlightBlockId,
       pendingInterview,
       interviewBusy,
       unanswerableInterviews,
@@ -3002,8 +3109,10 @@ function useChatTileSessionViewModel(props: ChatTileSessionViewProps) {
       pendingApprovals: state.pendingApprovals,
       onFileEditDecision: dispatchFileEditApprovalDecision,
       onApprovalDecision: dispatchApprovalDecision,
+      highlightedApprovalId: composerHighlightBlockId,
     }),
     [
+      composerHighlightBlockId,
       state.pendingFileEditApprovals,
       state.pendingApprovals,
       dispatchFileEditApprovalDecision,

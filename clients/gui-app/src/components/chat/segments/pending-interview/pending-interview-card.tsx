@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { PrimaryActionShortcutHint } from "@/components/ui/primary-action-shortcut-hint";
 import { ShortcutHint } from "@/components/ui/shortcut-hint";
+import { CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME } from "@/components/chat/chat-navigation-highlight";
 import { InterviewForkActions } from "@/components/chat/segments/interview-fork-actions";
 import {
   InterviewQuestionHeader,
@@ -18,6 +19,7 @@ import {
 import { interviewChoiceModeHint } from "./interview-choice-mode";
 import { QuestionPage } from "./question-page";
 import { QUESTION_TRANSITION, useInterviewCard } from "./use-interview-card";
+import { cn } from "@/lib/utils";
 
 interface PendingInterviewCardProps {
   chatId: string;
@@ -61,6 +63,8 @@ interface PendingInterviewCardProps {
   onFork: ((mode: ChatForkMode) => void) | null;
   readonly epicId?: string | null;
   readonly hostId?: string | null;
+  /** External jump (interview notification) landed on this pending card. */
+  readonly navigationHighlighted: boolean;
 }
 
 export function PendingInterviewCard(props: PendingInterviewCardProps) {
@@ -104,8 +108,15 @@ export function PendingInterviewCard(props: PendingInterviewCardProps) {
       ref={containerRef}
       aria-label="Interview"
       data-testid="interview-card"
+      data-block-id={props.blockId}
+      data-navigation-highlighted={
+        props.navigationHighlighted ? "true" : undefined
+      }
       tabIndex={-1}
-      className="flex flex-col gap-3 rounded-md border border-border/70 bg-card/70 p-3 text-ui-sm shadow-sm outline-none"
+      className={cn(
+        "flex flex-col gap-3 rounded-md border border-border/70 bg-card/70 p-3 text-ui-sm shadow-sm outline-none transition-[background-color,box-shadow] duration-300",
+        props.navigationHighlighted && CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME,
+      )}
     >
       {question === null ? (
         <InterviewQuestionHeader

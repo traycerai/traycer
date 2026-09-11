@@ -2,6 +2,7 @@ import { Check, FilePenLine, X } from "lucide-react";
 import type { ChatFileEditApprovalState } from "@traycer/protocol/host/agent/gui/subscribe";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME } from "@/components/chat/chat-navigation-highlight";
 import { cn } from "@/lib/utils";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -9,6 +10,7 @@ interface ComposerSlotFileEditApprovalQueueProps {
   readonly approvals: ReadonlyArray<ChatFileEditApprovalState>;
   readonly canAct: boolean;
   readonly onDecision: (approvalId: string, approved: boolean) => void;
+  readonly highlightedApprovalId: string | null;
 }
 
 export function ComposerSlotFileEditApprovalQueue(
@@ -78,6 +80,9 @@ export function ComposerSlotFileEditApprovalQueue(
             approval={approval}
             canAct={props.canAct}
             onDecision={props.onDecision}
+            navigationHighlighted={
+              props.highlightedApprovalId === approval.approvalId
+            }
           />
         ))}
       </div>
@@ -89,6 +94,7 @@ interface FileEditApprovalRowProps {
   readonly approval: ChatFileEditApprovalState;
   readonly canAct: boolean;
   readonly onDecision: (approvalId: string, approved: boolean) => void;
+  readonly navigationHighlighted: boolean;
 }
 
 function FileEditApprovalRow(props: FileEditApprovalRowProps) {
@@ -97,7 +103,16 @@ function FileEditApprovalRow(props: FileEditApprovalRowProps) {
       ? props.approval.description
       : props.approval.toolName;
   return (
-    <div className="flex min-w-0 flex-col gap-1.5 py-2 first:pt-0 last:pb-0">
+    <div
+      data-approval-id={props.approval.approvalId}
+      data-navigation-highlighted={
+        props.navigationHighlighted ? "true" : undefined
+      }
+      className={cn(
+        "flex min-w-0 flex-col gap-1.5 rounded-md py-2 first:pt-0 last:pb-0 transition-[background-color,box-shadow] duration-300",
+        props.navigationHighlighted && CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME,
+      )}
+    >
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-mono text-code-sm text-foreground/80">
           {props.approval.toolName}

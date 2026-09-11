@@ -2902,6 +2902,64 @@ describe("ChatMessages scroll policy", () => {
       // Dedup: scroll position not re-driven by a second navigateToMessage.
       expect(getScrollNode().scrollTop).toBe(scrollAfterFirst);
     });
+
+    it("highlights the named block instead of the whole assistant row", async () => {
+      const blockId = "text-block-1";
+      const assistant = {
+        ...makeAssistantMessage("assistant-target", "act-1"),
+        segments: [
+          {
+            id: blockId,
+            kind: "text" as const,
+            markdown: "Hello",
+            isStreaming: false,
+          },
+        ],
+        completedAt: 1,
+      };
+      const messages: ReadonlyArray<ChatMessageModel> = [
+        makeMessage(0, "user"),
+        assistant,
+      ];
+      renderChatMessages({
+        messages,
+        scrollStateKey: "scroll-req-block-highlight",
+        scrollRequest: {
+          kind: "message",
+          messageId: assistant.id,
+          blockId,
+          requestId: 43,
+        },
+      });
+
+      const targetRow = document.querySelector<HTMLElement>(
+        `[data-message-id="${assistant.id}"]`,
+      );
+      expect(targetRow?.dataset.navigationHighlighted).toBeUndefined();
+      const block = document.querySelector<HTMLElement>(
+        `[data-block-id="${blockId}"]`,
+      );
+      expect(block).not.toBeNull();
+      expect(block?.dataset.navigationHighlighted).toBe("true");
+      const scrollIntoView = vi.spyOn(block as HTMLElement, "scrollIntoView");
+      await act(async () => {
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              resolve();
+            });
+          });
+        });
+      });
+      expect(scrollIntoView).not.toHaveBeenCalled();
+
+      await waitFor(() => {
+        act(() => {
+          getScrollNode().dispatchEvent(new Event("scrollend"));
+        });
+        expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      });
+    });
   });
 
   describe("quote gating under systemOverlayActive (coverage restore)", () => {

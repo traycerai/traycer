@@ -5,6 +5,11 @@ import type {
   MessageSegment,
 } from "@/stores/composer/chat-store";
 import type { ChatTranscriptJumpTarget } from "@/stores/chats/chat-transcript-jump-store";
+import type {
+  ChatApprovalState,
+  ChatFileEditApprovalState,
+} from "@traycer/protocol/host/agent/gui/subscribe";
+import { visibleComposerApprovals } from "@/components/epic-canvas/renderers/chat-approval-visibility";
 import type { TranscriptWindow } from "@/stores/chats/transcript-window";
 
 /**
@@ -113,16 +118,17 @@ export function messageIdForTranscriptTarget(
  * the same receiver more than once, the send whose start time is nearest the
  * event's capture time wins; both clocks are the same host's.
  */
-export function sentMessageAnchorId(
+function sentMessageAnchor(
   messages: ReadonlyArray<ChatMessageModel>,
   target: {
     readonly receiverAgentId: string;
     readonly messageText: string;
     readonly timestamp: number;
   },
-): string | null {
+): { readonly messageId: string; readonly blockId: string } | null {
   const candidates: Array<{
     readonly messageId: string;
+    readonly blockId: string;
     readonly distance: number;
   }> = [];
   const visit = (messageId: string, node: BackgroundBlockSearchNode): void => {
@@ -135,6 +141,7 @@ export function sentMessageAnchorId(
     ) {
       candidates.push({
         messageId,
+        blockId: node.id,
         distance: Math.abs(node.startedAt - target.timestamp),
       });
     }
@@ -147,12 +154,28 @@ export function sentMessageAnchorId(
       visit(message.id, segment);
     }
   }
-  let best: { readonly messageId: string; readonly distance: number } | null =
-    null;
+  let best: {
+    readonly messageId: string;
+    readonly blockId: string;
+    readonly distance: number;
+  } | null = null;
   for (const candidate of candidates) {
     if (best === null || candidate.distance < best.distance) best = candidate;
   }
-  return best?.messageId ?? null;
+  return best === null
+    ? null
+    : { messageId: best.messageId, blockId: best.blockId };
+}
+
+export function sentMessageAnchorId(
+  messages: ReadonlyArray<ChatMessageModel>,
+  target: {
+    readonly receiverAgentId: string;
+    readonly messageText: string;
+    readonly timestamp: number;
+  },
+): string | null {
+  return sentMessageAnchor(messages, target)?.messageId ?? null;
 }
 
 /**
@@ -190,11 +213,94 @@ export function receiptAnchorBlockId(
   return null;
 }
 
+/** True when this block is a streaming interview, which the transcript hides. */
+export function isStreamingInterviewBlock(
+  messages: ReadonlyArray<ChatMessageModel>,
+  blockId: string,
+): boolean {
+  for (const message of messages) {
+    for (const segment of message.segments) {
+      if (
+        segment.kind === "interview" &&
+        segment.id === blockId &&
+        segment.status === "streaming"
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+export function isComposerPendingApproval(
+  pendingApprovals: ReadonlyArray<ChatApprovalState>,
+  pendingFileEditApprovals: ReadonlyArray<ChatFileEditApprovalState>,
+  approvalId: string,
+): boolean {
+  if (
+    visibleComposerApprovals(pendingApprovals).some(
+      (approval) => approval.approvalId === approvalId,
+    )
+  ) {
+    return true;
+  }
+  return pendingFileEditApprovals.some(
+    (approval) => approval.approvalId === approvalId,
+  );
+}
+
+export type ApprovalJumpLanding =
+  | { readonly kind: "composer"; readonly approvalId: string }
+  | { readonly kind: "plan"; readonly blockId: string }
+  | { readonly kind: "hold" };
+
+/** Where an `approval` jump paints: composer queue, inline plan card, or wait. */
+export function resolveApprovalJumpLanding(input: {
+  readonly approvalId: string;
+  readonly pendingApprovals: ReadonlyArray<ChatApprovalState>;
+  readonly pendingFileEditApprovals: ReadonlyArray<ChatFileEditApprovalState>;
+  readonly messages: ReadonlyArray<ChatMessageModel>;
+}): ApprovalJumpLanding {
+  if (
+    isComposerPendingApproval(
+      input.pendingApprovals,
+      input.pendingFileEditApprovals,
+      input.approvalId,
+    )
+  ) {
+    return { kind: "composer", approvalId: input.approvalId };
+  }
+  const planBlockId = planSegmentIdForApproval(
+    input.messages,
+    input.approvalId,
+  );
+  if (planBlockId !== null) {
+    return { kind: "plan", blockId: planBlockId };
+  }
+  return { kind: "hold" };
+}
+
+/** Plan approvals are answered on the inline plan card, not the composer queue. */
+export function planSegmentIdForApproval(
+  messages: ReadonlyArray<ChatMessageModel>,
+  approvalId: string,
+): string | null {
+  for (const message of messages) {
+    for (const segment of message.segments) {
+      if (segment.kind === "plan" && segment.approvalId === approvalId) {
+        return segment.id;
+      }
+    }
+  }
+  return null;
+}
+
 /**
- * The block a jump LANDS ON, for the two kinds that name a card rather than a
+ * The block a jump LANDS ON, for the kinds that name a card rather than a
  * row: a `block` target names it outright, a `receipt` target resolves it via
- * {@link receiptAnchorBlockId}. `null` for every row-landing kind, and for a
- * receipt no rendered segment carries yet.
+ * {@link receiptAnchorBlockId}, and a `sent-message` target resolves it via
+ * the send tool's own id. `null` for every row-landing kind, and for a
+ * receipt/send no rendered segment carries yet.
  */
 export function landingBlockIdForJumpTarget(
   messages: ReadonlyArray<ChatMessageModel>,
@@ -203,6 +309,9 @@ export function landingBlockIdForJumpTarget(
   if (target.kind === "block") return target.blockId;
   if (target.kind === "receipt") {
     return receiptAnchorBlockId(messages, target.messageId);
+  }
+  if (target.kind === "sent-message") {
+    return sentMessageAnchor(messages, target)?.blockId ?? null;
   }
   return null;
 }
@@ -250,6 +359,8 @@ export function coldJumpOrdinal(
     case "first-message":
       return transcriptWindow.skeleton[0] === undefined ? null : 0;
     case "end":
+    case "approval":
+      // Composer-slot (or plan-card) landing: no transcript ordinal to fetch.
       return null;
   }
 }
@@ -278,6 +389,9 @@ function skeletonOrdinalOf(
  * there is nothing for the host to find that the client has not already looked
  * at.
  *
+ * A composer-pending interview is already on screen, so a `block` target
+ * matching `pendingInterviewBlockId` must not spend a locate-row RPC.
+ *
  * Module scope for the same reason {@link coldJumpOrdinal} is, and so the
  * decision can be tested without the tile.
  */
@@ -285,10 +399,17 @@ export function hostLocatorForJumpTarget(input: {
   readonly target: ChatTranscriptJumpTarget;
   readonly transcriptWindow: TranscriptWindow | null;
   readonly messages: ReadonlyArray<ChatMessageModel>;
+  readonly pendingInterviewBlockId: string | null;
 }): TranscriptRowLocator | null {
-  const { messages, target, transcriptWindow } = input;
+  const { messages, pendingInterviewBlockId, target, transcriptWindow } = input;
   if (transcriptWindow === null) return null;
   if (target.kind === "block") {
+    if (
+      pendingInterviewBlockId === target.blockId ||
+      isStreamingInterviewBlock(messages, target.blockId)
+    ) {
+      return null;
+    }
     return messageIdForBlock(messages, target.blockId) === null
       ? { kind: "block", blockId: target.blockId }
       : null;
@@ -308,6 +429,7 @@ export function hostLocatorForJumpTarget(input: {
       ? { kind: "receipt", messageId: target.messageId }
       : null;
   }
+  if (target.kind === "approval") return null;
   if (target.kind === "message") {
     // BOTH client reads have to miss before the host is worth asking, and they
     // miss for different reasons. The skeleton read covers a cold USER row,

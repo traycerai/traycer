@@ -1,12 +1,15 @@
 import { Check, ShieldAlert, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME } from "@/components/chat/chat-navigation-highlight";
 import { deriveToolInputSummary } from "@/lib/segment-summary";
+import { cn } from "@/lib/utils";
 import type { ChatApprovalState } from "@traycer/protocol/host/agent/gui/subscribe";
 
 interface ComposerSlotApprovalQueueProps {
   readonly approvals: ReadonlyArray<ChatApprovalState>;
   readonly canAct: boolean;
   readonly onDecision: (approvalId: string, approved: boolean) => void;
+  readonly highlightedApprovalId: string | null;
 }
 
 /**
@@ -80,6 +83,9 @@ export function ComposerSlotApprovalQueue(
             approval={approval}
             canAct={canAct}
             onDecision={onDecision}
+            navigationHighlighted={
+              props.highlightedApprovalId === approval.approvalId
+            }
           />
         ))}
       </div>
@@ -91,6 +97,7 @@ interface ApprovalRowProps {
   readonly approval: ChatApprovalState;
   readonly canAct: boolean;
   readonly onDecision: (approvalId: string, approved: boolean) => void;
+  readonly navigationHighlighted: boolean;
 }
 
 function ApprovalRow(props: ApprovalRowProps) {
@@ -102,7 +109,16 @@ function ApprovalRow(props: ApprovalRowProps) {
   const headline =
     approval.description.length > 0 ? approval.description : approval.toolName;
   return (
-    <div className="flex min-w-0 flex-col gap-1.5 py-2 first:pt-0 last:pb-0">
+    <div
+      data-approval-id={approval.approvalId}
+      data-navigation-highlighted={
+        props.navigationHighlighted ? "true" : undefined
+      }
+      className={cn(
+        "flex min-w-0 flex-col gap-1.5 rounded-md py-2 first:pt-0 last:pb-0 transition-[background-color,box-shadow] duration-300",
+        props.navigationHighlighted && CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME,
+      )}
+    >
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 font-mono text-code-sm text-foreground/80">
         <span className="shrink-0">{approval.toolName}</span>
         {inputSummary !== null ? (
