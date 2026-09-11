@@ -168,6 +168,7 @@ function isDragStateIdle(state: EpicDndState): boolean {
     state.activeSource === null &&
     state.activeOverlayTile === null &&
     state.activeHeaderTab === null &&
+    !state.headerTearOffPreview &&
     state.dropPreview === null &&
     state.headerStripDropIndex === null &&
     state.headerStripDragState === null &&
@@ -193,6 +194,8 @@ interface EpicDndState {
   readonly activeOverlayTile: EpicCanvasTileRef | null;
   /** Header-tab reorder source, null when no header-tab drag is active. */
   readonly activeHeaderTab: HeaderTabDragData | null;
+  /** Whether the header preview depicts a detached member. */
+  readonly headerTearOffPreview: boolean;
   /** Current canvas-side drop preview (strip / body / empty-shell / rail). */
   readonly dropPreview: EpicCanvasDropPreview;
   /**
@@ -257,6 +260,7 @@ interface EpicDndState {
     tab: HeaderTabDragData,
     sourceWidth: number | null,
   ) => void;
+  readonly headerTearOffPreviewChanged: (active: boolean) => void;
   readonly dropPreviewChanged: (preview: EpicCanvasDropPreview) => void;
   readonly headerStripDropIndexChanged: (index: number | null) => void;
   readonly headerStripDragStateChanged: (state: StripDragState | null) => void;
@@ -286,6 +290,7 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
   activeSource: null,
   activeOverlayTile: null,
   activeHeaderTab: null,
+  headerTearOffPreview: false,
   dropPreview: null,
   headerStripDropIndex: null,
   headerStripDragState: null,
@@ -303,6 +308,7 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
       activeSource: source,
       activeOverlayTile: overlayTile,
       activeHeaderTab: null,
+      headerTearOffPreview: false,
       dropPreview: null,
       headerStripDropIndex: null,
       headerStripDragState: null,
@@ -322,6 +328,7 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
       activeSource: null,
       activeOverlayTile: null,
       activeHeaderTab: tab,
+      headerTearOffPreview: false,
       dropPreview: null,
       headerStripDropIndex: null,
       headerStripDragState: null,
@@ -335,6 +342,10 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
       reparentRootPanelId: null,
       reparentRootViewTabId: null,
     });
+  },
+  headerTearOffPreviewChanged: (active) => {
+    if (get().headerTearOffPreview === active) return;
+    set({ headerTearOffPreview: active });
   },
   dropPreviewChanged: (preview) => {
     if (epicCanvasDropPreviewEqual(get().dropPreview, preview)) return;
@@ -410,6 +421,7 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
       activeSource: null,
       activeOverlayTile: null,
       activeHeaderTab: null,
+      headerTearOffPreview: false,
       dropPreview: null,
       headerStripDropIndex: null,
       headerStripDragState: null,
