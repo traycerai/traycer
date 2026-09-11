@@ -813,25 +813,27 @@ function exposedStepPixels(
   return exposed;
 }
 
+function countingElementReads<T>(
+  items: ReadonlyArray<T>,
+  onIndex: (index: number) => void,
+): ReadonlyArray<T> {
+  return new Proxy(items, {
+    get(target, property, receiver) {
+      if (typeof property === "string" && /^\d+$/.test(property)) {
+        onIndex(Number.parseInt(property, 10));
+      }
+      const value: unknown = Reflect.get(target, property, receiver);
+      return value;
+    },
+  });
+}
+
 function countingReads<T>(
   items: ReadonlyArray<T>,
   onRead: () => void,
 ): ReadonlyArray<T> {
-  return new Proxy(items, {
-    get(target, property) {
-      if (property === "length") return target.length;
-      if (property === "every") return target.every.bind(target);
-      if (property === "map") return target.map.bind(target);
-      if (property === "filter") return target.filter.bind(target);
-      if (property === Symbol.iterator) {
-        return target[Symbol.iterator].bind(target);
-      }
-      if (typeof property === "string" && /^\d+$/.test(property)) {
-        onRead();
-        return target[Number.parseInt(property, 10)];
-      }
-      return undefined;
-    },
+  return countingElementReads(items, () => {
+    onRead();
   });
 }
 
@@ -839,21 +841,8 @@ function countingIndexReads<T>(
   items: ReadonlyArray<T>,
   seen: number[],
 ): ReadonlyArray<T> {
-  return new Proxy(items, {
-    get(target, property) {
-      if (property === "length") return target.length;
-      if (property === "every") {
-        return (
-          predicate: (value: T, index: number, array: readonly T[]) => boolean,
-        ) => target.every(predicate);
-      }
-      if (typeof property === "string" && /^\d+$/.test(property)) {
-        const index = Number.parseInt(property, 10);
-        seen.push(index);
-        return target[index];
-      }
-      return undefined;
-    },
+  return countingElementReads(items, (index) => {
+    seen.push(index);
   });
 }
 
