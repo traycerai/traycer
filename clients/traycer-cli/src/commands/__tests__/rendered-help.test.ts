@@ -888,6 +888,16 @@ const EXPECTED_PUBLIC_SURFACE: readonly ExpectedSurfaceEntry[] = [
     args: [],
   },
   {
+    path: "agent binding",
+    options: [
+      { flags: "--agent-id <id>", mandatory: true },
+      { flags: "--json", mandatory: false },
+      { flags: "--no-progress", mandatory: false },
+      { flags: "--quiet", mandatory: false },
+    ],
+    args: [],
+  },
+  {
     path: "agent transcript",
     options: [
       { flags: "--agent-id <id>", mandatory: true },

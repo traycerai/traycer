@@ -778,6 +778,7 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "agent.getTranscript": { ...LATEST_SCHEDULING, poll: null },
+  "agent.getNativeSessionBinding": { ...LATEST_SCHEDULING, poll: null },
   "agent.inbox.read": { ...LATEST_SCHEDULING, poll: null },
   "agent.inbox.ack": {
     mode: "fifo",

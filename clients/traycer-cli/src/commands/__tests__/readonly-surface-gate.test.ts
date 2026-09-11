@@ -216,6 +216,7 @@ const UNGATED_READS: ReadonlyArray<{
   readonly args: readonly string[];
 }> = [
   { path: ["agent", "list"], args: [] },
+  { path: ["agent", "binding"], args: ["--agent-id", "agent-1"] },
   { path: ["agent", "transcript"], args: ["--agent-id", "agent-1"] },
   { path: ["agent", "inbox"], args: [] },
   { path: ["agent", "role", "list"], args: [] },
