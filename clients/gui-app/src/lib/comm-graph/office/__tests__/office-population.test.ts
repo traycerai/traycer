@@ -54,19 +54,25 @@ function statusMap(
  * invariant the plans, boards and directory all lean on: two symptoms of one
  * agent counted twice (or not at all) is a bug, never two separate ones.
  */
+function hostKeyOf(hostId: string | null): string {
+  // Mirrors the partition's own grouping: a named host is prefixed, so the
+  // bare word can never be produced by a host id.
+  return hostId === null ? "unattributed" : `h:${hostId}`;
+}
+
 function assertEveryAgentPlacedExactlyOnce(
   agents: ReadonlyArray<OfficeAgentInput>,
   partition: OfficePopulation,
 ): void {
   const agentsByHostKey = new Map<string, number>();
   for (const candidate of agents) {
-    const key = candidate.hostId ?? "\0unattributed";
+    const key = hostKeyOf(candidate.hostId);
     agentsByHostKey.set(key, (agentsByHostKey.get(key) ?? 0) + 1);
   }
 
   const seen = new Set<string>();
   for (const host of partition.hosts) {
-    const key = host.hostId ?? "\0unattributed";
+    const key = hostKeyOf(host.hostId);
     let total = 0;
     if (host.hqAgentId !== null) {
       expect(seen.has(host.hqAgentId)).toBe(false);
