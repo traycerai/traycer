@@ -35,6 +35,7 @@ function noop(): void {}
 interface ProviderProfileReauthPanelProps {
   readonly state: ProviderCliState;
   readonly profile: ProviderProfile;
+  readonly isLocalHost: boolean;
   /** Settles a reconnect of the SAME account without the acknowledgment card.
    *  The profile is already authenticated and persisted by the time the flow
    *  reaches `identity` - the card only asks the user to confirm something
@@ -58,6 +59,7 @@ interface ProviderProfileReauthPanelProps {
 export function ProviderProfileReauthPanel({
   state,
   profile,
+  isLocalHost,
   onSameAccountReconnected,
   onCancel,
   onDone,
@@ -176,6 +178,7 @@ export function ProviderProfileReauthPanel({
         identityChanged={identityChanged}
         emailRevealed={emailRevealed}
         setEmailRevealed={setEmailRevealed}
+        isLocalHost={isLocalHost}
         onOpenExternalLink={(url) => {
           void openLink(url, "auth", null);
         }}
@@ -196,6 +199,7 @@ function ProviderProfileReauthState({
   identityChanged,
   emailRevealed,
   setEmailRevealed,
+  isLocalHost,
   onOpenExternalLink,
   onCancel,
   onRetry,
@@ -212,6 +216,7 @@ function ProviderProfileReauthState({
   readonly identityChanged: boolean;
   readonly emailRevealed: boolean;
   readonly setEmailRevealed: (value: boolean) => void;
+  readonly isLocalHost: boolean;
   readonly onOpenExternalLink: (url: string) => void;
   readonly onCancel: () => void;
   readonly onRetry: () => void;
@@ -223,6 +228,8 @@ function ProviderProfileReauthState({
       {showWaiting ? (
         <AddProfileWaitingStep
           loginUrl={flow.state.kind === "waiting" ? flow.state.url : null}
+          userCode={flow.state.kind === "waiting" ? flow.state.userCode : null}
+          isLocalHost={isLocalHost}
           queuePending={flow.startPending}
           cancelRequested={
             flow.state.kind === "starting" && flow.state.cancelRequested
