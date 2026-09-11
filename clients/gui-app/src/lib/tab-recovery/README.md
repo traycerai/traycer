@@ -106,3 +106,10 @@ image retention, and stale asynchronous recovery are covered by focused tests.
 These checks do not simulate native Electron window ownership, OS quit delivery,
 or a real multi-host disconnect. Check published content on an offline host
 separately from a live host disconnect.
+
+Host-backed image recovery reads bytes first, reserves their actual total size
+as one batch, then verifies hashes and stores them before reopening. Missing
+or stale size metadata is replaced with measured sizes for future accounting.
+Capacity failure preserves the saved drafts and the recovery entry. Direct
+canvas-store closes capture their position from the full header strip, including
+drafts and split items.

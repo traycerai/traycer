@@ -19,6 +19,7 @@ import { bytesToBase64 } from "@/lib/composer/image-base64";
 import {
   LANDING_IMAGE_BUDGET_BYTES,
   resetLandingImageBudgetReservationsForTesting,
+  tryReserveLandingImageBudget,
 } from "@/lib/composer/landing-image-budget";
 import {
   imageHashKeys,
@@ -143,6 +144,13 @@ function textDocument(text: string): JsonContent {
 }
 
 function imageDocument(hash: string): JsonContent {
+  return imageDocumentWithSize(hash, undefined);
+}
+
+function imageDocumentWithSize(
+  hash: string,
+  size: number | undefined,
+): JsonContent {
   return {
     type: "doc",
     content: [
@@ -151,7 +159,12 @@ function imageDocument(hash: string): JsonContent {
         content: [
           {
             type: "imageAttachment",
-            attrs: { id: "image-1", fileName: "image.png", hash },
+            attrs: {
+              id: "image-1",
+              fileName: "image.png",
+              hash,
+              ...(size === undefined ? {} : { size }),
+            },
           },
         ],
       },
@@ -588,7 +601,9 @@ describe("prepareSavedDraft", () => {
       "drafts.readBlob",
     ]);
     const restored = useLandingDraftStore.getState().drafts[0];
-    expect(restored.content).toEqual(document.portable.content);
+    expect(restored.content).toEqual(
+      imageDocumentWithSize(hash, IMAGE_BYTES.byteLength),
+    );
     expect(restored.confirmedHostBlobHashes).toEqual([hash]);
   });
 
@@ -613,6 +628,95 @@ describe("prepareSavedDraft", () => {
     const restored = useLandingDraftStore.getState().drafts[0];
     expect(restored.content).toEqual(document.portable.content);
     expect(restored.closed).toBe(true);
+  });
+
+  it("rejects a host image at capacity before writing bytes or importing history", async () => {
+    const outstandingReservation = tryReserveLandingImageBudget([
+      { hash: null, bytes: LANDING_IMAGE_BUDGET_BYTES - 2 },
+    ]);
+    if (outstandingReservation === null)
+      throw new Error("expected the capacity reservation to succeed");
+    const draftId = "host-over-capacity";
+    const hash = await sha256Hex(IMAGE_BYTES);
+    const document = landingDocumentWithClosed(
+      draftId,
+      imageDocumentWithSize(hash, 0),
+      [hash],
+      false,
+    );
+    const item = recoveryItem(draftId, HOST_ID, undefined);
+    useTabRecoveryHistory.setState({
+      entries: [
+        {
+          kind: "header",
+          id: "host-capacity-history",
+          items: [item],
+          bulk: false,
+        },
+      ],
+      ready: true,
+    });
+    const historyBefore = useTabRecoveryHistory.getState().entries;
+    const fixture = createHostFixture({
+      list: () => Promise.resolve(listResponse([document], [])),
+      readBlob: () =>
+        Promise.resolve({
+          ok: true,
+          bytesBase64: bytesToBase64(IMAGE_BYTES),
+        }),
+    });
+    mocks.resolveNamedHostClient.mockReturnValue(fixture.client);
+
+    try {
+      await expect(prepareSavedDraft(item, () => true)).rejects.toThrow(
+        "not enough image capacity",
+      );
+
+      expect(fixture.messenger.calls.map((call) => call.method)).toEqual([
+        "drafts.list",
+        "drafts.readBlob",
+      ]);
+      expect(idbData.size).toBe(0);
+      expect(useLandingDraftStore.getState().drafts).toEqual([]);
+      expect(useTabRecoveryHistory.getState().entries).toEqual(historyBefore);
+    } finally {
+      outstandingReservation.release();
+    }
+  });
+
+  it("counts actual host bytes, normalizes image size, and releases its reservation", async () => {
+    const draftId = "host-sized-image";
+    const hash = await sha256Hex(IMAGE_BYTES);
+    const document = landingDocumentWithClosed(
+      draftId,
+      imageDocumentWithSize(hash, 0),
+      [hash],
+      false,
+    );
+    const fixture = createHostFixture({
+      list: () => Promise.resolve(listResponse([document], [])),
+      readBlob: () =>
+        Promise.resolve({
+          ok: true,
+          bytesBase64: bytesToBase64(IMAGE_BYTES),
+        }),
+    });
+    mocks.resolveNamedHostClient.mockReturnValue(fixture.client);
+
+    await expect(
+      prepareSavedDraft(recoveryItem(draftId, HOST_ID, undefined), () => true),
+    ).resolves.toBe(true);
+
+    const restored = useLandingDraftStore.getState().drafts[0];
+    expect(restored.content).toEqual(imageDocumentWithSize(hash, 3));
+    expect(restored.closed).toBe(true);
+    useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
+    const reservation = tryReserveLandingImageBudget([
+      { hash: null, bytes: LANDING_IMAGE_BUDGET_BYTES },
+    ]);
+    if (reservation === null)
+      throw new Error("expected the host image reservation to be released");
+    reservation.release();
   });
 
   it("keeps a local draft opened while the host mirror is being read", async () => {

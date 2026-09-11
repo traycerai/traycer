@@ -127,6 +127,52 @@ describe("tab recovery through the command coordinator", () => {
     expect(useEpicCanvasStore.getState().openTabOrder).toContain(taskA);
   });
 
+  it("uses the strip item index for a direct close of an epic inside a split", () => {
+    const draftId = useLandingDraftStore.getState().createDraft(null);
+    const taskId = useEpicCanvasStore
+      .getState()
+      .openEpicTab("epic-split-index", "Split index");
+    const draftRef: TabRef = { kind: "draft", id: draftId };
+    const taskRef: TabRef = { kind: "epic", id: taskId };
+    useTabsStore.setState({
+      version: 2,
+      items: [
+        { kind: "tab", id: tabItemId(draftRef), ref: draftRef },
+        {
+          kind: "split",
+          id: "split-index",
+          left: { kind: "tab", ref: taskRef },
+          right: { kind: "empty" },
+          focusedSide: "left",
+          routeBackingSide: "left",
+          leftRatio: 0.5,
+        },
+      ],
+      activeItemId: tabItemId(draftRef),
+      stripOrder: [draftRef, taskRef],
+      activationHistory: [draftRef, taskRef],
+      systemTabs: { history: null, settings: null },
+    });
+
+    useEpicCanvasStore.getState().closeTab(taskId);
+
+    const recovery = useTabRecoveryHistory.getState().entries.at(0);
+    if (recovery === undefined || recovery.kind !== "header") {
+      throw new Error("expected the direct canvas close recovery entry");
+    }
+    expect(recovery.items).toHaveLength(1);
+    expect(recovery.items[0]).toMatchObject({
+      kind: "epic",
+      tab: { tabId: taskId },
+      index: 1,
+    });
+    expect(stripRefs()).toEqual([draftRef]);
+
+    tabCommandCoordinator.restoreClosedHeaderTabs(recovery.items, null);
+
+    expect(stripRefs()).toEqual([draftRef, taskRef]);
+  });
+
   it("captures an empty canvas when a confirmed task close has no canvas entry", () => {
     const taskId = useEpicCanvasStore
       .getState()

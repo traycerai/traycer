@@ -1,6 +1,8 @@
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import { tryReserveLandingImageBudget } from "@/lib/composer/landing-image-budget";
 import { scheduleLandingImageReconcile } from "@/lib/composer/landing-image-gc";
+import type { DraftDocument } from "@traycer/protocol/host";
+import type { DraftBlobClient } from "@/lib/drafts/draft-blob-transport";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { HostRpcRegistry } from "@/lib/host";
 import { getHostBindingSnapshot } from "@/lib/host/runtime";
@@ -13,9 +15,12 @@ import {
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
 import { blobHashesOfDocument } from "@/lib/drafts/draft-write-codec";
-import { readDraftBlobsIntoLocalStore } from "@/lib/drafts/draft-blob-transport";
+import { readDraftBlobsForRecovery } from "@/lib/drafts/draft-blob-transport";
 import { base64ToBytes } from "@/lib/composer/image-base64";
-import { putImage } from "@/lib/composer/landing-image-store";
+import {
+  putImage,
+  putImageBytesAtHash,
+} from "@/lib/composer/landing-image-store";
 import type { ClosedHeaderTab } from "./history";
 
 /** Decode the entire legacy batch before admission or writes can change storage. */
@@ -54,6 +59,28 @@ async function durableDraftContent(
     content.push(await durableDraftContent(child, images));
   return { ...node, content };
 }
+/** Keep future live-byte accounting consistent with the bytes actually read. */
+function contentWithImageSizes(
+  node: JsonContent,
+  sizes: ReadonlyMap<string, number>,
+): JsonContent {
+  const size =
+    node.type === "imageAttachment" && typeof node.attrs?.hash === "string"
+      ? sizes.get(node.attrs.hash)
+      : undefined;
+  return {
+    ...node,
+    ...(size === undefined ? {} : { attrs: { ...node.attrs, size } }),
+    ...(node.content === undefined
+      ? {}
+      : {
+          content: node.content.map((child) =>
+            contentWithImageSizes(child, sizes),
+          ),
+        }),
+  };
+}
+
 /** Resolve a saved draft without recreating content that was permanently deleted. */
 export async function prepareSavedDraft(
   item: Extract<ClosedHeaderTab, { kind: "draft" }>,
@@ -121,27 +148,62 @@ export async function prepareSavedDraft(
     (draft) => draft.draftId === item.draftId,
   );
   if (document === undefined || document.kind !== "landing") return false;
+  return prepareHostDraft(document, item.hostId, client, stillCurrent);
+}
+
+async function prepareHostDraft(
+  document: Extract<DraftDocument, { kind: "landing" }>,
+  hostId: string,
+  client: DraftBlobClient,
+  stillCurrent: () => boolean,
+): Promise<boolean> {
   const hashes = blobHashesOfDocument(document);
-  const images = await readDraftBlobsIntoLocalStore(
-    item.hostId,
-    client,
-    hashes,
-  );
+  const images = await readDraftBlobsForRecovery(hostId, client, hashes);
   if (!stillCurrent()) return false;
+  if (
+    useLandingDraftStore
+      .getState()
+      .drafts.some((draft) => draft.id === document.draftId)
+  )
+    return true;
   if (hashes.some((hash) => !images.has(hash)))
     throw new Error("The draft's images are not available yet.");
-  if (
-    !useLandingDraftStore
-      .getState()
-      .drafts.some((draft) => draft.id === item.draftId)
-  ) {
-    // Loading the host record prepares a local mirror; the coordinator still
-    // owns reopening its tab. The host's open state is not local tab presence.
-    applyLandingHostDocument(
-      { ...document, portable: { ...document.portable, closed: true } },
-      document.portable.content,
+  const reservation = tryReserveLandingImageBudget(
+    [...images].map(([hash, image]) => ({
+      hash,
+      bytes: image.bytes.byteLength,
+    })),
+  );
+  if (reservation === null)
+    throw new Error(
+      "There is not enough image capacity to reopen this draft yet.",
     );
-    rememberLandingBlobsOnHost(item.draftId, [...images.keys()]);
+  try {
+    for (const [hash, image] of images) {
+      if (!stillCurrent()) return false;
+      if (!(await putImageBytesAtHash(hash, image.bytes)))
+        throw new Error("The draft's image could not be verified.");
+    }
+    if (!stillCurrent()) return false;
+    if (
+      !useLandingDraftStore
+        .getState()
+        .drafts.some((draft) => draft.id === document.draftId)
+    ) {
+      // Loading the host record prepares a local mirror; the coordinator still
+      // owns reopening its tab. The host's open state is not local tab presence.
+      const sizes = new Map(
+        [...images].map(([hash, image]) => [hash, image.bytes.byteLength]),
+      );
+      applyLandingHostDocument(
+        { ...document, portable: { ...document.portable, closed: true } },
+        contentWithImageSizes(document.portable.content, sizes),
+      );
+      rememberLandingBlobsOnHost(document.draftId, [...images.keys()]);
+    }
+    return true;
+  } finally {
+    reservation.release();
+    scheduleLandingImageReconcile();
   }
-  return true;
 }

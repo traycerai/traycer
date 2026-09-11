@@ -1,3 +1,5 @@
+import { readTabStripLayout } from "@/stores/tabs/store";
+import { flattenStripItemRefs } from "@/stores/tabs/layout";
 import {
   recordClosedHeaderTab,
   recordClosedCanvas,
@@ -1548,8 +1550,14 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           if (isTabCloseLocked({ kind: "epic", id: tabId })) return;
           const prior = get();
           const closing = prior.tabsById[tabId];
-          const index = prior.openTabOrder.indexOf(tabId);
-          if (closing !== undefined && index >= 0)
+          const epicIndex = prior.openTabOrder.indexOf(tabId);
+          const stripIndex = readTabStripLayout().items.findIndex((item) =>
+            flattenStripItemRefs(item).some(
+              (ref) => ref.kind === "epic" && ref.id === tabId,
+            ),
+          );
+          const index = stripIndex >= 0 ? stripIndex : epicIndex;
+          if (closing !== undefined && epicIndex >= 0)
             recordClosedHeaderTab({
               kind: "epic",
               tab: closing,
