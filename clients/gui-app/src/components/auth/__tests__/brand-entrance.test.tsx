@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BrandEntrance } from "@/components/auth/brand-entrance";
@@ -119,5 +122,73 @@ describe('<BrandEntrance size="boot" /> mark shimmer', () => {
     expect(
       screen.getByTestId("brand-entrance").querySelector("svg"),
     ).not.toBeNull();
+  });
+});
+
+/**
+ * The stylesheet half of the same two contracts. jsdom does not process CSS,
+ * so the inline-style assertions above cannot see an `animation:` added to
+ * the class, or a mask rule moved out from under the motion media query -
+ * either of which would pass every render-time check while a reduced-motion
+ * user got a permanently dimmed mark, or every user paid for an always-on
+ * CSS animation. Read the source instead.
+ */
+describe("auth-arrival.css: the boot mark shimmer rules", () => {
+  const css = readFileSync(
+    path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "..",
+      "..",
+      "..",
+      "styles",
+      "auth-arrival.css",
+    ),
+    "utf8",
+  );
+
+  /** Every `.brand-entrance-mark-shimmer { … }` declaration block, with the index it starts at. */
+  function shimmerRules(): { readonly start: number; readonly body: string }[] {
+    const rules: { start: number; body: string }[] = [];
+    const pattern = /\.brand-entrance-mark-shimmer\s*\{([^}]*)\}/g;
+    for (const match of css.matchAll(pattern)) {
+      rules.push({ start: match.index, body: match[1] });
+    }
+    return rules;
+  }
+
+  /** `[start, end)` of the body of the `prefers-reduced-motion: no-preference` block. */
+  function motionBlockRange(): readonly [number, number] {
+    const open = css.indexOf("@media (prefers-reduced-motion: no-preference)");
+    expect(open).toBeGreaterThanOrEqual(0);
+    const bodyStart = css.indexOf("{", open) + 1;
+    let depth = 1;
+    for (let i = bodyStart; i < css.length; i++) {
+      if (css[i] === "{") depth += 1;
+      else if (css[i] === "}") {
+        depth -= 1;
+        if (depth === 0) return [bodyStart, i];
+      }
+    }
+    throw new Error("unterminated motion media block");
+  }
+
+  it("declares the mask only under the motion media query", () => {
+    const [start, end] = motionBlockRange();
+    const masked = shimmerRules().filter((rule) =>
+      rule.body.includes("mask-image"),
+    );
+    expect(masked.length).toBe(1);
+    for (const rule of masked) {
+      expect(rule.start).toBeGreaterThan(start);
+      expect(rule.start).toBeLessThan(end);
+    }
+  });
+
+  it("never drives the sweep with a CSS animation", () => {
+    const rules = shimmerRules();
+    expect(rules.length).toBeGreaterThan(0);
+    for (const rule of rules) {
+      expect(rule.body).not.toMatch(/animation|transition/);
+    }
   });
 });
