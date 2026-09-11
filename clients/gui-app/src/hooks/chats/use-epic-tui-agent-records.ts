@@ -2,7 +2,10 @@ import { useEffect, useMemo } from "react";
 import type { QueryClient } from "@tanstack/react-query";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
-import { useRecordListStamp } from "@/hooks/chats/use-record-list-stamp";
+import {
+  useRecordListStamp,
+  useRecordListStreamStamp,
+} from "@/hooks/chats/use-record-list-stamp";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
 import { hostQueryKeys } from "@/lib/query-keys";
@@ -177,6 +180,12 @@ export function useEpicSyncTuiAgentRecords(epicId: string): void {
       };
     },
   });
+
+  // Stage 2, the terminal twin - see the chat hook. This plane advances on
+  // every applied delta for the epic, INCLUDING a chat one: both lists are
+  // answered from the same per-(viewer, epic) composite, so a chat write moves
+  // this list's revision even though no terminal-agent row changed.
+  useRecordListStreamStamp(epicId, stamp, query.refetch);
 
   const answer = query.data ?? null;
   useEffect(() => {

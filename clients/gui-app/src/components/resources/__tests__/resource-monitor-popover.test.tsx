@@ -225,6 +225,12 @@ const liveAgentsMock = vi.hoisted(() => {
   return { byAgentId };
 });
 
+const agentSessionCountsMock = vi.hoisted(() => ({
+  byEpicId: new Map<
+    string,
+    { readonly running: number; readonly sleeping: number }
+  >(),
+}));
 vi.mock("@/lib/epic-selectors", () => ({
   useRegisteredEpicLiveArtifactTitle: (
     _epicId: string,
@@ -259,6 +265,10 @@ vi.mock("@/lib/epic-selectors", () => ({
       }
       return null;
     }),
+  // The session tally the task header reads. Empty by default: every case in
+  // this file is about processes, and an epic this window holds no session for
+  // is exactly what the real hook answers with an absent entry.
+  useRegisteredEpicAgentSessionCounts: () => agentSessionCountsMock.byEpicId,
 }));
 
 vi.mock("@/lib/history-navigation/use-history-nav-available", () => ({
@@ -272,6 +282,18 @@ const resourcesKillMock = vi.hoisted(() => ({ mutate: vi.fn() }));
 vi.mock("@/hooks/resources/use-resources-kill-mutation", () => ({
   useResourcesKill: () => ({
     mutate: resourcesKillMock.mutate,
+    isPending: false,
+  }),
+}));
+
+// Same reason as the kill stub: a terminal / terminal-agent row drives
+// `terminal.kill` through its own host. `stopTerminalOwnerMock.mutate` captures
+// the stops, and the pair with `resourcesKillMock` is what lets a case assert
+// WHICH route a row took.
+const stopTerminalOwnerMock = vi.hoisted(() => ({ mutate: vi.fn() }));
+vi.mock("@/hooks/resources/use-stop-terminal-owner-mutation", () => ({
+  useStopTerminalOwner: () => ({
+    mutate: stopTerminalOwnerMock.mutate,
     isPending: false,
   }),
 }));

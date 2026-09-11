@@ -644,6 +644,8 @@ function sourceAgent(): ForkableTuiAgent {
     terminalAgentArgs: null,
     terminalShellCommand: "claude",
     terminalShellArgs: ["--resume", "source-session"],
+    sessionState: null,
+    lastExit: null,
   };
 }
 

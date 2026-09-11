@@ -42,6 +42,7 @@ import { useAgentStartTerminalSession } from "@/hooks/agent/use-prepare-tui-laun
 import { useHostClientFor } from "@/hooks/host/use-host-client-for";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useTerminalKillFor } from "@/hooks/terminal/use-terminal-kill-for-mutation";
+import { wasTileOpenRequested } from "@/lib/canvas/tile-open/tile-open-provenance";
 import type {
   TerminalDataWriter,
   TerminalSessionStoreHandle,
@@ -337,6 +338,33 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
 // never swallowed indefinitely.
 const RESTART_SUPPRESS_TIMEOUT_MS = 15_000;
 
+/**
+ * Whether this tile should leave its agent asleep until somebody asks for it.
+ *
+ * Starting a sleeping agent is right for an open the user performed - that is
+ * the promise "opening it or sending it a message resumes the same session"
+ * makes - and wrong for a RESTORE: an epic whose canvas holds ten sleeping
+ * agents would spawn ten provider CLIs on the first show, which is exactly the
+ * cost the host's idle reap freed.
+ *
+ * Narrow on purpose. `running` and `null` (a peer host, a replica, a row from
+ * a host that predates the facet) are both untouched, so this can only hold
+ * back an agent the serving host has SAID is asleep - never one it merely has
+ * nothing to say about.
+ *
+ * Beside the tile rather than inside it: a three-term predicate is where that
+ * component's complexity budget runs out, and the rule reads better in one
+ * piece anyway.
+ */
+function sleepsUntilRequested(input: {
+  readonly agent: TuiAgentProjection | null;
+  readonly isCloudReplica: boolean;
+  readonly startRequested: boolean;
+}): boolean {
+  if (input.isCloudReplica || input.startRequested) return false;
+  return input.agent !== null && input.agent.sessionState === "sleeping";
+}
+
 function TuiAgentTileLive(
   props: TuiAgentTileProps & {
     readonly recovery: TerminalSessionRecovery;
@@ -484,6 +512,18 @@ function TuiAgentTileLive(
   // still arming the measure-grid wait, so the tile can attach when the owner
   // host does report a running PTY.
   const isCloudReplica = agent?.origin === "cloud";
+  // A tile this session did not ask for: the persisted layout restored it.
+  // Read ONCE, at mount, as the seed of the local latch below - not on every
+  // render - so the answer cannot change under a tile that has already decided
+  // what to render. See `tile-open-provenance.ts`.
+  const [startRequested, setStartRequested] = useState(() =>
+    wasTileOpenRequested(instanceId),
+  );
+  const isSleepingUnrequested = sleepsUntilRequested({
+    agent,
+    isCloudReplica,
+    startRequested,
+  });
   const bootstrap = useTerminalTileBootstrap({
     hostId,
     scope: { kind: "epic", epicId },
@@ -492,7 +532,13 @@ function TuiAgentTileLive(
     sessionKind: "terminal-agent",
     preparePayload,
     enabled: agent !== null && prepareLaunch.isIdle,
-    adoptOnly: isCloudReplica,
+    // `adoptOnly` rather than `enabled: false` for the sleeping arm, for the
+    // reason the replica arm uses it: the create must not fire, but an ATTACH
+    // must still happen. That is what keeps ticket 2's known window harmless -
+    // an agent archived while its PTY was alive reads `sleeping` until that
+    // PTY exits, and a tile that refused to attach would show an asleep
+    // notice over a session that is running right now.
+    adoptOnly: isCloudReplica || isSleepingUnrequested,
     resetPrepare,
   });
   const hostHasSession = bootstrap.hostHasSession;
@@ -590,6 +636,12 @@ function TuiAgentTileLive(
     // refusal readable at the call site instead of resting entirely on a flag
     // handed to a hook three files away.
     if (isCloudReplica) return;
+    // Also the latch the restored-tile gate reads. Without it the gate would
+    // refuse the very revive this function exists to perform: a reap stamps
+    // the record `sleeping`, and on a restored tile that stamp would hold
+    // `adoptOnly` true through the retry below and leave the tile waiting for
+    // a session nothing is going to create. Asking to revive IS the request.
+    setStartRequested(true);
     armRestartSuppression();
     retryTerminal();
   }, [armRestartSuppression, isCloudReplica, retryTerminal]);
@@ -706,6 +758,32 @@ function TuiAgentTileLive(
     );
   }
 
+  // OWN-HOST AND ASLEEP, in a tile nobody asked for. The host reports no live
+  // session (`false`, not `null` - that is the list still loading and is not
+  // evidence of anything) and the record says the agent is sleeping, so there
+  // is nothing to attach to and this tile is not going to create one on its
+  // own. The honest end state is the notice, not a skeleton waiting forever.
+  //
+  // Deliberately NOT the dead-tile banner the replica arm uses: that banner
+  // says an agent is somewhere this client cannot reach it, and this one is
+  // right here, intact, one click from resuming the same conversation.
+  if (isSleepingUnrequested && hostHasSession === false) {
+    return (
+      <TerminalAgentTileShell tileId={props.tileId}>
+        <TerminalAgentWorktreeNotice
+          hostId={hostId}
+          agentId={sessionId}
+          viewTabId={props.viewTabId}
+          layout="bar"
+        />
+        <TerminalAgentAsleepNotice
+          tileId={props.tileId}
+          onOpen={reviveAfterReap}
+        />
+      </TerminalAgentTileShell>
+    );
+  }
+
   if (agent === null) {
     // Same stable skeleton the reachability-check, pre-launch, and xterm
     // suspense states use, so the create→ready transition reads as one
@@ -775,6 +853,37 @@ function TuiAgentTileLive(
         />
       </div>
     </TerminalAgentTileShell>
+  );
+}
+
+/**
+ * What a restored tile shows for an agent its host says is asleep.
+ *
+ * The copy is the whole point: "asleep" and "resumes the same session" are the
+ * two facts every other surface used to get wrong about a reaped agent, which
+ * read as gone. Naming both acts that wake it - opening and messaging - also
+ * says that the button here is a convenience and not the only door.
+ *
+ * Beside the tile rather than inside it: this file's components already carry
+ * their complexity budget, and a leaf with one prop belongs at module scope.
+ */
+function TerminalAgentAsleepNotice(props: {
+  readonly tileId: string;
+  readonly onOpen: () => void;
+}): React.ReactNode {
+  return (
+    <div
+      className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center"
+      data-testid={`terminal-agent-asleep-${props.tileId}`}
+    >
+      <span className="max-w-prose text-ui-sm text-muted-foreground">
+        This agent is asleep. Opening it or sending it a message resumes the
+        same session.
+      </span>
+      <Button type="button" variant="outline" size="sm" onClick={props.onOpen}>
+        Open
+      </Button>
+    </div>
   );
 }
 

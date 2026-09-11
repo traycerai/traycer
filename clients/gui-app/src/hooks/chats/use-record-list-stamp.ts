@@ -1,6 +1,7 @@
-import { useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { sessionKeyOf } from "@traycer-clients/shared/replica-runtime";
 import type { RecordListStamp } from "@traycer/protocol/host/epic/record-list-revision";
+import { subscribeRecordListDeltaStamps } from "@/lib/records/record-list-delta-stamps";
 
 /**
  * The stamp seam one revision-gated record poll uses: what to SEND on the next
@@ -94,5 +95,95 @@ export function useRecordListStamp(
       },
     }),
     [identity],
+  );
+}
+
+/**
+ * Stage 2: keeps one record plane's held stamp current from the PUSH stream,
+ * so an ordinary change stops costing a snapshot.
+ *
+ * ## The rule
+ *
+ * A delta's `listRevision` is the composite AFTER the write that produced it.
+ * The plane applies and advances only for the immediate successor - same
+ * epoch, `held + 1` - and asks for a snapshot for anything else.
+ *
+ * `+ 1` rather than "any forward jump", for the reason the protocol's own note
+ * gives: a consumer that accepted a jump would silently skip the changes in
+ * between, and those are exactly what it has no other way to learn. A gap is
+ * therefore not an anomaly to tolerate but the signal the mechanism runs on -
+ * it is how a doc-resident edit (which produces no delta at all), a missed
+ * frame, or a host restart reaches this client. Every one of them lands here
+ * as "not the successor" and is answered the same way: drop the stamp, re-read
+ * the list.
+ *
+ * ## Why the epoch check is not redundant
+ *
+ * Revisions from two epochs do not compare, so `held.revision + 1` could match
+ * by coincidence across a host restart or a re-hydrate. `UNSTAMPED_RECORD_LIST_REVISION`
+ * makes that concrete rather than theoretical: a delta for an epic whose
+ * registry is not hydrated ships with a bare epoch and its own counter, which
+ * says nothing about this client's rows. Epoch first, always.
+ *
+ * ## Dropping the stamp on a gap, rather than leaving it stale
+ *
+ * Either one produces a snapshot - a stale stamp cannot match a revision that
+ * has moved past it, and the host answers with rows. Dropping is what makes
+ * the refetch happen ONCE: a burst of deltas arriving during a gap would
+ * otherwise each find a non-null held stamp, each read as a gap, and each fire
+ * another re-read. With the stamp dropped, the rest of the burst returns at
+ * the `null` guard and the answer in flight brings the fresh stamp back.
+ *
+ * ## What it never does
+ *
+ * It does not apply rows. The mount routed those into the record tables before
+ * announcing, and this is only the bookkeeping that stops the next poll from
+ * re-shipping them. A plane holding nothing (`null`) is already asking for a
+ * snapshot on every dispatch, so a delta has nothing to tell it.
+ */
+export function useRecordListStreamStamp(
+  epicId: string,
+  stamp: RecordListStampHold,
+  /**
+   * This plane's own list read, re-issued on a gap. The query's `refetch`
+   * rather than an invalidation, because the invalidation this hook could
+   * reach is method-scoped - it would re-read every other open epic's list
+   * too, on every gap - while `refetch` names exactly this observer's key
+   * without reconstructing it.
+   *
+   * Typed at what `refetch` actually returns so it can be passed straight in,
+   * with no wrapper closure to churn the ref below on every render. The result
+   * is deliberately dropped: the answer lands through the query's own cache
+   * and the applying effect, exactly as a poll's does, and a rejection is
+   * already the query's `error`.
+   */
+  refetch: () => Promise<unknown>,
+): void {
+  // Through a ref so the subscription survives re-renders: `refetch` is read
+  // at NOTIFICATION time, and re-subscribing whenever the query result object
+  // is rebuilt (every render) would churn the channel for nothing.
+  const refetchRef = useRef(refetch);
+  useEffect(() => {
+    refetchRef.current = refetch;
+  }, [refetch]);
+  useEffect(
+    () =>
+      subscribeRecordListDeltaStamps(epicId, (listRevision) => {
+        const currentStamp = stamp.read();
+        if (currentStamp === null) return;
+        if (
+          currentStamp.epoch === listRevision.epoch &&
+          listRevision.revision === currentStamp.revision + 1
+        ) {
+          // `touchRevision` rides through untouched: a delta reports a list
+          // change, never a quiet write, so the recency watermark this client
+          // holds is still exactly where the last answer left it.
+          stamp.hold({ ...currentStamp, revision: listRevision.revision });
+          return;
+        }
+        stamp.hold(null);
+        void refetchRef.current();
+      }),
+    [epicId, stamp],
   );
 }

@@ -7,7 +7,10 @@ import type {
   RecordListStamp,
 } from "@traycer/protocol/host/epic/record-list-revision";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
-import { useRecordListStamp } from "@/hooks/chats/use-record-list-stamp";
+import {
+  useRecordListStamp,
+  useRecordListStreamStamp,
+} from "@/hooks/chats/use-record-list-stamp";
 import { useHostQueryWithResponseMap } from "@/hooks/host/use-host-query";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { hostQueryKeys } from "@/lib/query-keys";
@@ -238,6 +241,12 @@ export function useEpicSyncChatRecords(epicId: string): void {
       };
     },
   });
+
+  // Stage 2: the push stream's stamp keeps the revision above current between
+  // polls, so an ordinary record change costs one delta instead of one
+  // snapshot per open tab. `query.refetch` is what a GAP falls back to - see
+  // {@link useRecordListStreamStamp}.
+  useRecordListStreamStamp(epicId, stamp, query.refetch);
 
   const answer = query.data ?? null;
   const recordListAuthoritative =

@@ -367,6 +367,7 @@ describe("applyTouches - the session facet survives a recency patch (T7)", () =>
     };
     const afterUpsert = table.applyDelta({
       kind: "tuiUpsert",
+      sessionFacet: null,
       epicId: EPIC_ID,
       record: streamRow,
     });

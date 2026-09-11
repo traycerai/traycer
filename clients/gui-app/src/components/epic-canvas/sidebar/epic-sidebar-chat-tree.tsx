@@ -6,6 +6,10 @@ import { useSidebarCopyIdMenuEntry } from "@/components/epic-canvas/sidebar/use-
 import { useDraggable } from "@dnd-kit/core";
 import { AnimatePresence, m, useReducedMotion } from "motion/react";
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
+import type {
+  AgentSessionLastExit,
+  AgentSessionState,
+} from "@traycer/protocol/host/agent-session-state";
 import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { v4 as uuidv4 } from "uuid";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
@@ -147,6 +151,7 @@ import {
 import {
   useAncestorIds,
   useEpicAgentRoleClaims,
+  useEpicAgentSessionFacet,
   useEpicAgentActivityTiers,
   type AgentActivityTier,
   useEpicChatIds,
@@ -2917,14 +2922,32 @@ function describeOfflineLockForAria(
   return `on ${lock.hostLabel}, offline, ${outcome}`;
 }
 
+/**
+ * The session facet as a word in the row's accessible NAME.
+ *
+ * The badge below is inside the row button, whose explicit `aria-label`
+ * replaces its subtree, so without this line the one state a reader most needs
+ * - the agent is asleep, not gone - would be visible and unspoken. `null`
+ * (unknown) and `running` add nothing: the row already reads as a live agent.
+ */
+function describeSessionStateForAria(
+  sessionState: AgentSessionState | null,
+): string | null {
+  if (sessionState === "sleeping") return "asleep";
+  if (sessionState === "stopped") return "stopped";
+  return null;
+}
+
 function chatRowAriaLabel(input: {
   readonly nodeName: string;
   readonly isArchived: boolean;
   readonly sharedWithTask: boolean;
   readonly offlineLock: OfflineRowLock | null;
+  readonly sessionState: AgentSessionState | null;
 }): string {
   const stateSuffix = [
     input.isArchived ? "archived" : null,
+    describeSessionStateForAria(input.sessionState),
     input.sharedWithTask ? "shared with task" : null,
     describeOfflineLockForAria(input.offlineLock),
   ]
@@ -2997,6 +3020,75 @@ function AgentRoleBadgesForOwner(props: {
 }
 
 /**
+ * What a sleeping agent's tooltip says.
+ *
+ * Two sentences, and the first one carries the whole fix: an idle-reaped agent
+ * is not gone, and the reader does not have to do anything special to get it
+ * back. The second is added only for `process-exit`, where the CLI ended on
+ * its own rather than being taken down - a reader who left an agent running
+ * and came back to "asleep" deserves to know which of those happened. The
+ * other three reasons (`reaped`, `user-stop`, `restart`) are deliberately not
+ * spelled out here: all four resume identically, and only this one contradicts
+ * what the reader would otherwise assume.
+ */
+function sleepingAgentTooltip(lastExit: AgentSessionLastExit | null): string {
+  const base = "Sleeping. Resumes on the next message or when you open it.";
+  return lastExit === "process-exit"
+    ? `${base} Last run exited on its own.`
+    : base;
+}
+
+/**
+ * The session badge on a terminal-agent row: "Asleep" for a resumable agent
+ * whose session is not running, "Stopped" for one that is over as a record.
+ *
+ * Reads the facet itself rather than taking it as a prop, so the row button
+ * that hosts it neither grows a parameter nor re-renders when a sibling
+ * agent's session moves - and so the two states cannot be rendered from two
+ * different reads of the same store.
+ *
+ * `null` (unknown) and `running` render NOTHING, which is the same row every
+ * build before the facet drew. A peer-host row and a cloud replica are both
+ * `null`: only the binding host observes its own session transitions, so a
+ * badge here would be this client guessing about another machine.
+ *
+ * "Stopped" gets no tooltip, matching {@link ArchivedTitlePrefix}: it states a
+ * terminal fact with no follow-on action, where "Asleep" has to say what wakes
+ * it.
+ */
+function AgentSessionStateBadge(props: { readonly nodeId: string }) {
+  const facet = useEpicAgentSessionFacet(props.nodeId);
+  if (facet.sessionState === "stopped") {
+    return (
+      <span
+        className="shrink-0 text-ui-xs text-muted-foreground"
+        data-testid={`chat-row-session-state-${props.nodeId}`}
+        data-session-state="stopped"
+      >
+        Stopped
+      </span>
+    );
+  }
+  if (facet.sessionState !== "sleeping") return null;
+  return (
+    <TooltipWrapper
+      label={sleepingAgentTooltip(facet.lastExit)}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+    >
+      <span
+        className="shrink-0 text-ui-xs text-muted-foreground"
+        data-testid={`chat-row-session-state-${props.nodeId}`}
+        data-session-state="sleeping"
+      >
+        Asleep
+      </span>
+    </TooltipWrapper>
+  );
+}
+
+/**
  * The row's own class list, lifted out of {@link ChatRowButton} so its five
  * state modifiers stop counting against that component's complexity ceiling.
  * Pure and unchanged - same operands, same order.
@@ -3058,6 +3150,10 @@ function ChatRowButton(props: ChatRowButtonProps) {
   } = props;
   const resourceOwnerKind = resourceOwnerKindForNode(artifactType);
   const roleClaims = useEpicAgentRoleClaims(nodeId);
+  // Read HERE as well as inside the badge, because the row button's explicit
+  // `aria-label` replaces its subtree - a state only the badge knows would be
+  // visible and unspoken. The same store read, so the two cannot disagree.
+  const sessionFacet = useEpicAgentSessionFacet(nodeId);
   const ownerHostId = useEpicNodeHostId(nodeId);
   // Session host as the fallback, for the same reason `ChatNode` opens with
   // it: the drag payload names the host the dropped tile binds to.
@@ -3244,6 +3340,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
         isArchived,
         sharedWithTask: showSharedIndicator,
         offlineLock,
+        sessionState: sessionFacet.sessionState,
       })}
       data-testid={`epic-sidebar-item-${nodeId}`}
       data-sidebar-node-id={nodeId}
@@ -3274,6 +3371,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
         <span className="flex min-w-0 items-center gap-1.5">
           {isArchived ? <ArchivedTitlePrefix /> : null}
           <span className="min-w-0 flex-1 truncate">{nodeName}</span>
+          <AgentSessionStateBadge nodeId={nodeId} />
           {showSharedIndicator ? (
             <TooltipWrapper
               label={SHARED_WITH_TASK_TOOLTIP}

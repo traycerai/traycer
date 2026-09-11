@@ -1000,6 +1000,8 @@ function tuiAgent(id: string, harnessId: TuiHarnessId): TuiAgentProjection {
     terminalAgentArgs: null,
     terminalShellCommand: null,
     terminalShellArgs: null,
+    sessionState: null,
+    lastExit: null,
   };
 }
 

@@ -265,23 +265,37 @@ export function createTuiAgentRecordTable(
       // point is that `tuiUpsert` can carry a cross-host replica - the same
       // premise that {@link tuiAgentRowSupersedes} had to stop relying on.
       //
-      // The SESSION FACET is the one thing this frame cannot state and the
-      // table nonetheless holds: the stream's row is the `@1.2` one, and
-      // `host.chatRecords.subscribe@1.4` - which stamps the facet on
-      // `tuiUpsert` - is not parsed by this client yet. So carry forward what
-      // the last ANSWER stated for this agent and admit ignorance when nothing
+      // The SESSION FACET has two sources and they are not interchangeable.
+      //
+      // A `@1.4` frame STATES it (`delta.sessionFacet`), and that statement is
+      // the point of the minor: a spawn or a reap moves nothing else on the
+      // row, so a client that ignored it would learn an agent had gone to
+      // sleep only at the next full snapshot - which under stage-2 gating is
+      // only ever fetched on a genuine gap, i.e. possibly never.
+      //
+      // Below `@1.4` the frame has no field for it (`null`), which is NOT the
+      // row's own `null`: the latter means "the serving host cannot know", the
+      // former means "this minor could not say". So carry forward what the
+      // last ANSWER stated for this agent and admit ignorance when nothing
       // has, exactly as the chat twin does for `docResident`. Stamping `null`
       // instead would report a sleeping agent as unknown on every unrelated
       // rename until the next snapshot; read by the FULL record identity, not
       // off the published slice, for the reason that twin gives.
-      const held = table.retainedRow(
-        ownerScopedRowKey(delta.record.ownerUserId, delta.record.tuiAgentId),
-      );
+      //
+      // One holder for both sources: a stated facet and a retained row answer
+      // exactly these two questions, so the `??` picks the authority and the
+      // reads below need no second branch. It short-circuits, so a `@1.4`
+      // frame never looks the row up.
+      const facet =
+        delta.sessionFacet ??
+        table.retainedRow(
+          ownerScopedRowKey(delta.record.ownerUserId, delta.record.tuiAgentId),
+        );
       return published(
         table.applyUpsert({
           ...delta.record,
-          sessionState: held === null ? null : held.sessionState,
-          lastExit: held === null ? null : held.lastExit,
+          sessionState: facet === null ? null : facet.sessionState,
+          lastExit: facet === null ? null : facet.lastExit,
         }),
       );
     },

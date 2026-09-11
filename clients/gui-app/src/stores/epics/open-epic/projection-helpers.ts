@@ -23,7 +23,7 @@
  *   }
  */
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
-import type { TuiAgentRecordSummaryV12 } from "@traycer/protocol/host/epic/tui-agent-records";
+import type { TuiAgentRecordSummaryV13 } from "@traycer/protocol/host/epic/tui-agent-records";
 import type {
   AgentMode,
   ChatRunSettings,
@@ -384,6 +384,13 @@ export function projectTerminalAgent(
     terminalShellCommand:
       typeof terminalShellCommand === "string" ? terminalShellCommand : null,
     terminalShellArgs: readTerminalShellArgs(entry),
+    // The session facet is a REGISTRY fact, stamped by the binding host on its
+    // own row. The doc map never carried it and never will - a host that
+    // stamps it is a host that stopped maintaining this map - so `null` here
+    // is the truthful "this plane cannot know", which is exactly what the
+    // field's `null` means everywhere else.
+    sessionState: null,
+    lastExit: null,
   };
 }
 
@@ -508,6 +515,13 @@ export function terminalAgentProjectionsEq(
     a.reasoningEffort === b.reasoningEffort,
     a.agentMode === b.agentMode,
     a.archivedAt === b.archivedAt,
+    // The session facet moves with NOTHING else: a spawn or a reap stamps
+    // these two and leaves every field above untouched, so omitting them here
+    // would freeze the sidebar badge and the tile's asleep state on whatever
+    // the first answer of the session said - which is the absent-versus-asleep
+    // misreading this facet exists to fix, reproduced behind the change gate.
+    a.sessionState === b.sessionState,
+    a.lastExit === b.lastExit,
   ].every((fieldEqual) => fieldEqual);
 
   // Nullability first: `?? []` on both sides would call `null` and `[]`
@@ -908,7 +922,7 @@ function narrowTuiHarnessId(value: string): TuiHarnessId | null {
  * `updatedAt` stands in when the plane that answered carried no timestamp.
  */
 export function tuiAgentProjectionFromRecord(
-  record: TuiAgentRecordSummaryV12,
+  record: TuiAgentRecordSummaryV13,
 ): TuiAgentProjection | null {
   if (record.origin === "cloud") return cloudReplicaProjection(record);
   const harnessId = narrowTuiHarnessId(record.harnessId);
@@ -940,6 +954,13 @@ export function tuiAgentProjectionFromRecord(
     terminalAgentArgs: record.terminalAgentArgs,
     terminalShellCommand: record.terminalShellCommand,
     terminalShellArgs: record.terminalShellArgs,
+    // Passed through on BOTH local arms, and not defaulted: a `doc` row's
+    // facet is `null` because the plane that answered has nothing to say about
+    // a session, and a `registry` row's is whatever its binding host last
+    // stamped. Both are the wire's own answer, and `null` already carries
+    // "cannot know".
+    sessionState: record.sessionState,
+    lastExit: record.lastExit,
   };
 }
 
@@ -983,7 +1004,7 @@ export function tuiAgentProjectionFromRecord(
  * dispatch it would be a row promising a session this build cannot open.
  */
 function cloudReplicaProjection(
-  record: Extract<TuiAgentRecordSummaryV12, { origin: "cloud" }>,
+  record: Extract<TuiAgentRecordSummaryV13, { origin: "cloud" }>,
 ): TuiAgentProjection | null {
   const harnessId =
     record.harnessId === null ? null : narrowTuiHarnessId(record.harnessId);
@@ -1015,6 +1036,14 @@ function cloudReplicaProjection(
     terminalAgentArgs: null,
     terminalShellCommand: null,
     terminalShellArgs: null,
+    // Read off the row rather than hardcoded `null`, even though the cloud
+    // metadata projection carries no facet today and this arm therefore always
+    // answers `null`. Hardcoding would mean a server that starts carrying it
+    // (the `roleClaims` recipe, a scoped follow-up) reached this renderer and
+    // was discarded HERE, silently - and the arm's own schema note says the
+    // field exists precisely so that change needs no protocol move.
+    sessionState: record.sessionState,
+    lastExit: record.lastExit,
   };
 }
 
@@ -1026,7 +1055,7 @@ function cloudReplicaProjection(
  * selection frozen at arrival time. Undispatchable rows are dropped here.
  */
 export function tuiAgentRecordsSlice(
-  records: readonly TuiAgentRecordSummaryV12[],
+  records: readonly TuiAgentRecordSummaryV13[],
 ): TerminalAgentsSlice {
   const byId: Record<string, TuiAgentProjection> = {};
   const allIds: string[] = [];

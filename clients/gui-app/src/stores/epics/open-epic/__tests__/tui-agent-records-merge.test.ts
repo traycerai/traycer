@@ -265,6 +265,7 @@ describe("applyTuiAgentRecords merges rather than replaces", () => {
     const issuedAt = state.peekTuiAgentIngestSeq();
     state.applyTuiAgentRecordDelta({
       kind: "tuiUpsert",
+      sessionFacet: null,
       epicId: "epic-test",
       record: row({ tuiAgentId: "pushed" }),
     });
@@ -289,6 +290,7 @@ describe("applyTuiAgentRecords merges rather than replaces", () => {
     const state = handle.store.getState();
     state.applyTuiAgentRecordDelta({
       kind: "tuiUpsert",
+      sessionFacet: null,
       epicId: "epic-test",
       record: row({ tuiAgentId: "doomed" }),
     });
@@ -308,6 +310,7 @@ describe("applyTuiAgentRecords merges rather than replaces", () => {
     const state = handle.store.getState();
     state.applyTuiAgentRecordDelta({
       kind: "tuiUpsert",
+      sessionFacet: null,
       epicId: "epic-test",
       record: row({ tuiAgentId: "doomed" }),
     });
@@ -336,6 +339,7 @@ describe("applyTuiAgentRecords merges rather than replaces", () => {
 
     handle.store.getState().applyTuiAgentRecordDelta({
       kind: "tuiUpsert",
+      sessionFacet: null,
       epicId: "epic-test",
       record: row({ tuiAgentId: "tui-1", title: "After", revision: 2 }),
     });
@@ -537,6 +541,7 @@ describe("applyTuiAgentRecordDelta takes the row's own provenance", () => {
     const handle = newSession();
     handle.store.getState().applyTuiAgentRecordDelta({
       kind: "tuiUpsert",
+      sessionFacet: null,
       epicId: "epic-test",
       record: row({ tuiAgentId: "tui-1" }),
     });
@@ -557,6 +562,7 @@ describe("applyTuiAgentRecordDelta takes the row's own provenance", () => {
     const handle = newSession();
     handle.store.getState().applyTuiAgentRecordDelta({
       kind: "tuiUpsert",
+      sessionFacet: null,
       epicId: "epic-test",
       record: {
         origin: "cloud",
@@ -587,6 +593,7 @@ describe("applyTuiAgentRecordDelta takes the row's own provenance", () => {
     const handle = newSession();
     handle.store.getState().applyTuiAgentRecordDelta({
       kind: "tuiUpsert",
+      sessionFacet: null,
       epicId: "epic-test",
       record: {
         origin: "cloud",
@@ -619,6 +626,7 @@ describe("applyTuiAgentRecordDelta takes the row's own provenance", () => {
     const handle = newSession();
     handle.store.getState().applyTuiAgentRecordDelta({
       kind: "tuiUpsert",
+      sessionFacet: null,
       epicId: "epic-test",
       record: {
         origin: "cloud",
@@ -692,6 +700,7 @@ describe("applyTuiAgentRecordDelta takes the row's own provenance", () => {
     // announces it as an ordinary registry upsert.
     state.applyTuiAgentRecordDelta({
       kind: "tuiUpsert",
+      sessionFacet: null,
       epicId: "epic-test",
       record: row({
         tuiAgentId: "tui-1",
@@ -825,11 +834,13 @@ describe("terminal-agent merge puts AUTHORITY before revision", () => {
     const handle = newSession();
     handle.store.getState().applyTuiAgentRecordDelta({
       kind: "tuiUpsert",
+      sessionFacet: null,
       epicId: "epic-test",
       record: cloudRow({ revision: 999 }),
     });
     handle.store.getState().applyTuiAgentRecordDelta({
       kind: "tuiUpsert",
+      sessionFacet: null,
       epicId: "epic-test",
       record: row({ tuiAgentId: "tui-1", revision: 1 }),
     });

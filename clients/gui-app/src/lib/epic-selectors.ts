@@ -35,6 +35,10 @@ import {
 import type { PermissionRole } from "@traycer/protocol/host/epic/unary-schemas";
 import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 import type {
+  AgentSessionLastExit,
+  AgentSessionState,
+} from "@traycer/protocol/host/agent-session-state";
+import type {
   GuiHarnessId,
   TuiHarnessId,
 } from "@traycer/protocol/persistence/epic/schemas";
@@ -1540,6 +1544,137 @@ export function useRegisteredEpicLiveAgents(
 }
 
 /**
+ * How many terminal agents each named epic has running and how many are
+ * asleep, read from the epics this window has mounted.
+ *
+ * ## Why it is not derived from the resource plane
+ *
+ * The resource monitor's own projection lists owners that own PROCESSES, and
+ * a sleeping agent owns none - that is what asleep means. Counting from there
+ * would answer zero for every agent the count exists to surface, and the only
+ * way to make one appear would be to synthesize a process row for it, which
+ * the Resource Manager must not do: it stays honest about processes. So the
+ * count comes from the RECORD plane, where a sleeping agent is a row like any
+ * other.
+ *
+ * `stopped` and `null` are in neither number, and deliberately: `stopped` is
+ * an agent that is over as a record, and `null` is a row whose serving host
+ * cannot know (a peer host, a cloud replica, a host that predates the facet).
+ * Reporting either as running or asleep would be this client guessing.
+ *
+ * Epics this window has not mounted are absent from the map rather than zero -
+ * "we hold no session for it" and "it has no agents" are different answers,
+ * and the caller renders nothing for the first.
+ */
+export interface EpicAgentSessionCounts {
+  readonly running: number;
+  readonly sleeping: number;
+}
+
+export function useRegisteredEpicAgentSessionCounts(
+  epicIds: readonly string[],
+): ReadonlyMap<string, EpicAgentSessionCounts> {
+  const registry = getOpenEpicRegistry();
+  const encodedCounts = useSyncExternalStore(
+    (listener) => subscribeToRegisteredEpics(registry, epicIds, listener),
+    () => agentSessionCountsSnapshot(registry, epicIds),
+    () => JSON.stringify([]),
+  );
+  return useMemo(
+    () => decodeAgentSessionCounts(encodedCounts),
+    [encodedCounts],
+  );
+}
+
+/**
+ * Encoded `[epicId, running, sleeping]` triples, for the reason the live-agent
+ * snapshot below encodes its own: `useSyncExternalStore` compares by value,
+ * and every one of these stores notifies on changes that move neither count.
+ */
+function agentSessionCountsSnapshot(
+  registry: OpenEpicSessionRegistry,
+  epicIds: readonly string[],
+): string {
+  return JSON.stringify(
+    epicIds.flatMap((epicId): Array<[string, number, number]> => {
+      const handle = registry.peek(epicId);
+      if (handle === null) return [];
+      const agents = handle.store.getState().tuiAgents;
+      let running = 0;
+      let sleeping = 0;
+      for (const id of agents.allIds) {
+        const state = agents.byId[id].sessionState;
+        if (state === "running") running += 1;
+        else if (state === "sleeping") sleeping += 1;
+      }
+      return [[epicId, running, sleeping]];
+    }),
+  );
+}
+
+function decodeAgentSessionCounts(
+  encodedCounts: string,
+): ReadonlyMap<string, EpicAgentSessionCounts> {
+  const decoded: unknown = JSON.parse(encodedCounts);
+  const counts = new Map<string, EpicAgentSessionCounts>();
+  if (!Array.isArray(decoded)) return counts;
+  for (const entry of decoded) {
+    if (!Array.isArray(entry)) continue;
+    const epicId: unknown = entry[0];
+    const running: unknown = entry[1];
+    const sleeping: unknown = entry[2];
+    if (
+      typeof epicId !== "string" ||
+      typeof running !== "number" ||
+      typeof sleeping !== "number"
+    ) {
+      continue;
+    }
+    counts.set(epicId, { running, sleeping });
+  }
+  return counts;
+}
+
+/**
+ * Subscribes to the registry and to every currently-registered epic among
+ * `epicIds`, re-reconciling as sessions come and go. Shared by the two
+ * cross-epic readers here, which differ only in what they read out of the
+ * stores they are watching.
+ */
+function subscribeToRegisteredEpics(
+  registry: OpenEpicSessionRegistry,
+  epicIds: readonly string[],
+  listener: () => void,
+): () => void {
+  const unsubscribeByHandle = new Map<object, () => void>();
+  const reconcileHandleSubscriptions = () => {
+    const currentHandles = new Set<object>();
+    for (const epicId of epicIds) {
+      const handle = registry.peek(epicId);
+      if (handle === null || currentHandles.has(handle)) continue;
+      currentHandles.add(handle);
+      if (!unsubscribeByHandle.has(handle)) {
+        unsubscribeByHandle.set(handle, handle.store.subscribe(listener));
+      }
+    }
+    for (const [handle, unsubscribe] of unsubscribeByHandle) {
+      if (currentHandles.has(handle)) continue;
+      unsubscribe();
+      unsubscribeByHandle.delete(handle);
+    }
+  };
+  reconcileHandleSubscriptions();
+  const unsubscribeRegistry = registry.subscribe(() => {
+    reconcileHandleSubscriptions();
+    listener();
+  });
+  return () => {
+    unsubscribeRegistry();
+    for (const unsubscribe of unsubscribeByHandle.values()) unsubscribe();
+  };
+}
+
+/**
  * Encoded per-ref tuples (`[kind, title, hostId]`, or `null`) so
  * `useSyncExternalStore` compares by value: the registry and every store
  * notify on unrelated changes, and a fresh array per notification would
@@ -2020,6 +2155,44 @@ export function useEpicAgentRoleClaims(agentId: string): readonly RoleClaim[] {
       : EMPTY_ROLE_CLAIMS,
   );
   return enabled ? claims : EMPTY_ROLE_CLAIMS;
+}
+
+/**
+ * One node's session facet: whether its binding host says the agent is
+ * running, asleep or over, and why the last session ended.
+ *
+ * Both fields `null` for every node that is not a terminal agent this session
+ * holds a row for, and for a terminal agent whose serving host cannot know -
+ * a peer-host row, a cloud replica, a host that predates the facet. `null`
+ * NEVER means stopped, so a consumer renders it exactly as it rendered every
+ * row before the facet shipped.
+ *
+ * A two-field VIEW rather than the projection itself, so a row that renders
+ * only the badge does not re-render when the agent's title, worktree binding
+ * or launch metadata moves.
+ */
+export interface AgentSessionFacetView {
+  readonly sessionState: AgentSessionState | null;
+  readonly lastExit: AgentSessionLastExit | null;
+}
+
+const UNKNOWN_AGENT_SESSION_FACET: AgentSessionFacetView = Object.freeze({
+  sessionState: null,
+  lastExit: null,
+});
+
+export function useEpicAgentSessionFacet(
+  nodeId: string,
+): AgentSessionFacetView {
+  return useEpicStore(
+    useShallow((s): AgentSessionFacetView => {
+      if (!Object.hasOwn(s.tuiAgents.byId, nodeId)) {
+        return UNKNOWN_AGENT_SESSION_FACET;
+      }
+      const agent = s.tuiAgents.byId[nodeId];
+      return { sessionState: agent.sessionState, lastExit: agent.lastExit };
+    }),
+  );
 }
 
 export function useEpicAgentRoleClaimsByAgentId(): Readonly<

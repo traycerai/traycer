@@ -325,6 +325,7 @@ describe("<ChatRecordsStreamMount />", () => {
     // the GATE and not about a table nothing ever wrote to.
     emit({
       kind: "tuiUpsert",
+      sessionFacet: null,
       epicId: "epic-1",
       record: tuiRecord({ tuiAgentId: "tui-from-host-a" }),
     });
@@ -348,6 +349,7 @@ describe("<ChatRecordsStreamMount />", () => {
     });
     emit({
       kind: "tuiUpsert",
+      sessionFacet: null,
       epicId: "epic-1",
       record: tuiRecord({ tuiAgentId: "tui-from-host-a" }),
     });

@@ -181,6 +181,8 @@ vi.mock("@/lib/epic-selectors", () => ({
     terminalAgentArgs: null,
     terminalShellCommand: "claude",
     terminalShellArgs: ["--continue"],
+    sessionState: null,
+    lastExit: null,
     workspaceFolders: ["/tmp/workspace"],
     workspaceMode: undefined,
     archivedAt: null,

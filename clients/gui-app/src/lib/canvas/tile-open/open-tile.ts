@@ -17,6 +17,7 @@ import type { PipOrigin } from "@/lib/browser-view/pip/pip-store";
 import { executeTileOpen } from "./execute-tile-open";
 import type { TileOpenIntent } from "./intent";
 import { resolveTileOpen } from "./resolve-tile-open";
+import { markTileOpenRequested } from "./tile-open-provenance";
 
 /**
  * Runs the prepared focus target without a route write. For the two callers
@@ -60,6 +61,13 @@ export function openTileWithNavigation(
   // one, and the resolver needs THAT tab's canvas.
   const tabId = resolveHeaderTabId(intent, options.createTab);
   if (tabId === null) return null;
+  // Recorded here rather than inside the executor because THIS is the seam a
+  // request comes through - the executor also runs for placements that reuse
+  // a tile, and the fact being recorded is that something asked for this tile
+  // in this session, not what the placement decided. A tile the persisted
+  // layout restored never reaches this line, which is the whole distinction.
+  // See `tile-open-provenance.ts`.
+  markTileOpenRequested(intent.node.instanceId);
   const store = useEpicCanvasStore.getState();
   const plan = resolveTileOpen({
     intent,
