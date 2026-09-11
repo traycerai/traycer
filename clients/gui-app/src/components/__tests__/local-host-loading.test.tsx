@@ -130,18 +130,29 @@ describe("<LocalHostLoadingContent />", () => {
     expect(useHostBootDetailsStore.getState().open).toBe(false);
   });
 
-  it("renders spinner, heading, and no Retry or [host] logs hint", () => {
-    // P3.4 deleted the `stage="slow"` arm outright (every surviving caller
-    // passes a start that is still progressing), so this body no longer
-    // branches - there is no slow copy or Retry to withhold, only to
-    // structurally never have.
+  it("renders the idle card as the shimmering mark and the heading only - no spinner, no bar, no Retry or [host] logs hint", () => {
+    // ONE activity signal: the mark's shimmer says the card is busy and the
+    // heading says with what, so nothing else on the idle card animates.
     const container = mountLoadingContent(buildHost(), null);
 
-    // Spinner is visible.
-    expect(screen.queryByTestId("local-host-loading-spinner")).not.toBeNull();
+    // Positive first: the mark and its shimmer are the activity signal, so
+    // their presence is what makes the absences below a choice rather than a
+    // card that failed to draw.
+    expect(
+      screen.getByTestId("brand-entrance-mark-shimmer").querySelector("svg"),
+    ).not.toBeNull();
+    const stage = screen.getByTestId("local-host-loading-stage");
+    expect(stage.textContent).toBe("Starting Traycer…");
 
-    // Primary heading.
-    expect(container.textContent).toContain("Starting Traycer…");
+    // No spinner: the heading is alone in its row. The spinner is an
+    // aria-hidden, text-less span stacked in this same row, so the row's
+    // element count is where its return would show.
+    expect(stage.parentElement?.childElementCount).toBe(1);
+
+    // No bar: nothing has a measured position yet.
+    expect(screen.queryByRole("progressbar")).toBeNull();
+    expect(screen.queryByTestId("local-host-download-progress")).toBeNull();
+    expect(container.textContent).not.toContain("%");
 
     expect(screen.queryByTestId("local-host-loading-slow-copy")).toBeNull();
     expect(screen.queryByTestId("local-host-retry")).toBeNull();
@@ -275,60 +286,65 @@ describe("<LocalHostLoadingContent />", () => {
     expect(container.textContent.match(/Setting up/g)?.length ?? 0).toBe(1);
   });
 
-  it("draws an indeterminate bar when no lane is running, and when a lane reports no percentage", () => {
-    // THE CONTRACT: no measured position => indeterminate, and the bar is on
-    // EVERY wait face. This REVERSES an earlier pin here ("draws NO bar when no
-    // lane is running"), which read the bar as a claim that a lane runs. It is
-    // not: an indeterminate `progressbar` means "busy, position unknown", which
-    // is exactly what a start that has not reported yet is - and a bar that
-    // appeared only once a lane reported was a mid-wait height change on a
-    // centred card. Reported after a real install as "3-4 different modals …
-    // the UI feels jumpy when the modal size keeps changing", the ruling
-    // changed. The height it holds is measured in the browser gallery
-    // (`scripts/host-boot-family-gallery-browser.mjs`); jsdom cannot see it.
+  it("draws the bar only while the running stage reports a percentage", () => {
+    // THE CONTRACT: a bar only with a measured position. The heading names
+    // the stage and the mark says the card is busy, so a stage that reports no
+    // percentage gets neither a bar nor a figure - there is no position to
+    // draw, and inventing one would be a number nobody measured.
     //
-    // `progress: null` is exactly the no-lane state - `useHostProvisioningProgress`
-    // returns null when no lane is running, and the body falls back to
-    // HOST_PROGRESS_IDLE_HEADING.
-    mountLoadingContent(buildHost(), null);
-    const idleBar = screen.getByTestId("local-host-download-progress");
-    expect(idleBar.dataset.indeterminate).toBe("true");
-    expect(
-      screen.getByRole("progressbar").getAttribute("aria-valuenow"),
-    ).toBeNull();
-    expect(idleBar.textContent).not.toContain("%");
-
-    cleanup();
-
-    // A RUNNING lane with no percentage: the same bar, still indeterminate,
-    // with no percentage figure beside it.
+    // Positive control first, on the stage that DOES report one: the same lane
+    // kind, so the only difference from the arm below is the percentage.
     mountLoadingContent(
       buildHost(),
       buildHostProgressView({
         kind: "ensure",
         startedAt: LANE_STARTED_AT,
         progress: {
-          stage: "extract",
-          percent: null,
+          stage: "download",
+          percent: 43,
           bytes: null,
           totalBytes: null,
-          message: "extracting host 1.2.3",
-          workUnits: 120,
+          message: null,
+          workUnits: null,
         },
       }),
     );
-    const bar = screen.getByTestId("local-host-download-progress");
-    expect(bar.dataset.indeterminate).toBe("true");
-    expect(
-      screen.getByTestId("local-host-progress-indeterminate"),
-    ).toBeTruthy();
-    // No `aria-valuenow` while indeterminate: that is what the role means by it -
-    // busy with an unknown position, rather than a specific amount done.
-    expect(
-      screen.getByRole("progressbar").getAttribute("aria-valuenow"),
-    ).toBeNull();
-    // And no percentage figure, which would be a number nobody measured.
-    expect(bar.textContent).not.toContain("%");
+    const stage = screen.getByTestId("local-host-loading-stage");
+    expect(stage.textContent).toBe("Downloading Traycer Host…");
+    // No spinner on a progressing card either: the heading is alone in its row.
+    expect(stage.parentElement?.childElementCount).toBe(1);
+    expect(screen.getByRole("progressbar").getAttribute("aria-valuenow")).toBe(
+      "43",
+    );
+    expect(screen.getByTestId("local-host-download-progress").textContent).toBe(
+      "43%",
+    );
+
+    cleanup();
+
+    // A RUNNING lane on a stage with no percentage (`verify` reports none):
+    // its heading, and no bar at all.
+    const container = mountLoadingContent(
+      buildHost(),
+      buildHostProgressView({
+        kind: "ensure",
+        startedAt: LANE_STARTED_AT,
+        progress: {
+          stage: "verify",
+          percent: null,
+          bytes: null,
+          totalBytes: 250_609_664,
+          message: "verifying host 1.2.3",
+          workUnits: null,
+        },
+      }),
+    );
+    expect(screen.getByTestId("local-host-loading-stage").textContent).toBe(
+      "Setting up Traycer Host…",
+    );
+    expect(screen.queryByRole("progressbar")).toBeNull();
+    expect(screen.queryByTestId("local-host-download-progress")).toBeNull();
+    expect(container.textContent).not.toContain("%");
   });
 
   /**
