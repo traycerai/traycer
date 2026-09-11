@@ -26,7 +26,14 @@ vi.mock("@/providers/use-resolved-theme", () => ({
 // detail panel this suite opens reaches other selectors in the same module.
 vi.mock("@/lib/epic-selectors", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/epic-selectors")>();
-  return { ...actual, useEpicAgentActivityTiers: () => new Map() };
+  return {
+    ...actual,
+    useEpicAgentActivityTiers: () => new Map(),
+    // The office reads every agent's role claims in one bulk selector for the
+    // door plates; like the activity tiers above, it resolves an epic session
+    // this suite deliberately renders without.
+    useEpicAgentRoleClaimsByAgentId: () => ({}),
+  };
 });
 
 import {
@@ -169,6 +176,12 @@ function officeElement(
       modeToggle={null}
       view={OFFICE_VIEW}
       officeView={OFFICE_VIEWS.floor}
+      // The tile has settled which view this is; these cases are about the
+      // canvas, not about Auto still deciding what to hand it.
+      ready
+      onAutoProbe={vi.fn()}
+      viewPicker={null}
+      autoChip={null}
       onCameraChange={vi.fn()}
       canOpenAgentForEvent={() => true}
       canJump={() => false}

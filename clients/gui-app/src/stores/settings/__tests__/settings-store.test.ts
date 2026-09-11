@@ -4,6 +4,7 @@ import { DEFAULT_EPIC_NODE_ICON_COLORS } from "@/lib/artifacts/node-display";
 import { DEFAULT_DIFF_VIEWER_PREFERENCES } from "@/lib/diff/diff-viewer-preferences";
 import { DEFAULT_NOTIFICATION_CHIME_SOUNDS } from "@/lib/notifications/notification-chime";
 import {
+  DEFAULT_AGENT_OFFICE_VIEW,
   DEFAULT_LINK_OPEN_SETTINGS,
   DEFAULT_TILE_PLACEMENT_SETTINGS,
   DEFAULT_WORKTREE_BRANCH_PREFIX,
@@ -32,6 +33,7 @@ function resetSettingsStore(): void {
     showNavigatorResourceStats: false,
     pinContextUsageBreakdown: false,
     chatTurnMinimapSide: "right",
+    agentOfficeDefaultView: DEFAULT_AGENT_OFFICE_VIEW,
     quoteReplyEnabled: true,
     linkOpen: DEFAULT_LINK_OPEN_SETTINGS,
     browserDevOrigins: [],
@@ -203,6 +205,52 @@ describe("useSettingsStore", () => {
     await useSettingsStore.persist.rehydrate();
 
     expect(useSettingsStore.getState().chatTurnMinimapSide).toBe("right");
+  });
+
+  it("defaults the agent office default view to auto", () => {
+    expect(useSettingsStore.getState().agentOfficeDefaultView).toBe("auto");
+  });
+
+  it("persists and rehydrates the agent office default view for auto", async () => {
+    useSettingsStore.getState().setAgentOfficeDefaultView("auto");
+    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
+    expect(persisted ?? "").toContain('"agentOfficeDefaultView":"auto"');
+
+    useSettingsStore.setState({ agentOfficeDefaultView: "towers" });
+    if (persisted === null) throw new Error("expected persisted settings");
+    window.localStorage.setItem("traycer-gui-app:settings", persisted);
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().agentOfficeDefaultView).toBe("auto");
+  });
+
+  it("persists and rehydrates the agent office default view for a real view id", async () => {
+    useSettingsStore.getState().setAgentOfficeDefaultView("towers");
+    const persisted = window.localStorage.getItem("traycer-gui-app:settings");
+    expect(persisted ?? "").toContain('"agentOfficeDefaultView":"towers"');
+
+    useSettingsStore.setState({ agentOfficeDefaultView: "auto" });
+    if (persisted === null) throw new Error("expected persisted settings");
+    window.localStorage.setItem("traycer-gui-app:settings", persisted);
+    await useSettingsStore.persist.rehydrate();
+
+    expect(useSettingsStore.getState().agentOfficeDefaultView).toBe("towers");
+  });
+
+  it("repairs a non-string persisted agent office default view to auto", async () => {
+    useSettingsStore.setState({ agentOfficeDefaultView: "towers" });
+    await rehydrateFrom({ agentOfficeDefaultView: 42 });
+
+    expect(useSettingsStore.getState().agentOfficeDefaultView).toBe("auto");
+  });
+
+  it("repairs a persisted agent office default view naming an unregistered view to auto", async () => {
+    useSettingsStore.setState({ agentOfficeDefaultView: "towers" });
+    // "city" is not in OFFICE_VIEW_IDS at this build - a value a newer build
+    // wrote and this one cannot plan.
+    await rehydrateFrom({ agentOfficeDefaultView: "city" });
+
+    expect(useSettingsStore.getState().agentOfficeDefaultView).toBe("auto");
   });
 
   it("updates the global artifact icon color mode", () => {

@@ -31,13 +31,18 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
 } from "react";
-import { Maximize, Minus, Plus } from "lucide-react";
+import { Maximize, Minus, PanelLeft, Plus } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useResolvedTheme } from "@/providers/use-resolved-theme";
-import { useEpicAgentActivityTiers } from "@/lib/epic-selectors";
+import {
+  useEpicAgentActivityTiers,
+  useEpicAgentRoleClaimsByAgentId,
+} from "@/lib/epic-selectors";
+import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 import { NotificationIndicatorsContext } from "@/components/notifications/notification-indicator-context";
 import { attentionTone } from "@/components/notifications/notification-indicator-tones";
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
@@ -46,6 +51,10 @@ import {
   useCommGraphCursor,
   useCommGraphSpeed,
 } from "@/stores/epics/comm-graph-timeline-store";
+import {
+  useCommGraphDirectoryOpen,
+  useCommGraphPanelStore,
+} from "@/stores/epics/comm-graph-panel-store";
 import type { CommGraphCanvasProps } from "@/components/epic-canvas/comm-graph/comm-graph-canvas";
 import {
   aggregateCommGraphEdges,
@@ -58,6 +67,7 @@ import { isDefaultCommGraphView } from "@/stores/epics/canvas/tile-schema/comm-g
 import { CommGraphAgentDetailSurface } from "@/components/epic-canvas/comm-graph/comm-graph-agent-detail-surface";
 import { CommGraphThreadPanel } from "@/components/epic-canvas/comm-graph/comm-graph-thread-panel";
 import { OFFICE_ENVELOPE_TINTS } from "@/components/epic-canvas/comm-graph/office/office-envelope-tints";
+import { officePipColor } from "@/components/epic-canvas/comm-graph/office/office-pip-color";
 import { OfficeAgentHover } from "@/components/epic-canvas/comm-graph/office/office-agent-hover";
 import {
   followOfficeHover,
@@ -66,6 +76,8 @@ import {
 } from "@/components/epic-canvas/comm-graph/office/office-hover-follow";
 import { OfficeHoverSupplement } from "@/components/epic-canvas/comm-graph/office/office-hover-supplement";
 import { OfficeLegend } from "@/components/epic-canvas/comm-graph/office/office-legend";
+import { OfficeLodChip } from "@/components/epic-canvas/comm-graph/office/office-lod-chip";
+import { OfficeDirectoryPanel } from "@/components/epic-canvas/comm-graph/office/office-directory-panel";
 import {
   createOfficeStaticSurface,
   officeBakesIntoStaticFloor,
@@ -108,6 +120,7 @@ import {
   type OfficePopulation,
 } from "@/lib/comm-graph/office/office-population";
 import type { OfficeView } from "@/lib/comm-graph/office/views/office-view";
+import type { OfficeAutoProbe } from "@/lib/comm-graph/office/office-auto";
 import { useOfficeEligibility } from "@/components/epic-canvas/comm-graph/office/use-office-eligibility";
 import {
   officeAgentStatuses,
@@ -220,10 +233,45 @@ type OfficeSelectedDetail =
  * screen pixels. Set on pointer move, and moved by the frame loop only while
  * the character under the pointer is itself moving.
  */
+/**
+ * The open hover card's subject and geometry.
+ *
+ * `whereabouts` is resolved WHEN THE CARD IS PLACED, never while rendering it:
+ * the scene is a ref the frame loop owns, and a render that reached into it
+ * would be reading state React does not know changed. Every path that places
+ * this card has the scene in hand already.
+ */
 interface OfficeHoverTarget {
   readonly agentId: string;
   /** The character's box in container screen pixels; the trigger's geometry. */
   readonly rect: OfficeRect;
+  /** Where this agent is, in its floor plan's words; `null` before a layout. */
+  readonly whereabouts: string | null;
+}
+
+/**
+ * The open card's whole subject, from one hit test: who, the box in screen
+ * pixels, and where they are. Assembled here rather than in the pointer
+ * handler so that handler stays a router - and so the scene is read on the
+ * path that HAS one, never during a render.
+ */
+function hoverTargetFor(args: {
+  readonly region: OfficeHitRegion | null;
+  readonly camera: OfficeCamera;
+  readonly scene: OfficeScene | null;
+}): OfficeHoverTarget | null {
+  const { camera, region, scene } = args;
+  if (region === null) return null;
+  return {
+    agentId: region.agentId,
+    rect: {
+      x: region.rect.x * camera.zoom + camera.x,
+      y: region.rect.y * camera.zoom + camera.y,
+      width: region.rect.width * camera.zoom,
+      height: region.rect.height * camera.zoom,
+    },
+    whereabouts: scene === null ? null : scene.whereabouts(region.agentId),
+  };
 }
 
 function sameRect(a: OfficeRect, b: OfficeRect | null): boolean {
@@ -395,6 +443,18 @@ interface OfficeRuntime {
    */
   readonly getNameById: () => ReadonlyMap<string, string>;
   readonly setNameById: (next: ReadonlyMap<string, string>) => void;
+  /**
+   * Every agent's role claims, in ONE map read from one store subscription.
+   *
+   * Mirrored here for the same reason as `nameById`: the plates draw the
+   * owner's claim as their second line, a claim lands asynchronously and moves
+   * nothing on the floor, and a hook per sign would be one subscription per
+   * room re-running on every unrelated claim in the epic.
+   */
+  readonly getRoleClaims: () => Readonly<Record<string, readonly RoleClaim[]>>;
+  readonly setRoleClaims: (
+    next: Readonly<Record<string, readonly RoleClaim[]>>,
+  ) => void;
 }
 
 function createOfficeRuntime(view: CommGraphTileViewState): OfficeRuntime {
@@ -426,6 +486,7 @@ function createOfficeRuntime(view: CommGraphTileViewState): OfficeRuntime {
   let eligibilityListener: (next: boolean) => void = () => undefined;
   let hostNames: ReadonlyMap<string, string> = new Map();
   let nameById: ReadonlyMap<string, string> = new Map();
+  let roleClaims: Readonly<Record<string, readonly RoleClaim[]>> = {};
   let hoveredAgentId: string | null = null;
   return {
     getCamera: () => camera,
@@ -526,6 +587,10 @@ function createOfficeRuntime(view: CommGraphTileViewState): OfficeRuntime {
     setNameById: (next) => {
       nameById = next;
     },
+    getRoleClaims: () => roleClaims,
+    setRoleClaims: (next) => {
+      roleClaims = next;
+    },
     takeManualControl: () => {
       autoPanEnabled = false;
       autoFitEnabled = false;
@@ -612,8 +677,23 @@ function isOnScreen(
 
 const EMPTY_MATCH_IDS: ReadonlySet<string> = new Set();
 
+/** A frozen empty list, so a claimless agent does not re-render the card. */
+const NO_ROLE_CLAIMS: readonly RoleClaim[] = Object.freeze([]);
+
+function claimsOf(
+  roleClaims: Readonly<Record<string, readonly RoleClaim[]>>,
+  agentId: string,
+): readonly RoleClaim[] {
+  if (!Object.hasOwn(roleClaims, agentId)) return NO_ROLE_CLAIMS;
+  return roleClaims[agentId];
+}
+
 /** The unmeasured tile; see the placeholder note on `sceneInput`. */
 const EMPTY_VIEWPORT: OfficeSize = { width: 0, height: 0 };
+
+/** A fresh office's seat book: nobody seated, nobody waiting for a seat. */
+const NO_OCCUPANCY: ReadonlyMap<string, string> = new Map();
+const NO_CAPACITY_NEEDED: ReadonlyArray<string> = [];
 
 /** Stand-ins for a floor with no layout yet. Frozen, so no frame allocates one. */
 const NO_SIGNS: ReadonlyArray<OfficeSign> = [];
@@ -796,6 +876,8 @@ interface DrawFrameArgs {
   readonly visibleAgentIds: ReadonlySet<string>;
   readonly statusById: ReadonlyMap<string, OfficeAgentStatus>;
   readonly nameById: ReadonlyMap<string, string>;
+  /** Every agent's claims, as one bulk map; a plate draws its owner's first. */
+  readonly roleClaims: Readonly<Record<string, readonly RoleClaim[]>>;
   /** One per host. A single-floor building names nothing - there is no choice to explain. */
   readonly floors: ReadonlyArray<OfficeFloor>;
   readonly hostNameById: ReadonlyMap<string, string>;
@@ -1253,6 +1335,12 @@ function truncateSign(text: string, maxChars: number): string {
 interface SignToDraw {
   readonly sign: OfficeSign;
   readonly text: string;
+  /**
+   * The owner's role claim, drawn under the name at close-up. `null` where
+   * nobody has claimed one - which is most agents, so the plate is a name
+   * alone unless somebody has said otherwise.
+   */
+  readonly subtext: string | null;
 }
 
 /** Overview draws none; see the note in `drawOfficeFrame`. */
@@ -1264,14 +1352,26 @@ function signsToDraw(args: {
   readonly statusById: ReadonlyMap<string, OfficeAgentStatus>;
   readonly nameById: ReadonlyMap<string, string>;
   readonly hostNameById: ReadonlyMap<string, string>;
+  readonly roleClaims: Readonly<Record<string, readonly RoleClaim[]>>;
 }): ReadonlyArray<SignToDraw> {
-  const { hostNameById, nameById, signs, statusById, visibleAgentIds } = args;
+  const {
+    hostNameById,
+    nameById,
+    roleClaims,
+    signs,
+    statusById,
+    visibleAgentIds,
+  } = args;
   const out: SignToDraw[] = [];
   for (const sign of signs) {
     const owner = sign.ownerAgentId;
     if (owner !== null && !visibleAgentIds.has(owner)) continue;
     if (sign.kind === "board" || sign.kind === "hq-board") {
-      out.push({ sign, text: officeBoardSummary(sign.agentIds, statusById) });
+      out.push({
+        sign,
+        text: officeBoardSummary(sign.agentIds, statusById),
+        subtext: null,
+      });
       continue;
     }
     // A host sign carries no text of its own: the layout knows the id and the
@@ -1279,9 +1379,25 @@ function signsToDraw(args: {
     // the plan wrote, re-lettered from the owner's current name.
     const text = signTextOf({ sign, owner, nameById, hostNameById });
     if (text === "") continue;
-    out.push({ sign, text });
+    out.push({ sign, text, subtext: roleClaimOf(roleClaims, owner) });
   }
   return out;
+}
+
+/**
+ * The door plate's second line: what this agent has CLAIMED to be doing, in
+ * its own words.
+ *
+ * The first claim only. A plate is two tiles wide and a list of roles on it
+ * would be unreadable at any zoom; the hover card carries the rest.
+ */
+function roleClaimOf(
+  roleClaims: Readonly<Record<string, readonly RoleClaim[]>>,
+  owner: string | null,
+): string | null {
+  if (owner === null) return null;
+  if (!Object.hasOwn(roleClaims, owner)) return null;
+  return roleClaims[owner].at(0)?.role ?? null;
 }
 
 /** What one non-board sign says right now: the owner's name, or a host's. */
@@ -1323,8 +1439,9 @@ function drawSignLabels(args: {
   readonly signs: ReadonlyArray<SignToDraw>;
   readonly camera: OfficeCamera;
   readonly palette: OfficePalette;
+  readonly lod: OfficeLod;
 }): void {
-  const { camera, ctx, palette, signs } = args;
+  const { camera, ctx, lod, palette, signs } = args;
   for (const entry of signs) {
     const name = signSpriteFor(entry.sign);
     const baseline =
@@ -1335,30 +1452,31 @@ function drawSignLabels(args: {
     const centerX =
       entry.sign.tile.col * OFFICE_TILE +
       (entry.sign.widthTiles * OFFICE_TILE) / 2;
+    const screenX = centerX * camera.zoom + camera.x;
     drawSignPlate(ctx, {
       text: truncateSign(
         entry.text,
         signMaxChars(entry.sign.widthTiles),
       ).toUpperCase(),
-      screenX: centerX * camera.zoom + camera.x,
+      screenX,
       screenY: baseline * camera.zoom + camera.y,
       palette,
     });
+    // THE CLAIM ONLY AT CLOSE-UP. The name is what a plate is for; the role
+    // under it is a second plate's worth of pixels, and at office zoom it
+    // would double the signage on a floor that is already mostly signage.
+    if (lod < 2 || entry.subtext === null) continue;
+    drawSignPlate(ctx, {
+      text: truncateSign(
+        entry.subtext,
+        signMaxChars(entry.sign.widthTiles),
+      ).toUpperCase(),
+      screenX,
+      screenY:
+        (baseline + SIGN_FONT_PX + SIGN_PADDING_Y * 2) * camera.zoom + camera.y,
+      palette,
+    });
   }
-}
-
-/**
- * A pip's colour, from the same signals the legend names. Deliberately drawn
- * from the office's OWN palette rather than from the app's foreground colors:
- * it has to read against the room, which is the palette's background.
- */
-function pipColor(status: OfficeAgentStatus, palette: OfficePalette): string {
-  if (status === "failure" || status === "attention") return palette.attention;
-  if (status === "awaiting") return palette.notice;
-  if (status === "working") return palette.screenLit;
-  if (status === "background") return palette.leafLight;
-  if (status === "archived") return palette.textMuted;
-  return palette.metalLight;
 }
 
 /**
@@ -1383,7 +1501,7 @@ function drawPip(args: {
   readonly palette: OfficePalette;
 }): void {
   const { ctx, palette, pip } = args;
-  const color = pipColor(pip.status, palette);
+  const color = officePipColor(pip.status, palette);
   ctx.save();
   ctx.fillStyle = color;
   ctx.strokeStyle = color;
@@ -1502,6 +1620,7 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
     hoveredAgentId,
     lod,
     nameById,
+    roleClaims,
     searchMatchIds,
     staticFloor,
     statusById,
@@ -1522,6 +1641,7 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
           statusById,
           nameById,
           hostNameById,
+          roleClaims,
         });
   // The backing exists to separate glyphs from whatever they sit on, so it has
   // to contrast with the TEXT. A fixed dark backing did that for the dark
@@ -1619,7 +1739,7 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
   // which is the palette's own background and not the app's.
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-  drawSignLabels({ ctx, signs, camera, palette });
+  drawSignLabels({ ctx, signs, camera, palette, lod });
   drawNameTags({
     ctx,
     labels,
@@ -1687,6 +1807,48 @@ function usePrefersReducedMotion(): boolean {
   return reduced;
 }
 
+/**
+ * The top-right chrome, in reading order: what is beside the floor, what the
+ * floor IS, and which renderer draws it.
+ *
+ * Its own component so the office component is not also a toolbar: the row is
+ * three controls and one branch, and none of it depends on anything the canvas
+ * knows.
+ */
+function OfficeChromeRow(props: {
+  readonly directoryOpen: boolean;
+  readonly onToggleDirectory: () => void;
+  readonly viewPicker: ReactNode;
+  readonly modeToggle: ReactNode;
+}) {
+  return (
+    <div className="absolute top-2 right-2 z-10 flex items-center gap-1">
+      <div
+        className={cn(
+          "flex items-center gap-0.5 rounded-md border border-border",
+          "bg-popover p-0.5 shadow-xs",
+        )}
+      >
+        <Button
+          type="button"
+          size="icon-sm"
+          variant="ghost"
+          aria-pressed={props.directoryOpen}
+          aria-label={
+            props.directoryOpen ? "Hide the directory" : "Show the directory"
+          }
+          data-testid="comm-graph-office-directory-toggle"
+          onClick={props.onToggleDirectory}
+        >
+          <PanelLeft aria-hidden />
+        </Button>
+        {props.viewPicker}
+      </div>
+      {props.modeToggle}
+    </div>
+  );
+}
+
 /** The moment a detached floor is showing; nothing while live. */
 function OfficeCursorChip(props: {
   readonly cursorMs: number | null;
@@ -1716,12 +1878,41 @@ export interface CommGraphOfficeCanvasProps extends CommGraphCanvasProps {
    * already the tile's camera and mode state, which both canvases share.
    */
   readonly officeView: OfficeView;
+  /**
+   * The view picker, owned by the tile (which owns the choice it writes) and
+   * POSITIONED here, beside the mode toggle - the same bargain the toggle
+   * itself strikes, and for the same reason: only this component knows where
+   * its canvas ends and a detail panel begins.
+   */
+  readonly viewPicker: ReactNode;
+  /** Auto's explanation, or `null` where the choice is not Auto. */
+  readonly autoChip: ReactNode;
+  /**
+   * Whether the tile has settled what this canvas is supposed to draw.
+   *
+   * False while Auto is still measuring: the derivations below keep running
+   * (they are what make the probe possible, and they are cheap), but nothing
+   * is PLANNED - a floor planned for a view that is about to be replaced is a
+   * whole layout thrown away a moment later.
+   */
+  readonly ready: boolean;
+  /**
+   * What Auto would need to decide, pushed up as the inputs change.
+   *
+   * The measurement belongs to the TILE - a mode toggle or an LRU remount
+   * re-creates this component, and a decision taken here would be re-taken
+   * every time - but the two things a decision needs are both known here: the
+   * population this canvas derives anyway, and the box the office is left
+   * once the directory and any panel have taken their width.
+   */
+  readonly onAutoProbe: (probe: OfficeAutoProbe) => void;
 }
 
 export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   const {
     agentIds,
     agents,
+    autoChip,
     canJump,
     canJumpToCreated,
     canJumpToSender,
@@ -1731,6 +1922,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     initialHistoryCaughtUp,
     modeToggle,
     officeView,
+    onAutoProbe,
     onJump,
     onJumpToCreated,
     onJumpToSender,
@@ -1739,8 +1931,10 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     playing,
     pulse,
     pulseKey,
+    ready,
     tileInstanceId,
     view,
+    viewPicker,
   } = props;
 
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -1790,6 +1984,27 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   // rather than a ref because the card is React, and it only moves when the
   // hover target changes - not every frame.
   const [hoverCard, setHoverCard] = useState<OfficeHoverTarget | null>(null);
+
+  // The BAND the camera is in, mirrored into React for the chip that names it.
+  // The camera itself is a ref read by the frame loop; only a band CHANGE is
+  // worth a render, which is a few times per session rather than per frame.
+  const openingLod = officeLodForZoom(clampZoom(view.zoom));
+  const lodBandRef = useRef<OfficeLod>(openingLod);
+  const [lodBand, setLodBand] = useState<OfficeLod>(openingLod);
+  const syncLodBand = useCallback((zoom: number) => {
+    const next = officeLodForZoom(zoom);
+    if (lodBandRef.current === next) return;
+    lodBandRef.current = next;
+    setLodBand(next);
+  }, []);
+
+  /** The canvas box as last measured; `EMPTY_VIEWPORT` before the first pass. */
+  const [measuredBox, setMeasuredBox] = useState<OfficeSize>(EMPTY_VIEWPORT);
+
+  const directoryOpen = useCommGraphDirectoryOpen();
+  const setDirectoryOpen = useCommGraphPanelStore(
+    (state) => state.setDirectoryOpen,
+  );
 
   const { resolvedTheme } = useResolvedTheme();
   const speed = useCommGraphSpeed(epicId);
@@ -1852,6 +2067,17 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     // shows it.
     runtime.invalidateFrame();
   }, [nameById, runtime]);
+
+  // ONE subscription for every agent's claims, the same shape `nameById`
+  // takes: the plates read it, the hover card reads it, and a hook per sign
+  // would re-run a subscription per room whenever anyone claimed anything.
+  const roleClaimsByAgentId = useEpicAgentRoleClaimsByAgentId();
+  useEffect(() => {
+    runtime.setRoleClaims(roleClaimsByAgentId);
+    // A claim lands asynchronously and moves nothing on the floor, so the
+    // frame that shows it has to be asked for.
+    runtime.invalidateFrame();
+  }, [roleClaimsByAgentId, runtime]);
 
   const officeAgents = useMemo<ReadonlyArray<OfficeAgentInput>>(
     () =>
@@ -1966,6 +2192,37 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     runtime.setPartition(partition);
   }, [partition, runtime]);
 
+  // WHAT AUTO WOULD MEASURE, pushed up whenever it changes. Reported even
+  // while `ready` is false - it is the thing that MAKES the tile ready - but
+  // never before this canvas is eligible and has a box, because a measurement
+  // against a tile nobody can see would decide the office by the size of
+  // nothing.
+  useEffect(() => {
+    if (!eligible) return;
+    if (measuredBox.width <= 0 || measuredBox.height <= 0) return;
+    onAutoProbe({
+      input: {
+        agents: officeAgents,
+        partition,
+        // A measurement is of a FRESH office: nobody is seated yet, nobody is
+        // owed a seat, and there is no previous layout to keep stable.
+        occupancy: NO_OCCUPANCY,
+        needsCapacity: NO_CAPACITY_NEEDED,
+        activityById,
+        viewport: measuredBox,
+        previous: null,
+      },
+      canvas: measuredBox,
+    });
+  }, [
+    activityById,
+    eligible,
+    measuredBox,
+    officeAgents,
+    onAutoProbe,
+    partition,
+  ]);
+
   const sceneInput = useMemo<OfficeSceneInput>(
     () => ({
       agents: officeAgents,
@@ -2050,7 +2307,10 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     // state the rows it slept through led to, which is what makes the return
     // one sync rather than a burst of envelopes nobody watched.
     runtime.setSceneInput(stamped);
-    if (!eligible) return;
+    // READY as well as eligible. Until the tile has settled which view this
+    // is, there is nothing to plan FOR - and the held input above means the
+    // wait costs one sync when it settles, not a replay of everything missed.
+    if (!eligible || !ready) return;
     const scene = ensureScene();
     if (runtime.isSuspended()) {
       runtime.setSuspended(false);
@@ -2062,7 +2322,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     // an open request takes an envelope off a desk and starts no walk, and
     // within the same minute the idle skip would leave the pile painted.
     runtime.invalidateFrame();
-  }, [eligible, ensureScene, runtime, sceneInput]);
+  }, [eligible, ensureScene, ready, runtime, sceneInput]);
 
   // Pressing Play is an explicit request to follow the action again. Pause
   // leaves the current choice alone; only the next false -> true transition
@@ -2105,12 +2365,13 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       camera.x = screenX - (screenX - camera.x) * ratio;
       camera.y = screenY - (screenY - camera.y) * ratio;
       camera.zoom = nextZoom;
+      syncLodBand(nextZoom);
       // The camera is not part of what the idle skip watches - a still floor
       // would keep the old framing painted under the new hit geometry.
       runtime.invalidateFrame();
       persistView();
     },
-    [persistView, runtime],
+    [persistView, runtime, syncLodBand],
   );
 
   const fitToFloor = useCallback(() => {
@@ -2126,10 +2387,11 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     runtime.getCamera().x = fitted.x;
     runtime.getCamera().y = fitted.y;
     runtime.getCamera().zoom = fitted.zoom;
+    syncLodBand(fitted.zoom);
     fittedRef.current = { floor: size, viewport };
     runtime.invalidateFrame();
     persistView();
-  }, [peekScene, persistView, runtime]);
+  }, [peekScene, persistView, runtime, syncLodBand]);
 
   const handleZoomIn = useCallback(() => {
     runtime.takeManualControl();
@@ -2158,6 +2420,14 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     const dpr = window.devicePixelRatio || 1;
     appliedDprRef.current = dpr;
     runtime.setViewport({ width: rect.width, height: rect.height });
+    // Mirrored into React as well as the runtime: the runtime's copy is for
+    // the frame loop, and this one is what lets the Auto probe below be a
+    // reaction to the tile changing size rather than a poll.
+    setMeasuredBox((current) =>
+      current.width === rect.width && current.height === rect.height
+        ? current
+        : { width: rect.width, height: rect.height },
+    );
     const width = Math.max(1, Math.round(rect.width * dpr));
     const height = Math.max(1, Math.round(rect.height * dpr));
     if (canvas.width === width && canvas.height === height) return;
@@ -2333,6 +2603,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     const followHoverCard = (
       frame: OfficeFrame,
       camera: OfficeCamera,
+      scene: OfficeScene,
     ): void => {
       const anchor = hoverAnchorRef.current;
       if (anchor === null) return;
@@ -2345,9 +2616,15 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         return;
       }
       if (sameRect(rect, hoverRectRef.current)) return;
-      // React state, so only a box that actually moved is worth a render.
+      // React state, so only a box that actually moved is worth a render. The
+      // "where" is re-read on those same frames: what moves a character's box
+      // is exactly what changes where it is.
       hoverRectRef.current = rect;
-      setHoverCard({ agentId: anchor.agentId, rect });
+      setHoverCard({
+        agentId: anchor.agentId,
+        rect,
+        whereabouts: scene.whereabouts(anchor.agentId),
+      });
     };
 
     /**
@@ -2472,6 +2749,10 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       // map and pips at overview, pixel art otherwise - so it is chosen here,
       // once, and everything below reads it rather than the zoom.
       const lod = officeLodForZoom(camera.zoom);
+      // An auto-fit or a playback pan moves the zoom without any handler
+      // having touched it, so the chip is synced from the frame that results
+      // rather than only from the gestures.
+      syncLodBand(camera.zoom);
       const worldRect = worldRectOf(camera, viewport);
       const frame = scene.frame(lod, worldRect);
       runtime.setHitRegions(frame.hitRegions);
@@ -2481,7 +2762,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       // frame, so the move begins on the next one. A playback pan is a 400ms
       // ease, and one frame of it is a pixel.
       requestPlaybackPan(frame.focus, viewport);
-      followHoverCard(frame, camera);
+      followHoverCard(frame, camera, scene);
       drawOfficeFrame({
         ctx,
         frame,
@@ -2493,6 +2774,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         theme: resolvedTheme,
         searchMatchIds: runtime.getSearchMatchIds(),
         nameById: runtime.getNameById(),
+        roleClaims: runtime.getRoleClaims(),
         hostNameById: runtime.getHostNames(),
         awayAgentIds: frame.awayAgentIds,
         hoveredAgentId: runtime.getHoveredAgentId(),
@@ -2555,7 +2837,14 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       // A floor's worth of pixels is real memory; it goes with the tile.
       staticLayer.release();
     };
-  }, [applyCanvasSize, officeView, peekScene, resolvedTheme, runtime]);
+  }, [
+    applyCanvasSize,
+    officeView,
+    peekScene,
+    resolvedTheme,
+    runtime,
+    syncLodBand,
+  ]);
 
   /** A client position in container screen pixels. */
   const toScreenPoint = useCallback(
@@ -2632,30 +2921,21 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         envelopeEdgeFor(runtime, scene, point) !== null;
       const region =
         point === null ? null : hitRegionFor(runtime.getHitRegions(), point);
-      const camera = runtime.getCamera();
       const screen = toScreenPoint(event.clientX, event.clientY);
+      const target = hoverTargetFor({
+        region,
+        camera: runtime.getCamera(),
+        scene,
+      });
       // Mirrored for the DRAW, which needs it to keep an away agent's name tag
       // while the pointer is on it; the card itself is React state.
-      runtime.setHoveredAgentId(region === null ? null : region.agentId);
-      const rect =
-        region === null
-          ? null
-          : {
-              x: region.rect.x * camera.zoom + camera.x,
-              y: region.rect.y * camera.zoom + camera.y,
-              width: region.rect.width * camera.zoom,
-              height: region.rect.height * camera.zoom,
-            };
+      runtime.setHoveredAgentId(target === null ? null : target.agentId);
       hoverAnchorRef.current =
-        region === null || screen === null
+        target === null || screen === null
           ? null
-          : { agentId: region.agentId, screenX: screen.x, screenY: screen.y };
-      hoverRectRef.current = rect;
-      setHoverCard(
-        region === null || rect === null
-          ? null
-          : { agentId: region.agentId, rect },
-      );
+          : { agentId: target.agentId, screenX: screen.x, screenY: screen.y };
+      hoverRectRef.current = target === null ? null : target.rect;
+      setHoverCard(target);
       // An envelope is clickable too, so it earns the same cursor even where
       // it is flying over open floor with no desk under it.
       event.currentTarget.style.cursor =
@@ -2972,8 +3252,63 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   const openAgentById = useCommGraphOpenAgentById(agents, onOpenAgent);
   const closePanel = useCallback(() => setSelectedDetail(null), []);
 
+  /**
+   * A directory row names somebody who may be nowhere near the viewport, so
+   * the camera is aimed from the SEAT BOOK (`scene.locate`) rather than from
+   * the last frame, which only knows what it drew.
+   */
+  const handleDirectorySelect = useCallback(
+    (agentId: string) => {
+      setSelectedAgentId(agentId);
+      const scene = peekScene();
+      if (scene === null) return;
+      const box = scene.locate(agentId);
+      if (box === null) return;
+      // Aiming the camera by hand is a statement about where it should be, the
+      // same as a drag - Find's own row does exactly this.
+      runtime.takeManualControl();
+      runtime.requestPan({ focus: rectCenter(box), zoom: null });
+    },
+    [peekScene, runtime, setSelectedAgentId],
+  );
+
+  const handleDirectoryHover = useCallback(
+    (agentId: string | null) => {
+      // The draw keeps an away agent's name tag while it is hovered, so a row
+      // under the pointer lights its character up on the floor.
+      runtime.setHoveredAgentId(agentId);
+    },
+    [runtime],
+  );
+
+  const hideDirectory = useCallback(() => {
+    setDirectoryOpen(false);
+  }, [setDirectoryOpen]);
+
+  const toggleDirectory = useCallback(() => {
+    setDirectoryOpen(!directoryOpen);
+  }, [directoryOpen, setDirectoryOpen]);
+
   return (
     <div className="flex h-full min-h-0 w-full min-w-0">
+      {/*
+        RESERVED SPACE, before the canvas and before any panel: the directory
+        is read WHILE the floor is, so it takes width rather than covering it -
+        and taking width is also what makes the canvas box Auto measures the
+        box the office really gets.
+      */}
+      {!directoryOpen ? null : (
+        <OfficeDirectoryPanel
+          partition={partition}
+          statusById={statusById}
+          nameById={nameById}
+          hostNameById={hostNameById}
+          selectedAgentId={selectedAgentId}
+          onSelectAgent={handleDirectorySelect}
+          onHoverAgent={handleDirectoryHover}
+          onClose={hideDirectory}
+        />
+      )}
       <div
         ref={containerRef}
         className="relative h-full min-h-0 w-full min-w-0 flex-1 overflow-hidden"
@@ -3005,7 +3340,17 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
           role="img"
           aria-label="Office view of the communication graph"
         />
-        {modeToggle}
+        {/*
+          The mode toggle is passed in already positioned for this row by the
+          tile - it pins itself to the corner in the node graph, which has no
+          row to sit in.
+        */}
+        <OfficeChromeRow
+          directoryOpen={directoryOpen}
+          onToggleDirectory={toggleDirectory}
+          viewPicker={viewPicker}
+          modeToggle={modeToggle}
+        />
         {/*
           A detached cursor has to be VISIBLE on the floor. Scrubbing back
           changes little here - the same people sit at the same desks, only
@@ -3021,10 +3366,15 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
             name={hoveredAgent.name}
             screenRect={hoverCard.rect}
             onPointerDown={handlePointerDown}
+            roleClaims={claimsOf(roleClaimsByAgentId, hoveredAgent.id)}
             extraContent={
               <OfficeHoverSupplement
                 status={statusById.get(hoveredAgent.id) ?? "idle"}
                 modelTier={officeModelTier(hoveredAgent.model)}
+                // Asked of the LIVE scene as the card re-renders, which it does
+                // every time the character it points at moves - so "at their
+                // desk" becomes "Kitchen" on the frame they get up.
+                whereabouts={hoverCard.whereabouts}
               />
             }
             onSelect={setSelectedAgentId}
@@ -3053,40 +3403,52 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         </ul>
         <div
           className={cn(
-            "absolute bottom-2 left-2 z-10 flex flex-col gap-0.5",
-            "rounded-md border border-border bg-popover p-0.5 shadow-xs",
+            "absolute bottom-2 left-2 z-10 flex flex-col items-start gap-1",
+            // Capped against the tile: the auto chip is a sentence, and a
+            // sentence has no business being wider than the office it is
+            // explaining.
+            "max-w-[min(100%,24rem)]",
           )}
         >
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="outline"
-            aria-label="Zoom in"
-            data-testid="comm-graph-office-zoom-in"
-            onClick={handleZoomIn}
+          {autoChip}
+          <OfficeLodChip lod={lodBand} />
+          <div
+            className={cn(
+              "flex flex-col gap-0.5",
+              "rounded-md border border-border bg-popover p-0.5 shadow-xs",
+            )}
           >
-            <Plus aria-hidden />
-          </Button>
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="outline"
-            aria-label="Zoom out"
-            data-testid="comm-graph-office-zoom-out"
-            onClick={handleZoomOut}
-          >
-            <Minus aria-hidden />
-          </Button>
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="outline"
-            aria-label="Fit the office floor"
-            data-testid="comm-graph-office-fit"
-            onClick={handleFit}
-          >
-            <Maximize aria-hidden />
-          </Button>
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="outline"
+              aria-label="Zoom in"
+              data-testid="comm-graph-office-zoom-in"
+              onClick={handleZoomIn}
+            >
+              <Plus aria-hidden />
+            </Button>
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="outline"
+              aria-label="Zoom out"
+              data-testid="comm-graph-office-zoom-out"
+              onClick={handleZoomOut}
+            >
+              <Minus aria-hidden />
+            </Button>
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="outline"
+              aria-label="Fit the office floor"
+              data-testid="comm-graph-office-fit"
+              onClick={handleFit}
+            >
+              <Maximize aria-hidden />
+            </Button>
+          </div>
         </div>
       </div>
       {selectedEdge === null ? null : (

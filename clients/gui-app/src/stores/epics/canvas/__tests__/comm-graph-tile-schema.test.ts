@@ -6,10 +6,14 @@ import {
 } from "@/stores/epics/canvas/tile-schema";
 import {
   commGraphTileId,
+  isDefaultCommGraphView,
   makeCommGraphTileRef,
   DEFAULT_COMM_GRAPH_VIEW,
 } from "@/stores/epics/canvas/tile-schema/comm-graph-tile";
-import { updateCommGraphTileView } from "@/stores/epics/canvas/actions";
+import {
+  updateCommGraphTileCamera,
+  updateCommGraphTileView,
+} from "@/stores/epics/canvas/actions";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import type { EpicCanvasState } from "@/stores/epics/canvas/types";
 
@@ -43,6 +47,166 @@ describe("comm-graph tile schema", () => {
       },
     };
     expect(parseTileRef(serializeTileRef(ref))).toEqual(ref);
+  });
+
+  it("round-trips a real officeView and officeAutoView choice", () => {
+    const ref = {
+      ...makeCommGraphTileRef(EPIC_ID),
+      view: {
+        ...DEFAULT_COMM_GRAPH_VIEW,
+        x: 12,
+        y: -30,
+        zoom: 1.5,
+        mode: "office" as const,
+        officeView: "towers" as const,
+        officeAutoView: "building" as const,
+      },
+    };
+    expect(parseTileRef(serializeTileRef(ref))).toEqual(ref);
+  });
+
+  it('round-trips officeView: "auto" as a real choice, not a degrade', () => {
+    const ref = {
+      ...makeCommGraphTileRef(EPIC_ID),
+      view: {
+        ...DEFAULT_COMM_GRAPH_VIEW,
+        officeView: "auto" as const,
+        officeAutoView: "building" as const,
+      },
+    };
+    const parsed = parseTileRef(serializeTileRef(ref));
+    expect(parsed?.type).toBe("comm-graph");
+    if (parsed === null || parsed.type !== "comm-graph") return;
+    expect(parsed.view.officeView).toBe("auto");
+    expect(parsed.view.officeAutoView).toBe("building");
+  });
+
+  it("degrades an officeView this build does not register, resetting the camera", () => {
+    const parsed = parseTileRef({
+      id: commGraphTileId(EPIC_ID),
+      instanceId: "inst-1",
+      type: "comm-graph",
+      name: "Agent office",
+      hostId: UNKNOWN_HOST_PLACEHOLDER,
+      epicId: EPIC_ID,
+      view: {
+        x: 400,
+        y: -220,
+        zoom: 3,
+        mode: "office",
+        officeView: "city",
+        officeAutoView: "building",
+      },
+    });
+    expect(parsed?.type).toBe("comm-graph");
+    if (parsed === null || parsed.type !== "comm-graph") return;
+    expect(parsed.view.officeView).toBeNull();
+    // A camera saved against a view this build cannot draw would reopen the
+    // fallback view scrolled off into empty space, so it resets in the same
+    // parse rather than surviving the degrade.
+    expect(parsed.view.x).toBe(DEFAULT_COMM_GRAPH_VIEW.x);
+    expect(parsed.view.y).toBe(DEFAULT_COMM_GRAPH_VIEW.y);
+    expect(parsed.view.zoom).toBe(DEFAULT_COMM_GRAPH_VIEW.zoom);
+  });
+
+  it("degrades an officeAutoView this build does not register, resetting the camera", () => {
+    const parsed = parseTileRef({
+      id: commGraphTileId(EPIC_ID),
+      instanceId: "inst-1",
+      type: "comm-graph",
+      name: "Agent office",
+      hostId: UNKNOWN_HOST_PLACEHOLDER,
+      epicId: EPIC_ID,
+      view: {
+        x: 400,
+        y: -220,
+        zoom: 3,
+        mode: "office",
+        officeView: "towers",
+        officeAutoView: "city",
+      },
+    });
+    expect(parsed?.type).toBe("comm-graph");
+    if (parsed === null || parsed.type !== "comm-graph") return;
+    // The two fields degrade independently; only the auto outcome is gone.
+    expect(parsed.view.officeView).toBe("towers");
+    expect(parsed.view.officeAutoView).toBeNull();
+    expect(parsed.view.x).toBe(DEFAULT_COMM_GRAPH_VIEW.x);
+    expect(parsed.view.y).toBe(DEFAULT_COMM_GRAPH_VIEW.y);
+    expect(parsed.view.zoom).toBe(DEFAULT_COMM_GRAPH_VIEW.zoom);
+  });
+
+  it('degrades "auto" as an officeAutoView, since it is a measured outcome, not a choice', () => {
+    const parsed = parseTileRef({
+      id: commGraphTileId(EPIC_ID),
+      instanceId: "inst-1",
+      type: "comm-graph",
+      name: "Agent office",
+      hostId: UNKNOWN_HOST_PLACEHOLDER,
+      epicId: EPIC_ID,
+      view: {
+        x: 0,
+        y: 0,
+        zoom: 1,
+        mode: "office",
+        officeView: "auto",
+        officeAutoView: "auto",
+      },
+    });
+    expect(parsed?.type).toBe("comm-graph");
+    if (parsed === null || parsed.type !== "comm-graph") return;
+    expect(parsed.view.officeView).toBe("auto");
+    expect(parsed.view.officeAutoView).toBeNull();
+  });
+
+  it("keeps an absent officeView/officeAutoView as null WITHOUT resetting the camera", () => {
+    // A tile saved before these fields existed predates the choice entirely -
+    // that is not the same thing as a value this build cannot read, and its
+    // owner's framing must survive.
+    const parsed = parseTileRef({
+      id: commGraphTileId(EPIC_ID),
+      instanceId: "inst-1",
+      type: "comm-graph",
+      name: "Agent office",
+      hostId: UNKNOWN_HOST_PLACEHOLDER,
+      epicId: EPIC_ID,
+      view: { x: 4, y: 5, zoom: 2, mode: "office" },
+    });
+    expect(parsed?.type).toBe("comm-graph");
+    if (parsed === null || parsed.type !== "comm-graph") return;
+    expect(parsed.view.officeView).toBeNull();
+    expect(parsed.view.officeAutoView).toBeNull();
+    expect(parsed.view.x).toBe(4);
+    expect(parsed.view.y).toBe(5);
+    expect(parsed.view.zoom).toBe(2);
+  });
+
+  it("keeps an explicitly persisted null officeView/officeAutoView WITHOUT resetting the camera", () => {
+    // A persisted `null` and an absent field are the SAME thing - never
+    // chosen - and neither is a degrade; only an unreadable non-null value is.
+    const parsed = parseTileRef({
+      id: commGraphTileId(EPIC_ID),
+      instanceId: "inst-1",
+      type: "comm-graph",
+      name: "Agent office",
+      hostId: UNKNOWN_HOST_PLACEHOLDER,
+      epicId: EPIC_ID,
+      view: {
+        x: 4,
+        y: 5,
+        zoom: 2,
+        mode: "office",
+        officeView: null,
+        officeAutoView: null,
+      },
+    });
+    expect(parsed?.type).toBe("comm-graph");
+    if (parsed === null || parsed.type !== "comm-graph") return;
+    expect(parsed.view.officeView).toBeNull();
+    expect(parsed.view.officeAutoView).toBeNull();
+    expect(parsed.view.x).toBe(4);
+    expect(parsed.view.y).toBe(5);
+    expect(parsed.view.zoom).toBe(2);
   });
 
   it("opens a NEWLY CREATED tile on the office floor", () => {
@@ -185,6 +349,20 @@ describe("comm-graph tile schema", () => {
       mode: "graph",
     });
   });
+
+  it("isDefaultCommGraphView ignores officeView and officeAutoView", () => {
+    // A tile at the neutral camera with a real view choice still reads as
+    // unframed - choosing a view is what resets the camera to this default in
+    // the first place, so folding the choice into the comparison would make
+    // every view pick immediately count as "the user framed this".
+    expect(
+      isDefaultCommGraphView({
+        ...DEFAULT_COMM_GRAPH_VIEW,
+        officeView: "building",
+        officeAutoView: "towers",
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("updateCommGraphTileView", () => {
@@ -248,6 +426,98 @@ describe("updateCommGraphTileView", () => {
         commGraphTileId(EPIC_ID),
         DEFAULT_COMM_GRAPH_VIEW,
       ),
+    ).toBe(state);
+  });
+
+  it("stores a write that changes only officeView", () => {
+    const state = stateWith();
+    const next = updateCommGraphTileView(state, commGraphTileId(EPIC_ID), {
+      ...DEFAULT_COMM_GRAPH_VIEW,
+      officeView: "towers",
+    });
+    const ref = Object.values(next.tilesByInstanceId)[0];
+    expect(ref?.type).toBe("comm-graph");
+    if (ref === undefined || ref.type !== "comm-graph") return;
+    // A compare over x/y/zoom/mode alone would see nothing different here and
+    // silently swallow the pick.
+    expect(ref.view.officeView).toBe("towers");
+    expect(next).not.toBe(state);
+  });
+
+  it("stores a write that changes only officeAutoView", () => {
+    const state = stateWith();
+    const next = updateCommGraphTileView(state, commGraphTileId(EPIC_ID), {
+      ...DEFAULT_COMM_GRAPH_VIEW,
+      officeAutoView: "building",
+    });
+    const ref = Object.values(next.tilesByInstanceId)[0];
+    expect(ref?.type).toBe("comm-graph");
+    if (ref === undefined || ref.type !== "comm-graph") return;
+    expect(ref.view.officeAutoView).toBe("building");
+    expect(next).not.toBe(state);
+  });
+});
+
+describe("updateCommGraphTileCamera", () => {
+  function stateWithChoice(): EpicCanvasState {
+    const ref = {
+      ...makeCommGraphTileRef(EPIC_ID),
+      view: {
+        ...DEFAULT_COMM_GRAPH_VIEW,
+        mode: "graph" as const,
+        officeView: "towers" as const,
+        officeAutoView: "building" as const,
+      },
+    };
+    return {
+      root: {
+        kind: "pane",
+        id: "pane-1",
+        tabInstanceIds: [ref.instanceId],
+        activeTabId: ref.instanceId,
+        previewTabId: null,
+        activationHistory: [ref.instanceId],
+      },
+      activePaneId: "pane-1",
+      tilesByInstanceId: { [ref.instanceId]: ref },
+      sizesByGroupId: {},
+    };
+  }
+
+  it("moves the camera and leaves mode, officeView and officeAutoView untouched", () => {
+    // Either renderer's debounced pan writes through this patch, so a pan
+    // landing after a pick must not carry the old choice back over it.
+    const state = stateWithChoice();
+    const next = updateCommGraphTileCamera(state, commGraphTileId(EPIC_ID), {
+      x: 40,
+      y: -12,
+      zoom: 2.5,
+    });
+    const ref = Object.values(next.tilesByInstanceId)[0];
+    expect(ref?.type).toBe("comm-graph");
+    if (ref === undefined || ref.type !== "comm-graph") return;
+    expect(ref.view).toEqual({
+      x: 40,
+      y: -12,
+      zoom: 2.5,
+      mode: "graph",
+      officeView: "towers",
+      officeAutoView: "building",
+    });
+  });
+
+  it("returns the same state object when the camera has not moved", () => {
+    const state = stateWithChoice();
+    const ref = Object.values(state.tilesByInstanceId)[0];
+    if (ref === undefined || ref.type !== "comm-graph") {
+      throw new Error("expected a comm-graph tile");
+    }
+    expect(
+      updateCommGraphTileCamera(state, commGraphTileId(EPIC_ID), {
+        x: ref.view.x,
+        y: ref.view.y,
+        zoom: ref.view.zoom,
+      }),
     ).toBe(state);
   });
 });

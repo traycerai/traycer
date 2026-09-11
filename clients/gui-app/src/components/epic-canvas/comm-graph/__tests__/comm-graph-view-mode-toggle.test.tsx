@@ -249,6 +249,51 @@ describe("comm-graph view mode", () => {
     expect(storedView()).toEqual({ ...DEFAULT_COMM_GRAPH_VIEW, mode: "graph" });
   });
 
+  it("keeps officeView and officeAutoView through Office -> Graph -> Office", async () => {
+    // `handleModeChange` spreads the two choices from the current value
+    // instead of rebuilding from DEFAULT_COMM_GRAPH_VIEW, so a mode toggle
+    // must not lose either one even though the camera resets on both hops.
+    act(() => {
+      useEpicCanvasStore
+        .getState()
+        .updateCommGraphTileViewInTab(TAB_ID, commGraphTileId(EPIC_ID), {
+          ...DEFAULT_COMM_GRAPH_VIEW,
+          x: 400,
+          y: -220,
+          zoom: 3,
+          mode: "office",
+          officeView: "towers",
+          officeAutoView: "building",
+        });
+    });
+    await renderTile();
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("comm-graph-mode-graph"));
+      await Promise.resolve();
+    });
+
+    expect(storedView()?.mode).toBe("graph");
+    expect(storedView()?.officeView).toBe("towers");
+    expect(storedView()?.officeAutoView).toBe("building");
+    // The camera still resets to neutral on each mode change.
+    expect(storedView()?.x).toBe(DEFAULT_COMM_GRAPH_VIEW.x);
+    expect(storedView()?.y).toBe(DEFAULT_COMM_GRAPH_VIEW.y);
+    expect(storedView()?.zoom).toBe(DEFAULT_COMM_GRAPH_VIEW.zoom);
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("comm-graph-mode-office"));
+      await Promise.resolve();
+    });
+
+    expect(storedView()?.mode).toBe("office");
+    expect(storedView()?.officeView).toBe("towers");
+    expect(storedView()?.officeAutoView).toBe("building");
+    expect(storedView()?.x).toBe(DEFAULT_COMM_GRAPH_VIEW.x);
+    expect(storedView()?.y).toBe(DEFAULT_COMM_GRAPH_VIEW.y);
+    expect(storedView()?.zoom).toBe(DEFAULT_COMM_GRAPH_VIEW.zoom);
+  });
+
   it("switches back to the office from the graph", async () => {
     await renderTile();
 

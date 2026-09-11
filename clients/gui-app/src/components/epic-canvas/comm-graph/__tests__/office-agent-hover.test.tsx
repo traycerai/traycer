@@ -33,8 +33,13 @@ function renderHover(onSelect: (agentId: string) => void) {
       agentId="agent-1"
       name="Reviewer"
       screenRect={RECT}
+      roleClaims={[]}
       extraContent={
-        <OfficeHoverSupplement status="working" modelTier="large" />
+        <OfficeHoverSupplement
+          status="working"
+          modelTier="large"
+          whereabouts={null}
+        />
       }
       onSelect={onSelect}
       onLeave={vi.fn()}

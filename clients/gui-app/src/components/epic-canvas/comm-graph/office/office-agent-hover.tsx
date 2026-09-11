@@ -20,11 +20,8 @@ import type { PointerEvent as ReactPointerEvent, ReactElement } from "react";
 import { AgentHoverTooltip } from "@/components/epic-canvas/sidebar/agent-hover-tooltip";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
-import {
-  useEpicAgentRoleClaims,
-  useEpicNodeHostId,
-  useEpicNodeOwnerKind,
-} from "@/lib/epic-selectors";
+import { useEpicNodeHostId, useEpicNodeOwnerKind } from "@/lib/epic-selectors";
+import type { RoleClaim } from "@traycer/protocol/persistence/epic/role-claims";
 import type { OfficeRect } from "@/lib/comm-graph/office/office-types";
 
 export interface OfficeAgentHoverProps {
@@ -39,6 +36,13 @@ export interface OfficeAgentHoverProps {
   readonly onLeave: () => void;
   /** The floor's own press handler, so a drag that starts here still pans. */
   readonly onPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
+  /**
+   * This agent's claims, taken from the canvas's ONE bulk map rather than from
+   * a hook here. The floor already holds every agent's claims for the plates,
+   * and a second per-agent subscription opening on hover is a subscription
+   * that churns with the pointer.
+   */
+  readonly roleClaims: readonly RoleClaim[];
 }
 
 export function OfficeAgentHover(props: OfficeAgentHoverProps) {
@@ -50,6 +54,7 @@ export function OfficeAgentHover(props: OfficeAgentHoverProps) {
     onLeave,
     onPointerDown,
     onSelect,
+    roleClaims,
     screenRect,
   } = props;
   // Resolved exactly as the graph node resolves them, from the node id alone -
@@ -60,7 +65,6 @@ export function OfficeAgentHover(props: OfficeAgentHoverProps) {
     hoverHostId ?? UNKNOWN_HOST_PLACEHOLDER,
   );
   const hoverOwnerKind = useEpicNodeOwnerKind(agentId);
-  const roleClaims = useEpicAgentRoleClaims(agentId);
 
   const trigger = (
     <button
