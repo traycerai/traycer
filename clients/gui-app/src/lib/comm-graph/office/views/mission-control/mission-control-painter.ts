@@ -2,6 +2,7 @@
  * Layered painter for Mission control. Identity projector; lod 0 is one
  * filled rect per console tier.
  */
+import { officeSpriteSize } from "@/lib/comm-graph/office/office-pixel-art";
 import { OFFICE_TILE } from "@/lib/comm-graph/office/office-types";
 import {
   frozenOf,
@@ -150,30 +151,17 @@ function podFloorName(
   return even ? "floor-pod-a" : "floor-pod-b";
 }
 
-function hostBandTiles(layout: OfficeLayout): ReadonlySet<string> {
-  const keys = new Set<string>();
-  const byHost = new Map<string, OfficeTilePos[]>();
-  for (const seat of layout.seats.values()) {
-    if (seat.kind !== "console") continue;
-    const hostKey = seat.hostId ?? "unattributed";
-    const tiles = byHost.get(hostKey) ?? [];
-    tiles.push(seat.deskTile);
-    byHost.set(hostKey, tiles);
+function hostBandSpriteAt(
+  layout: OfficeLayout,
+  col: number,
+  row: number,
+): OfficeSpriteName | null {
+  const frozen = frozenOf(layout);
+  if (frozen === null) return null;
+  for (const band of frozen.hostBands) {
+    if (band.col === col && band.row === row) return band.sprite;
   }
-  for (const tiles of byHost.values()) {
-    const byRow = new Map<number, number>();
-    for (const tile of tiles) {
-      const current = byRow.get(tile.row);
-      if (current === undefined || tile.col < current) {
-        byRow.set(tile.row, tile.col);
-      }
-    }
-    for (const [row, col] of byRow) {
-      keys.add(`${col - 1},${row}`);
-      keys.add(`${col - 1},${row + 1}`);
-    }
-  }
-  return keys;
+  return null;
 }
 
 function tileInPod(pod: OfficePod, col: number, row: number): boolean {
@@ -239,6 +227,55 @@ function blockMap(
   return blocks;
 }
 
+function ownedPropKeys(layout: OfficeLayout): ReadonlySet<string> {
+  const keys = new Set<string>();
+  for (const floor of layout.floors) {
+    for (const spot of floor.errandSpots) {
+      const sprite = SPOT_SPRITES[spot.kind];
+      if (sprite === undefined) continue;
+      const tile = fixtureTile(spot);
+      keys.add(`${sprite}:${tile.col},${tile.row}`);
+    }
+  }
+  return keys;
+}
+
+function propOverlapsTiles(
+  prop: OfficeLayout["props"][number],
+  tiles: OfficeTileRect,
+): boolean {
+  const size = officeSpriteSize(prop.sprite);
+  const x = prop.tile.col * OFFICE_TILE;
+  const y = prop.tile.row * OFFICE_TILE;
+  const left = tiles.col * OFFICE_TILE;
+  const top = tiles.row * OFFICE_TILE;
+  const right = left + tiles.cols * OFFICE_TILE;
+  const bottom = top + tiles.rows * OFFICE_TILE;
+  return (
+    x < right && x + size.width > left && y < bottom && y + size.height > top
+  );
+}
+
+function paintUnownedProps(
+  layout: OfficeLayout,
+  tiles: OfficeTileRect,
+): ReadonlyArray<OfficeDrawable> {
+  const owned = ownedPropKeys(layout);
+  const drawables: OfficeDrawable[] = [];
+  for (const prop of layout.props) {
+    const key = `${prop.sprite.name}:${prop.tile.col},${prop.tile.row}`;
+    if (owned.has(key)) continue;
+    if (!propOverlapsTiles(prop, tiles)) continue;
+    drawables.push({
+      kind: "sprite",
+      sprite: prop.sprite,
+      x: prop.tile.col * OFFICE_TILE,
+      y: prop.tile.row * OFFICE_TILE,
+    });
+  }
+  return drawables;
+}
+
 function paintFloor(
   layout: OfficeLayout,
   tiles: OfficeTileRect,
@@ -246,20 +283,17 @@ function paintFloor(
 ): ReadonlyArray<OfficeDrawable> {
   if (lod === 0) return blockMap(layout, tiles);
   const drawables: OfficeDrawable[] = [];
-  const hostBand = hostBandTiles(layout);
   const lastCol = tiles.col + tiles.cols;
   const lastRow = tiles.row + tiles.rows;
   for (let row = tiles.row; row < lastRow; row += 1) {
     if (row < 0 || row >= layout.rows) continue;
     for (let col = tiles.col; col < lastCol; col += 1) {
       if (col < 0 || col >= layout.cols) continue;
+      const band = hostBandSpriteAt(layout, col, row);
       const tinted = podSpriteAt(layout.rooms, col, row);
       let sprite: OfficeSpriteName =
         tinted === null ? floorSpriteAt(col, row) : tinted;
-      if (hostBand.has(`${col},${row}`)) {
-        sprite =
-          (col + row) % 2 === 0 ? "floor-pod-warm-a" : "floor-pod-warm-b";
-      }
+      if (band !== null) sprite = band;
       drawables.push({
         kind: "sprite",
         sprite: { name: sprite },
@@ -268,6 +302,7 @@ function paintFloor(
       });
     }
   }
+  drawables.push(...paintUnownedProps(layout, tiles));
   return drawables;
 }
 
@@ -300,21 +335,24 @@ function paintSeat(
   state: OfficeDeskState,
   lod: OfficeLod,
 ): ReadonlyArray<OfficeWorldDrawable> {
+  if (lod === 0) return [];
   const deskX = seat.deskTile.col * OFFICE_TILE;
   const deskY = seat.deskTile.row * OFFICE_TILE;
   const depth = deskY + OFFICE_TILE;
   const owner = state.agentId;
   const out: OfficeWorldDrawable[] = [];
   if (seat.kind === "console") {
+    const stepY = seat.chairTile.row * OFFICE_TILE;
+    const stepDepth = stepY - 1;
     out.push(
       worldOf(
         {
           kind: "sprite",
           sprite: { name: "tier-step" },
           x: deskX,
-          y: deskY,
+          y: stepY,
         },
-        depth - 1,
+        stepDepth,
         owner,
       ),
     );
@@ -324,9 +362,9 @@ function paintSeat(
           kind: "sprite",
           sprite: { name: "tier-step" },
           x: deskX + OFFICE_TILE,
-          y: deskY,
+          y: stepY,
         },
-        depth - 1,
+        stepDepth,
         owner,
       ),
     );
@@ -483,18 +521,18 @@ function isFixtureOrigin(spot: OfficeErrandSpot): boolean {
 }
 
 function fixtureTile(spot: OfficeErrandSpot): OfficeTilePos {
-  if (spot.actionTile !== null && spot.kind !== "whiteboard") {
-    return spot.actionTile;
-  }
-  if (spot.kind === "pingpong" && spot.actionTile !== null) {
-    return spot.actionTile;
-  }
   if (
     spot.kind === "nap" ||
     spot.kind === "read" ||
     spot.kind === "treadmill"
   ) {
     return spot.tile;
+  }
+  if (spot.actionTile !== null && spot.kind !== "whiteboard") {
+    return spot.actionTile;
+  }
+  if (spot.kind === "pingpong" && spot.actionTile !== null) {
+    return spot.actionTile;
   }
   if (spot.kind === "whiteboard" && spot.actionTile !== null) {
     return spot.actionTile;
@@ -505,8 +543,9 @@ function fixtureTile(spot: OfficeErrandSpot): OfficeTilePos {
 function paintSpot(
   _layout: OfficeLayout,
   spot: OfficeErrandSpot,
-  _lod: OfficeLod,
+  lod: OfficeLod,
 ): ReadonlyArray<OfficeWorldDrawable> {
+  if (lod === 0) return [];
   if (!isFixtureOrigin(spot)) return [];
   const sprite = SPOT_SPRITES[spot.kind];
   if (sprite === undefined) return [];

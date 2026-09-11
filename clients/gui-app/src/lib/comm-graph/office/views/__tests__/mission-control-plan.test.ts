@@ -4,8 +4,14 @@
  */
 import { describe, expect, it } from "vitest";
 import { findOfficePath } from "@/lib/comm-graph/office/office-path";
+import {
+  officeSpriteColors,
+  officeSpriteMaps,
+  rasterizeSpriteMap,
+} from "@/lib/comm-graph/office/office-pixel-art";
 import { partitionOfficePopulation } from "@/lib/comm-graph/office/office-population";
 import type { OfficePopulation } from "@/lib/comm-graph/office/office-population";
+import { OfficeScene } from "@/lib/comm-graph/office/office-scene";
 import { makeTestEpic } from "@/lib/comm-graph/office/office-test-epic";
 import type { OfficeTestEpic } from "@/lib/comm-graph/office/office-test-epic";
 import {
@@ -17,15 +23,24 @@ import {
 } from "@/lib/comm-graph/office/views/mission-control/mission-control-plan";
 import type { MissionControlFrozen } from "@/lib/comm-graph/office/views/mission-control/mission-control-plan";
 import { MISSION_CONTROL_VIEW } from "@/lib/comm-graph/office/views/mission-control/mission-control-view";
-import type { OfficePlanInput } from "@/lib/comm-graph/office/views/office-view";
+import type {
+  OfficeDeskState,
+  OfficePlanInput,
+  OfficeView,
+} from "@/lib/comm-graph/office/views/office-view";
 import {
   OFFICE_TILE,
   type OfficeAgentInput,
   type OfficeAgentStatus,
+  type OfficeDrawable,
   type OfficeErrandSpot,
   type OfficeFloor,
+  type OfficeFrame,
   type OfficeLayout,
+  type OfficeSceneInput,
+  type OfficeSeat,
   type OfficeSize,
+  type OfficeSpriteName,
   type OfficeTilePos,
 } from "@/lib/comm-graph/office/office-types";
 
@@ -575,5 +590,521 @@ describe("planMissionControl contract", () => {
       expect(pingpong).toHaveLength(2);
       expect(pingpong[0].fixtureId).toBe(pingpong[1].fixtureId);
     });
+  });
+});
+
+const WHOLE_WORLD = { x: 0, y: 0, width: 10000, height: 10000 };
+const DESK_STATE: OfficeDeskState = {
+  agentId: "probe",
+  name: "probe",
+  status: "working",
+  sheeted: false,
+  openRequests: 3,
+  screenFrame: 0,
+  harnessId: null,
+  modelTier: "medium",
+  accentId: null,
+};
+
+function sceneInputFor(input: OfficePlanInput): OfficeSceneInput {
+  return {
+    agents: input.agents,
+    partition: input.partition,
+    activityById: input.activityById,
+    viewport: input.viewport,
+    visibleAgentIds: new Set(input.agents.map((agent) => agent.id)),
+    statusById: new Map(input.agents.map((agent) => [agent.id, "working"])),
+    openRequestsByReceiver: new Map(),
+    pulse: null,
+    pulseKey: null,
+    stepMs: 800,
+    cursorMs: null,
+    clockMs: 0,
+    playing: false,
+    reducedMotion: false,
+  };
+}
+
+function sceneOf(epic: OfficeTestEpic): OfficeScene {
+  const scene = new OfficeScene(MISSION_CONTROL_VIEW, null);
+  scene.sync(sceneInputFor(planFresh(epic, VIEWPORT_WIDE).input));
+  return scene;
+}
+
+function requireLayout(scene: OfficeScene): OfficeLayout {
+  const layout = scene.layout();
+  if (layout === null) throw new Error("scene has no layout");
+  return layout;
+}
+
+function frameDrawables(frame: OfficeFrame): ReadonlyArray<OfficeDrawable> {
+  const world =
+    frame.world === null ? [] : frame.world.map((entry) => entry.drawable);
+  return [...frame.floor, ...frame.props, ...frame.actors, ...world];
+}
+
+function spriteCount(
+  draws: ReadonlyArray<OfficeDrawable>,
+  name: OfficeSpriteName,
+): number {
+  return draws.filter(
+    (drawable) => drawable.kind === "sprite" && drawable.sprite.name === name,
+  ).length;
+}
+
+function floorSpriteAtTile(
+  draws: ReadonlyArray<OfficeDrawable>,
+  tile: OfficeTilePos,
+): OfficeSpriteName | null {
+  const sprites = draws.filter(
+    (drawable) =>
+      drawable.kind === "sprite" &&
+      drawable.x === tile.col * OFFICE_TILE &&
+      drawable.y === tile.row * OFFICE_TILE,
+  );
+  const last = sprites.at(-1);
+  if (last === undefined || last.kind !== "sprite") return null;
+  return last.sprite.name;
+}
+
+function firstConsole(layout: OfficeLayout): OfficeSeat {
+  for (const seat of layout.seats.values()) {
+    if (seat.kind === "console") return seat;
+  }
+  throw new Error("no console seat");
+}
+
+function grownFrom(
+  input: OfficePlanInput,
+  previous: OfficeLayout,
+  arrivals: ReadonlyArray<OfficeAgentInput>,
+): OfficePlanInput {
+  const agents = [...input.agents, ...arrivals];
+  const statuses = new Map<string, OfficeAgentStatus>(
+    agents.map((agent) => [agent.id, "working"]),
+  );
+  const occupancy = new Map<string, string>();
+  for (const desk of previous.desks.values()) {
+    occupancy.set(desk.seatId, desk.agentId);
+  }
+  return {
+    agents,
+    partition: partitionOfficePopulation({
+      agents,
+      statusById: statuses,
+      previous: input.partition,
+    }),
+    occupancy,
+    needsCapacity: [],
+    activityById: input.activityById,
+    viewport: input.viewport,
+    previous,
+  };
+}
+
+function rasterColors(name: OfficeSpriteName): string[] {
+  const entry = officeSpriteMaps().find((item) => item.name === name);
+  if (entry === undefined) return [];
+  const paint = rasterizeSpriteMap(
+    entry.map,
+    officeSpriteColors({ name }, "dark"),
+    false,
+  );
+  const colors = new Set<string>();
+  for (let i = 0; i < paint.pixels.length; i += 4) {
+    colors.add(Array.from(paint.pixels.slice(i, i + 4)).join(","));
+  }
+  return [...colors].sort();
+}
+
+function consoleCoversPixel(request: {
+  readonly draws: ReadonlyArray<OfficeDrawable>;
+  readonly afterIndex: number;
+  readonly px: number;
+  readonly py: number;
+  readonly consoleMap: ReadonlyArray<string>;
+}): boolean {
+  for (let i = request.afterIndex; i < request.draws.length; i += 1) {
+    const later = request.draws[i];
+    if (later.kind !== "sprite") continue;
+    if (later.sprite.name !== "console") continue;
+    const lx = request.px - later.x;
+    const ly = request.py - later.y;
+    if (lx < 0 || ly < 0 || ly >= request.consoleMap.length) continue;
+    const row = request.consoleMap[ly];
+    if (lx >= row.length) continue;
+    if (row[lx] !== ".") return true;
+  }
+  return false;
+}
+
+function exposedStepPixels(
+  draws: ReadonlyArray<OfficeDrawable>,
+  steps: ReadonlyArray<OfficeDrawable>,
+): number {
+  const maps = new Map(
+    officeSpriteMaps().map((entry) => [entry.name, entry.map]),
+  );
+  const consoleMap = maps.get("console");
+  if (consoleMap === undefined) throw new Error("no console map");
+  let exposed = 0;
+  for (const step of steps) {
+    if (step.kind !== "sprite") continue;
+    const map = maps.get(step.sprite.name);
+    if (map === undefined) throw new Error("no step map");
+    const raster = rasterizeSpriteMap(
+      map,
+      officeSpriteColors(step.sprite, "dark"),
+      false,
+    );
+    const afterIndex = draws.indexOf(step) + 1;
+    for (let y = 0; y < raster.height; y += 1) {
+      for (let x = 0; x < raster.width; x += 1) {
+        if (raster.pixels[(y * raster.width + x) * 4 + 3] === 0) continue;
+        if (
+          !consoleCoversPixel({
+            draws,
+            afterIndex,
+            px: step.x + x,
+            py: step.y + y,
+            consoleMap,
+          })
+        ) {
+          exposed += 1;
+        }
+      }
+    }
+  }
+  return exposed;
+}
+
+class CountingSeatMap extends Map<string, OfficeSeat> {
+  constructor(
+    entries: Iterable<readonly [string, OfficeSeat]>,
+    private readonly onVisit: () => void,
+  ) {
+    super(entries);
+  }
+
+  override *values(): MapIterator<OfficeSeat> {
+    for (const seat of super.values()) {
+      this.onVisit();
+      yield seat;
+    }
+  }
+}
+
+describe("mission-control cold-review findings", () => {
+  it("keeps the incumbent on the podium when an earlier HQ arrives from another host", () => {
+    const fixture = makeTestEpic("many-roots", 2, 1);
+    const agents = fixture.agents.map((agent, index) => ({
+      ...agent,
+      hostId: "host-a",
+      createdAt: 100 + index,
+    }));
+    const epic: OfficeTestEpic = { ...fixture, agents };
+    const input = planFresh(epic, VIEWPORT_WIDE).input;
+    const scene = new OfficeScene(MISSION_CONTROL_VIEW, null);
+    scene.sync(sceneInputFor(input));
+    const prior = requireLayout(scene);
+    const incumbent = input.agents[0];
+    const arrival: OfficeAgentInput = {
+      ...input.agents[0],
+      id: "older-remote-hq",
+      name: "Older remote HQ",
+      hostId: "host-b",
+      createdAt: 50,
+    };
+    const next = grownFrom(input, prior, [arrival]);
+    scene.sync({ ...sceneInputFor(next), reducedMotion: true });
+    const layout = requireLayout(scene);
+    expect(layout.desks.size).toBe(3);
+    expect(layout.desks.get(incumbent.id)?.seatId).toBe(
+      prior.desks.get(incumbent.id)?.seatId,
+    );
+    expect(layout.desks.get(arrival.id)?.seatId).not.toBe("-/0/hall/podium");
+    expect(scene.locate(incumbent.id)).not.toEqual(scene.locate(arrival.id));
+    expect(scene.locate(arrival.id)).not.toBeNull();
+  });
+
+  it("paints every declared whiteboard, the reception and the bookcase", () => {
+    const scene = sceneOf(makeTestEpic("triage", 40, 1));
+    const layout = requireLayout(scene);
+    const draws = frameDrawables(scene.frame(2, WHOLE_WORLD));
+    const plannedBoard = layout.props.filter(
+      (prop) => prop.sprite.name === "whiteboard",
+    );
+    expect(spriteCount(draws, "whiteboard")).toBe(plannedBoard.length);
+    expect(spriteCount(draws, "whiteboard")).toBe(48);
+    expect(spriteCount(draws, "reception")).toBe(1);
+    expect(spriteCount(draws, "bookcase")).toBe(1);
+  });
+
+  it("tints only a team's own seats when that team overflows to the tail", () => {
+    const input = planFresh(
+      makeTestEpic("triage", 309, 1),
+      VIEWPORT_WIDE,
+    ).input;
+    const prior = MISSION_CONTROL_VIEW.plan(input);
+    const reserve = frozenOf(prior)?.teamReserveSeatIds[0];
+    if (reserve === undefined) throw new Error("no reserve");
+    const parent = input.agents.find((agent) => agent.id === reserve.teamId);
+    if (parent === undefined) throw new Error("no lead");
+    const first = grownFrom(input, prior, [
+      childAgent(parent, "new-child-1", nextCreatedAt(input.agents)),
+    ]);
+    const one = MISSION_CONTROL_VIEW.plan(first);
+    const second = grownFrom(first, one, [
+      childAgent(parent, "new-child-2", nextCreatedAt(first.agents)),
+    ]);
+    const two = MISSION_CONTROL_VIEW.plan(second);
+    const oldFloor = MISSION_CONTROL_VIEW.painter.floor(
+      prior,
+      { col: 0, row: 0, cols: prior.cols, rows: prior.rows },
+      1,
+    );
+    const newFloor = MISSION_CONTROL_VIEW.painter.floor(
+      two,
+      { col: 0, row: 0, cols: two.cols, rows: two.rows },
+      1,
+    );
+    const changed: string[] = [];
+    for (const [id, desk] of prior.desks) {
+      if (input.partition.members.get(id)?.teamId !== null) continue;
+      const probe = { col: desk.chairTile.col + 1, row: desk.chairTile.row };
+      if (
+        floorSpriteAtTile(oldFloor, probe) !==
+        floorSpriteAtTile(newFloor, probe)
+      ) {
+        changed.push(id);
+      }
+    }
+    expect(changed).toEqual([]);
+  });
+
+  it("sits every team lead at an aisle end on triage 309 and 1000", () => {
+    for (const n of [309, 1000]) {
+      const planned = planFresh(makeTestEpic("triage", n, 1), VIEWPORT_WIDE);
+      const bad: string[] = [];
+      for (const host of planned.input.partition.hosts) {
+        for (const team of host.teams) {
+          const lead = planned.layout.desks.get(team.teamId);
+          if (lead === undefined) throw new Error(`no lead ${team.teamId}`);
+          const rowSeats = [...planned.layout.seats.values()]
+            .filter(
+              (seat) =>
+                seat.kind === "console" &&
+                seat.deskTile.row === lead.deskTile.row,
+            )
+            .sort((left, right) => left.deskTile.col - right.deskTile.col);
+          const index = rowSeats.findIndex(
+            (seat) => seat.seatId === lead.seatId,
+          );
+          const inGroup = index % 12;
+          if (
+            index !== 0 &&
+            index !== rowSeats.length - 1 &&
+            inGroup !== 0 &&
+            inGroup !== 11
+          ) {
+            bad.push(`${n}:${team.teamId}:${index}`);
+          }
+        }
+      }
+      expect(bad).toEqual([]);
+    }
+  });
+
+  it("allocates a reserve for a team that arrives after the first plan", () => {
+    const input = planFresh(makeTestEpic("triage", 12, 1), VIEWPORT_WIDE).input;
+    const prior = MISSION_CONTROL_VIEW.plan(input);
+    const root = rootAgent(input.agents);
+    const lead = childAgent(root, "arriving-lead", nextCreatedAt(input.agents));
+    const member = childAgent(lead, "arriving-member", lead.createdAt + 1);
+    const next = grownFrom(input, prior, [lead, member]);
+    expect(
+      next.partition.hosts.some((host) =>
+        host.teams.some((team) => team.teamId === lead.id),
+      ),
+    ).toBe(true);
+    const layout = MISSION_CONTROL_VIEW.plan(next);
+    const reserves = frozenOf(layout)?.teamReserveSeatIds;
+    expect(reserves?.some((entry) => entry.teamId === lead.id)).toBe(true);
+  });
+
+  it("paints distinct host-band palettes for two hosts", () => {
+    const scene = sceneOf(makeTestEpic("two-hosts", 60, 1));
+    const layout = requireLayout(scene);
+    const frame = scene.frame(1, WHOLE_WORLD);
+    const palettes: string[][] = [];
+    for (const host of ["host-a", "host-b"]) {
+      const seats = [...layout.seats.values()]
+        .filter((seat) => seat.kind === "console" && seat.hostId === host)
+        .sort(
+          (left, right) =>
+            left.deskTile.row - right.deskTile.row ||
+            left.deskTile.col - right.deskTile.col,
+        );
+      const seat = seats[0];
+      const tile = { col: seat.deskTile.col - 1, row: seat.deskTile.row };
+      const sprite = frame.floor.find(
+        (drawable) =>
+          drawable.kind === "sprite" &&
+          drawable.x === tile.col * OFFICE_TILE &&
+          drawable.y === tile.row * OFFICE_TILE,
+      );
+      if (sprite === undefined || sprite.kind !== "sprite") {
+        throw new Error(`no band sprite for ${host}`);
+      }
+      palettes.push(rasterColors(sprite.sprite.name));
+    }
+    expect(palettes[0]).not.toEqual(palettes[1]);
+  });
+
+  it("paints the reading chair on the tile the reader sits on", () => {
+    const scene = sceneOf(makeTestEpic("triage", 40, 1));
+    const layout = requireLayout(scene);
+    const spot = layout.floors[0].errandSpots.find(
+      (entry) => entry.kind === "read",
+    );
+    if (spot === undefined) throw new Error("no read spot");
+    const chair = frameDrawables(scene.frame(2, WHOLE_WORLD)).find(
+      (drawable) =>
+        drawable.kind === "sprite" && drawable.sprite.name === "armchair",
+    );
+    expect(chair?.x).toBe(spot.tile.col * OFFICE_TILE);
+    expect(chair?.y).toBe(spot.tile.row * OFFICE_TILE);
+  });
+
+  it("leaves opaque tier-step pixels uncovered by the console", () => {
+    const scene = sceneOf(makeTestEpic("triage", 40, 1));
+    const layout = requireLayout(scene);
+    const seat = firstConsole(layout);
+    const draws = frameDrawables(scene.frame(1, WHOLE_WORLD));
+    const steps = draws.filter(
+      (drawable) =>
+        drawable.kind === "sprite" &&
+        drawable.sprite.name === "tier-step" &&
+        (drawable.x === seat.deskTile.col * OFFICE_TILE ||
+          drawable.x === (seat.deskTile.col + 1) * OFFICE_TILE),
+    );
+    expect(steps.length).toBeGreaterThanOrEqual(2);
+    expect(exposedStepPixels(draws, steps)).toBeGreaterThan(0);
+  });
+
+  it("keeps every host foot sign inside the projected world", () => {
+    const fixture = makeTestEpic("many-roots", 20, 1);
+    const epic: OfficeTestEpic = {
+      ...fixture,
+      agents: fixture.agents.map((agent, index) => ({
+        ...agent,
+        hostId: `host-${String(index).padStart(2, "0")}`,
+      })),
+    };
+    const scene = sceneOf(epic);
+    const layout = requireLayout(scene);
+    const width = scene.worldSize().width;
+    const out = layout.signs.filter(
+      (sign) =>
+        sign.kind === "host" &&
+        (sign.tile.col + sign.widthTiles) * OFFICE_TILE > width,
+    );
+    expect(out).toEqual([]);
+  });
+
+  it("keeps an arriving character inside the projector bounds", () => {
+    const input = planFresh(makeTestEpic("triage", 12, 1), VIEWPORT_WIDE).input;
+    const scene = new OfficeScene(MISSION_CONTROL_VIEW, null);
+    const base = sceneInputFor(input);
+    const newcomer = input.agents.at(-1);
+    if (newcomer === undefined) throw new Error("no newcomer");
+    scene.sync({
+      ...base,
+      visibleAgentIds: new Set(
+        input.agents.slice(0, -1).map((agent) => agent.id),
+      ),
+    });
+    scene.sync({
+      ...base,
+      pulse: {
+        kind: "edge",
+        edgeId: "root-newcomer",
+        pulseKind: "created",
+        fromAgentId: input.agents[0].id,
+        toAgentId: newcomer.id,
+      },
+      pulseKey: "new-agent",
+    });
+    const chars = scene
+      .frame(2, WHOLE_WORLD)
+      .actors.filter(
+        (drawable) =>
+          drawable.kind === "sprite" && drawable.sprite.name === "character",
+      );
+    const projector = MISSION_CONTROL_VIEW.painter.projector(
+      requireLayout(scene),
+    );
+    const out = chars.filter(
+      (drawable) =>
+        drawable.y < projector.bounds.y ||
+        drawable.x < projector.bounds.x ||
+        drawable.y + 20 > projector.bounds.y + projector.bounds.height,
+    );
+    expect(out).toEqual([]);
+  });
+
+  it("does not enumerate seats while panning a 1×1 empty viewport", () => {
+    let visits = 0;
+    const tracked: OfficeView = {
+      ...MISSION_CONTROL_VIEW,
+      plan: (input) => {
+        const layout = MISSION_CONTROL_VIEW.plan(input);
+        const seats = new CountingSeatMap(layout.seats, () => {
+          visits += 1;
+        });
+        return { ...layout, seats };
+      },
+    };
+    const scene = new OfficeScene(tracked, null);
+    scene.sync(
+      sceneInputFor(
+        planFresh(makeTestEpic("triage", 1000, 1), VIEWPORT_WIDE).input,
+      ),
+    );
+    scene.frame(1, { x: 0, y: 0, width: 1, height: 1 });
+    visits = 0;
+    scene.frame(1, { x: 16, y: 0, width: 1, height: 1 });
+    expect(visits).toBe(0);
+  });
+
+  it("keeps a single-host floor hostless", () => {
+    const epic = makeTestEpic("triage", 12, 1);
+    const hosted: OfficeTestEpic = {
+      ...epic,
+      agents: epic.agents.map((agent) => ({ ...agent, hostId: "host-a" })),
+    };
+    expect(sceneOf(hosted).layout()?.floors[0].hostId).toBeNull();
+  });
+
+  it("returns no seat or spot props at lod 0", () => {
+    const layout = planFresh(
+      makeTestEpic("triage", 40, 1),
+      VIEWPORT_WIDE,
+    ).layout;
+    expect(
+      MISSION_CONTROL_VIEW.painter.seatProps(
+        layout,
+        firstConsole(layout),
+        DESK_STATE,
+        0,
+      ),
+    ).toEqual([]);
+    expect(
+      MISSION_CONTROL_VIEW.painter.spotProps(
+        layout,
+        layout.floors[0].errandSpots[0],
+        0,
+      ),
+    ).toEqual([]);
   });
 });

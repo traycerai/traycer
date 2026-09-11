@@ -340,6 +340,19 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
         expect(benchStandsThere).toBe(true);
       }
     });
+
+    it("still requires Floor to emit every action-anchor kind", (context) => {
+      if (viewId !== "floor") {
+        context.skip("Floor is the reference view for non-empty errand kinds");
+        return;
+      }
+      for (const { kind } of ACTION_ANCHORS) {
+        const spots = layout.floors.flatMap((floor) =>
+          floor.errandSpots.filter((spot) => spot.kind === kind),
+        );
+        expect(spots.length).toBeGreaterThan(0);
+      }
+    });
   });
 
   // Folded from office-layout-contract.test.ts's `the two-host shape` describe.

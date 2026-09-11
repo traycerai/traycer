@@ -26,6 +26,7 @@ import type {
   OfficeSize,
   OfficeSpriteName,
   OfficeTilePos,
+  OfficeTileRect,
 } from "@/lib/comm-graph/office/office-types";
 
 const VIEW_ID = "mission-control" as const;
@@ -65,10 +66,17 @@ export interface MissionControlTeamReserve {
   readonly seatId: string;
 }
 
+export interface MissionControlHostBand {
+  readonly col: number;
+  readonly row: number;
+  readonly sprite: OfficeSpriteName;
+}
+
 export interface MissionControlFrozen {
   readonly tierSeatCounts: ReadonlyArray<number>;
   readonly centerCol: number;
   readonly teamReserveSeatIds: ReadonlyArray<MissionControlTeamReserve>;
+  readonly hostBands: ReadonlyArray<MissionControlHostBand>;
 }
 
 interface ConsoleSlot {
@@ -120,6 +128,18 @@ function isTeamReserve(value: unknown): value is MissionControlTeamReserve {
   return typeof value.teamId === "string" && typeof value.seatId === "string";
 }
 
+function isHostBand(value: unknown): value is MissionControlHostBand {
+  if (value === null || typeof value !== "object") return false;
+  if (!("col" in value) || !("row" in value) || !("sprite" in value)) {
+    return false;
+  }
+  return (
+    isFiniteNumber(value.col) &&
+    isFiniteNumber(value.row) &&
+    typeof value.sprite === "string"
+  );
+}
+
 export function isMissionControlFrozen(
   value: unknown,
 ): value is MissionControlFrozen {
@@ -127,7 +147,8 @@ export function isMissionControlFrozen(
   if (
     !("tierSeatCounts" in value) ||
     !("centerCol" in value) ||
-    !("teamReserveSeatIds" in value)
+    !("teamReserveSeatIds" in value) ||
+    !("hostBands" in value)
   ) {
     return false;
   }
@@ -135,7 +156,9 @@ export function isMissionControlFrozen(
   if (!value.tierSeatCounts.every(isFiniteNumber)) return false;
   if (!isFiniteNumber(value.centerCol)) return false;
   if (!Array.isArray(value.teamReserveSeatIds)) return false;
-  return value.teamReserveSeatIds.every(isTeamReserve);
+  if (!value.teamReserveSeatIds.every(isTeamReserve)) return false;
+  if (!Array.isArray(value.hostBands)) return false;
+  return value.hostBands.every(isHostBand);
 }
 
 export function frozenOf(
@@ -210,6 +233,22 @@ function podiumAgentId(
     if (best === null || compareByCreation(agent, best) < 0) best = agent;
   }
   return best === null ? null : best.id;
+}
+
+function incumbentPodiumId(
+  input: OfficePlanInput,
+  byId: ReadonlyMap<string, OfficeAgentInput>,
+): string | null {
+  const occupied = input.occupancy.get(podiumSeatId());
+  if (occupied !== undefined && byId.has(occupied)) return occupied;
+  const previous = input.previous;
+  if (previous !== null) {
+    for (const desk of previous.desks.values()) {
+      if (desk.seatId !== podiumSeatId()) continue;
+      if (byId.has(desk.agentId)) return desk.agentId;
+    }
+  }
+  return podiumAgentId(input.partition, byId);
 }
 
 function placementsFor(
@@ -365,14 +404,70 @@ function fillRun(
   }
 }
 
+function rangeIsFree(
+  used: ReadonlyArray<boolean>,
+  start: number,
+  length: number,
+): boolean {
+  if (start < 0 || start + length > used.length) return false;
+  for (let i = 0; i < length; i += 1) {
+    if (used[start + i]) return false;
+  }
+  return true;
+}
+
+function slotIsRightAisle(
+  slots: ReadonlyArray<ConsoleSlot>,
+  index: number,
+): boolean {
+  const slot = slots[index];
+  const inGroup = slot.indexInTier % AISLE_EVERY;
+  if (inGroup === AISLE_EVERY - 1) return true;
+  if (index === slots.length - 1) return true;
+  return slots[index + 1].tier !== slot.tier;
+}
+
+function firstAisleAlignedStart(
+  slots: ReadonlyArray<ConsoleSlot>,
+  used: ReadonlyArray<boolean>,
+  length: number,
+): number {
+  for (let i = 0; i < slots.length; i += 1) {
+    if (!slots[i].aisleEnd) continue;
+    if (slotIsRightAisle(slots, i)) {
+      if (rangeIsFree(used, i - length + 1, length)) return i - length + 1;
+    } else if (rangeIsFree(used, i, length)) {
+      return i;
+    }
+  }
+  for (let i = 0; i <= used.length - length; i += 1) {
+    if (rangeIsFree(used, i, length)) return i;
+  }
+  return -1;
+}
+
+function markUsed(used: boolean[], start: number, length: number): void {
+  for (let i = 0; i < length; i += 1) used[start + i] = true;
+}
+
+function firstUnused(used: ReadonlyArray<boolean>): number {
+  for (let i = 0; i < used.length; i += 1) {
+    if (!used[i]) return i;
+  }
+  return -1;
+}
+
 function fillPacked(
   fills: SlotFill[],
   slots: ReadonlyArray<ConsoleSlot>,
   placements: ReadonlyArray<Placement>,
 ): void {
-  let cursor = 0;
+  const used: boolean[] = [];
+  for (let i = 0; i < fills.length; i += 1) used.push(false);
+
   let index = 0;
-  while (index < placements.length && cursor < fills.length) {
+  const singles: Placement[] = [];
+  while (index < placements.length) {
     const current = placements[index];
     if (current.teamId !== null && current.reserveForTeamId === null) {
       const teamId = current.teamId;
@@ -381,19 +476,25 @@ function fillPacked(
         run.push(placements[index]);
         index += 1;
       }
-      if (cursor + run.length > fills.length) break;
-      fillRun(fills, slots, cursor, run);
-      cursor += run.length;
+      const start = firstAisleAlignedStart(slots, used, run.length);
+      if (start < 0) continue;
+      fillRun(fills, slots, start, run);
+      markUsed(used, start, run.length);
       continue;
     }
-    fills[cursor] = {
-      agentId: current.agentId,
-      teamId: current.teamId,
-      hostId: current.hostId,
-      reserveForTeamId: current.reserveForTeamId,
-    };
-    cursor += 1;
+    singles.push(current);
     index += 1;
+  }
+  for (const placement of singles) {
+    const free = firstUnused(used);
+    if (free < 0) break;
+    fills[free] = {
+      agentId: placement.agentId,
+      teamId: placement.teamId,
+      hostId: placement.hostId,
+      reserveForTeamId: placement.reserveForTeamId,
+    };
+    used[free] = true;
   }
 }
 
@@ -603,41 +704,51 @@ function reserveIndexFor(
   return reserved;
 }
 
-function packFromPrevious(
-  input: OfficePlanInput,
-  previous: MissionControlFrozen,
-): Packing {
-  const byId = agentsById(input.agents);
-  const hqId = podiumAgentId(input.partition, byId);
-  const counts = [...previous.tierSeatCounts];
-  const centerCol = previous.centerCol;
-  const arrivals = collectArrivals(input, byId, hqId);
+function growOpenIndex(request: {
+  fills: SlotFill[];
+  slots: ConsoleSlot[];
+  counts: number[];
+  readonly centerCol: number;
+  readonly reserveByTeam: ReadonlyMap<string, number>;
+  readonly teamId: string | null;
+}): number {
+  const { fills, slots, counts, centerCol, reserveByTeam, teamId } = request;
+  let index = reserveIndexFor(fills, reserveByTeam, teamId);
+  if (index >= 0) return index;
+  index = firstOpenFill(fills, lastTierStartIndex(slots));
+  if (index >= 0) return index;
+  const previousLength = fills.length;
+  appendTiersUntil(counts, slots.length + 1);
+  const grown = buildSlots(counts, centerCol);
+  slots.length = 0;
+  for (const slot of grown) slots.push(slot);
+  extendFillsTo(fills, slots.length);
+  return firstOpenFill(fills, previousLength);
+}
 
-  let slots = buildSlots(counts, centerCol);
-  const fills = emptyFills(slots.length);
-  pinOccupancy(input, byId, fills);
-  pinPreviousDesks(input.previous, input, byId, fills);
-
-  const takenAgents = new Set<string>();
-  for (const fill of fills) {
-    if (fill.agentId !== null) takenAgents.add(fill.agentId);
-  }
-  const reserveByTeam = restoreTeamReserves(previous, fills);
-  copyPreviousEmptyHosts(input.previous, fills);
-
+function seatArrivals(request: {
+  readonly input: OfficePlanInput;
+  readonly arrivals: ReadonlyArray<OfficeAgentInput>;
+  fills: SlotFill[];
+  slots: ConsoleSlot[];
+  counts: number[];
+  readonly centerCol: number;
+  readonly takenAgents: Set<string>;
+  readonly reserveByTeam: Map<string, number>;
+}): void {
+  const { input, arrivals, fills, takenAgents, reserveByTeam } = request;
   for (const agent of arrivals) {
     if (takenAgents.has(agent.id)) continue;
     const member = input.partition.members.get(agent.id);
     const teamId = member?.agentClass === "team" ? member.teamId : null;
-    let index = reserveIndexFor(fills, reserveByTeam, teamId);
-    if (index < 0) index = firstOpenFill(fills, lastTierStartIndex(slots));
-    if (index < 0) {
-      const previousLength = fills.length;
-      appendTiersUntil(counts, slots.length + 1);
-      slots = buildSlots(counts, centerCol);
-      extendFillsTo(fills, slots.length);
-      index = firstOpenFill(fills, previousLength);
-    }
+    const index = growOpenIndex({
+      fills,
+      slots: request.slots,
+      counts: request.counts,
+      centerCol: request.centerCol,
+      reserveByTeam,
+      teamId,
+    });
     if (index < 0) continue;
     fills[index] = {
       agentId: agent.id,
@@ -650,6 +761,85 @@ function packFromPrevious(
       reserveByTeam.delete(teamId);
     }
   }
+}
+
+function ensureTeamReserves(request: {
+  readonly input: OfficePlanInput;
+  readonly previous: MissionControlFrozen;
+  fills: SlotFill[];
+  slots: ConsoleSlot[];
+  counts: number[];
+  readonly centerCol: number;
+  readonly reserveByTeam: Map<string, number>;
+}): void {
+  const { input, previous, fills, reserveByTeam } = request;
+  const known = new Set(
+    previous.teamReserveSeatIds.map((entry) => entry.teamId),
+  );
+  for (const host of input.partition.hosts) {
+    for (const team of host.teams) {
+      if (known.has(team.teamId)) continue;
+      if (reserveByTeam.has(team.teamId)) continue;
+      const index = growOpenIndex({
+        fills,
+        slots: request.slots,
+        counts: request.counts,
+        centerCol: request.centerCol,
+        reserveByTeam,
+        teamId: null,
+      });
+      if (index < 0) continue;
+      fills[index] = {
+        agentId: null,
+        teamId: team.teamId,
+        hostId: host.hostId,
+        reserveForTeamId: team.teamId,
+      };
+      reserveByTeam.set(team.teamId, index);
+    }
+  }
+}
+
+function packFromPrevious(
+  input: OfficePlanInput,
+  previous: MissionControlFrozen,
+): Packing {
+  const byId = agentsById(input.agents);
+  const hqId = incumbentPodiumId(input, byId);
+  const counts = [...previous.tierSeatCounts];
+  const centerCol = previous.centerCol;
+  const arrivals = collectArrivals(input, byId, hqId);
+
+  const slots = [...buildSlots(counts, centerCol)];
+  const fills = emptyFills(slots.length);
+  pinOccupancy(input, byId, fills);
+  pinPreviousDesks(input.previous, input, byId, fills);
+
+  const takenAgents = new Set<string>();
+  for (const fill of fills) {
+    if (fill.agentId !== null) takenAgents.add(fill.agentId);
+  }
+  const reserveByTeam = restoreTeamReserves(previous, fills);
+  copyPreviousEmptyHosts(input.previous, fills);
+  seatArrivals({
+    input,
+    arrivals,
+    fills,
+    slots,
+    counts,
+    centerCol,
+    takenAgents,
+    reserveByTeam,
+  });
+  ensureTeamReserves({
+    input,
+    previous,
+    fills,
+    slots,
+    counts,
+    centerCol,
+    reserveByTeam,
+  });
 
   return finishPacking({
     tierCounts: counts,
@@ -1206,17 +1396,18 @@ function buildSigns(
     });
   }
   const hosts = uniqueHosts(input);
-  const footRow = packing.rows - 1;
-  const startCol = Math.max(
-    1,
-    packing.centerCol - hosts.length * (HOST_SIGN_WIDTH_TILES + 1),
-  );
+  const stride = HOST_SIGN_WIDTH_TILES + 2;
+  const left = 1;
+  const maxStart = packing.cols - 1 - HOST_SIGN_WIDTH_TILES;
+  const perRow = Math.max(1, Math.floor((maxStart - left) / stride) + 1);
   for (let i = 0; i < hosts.length; i += 1) {
+    const rowIndex = Math.floor(i / perRow);
+    const colIndex = i % perRow;
     signs.push({
       kind: "host",
       tile: {
-        col: startCol + i * (HOST_SIGN_WIDTH_TILES + 2),
-        row: footRow,
+        col: left + colIndex * stride,
+        row: packing.rows - 1 - rowIndex,
       },
       widthTiles: HOST_SIGN_WIDTH_TILES,
       text: "",
@@ -1228,49 +1419,104 @@ function buildSigns(
   return signs;
 }
 
+function podBoundsOf(tiles: ReadonlyArray<OfficeTilePos>): OfficeTileRect {
+  const first = tiles[0];
+  let minCol = first.col;
+  let maxCol = first.col;
+  let minRow = first.row;
+  let maxRow = first.row;
+  for (const tile of tiles) {
+    minCol = Math.min(minCol, tile.col);
+    maxCol = Math.max(maxCol, tile.col);
+    minRow = Math.min(minRow, tile.row);
+    maxRow = Math.max(maxRow, tile.row);
+  }
+  return {
+    col: minCol,
+    row: minRow,
+    cols: maxCol - minCol + CONSOLE_WIDTH_TILES,
+    rows: maxRow - minRow + 1,
+  };
+}
+
+function flushTeamRun(request: {
+  readonly packing: Packing;
+  readonly byId: ReadonlyMap<string, OfficeAgentInput>;
+  readonly teamId: string;
+  readonly start: number;
+  readonly end: number;
+  readonly tint: "cool" | "warm";
+  readonly style: OfficeRoom["pods"][number]["style"];
+  readonly pods: OfficeRoom["pods"][number][];
+}): void {
+  if (request.end <= request.start) return;
+  const tiles: OfficeTilePos[] = [];
+  for (let i = request.start; i < request.end; i += 1) {
+    const slot = request.packing.slots[i];
+    tiles.push(slot.deskTile, slot.chairTile);
+  }
+  const bounds = podBoundsOf(tiles);
+  const lead = request.byId.get(request.teamId);
+  request.pods.push({
+    leadAgentId: request.teamId,
+    name: lead === undefined ? request.teamId : lead.name,
+    depth: 1,
+    bounds,
+    plateTile: { col: bounds.col - 1, row: bounds.row + 1 },
+    style: request.style,
+    tint: request.tint,
+  });
+}
+
+function teamTintOf(
+  tintFor: Map<string, "cool" | "warm">,
+  teamId: string,
+  tintIndex: { value: number },
+): "cool" | "warm" {
+  const existing = tintFor.get(teamId);
+  if (existing !== undefined) return existing;
+  const tint = tintIndex.value % 2 === 0 ? "cool" : "warm";
+  tintFor.set(teamId, tint);
+  tintIndex.value += 1;
+  return tint;
+}
+
 function teamPods(
   packing: Packing,
   byId: ReadonlyMap<string, OfficeAgentInput>,
 ): OfficeRoom["pods"] {
-  const byTeam = new Map<string, OfficeTilePos[]>();
-  for (let i = 0; i < packing.slots.length; i += 1) {
-    const fill = packing.fills[i];
-    if (fill.teamId === null) continue;
-    const slot = packing.slots[i];
-    const tiles = byTeam.get(fill.teamId) ?? [];
-    tiles.push(slot.deskTile, slot.chairTile);
-    byTeam.set(fill.teamId, tiles);
-  }
   const pods: OfficeRoom["pods"][number][] = [];
-  let depthIndex = 0;
-  for (const [teamId, tiles] of byTeam) {
-    if (tiles.length === 0) continue;
-    let minCol = tiles[0].col;
-    let maxCol = tiles[0].col;
-    let minRow = tiles[0].row;
-    let maxRow = tiles[0].row;
-    for (const tile of tiles) {
-      minCol = Math.min(minCol, tile.col);
-      maxCol = Math.max(maxCol, tile.col);
-      minRow = Math.min(minRow, tile.row);
-      maxRow = Math.max(maxRow, tile.row);
+  const tintFor = new Map<string, "cool" | "warm">();
+  const tintIndex = { value: 0 };
+  let runTeam: string | null = null;
+  let runStart = 0;
+  for (let i = 0; i <= packing.slots.length; i += 1) {
+    const teamId = i < packing.fills.length ? packing.fills[i].teamId : null;
+    const sameRow =
+      i < packing.slots.length &&
+      runTeam !== null &&
+      packing.slots[i].deskTile.row === packing.slots[runStart].deskTile.row;
+    if (teamId !== null && teamId === runTeam && sameRow) continue;
+    if (runTeam !== null) {
+      const tint = teamTintOf(tintFor, runTeam, tintIndex);
+      flushTeamRun({
+        packing,
+        byId,
+        teamId: runTeam,
+        start: runStart,
+        end: i,
+        tint,
+        style: tint === "warm" ? "planters" : "glass",
+        pods,
+      });
     }
-    const lead = byId.get(teamId);
-    pods.push({
-      leadAgentId: teamId,
-      name: lead === undefined ? teamId : lead.name,
-      depth: 1,
-      bounds: {
-        col: minCol,
-        row: minRow,
-        cols: maxCol - minCol + CONSOLE_WIDTH_TILES,
-        rows: maxRow - minRow + 1,
-      },
-      plateTile: { col: minCol - 1, row: minRow + 1 },
-      style: depthIndex % 2 === 0 ? "glass" : "planters",
-      tint: depthIndex % 2 === 0 ? "cool" : "warm",
-    });
-    depthIndex += 1;
+    if (teamId === null || i >= packing.slots.length) {
+      runTeam = null;
+      continue;
+    }
+    teamTintOf(tintFor, teamId, tintIndex);
+    runTeam = teamId;
+    runStart = i;
   }
   return pods;
 }
@@ -1358,20 +1604,70 @@ function visitTileOf(
   return null;
 }
 
+function hostPalette(index: number): {
+  readonly even: OfficeSpriteName;
+  readonly odd: OfficeSpriteName;
+} {
+  if (index % 2 === 0) {
+    return { even: "floor-pod-warm-a", odd: "floor-pod-warm-b" };
+  }
+  return { even: "floor-pod-a", odd: "floor-pod-b" };
+}
+
+function hostBandsOf(packing: Packing): ReadonlyArray<MissionControlHostBand> {
+  const byHost = new Map<string, OfficeTilePos[]>();
+  for (let i = 0; i < packing.slots.length; i += 1) {
+    const hostId = packing.fills[i].hostId;
+    if (hostId === null) continue;
+    const tiles = byHost.get(hostId) ?? [];
+    tiles.push(packing.slots[i].deskTile);
+    byHost.set(hostId, tiles);
+  }
+  const hosts = [...byHost.keys()].sort();
+  const bands: MissionControlHostBand[] = [];
+  for (let h = 0; h < hosts.length; h += 1) {
+    const palette = hostPalette(h);
+    const byRow = new Map<number, number>();
+    const tiles = byHost.get(hosts[h]);
+    if (tiles === undefined) continue;
+    for (const tile of tiles) {
+      const current = byRow.get(tile.row);
+      if (current === undefined || tile.col < current) {
+        byRow.set(tile.row, tile.col);
+      }
+    }
+    for (const [row, col] of byRow) {
+      const even = (col - 1 + row) % 2 === 0;
+      bands.push({
+        col: col - 1,
+        row,
+        sprite: even ? palette.even : palette.odd,
+      });
+      const chairEven = (col - 1 + row + 1) % 2 === 0;
+      bands.push({
+        col: col - 1,
+        row: row + 1,
+        sprite: chairEven ? palette.even : palette.odd,
+      });
+    }
+  }
+  return bands;
+}
+
 export function planMissionControl(input: OfficePlanInput): OfficeLayout {
   const packing = pack(input);
   const byId = agentsById(input.agents);
   const walkable = buildWalkable(packing);
   const doorTile: OfficeTilePos = {
     col: packing.loungeOriginCol,
-    row: 0,
+    row: 1,
   };
   if (inBounds(packing.cols, packing.rows, doorTile)) {
     walkable[doorTile.row][doorTile.col] = true;
   }
   const lobbyTile: OfficeTilePos = {
     col: packing.loungeOriginCol,
-    row: 1,
+    row: 2,
   };
   const receptionTile: OfficeTilePos = {
     col: packing.loungeOriginCol + 3,
@@ -1414,9 +1710,8 @@ export function planMissionControl(input: OfficePlanInput): OfficeLayout {
     { name: "Lounge", signTile: { col: packing.loungeOriginCol, row: 0 } },
   ];
   const amenities: ReadonlyArray<OfficeAmenity> = [];
-  const hosts = uniqueHosts(input);
   const floor: OfficeFloor = {
-    hostId: hosts.length === 1 ? hosts[0] : null,
+    hostId: null,
     bounds: { col: 0, row: 0, cols: packing.cols, rows: packing.rows },
     doorTile,
     lobbyTile,
@@ -1439,6 +1734,7 @@ export function planMissionControl(input: OfficePlanInput): OfficeLayout {
     tierSeatCounts: packing.tierCounts,
     centerCol: packing.centerCol,
     teamReserveSeatIds: packing.teamReserves,
+    hostBands: hostBandsOf(packing),
   };
   return {
     view: VIEW_ID,
