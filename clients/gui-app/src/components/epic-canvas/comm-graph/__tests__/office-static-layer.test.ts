@@ -202,7 +202,14 @@ describe("OfficeStaticLayer", () => {
  */
 const ONE_OF_EACH: Readonly<Record<OfficeDrawable["kind"], OfficeDrawable>> = {
   sprite: { kind: "sprite", sprite: { name: "desk" }, x: 0, y: 0 },
-  label: { kind: "label", text: "Reviewer", x: 0, y: 0, tone: "default" },
+  label: {
+    kind: "label",
+    text: "Reviewer",
+    x: 0,
+    y: 0,
+    tone: "default",
+    ownerAgentId: null,
+  },
   clock: { kind: "clock", x: 0, y: 0, timeMs: 0 },
   envelope: {
     kind: "envelope",
@@ -213,6 +220,22 @@ const ONE_OF_EACH: Readonly<Record<OfficeDrawable["kind"], OfficeDrawable>> = {
     edgeId: "a|b",
   },
   logo: { kind: "logo", harnessId: "claude", x: 0, y: 0 },
+  pip: {
+    kind: "pip",
+    x: 0,
+    y: 0,
+    status: "idle",
+    glyph: "none",
+    agentId: "alpha",
+  },
+  block: {
+    kind: "block",
+    x: 0,
+    y: 0,
+    width: 16,
+    height: 16,
+    fill: "room",
+  },
 };
 
 /**
@@ -226,11 +249,14 @@ describe("officeBakesIntoStaticFloor", () => {
     expect(officeBakesIntoStaticFloor(ONE_OF_EACH.sprite)).toBe(true);
   });
 
-  it.each(["label", "clock", "envelope", "logo"] as const)(
+  it.each(["label", "clock", "envelope", "logo", "pip", "block"] as const)(
     "leaves a %s to the per-frame path",
     (kind) => {
       // A label on the floor is drawn in SCREEN space, a clock needs hands
-      // over it, and neither an envelope nor a logo is static by nature. Each
+      // over it, and neither an envelope nor a logo is static by nature. A
+      // pip is overview-only and a block is a lod-0 stand-in for the very
+      // floor this layer bakes, so baking either here would double-draw the
+      // overview and never repaint once the lod changed back. Each of the six
       // would have been silently dropped by a blitted floor that baked
       // everything, and silently duplicated by one that baked nothing.
       expect(officeBakesIntoStaticFloor(ONE_OF_EACH[kind])).toBe(false);

@@ -37,7 +37,7 @@ import {
   screen,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { CommGraphOfficeCanvas } from "@/components/epic-canvas/comm-graph/office/comm-graph-office-canvas";
 import { useCommGraphTimelineStore } from "@/stores/epics/comm-graph-timeline-store";
@@ -47,13 +47,15 @@ import {
 } from "@/lib/comm-graph/comm-graph-model";
 import type { CommGraphEvent } from "@/lib/comm-graph/comm-graph-events";
 import type { CommGraphPulse } from "@/lib/comm-graph/comm-graph-timeline";
-import { layoutOffice } from "@/lib/comm-graph/office/office-layout";
 import { OfficeScene } from "@/lib/comm-graph/office/office-scene";
+import { OFFICE_VIEWS } from "@/lib/comm-graph/office/views/office-view";
+import { partitionOfficePopulation } from "@/lib/comm-graph/office/office-population";
 import { BASE_STEP_MS } from "@/components/epic-canvas/comm-graph/use-comm-graph-transport";
 import { agentAppearance } from "@/lib/comm-graph/office/office-appearance";
 import { officeModelTier } from "@/lib/comm-graph/office/office-model-tier";
 import type {
   OfficeAgentInput,
+  OfficeAgentStatus,
   OfficeRect,
   OfficeSceneInput,
 } from "@/lib/comm-graph/office/office-types";
@@ -66,6 +68,54 @@ const OFFICE_VIEW: CommGraphTileViewState = {
   zoom: 1,
   mode: "office",
 };
+
+/** Large enough to hold this suite's fixtures with room to spare. */
+const WHOLE_WORLD: OfficeRect = { x: 0, y: 0, width: 4000, height: 4000 };
+
+/**
+ * A controllable stand-in for the real `IntersectionObserver`, which jsdom
+ * does not implement at all - the harness's own `MockIntersectionObserver`
+ * (`__tests__/test-browser-apis.ts`) never fires, so left in place the office
+ * canvas would be permanently ineligible and every case that reaches its
+ * scene would be untestable. `observe`/`unobserve` are no-ops on purpose:
+ * this suite drives visibility by calling the registered callbacks directly,
+ * not by tracking which element was observed.
+ */
+type ObserverEntryLike = { readonly isIntersecting: boolean };
+type ObserverCallback = (entries: ReadonlyArray<ObserverEntryLike>) => void;
+let activeObserverCallbacks: Array<ObserverCallback> = [];
+
+class ControllableIntersectionObserver {
+  private readonly callback: ObserverCallback;
+  constructor(callback: ObserverCallback) {
+    this.callback = callback;
+    activeObserverCallbacks.push(callback);
+  }
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {
+    activeObserverCallbacks = activeObserverCallbacks.filter(
+      (registered) => registered !== this.callback,
+    );
+  }
+  takeRecords(): ReadonlyArray<ObserverEntryLike> {
+    return [];
+  }
+}
+
+/** Reports intersection to every office canvas currently observing. */
+function setIntersecting(value: boolean): void {
+  act(() => {
+    for (const callback of activeObserverCallbacks) {
+      callback([{ isIntersecting: value }]);
+    }
+  });
+}
+
+beforeEach(() => {
+  activeObserverCallbacks = [];
+  vi.stubGlobal("IntersectionObserver", ControllableIntersectionObserver);
+});
 
 function agent(id: string, name: string): CommGraphAgentNode {
   return {
@@ -116,6 +166,7 @@ function officeElement(
       pulseKey={options.pulseKey}
       modeToggle={null}
       view={OFFICE_VIEW}
+      officeView={OFFICE_VIEWS.floor}
       onViewChange={vi.fn()}
       canOpenAgentForEvent={() => true}
       canJump={() => false}
@@ -206,12 +257,24 @@ function officeAgentInput(agent: CommGraphAgentNode): OfficeAgentInput {
  * being true this test failing is the correct outcome.
  */
 function envelopeRect(visibleIds: ReadonlySet<string>): OfficeRect {
-  const scene = new OfficeScene(layoutOffice);
+  const scene = new OfficeScene(OFFICE_VIEWS.floor, null);
   const agents = [ORCHESTRATOR, REVIEWER].map(officeAgentInput);
+  const statusById = new Map<string, OfficeAgentStatus>();
   const base: OfficeSceneInput = {
     agents,
     visibleAgentIds: visibleIds,
-    statusById: new Map(),
+    statusById,
+    partition: partitionOfficePopulation({
+      agents,
+      statusById,
+      previous: null,
+    }),
+    activityById: new Map(),
+    // The component stamps `runtime.getViewport()` at sync time, and jsdom's
+    // `getBoundingClientRect()` is all zeros - so a parallel scene fed
+    // anything else would be answering a different question. Nothing
+    // re-plans on viewport, so this only matters for staying identical.
+    viewport: { width: 0, height: 0 },
     pulse: null,
     pulseKey: null,
     // The component's own value at the speed this suite runs (1x), so the
@@ -228,7 +291,7 @@ function envelopeRect(visibleIds: ReadonlySet<string>): OfficeRect {
   // sequence the canvas performs across the two renders below.
   scene.sync(base);
   scene.sync({ ...base, pulse: REQUEST_PULSE, pulseKey: "row-1" });
-  const regions = scene.frame().envelopeHitRegions;
+  const regions = scene.frame(2, WHOLE_WORLD).envelopeHitRegions;
   if (regions.length === 0) throw new Error("No envelope was in flight");
   return regions[0].rect;
 }
@@ -243,6 +306,7 @@ afterEach(() => {
   cleanup();
   registerFindAdapterMock.mockClear();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   useCommGraphTimelineStore.setState({ stateByEpicId: {} });
 });
 
@@ -352,6 +416,7 @@ describe("CommGraphOfficeCanvas", () => {
 
   it("opens the agent panel when Find focuses a match", async () => {
     renderOffice(new Set([ORCHESTRATOR.id, REVIEWER.id]));
+    setIntersecting(true);
     await act(async () => {
       await latestFindAdapter().search({
         requestId: 5,
@@ -374,6 +439,7 @@ describe("CommGraphOfficeCanvas", () => {
   it("opens the pair thread when an envelope in flight is clicked", () => {
     const both = new Set([ORCHESTRATOR.id, REVIEWER.id]);
     const view = render(withQueryClient(officeElement(both, STATIC_OFFICE)));
+    setIntersecting(true);
     // A first render with no pulse, then the row: the scene deliberately does
     // not replay the row its very first sync arrives on.
     view.rerender(withQueryClient(officeElement(both, IN_FLIGHT)));
@@ -495,5 +561,97 @@ describe("CommGraphOfficeCanvas", () => {
 
     const chip = screen.getByTestId("comm-graph-office-cursor-chip");
     expect(chip.textContent).toMatch(/^Replaying/);
+  });
+
+  it("suspends its scene while ineligible and resumes it exactly once on return", () => {
+    const both = new Set([ORCHESTRATOR.id, REVIEWER.id]);
+    const view = render(withQueryClient(officeElement(both, STATIC_OFFICE)));
+    // Eligible first, so a scene exists to be suspended - a canvas that has
+    // never been eligible has no scene at all, and a transition onto one
+    // would go through the bare `sync` branch, not `resume`.
+    setIntersecting(true);
+
+    const syncSpy = vi.spyOn(OfficeScene.prototype, "sync");
+    const resumeSpy = vi.spyOn(OfficeScene.prototype, "resume");
+
+    setIntersecting(false);
+
+    for (let change = 0; change < 20; change += 1) {
+      view.rerender(
+        withQueryClient(
+          officeElement(both, { ...STATIC_OFFICE, pulseKey: `row-${change}` }),
+        ),
+      );
+    }
+    expect(syncSpy).not.toHaveBeenCalled();
+    expect(resumeSpy).not.toHaveBeenCalled();
+
+    setIntersecting(true);
+
+    // The eligibility effect runs before the sync effect, so a commit that
+    // flips both together takes the resume branch. `resume` is itself
+    // implemented as one `sync` call with the suppressed pulse key adopted
+    // first (`OfficeScene.resume`), so a `resume` call carries exactly one
+    // `sync` call with it - the count that would tell resume apart from the
+    // bare-sync branch is `resume`'s own, not `sync`'s.
+    expect(resumeSpy).toHaveBeenCalledTimes(1);
+    expect(syncSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("carries a glyph on its lod 0 pip for attention, failure, awaiting and archived", () => {
+    // jsdom draws nothing, so this reads the same answer the canvas's own
+    // scene would give at overview zoom, the way `envelopeRect` already does
+    // for the envelope box - a parallel scene fed the identical statuses.
+    const attention = agent("agent-attn", "Attention");
+    const failure = agent("agent-fail", "Failure");
+    const awaiting = agent("agent-wait", "Awaiting");
+    const archived = agent("agent-arch", "Archived");
+    const roster = [attention, failure, awaiting, archived];
+    const ids = new Set(roster.map((one) => one.id));
+
+    const scene = new OfficeScene(OFFICE_VIEWS.floor, null);
+    const agents = roster.map(officeAgentInput);
+    const statusById = new Map<string, OfficeAgentStatus>([
+      [attention.id, "attention"],
+      [failure.id, "failure"],
+      [awaiting.id, "awaiting"],
+      [archived.id, "archived"],
+    ]);
+    scene.sync({
+      agents,
+      visibleAgentIds: ids,
+      statusById,
+      partition: partitionOfficePopulation({
+        agents,
+        statusById,
+        previous: null,
+      }),
+      activityById: new Map(),
+      viewport: { width: 0, height: 0 },
+      pulse: null,
+      pulseKey: null,
+      stepMs: BASE_STEP_MS,
+      cursorMs: null,
+      clockMs: 0,
+      openRequestsByReceiver: new Map(),
+      playing: false,
+      reducedMotion: false,
+    });
+
+    const pips = scene.frame(0, WHOLE_WORLD).actors;
+    function glyphOf(agentId: string): string {
+      const pip = pips.find(
+        (drawable) => drawable.kind === "pip" && drawable.agentId === agentId,
+      );
+      if (pip === undefined || pip.kind !== "pip") {
+        throw new Error(`no pip for ${agentId}`);
+      }
+      return pip.glyph;
+    }
+
+    expect(glyphOf(attention.id)).toBe("bang");
+    expect(glyphOf(failure.id)).toBe("bang");
+    expect(glyphOf(awaiting.id)).toBe("ring");
+    expect(glyphOf(archived.id)).toBe("hollow");
   });
 });

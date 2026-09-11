@@ -30,6 +30,7 @@ import type { CommGraphTileRef } from "@/stores/epics/canvas/types";
 import type { CommGraphTileViewState } from "@/stores/epics/canvas/types";
 import { CommGraphCanvas } from "@/components/epic-canvas/comm-graph/comm-graph-canvas";
 import { CommGraphOfficeCanvas } from "@/components/epic-canvas/comm-graph/office/comm-graph-office-canvas";
+import { OFFICE_VIEWS } from "@/lib/comm-graph/office/views/office-view";
 import { CommGraphViewModeToggle } from "@/components/epic-canvas/comm-graph/comm-graph-view-mode-toggle";
 import { useCommGraphAgents } from "@/components/epic-canvas/comm-graph/use-comm-graph-agents";
 import { useCommGraphJump } from "@/components/epic-canvas/comm-graph/use-comm-graph-jump";
@@ -172,7 +173,10 @@ export function CommGraphTile(props: CommGraphTileProps) {
     <div className="flex h-full min-h-0 w-full min-w-0 flex-col">
       <div className="min-h-0 min-w-0 flex-1">
         {node.view.mode === "office" ? (
-          <CommGraphOfficeCanvas {...canvasProps} />
+          <CommGraphOfficeCanvas
+            {...canvasProps}
+            officeView={OFFICE_VIEWS.floor}
+          />
         ) : (
           <CommGraphCanvas {...canvasProps} />
         )}

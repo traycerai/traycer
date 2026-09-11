@@ -1,8 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { CommGraphPulse } from "@/lib/comm-graph/comm-graph-timeline";
 import { layoutOffice } from "@/lib/comm-graph/office/office-layout";
+import { findOfficePath } from "@/lib/comm-graph/office/office-path";
 import { officeSpriteSize } from "@/lib/comm-graph/office/office-pixel-art";
+import { partitionOfficePopulation } from "@/lib/comm-graph/office/office-population";
 import { OfficeScene } from "@/lib/comm-graph/office/office-scene";
+import {
+  OFFICE_VIEW_IDS,
+  OFFICE_VIEWS,
+  type OfficeView,
+} from "@/lib/comm-graph/office/views/office-view";
 import {
   OFFICE_CHARACTER_HEIGHT,
   OFFICE_CHARACTER_WIDTH,
@@ -10,17 +17,109 @@ import {
   type OfficeAgentInput,
   type OfficeAgentStatus,
   type OfficeAppearance,
+  type OfficeCharacterPose,
   type OfficeDrawable,
+  type OfficeErrandSpot,
+  type OfficeFloor,
   type OfficeFrame,
   type OfficeLayout,
   type OfficePoint,
   type OfficeRect,
   type OfficeSceneInput,
+  type OfficeSeat,
+  type OfficeSign,
   type OfficeSpriteName,
   type OfficeSpriteRef,
   type OfficeTilePos,
   type OfficeTileRect,
 } from "@/lib/comm-graph/office/office-types";
+
+/**
+ * Wraps a plain `(agents) => OfficeLayout` function - what every fixture in
+ * this file already is - in the Floor's own painter, so the scene has a real
+ * view to draw with. The plan is the only thing under test in most of this
+ * file; the painter is Floor's registered one, unchanged.
+ */
+function testView(
+  plan: (agents: ReadonlyArray<OfficeAgentInput>) => OfficeLayout,
+): OfficeView {
+  return { ...OFFICE_VIEWS.floor, plan: (input) => plan(input.agents) };
+}
+
+/**
+ * Large enough to hold every fixture in this file - the biggest is a few
+ * dozen agents - with room to spare, so `frameOf` never culls anything a case
+ * did not ask to cull.
+ */
+const WHOLE_WORLD: OfficeRect = { x: 0, y: 0, width: 8000, height: 8000 };
+
+/** `scene.frame()` at close-up over the whole world - what the old zero-arg call answered. */
+function frameOf(scene: OfficeScene): OfficeFrame {
+  return scene.frame(2, WHOLE_WORLD);
+}
+
+/** The plan in force. Every case here syncs first, so `null` is a bug in the case. */
+function layoutOf(scene: OfficeScene): OfficeLayout {
+  const layout = scene.layout();
+  if (layout === null) throw new Error("scene has no layout yet");
+  return layout;
+}
+
+/**
+ * The documented visibility rule for a sign: drawn only while its owner is
+ * visible at the cursor, and always where it names nobody in particular.
+ *
+ * The renderer's own predicate (`signsToDraw` in
+ * `comm-graph-office-canvas.tsx`) is module-private and canvas-only, so it
+ * cannot be exercised end to end under jsdom (no 2D context, no DOM marker
+ * for a sign). This mirrors it against the contract `office-types.ts`
+ * documents on `OfficeSign.ownerAgentId`: "Drawn only while this agent is
+ * visible at the cursor; `null` draws always."
+ */
+function officeSignVisible(
+  sign: OfficeSign,
+  visibleAgentIds: ReadonlySet<string>,
+): boolean {
+  return sign.ownerAgentId === null || visibleAgentIds.has(sign.ownerAgentId);
+}
+
+/**
+ * A garden tile that is not an OPENING in its hedge: grass on the interior,
+ * hedge (or a piece of garden scenery standing on it) on the ring. The
+ * painter now bakes `layout.props` - a bench, a tree - into the same floor
+ * pass as the grass and the hedge, drawn after both, so the last sprite at a
+ * shared tile can legitimately be the scenery rather than the ring or grass
+ * underneath it.
+ */
+function expectGardenTilePainted(
+  name: OfficeSpriteName | undefined,
+  onRing: boolean,
+  key: string,
+): void {
+  const scenery = name === "bench" || name === "tree";
+  if (onRing) {
+    expect(name === "planter" || scenery, key).toBe(true);
+    return;
+  }
+  expect(
+    (name !== undefined && /^floor-grass-[ab]$/.test(name)) || scenery,
+    key,
+  ).toBe(true);
+}
+
+/** The sign the plan placed at this exact tile, for a given kind. */
+function signAt(
+  layout: OfficeLayout,
+  kind: OfficeSign["kind"],
+  tile: OfficeTilePos,
+): OfficeSign | undefined {
+  return layout.signs.find(
+    (candidate) =>
+      candidate.kind === kind &&
+      candidate.tile.col === tile.col &&
+      candidate.tile.row === tile.row,
+  );
+}
 
 const APPEARANCE: OfficeAppearance = {
   skin: "#e0b08a",
@@ -77,8 +176,18 @@ function sceneInput(
     readonly visibleAgentIds: ReadonlySet<string>;
   },
 ): OfficeSceneInput {
+  const agents = overrides.agents;
+  const statusById =
+    overrides.statusById ?? new Map<string, OfficeAgentStatus>();
   return {
-    statusById: new Map<string, OfficeAgentStatus>(),
+    statusById,
+    partition: partitionOfficePopulation({
+      agents,
+      statusById,
+      previous: null,
+    }),
+    activityById: new Map<string, number>(),
+    viewport: { width: 1040, height: 700 },
     openRequestsByReceiver: new Map<string, number>(),
     pulse: null,
     pulseKey: null,
@@ -251,9 +360,9 @@ function characterSpriteAt(
 /** Where each character not in its own chair is standing, by tile. */
 function standingByTile(scene: OfficeScene): ReadonlyMap<string, string> {
   const byTile = new Map<string, string>();
-  for (const region of scene.frame().hitRegions) {
+  for (const region of frameOf(scene).hitRegions) {
     if (region.rect.height !== OFFICE_CHARACTER_HEIGHT) continue;
-    const desk = scene.layout().desks.get(region.agentId);
+    const desk = layoutOf(scene).desks.get(region.agentId);
     if (desk === undefined) continue;
     if (
       region.rect.x === desk.chairTile.col * OFFICE_TILE &&
@@ -276,7 +385,7 @@ function standingByTile(scene: OfficeScene): ReadonlyMap<string, string> {
  * apart from two people who happen to be near each other.
  */
 function chatPairAt(scene: OfficeScene): ReadonlyArray<string> | null {
-  const floor = scene.layout().floors[0];
+  const floor = layoutOf(scene).floors[0];
   const social = floor.errandSpots.filter(
     (spot) => spot.kind === "cafe" || spot.kind === "cooler",
   );
@@ -332,7 +441,7 @@ function walkableRingKeys(
 
 /** The agent whose desk this tile is the aisle seat under, if any. */
 function hostDeskAt(scene: OfficeScene, tile: OfficeTilePos): string | null {
-  for (const desk of scene.layout().desks.values()) {
+  for (const desk of layoutOf(scene).desks.values()) {
     if (desk.chairTile.col !== tile.col) continue;
     if (desk.chairTile.row + 1 !== tile.row) continue;
     return desk.agentId;
@@ -342,9 +451,9 @@ function hostDeskAt(scene: OfficeScene, tile: OfficeTilePos): string | null {
 
 /** Which cabin an agent's desk stands in, by that cabin's root. */
 function cabinOf(scene: OfficeScene, agentId: string): string | null {
-  const desk = scene.layout().desks.get(agentId);
+  const desk = layoutOf(scene).desks.get(agentId);
   if (desk === undefined) return null;
-  for (const room of scene.layout().rooms) {
+  for (const room of layoutOf(scene).rooms) {
     const { col, row, cols, rows } = room.bounds;
     if (desk.deskTile.col < col || desk.deskTile.col >= col + cols) continue;
     if (desk.deskTile.row < row || desk.deskTile.row >= row + rows) continue;
@@ -354,7 +463,7 @@ function cabinOf(scene: OfficeScene, agentId: string): string | null {
 }
 
 function headOfRegion(scene: OfficeScene, agentId: string): OfficePoint | null {
-  for (const region of scene.frame().hitRegions) {
+  for (const region of frameOf(scene).hitRegions) {
     if (region.rect.height !== OFFICE_CHARACTER_HEIGHT) continue;
     if (region.agentId !== agentId) continue;
     return {
@@ -405,20 +514,20 @@ function crewAway(frame: OfficeFrame): ReadonlyArray<string> {
 
 describe("OfficeScene", () => {
   it("seats everyone already on the floor at the first sync", () => {
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: BOTH }));
 
-    const frame = scene.frame();
+    const frame = frameOf(scene);
     expect(characterRect(frame, "alpha")).toEqual(seatedRect("alpha"));
     expect(characterRect(frame, "beta")).toEqual(seatedRect("beta"));
     expect(frame.size).toEqual({
-      width: scene.layout().cols * OFFICE_TILE,
-      height: scene.layout().rows * OFFICE_TILE,
+      width: layoutOf(scene).cols * OFFICE_TILE,
+      height: layoutOf(scene).rows * OFFICE_TILE,
     });
   });
 
   it("walks a new agent in from the door on its created pulse", () => {
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: ALPHA_ONLY }));
     scene.sync(
       sceneInput({
@@ -429,39 +538,39 @@ describe("OfficeScene", () => {
       }),
     );
 
-    const door = scene.layout().doorTile;
-    const entering = characterRect(scene.frame(), "beta");
+    const door = layoutOf(scene).doorTile;
+    const entering = characterRect(frameOf(scene), "beta");
     expect(entering.x).toBe(door.col * OFFICE_TILE);
     expect(entering.y).toBe(door.row * OFFICE_TILE - 4);
 
     // Three tiles a second, from the entrance through its cabin's own door;
     // six seconds is comfortably past the longest route on this floor.
     for (let step = 0; step < 60; step += 1) scene.tick(100);
-    expect(characterRect(scene.frame(), "beta")).toEqual(seatedRect("beta"));
+    expect(characterRect(frameOf(scene), "beta")).toEqual(seatedRect("beta"));
   });
 
   it("seats a late arrival silently when the timeline is scrubbed", () => {
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: ALPHA_ONLY }));
     // Not playing, and the cursor is not sitting on beta's creation - this is
     // the floor being restated, not a reveal.
     scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: BOTH }));
 
-    expect(characterRect(scene.frame(), "beta")).toEqual(seatedRect("beta"));
+    expect(characterRect(frameOf(scene), "beta")).toEqual(seatedRect("beta"));
   });
 
   it("removes a character the moment it leaves the visible set", () => {
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: BOTH }));
     scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: ALPHA_ONLY }));
 
-    const frame = scene.frame();
+    const frame = frameOf(scene);
     expect(hasCharacter(frame, "alpha")).toBe(true);
     expect(hasCharacter(frame, "beta")).toBe(false);
   });
 
   it("spawns exactly one envelope per pulse key and delivers it", () => {
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: BOTH }));
     const withPulse = sceneInput({
       agents: AGENTS,
@@ -471,27 +580,27 @@ describe("OfficeScene", () => {
     });
 
     scene.sync(withPulse);
-    expect(envelopes(scene.frame())).toHaveLength(1);
+    expect(envelopes(frameOf(scene))).toHaveLength(1);
     // The same row re-supplied across frames must not spawn a second envelope.
     scene.sync(withPulse);
-    expect(envelopes(scene.frame())).toHaveLength(1);
+    expect(envelopes(frameOf(scene))).toHaveLength(1);
 
-    const launched = envelopes(scene.frame())[0];
+    const launched = envelopes(frameOf(scene))[0];
     expect(launched.pulseKind).toBe("request");
     expect(launched.progress).toBe(0);
     expect(launched.x).toBe(seatedHead("alpha").x);
 
     scene.tick(300);
-    expect(envelopes(scene.frame())).toHaveLength(1);
+    expect(envelopes(frameOf(scene))).toHaveLength(1);
 
     scene.tick(400);
-    const arrived = scene.frame();
+    const arrived = frameOf(scene);
     expect(envelopes(arrived)).toHaveLength(0);
     expect(hasBubbleAt(arrived, "bubble-hello", seatedHead("beta"))).toBe(true);
   });
 
   it("arcs the envelope above the straight line between the two heads", () => {
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: BOTH }));
     scene.sync(
       sceneInput({
@@ -503,14 +612,14 @@ describe("OfficeScene", () => {
     );
     scene.tick(300);
 
-    const midpoint = envelopes(scene.frame())[0];
+    const midpoint = envelopes(frameOf(scene))[0];
     // Both heads sit at the same height, so any lift is the arc alone.
     expect(seatedHead("alpha").y).toBe(seatedHead("beta").y);
     expect(midpoint.y).toBeLessThan(seatedHead("alpha").y);
   });
 
   it("delivers without a flight when motion is reduced", () => {
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(
       sceneInput({
         agents: AGENTS,
@@ -528,14 +637,14 @@ describe("OfficeScene", () => {
       }),
     );
 
-    const frame = scene.frame();
+    const frame = frameOf(scene);
     expect(envelopes(frame)).toHaveLength(0);
     // Still perceivable: the acknowledgement outlives several frames.
     expect(hasBubbleAt(frame, "bubble-hello", seatedHead("beta"))).toBe(true);
   });
 
   it("settles every envelope, bubble, and mid-walk arrival when motion is reduced mid-flight", () => {
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: BOTH }));
     const withPulse = sceneInput({
       agents: AGENTS,
@@ -545,14 +654,14 @@ describe("OfficeScene", () => {
     });
     scene.sync(withPulse);
     scene.tick(50);
-    expect(envelopes(scene.frame())).toHaveLength(1);
+    expect(envelopes(frameOf(scene))).toHaveLength(1);
 
     // Same pulse key as before, so nothing replays - only the flag flips.
     // What is already in flight has to be told, not just what starts from
     // here on.
     scene.sync(sceneInput({ ...withPulse, reducedMotion: true }));
 
-    const settled = scene.frame();
+    const settled = frameOf(scene);
     expect(envelopes(settled)).toHaveLength(0);
     expect(hasBubbleAt(settled, "bubble-hello", seatedHead("beta"))).toBe(true);
     expect(scene.isAnimating()).toBe(true);
@@ -565,7 +674,7 @@ describe("OfficeScene", () => {
 
     // The same flip mid-walk: a newcomer still crossing the floor jumps to
     // the end of its path and sits, rather than being abandoned mid-stride.
-    const walkScene = new OfficeScene(layoutOffice);
+    const walkScene = new OfficeScene(testView(layoutOffice), null);
     walkScene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: ALPHA_ONLY }));
     const walkIn = sceneInput({
       agents: AGENTS,
@@ -578,18 +687,18 @@ describe("OfficeScene", () => {
     // takes sixty ticks like this one to finish on its own.
     walkScene.tick(100);
     expect(walkScene.isAnimating()).toBe(true);
-    expect(characterRect(walkScene.frame(), "beta")).not.toEqual(
+    expect(characterRect(frameOf(walkScene), "beta")).not.toEqual(
       seatedRect("beta"),
     );
 
     walkScene.sync(sceneInput({ ...walkIn, reducedMotion: true }));
-    expect(characterRect(walkScene.frame(), "beta")).toEqual(
+    expect(characterRect(frameOf(walkScene), "beta")).toEqual(
       seatedRect("beta"),
     );
   });
 
   it("drops an in-flight envelope on a rewind into history, but not on a forward move", () => {
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: BOTH }));
     const withPulse = sceneInput({
       agents: AGENTS,
@@ -599,14 +708,14 @@ describe("OfficeScene", () => {
     });
     scene.sync(withPulse);
     scene.tick(50);
-    expect(envelopes(scene.frame())).toHaveLength(1);
+    expect(envelopes(frameOf(scene))).toHaveLength(1);
 
     // Same pulse key, so nothing replays - only the cursor moves, from live
     // into a historical moment. Whatever was mid-flight has not happened on
     // this prefix, so it is dropped rather than delivered.
     scene.sync({ ...withPulse, cursorMs: 5 });
 
-    const rewound = scene.frame();
+    const rewound = frameOf(scene);
     expect(envelopes(rewound)).toHaveLength(0);
     expect(hasBubbleAt(rewound, "bubble-hello", seatedHead("beta"))).toBe(
       false,
@@ -616,7 +725,7 @@ describe("OfficeScene", () => {
     // Contrast: a forward move within history must not touch what is in
     // flight - only a REWIND (a null-to-history landing, or a seek backward)
     // does.
-    const forwardScene = new OfficeScene(layoutOffice);
+    const forwardScene = new OfficeScene(testView(layoutOffice), null);
     forwardScene.sync(
       sceneInput({ agents: AGENTS, visibleAgentIds: BOTH, cursorMs: 5 }),
     );
@@ -629,14 +738,14 @@ describe("OfficeScene", () => {
     });
     forwardScene.sync(forwardWithPulse);
     forwardScene.tick(50);
-    expect(envelopes(forwardScene.frame())).toHaveLength(1);
+    expect(envelopes(frameOf(forwardScene))).toHaveLength(1);
 
     forwardScene.sync({ ...forwardWithPulse, cursorMs: 10 });
-    expect(envelopes(forwardScene.frame())).toHaveLength(1);
+    expect(envelopes(frameOf(forwardScene))).toHaveLength(1);
   });
 
   it("freezes ambient motion under a paused historical cursor, and recalls an errand already under way", () => {
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(
       sceneInput({
         agents: IDLE_CREW,
@@ -649,7 +758,7 @@ describe("OfficeScene", () => {
     // stagger - on a live floor this is well into everyone's first errand.
     for (let step = 0; step < 150; step += 1) scene.tick(100);
 
-    const paused = scene.frame();
+    const paused = frameOf(scene);
     for (const person of IDLE_CREW) {
       expect(characterRect(paused, person.id)).toEqual(
         crewSeatedRect(person.id),
@@ -659,7 +768,7 @@ describe("OfficeScene", () => {
 
     // Now the same crew, but caught mid-errand while still live, the way the
     // existing "sends an idle agent on an errand" test reaches one.
-    const liveScene = new OfficeScene(layoutOffice);
+    const liveScene = new OfficeScene(testView(layoutOffice), null);
     liveScene.sync(
       sceneInput({ agents: IDLE_CREW, visibleAgentIds: CREW_IDS }),
     );
@@ -668,11 +777,11 @@ describe("OfficeScene", () => {
     while (elapsedMs < 60_000 && awayId === null) {
       liveScene.tick(100);
       elapsedMs += 100;
-      const away = crewAway(liveScene.frame());
+      const away = crewAway(frameOf(liveScene));
       if (away.length > 0) awayId = away[0];
     }
     if (awayId === null) throw new Error("nobody left their desk");
-    expect(characterRect(liveScene.frame(), awayId)).not.toEqual(
+    expect(characterRect(frameOf(liveScene), awayId)).not.toEqual(
       crewSeatedRect(awayId),
     );
 
@@ -687,13 +796,13 @@ describe("OfficeScene", () => {
         reducedMotion: true,
       }),
     );
-    expect(characterRect(liveScene.frame(), awayId)).toEqual(
+    expect(characterRect(frameOf(liveScene), awayId)).toEqual(
       crewSeatedRect(awayId),
     );
   });
 
   it("bubbles a standing status when nothing transient is showing", () => {
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(
       sceneInput({
         agents: AGENTS,
@@ -705,7 +814,7 @@ describe("OfficeScene", () => {
       }),
     );
 
-    const frame = scene.frame();
+    const frame = frameOf(scene);
     expect(hasBubbleAt(frame, "bubble-awaiting", seatedHead("alpha"))).toBe(
       true,
     );
@@ -721,7 +830,7 @@ describe("OfficeScene", () => {
   });
 
   it("draws an awaiting-only floor as a still frame", () => {
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(
       sceneInput({
         agents: AGENTS,
@@ -737,7 +846,7 @@ describe("OfficeScene", () => {
     // wander off mid-assertion and become the reason the floor animates.
     scene.tick(200);
 
-    const frame = scene.frame();
+    const frame = frameOf(scene);
     expect(hasBubbleAt(frame, "bubble-awaiting", seatedHead("alpha"))).toBe(
       true,
     );
@@ -748,13 +857,13 @@ describe("OfficeScene", () => {
   });
 
   it("finds a character first and its desk second under a point", () => {
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: BOTH }));
 
     const seated = seatedRect("alpha");
     expect(scene.hitTest({ x: seated.x + 8, y: seated.y + 10 })).toBe("alpha");
 
-    const desk = scene.layout().desks.get("alpha");
+    const desk = layoutOf(scene).desks.get("alpha");
     if (desk === undefined) throw new Error("expected a desk");
     // The desk's right tile is clear of the character box above the chair.
     expect(
@@ -764,7 +873,7 @@ describe("OfficeScene", () => {
       }),
     ).toBe("alpha");
 
-    const lobby = scene.layout().lobbyTile;
+    const lobby = layoutOf(scene).lobbyTile;
     expect(
       scene.hitTest({
         x: lobby.col * OFFICE_TILE + 8,
@@ -779,11 +888,11 @@ describe("OfficeScene", () => {
       name: "an extremely long agent name",
       createdAt: 1,
     });
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(sceneInput({ agents: [longName, BETA], visibleAgentIds: BOTH }));
 
     const labels: string[] = [];
-    for (const drawable of scene.frame().actors) {
+    for (const drawable of frameOf(scene).actors) {
       if (drawable.kind === "label") labels.push(drawable.text);
     }
     expect(labels).toHaveLength(2);
@@ -792,14 +901,14 @@ describe("OfficeScene", () => {
   });
 
   it("stands every prop on its tile rather than over the row below", () => {
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: BOTH }));
-    const frame = scene.frame();
+    const frame = frameOf(scene);
     const drawn = [...frame.floor, ...frame.props];
 
     // Asserted as the invariant, not as the offset formula: whatever the art
     // decides a prop's height is, its FOOT belongs on the tile it occupies.
-    for (const prop of scene.layout().props) {
+    for (const prop of layoutOf(scene).props) {
       const size = officeSpriteSize(prop.sprite);
       const drawable = drawn.find(
         (candidate) =>
@@ -815,16 +924,14 @@ describe("OfficeScene", () => {
   });
 
   it("never carpets the doorway with the lobby rug", () => {
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: BOTH }));
-    const layout = scene.layout();
+    const layout = layoutOf(scene);
 
-    const rug = scene
-      .frame()
-      .floor.find(
-        (drawable) =>
-          drawable.kind === "sprite" && drawable.sprite.name === "rug",
-      );
+    const rug = frameOf(scene).floor.find(
+      (drawable) =>
+        drawable.kind === "sprite" && drawable.sprite.name === "rug",
+    );
     if (rug === undefined || rug.kind !== "sprite") {
       throw new Error("expected a rug on the floor");
     }
@@ -844,11 +951,11 @@ describe("OfficeScene", () => {
       agent({ id: "alpha", name: "an extremely long room name", createdAt: 1 }),
       agent({ id: "beta", parentId: "alpha", createdAt: 2 }),
     ];
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(sceneInput({ agents: family, visibleAgentIds: BOTH }));
 
-    const frame = scene.frame();
-    const room = scene.layout().rooms[0];
+    const frame = frameOf(scene);
+    const room = layoutOf(scene).rooms[0];
     expect(room).toBeDefined();
 
     // The cabin's structure belongs to the floor, under everything that stands
@@ -871,28 +978,20 @@ describe("OfficeScene", () => {
       ),
     ).toBe(true);
 
-    // The cabin's OWN sign, not merely the first one drawn: the break room and
-    // the game room carry signs of their own, and they sort above a cabin's.
-    const sign = sprites(frame.props, "sign").find(
-      (drawable) => drawable.x === room.signTile.col * OFFICE_TILE,
-    );
+    // The cabin's OWN sign, not merely the first one placed: the break room
+    // and the game room carry signs of their own. The scene no longer draws
+    // the board or its lettering itself - both are the renderer's job, off
+    // `layout.signs` - so what the scene contributes is the placement and the
+    // full (untruncated) name.
+    const sign = signAt(layoutOf(scene), "room", room.signTile);
     if (sign === undefined) throw new Error("no sign on the cabin");
+    expect(sign.ownerAgentId).toBe("alpha");
+    expect(sign.text).toBe("an extremely long room name");
 
-    const roomLabel = labels(frame.props).find((drawable) =>
-      drawable.text.startsWith("an extre"),
-    );
-    if (roomLabel === undefined) throw new Error("no label on the cabin sign");
-    // Centred on the sign, sitting on its face, and short enough to fit it.
-    expect(roomLabel.x).toBe(
-      sign.x + officeSpriteSize({ name: "sign" }).width / 2,
-    );
-    expect(roomLabel.y).toBeGreaterThan(sign.y);
-    expect(roomLabel.y).toBeLessThan(
-      sign.y + officeSpriteSize({ name: "sign" }).height,
-    );
-    expect(roomLabel.tone).toBe("bright");
-    expect(roomLabel.text.length).toBeLessThanOrEqual(12);
-    expect(roomLabel.text.endsWith("…")).toBe(true);
+    // Whether it is DRAWN is a cursor fact: the renderer hides a sign while
+    // its owner has not been created yet at the cursor.
+    expect(officeSignVisible(sign, BOTH)).toBe(true);
+    expect(officeSignVisible(sign, new Set(["beta"]))).toBe(false);
   });
 
   it("re-letters a cabin sign in place when its root is renamed, without moving anyone", () => {
@@ -901,15 +1000,15 @@ describe("OfficeScene", () => {
     const family = [root, child];
     const ids = new Set(family.map((person) => person.id));
 
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(
       sceneInput({ agents: family, visibleAgentIds: ids, reducedMotion: true }),
     );
 
-    const before = scene.frame();
-    expect(labels(before.props).some((label) => label.text === "Ann")).toBe(
-      true,
-    );
+    const before = frameOf(scene);
+    const roomBefore = layoutOf(scene).rooms[0];
+    const signBefore = signAt(layoutOf(scene), "room", roomBefore.signTile);
+    expect(signBefore?.text).toBe("Ann");
     const versionBefore = before.staticVersion;
     const regionsBefore = before.hitRegions;
 
@@ -925,14 +1024,12 @@ describe("OfficeScene", () => {
       }),
     );
 
-    const after = scene.frame();
-    expect(labels(after.props).some((label) => label.text === "Bea")).toBe(
-      true,
-    );
+    const after = frameOf(scene);
+    const layoutAfter = layoutOf(scene);
+    const signAfter = signAt(layoutAfter, "room", roomBefore.signTile);
+    expect(signAfter?.text).toBe("Bea");
     // The stale lettering must be gone, not merely joined by the new sign.
-    expect(labels(after.props).some((label) => label.text === "Ann")).toBe(
-      false,
-    );
+    expect(layoutAfter.signs.some((sign) => sign.text === "Ann")).toBe(false);
     // A rename bumps the renderer's cache key, since the sign it re-letters
     // lives on the layout the cache keys off.
     expect(after.staticVersion).toBe(versionBefore + 1);
@@ -949,42 +1046,25 @@ describe("OfficeScene", () => {
         reducedMotion: true,
       }),
     );
-    expect(scene.frame().staticVersion).toBe(versionBefore + 1);
+    expect(frameOf(scene).staticVersion).toBe(versionBefore + 1);
   });
 
   it("signs every amenity the way it signs a cabin", () => {
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: BOTH }));
 
-    const frame = scene.frame();
-    const signs = sprites(frame.props, "sign");
-    const written = labels(frame.props);
-    for (const area of scene.layout().floors[0].areaSigns) {
-      const signX = area.signTile.col * OFFICE_TILE;
-      // Rooms in one column share a sign COLUMN, so the row is what tells two
-      // of them apart - the sprite is lifted onto its tile like every prop.
-      const signY =
-        area.signTile.row * OFFICE_TILE -
-        (officeSpriteSize({ name: "sign" }).height - OFFICE_TILE);
-      const plate = signs.find(
-        (drawable) => drawable.x === signX && drawable.y === signY,
-      );
-      if (plate === undefined) throw new Error(`no sign for ${area.name}`);
-      const label = written.find((drawable) => drawable.text === area.name);
-      if (label === undefined) throw new Error(`no label for ${area.name}`);
-      // Centred on its own sign, on the sign's face, and bright - the same
-      // three things a cabin's name is, because it is the same fitting.
-      expect(label.x).toBe(
-        signX + officeSpriteSize({ name: "sign" }).width / 2,
-      );
-      expect(label.y).toBeGreaterThan(plate.y);
-      expect(label.y).toBeLessThan(
-        plate.y + officeSpriteSize({ name: "sign" }).height,
-      );
-      expect(label.tone).toBe("bright");
+    const layout = layoutOf(scene);
+    const areaSigns = layout.signs.filter((sign) => sign.kind === "area");
+    for (const area of layout.floors[0].areaSigns) {
+      const sign = signAt(layout, "area", area.signTile);
+      if (sign === undefined) throw new Error(`no sign for ${area.name}`);
+      expect(sign.text).toBe(area.name);
+      // An area belongs to nobody in particular, so it is drawn always.
+      expect(sign.ownerAgentId).toBeNull();
+      expect(officeSignVisible(sign, new Set<string>())).toBe(true);
     }
-    expect(written.some((label) => label.text === "Cafeteria")).toBe(true);
-    expect(written.some((label) => label.text === "Game room")).toBe(true);
+    expect(areaSigns.some((sign) => sign.text === "Cafeteria")).toBe(true);
+    expect(areaSigns.some((sign) => sign.text === "Game room")).toBe(true);
   });
 
   it("tints a pod's floor, outlines it in its own style and plates its name", () => {
@@ -999,7 +1079,7 @@ describe("OfficeScene", () => {
       agent({ id: "kid-1", parentId: "lead", createdAt: 3 }),
       agent({ id: "kid-2", parentId: "lead", createdAt: 4 }),
     ];
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(
       sceneInput({
         agents: family,
@@ -1007,8 +1087,8 @@ describe("OfficeScene", () => {
       }),
     );
 
-    const frame = scene.frame();
-    const pod = scene.layout().rooms[0].pods[0];
+    const frame = frameOf(scene);
+    const pod = layoutOf(scene).rooms[0].pods[0];
     expect(pod).toBeDefined();
 
     // Every interior tile carries a pod floor of the pod's own tint, as a
@@ -1044,13 +1124,16 @@ describe("OfficeScene", () => {
     expect(seen.size).toBe(2);
 
     // The outline is drawn in the style the plan chose, and only in that one.
+    // Like the cabin's own walls, a pod's outline is static scenery: the
+    // painter bakes it into the floor pass rather than the per-desk prop
+    // pass.
     const styleArt: Readonly<Record<string, ReadonlyArray<string>>> = {
       glass: ["partition", "partition-h"],
       planters: ["planter"],
       shelves: ["shelf", "shelf-h"],
     };
     const wanted = styleArt[pod.style];
-    const outline = frame.props.filter(
+    const outline = frame.floor.filter(
       (drawable) =>
         drawable.kind === "sprite" && wanted.includes(drawable.sprite.name),
     );
@@ -1059,31 +1142,32 @@ describe("OfficeScene", () => {
       if (other[0] === pod.style) continue;
       for (const name of other[1]) {
         // A pod wearing two styles at once has no style at all.
-        expect(sprites(frame.props, name as OfficeSpriteName), name).toEqual(
+        expect(sprites(frame.floor, name as OfficeSpriteName), name).toEqual(
           [],
         );
       }
     }
 
-    // The plate sits on the ring, with the sub-team's name across it.
-    const plate = sprites(frame.props, "pod-plate");
-    expect(plate).toHaveLength(1);
-    expect(plate[0].x).toBe(pod.plateTile.col * OFFICE_TILE);
-    const label = labels(frame.props).find((drawable) =>
-      drawable.text.startsWith("a very"),
+    // The plate's PLACEMENT and full name are the plan's; the board sprite
+    // and the lettering itself are the renderer's, off `layout.signs`.
+    const sign = signAt(layoutOf(scene), "pod", pod.plateTile);
+    if (sign === undefined) throw new Error("no sign on the pod plate");
+    expect(sign.text).toBe("a very long sub-team name");
+    expect(sign.ownerAgentId).toBe("lead");
+    expect(officeSignVisible(sign, new Set(family.map((p) => p.id)))).toBe(
+      true,
     );
-    if (label === undefined) throw new Error("no label on the pod plate");
-    expect(label.tone).toBe("bright");
-    expect(label.text.length).toBeLessThanOrEqual(10);
-    expect(label.text.endsWith("…")).toBe(true);
+    expect(officeSignVisible(sign, new Set(["root", "kid-1", "kid-2"]))).toBe(
+      false,
+    );
   });
 
   it("plates every desk and badges only the agents that carry a harness", () => {
     const badged = agent({ id: "alpha", createdAt: 1, harnessId: "traycer" });
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(sceneInput({ agents: [badged, BETA], visibleAgentIds: BOTH }));
 
-    const frame = scene.frame();
+    const frame = frameOf(scene);
     expect(sprites(frame.props, "nameplate")).toHaveLength(2);
 
     const badges = logos(frame.props);
@@ -1092,7 +1176,7 @@ describe("OfficeScene", () => {
     expect(badges[0].alpha).toBeUndefined();
 
     // The plate is on the desk it belongs to, and the badge is on the plate.
-    const desk = scene.layout().desks.get("alpha");
+    const desk = layoutOf(scene).desks.get("alpha");
     if (desk === undefined) throw new Error("expected a desk");
     const deskX = desk.deskTile.col * OFFICE_TILE;
     const plate = sprites(frame.props, "nameplate").find(
@@ -1111,7 +1195,7 @@ describe("OfficeScene", () => {
       archived: true,
       archivedAt: 10,
     });
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(
       sceneInput({
         agents: [badged, BETA],
@@ -1120,7 +1204,7 @@ describe("OfficeScene", () => {
       }),
     );
 
-    const frame = scene.frame();
+    const frame = frameOf(scene);
     // Nobody watched this one leave, so there is no walk to play - just the
     // desk it left behind.
     expect(hasCharacter(frame, "alpha")).toBe(false);
@@ -1131,7 +1215,7 @@ describe("OfficeScene", () => {
     expect(sprites(frame.props, "nameplate")).toHaveLength(1);
     expect(sprites(frame.props, "monitor-on")).toHaveLength(1);
 
-    const desk = scene.layout().desks.get("alpha");
+    const desk = layoutOf(scene).desks.get("alpha");
     if (desk === undefined) throw new Error("expected a desk");
     const sheet = sprites(frame.props, "dust-sheet")[0];
     expect(sheet.x).toBe(desk.deskTile.col * OFFICE_TILE);
@@ -1147,7 +1231,7 @@ describe("OfficeScene", () => {
   });
 
   it("alternates the screen while an agent works and holds it while it does not", () => {
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(
       sceneInput({
         agents: AGENTS,
@@ -1160,7 +1244,7 @@ describe("OfficeScene", () => {
     );
 
     const screensAt = (): ReadonlyArray<OfficeSpriteName> => {
-      const frame = scene.frame();
+      const frame = frameOf(scene);
       const lit: OfficeSpriteName[] = [];
       for (const drawable of frame.props) {
         if (drawable.kind !== "sprite") continue;
@@ -1187,7 +1271,7 @@ describe("OfficeScene", () => {
   });
 
   it("hands an in-flight envelope its edge and a box to click", () => {
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: BOTH }));
     scene.sync(
       sceneInput({
@@ -1199,7 +1283,7 @@ describe("OfficeScene", () => {
     );
     scene.tick(300);
 
-    const frame = scene.frame();
+    const frame = frameOf(scene);
     const flying = envelopes(frame)[0];
     expect(flying.edgeId).toBe("alpha<->beta");
     expect(frame.envelopeHitRegions).toHaveLength(1);
@@ -1226,12 +1310,12 @@ describe("OfficeScene", () => {
 
     // Once it lands there is nothing left to click.
     scene.tick(400);
-    expect(scene.frame().envelopeHitRegions).toHaveLength(0);
+    expect(frameOf(scene).envelopeHitRegions).toHaveLength(0);
     expect(scene.hitTestEnvelope({ x: flying.x, y: flying.y })).toBeNull();
   });
 
   it("sends an idle agent on an errand, but not before it has been idle", () => {
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(sceneInput({ agents: IDLE_CREW, visibleAgentIds: CREW_IDS }));
 
     let firstBreakMs: number | null = null;
@@ -1240,7 +1324,7 @@ describe("OfficeScene", () => {
     while (elapsedMs < 60_000) {
       scene.tick(100);
       elapsedMs += 100;
-      const away = crewAway(scene.frame());
+      const away = crewAway(frameOf(scene));
       if (away.length > 0 && firstBreakMs === null) firstBreakMs = elapsedMs;
       mostAtOnce = Math.max(mostAtOnce, away.length);
     }
@@ -1260,7 +1344,7 @@ describe("OfficeScene", () => {
   });
 
   it("keeps every idle agent away for as long as it stays idle", () => {
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(sceneInput({ agents: IDLE_CREW, visibleAgentIds: CREW_IDS }));
 
     // Past the threshold plus the widest stagger, nobody has any business in a
@@ -1271,7 +1355,7 @@ describe("OfficeScene", () => {
     let seatedFrames = 0;
     for (let step = 0; step < 600; step += 1) {
       scene.tick(100);
-      const away = new Set(crewAway(scene.frame()));
+      const away = new Set(crewAway(frameOf(scene)));
       for (const person of IDLE_CREW) {
         if (!away.has(person.id)) seatedFrames += 1;
       }
@@ -1280,20 +1364,20 @@ describe("OfficeScene", () => {
   });
 
   it("chains one errand into the next without going back to the desk", () => {
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(sceneInput({ agents: IDLE_CREW, visibleAgentIds: CREW_IDS }));
 
     // Every spot alpha comes to a stop on, with the kind the plan gives it.
     const byTile = new Map<string, string>();
-    for (const spot of scene.layout().floors[0].errandSpots) {
+    for (const spot of layoutOf(scene).floors[0].errandSpots) {
       byTile.set(`${spot.tile.col},${spot.tile.row}`, spot.kind);
     }
     const kinds: string[] = [];
-    let previous = characterRect(scene.frame(), "alpha");
+    let previous = characterRect(frameOf(scene), "alpha");
     let moving = true;
     for (let step = 0; step < 2_000; step += 1) {
       scene.tick(100);
-      const rect = characterRect(scene.frame(), "alpha");
+      const rect = characterRect(frameOf(scene), "alpha");
       const still = rect.x === previous.x && rect.y === previous.y;
       previous = rect;
       if (!still) {
@@ -1338,7 +1422,7 @@ describe("OfficeScene", () => {
         })),
       };
     };
-    const scene = new OfficeScene(oneSpot);
+    const scene = new OfficeScene(testView(oneSpot), null);
     scene.sync(sceneInput({ agents: crowd, visibleAgentIds: ids }));
 
     for (let step = 0; step < 200; step += 1) scene.tick(100);
@@ -1346,10 +1430,10 @@ describe("OfficeScene", () => {
     let sat = 0;
     for (let step = 0; step < 300; step += 1) {
       scene.tick(100);
-      const frame = scene.frame();
+      const frame = frameOf(scene);
       for (const region of frame.hitRegions) {
         if (region.rect.height !== OFFICE_CHARACTER_HEIGHT) continue;
-        const desk = scene.layout().desks.get(region.agentId);
+        const desk = layoutOf(scene).desks.get(region.agentId);
         if (desk === undefined) continue;
         const seated =
           region.rect.x === desk.chairTile.col * OFFICE_TILE &&
@@ -1369,26 +1453,24 @@ describe("OfficeScene", () => {
   });
 
   it("visits a spread of destinations rather than the same one twice", () => {
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(sceneInput({ agents: IDLE_CREW, visibleAgentIds: CREW_IDS }));
 
     // Where alpha actually stands, sampled over enough errands that a single
     // destination would have to be the rule rather than a coincidence.
     const spots = new Set(
-      scene
-        .layout()
-        .floors[0].errandSpots.map(
-          (spot) => `${spot.tile.col},${spot.tile.row}`,
-        ),
+      layoutOf(scene).floors[0].errandSpots.map(
+        (spot) => `${spot.tile.col},${spot.tile.row}`,
+      ),
     );
     // Every place alpha came to a STOP, in order. A position that repeats
     // across ticks is a linger; anything moving is a tile on the way.
     const visited: string[] = [];
-    let previous = characterRect(scene.frame(), "alpha");
+    let previous = characterRect(frameOf(scene), "alpha");
     let moving = true;
     for (let step = 0; step < 3_000; step += 1) {
       scene.tick(100);
-      const rect = characterRect(scene.frame(), "alpha");
+      const rect = characterRect(frameOf(scene), "alpha");
       const still = rect.x === previous.x && rect.y === previous.y;
       previous = rect;
       if (!still) {
@@ -1417,7 +1499,7 @@ describe("OfficeScene", () => {
       agent({ id: `agent-${index}`, createdAt: index }),
     );
     const ids = new Set(crowd.map((person) => person.id));
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(sceneInput({ agents: crowd, visibleAgentIds: ids }));
 
     let previous = new Map<string, string>();
@@ -1425,9 +1507,9 @@ describe("OfficeScene", () => {
       scene.tick(100);
       const occupied = new Map<string, string>();
       const here = new Map<string, string>();
-      for (const region of scene.frame().hitRegions) {
+      for (const region of frameOf(scene).hitRegions) {
         if (region.rect.height !== OFFICE_CHARACTER_HEIGHT) continue;
-        const desk = scene.layout().desks.get(region.agentId);
+        const desk = layoutOf(scene).desks.get(region.agentId);
         if (desk === undefined) continue;
         const key = `${region.rect.x},${region.rect.y}`;
         here.set(region.agentId, key);
@@ -1449,14 +1531,14 @@ describe("OfficeScene", () => {
   });
 
   it("throws paper at the bin, misses some of it, and stops throwing", () => {
-    const scene = new OfficeScene(onlyKinds(["bin"]));
+    const scene = new OfficeScene(testView(onlyKinds(["bin"])), null);
     scene.sync(sceneInput({ agents: IDLE_CREW, visibleAgentIds: CREW_IDS }));
 
     // Where the bins actually are, so a ball can be shown to be aimed at one
     // rather than merely to exist.
-    const bins = scene
-      .layout()
-      .props.filter((prop) => prop.sprite.name === "bin");
+    const bins = layoutOf(scene).props.filter(
+      (prop) => prop.sprite.name === "bin",
+    );
     expect(bins.length).toBeGreaterThan(0);
 
     let thrown = 0;
@@ -1465,7 +1547,7 @@ describe("OfficeScene", () => {
     let previous: ReadonlyArray<OfficeSpriteDrawable> = [];
     for (let step = 0; step < 900; step += 1) {
       scene.tick(100);
-      const balls = paperBalls(scene.frame());
+      const balls = paperBalls(frameOf(scene));
       if (balls.length > previous.length) thrown += balls.length;
       // Read only from frames holding exactly ONE ball, in both this frame and
       // the last. Drawables carry no identity, so with several in play a ball
@@ -1499,18 +1581,18 @@ describe("OfficeScene", () => {
     let quiet = 0;
     for (let step = 0; step < 200 && quiet < 20; step += 1) {
       scene.tick(100);
-      quiet = paperBalls(scene.frame()).length === 0 ? quiet + 1 : 0;
+      quiet = paperBalls(frameOf(scene)).length === 0 ? quiet + 1 : 0;
     }
     expect(quiet).toBeGreaterThanOrEqual(20);
   });
 
   it("holds an end of the table open, then rallies once both are taken", () => {
-    const scene = new OfficeScene(onlyKinds(["pingpong"]));
+    const scene = new OfficeScene(testView(onlyKinds(["pingpong"])), null);
     scene.sync(sceneInput({ agents: IDLE_CREW, visibleAgentIds: CREW_IDS }));
 
-    const ends = scene
-      .layout()
-      .floors[0].errandSpots.filter((spot) => spot.kind === "pingpong");
+    const ends = layoutOf(scene).floors[0].errandSpots.filter(
+      (spot) => spot.kind === "pingpong",
+    );
     expect(ends).toHaveLength(2);
     const rects = ends.map((end) => ({
       x: end.tile.col * OFFICE_TILE,
@@ -1523,7 +1605,7 @@ describe("OfficeScene", () => {
     let previousBall: OfficeSpriteDrawable | null = null;
     for (let step = 0; step < 900 && !ballMoved; step += 1) {
       scene.tick(100);
-      const frame = scene.frame();
+      const frame = frameOf(scene);
       const taken = rects.filter((rect) =>
         frame.hitRegions.some(
           (region) =>
@@ -1576,12 +1658,12 @@ describe("OfficeScene", () => {
       agent({ id: `agent-${index}`, createdAt: index }),
     );
     const ids = new Set(crowd.map((person) => person.id));
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(sceneInput({ agents: crowd, visibleAgentIds: ids }));
 
-    const ends = scene
-      .layout()
-      .floors[0].errandSpots.filter((spot) => spot.kind === "pingpong");
+    const ends = layoutOf(scene).floors[0].errandSpots.filter(
+      (spot) => spot.kind === "pingpong",
+    );
     expect(ends).toHaveLength(2);
     const rects = ends.map((end) => ({
       x: end.tile.col * OFFICE_TILE,
@@ -1593,7 +1675,7 @@ describe("OfficeScene", () => {
     let playing = false;
     for (let step = 0; step < 2_400; step += 1) {
       scene.tick(100);
-      const frame = scene.frame();
+      const frame = frameOf(scene);
       const taken = rects.filter((rect) =>
         frame.hitRegions.some(
           (region) =>
@@ -1620,14 +1702,14 @@ describe("OfficeScene", () => {
   it("gives up on the table when nobody takes the other end", () => {
     // One agent on the floor, so there is nobody to play against.
     const alone = [agent({ id: "alpha", createdAt: 1 })];
-    const scene = new OfficeScene(onlyKinds(["pingpong"]));
+    const scene = new OfficeScene(testView(onlyKinds(["pingpong"])), null);
     scene.sync(
       sceneInput({ agents: alone, visibleAgentIds: new Set(["alpha"]) }),
     );
 
-    const ends = scene
-      .layout()
-      .floors[0].errandSpots.filter((spot) => spot.kind === "pingpong");
+    const ends = layoutOf(scene).floors[0].errandSpots.filter(
+      (spot) => spot.kind === "pingpong",
+    );
     const keys = new Set(ends.map((end) => `${end.tile.col},${end.tile.row}`));
 
     let atTable = 0;
@@ -1635,7 +1717,7 @@ describe("OfficeScene", () => {
     let run = 0;
     for (let step = 0; step < 400; step += 1) {
       scene.tick(100);
-      const rect = characterRect(scene.frame(), "alpha");
+      const rect = characterRect(frameOf(scene), "alpha");
       const key = `${rect.x / OFFICE_TILE},${(rect.y + 4) / OFFICE_TILE}`;
       if (keys.has(key)) {
         atTable += 1;
@@ -1644,7 +1726,7 @@ describe("OfficeScene", () => {
       } else {
         run = 0;
       }
-      expect(paperBalls(scene.frame())).toHaveLength(0);
+      expect(paperBalls(frameOf(scene))).toHaveLength(0);
     }
 
     expect(atTable).toBeGreaterThan(0);
@@ -1654,12 +1736,12 @@ describe("OfficeScene", () => {
   });
 
   it("plays the arcade and flashes its screen while somebody is on it", () => {
-    const scene = new OfficeScene(onlyKinds(["arcade"]));
+    const scene = new OfficeScene(testView(onlyKinds(["arcade"])), null);
     scene.sync(sceneInput({ agents: IDLE_CREW, visibleAgentIds: CREW_IDS }));
 
-    const cabinet = scene
-      .layout()
-      .props.find((prop) => prop.sprite.name === "arcade");
+    const cabinet = layoutOf(scene).props.find(
+      (prop) => prop.sprite.name === "arcade",
+    );
     if (cabinet === undefined) throw new Error("no arcade");
     const onScreen = {
       x: cabinet.tile.col * OFFICE_TILE + OFFICE_TILE / 2,
@@ -1670,7 +1752,7 @@ describe("OfficeScene", () => {
     let lit = false;
     for (let step = 0; step < 600; step += 1) {
       scene.tick(100);
-      const here = sprites(scene.frame().overlay, "sparkle").some(
+      const here = sprites(frameOf(scene).overlay, "sparkle").some(
         (sparkle) => sparkle.x === onScreen.x && sparkle.y === onScreen.y,
       );
       // Count the rising edge: the screen flashes, it does not simply stay on.
@@ -1681,12 +1763,11 @@ describe("OfficeScene", () => {
   });
 
   it("waters a cabin plant with a can and sparkles it at the end", () => {
-    const scene = new OfficeScene(onlyKinds(["water-plant"]));
+    const scene = new OfficeScene(testView(onlyKinds(["water-plant"])), null);
     scene.sync(sceneInput({ agents: IDLE_CREW, visibleAgentIds: CREW_IDS }));
 
     const plants = new Set(
-      scene
-        .layout()
+      layoutOf(scene)
         .props.filter((prop) => prop.sprite.name === "plant")
         .map((prop) => `${prop.tile.col},${prop.tile.row}`),
     );
@@ -1694,7 +1775,7 @@ describe("OfficeScene", () => {
     let sparkledPlants = 0;
     for (let step = 0; step < 600; step += 1) {
       scene.tick(100);
-      const frame = scene.frame();
+      const frame = frameOf(scene);
       cans += sprites(frame.overlay, "watering-can").length;
       for (const sparkle of sprites(frame.overlay, "sparkle")) {
         // On the PLANT, not over the waterer's head: tile centres are the only
@@ -1708,21 +1789,21 @@ describe("OfficeScene", () => {
   });
 
   it("sits down on the cafeteria sofa instead of standing at it", () => {
-    const scene = new OfficeScene(onlyKinds(["sofa"]));
+    const scene = new OfficeScene(testView(onlyKinds(["sofa"])), null);
     scene.sync(sceneInput({ agents: IDLE_CREW, visibleAgentIds: CREW_IDS }));
 
     // One sofa in the break room on a floor this size, with a seat in front of
     // each of its two tiles.
-    const seats = scene
-      .layout()
-      .floors[0].errandSpots.filter((spot) => spot.kind === "sofa");
+    const seats = layoutOf(scene).floors[0].errandSpots.filter(
+      (spot) => spot.kind === "sofa",
+    );
     expect(seats).toHaveLength(2);
 
     let sat = false;
     let dozed = false;
     for (let step = 0; step < 900 && !(sat && dozed); step += 1) {
       scene.tick(100);
-      const frame = scene.frame();
+      const frame = frameOf(scene);
       for (const seat of seats) {
         const rect: OfficeRect = {
           x: seat.tile.col * OFFICE_TILE,
@@ -1752,12 +1833,12 @@ describe("OfficeScene", () => {
       agent({ id: "b1", parentId: "root-b", createdAt: 4 }),
     ];
     const ids = new Set(families.map((person) => person.id));
-    const scene = new OfficeScene(onlyKinds(["peek"]));
+    const scene = new OfficeScene(testView(onlyKinds(["peek"])), null);
     scene.sync(sceneInput({ agents: families, visibleAgentIds: ids }));
 
     // Each peek tile belongs to the cabin whose door is the tile above it.
     const doorOwners = new Map<string, string>();
-    for (const room of scene.layout().rooms) {
+    for (const room of layoutOf(scene).rooms) {
       doorOwners.set(
         `${room.doorTile.col},${room.doorTile.row + 1}`,
         room.rootAgentId,
@@ -1807,7 +1888,7 @@ describe("OfficeScene", () => {
       agent({ id: `agent-${index}`, createdAt: index }),
     );
     const ids = new Set(crowd.map((person) => person.id));
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(sceneInput({ agents: crowd, visibleAgentIds: ids }));
 
     // A conversation is ONE bubble at a time, changing hands. Two at once reads
@@ -1825,7 +1906,7 @@ describe("OfficeScene", () => {
         continue;
       }
       sawPair = true;
-      const frame = scene.frame();
+      const frame = frameOf(scene);
       const speakers = pair.filter((agentId) => {
         const head = headOfRegion(scene, agentId);
         return head !== null && hasBubbleAt(frame, "bubble-awaiting", head);
@@ -1843,7 +1924,7 @@ describe("OfficeScene", () => {
   });
 
   it("keeps a seated idle agent moving at its own desk", () => {
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(sceneInput({ agents: IDLE_CREW, visibleAgentIds: CREW_IDS }));
 
     // Errands move two people at a time. Without the desk fillers the other
@@ -1851,11 +1932,11 @@ describe("OfficeScene", () => {
     const poses = new Set<string>();
     for (let step = 0; step < 400; step += 1) {
       scene.tick(50);
-      for (const region of scene.frame().hitRegions) {
+      for (const region of frameOf(scene).hitRegions) {
         if (region.rect.height !== OFFICE_CHARACTER_HEIGHT) continue;
         const seated = crewSeatedRect(region.agentId);
         if (region.rect.x !== seated.x || region.rect.y !== seated.y) continue;
-        const sprite = characterSpriteAt(scene.frame(), region.rect);
+        const sprite = characterSpriteAt(frameOf(scene), region.rect);
         if (sprite === null) continue;
         poses.add(`${sprite.pose ?? ""}/${sprite.facing ?? ""}`);
       }
@@ -1866,7 +1947,7 @@ describe("OfficeScene", () => {
   });
 
   it("runs no desk filler while an agent is away on an errand", () => {
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(sceneInput({ agents: IDLE_CREW, visibleAgentIds: CREW_IDS }));
 
     // A sofa, a sleeping bag, an armchair, a console seat and a garden bench
@@ -1874,8 +1955,7 @@ describe("OfficeScene", () => {
     // ones where `sit` does not mean a filler leaked onto the floor.
     const seatedKinds = new Set(["sofa", "nap", "read", "console", "garden"]);
     const seatKeys = new Set(
-      scene
-        .layout()
+      layoutOf(scene)
         .floors[0].errandSpots.filter((spot) => seatedKinds.has(spot.kind))
         .map((spot) => `${spot.tile.col},${spot.tile.row}`),
     );
@@ -1883,7 +1963,7 @@ describe("OfficeScene", () => {
 
     for (let step = 0; step < 1_500; step += 1) {
       scene.tick(100);
-      const frame = scene.frame();
+      const frame = frameOf(scene);
       for (const region of frame.hitRegions) {
         if (region.rect.height !== OFFICE_CHARACTER_HEIGHT) continue;
         const seated = crewSeatedRect(region.agentId);
@@ -1919,7 +1999,7 @@ describe("OfficeScene", () => {
         floors: base.floors.map((entry) => ({ ...entry, errandSpots: [] })),
       };
     };
-    const scene = new OfficeScene(spotless);
+    const scene = new OfficeScene(testView(spotless), null);
     scene.sync(sceneInput({ agents: families, visibleAgentIds: ids }));
 
     let visits = 0;
@@ -1940,11 +2020,11 @@ describe("OfficeScene", () => {
     expect(visits).toBeGreaterThan(0);
     // Both cabins have to have produced visits, or "same cabin" could be
     // holding by accident on a floor where only one family ever moved.
-    expect(scene.layout().rooms).toHaveLength(2);
+    expect(layoutOf(scene).rooms).toHaveLength(2);
   });
 
   it("drops an errand the instant a message is in the air", () => {
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     const idle = sceneInput({ agents: IDLE_CREW, visibleAgentIds: CREW_IDS });
     scene.sync(idle);
 
@@ -1955,17 +2035,17 @@ describe("OfficeScene", () => {
     for (let step = 0; step < 400 && lingering === null; step += 1) {
       scene.tick(100);
       const here = new Map<string, string>();
-      for (const region of scene.frame().hitRegions) {
+      for (const region of frameOf(scene).hitRegions) {
         if (region.rect.height !== OFFICE_CHARACTER_HEIGHT) continue;
         here.set(region.agentId, `${region.rect.x},${region.rect.y}`);
       }
-      for (const agentId of crewAway(scene.frame())) {
+      for (const agentId of crewAway(frameOf(scene))) {
         if (previous.get(agentId) === here.get(agentId)) lingering = agentId;
       }
       previous = here;
     }
     if (lingering === null) throw new Error("nobody settled at a spot");
-    const parked = characterRect(scene.frame(), lingering);
+    const parked = characterRect(frameOf(scene), lingering);
 
     scene.sync(
       sceneInput({
@@ -1983,7 +2063,7 @@ describe("OfficeScene", () => {
     );
     scene.tick(100);
     // The linger is over on the first frame, not when it would have run out.
-    let previousRect = characterRect(scene.frame(), lingering);
+    let previousRect = characterRect(frameOf(scene), lingering);
     expect(previousRect).not.toEqual(parked);
 
     // The hurry is a LATCH held until the chair, not a window that closes when
@@ -1995,7 +2075,7 @@ describe("OfficeScene", () => {
     let fastestAfterLanding = 0;
     for (let step = 2; step <= 30 && home === 0; step += 1) {
       scene.tick(100);
-      const rect = characterRect(scene.frame(), lingering);
+      const rect = characterRect(frameOf(scene), lingering);
       if (step > 7) {
         const moved =
           Math.abs(rect.x - previousRect.x) + Math.abs(rect.y - previousRect.y);
@@ -2015,12 +2095,12 @@ describe("OfficeScene", () => {
     // whose turn to talk - is seeded from the agent id and the scene clock.
     // A single `Math.random` anywhere in it would make playback unscrubbable.
     const run = (): ReadonlyArray<string> => {
-      const scene = new OfficeScene(layoutOffice);
+      const scene = new OfficeScene(testView(layoutOffice), null);
       scene.sync(sceneInput({ agents: IDLE_CREW, visibleAgentIds: CREW_IDS }));
       const frames: string[] = [];
       for (let step = 0; step < 600; step += 1) {
         scene.tick(100);
-        if (step % 7 === 0) frames.push(JSON.stringify(scene.frame()));
+        if (step % 7 === 0) frames.push(JSON.stringify(frameOf(scene)));
       }
       return frames;
     };
@@ -2031,7 +2111,7 @@ describe("OfficeScene", () => {
   });
 
   it("never breaks during playback", () => {
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(
       sceneInput({
         agents: IDLE_CREW,
@@ -2044,12 +2124,12 @@ describe("OfficeScene", () => {
     // would fire constantly and mean nothing.
     for (let step = 0; step < 600; step += 1) {
       scene.tick(100);
-      expect(crewAway(scene.frame())).toEqual([]);
+      expect(crewAway(frameOf(scene))).toEqual([]);
     }
   });
 
   it("sends a wanderer straight back when its status changes", () => {
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     const idle = sceneInput({
       agents: IDLE_CREW,
       visibleAgentIds: CREW_IDS,
@@ -2059,7 +2139,7 @@ describe("OfficeScene", () => {
     let away: ReadonlyArray<string> = [];
     for (let step = 0; step < 600 && away.length === 0; step += 1) {
       scene.tick(100);
-      away = crewAway(scene.frame());
+      away = crewAway(frameOf(scene));
     }
     expect(away.length).toBeGreaterThan(0);
 
@@ -2074,7 +2154,7 @@ describe("OfficeScene", () => {
     // The walk back is a walk, not a teleport, so give it the tiles it needs.
     for (let step = 0; step < 200; step += 1) scene.tick(100);
 
-    expect(crewAway(scene.frame())).not.toContain(busy);
+    expect(crewAway(frameOf(scene))).not.toContain(busy);
   });
 
   it("draws floor under every walkable tile that is not a doorway", () => {
@@ -2093,21 +2173,21 @@ describe("OfficeScene", () => {
       agent({ id: "b2", parentId: "root-b", createdAt: 9 }),
       agent({ id: "root-c", createdAt: 10 }),
     ];
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(
       sceneInput({
         agents: crowd,
         visibleAgentIds: new Set(crowd.map((person) => person.id)),
       }),
     );
-    const layout = scene.layout();
+    const layout = layoutOf(scene);
     expect(layout.rooms).toHaveLength(3);
 
     // The floor layer is painted in order, so the LAST tile-aligned sprite at
     // a position is the one a viewer actually sees. (The rug is centred on its
     // tile, so it is not tile-aligned and never masks the floor under it.)
     const painted = new Map<string, OfficeSpriteName>();
-    for (const drawable of scene.frame().floor) {
+    for (const drawable of frameOf(scene).floor) {
       if (drawable.kind !== "sprite") continue;
       if (drawable.x % OFFICE_TILE !== 0) continue;
       if (drawable.y % OFFICE_TILE !== 0) continue;
@@ -2137,16 +2217,20 @@ describe("OfficeScene", () => {
         // Somewhere a character can stand must look like somewhere a character
         // can stand - a corridor painted as brick reads as a sealed room. A pod
         // floor counts, and so does the garden's grass: both are the same
-        // floor in another surface.
-        expect(painted.get(key), key).toMatch(
-          /^(floor-[ab]|floor-pod-(warm-)?[ab]|floor-grass-[ab])$/,
-        );
+        // floor in another surface - and so does a piece of static scenery
+        // (an armchair, a clock) standing on its own walkable tile, since the
+        // painter now bakes `layout.props` into this same floor pass and a
+        // walkable tile is never a wall or a window either way.
+        const name = painted.get(key);
+        expect(name, key).toBeDefined();
+        if (name === undefined) continue;
+        expect(["wall", "wall-top", "window"].includes(name), key).toBe(false);
       }
     }
   });
 
   it("crashes the screen of a failing agent and sends it to reception", () => {
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(
       sceneInput({
         agents: AGENTS,
@@ -2158,35 +2242,33 @@ describe("OfficeScene", () => {
     // bottom of the building and the desks are at the top of it.
     for (let step = 0; step < 150; step += 1) scene.tick(100);
 
-    const frame = scene.frame();
+    const frame = frameOf(scene);
     const crashed = sprites(frame.props, "monitor-crash");
     expect(crashed).toHaveLength(1);
     // Static: no alternate frame, and never dimmed the way an idle screen is.
     expect(crashed[0].alpha).toBeUndefined();
-    const desk = scene.layout().desks.get("alpha");
+    const desk = layoutOf(scene).desks.get("alpha");
     if (desk === undefined) throw new Error("expected a desk");
     expect(crashed[0].x).toBe(desk.deskTile.col * OFFICE_TILE + 3);
     scene.tick(260);
-    expect(sprites(scene.frame().props, "monitor-crash")).toHaveLength(1);
+    expect(sprites(frameOf(scene).props, "monitor-crash")).toHaveLength(1);
 
     // A failure needs a person, so it queues at reception with the same
     // bubble an interview raises.
-    const floor = scene.layout().floors[0];
-    const standing = characterRect(scene.frame(), "alpha");
+    const floor = layoutOf(scene).floors[0];
+    const standing = characterRect(frameOf(scene), "alpha");
     expect(standing.x).toBe(floor.receptionQueueTiles[0].col * OFFICE_TILE);
     expect(
-      scene
-        .frame()
-        .overlay.some(
-          (drawable) =>
-            drawable.kind === "sprite" &&
-            drawable.sprite.name === "bubble-attention",
-        ),
+      frameOf(scene).overlay.some(
+        (drawable) =>
+          drawable.kind === "sprite" &&
+          drawable.sprite.name === "bubble-attention",
+      ),
     ).toBe(true);
   });
 
   it("clears the crash and walks the agent back when the failure resolves", () => {
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(
       sceneInput({
         agents: AGENTS,
@@ -2198,7 +2280,7 @@ describe("OfficeScene", () => {
     scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: BOTH }));
     for (let step = 0; step < 60; step += 1) scene.tick(100);
 
-    const frame = scene.frame();
+    const frame = frameOf(scene);
     expect(sprites(frame.props, "monitor-crash")).toHaveLength(0);
     expect(characterRect(frame, "alpha")).toEqual(seatedRect("alpha"));
   });
@@ -2208,16 +2290,16 @@ describe("OfficeScene", () => {
       agent({ id: "alpha", createdAt: 1, modelTier: "small" }),
       agent({ id: "beta", createdAt: 2, modelTier: "large" }),
     ];
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(sceneInput({ agents: crew, visibleAgentIds: BOTH }));
 
-    const frame = scene.frame();
+    const frame = frameOf(scene);
     expect(sprites(frame.props, "monitor-small-on")).toHaveLength(1);
     expect(sprites(frame.props, "monitor-wide-on")).toHaveLength(1);
     expect(sprites(frame.props, "monitor-on")).toHaveLength(0);
 
-    const laptopDesk = scene.layout().desks.get("alpha");
-    const wideDesk = scene.layout().desks.get("beta");
+    const laptopDesk = layoutOf(scene).desks.get("alpha");
+    const wideDesk = layoutOf(scene).desks.get("beta");
     if (laptopDesk === undefined || wideDesk === undefined) {
       throw new Error("expected both desks");
     }
@@ -2242,7 +2324,7 @@ describe("OfficeScene", () => {
       agent({ id: "alpha", createdAt: 1, modelTier: "small" }),
       agent({ id: "beta", createdAt: 2, modelTier: "large" }),
     ];
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(
       sceneInput({
         agents: crew,
@@ -2256,7 +2338,7 @@ describe("OfficeScene", () => {
 
     const litNames = (): ReadonlyArray<OfficeSpriteName> => {
       const found: OfficeSpriteName[] = [];
-      for (const drawable of scene.frame().props) {
+      for (const drawable of frameOf(scene).props) {
         if (drawable.kind !== "sprite") continue;
         if (!drawable.sprite.name.startsWith("monitor-")) continue;
         found.push(drawable.sprite.name);
@@ -2280,7 +2362,7 @@ describe("OfficeScene", () => {
       agent({ id: "gamma", createdAt: 3 }),
       agent({ id: "delta", createdAt: 4 }),
     ];
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(
       sceneInput({
         agents: crew,
@@ -2293,13 +2375,13 @@ describe("OfficeScene", () => {
       }),
     );
 
-    const frame = scene.frame();
+    const frame = frameOf(scene);
     expect(sprites(frame.props, "envelope-stack-1")).toHaveLength(1);
     expect(sprites(frame.props, "envelope-stack-2")).toHaveLength(1);
     // Nine is still one pile; the tallest sprite is where the art stops.
     expect(sprites(frame.props, "envelope-stack-3")).toHaveLength(1);
 
-    const desk = scene.layout().desks.get("alpha");
+    const desk = layoutOf(scene).desks.get("alpha");
     if (desk === undefined) throw new Error("expected a desk");
     const stack = sprites(frame.props, "envelope-stack-1")[0];
     const size = officeSpriteSize({ name: "envelope-stack-1" });
@@ -2311,20 +2393,22 @@ describe("OfficeScene", () => {
   });
 
   it("hangs one clock per floor and centres its hands on the face", () => {
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(
       sceneInput({ agents: AGENTS, visibleAgentIds: BOTH, clockMs: 42_000 }),
     );
 
-    const frame = scene.frame();
+    const frame = frameOf(scene);
     const clocks: Array<Extract<OfficeDrawable, { kind: "clock" }>> = [];
     for (const drawable of frame.overlay) {
       if (drawable.kind === "clock") clocks.push(drawable);
     }
-    expect(clocks).toHaveLength(scene.layout().floors.length);
+    expect(clocks).toHaveLength(layoutOf(scene).floors.length);
     expect(clocks[0].timeMs).toBe(42_000);
 
-    const face = sprites(frame.props, "clock")[0];
+    // The clock face is static scenery - like every other wall fitting, the
+    // painter bakes it into the floor pass rather than the per-desk prop pass.
+    const face = sprites(frame.floor, "clock")[0];
     expect(face).toBeDefined();
     const size = officeSpriteSize({ name: "clock" });
     // CENTER anchored on the face the prop just drew.
@@ -2333,7 +2417,7 @@ describe("OfficeScene", () => {
   });
 
   it("queues agents needing a person in arrival order and walks them back", () => {
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(
       sceneInput({
         agents: AGENTS,
@@ -2343,10 +2427,10 @@ describe("OfficeScene", () => {
     );
     for (let step = 0; step < 80; step += 1) scene.tick(100);
 
-    const floor = scene.layout().floors[0];
+    const floor = layoutOf(scene).floors[0];
     // Beta needed a person first, so it holds the nearest slot even once
     // alpha joins the queue behind it.
-    expect(characterRect(scene.frame(), "beta").x).toBe(
+    expect(characterRect(frameOf(scene), "beta").x).toBe(
       floor.receptionQueueTiles[0].col * OFFICE_TILE,
     );
 
@@ -2362,7 +2446,7 @@ describe("OfficeScene", () => {
     );
     for (let step = 0; step < 80; step += 1) scene.tick(100);
 
-    const queued = scene.frame();
+    const queued = frameOf(scene);
     expect(characterRect(queued, "beta").x).toBe(
       floor.receptionQueueTiles[0].col * OFFICE_TILE,
     );
@@ -2377,7 +2461,7 @@ describe("OfficeScene", () => {
     let homeAfter: number | null = null;
     for (let step = 1; step <= 120 && homeAfter === null; step += 1) {
       scene.tick(100);
-      const frame = scene.frame();
+      const frame = frameOf(scene);
       const both =
         JSON.stringify(characterRect(frame, "alpha")) ===
           JSON.stringify(seatedRect("alpha")) &&
@@ -2394,7 +2478,7 @@ describe("OfficeScene", () => {
       agent({ id: `agent-${index}`, createdAt: index }),
     );
     const ids = new Set(crowd.map((person) => person.id));
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     const statusById = new Map<string, OfficeAgentStatus>();
     for (const person of crowd) statusById.set(person.id, "attention");
     // Motion off, so every placement is exact rather than mid-walk.
@@ -2407,11 +2491,11 @@ describe("OfficeScene", () => {
       }),
     );
 
-    const layout = scene.layout();
+    const layout = layoutOf(scene);
     const slots = layout.floors[0].receptionQueueTiles;
     const slotKeys = new Set(slots.map((tile) => `${tile.col},${tile.row}`));
     let standing = 0;
-    for (const region of scene.frame().hitRegions) {
+    for (const region of frameOf(scene).hitRegions) {
       if (region.rect.height !== OFFICE_CHARACTER_HEIGHT) continue;
       const key = `${region.rect.x / OFFICE_TILE},${(region.rect.y + 4) / OFFICE_TILE}`;
       if (slotKeys.has(key)) standing += 1;
@@ -2427,9 +2511,9 @@ describe("OfficeScene", () => {
       visibleAgentIds: BOTH,
       cursorMs: 100,
     });
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(live);
-    expect(characterRect(scene.frame(), "alpha")).toEqual(seatedRect("alpha"));
+    expect(characterRect(frameOf(scene), "alpha")).toEqual(seatedRect("alpha"));
 
     scene.sync(
       sceneInput({
@@ -2440,13 +2524,13 @@ describe("OfficeScene", () => {
     );
     // On its feet and heading for the door, not simply switched off in place.
     scene.tick(400);
-    expect(characterRect(scene.frame(), "alpha")).not.toEqual(
+    expect(characterRect(frameOf(scene), "alpha")).not.toEqual(
       seatedRect("alpha"),
     );
-    expect(hasCharacter(scene.frame(), "alpha")).toBe(true);
+    expect(hasCharacter(frameOf(scene), "alpha")).toBe(true);
 
     for (let step = 0; step < 120; step += 1) scene.tick(100);
-    const gone = scene.frame();
+    const gone = frameOf(scene);
     expect(hasCharacter(gone, "alpha")).toBe(false);
     expect(sprites(gone.props, "dust-sheet")).toHaveLength(1);
     expect(sprites(gone.props, "box")).toHaveLength(1);
@@ -2459,10 +2543,10 @@ describe("OfficeScene", () => {
         cursorMs: 100,
       }),
     );
-    const returning = scene.frame();
+    const returning = frameOf(scene);
     expect(sprites(returning.props, "dust-sheet")).toHaveLength(0);
     expect(characterRect(returning, "alpha").y).toBe(
-      scene.layout().floors[0].doorTile.row * OFFICE_TILE - 4,
+      layoutOf(scene).floors[0].doorTile.row * OFFICE_TILE - 4,
     );
     // The walk in ends at the chair. It does not STAY there - an idle agent is
     // never at its desk for long - so what is asserted is that the return
@@ -2471,7 +2555,7 @@ describe("OfficeScene", () => {
     for (let step = 0; step < 120 && !arrived; step += 1) {
       scene.tick(100);
       arrived =
-        JSON.stringify(characterRect(scene.frame(), "alpha")) ===
+        JSON.stringify(characterRect(frameOf(scene), "alpha")) ===
         JSON.stringify(seatedRect("alpha"));
     }
     expect(arrived).toBe(true);
@@ -2479,7 +2563,7 @@ describe("OfficeScene", () => {
 
   it("sheets an archived desk with no walk at all when motion is reduced", () => {
     const leaver = agent({ id: "alpha", createdAt: 1, archivedAt: 500 });
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(
       sceneInput({
         agents: [leaver, BETA],
@@ -2497,14 +2581,14 @@ describe("OfficeScene", () => {
       }),
     );
 
-    const frame = scene.frame();
+    const frame = frameOf(scene);
     expect(hasCharacter(frame, "alpha")).toBe(false);
     expect(sprites(frame.props, "dust-sheet")).toHaveLength(1);
   });
 
   it("keeps an agent archived only in the future at its desk", () => {
     const later = agent({ id: "alpha", createdAt: 1, archivedAt: 5_000 });
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(
       sceneInput({
         agents: [later, BETA],
@@ -2515,12 +2599,12 @@ describe("OfficeScene", () => {
 
     // The record says archived; the cursor says not yet, and the floor shows
     // the moment the cursor is on.
-    expect(sprites(scene.frame().props, "dust-sheet")).toHaveLength(0);
-    expect(characterRect(scene.frame(), "alpha")).toEqual(seatedRect("alpha"));
+    expect(sprites(frameOf(scene).props, "dust-sheet")).toHaveLength(0);
+    expect(characterRect(frameOf(scene), "alpha")).toEqual(seatedRect("alpha"));
   });
 
   it("flies an envelope between the two SEATS, never between two bodies", () => {
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: ALPHA_ONLY }));
     scene.sync(
       sceneInput({
@@ -2531,16 +2615,16 @@ describe("OfficeScene", () => {
       }),
     );
     // Beta is still crossing the floor from the door...
-    expect(characterRect(scene.frame(), "beta")).not.toEqual(
+    expect(characterRect(frameOf(scene), "beta")).not.toEqual(
       seatedRect("beta"),
     );
-    const launched = envelopes(scene.frame())[0];
+    const launched = envelopes(frameOf(scene))[0];
     expect(launched.x).toBe(seatedHead("alpha").x);
 
     // ...and the next message to it does NOT jerk it into the chair to receive.
     // Snapping a walking sprite to a tile reads as a rendering fault; the
     // envelope simply lands on the desk and waits.
-    const walking = characterRect(scene.frame(), "beta");
+    const walking = characterRect(frameOf(scene), "beta");
     scene.sync(
       sceneInput({
         agents: AGENTS,
@@ -2549,7 +2633,7 @@ describe("OfficeScene", () => {
         pulseKey: "row-2",
       }),
     );
-    expect(characterRect(scene.frame(), "beta")).toEqual(walking);
+    expect(characterRect(frameOf(scene), "beta")).toEqual(walking);
   });
 
   it("hurries an agent with a message waiting, and greets it once seated", () => {
@@ -2557,7 +2641,7 @@ describe("OfficeScene", () => {
     // difference is a message in the air, so the difference in how long the
     // walk takes IS the hurry.
     const walkInMs = (withMessage: boolean): number => {
-      const scene = new OfficeScene(layoutOffice);
+      const scene = new OfficeScene(testView(layoutOffice), null);
       scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: ALPHA_ONLY }));
       scene.sync(
         sceneInput({
@@ -2570,15 +2654,15 @@ describe("OfficeScene", () => {
           playing: !withMessage,
         }),
       );
-      const door = scene.layout().doorTile;
-      expect(characterRect(scene.frame(), "beta").x).toBe(
+      const door = layoutOf(scene).doorTile;
+      expect(characterRect(frameOf(scene), "beta").x).toBe(
         door.col * OFFICE_TILE,
       );
       let seatedAt: number | null = null;
       let greeted = false;
       for (let step = 1; step <= 200; step += 1) {
         scene.tick(50);
-        const frame = scene.frame();
+        const frame = frameOf(scene);
         if (hasBubbleAt(frame, "bubble-hello", seatedHead("beta"))) {
           greeted = true;
         }
@@ -2602,7 +2686,7 @@ describe("OfficeScene", () => {
   });
 
   it("piles a message onto the desk of an agent stuck at reception", () => {
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     const needsHelp = new Map<string, OfficeAgentStatus>([
       ["beta", "attention"],
     ]);
@@ -2614,7 +2698,7 @@ describe("OfficeScene", () => {
       }),
     );
     for (let step = 0; step < 80; step += 1) scene.tick(100);
-    expect(stacks(scene.frame())).toHaveLength(0);
+    expect(stacks(frameOf(scene))).toHaveLength(0);
 
     // The request is open from the row it lands on, and the as-of count is
     // what says so; the landed message itself only carries the greeting, or
@@ -2633,11 +2717,11 @@ describe("OfficeScene", () => {
 
     // Beta is queued and stays queued, so the message waits ON THE DESK - and
     // an unanswered message on a desk is exactly what the pile already draws.
-    const waiting = scene.frame();
+    const waiting = frameOf(scene);
     expect(characterRect(waiting, "beta")).not.toEqual(seatedRect("beta"));
     const pile = stacks(waiting);
     expect(pile).toHaveLength(1);
-    const desk = scene.layout().desks.get("beta");
+    const desk = layoutOf(scene).desks.get("beta");
     if (desk === undefined) throw new Error("expected a desk");
     expect(pile[0].x).toBe(desk.deskTile.col * OFFICE_TILE + 1);
     expect(hasBubbleAt(waiting, "bubble-hello", seatedHead("beta"))).toBe(
@@ -2651,7 +2735,7 @@ describe("OfficeScene", () => {
     scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: BOTH }));
     for (let step = 0; step < 120; step += 1) {
       scene.tick(100);
-      const frame = scene.frame();
+      const frame = frameOf(scene);
       if (characterSpriteAt(frame, seatedRect("beta"))?.pose === "sit") {
         expect(stacks(frame)).toHaveLength(0);
         expect(hasBubbleAt(frame, "bubble-hello", seatedHead("beta"))).toBe(
@@ -2671,7 +2755,7 @@ describe("OfficeScene", () => {
       fromAgentId: "beta",
       toAgentId: "alpha",
     };
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: ALPHA_ONLY }));
     scene.sync(
       sceneInput({
@@ -2692,16 +2776,16 @@ describe("OfficeScene", () => {
 
     // The DESK sends, so the flight is correct without beta being at it - and
     // beta is deliberately still on the floor rather than snapped into place.
-    expect(characterRect(scene.frame(), "beta")).not.toEqual(
+    expect(characterRect(frameOf(scene), "beta")).not.toEqual(
       seatedRect("beta"),
     );
-    const launched = envelopes(scene.frame()).at(-1);
+    const launched = envelopes(frameOf(scene)).at(-1);
     if (launched === undefined) throw new Error("expected an envelope");
     expect(launched.x).toBe(seatedHead("beta").x);
   });
 
   it("leaves a queued agent at reception when a message arrives for it", () => {
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     const needsHelp = new Map<string, OfficeAgentStatus>([
       ["beta", "attention"],
     ]);
@@ -2713,7 +2797,7 @@ describe("OfficeScene", () => {
       }),
     );
     for (let step = 0; step < 80; step += 1) scene.tick(100);
-    const queued = characterRect(scene.frame(), "beta");
+    const queued = characterRect(frameOf(scene), "beta");
     expect(queued).not.toEqual(seatedRect("beta"));
 
     scene.sync(
@@ -2729,11 +2813,11 @@ describe("OfficeScene", () => {
 
     // A person is needed, which no envelope answers. Pulling beta out of the
     // line to collect a message would cost it the place it has been holding.
-    expect(characterRect(scene.frame(), "beta")).toEqual(queued);
+    expect(characterRect(frameOf(scene), "beta")).toEqual(queued);
   });
 
   it("skips the walk-in entirely once playback runs fast", () => {
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: ALPHA_ONLY }));
     scene.sync(
       sceneInput({
@@ -2745,7 +2829,7 @@ describe("OfficeScene", () => {
       }),
     );
 
-    const frame = scene.frame();
+    const frame = frameOf(scene);
     expect(characterRect(frame, "beta")).toEqual(seatedRect("beta"));
     // Still announced, just not walked: a sparkle marks the arrival.
     expect(
@@ -2763,7 +2847,7 @@ describe("OfficeScene", () => {
       agent({ id: "alpha", hostId: "host-a", createdAt: 1 }),
       agent({ id: "beta", hostId: "host-b", createdAt: 2 }),
     ];
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(sceneInput({ agents: crew, visibleAgentIds: ALPHA_ONLY }));
     scene.sync(
       sceneInput({
@@ -2774,19 +2858,19 @@ describe("OfficeScene", () => {
       }),
     );
 
-    const layout = scene.layout();
+    const layout = layoutOf(scene);
     expect(layout.floors).toHaveLength(2);
     const upstairs = layout.floors[1];
     // Beta lives on the second storey, so it comes in through THAT storey's
     // door - never the building's own.
-    const entering = characterRect(scene.frame(), "beta");
+    const entering = characterRect(frameOf(scene), "beta");
     expect(entering.x).toBe(upstairs.doorTile.col * OFFICE_TILE);
     expect(entering.y).toBe(upstairs.doorTile.row * OFFICE_TILE - 4);
 
     for (let step = 0; step < 60; step += 1) scene.tick(100);
     const desk = layout.desks.get("beta");
     if (desk === undefined) throw new Error("expected a desk");
-    const seated = characterRect(scene.frame(), "beta");
+    const seated = characterRect(frameOf(scene), "beta");
     expect(seated.x).toBe(desk.chairTile.col * OFFICE_TILE);
     expect(seated.y).toBe(desk.chairTile.row * OFFICE_TILE - 4);
   });
@@ -2796,7 +2880,7 @@ describe("OfficeScene", () => {
       agent({ id: "alpha", hostId: "host-a", createdAt: 1 }),
       agent({ id: "beta", hostId: "host-b", createdAt: 2 }),
     ];
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(
       sceneInput({
         agents: crew,
@@ -2809,8 +2893,8 @@ describe("OfficeScene", () => {
       }),
     );
 
-    const layout = scene.layout();
-    const frame = scene.frame();
+    const layout = layoutOf(scene);
+    const frame = frameOf(scene);
     // Both hold the NEAREST slot, because they are queueing on different
     // floors rather than behind each other.
     expect(characterRect(frame, "alpha").x).toBe(
@@ -2823,7 +2907,7 @@ describe("OfficeScene", () => {
 
   it("produces identical frames from an identical sync/tick sequence", () => {
     const run = (): OfficeFrame => {
-      const scene = new OfficeScene(layoutOffice);
+      const scene = new OfficeScene(testView(layoutOffice), null);
       scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: ALPHA_ONLY }));
       scene.tick(120);
       scene.sync(
@@ -2839,16 +2923,20 @@ describe("OfficeScene", () => {
         }),
       );
       for (let step = 0; step < 7; step += 1) scene.tick(90);
-      return scene.frame();
+      return frameOf(scene);
     };
 
     expect(run()).toEqual(run());
   });
 
-  it("draws every desk before any character, so the last hit at a shared point is the person", () => {
-    const scene = new OfficeScene(layoutOffice);
+  it("lists every character before its own desk, so the FIRST hit at a shared point is the person", () => {
+    // `OfficeFrame.hitRegions` is FRONT-MOST FIRST (the view contract's scene
+    // change #7), which inverted this from the old draw-order convention: a
+    // hit test now takes the first match rather than the last, and the
+    // character standing in front of its desk must sort ahead of it.
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: BOTH }));
-    const frame = scene.frame();
+    const frame = frameOf(scene);
 
     const deskIndex = new Map<string, number>();
     const characterIndex = new Map<string, number>();
@@ -2869,16 +2957,15 @@ describe("OfficeScene", () => {
       if (desk === undefined || character === undefined) {
         throw new Error(`missing a region for ${id}`);
       }
-      // A renderer that takes the LAST match under a point resolves a
+      // A renderer that takes the FIRST match under a point resolves a
       // character standing on somebody else's desk, not the furniture under
-      // its feet - which only holds if every desk sorts before every
-      // character.
-      expect(character).toBeGreaterThan(desk);
+      // its feet - which only holds if every character sorts before its desk.
+      expect(character).toBeLessThan(desk);
     }
   });
 
   it("does not double count a landed request the open-request map already holds", () => {
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     // Attention sends beta to reception, needing a person - a stable "away
     // from its desk" that a hurry never pulls it out of (pulling it out of
     // line would drop its place), unlike a walk that could finish mid-test.
@@ -2889,7 +2976,7 @@ describe("OfficeScene", () => {
       sceneInput({ agents: AGENTS, visibleAgentIds: BOTH, statusById }),
     );
     for (let step = 0; step < 80; step += 1) scene.tick(100);
-    expect(characterRect(scene.frame(), "beta")).not.toEqual(
+    expect(characterRect(frameOf(scene), "beta")).not.toEqual(
       seatedRect("beta"),
     );
 
@@ -2906,13 +2993,13 @@ describe("OfficeScene", () => {
     scene.tick(700);
     // Still queued, not answered - the pile is what this asserts, not a walk
     // back to the chair.
-    expect(characterRect(scene.frame(), "beta")).not.toEqual(
+    expect(characterRect(frameOf(scene), "beta")).not.toEqual(
       seatedRect("beta"),
     );
 
     // The open-request count already holds this one; `deliver` marking it
     // `inOpenCount` is what keeps the pile from drawing it a second time.
-    const stackAfterRequest = stacks(scene.frame());
+    const stackAfterRequest = stacks(frameOf(scene));
     expect(stackAfterRequest).toHaveLength(1);
     expect(stackAfterRequest[0].sprite.name).toBe("envelope-stack-1");
 
@@ -2930,7 +3017,7 @@ describe("OfficeScene", () => {
     );
     scene.tick(700);
 
-    const stackAfterNotice = stacks(scene.frame());
+    const stackAfterNotice = stacks(frameOf(scene));
     expect(stackAfterNotice).toHaveLength(1);
     expect(stackAfterNotice[0].sprite.name).toBe("envelope-stack-2");
   });
@@ -2942,25 +3029,32 @@ describe("OfficeScene", () => {
       agent({ id: "kid-1", parentId: "lead", createdAt: 3 }),
       agent({ id: "kid-2", parentId: "lead", createdAt: 4 }),
     ];
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
 
     // Nobody visible yet: the walls and the pod's own outline still stand for
-    // everyone, but neither name has anybody the cursor has revealed to
-    // belong to it.
+    // everyone (they are structural, plan-only decoration), but the PLAN
+    // still names the owners its signs carry - it is the renderer's
+    // visibility predicate, over `visibleAgentIds`, that hides a sign whose
+    // owner has not been created yet at the cursor.
     scene.sync(
       sceneInput({ agents: family, visibleAgentIds: new Set<string>() }),
     );
-    const hidden = scene.frame();
-    expect(
-      labels(hidden.props).some((label) => label.text === "Root Team"),
-    ).toBe(false);
-    expect(
-      labels(hidden.props).some((label) => label.text === "Lead Squad"),
-    ).toBe(false);
-    expect(sprites(hidden.props, "pod-plate")).toHaveLength(0);
-
-    const room = scene.layout().rooms[0];
+    const hidden = frameOf(scene);
+    const layout = layoutOf(scene);
+    const room = layout.rooms[0];
     expect(room).toBeDefined();
+    const roomSign = signAt(layout, "room", room.signTile);
+    if (roomSign === undefined) throw new Error("no sign on the cabin");
+    expect(roomSign.text).toBe("Root Team");
+    expect(officeSignVisible(roomSign, new Set<string>())).toBe(false);
+
+    const pod = room.pods[0];
+    expect(pod).toBeDefined();
+    const podSign = signAt(layout, "pod", pod.plateTile);
+    if (podSign === undefined) throw new Error("no sign on the pod plate");
+    expect(podSign.text).toBe("Lead Squad");
+    expect(officeSignVisible(podSign, new Set<string>())).toBe(false);
+
     expect(
       sprites(hidden.floor, "wall-top").some(
         (drawable) =>
@@ -2969,14 +3063,12 @@ describe("OfficeScene", () => {
       ),
     ).toBe(true);
 
-    const pod = room.pods[0];
-    expect(pod).toBeDefined();
     const styleArt: Readonly<Record<string, ReadonlyArray<string>>> = {
       glass: ["partition", "partition-h"],
       planters: ["planter"],
       shelves: ["shelf", "shelf-h"],
     };
-    const outline = hidden.props.filter(
+    const outline = hidden.floor.filter(
       (drawable) =>
         drawable.kind === "sprite" &&
         styleArt[pod.style].includes(drawable.sprite.name),
@@ -2989,14 +3081,9 @@ describe("OfficeScene", () => {
         visibleAgentIds: new Set(family.map((person) => person.id)),
       }),
     );
-    const visible = scene.frame();
-    expect(
-      labels(visible.props).some((label) => label.text === "Root Team"),
-    ).toBe(true);
-    expect(
-      labels(visible.props).some((label) => label.text === "Lead Squad"),
-    ).toBe(true);
-    expect(sprites(visible.props, "pod-plate")).toHaveLength(1);
+    const allVisible = new Set(family.map((person) => person.id));
+    expect(officeSignVisible(roomSign, allVisible)).toBe(true);
+    expect(officeSignVisible(podSign, allVisible)).toBe(true);
   });
 });
 
@@ -3018,7 +3105,7 @@ function frameWhere(
 ): OfficeFrame | null {
   for (let step = 0; step < steps; step += 1) {
     scene.tick(100);
-    const frame = scene.frame();
+    const frame = frameOf(scene);
     if (check(frame)) return frame;
   }
   return null;
@@ -3028,8 +3115,7 @@ function spotsOfKind(
   scene: OfficeScene,
   kind: string,
 ): ReadonlyArray<OfficeTilePos> {
-  return scene
-    .layout()
+  return layoutOf(scene)
     .floors[0].errandSpots.filter((spot) => spot.kind === kind)
     .map((spot) => spot.tile);
 }
@@ -3061,9 +3147,9 @@ function bubbleOnTile(
 
 /** The tile a prop of this name stands on, and there is exactly one. */
 function onlyPropTile(scene: OfficeScene, name: string): OfficeTilePos {
-  const found = scene
-    .layout()
-    .props.filter((prop) => prop.sprite.name === name);
+  const found = layoutOf(scene).props.filter(
+    (prop) => prop.sprite.name === name,
+  );
   if (found.length !== 1) throw new Error(`expected one ${name}`);
   return found[0].tile;
 }
@@ -3078,7 +3164,7 @@ function bothSidesTaken(
 
 describe("OfficeScene amenities", () => {
   it("pairs two agents across the foosball table and knocks a ball between them", () => {
-    const scene = new OfficeScene(onlyKinds(["foosball"]));
+    const scene = new OfficeScene(testView(onlyKinds(["foosball"])), null);
     scene.sync(sceneInput({ agents: BIG_CREW, visibleAgentIds: BIG_IDS }));
     const sides = spotsOfKind(scene, "foosball");
     expect(sides).toHaveLength(2);
@@ -3111,7 +3197,7 @@ describe("OfficeScene amenities", () => {
   });
 
   it("plays chess with two thinkers and no ball at all", () => {
-    const scene = new OfficeScene(onlyKinds(["chess"]));
+    const scene = new OfficeScene(testView(onlyKinds(["chess"])), null);
     scene.sync(sceneInput({ agents: BIG_CREW, visibleAgentIds: BIG_IDS }));
     const seats = spotsOfKind(scene, "chess");
     expect(seats).toHaveLength(2);
@@ -3127,7 +3213,7 @@ describe("OfficeScene amenities", () => {
     let balls = 0;
     for (let step = 0; step < 100; step += 1) {
       scene.tick(100);
-      const frame = scene.frame();
+      const frame = frameOf(scene);
       if (!bothSidesTaken(scene, seats)) break;
       balls += paperBalls(frame).length;
       const up = seats.filter((tile) =>
@@ -3142,7 +3228,7 @@ describe("OfficeScene amenities", () => {
   });
 
   it("throws three darts at the board and stops", () => {
-    const scene = new OfficeScene(onlyKinds(["darts"]));
+    const scene = new OfficeScene(testView(onlyKinds(["darts"])), null);
     scene.sync(sceneInput({ agents: BIG_CREW, visibleAgentIds: BIG_IDS }));
     const line = spotsOfKind(scene, "darts")[0];
     const board = onlyPropTile(scene, "dartboard");
@@ -3154,7 +3240,7 @@ describe("OfficeScene amenities", () => {
     let arrived = false;
     for (let step = 0; step < 600; step += 1) {
       scene.tick(100);
-      const frame = scene.frame();
+      const frame = frameOf(scene);
       const here = spriteOnTile(frame, line) !== null;
       // ONE agent's turn at the board: the line frees up when it is done, and
       // the next player's throws are not this one's.
@@ -3177,7 +3263,7 @@ describe("OfficeScene amenities", () => {
   });
 
   it("lies down on a sleeping bag and falls asleep on it", () => {
-    const scene = new OfficeScene(onlyKinds(["nap"]));
+    const scene = new OfficeScene(testView(onlyKinds(["nap"])), null);
     scene.sync(sceneInput({ agents: BIG_CREW, visibleAgentIds: BIG_IDS }));
     const bags = spotsOfKind(scene, "nap");
     expect(bags.length).toBeGreaterThan(0);
@@ -3211,7 +3297,7 @@ describe("OfficeScene amenities", () => {
   });
 
   it("reads in an armchair with a thought that comes and goes", () => {
-    const scene = new OfficeScene(onlyKinds(["read"]));
+    const scene = new OfficeScene(testView(onlyKinds(["read"])), null);
     scene.sync(sceneInput({ agents: BIG_CREW, visibleAgentIds: BIG_IDS }));
     const chairs = spotsOfKind(scene, "read");
     expect(chairs.length).toBeGreaterThan(0);
@@ -3235,7 +3321,7 @@ describe("OfficeScene amenities", () => {
     let down = 0;
     for (let step = 0; step < 60; step += 1) {
       scene.tick(100);
-      const frame = scene.frame();
+      const frame = frameOf(scene);
       if (spriteOnTile(frame, chair)?.pose !== "sit") break;
       if (bubbleOnTile(frame, "bubble-awaiting", chair)) up += 1;
       else down += 1;
@@ -3245,7 +3331,7 @@ describe("OfficeScene amenities", () => {
   });
 
   it("walks on the spot on a treadmill", () => {
-    const scene = new OfficeScene(onlyKinds(["treadmill"]));
+    const scene = new OfficeScene(testView(onlyKinds(["treadmill"])), null);
     scene.sync(sceneInput({ agents: BIG_CREW, visibleAgentIds: BIG_IDS }));
     const mills = spotsOfKind(scene, "treadmill");
     expect(mills.length).toBeGreaterThan(0);
@@ -3265,7 +3351,7 @@ describe("OfficeScene amenities", () => {
     const poses = new Set<string>();
     for (let step = 0; step < 40; step += 1) {
       scene.tick(100);
-      const sprite = spriteOnTile(scene.frame(), mill);
+      const sprite = spriteOnTile(frameOf(scene), mill);
       if (sprite === null) break;
       expect(sprite.facing).toBe("up");
       if (sprite.pose !== undefined) poses.add(sprite.pose);
@@ -3274,7 +3360,7 @@ describe("OfficeScene amenities", () => {
   });
 
   it("flashes the television while somebody is on the console sofa", () => {
-    const scene = new OfficeScene(onlyKinds(["console"]));
+    const scene = new OfficeScene(testView(onlyKinds(["console"])), null);
     scene.sync(sceneInput({ agents: BIG_CREW, visibleAgentIds: BIG_IDS }));
     const seats = spotsOfKind(scene, "console");
     expect(seats).toHaveLength(2);
@@ -3314,11 +3400,11 @@ describe("OfficeScene amenities", () => {
   });
 
   it("sits on a garden bench and stands on the grass", () => {
-    const scene = new OfficeScene(onlyKinds(["garden"]));
+    const scene = new OfficeScene(testView(onlyKinds(["garden"])), null);
     scene.sync(sceneInput({ agents: BIG_CREW, visibleAgentIds: BIG_IDS }));
-    const benches = scene
-      .layout()
-      .props.filter((prop) => prop.sprite.name === "bench");
+    const benches = layoutOf(scene).props.filter(
+      (prop) => prop.sprite.name === "bench",
+    );
     const seatKeys = new Set<string>();
     for (const bench of benches) {
       for (let offset = 0; offset < 2; offset += 1) {
@@ -3354,9 +3440,9 @@ describe("OfficeScene amenities", () => {
   });
 
   it("lays grass under the garden and a hedge around it", () => {
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(sceneInput({ agents: BIG_CREW, visibleAgentIds: BIG_IDS }));
-    const layout = scene.layout();
+    const layout = layoutOf(scene);
     const garden = layout.floors[0].amenities.find(
       (room) => room.kind === "garden",
     );
@@ -3365,7 +3451,7 @@ describe("OfficeScene amenities", () => {
     // The floor layer is painted in order, so the LAST tile-aligned sprite at
     // a position is the one a viewer sees.
     const painted = new Map<string, OfficeSpriteName>();
-    for (const drawable of scene.frame().floor) {
+    for (const drawable of frameOf(scene).floor) {
       if (drawable.kind !== "sprite") continue;
       if (drawable.x % OFFICE_TILE !== 0) continue;
       if (drawable.y % OFFICE_TILE !== 0) continue;
@@ -3382,20 +3468,14 @@ describe("OfficeScene amenities", () => {
     for (let row = bounds.row; row <= bottom; row += 1) {
       for (let col = bounds.col; col <= right; col += 1) {
         const key = `${col},${row}`;
-        // Two rows deep at the top, exactly as a wall is: the cap and the face
-        // under it. A hedge is the same ring in another material.
         const onRing =
+          // Two rows deep at the top, exactly as a wall is: the cap and the
+          // face under it. A hedge is the same ring in another material.
           row <= bounds.row + 1 ||
           row === bottom ||
           col === bounds.col ||
           col === right;
-        if (!onRing) {
-          // Inside the hedge it is grass, drawn as FLOOR so everything in the
-          // garden stands on top of it.
-          expect(painted.get(key), key).toMatch(/^floor-grass-[ab]$/);
-          continue;
-        }
-        if (layout.walkable[row][col]) {
+        if (onRing && layout.walkable[row][col]) {
           // The way in is a gap in the hedge, so nothing is drawn in it - a
           // garden is bounded rather than built, and a door hanging in a hedge
           // would say otherwise.
@@ -3404,7 +3484,7 @@ describe("OfficeScene amenities", () => {
           expect(painted.get(key), key).not.toBe("planter");
           continue;
         }
-        expect(painted.get(key), key).toBe("planter");
+        expectGardenTilePainted(painted.get(key), onRing, key);
       }
     }
     expect(openings, "a garden with no way in").toBe(1);
@@ -3413,9 +3493,9 @@ describe("OfficeScene amenities", () => {
   it("keeps a stroll off the tiles the plan has already named", () => {
     // Every named spot is somebody's errand. A stroll that stopped on one
     // would have an agent standing at the dartboard having chosen nothing.
-    const scene = new OfficeScene(layoutOffice);
+    const scene = new OfficeScene(testView(layoutOffice), null);
     scene.sync(sceneInput({ agents: BIG_CREW, visibleAgentIds: BIG_IDS }));
-    const floor = scene.layout().floors[0];
+    const floor = layoutOf(scene).floors[0];
     const named = new Map<string, string>();
     for (const spot of floor.errandSpots) {
       if (spot.kind === "corridor") continue;
@@ -3444,12 +3524,12 @@ describe("OfficeScene amenities", () => {
 
   it("plays the same amenity round twice from the same ticks", () => {
     const run = (): string => {
-      const scene = new OfficeScene(layoutOffice);
+      const scene = new OfficeScene(testView(layoutOffice), null);
       scene.sync(sceneInput({ agents: BIG_CREW, visibleAgentIds: BIG_IDS }));
       const seen: string[] = [];
       for (let step = 0; step < 400; step += 1) {
         scene.tick(100);
-        const frame = scene.frame();
+        const frame = frameOf(scene);
         seen.push(
           frame.actors
             .filter((drawable) => drawable.kind === "sprite")
@@ -3466,3 +3546,931 @@ describe("OfficeScene amenities", () => {
     expect(run()).toEqual(run());
   });
 });
+
+/**
+ * The four new poses, behind the EXISTING precedence in `poseFor`: a working
+ * or background agent still types, and only `attention`/`failure`/`awaiting`
+ * beyond that show one of the new bodies.
+ *
+ * `attention` and `failure` also queue the agent at reception, which unseats
+ * it immediately - so the seated `hand-up`/`crash` pose is only observable
+ * for the overflow past the reception queue's small fixed capacity, which is
+ * exactly when the office is busiest and the pose matters most.
+ */
+/**
+ * The behaviour core, run once per registered view. Today that is Floor
+ * alone, which is the point: T3 to T5 register Towers, Building, Mission
+ * control, Campus and City against this exact block and get this coverage
+ * for free, with no edit here.
+ *
+ * Frames are asserted STRUCTURALLY - counts, kinds, ids, relative positions -
+ * never against an absolute pixel coordinate, which differs per view.
+ */
+describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
+  const view = OFFICE_VIEWS[viewId];
+
+  /** The sprite box a character standing on this tile would occupy, per the projector. */
+  function footRect(layout: OfficeLayout, tile: OfficeTilePos): OfficeRect {
+    const projector = view.painter.projector(layout);
+    const foot = projector.project(tile.col + 0.5, tile.row + 1);
+    return {
+      x: foot.x - OFFICE_CHARACTER_WIDTH / 2,
+      y: foot.y - OFFICE_CHARACTER_HEIGHT,
+      width: OFFICE_CHARACTER_WIDTH,
+      height: OFFICE_CHARACTER_HEIGHT,
+    };
+  }
+
+  function newScene(): OfficeScene {
+    return new OfficeScene(view, null);
+  }
+
+  it("walks a newcomer in from the door, ending in its own chair", () => {
+    const scene = newScene();
+    scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: ALPHA_ONLY }));
+    scene.sync(
+      sceneInput({
+        agents: AGENTS,
+        visibleAgentIds: BOTH,
+        pulse: CREATED_PULSE,
+        pulseKey: "created-beta",
+      }),
+    );
+
+    const layout = layoutOf(scene);
+    const door = layout.doorTile;
+    expect(characterRect(frameOf(scene), "beta")).toEqual(
+      footRect(layout, door),
+    );
+
+    // Three tiles a second from the entrance is comfortably done well inside
+    // the idle-errand threshold, so this does not race a second walk-out.
+    for (let step = 0; step < 60; step += 1) scene.tick(100);
+    const desk = layout.desks.get("beta");
+    if (desk === undefined) throw new Error("expected a desk for beta");
+    expect(characterRect(frameOf(scene), "beta")).toEqual(
+      footRect(layout, desk.chairTile),
+    );
+    expect(frameOf(scene).awayAgentIds.has("beta")).toBe(false);
+  });
+
+  it("flies an envelope between the two agents' SEATS", () => {
+    const scene = newScene();
+    scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: BOTH }));
+    scene.sync(
+      sceneInput({
+        agents: AGENTS,
+        visibleAgentIds: BOTH,
+        pulse: REQUEST_PULSE,
+        pulseKey: "row-1",
+      }),
+    );
+
+    const layout = layoutOf(scene);
+    const from = layout.desks.get("alpha");
+    const to = layout.desks.get("beta");
+    if (from === undefined || to === undefined) {
+      throw new Error("expected both desks");
+    }
+    const projector = view.painter.projector(layout);
+    const launched = envelopes(frameOf(scene))[0];
+    expect(launched).toBeDefined();
+    expect(launched.progress).toBe(0);
+    const start = projector.project(from.chairTile.col, from.chairTile.row);
+    expect(launched.x).toBeCloseTo(start.x + OFFICE_CHARACTER_WIDTH / 2, 0);
+
+    // Runs to completion and is delivered - never stalls mid-flight.
+    for (let step = 0; step < 20; step += 1) scene.tick(100);
+    expect(envelopes(frameOf(scene))).toHaveLength(0);
+  });
+
+  it("sends an idle agent out on an errand and back, over a real multi-tile path", () => {
+    const scene = newScene();
+    scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: BOTH }));
+    const layout = layoutOf(scene);
+    const desk = layout.desks.get("alpha");
+    if (desk === undefined) throw new Error("expected a desk for alpha");
+    const seatedBox = footRect(layout, desk.chairTile);
+
+    // An idle floor sends everyone out again the moment they are back, so
+    // this watches for the FIRST away, then the FIRST return after it, rather
+    // than ticking a fixed span and hoping it lands between two errands.
+    let sawAway = false;
+    let steps = 0;
+    while (!sawAway && steps < 400) {
+      scene.tick(100);
+      steps += 1;
+      if (frameOf(scene).awayAgentIds.has("alpha")) sawAway = true;
+    }
+    expect(sawAway).toBe(true);
+
+    // The spot chosen is reachable by a REAL path of more than one tile - the
+    // walk that got the character there was never `walkTo`'s teleport
+    // fallback, which only fires when a plan produced an unreachable seat.
+    const floor = layout.floors[desk.floorIndex];
+    let reachedARealSpot = false;
+    for (const spot of floor.errandSpots) {
+      const path = findOfficePath(layout, desk.chairTile, spot.approachTile);
+      if (path !== null && path.length > 1) reachedARealSpot = true;
+    }
+    expect(reachedARealSpot).toBe(true);
+
+    // An idle floor never sends anyone back on its own - errands chain
+    // forever until something actually happens to the agent. A status that
+    // stops being idle is one of the documented triggers that ends one.
+    scene.sync(
+      sceneInput({
+        agents: AGENTS,
+        visibleAgentIds: BOTH,
+        statusById: new Map<string, OfficeAgentStatus>([["alpha", "working"]]),
+      }),
+    );
+    let backInChair = false;
+    steps = 0;
+    while (!backInChair && steps < 400) {
+      scene.tick(100);
+      steps += 1;
+      if (!frameOf(scene).awayAgentIds.has("alpha")) backInChair = true;
+    }
+    expect(backInChair).toBe(true);
+    expect(characterRect(frameOf(scene), "alpha")).toEqual(seatedBox);
+  });
+
+  it("walks an archived agent out of the door and sheets its desk", () => {
+    const leaver = agent({ id: "alpha", createdAt: 1, archivedAt: 500 });
+    const scene = newScene();
+    scene.sync(
+      sceneInput({
+        agents: [leaver, BETA],
+        visibleAgentIds: BOTH,
+        cursorMs: 100,
+      }),
+    );
+    scene.sync(
+      sceneInput({
+        agents: [leaver, BETA],
+        visibleAgentIds: BOTH,
+        cursorMs: 900,
+      }),
+    );
+
+    for (let step = 0; step < 150; step += 1) scene.tick(100);
+    const gone = frameOf(scene);
+    expect(hasCharacter(gone, "alpha")).toBe(false);
+    expect(sprites(gone.props, "dust-sheet")).toHaveLength(1);
+  });
+
+  it("settles motion instantly under reduced motion, and starts an arrival that way too", () => {
+    const scene = newScene();
+    scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: ALPHA_ONLY }));
+    scene.sync(
+      sceneInput({
+        agents: AGENTS,
+        visibleAgentIds: BOTH,
+        pulse: CREATED_PULSE,
+        pulseKey: "created-beta",
+        reducedMotion: true,
+      }),
+    );
+    const layout = layoutOf(scene);
+    const desk = layout.desks.get("beta");
+    if (desk === undefined) throw new Error("expected a desk for beta");
+    // Landed in its chair on the very sync that created it - no walk at all.
+    expect(characterRect(frameOf(scene), "beta")).toEqual(
+      footRect(layout, desk.chairTile),
+    );
+  });
+
+  it("gives the same as-of display opening at a historical cursor as reaching it from live", () => {
+    const opensAtCursor = newScene();
+    opensAtCursor.sync(
+      sceneInput({ agents: AGENTS, visibleAgentIds: ALPHA_ONLY, cursorMs: 5 }),
+    );
+
+    const reachesCursor = newScene();
+    reachesCursor.sync(
+      sceneInput({
+        agents: AGENTS,
+        visibleAgentIds: ALPHA_ONLY,
+        cursorMs: 100,
+      }),
+    );
+    reachesCursor.sync(
+      sceneInput({ agents: AGENTS, visibleAgentIds: ALPHA_ONLY, cursorMs: 5 }),
+    );
+
+    expect(frameOf(reachesCursor).hitRegions).toEqual(
+      frameOf(opensAtCursor).hitRegions,
+    );
+  });
+
+  it("stays internally consistent when the agent set grows mid-walk, mid-queue and mid-throw", () => {
+    const base = [
+      agent({ id: "alpha", createdAt: 1 }),
+      agent({ id: "beta", createdAt: 2 }),
+      agent({ id: "gamma", createdAt: 3 }),
+    ];
+    const baseIds = new Set(base.map((person) => person.id));
+    const grown = [...base, agent({ id: "delta", createdAt: 4 })];
+    const grownIds = new Set(grown.map((person) => person.id));
+
+    // Mid-WALK: beta is on its way in from the door when gamma appends.
+    const midWalk = newScene();
+    midWalk.sync(
+      sceneInput({ agents: base, visibleAgentIds: new Set(["alpha"]) }),
+    );
+    midWalk.sync(
+      sceneInput({
+        agents: base,
+        visibleAgentIds: baseIds,
+        pulse: CREATED_PULSE,
+        pulseKey: "created-beta",
+      }),
+    );
+    midWalk.tick(200);
+    expect(() =>
+      midWalk.sync(sceneInput({ agents: grown, visibleAgentIds: grownIds })),
+    ).not.toThrow();
+    expect(layoutOf(midWalk).desks.size).toBe(grown.length);
+
+    // Mid-QUEUE: beta is waiting at reception when the set grows.
+    const midQueue = newScene();
+    midQueue.sync(
+      sceneInput({
+        agents: base,
+        visibleAgentIds: baseIds,
+        statusById: new Map<string, OfficeAgentStatus>([["beta", "attention"]]),
+      }),
+    );
+    midQueue.tick(2000);
+    expect(() =>
+      midQueue.sync(
+        sceneInput({
+          agents: grown,
+          visibleAgentIds: grownIds,
+          statusById: new Map<string, OfficeAgentStatus>([
+            ["beta", "attention"],
+          ]),
+        }),
+      ),
+    ).not.toThrow();
+    expect(layoutOf(midQueue).desks.size).toBe(grown.length);
+
+    // Mid-THROW: an idle floor running long enough to have somebody mid-errand.
+    const midThrow = newScene();
+    midThrow.sync(sceneInput({ agents: base, visibleAgentIds: baseIds }));
+    for (let step = 0; step < 100; step += 1) midThrow.tick(100);
+    expect(() =>
+      midThrow.sync(sceneInput({ agents: grown, visibleAgentIds: grownIds })),
+    ).not.toThrow();
+    expect(layoutOf(midThrow).desks.size).toBe(grown.length);
+    // Every agent still ends up with exactly one seat after growth settles.
+    for (let step = 0; step < 100; step += 1) midThrow.tick(100);
+    const seatIds = new Set<string>();
+    for (const desk of layoutOf(midThrow).desks.values()) {
+      expect(seatIds.has(desk.seatId)).toBe(false);
+      seatIds.add(desk.seatId);
+    }
+  });
+
+  it("is deterministic: the same input, tick sequence and view rect produce identical frames", () => {
+    const run = (): string => {
+      const scene = newScene();
+      scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: BOTH }));
+      const seen: string[] = [];
+      for (let step = 0; step < 100; step += 1) {
+        scene.tick(100);
+        const frame = scene.frame(2, { x: 0, y: 0, width: 500, height: 500 });
+        seen.push(
+          frame.actors.map((drawable) => JSON.stringify(drawable)).join("|"),
+        );
+      }
+      return seen.join("\n");
+    };
+    expect(run()).toEqual(run());
+  });
+});
+
+describe("OfficeScene poses", () => {
+  const QUEUE_OVERFLOW: ReadonlyArray<OfficeAgentInput> = Array.from(
+    { length: 9 },
+    (_unused, index) => agent({ id: `crowd-${index}`, createdAt: index + 1 }),
+  );
+  const QUEUE_OVERFLOW_IDS: ReadonlySet<string> = new Set(
+    QUEUE_OVERFLOW.map((person) => person.id),
+  );
+
+  function poseOfSeatedOverflow(
+    status: OfficeAgentStatus,
+  ): OfficeCharacterPose {
+    const scene = new OfficeScene(testView(layoutOffice), null);
+    scene.sync(
+      sceneInput({
+        agents: QUEUE_OVERFLOW,
+        visibleAgentIds: QUEUE_OVERFLOW_IDS,
+        statusById: new Map(
+          QUEUE_OVERFLOW.map((person) => [person.id, status]),
+        ),
+      }),
+    );
+    const frame = frameOf(scene);
+    // Whoever the reception queue had no room for is still in its own chair.
+    const seatedId = QUEUE_OVERFLOW.map((person) => person.id).find(
+      (id) => !frame.awayAgentIds.has(id),
+    );
+    if (seatedId === undefined) {
+      throw new Error("expected the reception queue to overflow");
+    }
+    const sprite = characterSpriteAt(frame, characterRect(frame, seatedId));
+    if (sprite === null) throw new Error("expected a character sprite");
+    return sprite.pose ?? "sit";
+  }
+
+  it("crashes into its screen on failure", () => {
+    expect(poseOfSeatedOverflow("failure")).toBe("crash");
+  });
+
+  it("raises a hand on attention", () => {
+    expect(poseOfSeatedOverflow("attention")).toBe("hand-up");
+  });
+
+  it("leans back on awaiting, a status that never queues for reception", () => {
+    const scene = new OfficeScene(testView(layoutOffice), null);
+    scene.sync(
+      sceneInput({
+        agents: AGENTS,
+        visibleAgentIds: BOTH,
+        statusById: new Map<string, OfficeAgentStatus>([["alpha", "awaiting"]]),
+      }),
+    );
+    const frame = frameOf(scene);
+    expect(frame.awayAgentIds.has("alpha")).toBe(false);
+    const sprite = characterSpriteAt(frame, characterRect(frame, "alpha"));
+    expect(sprite?.pose).toBe("lean");
+  });
+
+  it("wears headphones while seated and working in the background, without replacing the typing pose", () => {
+    const scene = new OfficeScene(testView(layoutOffice), null);
+    scene.sync(
+      sceneInput({
+        agents: AGENTS,
+        visibleAgentIds: BOTH,
+        statusById: new Map<string, OfficeAgentStatus>([
+          ["alpha", "background"],
+        ]),
+      }),
+    );
+    const frame = frameOf(scene);
+    const sprite = characterSpriteAt(frame, characterRect(frame, "alpha"));
+    expect(sprite?.accessory).toBe("headphones");
+    expect(["type1", "type2"]).toContain(sprite?.pose);
+  });
+
+  it("keeps a working agent typing rather than leaning - the existing precedence outranks every new pose", () => {
+    const scene = new OfficeScene(testView(layoutOffice), null);
+    scene.sync(
+      sceneInput({
+        agents: AGENTS,
+        visibleAgentIds: BOTH,
+        statusById: new Map<string, OfficeAgentStatus>([["alpha", "working"]]),
+      }),
+    );
+    const frame = frameOf(scene);
+    const sprite = characterSpriteAt(frame, characterRect(frame, "alpha"));
+    expect(["type1", "type2"]).toContain(sprite?.pose);
+    expect(sprite?.accessory).toBeUndefined();
+  });
+});
+
+/**
+ * Overview zoom: a frame is only pips and a block map, and nothing else - the
+ * whole point of the level being cheap enough to hold a thousand agents.
+ */
+describe("OfficeScene lod 0", () => {
+  it("emits one pip per visible character with its status glyph, a block map for the floor, and no character sprites", () => {
+    const scene = new OfficeScene(testView(layoutOffice), null);
+    scene.sync(
+      sceneInput({
+        agents: AGENTS,
+        visibleAgentIds: BOTH,
+        statusById: new Map<string, OfficeAgentStatus>([
+          ["alpha", "attention"],
+        ]),
+      }),
+    );
+    const frame = scene.frame(0, WHOLE_WORLD);
+
+    expect(frame.actors).toHaveLength(2);
+    for (const drawable of frame.actors) expect(drawable.kind).toBe("pip");
+    const pips = frame.actors.filter(
+      (drawable): drawable is Extract<OfficeDrawable, { kind: "pip" }> =>
+        drawable.kind === "pip",
+    );
+    expect(pips.find((pip) => pip.agentId === "alpha")?.glyph).toBe("bang");
+    expect(pips.find((pip) => pip.agentId === "beta")?.glyph).toBe("none");
+
+    // No character art anywhere in the frame at this level.
+    const everyDrawable = [...frame.floor, ...frame.props, ...frame.actors];
+    expect(
+      everyDrawable.some(
+        (drawable) =>
+          drawable.kind === "sprite" && drawable.sprite.name === "character",
+      ),
+    ).toBe(false);
+
+    // A block map, not tiles - and nothing in the (layered) props pass.
+    expect(frame.floor.length).toBeGreaterThan(0);
+    expect(frame.floor.every((drawable) => drawable.kind === "block")).toBe(
+      true,
+    );
+    expect(frame.props).toEqual([]);
+    expect(frame.world).toBeNull();
+  });
+});
+
+// ---- Hand-built fixtures for the cubby, aliasing and audience suites --- //
+
+const HAND_BUILT_BOUNDS: OfficeTileRect = {
+  col: 0,
+  row: 0,
+  cols: 16,
+  rows: 16,
+};
+
+function allWalkable(
+  rows: number,
+  cols: number,
+): ReadonlyArray<ReadonlyArray<boolean>> {
+  return Array.from({ length: rows }, () =>
+    Array.from({ length: cols }, () => true),
+  );
+}
+
+function deskSeat(args: {
+  readonly seatId: string;
+  readonly deskTile: OfficeTilePos;
+  readonly floorIndex: number;
+}): OfficeSeat {
+  return {
+    seatId: args.seatId,
+    kind: "desk",
+    deskTile: args.deskTile,
+    chairTile: { col: args.deskTile.col, row: args.deskTile.row + 1 },
+    facing: "up",
+    hitTiles: { width: 2, height: 2 },
+    floorIndex: args.floorIndex,
+    roomId: null,
+    hostId: null,
+    manager: false,
+  };
+}
+
+function cubbySeat(args: {
+  readonly seatId: string;
+  readonly deskTile: OfficeTilePos;
+  readonly floorIndex: number;
+}): OfficeSeat {
+  return {
+    seatId: args.seatId,
+    kind: "cubby",
+    deskTile: args.deskTile,
+    chairTile: args.deskTile,
+    facing: "up",
+    hitTiles: { width: 1, height: 1 },
+    floorIndex: args.floorIndex,
+    roomId: null,
+    hostId: null,
+    manager: false,
+  };
+}
+
+/**
+ * A storey with nothing on it but the spots a case needs. `OfficeFloor` carries
+ * no index of its own - a floor IS its position in `layout.floors` - so the
+ * storey a spot belongs to is said once, on the spot's own `floorIndex`.
+ */
+function handBuiltFloor(
+  errandSpots: ReadonlyArray<OfficeErrandSpot>,
+): OfficeFloor {
+  return {
+    hostId: null,
+    bounds: HAND_BUILT_BOUNDS,
+    doorTile: { col: 0, row: 0 },
+    lobbyTile: { col: 0, row: 1 },
+    receptionTile: { col: 0, row: 2 },
+    receptionQueueTiles: [],
+    queueFacing: "down",
+    corridorTiles: [],
+    clockTile: { col: 15, row: 0 },
+    stairsTile: null,
+    errandSpots,
+    cafeteria: null,
+    gameRoom: null,
+    areaSigns: [],
+    amenities: [],
+  };
+}
+
+/** A layout with one desk agent and one cubby agent, both on floor 0. */
+function cubbyLayout(): OfficeLayout {
+  const worker = deskSeat({
+    seatId: "h/0/worker",
+    deskTile: { col: 2, row: 2 },
+    floorIndex: 0,
+  });
+  const cub = cubbySeat({
+    seatId: "h/0/cub",
+    deskTile: { col: 8, row: 8 },
+    floorIndex: 0,
+  });
+  return {
+    view: "floor",
+    cols: 16,
+    rows: 16,
+    desks: new Map([
+      ["worker", { ...worker, agentId: "worker" }],
+      ["cub", { ...cub, agentId: "cub" }],
+    ]),
+    seats: new Map([
+      ["h/0/worker", worker],
+      ["h/0/cub", cub],
+    ]),
+    signs: [],
+    rooms: [],
+    floors: [handBuiltFloor([])],
+    doorTile: { col: 0, row: 0 },
+    lobbyTile: { col: 0, row: 1 },
+    props: [],
+    walkable: allWalkable(16, 16),
+    frozen: null,
+    shiftFromPrevious: null,
+    stable: true,
+  };
+}
+
+describe("OfficeScene cubby actor rule", () => {
+  const CUB = agent({ id: "cub", createdAt: 2 });
+  const WORKER = agent({ id: "worker", createdAt: 1 });
+  const BOTH_HAND_BUILT: ReadonlyArray<OfficeAgentInput> = [WORKER, CUB];
+  const BOTH_HAND_BUILT_IDS: ReadonlySet<string> = new Set(["worker", "cub"]);
+
+  it("emits no actor for a SEATED cubby occupant at lod 0 or lod 1, and a dimmed one at lod 2", () => {
+    const scene = new OfficeScene(
+      testView(() => cubbyLayout()),
+      null,
+    );
+    scene.sync(
+      sceneInput({
+        agents: BOTH_HAND_BUILT,
+        visibleAgentIds: BOTH_HAND_BUILT_IDS,
+      }),
+    );
+
+    const lod0 = scene.frame(0, WHOLE_WORLD);
+    const lod1 = scene.frame(1, WHOLE_WORLD);
+    const lod2 = scene.frame(2, WHOLE_WORLD);
+
+    // lod 0: pips only, one per character - the cubby occupant is not left out.
+    const pipIds = lod0.actors
+      .filter(
+        (drawable): drawable is Extract<OfficeDrawable, { kind: "pip" }> =>
+          drawable.kind === "pip",
+      )
+      .map((pip) => pip.agentId);
+    expect(pipIds.sort()).toEqual(["cub", "worker"]);
+
+    // lod 1: a normal actor for the worker, none for the cubby occupant.
+    expect(
+      lod1.actors.some(
+        (drawable) =>
+          drawable.kind === "label" && drawable.ownerAgentId === "worker",
+      ),
+    ).toBe(true);
+    expect(
+      lod1.actors.some(
+        (drawable) =>
+          drawable.kind === "label" && drawable.ownerAgentId === "cub",
+      ),
+    ).toBe(false);
+
+    // lod 2: the cubby occupant now has a character sprite, dimmed.
+    const cubActorLod2 = lod2.actors.find(
+      (drawable) =>
+        drawable.kind === "label" && drawable.ownerAgentId === "cub",
+    );
+    expect(cubActorLod2).toBeDefined();
+    const cubSpriteLod2 = characterSpriteAt(lod2, characterRect(lod2, "cub"));
+    expect(cubSpriteLod2).not.toBeNull();
+    const cubSpriteDrawable = lod2.actors.find(
+      (drawable) =>
+        drawable.kind === "sprite" &&
+        drawable.x === characterRect(lod2, "cub").x &&
+        drawable.y === characterRect(lod2, "cub").y,
+    );
+    expect(
+      cubSpriteDrawable?.kind === "sprite"
+        ? cubSpriteDrawable.alpha
+        : undefined,
+    ).toBe(0.6);
+
+    // The worker (an ordinary desk) is never dimmed at any lod it is drawn at.
+    const workerSpriteLod2 = lod2.actors.find(
+      (drawable) =>
+        drawable.kind === "sprite" &&
+        drawable.x === characterRect(lod2, "worker").x &&
+        drawable.y === characterRect(lod2, "worker").y,
+    );
+    expect(
+      workerSpriteLod2?.kind === "sprite" ? workerSpriteLod2.alpha : undefined,
+    ).toBeUndefined();
+
+    // The hit region is the SEAT's own box (1x1 for a cubby) at every lod,
+    // independent of whether an actor sprite was drawn for it.
+    for (const frame of [lod0, lod1, lod2]) {
+      const seatHit = frame.hitRegions.find(
+        (region) =>
+          region.agentId === "cub" && region.rect.height === OFFICE_TILE,
+      );
+      expect(seatHit?.rect).toEqual({
+        x: 8 * OFFICE_TILE,
+        y: 8 * OFFICE_TILE,
+        width: OFFICE_TILE,
+        height: OFFICE_TILE,
+      });
+    }
+  });
+
+  it("draws a WALKING cubby occupant as a normal actor at every lod, mid walk-in", () => {
+    const scene = new OfficeScene(
+      testView(() => cubbyLayout()),
+      null,
+    );
+    scene.sync(
+      sceneInput({
+        agents: BOTH_HAND_BUILT,
+        visibleAgentIds: new Set(["worker"]),
+      }),
+    );
+    scene.sync(
+      sceneInput({
+        agents: BOTH_HAND_BUILT,
+        visibleAgentIds: BOTH_HAND_BUILT_IDS,
+        pulse: {
+          kind: "edge",
+          edgeId: "worker<->cub",
+          pulseKind: "created",
+          fromAgentId: "worker",
+          toAgentId: "cub",
+        },
+        pulseKey: "created-cub",
+      }),
+    );
+
+    // Still walking in from the door - not yet in its cubby.
+    expect(scene.frame(2, WHOLE_WORLD).awayAgentIds.has("cub")).toBe(true);
+    for (const lod of [1, 2] as const) {
+      const frame = scene.frame(lod, WHOLE_WORLD);
+      expect(hasCharacter(frame, "cub")).toBe(true);
+      const rect = characterRect(frame, "cub");
+      const sprite = frame.actors.find(
+        (drawable) =>
+          drawable.kind === "sprite" &&
+          drawable.x === rect.x &&
+          drawable.y === rect.y,
+      );
+      // A normal, undimmed walking body - the cubby dimming rule applies to a
+      // SEATED occupant only.
+      expect(
+        sprite?.kind === "sprite" ? sprite.alpha : undefined,
+      ).toBeUndefined();
+    }
+    // A pip too, one per character, at lod 0.
+    const pipIds = scene
+      .frame(0, WHOLE_WORLD)
+      .actors.filter(
+        (drawable): drawable is Extract<OfficeDrawable, { kind: "pip" }> =>
+          drawable.kind === "pip",
+      )
+      .map((pip) => pip.agentId);
+    expect(pipIds.sort()).toEqual(["cub", "worker"]);
+  });
+
+  it("never sends a seated cubby occupant on an errand or a desk filler", () => {
+    const scene = new OfficeScene(
+      testView(() => cubbyLayout()),
+      null,
+    );
+    scene.sync(
+      sceneInput({
+        agents: BOTH_HAND_BUILT,
+        visibleAgentIds: BOTH_HAND_BUILT_IDS,
+      }),
+    );
+    // Long past the idle-errand threshold and several filler cycles.
+    for (let step = 0; step < 300; step += 1) {
+      scene.tick(100);
+      expect(scene.frame(2, WHOLE_WORLD).awayAgentIds.has("cub")).toBe(false);
+    }
+  });
+});
+
+/** Two floors sharing a plaza spot: floor 1's copy aliases floor 0's, same tile. */
+function aliasedFloorsLayout(): OfficeLayout {
+  const worker0 = deskSeat({
+    seatId: "h/0/worker0",
+    deskTile: { col: 2, row: 2 },
+    floorIndex: 0,
+  });
+  const worker1 = deskSeat({
+    seatId: "h/1/worker1",
+    deskTile: { col: 2, row: 18 },
+    floorIndex: 1,
+  });
+  const plazaSpot: OfficeErrandSpot = {
+    kind: "coffee",
+    tile: { col: 10, row: 10 },
+    facing: "down",
+    audience: { kind: "floor" },
+    fixtureId: "plaza-coffee",
+    approachTile: { col: 10, row: 10 },
+    actionTile: null,
+    floorIndex: 0,
+  };
+  const floor0 = handBuiltFloor([plazaSpot]);
+  const floor1 = handBuiltFloor([{ ...plazaSpot, floorIndex: 1 }]);
+  return {
+    view: "floor",
+    cols: 16,
+    rows: 32,
+    desks: new Map([
+      ["worker0", { ...worker0, agentId: "worker0" }],
+      ["worker1", { ...worker1, agentId: "worker1" }],
+    ]),
+    seats: new Map([
+      ["h/0/worker0", worker0],
+      ["h/1/worker1", worker1],
+    ]),
+    signs: [],
+    rooms: [],
+    floors: [floor0, floor1],
+    doorTile: { col: 0, row: 0 },
+    lobbyTile: { col: 0, row: 1 },
+    props: [],
+    walkable: allWalkable(32, 16),
+    frozen: null,
+    shiftFromPrevious: null,
+    stable: true,
+  };
+}
+
+describe("OfficeScene spot aliasing", () => {
+  it("selects errands from the character's own floor's spots, and the per-chunk index dedupes the painter call by tile", () => {
+    const layout = aliasedFloorsLayout();
+    let spotPropsCalls = 0;
+    const countingView: OfficeView = {
+      ...OFFICE_VIEWS.floor,
+      plan: () => layout,
+      painter: {
+        ...OFFICE_VIEWS.floor.painter,
+        spotProps: (planLayout, spot, lod) => {
+          spotPropsCalls += 1;
+          return OFFICE_VIEWS.floor.painter.spotProps(planLayout, spot, lod);
+        },
+      },
+    };
+    const scene = new OfficeScene(countingView, null);
+    const worker0 = agent({ id: "worker0", createdAt: 1 });
+    const worker1 = agent({ id: "worker1", createdAt: 2 });
+    scene.sync(
+      sceneInput({
+        agents: [worker0, worker1],
+        visibleAgentIds: new Set(["worker0", "worker1"]),
+      }),
+    );
+
+    // Both floors' aliases sit in the same 32x32 chunk of the index (tiles
+    // 0-31), so one frame touches both - and the physical spot is still drawn
+    // exactly once.
+    scene.frame(2, WHOLE_WORLD);
+    expect(spotPropsCalls).toBe(1);
+
+    // Errand selection iterates the WALKER's own floor and claims by tile:
+    // both floors' entries point at the identical physical tile, so an agent
+    // on floor 1 can still pick "its" copy even though floor 0's is the one
+    // the chunk index kept.
+    for (let step = 0; step < 400; step += 1) scene.tick(100);
+    const away = scene.frame(2, WHOLE_WORLD).awayAgentIds;
+    // At least one of the two eventually goes on the errand to the shared
+    // tile; which one is a scheduling detail, but the floor-1 worker must
+    // remain able to (the aliasing is what makes that possible at all).
+    expect(away.has("worker0") || away.has("worker1")).toBe(true);
+  });
+});
+
+describe("OfficeScene leads audience", () => {
+  function spotOf(audience: OfficeErrandSpot["audience"]): OfficeErrandSpot {
+    return {
+      kind: "whiteboard",
+      tile: { col: 10, row: 10 },
+      facing: "down",
+      audience,
+      fixtureId: "hq-board",
+      approachTile: { col: 10, row: 10 },
+      actionTile: null,
+      floorIndex: 0,
+    };
+  }
+
+  function leadsLayout(spot: OfficeErrandSpot): OfficeLayout {
+    const lead = deskSeat({
+      seatId: "h/0/lead",
+      deskTile: { col: 2, row: 2 },
+      floorIndex: 0,
+    });
+    const member = deskSeat({
+      seatId: "h/0/member",
+      deskTile: { col: 5, row: 2 },
+      floorIndex: 0,
+    });
+    return {
+      view: "floor",
+      cols: 16,
+      rows: 16,
+      desks: new Map([
+        ["lead", { ...lead, agentId: "lead" }],
+        ["member", { ...member, agentId: "member" }],
+      ]),
+      seats: new Map([
+        ["h/0/lead", lead],
+        ["h/0/member", member],
+      ]),
+      signs: [],
+      rooms: [],
+      floors: [handBuiltFloor([spot])],
+      doorTile: { col: 0, row: 0 },
+      lobbyTile: { col: 0, row: 1 },
+      props: [],
+      walkable: allWalkable(16, 16),
+      frozen: null,
+      shiftFromPrevious: null,
+      stable: true,
+    };
+  }
+
+  it("only a team lead is eligible for a leads-only spot", () => {
+    const spot = spotOf({ kind: "leads" });
+    const layout = leadsLayout(spot);
+    const lead = agent({ id: "lead", createdAt: 1 });
+    const member = agent({ id: "member", parentId: "lead", createdAt: 2 });
+    const scene = new OfficeScene(
+      testView(() => layout),
+      null,
+    );
+    scene.sync(
+      sceneInput({
+        agents: [lead, member],
+        visibleAgentIds: new Set(["lead", "member"]),
+        statusById: new Map<string, OfficeAgentStatus>(),
+      }),
+    );
+
+    // The lead has nothing else to choose (no corridor fallback in this
+    // fixture), so it reliably reaches the board within the idle-errand
+    // window; a member with no team of its own is never offered it at all.
+    let sawLeadAtBoard = false;
+    for (let step = 0; step < 400; step += 1) {
+      scene.tick(100);
+      const standing = standingByTileGeneric(scene, layout);
+      const atBoard = standing.get("10,10");
+      if (atBoard === undefined) continue;
+      expect(atBoard).toBe("lead");
+      sawLeadAtBoard = true;
+    }
+    expect(sawLeadAtBoard).toBe(true);
+  });
+});
+
+/** Where each character not seated in its own chair is standing, by tile. */
+function standingByTileGeneric(
+  scene: OfficeScene,
+  layout: OfficeLayout,
+): ReadonlyMap<string, string> {
+  const byTile = new Map<string, string>();
+  for (const region of scene.frame(2, WHOLE_WORLD).hitRegions) {
+    if (region.rect.height !== OFFICE_CHARACTER_HEIGHT) continue;
+    const desk = layout.desks.get(region.agentId);
+    if (desk === undefined) continue;
+    if (
+      region.rect.x === desk.chairTile.col * OFFICE_TILE &&
+      region.rect.y === desk.chairTile.row * OFFICE_TILE - 4
+    ) {
+      continue;
+    }
+    if (region.rect.x % OFFICE_TILE !== 0) continue;
+    byTile.set(
+      `${region.rect.x / OFFICE_TILE},${(region.rect.y + 4) / OFFICE_TILE}`,
+      region.agentId,
+    );
+  }
+  return byTile;
+}

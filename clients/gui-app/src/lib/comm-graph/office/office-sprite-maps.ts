@@ -314,6 +314,115 @@ const SEATED_TYPE2: SpriteMap = [
   EMPTY_ROW,
 ];
 
+/**
+ * Tipped back from the desk: the head rides a row higher on a longer neck and
+ * both hands come up to the top of the torso. What waiting on somebody else
+ * looks like from behind - the one posture that is legible without a face.
+ */
+const SEATED_LEAN: SpriteMap = [
+  EMPTY_ROW,
+  "....OOOOOOOO....",
+  "...OSSSSSSSSO...",
+  "..OSSSSSSSSSSO..",
+  "..OSSSSSSSSSSO..",
+  "..OSSSSSSSSSSO..",
+  "..OSSSSSSSSSSO..",
+  "..OSSSSSSSSSSO..",
+  "...OSSSSSSSSO...",
+  ".....OSSSSO.....",
+  ".....OSSSSO.....",
+  ".OTTTTTTTTTTTTO.",
+  ".OSsTTTTTTTTsSO.",
+  ".OTtTTTTTTTTtTO.",
+  ".OTtTTTTTTTTtTO.",
+  ".OTtTTTTTTTTtTO.",
+  ".OTTTTTTTTTTTTO.",
+  ".OOOOOOOOOOOOOO.",
+  EMPTY_ROW,
+  EMPTY_ROW,
+];
+
+/** An arm up beside the head: this one is asking for a person. */
+const SEATED_HAND_UP: SpriteMap = [
+  EMPTY_ROW,
+  EMPTY_ROW,
+  "....OOOOOOOO....",
+  "...OSSSSSSSSO...",
+  "..OSSSSSSSSSSO..",
+  "..OSSSSSSSSSSO..",
+  "..OSSSSSSSSSSO..",
+  "..OSSSSSSSSSSO.O",
+  "..OSSSSSSSSSSOSO",
+  "...OSSSSSSSSO.SO",
+  ".....OSSSSO..OSO",
+  ".OTTTTTTTTTTTTSO",
+  ".OTtTTTTTTTTTTsO",
+  ".OTtTTTTTTTTtTO.",
+  ".OTtTTTTTTTTtTO.",
+  ".OSsTTTTTTTTtTO.",
+  ".OTTTTTTTTTTTTO.",
+  ".OOOOOOOOOOOOOO.",
+  EMPTY_ROW,
+  EMPTY_ROW,
+];
+
+/**
+ * Head in hands, a row lower than usual. Paired with the crashed screen at the
+ * same desk, which is what says whether the slump is a failure or a long day.
+ */
+const SEATED_CRASH: SpriteMap = [
+  EMPTY_ROW,
+  EMPTY_ROW,
+  EMPTY_ROW,
+  "....OOOOOOOO....",
+  "...OSSSSSSSSO...",
+  "..OSSSSSSSSSSO..",
+  "..OSSSSSSSSSSO..",
+  "..OSSSSSSSSSSO..",
+  "..OSSSSSSSSSSO..",
+  "...OSSSSSSSSO...",
+  "..OSsOSSSSOsSO..",
+  ".OTTTTTTTTTTTTO.",
+  ".OTtTTTTTTTTtTO.",
+  ".OTtTTTTTTTTtTO.",
+  ".OTtTTTTTTTTtTO.",
+  ".OTtTTTTTTTTtTO.",
+  ".OTTTTTTTTTTTTO.",
+  ".OOOOOOOOOOOOOO.",
+  EMPTY_ROW,
+  EMPTY_ROW,
+];
+
+// ---- Accessories ----------------------------------------------------- //
+//
+// Worn OVER a finished body rather than authored into one, because the body
+// underneath keeps changing: an agent working in the background still types.
+// Aligned to the STANDING head, like the hair maps, and shifted down by the
+// same amount for a seated pose.
+
+const HEADPHONES: SpriteMap = [
+  "...OOOOOOOOOO...",
+  "..OEEEEEEEEEEO..",
+  "..OEO......OEO..",
+  "..OEO......OEO..",
+  "..OEO......OEO..",
+  "..OEO......OEO..",
+  "..OEO......OEO..",
+  "...O........O...",
+  EMPTY_ROW,
+  EMPTY_ROW,
+  EMPTY_ROW,
+  EMPTY_ROW,
+  EMPTY_ROW,
+  EMPTY_ROW,
+  EMPTY_ROW,
+  EMPTY_ROW,
+  EMPTY_ROW,
+  EMPTY_ROW,
+  EMPTY_ROW,
+  EMPTY_ROW,
+];
+
 export const OFFICE_HEAD_MAPS: ReadonlyArray<{
   readonly label: string;
   readonly map: SpriteMap;
@@ -342,7 +451,54 @@ export const OFFICE_SEATED_MAPS: ReadonlyArray<{
   { label: "seated-sit", map: SEATED_SIT },
   { label: "seated-type1", map: SEATED_TYPE1 },
   { label: "seated-type2", map: SEATED_TYPE2 },
+  { label: "seated-lean", map: SEATED_LEAN },
+  { label: "seated-hand-up", map: SEATED_HAND_UP },
+  { label: "seated-crash", map: SEATED_CRASH },
 ];
+
+export const OFFICE_ACCESSORY_MAPS: ReadonlyArray<{
+  readonly label: string;
+  readonly map: SpriteMap;
+}> = [{ label: "accessory-headphones", map: HEADPHONES }];
+
+/** Every seated pose the office draws, and how far its HEAD sits from the top. */
+export type OfficeSeatedPose =
+  | "sit"
+  | "type1"
+  | "type2"
+  | "lean"
+  | "hand-up"
+  | "crash";
+
+export function isOfficeSeatedPose(pose: string): pose is OfficeSeatedPose {
+  return (
+    pose === "sit" ||
+    pose === "type1" ||
+    pose === "type2" ||
+    pose === "lean" ||
+    pose === "hand-up" ||
+    pose === "crash"
+  );
+}
+
+/**
+ * How far an overlay authored for the STANDING head has to drop to land on
+ * this pose's head. A seated head sits one row lower than a standing one; a
+ * lean tips it back up, and a slump drops it further.
+ */
+export function officeHeadOffsetOf(pose: OfficeSeatedPose): number {
+  if (pose === "lean") return 0;
+  if (pose === "crash") return 2;
+  return 1;
+}
+
+const ACCESSORY_MAPS: Readonly<Record<"headphones", SpriteMap>> = {
+  headphones: HEADPHONES,
+};
+
+export function officeAccessoryMap(accessory: "headphones"): SpriteMap {
+  return ACCESSORY_MAPS[accessory];
+}
 
 export function officeHeadMap(facing: "down" | "up" | "right"): SpriteMap {
   if (facing === "up") {
@@ -376,12 +532,21 @@ export function officeTorsoMap(
   return TORSO_FRONT_STAND;
 }
 
-export function officeSeatedMap(pose: "sit" | "type1" | "type2"): SpriteMap {
+export function officeSeatedMap(pose: OfficeSeatedPose): SpriteMap {
   if (pose === "type1") {
     return SEATED_TYPE1;
   }
   if (pose === "type2") {
     return SEATED_TYPE2;
+  }
+  if (pose === "lean") {
+    return SEATED_LEAN;
+  }
+  if (pose === "hand-up") {
+    return SEATED_HAND_UP;
+  }
+  if (pose === "crash") {
+    return SEATED_CRASH;
   }
   return SEATED_SIT;
 }

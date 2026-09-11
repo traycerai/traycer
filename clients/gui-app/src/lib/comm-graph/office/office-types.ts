@@ -22,6 +22,9 @@ import type {
   CommGraphPulse,
   CommGraphPulseKind,
 } from "@/lib/comm-graph/comm-graph-timeline";
+// Type-only, and erased: `office-population.ts` reads this module back, so a
+// value import here would close a real cycle.
+import type { OfficePopulation } from "@/lib/comm-graph/office/office-population";
 
 /** Side of one floor tile, in sprite-space pixels. */
 export const OFFICE_TILE = 16;
@@ -37,6 +40,12 @@ export type OfficeFacing = "down" | "up" | "left" | "right";
  * - `stand` / `walk1` / `walk2` - on foot, any facing.
  * - `sit` - seated at the desk, facing `up` (back to the viewer, screen ahead).
  * - `type1` / `type2` - seated and typing, alternated by the scene.
+ * - `lean` - seated, tipped back from the desk: waiting on somebody else.
+ * - `hand-up` - seated with an arm raised: this one needs a person.
+ * - `crash` - seated, head in hands, in front of a dead screen.
+ *
+ * The last three are what a status looks like from behind, and they only ever
+ * replace `sit`: a working agent types whatever else is true of it.
  */
 export type OfficeCharacterPose =
   | "stand"
@@ -44,7 +53,16 @@ export type OfficeCharacterPose =
   | "walk2"
   | "sit"
   | "type1"
-  | "type2";
+  | "type2"
+  | "lean"
+  | "hand-up"
+  | "crash";
+
+/**
+ * Something WORN over a pose rather than a pose of its own, because it has to
+ * survive the body underneath changing: a background agent still types.
+ */
+export type OfficeCharacterAccessory = "headphones";
 
 /**
  * A character's look. Every value is a CSS hex color except `hairStyle`, which
@@ -184,6 +202,8 @@ export interface OfficeSpriteRef {
   readonly pose?: OfficeCharacterPose;
   readonly appearance?: OfficeAppearance;
   readonly tint?: string;
+  /** Overlaid on a `character` after its pose and hair; nothing else takes one. */
+  readonly accessory?: OfficeCharacterAccessory;
 }
 
 export interface OfficeSize {
@@ -469,10 +489,37 @@ export type OfficeErrandKind =
   | "plant"
   | "corridor";
 
+/**
+ * WHO may take a spot, as a fact about the plan rather than about the kind.
+ *
+ * Today's scene reasons from the kind - a bin belongs to the cabin it stands
+ * in, a peek is somebody else's door - which is a rule about one floor plan
+ * wearing the costume of a rule about errands. A plaza plant belongs to no
+ * room at all and a leads-only whiteboard belongs to a class of agent, and
+ * neither can be said in kinds without the scene learning view names.
+ *
+ * - `floor` - anyone whose seat is on this spot's storey.
+ * - `room` - that cabin's own people, and nobody else: its bin, its plant.
+ * - `not-room` - anyone with a room of their OWN that is not this one: the
+ *   point of a peek is that the door is somebody else's. An agent with no room
+ *   is refused, as it is for `room` - a deskless or open-plan agent is not
+ *   given the run of every cabin on the storey.
+ * - `leads` - team leads and the host's HQ occupant.
+ * - `nobody` - a prop the plan stood up with no usable spot beside it.
+ */
+export type OfficeSpotAudience =
+  | { readonly kind: "floor" }
+  | { readonly kind: "room"; readonly roomId: string }
+  | { readonly kind: "not-room"; readonly roomId: string }
+  | { readonly kind: "leads" }
+  | { readonly kind: "nobody" };
+
 export interface OfficeErrandSpot {
   readonly kind: OfficeErrandKind;
   readonly tile: OfficeTilePos;
   readonly facing: OfficeFacing;
+  /** Who has any business here. An ALIAS copies its canonical spot's. */
+  readonly audience: OfficeSpotAudience;
   /**
    * The FIXTURE this spot belongs to - one id per table, sofa or board, not
    * one per row. Two agents rally when they stand at spots that share a
@@ -635,6 +682,19 @@ export interface OfficeSceneInput {
   readonly visibleAgentIds: ReadonlySet<string>;
   readonly statusById: ReadonlyMap<string, OfficeAgentStatus>;
   /**
+   * HQ, teams and solos, computed once outside the scene and handed to every
+   * plan, board and directory row - so a floor that seats somebody in a team's
+   * room cannot disagree with the panel that calls them a solo.
+   */
+  readonly partition: OfficePopulation;
+  /** Edge counts over the displayed graph. Only City's heights read it. */
+  readonly activityById: ReadonlyMap<string, number>;
+  /**
+   * The canvas in CSS pixels. A plan reads the aspect once and freezes it; the
+   * scene never re-plans because this changed.
+   */
+  readonly viewport: OfficeSize;
+  /**
    * The timeline's pulse and a stable identity for the row behind it
    * (`commGraphEventKey`). The scene reacts to the KEY changing, so the same
    * pulse object re-supplied across frames spawns nothing new.
@@ -680,6 +740,14 @@ export type OfficeDrawable =
       readonly y: number;
       /** `bright` is for text over a surface that is dark in both themes, such as a wall sign. */
       readonly tone: "default" | "muted" | "bright";
+      /**
+       * Whose name this is, or `null` for lettering that names nobody.
+       *
+       * Carried rather than recovered, so the renderer stops matching a tag to
+       * a character by comparing coordinates against the hit regions - a test
+       * that is wrong the moment two things share a centre line.
+       */
+      readonly ownerAgentId: string | null;
     }
   | {
       /** Hands over a `clock` face sprite. CENTER anchored on the face. */
@@ -709,7 +777,53 @@ export type OfficeDrawable =
       readonly x: number;
       readonly y: number;
       readonly alpha?: number;
+    }
+  | {
+      /**
+       * One agent at OVERVIEW zoom, where a sixteen-pixel character is four
+       * pixels across and its colour is the only thing left of it. A glyph
+       * rides along because colour alone is not a state channel.
+       */
+      readonly kind: "pip";
+      readonly x: number;
+      readonly y: number;
+      readonly status: OfficeAgentStatus;
+      /** `ring` awaiting · `bang` attention or failure · `hollow` archived. */
+      readonly glyph: OfficePipGlyph;
+      readonly agentId: string;
+    }
+  | {
+      /**
+       * A filled rectangle in world pixels: the unit of a lod-0 block map.
+       *
+       * At overview zoom a floor is not drawn tile by tile - it is drawn as the
+       * regions the tiles add up to, which is both the only legible reading at
+       * that scale and the reason the whole-world bitmap can go away.
+       */
+      readonly kind: "block";
+      readonly x: number;
+      readonly y: number;
+      readonly width: number;
+      readonly height: number;
+      readonly fill: OfficeBlockFill;
+      readonly alpha?: number;
     };
+
+/** What a lod-0 block STANDS FOR; the renderer maps each to a theme colour. */
+export type OfficeBlockFill =
+  | "room"
+  | "pod"
+  | "storey"
+  | "building"
+  | "plaza"
+  | "ground"
+  | "grass";
+
+/**
+ * The mark drawn over a pip, so overview state survives colour blindness and a
+ * four-pixel dot. `none` is the quiet states: working, background, idle.
+ */
+export type OfficePipGlyph = "none" | "ring" | "bang" | "hollow";
 
 /**
  * One drawable in a DEPTH-ORDERED world stream, for the views whose props and
@@ -758,10 +872,26 @@ export interface OfficeFrame {
   readonly floor: ReadonlyArray<OfficeDrawable>;
   readonly props: ReadonlyArray<OfficeDrawable>;
   readonly actors: ReadonlyArray<OfficeDrawable>;
+  /**
+   * Props and actors interleaved by depth, for a `world` painter; `null` for a
+   * `layered` one, whose `props` and `actors` are the two passes instead.
+   *
+   * A view whose desk fronts cover their own occupants cannot be expressed as
+   * two passes at all - which is why this is a different stream rather than a
+   * sort order on the same one. The renderer draws exactly one of the two.
+   */
+  readonly world: ReadonlyArray<OfficeWorldDrawable> | null;
   readonly overlay: ReadonlyArray<OfficeDrawable>;
+  /** FRONT-MOST FIRST, from the same order the frame was drawn in. */
   readonly hitRegions: ReadonlyArray<OfficeHitRegion>;
   /** In-flight envelopes, in draw order; checked BEFORE `hitRegions` so a message over a desk wins. */
   readonly envelopeHitRegions: ReadonlyArray<OfficeEnvelopeHitRegion>;
+  /**
+   * Agents whose character is not in its own seat, WITHIN THE VIEW RECT. The
+   * frame is culled, so this is the culled set too: nothing outside the rect
+   * was built, and nothing outside it can be drawn.
+   */
+  readonly awayAgentIds: ReadonlySet<string>;
   /**
    * Where the camera should look while playback is following the action: the
    * sender of the pulsing row, or `null` when nothing is in flight.

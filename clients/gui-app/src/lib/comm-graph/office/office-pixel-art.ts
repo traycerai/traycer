@@ -14,12 +14,13 @@
  * the agent's appearance, the tint and the theme - because a stale entry would
  * silently render one agent in another's colors.
  */
-import type {
-  OfficePoint,
-  OfficeSize,
-  OfficeSpriteName,
-  OfficeSpriteRef,
-  OfficeTheme,
+import {
+  OFFICE_TILE,
+  type OfficePoint,
+  type OfficeSize,
+  type OfficeSpriteName,
+  type OfficeSpriteRef,
+  type OfficeTheme,
 } from "@/lib/comm-graph/office/office-types";
 import {
   BOX_MAP,
@@ -94,10 +95,14 @@ import {
   WINDOW_MAP,
 } from "@/lib/comm-graph/office/office-prop-maps";
 import {
+  isOfficeSeatedPose,
+  officeAccessoryMap,
   officeHairMap,
   officeHeadMap,
+  officeHeadOffsetOf,
   officeSeatedMap,
   officeTorsoMap,
+  OFFICE_ACCESSORY_MAPS,
   OFFICE_HAIR_MAPS,
   OFFICE_HEAD_MAPS,
   OFFICE_SEATED_MAPS,
@@ -440,6 +445,27 @@ export function officeSpriteSize(ref: OfficeSpriteRef): OfficeSize {
   return SPRITE_SIZES[ref.name];
 }
 
+/**
+ * Where a TOP-LEFT anchored sprite is drawn so that its FOOT lands on a tile.
+ *
+ * A prop taller than its tile would otherwise spill DOWN over whatever sits on
+ * the row below - a plant over its own chair, a rug over the doorway. A
+ * one-tile sprite is unaffected, and a sprite SHORTER than a tile (a name
+ * plate, a pod plate) sits down on it, which is where a small thing on the
+ * floor actually is.
+ *
+ * Lives with the sprite sizes rather than with any one caller: the painter
+ * places props by it, the scene hangs the clock hands off it, and the renderer
+ * mounts a sign with it. Three copies of this arithmetic is three chances for
+ * one of them to disagree about where a sign is.
+ */
+export function officeSpriteFootY(
+  ref: OfficeSpriteRef,
+  tileRow: number,
+): number {
+  return tileRow * OFFICE_TILE - (SPRITE_SIZES[ref.name].height - OFFICE_TILE);
+}
+
 /** One entry per authored map, for the test that guards the art's shape. */
 export interface OfficeSpriteMapEntry {
   readonly name: OfficeSpriteName;
@@ -453,6 +479,7 @@ export function officeSpriteMaps(): ReadonlyArray<OfficeSpriteMapEntry> {
     ...OFFICE_TORSO_MAPS,
     ...OFFICE_SEATED_MAPS,
     ...OFFICE_HAIR_MAPS,
+    ...OFFICE_ACCESSORY_MAPS,
   ].map((part) => ({
     name: "character" as const,
     label: part.label,
@@ -617,15 +644,34 @@ interface SelectedMap {
  * `left` is never authored: it is `right` mirrored, which is both half the art
  * to keep consistent and the only way the two stay in sync when one is edited.
  */
-function selectCharacterMap(ref: OfficeSpriteRef): SelectedMap {
+/** Hair, then anything worn over it, at whatever offset this head sits at. */
+function dressHead(
+  body: SpriteMap,
+  ref: OfficeSpriteRef,
+  source: "down" | "up" | "right",
+  headDy: number,
+): SpriteMap {
   const appearance = ref.appearance;
   const hairStyle = appearance === undefined ? 0 : appearance.hairStyle;
+  const haired = overlayMap(body, officeHairMap(source, hairStyle), headDy);
+  const accessory = ref.accessory;
+  if (accessory === undefined) return haired;
+  return overlayMap(haired, officeAccessoryMap(accessory), headDy);
+}
+
+function selectCharacterMap(ref: OfficeSpriteRef): SelectedMap {
   const pose = ref.pose ?? "stand";
-  if (pose === "sit" || pose === "type1" || pose === "type2") {
-    // A seated head sits one row lower than a standing one, so the `up` hair
-    // rides down with it rather than floating above the scalp.
+  if (isOfficeSeatedPose(pose)) {
+    // A seated head sits a row lower than a standing one - further on a slump,
+    // less on a lean - so the `up` hair and anything over it ride down with it
+    // rather than floating above the scalp.
     return {
-      map: overlayMap(officeSeatedMap(pose), officeHairMap("up", hairStyle), 1),
+      map: dressHead(
+        officeSeatedMap(pose),
+        ref,
+        "up",
+        officeHeadOffsetOf(pose),
+      ),
       mirror: false,
     };
   }
@@ -637,7 +683,7 @@ function selectCharacterMap(ref: OfficeSpriteRef): SelectedMap {
     0,
   );
   return {
-    map: overlayMap(body, officeHairMap(source, hairStyle), 0),
+    map: dressHead(body, ref, source, 0),
     mirror: facing === "left",
   };
 }
@@ -728,7 +774,7 @@ function cacheKey(ref: OfficeSpriteRef, theme: OfficeTheme): string {
     appearance === undefined
       ? "-"
       : `${appearance.skin}${appearance.hair}${appearance.hairStyle}${appearance.shirt}${appearance.pants}`;
-  return `character|${theme}|${ref.facing ?? "down"}|${ref.pose ?? "stand"}|${look}`;
+  return `character|${theme}|${ref.facing ?? "down"}|${ref.pose ?? "stand"}|${ref.accessory ?? ""}|${look}`;
 }
 
 /**

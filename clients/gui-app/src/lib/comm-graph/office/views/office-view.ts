@@ -19,6 +19,9 @@
  */
 import type { GuiHarnessId } from "@traycer/protocol/persistence/epic/foundation";
 import type { OfficePopulation } from "@/lib/comm-graph/office/office-population";
+import { floorPainter } from "@/lib/comm-graph/office/views/floor/floor-painter";
+import { measureFloor } from "@/lib/comm-graph/office/views/floor/floor-measure";
+import { planFloor } from "@/lib/comm-graph/office/views/floor/floor-plan";
 import type {
   OfficeAgentInput,
   OfficeAgentStatus,
@@ -99,6 +102,8 @@ export interface OfficeProjector {
 export interface OfficeDeskState {
   /** Who sits here, or `null` for a reserve seat nobody has taken. */
   readonly agentId: string | null;
+  /** The occupant's display name, or `null` where nobody sits here. */
+  readonly name: string | null;
   readonly status: OfficeAgentStatus;
   /** Archived and gone: the desk wears a dust sheet and a box beside it. */
   readonly sheeted: boolean;
@@ -110,6 +115,16 @@ export interface OfficeDeskState {
   readonly harnessId: GuiHarnessId | null;
   /** Decides the screen: laptop, single monitor, or dual wide. */
   readonly modelTier: OfficeModelTier;
+  /**
+   * The occupant's TEAM, as the partition names it - the lead's agent id, and
+   * the same id a solo stranded on another host still carries, so the two read
+   * as one team across two buildings. `null` for HQ, an unattributed solo and
+   * an empty seat.
+   *
+   * A painter that tints by team (the quiet stack's silhouettes) reads it; the
+   * Floor, whose rooms ARE the teams, does not.
+   */
+  readonly accentId: string | null;
 }
 
 /**
@@ -150,4 +165,45 @@ export interface OfficeView {
   readonly plan: OfficePlanFn;
   readonly measure: OfficeMeasureFn;
   readonly painter: OfficePainter;
+}
+
+/**
+ * EVERY view that ships, by id.
+ *
+ * The record is exhaustive over `OfficeViewId` by its type, which is the whole
+ * point of registering a view here and in the union together: a half-registered
+ * view does not compile, so the picker, the persisted choice, the parser and
+ * every `describe.each` below cannot disagree about what exists.
+ *
+ * Stateless, and never a cache. A view is three pure functions and two strings;
+ * whatever is expensive belongs to the scene and the renderer, which know when
+ * it may be thrown away.
+ */
+export const OFFICE_VIEWS: Readonly<Record<OfficeViewId, OfficeView>> = {
+  floor: {
+    id: "floor",
+    label: "Floor",
+    description:
+      "One walled cabin per team on a single storey. Every desk is drawn; best up to a few dozen agents.",
+    plan: planFloor,
+    measure: measureFloor,
+    painter: floorPainter,
+  },
+};
+
+/**
+ * The registry's order, which is the order the picker lists and every shared
+ * suite enumerates. Derived rather than written down, so registering a view is
+ * one edit and enrolling it in the tests is none.
+ */
+export const OFFICE_VIEW_IDS: ReadonlyArray<OfficeViewId> =
+  Object.keys(OFFICE_VIEWS).filter(isOfficeViewId);
+
+/**
+ * Narrows a key of {@link OFFICE_VIEWS} back to its own type. `Object.keys`
+ * erases to `string[]`, and a cast to put the type back would re-introduce
+ * exactly the drift deriving the list removes.
+ */
+function isOfficeViewId(id: string): id is OfficeViewId {
+  return Object.hasOwn(OFFICE_VIEWS, id);
 }

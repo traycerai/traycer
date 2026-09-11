@@ -49,6 +49,7 @@ import type {
   OfficeSeat,
   OfficeSeatKind,
   OfficeSign,
+  OfficeSpotAudience,
   OfficeSpriteName,
   OfficeTilePos,
   OfficeTileRect,
@@ -2772,15 +2773,61 @@ function fixtureIdOf(spot: PlacedSpot, floorIndex: number): string {
   return `${floorIndex}/${spot.kind}/${spot.tile.row}`;
 }
 
+/**
+ * Who has business at a spot, written out as today's three rules.
+ *
+ * A bin and a plant belong to the cabin they stand in, and walking into
+ * somebody else's room to throw paper away is not a break, it is trespass. A
+ * peek is the exact opposite: the point of it is another team's door, which is
+ * the cabin whose door is the tile above. Everything else is open to the
+ * storey.
+ *
+ * A bin or a plant standing in no cabin at all is usable by NOBODY, which is
+ * what the scene already concludes today - it looks up the agent's own cabin
+ * and asks whether the spot is inside it, and a spot inside no cabin is inside
+ * nobody's.
+ */
+function audienceOf(
+  spot: PlacedSpot,
+  rooms: ReadonlyArray<PlacedRoom>,
+): OfficeSpotAudience {
+  if (spot.kind === "bin" || spot.kind === "water-plant") {
+    const roomId = roomIdOfTile(rooms, spot.tile);
+    return roomId === null ? { kind: "nobody" } : { kind: "room", roomId };
+  }
+  if (spot.kind !== "peek") return { kind: "floor" };
+  const doorTile: OfficeTilePos = {
+    col: spot.tile.col,
+    row: spot.tile.row - 1,
+  };
+  const owner = rooms.find(
+    (room) =>
+      room.doorTile.col === doorTile.col && room.doorTile.row === doorTile.row,
+  );
+  // Unreachable on this plan: `addPeekSpots` puts one spot directly below
+  // EVERY room's door and nowhere else. Answered as open floor rather than by
+  // throwing, because a plan is not the place to assert about its own packing.
+  return owner === undefined
+    ? { kind: "floor" }
+    : { kind: "not-room", roomId: owner.rootAgentId };
+}
+
+interface SpotDecorationRequest {
+  readonly spots: ReadonlyArray<PlacedSpot>;
+  readonly props: ReadonlyArray<OfficeProp>;
+  readonly rooms: ReadonlyArray<PlacedRoom>;
+  readonly floorIndex: number;
+}
+
 function decorateSpots(
-  spots: ReadonlyArray<PlacedSpot>,
-  props: ReadonlyArray<OfficeProp>,
-  floorIndex: number,
+  request: SpotDecorationRequest,
 ): ReadonlyArray<OfficeErrandSpot> {
+  const { floorIndex, props, rooms, spots } = request;
   return spots.map((spot) => {
     const sprite = actionSpriteOf(spot.kind);
     return {
       ...spot,
+      audience: audienceOf(spot, rooms),
       fixtureId: fixtureIdOf(spot, floorIndex),
       // On this floor you act from where you stand; an oblique or isometric
       // view can put the approach a tile off the fixture instead.
@@ -2949,7 +2996,12 @@ function decorateFloorLayout(request: DecorationRequest): OfficeLayout {
         rooms: request.placedRooms,
         floor,
       }),
-      errandSpots: decorateSpots(floor.errandSpots, props, floorIndex),
+      errandSpots: decorateSpots({
+        spots: floor.errandSpots,
+        props,
+        rooms: request.placedRooms,
+        floorIndex,
+      }),
     }),
   );
   return {
@@ -2971,6 +3023,27 @@ function decorateFloorLayout(request: DecorationRequest): OfficeLayout {
     shiftFromPrevious: null,
     stable: false,
   };
+}
+
+/**
+ * The grid this agent set would pack into, in TILES, and nothing else.
+ *
+ * `buildFloors` and the fold below are the whole of the Floor's size
+ * arithmetic; everything after them in `layoutOffice` fills that grid in. Auto
+ * needs the size to choose a view and never looks at what is inside it, so this
+ * is exported for `views/floor/floor-measure.ts` to call - and shared with the
+ * plan rather than restated, because a measure that disagreed with the plan
+ * would pick a view the plan then contradicts.
+ */
+export function officeFloorGrid(agents: ReadonlyArray<OfficeAgentInput>): {
+  readonly cols: number;
+  readonly rows: number;
+} {
+  const builds = buildFloors(agents);
+  const last = builds[builds.length - 1];
+  let cols = 0;
+  for (const build of builds) cols = Math.max(cols, build.localCols);
+  return { cols, rows: last.originRow + last.localRows };
 }
 
 export function layoutOffice(

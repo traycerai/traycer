@@ -82,10 +82,10 @@ import { createCommGraphFindAdapter } from "@/components/epic-canvas/comm-graph/
 import { useRegisterTileFindAdapter } from "@/components/epic-canvas/tile-find/tile-find-adapter-context";
 import { BASE_STEP_MS } from "@/components/epic-canvas/comm-graph/use-comm-graph-transport";
 import { agentAppearance } from "@/lib/comm-graph/office/office-appearance";
-import { layoutOffice } from "@/lib/comm-graph/office/office-layout";
 import {
   drawOfficeSprite,
   officePalette,
+  officeSpriteFootY,
   officeSpriteSize,
   type OfficePalette,
 } from "@/lib/comm-graph/office/office-pixel-art";
@@ -94,6 +94,16 @@ import {
   OfficeScene,
 } from "@/lib/comm-graph/office/office-scene";
 import {
+  officeLodForZoom,
+  OFFICE_LOD_COUNT,
+} from "@/lib/comm-graph/office/office-lod";
+import {
+  partitionOfficePopulation,
+  type OfficePopulation,
+} from "@/lib/comm-graph/office/office-population";
+import type { OfficeView } from "@/lib/comm-graph/office/views/office-view";
+import { useOfficeEligibility } from "@/components/epic-canvas/comm-graph/office/use-office-eligibility";
+import {
   officeAgentStatuses,
   officeOpenRequestCounts,
 } from "@/lib/comm-graph/office/office-status";
@@ -101,27 +111,32 @@ import { officeModelTier } from "@/lib/comm-graph/office/office-model-tier";
 import { officeClockAngles } from "@/lib/comm-graph/office/office-clock";
 import { officeFloorName } from "@/lib/comm-graph/office/office-floor-name";
 import { officeFlagKind } from "@/components/epic-canvas/comm-graph/office/office-flag-kind";
+import { officeBoardSummary } from "@/components/epic-canvas/comm-graph/office/office-board-summary";
 import {
   layoutNameTags,
   NAME_TAG_LINE_HEIGHT,
   type OfficeNameTagCandidate,
 } from "@/components/epic-canvas/comm-graph/office/office-name-tags";
 import {
-  OFFICE_CHARACTER_HEIGHT,
   OFFICE_LOGO_SIZE,
   OFFICE_TILE,
   type OfficeAgentInput,
+  type OfficeAgentStatus,
+  type OfficeBlockFill,
   type OfficeDrawable,
   type OfficeFloor,
   type OfficeFrame,
   type OfficeEnvelopeHitRegion,
   type OfficeHitRegion,
   type OfficeLayout,
+  type OfficeLod,
   type OfficePoint,
   type OfficeRect,
   type OfficeSceneInput,
+  type OfficeSign,
   type OfficeSize,
   type OfficeTheme,
+  type OfficeTileRect,
 } from "@/lib/comm-graph/office/office-types";
 
 /**
@@ -157,6 +172,17 @@ const CLOCK_MINUTE_HAND = 4;
 const CLOCK_HUB_RADIUS = 1.5;
 const DARK_LABEL_BACKING = "rgba(0, 0, 0, 0.85)";
 const LIGHT_LABEL_BACKING = "rgba(255, 255, 255, 0.85)";
+/** A cabin's sign is two tiles wide, so its name gets less room than a desk's. */
+const MAX_ROOM_LABEL_CHARS = 12;
+/** A pod's plate is ONE tile, so its name gets less room again. */
+const MAX_POD_LABEL_CHARS = 10;
+/** Baseline of a sign's name, measured down from the sign sprite's own top. */
+const SIGN_LABEL_BASELINE = 11;
+const SIGN_WIDTH_TILES = 2;
+/** An overview pip, and the two marks that ride over it. */
+const PIP_RADIUS = 3;
+const PIP_RING_GAP = 2;
+const PIP_BANG_HEIGHT = 4;
 
 interface OfficeCamera {
   x: number;
@@ -317,9 +343,34 @@ interface OfficeRuntime {
   /**
    * The last input the scene was synced with, so the frame loop can re-sync a
    * fresh wall clock without React. `null` until the first sync.
+   *
+   * Kept even while the office is INELIGIBLE, where it is the held input that
+   * `resume` is handed on the way back.
    */
   readonly getSceneInput: () => OfficeSceneInput | null;
   readonly setSceneInput: (next: OfficeSceneInput) => void;
+  /**
+   * The partition the last input carried, which is the `previous` the next one
+   * folds in. Held here rather than in a ref so the memo that computes it can
+   * read it at all - see the note on this interface.
+   */
+  readonly getPartition: () => OfficePopulation | null;
+  readonly setPartition: (next: OfficePopulation) => void;
+  /**
+   * Whether this office is allowed to do anything - see
+   * {@link useOfficeEligibility}. Mirrored here because the frame loop starts
+   * and stops on it and the loop is created once, outside React's data flow.
+   */
+  readonly isEligible: () => boolean;
+  readonly setEligible: (next: boolean) => void;
+  readonly onEligibilityChange: (listener: (eligible: boolean) => void) => void;
+  /**
+   * Whether the SCENE is suspended. Distinct from eligibility: an office that
+   * was never eligible has no scene to suspend, and coming back has to know
+   * whether to `resume` (once, with missed rows suppressed) or plain `sync`.
+   */
+  readonly isSuspended: () => boolean;
+  readonly setSuspended: (next: boolean) => void;
   readonly getHoveredAgentId: () => string | null;
   readonly setHoveredAgentId: (next: string | null) => void;
   readonly getHostNames: () => ReadonlyMap<string, string>;
@@ -356,6 +407,11 @@ function createOfficeRuntime(view: CommGraphTileViewState): OfficeRuntime {
   let autoPanEnabled = true;
   let autoFitEnabled = isDefaultCommGraphView(view);
   let sceneInput: OfficeSceneInput | null = null;
+  let partition: OfficePopulation | null = null;
+  let eligible = false;
+  let suspended = false;
+  // Replaced by the frame loop on mount, like the invalidate listener above.
+  let eligibilityListener: (next: boolean) => void = () => undefined;
   let hostNames: ReadonlyMap<string, string> = new Map();
   let nameById: ReadonlyMap<string, string> = new Map();
   let hoveredAgentId: string | null = null;
@@ -423,6 +479,26 @@ function createOfficeRuntime(view: CommGraphTileViewState): OfficeRuntime {
     getSceneInput: () => sceneInput,
     setSceneInput: (next) => {
       sceneInput = next;
+    },
+    getPartition: () => partition,
+    setPartition: (next) => {
+      partition = next;
+    },
+    isEligible: () => eligible,
+    // Only a CHANGE reaches the loop: the effect that writes this runs on
+    // every render of the composed signal, and a tile that stays on screen
+    // would otherwise restart the loop on each one.
+    setEligible: (next) => {
+      if (next === eligible) return;
+      eligible = next;
+      eligibilityListener(next);
+    },
+    onEligibilityChange: (listener) => {
+      eligibilityListener = listener;
+    },
+    isSuspended: () => suspended,
+    setSuspended: (next) => {
+      suspended = next;
     },
     getHoveredAgentId: () => hoveredAgentId,
     setHoveredAgentId: (next) => {
@@ -523,6 +599,109 @@ function isOnScreen(
 
 const EMPTY_MATCH_IDS: ReadonlySet<string> = new Set();
 
+/** The unmeasured tile; see the placeholder note on `sceneInput`. */
+const EMPTY_VIEWPORT: OfficeSize = { width: 0, height: 0 };
+
+/** Stand-ins for a floor with no layout yet. Frozen, so no frame allocates one. */
+const NO_SIGNS: ReadonlyArray<OfficeSign> = [];
+const NO_FLOORS: ReadonlyArray<OfficeFloor> = [];
+const NO_STATUSES: ReadonlyMap<string, OfficeAgentStatus> = new Map();
+
+/**
+ * What the camera can SEE, in world pixels. The frame is built for this and
+ * nothing outside it plus the scene's own cull margin, which is what makes a
+ * frame cost what the viewport holds rather than what the epic holds.
+ */
+function worldRectOf(camera: OfficeCamera, viewport: ScreenSize): OfficeRect {
+  return {
+    x: -camera.x / camera.zoom,
+    y: -camera.y / camera.zoom,
+    width: viewport.width / camera.zoom,
+    height: viewport.height / camera.zoom,
+  };
+}
+
+/**
+ * The whole layout as one chunk. The static layer is a bitmap of the entire
+ * world, so it is painted from the whole thing rather than from the frame's
+ * culled floor - T7 chunks it, and this is the seam that moves when it does.
+ */
+function wholeWorldTiles(layout: OfficeLayout): OfficeTileRect {
+  return { col: 0, row: 0, cols: layout.cols, rows: layout.rows };
+}
+
+/**
+ * The static layer's version, with the BAND folded in. Two zoom bands of one
+ * layout share a `staticVersion` and are not the same floor: the painter is
+ * asked for each separately, and a bitmap keyed on the layout alone would
+ * serve whichever was baked first.
+ */
+function staticKeyOf(staticVersion: number, lod: OfficeLod): number {
+  return staticVersion * OFFICE_LOD_COUNT + lod;
+}
+
+/**
+ * Everything the draw needs that is NOT in the frame: the plan's lettering and
+ * storeys, and what the last synced input says exists right now.
+ *
+ * Gathered in one place because each of the four has an answer for "there is
+ * no layout yet" or "nothing has been synced yet", and four separate fallbacks
+ * inline in the frame loop is four chances to write the wrong empty value.
+ */
+interface FrameChrome {
+  readonly signs: ReadonlyArray<OfficeSign>;
+  readonly floors: ReadonlyArray<OfficeFloor>;
+  readonly visibleAgentIds: ReadonlySet<string>;
+  readonly statusById: ReadonlyMap<string, OfficeAgentStatus>;
+}
+
+function frameChrome(
+  layout: OfficeLayout | null,
+  synced: OfficeSceneInput | null,
+): FrameChrome {
+  return {
+    signs: layout === null ? NO_SIGNS : layout.signs,
+    floors: layout === null ? NO_FLOORS : layout.floors,
+    // Off the SYNCED input, not off props: the loop is created once and never
+    // re-created for a cursor step, and the signs have to say what the floor
+    // under them is showing.
+    visibleAgentIds: synced === null ? EMPTY_MATCH_IDS : synced.visibleAgentIds,
+    statusById: synced === null ? NO_STATUSES : synced.statusById,
+  };
+}
+
+/** A requested pan names a WORLD point, so a world that moved moves it too. */
+function shiftPendingPan(runtime: OfficeRuntime, shift: OfficePoint): void {
+  const pending = runtime.takePanRequest();
+  if (pending === null) return;
+  runtime.requestPan({
+    ...pending,
+    focus: { x: pending.focus.x + shift.x, y: pending.focus.y + shift.y },
+  });
+}
+
+/**
+ * A pan ALREADY RUNNING holds camera offsets, not world points, so it moves by
+ * the shift in screen pixels - and it has to move, because the next frame
+ * writes `camera.x` straight from these and would otherwise throw away the
+ * compensation applied beside them.
+ */
+function shiftActivePan(
+  runtime: OfficeRuntime,
+  shift: OfficePoint,
+  zoom: number,
+): void {
+  const pan = runtime.getActivePan();
+  if (pan === null) return;
+  runtime.setActivePan({
+    ...pan,
+    fromX: pan.fromX - shift.x * zoom,
+    toX: pan.toX - shift.x * zoom,
+    fromY: pan.fromY - shift.y * zoom,
+    toY: pan.toY - shift.y * zoom,
+  });
+}
+
 /**
  * The sprite-space box covering every named agent's hit region, or `null` when
  * none of them is on the floor.
@@ -593,11 +772,22 @@ interface DrawFrameArgs {
   readonly ctx: CanvasRenderingContext2D;
   readonly frame: OfficeFrame;
   readonly camera: OfficeCamera;
+  /** The zoom band the frame was built for; the signage follows it. */
+  readonly lod: OfficeLod;
   readonly viewport: ScreenSize;
   readonly dpr: number;
   readonly theme: OfficeTheme;
   /** Agents the tile's Find session currently matches; empty when idle. */
   readonly searchMatchIds: ReadonlySet<string>;
+  /**
+   * The PLAN's lettering, drawn here because a sign names an agent and whether
+   * that agent exists yet is a fact about the time cursor. Empty before the
+   * first layout.
+   */
+  readonly signs: ReadonlyArray<OfficeSign>;
+  /** Who exists at the cursor; a sign whose owner does not is not drawn. */
+  readonly visibleAgentIds: ReadonlySet<string>;
+  readonly statusById: ReadonlyMap<string, OfficeAgentStatus>;
   readonly nameById: ReadonlyMap<string, string>;
   /** One per host. A single-floor building names nothing - there is no choice to explain. */
   readonly floors: ReadonlyArray<OfficeFloor>;
@@ -834,37 +1024,10 @@ function drawSignPlate(
   ctx.restore();
 }
 
-/**
- * The agent a name tag belongs to, or `null` when it belongs to no character.
- *
- * The scene emits a tag directly under its character and gives neither an id,
- * so they are matched by GEOMETRY: same horizontal centre, and the tag's
- * baseline within one tile below the character's feet. An empty desk's own
- * plate label matches nothing - correctly, since a desk is not away.
- */
-function nameTagOwner(
-  label: OfficeLabelDrawable,
-  hitRegions: ReadonlyArray<OfficeHitRegion>,
-): string | null {
-  for (const region of hitRegions) {
-    if (region.rect.x + region.rect.width / 2 !== label.x) continue;
-    const feet = region.rect.y + region.rect.height;
-    if (label.y <= feet || label.y - feet > OFFICE_TILE) continue;
-    return region.agentId;
-  }
-  return null;
-}
-
-/**
- * Agents whose character is not on its own chair tile - walking, on an errand,
- * queueing, playing.
- *
- * Derived from the character hit region rather than from any scene internal:
- * a region's bottom edge sits exactly on the bottom of the tile the character
- * stands on, so the tile falls out of the rect with no offset to keep in step.
- */
 type OfficeLabelDrawable = Extract<OfficeDrawable, { kind: "label" }>;
 type OfficeClockDrawable = Extract<OfficeDrawable, { kind: "clock" }>;
+type OfficePipDrawable = Extract<OfficeDrawable, { kind: "pip" }>;
+type OfficeBlockDrawable = Extract<OfficeDrawable, { kind: "block" }>;
 
 /**
  * Per-frame scratch, module-scoped and reused.
@@ -969,6 +1132,16 @@ function drawDrawableLayer(args: DrawLayerArgs): void {
       clocks.push(drawable);
       continue;
     }
+    // The two overview primitives. They are not sprites - at lod 0 a tile is
+    // under a pixel, so the floor is filled rects and a person is a dot.
+    if (drawable.kind === "block") {
+      drawBlock({ ctx, block: drawable, palette });
+      continue;
+    }
+    if (drawable.kind === "pip") {
+      drawPip({ ctx, pip: drawable, palette });
+      continue;
+    }
     drawAnchoredSprite(ctx, drawable, anchor, theme);
   }
 }
@@ -987,9 +1160,6 @@ function drawStaticFloor(
     drawAnchoredSprite(ctx, drawable, "top-left", theme);
   }
 }
-
-/** Reused across frames; see the scratch note above. */
-const awayScratch = new Set<string>();
 
 /**
  * The pair edge of the envelope under a point, topmost first.
@@ -1032,44 +1202,218 @@ function envelopeEdgeFor(
   return envelopeEdgeAt(runtime.getEnvelopeRegions(), point);
 }
 
-function awayAgentIdsIn(
-  frame: OfficeFrame,
-  layout: OfficeLayout,
-): ReadonlySet<string> {
-  const away = awayScratch;
-  away.clear();
-  for (const region of frame.hitRegions) {
-    const desk = layout.desks.get(region.agentId);
-    if (desk === undefined) continue;
-    if (region.rect.height !== OFFICE_CHARACTER_HEIGHT) continue;
-    const col = region.rect.x / OFFICE_TILE;
-    const row = (region.rect.y + region.rect.height) / OFFICE_TILE - 1;
-    if (col !== desk.chairTile.col || row !== desk.chairTile.row) {
-      away.add(region.agentId);
-    }
+/**
+ * The world-space art a sign hangs ON: a two-tile wall board for a cabin or an
+ * area, a one-tile plate for a pod. A board sign has none - it is lettering on
+ * the storey itself, which the later views hang without furniture.
+ */
+function signSpriteFor(sign: OfficeSign): "sign" | "pod-plate" | null {
+  if (sign.kind === "room" || sign.kind === "area" || sign.kind === "host") {
+    return "sign";
   }
-  return away;
+  if (sign.kind === "pod" || sign.kind === "plate") return "pod-plate";
+  return null;
+}
+
+/** How many characters fit across a sign of this width, before the ellipsis. */
+function signMaxChars(widthTiles: number): number {
+  return widthTiles >= SIGN_WIDTH_TILES
+    ? MAX_ROOM_LABEL_CHARS
+    : MAX_POD_LABEL_CHARS;
+}
+
+function truncateSign(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars - 1)}…`;
 }
 
 /**
- * Cabin, area and pod names. They are the only `bright` labels the scene
- * emits, which is what makes the tone a reliable test for "this is signage".
+ * The lettering the PLAN placed: cabin signs, pod plates, area names, boards.
+ *
+ * Drawn here rather than emitted by the scene because a sign NAMES an agent
+ * and whether that agent exists is a fact about the time cursor: a cabin whose
+ * lead has not been created yet at this cursor has no name to show, and the
+ * visible set is known here and nowhere else.
+ *
+ * Two passes, because a sign is two things in two coordinate spaces: the board
+ * it hangs on is world art under the camera, and the text on it is screen-space
+ * so it stays crisp at every zoom.
  */
-function drawSignLabels(
-  ctx: CanvasRenderingContext2D,
-  labels: ReadonlyArray<OfficeLabelDrawable>,
-  camera: OfficeCamera,
-  palette: OfficePalette,
-): void {
-  for (const label of labels) {
-    if (label.tone !== "bright") continue;
+/** One sign, resolved: the plan's placement plus the text it says right now. */
+interface SignToDraw {
+  readonly sign: OfficeSign;
+  readonly text: string;
+}
+
+/** Overview draws none; see the note in `drawOfficeFrame`. */
+const NO_SIGN_ENTRIES: ReadonlyArray<SignToDraw> = [];
+
+function signsToDraw(args: {
+  readonly signs: ReadonlyArray<OfficeSign>;
+  readonly visibleAgentIds: ReadonlySet<string>;
+  readonly statusById: ReadonlyMap<string, OfficeAgentStatus>;
+  readonly nameById: ReadonlyMap<string, string>;
+  readonly hostNameById: ReadonlyMap<string, string>;
+}): ReadonlyArray<SignToDraw> {
+  const { hostNameById, nameById, signs, statusById, visibleAgentIds } = args;
+  const out: SignToDraw[] = [];
+  for (const sign of signs) {
+    const owner = sign.ownerAgentId;
+    if (owner !== null && !visibleAgentIds.has(owner)) continue;
+    if (sign.kind === "board" || sign.kind === "hq-board") {
+      out.push({ sign, text: officeBoardSummary(sign.agentIds, statusById) });
+      continue;
+    }
+    // A host sign carries no text of its own: the layout knows the id and the
+    // directory knows what the machine is called. Everything else says what
+    // the plan wrote, re-lettered from the owner's current name.
+    const text = signTextOf({ sign, owner, nameById, hostNameById });
+    if (text === "") continue;
+    out.push({ sign, text });
+  }
+  return out;
+}
+
+/** What one non-board sign says right now: the owner's name, or a host's. */
+function signTextOf(args: {
+  readonly sign: OfficeSign;
+  readonly owner: string | null;
+  readonly nameById: ReadonlyMap<string, string>;
+  readonly hostNameById: ReadonlyMap<string, string>;
+}): string {
+  const { hostNameById, nameById, owner, sign } = args;
+  if (sign.text === "") return officeFloorName(sign.hostId, hostNameById);
+  if (owner === null) return sign.text;
+  return nameById.get(owner) ?? sign.text;
+}
+
+function drawSignArt(args: {
+  readonly ctx: CanvasRenderingContext2D;
+  readonly signs: ReadonlyArray<SignToDraw>;
+  readonly theme: OfficeTheme;
+}): void {
+  const { ctx, signs, theme } = args;
+  for (const entry of signs) {
+    const name = signSpriteFor(entry.sign);
+    if (name === null) continue;
+    drawOfficeSprite(
+      ctx,
+      { name },
+      {
+        x: entry.sign.tile.col * OFFICE_TILE,
+        y: officeSpriteFootY({ name }, entry.sign.tile.row),
+      },
+      theme,
+    );
+  }
+}
+
+function drawSignLabels(args: {
+  readonly ctx: CanvasRenderingContext2D;
+  readonly signs: ReadonlyArray<SignToDraw>;
+  readonly camera: OfficeCamera;
+  readonly palette: OfficePalette;
+}): void {
+  const { camera, ctx, palette, signs } = args;
+  for (const entry of signs) {
+    const name = signSpriteFor(entry.sign);
+    const baseline =
+      name === null
+        ? entry.sign.tile.row * OFFICE_TILE + SIGN_LABEL_BASELINE
+        : officeSpriteFootY({ name }, entry.sign.tile.row) +
+          SIGN_LABEL_BASELINE;
+    const centerX =
+      entry.sign.tile.col * OFFICE_TILE +
+      (entry.sign.widthTiles * OFFICE_TILE) / 2;
     drawSignPlate(ctx, {
-      text: label.text.toUpperCase(),
-      screenX: label.x * camera.zoom + camera.x,
-      screenY: label.y * camera.zoom + camera.y,
+      text: truncateSign(
+        entry.text,
+        signMaxChars(entry.sign.widthTiles),
+      ).toUpperCase(),
+      screenX: centerX * camera.zoom + camera.x,
+      screenY: baseline * camera.zoom + camera.y,
       palette,
     });
   }
+}
+
+/**
+ * A pip's colour, from the same signals the legend names. Deliberately drawn
+ * from the office's OWN palette rather than from the app's foreground colors:
+ * it has to read against the room, which is the palette's background.
+ */
+function pipColor(status: OfficeAgentStatus, palette: OfficePalette): string {
+  if (status === "failure" || status === "attention") return palette.attention;
+  if (status === "awaiting") return palette.notice;
+  if (status === "working") return palette.screenLit;
+  if (status === "background") return palette.leafLight;
+  if (status === "archived") return palette.textMuted;
+  return palette.metalLight;
+}
+
+/**
+ * What a lod-0 block is painted in. Every role resolves in both themes - a
+ * fill with no colour is a hole in the overview, and the block map is the
+ * whole of the floor at that zoom.
+ */
+function blockColor(fill: OfficeBlockFill, palette: OfficePalette): string {
+  if (fill === "room") return palette.wallLight;
+  if (fill === "pod") return palette.glassLight;
+  if (fill === "storey") return palette.floorBase;
+  if (fill === "building") return palette.wallDark;
+  if (fill === "grass") return palette.leafDark;
+  // `plaza` and `ground` are both open outdoor floor.
+  return palette.floorAccent;
+}
+
+/** One agent at overview zoom: a dot in its status colour, with its glyph. */
+function drawPip(args: {
+  readonly ctx: CanvasRenderingContext2D;
+  readonly pip: OfficePipDrawable;
+  readonly palette: OfficePalette;
+}): void {
+  const { ctx, palette, pip } = args;
+  const color = pipColor(pip.status, palette);
+  ctx.save();
+  ctx.fillStyle = color;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1;
+  if (pip.glyph === "hollow") {
+    ctx.beginPath();
+    ctx.arc(pip.x, pip.y, PIP_RADIUS, 0, Math.PI * 2);
+    ctx.stroke();
+  } else {
+    ctx.beginPath();
+    ctx.arc(pip.x, pip.y, PIP_RADIUS, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  if (pip.glyph === "ring") {
+    // A second, wider outline: the mark for "waiting on somebody else", which
+    // must not be the colour alone.
+    ctx.beginPath();
+    ctx.arc(pip.x, pip.y, PIP_RADIUS + PIP_RING_GAP, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  if (pip.glyph === "bang") {
+    ctx.beginPath();
+    ctx.moveTo(pip.x, pip.y - PIP_RADIUS - PIP_BANG_HEIGHT);
+    ctx.lineTo(pip.x, pip.y - PIP_RADIUS - 1);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawBlock(args: {
+  readonly ctx: CanvasRenderingContext2D;
+  readonly block: OfficeBlockDrawable;
+  readonly palette: OfficePalette;
+}): void {
+  const { block, ctx, palette } = args;
+  ctx.save();
+  ctx.globalAlpha = block.alpha ?? 1;
+  ctx.fillStyle = blockColor(block.fill, palette);
+  ctx.fillRect(block.x, block.y, block.width, block.height);
+  ctx.restore();
 }
 
 /**
@@ -1087,7 +1431,6 @@ function drawNameTags(args: {
   readonly camera: OfficeCamera;
   readonly palette: OfficePalette;
   readonly backings: Readonly<Record<OfficeLabelTone, string>>;
-  readonly hitRegions: ReadonlyArray<OfficeHitRegion>;
   readonly awayAgentIds: ReadonlySet<string>;
   readonly hoveredAgentId: string | null;
 }): void {
@@ -1096,7 +1439,6 @@ function drawNameTags(args: {
     backings,
     camera,
     ctx,
-    hitRegions,
     hoveredAgentId,
     labels,
     palette,
@@ -1104,8 +1446,16 @@ function drawNameTags(args: {
   const candidates = resetScratch(nameTagScratch);
   ctx.font = LABEL_FONT;
   for (const label of labels) {
+    // Signage is drawn from `layout.signs` by `drawSignLabels` and never
+    // reaches the frame, so a `bright` label here is a view sending signage
+    // down the name-tag channel. Skipped rather than printed as body text on
+    // a plate meant for a dark surface - and skipping it is also what narrows
+    // the tone to the two a name tag can carry.
     if (label.tone === "bright") continue;
-    const owner = nameTagOwner(label, hitRegions);
+    // The owner rides ON the drawable now. It used to be recovered by scanning
+    // the hit regions for one whose centre line matched, which is a guess that
+    // is wrong the moment two things share a column.
+    const owner = label.ownerAgentId;
     if (owner !== null && awayAgentIds.has(owner) && owner !== hoveredAgentId) {
       continue;
     }
@@ -1140,13 +1490,29 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
     frame,
     hostNameById,
     hoveredAgentId,
+    lod,
     nameById,
     searchMatchIds,
     staticFloor,
+    statusById,
     theme,
     viewport,
+    visibleAgentIds,
   } = args;
   const palette = officePalette(theme);
+  // NO SIGNAGE AT OVERVIEW. A two-tile board is five screen pixels there and
+  // the plate its text needs is wider than the room it names, so the block map
+  // carries the whole reading on its own.
+  const signs =
+    lod === 0
+      ? NO_SIGN_ENTRIES
+      : signsToDraw({
+          signs: args.signs,
+          visibleAgentIds,
+          statusById,
+          nameById,
+          hostNameById,
+        });
   // The backing exists to separate glyphs from whatever they sit on, so it has
   // to contrast with the TEXT. A fixed dark backing did that for the dark
   // theme's light text and smeared the light theme's dark text into a bold
@@ -1179,7 +1545,9 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
   // layer the scene emitted the clock in.
   const clocks = resetScratch(clockScratch);
   // The floor is either one blit or, where no offscreen surface exists, the
-  // tile-by-tile walk it has always been.
+  // tile-by-tile walk it has always been. At overview zoom there is no bake at
+  // all: the floor is a few dozen filled rects, and baking a whole world's
+  // bitmap to blit them would be the largest allocation in the office.
   const layer = {
     ctx,
     theme,
@@ -1202,8 +1570,24 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
       sprites: "skip",
     });
   }
-  drawDrawableLayer({ ...layer, drawables: frame.props, anchor: "top-left" });
-  drawDrawableLayer({ ...layer, drawables: frame.actors, anchor: "top-left" });
+  // ONE of the two streams, never both: a `world` painter interleaves its props
+  // and its characters by depth because they genuinely overlap, and a `layered`
+  // one draws props and then actors as the office always has.
+  const world = frame.world;
+  if (world === null) {
+    drawDrawableLayer({ ...layer, drawables: frame.props, anchor: "top-left" });
+    drawDrawableLayer({
+      ...layer,
+      drawables: frame.actors,
+      anchor: "top-left",
+    });
+  } else {
+    drawDrawableLayer({
+      ...layer,
+      drawables: world.map((entry) => entry.drawable),
+      anchor: "top-left",
+    });
+  }
   // Bubbles and sparkles hang over whatever they belong to, so the scene
   // anchors them at their bottom centre rather than a corner.
   drawDrawableLayer({
@@ -1211,6 +1595,9 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
     drawables: frame.overlay,
     anchor: "bottom-center",
   });
+  // Signage rides on the world transform for its board and on the screen for
+  // its text, so the board goes down before the transform is dropped.
+  drawSignArt({ ctx, signs, theme });
 
   for (const clock of clocks) drawClockHands(ctx, clock, palette.ink);
 
@@ -1220,14 +1607,13 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
   // which is the palette's own background and not the app's.
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-  drawSignLabels(ctx, labels, camera, palette);
+  drawSignLabels({ ctx, signs, camera, palette });
   drawNameTags({
     ctx,
     labels,
     camera,
     palette,
     backings: labelBackings,
-    hitRegions: frame.hitRegions,
     awayAgentIds,
     hoveredAgentId,
   });
@@ -1310,7 +1696,15 @@ function OfficeCursorChip(props: {
   );
 }
 
-export type CommGraphOfficeCanvasProps = CommGraphCanvasProps;
+export interface CommGraphOfficeCanvasProps extends CommGraphCanvasProps {
+  /**
+   * WHICH view draws this canvas - a value, not an id: the plan, the measure
+   * and the painter all come out of it, and the scene is rebuilt when it
+   * changes. Named `officeView` because `view` on `CommGraphCanvasProps` is
+   * already the tile's camera and mode state, which both canvases share.
+   */
+  readonly officeView: OfficeView;
+}
 
 export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   const {
@@ -1324,6 +1718,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     events,
     initialHistoryCaughtUp,
     modeToggle,
+    officeView,
     onJump,
     onJumpToCreated,
     onJumpToSender,
@@ -1392,20 +1787,48 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   const activityTiers = useEpicAgentActivityTiers();
   const reducedMotion = usePrefersReducedMotion();
 
-  // ONE scene per epic, kept across renders: it owns walk paths, envelope
-  // flights and typing phase, all of which are continuous state that a
-  // re-created scene would restart on every unrelated prop change.
+  // ONE scene per epic AND per view, kept across renders: it owns walk paths,
+  // envelope flights and typing phase, all of which are continuous state that
+  // a re-created scene would restart on every unrelated prop change.
+  //
+  // Built on the first ELIGIBLE input rather than at mount. A tile in a
+  // background tab is mounted along with everything else in its pane, and a
+  // scene built there would plan a whole floor for nobody - which is the
+  // largest single thing a hidden office used to do.
+  //
+  // Not keyed by the VIEW. The contract's answer to a view change is that this
+  // canvas REMOUNTS, so the scene goes with the component through the ordinary
+  // unmount path rather than being swapped underneath it - which also keeps
+  // `previous` from ever chaining across two different plans.
+  //
+  // T6 OWES THIS A KEY. The tile passes a constant view today and so needs
+  // none; the ticket that adds the picker must render this as
+  // `key={officeView.id}`, or a switched view keeps the old view's scene.
   const sceneRef = useRef<{
     readonly epicId: string;
     readonly scene: OfficeScene;
   } | null>(null);
-  const readScene = useCallback((): OfficeScene => {
+  /** The live scene, or `null` where nothing has been eligible to build one. */
+  const peekScene = useCallback((): OfficeScene | null => {
     const current = sceneRef.current;
-    if (current !== null && current.epicId === epicId) return current.scene;
-    const scene = new OfficeScene(layoutOffice);
+    if (current === null || current.epicId !== epicId) return null;
+    return current.scene;
+  }, [epicId]);
+  const ensureScene = useCallback((): OfficeScene => {
+    const current = peekScene();
+    if (current !== null) return current;
+    // No initial layout: the first sync plans one. Handing the constructor an
+    // empty plan would be a floor nobody asked for, thrown away a line later.
+    const scene = new OfficeScene(officeView, null);
     sceneRef.current = { epicId, scene };
     return scene;
-  }, [epicId]);
+  }, [epicId, officeView, peekScene]);
+
+  // The canvas's own intersection state - the one eligibility signal no
+  // context can answer, because a tile scrolled out of the epic canvas is
+  // mounted, selected and in a visible pane.
+  const [intersecting, setIntersecting] = useState(false);
+  const { eligible } = useOfficeEligibility({ intersecting });
 
   const nameById = useMemo(
     () => new Map(agents.map((agent) => [agent.id, agent.name])),
@@ -1500,11 +1923,48 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     [agentIds, events],
   );
 
+  // How much each agent is TALKING, over the graph as displayed. Folded from
+  // the same aggregation the node graph draws, so the two cannot disagree
+  // about who is busy; only City's building heights read it today.
+  const activityById = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const edge of aggregateCommGraphEdges(events, agentIds)) {
+      const weight = edge.events.length;
+      counts.set(edge.agentAId, (counts.get(edge.agentAId) ?? 0) + weight);
+      counts.set(edge.agentBId, (counts.get(edge.agentBId) ?? 0) + weight);
+    }
+    return counts;
+  }, [agentIds, events]);
+
+  // HQ, teams and solos, computed ONCE here and handed to the plan, the boards
+  // and (in time) the directory panel, so nothing downstream can re-derive a
+  // different answer. The previous partition is what freezes a classification
+  // for an agent that was already here; it is read off the runtime rather than
+  // a ref for the reason the runtime exists - a memo may not touch a ref.
+  const partition = useMemo(
+    () =>
+      partitionOfficePopulation({
+        agents: officeAgents,
+        statusById,
+        previous: runtime.getPartition(),
+      }),
+    [officeAgents, runtime, statusById],
+  );
+  useEffect(() => {
+    runtime.setPartition(partition);
+  }, [partition, runtime]);
+
   const sceneInput = useMemo<OfficeSceneInput>(
     () => ({
       agents: officeAgents,
       visibleAgentIds: agentIds,
       statusById,
+      activityById,
+      partition,
+      // A PLACEHOLDER, like `clockMs` below: the measured box is written by a
+      // ResizeObserver with no render behind it, so the sync effect stamps
+      // whatever it currently is. Nothing re-plans because it changed.
+      viewport: EMPTY_VIEWPORT,
       pulse,
       pulseKey,
       // Envelope flights are sized to fit inside one playback step, so a faster
@@ -1521,8 +1981,10 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       reducedMotion,
     }),
     [
+      activityById,
       agentIds,
       officeAgents,
+      partition,
       playing,
       pulse,
       cursorMs,
@@ -1551,18 +2013,44 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     runtime.invalidateFrame();
   }, [hostNameById, runtime]);
 
+  // Eligibility drives the DRAWING half: the loop starts and stops with it,
+  // and going away releases the floor's bitmap. Declared before the sync
+  // effect so a commit that flips both has told the loop before the scene is
+  // resumed. Suspension itself is the scene's, and lives here rather than in
+  // the frame loop because a host with no 2D context never builds one.
   useEffect(() => {
-    const stamped =
-      sceneInput.cursorMs === null
-        ? { ...sceneInput, clockMs: Date.now() }
-        : sceneInput;
+    runtime.setEligible(eligible);
+    if (eligible) return;
+    const scene = peekScene();
+    if (scene === null || runtime.isSuspended()) return;
+    runtime.setSuspended(true);
+    scene.suspend();
+  }, [eligible, peekScene, runtime]);
+
+  useEffect(() => {
+    const viewport = runtime.getViewport();
+    const stamped: OfficeSceneInput = {
+      ...sceneInput,
+      clockMs: sceneInput.cursorMs ?? Date.now(),
+      viewport: { width: viewport.width, height: viewport.height },
+    };
+    // HELD whether or not it is synced. An office that comes back finds the
+    // state the rows it slept through led to, which is what makes the return
+    // one sync rather than a burst of envelopes nobody watched.
     runtime.setSceneInput(stamped);
-    readScene().sync(stamped);
+    if (!eligible) return;
+    const scene = ensureScene();
+    if (runtime.isSuspended()) {
+      runtime.setSuspended(false);
+      scene.resume(stamped);
+    } else {
+      scene.sync(stamped);
+    }
     // Not every change to the input moves anything. A paused seek that answers
     // an open request takes an envelope off a desk and starts no walk, and
     // within the same minute the idle skip would leave the pile painted.
     runtime.invalidateFrame();
-  }, [readScene, runtime, sceneInput]);
+  }, [eligible, ensureScene, runtime, sceneInput]);
 
   // Pressing Play is an explicit request to follow the action again. Pause
   // leaves the current choice alone; only the next false -> true transition
@@ -1616,11 +2104,12 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   );
 
   const fitToFloor = useCallback(() => {
-    const layout = readScene().layout();
-    const size: OfficeSize = {
-      width: layout.cols * OFFICE_TILE,
-      height: layout.rows * OFFICE_TILE,
-    };
+    // The PROJECTED world, not the layout's tile grid: a projector is free not
+    // to be the identity, and on those views the grid is not the shape
+    // anything was drawn at.
+    const scene = peekScene();
+    if (scene === null) return;
+    const size = scene.worldSize();
     const viewport = runtime.getViewport();
     if (size.width <= 0 || viewport.width <= 0) return;
     const fitted = fitCamera(size, viewport);
@@ -1630,7 +2119,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     fittedRef.current = { floor: size, viewport };
     runtime.invalidateFrame();
     persistView();
-  }, [persistView, readScene, runtime]);
+  }, [peekScene, persistView, runtime]);
 
   const handleZoomIn = useCallback(() => {
     runtime.takeManualControl();
@@ -1694,6 +2183,26 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     runtime.setPlayback(pulseKey, playing);
   }, [playing, pulseKey, runtime]);
 
+  // The one eligibility signal that is not a context: whether the tile is
+  // actually in the epic canvas's viewport. Held in React state, because
+  // everything downstream of it - the scene, the sync, the loop - is decided
+  // during render from the composed boolean.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (canvas === null) return;
+    // Seeded from the DOM rather than assumed: the observer's first callback
+    // is asynchronous, and a tile opened in the foreground should not wait a
+    // frame for it.
+    setIntersecting(isElementVisible(canvas));
+    const observer = new IntersectionObserver((entries) => {
+      setIntersecting(entries.some((entry) => entry.isIntersecting));
+    });
+    observer.observe(canvas);
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (canvas === null) return;
@@ -1704,10 +2213,6 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
 
     let raf = 0;
     let last = performance.now();
-    // Seeded from the DOM rather than assumed: the observer's first callback
-    // is asynchronous, and a tile opened in the foreground should not wait a
-    // frame for it.
-    let canvasIsVisible = isElementVisible(canvas);
     let lastClockSecond = -1;
     let pausedAt: number | null = null;
     const gate = new OfficeFrameGate();
@@ -1725,7 +2230,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     // right only at mount. Re-syncing the SAME input with a fresh `clockMs`
     // is what advances it: `sync` is idempotent and guarded by the pulse key,
     // so re-supplying a row replays nothing.
-    const advanceLiveClock = (): void => {
+    const advanceLiveClock = (scene: OfficeScene): void => {
       const input = runtime.getSceneInput();
       if (input === null || input.cursorMs !== null) return;
       const now = Date.now();
@@ -1733,7 +2238,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       if (second === lastClockSecond) return;
       lastClockSecond = second;
       const stamped = { ...input, clockMs: now };
-      readScene().sync(stamped);
+      scene.sync(stamped);
       // Stored back, not merely synced: the idle skip reads the clock off the
       // runtime to decide whether the minute turned over, and a stamp only the
       // scene knows about leaves it comparing the mount-time value forever.
@@ -1803,6 +2308,72 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       if (progress >= 1) runtime.setActivePan(null);
     };
 
+    /**
+     * Keeps the open hover card on the thing it points at.
+     *
+     * What the card points at can move without the pointer moving at all: the
+     * agent walks off to the cafeteria, an auto-pan slides the floor under the
+     * cursor, or the cursor scrubs to a time before that agent existed. So the
+     * pointer's last position is hit-tested against THIS frame - while it
+     * still lands on the hovered agent the card follows the character, and
+     * once it does not the card closes rather than being left anchored to
+     * empty floor. Run AFTER the camera has moved for this frame, so a pan is
+     * caught on the frame it happens rather than the one after.
+     */
+    const followHoverCard = (
+      frame: OfficeFrame,
+      camera: OfficeCamera,
+    ): void => {
+      const anchor = hoverAnchorRef.current;
+      if (anchor === null) return;
+      const rect = followOfficeHover(anchor, frame.hitRegions, camera);
+      if (rect === null) {
+        hoverAnchorRef.current = null;
+        hoverRectRef.current = null;
+        runtime.setHoveredAgentId(null);
+        setHoverCard(null);
+        return;
+      }
+      if (sameRect(rect, hoverRectRef.current)) return;
+      // React state, so only a box that actually moved is worth a render.
+      hoverRectRef.current = rect;
+      setHoverCard({ agentId: anchor.agentId, rect });
+    };
+
+    /**
+     * The floor as a bitmap, repainted only when the plan's version, its band,
+     * the theme or its size moves; every other frame this is one `drawImage`.
+     *
+     * NOT baked at overview, and never from the frame's own floor. At lod 0 the
+     * floor is a few dozen filled rects covering the view, and baking a whole
+     * world's bitmap to blit them would be the largest allocation the office
+     * makes. Above it the bake is the WHOLE world - the frame's floor is culled
+     * to the viewport, and a bitmap painted from that would hold whatever
+     * happened to be on screen when it was last repainted.
+     */
+    const bakeFloor = (
+      frame: OfficeFrame,
+      layout: OfficeLayout | null,
+      lod: OfficeLod,
+    ): HTMLCanvasElement | null => {
+      if (lod === 0 || layout === null) return null;
+      return staticLayer.sync(
+        {
+          staticVersion: staticKeyOf(frame.staticVersion, lod),
+          theme: resolvedTheme,
+          width: frame.size.width,
+          height: frame.size.height,
+        },
+        (floorCtx) => {
+          drawStaticFloor(
+            floorCtx,
+            officeView.painter.floor(layout, wholeWorldTiles(layout), lod),
+            resolvedTheme,
+          );
+        },
+      );
+    };
+
     const step = (now: number): void => {
       // The SIM runs in real time; only the DRAWING is capped, and the whole
       // accumulated slice is what it is ticked with - that is what keeps a
@@ -1813,8 +2384,16 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         raf = requestAnimationFrame(step);
         return;
       }
-      advanceLiveClock();
-      const scene = readScene();
+      // The loop only runs while the office is eligible, which is the same
+      // condition that builds the scene - but the two are separate effects,
+      // so the frame between them draws nothing rather than planning a floor
+      // from inside an animation callback.
+      const scene = peekScene();
+      if (scene === null) {
+        raf = requestAnimationFrame(step);
+        return;
+      }
+      advanceLiveClock(scene);
       scene.tick(elapsed);
       // A DPR change does not resize anything in CSS pixels, so no resize
       // event is guaranteed to arrive - a browser zoom on a secondary display
@@ -1825,7 +2404,8 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         applyCanvasSize();
       }
 
-      const clockMs = runtime.getSceneInput()?.clockMs ?? 0;
+      const synced = runtime.getSceneInput();
+      const clockMs = synced?.clockMs ?? 0;
       const draw = gate.shouldDraw({
         animating: scene.isAnimating(),
         minute: Math.floor(clockMs / 60_000),
@@ -1838,80 +2418,79 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         return;
       }
 
-      const frame = scene.frame();
-      runtime.setHitRegions(frame.hitRegions);
-      runtime.setEnvelopeRegions(frame.envelopeHitRegions);
       const camera = runtime.getCamera();
       const viewport = runtime.getViewport();
-      applyAutoFit(frame.size, viewport);
-      requestPlaybackPan(frame.focus, viewport);
-      advanceCamera(now, viewport);
-      // What the hover card points at can move without the pointer moving at
-      // all: the agent walks off to the cafeteria, an auto-pan slides the
-      // floor under the cursor, or the cursor scrubs to a time before that
-      // agent existed. So the pointer's last position is hit-tested against
-      // THIS frame: while it still lands on the hovered agent the card follows
-      // the character, and once it does not the card closes rather than being
-      // left anchored to empty floor. Checked AFTER the camera has moved for
-      // this frame, so a pan is caught on the frame it happens rather than
-      // the one after.
-      const anchor = hoverAnchorRef.current;
-      if (anchor !== null) {
-        const rect = followOfficeHover(anchor, frame.hitRegions, camera);
-        if (rect === null) {
-          hoverAnchorRef.current = null;
-          hoverRectRef.current = null;
-          runtime.setHoveredAgentId(null);
-          setHoverCard(null);
-        } else if (!sameRect(rect, hoverRectRef.current)) {
-          // React state, so only a box that actually moved is worth a render.
-          hoverRectRef.current = rect;
-          setHoverCard({ agentId: anchor.agentId, rect });
-        }
+      // A plan that GREW the world translates everything in it. Taking the
+      // shift and moving the camera by it is what keeps the floor still on
+      // screen: without it a building that gained a storey jumps by a storey.
+      //
+      // Every camera MOVE in flight moves with it too. A pan is aimed at a
+      // world point that just slid, and an active one overwrites `camera.x`
+      // from its own endpoints on the next frame - so compensating the camera
+      // alone would be undone by the pan a frame later.
+      const shift = scene.takeShift();
+      if (shift !== null) {
+        camera.x -= shift.x * camera.zoom;
+        camera.y -= shift.y * camera.zoom;
+        shiftPendingPan(runtime, shift);
+        shiftActivePan(runtime, shift, camera.zoom);
       }
-
-      // Repainted only when the floor's version, the theme or its size moves;
-      // every other frame this is a single `drawImage`.
-      const staticFloor = staticLayer.sync(
-        {
-          staticVersion: frame.staticVersion,
-          theme: resolvedTheme,
-          width: frame.size.width,
-          height: frame.size.height,
-        },
-        (floorCtx) => {
-          drawStaticFloor(floorCtx, frame.floor, resolvedTheme);
-        },
-      );
-      const hoveredId = runtime.getHoveredAgentId();
+      // THE CAMERA SETTLES FIRST, and the frame is built from where it ended
+      // up. A frame is culled to what the camera can see, so a fit or a pan
+      // applied after it would be one frame ahead of the world it framed -
+      // which on the very first frame is the whole difference between the
+      // floor as fitted and the floor as it happened to be persisted.
+      applyAutoFit(scene.worldSize(), viewport);
+      advanceCamera(now, viewport);
+      // SEMANTIC ZOOM. The band decides what a frame even contains - a block
+      // map and pips at overview, pixel art otherwise - so it is chosen here,
+      // once, and everything below reads it rather than the zoom.
+      const lod = officeLodForZoom(camera.zoom);
+      const frame = scene.frame(lod, worldRectOf(camera, viewport));
+      runtime.setHitRegions(frame.hitRegions);
+      runtime.setEnvelopeRegions(frame.envelopeHitRegions);
+      const layout = scene.layout();
+      // REQUESTED, not started: `advanceCamera` has already run for this
+      // frame, so the move begins on the next one. A playback pan is a 400ms
+      // ease, and one frame of it is a pixel.
+      requestPlaybackPan(frame.focus, viewport);
+      followHoverCard(frame, camera);
       drawOfficeFrame({
         ctx,
         frame,
-        staticFloor,
+        staticFloor: bakeFloor(frame, layout, lod),
         camera,
+        lod,
         viewport,
         dpr: appliedDprRef.current,
         theme: resolvedTheme,
         searchMatchIds: runtime.getSearchMatchIds(),
         nameById: runtime.getNameById(),
-        floors: scene.layout().floors,
         hostNameById: runtime.getHostNames(),
-        awayAgentIds: awayAgentIdsIn(frame, scene.layout()),
-        hoveredAgentId: hoveredId,
+        awayAgentIds: frame.awayAgentIds,
+        hoveredAgentId: runtime.getHoveredAgentId(),
+        ...frameChrome(layout, synced),
       });
       raf = requestAnimationFrame(step);
     };
 
     const start = (): void => {
       if (raf !== 0) return;
-      if (document.hidden || !canvasIsVisible) return;
+      if (!runtime.isEligible()) return;
       // Catch the simulation up on a bounded slice of the time spent paused,
       // so the floor resumes looking alive rather than mid-stride.
       const catchUp = officeCatchUpMs(
         pausedAt === null ? 0 : Date.now() - pausedAt,
       );
       pausedAt = null;
-      if (catchUp > 0) readScene().tick(catchUp);
+      const scene = peekScene();
+      // Not for a SUSPENDED scene: `resume` is about to settle every walk and
+      // flight anyway, so catching one up first is work whose result is thrown
+      // away a moment later. The catch-up is for the loop being rebuilt under
+      // a live office - a theme flip - where nothing resets the motion.
+      if (catchUp > 0 && scene !== null && !runtime.isSuspended()) {
+        scene.tick(catchUp);
+      }
       last = performance.now();
       gate.resume();
       raf = requestAnimationFrame(step);
@@ -1922,36 +2501,34 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       raf = 0;
       pausedAt = Date.now();
     };
-    // TWO ways to be invisible, and the floor has to answer to both. A hidden
-    // DOCUMENT is the browser's own signal. A hidden TILE is not: an unselected
-    // Traycer tab keeps its tiles mounted under `display:none`, so without the
-    // observer this loop draws sixty frames a second into a canvas nobody can
-    // see. The tile itself stays mounted either way - only the loop pauses.
-    const onVisibility = (): void => {
-      if (document.hidden) stop();
-      else start();
-    };
-    const observer = new IntersectionObserver((entries) => {
-      canvasIsVisible = entries.some((entry) => entry.isIntersecting);
-      if (canvasIsVisible) start();
-      else stop();
+    // EVERY way to be invisible arrives as one boolean - a hidden document, a
+    // background tab, an unselected tab body, a tile scrolled out of the
+    // canvas - and each of them used to be somebody else's listener, or
+    // nobody's. What is left here is what the loop itself owns: the frames,
+    // and the floor's bitmap.
+    //
+    // The bitmap goes on the way out because it is the largest thing a hidden
+    // office was holding; the scene's own suspension is the other effect's,
+    // since a host with no 2D context never reaches this line at all.
+    runtime.onEligibilityChange((next) => {
+      if (next) {
+        gate.invalidate();
+        start();
+        return;
+      }
+      stop();
+      staticLayer.release();
     });
-    observer.observe(canvas);
-    if (isElementVisible(canvas)) {
-      canvasIsVisible = true;
-      start();
-    }
-    document.addEventListener("visibilitychange", onVisibility);
+    start();
     return () => {
-      document.removeEventListener("visibilitychange", onVisibility);
-      observer.disconnect();
       stop();
       stopWatchingLogos();
       runtime.onInvalidateFrame(() => undefined);
+      runtime.onEligibilityChange(() => undefined);
       // A floor's worth of pixels is real memory; it goes with the tile.
       staticLayer.release();
     };
-  }, [applyCanvasSize, readScene, resolvedTheme, runtime]);
+  }, [applyCanvasSize, officeView, peekScene, resolvedTheme, runtime]);
 
   /** A client position in container screen pixels. */
   const toScreenPoint = useCallback(
@@ -2021,8 +2598,11 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         return;
       }
       const point = toSpritePoint(event.clientX, event.clientY);
+      const scene = peekScene();
       const overEnvelope =
-        point !== null && envelopeEdgeFor(runtime, readScene(), point) !== null;
+        point !== null &&
+        scene !== null &&
+        envelopeEdgeFor(runtime, scene, point) !== null;
       const region =
         point === null ? null : hitRegionFor(runtime.getHitRegions(), point);
       const camera = runtime.getCamera();
@@ -2054,7 +2634,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       event.currentTarget.style.cursor =
         region === null && !overEnvelope ? "default" : "pointer";
     },
-    [readScene, runtime, toScreenPoint, toSpritePoint],
+    [peekScene, runtime, toScreenPoint, toSpritePoint],
   );
 
   // On the CONTAINER, because the hover trigger is laid over the character and
@@ -2122,7 +2702,8 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       if (point === null) return;
       // Envelopes first: a message in flight over a desk is drawn on top of
       // it, so it has to be the thing a click on those pixels resolves to.
-      const scene = readScene();
+      const scene = peekScene();
+      if (scene === null) return;
       const edgeId = envelopeEdgeFor(runtime, scene, point);
       if (edgeId !== null) {
         setSelectedDetail({ kind: "pair", edgeId });
@@ -2137,7 +2718,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         : scene.hitTest(point);
       if (agentId !== null) setSelectedAgentId(agentId);
     },
-    [persistView, readScene, runtime, setSelectedAgentId, toSpritePoint],
+    [peekScene, persistView, runtime, setSelectedAgentId, toSpritePoint],
   );
 
   // A cancelled gesture is not a click: the browser took the pointer (a touch

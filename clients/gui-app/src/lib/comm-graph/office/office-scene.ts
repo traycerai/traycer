@@ -13,8 +13,11 @@
  * ANCHORS the canvas must honour - a frame is coordinates and nothing else:
  *
  * - `floor`, `props` and `actors` sprites are TOP-LEFT anchored at `(x, y)`.
- * - A character sits at `(col * OFFICE_TILE, row * OFFICE_TILE - 4)`: its feet
- *   land on its tile and its head rises above it.
+ * - A character hangs from its FOOT POINT, the projected bottom centre of the
+ *   tile it stands on: its sprite corner is that point less half a character's
+ *   width and a whole character's height, so its feet land on its tile and its
+ *   head rises above it. On the Floor's identity projector that is exactly
+ *   `(col * OFFICE_TILE, row * OFFICE_TILE - 4)`.
  * - `overlay` sprites (bubbles, sparkles) are BOTTOM-CENTER anchored - `x` is
  *   the character's horizontal centre, `y` its top minus two.
  * - `envelope` drawables are CENTER anchored. Their `y` ALREADY includes the
@@ -41,17 +44,21 @@ import type {
   CommGraphPulseKind,
 } from "@/lib/comm-graph/comm-graph-timeline";
 import { officeSpriteSize } from "@/lib/comm-graph/office/office-pixel-art";
-import { officeArchivedAsOf } from "@/lib/comm-graph/office/office-status";
+import {
+  isOfficeHotStatus,
+  officeArchivedAsOf,
+} from "@/lib/comm-graph/office/office-status";
 import { findOfficePath } from "@/lib/comm-graph/office/office-path";
+import { OfficeSeatBook } from "@/lib/comm-graph/office/office-seat-book";
+import type { OfficePopulation } from "@/lib/comm-graph/office/office-population";
 import {
   OFFICE_CHARACTER_HEIGHT,
   OFFICE_CHARACTER_WIDTH,
   OFFICE_TILE,
-  officeTileCenter,
   type OfficeAgentInput,
   type OfficeAgentStatus,
+  type OfficeCharacterAccessory,
   type OfficeCharacterPose,
-  type OfficeDesk,
   type OfficeDrawable,
   type OfficeEnvelopeHitRegion,
   type OfficeErrandKind,
@@ -61,23 +68,48 @@ import {
   type OfficeFrame,
   type OfficeHitRegion,
   type OfficeLayout,
-  type OfficeModelTier,
-  type OfficePod,
-  type OfficePodStyle,
+  type OfficeLod,
+  type OfficePipGlyph,
   type OfficePoint,
-  type OfficeProp,
   type OfficeRect,
   type OfficeRoom,
   type OfficeSceneInput,
+  type OfficeSeat,
+  type OfficeSize,
   type OfficeSpriteName,
-  type OfficeSpriteRef,
   type OfficeTilePos,
   type OfficeTileRect,
+  type OfficeWorldDrawable,
 } from "@/lib/comm-graph/office/office-types";
+import type {
+  OfficeDeskState,
+  OfficeProjector,
+  OfficeView,
+} from "@/lib/comm-graph/office/views/office-view";
 
-export type OfficeLayoutFn = (
-  agents: ReadonlyArray<OfficeAgentInput>,
-) => OfficeLayout;
+/**
+ * How far outside the camera's rect the frame is still built.
+ *
+ * A character standing just off the left edge is half on screen, and a desk's
+ * monitor is drawn eight pixels above the desk's own tile. One tile's worth of
+ * slack, four times over, costs a handful of drawables and removes every class
+ * of thing popping into existence at the edge of the viewport.
+ */
+export const OFFICE_CULL_MARGIN_PX = 64;
+
+/**
+ * The side of one frame-index chunk, in tiles - 512 sprite pixels, the same
+ * square the static layer bakes in.
+ *
+ * The index exists so `frame` never walks every seat in a thousand-agent
+ * office to find the forty that are on screen. It is rebuilt per layout and
+ * read per frame, so the chunk wants to be big enough that a viewport touches
+ * a dozen of them and small enough that one is not most of the world.
+ */
+const FRAME_CHUNK_TILES = 32;
+
+/** A cubby's occupant is drawn dimmed at close-up: present, not working. */
+const CUBBY_OCCUPANT_ALPHA = 0.6;
 
 const WALK_TILES_PER_SECOND = 3;
 /**
@@ -122,56 +154,18 @@ export const ENVELOPE_ARC_LIFT = 14;
 const MAX_LIVE_ENVELOPES = 24;
 /** Even with motion off an arrival has to be on screen long enough to see. */
 const REDUCED_MOTION_ARRIVAL_MS = 300;
-const CHARACTER_Y_OFFSET = -4;
 const BUBBLE_GAP = 2;
 const LABEL_GAP = 8;
 const MAX_LABEL_CHARS = 14;
-/** A cabin's sign is two tiles wide, so its name gets less room than a desk's. */
-const MAX_ROOM_LABEL_CHARS = 12;
-/** A pod's plate is ONE tile, so its name gets less room again. */
-const MAX_POD_LABEL_CHARS = 10;
-/** Baseline of the pod name, measured down from the plate sprite's own top. */
-const POD_PLATE_LABEL_BASELINE = 11;
-/**
- * How each pod style draws its outline. The vertical piece takes the corners
- * too: a corner belongs to the side that carries the run, and a horizontal
- * piece turned on its end reads as a mistake.
- */
-interface OfficePodOutlineArt {
-  readonly vertical: OfficeSpriteName;
-  readonly horizontal: OfficeSpriteName;
-}
-
-const POD_OUTLINE_ART: Readonly<Record<OfficePodStyle, OfficePodOutlineArt>> = {
-  glass: { vertical: "partition", horizontal: "partition-h" },
-  // A planter box reads the same from any side, so one sprite serves the ring.
-  planters: { vertical: "planter", horizontal: "planter" },
-  shelves: { vertical: "shelf", horizontal: "shelf-h" },
-};
-
-/**
- * The tinted floor inside a pod, as a checker. Depth swaps which variant lands
- * on an even tile, so a pod nested inside another never lines up with its
- * parent's floor even where the two share a tint.
- */
-const POD_FLOOR_ART: Readonly<
-  Record<"cool" | "warm", readonly [OfficeSpriteName, OfficeSpriteName]>
-> = {
-  cool: ["floor-pod-a", "floor-pod-b"],
-  warm: ["floor-pod-warm-a", "floor-pod-warm-b"],
-};
-/** Baseline of the cabin name, measured down from the sign sprite's own top. */
-const SIGN_LABEL_BASELINE = 11;
-const SIGN_WIDTH_TILES = 2;
 /**
  * A lit screen is never still: two frames alternate while an agent is in a
  * turn, and far more slowly while it is only working in the background.
+ *
+ * The scene owns the CLOCK and the painter owns the art, so what crosses the
+ * seam is which of the two frames a desk is on.
  */
 const MONITOR_WORKING_FRAME_MS = 260;
 const MONITOR_BACKGROUND_FRAME_MS = 700;
-/** The plate on the desk's right half, and the logo standing on top of it. */
-const NAMEPLATE_Y_OFFSET = 4;
-const LOGO_Y_OFFSET = 1;
 /** Slack around an envelope's box, so a moving 10x8 target stays clickable. */
 const ENVELOPE_HIT_PADDING = 2;
 /**
@@ -347,92 +341,9 @@ const ERRAND_WEIGHTS: Readonly<Record<OfficeErrandTargetKind, number>> = {
   pingpong: 3,
   arcade: 2,
 };
-const IDLE_MONITOR_ALPHA = 0.6;
 const ARCHIVED_ALPHA = 0.45;
-const DESK_WIDTH_TILES = 2;
-/** Desk row plus chair row - what a click on "that person's desk" means. */
-const DESK_HIT_ROWS = 2;
 /** Spread of the per-agent animation phase offset. */
 const PHASE_SPREAD_MS = 1000;
-/**
- * The unanswered-request pile, indexed by how many are waiting (1, 2, 3+).
- * Every height shares one BASE line on the desk, so the pile grows upward as
- * it deepens instead of floating off the furniture.
- */
-interface OfficeEnvelopeStack {
-  readonly sprite: OfficeSpriteName;
-  readonly xOffset: number;
-  readonly yOffset: number;
-}
-
-const ENVELOPE_STACKS: ReadonlyArray<OfficeEnvelopeStack> = [
-  { sprite: "envelope-stack-1", xOffset: 1, yOffset: -2 },
-  { sprite: "envelope-stack-2", xOffset: 1, yOffset: -4 },
-  { sprite: "envelope-stack-3", xOffset: 1, yOffset: -6 },
-];
-
-/**
- * The screen on a desk, by the coarse size class of the agent's model: a
- * laptop, a single monitor, or dual wide displays. `onB` is the second lit
- * frame, and a tier that has none simply does not animate.
- *
- * Offsets sit the screen on the desk's back edge, aligned to where the desk
- * sprite draws its keyboard rather than to the desk's own centre - the screen
- * belongs behind the keys, not behind the middle of the furniture. The crash
- * map is one 16x12 for every tier, so it carries its OWN offset rather than
- * borrowing a wide screen's.
- *
- * The plate moves with the screen for the same reason: a wide display reaches
- * across the desk's right half, so a large tier sets its own plate and badge
- * columns instead of overlapping them.
- */
-interface OfficeScreenArt {
-  readonly on: OfficeSpriteName;
-  readonly onB: OfficeSpriteName | null;
-  readonly off: OfficeSpriteName;
-  readonly xOffset: number;
-  readonly yOffset: number;
-  readonly crashXOffset: number;
-  readonly crashYOffset: number;
-  readonly plateXOffset: number;
-  readonly logoXOffset: number;
-}
-
-const SCREEN_ART: Readonly<Record<OfficeModelTier, OfficeScreenArt>> = {
-  small: {
-    on: "monitor-small-on",
-    onB: null,
-    off: "monitor-small-off",
-    xOffset: 5,
-    yOffset: -5,
-    crashXOffset: 3,
-    crashYOffset: -8,
-    plateXOffset: 18,
-    logoXOffset: 24,
-  },
-  medium: {
-    on: "monitor-on",
-    onB: "monitor-on-b",
-    off: "monitor-off",
-    xOffset: 3,
-    yOffset: -8,
-    crashXOffset: 3,
-    crashYOffset: -8,
-    plateXOffset: 18,
-    logoXOffset: 24,
-  },
-  large: {
-    on: "monitor-wide-on",
-    onB: "monitor-wide-on-b",
-    off: "monitor-wide-off",
-    xOffset: 0,
-    yOffset: -8,
-    crashXOffset: 4,
-    crashYOffset: -8,
-    plateXOffset: 20,
-    logoXOffset: 26,
-  },
-};
 
 interface TransientBubble {
   readonly sprite: OfficeSpriteName;
@@ -477,10 +388,44 @@ type OfficeErrandTargetKind = OfficeErrandKind | "visit";
 
 interface OfficeErrandTarget {
   readonly kind: OfficeErrandTargetKind;
+  /** Where the walker STANDS. The spot's `approachTile`, which it may not own. */
   readonly tile: OfficeTilePos;
   readonly facing: OfficeFacing;
   /** The colleague a `visit` is paid to; `null` for every other kind. */
   readonly partnerId: string | null;
+  /**
+   * The FIXTURE, so two agents at one table are two agents at one table.
+   * `null` for a visit and a stroll, which have no furniture between them.
+   */
+  readonly fixtureId: string | null;
+  /**
+   * What this errand acts ON - the bin a ball is thrown at, the plant that is
+   * watered, the screen that flashes - or `null` for one that acts on nothing.
+   * Carried from the spot rather than looked up a tile above, which is a fact
+   * about one floor plan rather than about errands.
+   */
+  readonly actionTile: OfficeTilePos | null;
+}
+
+/** Every errand target that is not a spot on the plan names no fixture. */
+function derivedTarget(args: {
+  readonly kind: OfficeErrandTargetKind;
+  readonly tile: OfficeTilePos;
+  readonly facing: OfficeFacing;
+  readonly partnerId: string | null;
+}): OfficeErrandTarget {
+  return { ...args, fixtureId: null, actionTile: null };
+}
+
+function targetOfSpot(spot: OfficeErrandSpot): OfficeErrandTarget {
+  return {
+    kind: spot.kind,
+    tile: spot.approachTile,
+    facing: spot.facing,
+    partnerId: null,
+    fixtureId: spot.fixtureId,
+    actionTile: spot.actionTile,
+  };
 }
 
 /**
@@ -577,11 +522,6 @@ interface OfficePaperBall {
   elapsedMs: number;
 }
 
-interface SortedProp {
-  readonly drawable: OfficeDrawable;
-  readonly sortY: number;
-}
-
 function clamp(value: number, low: number, high: number): number {
   return Math.min(high, Math.max(low, value));
 }
@@ -672,16 +612,12 @@ function isSeatedErrandKind(kind: OfficeErrandTargetKind): boolean {
 }
 
 /**
- * What a thrower is aiming at, or `null` for an errand that throws nothing.
- * A dart and a crumpled page fly the same arc at the same cadence; only the
- * target prop and whether a shot can miss differ.
+ * Whether this errand THROWS something. A dart and a crumpled page fly the
+ * same arc at the same cadence; only what they are aimed at - which the spot
+ * itself carries - and whether a shot can miss differ.
  */
-function throwTargetSpriteOf(
-  kind: OfficeErrandTargetKind,
-): OfficeSpriteName | null {
-  if (kind === "bin") return "bin";
-  if (kind === "darts") return "dartboard";
-  return null;
+function targetIsThrowable(kind: OfficeErrandTargetKind): boolean {
+  return kind === "bin" || kind === "darts";
 }
 
 /**
@@ -758,8 +694,16 @@ function fillerDurationMs(kind: OfficeFillerKind): number {
   return FILLER_SPIN_STEP_MS * FILLER_SPIN_FACINGS.length * FILLER_SPIN_TURNS;
 }
 
-/** Which way a character is turned partway through a filler, and how it sits. */
-function fillerPoseOf(filler: OfficeFiller): {
+/**
+ * Which way a character is turned partway through a filler, and how it sits.
+ *
+ * A look ends back at the SCREEN, which is wherever this seat faces - `up` on
+ * the Floor and something else in a view whose desks are turned.
+ */
+function fillerPoseOf(
+  filler: OfficeFiller,
+  seatFacing: OfficeFacing,
+): {
   readonly pose: OfficeCharacterPose;
   readonly facing: OfficeFacing;
 } {
@@ -777,7 +721,7 @@ function fillerPoseOf(filler: OfficeFiller): {
   if (elapsed < FILLER_LOOK_STEP_MS * 2) {
     return { pose: "stand", facing: "right" };
   }
-  return { pose: "stand", facing: "up" };
+  return { pose: "stand", facing: seatFacing };
 }
 
 /**
@@ -804,43 +748,50 @@ function agentNameSignature(agents: ReadonlyArray<OfficeAgentInput>): string {
 }
 
 /**
- * The same floor plan with every cabin sign and pod plate re-lettered from
- * the current agent names. Geometry is untouched, so nothing that was placed
- * moves.
+ * The same floor plan with every cabin sign, pod plate and piece of lettering
+ * re-lettered from the current agent names. Geometry is untouched, so nothing
+ * that was placed moves.
+ *
+ * The SIGNS are refreshed as well as the rooms and pods they were copied from.
+ * They are what the renderer actually draws, so re-lettering only the source
+ * would rename the room in the hover card and leave the wall saying the old
+ * name - which is the shape of bug a copied string always eventually has.
+ *
+ * SIGNS ARE THE SOURCE for a room's name, not `rootAgentId`. A room id is a
+ * key that `seat.roomId` resolves to and nothing more: a view that splits a
+ * large team across several rooms makes it up, so resolving it as an agent
+ * would silently name the wrong person - or nobody - on exactly the layouts
+ * where rooms outnumber leads. A pod's `leadAgentId` IS an agent, and stays
+ * one.
  */
 function withRefreshedNames(
   layout: OfficeLayout,
   agentById: ReadonlyMap<string, OfficeAgentInput>,
 ): OfficeLayout {
+  const signs = layout.signs.map((sign) => {
+    const owner = sign.ownerAgentId;
+    if (owner === null) return sign;
+    const name = agentById.get(owner)?.name;
+    if (name === undefined || name === sign.text) return sign;
+    return { ...sign, text: name };
+  });
+  const roomNames = new Map<string, string>();
+  for (const sign of signs) {
+    if (sign.kind !== "room") continue;
+    roomNames.set(tileKeyOf(sign.tile), sign.text);
+  }
   return {
     ...layout,
     rooms: layout.rooms.map((room) => ({
       ...room,
-      name: agentById.get(room.rootAgentId)?.name ?? room.name,
+      name: roomNames.get(tileKeyOf(room.signTile)) ?? room.name,
       pods: room.pods.map((pod) => ({
         ...pod,
         name: agentById.get(pod.leadAgentId)?.name ?? pod.name,
       })),
     })),
+    signs,
   };
-}
-
-/**
- * Where a prop's sprite is drawn, given that props are TOP-LEFT anchored.
- *
- * A prop taller than its tile would otherwise spill DOWN over whatever sits
- * on the row below - a plant over its own chair, a rug over the doorway.
- * Lifting by the overhang puts the sprite's FOOT on its tile, which is where
- * a standing object actually stands; a one-tile prop is unaffected.
- */
-function spriteFootY(sprite: OfficeSpriteRef, tileRow: number): number {
-  return (
-    tileRow * OFFICE_TILE - (officeSpriteSize(sprite).height - OFFICE_TILE)
-  );
-}
-
-function propDrawY(prop: OfficeProp): number {
-  return spriteFootY(prop.sprite, prop.tile.row);
 }
 
 function facingFor(dCol: number, dRow: number): OfficeFacing | null {
@@ -951,20 +902,204 @@ function blankCharacter(agentId: string): OfficeCharacter {
   };
 }
 
-function seatedCharacter(agentId: string, desk: OfficeDesk): OfficeCharacter {
+function seatedCharacter(agentId: string, seat: OfficeSeat): OfficeCharacter {
   return {
     ...blankCharacter(agentId),
-    col: desk.chairTile.col,
-    row: desk.chairTile.row,
-    // Seated means facing the screen, which is up the floor and away from us.
-    facing: "up",
+    col: seat.chairTile.col,
+    row: seat.chairTile.row,
+    // Seated means facing the screen, which the SEAT knows about and the scene
+    // does not: `up` on the Floor, and something else wherever a view turns a
+    // desk round.
+    facing: seat.facing,
     seated: true,
   };
 }
 
+/** An agent and the seat it is actually in - the claim, or the assignment. */
+interface SeatedAgent {
+  readonly agentId: string;
+  readonly seat: OfficeSeat;
+}
+
+/** Everything that stands still, bucketed by chunk. Rebuilt per layout. */
+interface FrameChunkIndex {
+  readonly seats: ReadonlyMap<string, ReadonlyArray<OfficeSeat>>;
+  readonly spots: ReadonlyMap<string, ReadonlyArray<OfficeErrandSpot>>;
+}
+
+interface CachedSeatProps {
+  readonly key: string;
+  readonly drawables: ReadonlyArray<OfficeWorldDrawable>;
+}
+
+/** One painted floor and the three things that decide what it contains. */
+interface CachedFloor {
+  readonly key: string;
+  readonly drawables: ReadonlyArray<OfficeDrawable>;
+}
+
+/** What a floor was asked for: the plan, the band, and the rectangle of it. */
+function floorKeyOf(
+  layoutVersion: number,
+  lod: OfficeLod,
+  tiles: OfficeTileRect,
+): string {
+  return `${layoutVersion}|${lod}|${tiles.col},${tiles.row},${tiles.cols},${tiles.rows}`;
+}
+
+function compareIdPair(left: string, right: string): number {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
+/**
+ * Everything about a desk that changes what it LOOKS like, as one string.
+ *
+ * The cache this keys exists because a floor of idle agents produces the
+ * identical desk drawables on every frame, and rebuilding them is most of what
+ * a still office used to spend its frame budget on.
+ */
+function deskStateKey(state: OfficeDeskState): string {
+  return [
+    state.agentId ?? "",
+    state.name ?? "",
+    state.status,
+    state.sheeted ? "1" : "0",
+    state.openRequests,
+    state.screenFrame,
+    state.harnessId ?? "",
+    state.modelTier,
+    state.accentId ?? "",
+  ].join("|");
+}
+
+/**
+ * One depth-ordered stream out of the two halves a world painter emits.
+ *
+ * Stable within a depth, and the PROPS come first at equal depth: a desk front
+ * carries its occupant's own depth plus a hair, so a painter that wants to
+ * cover a lap says so with the depth rather than relying on which array it
+ * came from.
+ */
+function mergeByDepth(
+  props: ReadonlyArray<OfficeWorldDrawable>,
+  actors: ReadonlyArray<OfficeWorldDrawable>,
+): ReadonlyArray<OfficeWorldDrawable> {
+  const merged = [...props, ...actors];
+  merged.sort((left, right) => left.depth - right.depth);
+  return merged;
+}
+
+/** The tile one step AGAINST a facing: where somebody looking that way stands. */
+function stepAgainst(tile: OfficeTilePos, facing: OfficeFacing): OfficeTilePos {
+  if (facing === "up") return { col: tile.col, row: tile.row + 1 };
+  if (facing === "down") return { col: tile.col, row: tile.row - 1 };
+  if (facing === "left") return { col: tile.col + 1, row: tile.row };
+  return { col: tile.col - 1, row: tile.row };
+}
+
+function characterAlpha(
+  archived: boolean,
+  inCubby: boolean,
+): number | undefined {
+  if (archived) return ARCHIVED_ALPHA;
+  return inCubby ? CUBBY_OCCUPANT_ALPHA : undefined;
+}
+
+const NO_AWAY_IDS: ReadonlySet<string> = new Set<string>();
+
+/** What a scene with no layout answers with: a frame of nothing, at no size. */
+function emptyFrame(): OfficeFrame {
+  return {
+    size: { width: 0, height: 0 },
+    staticVersion: 0,
+    floor: [],
+    props: [],
+    actors: [],
+    world: null,
+    overlay: [],
+    hitRegions: [],
+    envelopeHitRegions: [],
+    awayAgentIds: NO_AWAY_IDS,
+    focus: null,
+  };
+}
+
+/** The mark an overview pip wears, so state is never colour alone. */
+function pipGlyphOf(status: OfficeAgentStatus): OfficePipGlyph {
+  if (status === "attention" || status === "failure") return "bang";
+  if (status === "awaiting") return "ring";
+  if (status === "archived") return "hollow";
+  return "none";
+}
+
+/** Which index chunk a tile falls in; the key both halves of the index use. */
+function chunkKeyOf(col: number, row: number): string {
+  return `${Math.floor(col / FRAME_CHUNK_TILES)},${Math.floor(row / FRAME_CHUNK_TILES)}`;
+}
+
+function rectsOverlap(a: OfficeRect, b: OfficeRect): boolean {
+  return (
+    a.x < b.x + b.width &&
+    b.x < a.x + a.width &&
+    a.y < b.y + b.height &&
+    b.y < a.y + a.height
+  );
+}
+
+/** The rect grown by the cull margin on every side. */
+function grownBy(rect: OfficeRect, margin: number): OfficeRect {
+  return {
+    x: rect.x - margin,
+    y: rect.y - margin,
+    width: rect.width + margin * 2,
+    height: rect.height + margin * 2,
+  };
+}
+
+/** The whole tiles a world-pixel rect touches, clamped to nothing. */
+function tileRectOf(rect: OfficeRect): OfficeTileRect {
+  const col = Math.floor(rect.x / OFFICE_TILE);
+  const row = Math.floor(rect.y / OFFICE_TILE);
+  return {
+    col,
+    row,
+    cols: Math.ceil((rect.x + rect.width) / OFFICE_TILE) - col,
+    rows: Math.ceil((rect.y + rect.height) / OFFICE_TILE) - row,
+  };
+}
+
 export class OfficeScene {
-  private readonly layoutOf: OfficeLayoutFn;
-  private currentLayout: OfficeLayout;
+  private readonly view: OfficeView;
+  /**
+   * The plan in force, or `null` until the first sync makes one.
+   *
+   * Deliberately not a plan of `[]` at construction. An empty plan is a real
+   * packing pass over a world nobody asked for - and for a view whose shape
+   * reads the viewport, it is a packing pass against a viewport that does not
+   * exist yet. The canvas does not build a scene until its inputs are ready,
+   * so the gap between here and the first sync is where nothing happens.
+   */
+  private layoutOrNull: OfficeLayout | null = null;
+  private projectorOrNull: OfficeProjector | null = null;
+  /**
+   * WHO SITS WHERE. The scene owns it and every routine that needs a seat asks
+   * it rather than reading `layout.desks`, which is only ever the plan's
+   * opening offer.
+   */
+  private readonly seats = new OfficeSeatBook();
+  private partition: OfficePopulation | null = null;
+  private activityById: ReadonlyMap<string, number> = new Map<string, number>();
+  private viewport: OfficeSize = { width: 0, height: 0 };
+  /**
+   * How far the world moved on the last plan, until somebody takes it.
+   *
+   * The scene translates its own state by the shift; the CAMERA is the
+   * renderer's, so the delta is left here to be collected once and applied
+   * there. Consumed rather than reported on the frame, because a frame is
+   * built many times per shift and would otherwise pan the camera on each.
+   */
+  private pendingShift: OfficePoint | null = null;
   private readonly characters = new Map<string, OfficeCharacter>();
   private envelopes: OfficeEnvelope[] = [];
   private paperBalls: OfficePaperBall[] = [];
@@ -1024,17 +1159,106 @@ export class OfficeScene {
    * passes that need it share one sort.
    */
   private orderedCache: ReadonlyArray<OfficeCharacter> | null = null;
-  private cachedFloor: ReadonlyArray<OfficeDrawable> | null = null;
-  private cachedFloorVersion = -1;
+  /**
+   * Seats and spots by index chunk, rebuilt once per layout.
+   *
+   * `frame` is bounded by the viewport rather than by the population, and this
+   * is what makes that true: without it, finding the forty desks on screen in
+   * a thousand-agent office is a walk over a thousand desks, thirty times a
+   * second.
+   */
+  private chunkIndex: FrameChunkIndex | null = null;
+  private chunkIndexVersion = -1;
+  /** Seat props by seat, keyed by the desk state that produced them. */
+  private readonly seatPropCache = new Map<string, CachedSeatProps>();
+  private seatPropVersion = -1;
+  /**
+   * The last floor the painter was asked for, and what it was asked for.
+   *
+   * The floor is a pure function of the layout, the band and the rectangle, and
+   * on a still office all three hold from frame to frame - so a floor of
+   * thousands of tile drawables is built once and handed back by identity,
+   * which is also what lets the renderer's own bitmap cache skip a repaint.
+   */
+  private floorCache: CachedFloor | null = null;
 
-  /** `layoutOffice` in production; injected so tests can pin a floor plan. */
-  constructor(layoutOf: OfficeLayoutFn) {
-    this.layoutOf = layoutOf;
-    this.currentLayout = layoutOf([]);
+  /**
+   * A view and, optionally, the layout to answer with until the first sync.
+   *
+   * The view is a VALUE - three pure functions and two strings - so a scene is
+   * bound to one for life and a view change is a new scene through the
+   * renderer's own unmount path. There is no view id anywhere below this line.
+   */
+  constructor(view: OfficeView, initialLayout: OfficeLayout | null) {
+    this.view = view;
+    if (initialLayout === null) return;
+    this.installLayout(initialLayout);
   }
 
-  layout(): OfficeLayout {
-    return this.currentLayout;
+  /** The plan in force, or `null` before the first sync has made one. */
+  layout(): OfficeLayout | null {
+    return this.layoutOrNull;
+  }
+
+  /**
+   * How big the world is, in canvas pixels - the projector's bounds, which is
+   * `frame().size` without building a frame.
+   *
+   * Answered separately because the CAMERA has to settle before the frame is
+   * built: a frame is culled to what the camera can see, so fitting the camera
+   * to a size read off that frame would fit it to the previous framing. Zero
+   * before the first plan.
+   */
+  worldSize(): OfficeSize {
+    const projector = this.projectorOrNull;
+    if (projector === null) return { width: 0, height: 0 };
+    return { width: projector.bounds.width, height: projector.bounds.height };
+  }
+
+  /**
+   * How far the world moved since the caller last asked, in world pixels, or
+   * `null` where it has not. Taken once: the renderer pans the camera back by
+   * it so a building that grew a storey does not jump on screen.
+   */
+  takeShift(): OfficePoint | null {
+    const shift = this.pendingShift;
+    this.pendingShift = null;
+    return shift;
+  }
+
+  /**
+   * Stops holding anything DERIVED. The logical state - who is where, what is
+   * in flight - stays, because that is what makes the return a single sync
+   * rather than a re-materialized floor.
+   *
+   * The scene keeps no suspended FLAG. Whether an office is off screen is the
+   * renderer's question - it owns the four signals that decide it - and a
+   * second copy here could only ever disagree with the one that matters. What
+   * `suspend` changes is what the scene is holding, nothing more.
+   */
+  suspend(): void {
+    this.orderedCache = null;
+    this.byAgentIdCache = null;
+    this.byAgentIdVersion = -1;
+    this.chunkIndex = null;
+    this.chunkIndexVersion = -1;
+    this.seatPropCache.clear();
+    this.seatPropVersion = -1;
+    this.floorCache = null;
+  }
+
+  /**
+   * Back on screen: ONE sync, with whatever rows went by while it was away
+   * suppressed. Replaying them would fly a burst of envelopes across a floor
+   * nobody was watching; the input carries the state those rows led to, which
+   * is the thing actually worth showing.
+   */
+  resume(input: OfficeSceneInput): void {
+    // Adopted BEFORE the sync, so the pulse-key check inside it sees the row
+    // as already seen and `applyPulse` never fires for it.
+    this.lastPulseKey = input.pulseKey;
+    this.sync(input);
+    this.dropTransientMotion();
   }
 
   sync(input: OfficeSceneInput): void {
@@ -1054,6 +1278,9 @@ export class OfficeScene {
     this.cursorMs = input.cursorMs;
     this.clockMs = input.clockMs;
     this.pulse = input.pulse;
+    this.partition = input.partition;
+    this.activityById = input.activityById;
+    this.viewport = input.viewport;
     this.agentById = new Map(input.agents.map((agent) => [agent.id, agent]));
     if (!firstSync) {
       // The flag governs what STARTS; what is already in flight has to be
@@ -1065,9 +1292,16 @@ export class OfficeScene {
     }
 
     this.adoptLayout(input.agents);
+    if (rewound) {
+      // A scrub back cannot replay the walks that led to today's claims, so it
+      // does not try: they are re-derived from the statuses as of the cursor,
+      // the same treatment the rest of the in-flight state gets.
+      this.seats.recomputeClaims(input.statusById, this.seats.knownAgentIds());
+    }
     this.applyArchivalTransitions(input, firstSync);
     this.reconcileCharacters(input, firstSync);
     this.returningIds.clear();
+    this.updateSeatClaims();
     // An errand ends on the sync that ends it, not on the tick after: playback
     // starting or an agent picking work back up are both seen here first.
     for (const character of this.characters.values()) {
@@ -1102,51 +1336,126 @@ export class OfficeScene {
     this.orderedCache = null;
   }
 
-  frame(): OfficeFrame {
-    const overlay = this.buildOverlay();
+  /**
+   * One frame, for one level of detail and one rectangle of world.
+   *
+   * Both arguments are load-bearing. The RECT is what makes the cost of a
+   * frame a fact about the viewport rather than about the population: nothing
+   * outside it plus the cull margin is built, hit-tested or reported away. The
+   * LOD is what the floor is asked for - a block map at overview, tiles
+   * otherwise - and at overview it is also all there is of a character: one
+   * pip carrying a state glyph, because sixteen pixels of pixel art at 0.3x is
+   * a smudge and thirty thousand of them is a smudge that costs a bitmap.
+   */
+  frame(lod: OfficeLod, view: OfficeRect): OfficeFrame {
+    const layout = this.layoutOrNull;
+    const projector = this.projectorOrNull;
+    if (layout === null || projector === null) return emptyFrame();
+    const rect = grownBy(view, OFFICE_CULL_MARGIN_PX);
+    const floor = this.floorIn(layout, tileRectOf(rect), lod);
+    const overlay = lod === 0 ? this.buildEnvelopes() : this.buildOverlay(rect);
+    const characters = this.charactersIn(rect);
+    const seats = this.seatsIn(rect);
+    const size: OfficeSize = {
+      width: projector.bounds.width,
+      height: projector.bounds.height,
+    };
+    if (lod === 0) {
+      return {
+        size,
+        staticVersion: this.layoutVersion,
+        floor,
+        props: [],
+        actors: this.buildPips(characters),
+        world: null,
+        overlay,
+        hitRegions: this.buildHitRegions(characters, seats),
+        envelopeHitRegions: envelopeHitRegionsOf(overlay),
+        awayAgentIds: this.awayAgentIdsAmong(characters),
+        focus: this.focusPoint(),
+      };
+    }
+    const props = this.buildSeatProps({ layout, seats, rect, lod });
+    const actors = this.buildActors(characters, lod);
+    const layered = this.view.painter.depth === "layered";
     return {
-      size: {
-        width: this.currentLayout.cols * OFFICE_TILE,
-        height: this.currentLayout.rows * OFFICE_TILE,
-      },
+      size,
       staticVersion: this.layoutVersion,
-      floor: this.floorDrawables(),
-      props: this.buildProps(),
-      actors: this.buildActors(),
+      floor,
+      props: layered ? props.map((entry) => entry.drawable) : [],
+      actors: layered ? actors.map((entry) => entry.drawable) : [],
+      world: layered ? null : mergeByDepth(props, actors),
       overlay,
-      hitRegions: this.buildHitRegions(),
+      hitRegions: this.buildHitRegions(characters, seats),
       envelopeHitRegions: envelopeHitRegionsOf(overlay),
+      awayAgentIds: this.awayAgentIdsAmong(characters),
       focus: this.focusPoint(),
     };
   }
 
+  /**
+   * Where to point the camera for this agent: its seat's box, or its own where
+   * it is away from that seat.
+   *
+   * Answered from the seat book and the projector rather than from the last
+   * frame, so it works for an agent nowhere near the view rect - which is the
+   * only kind the directory and Find ever ask about.
+   */
+  locate(agentId: string): OfficeRect | null {
+    const projector = this.projectorOrNull;
+    if (projector === null) return null;
+    const character = this.characters.get(agentId);
+    // An agent AWAY from its chair is answered from its own box, which is the
+    // same foot-point derivation the frame drew it with - and a walker is
+    // between two tiles for most of a journey, so a tile rounded from its
+    // position would point the camera up to a tile away from the person.
+    if (character !== undefined && !character.seated) {
+      return this.characterBox(character);
+    }
+    return this.seats.locate(agentId, projector, null);
+  }
+
+  /**
+   * The hover card's "where" line: the place this agent is, in the words the
+   * floor plan uses for it.
+   *
+   * Derived from the effective seat and the character's own motion, never from
+   * a label the plan carried - a plan-only label is a string that stops being
+   * true the moment somebody walks.
+   */
+  whereabouts(agentId: string): string | null {
+    const layout = this.layoutOrNull;
+    if (layout === null) return null;
+    const character = this.characters.get(agentId);
+    if (character !== undefined && !character.seated) {
+      return this.awayWhereabouts(layout, character);
+    }
+    const seat = this.seats.effectiveSeat(agentId);
+    if (seat === null) return null;
+    if (seat.kind === "cubby") return "Quiet stack";
+    const room = this.roomOfSeat(seat);
+    if (room !== null) return room.name;
+    return this.placeNameAt(layout, seat.chairTile, seat.floorIndex);
+  }
+
   /** Characters win over desks: a person is the more specific target. */
   hitTest(point: OfficePoint): string | null {
-    const ordered = this.orderedCharacters();
-    for (let index = ordered.length - 1; index >= 0; index -= 1) {
-      const character = ordered[index];
-      const x = character.col * OFFICE_TILE;
-      const y = character.row * OFFICE_TILE + CHARACTER_Y_OFFSET;
-      if (
-        point.x >= x &&
-        point.x < x + OFFICE_CHARACTER_WIDTH &&
-        point.y >= y &&
-        point.y < y + OFFICE_CHARACTER_HEIGHT
-      ) {
-        return character.agentId;
-      }
-    }
-    for (const desk of this.visibleDesks()) {
-      const x = desk.deskTile.col * OFFICE_TILE;
-      const y = desk.deskTile.row * OFFICE_TILE;
-      if (
-        point.x >= x &&
-        point.x < x + DESK_WIDTH_TILES * OFFICE_TILE &&
-        point.y >= y &&
-        point.y < y + DESK_HIT_ROWS * OFFICE_TILE
-      ) {
-        return desk.agentId;
-      }
+    const layout = this.layoutOrNull;
+    if (layout === null) return null;
+    // The point plus a tile of slack: the regions are culled, so asking for a
+    // rect that could not contain the point would answer nothing.
+    const rect: OfficeRect = {
+      x: point.x - OFFICE_TILE,
+      y: point.y - OFFICE_TILE,
+      width: OFFICE_TILE * 2,
+      height: OFFICE_TILE * 2,
+    };
+    const regions = this.buildHitRegions(
+      this.charactersIn(rect),
+      this.seatsIn(rect),
+    );
+    for (const region of regions) {
+      if (containsPoint(region.rect, point)) return region.agentId;
     }
     return null;
   }
@@ -1157,12 +1466,78 @@ export class OfficeScene {
    * the canvas asks this BEFORE `hitTest`.
    */
   hitTestEnvelope(point: OfficePoint): string | null {
-    const regions = envelopeHitRegionsOf(this.buildOverlay());
+    if (this.layoutOrNull === null) return null;
+    const regions = envelopeHitRegionsOf(this.buildEnvelopes());
     for (let index = regions.length - 1; index >= 0; index -= 1) {
       const region = regions[index];
       if (containsPoint(region.rect, point)) return region.edgeId;
     }
     return null;
+  }
+
+  /**
+   * The plan in force.
+   *
+   * Every private routine below reads this rather than carrying a layout
+   * argument through thirty call sites. It is valid from the first sync
+   * onward, which every public entry point above has already checked - so the
+   * throw is a statement about this class's own invariant rather than a case
+   * anything downstream has to handle.
+   */
+  private get currentLayout(): OfficeLayout {
+    const layout = this.layoutOrNull;
+    if (layout === null) {
+      throw new Error("OfficeScene: no layout before the first sync");
+    }
+    return layout;
+  }
+
+  private get projector(): OfficeProjector {
+    const projector = this.projectorOrNull;
+    if (projector === null) {
+      throw new Error("OfficeScene: no projector before the first sync");
+    }
+    return projector;
+  }
+
+  /** A tile, projected. EVERY point the scene emits goes through here. */
+  private point(col: number, row: number): OfficePoint {
+    return this.projector.project(col, row);
+  }
+
+  /**
+   * WHERE A PERSON'S FEET ARE: the projected bottom centre of the tile they
+   * stand on, fractional col and row included, because a walker is between two
+   * tiles for most of its journey.
+   *
+   * Every character-relative point in the scene is derived from this one -
+   * sprite corner, hit box, name tag, bubble, envelope endpoint, world depth -
+   * rather than from the tile's top-left plus a hand-tuned offset. The offset
+   * was a fact about the identity projector: on an oblique or isometric one a
+   * tile's top-left is not above its own floor, and a sprite hung from it
+   * stands beside the person it belongs to. The foot point is the same pixel
+   * in every projection, which is why it is the one the others hang off.
+   */
+  private footPoint(col: number, row: number): OfficePoint {
+    return this.projector.project(col + 0.5, row + 1);
+  }
+
+  /** The sprite corner for a 16x20 character standing at `foot`. */
+  private spriteCornerOf(foot: OfficePoint): OfficePoint {
+    return {
+      x: foot.x - OFFICE_CHARACTER_WIDTH / 2,
+      y: foot.y - OFFICE_CHARACTER_HEIGHT,
+    };
+  }
+
+  /** Takes up a layout and the projector that goes with it, as one step. */
+  private installLayout(layout: OfficeLayout): void {
+    this.layoutOrNull = layout;
+    this.projectorOrNull = this.view.painter.projector(layout);
+    this.layoutVersion += 1;
+    this.chunkIndex = null;
+    this.chunkIndexVersion = -1;
+    this.seatPropCache.clear();
   }
 
   // ---- Population ---------------------------------------------------- //
@@ -1260,8 +1635,8 @@ export class OfficeScene {
       if (!input.visibleAgentIds.has(agent.id)) continue;
       if (this.characters.has(agent.id)) continue;
       if (this.departedIds.has(agent.id)) continue;
-      const desk = this.currentLayout.desks.get(agent.id);
-      if (desk === undefined) continue;
+      const seat = this.seats.effectiveSeat(agent.id);
+      if (seat === null) continue;
       // Walking in is what a REVEAL looks like: playback advancing, the cursor
       // resting on the very row that created this agent, or a scrub back past
       // its archival. A hand-scrubbed jump and a live arrival while paused are
@@ -1273,11 +1648,11 @@ export class OfficeScene {
         isCreatedPulseFor(input.pulse, agent.id);
       const announced = !firstSync && !input.reducedMotion && revealed;
       if (announced && !fastPlayback) {
-        this.characters.set(agent.id, this.spawnAtDoor(agent.id, desk));
+        this.characters.set(agent.id, this.spawnAtDoor(agent.id, seat));
         this.membershipVersion += 1;
         continue;
       }
-      const character = seatedCharacter(agent.id, desk);
+      const character = seatedCharacter(agent.id, seat);
       if (announced) character.sparkleMs = SPARKLE_MS;
       this.characters.set(agent.id, character);
       this.membershipVersion += 1;
@@ -1293,11 +1668,11 @@ export class OfficeScene {
     );
   }
 
-  private spawnAtDoor(agentId: string, desk: OfficeDesk): OfficeCharacter {
+  private spawnAtDoor(agentId: string, seat: OfficeSeat): OfficeCharacter {
     const door = this.floorOfAgent(agentId).doorTile;
-    const path = findOfficePath(this.currentLayout, door, desk.chairTile);
+    const path = findOfficePath(this.currentLayout, door, seat.chairTile);
     if (path === null || path.length === 0) {
-      return seatedCharacter(agentId, desk);
+      return seatedCharacter(agentId, seat);
     }
     return {
       ...blankCharacter(agentId),
@@ -1318,16 +1693,18 @@ export class OfficeScene {
    * A departure and a reception queue are left alone: those are not headed for
    * a chair at all, and their own updaters re-target them on this same sync.
    */
-  private rehomeCharacters(): void {
-    for (const character of this.characters.values()) {
+  private rehomeCharacters(moved: ReadonlyArray<string>): void {
+    for (const agentId of moved) {
+      const character = this.characters.get(agentId);
+      if (character === undefined) continue;
       if (character.errand === "leaving") continue;
       if (this.inReceptionQueue(character)) continue;
-      const desk = this.currentLayout.desks.get(character.agentId);
-      if (desk === undefined) continue;
+      const seat = this.seats.effectiveSeat(agentId);
+      if (seat === null) continue;
       const destination = this.destinationOf(character);
       if (
-        destination.col === desk.chairTile.col &&
-        destination.row === desk.chairTile.row
+        destination.col === seat.chairTile.col &&
+        destination.row === seat.chairTile.row
       ) {
         continue;
       }
@@ -1371,8 +1748,8 @@ export class OfficeScene {
 
   /** Back to its own chair, from an errand, a queue or a moved desk. */
   private returnToDesk(character: OfficeCharacter): void {
-    const desk = this.currentLayout.desks.get(character.agentId);
-    if (desk === undefined) {
+    const seat = this.seats.effectiveSeat(character.agentId);
+    if (seat === null) {
       character.errand = "none";
       character.waitMs = 0;
       character.queueTile = null;
@@ -1383,7 +1760,7 @@ export class OfficeScene {
     character.queueTile = null;
     character.waitMs = 0;
     character.filler = null;
-    if (this.walkTo(character, desk.chairTile)) {
+    if (this.walkTo(character, seat.chairTile)) {
       character.errand = fromErrand ? "errand-return" : "returning";
       return;
     }
@@ -1397,7 +1774,10 @@ export class OfficeScene {
    * while it was away finally acknowledged.
    */
   private settleInChair(character: OfficeCharacter): void {
-    character.facing = "up";
+    const seat = this.seats.effectiveSeat(character.agentId);
+    // The SEAT says which way its occupant looks; `up` was only ever the
+    // Floor's answer to that question.
+    character.facing = seat === null ? "up" : seat.facing;
     character.seated = true;
     character.path = [];
     character.pathIndex = 0;
@@ -1518,8 +1898,9 @@ export class OfficeScene {
     const standing = (): void => {
       character.col = slot.col;
       character.row = slot.row;
-      // Facing the counter, which is the way a person waiting actually stands.
-      character.facing = "down";
+      // Facing the counter, which is the way a person waiting actually stands
+      // - and which way that is, is the STOREY's fact rather than the scene's.
+      character.facing = this.queueFacingOf(character.agentId);
       character.seated = false;
       character.path = [];
       character.pathIndex = 0;
@@ -1669,6 +2050,21 @@ export class OfficeScene {
    * true for a seated one that still has a message in the air or on the desk,
    * which is what keeps it from wandering off in the middle of a delivery.
    */
+  /**
+   * Parked in the QUIET STACK: seated in a cubby rather than at a desk.
+   *
+   * A cubby is a waiting slot, not a workstation. Its occupant is cold by
+   * definition, so it does not fidget at a desk it does not have and does not
+   * wander off for coffee - it is waiting to be woken, and waking it is what
+   * takes it to a real chair. One that is WALKING has already left the slot
+   * and is an ordinary character again.
+   */
+  private seatedInCubby(agentId: string): boolean {
+    const character = this.characters.get(agentId);
+    if (character === undefined || !character.seated) return false;
+    return this.seats.effectiveSeat(agentId)?.kind === "cubby";
+  }
+
   private isHurrying(agentId: string): boolean {
     const character = this.characters.get(agentId);
     if (character !== undefined && character.hurrying) return true;
@@ -1723,23 +2119,114 @@ export class OfficeScene {
    */
   private adoptLayout(agents: ReadonlyArray<OfficeAgentInput>): void {
     const signature = agentSetSignature(agents);
-    const layoutChanged = signature !== this.agentSignature;
     const names = agentNameSignature(agents);
-    if (layoutChanged) {
-      this.agentSignature = signature;
-      this.currentLayout = this.layoutOf(agents);
-      this.layoutVersion += 1;
-      // Before reconciling, so a newly spawned walker is not immediately
-      // re-pathed to the destination it was just given.
-      this.rehomeCharacters();
-    } else if (names !== this.nameSignature) {
-      this.currentLayout = withRefreshedNames(
-        this.currentLayout,
-        this.agentById,
-      );
-      this.layoutVersion += 1;
+    // TWO triggers and no others. The agent SET, as it always has been; and a
+    // non-empty shortfall, because an agent the book could not seat is a
+    // question only the next plan can answer. Never a status flip, a viewport
+    // change or an activity change: each of those moves lights, not desks.
+    const shortfall = this.seats.needsCapacity();
+    const replan =
+      signature !== this.agentSignature ||
+      this.layoutOrNull === null ||
+      shortfall.length > 0;
+    this.agentSignature = signature;
+    if (!replan) {
+      if (names !== this.nameSignature) {
+        const relettered = withRefreshedNames(
+          this.currentLayout,
+          this.agentById,
+        );
+        this.installLayout(relettered);
+        // The book holds the layout it last adopted, and a re-lettering is a
+        // new object with the same seats - so it takes this one up too rather
+        // than answering out of a plan that no longer exists.
+        this.seats.adopt(
+          relettered,
+          agents.map((agent) => agent.id),
+        );
+      }
+      this.nameSignature = names;
+      return;
     }
     this.nameSignature = names;
+    const previous = this.layoutOrNull;
+    const planned = this.view.plan({
+      agents,
+      partition: this.requirePartition(),
+      occupancy: this.seats.occupancy(),
+      needsCapacity: shortfall,
+      activityById: this.activityById,
+      viewport: this.viewport,
+      previous,
+    });
+    this.installLayout(planned);
+    this.applyShift(planned.shiftFromPrevious);
+    const moved = this.seats.adopt(
+      planned,
+      agents.map((agent) => agent.id),
+    );
+    // Before reconciling, so a newly spawned walker is not immediately
+    // re-pathed to the destination it was just given. On a STABLE layout the
+    // moved set is empty by construction and this walks nobody.
+    this.rehomeCharacters(moved);
+  }
+
+  /**
+   * The whole world moved. Everything the scene holds that names a tile or a
+   * point moves with it, so a building that grew a storey does not leave its
+   * people standing where the storey used to be.
+   *
+   * The camera is the renderer's and is left for it to collect, which is what
+   * keeps the office from appearing to jump while nothing in it moved.
+   */
+  private applyShift(shift: OfficeTilePos | null): void {
+    if (shift === null) return;
+    if (shift.col === 0 && shift.row === 0) return;
+    const slide = (tile: OfficeTilePos): OfficeTilePos => ({
+      col: tile.col + shift.col,
+      row: tile.row + shift.row,
+    });
+    for (const character of this.characters.values()) {
+      character.col += shift.col;
+      character.row += shift.row;
+      character.path = character.path.map(slide);
+      if (character.queueTile !== null) {
+        character.queueTile = slide(character.queueTile);
+      }
+      const target = character.errandTarget;
+      if (target !== null) {
+        character.errandTarget = {
+          ...target,
+          tile: slide(target.tile),
+          actionTile:
+            target.actionTile === null ? null : slide(target.actionTile),
+        };
+        // The key names a TILE, and the tile moved; a stale key would forbid
+        // an errand to a spot this agent has never been to.
+        character.lastErrandKey = tileKeyOf(character.errandTarget.tile);
+      }
+    }
+    const origin = this.point(0, 0);
+    const moved = this.point(shift.col, shift.row);
+    const delta: OfficePoint = { x: moved.x - origin.x, y: moved.y - origin.y };
+    this.paperBalls = this.paperBalls.map((ball) => ({
+      ...ball,
+      from: { x: ball.from.x + delta.x, y: ball.from.y + delta.y },
+      to: { x: ball.to.x + delta.x, y: ball.to.y + delta.y },
+    }));
+    const pending = this.pendingShift;
+    this.pendingShift =
+      pending === null
+        ? delta
+        : { x: pending.x + delta.x, y: pending.y + delta.y };
+  }
+
+  private requirePartition(): OfficePopulation {
+    const partition = this.partition;
+    if (partition === null) {
+      throw new Error("OfficeScene: no partition before the first sync");
+    }
+    return partition;
   }
 
   /**
@@ -1844,20 +2331,23 @@ export class OfficeScene {
 
   /**
    * The agent on the OTHER side of this one's table, if somebody has taken it.
-   * A game's two spots are laid on the same ROW a couple of tiles apart, so the
-   * table they belong to is the one they share a row with - and the kind has to
-   * match, because a floor with a foosball table has a ping-pong one beside it.
+   *
+   * The two are at one table when they stand at spots that name the same
+   * FIXTURE. That used to be read off the geometry - same kind, same row -
+   * which is true of this floor plan and of no other: an oblique storey puts
+   * two tables of one kind on one row, and an isometric one puts the two ends
+   * of a table on different rows entirely.
    */
   private rallyPartnerOf(character: OfficeCharacter): OfficeCharacter | null {
     const target = character.errandTarget;
     if (target === null || !isTwoPlayerKind(target.kind)) return null;
+    if (target.fixtureId === null) return null;
     if (character.errand !== "errand-wait") return null;
     for (const other of this.orderedByAgentId()) {
       if (other.agentId === character.agentId) continue;
       if (other.errand !== "errand-wait") continue;
       const theirs = other.errandTarget;
-      if (theirs === null || theirs.kind !== target.kind) continue;
-      if (theirs.tile.row !== target.tile.row) continue;
+      if (theirs === null || theirs.fixtureId !== target.fixtureId) continue;
       return other;
     }
     return null;
@@ -1926,7 +2416,7 @@ export class OfficeScene {
   private advanceThrows(character: OfficeCharacter, dtMs: number): void {
     if (character.throwsLeft <= 0) return;
     const target = character.errandTarget;
-    if (target === null || throwTargetSpriteOf(target.kind) === null) return;
+    if (target === null || !targetIsThrowable(target.kind)) return;
     character.nextThrowMs -= dtMs;
     if (character.nextThrowMs > 0) return;
     character.nextThrowMs += BIN_THROW_GAP_MS;
@@ -1949,16 +2439,15 @@ export class OfficeScene {
     character: OfficeCharacter,
     target: OfficeErrandTarget,
   ): void {
-    const sprite = throwTargetSpriteOf(target.kind);
-    if (sprite === null) return;
-    const targetTile = this.propTileAbove(target.tile, sprite);
+    if (!targetIsThrowable(target.kind)) return;
+    const targetTile = target.actionTile;
     if (targetTile === null) return;
     const seed = mixSeed(
       hashAgentId(character.agentId),
       character.throwsLeft + Math.floor(this.nowMs / 1000),
     );
     const missed = target.kind === "bin" && seed % 100 < PAPER_MISS_PERCENT;
-    const aim = officeTileCenter(targetTile);
+    const aim = this.tileCenter(targetTile);
     this.paperBalls.push({
       from: this.headPointOfCharacter(character),
       to: {
@@ -1974,25 +2463,10 @@ export class OfficeScene {
     });
   }
 
-  /**
-   * The nearest prop of this name standing above a spot, in the spot's own
-   * column. Every spot that acts ON something is laid out looking up at it, so
-   * this is how the scene asks the plan what a spot is FOR without knowing how
-   * the plan spaced the two apart.
-   */
-  private propTileAbove(
-    tile: OfficeTilePos,
-    name: OfficeSpriteName,
-  ): OfficeTilePos | null {
-    let found: OfficeTilePos | null = null;
-    for (const prop of this.currentLayout.props) {
-      if (prop.sprite.name !== name) continue;
-      if (prop.tile.col !== tile.col) continue;
-      if (prop.tile.row >= tile.row) continue;
-      if (found !== null && prop.tile.row <= found.row) continue;
-      found = prop.tile;
-    }
-    return found;
+  /** A tile's centre, PROJECTED - never `col * OFFICE_TILE` in this class. */
+  private tileCenter(tile: OfficeTilePos): OfficePoint {
+    const origin = this.point(tile.col, tile.row);
+    return { x: origin.x + OFFICE_TILE / 2, y: origin.y + OFFICE_TILE / 2 };
   }
 
   private advancePaperBalls(dtMs: number): void {
@@ -2040,6 +2514,11 @@ export class OfficeScene {
       return;
     }
     if (this.isHurrying(character.agentId)) {
+      character.filler = null;
+      return;
+    }
+    // A cubby has no desk to look up from, spin on or stretch at.
+    if (this.seatedInCubby(character.agentId)) {
       character.filler = null;
       return;
     }
@@ -2095,7 +2574,9 @@ export class OfficeScene {
     if (target === null || character.errand !== "errand-wait") return false;
     if (!isSeatedErrandKind(target.kind)) return false;
     if (target.kind !== "garden") return true;
-    return this.propTileAbove(target.tile, "bench") !== null;
+    // A garden BENCH spot names the bench it sits in front of; a garden
+    // stroll spot names nothing, which is the difference between the two.
+    return target.actionTile !== null;
   }
 
   /**
@@ -2168,6 +2649,7 @@ export class OfficeScene {
   private mayStartErrand(character: OfficeCharacter): boolean {
     if (character.errand !== "none") return false;
     if (!character.seated) return false;
+    if (this.seatedInCubby(character.agentId)) return false;
     if (this.errandMustEnd(character.agentId)) return false;
     if (this.isHurrying(character.agentId)) return false;
     const threshold = IDLE_ERRAND_MS + errandStaggerMs(character.agentId);
@@ -2247,17 +2729,16 @@ export class OfficeScene {
     const floor = this.floorOfAgent(character.agentId);
     const options: OfficeErrandTarget[] = [];
     for (const spot of floor.errandSpots) {
-      const key = tileKeyOf(spot.tile);
+      // Claimed by the tile a walker would STAND on, which is what two agents
+      // can collide over. An aliased spot - one storey's copy of a plaza's -
+      // therefore blocks the physical spot for the whole building, which is
+      // the point of aliasing it in the first place.
+      const key = tileKeyOf(spot.approachTile);
       if (claimed.has(key)) continue;
       if (key === character.lastErrandKey) continue;
       if (spot.kind === character.lastErrandKind) continue;
       if (!this.spotSuitsAgent(character, spot)) continue;
-      options.push({
-        kind: spot.kind,
-        tile: spot.tile,
-        facing: spot.facing,
-        partnerId: null,
-      });
+      options.push(targetOfSpot(spot));
     }
     if (character.lastErrandKind !== "visit") {
       const visit = this.visitTargetFor(character, claimed, seed);
@@ -2267,41 +2748,56 @@ export class OfficeScene {
   }
 
   /**
-   * Whether this spot is one THIS agent has any business at. Three kinds are
-   * about whose room you are in rather than about what is on the floor:
+   * Whether this spot is one THIS agent has any business at: its own storey,
+   * and then whoever the plan says the spot is FOR.
    *
-   * - a bin and a plant belong to the cabin they stand in, and walking into
-   *   somebody else's room to throw paper away is not a break, it is trespass;
-   * - a peek is the exact opposite - the point of it is another team's door.
-   *
-   * A deskless agent has no cabin, so it is refused all three rather than being
-   * given the run of every room on the floor.
+   * The rule used to be read off the kind - a bin belongs to the cabin it
+   * stands in, a peek is somebody else's door - which is a fact about this one
+   * floor plan wearing the costume of a fact about errands. A plaza plant
+   * belongs to no cabin and a leads-only board belongs to a class of agent,
+   * and neither can be said in kinds without the scene learning view names.
    */
   private spotSuitsAgent(
     character: OfficeCharacter,
     spot: OfficeErrandSpot,
   ): boolean {
-    if (spot.kind === "bin" || spot.kind === "water-plant") {
-      const room = this.roomOfAgent(character.agentId);
-      if (room === null) return false;
-      return withinTileRect(room.bounds, spot.tile);
+    const seat = this.seats.effectiveSeat(character.agentId);
+    if (seat === null) return false;
+    if (spot.floorIndex !== seat.floorIndex) return false;
+    const audience = spot.audience;
+    if (audience.kind === "nobody") return false;
+    if (audience.kind === "floor") return true;
+    if (audience.kind === "room") return seat.roomId === audience.roomId;
+    // A peek: anybody with a cabin of their own that is not this one. Having a
+    // cabin is part of the test rather than an afterthought - a solo at an
+    // open-plan desk belongs to no room, and giving it every cabin's doorway
+    // would be a change, not a migration.
+    if (audience.kind === "not-room") {
+      return seat.roomId !== null && seat.roomId !== audience.roomId;
     }
-    if (spot.kind !== "peek") return true;
-    const room = this.roomOfAgent(character.agentId);
-    if (room === null) return false;
-    // The tile is the corridor OUTSIDE a door, so the cabin it belongs to is
-    // the one whose door is the tile above it.
-    return !sameTile(
-      { col: spot.tile.col, row: spot.tile.row - 1 },
-      room.doorTile,
-    );
+    return this.leadsATeam(character.agentId);
   }
 
   /**
-   * A corridor tile to stand on when every spot is taken. Any walkable tile
-   * that is not inside a room, the break room, the lobby row or the reception
-   * queue - the floor's own corridors, which is where somebody with nowhere to
-   * be would actually be.
+   * Whether this agent runs something: a team's lead, or the one the host's HQ
+   * belongs to. Read off the partition, which is the single answer every
+   * layout, board and directory row already shares.
+   */
+  private leadsATeam(agentId: string): boolean {
+    const partition = this.partition;
+    if (partition === null) return false;
+    if (partition.teamOf(agentId)?.leadAgentId === agentId) return true;
+    return partition.hosts.some((host) => host.hqAgentId === agentId);
+  }
+
+  /**
+   * A corridor tile to stand on when every spot is taken - the floor's OWN
+   * corridors, which is where somebody with nowhere to be would actually be.
+   *
+   * The tiles are carried by the storey rather than scanned for, because "the
+   * rows between the wall face and the lobby, minus the rooms" is a fact about
+   * one storey of one view: an oblique aisle and an isometric district street
+   * are both corridors and neither is above a lobby.
    */
   private strollTargetFor(
     character: OfficeCharacter,
@@ -2313,49 +2809,26 @@ export class OfficeScene {
       hashAgentId(character.agentId),
       character.errandLegs + Math.floor(this.nowMs / 1000),
     );
-    return {
+    const floor = this.floorOfAgent(character.agentId);
+    return derivedTarget({
       kind: "corridor",
       tile: options[seed % options.length],
-      facing: "down",
+      facing: floor.queueFacing,
       partnerId: null,
-    };
+    });
   }
 
   private corridorTilesFor(
     character: OfficeCharacter,
     claimed: ReadonlySet<string>,
   ): ReadonlyArray<OfficeTilePos> {
-    const layout = this.currentLayout;
     const floor = this.floorOfAgent(character.agentId);
-    const reserved = new Set<string>([
-      tileKeyOf(floor.doorTile),
-      tileKeyOf(floor.lobbyTile),
-      ...floor.receptionQueueTiles.map(tileKeyOf),
-      // A tile the plan already named is that errand's, not somewhere to
-      // stand about: a stroll that stopped on the peek spot outside a door
-      // would be paying somebody a visit it never chose.
-      ...floor.errandSpots.map((spot) => tileKeyOf(spot.tile)),
-    ]);
-    const first = floor.bounds.row + 2;
-    const last = floor.lobbyTile.row - 1;
     const tiles: OfficeTilePos[] = [];
-    for (let row = first; row <= last; row += 1) {
-      for (let col = 1; col < layout.cols - 1; col += 1) {
-        if (!layout.walkable[row][col]) continue;
-        const tile: OfficeTilePos = { col, row };
-        const key = tileKeyOf(tile);
-        if (claimed.has(key) || reserved.has(key)) continue;
-        if (key === character.lastErrandKey) continue;
-        if (layout.rooms.some((room) => withinTileRect(room.bounds, tile))) {
-          continue;
-        }
-        // Inside an amenity you are AT that amenity; a stroll that wandered
-        // through the nap room would be somebody standing between the beds.
-        if (floor.amenities.some((room) => withinTileRect(room.bounds, tile))) {
-          continue;
-        }
-        tiles.push(tile);
-      }
+    for (const tile of floor.corridorTiles) {
+      const key = tileKeyOf(tile);
+      if (claimed.has(key)) continue;
+      if (key === character.lastErrandKey) continue;
+      tiles.push(tile);
     }
     return tiles;
   }
@@ -2391,31 +2864,33 @@ export class OfficeScene {
     claimed: ReadonlySet<string>,
     seed: number,
   ): OfficeErrandTarget | null {
-    const room = this.roomOfAgent(character.agentId);
-    if (room === null) return null;
-    const layout = this.currentLayout;
+    const mySeat = this.seats.effectiveSeat(character.agentId);
+    if (mySeat === null || mySeat.roomId === null) return null;
+    const room = this.roomOfSeat(mySeat);
     const hosts: OfficeErrandTarget[] = [];
-    for (const desk of this.visibleDesks()) {
-      if (desk.agentId === character.agentId) continue;
-      if (!withinTileRect(room.bounds, desk.deskTile)) continue;
-      const colleague = this.characters.get(desk.agentId);
+    for (const seated of this.visibleSeats()) {
+      if (seated.agentId === character.agentId) continue;
+      if (seated.seat.roomId !== mySeat.roomId) continue;
+      const colleague = this.characters.get(seated.agentId);
       if (colleague === undefined || !colleague.seated) continue;
-      const status = this.statusOf(desk.agentId);
+      const status = this.statusOf(seated.agentId);
       if (status !== "idle" && status !== "working") continue;
-      const tile: OfficeTilePos = {
-        col: desk.chairTile.col,
-        row: desk.chairTile.row + 1,
-      };
-      if (tile.row >= layout.rows) continue;
-      if (!layout.walkable[tile.row][tile.col]) continue;
+      // Under the colleague's OWN chair, which is what makes a visit read as
+      // two people talking rather than as a queue at one tile. The room's
+      // `visitTile` is the fallback for a view whose chairs have nothing
+      // walkable under them.
+      const tile = this.visitTileNear(seated.seat, room);
+      if (tile === null) continue;
       const key = tileKeyOf(tile);
       if (claimed.has(key) || key === character.lastErrandKey) continue;
-      hosts.push({
-        kind: "visit",
-        tile,
-        facing: "up",
-        partnerId: desk.agentId,
-      });
+      hosts.push(
+        derivedTarget({
+          kind: "visit",
+          tile,
+          facing: seated.seat.facing,
+          partnerId: seated.agentId,
+        }),
+      );
     }
     if (hosts.length === 0) return null;
     hosts.sort((left, right) =>
@@ -2501,7 +2976,7 @@ export class OfficeScene {
       hashAgentId(character.agentId),
       character.errandLegs + Math.floor(this.nowMs / 1000),
     );
-    if (throwTargetSpriteOf(target.kind) !== null) {
+    if (targetIsThrowable(target.kind)) {
       return this.armThrows(character, target.kind, seed);
     }
     const range = seededLingerRangeOf(target.kind);
@@ -2568,14 +3043,9 @@ export class OfficeScene {
     const options: OfficeErrandTarget[] = [];
     for (const spot of floor.errandSpots) {
       if (spot.kind !== "corridor") continue;
-      const key = tileKeyOf(spot.tile);
+      const key = tileKeyOf(spot.approachTile);
       if (claimed.has(key) || key === character.lastErrandKey) continue;
-      options.push({
-        kind: spot.kind,
-        tile: spot.tile,
-        facing: spot.facing,
-        partnerId: null,
-      });
+      options.push(targetOfSpot(spot));
     }
     if (options.length === 0) return this.strollTargetFor(character, claimed);
     const seed = mixSeed(hashAgentId(character.agentId), character.errandLegs);
@@ -2713,7 +3183,7 @@ export class OfficeScene {
     }
     if (character.errand === "queue-out") {
       character.errand = "queue-stand";
-      character.facing = "down";
+      character.facing = this.queueFacingOf(character.agentId);
       character.path = [];
       character.pathIndex = 0;
       character.walkPhaseMs = 0;
@@ -2735,12 +3205,44 @@ export class OfficeScene {
   private renderStateOf(character: OfficeCharacter): {
     readonly pose: OfficeCharacterPose;
     readonly facing: OfficeFacing;
+    readonly accessory: OfficeCharacterAccessory | undefined;
   } {
+    const seat = this.seats.effectiveSeat(character.agentId);
+    const seatFacing = seat === null ? "up" : seat.facing;
     const filler = character.filler;
-    if (filler !== null && character.seated) return fillerPoseOf(filler);
-    return { pose: this.poseFor(character), facing: character.facing };
+    if (filler !== null && character.seated) {
+      return { ...fillerPoseOf(filler, seatFacing), accessory: undefined };
+    }
+    return {
+      pose: this.poseFor(character),
+      facing: character.facing,
+      accessory: this.accessoryFor(character),
+    };
   }
 
+  /**
+   * Headphones, and only while an agent is seated at its own desk working in
+   * the BACKGROUND. It is the one state with nothing else to show for itself -
+   * a background turn types at a quarter of the speed of a real one - and a
+   * pair of headphones is what "head down, not interruptible" looks like from
+   * behind.
+   */
+  private accessoryFor(
+    character: OfficeCharacter,
+  ): OfficeCharacterAccessory | undefined {
+    if (!character.seated) return undefined;
+    return this.statusOf(character.agentId) === "background"
+      ? "headphones"
+      : undefined;
+  }
+
+  /**
+   * How a seated character SITS, which is what its status looks like from
+   * behind. The precedence is the status precedence, unchanged: a crashed
+   * screen outranks a raised hand outranks a wait, and anything the record
+   * says is actually happening - a turn, a background turn - outranks all of
+   * them, because a typing body is the more informative reading.
+   */
   private poseFor(character: OfficeCharacter): OfficeCharacterPose {
     if (!character.seated) {
       // Off a desk and off its feet: a sofa, a sleeping bag, an armchair, a
@@ -2766,6 +3268,9 @@ export class OfficeScene {
     if (status === "background") {
       return this.typingPose(character.agentId, BACKGROUND_FRAME_MS);
     }
+    if (status === "failure") return "crash";
+    if (status === "attention") return "hand-up";
+    if (status === "awaiting") return "lean";
     return "sit";
   }
 
@@ -2792,67 +3297,6 @@ export class OfficeScene {
   }
 
   // ---- Frame assembly ------------------------------------------------ //
-
-  /**
-   * A cabin's own walls. They sit ON the floor tiles and UNDER the lobby rug:
-   * the building's inner structure, not furniture standing on it.
-   */
-  private pushCabinWalls(floor: OfficeDrawable[], room: OfficeRoom): void {
-    const { col, row, cols, rows } = room.bounds;
-    const right = col + cols - 1;
-    const bottom = row + rows - 1;
-    const wallAt = (wallCol: number, wallRow: number): void => {
-      const isDoor =
-        wallRow === room.doorTile.row && wallCol === room.doorTile.col;
-      floor.push({
-        kind: "sprite",
-        sprite: { name: isDoor ? "door" : "wall" },
-        x: wallCol * OFFICE_TILE,
-        y: wallRow * OFFICE_TILE,
-      });
-    };
-    for (let scanCol = col; scanCol <= right; scanCol += 1) {
-      floor.push({
-        kind: "sprite",
-        sprite: { name: "wall-top" },
-        x: scanCol * OFFICE_TILE,
-        y: row * OFFICE_TILE,
-      });
-      wallAt(scanCol, row + 1);
-      wallAt(scanCol, bottom);
-    }
-    for (let scanRow = row + 2; scanRow < bottom; scanRow += 1) {
-      wallAt(col, scanRow);
-      wallAt(right, scanRow);
-    }
-  }
-
-  /**
-   * A pod's tinted carpet, on TOP of the cabin's own floor and under
-   * everything that stands on it - a tinted region is a different bit of
-   * carpet, not a thing in the room.
-   *
-   * Deepest LAST, so a nested pod's tint wins over its parent's on the tiles
-   * the two share.
-   */
-  private pushPodFloors(floor: OfficeDrawable[], room: OfficeRoom): void {
-    for (const pod of [...room.pods].sort((a, b) => a.depth - b.depth)) {
-      const [even, odd] = POD_FLOOR_ART[pod.tint];
-      const lastRow = pod.bounds.row + pod.bounds.rows;
-      const lastCol = pod.bounds.col + pod.bounds.cols;
-      for (let row = pod.bounds.row; row < lastRow; row += 1) {
-        for (let col = pod.bounds.col; col < lastCol; col += 1) {
-          const alternate = (col + row + pod.depth) % 2 === 0;
-          floor.push({
-            kind: "sprite",
-            sprite: { name: alternate ? even : odd },
-            x: col * OFFICE_TILE,
-            y: row * OFFICE_TILE,
-          });
-        }
-      }
-    }
-  }
 
   /**
    * Whether anything on the floor is MOVING right now.
@@ -2886,509 +3330,195 @@ export class OfficeScene {
     return false;
   }
 
-  /**
-   * The floor, built once per layout.
-   *
-   * A floor is one sprite per TILE - thousands of them on a large office - and
-   * rebuilding that array sixty, or even thirty, times a second to produce the
-   * identical thing was the single largest source of garbage the office made.
-   */
-  private floorDrawables(): ReadonlyArray<OfficeDrawable> {
-    if (
-      this.cachedFloor !== null &&
-      this.cachedFloorVersion === this.layoutVersion
-    ) {
-      return this.cachedFloor;
-    }
-    const floor = this.buildFloor();
-    this.cachedFloor = floor;
-    this.cachedFloorVersion = this.layoutVersion;
-    return floor;
-  }
-
-  private buildFloor(): ReadonlyArray<OfficeDrawable> {
-    const layout = this.currentLayout;
-    const floor: OfficeDrawable[] = [];
-    for (let row = 0; row < layout.rows; row += 1) {
-      for (let col = 0; col < layout.cols; col += 1) {
-        floor.push({
-          kind: "sprite",
-          sprite: { name: this.floorSpriteAt(col, row) },
-          x: col * OFFICE_TILE,
-          y: row * OFFICE_TILE,
-        });
-      }
-    }
-    for (const room of layout.rooms) this.pushCabinWalls(floor, room);
-    for (const room of layout.rooms) this.pushPodFloors(floor, room);
-    // Every amenity's ring is drawn with the cabins' own two sprites, and the
-    // garden's with a hedge instead. Their doors are not carried in the plan
-    // and do not need to be: a ring tile the grid still says is walkable IS
-    // the door, by construction.
-    for (const floorPlan of layout.floors) {
-      for (const room of floorPlan.amenities) {
-        this.pushRoomRing(floor, room.bounds, room.kind === "garden");
-      }
-    }
-    // A stairwell is a hole in the FLOOR, not a thing standing on it, so it is
-    // drawn from its own top-left tile with no foot lift at all.
-    for (const floorPlan of layout.floors) {
-      const stairsTile = floorPlan.stairsTile;
-      if (stairsTile === null) continue;
-      floor.push({
-        kind: "sprite",
-        sprite: { name: "stairs" },
-        x: stairsTile.col * OFFICE_TILE,
-        y: stairsTile.row * OFFICE_TILE,
-      });
-    }
-    for (const prop of layout.props) {
-      if (prop.sprite.name !== "rug") continue;
-      // Centred on its tile as well as lifted onto it: the rug is wider than
-      // one tile and the door sits directly below the lobby, so a top-left
-      // draw would carpet over the way in.
-      const overhang = officeSpriteSize(prop.sprite).width - OFFICE_TILE;
-      floor.push({
-        kind: "sprite",
-        sprite: prop.sprite,
-        x: prop.tile.col * OFFICE_TILE - overhang / 2,
-        y: propDrawY(prop),
-      });
-    }
-    return floor;
-  }
-
-  /**
-   * One amenity's ring: cap, wall face, sides, and its own doorway.
-   *
-   * A HEDGE is the same ring in a different material - a garden is bounded, not
-   * built - so the two share every tile and differ only in the sprite. Its
-   * opening is still the one ring tile the grid says is walkable, exactly as a
-   * walled room's door is.
-   */
-  private pushRoomRing(
-    floor: OfficeDrawable[],
-    room: OfficeTileRect,
-    hedge: boolean,
-  ): void {
-    const { col, row, cols, rows } = room;
-    const right = col + cols - 1;
-    const bottom = row + rows - 1;
-    const ringAt = (ringCol: number, ringRow: number): void => {
-      const name = this.ringSpriteAt(ringCol, ringRow, { hedge, cap: false });
-      if (name === null) return;
-      floor.push({
-        kind: "sprite",
-        sprite: { name },
-        x: ringCol * OFFICE_TILE,
-        y: ringRow * OFFICE_TILE,
-      });
-    };
-    for (let scanCol = col; scanCol <= right; scanCol += 1) {
-      const capName = this.ringSpriteAt(scanCol, row, { hedge, cap: true });
-      if (capName !== null) {
-        floor.push({
-          kind: "sprite",
-          sprite: { name: capName },
-          x: scanCol * OFFICE_TILE,
-          y: row * OFFICE_TILE,
-        });
-      }
-      ringAt(scanCol, row + 1);
-      ringAt(scanCol, bottom);
-    }
-    for (let scanRow = row + 2; scanRow < bottom; scanRow += 1) {
-      ringAt(col, scanRow);
-      ringAt(right, scanRow);
-    }
-  }
-
-  /**
-   * One tile of a room's boundary: its cap row, or the wall below and around
-   * it. `null` means draw nothing, which is what a gap in a hedge is - a garden
-   * is bounded rather than built, so its way in has no door hanging in it.
-   */
-  private ringSpriteAt(
-    col: number,
-    row: number,
-    style: { readonly hedge: boolean; readonly cap: boolean },
-  ): OfficeSpriteName | null {
-    const open = this.currentLayout.walkable[row][col];
-    if (style.hedge) return open ? null : "planter";
-    if (style.cap) return "wall-top";
-    return open ? "door" : "wall";
-  }
-
-  private floorSpriteAt(col: number, row: number): OfficeSpriteName {
-    const layout = this.currentLayout;
-    for (const floor of layout.floors) {
-      if (row === floor.doorTile.row && col === floor.doorTile.col) {
-        return "door";
-      }
-    }
-    // A storey's cap wins over the storey above's bottom wall on the row the
-    // two SHARE: what a viewer sees between two floors is one capped wall.
-    for (const floor of layout.floors) {
-      if (row === floor.bounds.row) return "wall-top";
-    }
-    for (const floor of layout.floors) {
-      const top = floor.bounds.row;
-      if (row === top + 1 || row === top + floor.bounds.rows - 1) return "wall";
-    }
-    if (col === 0 || col === layout.cols - 1) return "wall";
-    // A garden's ground is GRASS, and grass is floor rather than a thing
-    // standing on it: drawn here, under the hedge and under everyone in it.
-    if (this.inGarden(col, row)) {
-      return (col + row) % 2 === 0 ? "floor-grass-a" : "floor-grass-b";
-    }
-    return (col + row) % 2 === 0 ? "floor-a" : "floor-b";
-  }
-
-  /**
-   * Inside a garden's hedge, the hedge itself excluded. The boundary is two
-   * rows deep at the top exactly as a wall is - the cap and the face under it -
-   * because it is the same ring in another material.
-   */
-  private inGarden(col: number, row: number): boolean {
-    for (const floor of this.currentLayout.floors) {
-      for (const room of floor.amenities) {
-        if (room.kind !== "garden") continue;
-        const { bounds } = room;
-        if (col <= bounds.col || col >= bounds.col + bounds.cols - 1) continue;
-        if (row <= bounds.row + 1 || row >= bounds.row + bounds.rows - 1) {
-          continue;
-        }
-        return true;
-      }
-    }
-    return false;
-  }
-
-  private buildProps(): ReadonlyArray<OfficeDrawable> {
-    const sorted: SortedProp[] = [];
-    for (const desk of this.visibleDesks()) {
-      const deskX = desk.deskTile.col * OFFICE_TILE;
-      const deskY = desk.deskTile.row * OFFICE_TILE;
-      sorted.push({
-        drawable: {
-          kind: "sprite",
-          sprite: { name: "desk" },
-          x: deskX,
-          y: deskY,
-        },
-        sortY: deskY,
-      });
-      if (this.isDeskSheeted(desk.agentId)) {
-        this.pushSheetedDesk(sorted, desk);
-        continue;
-      }
-      // Shares the desk's sort key so it always lands ON the desk, even though
-      // it is drawn above the desk's own top edge.
-      const art = this.screenArtFor(desk.agentId);
-      const screen = this.monitorSpriteFor(desk.agentId);
-      const crashed = screen === "monitor-crash";
-      sorted.push({
-        drawable: {
-          kind: "sprite",
-          sprite: { name: screen },
-          x: deskX + (crashed ? art.crashXOffset : art.xOffset),
-          y: deskY + (crashed ? art.crashYOffset : art.yOffset),
-          alpha: this.monitorAlphaFor(desk.agentId),
-        },
-        sortY: deskY,
-      });
-      // After the screen, in the same bucket: the paper is in FRONT of the
-      // display's lower-left corner, not behind it.
-      const stack = this.envelopeStackFor(desk.agentId);
-      if (stack !== null) {
-        sorted.push({
-          drawable: {
-            kind: "sprite",
-            sprite: { name: stack.sprite },
-            x: deskX + stack.xOffset,
-            y: deskY + stack.yOffset,
-          },
-          sortY: deskY,
-        });
-      }
-      sorted.push({
-        drawable: {
-          kind: "sprite",
-          sprite: { name: "chair" },
-          x: desk.chairTile.col * OFFICE_TILE,
-          y: desk.chairTile.row * OFFICE_TILE,
-        },
-        sortY: desk.chairTile.row * OFFICE_TILE,
-      });
-      // The plate and its logo share the desk's sort key for the same reason
-      // the monitor does: they are ON the desk, drawn above its own top edge.
-      const plateX = deskX + art.plateXOffset;
-      const plateY = deskY + NAMEPLATE_Y_OFFSET;
-      sorted.push({
-        drawable: {
-          kind: "sprite",
-          sprite: { name: "nameplate" },
-          x: plateX,
-          y: plateY,
-        },
-        sortY: deskY,
-      });
-      const agent = this.agentById.get(desk.agentId);
-      // The scene places the logo and never sees the icon; a record that
-      // carries no harness simply has an empty plate.
-      if (agent !== undefined && agent.harnessId !== null) {
-        sorted.push({
-          drawable: {
-            kind: "logo",
-            harnessId: agent.harnessId,
-            x: deskX + art.logoXOffset,
-            y: deskY + LOGO_Y_OFFSET,
-          },
-          sortY: deskY,
-        });
-      }
-    }
-    // The walls and outlines stand for every agent the epic has, because a
-    // floor that restacks as the cursor moves cannot be read. The LETTERING
-    // does not: a sign or a plate names an agent, and one that does not exist
-    // yet at this cursor has no name to show.
-    for (const room of this.currentLayout.rooms) {
-      if (this.visibleAgentIds.has(room.rootAgentId)) {
-        this.pushSign(sorted, room.signTile, room.name);
-      }
-      for (const pod of room.pods) {
-        this.pushPodOutline(sorted, pod);
-        if (this.visibleAgentIds.has(pod.leadAgentId)) {
-          this.pushPodPlate(sorted, pod);
-        }
-      }
-    }
-    // The break room and the game room are named the same way a cabin is: a
-    // walled room nobody owns still has to say what it is for.
-    for (const floorPlan of this.currentLayout.floors) {
-      for (const sign of floorPlan.areaSigns) {
-        this.pushSign(sorted, sign.signTile, sign.name);
-      }
-    }
-    for (const prop of this.currentLayout.props) {
-      if (prop.sprite.name === "rug") continue;
-      sorted.push({
-        drawable: {
-          kind: "sprite",
-          sprite: prop.sprite,
-          x: prop.tile.col * OFFICE_TILE,
-          y: propDrawY(prop),
-        },
-        // Keyed by the prop's TILE, never by its lifted draw position: a tall
-        // prop still belongs to the row it occupies, and sorting on the lift
-        // would file it behind the row above.
-        sortY: prop.tile.row * OFFICE_TILE,
-      });
-    }
-    // Stable, so same-row props keep the order they were pushed in.
-    sorted.sort((left, right) => left.sortY - right.sortY);
-    return sorted.map((entry) => entry.drawable);
-  }
-
-  /**
-   * A pod's boundary: its outline, drawn in the style the plan gave it, and the
-   * plate carrying the sub-team's name.
-   *
-   * The OPENING is the ring tile the grid still says is walkable, exactly as a
-   * room's door is - the scene never has to be told twice where a way in is.
-   * The plate's own tile carries the plate instead of a length of outline,
-   * which is what makes the name look mounted on the boundary rather than
-   * floating beside it.
-   */
-  private pushPodOutline(sorted: SortedProp[], pod: OfficePod): void {
-    const { col, row, cols, rows } = pod.bounds;
-    const left = col - 1;
-    const top = row - 1;
-    const right = col + cols;
-    const bottom = row + rows;
-    for (let scanCol = left; scanCol <= right; scanCol += 1) {
-      for (let scanRow = top; scanRow <= bottom; scanRow += 1) {
-        const name = this.podOutlineSpriteAt(pod, scanCol, scanRow);
-        if (name === null) continue;
-        sorted.push({
-          drawable: {
-            kind: "sprite",
-            sprite: { name },
-            x: scanCol * OFFICE_TILE,
-            y: spriteFootY({ name }, scanRow),
-          },
-          sortY: scanRow * OFFICE_TILE,
-        });
-      }
-    }
-  }
-
-  /**
-   * Which piece of a pod's outline stands on one tile, or `null` where none
-   * does: off the ring, on the plate's own tile, or on a tile the grid says is
-   * WALKABLE - which is how the single opening stays open. A corner takes the
-   * vertical piece, so the two runs meet rather than butting end to end.
-   */
-  private podOutlineSpriteAt(
-    pod: OfficePod,
-    col: number,
-    row: number,
-  ): OfficeSpriteName | null {
-    const left = pod.bounds.col - 1;
-    const top = pod.bounds.row - 1;
-    const right = pod.bounds.col + pod.bounds.cols;
-    const bottom = pod.bounds.row + pod.bounds.rows;
-    const onRing =
-      col === left || col === right || row === top || row === bottom;
-    if (!onRing) return null;
-    if (col === pod.plateTile.col && row === pod.plateTile.row) return null;
-    if (this.isWalkableTile(col, row)) return null;
-    const art = POD_OUTLINE_ART[pod.style];
-    // A corner is on a side column too, so this covers it: the two runs meet
-    // at the vertical piece rather than butting end to end.
-    const vertical = col === left || col === right;
-    return vertical ? art.vertical : art.horizontal;
-  }
-
-  /**
-   * The pod's name plate, and its name written across it. On the outline's
-   * corner, so a nested pod's plate cannot land on a tile its parent's outline
-   * already owns.
-   */
-  private pushPodPlate(sorted: SortedProp[], pod: OfficePod): void {
-    const plateX = pod.plateTile.col * OFFICE_TILE;
-    const plateY = spriteFootY({ name: "pod-plate" }, pod.plateTile.row);
-    const sortY = pod.plateTile.row * OFFICE_TILE;
-    sorted.push({
-      drawable: {
-        kind: "sprite",
-        sprite: { name: "pod-plate" },
-        x: plateX,
-        y: plateY,
-      },
-      sortY,
-    });
-    sorted.push({
-      drawable: {
-        kind: "label",
-        text: truncate(pod.name, MAX_POD_LABEL_CHARS),
-        x: plateX + OFFICE_TILE / 2,
-        y: plateY + POD_PLATE_LABEL_BASELINE,
-        tone: "bright",
-      },
-      sortY,
-    });
-  }
-
-  private isWalkableTile(col: number, row: number): boolean {
-    const layout = this.currentLayout;
-    if (row < 0 || row >= layout.rows) return false;
-    if (col < 0 || col >= layout.cols) return false;
-    return layout.walkable[row][col];
-  }
-
-  /**
-   * A two-tile wall sign with its name written across it. Every named region on
-   * the floor - a cabin, the break room, the game room - is signed the same way,
-   * so one of them cannot drift into looking like a different kind of place.
-   */
-  private pushSign(
-    sorted: SortedProp[],
-    signTile: OfficeTilePos,
-    name: string,
-  ): void {
-    const signX = signTile.col * OFFICE_TILE;
-    const signY = spriteFootY({ name: "sign" }, signTile.row);
-    sorted.push({
-      drawable: {
-        kind: "sprite",
-        sprite: { name: "sign" },
-        x: signX,
-        y: signY,
-      },
-      sortY: signTile.row * OFFICE_TILE,
-    });
-    sorted.push({
-      drawable: {
-        kind: "label",
-        text: truncate(name, MAX_ROOM_LABEL_CHARS),
-        x: signX + (SIGN_WIDTH_TILES * OFFICE_TILE) / 2,
-        y: signY + SIGN_LABEL_BASELINE,
-        // The sign's field is dark in both themes, so the name is written on
-        // it rather than in the floor's own text colour.
-        tone: "bright",
-      },
-      sortY: signTile.row * OFFICE_TILE,
-    });
-  }
-
-  /**
-   * An archived agent's desk, once its character has left: sheeted over, its
-   * chair holding a packed box, no screen and no plate. The name stays, muted,
-   * because a nameless sheeted desk is a hole in the floor plan rather than a
-   * record of who used to sit there.
-   */
-  private pushSheetedDesk(sorted: SortedProp[], desk: OfficeDesk): void {
-    const deskX = desk.deskTile.col * OFFICE_TILE;
-    const deskY = desk.deskTile.row * OFFICE_TILE;
-    const chairX = desk.chairTile.col * OFFICE_TILE;
-    const chairY = desk.chairTile.row * OFFICE_TILE;
-    sorted.push({
-      drawable: {
-        kind: "sprite",
-        sprite: { name: "dust-sheet" },
-        x: deskX,
-        y: deskY,
-      },
-      sortY: deskY,
-    });
-    sorted.push({
-      drawable: {
-        kind: "sprite",
-        sprite: { name: "chair" },
-        x: chairX,
-        y: chairY,
-      },
-      sortY: chairY,
-    });
-    // Under the desk's RIGHT half - the chair is under its left, and a packed
-    // box standing in the seat would read as furniture rather than as moving
-    // out.
-    const boxTile: OfficeTilePos = {
-      col: desk.deskTile.col + 1,
-      row: desk.deskTile.row + 1,
-    };
-    sorted.push({
-      drawable: {
-        kind: "sprite",
-        sprite: { name: "box" },
-        x: boxTile.col * OFFICE_TILE,
-        y: spriteFootY({ name: "box" }, boxTile.row),
-      },
-      sortY: boxTile.row * OFFICE_TILE,
-    });
-    const agent = this.agentById.get(desk.agentId);
-    if (agent === undefined) return;
-    sorted.push({
-      drawable: {
-        kind: "label",
-        text: truncate(agent.name, MAX_LABEL_CHARS),
-        // Exactly where the seated character's own label was, so the desk does
-        // not appear to shift when its owner leaves.
-        x: chairX + OFFICE_CHARACTER_WIDTH / 2,
-        y: chairY + CHARACTER_Y_OFFSET + OFFICE_CHARACTER_HEIGHT + LABEL_GAP,
-        tone: "muted",
-      },
-      sortY: chairY,
-    });
-  }
-
   /** Sheeted once the archive is real AND the person has actually gone. */
   private isDeskSheeted(agentId: string): boolean {
     return this.departedIds.has(agentId) && this.archivedIds.has(agentId);
   }
 
-  private envelopeStackFor(agentId: string): OfficeEnvelopeStack | null {
+  // ---- The per-layout index ------------------------------------------- //
+
+  /**
+   * Seats and spots bucketed by index chunk, built once per layout.
+   *
+   * Without it, drawing the forty desks a viewport holds means walking all
+   * thousand of them, thirty times a second, to find out which forty. The
+   * index is a pure function of the layout, which is why it can be built once
+   * and thrown away wholesale when the layout is replaced or the canvas goes
+   * off screen.
+   *
+   * Spots are DEDUPED by the tile a walker stands on. A storey may alias
+   * another's plaza spot - same tile, same fixture, its own `floorIndex` - so
+   * that the whole building can reach one coffee machine; the painter must
+   * still be asked about that coffee machine exactly once.
+   */
+  private index(): FrameChunkIndex {
+    const cached = this.chunkIndex;
+    if (cached !== null && this.chunkIndexVersion === this.layoutVersion) {
+      return cached;
+    }
+    const layout = this.currentLayout;
+    const seats = new Map<string, OfficeSeat[]>();
+    for (const seat of layout.seats.values()) {
+      const key = chunkKeyOf(seat.deskTile.col, seat.deskTile.row);
+      const bucket = seats.get(key);
+      if (bucket === undefined) seats.set(key, [seat]);
+      else bucket.push(seat);
+    }
+    const spots = new Map<string, OfficeErrandSpot[]>();
+    const seen = new Set<string>();
+    for (const floor of layout.floors) {
+      for (const spot of floor.errandSpots) {
+        const tileKey = tileKeyOf(spot.approachTile);
+        if (seen.has(tileKey)) continue;
+        seen.add(tileKey);
+        const key = chunkKeyOf(spot.approachTile.col, spot.approachTile.row);
+        const bucket = spots.get(key);
+        if (bucket === undefined) spots.set(key, [spot]);
+        else bucket.push(spot);
+      }
+    }
+    const built: FrameChunkIndex = { seats, spots };
+    this.chunkIndex = built;
+    this.chunkIndexVersion = this.layoutVersion;
+    return built;
+  }
+
+  /** Every index chunk key a world-pixel rect reaches. */
+  private chunkKeysFor(rect: OfficeRect): ReadonlyArray<string> {
+    const tiles = tileRectOf(rect);
+    const firstCol = Math.floor(tiles.col / FRAME_CHUNK_TILES);
+    const lastCol = Math.floor(
+      (tiles.col + Math.max(0, tiles.cols - 1)) / FRAME_CHUNK_TILES,
+    );
+    const firstRow = Math.floor(tiles.row / FRAME_CHUNK_TILES);
+    const lastRow = Math.floor(
+      (tiles.row + Math.max(0, tiles.rows - 1)) / FRAME_CHUNK_TILES,
+    );
+    const keys: string[] = [];
+    for (let row = firstRow; row <= lastRow; row += 1) {
+      for (let col = firstCol; col <= lastCol; col += 1)
+        keys.push(`${col},${row}`);
+    }
+    return keys;
+  }
+
+  /**
+   * The seats the rect touches, with the agent in each - the OCCUPIED ones
+   * only, because an empty seat on the Floor is a seat for somebody who does
+   * not exist at this cursor, and drawing it would leak the future.
+   *
+   * A chunk is indexed by the seat's own tile, and a projector may place a
+   * seat's art well away from it, so every candidate is tested against the
+   * rect before it is kept.
+   */
+  private seatsIn(rect: OfficeRect): ReadonlyArray<SeatedAgent> {
+    const index = this.index();
+    const found: SeatedAgent[] = [];
+    for (const key of this.chunkKeysFor(rect)) {
+      const bucket = index.seats.get(key);
+      if (bucket === undefined) continue;
+      for (const seat of bucket) {
+        const agentId = this.seats.occupant(seat.seatId);
+        if (agentId === null) continue;
+        if (!this.visibleAgentIds.has(agentId)) continue;
+        if (!rectsOverlap(this.seatBox(seat), rect)) continue;
+        found.push({ agentId, seat });
+      }
+    }
+    // Canonical order, so the same input and rect give the same frame twice.
+    found.sort((left, right) => compareIdPair(left.agentId, right.agentId));
+    return found;
+  }
+
+  /**
+   * The floor inside a tile rect, from the painter, remembered.
+   *
+   * A still office asks for the same floor sixty times a second - same plan,
+   * same band, same rectangle - and the floor is the largest thing in a frame
+   * by an order of magnitude. Handing back the SAME array is also what tells
+   * the renderer's bitmap cache it has nothing to repaint.
+   */
+  private floorIn(
+    layout: OfficeLayout,
+    tiles: OfficeTileRect,
+    lod: OfficeLod,
+  ): ReadonlyArray<OfficeDrawable> {
+    const key = floorKeyOf(this.layoutVersion, lod, tiles);
+    const cached = this.floorCache;
+    if (cached !== null && cached.key === key) return cached.drawables;
+    const drawables = this.view.painter.floor(layout, tiles, lod);
+    this.floorCache = { key, drawables };
+    return drawables;
+  }
+
+  /** The spots the rect touches, already deduped by the index. */
+  private spotsIn(rect: OfficeRect): ReadonlyArray<OfficeErrandSpot> {
+    const index = this.index();
+    const found: OfficeErrandSpot[] = [];
+    for (const key of this.chunkKeysFor(rect)) {
+      const bucket = index.spots.get(key);
+      if (bucket === undefined) continue;
+      for (const spot of bucket) {
+        const origin = this.point(spot.approachTile.col, spot.approachTile.row);
+        const box: OfficeRect = {
+          x: origin.x,
+          y: origin.y,
+          width: OFFICE_TILE,
+          height: OFFICE_TILE,
+        };
+        if (!rectsOverlap(box, rect)) continue;
+        found.push(spot);
+      }
+    }
+    return found;
+  }
+
+  /** A seat's projected box - what the rect test and the hit region both use. */
+  private seatBox(seat: OfficeSeat): OfficeRect {
+    const origin = this.point(seat.deskTile.col, seat.deskTile.row);
+    return {
+      x: origin.x,
+      y: origin.y,
+      width: seat.hitTiles.width * OFFICE_TILE,
+      height: seat.hitTiles.height * OFFICE_TILE,
+    };
+  }
+
+  /** A character's projected box: the sprite standing on its own foot point. */
+  private characterBox(character: OfficeCharacter): OfficeRect {
+    const corner = this.spriteCornerOf(
+      this.footPoint(character.col, character.row),
+    );
+    return {
+      x: corner.x,
+      y: corner.y,
+      width: OFFICE_CHARACTER_WIDTH,
+      height: OFFICE_CHARACTER_HEIGHT,
+    };
+  }
+
+  /**
+   * The characters inside the rect, in draw order.
+   *
+   * Not indexed: characters MOVE, so an index of them would be rebuilt every
+   * tick to answer a question a single pass over the population already
+   * answers in microseconds. The index exists for the things that stand still.
+   */
+  private charactersIn(rect: OfficeRect): ReadonlyArray<OfficeCharacter> {
+    const found: OfficeCharacter[] = [];
+    for (const character of this.orderedCharacters()) {
+      if (!this.agentById.has(character.agentId)) continue;
+      if (!rectsOverlap(this.characterBox(character), rect)) continue;
+      found.push(character);
+    }
+    return found;
+  }
+
+  /** What one desk LOOKS like right now, as the painter needs to see it. */
+  private deskStateOf(seated: SeatedAgent): OfficeDeskState {
+    const agentId = seated.agentId;
+    const agent = this.agentById.get(agentId);
+    const status = this.statusOf(agentId);
     const character = this.characters.get(agentId);
     // A message that landed while its owner was away is on the desk in exactly
     // the sense the pile already draws: waiting, unanswered, in front of them.
@@ -3398,104 +3528,229 @@ export class OfficeScene {
       character === undefined
         ? 0
         : character.pending.filter((item) => !item.inOpenCount).length;
-    const open = (this.openRequestsByReceiver.get(agentId) ?? 0) + waiting;
-    if (open <= 0) return null;
-    const index = Math.min(open, ENVELOPE_STACKS.length) - 1;
-    return ENVELOPE_STACKS[index];
+    return {
+      agentId,
+      name: agent?.name ?? null,
+      status,
+      sheeted: this.isDeskSheeted(agentId),
+      openRequests: (this.openRequestsByReceiver.get(agentId) ?? 0) + waiting,
+      screenFrame: this.screenFrameOf(agentId, status),
+      harnessId: agent?.harnessId ?? null,
+      modelTier: agent?.modelTier ?? "medium",
+      // The member's OWN `teamId`, never `teamOf`. A solo stranded on another
+      // host carries its team's id - that is the whole point of the field,
+      // keeping one team one colour across two buildings - while `teamOf`
+      // answers null for it, because no roster for that team exists on this
+      // host to return. `teamOf` is the roster; `teamId` is the accent.
+      accentId: this.partition?.members.get(agentId)?.teamId ?? null,
+    };
   }
 
-  private screenArtFor(agentId: string): OfficeScreenArt {
-    const agent = this.agentById.get(agentId);
-    if (agent === undefined) return SCREEN_ART.medium;
-    return SCREEN_ART[agent.modelTier];
-  }
-
-  private monitorSpriteFor(agentId: string): OfficeSpriteName {
-    const status = this.statusOf(agentId);
-    // One crash map serves every tier; the renderer draws it at the tier's own
-    // screen offset, which is where that desk's display already was.
-    if (status === "failure") return "monitor-crash";
-    const art = this.screenArtFor(agentId);
-    if (status === "archived") return art.off;
-    if (status === "working") {
-      return this.screenFrame(agentId, art, MONITOR_WORKING_FRAME_MS);
-    }
-    if (status === "background") {
-      return this.screenFrame(agentId, art, MONITOR_BACKGROUND_FRAME_MS);
-    }
-    return art.on;
-  }
-
-  /** Shares the typing phase offset, so a screen and its typist agree. */
-  private screenFrame(
-    agentId: string,
-    art: OfficeScreenArt,
-    frameMs: number,
-  ): OfficeSpriteName {
-    const second = art.onB;
-    // A laptop has one lit frame, so it simply does not flicker.
-    if (second === null) return art.on;
+  /** Which of a lit screen's two frames this desk is on. Shares the typing phase. */
+  private screenFrameOf(agentId: string, status: OfficeAgentStatus): 0 | 1 {
+    if (status !== "working" && status !== "background") return 0;
+    const frameMs =
+      status === "working"
+        ? MONITOR_WORKING_FRAME_MS
+        : MONITOR_BACKGROUND_FRAME_MS;
     const phase = this.nowMs + phaseOffsetMs(agentId);
-    return Math.floor(phase / frameMs) % 2 === 0 ? art.on : second;
+    return Math.floor(phase / frameMs) % 2 === 0 ? 0 : 1;
   }
 
-  private monitorAlphaFor(agentId: string): number | undefined {
-    const status = this.statusOf(agentId);
-    // Idle keeps a LIT monitor, merely dimmed: the screen is on, nobody is at
-    // it. Only an archived record actually powers down.
-    if (status === "idle") return IDLE_MONITOR_ALPHA;
-    if (status === "archived") return ARCHIVED_ALPHA;
-    return undefined;
+  /**
+   * The static half of the frame: what each visible seat and each spot in the
+   * rect looks like, from the painter.
+   *
+   * Cached per seat and keyed by the desk state that produced it, so a floor of
+   * idle agents rebuilds nothing between frames and a desk whose screen just
+   * flickered rebuilds only itself.
+   */
+  private buildSeatProps(args: {
+    readonly layout: OfficeLayout;
+    readonly seats: ReadonlyArray<SeatedAgent>;
+    readonly rect: OfficeRect;
+    readonly lod: OfficeLod;
+  }): ReadonlyArray<OfficeWorldDrawable> {
+    const { layout, lod, rect, seats } = args;
+    if (this.seatPropVersion !== this.layoutVersion) {
+      this.seatPropCache.clear();
+      this.seatPropVersion = this.layoutVersion;
+    }
+    const out: OfficeWorldDrawable[] = [];
+    for (const seated of seats) {
+      const state = this.deskStateOf(seated);
+      const key = `${lod}|${deskStateKey(state)}`;
+      const cached = this.seatPropCache.get(seated.seat.seatId);
+      if (cached !== undefined && cached.key === key) {
+        out.push(...cached.drawables);
+        continue;
+      }
+      const drawables = this.view.painter.seatProps(
+        layout,
+        seated.seat,
+        state,
+        lod,
+      );
+      this.seatPropCache.set(seated.seat.seatId, { key, drawables });
+      out.push(...drawables);
+    }
+    for (const spot of this.spotsIn(rect)) {
+      out.push(...this.view.painter.spotProps(layout, spot, lod));
+    }
+    // Stable, so two drawables at one depth keep the order they were made in:
+    // a screen belongs in front of the desk it stands on.
+    out.sort((left, right) => left.depth - right.depth);
+    return out;
   }
 
-  private buildActors(): ReadonlyArray<OfficeDrawable> {
-    const actors: OfficeDrawable[] = [];
-    for (const character of this.orderedCharacters()) {
+  /** One pip per character in view, and nothing else: this is overview zoom. */
+  private buildPips(
+    characters: ReadonlyArray<OfficeCharacter>,
+  ): ReadonlyArray<OfficeDrawable> {
+    const pips: OfficeDrawable[] = [];
+    for (const character of characters) {
+      const status = this.statusOf(character.agentId);
+      const point = this.point(character.col, character.row);
+      pips.push({
+        kind: "pip",
+        x: point.x + OFFICE_TILE / 2,
+        y: point.y + OFFICE_TILE / 2,
+        status,
+        glyph: pipGlyphOf(status),
+        agentId: character.agentId,
+      });
+    }
+    return pips;
+  }
+
+  /** Whoever in the rect is not in their own chair - the culled set, as promised. */
+  private awayAgentIdsAmong(
+    characters: ReadonlyArray<OfficeCharacter>,
+  ): ReadonlySet<string> {
+    const away = new Set<string>();
+    for (const character of characters) {
+      if (character.seated) continue;
+      away.add(character.agentId);
+    }
+    return away;
+  }
+
+  /**
+   * The characters, in draw order, with their name tags.
+   *
+   * A CUBBY occupant is the exception, and the reason is that a cubby is a
+   * waiting slot rather than a workstation: below close-up its painter draws a
+   * silhouette in the slot, so drawing the character too would put two bodies
+   * in one one-tile box. At close-up the character itself is drawn, dimmed - a
+   * cold agent is present rather than working. One that is WALKING is an
+   * ordinary actor at every level: it has left the slot.
+   */
+  private buildActors(
+    characters: ReadonlyArray<OfficeCharacter>,
+    lod: OfficeLod,
+  ): ReadonlyArray<OfficeWorldDrawable> {
+    const actors: OfficeWorldDrawable[] = [];
+    for (const character of characters) {
       const agent = this.agentById.get(character.agentId);
       if (agent === undefined) continue;
+      const inCubby = this.seatedInCubby(character.agentId);
+      if (inCubby && lod < 2) continue;
       const archived = this.archivedIds.has(character.agentId);
-      const x = character.col * OFFICE_TILE;
-      const y = character.row * OFFICE_TILE + CHARACTER_Y_OFFSET;
+      const foot = this.footPoint(character.col, character.row);
+      const corner = this.spriteCornerOf(foot);
+      const x = corner.x;
+      const y = corner.y;
       const render = this.renderStateOf(character);
+      // Sorted by the FEET, which is what "in front of" means on a floor: a
+      // taller sprite does not stand nearer, and a world painter interleaves
+      // its props against this same number.
+      const depth = foot.y;
       actors.push({
-        kind: "sprite",
-        sprite: {
-          name: "character",
-          facing: render.facing,
-          pose: render.pose,
-          appearance: agent.appearance,
+        drawable: {
+          kind: "sprite",
+          sprite: {
+            name: "character",
+            facing: render.facing,
+            pose: render.pose,
+            appearance: agent.appearance,
+            accessory: render.accessory,
+          },
+          x,
+          y,
+          alpha: characterAlpha(archived, inCubby),
         },
-        x,
-        y,
-        alpha: archived ? ARCHIVED_ALPHA : undefined,
+        depth,
+        ownerAgentId: character.agentId,
       });
       actors.push({
-        kind: "label",
-        text: truncate(agent.name, MAX_LABEL_CHARS),
-        x: x + OFFICE_CHARACTER_WIDTH / 2,
-        y: y + OFFICE_CHARACTER_HEIGHT + LABEL_GAP,
-        tone: archived ? "muted" : "default",
+        drawable: {
+          kind: "label",
+          text: truncate(agent.name, MAX_LABEL_CHARS),
+          x: x + OFFICE_CHARACTER_WIDTH / 2,
+          y: y + OFFICE_CHARACTER_HEIGHT + LABEL_GAP,
+          tone: archived ? "muted" : "default",
+          ownerAgentId: character.agentId,
+        },
+        depth,
+        ownerAgentId: character.agentId,
       });
     }
     return actors;
   }
 
-  private buildOverlay(): ReadonlyArray<OfficeDrawable> {
+  /** The envelopes in flight. Always built: there are at most two dozen. */
+  private buildEnvelopes(): ReadonlyArray<OfficeDrawable> {
+    const overlay: OfficeDrawable[] = [];
+    for (const envelope of this.envelopes) {
+      const from = this.seatPointOf(envelope.fromAgentId);
+      const to = this.seatPointOf(envelope.toAgentId);
+      if (from === null || to === null) continue;
+      const progress = easeInOut(
+        clamp(envelope.elapsedMs / envelope.durationMs, 0, 1),
+      );
+      overlay.push({
+        kind: "envelope",
+        x: from.x + (to.x - from.x) * progress,
+        y:
+          from.y +
+          (to.y - from.y) * progress -
+          ENVELOPE_ARC_LIFT * 4 * progress * (1 - progress),
+        pulseKind: envelope.pulseKind,
+        progress,
+        edgeId: envelope.edgeId,
+      });
+    }
+    return overlay;
+  }
+
+  private buildOverlay(rect: OfficeRect): ReadonlyArray<OfficeDrawable> {
     const overlay: OfficeDrawable[] = [];
     const clockSize = officeSpriteSize({ name: "clock" });
     for (const floor of this.currentLayout.floors) {
       // CENTER anchored on the face the `clock` prop just drew, so the hands
       // pivot on the dial rather than on its corner.
+      const face = this.point(floor.clockTile.col, floor.clockTile.row);
+      // How far the art reaches ABOVE its own tile - a sprite-space constant,
+      // so it is added to the PROJECTED tile top rather than recomputed from
+      // an unprojected row.
+      const overhang = OFFICE_TILE - clockSize.height;
+      const y = face.y + overhang;
+      if (
+        !rectsOverlap(
+          { x: face.x, y, width: clockSize.width, height: clockSize.height },
+          rect,
+        )
+      ) {
+        continue;
+      }
       overlay.push({
         kind: "clock",
-        x: floor.clockTile.col * OFFICE_TILE + clockSize.width / 2,
-        y:
-          spriteFootY({ name: "clock" }, floor.clockTile.row) +
-          clockSize.height / 2,
+        x: face.x + clockSize.width / 2,
+        y: y + clockSize.height / 2,
         timeMs: this.clockMs,
       });
     }
-    for (const character of this.orderedCharacters()) {
+    for (const character of this.charactersIn(rect)) {
       const head = this.headPointOfCharacter(character);
       const bubble = this.bubbleFor(character);
       if (bubble !== null) {
@@ -3540,25 +3795,9 @@ export class OfficeScene {
         y: point.y,
       });
     }
-    for (const envelope of this.envelopes) {
-      const from = this.seatPointOf(envelope.fromAgentId);
-      const to = this.seatPointOf(envelope.toAgentId);
-      if (from === null || to === null) continue;
-      const progress = easeInOut(
-        clamp(envelope.elapsedMs / envelope.durationMs, 0, 1),
-      );
-      overlay.push({
-        kind: "envelope",
-        x: from.x + (to.x - from.x) * progress,
-        y:
-          from.y +
-          (to.y - from.y) * progress -
-          ENVELOPE_ARC_LIFT * 4 * progress * (1 - progress),
-        pulseKind: envelope.pulseKind,
-        progress,
-        edgeId: envelope.edgeId,
-      });
-    }
+    // Envelopes are never culled: there are at most two dozen, and one flying
+    // in from off screen is exactly the thing worth seeing arrive.
+    overlay.push(...this.buildEnvelopes());
     return overlay;
   }
 
@@ -3567,8 +3806,9 @@ export class OfficeScene {
    * job. The can hangs beside the body rather than over the head: it is held,
    * not thought, and every other overlay sprite is a bubble.
    *
-   * The sparkle lands on the PLANT, one tile up from where the character
-   * stands, so what reads as watered is the plant and not the person.
+   * The sparkle lands on the PLANT the spot names, so what reads as watered
+   * is the plant and not the person - and it lands there in an isometric view
+   * too, because the tile goes through the projector like everything else.
    */
   private pushWateringDrawables(
     overlay: OfficeDrawable[],
@@ -3585,9 +3825,9 @@ export class OfficeScene {
       y: head.y + WATERING_CAN_Y_OFFSET,
     });
     if (character.waitMs > SPARKLE_MS) return;
-    const plantTile = this.propTileAbove(target.tile, "plant");
+    const plantTile = target.actionTile;
     if (plantTile === null) return;
-    const plant = officeTileCenter(plantTile);
+    const plant = this.tileCenter(plantTile);
     overlay.push({
       kind: "sprite",
       sprite: { name: "sparkle" },
@@ -3602,8 +3842,8 @@ export class OfficeScene {
    * rather than over the player's head - what is happening is on the screen,
    * and the player is only sitting or standing there.
    *
-   * The screen is looked up above the spot rather than offset from it, so how
-   * far back the sofa stands stays the layout's business.
+   * The screen is the one the SPOT names rather than an offset from where the
+   * player stands, so how far back the sofa is stays the plan's business.
    */
   private pushScreenSparkle(
     overlay: OfficeDrawable[],
@@ -3618,9 +3858,9 @@ export class OfficeScene {
       screen === "arcade" ? ARCADE_SPARKLE_GAP_MS : CONSOLE_SPARKLE_GAP_MS;
     const played = character.lingerTotalMs - character.waitMs;
     if (played % gapMs >= SPARKLE_MS) return;
-    const tile = this.propTileAbove(target.tile, screen);
+    const tile = target.actionTile;
     if (tile === null) return;
-    const point = officeTileCenter(tile);
+    const point = this.tileCenter(tile);
     overlay.push({
       kind: "sprite",
       sprite: { name: "sparkle" },
@@ -3708,33 +3948,28 @@ export class OfficeScene {
   }
 
   /**
-   * In DRAW order, because the renderer's hover test takes the last match:
-   * desks first, then the characters in the order they are painted, so a
-   * character walking across somebody else's desk is what the pointer is
-   * over - the same precedence `hitTest` gives a click.
+   * FRONT-MOST FIRST, which is the reverse of the order the frame is drawn in:
+   * a character walking across somebody else's desk is what the pointer is
+   * over, and so is the nearer of two overlapping towers. The renderer and
+   * `hitTest` both take the FIRST match, so the order IS the precedence.
    */
-  private buildHitRegions(): ReadonlyArray<OfficeHitRegion> {
+  private buildHitRegions(
+    characters: ReadonlyArray<OfficeCharacter>,
+    seats: ReadonlyArray<SeatedAgent>,
+  ): ReadonlyArray<OfficeHitRegion> {
     const regions: OfficeHitRegion[] = [];
-    for (const desk of this.visibleDesks()) {
-      regions.push({
-        agentId: desk.agentId,
-        rect: {
-          x: desk.deskTile.col * OFFICE_TILE,
-          y: desk.deskTile.row * OFFICE_TILE,
-          width: DESK_WIDTH_TILES * OFFICE_TILE,
-          height: DESK_HIT_ROWS * OFFICE_TILE,
-        },
-      });
-    }
-    for (const character of this.orderedCharacters()) {
+    for (let index = characters.length - 1; index >= 0; index -= 1) {
+      const character = characters[index];
       regions.push({
         agentId: character.agentId,
-        rect: {
-          x: character.col * OFFICE_TILE,
-          y: character.row * OFFICE_TILE + CHARACTER_Y_OFFSET,
-          width: OFFICE_CHARACTER_WIDTH,
-          height: OFFICE_CHARACTER_HEIGHT,
-        },
+        rect: this.characterBox(character),
+      });
+    }
+    for (let index = seats.length - 1; index >= 0; index -= 1) {
+      const seated = seats[index];
+      regions.push({
+        agentId: seated.agentId,
+        rect: this.seatBox(seated.seat),
       });
     }
     return regions;
@@ -3750,13 +3985,20 @@ export class OfficeScene {
 
   // ---- Shared derivations -------------------------------------------- //
 
-  private visibleDesks(): ReadonlyArray<OfficeDesk> {
-    const desks: OfficeDesk[] = [];
-    for (const desk of this.currentLayout.desks.values()) {
-      if (!this.visibleAgentIds.has(desk.agentId)) continue;
-      desks.push(desk);
+  /**
+   * Every agent that exists at the cursor and has somewhere to sit, with the
+   * seat it is actually in - the CLAIM where it holds one, never the plan's
+   * opening offer.
+   */
+  private visibleSeats(): ReadonlyArray<SeatedAgent> {
+    const seated: SeatedAgent[] = [];
+    for (const agentId of this.seats.knownAgentIds()) {
+      if (!this.visibleAgentIds.has(agentId)) continue;
+      const seat = this.seats.effectiveSeat(agentId);
+      if (seat === null) continue;
+      seated.push({ agentId, seat });
     }
-    return desks;
+    return seated;
   }
 
   /**
@@ -3771,21 +4013,20 @@ export class OfficeScene {
     ) {
       return this.byAgentIdCache;
     }
-    const ordered = Array.from(this.characters.values()).sort((left, right) => {
-      if (left.agentId === right.agentId) return 0;
-      return left.agentId < right.agentId ? -1 : 1;
-    });
+    const ordered = Array.from(this.characters.values()).sort((left, right) =>
+      compareIdPair(left.agentId, right.agentId),
+    );
     this.byAgentIdCache = ordered;
     this.byAgentIdVersion = this.membershipVersion;
     return ordered;
   }
 
-  /** The cabin an agent's desk stands in, or `null` for a desk-less record. */
-  private roomOfAgent(agentId: string): OfficeRoom | null {
-    const desk = this.currentLayout.desks.get(agentId);
-    if (desk === undefined) return null;
+  /** The cabin a seat stands in, by the id the plan put on the seat. */
+  private roomOfSeat(seat: OfficeSeat): OfficeRoom | null {
+    const roomId = seat.roomId;
+    if (roomId === null) return null;
     for (const room of this.currentLayout.rooms) {
-      if (withinTileRect(room.bounds, desk.deskTile)) return room;
+      if (room.rootAgentId === roomId) return room;
     }
     return null;
   }
@@ -3797,8 +4038,7 @@ export class OfficeScene {
     const ordered = Array.from(this.characters.values()).sort((left, right) => {
       if (left.row !== right.row) return left.row - right.row;
       if (left.col !== right.col) return left.col - right.col;
-      if (left.agentId === right.agentId) return 0;
-      return left.agentId < right.agentId ? -1 : 1;
+      return compareIdPair(left.agentId, right.agentId);
     });
     this.orderedCache = ordered;
     return ordered;
@@ -3811,40 +4051,158 @@ export class OfficeScene {
   }
 
   private headPointOfCharacter(character: OfficeCharacter): OfficePoint {
-    return {
-      x: character.col * OFFICE_TILE + OFFICE_CHARACTER_WIDTH / 2,
-      y: character.row * OFFICE_TILE + CHARACTER_Y_OFFSET,
-    };
+    const foot = this.footPoint(character.col, character.row);
+    return { x: foot.x, y: foot.y - OFFICE_CHARACTER_HEIGHT };
   }
 
   /**
    * Where an agent's head is WHEN SEATED - the endpoint every envelope uses.
    * A flight aimed at a live position lands in an empty chair the moment its
    * owner is walking in or standing at reception.
+   *
+   * Lifted by the seat's own `seatLift`, so a message between two rooftops in
+   * the City flies between the rooftops rather than through the streets.
    */
   private seatPointOf(agentId: string): OfficePoint | null {
-    const desk = this.currentLayout.desks.get(agentId);
-    if (desk === undefined) return null;
+    const seat = this.seats.effectiveSeat(agentId);
+    if (seat === null) return null;
+    const foot = this.footPoint(seat.chairTile.col, seat.chairTile.row);
     return {
-      x: desk.chairTile.col * OFFICE_TILE + OFFICE_CHARACTER_WIDTH / 2,
-      y: desk.chairTile.row * OFFICE_TILE + CHARACTER_Y_OFFSET,
+      x: foot.x,
+      y: foot.y - OFFICE_CHARACTER_HEIGHT - this.projector.seatLift(seat),
     };
   }
 
   /** The storey an agent lives on; its door, lobby and reception are that one's. */
   private floorIndexOfAgent(agentId: string): number {
-    const desk = this.currentLayout.desks.get(agentId);
-    if (desk === undefined) return 0;
+    const seat = this.seats.effectiveSeat(agentId);
+    if (seat === null) return 0;
     const floors = this.currentLayout.floors;
-    for (let index = 0; index < floors.length; index += 1) {
-      const top = floors[index].bounds.row;
-      const bottom = top + floors[index].bounds.rows - 1;
-      if (desk.deskTile.row >= top && desk.deskTile.row <= bottom) return index;
-    }
-    return 0;
+    if (seat.floorIndex < 0 || seat.floorIndex >= floors.length) return 0;
+    return seat.floorIndex;
   }
 
   private floorOfAgent(agentId: string): OfficeFloor {
     return this.currentLayout.floors[this.floorIndexOfAgent(agentId)];
+  }
+
+  private queueFacingOf(agentId: string): OfficeFacing {
+    return this.floorOfAgent(agentId).queueFacing;
+  }
+
+  private isWalkable(tile: OfficeTilePos): boolean {
+    const layout = this.currentLayout;
+    if (tile.row < 0 || tile.row >= layout.rows) return false;
+    if (tile.col < 0 || tile.col >= layout.cols) return false;
+    return layout.walkable[tile.row][tile.col];
+  }
+
+  /**
+   * Where a visitor stands to call on somebody: BEHIND their chair, looking at
+   * them, which is the aisle tile under a desk on this floor.
+   *
+   * Per PARTNER rather than per room, which is what makes a visit read as two
+   * people talking. The room's own `visitTile` is the fallback for a view
+   * whose chairs have nothing standable behind them - one tile for a whole
+   * cabin is a queue, not a conversation, so it is the last resort and not the
+   * rule.
+   */
+  private visitTileNear(
+    seat: OfficeSeat,
+    room: OfficeRoom | null,
+  ): OfficeTilePos | null {
+    const behind = stepAgainst(seat.chairTile, seat.facing);
+    if (this.isWalkable(behind)) return behind;
+    const fallback = room?.visitTile ?? null;
+    if (fallback === null || !this.isWalkable(fallback)) return null;
+    return fallback;
+  }
+
+  /**
+   * WAKING. A cold agent in a cubby whose status turns hot takes the first free
+   * reserve seat it can, and gives it back once it has gone quiet and is home.
+   *
+   * Attention and failure still queue at reception first; the claim is made
+   * here all the same, so the seat is spoken for from the moment the wake is
+   * decided rather than from the moment the walk ends - otherwise somebody
+   * else takes it while this one is standing in line.
+   */
+  private updateSeatClaims(): void {
+    const rehome: string[] = [];
+    for (const agentId of this.seats.knownAgentIds()) {
+      const assigned = this.seats.assignedSeat(agentId);
+      if (assigned === null || assigned.kind !== "cubby") continue;
+      const before = this.seats.effectiveSeat(agentId);
+      const hot =
+        this.visibleAgentIds.has(agentId) &&
+        !this.archivedIds.has(agentId) &&
+        isOfficeHotStatus(this.statusById.get(agentId));
+      if (hot) {
+        this.seats.claim(agentId, {
+          roomId: assigned.roomId,
+          floorIndex: assigned.floorIndex,
+        });
+      } else {
+        this.seats.endClaim(agentId);
+        // The seat is free once the character is OUT of it, which on a floor
+        // with motion means once it is back home and seated again.
+        const character = this.characters.get(agentId);
+        const home =
+          character === undefined ||
+          (character.seated &&
+            character.col === assigned.chairTile.col &&
+            character.row === assigned.chairTile.row);
+        if (home) this.seats.vacated(agentId);
+      }
+      const after = this.seats.effectiveSeat(agentId);
+      if (before?.seatId !== after?.seatId) rehome.push(agentId);
+    }
+    // A wake and a cooling-off both MOVE somebody, so the character walks -
+    // which is the whole visible point of a reserve seat.
+    this.rehomeCharacters(rehome);
+  }
+
+  /** The named place an agent standing somewhere is AT, for the hover card. */
+  private awayWhereabouts(
+    layout: OfficeLayout,
+    character: OfficeCharacter,
+  ): string {
+    if (this.inReceptionQueue(character)) return "Reception";
+    if (character.errand === "arriving" || character.errand === "leaving") {
+      return "Lobby";
+    }
+    const target = character.errandTarget;
+    if (target !== null && target.kind === "visit") return "Visiting";
+    const tile = {
+      col: Math.round(character.col),
+      row: Math.round(character.row),
+    };
+    return this.placeNameAt(
+      layout,
+      tile,
+      this.floorIndexOfAgent(character.agentId),
+    );
+  }
+
+  /**
+   * What the plan calls the place a tile is in: an amenity's name, a cabin's,
+   * or the open floor. Read off the layout rather than off a label the plan
+   * carried, so it stays true when somebody walks.
+   */
+  private placeNameAt(
+    layout: OfficeLayout,
+    tile: OfficeTilePos,
+    floorIndex: number,
+  ): string {
+    // A layout always has at least one storey, so an index off the end falls
+    // back to the first rather than to nothing.
+    const floor = layout.floors[floorIndex] ?? layout.floors[0];
+    for (const amenity of floor.amenities) {
+      if (withinTileRect(amenity.bounds, tile)) return amenity.name;
+    }
+    for (const room of layout.rooms) {
+      if (withinTileRect(room.bounds, tile)) return room.name;
+    }
+    return "Open floor";
   }
 }

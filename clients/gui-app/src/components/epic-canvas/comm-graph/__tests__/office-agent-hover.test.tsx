@@ -155,11 +155,13 @@ describe("followOfficeHover", () => {
 
   it("closes rather than re-targeting when another character is painted over the pointer", () => {
     const anchor = { agentId: "agent-1", screenX: 48, screenY: 40 };
-    // Draw order: agent-2 painted last is on top, so the pointer is on it now.
+    // FRONT-MOST FIRST, which is the order the scene now reports its hit
+    // regions in: agent-2 was painted over agent-1, so it leads the list and
+    // the pointer is on it rather than on the agent the card belongs to.
     expect(
       followOfficeHover(
         anchor,
-        [walker(40, "agent-1"), walker(44, "agent-2")],
+        [walker(44, "agent-2"), walker(40, "agent-1")],
         IDENTITY,
       ),
     ).toBe(null);
