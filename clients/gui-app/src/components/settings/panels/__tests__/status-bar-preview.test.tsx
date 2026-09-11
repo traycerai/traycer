@@ -376,24 +376,36 @@ describe("<StatusBarPreview />", () => {
   });
 
   describe("mirrors the store, without remounting", () => {
-    it("percentMode, showModeWord, showBar, hiddenWindowKeys and hiddenProviders", () => {
+    it("percentMode, showModeWord, showBar, the provider's limit selection and hiddenProviders", () => {
       // `resetsAt: null` sidesteps the wall-clock entirely for this test -
       // the label always falls back to the static duration regardless of
       // `showTimer`, so the countdown itself is covered separately below.
       mocks.providers = [configuredProvider("codex", "ephemeralProcess")];
       mocks.envelopes = {
-        codex: envelopeFor(
-          codexRateLimits({
+        codex: envelopeFor({
+          ...codexRateLimits({
             usedPercent: 40,
             resetsAt: null,
             durationMinutes: 300,
           }),
-        ),
+          // A looser sibling, so the selection has something beyond the
+          // tightest to add.
+          secondary: {
+            usedPercent: 10,
+            resetsAt: null,
+            durationMinutes: 7 * 24 * 60,
+          },
+        }),
       };
 
       renderPreview(false);
 
+      // Two live limits, so the name stays: the tightest alone is drawn, and
+      // it says which of the two it is.
       expect(windowText("codex:primary")).toBe("40% used 5h");
+      expect(
+        screen.queryByTestId("status-bar-window-codex:secondary"),
+      ).toBeNull();
 
       act(() => {
         useLayoutStore.getState().setStatusBarPercentMode("remaining");
@@ -412,14 +424,20 @@ describe("<StatusBarPreview />", () => {
       expect(screen.queryByTestId("status-bar-provider-mini-bar")).toBeNull();
 
       act(() => {
-        useLayoutStore.getState().toggleStatusBarWindow("codex:primary");
+        useLayoutStore
+          .getState()
+          .toggleStatusBarProviderLimit("codex", "codex:secondary");
+      });
+      expect(windowText("codex:primary")).toBe("60% 5h");
+      expect(windowText("codex:secondary")).toBe("90% wk");
+      act(() => {
+        useLayoutStore
+          .getState()
+          .toggleStatusBarProviderLimit("codex", "codex:secondary");
       });
       expect(
-        screen.queryByTestId("status-bar-window-codex:primary"),
+        screen.queryByTestId("status-bar-window-codex:secondary"),
       ).toBeNull();
-      act(() => {
-        useLayoutStore.getState().toggleStatusBarWindow("codex:primary");
-      });
       expect(windowText("codex:primary")).toBe("60% 5h");
 
       act(() => {

@@ -45,7 +45,12 @@ import {
 } from "@/lib/rate-limits/rate-limit-window-catalog";
 import type { RateLimitWindowSeverity } from "@/lib/rate-limits/window-severity";
 import { useSampledNow } from "@/lib/relative-time";
-import { useLayoutStore } from "@/stores/settings/layout-store";
+import {
+  statusBarProviderLimitSelection,
+  useLayoutStore,
+  type StatusBarProviderLimitSelection,
+  type StatusBarProviderLimitSelections,
+} from "@/stores/settings/layout-store";
 
 /**
  * The status bar's left cluster, from the watched host's provider inventory to
@@ -53,7 +58,8 @@ import { useLayoutStore } from "@/stores/settings/layout-store";
  *
  * Generalises `useHeaderRateLimitBars`: every windowed provider rather than two,
  * every window the catalog reports rather than a fixed pair, and the layout
- * store's two deny-lists applied on top. Everything about a provider that is
+ * store's provider deny-list and per-provider limit selections applied on top.
+ * Everything about a provider that is
  * NOT a display preference (which profile is read, whether that profile may
  * fetch, which lane it fetches on) is resolved exactly as the header hook and
  * the popover resolve it, so the three surfaces cannot disagree about what they
@@ -107,12 +113,27 @@ export interface StatusBarProviderSegmentModel {
    */
   readonly reason: RateLimitUnavailableReason | null;
   /**
-   * Visible, live windows in catalog order. A `degraded` segment carries the
-   * retained reading's windows - dimming them is the whole point - while `cold`
-   * and `unavailable` have none to carry.
+   * Every live window in catalog order - what the provider HAS, before the
+   * user's selection is applied. A `degraded` segment carries the retained
+   * reading's windows - dimming them is the whole point - while `cold` and
+   * `unavailable` have none to carry.
    */
   readonly windows: ReadonlyArray<StatusBarRateLimitWindow>;
-  /** The window this provider is judged by when there is room for only one. */
+  /**
+   * The windows the strip draws when it has room for more than one: the
+   * user's selection resolved against `windows`, in catalog order. The
+   * automatic entry contributes the tightest of `windows`, each explicit pick
+   * contributes the window it names, and a window both name is drawn once - a
+   * filter over `windows` cannot list one twice. A selection that names
+   * nothing currently live (every pick a model since renamed) falls back to
+   * the tightest, so a provider never vanishes for a stale key.
+   */
+  readonly shown: ReadonlyArray<StatusBarRateLimitWindow>;
+  /**
+   * The window this provider is judged by when there is room for only one: the
+   * tightest of `shown`, which is the tightest overall whenever the automatic
+   * entry is on, and the tightest of the explicit picks otherwise.
+   */
   readonly tightest: StatusBarRateLimitWindow | null;
 }
 
@@ -343,14 +364,12 @@ function segmentState(
   return { state: "live", reason: null };
 }
 
-function visibleWindows(
+function liveWindows(
   rateLimits: ProviderRateLimits | null,
-  hiddenWindowKeys: ReadonlyArray<string>,
   now: number,
 ): ReadonlyArray<StatusBarRateLimitWindow> {
   if (rateLimits === null) return [];
   return providerWindowEntries(rateLimits).flatMap((entry) => {
-    if (hiddenWindowKeys.includes(entry.windowKey)) return [];
     // A window whose reset instant has passed describes a period that has
     // already rolled; printing its percentage would report spent usage as
     // current.
@@ -367,6 +386,30 @@ function visibleWindows(
       },
     ];
   });
+}
+
+/**
+ * The user's selection, resolved against what the provider currently reports.
+ *
+ * A filter over the live list rather than a union of two lists, so the result
+ * is in catalog order and a window the automatic entry and an explicit pick
+ * both name appears once. An explicit pick that matches nothing live is
+ * simply not there; when NONE of the selection is, the tightest stands in,
+ * because a provider whose every pick has gone stale should still be judged
+ * rather than disappear.
+ */
+function shownWindows(
+  windows: ReadonlyArray<StatusBarRateLimitWindow>,
+  selection: StatusBarProviderLimitSelection,
+): ReadonlyArray<StatusBarRateLimitWindow> {
+  const tightest = tightestWindow(windows);
+  const shown = windows.filter(
+    (window) =>
+      (selection.automatic && window === tightest) ||
+      selection.limitKeys.includes(window.windowKey),
+  );
+  if (shown.length > 0) return shown;
+  return tightest === null ? [] : [tightest];
 }
 
 /** Stable identity for a passive reader's empty refresh handles. */
@@ -386,7 +429,7 @@ function toSegments(
   queries: ReadonlyArray<
     UseQueryResult<ProviderRateLimitEnvelope, HostRpcError>
   >,
-  hiddenWindowKeys: ReadonlyArray<string>,
+  selections: StatusBarProviderLimitSelections,
   now: number,
 ): ReadonlyArray<StatusBarProviderSegmentModel> {
   return targets.map((target, index) => {
@@ -397,12 +440,17 @@ function toSegments(
     // halves, so the state a segment reports and the windows it draws can never
     // describe two different snapshots.
     const retained = resolveRetainedProviderRateLimits(envelope);
-    const windows = visibleWindows(retained, hiddenWindowKeys, now);
+    const windows = liveWindows(retained, now);
+    const shown = shownWindows(
+      windows,
+      statusBarProviderLimitSelection(selections, target.provider.providerId),
+    );
     return {
       providerId: target.provider.providerId,
       ...segmentState(retained, envelope, query.isError),
       windows,
-      tightest: tightestWindow(windows),
+      shown,
+      tightest: tightestWindow(shown),
     };
   });
 }
@@ -410,7 +458,7 @@ function toSegments(
 /**
  * Which of the three empty states applies, if any. A provider inventory that is
  * empty is the host's answer; segments that all dropped out of the draw are the
- * user's own deny-lists (or, rarely, every window having expired at once).
+ * user's own deny-list (or, rarely, every window having expired at once).
  */
 function clusterFor(
   providerCount: number,
@@ -517,21 +565,11 @@ export function useStatusBarRateLimitSegments(input: {
     ...toSegments(
       queueObserved,
       queueObservedQueries,
-      rateLimits.hiddenWindowKeys,
+      rateLimits.providers,
       now,
     ),
-    ...toSegments(
-      httpPolling,
-      httpPollingQueries,
-      rateLimits.hiddenWindowKeys,
-      now,
-    ),
-    ...toSegments(
-      httpObserved,
-      httpObservedQueries,
-      rateLimits.hiddenWindowKeys,
-      now,
-    ),
+    ...toSegments(httpPolling, httpPollingQueries, rateLimits.providers, now),
+    ...toSegments(httpObserved, httpObservedQueries, rateLimits.providers, now),
   ]).filter(hasContent);
 
   return {

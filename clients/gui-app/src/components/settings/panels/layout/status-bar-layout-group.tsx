@@ -5,12 +5,13 @@ import { LiveToggleRow } from "@/components/settings/panels/layout/live-toggle-r
 import { LAYOUT } from "@/components/settings/panels/layout-settings.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
+import {
+  SettingsCheckboxList,
+  type SettingsCheckboxListItem,
+} from "@/components/settings/controls/settings-checkbox-list";
 import { SettingsSegmentedControl } from "@/components/settings/controls/settings-segmented-control";
 import { SettingsSubgroup } from "@/components/settings/controls/settings-subgroup";
-import {
-  SettingsToggleChips,
-  type SettingsToggleChip,
-} from "@/components/settings/controls/settings-toggle-chips";
+import { SettingsToggleChips } from "@/components/settings/controls/settings-toggle-chips";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import { useScopedHostBinding } from "@/components/settings/host-scope/use-scoped-host-binding";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
@@ -57,8 +58,10 @@ import { isStatusBarControlsAvailable } from "@/lib/settings/settings-availabili
 import { cn } from "@/lib/utils";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import {
+  statusBarProviderLimitSelection,
   useLayoutStore,
   type ResourceMetric,
+  type StatusBarProviderLimitSelection,
 } from "@/stores/settings/layout-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
@@ -410,27 +413,26 @@ interface StatusBarProviderRow {
 }
 
 /**
- * One card per visible provider, holding the two things that are about that
- * provider alone: whether it shows every window or only its tightest, and which
- * of its windows count as visible at all.
+ * One card per visible provider, holding the one thing that is about that
+ * provider alone: which of its limits the segment draws - the tightest at the
+ * moment, any it names explicitly, or both.
  */
 function ScopedStatusBarRateLimitProviders(): ReactNode {
   const rows = useStatusBarProviderRows();
   const hiddenProviders = useLayoutStore(
     (state) => state.statusBar.rateLimits.hiddenProviders,
   );
-  const hiddenWindowKeys = useLayoutStore(
-    (state) => state.statusBar.rateLimits.hiddenWindowKeys,
-  );
-  const expandedProviders = useLayoutStore(
-    (state) => state.statusBar.rateLimits.expandedProviders,
+  const selections = useLayoutStore(
+    (state) => state.statusBar.rateLimits.providers,
   );
   const toggleProvider = useLayoutStore(
     (state) => state.toggleStatusBarProvider,
   );
-  const toggleWindow = useLayoutStore((state) => state.toggleStatusBarWindow);
-  const toggleExpandedProvider = useLayoutStore(
-    (state) => state.toggleStatusBarExpandedProvider,
+  const setProviderAutomatic = useLayoutStore(
+    (state) => state.setStatusBarProviderAutomatic,
+  );
+  const toggleProviderLimit = useLayoutStore(
+    (state) => state.toggleStatusBarProviderLimit,
   );
 
   if (rows.length === 0) {
@@ -439,90 +441,189 @@ function ScopedStatusBarRateLimitProviders(): ReactNode {
 
   return (
     <>
-      {rows.map((row) => (
-        <LiveSubgroup
-          key={row.providerId}
-          title={row.label}
-          description={providerRowDescription(row)}
-          icon={
-            <HarnessIcon
-              harnessId={providerIdToGuiHarnessId(row.providerId)}
-              className="size-3.5"
-            />
-          }
-          level={4}
-          // A hidden provider collapses its rows: they govern what a segment
-          // that is not drawn would have contained. Nothing is written when it
-          // closes, so re-enabling brings the same windows back.
-          open={!hiddenProviders.includes(row.providerId)}
-          dataTestId={`layout-provider-subgroup-${row.providerId}`}
-          control={
-            <Switch
-              checked={!hiddenProviders.includes(row.providerId)}
-              onCheckedChange={() => {
-                trackLayoutSetting("layout.statusBar.rateLimits.provider");
-                toggleProvider(row.providerId);
-              }}
-              aria-label={row.label}
-            />
-          }
-        >
-          {/* Above the window chips on purpose: it decides how many of them
-            reach the strip, while each of them decides whether its window
-            counts as visible at all - in both modes. */}
-          <LiveToggleRow
-            label="Show all limits"
-            description="Off: only the tightest limit. On: every limit not hidden below."
+      {rows.map((row) => {
+        const selection = statusBarProviderLimitSelection(
+          selections,
+          row.providerId,
+        );
+        const rendered = renderedSelection(row, selection);
+        return (
+          <LiveSubgroup
+            key={row.providerId}
+            title={row.label}
+            description={providerRowDescription(row)}
+            icon={
+              <HarnessIcon
+                harnessId={providerIdToGuiHarnessId(row.providerId)}
+                className="size-3.5"
+              />
+            }
+            level={4}
+            // A hidden provider collapses its rows: they govern what a segment
+            // that is not drawn would have contained. Nothing is written when
+            // it closes, so re-enabling brings the same selection back.
+            open={!hiddenProviders.includes(row.providerId)}
+            dataTestId={`layout-provider-subgroup-${row.providerId}`}
             control={
               <Switch
-                checked={expandedProviders.includes(row.providerId)}
+                checked={!hiddenProviders.includes(row.providerId)}
                 onCheckedChange={() => {
-                  trackLayoutSetting(
-                    "layout.statusBar.rateLimits.expandedProvider",
-                  );
-                  toggleExpandedProvider(row.providerId);
+                  trackLayoutSetting("layout.statusBar.rateLimits.provider");
+                  toggleProvider(row.providerId);
                 }}
-                aria-label={`${row.label} show all limits`}
+                aria-label={row.label}
               />
             }
-          />
-          <LiveToggleRow
-            label="Limits"
-            description="Which of this provider's limits the strip may show."
-            control={
-              <SettingsToggleChips
-                chips={windowChips(row, hiddenWindowKeys)}
-                onToggle={(windowKey) => {
-                  trackLayoutSetting("layout.statusBar.rateLimits.window");
-                  toggleWindow(windowKey);
-                }}
-                ariaLabel={`${row.label} limits`}
-                emptyLabel="Waiting for first reading"
-              />
-            }
-          />
-        </LiveSubgroup>
-      ))}
+          >
+            <LiveToggleRow
+              label="Limits"
+              description={limitsRowDescription(row, selection)}
+              control={
+                <SettingsCheckboxList
+                  items={limitItems(row, rendered)}
+                  onToggle={(value) => {
+                    switch (value.kind) {
+                      case "automatic":
+                        trackLayoutSetting(
+                          "layout.statusBar.rateLimits.providerAutomatic",
+                        );
+                        setProviderAutomatic(
+                          row.providerId,
+                          !rendered.automatic,
+                        );
+                        return;
+                      case "limit":
+                        trackLayoutSetting(
+                          "layout.statusBar.rateLimits.providerLimits",
+                        );
+                        // The stand-in, made real. While the list is forcing
+                        // the automatic entry on (`renderedSelection`) the
+                        // stored flag is still off, so adding a pick would
+                        // lift the force and leave the entry just clicked as
+                        // the only checked one - held, blurring to `<body>`,
+                        // with automatic unchecking itself in the same paint.
+                        // Writing the flag the user has been looking at keeps
+                        // the list saying what it said. Only ever a CHECK:
+                        // the force exists precisely because no visible pick
+                        // is checked. Written first, so no intermediate paint
+                        // can hold the clicked box either.
+                        if (rendered.automatic && !selection.automatic) {
+                          setProviderAutomatic(row.providerId, true);
+                        }
+                        toggleProviderLimit(row.providerId, value.windowKey);
+                        return;
+                    }
+                  }}
+                  ariaLabel={`${row.label} limits`}
+                />
+              }
+            />
+          </LiveSubgroup>
+        );
+      })}
     </>
   );
 }
 
-function windowChips(
+/**
+ * One entry of the limits list. A shape rather than a string, so the handler
+ * switches on `kind` exhaustively instead of recognising the automatic entry by
+ * its spelling and treating everything else as a window key.
+ */
+type LimitListEntry =
+  | { readonly kind: "automatic" }
+  | { readonly kind: "limit"; readonly windowKey: string };
+
+/**
+ * The selection AS THE LIST DRAWS IT, which is not always the selection the
+ * store holds.
+ *
+ * `limitKeys` may name a window the current reading does not carry - a model
+ * since renamed, or any pick at all before the first reading lands, which is
+ * routine on this page since it never fetches. `shownWindows` stands the
+ * tightest in for that, so the list has to show the automatic entry checked:
+ * otherwise a migrated `Show all limits` user opening Layout cold sees nothing
+ * checked while their strip is drawing something. It is the resolution the
+ * segment already performs, shown rather than re-decided.
+ *
+ * Held (see `limitItems`) rather than clickable in that state, because the
+ * stored `automatic` is still off and unchecking what was never checked could
+ * only write a selection the store refuses. A pick made WHILE it is forced
+ * writes the flag through with it, so the force is never lifted out from under
+ * the entry that lifted it - see the `limit` arm of the list's `onToggle`.
+ */
+function renderedSelection(
   row: StatusBarProviderRow,
-  hiddenWindowKeys: ReadonlyArray<string>,
-): ReadonlyArray<SettingsToggleChip<string>> {
-  return row.windows.map((window) => ({
-    value: window.windowKey,
-    label: window.label,
-    pressed: !hiddenWindowKeys.includes(window.windowKey),
-    disabled: false,
-  }));
+  selection: StatusBarProviderLimitSelection,
+): StatusBarProviderLimitSelection {
+  const limitKeys = row.windows
+    .filter((window) => selection.limitKeys.includes(window.windowKey))
+    .map((window) => window.windowKey);
+  return {
+    automatic: selection.automatic || limitKeys.length === 0,
+    limitKeys,
+  };
+}
+
+/**
+ * The automatic entry first, then one entry per limit the provider currently
+ * reports, in catalog order.
+ *
+ * The last checked entry ON SCREEN is held: unchecking it would leave the
+ * segment with nothing to draw, and the provider switch above is the control
+ * for that. Counted against the list rather than the store, because a pick the
+ * store remembers for a window the provider is not reporting right now is not
+ * something the user can see to re-check - and it is the rendered selection
+ * that is counted, so "nothing visible is checked" is never a state this list
+ * can be in.
+ */
+function limitItems(
+  row: StatusBarProviderRow,
+  rendered: StatusBarProviderLimitSelection,
+): ReadonlyArray<SettingsCheckboxListItem<LimitListEntry>> {
+  const checkedCount = rendered.limitKeys.length + (rendered.automatic ? 1 : 0);
+  return [
+    {
+      key: "automatic",
+      value: { kind: "automatic" },
+      label: "Tightest limit (automatic)",
+      checked: rendered.automatic,
+      disabled: rendered.automatic && checkedCount === 1,
+    },
+    ...row.windows.map((window) => {
+      const checked = rendered.limitKeys.includes(window.windowKey);
+      return {
+        key: window.windowKey,
+        value: { kind: "limit" as const, windowKey: window.windowKey },
+        label: window.label,
+        checked,
+        disabled: checked && checkedCount === 1,
+      };
+    }),
+  ];
+}
+
+function limitsRowDescription(
+  row: StatusBarProviderRow,
+  selection: StatusBarProviderLimitSelection,
+): string {
+  // Keys are stable, so a provider with no reading yet still has its automatic
+  // entry - the row says why the list stops there rather than implying the
+  // provider reports nothing else. Said differently for a provider whose picks
+  // are stored but unreported, where "the strip shows the tightest" is only
+  // true until the reading lands.
+  if (row.windows.length === 0) {
+    return selection.automatic
+      ? "The strip shows whichever limit is tightest. Its other limits are listed here once the first reading arrives."
+      : "No reading yet, so this provider's limits aren't listed and the strip falls back to whichever is tightest. The limits you picked come back with them.";
+  }
+  return "The strip shows every checked limit; automatic is whichever is tightest right now. At least one stays checked - the switch above hides the provider.";
 }
 
 function providerRowDescription(row: StatusBarProviderRow): string {
   // Keys are stable, so a provider with no reading yet still toggles - the
-  // chips row says why it lists none rather than the subtitle implying the
-  // provider reports none.
+  // limits row says why it lists only the automatic entry rather than the
+  // subtitle implying the provider reports none.
   if (row.windows.length === 0) return row.profileLabel;
   const limits =
     row.windows.length === 1 ? "1 limit" : `${row.windows.length} limits`;

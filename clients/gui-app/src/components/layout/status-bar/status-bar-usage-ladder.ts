@@ -21,7 +21,7 @@ import type { StatusBarDensity } from "@/components/layout/status-bar/status-bar
  * - `no-bars` — the mini bar goes. It duplicates the percentage beside it.
  * - `no-timers` — the countdown gives way to the window's static name.
  * - `percent-only` — icon and coloured percentage, nothing else, and one
- *   reading per provider regardless of "show all limits": several bare
+ *   reading per provider however many limits are selected: several bare
  *   numbers under one icon say which limits exist but not which is which.
  * - `icon-only` — the icon alone. Below this the cluster folds whole providers
  *   into a `+N` chip rather than inventing a shorter rung.

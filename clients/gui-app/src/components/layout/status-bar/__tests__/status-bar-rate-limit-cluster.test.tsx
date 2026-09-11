@@ -121,6 +121,7 @@ function segmentFixture(
     state: "live",
     reason: null,
     windows: tightest === null ? [] : [tightest],
+    shown: tightest === null ? [] : [tightest],
     tightest,
   };
 }

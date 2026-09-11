@@ -1300,13 +1300,13 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     analytics ids are unchanged too, but they are now reported under the
     `layout` section (`AnalyticsSettingsSection`).
 
-    | Row                                 | Was                       | Now        |
-    | ----------------------------------- | ------------------------- | ---------- |
-    | Show resource monitor in header     | General ▸ Running agents  | Status bar |
-    | Home tab                            | General ▸ Layout          | Tabs       |
-    | Pin context breakdown               | General ▸ Chat & composer | Chat       |
-    | Minimap side                        | Appearance                | Chat       |
-    | Resource chips on sidebar rows      | General ▸ Running agents  | Sidebar    |
+    | Row                             | Was                       | Now        |
+    | ------------------------------- | ------------------------- | ---------- |
+    | Show resource monitor in header | General ▸ Running agents  | Status bar |
+    | Home tab                        | General ▸ Layout          | Tabs       |
+    | Pin context breakdown           | General ▸ Chat & composer | Chat       |
+    | Minimap side                    | Appearance                | Chat       |
+    | Resource chips on sidebar rows  | General ▸ Running agents  | Sidebar    |
 
     Their search entries moved with them
     (`lib/settings-search/settings-search-entries.ts`), each keeping its old
@@ -1339,9 +1339,51 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     `rateLimits.enabled`) holding **Display** (percentage used / remaining, the
     used / remaining WORD after each percentage, reset timer, mini bar) and a
     `Providers on <hostLabel>` band of one subgroup per provider (title switch =
-    visible, then `Show all limits` and a chip per limit); and **Resource
-    monitor** (subgroup, title switch = `resources.enabled`) holding Scope
-    (Host / Desktop app) and a Metrics chip row.
+    visible, then one `Limits` checkbox list); and **Resource monitor**
+    (subgroup, title switch = `resources.enabled`) holding Scope (Host /
+    Desktop app) and a Metrics chip row.
+  - **Which of a provider's limits the strip draws is ONE checkbox list per
+    provider** (`controls/settings-checkbox-list.tsx`): `Tightest limit
+(automatic)` first, then one entry per limit the provider currently
+    reports, labelled from the window catalog (`5h`, `wk`, `Fable`). The strip
+    draws the UNION of the checked entries in catalog order - automatic is
+    whichever limit binds hardest at that moment, and a limit both name is
+    drawn once. Default is automatic alone. At least one entry stays checked:
+    the last checked entry on screen is `disabled`, because a provider that
+    draws nothing is what the provider switch above is for. Store:
+    `rateLimits.providers[providerId] = { automatic, limitKeys }`
+    (`stores/settings/layout-store.ts`); a provider with no entry is on the
+    default, so a provider connected later shows its tightest limit with no
+    visit here. The store refuses a write that would leave a selection
+    drawing nothing, whichever order the two are flipped in. This replaced
+    `Show all limits` + a deny-list chip row; the one-time migration in
+    `merge` turns an expanded provider into explicit picks of its FIXED
+    limits less the hidden ones with automatic off (a model-scoped or extra
+    window's key exists only in a snapshot, so it cannot be carried), drops
+    hidden keys for a provider that was not expanded (the default has no list
+    to remove them from), and runs only while `providers` is absent.
+    Resolution happens in `useStatusBarRateLimitSegments`, not in the
+    segment: the model carries `windows` (every live limit), `shown` (the
+    selection resolved against them, falling back to the tightest when every
+    pick has gone stale so the provider never vanishes for a renamed model)
+    and `tightest` (the tightest of `shown` - the tightest overall whenever
+    automatic is on, of the picks otherwise). Analytics:
+    `layout.statusBar.rateLimits.providerAutomatic` / `.providerLimits`.
+    **The list shows that resolution rather than re-deciding it.** The page
+    never fetches, so "no reading yet" is routine and a stored pick may name
+    no currently reported window - for a migrated `Show all limits` user, all
+    of them. `renderedSelection` therefore draws the automatic entry CHECKED
+    and held whenever nothing visible is checked, which is exactly what
+    `shownWindows` is standing in, and writes nothing: the picks return with
+    the first reading. A pick made WHILE it is standing in writes
+    `automatic: true` through with the limit, because lifting the stand-in is
+    what would otherwise leave the entry just clicked as the only checked one -
+    held, blurred, with automatic unchecking itself in the same paint. Together
+    those two mean the entry a click can reach is never the one about to be
+    held, so no click ever blurs a focused box to `<body>`.
+    The group carries `aria-describedby` to its row description
+    (`useSettingsRowDescriptionId`), since `disabled` takes the held entry out
+    of the tab order and the rule that held it is stated there.
   - **Chat** (in `layout-settings-panel.tsx` itself). `Pin context breakdown`
     is a `SettingsSubgroup` whose title switch is the pin
     (`pinContextUsageBreakdown`); open, it shows one `Fields` chip row
@@ -1393,22 +1435,27 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
   - **A set of independent on/off choices is a chip row, not a switch per
     choice** (`controls/settings-toggle-chips.tsx`). A switch each is right
     while there are three of them and a sentence to say about each; it is wrong
-    for a provider's rolling limits, whose labels are `5h` / `wk` / `Opus wk`
-    and whose count is whatever the account reports. The chips are real toggle
-    buttons carrying `aria-pressed`, so Enter and Space come from the element
-    rather than from a handler. `RAM share` under the Desktop-app scope is
-    `aria-disabled` rather than `disabled` - it keeps its place in the tab order,
-    which is what makes the row's hint reachable - and the scope has no
-    total-memory denominator to divide by.
+    for the resource metrics, whose labels are tokens and whose count is
+    fixed. The chips are real toggle buttons carrying `aria-pressed`, so Enter
+    and Space come from the element rather than from a handler. `RAM share`
+    under the Desktop-app scope is `aria-disabled` rather than `disabled` - it
+    keeps its place in the tab order, which is what makes the row's hint
+    reachable - and the scope has no total-memory denominator to divide by.
+    The chip row is the wrong shape once one entry is a sentence and the rest
+    are its alternatives - `Tightest limit (automatic)` beside `5h` reads as
+    two kinds of thing on one line - which is why a provider's limits are a
+    checkbox column instead.
   - **Every rate-limit row that hides something is also a rung of the strip's
-    collapse ladder**, and the two meet rather than fight. A provider shows its
-    tightest limit unless `Show all limits` is on; the limit switches prune
-    what counts as visible in BOTH modes. When the cluster runs out of room it
-    drops the mode word, then the bars, then the timers, then everything but
-    the coloured percentage, then everything but the icon, and finally folds
-    whole providers into a `+N` chip - skipping any rung whose setting is
-    already off, since taking away something invisible would free no width.
-    The percentage is severity-coloured at every rung, bar or no bar.
+    collapse ladder**, and the two meet rather than fight. A provider draws
+    its selected limits (the tightest alone by default). When the cluster runs
+    out of room it drops the mode word, then the bars, then the timers, then
+    everything but the coloured percentage - at which point it also narrows
+    to the tightest of the selection however many are checked, since several
+    bare numbers under one icon say which limits exist but not which is
+    which - then everything but the icon, and finally folds whole providers
+    into a `+N` chip - skipping any rung whose setting is already off, since
+    taking away something invisible would free no width. The percentage is
+    severity-coloured at every rung, bar or no bar.
   - **A limit is NAMED on the strip only when the name disambiguates**
     (`windowLabelText`, `lib/rate-limits/status-bar-window-text.ts`). A
     provider with ONE visible limit reads `100% used 6d` - there is nothing
@@ -1419,10 +1466,10 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     name that carries identity (`Fable`, `Opus wk`, `Cursor models`, a named
     Codex limit) is kept and the countdown appended, since several of those
     share one reset instant and would otherwise print as one string. The count
-    is the provider's VISIBLE limits, not the ones the rung draws - an
-    unexpanded provider draws its tightest alone and still has to say which of
-    several it is. Settings' chip row is not a caller: it lists every limit so
-    each can be toggled, so a name is the point even when there is one.
+    is the provider's LIVE limits, not the ones the rung draws - a provider
+    drawing its tightest alone still has to say which of several it is.
+    Settings' checkbox list is not a caller: it lists every limit so each can
+    be checked, so a name is the point even when there is one.
   - **Grok's period label never parses the wire token.** `periodType` is
     `z.string().nullable()`, so `grokPeriodLabel`
     (`lib/rate-limits/grok-period-label.ts`) names the window from its
@@ -1446,14 +1493,14 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       the page `Daily` / `Weekly` / `Monthly` + `Usage`. Injecting only the
       formatter put the page's prose on the strip by the table's back door
       (`[5h] [wk] [Weekly]`); the module owns the ORDER, never the words.
-  - **The strip's right-click menu deliberately has no `Show all limits`
-    item.** Its provider rows are `ContextMenuCheckboxItem`s - a one-click
-    visibility toggle each - and a checkbox item cannot also host a sub-menu
-    trigger, so offering the second preference there would either demote the
-    visibility toggle into a submenu or add a second flat checkbox per
-    provider, doubling a menu's length for the rarer of the two flips. The
-    quick menu stays the visibility menu; both live one item away under
-    `Status bar settings…`.
+  - **The strip's right-click menu deliberately has no per-limit items.**
+    Its provider rows are `ContextMenuCheckboxItem`s - a one-click visibility
+    toggle each - and a checkbox item cannot also host a sub-menu trigger, so
+    offering the limit selection there would either demote the visibility
+    toggle into a submenu or add a flat checkbox per limit per provider,
+    multiplying a menu's length for the rarer of the two flips. The quick
+    menu stays the visibility menu; both live one item away under `Status bar
+settings…`.
   - **The preview is the strip, not a picture of it**
     (`panels/layout/status-bar-preview.tsx`). It renders the same
     `StatusBarUsageReadings` box, the same `StatusBarProviderSegment`, the same

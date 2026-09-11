@@ -816,6 +816,10 @@ function sampleSegment(
     state: "live",
     reason: null,
     windows: [window],
+    // The one invented reading is also the whole selection: a sample stands in
+    // for a provider that has reported nothing, so there is no stored pick to
+    // resolve against and nothing for the list to hold back.
+    shown: [window],
     tightest: window,
   };
 }

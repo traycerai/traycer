@@ -65,14 +65,13 @@ export function windowPercentValueText(
  * are guaranteed to share one reset instant with a sibling, so dropping it
  * would print two windows as one indistinguishable string.
  *
- * `visibleWindowCount` is the provider's visible windows, NOT the ones this
- * rung happens to draw: an unexpanded provider draws its tightest alone and
- * still has to say which of several that one is. It is passed in rather than
- * re-derived here, so the count that decided what to draw is the count that
- * words it.
+ * `visibleWindowCount` is the provider's live windows, NOT the ones this rung
+ * happens to draw: a provider drawing its tightest alone still has to say
+ * which of several that one is. It is passed in rather than re-derived here,
+ * so the count that decided what to draw is the count that words it.
  *
- * Settings' chip row is deliberately not a caller. It lists every limit a
- * provider has so they can be toggled individually, so there a name is the
+ * Settings' checkbox list is deliberately not a caller. It lists every limit a
+ * provider has so they can be checked individually, so there a name is the
  * whole point even when there is only one.
  */
 export function windowLabelText(params: {

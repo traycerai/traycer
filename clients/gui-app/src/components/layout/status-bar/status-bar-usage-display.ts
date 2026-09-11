@@ -4,7 +4,6 @@ import type {
 } from "@/hooks/rate-limits/use-status-bar-rate-limit-segments";
 import { providerDisplayName } from "@/lib/provider-ordering";
 import { formatUnavailableReason } from "@/lib/provider-rate-limit-content";
-import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 import { windowPercentText } from "@/lib/rate-limits/status-bar-window-text";
 import { cn } from "@/lib/utils";
 import {
@@ -63,17 +62,18 @@ const NO_SEGMENTS: ReadonlyArray<StatusBarProviderSegmentModel> = [];
  * measured.
  *
  * One value because two surfaces draw these readings - the strip and the
- * Settings preview - and both need the same five answers for the same two
+ * Settings preview - and both need the same four answers for the same two
  * things: the ladder's active rungs, and what a segment prints at the rung it
  * lands on. Passing them together is what keeps a preview from being a second
- * opinion about the settings it exists to show.
+ * opinion about the settings it exists to show. Which of a provider's limits
+ * are drawn is NOT here: that is resolved into the segment model itself, so a
+ * segment already carries the windows it should draw.
  */
 export interface StatusBarUsageDisplay {
   readonly percentMode: PercentMode;
   readonly showModeWord: boolean;
   readonly showBar: boolean;
   readonly showTimer: boolean;
-  readonly expandedProviders: ReadonlyArray<RateLimitProviderId>;
 }
 
 /**
@@ -92,10 +92,7 @@ export function useStatusBarUsageDisplay(): StatusBarUsageDisplay {
   const showTimer = useLayoutStore(
     (state) => state.statusBar.rateLimits.showTimer,
   );
-  const expandedProviders = useLayoutStore(
-    (state) => state.statusBar.rateLimits.expandedProviders,
-  );
-  return { percentMode, showModeWord, showBar, showTimer, expandedProviders };
+  return { percentMode, showModeWord, showBar, showTimer };
 }
 
 /** The segments a cluster is drawing, or one shared empty list for the rest. */

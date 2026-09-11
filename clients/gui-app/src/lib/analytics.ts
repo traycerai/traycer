@@ -302,13 +302,13 @@ export type AnalyticsSetting =
   | "layout.sidebar.resetVisibility"
   | "layout.statusBar.placement"
   | "layout.statusBar.rateLimits.enabled"
-  | "layout.statusBar.rateLimits.expandedProvider"
   | "layout.statusBar.rateLimits.percentMode"
   | "layout.statusBar.rateLimits.provider"
+  | "layout.statusBar.rateLimits.providerAutomatic"
+  | "layout.statusBar.rateLimits.providerLimits"
   | "layout.statusBar.rateLimits.showBar"
   | "layout.statusBar.rateLimits.showModeWord"
   | "layout.statusBar.rateLimits.showTimer"
-  | "layout.statusBar.rateLimits.window"
   | "layout.statusBar.resources.enabled"
   | "layout.statusBar.resources.metric"
   | "layout.statusBar.resources.scope"
@@ -1221,13 +1221,13 @@ const ANALYTICS_SETTINGS = new Set<string>(
     "layout.sidebar.resetVisibility": true,
     "layout.statusBar.placement": true,
     "layout.statusBar.rateLimits.enabled": true,
-    "layout.statusBar.rateLimits.expandedProvider": true,
     "layout.statusBar.rateLimits.percentMode": true,
     "layout.statusBar.rateLimits.provider": true,
+    "layout.statusBar.rateLimits.providerAutomatic": true,
+    "layout.statusBar.rateLimits.providerLimits": true,
     "layout.statusBar.rateLimits.showBar": true,
     "layout.statusBar.rateLimits.showModeWord": true,
     "layout.statusBar.rateLimits.showTimer": true,
-    "layout.statusBar.rateLimits.window": true,
     "layout.statusBar.resources.enabled": true,
     "layout.statusBar.resources.metric": true,
     "layout.statusBar.resources.scope": true,

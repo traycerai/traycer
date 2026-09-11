@@ -49,7 +49,6 @@ export function StatusBarUsageReadings(props: {
               key={segment.providerId}
               segment={segment}
               detail={stop.detail}
-              expanded={display.expandedProviders.includes(segment.providerId)}
               percentMode={display.percentMode}
               showModeWord={display.showModeWord}
               showTimer={display.showTimer}

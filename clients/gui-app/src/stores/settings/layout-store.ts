@@ -3,6 +3,7 @@ import { createJSONStorage, persist } from "zustand/middleware";
 import { rateLimitCapableProviderIdSchema } from "@traycer/protocol/host/rate-limit";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
+import { fixedProviderWindowKeys } from "@/lib/rate-limits/rate-limit-window-catalog";
 
 /**
  * Every persisted preference about the app's own chrome — where a surface
@@ -32,24 +33,45 @@ export type ResourceMetric = "cpu" | "memory" | "processes" | "ramShare";
 /** Traycer's processes on the watched host, or this desktop app's own. */
 export type ResourceScope = "host-tree" | "desktop-app";
 
+/**
+ * Which of one provider's limits its segment draws.
+ *
+ * `automatic` is the tightest limit at the moment of drawing - whichever window
+ * currently binds hardest - so it can name a different window from one reading
+ * to the next. `limitKeys` are explicit picks by `windowKey`. The segment
+ * draws the union, and the two cannot double up: the tightest window is drawn
+ * once whether or not it is also picked. A key that names a window the
+ * provider is not currently reporting (a model since renamed, a limit not yet
+ * read) is kept and simply matches nothing until it is.
+ *
+ * At least one of the two is always on. A selection with `automatic` off and
+ * no keys would draw nothing, which is what the provider switch is for.
+ */
+export interface StatusBarProviderLimitSelection {
+  readonly automatic: boolean;
+  readonly limitKeys: ReadonlyArray<string>;
+}
+
+/**
+ * Per provider, keyed by id. A provider with no entry is on the default
+ * selection (`AUTOMATIC_LIMIT_SELECTION`), which is how a provider connected
+ * later shows its tightest limit without a visit to Settings. An entry whose
+ * provider is no longer configured is kept - it is cheap, and the intent
+ * survives reconnecting.
+ */
+export type StatusBarProviderLimitSelections = Readonly<
+  Partial<Record<RateLimitProviderId, StatusBarProviderLimitSelection>>
+>;
+
 export interface StatusBarRateLimitPreferences {
   readonly enabled: boolean;
   /**
-   * Deny-lists, not allow-lists, on both axes: a provider connected later, or
-   * a model window a provider only starts reporting, shows up without a visit
-   * to Settings. An entry whose provider is no longer configured is kept - it
-   * is cheap, and the intent survives reconnecting.
+   * A deny-list, not an allow-list: a provider connected later shows up
+   * without a visit to Settings. An entry whose provider is no longer
+   * configured is kept - it is cheap, and the intent survives reconnecting.
    */
   readonly hiddenProviders: ReadonlyArray<RateLimitProviderId>;
-  readonly hiddenWindowKeys: ReadonlyArray<string>;
-  /**
-   * An allow-list, unlike the two above, and the asymmetry is the point: a
-   * provider shows its tightest window by default, so "show all of them" is an
-   * opt-in per provider rather than something a new provider inherits. A
-   * provider that is later disconnected keeps its entry, exactly as a hidden
-   * one does.
-   */
-  readonly expandedProviders: ReadonlyArray<RateLimitProviderId>;
+  readonly providers: StatusBarProviderLimitSelections;
   readonly percentMode: PercentMode;
   readonly showTimer: boolean;
   readonly showBar: boolean;
@@ -138,11 +160,21 @@ interface LayoutStoreState {
   readonly setStatusBarRateLimitsEnabled: (enabled: boolean) => void;
   /** Flips one provider's membership in the deny-list. */
   readonly toggleStatusBarProvider: (providerId: RateLimitProviderId) => void;
-  /** Flips one window's membership in the deny-list, keyed by `windowKey`. */
-  readonly toggleStatusBarWindow: (windowKey: string) => void;
-  /** Flips whether one provider shows every visible window or just its tightest. */
-  readonly toggleStatusBarExpandedProvider: (
+  /**
+   * Whether one provider's segment draws its tightest limit. Refused when it
+   * would leave the provider with nothing selected.
+   */
+  readonly setStatusBarProviderAutomatic: (
     providerId: RateLimitProviderId,
+    automatic: boolean,
+  ) => void;
+  /**
+   * Flips one explicit pick for one provider, keyed by `windowKey`. Refused when
+   * it would leave the provider with nothing selected.
+   */
+  readonly toggleStatusBarProviderLimit: (
+    providerId: RateLimitProviderId,
+    limitKey: string,
   ) => void;
   readonly setStatusBarPercentMode: (percentMode: PercentMode) => void;
   readonly setStatusBarShowTimer: (showTimer: boolean) => void;
@@ -177,11 +209,16 @@ const RESOURCE_METRIC_ORDER: ReadonlyArray<ResourceMetric> = [
   "ramShare",
 ];
 
+/** What a provider draws until told otherwise: its tightest limit, and only that. */
+const AUTOMATIC_LIMIT_SELECTION: StatusBarProviderLimitSelection = {
+  automatic: true,
+  limitKeys: [],
+};
+
 const DEFAULT_STATUS_BAR_RATE_LIMITS: StatusBarRateLimitPreferences = {
   enabled: true,
   hiddenProviders: [],
-  hiddenWindowKeys: [],
-  expandedProviders: [],
+  providers: {},
   percentMode: "used",
   showTimer: true,
   showBar: true,
@@ -259,19 +296,106 @@ function isResourceScope(value: unknown): value is ResourceScope {
 }
 
 /**
- * A deny-list of opaque window keys. Nothing here can decide whether a key
- * still names a window some provider reports - only that it is the kind of
- * string the catalog produces - so the only work is dropping non-strings and
+ * A list of opaque window keys. Nothing here can decide whether a key still
+ * names a window some provider reports - only that it is the kind of string
+ * the catalog produces - so the only work is dropping non-strings and
  * duplicates, which would otherwise make a toggle read as on and off at once.
  */
 function persistedWindowKeys(value: unknown): ReadonlyArray<string> {
-  if (!Array.isArray(value)) {
-    return DEFAULT_STATUS_BAR_RATE_LIMITS.hiddenWindowKeys;
-  }
+  if (!Array.isArray(value)) return [];
   const keys = value.filter(
     (entry): entry is string => typeof entry === "string" && entry.length > 0,
   );
   return [...new Set(keys)];
+}
+
+/** Whether a selection still draws something. The floor every write is held to. */
+function isDrawableSelection(
+  selection: StatusBarProviderLimitSelection,
+): boolean {
+  return selection.automatic || selection.limitKeys.length > 0;
+}
+
+/**
+ * The selection one provider is on, with the default standing in for a
+ * provider that has never been configured.
+ */
+export function statusBarProviderLimitSelection(
+  providers: StatusBarProviderLimitSelections,
+  providerId: RateLimitProviderId,
+): StatusBarProviderLimitSelection {
+  return providers[providerId] ?? AUTOMATIC_LIMIT_SELECTION;
+}
+
+/**
+ * One persisted selection. A shape that has been hand-edited down to nothing
+ * drawable falls back to the default rather than to an empty segment.
+ */
+function persistedLimitSelection(
+  value: unknown,
+): StatusBarProviderLimitSelection {
+  const stored: Record<string, unknown> = isRecord(value) ? value : {};
+  const selection: StatusBarProviderLimitSelection = {
+    automatic: persistedBoolean(
+      stored.automatic,
+      AUTOMATIC_LIMIT_SELECTION.automatic,
+    ),
+    limitKeys: persistedWindowKeys(stored.limitKeys),
+  };
+  return isDrawableSelection(selection) ? selection : AUTOMATIC_LIMIT_SELECTION;
+}
+
+/**
+ * The per-provider selections, or their one-time migration from the two lists
+ * they replaced.
+ *
+ * The old shape was a deny-list of window keys plus an allow-list of "expanded"
+ * providers - a provider drew its tightest window, or every window not hidden.
+ * That maps onto the new shape only for the expanded providers: each becomes an
+ * explicit pick of every window the build can name for it, less the hidden
+ * ones, with `automatic` off. A provider that was not expanded drew its
+ * tightest alone, which is the default and needs no entry - its hidden keys
+ * are dropped, since a default selection has no list to remove them from. The
+ * migration runs only while `providers` is absent: once written, the new shape
+ * is authoritative and the old lists are ignored.
+ *
+ * Hydration alone does NOT rewrite storage - zustand's persist only writes back
+ * after hydration when a VERSION migration ran, and this store resolves in
+ * `merge` instead (a version bump with no `migrate` discards the blob). So the
+ * old keys survive in `localStorage` and are re-migrated on every start until
+ * the first write of any layout preference, which serialises the re-derived
+ * slice without them. That is safe because this is a pure function of two
+ * build-constant inputs, so every re-run produces the same selections.
+ *
+ * Only FIXED keys can be carried across (`fixedProviderWindowKeys`): a
+ * model-scoped or extra window's key exists only in a snapshot, and the store
+ * has none to ask.
+ */
+function persistedProviderSelections(
+  stored: Record<string, unknown>,
+): StatusBarProviderLimitSelections {
+  const selections: Partial<
+    Record<RateLimitProviderId, StatusBarProviderLimitSelection>
+  > = {};
+  if (isRecord(stored.providers)) {
+    for (const [key, value] of Object.entries(stored.providers)) {
+      const providerId = rateLimitCapableProviderIdSchema.safeParse(key);
+      if (!providerId.success) continue;
+      selections[providerId.data] = persistedLimitSelection(value);
+    }
+    return selections;
+  }
+  const hidden = new Set(persistedWindowKeys(stored.hiddenWindowKeys));
+  for (const providerId of persistedProviderIds(stored.expandedProviders, [])) {
+    const limitKeys = fixedProviderWindowKeys(providerId).filter(
+      (limitKey) => !hidden.has(limitKey),
+    );
+    // Every fixed window hidden leaves nothing to pick, and the default is
+    // the only drawable answer left.
+    if (limitKeys.length === 0) continue;
+    selections[providerId] = { automatic: false, limitKeys };
+  }
+  return selections;
 }
 
 /**
@@ -302,11 +426,7 @@ function persistedRateLimits(value: unknown): StatusBarRateLimitPreferences {
       stored.hiddenProviders,
       DEFAULT_STATUS_BAR_RATE_LIMITS.hiddenProviders,
     ),
-    hiddenWindowKeys: persistedWindowKeys(stored.hiddenWindowKeys),
-    expandedProviders: persistedProviderIds(
-      stored.expandedProviders,
-      DEFAULT_STATUS_BAR_RATE_LIMITS.expandedProviders,
-    ),
+    providers: persistedProviderSelections(stored),
     percentMode: isPercentMode(stored.percentMode)
       ? stored.percentMode
       : DEFAULT_STATUS_BAR_RATE_LIMITS.percentMode,
@@ -516,32 +636,48 @@ export const useLayoutStore = create<LayoutStoreState>()(
           },
         });
       },
-      toggleStatusBarWindow: (windowKey) => {
+      setStatusBarProviderAutomatic: (providerId, automatic) => {
         const statusBar = get().statusBar;
+        const current = statusBarProviderLimitSelection(
+          statusBar.rateLimits.providers,
+          providerId,
+        );
+        if (current.automatic === automatic) return;
+        const next = { ...current, automatic };
+        if (!isDrawableSelection(next)) return;
         set({
           statusBar: {
             ...statusBar,
             rateLimits: {
               ...statusBar.rateLimits,
-              hiddenWindowKeys: toggledMembership(
-                statusBar.rateLimits.hiddenWindowKeys,
-                windowKey,
-              ),
+              providers: {
+                ...statusBar.rateLimits.providers,
+                [providerId]: next,
+              },
             },
           },
         });
       },
-      toggleStatusBarExpandedProvider: (providerId) => {
+      toggleStatusBarProviderLimit: (providerId, limitKey) => {
         const statusBar = get().statusBar;
+        const current = statusBarProviderLimitSelection(
+          statusBar.rateLimits.providers,
+          providerId,
+        );
+        const next = {
+          ...current,
+          limitKeys: toggledMembership(current.limitKeys, limitKey),
+        };
+        if (!isDrawableSelection(next)) return;
         set({
           statusBar: {
             ...statusBar,
             rateLimits: {
               ...statusBar.rateLimits,
-              expandedProviders: toggledMembership(
-                statusBar.rateLimits.expandedProviders,
-                providerId,
-              ),
+              providers: {
+                ...statusBar.rateLimits.providers,
+                [providerId]: next,
+              },
             },
           },
         });

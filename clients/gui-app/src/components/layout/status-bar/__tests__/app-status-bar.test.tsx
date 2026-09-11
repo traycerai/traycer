@@ -455,6 +455,7 @@ describe("<AppStatusBar />", () => {
           state: "live",
           reason: null,
           windows: [],
+          shown: [],
           tightest: null,
         },
       ],

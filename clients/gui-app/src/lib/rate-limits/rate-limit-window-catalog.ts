@@ -156,6 +156,67 @@ const GROK_PERIOD_TYPE_STRIP_LABELS: ReadonlyMap<string, string> = new Map([
 ]);
 
 /**
+ * The keys of every FIXED window, per provider: the ones a build can name
+ * without a reading, because the protocol carries them as named fields rather
+ * than as a list. Model-scoped and Codex extra windows are deliberately absent -
+ * their keys exist only once a snapshot has reported them.
+ *
+ * Named here and read by `providerWindowCandidates` below, so the literal that
+ * files a window and the literal that names it in advance are one literal.
+ */
+const CLAUDE_CODE_WINDOW_KEYS = {
+  fiveHour: "claude-code:fiveHour",
+  sevenDay: "claude-code:sevenDay",
+  sevenDayOpus: "claude-code:sevenDayOpus",
+  sevenDaySonnet: "claude-code:sevenDaySonnet",
+} as const;
+
+const CODEX_WINDOW_KEYS = {
+  primary: "codex:primary",
+  secondary: "codex:secondary",
+} as const;
+
+const OPENCODE_WINDOW_KEYS = {
+  fiveHour: "opencode:fiveHour",
+  weekly: "opencode:weekly",
+  monthly: "opencode:monthly",
+} as const;
+
+const GROK_WINDOW_KEYS = { period: "grok:period" } as const;
+
+const CURSOR_WINDOW_KEYS = {
+  cursorModels: "cursor:cursorModels",
+  otherModels: "cursor:otherModels",
+} as const;
+
+/**
+ * The window keys a provider is known to report before it has reported
+ * anything, in render order. What a preference can be written against with no
+ * reading in hand; a window the snapshot discovers (a model, a named Codex
+ * limit) is not here and cannot be.
+ */
+export function fixedProviderWindowKeys(
+  providerId: RateLimitProviderId,
+): ReadonlyArray<string> {
+  switch (providerId) {
+    case "claude-code":
+      return Object.values(CLAUDE_CODE_WINDOW_KEYS);
+    case "codex":
+      return Object.values(CODEX_WINDOW_KEYS);
+    case "opencode":
+      return Object.values(OPENCODE_WINDOW_KEYS);
+    case "grok":
+      return Object.values(GROK_WINDOW_KEYS);
+    case "cursor":
+      return Object.values(CURSOR_WINDOW_KEYS);
+    case "openrouter":
+    case "kilocode":
+    case "huggingface":
+      return [];
+  }
+}
+
+/**
  * One entry, or none when the provider reported no such window. Named
  * arguments: the four descriptive fields are two strings and a boolean beside
  * an enum, and a positional call site is where a label and a key, or a flag and
@@ -259,14 +320,14 @@ function providerWindowCandidates(
     case "claude-code":
       return [
         ...entry({
-          windowKey: "claude-code:fiveHour",
+          windowKey: CLAUDE_CODE_WINDOW_KEYS.fiveHour,
           label: "5h",
           labelIsDuration: true,
           kind: "session",
           window: rateLimits.fiveHour,
         }),
         ...entry({
-          windowKey: "claude-code:sevenDay",
+          windowKey: CLAUDE_CODE_WINDOW_KEYS.sevenDay,
           label: "wk",
           labelIsDuration: true,
           kind: "weekly",
@@ -277,14 +338,14 @@ function providerWindowCandidates(
         // one cycle, so a surface that swapped these labels for that shared
         // reset would print the same string three times.
         ...entry({
-          windowKey: "claude-code:sevenDayOpus",
+          windowKey: CLAUDE_CODE_WINDOW_KEYS.sevenDayOpus,
           label: "Opus wk",
           labelIsDuration: false,
           kind: "weekly",
           window: rateLimits.sevenDayOpus,
         }),
         ...entry({
-          windowKey: "claude-code:sevenDaySonnet",
+          windowKey: CLAUDE_CODE_WINDOW_KEYS.sevenDaySonnet,
           label: "Sonnet wk",
           labelIsDuration: false,
           kind: "weekly",
@@ -304,7 +365,7 @@ function providerWindowCandidates(
     case "codex":
       return [
         ...entry({
-          windowKey: "codex:primary",
+          windowKey: CODEX_WINDOW_KEYS.primary,
           label: formatCompactWindowDuration(
             rateLimits.primary?.durationMinutes ?? null,
           ),
@@ -313,7 +374,7 @@ function providerWindowCandidates(
           window: rateLimits.primary,
         }),
         ...entry({
-          windowKey: "codex:secondary",
+          windowKey: CODEX_WINDOW_KEYS.secondary,
           label: formatCompactWindowDuration(
             rateLimits.secondary?.durationMinutes ?? null,
           ),
@@ -351,21 +412,21 @@ function providerWindowCandidates(
     case "opencode":
       return [
         ...entry({
-          windowKey: "opencode:fiveHour",
+          windowKey: OPENCODE_WINDOW_KEYS.fiveHour,
           label: "5h",
           labelIsDuration: true,
           kind: "session",
           window: rateLimits.fiveHour,
         }),
         ...entry({
-          windowKey: "opencode:weekly",
+          windowKey: OPENCODE_WINDOW_KEYS.weekly,
           label: "wk",
           labelIsDuration: true,
           kind: "weekly",
           window: rateLimits.weekly,
         }),
         ...entry({
-          windowKey: "opencode:monthly",
+          windowKey: OPENCODE_WINDOW_KEYS.monthly,
           label: "mo",
           labelIsDuration: true,
           kind: "monthly",
@@ -384,7 +445,7 @@ function providerWindowCandidates(
       // enough for the flag to be read. Claiming otherwise would be asserting
       // something about the label that the fallback paths do not honour.
       return entry({
-        windowKey: "grok:period",
+        windowKey: GROK_WINDOW_KEYS.period,
         label: grokPeriodLabel({
           durationMinutes: rateLimits.period?.durationMinutes ?? null,
           periodType: rateLimits.periodType,
@@ -403,14 +464,14 @@ function providerWindowCandidates(
       // may be dropped for one.
       return [
         ...entry({
-          windowKey: "cursor:cursorModels",
+          windowKey: CURSOR_WINDOW_KEYS.cursorModels,
           label: "Cursor models",
           labelIsDuration: false,
           kind: "bucket",
           window: rateLimits.cursorModels,
         }),
         ...entry({
-          windowKey: "cursor:otherModels",
+          windowKey: CURSOR_WINDOW_KEYS.otherModels,
           label: "Other models",
           labelIsDuration: false,
           kind: "bucket",

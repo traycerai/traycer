@@ -33,12 +33,6 @@ export interface StatusBarProviderSegmentProps {
   readonly segment: StatusBarProviderSegmentModel;
   /** Which rung of the cluster's collapse ladder this is being drawn at. */
   readonly detail: StatusBarUsageDetail;
-  /**
-   * Whether this provider shows every visible window rather than its tightest
-   * alone. Off by default: one reading per provider is what makes a strip of
-   * them readable at a glance, and a Max-plan account reports five from one.
-   */
-  readonly expanded: boolean;
   readonly percentMode: PercentMode;
   readonly showModeWord: boolean;
   readonly showTimer: boolean;
@@ -118,10 +112,11 @@ export function StatusBarProviderSegment(
  * shorter ladder still cannot resurrect what Settings hid.
  *
  * The window list narrows for two different reasons, and only one of them is a
- * preference. Unexpanded is the default and shows the tightest window - the one
- * that decides whether the panel is worth opening. `percent-only` narrows to it
- * as well whatever the preference says, because several bare percentages under
- * one icon name which limits exist without naming which is which.
+ * preference. The segment's `shown` list is the user's selection - the tightest
+ * limit by default, which is the one that decides whether the panel is worth
+ * opening. `percent-only` narrows to the tightest of those whatever the
+ * selection says, because several bare percentages under one icon name which
+ * limits exist without naming which is which.
  */
 function SegmentBody(props: StatusBarProviderSegmentProps): ReactNode {
   const { segment } = props;
@@ -143,7 +138,7 @@ function SegmentBody(props: StatusBarProviderSegmentProps): ReactNode {
       />
     );
   }
-  const windows = windowsToDraw(segment, props.expanded && parts.label);
+  const windows = windowsToDraw(segment, parts.label);
   // The rung and the preference have to agree before anything is drawn: a rung
   // cannot bring back what Settings hid, and a preference cannot keep what the
   // strip has run out of room for.
@@ -167,9 +162,9 @@ function SegmentBody(props: StatusBarProviderSegmentProps): ReactNode {
             showModeWord={showModeWord}
             showTimer={showTimer}
             showLabel={parts.label}
-            // The provider's visible windows, not the ones this rung draws: an
-            // unexpanded provider draws its tightest alone and still has to
-            // say which of several that one is.
+            // The provider's live windows, not the ones this rung draws: a
+            // provider drawing its tightest alone still has to say which of
+            // several that one is.
             visibleWindowCount={segment.windows.length}
           />
         </Fragment>
@@ -180,9 +175,9 @@ function SegmentBody(props: StatusBarProviderSegmentProps): ReactNode {
 
 function windowsToDraw(
   segment: StatusBarProviderSegmentModel,
-  expanded: boolean,
+  labelled: boolean,
 ): ReadonlyArray<StatusBarRateLimitWindow> {
-  if (expanded) return segment.windows;
+  if (labelled) return segment.shown;
   return segment.tightest === null ? [] : [segment.tightest];
 }
 

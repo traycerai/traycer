@@ -43,14 +43,14 @@ function windowFixture(overrides: {
 }
 
 /**
- * A second visible window, so the reading under test has something it has to be
+ * A second live window, so the reading under test has something it has to be
  * told apart FROM.
  *
- * A name is printed only once a provider has two or more visible limits, so a
+ * A name is printed only once a provider has two or more live limits, so a
  * fixture asserting a name has to state the sibling that earns it. It is not
- * drawn unexpanded - `tightest` defaults to the first window - which is exactly
- * the case the rule is about: the count is what the provider HAS visible, not
- * what this rung draws.
+ * drawn - `shown` defaults to the tightest alone, which defaults to the first
+ * window - which is exactly the case the rule is about: the count is what the
+ * provider HAS, not what this rung draws.
  */
 function siblingWindow(): StatusBarRateLimitWindow {
   return windowFixture({ windowKey: "sibling:other", label: "wk" });
@@ -61,22 +61,26 @@ function segmentFixture(overrides: {
   readonly state?: StatusBarProviderSegmentState;
   readonly reason?: StatusBarProviderSegmentModel["reason"];
   readonly windows?: ReadonlyArray<StatusBarRateLimitWindow>;
+  /** The selection resolved; defaults to the tightest alone, as the store does. */
+  readonly shown?: ReadonlyArray<StatusBarRateLimitWindow>;
   readonly tightest?: StatusBarRateLimitWindow | null;
 }): StatusBarProviderSegmentModel {
   const windows = overrides.windows ?? [];
+  const tightest =
+    overrides.tightest ?? (windows.length > 0 ? windows[0] : null);
   return {
     providerId: overrides.providerId ?? "codex",
     state: overrides.state ?? "live",
     reason: overrides.reason ?? null,
     windows,
-    tightest: overrides.tightest ?? (windows.length > 0 ? windows[0] : null),
+    shown: overrides.shown ?? (tightest === null ? [] : [tightest]),
+    tightest,
   };
 }
 
 function renderSegment(props: {
   readonly segment: StatusBarProviderSegmentModel;
   readonly detail?: StatusBarUsageDetail;
-  readonly expanded?: boolean;
   readonly percentMode?: PercentMode;
   readonly showModeWord?: boolean;
   readonly showTimer?: boolean;
@@ -87,7 +91,6 @@ function renderSegment(props: {
       <StatusBarProviderSegment
         segment={props.segment}
         detail={props.detail ?? "full"}
-        expanded={props.expanded ?? false}
         percentMode={props.percentMode ?? "used"}
         showModeWord={props.showModeWord ?? true}
         showTimer={props.showTimer ?? false}
@@ -317,8 +320,11 @@ describe("<StatusBarProviderSegment />", () => {
         kind: "bucket",
         resetsAt,
       });
-      const segment = segmentFixture({ windows: [cursorModels, otherModels] });
-      renderSegment({ segment, showTimer: true, expanded: true });
+      const segment = segmentFixture({
+        windows: [cursorModels, otherModels],
+        shown: [cursorModels, otherModels],
+      });
+      renderSegment({ segment, showTimer: true });
 
       const cursorText = screen.getByTestId(
         "status-bar-window-cursor:cursorModels",
@@ -385,8 +391,11 @@ describe("<StatusBarProviderSegment />", () => {
         kind: "bucket",
         resetsAt,
       });
-      const segment = segmentFixture({ windows: [cursorModels, otherModels] });
-      renderSegment({ segment, showTimer: false, expanded: true });
+      const segment = segmentFixture({
+        windows: [cursorModels, otherModels],
+        shown: [cursorModels, otherModels],
+      });
+      renderSegment({ segment, showTimer: false });
 
       const cursorText = screen.getByTestId(
         "status-bar-window-cursor:cursorModels",
@@ -414,12 +423,14 @@ describe("<StatusBarProviderSegment />", () => {
         kind: "bucket",
         resetsAt,
       });
-      const segment = segmentFixture({ windows: [cursorModels, otherModels] });
+      const segment = segmentFixture({
+        windows: [cursorModels, otherModels],
+        shown: [cursorModels, otherModels],
+      });
       renderSegment({
         segment,
         showTimer: true,
         percentMode: "remaining",
-        expanded: true,
       });
 
       const cursorText = screen.getByTestId(
@@ -802,8 +813,10 @@ describe("<StatusBarProviderSegment />", () => {
     });
   });
 
-  describe("expanded", () => {
-    function twoWindowSegment(): StatusBarProviderSegmentModel {
+  describe("selected limits", () => {
+    function twoWindowSegment(
+      shown: "both" | "tightest",
+    ): StatusBarProviderSegmentModel {
       const primary = windowFixture({
         windowKey: "codex:primary",
         usedPercent: 40,
@@ -814,16 +827,13 @@ describe("<StatusBarProviderSegment />", () => {
       });
       return segmentFixture({
         windows: [primary, secondary],
+        shown: shown === "both" ? [primary, secondary] : [secondary],
         tightest: secondary,
       });
     }
 
-    it("renders every window when expanded", () => {
-      renderSegment({
-        segment: twoWindowSegment(),
-        detail: "full",
-        expanded: true,
-      });
+    it("renders every window the selection resolved to", () => {
+      renderSegment({ segment: twoWindowSegment("both"), detail: "full" });
 
       expect(
         screen.getByTestId("status-bar-window-codex:primary"),
@@ -833,12 +843,8 @@ describe("<StatusBarProviderSegment />", () => {
       ).not.toBeNull();
     });
 
-    it("renders only the tightest window when not expanded", () => {
-      renderSegment({
-        segment: twoWindowSegment(),
-        detail: "full",
-        expanded: false,
-      });
+    it("renders only the tightest when that is all the selection resolved to", () => {
+      renderSegment({ segment: twoWindowSegment("tightest"), detail: "full" });
 
       expect(
         screen.queryByTestId("status-bar-window-codex:primary"),
@@ -848,13 +854,12 @@ describe("<StatusBarProviderSegment />", () => {
       ).not.toBeNull();
     });
 
-    it("stays on the tightest window even when expanded, once the rung is percent-only", () => {
+    it("stays on the tightest window however many are selected, once the rung is percent-only", () => {
       // Several bare percentages under one icon would say which limits exist
-      // without saying which is which, so the rung overrides the preference.
+      // without saying which is which, so the rung overrides the selection.
       renderSegment({
-        segment: twoWindowSegment(),
+        segment: twoWindowSegment("both"),
         detail: "percent-only",
-        expanded: true,
       });
 
       expect(

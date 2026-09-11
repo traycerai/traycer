@@ -37,8 +37,7 @@ describe("useLayoutStore", () => {
         rateLimits: {
           enabled: true,
           hiddenProviders: [],
-          hiddenWindowKeys: [],
-          expandedProviders: [],
+          providers: {},
           percentMode: "used",
           showTimer: true,
           showBar: true,
@@ -79,8 +78,13 @@ describe("useLayoutStore", () => {
           rateLimits: {
             enabled: false,
             hiddenProviders: ["codex"],
-            hiddenWindowKeys: ["claude-code:sevenDayOpus"],
-            expandedProviders: ["claude-code"],
+            providers: {
+              "claude-code": {
+                automatic: true,
+                limitKeys: ["claude-code:model:Fable"],
+              },
+              codex: { automatic: false, limitKeys: ["codex:secondary"] },
+            },
             percentMode: "remaining",
             showTimer: false,
             showBar: false,
@@ -99,8 +103,13 @@ describe("useLayoutStore", () => {
         rateLimits: {
           enabled: false,
           hiddenProviders: ["codex"],
-          hiddenWindowKeys: ["claude-code:sevenDayOpus"],
-          expandedProviders: ["claude-code"],
+          providers: {
+            "claude-code": {
+              automatic: true,
+              limitKeys: ["claude-code:model:Fable"],
+            },
+            codex: { automatic: false, limitKeys: ["codex:secondary"] },
+          },
           percentMode: "remaining",
           showTimer: false,
           showBar: false,
@@ -123,8 +132,7 @@ describe("useLayoutStore", () => {
           rateLimits: {
             enabled: "yes",
             hiddenProviders: "codex",
-            hiddenWindowKeys: { 0: "codex:primary" },
-            expandedProviders: "codex",
+            providers: ["codex"],
             percentMode: "leftover",
             showTimer: 1,
             showBar: false,
@@ -139,8 +147,7 @@ describe("useLayoutStore", () => {
         rateLimits: {
           enabled: true,
           hiddenProviders: [],
-          hiddenWindowKeys: [],
-          expandedProviders: [],
+          providers: {},
           percentMode: "used",
           showTimer: true,
           showBar: false,
@@ -191,48 +198,252 @@ describe("useLayoutStore", () => {
       ).toEqual(["codex", "grok"]);
     });
 
-    it("dedupes persisted window keys and drops non-strings", async () => {
-      await rehydrateFrom({
-        statusBar: {
-          rateLimits: {
-            hiddenWindowKeys: [
-              "codex:primary",
-              "codex:primary",
-              "",
-              7,
-              "grok:period",
-            ],
+    describe("per-provider limit selections", () => {
+      it("drops an entry keyed by a provider id no build knows and keeps the rest", async () => {
+        await rehydrateFrom({
+          statusBar: {
+            rateLimits: {
+              providers: {
+                codex: { automatic: false, limitKeys: ["codex:primary"] },
+                "not-a-provider": { automatic: false, limitKeys: ["x:y"] },
+              },
+            },
           },
-        },
+        });
+
+        expect(
+          useLayoutStore.getState().statusBar.rateLimits.providers,
+        ).toEqual({
+          codex: { automatic: false, limitKeys: ["codex:primary"] },
+        });
       });
 
-      expect(
-        useLayoutStore.getState().statusBar.rateLimits.hiddenWindowKeys,
-      ).toEqual(["codex:primary", "grok:period"]);
-    });
-
-    it("drops a persisted expanded-provider id no build knows and dedupes the rest", async () => {
-      await rehydrateFrom({
-        statusBar: {
-          rateLimits: {
-            expandedProviders: ["codex", "codex", "not-a-provider", "grok"],
+      it("dedupes a selection's keys, drops non-strings, and defaults a missing automatic flag to on", async () => {
+        await rehydrateFrom({
+          statusBar: {
+            rateLimits: {
+              providers: {
+                codex: {
+                  limitKeys: ["codex:primary", "codex:primary", "", 7],
+                },
+              },
+            },
           },
-        },
+        });
+
+        expect(
+          useLayoutStore.getState().statusBar.rateLimits.providers,
+        ).toEqual({
+          codex: { automatic: true, limitKeys: ["codex:primary"] },
+        });
       });
 
-      expect(
-        useLayoutStore.getState().statusBar.rateLimits.expandedProviders,
-      ).toEqual(["codex", "grok"]);
-    });
+      // A selection that draws nothing is not a state the UI can produce, so
+      // one that arrives persisted is a hand edit - and the default is the
+      // only drawable answer.
+      it("restores the automatic default for a persisted selection that would draw nothing", async () => {
+        await rehydrateFrom({
+          statusBar: {
+            rateLimits: {
+              providers: {
+                codex: { automatic: false, limitKeys: [] },
+                grok: { automatic: false, limitKeys: [3] },
+                cursor: "all",
+              },
+            },
+          },
+        });
 
-    it("falls back to the default expandedProviders when the persisted value isn't an array", async () => {
-      await rehydrateFrom({
-        statusBar: { rateLimits: { expandedProviders: "codex" } },
+        expect(
+          useLayoutStore.getState().statusBar.rateLimits.providers,
+        ).toEqual({
+          codex: { automatic: true, limitKeys: [] },
+          grok: { automatic: true, limitKeys: [] },
+          cursor: { automatic: true, limitKeys: [] },
+        });
       });
 
-      expect(
-        useLayoutStore.getState().statusBar.rateLimits.expandedProviders,
-      ).toEqual([]);
+      it("falls back to no selections when the persisted map isn't an object", async () => {
+        await rehydrateFrom({
+          statusBar: { rateLimits: { providers: "codex" } },
+        });
+
+        expect(
+          useLayoutStore.getState().statusBar.rateLimits.providers,
+        ).toEqual({});
+      });
+
+      describe("migration from expandedProviders + hiddenWindowKeys", () => {
+        it("turns an expanded provider into explicit picks of its fixed limits, less the hidden ones, with automatic off", async () => {
+          await rehydrateFrom({
+            statusBar: {
+              rateLimits: {
+                expandedProviders: ["claude-code", "codex"],
+                hiddenWindowKeys: [
+                  "claude-code:sevenDayOpus",
+                  "claude-code:model:Fable",
+                ],
+              },
+            },
+          });
+
+          expect(
+            useLayoutStore.getState().statusBar.rateLimits.providers,
+          ).toEqual({
+            "claude-code": {
+              automatic: false,
+              limitKeys: [
+                "claude-code:fiveHour",
+                "claude-code:sevenDay",
+                "claude-code:sevenDaySonnet",
+              ],
+            },
+            codex: {
+              automatic: false,
+              limitKeys: ["codex:primary", "codex:secondary"],
+            },
+          });
+        });
+
+        // An unexpanded provider drew its tightest alone, which is the default
+        // and needs no entry. Its hidden keys had nothing to be removed from.
+        it("drops hidden keys for a provider that was not expanded, leaving it on the default", async () => {
+          await rehydrateFrom({
+            statusBar: {
+              rateLimits: {
+                expandedProviders: [],
+                hiddenWindowKeys: ["codex:primary", "grok:period"],
+              },
+            },
+          });
+
+          expect(
+            useLayoutStore.getState().statusBar.rateLimits.providers,
+          ).toEqual({});
+        });
+
+        it("leaves an expanded provider on the default when every fixed limit was hidden", async () => {
+          await rehydrateFrom({
+            statusBar: {
+              rateLimits: {
+                expandedProviders: ["grok", "not-a-provider"],
+                hiddenWindowKeys: ["grok:period"],
+              },
+            },
+          });
+
+          expect(
+            useLayoutStore.getState().statusBar.rateLimits.providers,
+          ).toEqual({});
+        });
+
+        // Once the new shape has been written it is the record; the old lists
+        // cannot re-migrate over a selection the user has since changed.
+        it("ignores the old lists once a providers map is present", async () => {
+          await rehydrateFrom({
+            statusBar: {
+              rateLimits: {
+                providers: {},
+                expandedProviders: ["codex"],
+                hiddenWindowKeys: ["codex:primary"],
+              },
+            },
+          });
+
+          expect(
+            useLayoutStore.getState().statusBar.rateLimits.providers,
+          ).toEqual({});
+        });
+
+        // The migration is a pure function of two build-constant inputs, which
+        // is what makes it safe for hydration to re-run it: nothing rewrites
+        // storage until the first preference write (see the store's comment),
+        // so every app start until then resolves the same legacy blob again.
+        it("resolves the same selections on a second rehydrate of the same legacy blob", async () => {
+          const legacy = {
+            statusBar: {
+              rateLimits: {
+                expandedProviders: ["codex"],
+                hiddenWindowKeys: ["codex:primary"],
+              },
+            },
+          };
+          await rehydrateFrom(legacy);
+          const first =
+            useLayoutStore.getState().statusBar.rateLimits.providers;
+
+          await rehydrateFrom(legacy);
+
+          expect(
+            useLayoutStore.getState().statusBar.rateLimits.providers,
+          ).toEqual(first);
+          expect(first).toEqual({
+            codex: { automatic: false, limitKeys: ["codex:secondary"] },
+          });
+        });
+
+        // Any write serialises the whole re-derived slice, so the first one
+        // retires the old keys - including a write that has nothing to do with
+        // providers.
+        it("drops the old lists from storage on the first unrelated preference write", async () => {
+          await rehydrateFrom({
+            statusBar: {
+              rateLimits: {
+                expandedProviders: ["codex"],
+                hiddenWindowKeys: ["codex:primary"],
+              },
+            },
+          });
+          useLayoutStore.getState().setStatusBarShowBar(false);
+          await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+          const raw = window.localStorage.getItem(PERSIST_KEY) ?? "{}";
+          expect(raw).not.toContain("expandedProviders");
+          expect(raw).not.toContain("hiddenWindowKeys");
+          expect(
+            useLayoutStore.getState().statusBar.rateLimits.providers,
+          ).toEqual({
+            codex: { automatic: false, limitKeys: ["codex:secondary"] },
+          });
+        });
+
+        it("writes the migrated shape back without the old lists", async () => {
+          await rehydrateFrom({
+            statusBar: {
+              rateLimits: {
+                expandedProviders: ["codex"],
+                hiddenWindowKeys: [],
+              },
+            },
+          });
+          useLayoutStore.getState().setStatusBarPlacement("status-bar");
+          await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+          const persisted: unknown = JSON.parse(
+            window.localStorage.getItem(PERSIST_KEY) ?? "{}",
+          );
+          expect(persisted).toEqual({
+            state: {
+              statusBar: {
+                ...DEFAULT_STATUS_BAR_LAYOUT,
+                placement: "status-bar",
+                rateLimits: {
+                  ...DEFAULT_STATUS_BAR_LAYOUT.rateLimits,
+                  providers: {
+                    codex: {
+                      automatic: false,
+                      limitKeys: ["codex:primary", "codex:secondary"],
+                    },
+                  },
+                },
+              },
+              composer: DEFAULT_COMPOSER_LAYOUT,
+              home: DEFAULT_HOME_LAYOUT,
+            },
+            version: CURRENT_PERSIST_VERSION,
+          });
+        });
+      });
     });
 
     it("falls back to the default showModeWord when the persisted value isn't a boolean", async () => {
@@ -259,32 +470,75 @@ describe("useLayoutStore", () => {
       ).toEqual([]);
     });
 
-    it("returns a hidden window to visible on the second toggle", () => {
-      const { toggleStatusBarWindow } = useLayoutStore.getState();
+    it("returns an explicit pick to unchecked on the second toggle, keeping automatic on", () => {
+      const { toggleStatusBarProviderLimit } = useLayoutStore.getState();
 
-      toggleStatusBarWindow("claude-code:model:Fable");
-      expect(
-        useLayoutStore.getState().statusBar.rateLimits.hiddenWindowKeys,
-      ).toEqual(["claude-code:model:Fable"]);
+      toggleStatusBarProviderLimit("claude-code", "claude-code:model:Fable");
+      expect(useLayoutStore.getState().statusBar.rateLimits.providers).toEqual({
+        "claude-code": {
+          automatic: true,
+          limitKeys: ["claude-code:model:Fable"],
+        },
+      });
 
-      toggleStatusBarWindow("claude-code:model:Fable");
-      expect(
-        useLayoutStore.getState().statusBar.rateLimits.hiddenWindowKeys,
-      ).toEqual([]);
+      toggleStatusBarProviderLimit("claude-code", "claude-code:model:Fable");
+      expect(useLayoutStore.getState().statusBar.rateLimits.providers).toEqual({
+        "claude-code": { automatic: true, limitKeys: [] },
+      });
     });
 
-    it("returns an expanded provider to collapsed on the second toggle", () => {
-      const { toggleStatusBarExpandedProvider } = useLayoutStore.getState();
+    it("turns automatic off only once an explicit pick is checked, and back on regardless", () => {
+      const store = useLayoutStore.getState();
 
-      toggleStatusBarExpandedProvider("claude-code");
-      expect(
-        useLayoutStore.getState().statusBar.rateLimits.expandedProviders,
-      ).toEqual(["claude-code"]);
+      store.setStatusBarProviderAutomatic("codex", false);
+      expect(useLayoutStore.getState().statusBar.rateLimits.providers).toEqual(
+        {},
+      );
 
-      toggleStatusBarExpandedProvider("claude-code");
-      expect(
-        useLayoutStore.getState().statusBar.rateLimits.expandedProviders,
-      ).toEqual([]);
+      store.toggleStatusBarProviderLimit("codex", "codex:primary");
+      store.setStatusBarProviderAutomatic("codex", false);
+      expect(useLayoutStore.getState().statusBar.rateLimits.providers).toEqual({
+        codex: { automatic: false, limitKeys: ["codex:primary"] },
+      });
+
+      store.setStatusBarProviderAutomatic("codex", true);
+      expect(useLayoutStore.getState().statusBar.rateLimits.providers).toEqual({
+        codex: { automatic: true, limitKeys: ["codex:primary"] },
+      });
+    });
+
+    // The floor: a selection never reaches "nothing drawn" through the
+    // setters, whichever order the two are flipped in.
+    it("refuses to uncheck the last explicit pick while automatic is off", () => {
+      const store = useLayoutStore.getState();
+      store.toggleStatusBarProviderLimit("codex", "codex:primary");
+      store.setStatusBarProviderAutomatic("codex", false);
+      const before = useLayoutStore.getState().statusBar;
+
+      store.toggleStatusBarProviderLimit("codex", "codex:primary");
+
+      expect(useLayoutStore.getState().statusBar).toBe(before);
+    });
+
+    it("leaves state untouched when setStatusBarProviderAutomatic is handed the value already held", () => {
+      const before = useLayoutStore.getState().statusBar;
+
+      useLayoutStore.getState().setStatusBarProviderAutomatic("codex", true);
+
+      expect(useLayoutStore.getState().statusBar).toBe(before);
+    });
+
+    it("keeps one provider's selection apart from another's", () => {
+      const store = useLayoutStore.getState();
+
+      store.toggleStatusBarProviderLimit("codex", "codex:primary");
+      store.toggleStatusBarProviderLimit("grok", "grok:period");
+      store.setStatusBarProviderAutomatic("grok", false);
+
+      expect(useLayoutStore.getState().statusBar.rateLimits.providers).toEqual({
+        codex: { automatic: true, limitKeys: ["codex:primary"] },
+        grok: { automatic: false, limitKeys: ["grok:period"] },
+      });
     });
 
     it("never lists a provider twice however often it is toggled", () => {

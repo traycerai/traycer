@@ -6,6 +6,7 @@ import {
   screen,
   within,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ProviderRateLimits } from "@traycer/protocol/host";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import { assertSettingsSearchTargets } from "@/components/settings/__tests__/settings-search-targets";
@@ -203,6 +204,27 @@ function claudeReady(): Extract<
   };
 }
 
+/**
+ * A Claude reading carrying a MODEL-SCOPED window, whose key exists only in the
+ * payload - the half `fixedProviderWindowKeys` cannot name.
+ */
+function claudeReadyWithModelWindow(): Extract<
+  ProviderRateLimits,
+  { provider: "claude-code" }
+> {
+  return {
+    ...claudeReady(),
+    modelScoped: [
+      {
+        displayName: "Fable",
+        usedPercent: 57,
+        resetsAt: NOW + 6 * 24 * 60 * 60 * 1000,
+        durationMinutes: null,
+      },
+    ],
+  };
+}
+
 function envelopeFor(
   rateLimits: ProviderRateLimits,
 ): ProviderRateLimitEnvelope {
@@ -251,10 +273,19 @@ function choose(control: string, option: string): void {
   fireEvent.keyDown(item, { key: "Enter" });
 }
 
-/** The window-chip group a provider's "Limits" row renders. */
-function windowsGroup(providerLabel: string): HTMLElement {
+/** The checkbox list a provider's "Limits" row renders. */
+function limitsGroup(providerLabel: string): HTMLElement {
   return screen.getByRole("group", { name: `${providerLabel} limits` });
 }
+
+function limitCheckbox(providerLabel: string, name: string): HTMLElement {
+  return within(limitsGroup(providerLabel)).getByRole("checkbox", { name });
+}
+
+const AUTOMATIC = "Tightest limit (automatic)";
+
+/** A pick the current reading does not carry, so the list stands automatic in. */
+const STALE_LIMIT_KEY = "codex:extra:retired-limit:primary";
 
 function metricsGroup(): HTMLElement {
   return screen.getByRole("group", { name: "Metrics" });
@@ -383,89 +414,109 @@ describe("<LayoutSettingsPanel />", () => {
     );
   });
 
-  it("round-trips a provider's 'show all limits' switch to expandedProviders and tracks the analytics id", () => {
+  it("lists the automatic entry first, checked and held, then one unchecked entry per limit the provider reports", () => {
     mocks.providers = [configuredProvider("codex")];
     mocks.envelopes = { codex: envelopeFor(codexReady()) };
 
     render(<LayoutSettingsPanel />);
 
-    expect(
-      useLayoutStore.getState().statusBar.rateLimits.expandedProviders,
-    ).toEqual([]);
-
-    fireEvent.click(
-      screen.getByRole("switch", { name: "Codex show all limits" }),
+    const boxes = within(limitsGroup("Codex")).getAllByRole("checkbox");
+    expect(boxes.map((box) => box.getAttribute("aria-checked"))).toEqual([
+      "true",
+      "false",
+    ]);
+    expect(limitCheckbox("Codex", AUTOMATIC).hasAttribute("disabled")).toBe(
+      true,
     );
-
-    expect(
-      useLayoutStore.getState().statusBar.rateLimits.expandedProviders,
-    ).toEqual(["codex"]);
-    expect(trackSettingChanged).toHaveBeenCalledWith(
-      "layout",
-      "layout.statusBar.rateLimits.expandedProvider",
-    );
+    expect(limitCheckbox("Codex", "5h").hasAttribute("disabled")).toBe(false);
   });
 
-  it("toggles a window chip's hidden state, writing hiddenWindowKeys and tracking the analytics id, and the chip's aria-pressed follows the store", () => {
+  it("checks a limit into the provider's explicit picks and tracks the analytics id, and the box follows the store", () => {
     mocks.providers = [configuredProvider("codex")];
     mocks.envelopes = { codex: envelopeFor(codexReady()) };
 
     render(<LayoutSettingsPanel />);
 
-    expect(
-      useLayoutStore.getState().statusBar.rateLimits.hiddenWindowKeys,
-    ).toEqual([]);
+    expect(useLayoutStore.getState().statusBar.rateLimits.providers).toEqual(
+      {},
+    );
 
-    const chip = within(windowsGroup("Codex")).getByRole("button", {
-      name: "5h",
+    fireEvent.click(limitCheckbox("Codex", "5h"));
+
+    expect(useLayoutStore.getState().statusBar.rateLimits.providers).toEqual({
+      codex: { automatic: true, limitKeys: ["codex:primary"] },
     });
-    expect(chip.getAttribute("aria-pressed")).toBe("true");
-
-    fireEvent.click(chip);
-
-    expect(
-      useLayoutStore.getState().statusBar.rateLimits.hiddenWindowKeys,
-    ).toEqual(["codex:primary"]);
     expect(trackSettingChanged).toHaveBeenCalledWith(
       "layout",
-      "layout.statusBar.rateLimits.window",
+      "layout.statusBar.rateLimits.providerLimits",
     );
-    expect(chip.getAttribute("aria-pressed")).toBe("false");
+    expect(limitCheckbox("Codex", "5h").getAttribute("aria-checked")).toBe(
+      "true",
+    );
 
-    fireEvent.click(chip);
+    fireEvent.click(limitCheckbox("Codex", "5h"));
 
-    expect(
-      useLayoutStore.getState().statusBar.rateLimits.hiddenWindowKeys,
-    ).toEqual([]);
-    expect(chip.getAttribute("aria-pressed")).toBe("true");
+    expect(useLayoutStore.getState().statusBar.rateLimits.providers).toEqual({
+      codex: { automatic: true, limitKeys: [] },
+    });
+    expect(limitCheckbox("Codex", "5h").getAttribute("aria-checked")).toBe(
+      "false",
+    );
   });
 
-  it("collapses a hidden provider's 'show all limits' row and limit chips, restores them when re-enabled, and never touches hiddenWindowKeys", () => {
+  it("unchecks automatic once an explicit pick is checked, tracking its own analytics id, and then holds that pick", () => {
     mocks.providers = [configuredProvider("codex")];
     mocks.envelopes = { codex: envelopeFor(codexReady()) };
 
     render(<LayoutSettingsPanel />);
 
-    // Hide a window first, so the deny-list is non-empty going into the
-    // provider toggle below - proving the provider switch never reaches it.
-    fireEvent.click(
-      within(windowsGroup("Codex")).getByRole("button", { name: "5h" }),
+    fireEvent.click(limitCheckbox("Codex", "5h"));
+    // Two checked: neither is held.
+    expect(limitCheckbox("Codex", AUTOMATIC).hasAttribute("disabled")).toBe(
+      false,
     );
-    expect(
-      useLayoutStore.getState().statusBar.rateLimits.hiddenWindowKeys,
-    ).toEqual(["codex:primary"]);
+
+    fireEvent.click(limitCheckbox("Codex", AUTOMATIC));
+
+    expect(useLayoutStore.getState().statusBar.rateLimits.providers).toEqual({
+      codex: { automatic: false, limitKeys: ["codex:primary"] },
+    });
+    expect(trackSettingChanged).toHaveBeenCalledWith(
+      "layout",
+      "layout.statusBar.rateLimits.providerAutomatic",
+    );
+    // The one checked entry left is held, so the provider always draws
+    // something; the switch above is how it is hidden.
+    expect(limitCheckbox("Codex", "5h").hasAttribute("disabled")).toBe(true);
+    expect(limitCheckbox("Codex", AUTOMATIC).hasAttribute("disabled")).toBe(
+      false,
+    );
+  });
+
+  it("collapses a hidden provider's limits list, restores it when re-enabled, and never touches the selection", () => {
+    mocks.providers = [configuredProvider("codex")];
+    mocks.envelopes = { codex: envelopeFor(codexReady()) };
+
+    render(<LayoutSettingsPanel />);
+
+    // Pick a limit first, so the selection is non-default going into the
+    // provider toggle below - proving the provider switch never reaches it.
+    fireEvent.click(limitCheckbox("Codex", "5h"));
+    const selected = {
+      codex: { automatic: true, limitKeys: ["codex:primary"] },
+    };
+    expect(useLayoutStore.getState().statusBar.rateLimits.providers).toEqual(
+      selected,
+    );
 
     fireEvent.click(screen.getByRole("switch", { name: "Codex" }));
 
     expect(
       useLayoutStore.getState().statusBar.rateLimits.hiddenProviders,
     ).toEqual(["codex"]);
-    expect(
-      useLayoutStore.getState().statusBar.rateLimits.hiddenWindowKeys,
-    ).toEqual(["codex:primary"]);
-    expect(
-      screen.queryByRole("switch", { name: "Codex show all limits" }),
-    ).toBeNull();
+    expect(useLayoutStore.getState().statusBar.rateLimits.providers).toEqual(
+      selected,
+    );
     expect(screen.queryByRole("group", { name: "Codex limits" })).toBeNull();
 
     fireEvent.click(screen.getByRole("switch", { name: "Codex" }));
@@ -473,35 +524,188 @@ describe("<LayoutSettingsPanel />", () => {
     expect(
       useLayoutStore.getState().statusBar.rateLimits.hiddenProviders,
     ).toEqual([]);
-    expect(
-      useLayoutStore.getState().statusBar.rateLimits.hiddenWindowKeys,
-    ).toEqual(["codex:primary"]);
-    expect(
-      screen.getByRole("switch", { name: "Codex show all limits" }),
-    ).toBeTruthy();
-    expect(windowsGroup("Codex")).toBeTruthy();
+    expect(useLayoutStore.getState().statusBar.rateLimits.providers).toEqual(
+      selected,
+    );
+    expect(limitCheckbox("Codex", "5h").getAttribute("aria-checked")).toBe(
+      "true",
+    );
   });
 
-  it("keeps a provider with no reading toggleable, saying why it lists no limits", () => {
+  it("keeps a provider with no reading toggleable, listing only the automatic entry and saying why", () => {
     // Nothing in the shared cache for this provider: the page never fetches,
-    // so "no envelope" is a routine state and not an error one. The keys a
-    // window toggle is written under are stable, so the row still works.
+    // so "no envelope" is a routine state and not an error one. The automatic
+    // entry needs no reading to exist, so the list still has its one row.
     mocks.providers = [configuredProvider("codex")];
     mocks.envelopes = {};
 
     render(<LayoutSettingsPanel />);
 
-    expect(screen.getByText("Waiting for first reading")).toBeTruthy();
-    expect(screen.queryByRole("group", { name: "Codex limits" })).toBeNull();
     expect(
-      screen.getByRole("switch", { name: "Codex show all limits" }),
+      screen.getByText(/listed here once the first reading arrives/),
     ).toBeTruthy();
+    expect(within(limitsGroup("Codex")).getAllByRole("checkbox")).toHaveLength(
+      1,
+    );
+    expect(limitCheckbox("Codex", AUTOMATIC).hasAttribute("disabled")).toBe(
+      true,
+    );
 
     fireEvent.click(screen.getByRole("switch", { name: "Codex" }));
 
     expect(
       useLayoutStore.getState().statusBar.rateLimits.hiddenProviders,
     ).toEqual(["codex"]);
+  });
+
+  // The list is built from `providerWindowEntries` on the retained reading, not
+  // from the fixed-key list, which is what lets a model-scoped limit - whose
+  // identity is a `displayName` off the wire - be picked at all.
+  it("lists a discovered model window by its catalog label and writes its catalog key", () => {
+    mocks.providers = [configuredProvider("claude-code")];
+    mocks.envelopes = {
+      "claude-code": envelopeFor(claudeReadyWithModelWindow()),
+    };
+
+    render(<LayoutSettingsPanel />);
+
+    // Read off the wrapping `<label>`, which is where the box's accessible name
+    // comes from - and in list order, so this pins the catalog's ordering too.
+    expect(
+      within(limitsGroup("Claude Code"))
+        .getAllByRole("checkbox")
+        .map((box) => box.closest("label")?.textContent),
+    ).toEqual([AUTOMATIC, "5h", "Fable"]);
+
+    fireEvent.click(limitCheckbox("Claude Code", "Fable"));
+
+    expect(useLayoutStore.getState().statusBar.rateLimits.providers).toEqual({
+      "claude-code": {
+        automatic: true,
+        limitKeys: ["claude-code:model:Fable"],
+      },
+    });
+  });
+
+  // The migrated `Show all limits` user opening Layout before any reading has
+  // landed: the strip is drawing the tightest (`shownWindows` stands it in), so
+  // the list has to say so rather than render nothing checked.
+  it("shows automatic checked and held when none of the stored picks is in the current reading", () => {
+    mocks.providers = [configuredProvider("codex")];
+    mocks.envelopes = {};
+    useLayoutStore.setState({
+      statusBar: {
+        ...DEFAULT_STATUS_BAR_LAYOUT,
+        rateLimits: {
+          ...DEFAULT_STATUS_BAR_LAYOUT.rateLimits,
+          providers: {
+            codex: {
+              automatic: false,
+              limitKeys: ["codex:primary", "codex:secondary"],
+            },
+          },
+        },
+      },
+    });
+
+    render(<LayoutSettingsPanel />);
+
+    expect(limitCheckbox("Codex", AUTOMATIC).getAttribute("aria-checked")).toBe(
+      "true",
+    );
+    expect(limitCheckbox("Codex", AUTOMATIC).hasAttribute("disabled")).toBe(
+      true,
+    );
+    expect(
+      screen.getByText(/The limits you picked come back with them/),
+    ).toBeTruthy();
+    // Rendering it checked must not write: the picks are still the stored
+    // selection and return with the first reading.
+    expect(useLayoutStore.getState().statusBar.rateLimits.providers).toEqual({
+      codex: {
+        automatic: false,
+        limitKeys: ["codex:primary", "codex:secondary"],
+      },
+    });
+  });
+
+  // The forced -> unforced transition: a pick made while the automatic entry is
+  // standing in must not lift the stand-in out from under itself, which would
+  // hold (and blur) the box just clicked and silently uncheck automatic.
+  it("writes automatic through with a pick made while it is standing in, holding nothing", async () => {
+    const user = userEvent.setup();
+    mocks.providers = [configuredProvider("codex")];
+    mocks.envelopes = { codex: envelopeFor(codexReady()) };
+    useLayoutStore.setState({
+      statusBar: {
+        ...DEFAULT_STATUS_BAR_LAYOUT,
+        rateLimits: {
+          ...DEFAULT_STATUS_BAR_LAYOUT.rateLimits,
+          providers: {
+            // A model-scoped pick whose model has been renamed: stored, and
+            // absent from a reading that carries other windows.
+            codex: { automatic: false, limitKeys: [STALE_LIMIT_KEY] },
+          },
+        },
+      },
+    });
+
+    render(<LayoutSettingsPanel />);
+
+    expect(limitCheckbox("Codex", AUTOMATIC).getAttribute("aria-checked")).toBe(
+      "true",
+    );
+    expect(limitCheckbox("Codex", AUTOMATIC).hasAttribute("disabled")).toBe(
+      true,
+    );
+
+    await user.click(limitCheckbox("Codex", "5h"));
+
+    // The stale pick stays - it comes back with its own reading - and the
+    // checked automatic the user was looking at is now the stored one.
+    expect(useLayoutStore.getState().statusBar.rateLimits.providers).toEqual({
+      codex: {
+        automatic: true,
+        limitKeys: [STALE_LIMIT_KEY, "codex:primary"],
+      },
+    });
+    expect(document.activeElement).toBe(limitCheckbox("Codex", "5h"));
+    expect(
+      within(limitsGroup("Codex"))
+        .getAllByRole("checkbox")
+        .map((box) => box.hasAttribute("disabled")),
+    ).toEqual([false, false]);
+  });
+
+  it("describes the limits group by its row description, so the rule that held an entry is announced", () => {
+    mocks.providers = [configuredProvider("codex")];
+    mocks.envelopes = { codex: envelopeFor(codexReady()) };
+
+    render(<LayoutSettingsPanel />);
+
+    const describedBy = limitsGroup("Codex").getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    expect(document.getElementById(describedBy ?? "")?.textContent).toContain(
+      "At least one stays checked",
+    );
+  });
+
+  // A focused element that becomes `disabled` blurs to `<body>`. The rendered
+  // count is what prevents it: the entry a click can reach is never the one
+  // that is about to be held.
+  it("keeps focus on the entry that was clicked, in both directions", async () => {
+    const user = userEvent.setup();
+    mocks.providers = [configuredProvider("codex")];
+    mocks.envelopes = { codex: envelopeFor(codexReady()) };
+
+    render(<LayoutSettingsPanel />);
+
+    await user.click(limitCheckbox("Codex", "5h"));
+    expect(document.activeElement).toBe(limitCheckbox("Codex", "5h"));
+
+    await user.click(limitCheckbox("Codex", AUTOMATIC));
+    expect(document.activeElement).toBe(limitCheckbox("Codex", AUTOMATIC));
+    expect(limitCheckbox("Codex", "5h").hasAttribute("disabled")).toBe(true);
   });
 
   it("turning off 'Show usage limits' collapses Display and every provider card, leaves Placement and Resource monitor mounted, and restores everything when turned back on", () => {

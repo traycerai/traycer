@@ -8,6 +8,7 @@ import {
   providerRateLimitWindows,
 } from "@traycer/protocol/host/rate-limit";
 import {
+  fixedProviderWindowKeys,
   formatCompactWindowDuration,
   providerWindowEntries,
 } from "@/lib/rate-limits/rate-limit-window-catalog";
@@ -185,6 +186,51 @@ const UNAVAILABLE: ProviderRateLimits = wire({
   provider: "claude-code",
   available: false,
   reason: "usage_fetch_failed",
+});
+
+describe("fixedProviderWindowKeys", () => {
+  // The keys a preference can be written against with no reading in hand have
+  // to be the keys a reading is later filed under, in the same order - a
+  // migration that wrote one spelling and a catalog that reads another would
+  // silently match nothing.
+  it.each([
+    [
+      "claude-code",
+      CLAUDE_CODE,
+      ["claude-code:model:Fable", "claude-code:model:Opus 5"],
+    ],
+    [
+      "codex",
+      CODEX,
+      ["codex:extra:gpt-5-codex:primary", "codex:extra:gpt-5-codex:secondary"],
+    ],
+    ["opencode", OPENCODE, []],
+    ["grok", GROK, []],
+    ["cursor", CURSOR, []],
+  ] as const)(
+    "names exactly the fixed windows a full %s snapshot files, in its order",
+    (providerId, rateLimits, discovered) => {
+      const fixed = fixedProviderWindowKeys(providerId);
+      const filed = providerWindowEntries(rateLimits).map(
+        (entry) => entry.windowKey,
+      );
+      expect(filed.filter((windowKey) => fixed.includes(windowKey))).toEqual(
+        fixed,
+      );
+      // Everything a full snapshot files beyond them is a discovered window,
+      // never a fixed one this list forgot.
+      expect(filed.filter((windowKey) => !fixed.includes(windowKey))).toEqual(
+        discovered,
+      );
+    },
+  );
+
+  it.each(["openrouter", "kilocode", "huggingface"] as const)(
+    "has none for the credit provider %s",
+    (providerId) => {
+      expect(fixedProviderWindowKeys(providerId)).toEqual([]);
+    },
+  );
 });
 
 describe("formatCompactWindowDuration", () => {
