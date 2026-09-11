@@ -1682,9 +1682,14 @@ md:top-0`): positioned against the nearest scrollport - the settings
     for anything that carries a verb with no other home - the three dock rows
     own Stop all / Review all / Undo all, and the Access pill reports the
     permission the next send runs under. `Compact` is their floor: a row folds
-    to a chip in the composer's bottom strip (beside the host and workspace
-    chips) that opens it again, and the pill folds to its icon with the name on
-    hover. `Visible / Hidden` only for a control whose job has a second route:
+    to a chip at the RIGHT end of the composer's bottom strip - after the host
+    and workspace pickers, hard against the context-usage cluster, so a chip
+    coming and going never shifts those pickers - and one click opens the row
+    again; the pill folds to its icon with the name on hover. A chip always
+    draws its own icon (`Bot`, or Background's per-kind glyph) and shows
+    activity by pulsing that icon rather than replacing it, falling back under
+    `prefers-reduced-motion` to a small filled dot at the icon's corner.
+    `Visible / Hidden` only for a control whose job has a second route:
     paste and drag-drop attach images, the dictation chord starts voice input
     (`Hidden` here is NOT `voiceInputEnabled` off), and the palette and
     `/compact` compact a conversation. The row's own description names that

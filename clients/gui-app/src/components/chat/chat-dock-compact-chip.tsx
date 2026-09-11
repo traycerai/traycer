@@ -91,10 +91,7 @@ export function ChatDockCompactChip(props: ChatDockCompactChipProps) {
         )}
       >
         {props.icon}
-        <span
-          data-testid={`${props.testId}-text`}
-          className="font-mono text-code-xs tabular-nums"
-        >
+        <span className="font-mono text-code-xs tabular-nums">
           {props.text}
         </span>
       </button>

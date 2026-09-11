@@ -269,11 +269,12 @@ export function backgroundHeaderSummary(input: {
 /**
  * The one kind everything in the Background section shares, or `"mixed"`.
  *
- * This is the compact chip's resting glyph: a chip standing for the section
- * shows that kind's own icon when every row would draw the same one, and a
- * neutral stack when the rows differ - so a chip over a single pending wake
- * reads as a wake, and a chip over a wake and a held shell does not pretend to
- * be either.
+ * This is the compact chip's glyph, running or not: a chip standing for the
+ * section shows that kind's own icon when every row would draw the same one,
+ * and a neutral stack when the rows differ - so a chip over a single pending
+ * wake reads as a wake, and a chip over a wake and a held shell does not
+ * pretend to be either. Activity pulses that icon; it never replaces it, so
+ * this answer is owed for a busy section too.
  *
  * A managed shell is its OWN member rather than a `"command"`, because the
  * panel draws the two from different glyph families on purpose: a
@@ -286,7 +287,7 @@ export function backgroundHeaderSummary(input: {
  * not exist then, so the answer is never drawn; it is only the value that does
  * not claim a kind nothing has.
  */
-export function backgroundRestingKind(input: {
+export function backgroundKind(input: {
   readonly items: ReadonlyArray<BackgroundItem>;
   readonly hasManagedCommands: boolean;
 }): BackgroundItem["kind"] | "managedShell" | "mixed" {

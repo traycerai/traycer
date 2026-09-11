@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
-import { backgroundRestingKind } from "@/lib/chat/background-item-tree";
+import { backgroundKind } from "@/lib/chat/background-item-tree";
 
 function wakeup(taskId: string): BackgroundItem {
   return {
@@ -36,10 +36,10 @@ function subagent(taskId: string): BackgroundItem {
   };
 }
 
-describe("backgroundRestingKind", () => {
+describe("backgroundKind", () => {
   it("names the one kind every row shares", () => {
     expect(
-      backgroundRestingKind({
+      backgroundKind({
         items: [wakeup("w1"), wakeup("w2")],
         hasManagedCommands: false,
       }),
@@ -48,7 +48,7 @@ describe("backgroundRestingKind", () => {
 
   it("reads as mixed when rows differ in kind", () => {
     expect(
-      backgroundRestingKind({
+      backgroundKind({
         items: [wakeup("w1"), subagent("s1")],
         hasManagedCommands: false,
       }),
@@ -59,23 +59,23 @@ describe("backgroundRestingKind", () => {
   // from different glyph families, so a section holding one of each shares no
   // glyph to borrow.
   it("keeps managed shells apart from harness command rows", () => {
-    expect(backgroundRestingKind({ items: [], hasManagedCommands: true })).toBe(
+    expect(backgroundKind({ items: [], hasManagedCommands: true })).toBe(
       "managedShell",
     );
     expect(
-      backgroundRestingKind({
+      backgroundKind({
         items: [command("c1")],
         hasManagedCommands: true,
       }),
     ).toBe("mixed");
     expect(
-      backgroundRestingKind({
+      backgroundKind({
         items: [command("c1")],
         hasManagedCommands: false,
       }),
     ).toBe("command");
     expect(
-      backgroundRestingKind({
+      backgroundKind({
         items: [wakeup("w1")],
         hasManagedCommands: true,
       }),
@@ -83,8 +83,8 @@ describe("backgroundRestingKind", () => {
   });
 
   it("claims no kind for an empty section", () => {
-    expect(
-      backgroundRestingKind({ items: [], hasManagedCommands: false }),
-    ).toBe("mixed");
+    expect(backgroundKind({ items: [], hasManagedCommands: false })).toBe(
+      "mixed",
+    );
   });
 });

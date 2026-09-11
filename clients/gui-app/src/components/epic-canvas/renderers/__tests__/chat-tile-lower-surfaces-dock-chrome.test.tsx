@@ -139,10 +139,7 @@ import {
   DEFAULT_COMPOSER_LAYOUT,
   useLayoutStore,
 } from "@/stores/settings/layout-store";
-import {
-  CHAT_DOCK_CHIP_WORKING_TEST_ID,
-  ChatDockCompactStrip,
-} from "@/components/chat/chat-dock-compact-strip";
+import { ChatDockCompactStrip } from "@/components/chat/chat-dock-compact-strip";
 import {
   ChatLowerInteractionSurfaces,
   type ChatLowerInteractionSurfacesProps,
@@ -398,10 +395,14 @@ function renderSurfaces(props: ChatLowerInteractionSurfacesProps) {
   return render(tile(props));
 }
 
-// The number alone. A working chip's spinner is text too (a braille frame),
-// so the button's own `textContent` would read `⠋3`.
 function chipText(section: string): string | null {
-  return screen.getByTestId(`chat-dock-chip-${section}-text`).textContent;
+  return screen.getByTestId(`chat-dock-chip-${section}`).textContent;
+}
+
+/** True when this chip's icon is blinking - the strip's whole activity signal. */
+function chipWorking(section: string): boolean {
+  const chipElement = screen.getByTestId(`chat-dock-chip-${section}`);
+  return chipElement.querySelector("[data-chip-activity]") !== null;
 }
 
 beforeEach(() => {
@@ -495,7 +496,7 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
     );
   });
 
-  it("spins the active-agents chip while any agent is mid-turn, and rests on the icon when every one is background-only", () => {
+  it("pulses the active-agents icon while any agent is mid-turn, and stills it when every one is background-only", () => {
     useLayoutStore.setState({
       composer: { ...DEFAULT_COMPOSER_LAYOUT, activeAgents: "compact" },
     });
@@ -512,10 +513,9 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
     const { rerender } = renderSurfaces(props);
 
     const chip = screen.getByTestId("chat-dock-chip-activeAgents");
-    expect(
-      within(chip).getByTestId(CHAT_DOCK_CHIP_WORKING_TEST_ID),
-    ).not.toBeNull();
-    expect(chip.querySelector("svg")).toBeNull();
+    // The icon stays `Bot` throughout - only the pulse comes and goes.
+    expect(chipWorking("activeAgents")).toBe(true);
+    expect(chip.querySelector("svg.lucide-bot")).not.toBeNull();
     expect(chipText("activeAgents")).toBe("2");
 
     setAgentStopControls({
@@ -524,9 +524,7 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
     });
     rerender(tile(props));
 
-    expect(
-      within(chip).queryByTestId(CHAT_DOCK_CHIP_WORKING_TEST_ID),
-    ).toBeNull();
+    expect(chipWorking("activeAgents")).toBe(false);
     expect(chip.querySelector("svg.lucide-bot")).not.toBeNull();
     expect(chipText("activeAgents")).toBe("2");
     expect(chip.getAttribute("aria-label")).toBe(
@@ -550,11 +548,37 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
     const chip = screen.getByTestId("chat-dock-chip-background");
     expect(chipText("background")).toBe("1");
     expect(chip.getAttribute("aria-label")).toBe("Background. 1 running.");
-    // Something is running, so the glyph is the spinner, whatever the kind.
-    expect(
-      within(chip).getByTestId(CHAT_DOCK_CHIP_WORKING_TEST_ID),
-    ).not.toBeNull();
-    expect(chip.querySelector("svg")).toBeNull();
+    // Something is running, so the kind's icon pulses - it is not replaced.
+    expect(chipWorking("background")).toBe(true);
+    expect(chip.querySelector("svg.lucide-square-terminal")).not.toBeNull();
+  });
+
+  // Running and mixed at once: the neutral stack is still the glyph, and the
+  // blink rides on it. The two axes are independent, and this is the case that
+  // would have been hidden while a working chip swapped its icon out.
+  it("keeps the neutral stack on a background chip whose mixed rows are running", () => {
+    useLayoutStore.setState({
+      composer: { ...DEFAULT_COMPOSER_LAYOUT, background: "compact" },
+    });
+
+    renderSurfaces(
+      surfacesProps({
+        restoreContext: EMPTY_RESTORE,
+        queueItems: [],
+        backgroundItems: [
+          backgroundCommandItem("task-1", "bun test"),
+          backgroundWakeupItem("wake-1", "Review status"),
+        ],
+      }),
+    );
+
+    const chip = screen.getByTestId("chat-dock-chip-background");
+    expect(chipText("background")).toBe("1");
+    expect(chip.getAttribute("aria-label")).toBe(
+      "Background. 1 running · 1 waiting.",
+    );
+    expect(chipWorking("background")).toBe(true);
+    expect(chip.querySelector("svg.lucide-layers")).not.toBeNull();
   });
 
   // A pending wake is not running, so the chip rests - and rests on the wake's
@@ -573,9 +597,7 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
 
     const chip = screen.getByTestId("chat-dock-chip-background");
     expect(chipText("background")).toBe("0");
-    expect(
-      within(chip).queryByTestId(CHAT_DOCK_CHIP_WORKING_TEST_ID),
-    ).toBeNull();
+    expect(chipWorking("background")).toBe(false);
     expect(chip.querySelector("svg.lucide-alarm-clock")).not.toBeNull();
 
     // A held shell joins the wake: two kinds, so neither icon may stand for
@@ -587,9 +609,7 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
     });
 
     expect(chipText("background")).toBe("0");
-    expect(
-      within(chip).queryByTestId(CHAT_DOCK_CHIP_WORKING_TEST_ID),
-    ).toBeNull();
+    expect(chipWorking("background")).toBe(false);
     expect(chip.querySelector("svg.lucide-layers")).not.toBeNull();
   });
 
@@ -616,9 +636,7 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
 
     const chip = screen.getByTestId("chat-dock-chip-background");
     expect(chip.getAttribute("aria-label")).toBe("Background. 1 held.");
-    expect(
-      within(chip).queryByTestId(CHAT_DOCK_CHIP_WORKING_TEST_ID),
-    ).toBeNull();
+    expect(chipWorking("background")).toBe(false);
     expect(chip.querySelector("svg.lucide-circle-pause")).not.toBeNull();
   });
 
@@ -742,9 +760,7 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
 
     const chip = screen.getByTestId("chat-dock-chip-activeAgents");
     expect(chipText("activeAgents")).toBe("0 · 1");
-    expect(
-      within(chip).queryByTestId(CHAT_DOCK_CHIP_WORKING_TEST_ID),
-    ).toBeNull();
+    expect(chipWorking("activeAgents")).toBe(false);
     expect(chip.querySelector("svg.lucide-bot")).not.toBeNull();
     expect(chip.getAttribute("aria-label")).toBe(
       "Active agents. 0 running, 1 received from other agents and queued.",

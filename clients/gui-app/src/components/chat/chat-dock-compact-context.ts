@@ -5,24 +5,22 @@ import type { BackgroundItemKind } from "@traycer/protocol/host/agent/gui/subscr
 export type ChatDockSection = "filesChanged" | "activeAgents" | "background";
 
 /**
- * What a chip draws ahead of its number.
+ * What a chip draws ahead of its number - what the section IS, never what it
+ * is doing. Activity rides on top of this glyph (see `working`) rather than
+ * replacing it: a chip whose icon is swapped out while busy stops saying which
+ * section it stands for at exactly the moment someone is scanning for it, and
+ * two busy chips side by side then read as the same thing twice.
  *
- * `working` is the app's spinner, and it stands in for the section's own icon
- * whenever the section has something in flight: an agent mid-turn, a
- * background job running. The count beside it stays, so the chip still says
- * how many; the glyph says whether anything is happening right now.
- *
- * The Background chip has no icon of its own. At rest it borrows the icon of
- * the one kind its rows share - a wake, a sub-agent - and shows a neutral
- * stack (`mixed`) when they differ, exactly as the panel's rows would draw
- * them. `managedShell` is the host-supervised shell, which the panel draws
- * from its own glyph family rather than from the kind icons; a resting chip
- * with shells in it is always a HELD shell, since a running one spins.
+ * The Background chip has no icon of its own. It borrows the icon of the one
+ * kind its rows share - a wake, a sub-agent - and shows a neutral stack
+ * (`mixed`) when they differ, exactly as the panel's rows would draw them.
+ * `managedShell` is the host-supervised shell, which the panel draws from its
+ * own glyph family rather than from the kind icons; a shell that is not
+ * running is a held one, which is the glyph that family rests on.
  */
 export type ChatDockCompactChipGlyph =
   | "filesChanged"
   | "activeAgents"
-  | "working"
   | "managedShell"
   | "mixed"
   | BackgroundItemKind;
@@ -30,6 +28,12 @@ export type ChatDockCompactChipGlyph =
 export interface ChatDockCompactChipModel {
   readonly section: ChatDockSection;
   readonly glyph: ChatDockCompactChipGlyph;
+  /**
+   * True while this section has something in flight - an agent mid-turn, a
+   * background job running. It pulses the icon; it never changes which icon,
+   * and the count beside it is unaffected.
+   */
+  readonly working: boolean;
   /** The short form the chip prints: `+395 −12`, `3`, `2 · 1`. */
   readonly text: string;
   /** The whole sentence it stands for - the chip's accessible name. */
