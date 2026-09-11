@@ -34,7 +34,13 @@ describe("comm-graph tile schema", () => {
   it("round-trips through serialize / parse", () => {
     const ref = {
       ...makeCommGraphTileRef(EPIC_ID),
-      view: { x: 12, y: -30, zoom: 1.5, mode: "graph" as const },
+      view: {
+        ...DEFAULT_COMM_GRAPH_VIEW,
+        x: 12,
+        y: -30,
+        zoom: 1.5,
+        mode: "graph" as const,
+      },
     };
     expect(parseTileRef(serializeTileRef(ref))).toEqual(ref);
   });
@@ -61,7 +67,13 @@ describe("comm-graph tile schema", () => {
     // The framing the user chose survives, and the missing mode is filled in
     // with what that tile ALWAYS rendered - reopening it on the floor would
     // silently change a surface the person already had set up.
-    expect(parsed.view).toEqual({ x: 4, y: 5, zoom: 2, mode: "graph" });
+    expect(parsed.view).toEqual({
+      ...DEFAULT_COMM_GRAPH_VIEW,
+      x: 4,
+      y: 5,
+      zoom: 2,
+      mode: "graph",
+    });
   });
 
   it("degrades an unrecognized mode to the graph rather than a blank tile", () => {
@@ -168,7 +180,10 @@ describe("comm-graph tile schema", () => {
     });
     expect(parsed).not.toBeNull();
     if (parsed === null || parsed.type !== "comm-graph") return;
-    expect(parsed.view).toEqual({ x: 0, y: 0, zoom: 1, mode: "graph" });
+    expect(parsed.view).toEqual({
+      ...DEFAULT_COMM_GRAPH_VIEW,
+      mode: "graph",
+    });
   });
 });
 
@@ -193,6 +208,7 @@ describe("updateCommGraphTileView", () => {
   it("stores the new viewport", () => {
     const state = stateWith();
     const next = updateCommGraphTileView(state, commGraphTileId(EPIC_ID), {
+      ...DEFAULT_COMM_GRAPH_VIEW,
       x: 5,
       y: 6,
       zoom: 2,
@@ -201,7 +217,13 @@ describe("updateCommGraphTileView", () => {
     const ref = Object.values(next.tilesByInstanceId)[0];
     expect(ref?.type).toBe("comm-graph");
     if (ref === undefined || ref.type !== "comm-graph") return;
-    expect(ref.view).toEqual({ x: 5, y: 6, zoom: 2, mode: "office" });
+    expect(ref.view).toEqual({
+      ...DEFAULT_COMM_GRAPH_VIEW,
+      x: 5,
+      y: 6,
+      zoom: 2,
+      mode: "office",
+    });
   });
 
   it("stores a mode change on its own", () => {

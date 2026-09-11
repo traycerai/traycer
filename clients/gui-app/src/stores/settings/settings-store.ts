@@ -21,6 +21,8 @@ import {
   type EpicNodeKind,
 } from "@/lib/artifacts/node-display";
 import { DEFAULT_THEME_PRESET, type ThemePreset } from "@/lib/theme-presets";
+import { OFFICE_VIEW_IDS } from "@/lib/comm-graph/office/views/office-view";
+import type { OfficeViewChoice } from "@/stores/epics/canvas/types";
 import {
   DEFAULT_DIFF_VIEWER_PREFERENCES,
   type DiffViewerPreferences,
@@ -102,6 +104,12 @@ export const DEFAULT_TERMINAL_CURSOR_STYLE: TerminalCursorStyle = "block";
 export const DEFAULT_TERMINAL_CURSOR_BLINK = true;
 export const DEFAULT_MINIMAP_SIDE: MinimapPlacement = "right";
 
+/**
+ * Auto, so a first-ever office opens on the view that actually fits the tile
+ * it is in rather than on whichever one this build happens to list first.
+ */
+export const DEFAULT_AGENT_OFFICE_VIEW: OfficeViewChoice = "auto";
+
 // Shape drawn when the terminal loses focus (xterm's `cursorInactiveStyle`,
 // which never blinks). Bar/underline mirror the chosen shape so the cursor
 // keeps its identity on blur; block falls back to a hollow outline so an
@@ -152,6 +160,15 @@ export interface SettingsState {
   pinContextUsageBreakdown: boolean;
   /** Shared edge used by chat and artifact minimaps, or `hide` for both. */
   chatTurnMinimapSide: MinimapPlacement;
+  /**
+   * Which office view an epic's agent office opens on when nobody has picked
+   * one for that tile.
+   *
+   * A DEFAULT, not a setting the tiles follow: a tile that has been given a
+   * view of its own keeps it, so changing this moves only the tiles nobody has
+   * touched. `"auto"` measures the tile and picks by what fits.
+   */
+  agentOfficeDefaultView: OfficeViewChoice;
   pointerCursors: boolean;
   uiFontSize: number;
   codeFontSize: number;
@@ -246,6 +263,7 @@ export interface SettingsState {
   setShowNavigatorResourceStats: (value: boolean) => void;
   setPinContextUsageBreakdown: (value: boolean) => void;
   setMinimapSide: (value: MinimapPlacement) => void;
+  setAgentOfficeDefaultView: (value: OfficeViewChoice) => void;
   setPointerCursors: (value: boolean) => void;
   setUiFontSize: (value: number) => void;
   setCodeFontSize: (value: number) => void;
@@ -292,6 +310,7 @@ type PersistedSettingsState = Pick<
   | "showNavigatorResourceStats"
   | "pinContextUsageBreakdown"
   | "chatTurnMinimapSide"
+  | "agentOfficeDefaultView"
   | "pointerCursors"
   | "uiFontSize"
   | "codeFontSize"
@@ -366,6 +385,7 @@ function partializeSettingsState(state: SettingsState): PersistedSettingsState {
     showNavigatorResourceStats: state.showNavigatorResourceStats,
     pinContextUsageBreakdown: state.pinContextUsageBreakdown,
     chatTurnMinimapSide: state.chatTurnMinimapSide,
+    agentOfficeDefaultView: state.agentOfficeDefaultView,
     pointerCursors: state.pointerCursors,
     uiFontSize: state.uiFontSize,
     codeFontSize: state.codeFontSize,
@@ -408,6 +428,7 @@ export const useSettingsStore = create<SettingsState>()(
       showNavigatorResourceStats: false,
       pinContextUsageBreakdown: false,
       chatTurnMinimapSide: DEFAULT_MINIMAP_SIDE,
+      agentOfficeDefaultView: DEFAULT_AGENT_OFFICE_VIEW,
       pointerCursors: true,
       uiFontSize: DEFAULT_UI_FONT_SIZE,
       codeFontSize: DEFAULT_CODE_FONT_SIZE,
@@ -449,6 +470,7 @@ export const useSettingsStore = create<SettingsState>()(
       ),
       setPinContextUsageBreakdown: makeSetter(set, "pinContextUsageBreakdown"),
       setMinimapSide: makeSetter(set, "chatTurnMinimapSide"),
+      setAgentOfficeDefaultView: makeSetter(set, "agentOfficeDefaultView"),
       setPointerCursors: makeSetter(set, "pointerCursors"),
       setUiFontSize: makeClampedFontSizeSetter(
         set,
@@ -565,8 +587,12 @@ export const useSettingsStore = create<SettingsState>()(
       // could never be reached again. `linkOpen`, `tilePlacement` and
       // `agentTabSurfacing` are resolved from the persisted record rather than
       // from `merged` because this is also where the one-shot migration off
-      // their pre-refactor keys runs. Every other field keeps the default
-      // shallow merge behavior.
+      // their pre-refactor keys runs. `agentOfficeDefaultView` is re-derived
+      // because its vocabulary is a REGISTRY: a blob written by a build that
+      // ships more office views than this one names a view nothing here can
+      // plan, and it has to come back as Auto - which always has an answer -
+      // rather than as that name. Every other field keeps the default shallow
+      // merge behavior.
       merge: (persistedState, currentState) => {
         const persisted: Record<string, unknown> = isRecord(persistedState)
           ? persistedState
@@ -586,6 +612,9 @@ export const useSettingsStore = create<SettingsState>()(
             persistedMinimapSide === "hide"
               ? persistedMinimapSide
               : DEFAULT_MINIMAP_SIDE,
+          agentOfficeDefaultView: resolvePersistedAgentOfficeView(
+            persisted.agentOfficeDefaultView,
+          ),
           agentTabSurfacing: resolvePersistedAgentTabSurfacing(persisted),
           linkOpen: resolvePersistedLinkOpen(persisted),
           tilePlacement: resolvePersistedTilePlacement(persisted),
@@ -785,6 +814,21 @@ function resolvePersistedTilePlacement(
       ? stored.sideChat
       : DEFAULT_TILE_PLACEMENT_SETTINGS.sideChat,
   };
+}
+
+/**
+ * A persisted office view choice this build can still honour.
+ *
+ * The registry is the vocabulary, exactly as it is for the tile's own choice:
+ * a value naming a view a newer build shipped degrades to Auto, which measures
+ * and always has an answer, rather than to a view id nothing can plan.
+ */
+function resolvePersistedAgentOfficeView(value: unknown): OfficeViewChoice {
+  if (value === "auto") return "auto";
+  if (typeof value !== "string") return DEFAULT_AGENT_OFFICE_VIEW;
+  return (
+    OFFICE_VIEW_IDS.find((id) => id === value) ?? DEFAULT_AGENT_OFFICE_VIEW
+  );
 }
 
 function resolvePersistedAgentTabSurfacing(

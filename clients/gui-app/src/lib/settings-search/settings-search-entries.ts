@@ -407,6 +407,27 @@ export const SETTINGS_SEARCH_ENTRIES: ReadonlyArray<SettingsSearchEntry> = [
   },
   {
     section: "appearance",
+    anchor: "appearance-agent-office",
+    kind: "group",
+    availableWhen: alwaysAvailable,
+    label: "Agent office",
+    description: null,
+    group: null,
+    keywords: ["office", "agents", "floor", "epic", "canvas"],
+  },
+  {
+    section: "appearance",
+    anchor: "appearance-agent-office-default-view",
+    kind: "setting",
+    availableWhen: alwaysAvailable,
+    label: "Default view",
+    description:
+      "For epics you have not chosen a view in. Auto picks by how much fits the tile.",
+    group: "Agent office",
+    keywords: ["office", "view", "auto", "floor", "towers", "building"],
+  },
+  {
+    section: "appearance",
     anchor: "appearance-typography",
     kind: "group",
     availableWhen: alwaysAvailable,

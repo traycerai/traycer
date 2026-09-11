@@ -232,6 +232,7 @@ describe("comm-graph view mode", () => {
       useEpicCanvasStore
         .getState()
         .updateCommGraphTileViewInTab(TAB_ID, commGraphTileId(EPIC_ID), {
+          ...DEFAULT_COMM_GRAPH_VIEW,
           x: 400,
           y: -220,
           zoom: 3,

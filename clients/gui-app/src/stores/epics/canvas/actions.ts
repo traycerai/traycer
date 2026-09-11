@@ -22,6 +22,7 @@ import { v4 as uuidv4 } from "uuid";
 import type { PlainTerminalProjection } from "@traycer/protocol/host/terminal/plain-schemas";
 import { DEFAULT_TERMINAL_TITLE } from "@/lib/terminals/terminal-title";
 import type {
+  CommGraphTileCamera,
   CommGraphTileViewState,
   EpicCanvasTileRef,
   EpicCanvasState,
@@ -1736,9 +1737,13 @@ export function updateSnapshotDiffTilePayload(
 }
 
 /**
- * Persist a comm-graph tile's viewport. Called on gesture END (React Flow's
- * `onMoveEnd`), never per animation frame - the canvas snapshot is serialized
- * on every write, so a per-frame pan would churn the whole persistence path.
+ * Rewrite a comm-graph tile's WHOLE view value: the mode, the office view
+ * choice, and the camera those two decide.
+ *
+ * Every field is compared, the two office choices included. They are not
+ * decoration on a viewport write - they are the reason this action exists
+ * beside {@link updateCommGraphTileCamera}, and a compare that skipped them
+ * would report "nothing changed" for a pick that only switched views.
  */
 export function updateCommGraphTileView(
   state: EpicCanvasState,
@@ -1754,11 +1759,55 @@ export function updateCommGraphTileView(
         ref.view.x === view.x &&
         ref.view.y === view.y &&
         ref.view.zoom === view.zoom &&
-        ref.view.mode === view.mode
+        ref.view.mode === view.mode &&
+        ref.view.officeView === view.officeView &&
+        ref.view.officeAutoView === view.officeAutoView
       ) {
         return ref;
       }
       return { ...ref, view };
+    },
+  );
+}
+
+/**
+ * Persist a comm-graph tile's viewport, and ONLY its viewport. Called on
+ * gesture END (React Flow's `onMoveEnd`, the office's debounced persist),
+ * never per animation frame - the canvas snapshot is serialized on every
+ * write, so a per-frame pan would churn the whole persistence path.
+ *
+ * A PATCH, where the renderers used to build a whole view value and hand it
+ * over. Both of them know the camera and nothing else; a whole-value write
+ * from either would carry the mode and the view choice as they were when that
+ * renderer last rendered, so a pan landing after a pick - which is exactly
+ * what a debounced pan does - would put the old view back.
+ */
+export function updateCommGraphTileCamera(
+  state: EpicCanvasState,
+  tileId: string,
+  camera: CommGraphTileCamera,
+): EpicCanvasState {
+  return updateTilesWhere(
+    state,
+    (ref) => ref.id === tileId && isCommGraphTileRef(ref),
+    (ref) => {
+      if (!isCommGraphTileRef(ref)) return ref;
+      if (
+        ref.view.x === camera.x &&
+        ref.view.y === camera.y &&
+        ref.view.zoom === camera.zoom
+      ) {
+        return ref;
+      }
+      return {
+        ...ref,
+        view: {
+          ...ref.view,
+          x: camera.x,
+          y: camera.y,
+          zoom: camera.zoom,
+        },
+      };
     },
   );
 }

@@ -94,7 +94,7 @@ function canvas(view: CommGraphTileViewState, options: RenderCanvasOptions) {
       pulseKey={null}
       modeToggle={null}
       view={view}
-      onViewChange={vi.fn()}
+      onCameraChange={vi.fn()}
       canOpenAgentForEvent={() => true}
       canJump={() => false}
       onJump={vi.fn()}
@@ -246,10 +246,10 @@ describe("CommGraphCanvas viewport", () => {
 
   it("restores a user-positioned viewport instead of fitting it again", () => {
     const persistedView: CommGraphTileViewState = {
+      ...GRAPH_DEFAULT_VIEW,
       x: 120,
       y: -80,
       zoom: 0.75,
-      mode: "graph",
     };
     renderCanvas(persistedView, STATIC_CANVAS);
 

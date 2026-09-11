@@ -267,6 +267,7 @@ export type AnalyticsRole = "editor" | "owner" | "viewer";
 
 export type AnalyticsSetting =
   | "allowPrereleaseUpdates"
+  | "agentOfficeDefaultView"
   | "agentTabSurfacing"
   | "artifactIconColorMode"
   | "artifactIconColors"
@@ -1137,6 +1138,7 @@ const ANALYTICS_SETTINGS_SECTIONS = new Set<string>(
 );
 
 const ANALYTICS_SETTINGS = new Set<string>([
+  "agentOfficeDefaultView",
   "agentTabSurfacing",
   "allowPrereleaseUpdates",
   "artifactIconColorMode",

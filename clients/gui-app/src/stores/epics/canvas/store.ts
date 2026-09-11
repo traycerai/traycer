@@ -88,6 +88,7 @@ import {
   toggleGitDiffBundleFileCollapsed,
   toggleSnapshotDiffBundleFileCollapsed,
   updateBrowserTileViewportPreset,
+  updateCommGraphTileCamera,
   updateCommGraphTileView,
   updateGitDiffTileView,
   updateSnapshotDiffTileView,
@@ -113,6 +114,7 @@ import {
   type EdgeDropPosition,
   type EpicCanvasTileRef,
   type EpicCanvasState,
+  type CommGraphTileCamera,
   type CommGraphTileViewState,
   type EpicPipGeometry,
   type EpicViewTab,
@@ -557,6 +559,16 @@ export interface EpicCanvasStore {
     tabId: string,
     tileId: string,
     view: CommGraphTileViewState,
+  ) => void;
+  /**
+   * The viewport alone. Both canvases write their camera through this rather
+   * than through the whole-value action above, so a debounced pan cannot carry
+   * a stale mode or office view back over a pick made while it was in flight.
+   */
+  updateCommGraphTileCameraInTab: (
+    tabId: string,
+    tileId: string,
+    camera: CommGraphTileCamera,
   ) => void;
   updatePrDiffTileViewInTab: (
     tabId: string,
@@ -2109,6 +2121,14 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
           set((state) =>
             updateTabCanvas(state, tabId, (canvas) =>
               updateCommGraphTileView(canvas, tileId, view),
+            ),
+          );
+        },
+
+        updateCommGraphTileCameraInTab: (tabId, tileId, camera) => {
+          set((state) =>
+            updateTabCanvas(state, tabId, (canvas) =>
+              updateCommGraphTileCamera(canvas, tileId, camera),
             ),
           );
         },

@@ -1,5 +1,6 @@
 import type { ProviderId } from "@traycer/protocol/host/provider-schemas";
 import type { EpicNodeKind } from "@/lib/artifacts/node-display";
+import type { OfficeViewId } from "@/lib/comm-graph/office/office-types";
 import { makeLiteralGuard } from "@/lib/type-guard";
 import type { SnapshotSourceBlockIds } from "@/lib/chat/snapshot-source-block-ids";
 import type { DesktopJsonValue } from "@/lib/windows/types";
@@ -502,11 +503,37 @@ export interface ManagedCommandOutputTileRef {
  * yourself"; carrying the numbers over would open the incoming mode
  * off-screen while still counting as user-framed.
  */
-export interface CommGraphTileViewState {
+export interface CommGraphTileCamera {
   readonly x: number;
   readonly y: number;
   readonly zoom: number;
+}
+
+/**
+ * Which office view this tile draws, as the USER chose it.
+ *
+ * `"auto"` is a choice like any other, not the absence of one: it means "pick
+ * for me, by what fits", and its measured outcome is remembered separately in
+ * `officeAutoView` so a remount cannot re-decide it.
+ */
+export type OfficeViewChoice = "auto" | OfficeViewId;
+
+export interface CommGraphTileViewState extends CommGraphTileCamera {
   readonly mode: "graph" | "office";
+  /**
+   * The view this tile was told to draw, or `null` where the user has never
+   * said - in which case the Settings default applies, and a change to it
+   * moves this tile.
+   */
+  readonly officeView: OfficeViewChoice | null;
+  /**
+   * What Auto last MEASURED for this tile, or `null` before it has run.
+   *
+   * Persisted rather than recomputed, because a re-measure is free to answer
+   * differently and the saved camera addresses whichever view was on screen
+   * when it was saved. Only re-picking Auto clears it.
+   */
+  readonly officeAutoView: OfficeViewId | null;
 }
 
 /**

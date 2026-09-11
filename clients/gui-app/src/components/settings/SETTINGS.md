@@ -946,9 +946,9 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
   - The pre-refactor keys (`browserLinkDefaultMode`,
     `{terminal,markdown}BrowserLinkOpenMode`, `agentTabSurfacingMode`) are
     migrated once in the store's persist `merge` and then dropped.
-- `Appearance` Five preference groups via `settings-group.tsx`, broad-to-
-  specialized in one column: **Theme**, **Interface**, **Typography**,
-  **Terminal**, **Artifact icons** - each a quiet `<h2>` label outside its own
+- `Appearance` Six preference groups via `settings-group.tsx`, broad-to-
+  specialized in one column: **Theme**, **Interface**, **Agent office**,
+  **Typography**, **Terminal**, **Artifact icons** - each a quiet `<h2>` label outside its own
   bordered card; changes apply live, the surrounding app stays the primary
   preview. A design pass (`settings-related-panels-core-flows` artifact,
   extending the compact Settings language past General/Worktrees to five more
@@ -1042,6 +1042,14 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
       visually distinct. `TerminalPreview` reflects the chosen shape/blink with a
       CSS-only cursor (reads the store directly, no xterm instance) so the effect
       is visible without spawning a real terminal.
+  - **Agent office** (group). One row, `Default view` (a `Select` over
+    `agentOfficeDefaultView`, `"auto"` plus every id in `OFFICE_VIEW_IDS`,
+    default `"auto"`) - which office view an epic's comm-graph tile opens on
+    when nobody has picked one for that tile. The options are read from the
+    office view REGISTRY rather than listed here, so a newly registered view
+    appears in this row and in the tile's own picker together; `merge`
+    re-derives the persisted value against that registry and falls back to
+    Auto. A tile with its own `officeView` ignores this row.
   - **Artifact icons** (group). One row, `Artifact icon colors`
     (`EpicNodeIconColorPicker`, `controls/node-icon-color-picker.tsx`) - a "Use
     type colors" `Switch` (`artifactIconColorMode`, `"byType" | "none"`,

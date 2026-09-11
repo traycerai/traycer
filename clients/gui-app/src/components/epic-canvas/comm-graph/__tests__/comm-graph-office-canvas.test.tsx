@@ -67,6 +67,8 @@ const OFFICE_VIEW: CommGraphTileViewState = {
   y: 0,
   zoom: 1,
   mode: "office",
+  officeView: null,
+  officeAutoView: null,
 };
 
 /** Large enough to hold this suite's fixtures with room to spare. */
@@ -167,7 +169,7 @@ function officeElement(
       modeToggle={null}
       view={OFFICE_VIEW}
       officeView={OFFICE_VIEWS.floor}
-      onViewChange={vi.fn()}
+      onCameraChange={vi.fn()}
       canOpenAgentForEvent={() => true}
       canJump={() => false}
       onJump={vi.fn()}

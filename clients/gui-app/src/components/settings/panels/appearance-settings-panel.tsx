@@ -38,6 +38,11 @@ import {
   type TerminalCursorStyle,
 } from "@/stores/settings/settings-store";
 import { cn } from "@/lib/utils";
+import {
+  OFFICE_VIEWS,
+  OFFICE_VIEW_IDS,
+} from "@/lib/comm-graph/office/views/office-view";
+import type { OfficeViewChoice } from "@/stores/epics/canvas/types";
 import { useEffectiveTerminalFont } from "@/hooks/settings/use-effective-terminal-font";
 import { useRunnerInstalledFontsQuery } from "@/hooks/runner/use-runner-installed-fonts-query";
 import {
@@ -45,6 +50,24 @@ import {
   trackSettingChanged,
   type AnalyticsSetting,
 } from "@/lib/analytics";
+
+/**
+ * Auto first, then every registered office view in the registry's own order -
+ * the same order the tile's picker lists, because both read the registry
+ * rather than a second list that would drift from it.
+ */
+const OFFICE_VIEW_CHOICES: ReadonlyArray<OfficeViewChoice> = [
+  "auto",
+  ...OFFICE_VIEW_IDS,
+];
+
+function isOfficeViewChoice(value: string): value is OfficeViewChoice {
+  return OFFICE_VIEW_CHOICES.some((choice) => choice === value);
+}
+
+function officeViewChoiceLabel(choice: OfficeViewChoice): string {
+  return choice === "auto" ? "Auto" : OFFICE_VIEWS[choice].label;
+}
 
 function trackedAppearanceSetter<Value>(
   setting: AnalyticsSetting,
@@ -118,6 +141,12 @@ export function AppearanceSettingsPanel() {
   const resetArtifactIconColors = useSettingsStore(
     (state) => state.resetArtifactIconColors,
   );
+  const agentOfficeDefaultView = useSettingsStore(
+    (state) => state.agentOfficeDefaultView,
+  );
+  const setAgentOfficeDefaultView = useSettingsStore(
+    (state) => state.setAgentOfficeDefaultView,
+  );
   const compact = useSettingsDensity() === "compact";
 
   return (
@@ -185,6 +214,45 @@ export function AppearanceSettingsPanel() {
                   <SelectItem value="right">Right</SelectItem>
                   <SelectItem value="left">Left</SelectItem>
                   <SelectItem value="hide">Hide</SelectItem>
+                </SelectContent>
+              </Select>
+            }
+          />
+        </SettingsGroup>
+
+        <SettingsGroup
+          title="Agent office"
+          anchor="appearance-agent-office"
+          tone="default"
+          dataTestId={undefined}
+          fill={false}
+        >
+          <SettingsRow
+            label="Default view"
+            anchor="appearance-agent-office-default-view"
+            description="For epics you have not chosen a view in. Auto picks by how much fits the tile."
+            control={
+              <Select
+                value={agentOfficeDefaultView}
+                onValueChange={(value) => {
+                  if (!isOfficeViewChoice(value)) return;
+                  trackAppearanceSetting("agentOfficeDefaultView");
+                  setAgentOfficeDefaultView(value);
+                }}
+              >
+                <SelectTrigger
+                  size="sm"
+                  aria-label="Default view"
+                  className="w-[min(40vw,8rem)]"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {OFFICE_VIEW_CHOICES.map((choice) => (
+                    <SelectItem key={choice} value={choice}>
+                      {officeViewChoiceLabel(choice)}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             }

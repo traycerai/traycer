@@ -13,8 +13,14 @@
 import { v4 as uuidv4 } from "uuid";
 import type { DesktopJsonValue } from "@/lib/windows/types";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
+import type { OfficeViewId } from "@/lib/comm-graph/office/office-types";
+import { OFFICE_VIEW_IDS } from "@/lib/comm-graph/office/views/office-view";
 import { TILE_KIND_COMM_GRAPH } from "../tile-kinds";
-import type { CommGraphTileRef, CommGraphTileViewState } from "../types";
+import type {
+  CommGraphTileRef,
+  CommGraphTileViewState,
+  OfficeViewChoice,
+} from "../types";
 import type { TileSchema } from "./index";
 import { readTileInstanceId } from "./instance-id";
 
@@ -31,6 +37,11 @@ export const DEFAULT_COMM_GRAPH_VIEW: CommGraphTileViewState = {
   y: 0,
   zoom: 1,
   mode: "office",
+  // NOT a view id. A tile nobody has chosen a view for follows the Settings
+  // default, and writing one here would freeze the default at creation time
+  // for every tile ever opened.
+  officeView: null,
+  officeAutoView: null,
 };
 
 /**
@@ -40,7 +51,11 @@ export const DEFAULT_COMM_GRAPH_VIEW: CommGraphTileViewState = {
  * `mode` is deliberately NOT compared: it is a rendering choice, not a framing.
  * Folding it in would mean a tile that was only ever toggled to the office and
  * back reads as user-framed at the schema default, and would then open at
- * (0, 0) zoom 1 instead of fitting.
+ * (0, 0) zoom 1 instead of fitting. `officeView` and `officeAutoView` are out
+ * for the same reason and a stronger one: picking a view RESETS the camera to
+ * this very default, so a tile that reads as user-framed the moment a view is
+ * chosen would open every switched-to view at (0, 0) zoom 1 and never fit one
+ * again.
  *
  * Lives beside the default it compares against, and not in either renderer:
  * both ask the same question of the same schema value.
@@ -101,19 +116,64 @@ function readCommGraphViewMode(value: unknown): CommGraphTileViewState["mode"] {
   return value === "office" ? "office" : "graph";
 }
 
+/**
+ * A persisted view id this build can actually draw, else `null`.
+ *
+ * The registry is the vocabulary, exactly as it is for the picker and the
+ * tile: a value from a build that ships more views than this one degrades
+ * rather than naming a view nothing can plan.
+ */
+function readOfficeViewId(value: unknown): OfficeViewId | null {
+  if (typeof value !== "string") return null;
+  return OFFICE_VIEW_IDS.find((id) => id === value) ?? null;
+}
+
+function readOfficeViewChoice(value: unknown): OfficeViewChoice | null {
+  if (value === "auto") return "auto";
+  return readOfficeViewId(value);
+}
+
+/**
+ * Whether a field was a real choice this build cannot honour.
+ *
+ * An absent field and a persisted `null` are the SAME thing - never chosen -
+ * and neither is a degrade: a tile saved before views existed keeps the
+ * framing its owner gave it. A value that is present and unreadable is one a
+ * newer build wrote, and the camera saved beside it frames a view this one
+ * cannot draw.
+ */
+function degradesFrom(persisted: unknown, read: string | null): boolean {
+  return persisted !== undefined && persisted !== null && read === null;
+}
+
 export function parseCommGraphTileViewState(
   value: unknown,
 ): CommGraphTileViewState {
   if (!isRecord(value)) return PERSISTED_COMM_GRAPH_VIEW;
   const zoom = readFiniteNumber(value.zoom, PERSISTED_COMM_GRAPH_VIEW.zoom);
+  const officeView = readOfficeViewChoice(value.officeView);
+  const officeAutoView = readOfficeViewId(value.officeAutoView);
+  // The camera means "this much of THAT view". Once the view it was saved
+  // against has degraded away, the numbers point into a floor plan that is not
+  // coming back - and keeping them would reopen the fallback view scrolled off
+  // into empty space with no sign of why.
+  const stale =
+    degradesFrom(value.officeView, officeView) ||
+    degradesFrom(value.officeAutoView, officeAutoView);
   return {
-    x: readFiniteNumber(value.x, PERSISTED_COMM_GRAPH_VIEW.x),
-    y: readFiniteNumber(value.y, PERSISTED_COMM_GRAPH_VIEW.y),
+    x: stale
+      ? DEFAULT_COMM_GRAPH_VIEW.x
+      : readFiniteNumber(value.x, PERSISTED_COMM_GRAPH_VIEW.x),
+    y: stale
+      ? DEFAULT_COMM_GRAPH_VIEW.y
+      : readFiniteNumber(value.y, PERSISTED_COMM_GRAPH_VIEW.y),
     // A persisted zoom of 0 (or negative) would render an invisible canvas the
     // user cannot recover from, so it degrades to the default rather than
     // failing the whole tile.
-    zoom: zoom > 0 ? zoom : PERSISTED_COMM_GRAPH_VIEW.zoom,
+    zoom: stale || zoom <= 0 ? DEFAULT_COMM_GRAPH_VIEW.zoom : zoom,
     mode: readCommGraphViewMode(value.mode),
+    officeView,
+    officeAutoView,
   };
 }
 
@@ -153,6 +213,8 @@ function serializeCommGraphTileRef(ref: CommGraphTileRef): DesktopJsonValue {
       y: ref.view.y,
       zoom: ref.view.zoom,
       mode: ref.view.mode,
+      officeView: ref.view.officeView,
+      officeAutoView: ref.view.officeAutoView,
     },
   };
 }

@@ -28,6 +28,8 @@ import {
   useMemo,
   useRef,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { Maximize, Minus, Plus } from "lucide-react";
@@ -147,13 +149,20 @@ import {
  * the pixel art stays square; the bounds are what keeps a one-agent room from
  * filling the tile with a single desk and a fifty-agent floor from vanishing.
  */
-const MIN_ZOOM = 0.5;
+/**
+ * Far below one sprite pixel per screen pixel, because a thousand-agent City
+ * is tens of thousands of sprite pixels across and the overview band exists to
+ * show all of it at once. The floor at this zoom is a block map, not art.
+ */
+const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 8;
-/** Zoom levels the fit control may land on - whole-ish steps keep pixels crisp. */
-const FIT_ZOOM_STEPS: ReadonlyArray<number> = [1, 1.5, 2, 3, 4, 5, 6];
+/** As far in as a fit is ever allowed to go: past this a fitted floor is a desk. */
+const MAX_FIT_ZOOM = 6;
 /** Screen-pixel margin left around the floor when fitting. */
 const FIT_PADDING = 24;
 const ZOOM_BUTTON_FACTOR = 1.25;
+/** Screen pixels an arrow key moves the floor. */
+const KEY_PAN_PX = 48;
 const AUTO_PAN_MS = 250;
 /** Pointer travel that turns a click into a drag. */
 const CLICK_SLOP_PX = 4;
@@ -562,22 +571,23 @@ function easeInOut(t: number): number {
 }
 
 /**
- * The largest listed zoom at which the whole floor fits with padding, centered.
- * Falls back to the smallest step when nothing fits: an overflowing floor the
- * user can zoom out of beats a blank one.
+ * The EXACT zoom at which the whole floor fits with padding, centered.
+ *
+ * It used to be the largest of a few whole-ish steps, which kept pixels square
+ * and made a floor bigger than the tile at 1x overflow rather than fit - the
+ * step list had no answer below 1. Every view but the Floor is routinely
+ * larger than the tile, and "fit" has to mean it; the clamp at both ends is
+ * what keeps a one-desk office from filling the tile with a chair.
  */
 function fitCamera(floor: OfficeSize, viewport: ScreenSize): OfficeCamera {
   const availableWidth = Math.max(1, viewport.width - FIT_PADDING * 2);
   const availableHeight = Math.max(1, viewport.height - FIT_PADDING * 2);
-  let zoom = FIT_ZOOM_STEPS[0];
-  for (const step of FIT_ZOOM_STEPS) {
-    if (
-      floor.width * step <= availableWidth &&
-      floor.height * step <= availableHeight
-    ) {
-      zoom = step;
-    }
-  }
+  const zoom = clampZoom(
+    Math.min(
+      MAX_FIT_ZOOM,
+      Math.min(availableWidth / floor.width, availableHeight / floor.height),
+    ),
+  );
   return {
     zoom,
     x: (viewport.width - floor.width * zoom) / 2,
@@ -1725,7 +1735,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     onJumpToCreated,
     onJumpToSender,
     onOpenAgent,
-    onViewChange,
+    onCameraChange,
     playing,
     pulse,
     pulseKey,
@@ -2069,14 +2079,12 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     persistTimerRef.current = window.setTimeout(() => {
       persistTimerRef.current = null;
       const camera = runtime.getCamera();
-      onViewChange({
-        x: camera.x,
-        y: camera.y,
-        zoom: camera.zoom,
-        mode: view.mode,
-      });
+      // A PATCH of the three camera fields. This canvas is mounted under the
+      // resolved view's key and knows nothing about which view that is, so it
+      // must not be the thing that writes one back.
+      onCameraChange({ x: camera.x, y: camera.y, zoom: camera.zoom });
     }, VIEW_PERSIST_DEBOUNCE_MS);
-  }, [onViewChange, runtime, view.mode]);
+  }, [onCameraChange, runtime]);
 
   useEffect(
     () => () => {
@@ -2756,6 +2764,19 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     [persistView],
   );
 
+  const panBy = useCallback(
+    (dx: number, dy: number) => {
+      const camera = runtime.getCamera();
+      camera.x -= dx;
+      camera.y -= dy;
+      // The camera is not part of what the idle skip watches, so a still floor
+      // would keep the old framing painted under the new hit geometry.
+      runtime.invalidateFrame();
+      persistView();
+    },
+    [persistView, runtime],
+  );
+
   // A native listener, because a passive React `onWheel` cannot call
   // `preventDefault` - and without it the epic canvas scrolls under the floor.
   // On the CONTAINER rather than the canvas: the hover trigger is a sibling
@@ -2767,9 +2788,18 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     const onWheel = (event: WheelEvent): void => {
       event.preventDefault();
       runtime.takeManualControl();
+      // THE WHEEL PANS. An office is a place with a plan, and the gesture for
+      // moving around a map is scrolling it; zooming on a bare wheel made
+      // every scroll past the tile change how much office there was.
+      //
+      // A pinch arrives as ctrl+wheel whether or not a ctrl key exists, and
+      // the mod-wheel a trackpad user reaches for means the same thing - so
+      // both are the zoom, about the cursor, and nothing else is.
+      if (!event.ctrlKey && !event.metaKey) {
+        panBy(event.deltaX, event.deltaY);
+        return;
+      }
       const rect = container.getBoundingClientRect();
-      // A pinch arrives as ctrl+wheel and means exactly what a wheel means
-      // here, so both take the same path rather than forking a gesture model.
       const factor = Math.exp(-event.deltaY / 300);
       zoomAbout(factor, event.clientX - rect.left, event.clientY - rect.top);
     };
@@ -2777,7 +2807,80 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     return () => {
       container.removeEventListener("wheel", onWheel);
     };
-  }, [runtime, zoomAbout]);
+  }, [panBy, runtime, zoomAbout]);
+
+  // A double-click is the one gesture that reads as "closer, here" in every
+  // map surface; the floor had no answer to it at all.
+  const handleDoubleClick = useCallback(
+    (event: ReactMouseEvent<HTMLCanvasElement>) => {
+      const screen = toScreenPoint(event.clientX, event.clientY);
+      if (screen === null) return;
+      runtime.takeManualControl();
+      zoomAbout(ZOOM_BUTTON_FACTOR, screen.x, screen.y);
+    },
+    [runtime, toScreenPoint, zoomAbout],
+  );
+
+  /**
+   * The keyboard route around the floor.
+   *
+   * The canvas is the focusable element, so every key here is handled only
+   * once something inside the office has focus - the sr-only agent list is in
+   * the same container and keeps its own tab order.
+   */
+  const handleKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLCanvasElement>) => {
+      const viewport = runtime.getViewport();
+      const center = { x: viewport.width / 2, y: viewport.height / 2 };
+      switch (event.key) {
+        case "ArrowLeft":
+          runtime.takeManualControl();
+          panBy(-KEY_PAN_PX, 0);
+          break;
+        case "ArrowRight":
+          runtime.takeManualControl();
+          panBy(KEY_PAN_PX, 0);
+          break;
+        case "ArrowUp":
+          runtime.takeManualControl();
+          panBy(0, -KEY_PAN_PX);
+          break;
+        case "ArrowDown":
+          runtime.takeManualControl();
+          panBy(0, KEY_PAN_PX);
+          break;
+        // `=` unshifted is what most keyboards put `+` on, and a person
+        // pressing either means the same thing.
+        case "+":
+        case "=":
+          runtime.takeManualControl();
+          zoomAbout(ZOOM_BUTTON_FACTOR, center.x, center.y);
+          break;
+        case "-":
+          runtime.takeManualControl();
+          zoomAbout(1 / ZOOM_BUTTON_FACTOR, center.x, center.y);
+          break;
+        case "f":
+        case "F":
+          runtime.takeManualControl();
+          fitToFloor();
+          break;
+        // Back to one sprite pixel per screen pixel, about the CENTRE of the
+        // tile - so whatever was in the middle of the floor is still in the
+        // middle of it, rather than the office jumping to its own origin.
+        case "0":
+          runtime.takeManualControl();
+          zoomAbout(1 / runtime.getCamera().zoom, center.x, center.y);
+          break;
+        default:
+          return;
+      }
+      // Only for a key this actually handled: the default above returns first,
+      // so typing anywhere over the floor still reaches whatever owns it.
+      event.preventDefault();
+    },
+    [fitToFloor, panBy, runtime, zoomAbout],
+  );
 
   const visibleAgents = useMemo(
     () => agents.filter((agent) => agentIds.has(agent.id)),
@@ -2890,6 +2993,12 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
           onPointerUp={handlePointerUp}
           onPointerCancel={handlePointerCancel}
           onPointerLeave={handlePointerLeave}
+          onDoubleClick={handleDoubleClick}
+          onKeyDown={handleKeyDown}
+          // FOCUSABLE, so the camera has a keyboard route at all: arrows pan,
+          // `+`/`-` zoom, `F` fits and `0` returns to 1x. Everything a pointer
+          // can do to the framing, a keyboard can now do too.
+          tabIndex={0}
           // Nearest-neighbour scaling is what makes this pixel art rather than
           // a blurry upscale; the draw disables smoothing on its side too.
           style={{ imageRendering: "pixelated" }}

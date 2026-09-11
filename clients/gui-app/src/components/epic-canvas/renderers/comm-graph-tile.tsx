@@ -26,8 +26,11 @@
 import { useCallback, useMemo } from "react";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { DEFAULT_COMM_GRAPH_VIEW } from "@/stores/epics/canvas/tile-schema/comm-graph-tile";
-import type { CommGraphTileRef } from "@/stores/epics/canvas/types";
-import type { CommGraphTileViewState } from "@/stores/epics/canvas/types";
+import type {
+  CommGraphTileCamera,
+  CommGraphTileRef,
+  CommGraphTileViewState,
+} from "@/stores/epics/canvas/types";
 import { CommGraphCanvas } from "@/components/epic-canvas/comm-graph/comm-graph-canvas";
 import { CommGraphOfficeCanvas } from "@/components/epic-canvas/comm-graph/office/comm-graph-office-canvas";
 import { OFFICE_VIEWS } from "@/lib/comm-graph/office/views/office-view";
@@ -92,6 +95,9 @@ export function CommGraphTile(props: CommGraphTileProps) {
     snapshot.lastArrival,
   );
   const updateView = useEpicCanvasStore((s) => s.updateCommGraphTileViewInTab);
+  const updateCamera = useEpicCanvasStore(
+    (s) => s.updateCommGraphTileCameraInTab,
+  );
   // The detail panels jump to source exactly like the timeline rows do - same
   // resolver, same degrade for `origin: null`.
   const {
@@ -105,11 +111,15 @@ export function CommGraphTile(props: CommGraphTileProps) {
     openAgent,
   } = useCommGraphJump(node.epicId, agents, projection.asOfEvents);
 
-  const handleViewChange = useCallback(
-    (view: CommGraphTileViewState) => {
-      updateView(viewTabId, node.id, view);
+  // The CAMERA, patched. A renderer knows where it has been panned to and
+  // nothing else, and its write lands on a debounce - so a whole-value write
+  // from one would put back whatever mode and view choice that renderer last
+  // rendered, undoing a pick made while the pan was settling.
+  const handleCameraChange = useCallback(
+    (camera: CommGraphTileCamera) => {
+      updateCamera(viewTabId, node.id, camera);
     },
-    [node.id, updateView, viewTabId],
+    [node.id, updateCamera, viewTabId],
   );
 
   const handleModeChange = useCallback(
@@ -122,9 +132,26 @@ export function CommGraphTile(props: CommGraphTileProps) {
       // in one is meaningless in the other and would land the incoming mode
       // off-screen with nothing to say it had. The neutral viewport is what
       // each renderer reads as "fit yourself".
-      updateView(viewTabId, node.id, { ...DEFAULT_COMM_GRAPH_VIEW, mode });
+      //
+      // The OFFICE CHOICES ride through, spread from the current value rather
+      // than taken from the default: going to the graph and back is not a
+      // statement about which office you want, and rebuilding from the default
+      // would answer it with "whatever Settings says" every time.
+      updateView(viewTabId, node.id, {
+        ...DEFAULT_COMM_GRAPH_VIEW,
+        mode,
+        officeView: node.view.officeView,
+        officeAutoView: node.view.officeAutoView,
+      });
     },
-    [node.id, node.view.mode, updateView, viewTabId],
+    [
+      node.id,
+      node.view.mode,
+      node.view.officeView,
+      node.view.officeAutoView,
+      updateView,
+      viewTabId,
+    ],
   );
 
   if (agents.length === 0) {
@@ -158,7 +185,7 @@ export function CommGraphTile(props: CommGraphTileProps) {
       />
     ),
     view: node.view,
-    onViewChange: handleViewChange,
+    onCameraChange: handleCameraChange,
     canOpenAgentForEvent,
     canJump,
     onJump: jump,
