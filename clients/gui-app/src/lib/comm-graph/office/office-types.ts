@@ -334,6 +334,8 @@ export interface OfficeSeat {
   readonly hostId: string | null;
   /** A root agent (no parent on the floor) gets a manager desk with a plant. */
   readonly manager: boolean;
+  /** Alpha of the seated occupant's actor while idle at lod 1 and 2; absent means 1. */
+  readonly idleAlpha?: number;
 }
 
 /** A seat the plan handed to an agent: the INITIAL assignment, not the truth. */

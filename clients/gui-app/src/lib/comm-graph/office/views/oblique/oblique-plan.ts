@@ -3,6 +3,7 @@ import type {
   OfficeHostPopulation,
   OfficePopulationMember,
 } from "@/lib/comm-graph/office/office-population";
+import { officeSpriteSize } from "@/lib/comm-graph/office/office-pixel-art";
 import { OFFICE_TILE } from "@/lib/comm-graph/office/office-types";
 import type {
   OfficeAgentInput,
@@ -22,7 +23,7 @@ import type {
   OfficeTileRect,
 } from "@/lib/comm-graph/office/office-types";
 import type { OfficePlanInput, OfficeView } from "../office-view";
-import { OBLIQUE_PAINTER } from "./oblique-painter";
+import { OBLIQUE_FIXTURES, OBLIQUE_PAINTER } from "./oblique-painter";
 
 type ObliqueMode = "towers" | "building";
 type StoreyKind = "hq" | "live" | "quiet" | "plaza";
@@ -56,9 +57,15 @@ interface Building {
   plazaRow: number;
   quietRows: number;
 }
+interface IndexedObliqueProp {
+  readonly prop: OfficeProp;
+  readonly order: number;
+}
 /** No previous layout is retained: a fresh, private recipe is copied each run. */
 class ObliquePacking {
   readonly mode: ObliqueMode;
+  readonly propsByTile: Map<string, IndexedObliqueProp[]>;
+  propMargin: OfficeSize;
   readonly buildings: Building[];
   readonly storeys: Storey[];
   readonly assignment: Map<string, string>;
@@ -66,6 +73,8 @@ class ObliquePacking {
   shift: number;
   constructor(mode: ObliqueMode) {
     this.mode = mode;
+    this.propsByTile = new Map();
+    this.propMargin = { width: 0, height: 0 };
     this.buildings = [];
     this.storeys = [];
     this.assignment = new Map();
@@ -74,6 +83,72 @@ class ObliquePacking {
   }
 }
 
+function indexProps(
+  packing: ObliquePacking,
+  props: ReadonlyArray<OfficeProp>,
+): void {
+  let width = 0;
+  let height = 0;
+  for (const [order, prop] of props.entries()) {
+    const key = `${prop.tile.col}/${prop.tile.row}`;
+    const indexed = { prop, order };
+    const bucket = packing.propsByTile.get(key);
+    if (bucket === undefined) packing.propsByTile.set(key, [indexed]);
+    else bucket.push(indexed);
+    const size = officeSpriteSize(prop.sprite);
+    width = Math.max(width, size.width);
+    height = Math.max(height, size.height);
+  }
+  packing.propMargin = {
+    width: Math.ceil(width / OFFICE_TILE),
+    height: Math.ceil(height / OFFICE_TILE),
+  };
+}
+/** Read only the requested area, including sprites anchored before its edge. */
+export function obliquePropsIn(
+  layout: OfficeLayout,
+  tiles: OfficeTileRect,
+): ReadonlyArray<OfficeProp> {
+  const packing = layout.frozen;
+  if (
+    !(packing instanceof ObliquePacking) ||
+    tiles.cols <= 0 ||
+    tiles.rows <= 0
+  )
+    return [];
+  const found: IndexedObliqueProp[] = [];
+  for (
+    let row = Math.max(
+      0,
+      Math.floor(tiles.row) - packing.propMargin.height + 1,
+    );
+    row < Math.ceil(tiles.row + tiles.rows);
+    row += 1
+  ) {
+    for (
+      let col = Math.max(
+        0,
+        Math.floor(tiles.col) - packing.propMargin.width + 1,
+      );
+      col < Math.ceil(tiles.col + tiles.cols);
+      col += 1
+    ) {
+      found.push(...(packing.propsByTile.get(`${col}/${row}`) ?? []));
+    }
+  }
+  return found
+    .filter(({ prop }) => {
+      const size = officeSpriteSize(prop.sprite);
+      return (
+        prop.tile.col < tiles.col + tiles.cols &&
+        prop.tile.col + size.width / OFFICE_TILE > tiles.col &&
+        prop.tile.row < tiles.row + tiles.rows &&
+        prop.tile.row + size.height / OFFICE_TILE > tiles.row
+      );
+    })
+    .sort((left, right) => left.order - right.order)
+    .map((item) => item.prop);
+}
 function wingStep(mode: ObliqueMode): number {
   return mode === "towers" ? 26 : 23;
 }
@@ -587,6 +662,15 @@ function spot(placement: SpotPlacement): OfficeErrandSpot {
     audience: { kind: placement.kind === "whiteboard" ? "leads" : "floor" },
   };
 }
+function placeFixture(
+  geometry: Geometry,
+  kind: OfficeErrandKind,
+  tile: OfficeTilePos,
+): void {
+  for (const part of OBLIQUE_FIXTURES[kind] ?? []) {
+    prop(geometry, part.name, tile.col + part.col, tile.row + part.row);
+  }
+}
 function plazaProps(
   geometry: Geometry,
   building: Building,
@@ -595,25 +679,23 @@ function plazaProps(
   const spots: OfficeErrandSpot[] = [];
   const row = building.plazaRow;
   const start = building.col + 4;
-  const fixtures: ReadonlyArray<
-    readonly [OfficeSpriteName, OfficeErrandKind, number]
-  > = [
-    ["cafe-table", "cafe", 2],
-    ["cafe-table", "cafe", 2],
-    ["coffee-machine", "coffee", 1],
-    ["sofa", "sofa", 2],
-    ["pingpong-table", "pingpong", 2],
-    ["sleep-bag", "nap", 1],
-    ["sleep-bag", "nap", 1],
-    ["armchair", "read", 1],
-    ["treadmill", "treadmill", 1],
-    ["water-cooler", "cooler", 1],
-    ["plant", "water-plant", 1],
+  const fixtures: ReadonlyArray<readonly [OfficeErrandKind, number]> = [
+    ["cafe", 2],
+    ["cafe", 2],
+    ["coffee", 1],
+    ["sofa", 2],
+    ["pingpong", 2],
+    ["nap", 1],
+    ["nap", 1],
+    ["read", 1],
+    ["treadmill", 1],
+    ["cooler", 1],
+    ["water-plant", 1],
   ];
   let col = start;
-  for (const [i, [name, kind, width]] of fixtures.entries()) {
+  for (const [i, [kind, width]] of fixtures.entries()) {
     const tile = { col, row: row + (kind === "pingpong" ? 3 : 1) };
-    prop(geometry, name, tile.col, tile.row);
+    placeFixture(geometry, kind, tile);
     for (let dx = 0; dx < width; dx += 1)
       geometry.walkable[tile.row][tile.col + dx] = false;
     const id = `${hostKey(building.hostId)}/plaza/${i}`;
@@ -659,7 +741,6 @@ function plazaProps(
           }),
         );
     }
-    if (kind === "read") prop(geometry, "bookcase", col, row);
     col += width;
   }
   // Every additional wing gets two tables and two nap spots, each a fixture.
@@ -668,12 +749,7 @@ function plazaProps(
       const tile = { col: start + wing * 23 + i * 3, row: row + 1 };
       if (tile.col + 2 >= building.col + building.width) continue;
       const kind = i < 2 ? "cafe" : "nap";
-      prop(
-        geometry,
-        kind === "cafe" ? "cafe-table" : "sleep-bag",
-        tile.col,
-        tile.row,
-      );
+      placeFixture(geometry, kind, tile);
       geometry.walkable[tile.row][tile.col] = false;
       if (kind === "cafe") geometry.walkable[tile.row][tile.col + 1] = false;
       spots.push(
@@ -877,7 +953,7 @@ function paintStoreySpots(
     : canonicalSpots.map((item) => ({ ...item, floorIndex: storey.id }));
   if (!quiet && !plaza) {
     const action = { col: left + 21, row: storey.row + 1 };
-    prop(geometry, "coffee-machine", action.col, action.row);
+    placeFixture(geometry, "coffee", action);
     spots.push(
       spot({
         kind: "coffee",
@@ -904,7 +980,7 @@ function paintStoreySpots(
         hostId: building.hostId,
         agentIds: ids,
       });
-      prop(geometry, "whiteboard", left + 10, storey.row);
+      placeFixture(geometry, "whiteboard", { col: left + 10, row: storey.row });
       for (let i = 0; i < 3; i += 1)
         spots.push(
           spot({
@@ -925,8 +1001,22 @@ function materializeSeats(
   storey: Storey,
   location: StoreyLocation,
 ): void {
-  const { geometry, assigned, agents } = context;
+  const { geometry, assigned, agents, packing, input } = context;
   const { building, quiet } = location;
+  const teamRooms = new Set(
+    storey.rooms
+      .filter(
+        (room) =>
+          !room.solo &&
+          room.lead !== null &&
+          input.partition.hosts.some(
+            (host) =>
+              host.hostId === building.hostId &&
+              host.teams.some((team) => team.teamId === room.lead),
+          ),
+      )
+      .map((room) => room.id),
+  );
   for (const slot of storey.slots) {
     const agentId = assigned.get(slot.id);
     const seat: OfficeSeat = {
@@ -940,6 +1030,11 @@ function materializeSeats(
       roomId: slot.room,
       hostId: building.hostId,
       manager: slot.manager,
+      ...(packing.mode === "building" &&
+      slot.room !== null &&
+      teamRooms.has(slot.room)
+        ? { idleAlpha: 0.55 }
+        : {}),
     };
     if (agentId !== undefined && agents.has(agentId)) {
       const desk = { ...seat, agentId };
@@ -957,12 +1052,29 @@ function roomText(
   if (!solo) return name;
   return mode === "towers" ? "Solo desks" : `Bullpen · ${count} live solos`;
 }
+/** Team summaries describe membership, even when capacity lends somebody a seat. */
+function roomMembers(
+  context: PlanContext,
+  room: RoomRun,
+  hostId: string | null,
+): ReadonlyArray<string> {
+  const partition = context.input.partition;
+  if (room.solo)
+    return room.agents.filter((id) => partition.classOf(id) === "solo");
+  const host = partition.hosts.find((candidate) => candidate.hostId === hostId);
+  if (host === undefined) return [];
+  const team = host.teams.find((candidate) => candidate.teamId === room.lead);
+  if (team !== undefined) return team.memberAgentIds;
+  return host.hqAgentId !== null && room.lead === host.hqAgentId
+    ? [host.hqAgentId]
+    : [];
+}
 function materializeRooms(
   context: PlanContext,
   storey: Storey,
   location: StoreyLocation,
 ): void {
-  const { packing, geometry, agents, assigned } = context;
+  const { packing, geometry, agents } = context;
   const { building, left, aisle } = location;
   for (const room of storey.rooms) {
     const slots = storey.slots.filter((slot) => slot.room === room.id);
@@ -970,11 +1082,10 @@ function materializeRooms(
     const col = slots[0].col;
     const cols = slots[slots.length - 1].col + 2 - col;
     const owner =
-      room.lead !== null && agents.has(room.lead) ? room.lead : null;
-    const members = slots.flatMap((slot) => {
-      const id = assigned.get(slot.id);
-      return id === undefined ? [] : [id];
-    });
+      !room.solo && room.lead !== null && agents.has(room.lead)
+        ? room.lead
+        : null;
+    const members = roomMembers(context, room, building.hostId);
     const text = roomText(
       packing.mode,
       room.solo,
@@ -1096,6 +1207,7 @@ function materialize(
   };
   for (const storey of packing.storeys) materializeStorey(context, storey);
   aliasHqBoards(packing, geometry);
+  indexProps(packing, geometry.props);
 
   return {
     view: packing.mode,

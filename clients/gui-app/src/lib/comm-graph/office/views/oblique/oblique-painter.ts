@@ -5,6 +5,7 @@ import { OFFICE_TILE } from "@/lib/comm-graph/office/office-types";
 import type {
   OfficeBlockFill,
   OfficeDrawable,
+  OfficeErrandKind,
   OfficeErrandSpot,
   OfficeLayout,
   OfficeLod,
@@ -20,6 +21,8 @@ import type {
   OfficeProjector,
 } from "../office-view";
 
+import { obliquePropsIn } from "./oblique-plan";
+
 const STATIC_PROPS: ReadonlySet<OfficeSpriteName> = new Set([
   "face",
   "slab",
@@ -32,10 +35,45 @@ const STATIC_PROPS: ReadonlySet<OfficeSpriteName> = new Set([
   "door",
   "partition",
   "board",
-  "whiteboard",
   "reception",
-  "bookcase",
 ]);
+interface ObliqueFixturePart {
+  readonly name: OfficeSpriteName;
+  readonly col: number;
+  readonly row: number;
+  readonly anchor: "top" | "bottom";
+  /** Depth relative to the action tile's bottom edge, in tiles. */
+  readonly depth: number;
+}
+/** One fixture recipe shared by plan placement and pure world painting. */
+export const OBLIQUE_FIXTURES: Readonly<
+  Partial<Record<OfficeErrandKind, ReadonlyArray<ObliqueFixturePart>>>
+> = {
+  cafe: [{ name: "cafe-table", col: 0, row: 0, anchor: "bottom", depth: 0 }],
+  coffee: [
+    { name: "coffee-machine", col: 0, row: 0, anchor: "bottom", depth: 0 },
+  ],
+  sofa: [{ name: "sofa", col: 0, row: 0, anchor: "bottom", depth: 0 }],
+  pingpong: [
+    { name: "pingpong-table", col: 0, row: 0, anchor: "bottom", depth: 0 },
+  ],
+  nap: [{ name: "sleep-bag", col: 0, row: 0, anchor: "bottom", depth: 0 }],
+  read: [
+    { name: "bookcase", col: 0, row: -1, anchor: "top", depth: -1 },
+    { name: "armchair", col: 0, row: 0, anchor: "bottom", depth: 0 },
+  ],
+  treadmill: [
+    { name: "treadmill", col: 0, row: 0, anchor: "bottom", depth: 0 },
+  ],
+  cooler: [
+    { name: "water-cooler", col: 0, row: 0, anchor: "bottom", depth: 0 },
+  ],
+  "water-plant": [
+    { name: "plant", col: 0, row: 0, anchor: "bottom", depth: 0 },
+  ],
+  whiteboard: [{ name: "whiteboard", col: 0, row: 0, anchor: "top", depth: 0 }],
+};
+
 function projector(layout: OfficeLayout): OfficeProjector {
   return {
     project: (col, row) => ({ x: col * OFFICE_TILE, y: row * OFFICE_TILE }),
@@ -107,15 +145,8 @@ function floor(
   lod: OfficeLod,
 ): OfficeDrawable[] {
   if (lod === 0) return overviewBlocks(layout, tiles);
-  return layout.props
-    .filter(
-      (prop) =>
-        STATIC_PROPS.has(prop.sprite.name) &&
-        prop.tile.col >= tiles.col &&
-        prop.tile.col < tiles.col + tiles.cols &&
-        prop.tile.row >= tiles.row &&
-        prop.tile.row < tiles.row + tiles.rows,
-    )
+  return obliquePropsIn(layout, tiles)
+    .filter((prop) => STATIC_PROPS.has(prop.sprite.name))
     .map((prop) => ({
       kind: "sprite",
       sprite: prop.sprite,
@@ -289,43 +320,32 @@ function spotProps(
   lod: OfficeLod,
 ): OfficeWorldDrawable[] {
   if (lod === 0 || spot.actionTile === null) return [];
-  // A two-seat table is emitted once, by its first approach, never per patron.
-  const first = layout.floors[spot.floorIndex].errandSpots.find(
-    (candidate) => candidate.fixtureId === spot.fixtureId,
-  );
+  const bounds = layout.floors[spot.floorIndex].bounds;
+  // Aliases point outside the receiving storey, irrespective of object identity.
   if (
-    first === undefined ||
-    first.tile.col !== spot.tile.col ||
-    first.tile.row !== spot.tile.row
+    spot.tile.col < bounds.col ||
+    spot.tile.col >= bounds.col + bounds.cols ||
+    spot.tile.row < bounds.row ||
+    spot.tile.row >= bounds.row + bounds.rows
   )
     return [];
   const action = spot.actionTile;
-  const plazaFloorIndex = layout.floors.findIndex(
-    (candidate) =>
-      candidate.hostId === layout.floors[spot.floorIndex].hostId &&
-      candidate.bounds.row <= spot.tile.row &&
-      candidate.bounds.row + candidate.bounds.rows > spot.tile.row &&
-      candidate.bounds.col <= spot.tile.col &&
-      candidate.bounds.col + candidate.bounds.cols > spot.tile.col,
-  );
-  if (plazaFloorIndex >= 0 && plazaFloorIndex !== spot.floorIndex) return [];
-  return layout.props
-    .filter(
-      (prop) =>
-        !STATIC_PROPS.has(prop.sprite.name) &&
-        prop.tile.col === action.col &&
-        prop.tile.row === action.row,
-    )
-    .map((prop) => {
-      const size = officeSpriteSize(prop.sprite);
-      const foot = (prop.tile.row + 1) * OFFICE_TILE;
-      return entry(
-        prop.sprite,
-        { x: prop.tile.col * OFFICE_TILE, y: foot - size.height },
-        foot,
-        { ownerAgentId: null, alpha: 1 },
-      );
-    });
+  const firstCol = action.col - (spot.kind === "pingpong" ? 1 : 0);
+  if (spot.tile.col !== firstCol) return [];
+  const foot = (action.row + 1) * OFFICE_TILE;
+  return (OBLIQUE_FIXTURES[spot.kind] ?? []).map((part) => {
+    const sprite = { name: part.name };
+    const size = officeSpriteSize(sprite);
+    const y =
+      (action.row + part.row) * OFFICE_TILE +
+      (part.anchor === "bottom" ? OFFICE_TILE - size.height : 0);
+    return entry(
+      sprite,
+      { x: (action.col + part.col) * OFFICE_TILE, y },
+      foot + part.depth * OFFICE_TILE,
+      { ownerAgentId: null, alpha: 1 },
+    );
+  });
 }
 export const OBLIQUE_PAINTER: OfficePainter = {
   depth: "world",

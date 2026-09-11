@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { agentAppearance } from "@/lib/comm-graph/office/office-appearance";
 import { findOfficePath } from "@/lib/comm-graph/office/office-path";
 import { officeSpriteSize } from "@/lib/comm-graph/office/office-pixel-art";
+import { OfficeScene } from "@/lib/comm-graph/office/office-scene";
 import {
   partitionOfficePopulation,
   type OfficePopulation,
@@ -13,10 +14,12 @@ import {
 } from "@/lib/comm-graph/office/office-test-epic";
 import type {
   OfficeAgentInput,
+  OfficeAgentStatus,
   OfficeDrawable,
   OfficeLayout,
   OfficeLod,
   OfficeRect,
+  OfficeSceneInput,
   OfficeSize,
 } from "@/lib/comm-graph/office/office-types";
 import { OFFICE_TILE } from "@/lib/comm-graph/office/office-types";
@@ -73,6 +76,41 @@ function inputFor(
     activityById: new Map(epic.agents.map((agent) => [agent.id, 0])),
     viewport,
     previous: options.previous,
+  };
+}
+
+function inputForPartition(
+  epic: OfficeTestEpic,
+  partition: OfficePopulation,
+  viewport: OfficeSize,
+  options: InputOptions,
+): OfficePlanInput {
+  return {
+    ...inputFor(epic, viewport, options),
+    partition,
+  };
+}
+
+function sceneInputFor(args: {
+  readonly agents: ReadonlyArray<OfficeAgentInput>;
+  readonly statusById: ReadonlyMap<string, OfficeAgentStatus>;
+  readonly partition: OfficePopulation;
+}): OfficeSceneInput {
+  return {
+    agents: args.agents,
+    visibleAgentIds: new Set(args.agents.map((agent) => agent.id)),
+    statusById: args.statusById,
+    partition: args.partition,
+    activityById: new Map<string, number>(),
+    viewport: canvasViewport(VIEWPORTS[0]),
+    openRequestsByReceiver: new Map<string, number>(),
+    pulse: null,
+    pulseKey: null,
+    stepMs: 800,
+    cursorMs: null,
+    clockMs: 0,
+    playing: false,
+    reducedMotion: false,
   };
 }
 
@@ -470,6 +508,197 @@ describe("Towers packing", () => {
 });
 
 describe("Building packing", () => {
+  it("marks only live team-room desks for idle dimming", () => {
+    const source = makeTestEpic("triage", 40, 1);
+    const allWorking: OfficeTestEpic = {
+      agents: source.agents,
+      statusById: new Map(
+        source.agents.map((agent) => [agent.id, "working" as const]),
+      ),
+    };
+    const partition = populationFor(allWorking);
+    const teamIds = new Set(
+      partition.hosts.flatMap((host) =>
+        host.teams.flatMap((team) => team.memberAgentIds),
+      ),
+    );
+    const layout = planBuilding(initialInput(allWorking, VIEWPORTS[0]));
+    const teamDesks = [...layout.desks.values()].filter((desk) =>
+      teamIds.has(desk.agentId),
+    );
+    const nonTeamDesks = [...layout.desks.values()].filter(
+      (desk) => !teamIds.has(desk.agentId) && desk.kind === "desk",
+    );
+    expect(teamDesks.length).toBeGreaterThan(0);
+    expect(nonTeamDesks.length).toBeGreaterThan(0);
+    for (const desk of teamDesks) expect(desk.idleAlpha).toBe(0.55);
+    for (const desk of nonTeamDesks) expect(desk.idleAlpha).toBeUndefined();
+    const towers = planTowers(initialInput(allWorking, VIEWPORTS[0]));
+    expect(
+      [...towers.seats.values()].every((seat) => seat.idleAlpha === undefined),
+    ).toBe(true);
+
+    const cold = makeTestEpic("one-team", 12, 1);
+    const coldEpic: OfficeTestEpic = {
+      agents: cold.agents,
+      statusById: new Map(cold.agents.map((agent) => [agent.id, "idle"])),
+    };
+    const coldLayout = planBuilding(initialInput(coldEpic, VIEWPORTS[0]));
+    const cubbies = [...coldLayout.seats.values()].filter(
+      (seat) => seat.kind === "cubby",
+    );
+    expect(cubbies.length).toBeGreaterThan(0);
+    for (const cubby of cubbies) expect(cubby.idleAlpha).toBeUndefined();
+  });
+
+  it("keeps area and aggregate solo plates ownerless through name refresh", () => {
+    const source = makeTestEpic("triage", 60, 1);
+    const epic: OfficeTestEpic = {
+      agents: source.agents,
+      statusById: new Map(
+        source.agents.map((agent) => [agent.id, "working" as const]),
+      ),
+    };
+    for (const view of [TOWERS_VIEW, BUILDING_VIEW]) {
+      const partition = populationFor(epic);
+      const scene = new OfficeScene(view, null);
+      scene.sync(
+        sceneInputFor({
+          agents: epic.agents,
+          statusById: epic.statusById,
+          partition,
+        }),
+      );
+      const before = scene.layout();
+      if (before === null) throw new Error("expected a scene layout");
+      const aggregate = before.signs.filter(
+        (sign) =>
+          sign.kind === "area" ||
+          (sign.kind === "plate" &&
+            (sign.text === "Solo desks" || sign.text.startsWith("Bullpen ·"))),
+      );
+      expect(aggregate.length).toBeGreaterThan(0);
+      for (const sign of aggregate) expect(sign.ownerAgentId).toBeNull();
+      const aggregateKeys = new Set(
+        aggregate.map(
+          (sign) =>
+            `${sign.kind}:${sign.tile.col}:${sign.tile.row}:${sign.hostId ?? ""}`,
+        ),
+      );
+      const texts = aggregate.map((sign) => sign.text);
+
+      const renamedAgents = epic.agents.map((agent) => ({
+        ...agent,
+        name: `renamed-${agent.id}`,
+      }));
+      const renamedPartition = partitionOfficePopulation({
+        agents: renamedAgents,
+        statusById: epic.statusById,
+        previous: partition,
+      });
+      scene.sync(
+        sceneInputFor({
+          agents: renamedAgents,
+          statusById: epic.statusById,
+          partition: renamedPartition,
+        }),
+      );
+      const after = scene.layout();
+      if (after === null) throw new Error("expected renamed layout");
+      const afterAggregate = after.signs.filter((sign) =>
+        aggregateKeys.has(
+          `${sign.kind}:${sign.tile.col}:${sign.tile.row}:${sign.hostId ?? ""}`,
+        ),
+      );
+      expect(afterAggregate).toHaveLength(aggregate.length);
+      for (const sign of afterAggregate) expect(sign.ownerAgentId).toBeNull();
+      expect(afterAggregate.map((sign) => sign.text)).toEqual(texts);
+    }
+  });
+
+  it("keeps borrowed solo arrivals out of team room and board rosters", () => {
+    const source = makeTestEpic("triage", 40, 1);
+    const base: OfficeTestEpic = {
+      agents: source.agents,
+      statusById: new Map(
+        source.agents.map((agent) => [agent.id, "working" as const]),
+      ),
+    };
+    const firstPartition = populationFor(base);
+    const before = planBuilding(initialInput(base, VIEWPORTS[0]));
+    const occupancy = new Map(
+      [...before.desks.values()].map((desk) => [desk.seatId, desk.agentId]),
+    );
+    const freeRoomSeats = [...before.seats.values()].filter(
+      (seat) => !occupancy.has(seat.seatId) && seat.roomId !== null,
+    );
+    const freeBullpenSeats = [...before.seats.values()].filter(
+      (seat) => !occupancy.has(seat.seatId) && seat.roomId === null,
+    );
+    expect(freeRoomSeats.length).toBeGreaterThan(0);
+    const template = source.agents.at(0);
+    if (template === undefined) throw new Error("expected a source agent");
+    const arrivals = Array.from(
+      { length: freeBullpenSeats.length + 1 },
+      (_unused, index) => ({
+        ...template,
+        id: `new-solo-${index}`,
+        name: `new-solo-${index}`,
+        parentId: null,
+        createdAt: 100_000 + index,
+        archived: false,
+        archivedAt: null,
+      }),
+    );
+    const grown: OfficeTestEpic = {
+      agents: [...base.agents, ...arrivals],
+      statusById: new Map([
+        ...base.statusById,
+        ...arrivals.map((agent) => [agent.id, "working"] as const),
+      ]),
+    };
+    const afterPartition = partitionOfficePopulation({
+      agents: grown.agents,
+      statusById: grown.statusById,
+      previous: firstPartition,
+    });
+    const after = planBuilding(
+      inputForPartition(grown, afterPartition, VIEWPORTS[0], {
+        previous: before,
+        needsCapacity: [],
+        occupancy,
+      }),
+    );
+    const lastArrival = arrivals.at(-1);
+    if (lastArrival === undefined) throw new Error("expected an arrival");
+    const borrowed = after.desks.get(lastArrival.id);
+    if (borrowed === undefined) throw new Error("expected a borrowed seat");
+    if (borrowed.roomId === null) throw new Error("expected a borrowed room");
+
+    const team = afterPartition.hosts
+      .flatMap((host) => host.teams)
+      .find((candidate) => candidate.teamId === "team-0-lead");
+    if (team === undefined) throw new Error("expected team-0 roster");
+    const teamRoomIds = new Set(
+      Array.from(before.seats.values()).flatMap((seat) =>
+        seat.roomId !== null && seat.roomId.startsWith(`${team.teamId}/room/`)
+          ? [seat.roomId]
+          : [],
+      ),
+    );
+    expect(teamRoomIds.has(borrowed.roomId)).toBe(true);
+    const teamSigns = after.signs.filter(
+      (sign) =>
+        sign.ownerAgentId === team.leadAgentId &&
+        (sign.kind === "plate" || sign.kind === "board"),
+    );
+    expect(teamSigns.length).toBeGreaterThan(0);
+    for (const sign of teamSigns) {
+      expect(sign.agentIds).toEqual(team.memberAgentIds);
+      expect(sign.agentIds).not.toContain(lastArrival.id);
+    }
+  });
+
   it("gives live teams rooms with one reserve seat per room and puts the rest in partition order cubbies", () => {
     for (const shape of SHAPES) {
       const epic = makeTestEpic(shape, 309, 1);
@@ -637,6 +866,106 @@ describe("Building packing", () => {
 });
 
 describe("oblique painters", () => {
+  for (const view of [TOWERS_VIEW, BUILDING_VIEW]) {
+    it(`${view.id} bounds repeated visible fixture reads to the viewport`, () => {
+      const epic = makeTestEpic("triage", 1000, 1);
+      let propReads = 0;
+      const wrappedView = {
+        ...view,
+        plan: (input: OfficePlanInput): OfficeLayout => {
+          const layout = view.plan(input);
+          return {
+            ...layout,
+            props: new Proxy(layout.props, {
+              get(target, key, receiver) {
+                if (typeof key === "string" && /^\d+$/.test(key)) {
+                  propReads += 1;
+                }
+                const value: unknown = Reflect.get(target, key, receiver);
+                return value;
+              },
+            }),
+          };
+        },
+      };
+      const data = sceneInputFor({
+        agents: epic.agents,
+        statusById: epic.statusById,
+        partition: populationFor(epic),
+      });
+      const scene = new OfficeScene(wrappedView, null);
+      scene.sync(data);
+      const layout = scene.layout();
+      if (layout === null) throw new Error("expected a scene layout");
+      const plaza = layout.floors.at(0);
+      if (plaza === undefined) throw new Error("expected a plaza floor");
+      const rect = {
+        x: plaza.bounds.col * OFFICE_TILE,
+        y: plaza.bounds.row * OFFICE_TILE,
+        width: 400,
+        height: 80,
+      };
+      scene.frame(1, rect);
+      propReads = 0;
+      scene.frame(1, rect);
+      expect(propReads, `${view.id} repeated frame prop reads`).toBeLessThan(
+        10_000,
+      );
+    });
+  }
+
+  const chunkSource = makeTestEpic("many-roots", 3, 1);
+  const chunkEpic: OfficeTestEpic = {
+    agents: chunkSource.agents.map((agent, index) => ({
+      ...agent,
+      hostId: `host-${index}`,
+    })),
+    statusById: chunkSource.statusById,
+  };
+  for (const view of [TOWERS_VIEW, BUILDING_VIEW]) {
+    it(`${view.id} includes static sprites overlapping a 512px chunk edge`, () => {
+      const layout = view.plan(initialInput(chunkEpic, VIEWPORTS[0]));
+      const all = view.painter.floor(
+        layout,
+        { col: 0, row: 0, cols: layout.cols, rows: layout.rows },
+        1,
+      );
+      const reception = all.find(
+        (drawable) =>
+          drawable.kind === "sprite" &&
+          drawable.sprite.name === "reception" &&
+          drawable.x === 1008,
+      );
+      expect(reception).toBeDefined();
+      const leftChunk = view.painter.floor(
+        layout,
+        { col: 32, row: 0, cols: 32, rows: 32 },
+        1,
+      );
+      const rightChunk = view.painter.floor(
+        layout,
+        { col: 64, row: 0, cols: 32, rows: 32 },
+        1,
+      );
+      expect(
+        leftChunk.some(
+          (drawable) =>
+            drawable.kind === "sprite" &&
+            drawable.sprite.name === "reception" &&
+            drawable.x === 1008,
+        ),
+      ).toBe(true);
+      expect(
+        rightChunk.some(
+          (drawable) =>
+            drawable.kind === "sprite" &&
+            drawable.sprite.name === "reception" &&
+            drawable.x === 1008,
+        ),
+      ).toBe(true);
+    });
+  }
+
   it("uses a world stream and an identity projector for both plans", () => {
     const epic = makeTestEpic("triage", 309, 1);
     for (const view of [TOWERS_VIEW, BUILDING_VIEW]) {
