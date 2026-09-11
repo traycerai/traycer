@@ -376,6 +376,22 @@ describe("partitionOfficePopulation", () => {
     // a team lead on a fresh read. Freezing is per-KNOWN-agent, not a topology
     // re-derivation, so this is the whole of what "keeps its class" pins.
     expect(frozen.classOf("solo")).toBe("solo");
+    // "solo-child" is the ARRIVAL here, and this is exactly the input N1
+    // reproduced: before the fix, "solo-child" was drafted as a member of a
+    // team fabricated around "solo" as its lead - "solo" stayed a solo (the
+    // assertion above), so that team's own lead was never in its roster, and
+    // "solo" was ALSO double-counted in `host.solos`. Asserting only
+    // `frozen.classOf("solo")` (as this case did before N1 slipped through)
+    // cannot see any of that, so the arrival's class and both complete
+    // rosters have to be pinned too.
+    expect(frozen.classOf("solo-child")).toBe("solo");
+    expect(frozen.teamOf("solo-child")).toBeNull();
+    expect(frozen.hosts[0].teams).toEqual([]);
+    expect(frozen.hosts[0].solos.map((member) => member.agentId)).toEqual([
+      "solo",
+      "solo-child",
+    ]);
+    assertEveryAgentPlacedExactlyOnce(grownAgents, frozen);
 
     const fresh = partitionOfficePopulation({
       agents: grownAgents,
@@ -387,6 +403,149 @@ describe("partitionOfficePopulation", () => {
     expect(fresh.classOf("solo")).toBe("team");
     expect(fresh.teamOf("solo")?.teamId).toBe("solo");
     expect(fresh.classOf("solo-child")).toBe("team");
+  });
+
+  it("N1a: an arrival under a frozen solo is a solo, and no team is fabricated around its lead", () => {
+    // S is a direct leaf of HQ, so it is a solo by construction. Appending C
+    // under it and re-partitioning with `previous` is the reviewer's exact
+    // N1 sequence: fresh topology alone would read S as now leading a team,
+    // but S is a KNOWN agent and stays frozen as a solo - so C, the arrival,
+    // must be classified against that settled fact rather than against the
+    // topology a fresh read would see.
+    const before = partitionOfficePopulation({
+      agents: [
+        agent({ id: "R", createdAt: 0 }),
+        agent({ id: "S", parentId: "R", createdAt: 1 }),
+      ],
+      statusById: statusMap([]),
+      previous: null,
+    });
+    expect(before.classOf("S")).toBe("solo");
+
+    const grownAgents: ReadonlyArray<OfficeAgentInput> = [
+      agent({ id: "R", createdAt: 0 }),
+      agent({ id: "S", parentId: "R", createdAt: 1 }),
+      agent({ id: "C", parentId: "S", createdAt: 2 }),
+    ];
+    const after = partitionOfficePopulation({
+      agents: grownAgents,
+      statusById: statusMap([]),
+      previous: before,
+    });
+    expect(after.classOf("S")).toBe("solo");
+    expect(after.classOf("C")).toBe("solo");
+    expect(after.teamOf("C")).toBeNull();
+    // The point of this case: no team exists at all - in particular, none
+    // whose lead (S) is absent from its own roster - and S is not silently
+    // duplicated between a fabricated team and `host.solos`.
+    expect(after.hosts[0].teams).toEqual([]);
+    expect(after.hosts[0].solos.map((member) => member.agentId)).toEqual([
+      "S",
+      "C",
+    ]);
+    assertEveryAgentPlacedExactlyOnce(grownAgents, after);
+  });
+
+  it("N1b: an arrival under a surviving team member inherits that member's frozen team", () => {
+    // R -> L -> M is partitioned fresh, so M is a team member of L's team.
+    // L is then removed from the roster (M's frozen team identity survives
+    // that, per F5b), and N arrives as M's child. Fresh topology alone would
+    // read M's subtree as orphaned - M's parent, L, is gone from the record -
+    // and classify N as a solo; N must instead inherit M's settled team.
+    const base: ReadonlyArray<OfficeAgentInput> = [
+      agent({ id: "R", createdAt: 0 }),
+      agent({ id: "L", parentId: "R", createdAt: 1 }),
+      agent({ id: "M", parentId: "L", createdAt: 2 }),
+    ];
+    const withLead = partitionOfficePopulation({
+      agents: base,
+      statusById: statusMap([]),
+      previous: null,
+    });
+    expect(withLead.classOf("M")).toBe("team");
+
+    const leadRemoved: ReadonlyArray<OfficeAgentInput> = [base[0], base[2]];
+    const headless = partitionOfficePopulation({
+      agents: leadRemoved,
+      statusById: statusMap([]),
+      previous: withLead,
+    });
+    expect(headless.teamOf("M")?.teamId).toBe("L");
+
+    const grownAgents: ReadonlyArray<OfficeAgentInput> = [
+      ...leadRemoved,
+      agent({ id: "N", parentId: "M", createdAt: 3 }),
+    ];
+    const after = partitionOfficePopulation({
+      agents: grownAgents,
+      statusById: statusMap([]),
+      previous: headless,
+    });
+    expect(after.classOf("N")).toBe("team");
+    expect(after.teamOf("N")?.teamId).toBe("L");
+    // The complete roster: M and N, with the removed lead L nowhere in it.
+    expect(after.teamOf("N")?.memberAgentIds).toEqual(["M", "N"]);
+    expect(after.hosts[0].solos).toEqual([]);
+    assertEveryAgentPlacedExactlyOnce(grownAgents, after);
+  });
+
+  it("N1 at fixture scale: grows a triage epic in chunks without fabricating a team", () => {
+    // The three-agent cases above name the defect; this one is the shape it
+    // actually took in a real epic. Partitioning `triage` at 309 in twenty-
+    // agent chunks against `previous` - which is what the app does, one
+    // arrival at a time - produced a team whose own lead was sitting in the
+    // solos ("team-13-lead" was the first), because every direct leaf of HQ
+    // that later acquired a child was read fresh as leading a team while its
+    // frozen class stayed `solo`.
+    const epic = makeTestEpic("triage", 309, 1);
+    const ordered = [...epic.agents].sort((left, right) =>
+      left.createdAt === right.createdAt
+        ? left.id.localeCompare(right.id)
+        : left.createdAt - right.createdAt,
+    );
+    let grown = partitionOfficePopulation({
+      agents: ordered.slice(0, 20),
+      statusById: epic.statusById,
+      previous: null,
+    });
+    for (let size = 40; size < ordered.length + 20; size += 20) {
+      grown = partitionOfficePopulation({
+        agents: ordered.slice(0, Math.min(size, ordered.length)),
+        statusById: epic.statusById,
+        previous: grown,
+      });
+    }
+
+    for (const host of grown.hosts) {
+      for (const team of host.teams) {
+        expect(team.memberAgentIds.length).toBeGreaterThan(0);
+        // A lead that is still in the epic sits in the team it leads. A lead
+        // that has been archived out leaves a headless team (F5b), which is
+        // why this is conditional rather than absolute.
+        if (grown.members.has(team.leadAgentId)) {
+          expect(team.memberAgentIds).toContain(team.leadAgentId);
+        }
+        expect(grown.members.get(team.leadAgentId)?.agentClass).not.toBe(
+          "solo",
+        );
+      }
+    }
+    assertEveryAgentPlacedExactlyOnce(ordered, grown);
+
+    // The grown office has FEWER teams than one read in a single pass, and
+    // that gap is freezing working rather than teams going missing: a direct
+    // leaf of HQ first seen childless is a solo for life, so the children it
+    // gets later join it in the solos instead of a team being built around
+    // it. Both numbers are pinned because the drift that matters is either
+    // one moving - 28 rising back towards 30 is the fabricated teams coming
+    // back, and 30 falling is the fresh read losing teams it should have.
+    const atOnce = partitionOfficePopulation({
+      agents: ordered,
+      statusById: epic.statusById,
+      previous: null,
+    });
+    expect(grown.hosts.flatMap((host) => host.teams).length).toBe(28);
+    expect(atOnce.hosts.flatMap((host) => host.teams).length).toBe(30);
   });
 
   describe("orphans never become HQ or a team lead", () => {

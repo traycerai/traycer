@@ -3,6 +3,7 @@ import { OfficeSeatBook } from "@/lib/comm-graph/office/office-seat-book";
 import type {
   OfficeAgentStatus,
   OfficeDesk,
+  OfficeFloor,
   OfficeLayout,
   OfficeSeat,
   OfficeSeatKind,
@@ -16,10 +17,11 @@ import {
 import type { OfficeProjector } from "@/lib/comm-graph/office/views/office-view";
 
 /**
- * The seat book never reads a layout's cols, rows, rooms, floors, props or
- * walkable grid - only `desks`, `seats` and `stable` - so those fields are
- * filled with the emptiest values that still type-check. Building layouts by
- * hand here (never through `layoutOffice`) is what makes reserve seats, which
+ * The seat book never reads a layout's cols, rows, rooms, props or walkable
+ * grid - only `desks`, `seats`, `stable` and, for an unassigned agent's
+ * preference floor, `floors[i].hostId` - so those other fields are filled
+ * with the emptiest values that still type-check. Building layouts by hand
+ * here (never through `layoutOffice`) is what makes reserve seats, which
  * Floor never produces, possible to test at all.
  */
 interface SeatSpec {
@@ -54,11 +56,44 @@ function makeSeat(spec: SeatSpec): OfficeSeat {
   };
 }
 
+/** A floor's authoritative host, at the array index its own `floorIndex` reads. */
+interface FloorSpec {
+  readonly hostId: string | null;
+}
+
+/** The emptiest `OfficeFloor` that still type-checks, for a given host and row. */
+function makeFloor(hostId: string | null, row: number): OfficeFloor {
+  return {
+    hostId,
+    bounds: { col: 0, row, cols: 40, rows: 10 },
+    doorTile: tile(0, row),
+    lobbyTile: tile(1, row),
+    receptionTile: tile(2, row),
+    receptionQueueTiles: [],
+    queueFacing: "down",
+    corridorTiles: [],
+    clockTile: tile(3, row),
+    stairsTile: null,
+    errandSpots: [],
+    cafeteria: null,
+    gameRoom: null,
+    areaSigns: [],
+    amenities: [],
+  };
+}
+
 interface LayoutSpec {
   readonly seats: ReadonlyArray<SeatSpec>;
   /** agentId -> seatId, the plan's initial assignment. */
   readonly desks: ReadonlyMap<string, string>;
   readonly stable: boolean;
+  /**
+   * `layout.floors[i]`'s host, index by index. Omitted (the default for
+   * every existing case) leaves `floors: []`, which is exactly the "no
+   * storey at that index" input the unassigned branch's seat-scan fallback
+   * is meant for - those cases stay on that fallback path, unchanged.
+   */
+  readonly floors?: ReadonlyArray<FloorSpec>;
 }
 
 function buildLayout(spec: LayoutSpec): OfficeLayout {
@@ -72,6 +107,9 @@ function buildLayout(spec: LayoutSpec): OfficeLayout {
       throw new Error(`no seat "${seatId}" for ${agentId}`);
     desks.set(agentId, { ...seat, agentId });
   }
+  const floors = (spec.floors ?? []).map((floorSpec, floorIndex) =>
+    makeFloor(floorSpec.hostId, floorIndex * 10),
+  );
   return {
     view: "floor",
     cols: 40,
@@ -80,7 +118,7 @@ function buildLayout(spec: LayoutSpec): OfficeLayout {
     seats,
     signs: [],
     rooms: [],
-    floors: [],
+    floors,
     doorTile: tile(0, 0),
     lobbyTile: tile(0, 0),
     props: [],
@@ -1011,6 +1049,93 @@ describe("OfficeSeatBook", () => {
       const seat = book.claim("A", { roomId: ROOM, floorIndex: 0 });
       expect(seat?.seatId).toBe("a-desk");
       expect(book.needsCapacity()).toEqual([]);
+      assertNoDoubleBooking(book);
+    });
+  });
+
+  describe("N2: an unassigned agent's preference floor may itself be empty", () => {
+    it("reads the empty preference floor's own host and finds the free desk one floor up", () => {
+      // Floor 0 is explicitly host-a and has no seats at all; floor 1, also
+      // host-a, has the only free desk. Before N2 this went to
+      // `needsCapacity` because the unassigned branch inferred the host by
+      // scanning floor 0's (nonexistent) seats instead of reading
+      // `layout.floors[0].hostId` - it never learned floor 0 was host-a's at
+      // all, let alone that host-a had a desk open elsewhere.
+      const layout = buildLayout({
+        seats: [
+          {
+            seatId: "desk-1",
+            kind: "desk",
+            roomId: null,
+            floorIndex: 1,
+            deskTile: tile(0, 10),
+            hostId: "host-a",
+          },
+        ],
+        desks: new Map(),
+        stable: true,
+        floors: [{ hostId: "host-a" }, { hostId: "host-a" }],
+      });
+      const book = new OfficeSeatBook();
+      book.adopt(layout, ["A"]);
+      const seat = book.claim("A", { roomId: null, floorIndex: 0 });
+      expect(seat?.seatId).toBe("desk-1");
+      expect(book.needsCapacity()).toEqual([]);
+      assertNoDoubleBooking(book);
+    });
+
+    it("treats a null floor host the same way: an unattributed building is still a building", () => {
+      // Same shape, both floors explicitly hostless. A null host is its own
+      // host, not "unresolved" - this is what tells empty topology apart from
+      // missing identity: both floors say something, and what they say
+      // happens to be `null`.
+      const layout = buildLayout({
+        seats: [
+          {
+            seatId: "desk-1",
+            kind: "desk",
+            roomId: null,
+            floorIndex: 1,
+            deskTile: tile(0, 10),
+            hostId: null,
+          },
+        ],
+        desks: new Map(),
+        stable: true,
+        floors: [{ hostId: null }, { hostId: null }],
+      });
+      const book = new OfficeSeatBook();
+      book.adopt(layout, ["A"]);
+      const seat = book.claim("A", { roomId: null, floorIndex: 0 });
+      expect(seat?.seatId).toBe("desk-1");
+      expect(book.needsCapacity()).toEqual([]);
+      assertNoDoubleBooking(book);
+    });
+
+    it("still refuses when the empty preference floor's host is not the one with the free desk", () => {
+      // Floor 0 (empty, host-a) is where A wakes; the only free desk is on
+      // floor 1, but floor 1 belongs to host-b. F3's host scoping must
+      // survive N2's fix: reading the floor's own host must not turn into
+      // reading ANY floor's host.
+      const layout = buildLayout({
+        seats: [
+          {
+            seatId: "desk-1",
+            kind: "desk",
+            roomId: null,
+            floorIndex: 1,
+            deskTile: tile(0, 10),
+            hostId: "host-b",
+          },
+        ],
+        desks: new Map(),
+        stable: true,
+        floors: [{ hostId: "host-a" }, { hostId: "host-b" }],
+      });
+      const book = new OfficeSeatBook();
+      book.adopt(layout, ["A"]);
+      expect(book.claim("A", { roomId: null, floorIndex: 0 })).toBeNull();
+      expect(book.needsCapacity()).toEqual(["A"]);
       assertNoDoubleBooking(book);
     });
   });

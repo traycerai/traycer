@@ -420,12 +420,18 @@ export class OfficeSeatBook {
 
   /**
    * Which BUILDING this agent belongs to, from its own seat where it has one
-   * and from the floor it is waking on where it does not.
+   * and from the STOREY it is waking on where it does not.
    *
-   * `null` means the question has no answer - an unseated agent whose
-   * preference names a floor with no seats on it - and an agent with no
-   * building has no seat to be offered, which is the safe direction: it asks
-   * the plan for capacity instead of being sent somewhere impossible.
+   * An empty floor is not an unknown floor. `layout.floors[i].hostId` is the
+   * storey's own statement of which building it is part of, and it answers
+   * whether or not anybody happens to be seated there - so an agent waking on
+   * a floor with no desks on it can still be sent to a free desk upstairs in
+   * the same building, instead of demanding capacity beside one.
+   *
+   * `null` as a HOST is an answer: the unattributed building is a building.
+   * `resolved: false` is the absence of one, and an agent with no building has
+   * no seat to be offered - the safe direction, since it asks the plan for
+   * capacity rather than being sent somewhere impossible.
    */
   private owningHostOf(
     layout: OfficeLayout,
@@ -434,6 +440,14 @@ export class OfficeSeatBook {
   ): { readonly resolved: boolean; readonly hostId: string | null } {
     const assigned = this.assignedSeat(agentId);
     if (assigned !== null) return { resolved: true, hostId: assigned.hostId };
+    // Asked as "does this layout carry that storey", because a preference can
+    // name one it does not and indexing an array is typed here as a hit.
+    const index = preference.floorIndex;
+    if (index >= 0 && index < layout.floors.length) {
+      return { resolved: true, hostId: layout.floors[index].hostId };
+    }
+    // A layout that carries no storey at that index has not said where the
+    // wake is happening, so the seats that claim to be there answer instead.
     for (const seatId of Array.from(layout.seats.keys()).sort(compareIds)) {
       const seat = layout.seats.get(seatId);
       if (seat === undefined) continue;

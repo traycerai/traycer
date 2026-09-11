@@ -349,6 +349,87 @@ function settleHqs(
 }
 
 /**
+ * What an arrival becomes, given the SETTLED draft of the agent it was created
+ * under.
+ *
+ * An `hq` parent keeps its own rule and is not handled here: a direct child of
+ * HQ is where teams begin, so the drafting pass has already made it a solo or
+ * a lead depending on whether it brought anybody, and there is nothing about
+ * freezing that can change that reading.
+ */
+function adoptedUnder(parent: Draft): Draft {
+  // Inheriting the parent's team is what keeps an arrival in the room its
+  // creator is sitting in, even when the fresh topology cannot see that team -
+  // a lead that has since been archived leaves a team nobody's parent points
+  // at any more.
+  if (parent.agentClass === "team" && parent.teamId !== null) {
+    return { agentClass: "team", teamId: parent.teamId };
+  }
+  // Under a solo, and under anything that is a member of no team: a solo. A
+  // frozen solo is somebody the office has already seated on its own; it does
+  // not acquire a room, and a lead by construction sits in the team it leads,
+  // so no team is ever fabricated around an agent who is not in it.
+  return { agentClass: "solo", teamId: null };
+}
+
+/**
+ * ARRIVALS ARE CLASSIFIED AGAINST THE SETTLED OFFICE, not against the topology
+ * as read fresh.
+ *
+ * Freezing is what makes this necessary. A known agent keeps the class it was
+ * given, so the topology the drafting pass read and the office that actually
+ * exists can disagree - and an arrival drafted against the first of those
+ * lands somewhere the second has no room for. Appending a child to a frozen
+ * solo is the plain case: fresh topology says its parent now leads a team, so
+ * the child is drafted into a team whose lead is sitting in the solos.
+ *
+ * Only agents `previous` has never seen are touched, so this is not
+ * reclassification: it is the first classification those agents get, taken
+ * from the office as it stands rather than as it would have been.
+ */
+function adoptArrivals(
+  lineage: Lineage,
+  drafts: Map<string, Draft>,
+  previous: OfficePopulation | null,
+): void {
+  if (previous === null) return;
+  // Walk DOWN the lineage rather than along creation order, so a parent is
+  // always settled before the children that read it - including the rare
+  // child whose record is older than its own parent's.
+  const pending: string[] = [];
+  const walked = new Set<string>();
+  for (const agent of lineage.ordered) {
+    // The agents this pass cannot move, and therefore starts from: the known,
+    // and the arrivals with nobody above them HERE - a true root or an orphan,
+    // whose fresh reading is the only one there is.
+    const parentId = agent.parentId;
+    const settled =
+      previous.members.has(agent.id) ||
+      parentId === null ||
+      !lineage.byId.has(parentId);
+    if (!settled) continue;
+    pending.push(agent.id);
+    walked.add(agent.id);
+  }
+  while (pending.length > 0) {
+    const currentId = pending.pop();
+    if (currentId === undefined) continue;
+    const parent = drafts.get(currentId);
+    for (const child of childrenOf(lineage, currentId)) {
+      if (walked.has(child.id)) continue;
+      walked.add(child.id);
+      pending.push(child.id);
+      const draft = drafts.get(child.id);
+      if (draft === undefined || parent === undefined) continue;
+      if (parent.agentClass === "hq") continue;
+      const adopted = adoptedUnder(parent);
+      draft.agentClass = adopted.agentClass;
+      draft.teamId = adopted.teamId;
+    }
+  }
+}
+
+/**
  * A member whose lead is in another building cannot sit in that lead's room,
  * so it becomes a solo where it actually lives - keeping the team id, which is
  * what the accent is drawn from.
@@ -459,12 +540,18 @@ export function partitionOfficePopulation(
   for (const [agentId, draft] of fresh) {
     drafts.set(agentId, { agentClass: draft.agentClass, teamId: draft.teamId });
   }
-  // FREEZING IS THE LAST WORD on a known agent. Nothing after this line may
+  // FREEZING IS THE LAST WORD on a KNOWN agent. Nothing after this line may
   // re-read the topology to second-guess it: reclassification happens when
   // `previous` is null and at no other time, because a class change moves a
-  // character to another part of the building.
+  // character to another part of the building. An ARRIVAL is a different
+  // matter - it has no class to preserve yet - and the passes below finish
+  // deciding one for it against the office these known agents make up.
   freezeAgainstPrevious(lineage, drafts, input.previous);
   const hqs = settleHqs(lineage, drafts);
+  // After the HQs settle, so an arrival reads a parent whose class nothing
+  // further can change; before the cross-host pass, so an arrival that
+  // inherits a team in another building is stranded like any other member.
+  adoptArrivals(lineage, drafts, input.previous);
   strandCrossHostMembers(lineage, drafts, input.previous);
 
   const members = sealMembers(lineage, drafts, input);
