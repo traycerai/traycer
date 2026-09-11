@@ -81,12 +81,15 @@ import { OfficeDirectoryPanel } from "@/components/epic-canvas/comm-graph/office
 import {
   createOfficeStaticSurface,
   officeBakesIntoStaticFloor,
-  officeStaticChunkTiles,
   OFFICE_STATIC_CHUNK_BUDGET,
   OfficeStaticLayer,
   planOfficeStaticChunks,
   type OfficeStaticChunkDraw,
 } from "@/components/epic-canvas/comm-graph/office/office-static-layer";
+import {
+  officeTileRectOf,
+  OFFICE_PROJECTION_BLEED_PX,
+} from "@/lib/comm-graph/office/office-projection";
 import {
   isElementVisible,
   officeCatchUpMs,
@@ -2039,9 +2042,10 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
   // unmount path rather than being swapped underneath it - which also keeps
   // `previous` from ever chaining across two different plans.
   //
-  // T6 OWES THIS A KEY. The tile passes a constant view today and so needs
-  // none; the ticket that adds the picker must render this as
-  // `key={officeView.id}`, or a switched view keeps the old view's scene.
+  // The KEY that guarantees that is the tile's: it renders this canvas under
+  // `key={resolvedViewId}:{autoRevision}` (`comm-graph-tile.tsx`), so a picked
+  // view - or a re-measured Auto - is a remount here and never a scene left
+  // over from the view before it.
   const sceneRef = useRef<{
     readonly epicId: string;
     readonly scene: OfficeScene;
@@ -2730,11 +2734,12 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
           budget: OFFICE_STATIC_CHUNK_BUDGET,
         }),
         paint: (floorCtx, chunk) => {
-          const tiles = officeStaticChunkTiles({
+          const tiles = officeTileRectOf({
             projector: officeView.painter.projector(layout),
             cols: layout.cols,
             rows: layout.rows,
-            chunk,
+            rect: chunk,
+            bleedPx: OFFICE_PROJECTION_BLEED_PX,
           });
           drawStaticFloor(
             floorCtx,
@@ -2777,8 +2782,15 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
 
       const synced = runtime.getSceneInput();
       const clockMs = synced?.clockMs ?? 0;
+      // The band the frame below will be built at, read here because what
+      // counts as animating depends on it: a typing screen is a still frame
+      // at overview, where a desk is one dot. `advanceCamera` has not run yet
+      // and may move the zoom, but every way it does - a pan, an auto-fit -
+      // already forces a draw of its own, so a band read one frame early can
+      // only mean one extra frame at a band boundary, never a frozen floor.
+      const band = officeLodForZoom(runtime.getCamera().zoom);
       const draw = gate.shouldDraw({
-        animating: scene.isAnimating(),
+        animating: scene.isAnimating(band),
         minute: Math.floor(clockMs / 60_000),
         // PEEKED, not taken: consuming the request here would drop the pan on
         // the floor on exactly the still frames auto-pan exists to move.

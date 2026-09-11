@@ -4,7 +4,11 @@ import { layoutOffice } from "@/lib/comm-graph/office/office-layout";
 import { findOfficePath } from "@/lib/comm-graph/office/office-path";
 import { officeSpriteSize } from "@/lib/comm-graph/office/office-pixel-art";
 import { partitionOfficePopulation } from "@/lib/comm-graph/office/office-population";
-import { OfficeScene } from "@/lib/comm-graph/office/office-scene";
+import {
+  MAX_CONCURRENT_ERRANDS,
+  OFFICE_CULL_MARGIN_PX,
+  OfficeScene,
+} from "@/lib/comm-graph/office/office-scene";
 import { makeTestEpic } from "@/lib/comm-graph/office/office-test-epic";
 import {
   OFFICE_VIEW_IDS,
@@ -672,13 +676,13 @@ describe("OfficeScene", () => {
     const settled = frameOf(scene);
     expect(envelopes(settled)).toHaveLength(0);
     expect(hasBubbleAt(settled, "bubble-hello", seatedHead("beta"))).toBe(true);
-    expect(scene.isAnimating()).toBe(true);
+    expect(scene.isAnimating(2)).toBe(true);
 
     // The delivered bubble is transient like any other; once it times out
     // there is nothing left for the cut-short motion to keep the floor busy
     // with.
     scene.tick(800);
-    expect(scene.isAnimating()).toBe(false);
+    expect(scene.isAnimating(2)).toBe(false);
 
     // The same flip mid-walk: a newcomer still crossing the floor jumps to
     // the end of its path and sits, rather than being abandoned mid-stride.
@@ -694,7 +698,7 @@ describe("OfficeScene", () => {
     // Still on foot, part-way across the floor - the walk-in this replaced
     // takes sixty ticks like this one to finish on its own.
     walkScene.tick(100);
-    expect(walkScene.isAnimating()).toBe(true);
+    expect(walkScene.isAnimating(2)).toBe(true);
     expect(characterRect(frameOf(walkScene), "beta")).not.toEqual(
       seatedRect("beta"),
     );
@@ -772,7 +776,7 @@ describe("OfficeScene", () => {
         crewSeatedRect(person.id),
       );
     }
-    expect(scene.isAnimating()).toBe(false);
+    expect(scene.isAnimating(2)).toBe(false);
 
     // Now the same crew, but caught mid-errand while still live, the way the
     // existing "sends an idle agent on an errand" test reaches one.
@@ -861,7 +865,7 @@ describe("OfficeScene", () => {
     // A request can sit open for hours; unlike the attention bubble, the
     // awaiting one does not bob, so a seated agent wearing it is not a
     // reason to keep redrawing.
-    expect(scene.isAnimating()).toBe(false);
+    expect(scene.isAnimating(2)).toBe(false);
   });
 
   it("finds a character first and its desk second under a point", () => {
@@ -1344,10 +1348,10 @@ describe("OfficeScene", () => {
     expect(firstBreakMs).not.toBeNull();
     expect(firstBreakMs).toBeGreaterThanOrEqual(5_000);
     expect(firstBreakMs).toBeLessThanOrEqual(10_000);
-    // ...and then EVERYBODY goes. There is no cap: an idle agent is never at
-    // its desk, so a floor of four idle agents is a floor with four of them
-    // out. The old half-the-floor limit is what left the other half sitting
-    // perfectly still, which is the thing this is for.
+    // ...and then EVERYBODY goes. Four is nowhere near `MAX_CONCURRENT_ERRANDS`,
+    // so a floor of four idle agents is a floor with four of them out. The old
+    // half-the-floor limit is what left the other half sitting perfectly
+    // still, which is the thing this is for.
     expect(mostAtOnce).toBe(IDLE_CREW.length);
   });
 
@@ -3092,6 +3096,322 @@ describe("OfficeScene", () => {
     const allVisible = new Set(family.map((person) => person.id));
     expect(officeSignVisible(roomSign, allVisible)).toBe(true);
     expect(officeSignVisible(podSign, allVisible)).toBe(true);
+  });
+});
+
+/**
+ * A crew well over `MAX_CONCURRENT_ERRANDS`, so the cap is what limits how
+ * many are away at once rather than merely how many wanted to go.
+ */
+const CAP_CREW: ReadonlyArray<OfficeAgentInput> = Array.from(
+  { length: MAX_CONCURRENT_ERRANDS * 2 },
+  (_, index) => agent({ id: `cap-${index}`, createdAt: index + 1 }),
+);
+const CAP_IDS: ReadonlySet<string> = new Set(CAP_CREW.map((one) => one.id));
+
+/** Every character standing somewhere other than its own chair, by id. */
+function awayIds(
+  frame: OfficeFrame,
+  layout: OfficeLayout,
+): ReadonlyArray<string> {
+  const away: string[] = [];
+  for (const region of frame.hitRegions) {
+    if (region.rect.height !== OFFICE_CHARACTER_HEIGHT) continue;
+    const desk = layout.desks.get(region.agentId);
+    if (desk === undefined) continue;
+    const seatedX = desk.chairTile.col * OFFICE_TILE;
+    const seatedY = desk.chairTile.row * OFFICE_TILE - 4;
+    if (region.rect.x === seatedX && region.rect.y === seatedY) continue;
+    away.push(region.agentId);
+  }
+  return away;
+}
+
+function growRect(rect: OfficeRect, margin: number): OfficeRect {
+  return {
+    x: rect.x - margin,
+    y: rect.y - margin,
+    width: rect.width + margin * 2,
+    height: rect.height + margin * 2,
+  };
+}
+
+function pointInRect(point: OfficePoint, rect: OfficeRect): boolean {
+  return (
+    point.x >= rect.x &&
+    point.x < rect.x + rect.width &&
+    point.y >= rect.y &&
+    point.y < rect.y + rect.height
+  );
+}
+
+/** Where a chair's own foot point actually projects to, identity or not. */
+function chairPoint(layout: OfficeLayout, agentId: string): OfficePoint {
+  const desk = layout.desks.get(agentId);
+  if (desk === undefined) throw new Error(`no desk for ${agentId}`);
+  return {
+    x: desk.chairTile.col * OFFICE_TILE,
+    y: desk.chairTile.row * OFFICE_TILE - 4,
+  };
+}
+
+describe("OfficeScene errand cap and view rect", () => {
+  it("never lets more than MAX_CONCURRENT_ERRANDS be away at once, checked on every tick over a long run", () => {
+    const scene = new OfficeScene(testView(layoutOffice), null);
+    scene.sync(sceneInput({ agents: CAP_CREW, visibleAgentIds: CAP_IDS }));
+    const layout = layoutOf(scene);
+
+    let mostAtOnce = 0;
+    for (let step = 0; step < 3_000; step += 1) {
+      scene.tick(100);
+      const away = awayIds(frameOf(scene), layout).length;
+      // Checked every tick, not only at the end - a cap that only holds on
+      // average would still let a burst through on the very tick a test that
+      // sampled less often would miss.
+      expect(away).toBeLessThanOrEqual(MAX_CONCURRENT_ERRANDS);
+      mostAtOnce = Math.max(mostAtOnce, away);
+    }
+    // With twice the cap's worth of idle agents on one floor, the ceiling is
+    // what is actually holding the rest back - not merely how many happened
+    // to want to go.
+    expect(mostAtOnce).toBe(MAX_CONCURRENT_ERRANDS);
+  });
+
+  it("still counts the walk home against the cap, so a floor already at the cap starts nobody new while one is walking back", () => {
+    const scene = new OfficeScene(testView(layoutOffice), null);
+    scene.sync(sceneInput({ agents: CAP_CREW, visibleAgentIds: CAP_IDS }));
+    const layout = layoutOf(scene);
+
+    let atCap: ReadonlyArray<string> = [];
+    for (
+      let step = 0;
+      step < 3_000 && atCap.length < MAX_CONCURRENT_ERRANDS;
+      step += 1
+    ) {
+      scene.tick(100);
+      atCap = awayIds(frameOf(scene), layout);
+    }
+    expect(atCap.length).toBe(MAX_CONCURRENT_ERRANDS);
+    const stillAway = new Set(atCap);
+
+    // Call exactly one of them home - a status change is one of the
+    // documented ways an idle agent's errand is cut short - and watch it walk
+    // back while the rest of the away set holds still around it.
+    const recalled = atCap[0];
+    stillAway.delete(recalled);
+    scene.sync(
+      sceneInput({
+        agents: CAP_CREW,
+        visibleAgentIds: CAP_IDS,
+        statusById: new Map<string, OfficeAgentStatus>([[recalled, "working"]]),
+      }),
+    );
+
+    let sawStillWalking = false;
+    for (let step = 0; step < 60; step += 1) {
+      scene.tick(100);
+      const away = awayIds(frameOf(scene), layout);
+      expect(away.length).toBeLessThanOrEqual(MAX_CONCURRENT_ERRANDS);
+      if (!away.includes(recalled)) continue;
+      sawStillWalking = true;
+      // Its own walk home still holds its slot, so nobody from the eager
+      // backlog has taken its place yet.
+      expect(away.length).toBe(MAX_CONCURRENT_ERRANDS);
+      for (const id of away) {
+        expect(id === recalled || stillAway.has(id), id).toBe(true);
+      }
+    }
+    expect(sawStillWalking).toBe(true);
+  });
+
+  it("does not gate an arrival, an archival, or a reception summons behind the errand cap", () => {
+    const scene = new OfficeScene(testView(layoutOffice), null);
+    scene.sync(sceneInput({ agents: CAP_CREW, visibleAgentIds: CAP_IDS }));
+    let layout = layoutOf(scene);
+
+    let atCap: ReadonlyArray<string> = [];
+    for (
+      let step = 0;
+      step < 3_000 && atCap.length < MAX_CONCURRENT_ERRANDS;
+      step += 1
+    ) {
+      scene.tick(100);
+      atCap = awayIds(frameOf(scene), layout);
+    }
+    expect(atCap.length).toBe(MAX_CONCURRENT_ERRANDS);
+    const awayAtCap = new Set(atCap);
+    // A seated survivor for the reception summons, so that case starts from
+    // its own chair rather than from the middle of an idle errand.
+    const seatedSurvivor = CAP_CREW.find((person) => !awayAtCap.has(person.id));
+    if (seatedSurvivor === undefined) {
+      throw new Error("everybody was already away");
+    }
+    const archivedOne = CAP_CREW[CAP_CREW.length - 1];
+
+    const newcomer = agent({ id: "newcomer", createdAt: 10_000 });
+    scene.sync(
+      sceneInput({
+        agents: [
+          ...CAP_CREW.map((person) =>
+            person.id === archivedOne.id
+              ? { ...person, archivedAt: 1 }
+              : person,
+          ),
+          newcomer,
+        ],
+        visibleAgentIds: new Set([...CAP_IDS, newcomer.id]),
+        statusById: new Map<string, OfficeAgentStatus>([
+          [seatedSurvivor.id, "attention"],
+        ]),
+        playing: true,
+      }),
+    );
+    scene.tick(200);
+    layout = layoutOf(scene);
+
+    const away = new Set(awayIds(frameOf(scene), layout));
+    // None of the three is an idle agent's errand, so none of them had to
+    // wait behind the 32 that already are - the floor is at the cap and all
+    // three are moving anyway.
+    expect(away.has(newcomer.id), "arrival").toBe(true);
+    expect(away.has(archivedOne.id), "archival").toBe(true);
+    expect(away.has(seatedSurvivor.id), "reception summons").toBe(true);
+  });
+
+  it("starts an errand anywhere on a scene that has been ticked but never framed", () => {
+    const scene = new OfficeScene(testView(layoutOffice), null);
+    scene.sync(sceneInput({ agents: CAP_CREW, visibleAgentIds: CAP_IDS }));
+
+    // No `frame()` call at all until the very end - `lastViewRect` stays
+    // `null` the whole time this runs, which is documented to mean the WHOLE
+    // WORLD rather than nowhere: a scene ticked before its canvas has ever
+    // painted must not sit frozen waiting for a first frame that has not
+    // happened yet.
+    for (let step = 0; step < 150; step += 1) scene.tick(100);
+
+    const layout = layoutOf(scene);
+    expect(awayIds(frameOf(scene), layout).length).toBeGreaterThan(0);
+  });
+
+  it("starts nobody outside the last frame's rect, grown by the cull margin", () => {
+    const scene = new OfficeScene(testView(layoutOffice), null);
+    scene.sync(sceneInput({ agents: CAP_CREW, visibleAgentIds: CAP_IDS }));
+    const layout = layoutOf(scene);
+
+    // A narrow strip over one corner of the floor - most desks fall well
+    // outside it, cull margin included.
+    const narrow: OfficeRect = {
+      x: 0,
+      y: 0,
+      width: 4 * OFFICE_TILE,
+      height: 4 * OFFICE_TILE,
+    };
+    const grown = growRect(narrow, OFFICE_CULL_MARGIN_PX);
+
+    for (let step = 0; step < 900; step += 1) {
+      scene.tick(100);
+      scene.frame(2, narrow);
+    }
+
+    const away = awayIds(frameOf(scene), layout);
+    expect(away.length).toBeGreaterThan(0);
+    for (const id of away) {
+      expect(pointInRect(chairPoint(layout, id), grown), id).toBe(true);
+    }
+
+    // And somebody whose own desk sits well outside the strip never got up
+    // at all, proving the rect actually excluded something.
+    const farIds = CAP_CREW.map((person) => person.id).filter(
+      (id) => !pointInRect(chairPoint(layout, id), grown),
+    );
+    expect(farIds.length).toBeGreaterThan(0);
+    for (const id of farIds) {
+      expect(away.includes(id), id).toBe(false);
+    }
+  });
+
+  it("finishes an errand already under way even after a pan leaves the walker off screen", () => {
+    const scene = new OfficeScene(testView(layoutOffice), null);
+    scene.sync(sceneInput({ agents: IDLE_CREW, visibleAgentIds: CREW_IDS }));
+
+    // Frame the whole floor so somebody can actually start, then find who did.
+    let walker: string | null = null;
+    for (let step = 0; step < 400 && walker === null; step += 1) {
+      scene.tick(100);
+      scene.frame(2, WHOLE_WORLD);
+      const away = crewAway(frameOf(scene));
+      if (away.length > 0) walker = away[0];
+    }
+    if (walker === null) throw new Error("nobody started an errand");
+
+    // Pan somewhere that excludes the whole floor. Idle errands chain into
+    // one another for as long as an agent stays idle - the only thing that
+    // ever sends one home on its own is an interrupt, not the passage of
+    // time - so call it home with a status change the way a real turn
+    // starting would, and confirm the walk back is not itself a fresh START
+    // for the panned rect to refuse.
+    const excluding: OfficeRect = {
+      x: 50_000,
+      y: 50_000,
+      width: 10,
+      height: 10,
+    };
+    scene.sync(
+      sceneInput({
+        agents: IDLE_CREW,
+        visibleAgentIds: CREW_IDS,
+        statusById: new Map<string, OfficeAgentStatus>([[walker, "working"]]),
+      }),
+    );
+    for (let step = 0; step < 200; step += 1) {
+      scene.tick(100);
+      scene.frame(2, excluding);
+    }
+
+    // One WHOLE_WORLD frame at the very end, purely to read the outcome -
+    // never drawn again after the pan, and still home.
+    expect(characterRect(frameOf(scene), walker)).toEqual(
+      crewSeatedRect(walker),
+    );
+  });
+
+  it("lets canonical order decide who gets the last slots when more agents are eligible than the cap allows", () => {
+    const scene = new OfficeScene(testView(layoutOffice), null);
+    // Playback suppresses errand starts outright but still lets idle time
+    // build up - so ticking well past the longest possible per-agent stagger
+    // while playing makes every single one of them eligible at once, without
+    // any of them having actually left yet. Without this, a low id with a
+    // long stagger could simply become eligible later than a high id with a
+    // short one and lose its slot to timing rather than to order.
+    scene.sync(
+      sceneInput({ agents: CAP_CREW, visibleAgentIds: CAP_IDS, playing: true }),
+    );
+    for (let step = 0; step < 200; step += 1) scene.tick(100);
+
+    // Back to a live floor: everybody crosses eligibility on the very same
+    // tick, so `updateErrandStarts`'s own canonical-order pass is the only
+    // thing left to decide who claims a slot first when a spot briefly has
+    // more than one taker.
+    scene.sync(sceneInput({ agents: CAP_CREW, visibleAgentIds: CAP_IDS }));
+    const layout = layoutOf(scene);
+
+    let away: ReadonlyArray<string> = [];
+    for (
+      let step = 0;
+      step < 3_000 && away.length < MAX_CONCURRENT_ERRANDS;
+      step += 1
+    ) {
+      scene.tick(100);
+      away = awayIds(frameOf(scene), layout);
+    }
+    const sortedIds = [...CAP_IDS].sort();
+    expect(away.length).toBe(MAX_CONCURRENT_ERRANDS);
+    // The 32 who made it out are exactly the 32 lowest ids - not merely 32
+    // of the 64, which is what "canonical order decides" looks like once
+    // timing itself has been taken out of the picture above.
+    expect([...away].sort()).toEqual(
+      sortedIds.slice(0, MAX_CONCURRENT_ERRANDS),
+    );
   });
 });
 

@@ -27,13 +27,10 @@
 import type {
   OfficeDrawable,
   OfficeLod,
-  OfficePoint,
   OfficeRect,
   OfficeSize,
   OfficeTheme,
-  OfficeTileRect,
 } from "@/lib/comm-graph/office/office-types";
-import type { OfficeProjector } from "@/lib/comm-graph/office/views/office-view";
 
 /**
  * Whether a floor drawable is baked into the static layer.
@@ -70,20 +67,12 @@ export const OFFICE_STATIC_CHUNK_PX = 512;
 export const OFFICE_STATIC_CHUNK_BUDGET = 24;
 
 /**
- * How far past its own edge a chunk's bake reaches for the art it draws.
- *
- * A sprite is anchored at a tile and spills off it - a wall, a plant, a
- * two-tile desk - so a chunk that asked only for the tiles inside itself would
- * lose every sprite anchored just outside it and leave a seam of missing
- * pixels down its edge. Each chunk therefore paints everything anchored within
- * this margin as well, CLIPPED to its own square: the chunks stay disjoint, so
- * a sprite straddling two of them is drawn once into each and composed whole,
- * never blended twice.
- *
- * Four times the largest sprite (32 px) and comfortably over the tallest thing
- * a painter stacks on a floor tile (a campus back wall, 24 px).
+ * A chunk's bake reaches past its own edge for the art that spills into it -
+ * `OFFICE_PROJECTION_BLEED_PX`, the same reach the scene uses for the floor it
+ * draws per frame - and CLIPS the result to its own square. The chunks stay
+ * disjoint, so a sprite straddling two of them is drawn once into each and
+ * composed whole, never blended twice.
  */
-export const OFFICE_STATIC_CHUNK_BLEED_PX = 128;
 
 /** One chunk of the world, addressed on the chunk grid. */
 export interface OfficeStaticChunk {
@@ -283,114 +272,6 @@ export function officeStaticChunkRect(
     width: Math.ceil(Math.min(OFFICE_STATIC_CHUNK_PX, world.width - x)),
     height: Math.ceil(Math.min(OFFICE_STATIC_CHUNK_PX, world.height - y)),
   };
-}
-
-/**
- * The tiles a painter has to be asked for to fill one chunk of world pixels.
- *
- * A chunk is a square of the PROJECTED world and a painter takes a rectangle
- * of TILES, so this is the projection run backwards. Every projector the views
- * ship is affine - the identity for the flat and oblique ones, a shear for the
- * two isometric ones - so the mapping is recovered from three points of
- * `project` and inverted; two more points are checked against what was
- * recovered, and anything that does not agree falls back to the whole world,
- * which is slower and still correct.
- *
- * The chunk is grown by `OFFICE_STATIC_CHUNK_BLEED_PX` first, so the answer
- * includes the tiles whose art reaches into the chunk from outside it.
- */
-export function officeStaticChunkTiles(args: {
-  readonly projector: OfficeProjector;
-  readonly cols: number;
-  readonly rows: number;
-  readonly chunk: OfficeRect;
-}): OfficeTileRect {
-  const { chunk, cols, projector, rows } = args;
-  const whole: OfficeTileRect = { col: 0, row: 0, cols, rows };
-  const origin = projector.project(0, 0);
-  const alongCol = delta(projector.project(1, 0), origin);
-  const alongRow = delta(projector.project(0, 1), origin);
-  const determinant = alongCol.x * alongRow.y - alongRow.x * alongCol.y;
-  if (determinant === 0) return whole;
-  // Probed at the near corner AND at the far one: a projection that bends only
-  // over distance agrees with its own first step and disagrees across a world.
-  if (
-    !projectsAffinely({ projector, origin, alongCol, alongRow, col: 1, row: 1 })
-  ) {
-    return whole;
-  }
-  if (
-    !projectsAffinely({
-      projector,
-      origin,
-      alongCol,
-      alongRow,
-      col: cols,
-      row: rows,
-    })
-  ) {
-    return whole;
-  }
-  const bleed = OFFICE_STATIC_CHUNK_BLEED_PX;
-  const left = chunk.x - bleed;
-  const top = chunk.y - bleed;
-  const right = chunk.x + chunk.width + bleed;
-  const bottom = chunk.y + chunk.height + bleed;
-  let minCol = Number.POSITIVE_INFINITY;
-  let maxCol = Number.NEGATIVE_INFINITY;
-  let minRow = Number.POSITIVE_INFINITY;
-  let maxRow = Number.NEGATIVE_INFINITY;
-  for (const corner of [
-    { x: left, y: top },
-    { x: right, y: top },
-    { x: left, y: bottom },
-    { x: right, y: bottom },
-  ]) {
-    const offsetX = corner.x - origin.x;
-    const offsetY = corner.y - origin.y;
-    const col = (offsetX * alongRow.y - alongRow.x * offsetY) / determinant;
-    const row = (alongCol.x * offsetY - offsetX * alongCol.y) / determinant;
-    minCol = Math.min(minCol, col);
-    maxCol = Math.max(maxCol, col);
-    minRow = Math.min(minRow, row);
-    maxRow = Math.max(maxRow, row);
-  }
-  const firstCol = Math.max(0, Math.floor(minCol));
-  const firstRow = Math.max(0, Math.floor(minRow));
-  const endCol = Math.min(cols, Math.ceil(maxCol) + 1);
-  const endRow = Math.min(rows, Math.ceil(maxRow) + 1);
-  return {
-    col: firstCol,
-    row: firstRow,
-    cols: Math.max(0, endCol - firstCol),
-    rows: Math.max(0, endRow - firstRow),
-  };
-}
-
-/** Sub-pixel slack for the affinity check; a projector is built from integers. */
-const AFFINE_TOLERANCE_PX = 0.001;
-
-/** Whether one probe lands where the recovered mapping says it should. */
-function projectsAffinely(args: {
-  readonly projector: OfficeProjector;
-  readonly origin: OfficePoint;
-  readonly alongCol: OfficePoint;
-  readonly alongRow: OfficePoint;
-  readonly col: number;
-  readonly row: number;
-}): boolean {
-  const { alongCol, alongRow, col, origin, projector, row } = args;
-  const probe = delta(projector.project(col, row), origin);
-  return (
-    Math.abs(probe.x - (alongCol.x * col + alongRow.x * row)) <=
-      AFFINE_TOLERANCE_PX &&
-    Math.abs(probe.y - (alongCol.y * col + alongRow.y * row)) <=
-      AFFINE_TOLERANCE_PX
-  );
-}
-
-function delta(point: OfficePoint, origin: OfficePoint): OfficePoint {
-  return { x: point.x - origin.x, y: point.y - origin.y };
 }
 
 /** One chunk of the floor, painted. */

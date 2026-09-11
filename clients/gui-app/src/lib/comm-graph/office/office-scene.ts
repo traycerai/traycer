@@ -81,6 +81,10 @@ import {
   type OfficeTileRect,
   type OfficeWorldDrawable,
 } from "@/lib/comm-graph/office/office-types";
+import {
+  officeTileRectOf,
+  OFFICE_PROJECTION_BLEED_PX,
+} from "@/lib/comm-graph/office/office-projection";
 import type {
   OfficeDeskState,
   OfficeProjector,
@@ -186,16 +190,36 @@ const ENVELOPE_HIT_PADDING = 2;
  * minute reads as a screenshot, and the whole reason this exists is that agents
  * between turns looked dead.
  *
- * AN IDLE AGENT IS NEVER AT ITS DESK. Past the threshold everyone gets up, and
- * errands CHAIN - one finishes, the next begins from where the last one ended -
- * so the only things that put somebody back in a chair are the things that
- * actually happened to them: a status that stopped being idle, a message, a
- * summons to reception, an archival, playback starting, going invisible. There
- * is deliberately no cap on how many are away and no cooldown after one: both
- * existed to keep the floor looking populated, and a floor of people sitting
- * perfectly still is the thing this is for.
+ * AN IDLE AGENT IN VIEW IS NEVER AT ITS DESK. Past the threshold everyone the
+ * camera can see gets up, and errands CHAIN - one finishes, the next begins
+ * from where the last one ended - so what puts somebody back in a chair is
+ * something that actually happened to them: a status that stopped being idle,
+ * a message, a summons to reception, an archival, playback starting, going
+ * invisible - or the camera leaving, which ends a chain at its next linger.
+ * There is deliberately no COOLDOWN after one: it existed to keep the floor
+ * looking populated, and a floor of people sitting perfectly still is the
+ * thing this is for.
+ *
+ * What bounds it instead is `MAX_CONCURRENT_ERRANDS` and the rect the last
+ * frame drew, which cost the liveliness nothing because nobody is watching the
+ * agents they exclude.
  */
 const IDLE_ERRAND_MS = 5_000;
+/**
+ * How many agents may be away from their desks at once, the walk back included.
+ *
+ * MOTION IS THE ONE COST A VIEWPORT DOES NOT BOUND. Everything else a frame
+ * does is a fact about the rect it draws, but a walker is re-pathed, advanced
+ * and re-sorted every tick whether or not anyone can see it, so a thousand-agent
+ * epic that let everybody stroll would pay for a thousand walks to draw forty.
+ *
+ * Thirty-two is deliberately well over what a viewport holds: a screen shows
+ * around forty agents at office zoom and only the idle ones walk, so the cap is
+ * a ceiling on the pathological case rather than a budget the ordinary floor
+ * spends. Paired with the rect below it, a 1,000-agent bench moves about as
+ * much as a 40-agent epic does, which is the point.
+ */
+export const MAX_CONCURRENT_ERRANDS = 32;
 const ERRAND_STAGGER_SPREAD_MS = 4_000;
 const ERRAND_LINGER_MIN_MS = 3_000;
 const ERRAND_LINGER_SPREAD_MS = 5_000;
@@ -385,6 +409,21 @@ type OfficeErrand =
   | "queue-stand"
   | "leaving"
   | "returning";
+
+/**
+ * The states that spend a slot of `MAX_CONCURRENT_ERRANDS`: the three an errand
+ * itself passes through, walk home included, as the doc above requires.
+ *
+ * The others are not errands and are not capped. `arriving` and `leaving` are
+ * an agent's own life happening, `queue-*` is a summons somebody asked for, and
+ * `returning` is what ends every one of those - refusing any of them because
+ * the floor is busy would leave an agent standing where the scene put it.
+ */
+const AWAY_ERRANDS: ReadonlySet<OfficeErrand> = new Set<OfficeErrand>([
+  "errand-out",
+  "errand-wait",
+  "errand-return",
+]);
 
 /**
  * `visit` is the one errand with no tile in the floor plan: it is paid to a
@@ -1197,18 +1236,6 @@ function grownBy(rect: OfficeRect, margin: number): OfficeRect {
   };
 }
 
-/** The whole tiles a world-pixel rect touches, clamped to nothing. */
-function tileRectOf(rect: OfficeRect): OfficeTileRect {
-  const col = Math.floor(rect.x / OFFICE_TILE);
-  const row = Math.floor(rect.y / OFFICE_TILE);
-  return {
-    col,
-    row,
-    cols: Math.ceil((rect.x + rect.width) / OFFICE_TILE) - col,
-    rows: Math.ceil((rect.y + rect.height) / OFFICE_TILE) - row,
-  };
-}
-
 export class OfficeScene {
   private readonly view: OfficeView;
   /**
@@ -1305,6 +1332,8 @@ export class OfficeScene {
   private chunkIndexVersion = -1;
   /** Seat props by seat, keyed by the desk state that produced them. */
   private readonly seatPropCache = new Map<string, CachedSeatProps>();
+  /** Spot props by approach tile, keyed by the band - a spot has no state. */
+  private readonly spotPropCache = new Map<string, CachedSeatProps>();
   private seatPropVersion = -1;
   /**
    * The last floor the painter was asked for, and what it was asked for.
@@ -1315,6 +1344,16 @@ export class OfficeScene {
    * which is also what lets the renderer's own bitmap cache skip a repaint.
    */
   private floorCache: CachedFloor | null = null;
+  /**
+   * The rect the last frame drew, cull margin included, or `null` before the
+   * first one. What `updateErrandStarts` sends people walking inside.
+   *
+   * NOT dropped on suspension. It is a record of where the camera was, not
+   * derived state, and the viewport a hidden tile comes back to is the one it
+   * left - so keeping it means the first tick after a resume starts errands
+   * where they will be seen instead of anywhere at all.
+   */
+  private lastViewRect: OfficeRect | null = null;
 
   /**
    * A view and, optionally, the layout to answer with until the first sync.
@@ -1376,6 +1415,7 @@ export class OfficeScene {
     this.chunkIndex = null;
     this.chunkIndexVersion = -1;
     this.seatPropCache.clear();
+    this.spotPropCache.clear();
     this.seatPropVersion = -1;
     this.floorCache = null;
   }
@@ -1489,7 +1529,25 @@ export class OfficeScene {
     const projector = this.projectorOrNull;
     if (layout === null || projector === null) return emptyFrame();
     const rect = grownBy(view, OFFICE_CULL_MARGIN_PX);
-    const floor = this.floorIn(layout, tileRectOf(rect), lod);
+    // Remembered for the errand starts, which only send people walking where
+    // someone can see them walk; see `updateErrandStarts`.
+    this.lastViewRect = rect;
+    const floor = this.floorIn(
+      layout,
+      officeTileRectOf({
+        projector,
+        cols: layout.cols,
+        rows: layout.rows,
+        rect,
+        // The bleed is a question about SPRITES - art anchored at a tile just
+        // outside the rect that reaches into it - and at overview there are
+        // none. The floor there is a block map whose rects are their own
+        // extent, so reaching past the rect would only ask a painter for
+        // regions nobody can see.
+        bleedPx: lod === 0 ? 0 : OFFICE_PROJECTION_BLEED_PX,
+      }),
+      lod,
+    );
     // Culled ONCE and shared. The overlay reads the same characters the actors
     // do, so a non-overview frame no longer walks the population twice.
     const characters = this.charactersIn(rect);
@@ -1722,6 +1780,7 @@ export class OfficeScene {
     this.chunkIndex = null;
     this.chunkIndexVersion = -1;
     this.seatPropCache.clear();
+    this.spotPropCache.clear();
   }
 
   // ---- Population ---------------------------------------------------- //
@@ -2928,13 +2987,31 @@ export class OfficeScene {
   }
 
   /**
-   * EVERY idle agent past its threshold gets up - there is no cap, so this is a
-   * plain sweep rather than a budget being spent. Canonical order still decides
-   * who claims a contested spot first, which is what keeps that a fact about
-   * their ids rather than about map insertion order.
+   * Every idle agent past its threshold that someone can SEE gets up, up to
+   * `MAX_CONCURRENT_ERRANDS` away at once.
+   *
+   * TWO BOUNDS, and they do different jobs. The rect keeps the walking
+   * population a fact about the viewport, like everything else in a frame: an
+   * agent nobody is looking at sits still, and starts strolling the moment the
+   * camera reaches it. The cap is what covers the case the rect cannot - a
+   * zoomed-out view whose rect IS the world - and it is high enough that a
+   * viewport-sized crowd never reaches it.
+   *
+   * A walker that leaves the rect KEEPS WALKING. Only starting is gated, so
+   * nobody is ever frozen mid-floor by a pan, and the errand that carries it
+   * home is the one that frees its slot. What it does not do is take a NEXT
+   * errand out there: `finishLinger` asks this same question again when a
+   * chain would continue, so an agent the camera has left walks home once and
+   * then sits, rather than strolling off-screen for the rest of the session.
+   *
+   * Canonical order still decides who claims a contested spot - and now also
+   * who gets a slot when the cap bites - which keeps both facts about their
+   * ids rather than about map insertion order.
    */
   private updateErrandStarts(): void {
     if (this.playing || this.cursorMs !== null || this.reducedMotion) return;
+    let away = this.errandCount();
+    if (away >= MAX_CONCURRENT_ERRANDS) return;
     const claimed = this.claimedSpotKeys();
     for (const character of this.orderedByAgentId()) {
       if (!this.mayStartErrand(character)) continue;
@@ -2942,7 +3019,18 @@ export class OfficeScene {
       if (target === null) continue;
       if (!this.startErrand(character, target)) continue;
       claimed.add(tileKeyOf(target.tile));
+      away += 1;
+      if (away >= MAX_CONCURRENT_ERRANDS) return;
     }
+  }
+
+  /** How many agents are away from their desks right now, walk back included. */
+  private errandCount(): number {
+    let count = 0;
+    for (const character of this.characters.values()) {
+      if (AWAY_ERRANDS.has(character.errand)) count += 1;
+    }
+    return count;
   }
 
   private mayStartErrand(character: OfficeCharacter): boolean {
@@ -2952,7 +3040,24 @@ export class OfficeScene {
     if (this.errandMustEnd(character.agentId)) return false;
     if (this.isHurrying(character.agentId)) return false;
     const threshold = IDLE_ERRAND_MS + errandStaggerMs(character.agentId);
-    return character.idleMs >= threshold;
+    // Before the rect, which costs a projected point: almost everybody asked
+    // is short of the threshold, and that answer is two field reads.
+    if (character.idleMs < threshold) return false;
+    return this.inLastViewRect(character);
+  }
+
+  /**
+   * Is this agent where the last frame was looking?
+   *
+   * Before the first frame there is no rect and the answer is YES. A scene that
+   * has been ticked but never drawn is a scene under test or one whose canvas
+   * has not painted yet, and neither is a reason to hold the whole floor still;
+   * the first frame narrows it.
+   */
+  private inLastViewRect(character: OfficeCharacter): boolean {
+    const rect = this.lastViewRect;
+    if (rect === null) return true;
+    return this.characterTouches(character, rect);
   }
 
   /**
@@ -3314,6 +3419,17 @@ export class OfficeScene {
    * to go at all puts somebody back in a chair.
    */
   private finishLinger(character: OfficeCharacter): void {
+    // WHERE A CHAIN ENDS. An errand leads into the next one for as long as its
+    // agent stays idle, which is what keeps a live floor from emptying back
+    // into its chairs - but a chain is a START like any other, and one that
+    // never asked again would mean an agent that got up once while the camera
+    // was on it walks for the rest of the session wherever the camera goes.
+    // Off the rect it goes home instead, which is the same ending it takes on
+    // a floor with nowhere left to go.
+    if (!this.inLastViewRect(character)) {
+      this.returnToDesk(character);
+      return;
+    }
     const target = character.errandTarget;
     if (
       target !== null &&
@@ -3598,7 +3714,7 @@ export class OfficeScene {
   // ---- Frame assembly ------------------------------------------------ //
 
   /**
-   * Whether anything on the floor is MOVING right now.
+   * Whether anything the band being drawn SHOWS is moving right now.
    *
    * A renderer that draws sixty identical frames a second is spending a
    * laptop's battery to redraw a still life, and a floor of seated agents
@@ -3606,14 +3722,28 @@ export class OfficeScene {
    * frame going to differ from this one": something in flight, someone off
    * their chair, a bubble or sparkle up, or a screen mid-alternation.
    *
-   * Deliberately CONSERVATIVE. Anything it is unsure about counts as animating,
-   * because a false "no" freezes the floor and a false "yes" costs one frame.
+   * IT TAKES THE BAND because half of that list is invisible at overview. A
+   * frame at lod 0 is pips and envelopes - `frame` builds nothing else - so a
+   * bubble, a sparkle, a paper ball, a filler animation and a typing screen
+   * all resolve to the same pixels from one frame to the next, and a floor of
+   * working agents would otherwise redraw sixty times a second to show a
+   * thousand dots that never move. What still counts there is a character
+   * whose POSITION changes and an envelope in flight.
+   *
+   * A status CHANGE is not in this test at any band. It arrives as an input,
+   * and the canvas invalidates the gate on every sync - so the frame that
+   * shows it is asked for rather than discovered by polling.
+   *
+   * Deliberately CONSERVATIVE within a band. Anything it is unsure about counts
+   * as animating, because a false "no" freezes the floor and a false "yes"
+   * costs one frame.
    */
-  isAnimating(): boolean {
+  isAnimating(lod: OfficeLod): boolean {
     if (this.envelopes.length > 0) return true;
-    if (this.paperBalls.length > 0) return true;
     for (const character of this.characters.values()) {
+      // A walker moves its pip as surely as its sprite.
       if (!character.seated) return true;
+      if (lod === 0) continue;
       if (character.hurrying || character.rallying) return true;
       if (character.bubble !== null || character.sparkleMs > 0) return true;
       if (character.filler !== null) return true;
@@ -3626,7 +3756,8 @@ export class OfficeScene {
       // still frame, and a request can stay open for hours.
       if (status === "attention" || status === "failure") return true;
     }
-    return false;
+    // Thrown paper is overlay art, and the overlay at overview is envelopes.
+    return lod > 0 && this.paperBalls.length > 0;
   }
 
   /** Sheeted once the archive is real AND the person has actually gone. */
@@ -3942,8 +4073,10 @@ export class OfficeScene {
     const { layout, lod, rect, seats } = args;
     if (this.seatPropVersion !== this.layoutVersion) {
       this.seatPropCache.clear();
+      this.spotPropCache.clear();
       this.seatPropVersion = this.layoutVersion;
     }
+    const lodKey = String(lod);
     const out: OfficeWorldDrawable[] = [];
     for (const seated of seats) {
       const state = this.deskStateOf(seated);
@@ -3962,8 +4095,20 @@ export class OfficeScene {
       this.seatPropCache.set(seated.seat.seatId, { key, drawables });
       out.push(...drawables);
     }
+    // A spot's art has no state at all - it is the layout, the spot and the
+    // band - so it is cached by the band alone and thrown away with the plan
+    // that made it. The cache is the SPOTS THE RECT TOUCHES, not the floor's,
+    // so it is bounded by the viewport like everything else here.
     for (const spot of this.spotsIn(rect)) {
-      out.push(...this.view.painter.spotProps(layout, spot, lod));
+      const spotKey = tileKeyOf(spot.approachTile);
+      const cachedSpot = this.spotPropCache.get(spotKey);
+      if (cachedSpot !== undefined && cachedSpot.key === lodKey) {
+        out.push(...cachedSpot.drawables);
+        continue;
+      }
+      const drawables = this.view.painter.spotProps(layout, spot, lod);
+      this.spotPropCache.set(spotKey, { key: lodKey, drawables });
+      out.push(...drawables);
     }
     // Stable, so two drawables at one depth keep the order they were made in:
     // a screen belongs in front of the desk it stands on.

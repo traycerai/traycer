@@ -24,6 +24,11 @@ import {
 } from "@/lib/comm-graph/office/office-pixel-art";
 import { partitionOfficePopulation } from "@/lib/comm-graph/office/office-population";
 import {
+  officeTileRectOf,
+  OFFICE_PROJECTION_BLEED_PX,
+} from "@/lib/comm-graph/office/office-projection";
+import {
+  MAX_CONCURRENT_ERRANDS,
   OfficeScene,
   OFFICE_CULL_MARGIN_PX,
 } from "@/lib/comm-graph/office/office-scene";
@@ -100,6 +105,18 @@ const BUDGET_RUNS = 3;
 const FRAME_DRAWABLES_PER_SEAT = 12;
 const FRAME_DRAWABLE_SLACK = 24;
 
+/**
+ * How long the motion budgets watch the floor for, and at what step.
+ *
+ * Past `IDLE_ERRAND_MS` plus the widest stagger, so every agent on the floor is
+ * eligible and the cap is under real pressure rather than being measured on a
+ * floor that has not woken up yet - and then well past it, because an errand
+ * that ends frees its slot and the interesting number is the WORST moment, not
+ * the first one.
+ */
+const MOTION_TICK_MS = 100;
+const MOTION_TICKS = 300;
+
 const EPIC = makeTestEpic("triage", SCALE, 1);
 
 function planInputFor(args: {
@@ -146,6 +163,24 @@ function sceneInputFor(args: {
     clockMs: 0,
     playing: false,
     reducedMotion: true,
+  };
+}
+
+/**
+ * A live floor where EVERY agent is idle and nothing is suppressing motion.
+ *
+ * The worst case the cap exists for, deliberately: no status map at all, so
+ * every agent reads as idle and every one of them is eligible to get up once
+ * the threshold passes. The other budgets here run with `reducedMotion` on,
+ * which stops errands outright - and would measure a cap nobody was pushing.
+ */
+function idleSceneInput(): OfficeSceneInput {
+  return {
+    ...sceneInputFor({
+      agents: EPIC.agents,
+      statusById: new Map<string, OfficeAgentStatus>(),
+    }),
+    reducedMotion: false,
   };
 }
 
@@ -231,6 +266,72 @@ function occupiedSeatsIn(args: {
 }
 
 /**
+ * A viewport-sized rect over somebody's desk, clamped to the world.
+ *
+ * The world's own corner is not a camera position worth testing: a stacked
+ * plan puts sky there and an isometric one puts the diamond's empty shoulder,
+ * so a rect there frames no desks and proves nothing about who gets up.
+ */
+function viewportAround(args: {
+  readonly layout: OfficeLayout;
+  readonly projector: OfficeProjector;
+  readonly world: OfficeSize;
+}): OfficeRect {
+  const { layout, projector, world } = args;
+  if (layout.desks.size === 0) throw new Error("the plan seated nobody");
+  const desk = [...layout.desks.values()][0];
+  const origin = projector.project(desk.deskTile.col, desk.deskTile.row);
+  // Never more than half the world, whatever the window is. A single Building
+  // at a thousand agents is not much wider than the recording's window, and a
+  // rect that covered it would be testing the gate against nowhere.
+  const width = Math.min(VIEWPORT.width, world.width / 2);
+  const height = Math.min(VIEWPORT.height, world.height / 2);
+  return {
+    x: Math.max(0, Math.min(origin.x - width / 2, world.width - width)),
+    y: Math.max(0, Math.min(origin.y - height / 2, world.height - height)),
+    width,
+    height,
+  };
+}
+
+/**
+ * The agents whose desks are outside the rect by more than the cull margin,
+ * so neither their art nor the slack the scene adds to the rect reaches in.
+ *
+ * These are the agents a rect-local start must leave in their chairs, and the
+ * distance is what makes the claim airtight: an agent this far out cannot have
+ * been in the framed rect, so being away could only mean it got up unseen.
+ */
+function agentsSeatedOutside(args: {
+  readonly layout: OfficeLayout;
+  readonly projector: OfficeProjector;
+  readonly rect: OfficeRect;
+}): ReadonlySet<string> {
+  const { layout, projector, rect } = args;
+  // The gate's own margin, and as much again for the gap between the tile a
+  // desk is anchored at and the foot point the body seated at it stands on.
+  const margin = OFFICE_CULL_MARGIN_PX * 2;
+  const left = rect.x - margin;
+  const top = rect.y - margin;
+  const right = rect.x + rect.width + margin;
+  const bottom = rect.y + rect.height + margin;
+  const outside = new Set<string>();
+  for (const [agentId, desk] of layout.desks) {
+    const origin = projector.project(desk.deskTile.col, desk.deskTile.row);
+    const width = desk.hitTiles.width * OFFICE_TILE;
+    const height = desk.hitTiles.height * OFFICE_TILE;
+    const overlaps =
+      origin.x < right &&
+      left < origin.x + width &&
+      origin.y < bottom &&
+      top < origin.y + height;
+    if (overlaps) continue;
+    outside.add(agentId);
+  }
+  return outside;
+}
+
+/**
  * How many filled rects a block map describes: every region the plan has.
  * `room.pods` is already the recursive flattening, one entry per sub-team.
  */
@@ -287,6 +388,33 @@ describe.each(OFFICE_VIEW_IDS)("%s at a thousand agents", (viewId) => {
 
     expect(measured).not.toBeNull();
     expect(elapsed).toBeLessThan(MEASURE_BUDGET_MS);
+  });
+
+  it("projects affinely, so no frame and no bake falls back to the whole world", () => {
+    // THE ASSUMPTION THE SHARED INVERSION RESTS ON. `officeTileRectOf` runs a
+    // projector backwards by recovering an affine map from three of its
+    // points; a view whose projector BENT would silently be handed the whole
+    // world for every floor query and every chunk bake instead - correct to
+    // look at and a cliff to pay for, which no other budget here would catch.
+    const layout = view.plan(input);
+    const projector = view.painter.projector(layout);
+
+    const tiles = officeTileRectOf({
+      projector,
+      cols: layout.cols,
+      rows: layout.rows,
+      rect: { x: 0, y: 0, width: VIEWPORT.width, height: VIEWPORT.height },
+      bleedPx: OFFICE_PROJECTION_BLEED_PX,
+    });
+
+    expect(tiles).not.toEqual({
+      col: 0,
+      row: 0,
+      cols: layout.cols,
+      rows: layout.rows,
+    });
+    expect(tiles.cols).toBeGreaterThan(0);
+    expect(tiles.rows).toBeGreaterThan(0);
   });
 
   it("never plans more static chunks than the budget, wherever the camera is", () => {
@@ -421,6 +549,75 @@ describe.each(OFFICE_VIEW_IDS)("%s at a thousand agents", (viewId) => {
     expect(frame.actors.length).toBeGreaterThan(0);
   });
 
+  it("never has more than the motion cap away from their desks at once", () => {
+    // MOTION IS THE ONE COST THE VIEWPORT DOES NOT BOUND. A walker is
+    // re-pathed, advanced and re-sorted every tick whether or not it is on
+    // screen, so an office that let a thousand bored agents all get up would
+    // pay for a thousand walks to draw forty of them. Framed at the WHOLE
+    // world, so what this measures is the cap itself rather than the rect.
+    const scene = new OfficeScene(view, null);
+    scene.sync(idleSceneInput());
+    const world = scene.worldSize();
+    const whole: OfficeRect = {
+      x: 0,
+      y: 0,
+      width: world.width,
+      height: world.height,
+    };
+    let busiest = 0;
+
+    for (let step = 0; step < MOTION_TICKS; step += 1) {
+      scene.tick(MOTION_TICK_MS);
+      // Every tick, not only at the end: the cap is a claim about what is in
+      // flight at any instant, and a sample at the end would miss a burst
+      // that had already walked itself home.
+      busiest = Math.max(busiest, scene.frame(1, whole).awayAgentIds.size);
+    }
+
+    expect(busiest).toBeLessThanOrEqual(MAX_CONCURRENT_ERRANDS);
+    // Anti-vacuity: a floor where nobody ever gets up satisfies any ceiling,
+    // and a still office is the thing errands exist to prevent.
+    expect(busiest).toBeGreaterThan(0);
+  });
+
+  it("sends nobody walking outside the rect the last frame drew", () => {
+    // THE OTHER HALF OF THE CAP, and the half that scales. The cap bounds the
+    // worst case; this is what keeps the ordinary one cheap - an agent nobody
+    // is looking at sits still, and starts strolling when the camera reaches
+    // it. Asserted over the agents whose DESKS are in the far corner: they
+    // never entered the framed rect, so their being away could only mean an
+    // errand started where no one could see it.
+    const scene = new OfficeScene(view, null);
+    scene.sync(idleSceneInput());
+    const layout = layoutOf(scene);
+    const projector = view.painter.projector(layout);
+    const world = scene.worldSize();
+    // Centred on a real desk rather than on the world's corner, which in the
+    // stacked and isometric plans is sky.
+    const framed = viewportAround({ layout, projector, world });
+    const farAway = agentsSeatedOutside({ layout, projector, rect: framed });
+
+    for (let step = 0; step < MOTION_TICKS; step += 1) {
+      scene.frame(1, framed);
+      scene.tick(MOTION_TICK_MS);
+    }
+    // Read over the whole world ONCE, at the end: a frame culls the away set
+    // to its own rect, so asking the corner would answer with the corner.
+    const away = scene.frame(1, {
+      x: 0,
+      y: 0,
+      width: world.width,
+      height: world.height,
+    }).awayAgentIds;
+
+    const strayed = [...away].filter((agentId) => farAway.has(agentId));
+    expect(strayed).toEqual([]);
+    // Anti-vacuity twice over: there has to BE a far corner to stay seated,
+    // and the corner that was framed has to have produced walkers at all.
+    expect(farAway.size).toBeGreaterThan(0);
+    expect(away.size).toBeGreaterThan(0);
+  });
+
   it("grows the path scratch once for its layout, not once per walk", () => {
     const layout = view.plan(input);
     const seats = [...layout.seats.values()].slice(0, 24);
@@ -455,8 +652,12 @@ describe.each(OFFICE_VIEW_IDS)("%s at a thousand agents", (viewId) => {
  * - **View switch**, in `comm-graph/__tests__/comm-graph-tile.test.tsx`,
  *   driven through the real picker on the real keyed tile - the only place
  *   the thing the rule is about, the tile's `key`, actually exists.
- * - **Motion cap** - errands never exceeding `MAX_CONCURRENT_ERRANDS` and
- *   none starting outside the last frame's view rect - is the one budget
- *   still to come: it waits on the scene changes of this ticket's own phase
- *   2, since neither the cap nor the rect-local start exists to assert yet.
+ * The **motion cap** is here, in two cases because it is two claims - the
+ * ceiling, measured with the whole world framed so the rect cannot mask it,
+ * and the locality, measured over the agents whose desks the framed rect never
+ * came near. What the cap and the gate do to one agent's WALK, rather than to
+ * the floor's totals - that a walker leaving the rect finishes, that a summons
+ * is never refused for want of a slot, that canonical order decides who gets
+ * the last one - is in `office-scene.test.ts`, where a single character can be
+ * followed from its chair and back.
  */

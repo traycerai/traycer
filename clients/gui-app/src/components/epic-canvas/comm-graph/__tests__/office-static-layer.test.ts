@@ -4,12 +4,9 @@ import type {
   OfficeRect,
   OfficeSize,
 } from "@/lib/comm-graph/office/office-types";
-import { createIsoProjector } from "@/lib/comm-graph/office/views/isometric/iso-projector";
-import type { OfficeProjector } from "@/lib/comm-graph/office/views/office-view";
 import {
   officeBakesIntoStaticFloor,
   officeStaticChunkRect,
-  officeStaticChunkTiles,
   officeStaticLayerKeysMatch,
   OFFICE_STATIC_CHUNK_BUDGET,
   OFFICE_STATIC_CHUNK_PX,
@@ -630,122 +627,12 @@ describe("officeStaticChunkRect", () => {
 
 // ---- Chunk to tiles ---------------------------------------------------- //
 
-const IDENTITY_PROJECTOR: OfficeProjector = {
-  project: (col, row) => ({ x: col * 16, y: row * 16 }),
-  bounds: { x: 0, y: 0, width: 16 * 400, height: 16 * 400 },
-  seatLift: () => 0,
-};
-
-function containsTile(
-  tiles: { col: number; row: number; cols: number; rows: number },
-  col: number,
-  row: number,
-): boolean {
-  return (
-    col >= tiles.col &&
-    col < tiles.col + tiles.cols &&
-    row >= tiles.row &&
-    row < tiles.row + tiles.rows
-  );
-}
-
-describe("officeStaticChunkTiles", () => {
-  it.each([
-    ["the flat and oblique views' identity", IDENTITY_PROJECTOR, 400, 400],
-    [
-      "an isometric shear",
-      createIsoProjector({
-        cols: 200,
-        rows: 200,
-        stackHeight: 24,
-        seatLift: () => 0,
-      }),
-      200,
-      200,
-    ],
-  ])(
-    "asks for every tile whose art lands in the chunk under %s",
-    (_name, projector, cols, rows) => {
-      const chunk: OfficeRect = {
-        x: OFFICE_STATIC_CHUNK_PX * 2,
-        y: OFFICE_STATIC_CHUNK_PX,
-        width: OFFICE_STATIC_CHUNK_PX,
-        height: OFFICE_STATIC_CHUNK_PX,
-      };
-      const tiles = officeStaticChunkTiles({ projector, cols, rows, chunk });
-
-      // Every tile the chunk actually covers has to be in the answer, or the
-      // chunk is baked with a hole in it that nothing ever fills.
-      for (let row = 0; row < rows; row += 1) {
-        for (let col = 0; col < cols; col += 1) {
-          const point = projector.project(col, row);
-          if (
-            point.x < chunk.x ||
-            point.x >= chunk.x + chunk.width ||
-            point.y < chunk.y ||
-            point.y >= chunk.y + chunk.height
-          ) {
-            continue;
-          }
-          expect(containsTile(tiles, col, row)).toBe(true);
-        }
-      }
-    },
-  );
-
-  it("asks for a fraction of a large world, which is the whole point", () => {
-    const chunk: OfficeRect = {
-      x: 0,
-      y: 0,
-      width: OFFICE_STATIC_CHUNK_PX,
-      height: OFFICE_STATIC_CHUNK_PX,
-    };
-
-    const tiles = officeStaticChunkTiles({
-      projector: IDENTITY_PROJECTOR,
-      cols: 400,
-      rows: 400,
-      chunk,
-    });
-
-    expect(tiles.cols * tiles.rows).toBeLessThan((400 * 400) / 10);
-  });
-
-  it("clamps to the world, never off it", () => {
-    const tiles = officeStaticChunkTiles({
-      projector: IDENTITY_PROJECTOR,
-      cols: 20,
-      rows: 20,
-      chunk: {
-        x: 0,
-        y: 0,
-        width: OFFICE_STATIC_CHUNK_PX,
-        height: OFFICE_STATIC_CHUNK_PX,
-      },
-    });
-
-    expect(tiles).toEqual({ col: 0, row: 0, cols: 20, rows: 20 });
-  });
-
-  it("asks for the whole world where the projection is not affine", () => {
-    // Slower and still correct, which is the right way for a projector nobody
-    // has written yet to fail.
-    const curved: OfficeProjector = {
-      project: (col, row) => ({ x: col * col * 16, y: row * 16 }),
-      bounds: { x: 0, y: 0, width: 1600, height: 1600 },
-      seatLift: () => 0,
-    };
-
-    expect(
-      officeStaticChunkTiles({
-        projector: curved,
-        cols: 30,
-        rows: 30,
-        chunk: { x: 512, y: 512, width: 512, height: 512 },
-      }),
-    ).toEqual({ col: 0, row: 0, cols: 30, rows: 30 });
-  });
-});
+/**
+ * The projection run backwards - which tiles a chunk was drawn from - is
+ * `officeTileRectOf`, shared with the scene's own per-frame floor query and
+ * covered in `lib/comm-graph/office/__tests__/office-projection.test.ts`.
+ * There is one inversion, so there is one suite for it.
+ */
 
 /**
  * One drawable of every kind the scene can emit. Written as a record keyed by
