@@ -69,7 +69,7 @@ function SplitGroupUnderline(props: {
       data-testid={`split-tab-group-underline-${props.splitId}`}
       style={{ color: "var(--color-primary)" }}
       className={cn(
-        "pointer-events-none absolute inset-x-0 bottom-0 z-30 flex h-px",
+        "pointer-events-none absolute inset-x-0 bottom-0 z-30 flex h-[1.5px]",
         SPLIT_ROW_PADDING_CLASS,
       )}
     >
