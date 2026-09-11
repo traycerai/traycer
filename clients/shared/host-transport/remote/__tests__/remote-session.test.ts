@@ -35,6 +35,10 @@ import {
 import { buildStreamManifest } from "@traycer/protocol/framework/stream-compat";
 import { SERVES_EVERY_INSTALLED_MAJOR } from "@traycer/protocol/framework/capability-manifest";
 import {
+  SESSION_CLOSED_FATAL_CODE,
+  SESSION_NOT_READY_FATAL_CODE,
+} from "@traycer/protocol/framework/stream-ws-protocol";
+import {
   createResponderHandshake,
   generateStaticKeyPair,
   DEFAULT_REPLAY_WINDOW_SIZE,
@@ -7779,6 +7783,187 @@ describe("RemoteSession per-stream retryable FATAL recovery", () => {
         await vi.waitFor(() => expect(statuses).toContain("closed"), WAIT);
         // No re-subscribe was ever issued for it.
         expect(relay.subscribeStreamIds).toHaveLength(1);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  interface RecordedTransition {
+    readonly status: string;
+    readonly reason: StreamCloseReason | null;
+    readonly retryCause: FatalErrorDetails | null;
+  }
+
+  // A chat session's lifecycle refusal from a host released before those
+  // codes were flagged: no `retryable`. The local socket reconnects on it, so
+  // this transport must too, or a Try again pressed mid-open still goes
+  // terminal on every remote host.
+  it.each([SESSION_NOT_READY_FATAL_CODE, SESSION_CLOSED_FATAL_CODE])(
+    "re-subscribes a chat.subscribe stream the host refused with %s and no `retryable`, handing the details on as the retry cause",
+    async (code) => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        hostStreamRpcRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: hostStreamRpcRegistry,
+      });
+      const stream = session.subscribe("chat.subscribe", {
+        epicId: "epic-1",
+        chatId: "chat-1",
+      });
+      const transitions: RecordedTransition[] = [];
+      stream.onStatusChange((status, reason, retryCause) => {
+        transitions.push({ status, reason, retryCause });
+      });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        const streamId = relay.subscribeStreamIds[0];
+        const details: FatalErrorDetails = {
+          code,
+          reason: `${code}: Chat session is not ready`,
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        };
+
+        await relay.sendStreamFatal(streamId, details);
+
+        // A real re-subscribe on a fresh id, as for any retryable fatal.
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds.length).toBeGreaterThan(1),
+          WAIT,
+        );
+        expect(relay.subscribeStreamIds[1]).not.toBe(streamId);
+        expect(
+          transitions.map((transition) => transition.status),
+        ).not.toContain("closed");
+        expect(
+          transitions.filter(
+            (transition) => transition.status === "reconnecting",
+          ),
+        ).toEqual([
+          { status: "reconnecting", reason: null, retryCause: details },
+        ]);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  it(
+    "keeps a lifecycle code terminal on a method other than chat.subscribe",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      const transitions: RecordedTransition[] = [];
+      stream.onStatusChange((status, reason, retryCause) => {
+        transitions.push({ status, reason, retryCause });
+      });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        const details: FatalErrorDetails = {
+          code: SESSION_NOT_READY_FATAL_CODE,
+          reason: "SESSION_NOT_READY: not a chat session",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        };
+
+        await relay.sendStreamFatal(relay.subscribeStreamIds[0], details);
+
+        await vi.waitFor(
+          () =>
+            expect(
+              transitions.map((transition) => transition.status),
+            ).toContain("closed"),
+          WAIT,
+        );
+        expect(transitions.at(-1)).toEqual({
+          status: "closed",
+          reason: { kind: "fatalError", details },
+          retryCause: null,
+        });
+        expect(relay.subscribeStreamIds).toHaveLength(1);
+      } finally {
+        session.close();
+      }
+    },
+    TEST_BUDGET_MS,
+  );
+
+  // Parity with the local socket, where each stream's own socket carries a
+  // retryable session-level fatal: here one session fatal reconnects every
+  // stream, and each of them is told why.
+  it(
+    "hands a retryable SESSION fatal to every live stream as its retry cause",
+    async () => {
+      const relay = new FakeRelayHost();
+      relay.streamManifest = buildStreamManifest(
+        cursorStreamRegistry,
+        SERVES_EVERY_INSTALLED_MAJOR,
+      );
+      const lease = new MutableBearerLease("valid-token", "user-1");
+      const session = new RemoteSession({
+        ...buildSessionOptions(relay, lease, null),
+        streamRegistry: cursorStreamRegistry,
+      });
+      const stream = session.subscribe("cursor.subscribe", { cursor: null });
+      const transitions: RecordedTransition[] = [];
+      stream.onStatusChange((status, reason, retryCause) => {
+        transitions.push({ status, reason, retryCause });
+      });
+      try {
+        await vi.waitFor(
+          () => expect(relay.subscribeStreamIds).toHaveLength(1),
+          WAIT,
+        );
+        const before = transitions.length;
+        const details: FatalErrorDetails = {
+          code: "SOME_TRANSIENT_CODE",
+          reason: "a transient host-side rejection",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+          retryable: true,
+        };
+
+        await relay.sendStreamFatal(SESSION_CONTROL_STREAM_ID, details);
+
+        await vi.waitFor(
+          () =>
+            expect(
+              transitions.slice(before).map((transition) => transition.status),
+            ).toContain("reconnecting"),
+          WAIT,
+        );
+        expect(
+          transitions
+            .slice(before)
+            .find((transition) => transition.status === "reconnecting"),
+        ).toEqual({
+          status: "reconnecting",
+          reason: null,
+          retryCause: details,
+        });
       } finally {
         session.close();
       }

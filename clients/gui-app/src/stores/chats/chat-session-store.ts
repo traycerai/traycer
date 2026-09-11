@@ -710,14 +710,12 @@ export interface PreSnapshotRetryEvidence {
    * them - an attempt that carries none leaves the last pair standing rather
    * than erasing it.
    *
-   * `null` in the case this evidence exists for, and that is not an oversight:
-   * `WsStreamClient.handleFatalErrorFrame` consumes a retryable fatal and
-   * reports the drop as `reconnecting` with no reason at all (the remote
-   * transport re-keys the stream just as silently), so the host's sentence
-   * never leaves the transport. They are kept on the shape because a close
-   * that DOES arrive with details should be recorded rather than counted
-   * anonymously, and because an additive transport change that surfaces the
-   * retryable reason later then needs nothing here.
+   * Both transports publish a retryable close's details as the `retryCause`
+   * of the `reconnecting` transition it causes - a host's `CHAT_OPEN_FAILED`,
+   * or a chat session's lifecycle refusal such as `SESSION_NOT_READY` - and
+   * that is what fills these. A dropped socket or a failed dial has no cause,
+   * so it counts without touching them. They are what the tile's report
+   * carries as the host's code.
    */
   readonly code: string | null;
   readonly reason: string | null;
@@ -6267,7 +6265,7 @@ export function createChatSessionStoreWithNotificationDependencies(
               )),
         }));
       },
-      onConnectionStatus: (status, reason) => {
+      onConnectionStatus: (status, reason, retryCause) => {
         if (disposed) return;
         if (status === "reconnecting" || status === "closed") {
           // Frames dispatched on the lost connection can no longer be
@@ -6309,8 +6307,9 @@ export function createChatSessionStoreWithNotificationDependencies(
           //
           // `reconnecting` is the whole trigger because it is what every such
           // failure looks like from here: the transport publishes it once per
-          // dropped socket, failed dial and swallowed retryable fatal, and
-          // then re-dials. The two statuses that are NOT counted each already
+          // dropped socket, failed dial and retryable fatal, and then
+          // re-dials. A retryable fatal's details come with it as
+          // `retryCause`. The two statuses that are NOT counted each already
           // have their own surface - a terminal `closed` carries
           // `fatalClose`, and `open`/`connecting` are attempts still in
           // flight.
@@ -6328,7 +6327,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             }
             return countPreSnapshotRetry(
               state.preSnapshotRetries,
-              reason?.kind === "fatalError" ? reason.details : null,
+              retryCause,
               Date.now(),
             );
           };
@@ -6421,7 +6420,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         onRestoreProgress: guarded(callbacks.onRestoreProgress),
         onRestoreCompleted: guarded(callbacks.onRestoreCompleted),
         onErrorNotice: guarded(callbacks.onErrorNotice),
-        onConnectionStatus: (status, reason) => {
+        onConnectionStatus: (status, reason, retryCause) => {
           if (!streamGuard.isCurrent(streamGeneration)) return;
           // A RETRYABLE fatalError is the transport saying "not now" - the client
           // is already reconnecting on its own backoff and the user needs to do
@@ -6448,7 +6447,7 @@ export function createChatSessionStoreWithNotificationDependencies(
                 }),
               );
           }
-          callbacks.onConnectionStatus(status, reason);
+          callbacks.onConnectionStatus(status, reason, retryCause);
         },
       };
     };

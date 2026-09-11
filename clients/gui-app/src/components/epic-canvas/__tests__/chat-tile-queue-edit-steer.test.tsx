@@ -241,7 +241,7 @@ function createChatHarness(): {
         (_epicId, _chatId, nextCallbacks) => {
           callbacks = nextCallbacks;
           setTimeout(() => {
-            nextCallbacks.onConnectionStatus("open", null);
+            nextCallbacks.onConnectionStatus("open", null, null);
             emitChatSnapshot(nextCallbacks, access, queueItems);
           }, 0);
           const client: ChatStreamClientHandle = {

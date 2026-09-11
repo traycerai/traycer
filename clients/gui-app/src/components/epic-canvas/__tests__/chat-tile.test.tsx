@@ -541,7 +541,7 @@ function createChatHarness(): ChatHarness {
       streamCreations += 1;
       if (snapshot !== null) {
         setTimeout(() => {
-          nextCallbacks.onConnectionStatus("open", null);
+          nextCallbacks.onConnectionStatus("open", null, null);
           emitChatSnapshotWithMessages({
             callbacks: nextCallbacks,
             access: snapshot.access,
@@ -2631,8 +2631,8 @@ describe("<ChatTile />", () => {
     });
 
     act(() => {
-      chatHarness.callbacks().onConnectionStatus("reconnecting", null);
-      chatHarness.callbacks().onConnectionStatus("open", null);
+      chatHarness.callbacks().onConnectionStatus("reconnecting", null, null);
+      chatHarness.callbacks().onConnectionStatus("open", null, null);
     });
 
     expect(screen.getByText("Host chat content")).not.toBeNull();
@@ -2704,8 +2704,8 @@ describe("<ChatTile />", () => {
     });
 
     act(() => {
-      chatHarness.callbacks().onConnectionStatus("reconnecting", null);
-      chatHarness.callbacks().onConnectionStatus("open", null);
+      chatHarness.callbacks().onConnectionStatus("reconnecting", null, null);
+      chatHarness.callbacks().onConnectionStatus("open", null, null);
     });
 
     expect(chatHarness.sent).toHaveLength(1);
@@ -4139,15 +4139,19 @@ describe("<ChatTile />", () => {
     });
 
     act(() => {
-      chatHarness.callbacks().onConnectionStatus("closed", {
-        kind: "fatalError",
-        details: {
-          code: "UNAUTHORIZED",
-          reason: "CHAT_INVALID: gone",
-          incompatibleMethods: null,
-          upgradeGuidance: null,
+      chatHarness.callbacks().onConnectionStatus(
+        "closed",
+        {
+          kind: "fatalError",
+          details: {
+            code: "UNAUTHORIZED",
+            reason: "CHAT_INVALID: gone",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+          },
         },
-      });
+        null,
+      );
     });
 
     fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
