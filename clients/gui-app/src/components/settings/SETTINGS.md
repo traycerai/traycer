@@ -59,6 +59,204 @@ adding `fallback` and fixed alongside it. Three misses on one ungated pair is
 the argument for checking these two by hand whenever a section is added, not a
 run of bad luck.
 
+## Search
+
+The rail's first control is a search box (`settings-search-box.tsx`), rendered
+by `SettingsSidebar` and therefore present in BOTH surfaces and both rail
+variants at no extra cost. While a query is non-empty the results REPLACE the
+section list — two lists in one column would compete, and every result already
+names the section it belongs to.
+
+Five parts:
+
+| Part           | File                                                    | Owns                                           |
+| -------------- | ------------------------------------------------------- | ---------------------------------------------- |
+| Index          | `lib/settings-search/settings-search-entries.ts`        | Every page, group and row a query can land on  |
+| Availability   | `lib/settings/settings-availability.ts`                 | One predicate per row gate, shared with panels |
+| Ranking        | `lib/settings-search/settings-search.ts`                | Fuse pass, field weights, kind tie-break       |
+| Reveal request | `stores/settings/settings-search-store.ts`              | The one pending "scroll here" handoff          |
+| Reveal         | `use-settings-anchor-reveal.ts` + `settings-search.css` | Finding the element, scrolling, flashing       |
+
+**The index is hand-written, and cannot not be.** There is no schema behind
+these settings — a "setting" is a hand-authored row in one of sixteen panels,
+and the largest panels (Providers' per-provider tab bar, the Worktrees
+inventory, the Host overview) are bespoke JSX with no row primitive to walk.
+So the index is maintained by hand, and the join between an entry and the thing
+it points at is guarded by
+`lib/settings-search/__tests__/settings-search-index.test.ts`: every anchor in
+the index must be written somewhere under `components/settings/`, and every
+anchor written there must be indexed. Both directions, because a row that grows
+an anchor and never gets an entry is a row search cannot reach.
+
+That test **cannot** see whether an entry's LABEL still matches its row's. That
+half is reviewer discipline, which is why entries copy labels from the surface
+verbatim rather than paraphrasing them: a result whose words differ from the
+row it lands on reads as the wrong result.
+
+**Keyboard.** The input keeps focus the whole time, so it is a `combobox`
+whose `aria-activedescendant` names the highlighted `option` and whose
+`aria-controls` names the `listbox` — an empty one when nothing matches, never a
+paragraph in its place. The pointer never takes focus either: result options
+are `tabIndex={-1}` and the options and the clear button cancel `mousedown`,
+so after a click the arrows, typing and Escape still reach the input (clearing
+unmounts the clear button, and focus taken by it would fall to the document). The query lives in
+`stores/settings/settings-search-store.ts` rather than in the rail, because
+the modal frame needs to know a search is running: the settings overlay's
+`consumeEscape` (`stores/tabs/overlays/settings.tsx`) clears it from the
+dialog's own capture-phase Escape handler, so the first Escape clears the
+search and only the next one closes Settings. A `stopPropagation` inside the
+rail cannot do that — Radix hears Escape on the document before the input
+does. The rail clears the query when it unmounts, so it never greets the next
+visit.
+
+**Ranking.** One Fuse pass through the shared wrapper the composer menus
+already use (`lib/composer/fuzzy-ranking.ts`) — same library, same tolerance,
+so a typo behaves the same here as in the `@` menu. Fields are weighted label >
+keywords > group > section > scope > description. Keywords are the point of the
+index: they carry the words a label does not ("dark mode" → Theme, "proxy" →
+the Shell page, "caffeinate" → Prevent sleep). A small per-kind factor breaks
+near-ties toward the more specific hit, so typing "theme" lands on the ROW
+rather than the page — and it is small enough that a page still wins on its own
+name.
+
+**Anchors.** `SettingsRow` and `SettingsGroup` take an `anchor` prop and emit
+`data-settings-anchor`; a hand-built row writes the attribute directly (see
+`worktree-branch-prefix-section.tsx`). `LogDetailGroup` takes its anchor as a
+required `string | null` prop because the same card is the "Log detail" group
+on two different pages, and only the app's is indexed — the host page passes
+`null`.
+Anchors are unique across the whole index — the lookup is a bare attribute
+selector with no section in it.
+
+A group anchors its **card**, not the `<section>` that also wraps its heading.
+The heading sits outside the card by design, so a mark on the section drew the
+ring around the label plus the empty gutter beneath it and made the group's
+name read as part of its contents. `__tests__/settings-group.test.tsx` pins
+this.
+
+**A result must land somewhere.** Four kinds of conditional row, four
+different answers:
+
+- **Gated on a MODE** (the per-kind Link rows, the per-category Tile rows,
+  which render only once their parent is switched off the default) — not
+  indexed; the vocabulary rides on the parent row's keywords.
+- **Gated on DATA** ("Detected dev origins" and its Browser card, which render
+  only once a terminal has printed a local URL) — not indexed. No shell can
+  promise the row, so no shell offers it. This one shipped as a result that
+  navigated to General and lit nothing.
+- **Gated on the SHELL** (Zoom, Experimental and OS notifications need a
+  desktop bridge; This phone needs `pushPermission`; Voice input and Prevent
+  sleep hide in the mobile app) — indexed, with
+  `availableWhen` set to the gate's **named predicate** in
+  `lib/settings/settings-availability.ts`. The panel calls the SAME function to
+  decide whether to render the row, so a gate is written in exactly one place
+  and the index and the surface cannot disagree. Both reach it through
+  `useSettingsAvailabilityContext()` (`hooks/settings/`), which reads the
+  runner host, the desktop feature-settings bridge and `isMobileApp()` at
+  render time — never a module constant, so a module evaluated before the
+  Capacitor entry runs cannot freeze the wrong answer. The context is the
+  whole truth: a predicate reads only its argument, never a global, so the
+  predicates module has no React in it and tests call it with a literal
+  context.
+- **Gated on the SELECTED HOST** (which removal verb a host has — "Remove
+  Traycer" for this computer, "Remove from account" for a registered remote;
+  File edit snapshots behind a live route; Data & migration behind the host's
+  stream and a negotiated import capability; host Diagnostics' Log detail and
+  both Shell cards, Terminal shell · New terminals and Host environment ·
+  After restart, which a host too old for the config RPC replaces with a
+  notice; and the Overview's Installation and Danger zone cards themselves,
+  which the page drops for an unresolved or vanished host) — not indexed. A
+  shell-level context cannot decide selected-host identity or a capability
+  negotiated over host RPC, and a predicate that pretended to would be a
+  second, wrong model of the panel. The rule is **stable destinations**: index
+  the PAGE, which renders whatever state the selected host is in, and fold
+  the vocabulary of everything on it into the page entry's keywords, so
+  "uninstall", "snapshots", "import", "installation", "log level", "startup
+  flags" and "wsl" still land on the right page. The invariant that follows:
+  **no host-scoped section indexes an anchor.**
+- **Gated on the HOST RUNTIME** (Website sessions, which also needs a bound
+  host runtime and a successful first read of the browser bridge; host
+  Notifications' two groups, which the page's scope gate conceals while the
+  host connects or is unreachable and drops for a vanished host) — not
+  indexed as groups or rows either. Their vocabulary rides on the General and
+  host Notifications page entries.
+
+Bespoke pages are indexed at page/region level for the same reason: their
+content exists only once a host answers an RPC.
+
+**DOM contract tests.** The source scan proves an anchor is WRITTEN; it cannot
+prove it renders. `__tests__/settings-search-targets.ts`
+(`assertSettingsSearchTargets(section, context, container)`) closes that for a
+mounted panel: every anchored entry for the section must resolve to exactly
+ONE element when its `availableWhen(context)` is true and to ZERO when false.
+It is wired into the existing panel suites, not a separate one, and each suite
+turns on one gate at a time — every bridge absent, each bridge alone, mobile
+and not. The zero half is the point: a row wrongly left `alwaysAvailable`
+while its panel gates it passes a fully bridged mount and fails only the case
+whose gate is off. No host-scoped section indexes an anchor, so the host
+panels have nothing to assert and the helper, which refuses a section with no
+anchored entries, is wired into the application panels only.
+
+What these tests cannot catch: state combinations no suite mounts (a
+bridge-present shell with no host runtime bound, an unreachable or vanished
+selected host), whether a label still matches its row, whether the
+target is VISIBLE (CSS, a collapsed disclosure), and a capability that
+vanishes between the search and the navigation.
+
+**Reveal.** A click arms the store, then navigates through
+`lib/settings-navigation.ts` (surface-agnostic — the modal deliberately uses no
+router hooks). `useSettingsAnchorReveal`, mounted once inside
+`SettingsPanelForSection` so both surfaces get exactly one watcher, polls on
+`requestAnimationFrame` for the element until it is VISIBLE or a 3s deadline
+passes, then scrolls it to CENTER (so the group heading above it stays visible)
+and marks it for 1.8s. Visible, not merely present: a scope gate keeps its
+content mounted inside a hidden `<Activity>` while the host connects, and an
+element found there would spend the request on a scroll to nowhere
+(`checkVisibility()`, falling back to `offsetParent`). A page result arms a
+request too, with a `null` anchor: once the requested section is on screen its
+pane scrolls to the top and nothing is marked — navigating to the section
+already showing would otherwise move nothing. The pane is the
+`[data-settings-panel-pane]` element each SURFACE (`settings-surface.tsx`,
+`settings-modal-content.tsx`) wraps its panel in, not anything a panel renders,
+so a bespoke panel cannot fall outside it.
+
+The deadline is measured from the request's `requestedAt`, not from when a
+watcher started looking, so a request that outlives its surface cannot fire
+when Settings is next opened. Closing the surface also clears whatever request
+is pending — deferred one tick and cancelled by the watcher's next mount.
+React's development double-mount unmounts and remounts synchronously, so its
+clear never runs and a request armed just before the panel existed (the
+phone's section list navigating into it) survives; a real unmount has nothing
+to cancel it. One close is not an abandonment: promoting the modal into the
+settings tab. The modal surface calls the settings overlay's
+`prepareForPromotion` first, which marks a handoff in the store; the closing
+watcher then leaves the request alone, and the next watcher to mount — the
+tab's, which mounts lazily, after any deferred clear would have run — ends the
+handoff and reveals it.
+
+An anchored row's scroll is done by hand on the row's **nearest scrolling
+ancestor**, not on the surface's pane: a fill-height panel such as Agent
+selection scrolls inside its own body, where moving the outer pane cannot
+center anything. It is never `scrollIntoView`, which moves every scrollable
+ancestor and in the modal dragged the whole dialog (header, rail and all) up
+with the panel pane. The deadline covers a cold host RPC; giving up clears
+the request, so a stale one never fires at a user who has since navigated
+somewhere else. The flash is attribute-driven, not class-driven, because the
+element is marked from outside React — and it is an alpha of `--foreground`,
+never `var(--muted)`, which collapses into the card on most preset themes.
+
+**The mark's lifetime is held in refs, deliberately.** Finding the element ends
+the REQUEST — the watcher clears it immediately so a never-resolved one cannot
+fire later — but the mark has to outlive that by most of two seconds. Those two
+lifetimes shared one effect once, and because clearing the request mutates a
+value that effect depends on, React tore the effect down the instant it
+succeeded and the teardown stripped the attribute it had just set: the row
+scrolled into view and never lit up. Nothing static caught it — the attribute
+WAS being set — so `__tests__/settings-anchor-reveal.test.tsx` asserts the
+settled state (is the mark still there after the request clears?) rather than
+that `setAttribute` was called, which would pass against the broken version.
+Do not move the flash back into the `pendingReveal`-keyed effect.
+
 ## Responsive Behavior (mobile)
 
 The **route** presentation collapses to a drill-down below the 768px

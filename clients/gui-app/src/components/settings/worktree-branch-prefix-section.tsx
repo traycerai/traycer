@@ -187,7 +187,12 @@ export function WorktreeBranchPrefixSection(): ReactNode {
 
   return (
     <div className="overflow-hidden rounded-lg border border-border/60 bg-card/40">
+      {/* Written out rather than taken from `SettingsRow`'s `anchor` prop:
+          this row is hand-built (the input and its preview sentence share a
+          line the primitive does not offer), so it carries the attribute
+          settings search looks for itself. */}
       <div
+        data-settings-anchor="general-branch-prefix"
         className={cn(
           "flex flex-wrap items-center gap-3.5 px-3.5 py-2.5",
           SETTINGS_ROW_STACK.container,

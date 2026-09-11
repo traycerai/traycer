@@ -856,7 +856,7 @@ describe("<TabStrip />", () => {
     const frame = tab.parentElement;
     if (frame === null) throw new Error("Expected tab frame");
 
-    expect(frame.className).toContain("min-w-[120px]");
+    expect(frame.className).toContain("min-w-[min(40vw,12rem)]");
     expect(frame.className).toContain("w-56");
     expect(frame.className).toContain("max-w-56");
     expect(frame.className).toContain("flex-[1_1_14rem]");
@@ -1094,7 +1094,7 @@ describe("<TabStrip />", () => {
     expect(rightPane?.getAttribute("fill")).toBe("currentColor");
     expect(leftUnderline.className).toContain("bg-primary");
     expect(rightUnderline.className).not.toContain("bg-primary");
-    expect(leftTab.className).toContain("px-1.5");
+    expect(leftTab.className).toContain("px-5");
     expect(rightTab.className).toContain("px-5");
     expect(within(leftTab).queryByTestId("tab-chrome-center")).toBeNull();
     expect(
@@ -1209,9 +1209,15 @@ describe("<TabStrip />", () => {
 
     const tab = await screen.findByTestId("tab-epic-e-a");
     const title = screen.getByTestId("tab-title-epic-e-a");
+    const closeButton = screen.getByTestId("tab-close-epic-e-a");
+
+    const trigger = tab.querySelector('[data-slot="tooltip-trigger"]');
+    if (trigger === null) throw new Error("Expected a tooltip trigger");
 
     expect(tab.getAttribute("data-slot")).not.toBe("tooltip-trigger");
-    expect(title.getAttribute("data-slot")).toBe("tooltip-trigger");
+    expect(trigger).not.toBe(tab);
+    expect(trigger.contains(title)).toBe(true);
+    expect(trigger.contains(closeButton)).toBe(false);
   });
 
   it("shows a spinner while epic title generation is pending", async () => {
@@ -1524,11 +1530,10 @@ describe("<TabStrip />", () => {
     expect(item.getAttribute("aria-disabled")).toBe("true");
     expect(item.getAttribute("data-disabled")).toBeNull();
     // States the condition; does not promise a cloud sync that may never come.
-    // "the connected device": the epic lives on the host serving it, not
-    // necessarily the machine rendering this menu.
     expect(item.textContent).toContain(
-      "Pin Task in History — stored on the connected device",
+      "Pin Task in History — needs a newer host",
     );
+    expect(item.textContent).not.toMatch(/cloud|device/i);
 
     fireEvent.click(item);
 

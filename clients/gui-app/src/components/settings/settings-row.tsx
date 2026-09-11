@@ -9,14 +9,22 @@ interface SettingsRowProps {
   description?: string;
   hint?: ReactNode;
   control: ReactNode;
+  /**
+   * The token settings search scrolls to and flashes when a result names this
+   * row. Rows without one are simply not reachable by an in-page search hit —
+   * the index only ever names anchors that exist (see
+   * `lib/settings-search/settings-search-entries.ts`).
+   */
+  anchor?: string;
 }
 
 export function SettingsRow(props: SettingsRowProps) {
-  const { label, description, hint, control } = props;
+  const { label, description, hint, control, anchor } = props;
   const compact = useSettingsDensity() === "compact";
   const descriptionId = useId();
   return (
     <div
+      data-settings-anchor={anchor}
       className={cn(
         "flex flex-wrap items-start justify-between gap-x-6 gap-y-2 border-b border-border/40 last:border-b-0",
         SETTINGS_ROW_STACK.container,

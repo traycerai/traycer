@@ -92,7 +92,7 @@ vi.mock("@/hooks/terminal/use-plain-terminal-authority", () => ({
 const OFFLINE_COPY =
   "Disconnected. Unsent changes stay in this window until it reconnects — keep it open.";
 const OFFLINE_UNSAVED_TOOLTIP =
-  "The cloud connection is down, and some recent changes are still being saved on this device. Keep this window open.";
+  "Offline, and some recent changes are still being saved. Keep this window open.";
 
 function pillTree() {
   return (
@@ -648,12 +648,19 @@ describe("<EpicConnectionPill />", () => {
     expect(screen.getByTestId("epic-connection-pill").className).toContain(
       "bg-amber-500/10",
     );
-    expect(
-      screen.getByTestId("epic-connection-pill").getAttribute("aria-label"),
-    ).toBe(
-      "Offline. Some recent changes are still being saved on this device. Keep this window open.",
+    const offlineWithUnsavedChangesLabel = screen
+      .getByTestId("epic-connection-pill")
+      .getAttribute("aria-label");
+    expect(offlineWithUnsavedChangesLabel).toBe(
+      "Offline. Some recent changes are still being saved. Keep this window open.",
+    );
+    expect(offlineWithUnsavedChangesLabel).not.toMatch(
+      /\bcloud\b|\blocally\b|this device/i,
     );
     await expectTooltip(OFFLINE_UNSAVED_TOOLTIP);
+    expect(OFFLINE_UNSAVED_TOOLTIP).not.toMatch(
+      /\bcloud\b|\blocally\b|this device/i,
+    );
     expect(screen.getByRole("status").textContent).toContain(
       "Some recent changes are still being saved",
     );
@@ -666,10 +673,10 @@ describe("<EpicConnectionPill />", () => {
 
   it("shows host-pending offline work immediately, without claiming it is durable", async () => {
     // Cloud-down, but never quieted: the aria-label and tooltip below say
-    // "keep it running", which is an instruction about the DEVICE. The host
-    // has acked this replica's work, so the window is not its last holder -
-    // but the host's own durable flush is unknown, and a 15s quiet window is
-    // exactly when a shutdown would interrupt it.
+    // "keep that host running", an instruction about the SERVING HOST. The
+    // host has acked this replica's work, so the window is not its last
+    // holder - but the host's own durable flush is unknown, and a 15s quiet
+    // window is exactly when a shutdown would interrupt it.
     vi.useFakeTimers();
     renderPill("offlineWithHostPending");
     vi.useRealTimers();
@@ -682,17 +689,65 @@ describe("<EpicConnectionPill />", () => {
       "bg-amber-500",
     );
     expect(screen.getByTestId("epic-connection-pill-dot").textContent).toBe("");
-    expect(
-      screen.getByTestId("epic-connection-pill").getAttribute("aria-label"),
-    ).toBe(
-      "Offline. This device is still processing pending changes; keep it running.",
+    const offlineWithHostPendingLabel = screen
+      .getByTestId("epic-connection-pill")
+      .getAttribute("aria-label");
+    expect(offlineWithHostPendingLabel).toBe(
+      "Offline. Pending changes are still being processed on the host serving this task; keep that host running.",
     );
-    await expectTooltip(
-      "The cloud connection is down. This device is still processing pending changes; keep it running.",
+    expect(offlineWithHostPendingLabel).not.toMatch(
+      /\bcloud\b|\blocally\b|this device/i,
+    );
+    const offlineWithHostPendingTooltip =
+      "Offline. Pending changes are still being processed on the host serving this task; keep that host running.";
+    await expectTooltip(offlineWithHostPendingTooltip);
+    expect(offlineWithHostPendingTooltip).not.toMatch(
+      /\bcloud\b|\blocally\b|this device/i,
     );
     expect(screen.getByRole("status").textContent).toContain(
-      "still processing pending changes",
+      "still being processed",
     );
+  });
+
+  it("keeps every unprotected string prospective — the state is reached with nothing typed", async () => {
+    // `unprotected` derives on protection alone - `epic-sync-pill-state.ts`
+    // consults no dirty bit for it - so a freshly opened task with nothing
+    // typed can be in this state. All three strings must stay prospective
+    // ("anything you edit") rather than claim edits already exist ("recent
+    // changes", "changes not saved", "changes are"): that shape is a false
+    // data-loss alarm about work that was never done. A reviewer caught the
+    // tooltip drifting prospective while the aria-label still claimed
+    // existing edits; this pins all three so it cannot slip again.
+    vi.useFakeTimers();
+    renderPill("unprotected");
+    vi.useRealTimers();
+
+    expect(
+      screen.getByText("Offline — new edits not backed up"),
+    ).not.toBeNull();
+
+    const unprotectedLabel = screen
+      .getByTestId("epic-connection-pill")
+      .getAttribute("aria-label");
+    expect(unprotectedLabel).toBe(
+      "Offline. Anything you edit now is not backed up and exists only in this window; it is lost if the window closes.",
+    );
+
+    const unprotectedTooltip =
+      "Offline. Anything you edit now is not backed up and exists only in this window. Reconnect, or copy anything you cannot lose.";
+    await expectTooltip(unprotectedTooltip);
+
+    expect(unprotectedLabel).not.toContain("Recent changes");
+    expect(unprotectedLabel).not.toContain("changes not saved");
+    expect(unprotectedLabel).not.toContain("changes are");
+    expect(unprotectedTooltip).not.toContain("Recent changes");
+    expect(unprotectedTooltip).not.toContain("changes not saved");
+    expect(unprotectedTooltip).not.toContain("changes are");
+    expect("Offline — new edits not backed up").not.toContain("Recent changes");
+    expect("Offline — new edits not backed up").not.toContain(
+      "changes not saved",
+    );
+    expect("Offline — new edits not backed up").not.toContain("changes are");
   });
 
   it("preserves keyboard focus when a quiet save becomes an offline warning", () => {
@@ -714,8 +769,8 @@ describe("<EpicConnectionPill />", () => {
     expect(screen.getByText("Connected")).not.toBeNull();
     expect(pillClaimsSynced()).toBe(false);
     expect(
-      screen.getByTestId("epic-connection-pill").textContent,
-    ).not.toContain("saved locally");
+      screen.getByTestId("epic-connection-pill").getAttribute("aria-label"),
+    ).not.toBe("Offline — changes saved");
     expect(screen.getByTestId("epic-connection-pill").innerHTML).not.toContain(
       "status-ping",
     );
@@ -728,14 +783,14 @@ describe("<EpicConnectionPill />", () => {
     // Cloud-only outage: held back for the grace before it may read amber.
     vi.useFakeTimers();
     renderPill("offlineChangesSavedLocally");
-    expect(screen.queryByText("Offline — changes saved locally")).toBeNull();
+    expect(screen.queryByText("Offline — changes saved")).toBeNull();
 
     act(() => {
       vi.advanceTimersByTime(15_000);
     });
     vi.useRealTimers();
 
-    expect(screen.getByText("Offline — changes saved locally")).not.toBeNull();
+    expect(screen.getByText("Offline — changes saved")).not.toBeNull();
     // The spinner (AgentSpinningDots) writes a braille glyph into the dot's
     // textContent via layout effect; the plain-dot fallback renders no
     // children at all. An empty dot is the behavioral signal that no
@@ -752,8 +807,20 @@ describe("<EpicConnectionPill />", () => {
     expect(
       screen.getByTestId("epic-connection-pill").getAttribute("data-status"),
     ).toBe("offlineChangesSavedLocally");
-    await expectTooltip(
-      "The cloud connection is down. Your changes are saved on this device and sync when it is back.",
+    const offlineChangesSavedLocallyLabel = screen
+      .getByTestId("epic-connection-pill")
+      .getAttribute("aria-label");
+    expect(offlineChangesSavedLocallyLabel).toBe(
+      "Offline. Your changes are saved and sync when the connection is back.",
+    );
+    expect(offlineChangesSavedLocallyLabel).not.toMatch(
+      /\bcloud\b|\blocally\b|this device/i,
+    );
+    const offlineChangesSavedLocallyTooltip =
+      "Offline. Your changes are saved and sync when the connection is back.";
+    await expectTooltip(offlineChangesSavedLocallyTooltip);
+    expect(offlineChangesSavedLocallyTooltip).not.toMatch(
+      /\bcloud\b|\blocally\b|this device/i,
     );
   });
 
@@ -1069,7 +1136,8 @@ describe("<EpicConnectionPill />", () => {
 
   describe("durability plane", () => {
     it("selects a warning durability plane over a synced artifact leg, dot-only with its sentence as the tooltip and aria-label", async () => {
-      const sentence = "Cloud mirror — offline · No local backup";
+      const sentence =
+        "Offline — sync paused · New edits only in this window until synced";
       mocks.durability = { severity: "warning", sentence };
       renderPill("synced");
 
@@ -1107,7 +1175,8 @@ describe("<EpicConnectionPill />", () => {
       // a tie. It is also a cloud-link-down state, so it is held at the quiet
       // neutral reading until `CLOUD_LINK_GRACE_MS` passes.
       vi.useFakeTimers();
-      const sentence = "Cloud mirror — offline · No local backup";
+      const sentence =
+        "Offline — sync paused · New edits only in this window until synced";
       mocks.durability = { severity: "warning", sentence };
       renderPill("offlineChangesSavedLocally");
 
@@ -1119,7 +1188,7 @@ describe("<EpicConnectionPill />", () => {
       const pill = screen.getByRole<HTMLButtonElement>("button");
       expect(pill.dataset.source).toBe("artifact");
       expect(await tooltipLines()).toEqual([
-        "The cloud connection is down. Your changes are saved on this device and sync when it is back.",
+        "Offline. Your changes are saved and sync when the connection is back.",
         sentence,
       ]);
     });
@@ -1132,7 +1201,7 @@ describe("<EpicConnectionPill />", () => {
       // it is. Dropping it is what left a mirror-first cloud epic's "Local
       // copy · never synced" invisible behind `connected`.
       vi.useFakeTimers();
-      mocks.durability = { severity: "steady", sentence: "Stored locally" };
+      mocks.durability = { severity: "steady", sentence: "Not synced yet" };
       renderPill("synced");
 
       act(() => {
@@ -1143,11 +1212,11 @@ describe("<EpicConnectionPill />", () => {
       const pill = screen.getByRole<HTMLButtonElement>("button");
       expect(pill.dataset.source).toBe("artifact");
       expect(pill.getAttribute("aria-label")).toBe(
-        "All changes synced Stored locally",
+        "All changes synced Not synced yet",
       );
       expect(await tooltipLines()).toEqual([
         "All changes synced",
-        "Stored locally",
+        "Not synced yet",
       ]);
     });
 
