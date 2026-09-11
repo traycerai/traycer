@@ -92,6 +92,9 @@ function tileHostSessionsState(): BrowserSessionsState {
     inventoryReady: true,
     canMaterializeElectron: false,
     connectionGeneration: 0,
+    viewports: {},
+    setViewport: () => Promise.reject(new Error("not used")),
+    reportViewport: () => undefined,
     items: [
       sessionInfo({
         sessionId: "session-tile",

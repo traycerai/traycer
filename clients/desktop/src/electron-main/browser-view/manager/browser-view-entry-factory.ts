@@ -36,6 +36,8 @@ interface BrowserViewEntryFactoryOptions {
     reason: string | null,
   ) => void;
   readonly emitStatus: (entry: BrowserViewEntry) => void;
+  readonly requestZoom: (entry: BrowserViewEntry, factor: number) => void;
+  readonly refreshViewport: (entry: BrowserViewEntry) => void;
   readonly emitFocus: (entry: BrowserViewEntry) => void;
   readonly closeEntry: (entry: BrowserViewEntry) => void;
 }
@@ -64,6 +66,11 @@ export class BrowserViewEntryFactory {
     reason: string | null,
   ) => void;
   private readonly emitStatus: (entry: BrowserViewEntry) => void;
+  private readonly requestZoom: (
+    entry: BrowserViewEntry,
+    factor: number,
+  ) => void;
+  private readonly refreshViewport: (entry: BrowserViewEntry) => void;
   private readonly emitFocus: (entry: BrowserViewEntry) => void;
   private readonly closeEntry: (entry: BrowserViewEntry) => void;
 
@@ -77,6 +84,8 @@ export class BrowserViewEntryFactory {
     this.observePrimaryProfileOrigin = options.observePrimaryProfileOrigin;
     this.setStatus = options.setStatus;
     this.emitStatus = options.emitStatus;
+    this.requestZoom = options.requestZoom;
+    this.refreshViewport = options.refreshViewport;
     this.emitFocus = options.emitFocus;
     this.closeEntry = options.closeEntry;
   }
@@ -215,6 +224,7 @@ export class BrowserViewEntryFactory {
     this.observePrimaryProfileOrigin(url, entry.webContents, entry.profile);
     entry.certificateError = null;
     this.setStatus(entry, "ready", null);
+    this.refreshViewport(entry);
     void this.debugSessions
       .ensure(entry)
       .enableAfterCommit()
@@ -280,7 +290,7 @@ export class BrowserViewEntryFactory {
     if (step === null) return;
     event.preventDefault();
     const factor = step === 0 ? 1 : steppedEntryZoom(entry, step);
-    if (applyEntryZoom(entry, factor)) this.emitStatus(entry);
+    this.requestZoom(entry, factor);
   }
 }
 

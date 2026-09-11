@@ -54,6 +54,7 @@ interface GuestHooks {
   __traycerAnnotationHideChromeForCapture: () => void;
   __traycerAnnotationResetAfterAttach: () => void;
   __traycerAnnotationCaptureFailed: () => void;
+  __traycerAnnotationPrepareAttach: () => Record<string, unknown> | null;
   __traycerAnnotationSetTheme: (theme: BrowserAnnotationTheme) => void;
   __traycerAnnotationSetTargetChatLabel: (
     targets: readonly { readonly chatId: string; readonly label: string }[],
@@ -756,7 +757,9 @@ function boot(): boolean {
     return ok;
   }
 
-  function requestAttach(targetChatId: string | null): void {
+  function prepareAttach(
+    targetChatId: string | null,
+  ): Record<string, unknown> | null {
     const resolvedTargetChatId =
       targetChatId ?? targetPicker.getDefaultChatId();
     if (
@@ -764,13 +767,13 @@ function boot(): boolean {
       marks.entries.length === 0 ||
       resolvedTargetChatId === null
     ) {
-      return;
+      return null;
     }
     attachError = "";
     if (!validateAll()) {
       attachError = "Some marks need re-marking before sending.";
       layoutChrome();
-      return;
+      return null;
     }
     const snapshots = marks.entries.map((entry) =>
       toMarkSnapshot(viewportModel(entry)),
@@ -788,17 +791,23 @@ function boot(): boolean {
     });
     persistRefuseCount = budgeted.refusedCount;
     const union = unionRects(snapshots.map((mark) => mark.bounds));
-    if (union === null) return;
+    if (union === null) return null;
     attachPending = true;
+    return {
+      targetChatId: resolvedTargetChatId,
+      marks: snapshots,
+      elements: budgeted.kept,
+      comment: comment.value,
+      unionRect: union,
+    };
+  }
+
+  function requestAttach(targetChatId: string | null): void {
+    const payload = prepareAttach(targetChatId);
+    if (payload === null) return;
     emit({
       type: "attachRequested",
-      payload: {
-        targetChatId: resolvedTargetChatId,
-        marks: snapshots,
-        elements: budgeted.kept,
-        comment: comment.value,
-        unionRect: union,
-      },
+      payload,
     });
   }
 
@@ -965,6 +974,7 @@ function boot(): boolean {
     __traycerAnnotationHideChromeForCapture: hideChromeForCapture,
     __traycerAnnotationResetAfterAttach: resetAfterAttach,
     __traycerAnnotationCaptureFailed: captureFailed,
+    __traycerAnnotationPrepareAttach: () => prepareAttach(null),
     __traycerAnnotationSetTheme: setTheme,
     __traycerAnnotationSetTargetChatLabel: setTargetChatLabel,
   };
