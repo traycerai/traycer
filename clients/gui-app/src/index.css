@@ -33,8 +33,8 @@
    RUNNING but reports no percentage. Plain CSS - no motion runtime, so it
    animates regardless of the LazyMotion provider.
 
-   ONE keyframe, two directions BY DECLARATION. The host-install bars
-   (`local-host-loading`, `update-progress-bar`) run it one-way; the
+   ONE keyframe, two directions BY DECLARATION. The host-update bar
+   (`update-progress-bar`) runs it one-way; the
    stream-syncing strip below runs the same travel with
    `animation-direction: alternate`, so the segment returns instead of wrapping.
    The declaration is where the two differ - do not add a second keyframe for a
@@ -49,8 +49,8 @@
    not a progress claim: it carries no percentage semantics and the word
    "Syncing…" beside it is what the reader is actually reading.)
 
-   `transform` only, so it composites without laying out - this runs for the whole
-   multi-minute extract. */
+   `transform` only, so it composites without laying out - on the host-update bar
+   this runs for minutes. */
 @keyframes host-progress-indeterminate {
   from {
     transform: translateX(-100%);
@@ -61,8 +61,8 @@
 }
 
 /* The stream-syncing strip's travelling segment. A CLASS, not the inline
-   `animation` style the two install bars use, for one reason: an inline style
-   cannot be reached by a `motion-reduce:` variant, so those two do not honour
+   `animation` style the host-update bar uses, for one reason: an inline style
+   cannot be reached by a `motion-reduce:` variant, so that bar does not honour
    reduced motion at all. This one does, below.
 
    The strip drops this class entirely once it escalates, falling back to plain
@@ -76,8 +76,8 @@
      2.8s round trip with nothing on screen at all. On an install bar that runs
      for minutes the gap reads as pacing; on an indicator that lives two to four
      seconds it can be most of what the user sees, and it is what makes the
-     motion read as restarting rather than travelling. The install bars keep the
-     old value through the fallback in the keyframe. */
+     motion read as restarting rather than travelling. The host-update bar keeps
+     the old value through the fallback in the keyframe. */
   --host-progress-sweep-end: 250%;
   animation: host-progress-indeterminate 1.4s ease-in-out infinite alternate;
   /* The one moving element on screen during a reconnect, and a bar this thin

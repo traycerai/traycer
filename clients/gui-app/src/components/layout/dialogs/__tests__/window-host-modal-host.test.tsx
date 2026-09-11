@@ -282,12 +282,11 @@ afterEach(() => {
 });
 
 describe("<WindowHostModalHost />", () => {
-  it("∅ (no-usable-host): settled failure — Retry, Report issue and Open settings(button) present; spinner + progress heading absent; attempt panel + log toggle present", async () => {
-    // Previously asserted `local-host-loading-spinner` truthy on this arm -
-    // THAT was the reported defect (B4): a live "starting" spinner drawn over
-    // a state where nothing is starting, with Retry and Report issue beside
-    // it as if a real attempt were in flight. Kept only as the negative
-    // assertion below, with a comment recording why, so nobody restores it.
+  it("∅ (no-usable-host): settled failure — Retry, Report issue and Open settings(button) present; progress heading absent; attempt panel + log toggle present", async () => {
+    // The reported defect on this arm (B4) was a live "starting" narration
+    // drawn over a state where nothing is starting, with Retry and Report
+    // issue beside it as if a real attempt were in flight. Pinned by the
+    // negative assertions below so nobody restores it.
     hostStatus.data = BOOTSTRAP_MARKERS;
     applySnapshot({
       attached: true,
@@ -324,7 +323,7 @@ describe("<WindowHostModalHost />", () => {
     expect(openSettings).toBeTruthy();
 
     // Nothing is starting, so nothing narrates a start.
-    expect(screen.queryByTestId("local-host-loading-spinner")).toBeNull();
+    expect(screen.queryByTestId("local-host-loading-stage")).toBeNull();
     expect(screen.queryByText("Starting Traycer…")).toBeNull();
 
     // The attempt panel is what explains this state, and it is present...
@@ -366,11 +365,11 @@ describe("<WindowHostModalHost />", () => {
     await waitFor(() => {
       expect(screen.getByTestId("window-host-modal")).toBeTruthy();
     });
-    expect(screen.queryByTestId("local-host-loading-spinner")).toBeNull();
+    expect(screen.queryByTestId("local-host-loading-stage")).toBeNull();
     expect(screen.queryByTestId("local-host-bootstrap-log-path")).toBeNull();
   });
 
-  it("cold-start on a REMOTE target draws the SAME boot body as a local one: headline, spinner, inline Open settings, no action row", async () => {
+  it("cold-start on a REMOTE target draws the SAME boot body as a local one: headline, inline Open settings, no action row", async () => {
     // THE REPORTED LAUNCH. A fresh install on an account that has remote hosts
     // derives a remote as effective until the local host registers (the
     // engine's third arm: no preference, no local row, first usable remote), so
@@ -409,12 +408,13 @@ describe("<WindowHostModalHost />", () => {
     // Drawn THROUGH the shared boot card, not merely resembling it.
     expect(card.getAttribute("data-surface")).toBe(HOST_BOOT_CARD_SURFACE);
 
-    // The boot body: spinner + the family's idle heading (no lane is running,
-    // and no machine has been named that a lane could describe).
-    expect(screen.getByTestId("local-host-loading-spinner")).toBeTruthy();
+    // The boot body: the family's idle heading (no lane is running, and no
+    // machine has been named that a lane could describe) and no bar, since
+    // nothing has a measured position.
     expect(screen.getByTestId("local-host-loading-stage").textContent).toBe(
       "Starting Traycer…",
     );
+    expect(screen.queryByRole("progressbar")).toBeNull();
     // The footer pair, exactly as the two surfaces before this one draw it:
     // `Show details` with `Open settings` INLINE beside it ...
     expect(
@@ -436,12 +436,13 @@ describe("<WindowHostModalHost />", () => {
     ).toBeNull();
   });
 
-  it("cold-start on a REMOTE target while this machine's lane runs: the lane heading in the boot headline and the bar, never the boxed lane line", async () => {
+  it("cold-start on a REMOTE target while this machine's lane runs: the lane heading in the boot headline, never the boxed lane line", async () => {
     // The second shape of the same launch: the desktop's reconciler is
     // installing the local host underneath while the derived target is still
     // the remote. The lane is real and it is this machine's, so the boot body
-    // narrates it the way every other phase would - headline + progress bar -
-    // instead of the bordered `LaneProgressLine` strip that titled faces use
+    // narrates it the way every other phase would - its headline, plus the
+    // progress bar once a stage reports a percentage - instead of the
+    // bordered `LaneProgressLine` strip that titled faces use
     // under their own description. That strip under NO title was the
     // "weird-looking Setting up Traycer" card.
     controllerStatus.data = {
@@ -477,7 +478,8 @@ describe("<WindowHostModalHost />", () => {
     expect(screen.getByTestId("local-host-loading-stage").textContent).toBe(
       "Setting up Traycer Host…",
     );
-    expect(screen.getByTestId("local-host-download-progress")).toBeTruthy();
+    // The lane has reported no percentage yet, so there is no bar to draw.
+    expect(screen.queryByRole("progressbar")).toBeNull();
     expect(screen.queryByTestId("window-host-modal-progress")).toBeNull();
     // Still the healthy footer, still no action row.
     expect(screen.getByTestId("host-boot-open-settings")).toBeTruthy();
@@ -513,14 +515,14 @@ describe("<WindowHostModalHost />", () => {
     });
     expect(screen.queryByTestId("local-host-bootstrap-details")).toBeNull();
     expect(screen.queryByTestId("local-host-bootstrap-log-path")).toBeNull();
-    expect(screen.queryByTestId("local-host-loading-spinner")).toBeNull();
+    expect(screen.queryByTestId("local-host-loading-stage")).toBeNull();
     expect(
       screen.queryByTestId("local-host-loading-toggle-details"),
     ).toBeNull();
     expect(screen.getByTestId("window-host-modal-open-settings")).toBeTruthy();
   });
 
-  it("cold-start, healthy (stage: loading, no provisioningError): Retry, Report issue absent; Open settings present as a link; spinner shown; no attempt summary", async () => {
+  it("cold-start, healthy (stage: loading, no provisioningError): Retry, Report issue absent; Open settings present as a link; idle heading shown; no attempt summary", async () => {
     // The markers MUST be available for this assertion to mean anything. The
     // first version of this test left the status query empty, so the summary
     // was absent because there was nothing to summarise - it passed with the
@@ -564,7 +566,9 @@ describe("<WindowHostModalHost />", () => {
     expect(openSettings).toBeTruthy();
     expect(screen.queryByTestId("window-host-modal-open-settings")).toBeNull();
 
-    expect(screen.getByTestId("local-host-loading-spinner")).toBeTruthy();
+    expect(screen.getByTestId("local-host-loading-stage").textContent).toBe(
+      "Starting Traycer…",
+    );
     expect(screen.queryByTestId("local-host-bootstrap-details")).toBeNull();
 
     // This is the reported defect's own state: a start with no failure of any
@@ -641,8 +645,8 @@ describe("<WindowHostModalHost />", () => {
     });
 
     // The markers must be AVAILABLE for the body assertions below to mean
-    // anything - the attempt panel is what replaces the spinner here, and
-    // without markers it renders nothing and "no spinner" would be satisfied by
+    // anything - the attempt panel is what replaces the loading body here, and
+    // without markers it renders nothing and "no heading" would be satisfied by
     // an empty body.
     hostStatus.data = BOOTSTRAP_MARKERS;
 
@@ -679,20 +683,19 @@ describe("<WindowHostModalHost />", () => {
 
     // THE BODY, which this test used to say nothing about - and that silence was
     // worse than an omission. The row was enumerated, so it read as covered,
-    // while the arm it covers went on drawing a live spinner and "Starting local
-    // Traycer Host…" beside the Retry and Report issue asserted above. The ∅
-    // test has had this negative assertion all along; the arm that was actually
-    // broken did not.
+    // while the arm it covers went on drawing a live "Starting local Traycer
+    // Host…" beside the Retry and Report issue asserted above. The ∅ test has
+    // had this negative assertion all along; the arm that was actually broken
+    // did not.
     //
     // Positive first: the attempt panel is what this arm draws INSTEAD of the
-    // spinner, so its presence is what makes the absences below meaningful
-    // rather than vacuous.
+    // loading body, so its presence is what makes the absences below
+    // meaningful rather than vacuous.
     expect(screen.getByTestId("local-host-bootstrap-details")).toBeTruthy();
     expect(
       screen.getByTestId("local-host-loading-toggle-details"),
     ).toBeTruthy();
 
-    expect(screen.queryByTestId("local-host-loading-spinner")).toBeNull();
     expect(screen.queryByTestId("local-host-loading-stage")).toBeNull();
     // The copy itself, not just the node: the stage line's fallback is the exact
     // sentence this arm must not say, and asserting the testid alone would pass
@@ -1103,7 +1106,7 @@ describe("<WindowHostModalHost />", () => {
       // assertion above is satisfied by an empty div rendered beside them.
       expect(
         screen
-          .getByTestId("local-host-loading-spinner")
+          .getByTestId("local-host-loading-stage")
           .closest('[data-testid="local-host-body"]'),
       ).toBe(coldStartBody);
       expect(
