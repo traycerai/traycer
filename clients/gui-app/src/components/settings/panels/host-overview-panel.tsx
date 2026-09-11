@@ -19,6 +19,7 @@ import { useHostLease } from "@/hooks/host/use-host-lease";
 import { HostDangerZone } from "@/components/settings/host-scope/host-danger-zone";
 import { HostUpdateDrainGateRow } from "@/components/settings/host-scope/host-registry-updates";
 import { useHostRegistryUpdateMutation } from "@/components/settings/host-scope/use-host-registry-update-mutation";
+import { HOST_OVERVIEW } from "@/components/settings/panels/host-overview.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import {
   HostOverviewHeaderActions,
@@ -2743,7 +2744,8 @@ function HostOverviewInstallationCard(props: {
 }): ReactNode {
   return (
     <SettingsGroup
-      title="Installation"
+      group={HOST_OVERVIEW.definitions.installation}
+      showTitle
       tone="default"
       dataTestId="host-installation"
       fill={false}

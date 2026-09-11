@@ -106,6 +106,18 @@ describe("<LocalHostLoadingContent />", () => {
     ).toBe("true");
   });
 
+  it("keeps the mark and wordmark on the card at the boot size", () => {
+    // The boot size keeps the brand a small header over the card's own heading
+    // and progress, rather than the lockup the card is organised around. jsdom
+    // has no layout, so the rendered size is only visible in a real browser -
+    // `scripts/host-boot-family-gallery-browser.mjs` screenshots every face.
+    mountLoadingContent(buildHost(), null);
+    const brand = screen.getByTestId("brand-entrance");
+    expect(brand.getAttribute("data-size")).toBe("boot");
+    expect(brand.querySelector("svg")).not.toBeNull();
+    expect(brand.textContent).toBe("traycer");
+  });
+
   it("does NOT carry an open disclosure into a fresh launch", () => {
     // The other side of the same decision: the flag is session state, not a
     // preference. Nothing persists it, so a store that started life expanded

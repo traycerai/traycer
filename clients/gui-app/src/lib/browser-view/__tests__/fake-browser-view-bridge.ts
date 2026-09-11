@@ -17,6 +17,8 @@ import type {
   BrowserViewDetachSurface,
   BrowserViewGuestMountRequested,
   BrowserViewGuestReleaseRequested,
+  BrowserViewGuestViewportRequested,
+  BrowserViewGuestViewportResult,
   BrowserViewReservedChord,
   BrowserViewSnapshotInvalidatedChange,
   BrowserViewTileCommandEvent,
@@ -48,6 +50,7 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
   readonly openSessionsStreamCalls: BrowserSessionsStreamKey[] = [];
   readonly closeSessionsStreamCalls: BrowserSessionsStreamKey[] = [];
   readonly sendSessionsFrameCalls: BrowserSessionsStreamSend[] = [];
+  readonly guestViewportResultCalls: BrowserViewGuestViewportResult[] = [];
   private sessionsStreamEventHandler:
     | ((envelope: BrowserSessionsStreamEventEnvelope) => void)
     | null = null;
@@ -56,6 +59,9 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
   >();
   private readonly guestReleaseHandlers = new Set<
     (request: BrowserViewGuestReleaseRequested) => void
+  >();
+  private readonly guestViewportHandlers = new Set<
+    (request: BrowserViewGuestViewportRequested) => void
   >();
   private readonly snapshotInvalidationHandlers = new Set<
     (change: BrowserViewSnapshotInvalidatedChange) => void
@@ -371,11 +377,33 @@ export class FakeBrowserViewBridge implements BrowserViewBridge {
     };
   }
 
+  onGuestViewportRequested(
+    handler: (request: BrowserViewGuestViewportRequested) => void,
+  ): { dispose: () => void } {
+    this.guestViewportHandlers.add(handler);
+    return {
+      dispose: () => {
+        this.guestViewportHandlers.delete(handler);
+      },
+    };
+  }
+
+  reportGuestViewportResult(
+    input: BrowserViewGuestViewportResult,
+  ): Promise<void> {
+    this.guestViewportResultCalls.push(input);
+    return Promise.resolve();
+  }
+
   emitGuestMountRequested(request: BrowserViewGuestMountRequested): void {
     for (const handler of this.guestMountHandlers) handler(request);
   }
 
   emitGuestReleaseRequested(request: BrowserViewGuestReleaseRequested): void {
     for (const handler of this.guestReleaseHandlers) handler(request);
+  }
+
+  emitGuestViewportRequested(request: BrowserViewGuestViewportRequested): void {
+    for (const handler of this.guestViewportHandlers) handler(request);
   }
 }

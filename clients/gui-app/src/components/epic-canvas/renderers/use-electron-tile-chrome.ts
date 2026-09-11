@@ -14,7 +14,6 @@ import type {
   BrowserViewDownloadChange,
   BrowserViewElectronTabControlAction,
   BrowserViewTileKey,
-  BrowserViewViewportPresetId,
   BrowserViewBridge,
 } from "@traycer-clients/shared/platform/browser-view";
 
@@ -32,8 +31,6 @@ interface UseElectronTabChromeArgs {
   readonly canGoBack: boolean;
   readonly canGoForward: boolean;
   readonly zoomPercent: number;
-  readonly persistViewportPreset: (preset: BrowserViewViewportPresetId) => void;
-  readonly initialViewportPreset: BrowserViewViewportPresetId;
   readonly onAttemptedUrl: (url: string) => void;
 }
 
@@ -45,7 +42,6 @@ interface ElectronTabChrome {
   readonly certificateProceeding: boolean;
   readonly cancelDownload: (downloadId: string) => void;
   readonly proceedCertificate: () => void;
-  readonly viewportPreset: BrowserViewViewportPresetId;
 }
 
 /**
@@ -68,12 +64,8 @@ export function useElectronTabChrome(
     canGoBack,
     canGoForward,
     zoomPercent,
-    persistViewportPreset,
-    initialViewportPreset,
     onAttemptedUrl,
   } = args;
-  const [viewportPreset, setViewportPreset] =
-    useState<BrowserViewViewportPresetId>(initialViewportPreset);
   const [downloads, setDownloads] = useState<
     readonly BrowserViewDownloadChange[]
   >([]);
@@ -144,11 +136,6 @@ export function useElectronTabChrome(
     void control({ kind: "goForward" }).catch(ignoreError);
   };
 
-  const applyViewportPreset = (preset: BrowserViewViewportPresetId): void => {
-    setViewportPreset(preset);
-    persistViewportPreset(preset);
-  };
-
   const cancelDownload = (downloadId: string): void => {
     if (surfaceServices === null) return;
     void surfaceServices.cancelDownload({ downloadId }).catch(ignoreError);
@@ -174,6 +161,7 @@ export function useElectronTabChrome(
   };
 
   const controller: TileController = {
+    viewport: null,
     capabilities,
     profile,
     url: liveUrl,
@@ -184,7 +172,6 @@ export function useElectronTabChrome(
     canGoBack,
     canGoForward,
     zoomPercent,
-    viewportPreset,
     disabled: false,
     zoomLocked: annotation?.zoomLocked === true,
     annotation,
@@ -203,7 +190,6 @@ export function useElectronTabChrome(
     onResetZoom: () => {
       void control({ kind: "resetZoom" }).catch(ignoreError);
     },
-    onViewportPresetChange: applyViewportPreset,
     onOpenDevTools: () => {
       void control({ kind: "openDevTools" }).catch(ignoreError);
     },
@@ -225,7 +211,6 @@ export function useElectronTabChrome(
     certificateProceeding,
     cancelDownload,
     proceedCertificate,
-    viewportPreset,
   };
 }
 
