@@ -3340,10 +3340,14 @@ export class RemoteSession<
    * IT RE-ARMS FOR THE SILENCE THAT IS LEFT, and that is what makes the
    * deadline mean what its map doc says: "while this subscribe is unanswered,
    * watch for `SESSION_SILENCE_TIMEOUT_MS` of WHOLE-SESSION silence". A frame
-   * for some other stream - or this attach's own open-ack tail, which stamps
-   * the clock microseconds AFTER this loop armed - says nothing about whether
-   * THIS subscribe was heard, so the window it interrupts has to be re-run
-   * rather than abandoned. Dropping it instead was a real hole: a host that
+   * for some other stream says nothing about whether THIS subscribe was
+   * heard, so the window it interrupts has to be re-run rather than
+   * abandoned. The attach's own open-ack used to be such a frame: it stamped
+   * the clock microseconds AFTER this loop armed, leaving every deadline here
+   * that same ε short at its first fire. `handleOpenAck` now stamps BEFORE
+   * the fan-out, so that one is ordered away - but an unrelated frame
+   * mid-window cannot be, which is why the re-arm and not the ordering is the
+   * fix. Dropping it instead was a real hole: a host that
    * went mute right after `OPEN_ACK` had no bound left but the 15-minute
    * standing watchdog, which is the exact symptom this deadline exists to
    * close.
@@ -4785,7 +4789,9 @@ export class RemoteSession<
    * clock, advance the frame counter, re-arm the standing watchdog.
    *
    * The three callers are every place an in-channel frame lands - the
-   * handshake reply, an established inbound frame, and the open-ack tail. A
+   * handshake reply, an established inbound frame, and the open-ack (stamped
+   * before that attach's re-subscribe fan-out, so the deadlines it arms
+   * measure from it). A
    * relay control frame is deliberately NOT one of them: the relay answers
    * keepalives at its own edge and re-announces host attachment on every
    * burst, so letting those feed this clock is exactly how a session whose

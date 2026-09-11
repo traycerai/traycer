@@ -638,11 +638,45 @@ class FakeRelayHost {
   }
 
   private enqueue(connection: FakeConnection, data: string | Uint8Array): void {
+    // THE KEEPALIVE LANE DOES NOT QUEUE BEHIND THE MUX LANE. `handleClientSend`
+    // awaits a real WebCrypto decrypt for every data frame, and the queue is
+    // serial - so a ping sent while two frames are in flight is answered only
+    // after both decrypts resolve. Under `shouldAdvanceTime` that real latency
+    // becomes fake milliseconds, and on a loaded runner it can exceed the
+    // client's 12s awaiting-pong deadline: the socket fails 4004
+    // `relay-missed-pongs`, the session rebuilds mid-test, and whatever the
+    // test was actually pinning is lost to a teardown it never asked for.
+    // (Observed in CI on the D4 error-envelope control, never locally.) A real
+    // relay answers pings at its own edge, never behind the host's mux
+    // decryption, so this lane is the FAITHFUL order, not a convenience.
+    //
+    // A MICROTASK, never inline: `send` returning before its answer arrives is
+    // the one thing a real socket does guarantee, and the wake probe arms
+    // AFTER the forced ping is sent. Answering reentrantly inside `send`
+    // clears a probe that does not exist yet, leaves the armed one unanswered,
+    // and makes an answered arm look failed - which silently retires nothing
+    // and leaks the previous arm's policy into the next redial.
+    if (typeof data === "string" && data === "relay-ping") {
+      queueMicrotask(() => {
+        this.answerKeepalivePing(connection);
+      });
+      return;
+    }
     connection.queue = connection.queue
       .then(() => this.handleClientSend(connection, data))
       .catch((error: unknown) => {
         this.errors.push(error);
       });
+  }
+
+  private answerKeepalivePing(connection: FakeConnection): void {
+    if (connection.closed) {
+      return;
+    }
+    this.pingCount += 1;
+    if (this.answerPings) {
+      connection.socket.onmessage?.({ type: "text", data: "relay-pong" });
+    }
   }
 
   private async handleClientSend(
@@ -653,13 +687,8 @@ class FakeRelayHost {
       return;
     }
     if (typeof data === "string") {
-      if (data === "relay-ping") {
-        this.pingCount += 1;
-        if (this.answerPings) {
-          connection.socket.onmessage?.({ type: "text", data: "relay-pong" });
-        }
-      }
-      // `reauth` control frames need no ack for these tests.
+      // Pings never reach here - `enqueue` answers them off the queue, see
+      // its comment. `reauth` control frames need no ack for these tests.
       return;
     }
     if (connection.noise === null) {
@@ -9298,7 +9327,7 @@ describe("RemoteSession probed silence verdict (D4)", () => {
   );
 
   it(
-    "a 1ms shortfall against the full silence window still leaves the deadline re-armed and probing, not retired",
+    "a shortfall of a few milliseconds against the full silence window still leaves the deadline re-armed and probing, not retired",
     async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true });
       const relay = new FakeRelayHost();
@@ -9325,9 +9354,19 @@ describe("RemoteSession probed silence verdict (D4)", () => {
         );
         await vi.waitFor(() => expect(session.isReady()).toBe(true), WAIT);
 
-        // The ε case: the deadline arms at subscribe time, then ε=1ms later
-        // one in-channel frame lands - just enough to leave the window ε ms
-        // short of full silence at the deadline's first fire.
+        // The SMALL-SHORTFALL case. The shortfall at the first fire is this
+        // 1 ms advance PLUS whatever the two `vi.waitFor` calls and the unary
+        // round trip add: `vi.waitFor` advances fake time by its interval on
+        // every check, and `shouldAdvanceTime` maps the round trip's real
+        // WebCrypto latency into fake milliseconds. So it is a few
+        // milliseconds, not exactly one, and deliberately unasserted - the
+        // arm instant lives inside `handleOpenAck`'s loop and is not
+        // observable from here, so pinning an exact remainder would need a
+        // clock seam or a test hook in `session.ts`, which this pin is not
+        // worth. What it establishes is the claim that matters and the one
+        // the base tree fails: ANY positive shortfall re-arms rather than
+        // retiring the deadline. The ε-sized end of that range is the case
+        // production actually hit, through the open-ack stamp order.
         await vi.advanceTimersByTimeAsync(1);
         const answered = sendBindingUnary(session);
         await vi.waitFor(
@@ -9383,8 +9422,18 @@ describe("RemoteSession probed silence verdict (D4)", () => {
       const stream = session.subscribe("cursor.subscribe", { cursor: null });
       // A registered handler is what makes `deliverServerFrame` return
       // `true` and actually run `markStreamRestored` - the eager clear this
-      // control is pinning.
-      stream.onServerFrame(() => {});
+      // control is pinning. It also records the delivery, because the clear
+      // is what this test has to wait for: `onData` stamps the in-channel
+      // clock SYNCHRONOUSLY, before the decrypt, while `markStreamRestored`
+      // runs only once the decrypt and decode have handed the frame to this
+      // handler. Jump the 60s before that lands and the re-armed timer finds
+      // the stream still unrestored, re-arms for the remainder, fires with
+      // nothing left and raises a probe - a failure that says nothing about
+      // what this control pins.
+      let ownFrameDelivered = false;
+      stream.onServerFrame(() => {
+        ownFrameDelivered = true;
+      });
       try {
         await vi.waitFor(
           () => expect(relay.subscribeStreamIds).toHaveLength(1),
@@ -9422,6 +9471,9 @@ describe("RemoteSession probed silence verdict (D4)", () => {
           null,
           QosClass.INTERACTIVE,
         );
+        // `sendStreamFrame` resolves at socket delivery, which is the STAMP,
+        // not the clear. Wait for the handler above before moving the clock.
+        await vi.waitFor(() => expect(ownFrameDelivered).toBe(true), WAIT);
 
         // The re-armed timer is cleared by the stream's own first frame -
         // no probe follows within a further 60s.
