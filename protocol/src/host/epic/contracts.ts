@@ -152,9 +152,11 @@ import {
 import {
   listChatRecordsRequestSchema,
   listChatRecordsRequestV11Schema,
+  listChatRecordsRequestV13Schema,
   listChatRecordsResponseSchema,
   listChatRecordsResponseV11Schema,
   listChatRecordsResponseV12Schema,
+  listChatRecordsResponseV13Schema,
   getChatRunSettingsRequestSchema,
   getChatRunSettingsResponseSchema,
   getChatRunSettingsResponseSchemaV10,
@@ -1196,6 +1198,48 @@ export const epicListChatRecordsUpgradeV11ToV12 = defineUpgradePath<
   to: epicListChatRecordsV12.schemaVersion,
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => response,
+});
+
+// `@1.3` gates the whole answer on a list revision the caller sends back: the
+// 20s poll re-encodes the entire registry today, and on a large epic that is a
+// multi-MB body per open tab per tick that is almost always identical to the
+// last one. Request grows by the stamp; response becomes `snapshot` (the
+// `@1.2` body plus the new keys) or `unchanged` (the stamp plus recency
+// patches). The reasoning lives beside the schemas in `chat-records.ts`.
+export const epicListChatRecordsV13 = defineRpcContract({
+  method: "epic.listChatRecords",
+  schemaVersion: { major: 1, minor: 3 } as const,
+  requestSchema: listChatRecordsRequestV13Schema,
+  responseSchema: listChatRecordsResponseV13Schema,
+});
+
+/**
+ * REQUEST, `knownRevision: null`: a `@1.2` caller holds no stamp because a
+ * `@1.2` host never issued one. The only value that is true, not a default.
+ *
+ * RESPONSE: a `@1.2` host can only ever have produced a snapshot, so `kind` is
+ * a FACT about that peer rather than a choice - the same shape as
+ * `epicListTuiAgentsUpgradeV11ToV12`'s `origin` derivation. `unchanged` is
+ * unreachable through this path by construction: the arm answers a question
+ * the older host was never asked.
+ *
+ * `listStamp: null` says that host issued no gating fact. Inventing an epoch
+ * would be worse than a null in a way the `head` convention does not cover:
+ * the client sends the stamp BACK, so a fabricated one would be
+ * indistinguishable from a real one at the next poll.
+ */
+export const epicListChatRecordsUpgradeV12ToV13 = defineUpgradePath<
+  typeof epicListChatRecordsV12,
+  typeof epicListChatRecordsV13
+>({
+  from: epicListChatRecordsV12.schemaVersion,
+  to: epicListChatRecordsV13.schemaVersion,
+  upgradeRequest: (request) => ({ ...request, knownRevision: null }),
+  upgradeResponse: (response) => ({
+    kind: "snapshot" as const,
+    listStamp: null,
+    chats: response.chats,
+  }),
 });
 
 // One chat image attachment's bytes, resolved by the VIEWER's tab host (local
