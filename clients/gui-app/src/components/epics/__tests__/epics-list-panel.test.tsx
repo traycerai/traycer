@@ -377,6 +377,39 @@ function renderPanelWithOpenItem(
   return router;
 }
 
+/**
+ * Like {@link renderPanel}, but also returns the Testing Library render
+ * result - `rerender` and `unmount` - for tests that force a re-render (a
+ * glyph swap mid focus-session) or need to observe teardown (a document
+ * listener left behind by an unmounted row). No epic-tab routes: nothing
+ * here navigates.
+ */
+function renderPanelView(variant: EpicsListPanelVariant, initialEntry: string) {
+  const rootRoute = createRootRoute({
+    component: () => <RootOutlet />,
+  });
+  const indexRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/",
+    component: () => (
+      <EpicsListPanel
+        variant={variant}
+        className={undefined}
+        onSelectEpic={null}
+        onOpenItem={null}
+        routeSearch={null}
+        historyNowMs={null}
+        autoFocusSearch={false}
+      />
+    ),
+  });
+  const router = createRouter({
+    routeTree: rootRoute.addChildren([indexRoute]),
+    history: createMemoryHistory({ initialEntries: [initialEntry] }),
+  });
+  return { router, ...render(<RouterProvider router={router} />) };
+}
+
 function RootOutlet(): ReactNode {
   const content = (
     <QueryClientProvider client={queryClient}>
@@ -1758,6 +1791,188 @@ describe("<EpicsListPanel />", () => {
     expect(
       tooltips.some((tooltip) => tooltip.textContent === expectedTooltip),
     ).toBe(true);
+  });
+
+  it("keeps an Escape dismissal in effect after the leading glyph swaps mid keyboard-focus session, and lets a new session reopen it", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    // Running first: the spinner takes the leading slot ahead of the
+    // provenance dot (see `HistoryRowStatusIcon`).
+    testState.activityByEpicId.set("epic-from-history", "turn");
+    renderPanel("embedded", "/");
+
+    await screen.findByTestId("epics-list-row-activity-epic-from-history");
+    const link = await screen.findByRole("link", {
+      name: "Open task Local only epic",
+    });
+
+    act(() => {
+      link.focus();
+    });
+
+    const runningTooltips = await screen.findAllByRole("tooltip");
+    expect(
+      runningTooltips.some(
+        (tooltip) => tooltip.textContent === "Task activity in progress",
+      ),
+    ).toBe(true);
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
+
+    // Swap the row's leading glyph WITHOUT moving focus: the agent goes
+    // idle, so the slot now wraps the provenance dot instead of the
+    // spinner. `useEpicActivityStatus` is mocked here as a plain read of
+    // `testState.activityByEpicId` with no subscription of its own, so
+    // mutating the map alone triggers no re-render - the row must actually
+    // re-render for the swap to reach the DOM. `EpicsListRow` itself reads
+    // `useEpicCanvasStore` (`resolveTabIdForEpic`), so opening this epic's
+    // tab changes that selector's value and forces exactly that re-render,
+    // without moving focus or touching the row's `item` prop.
+    testState.activityByEpicId.delete("epic-from-history");
+    act(() => {
+      useEpicCanvasStore
+        .getState()
+        .openEpicTab("epic-from-history", "Local only epic");
+    });
+
+    const swappedGlyph = await screen.findByTestId(
+      "epics-list-row-provenance-local-only-epic-from-history",
+    );
+    const swappedTooltip = swappedGlyph.getAttribute("aria-label");
+    expect(swappedTooltip).not.toBeNull();
+    expect(swappedTooltip).not.toBe("Task activity in progress");
+
+    // The dismissal is owned by the SLOT, not by the glyph that carried it -
+    // so the new glyph inherits it and stays closed for the rest of this
+    // focus session, even though it never itself received an Escape.
+    expect(screen.queryByRole("tooltip")).toBeNull();
+
+    // Blur then focus again is a NEW focus session, so the hold reopens -
+    // now over the swapped-in glyph.
+    act(() => {
+      link.blur();
+    });
+    act(() => {
+      link.focus();
+    });
+
+    const reopenedTooltips = await screen.findAllByRole("tooltip");
+    expect(
+      reopenedTooltips.some(
+        (tooltip) => tooltip.textContent === swappedTooltip,
+      ),
+    ).toBe(true);
+  });
+
+  it("closes a hover-open tooltip elsewhere in the row when a keyboard-focus hold begins beside it", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    renderPanel("embedded", "/");
+
+    // Local-home pin support is fixed at `false` in this file (see the
+    // `use-epic-pin-local-home-support` mock above), so this control is
+    // permanently `aria-disabled` but still focusable/hoverable - and it
+    // carries its own, ordinary (uncontrolled) tooltip via `Tooltip` /
+    // `TooltipTrigger`, unlike the status glyph's controlled one.
+    const pin = await screen.findByRole("button", {
+      name: "Pinning Local only epic needs a newer Traycer host",
+    });
+    const link = await screen.findByRole("link", {
+      name: "Open task Local only epic",
+    });
+    const glyph = await screen.findByTestId(
+      "epics-list-row-provenance-local-only-epic-from-history",
+    );
+    const expectedGlyphTooltip = glyph.getAttribute("aria-label");
+    expect(expectedGlyphTooltip).not.toBeNull();
+
+    expect(screen.queryByRole("tooltip")).toBeNull();
+
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      // Radix's tooltip trigger opens on `pointermove` (not `pointerenter`),
+      // behind the provider's 500ms open delay. This open is driven purely
+      // by the pointer, so - unlike a focus-opened tooltip - it survives an
+      // unrelated focus move elsewhere in the row.
+      fireEvent.pointerMove(pin, { pointerType: "mouse" });
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+
+      const hoveredTooltips = screen.getAllByRole("tooltip");
+      expect(
+        hoveredTooltips.some(
+          (tooltip) =>
+            tooltip.textContent ===
+            "Pinning this task needs a newer Traycer host version. Update the host that serves it.",
+        ),
+      ).toBe(true);
+
+      // Keyboard-focus the row's activation target - no pointer event -
+      // which starts the row's own hold over the status glyph's tooltip.
+      act(() => {
+        link.focus();
+      });
+
+      const tooltipsAfterHold = screen.getAllByRole("tooltip");
+      const distinctTexts = new Set(
+        tooltipsAfterHold.map((tooltip) => tooltip.textContent),
+      );
+      // The hover-opened pin tooltip closed: the hold sends Radix's own
+      // exclusivity signal (`closeOpenTooltips`) before it opens, so only
+      // the status glyph's sentence remains.
+      expect(distinctTexts.size).toBe(1);
+      expect(
+        tooltipsAfterHold.every(
+          (tooltip) => tooltip.textContent === expectedGlyphTooltip,
+        ),
+      ).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("removes its document pointerup/pointercancel listeners when the row unmounts mid-press", async () => {
+    testState.items = [
+      historyItem({
+        title: "Local only epic",
+        isLocalHome: true,
+      }),
+    ];
+    const { unmount } = renderPanelView("embedded", "/");
+
+    const card = await screen.findByTestId("epics-list-row-card");
+
+    const removeEventListenerSpy = vi.spyOn(document, "removeEventListener");
+    try {
+      // Starts a press with nothing to release it: the row's own pending
+      // listeners (`pointerup` / `pointercancel` on `document`) are what a
+      // row unmounted mid-press (the list re-sorting under a drag) must not
+      // leave behind to fire at some later release.
+      fireEvent.pointerDown(card);
+
+      unmount();
+
+      const removedTypes = removeEventListenerSpy.mock.calls.map((call) =>
+        call.at(0),
+      );
+      expect(removedTypes).toContain("pointerup");
+      expect(removedTypes).toContain("pointercancel");
+    } finally {
+      removeEventListenerSpy.mockRestore();
+    }
   });
 
   it("exposes the imported-unseen dot through the row's description but holds only the leading mark's tooltip open on keyboard focus", async () => {

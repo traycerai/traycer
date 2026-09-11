@@ -105,7 +105,11 @@ import {
   ROW_TARGET_SELECTOR,
   useHistoryListKeyboardNav,
 } from "@/components/epics/use-history-list-keyboard-nav";
-import { StatusGlyphFocusContext } from "@/components/notifications/status-glyph-focus";
+import {
+  closeOpenTooltips,
+  StatusGlyphFocusContext,
+  useStatusGlyphFocusHold,
+} from "@/components/notifications/status-glyph-focus";
 import { onMiddleClick } from "@/lib/dom/on-middle-click";
 import {
   historyRowProvenance,
@@ -1741,17 +1745,17 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
   // Both status slots describe the row targets; only the leading one holds
   // its tooltip open on keyboard focus (see `HistoryRowStatusSlot`).
   const rowDescribedBy = `${statusDescriptionId} ${importedDescriptionId}`;
-  // Keyboard focus on the row's activation target holds every status glyph's
-  // tooltip open (`StatusGlyphFocusContext`): the target is an overlay, the
-  // glyphs are deliberately not tab stops, and `aria-describedby` puts the
-  // sentence in the accessibility tree and nowhere on screen. "Keyboard" is
+  // Keyboard focus on the row's activation target holds the leading status
+  // glyph's tooltip open (`StatusGlyphFocusContext`): the target is an
+  // overlay, the glyphs are deliberately not tab stops, and `aria-describedby`
+  // puts the sentence in the accessibility tree and nowhere on screen. "Keyboard" is
   // the decision `:focus-visible` makes, taken here by the same rule - a focus
   // that arrives during a pointer press is pointer focus, any other is
   // keyboard - because jsdom matches nothing for `:focus-visible` and the
   // behaviour would otherwise be untestable.
   const pointerPressRef = useRef(false);
   // A fresh id per keyboard-focus session, `null` while there is none: the
-  // glyph remembers an Escape against the id, so the hold stays dismissed
+  // slot remembers an Escape against the id, so the hold stays dismissed
   // until focus leaves and returns (`StatusGlyphFocusContext`).
   const focusSessionRef = useRef(0);
   const [rowFocusSession, setRowFocusSession] = useState<number | null>(null);
@@ -1759,18 +1763,31 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
   // press that starts here and ends outside fires no row handler, and a ref
   // left `true` would classify the next keyboard focus as a click. The focus
   // that reads the ref also consumes it, for the release that never arrives
-  // at the document either (a pointer let go over a webview guest).
+  // at the document either (a pointer let go over a webview guest). The
+  // pending release listeners are the row's, so they leave with it: a row
+  // unmounted mid-press (the list re-sorting under a drag) must not leave a
+  // one-shot listener on the document to fire at some later release.
+  const forgetPointerPressRef = useRef<(() => void) | null>(null);
   const rememberPointerPress = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
+      forgetPointerPressRef.current?.();
       pointerPressRef.current = true;
       const ownerDocument = event.currentTarget.ownerDocument;
       const forgetPointerPress = () => {
         pointerPressRef.current = false;
+        forgetPointerPressRef.current = null;
         ownerDocument.removeEventListener("pointerup", forgetPointerPress);
         ownerDocument.removeEventListener("pointercancel", forgetPointerPress);
       };
+      forgetPointerPressRef.current = forgetPointerPress;
       ownerDocument.addEventListener("pointerup", forgetPointerPress);
       ownerDocument.addEventListener("pointercancel", forgetPointerPress);
+    },
+    [],
+  );
+  useEffect(
+    () => () => {
+      forgetPointerPressRef.current?.();
     },
     [],
   );
@@ -1785,6 +1802,12 @@ const EpicsListRow = memo(function EpicsListRow(props: EpicsListRowProps) {
       event.target.matches(ROW_TARGET_SELECTOR) &&
       !event.target.hasAttribute(ROW_TARGET_OWN_TOOLTIP_ATTRIBUTE);
     focusSessionRef.current += 1;
+    // A hold opens its tooltip through a controlled `open`, which Radix does
+    // not count as an opening, so a tooltip still up from a hover (a row
+    // control's, or a glyph's in another row) would stay beside the held
+    // one. Send Radix's own exclusivity signal first, so the hold arrives
+    // alone - the same rule a hover-opened tooltip applies to the others.
+    if (keyboardFocused) closeOpenTooltips(event.currentTarget.ownerDocument);
     setRowFocusSession(keyboardFocused ? focusSessionRef.current : null);
   }, []);
   const onRowBlur = useCallback(() => {
@@ -2364,11 +2387,17 @@ function HistorySweepMenuItem(props: {
  * `onRowFocus`): while either activation target has keyboard focus, the mark
  * in the slot given the row's `rowFocusSession` shows its sentence over the
  * glyph without the glyph becoming a tab stop, until Escape dismisses it for
- * that focus session. One slot per row, on purpose - Radix
- * keeps hover tooltips to one at a time, and a controlled open defeats that,
- * so two held-open marks would be two overlapping portals. The leading slot
- * is the one; the imported-unseen slot is heard through `aria-describedby`
- * like the rest and stays a quiet dot on screen, which is the unread idiom.
+ * that focus session. The dismissal is the SLOT's state
+ * (`useStatusGlyphFocusHold`), not the mark's: the mark under the slot is
+ * swapped as the task's state moves (a running spinner becomes a completion
+ * mark), and a dismissal kept in the mark would leave with it, so the next
+ * mark would open uninvited in the same focus session. One slot per row, on
+ * purpose - Radix keeps hover tooltips to one at a time through a signal a
+ * controlled open never sends (the row sends it itself before starting a
+ * hold, see `onRowFocus`), so two held-open marks would be two overlapping
+ * portals. The leading slot is the one; the imported-unseen slot is heard
+ * through `aria-describedby` like the rest and stays a quiet dot on screen,
+ * which is the unread idiom.
  */
 function HistoryRowStatusSlot(props: {
   readonly id: string;
@@ -2379,6 +2408,7 @@ function HistoryRowStatusSlot(props: {
   readonly rowFocusSession: number | null;
   readonly children: ReactNode;
 }): ReactNode {
+  const focusHold = useStatusGlyphFocusHold(props.rowFocusSession);
   const forwardClickToRow = useCallback(
     (event: React.MouseEvent<HTMLSpanElement>) => {
       // `auxclick` is forwarded for the middle button only: the right button
@@ -2416,7 +2446,7 @@ function HistoryRowStatusSlot(props: {
     // or the parent's `gap` puts a stray space between the title and the next
     // control. Decided by the DOM rather than by re-reading each mark's
     // condition here, so a new mark cannot get the gap wrong.
-    <StatusGlyphFocusContext.Provider value={props.rowFocusSession}>
+    <StatusGlyphFocusContext.Provider value={focusHold}>
       <span
         id={props.id}
         role="presentation"
