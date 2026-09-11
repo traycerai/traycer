@@ -541,9 +541,10 @@ export function ChatTile(props: ChatTileProps) {
       );
     }
     if (reachability.status === "host-starting") {
-      // The local host hasn't published yet (boot/ensure/wake). Never offer
-      // Clone here - the bound host is most likely this machine, seconds
-      // from converging; cloning would fork a healthy thread.
+      // The bound host is coming back: this machine's host hasn't published
+      // yet (boot/ensure/wake), or the host's lease vouches for a restart it
+      // announced (D4), remote hosts included. Never offer Clone here -
+      // cloning would fork a healthy thread.
       return (
         <ChatHostStartingBanner
           className={undefined}
