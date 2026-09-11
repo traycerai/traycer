@@ -175,6 +175,7 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
     disabled: client === null || readOnly,
     pageZoom: 1,
     native: false,
+    registrationId: null,
   });
   const { tileRef, viewportRef } = session.refs;
   useRetainLastBrowserPeekFrame(frameCacheKey, image);

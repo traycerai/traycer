@@ -1,5 +1,5 @@
 import { act } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isPresentationLossBlur } from "@/components/epic-tabs/pane-visibility-context";
 import {
   HOSTED_TILE_INSTANCE_ID_ATTRIBUTE,
@@ -14,11 +14,14 @@ import type {
 import {
   browserGuestCssAnchorName,
   clearBrowserGuestTilePlacement,
+  confirmBrowserGuestViewport,
+  readBrowserGuestViewport,
   setBrowserGuestTilePlacement,
   startPersistentBrowserGuestHost,
 } from "@/lib/browser-view/guest/persistent-browser-guest-host";
 import { FakeBrowserViewBridge } from "@/lib/browser-view/__tests__/fake-browser-view-bridge";
 import type { BrowserViewGuestMountRequested } from "@traycer-clients/shared/platform/browser-view";
+import type { BrowserViewportState } from "@traycer/protocol/host/browser/viewport";
 
 /**
  * jsdom can observe wrapper/webview node identity, attributes,
@@ -37,15 +40,51 @@ const PARTITION_B = "persist:guest-b";
 const INSTANCE_A = "tile-1";
 const ANCHOR_A = `--traycer-bv-${REGISTRATION_A}`;
 
+const guestResizeObservers: ControllableGuestResizeObserver[] = [];
+
+class ControllableGuestResizeObserver implements ResizeObserver {
+  readonly callback: ResizeObserverCallback;
+
+  constructor(callback: ResizeObserverCallback) {
+    this.callback = callback;
+    guestResizeObservers.push(this);
+  }
+
+  observe(): void {}
+
+  unobserve(): void {}
+
+  disconnect(): void {}
+
+  trigger(): void {
+    this.callback([], this);
+  }
+}
+
+function triggerGuestResizeObservers(): void {
+  for (const observer of guestResizeObservers) observer.trigger();
+}
+
 async function waitForViewportRequest(): Promise<void> {
   await act(async () => {
-    await new Promise<void>((resolve) => {
-      window.requestAnimationFrame(() => {
-        window.requestAnimationFrame(() => resolve());
-      });
-    });
+    triggerGuestResizeObservers();
     await Promise.resolve();
     await Promise.resolve();
+  });
+}
+
+function setMeasuredGuestSize(
+  webview: HTMLElement,
+  width: number,
+  height: number,
+): void {
+  Object.defineProperty(webview, "offsetWidth", {
+    configurable: true,
+    value: width,
+  });
+  Object.defineProperty(webview, "offsetHeight", {
+    configurable: true,
+    value: height,
   });
 }
 
@@ -92,6 +131,11 @@ const NOOP_ACTIVATE: BrowserGuestActivate = {
 };
 
 let hostDisposers: Array<() => void> = [];
+
+beforeEach(() => {
+  guestResizeObservers.length = 0;
+  vi.stubGlobal("ResizeObserver", ControllableGuestResizeObserver);
+});
 
 function startHost(
   bridge: FakeBrowserViewBridge,
@@ -172,6 +216,9 @@ afterEach(() => {
   ownedPlacements.length = 0;
   hostDisposers.forEach((dispose) => dispose());
   hostDisposers = [];
+  guestResizeObservers.length = 0;
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("browserGuestCssAnchorName", () => {
@@ -196,7 +243,13 @@ describe("persistent browser guest host", () => {
         viewTabId: "view-1",
         paneId: "pane-1",
         presented: true,
-        viewport: { width: 640, height: 480, scale: 0.5, autoFit: true },
+        viewport: {
+          width: 640,
+          height: 480,
+          scale: 0.5,
+          autoFit: true,
+          requestId: null,
+        },
       });
       const first = guestNodes(REGISTRATION_A);
 
@@ -206,7 +259,24 @@ describe("persistent browser guest host", () => {
         revision: 1,
         width: 800,
         height: 600,
+        intent: { mode: "fixed", width: 800, height: 600 },
+        zoom: 1,
       });
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented: true,
+        viewport: {
+          width: 800,
+          height: 600,
+          scale: 0.5,
+          autoFit: true,
+          requestId: "viewport-1",
+        },
+      });
+      setMeasuredGuestSize(first.webview, 800, 600);
       await waitForViewportRequest();
       expect(bridge.guestViewportResultCalls).toEqual([
         {
@@ -216,14 +286,6 @@ describe("persistent browser guest host", () => {
           applied: true,
         },
       ]);
-      setOwnedPlacement(owner, {
-        registrationId: REGISTRATION_A,
-        instanceId: INSTANCE_A,
-        viewTabId: "view-1",
-        paneId: "pane-1",
-        presented: true,
-        viewport: { width: 800, height: 600, scale: 0.5, autoFit: true },
-      });
       expect(guestNodes(REGISTRATION_A).wrapper).toBe(first.wrapper);
       expect(guestNodes(REGISTRATION_A).webview).toBe(first.webview);
       expect(first.webview.style.width).toBe("800px");
@@ -236,13 +298,8 @@ describe("persistent browser guest host", () => {
         revision: 2,
         width: 1280,
         height: 800,
-      });
-      await waitForViewportRequest();
-      expect(bridge.guestViewportResultCalls.at(-1)).toEqual({
-        requestId: "viewport-reset",
-        registrationId: REGISTRATION_A,
-        revision: 2,
-        applied: true,
+        intent: { mode: "fit" },
+        zoom: 1,
       });
       setOwnedPlacement(owner, {
         registrationId: REGISTRATION_A,
@@ -250,12 +307,174 @@ describe("persistent browser guest host", () => {
         viewTabId: "view-1",
         paneId: "pane-1",
         presented: true,
-        viewport: { width: 1280, height: 800, scale: 1, autoFit: true },
+        viewport: {
+          width: 1280,
+          height: 800,
+          scale: 1,
+          autoFit: true,
+          requestId: "viewport-reset",
+        },
+      });
+      setMeasuredGuestSize(first.webview, 1280, 800);
+      await waitForViewportRequest();
+      expect(bridge.guestViewportResultCalls.at(-1)).toEqual({
+        requestId: "viewport-reset",
+        registrationId: REGISTRATION_A,
+        revision: 2,
+        applied: true,
       });
       expect(guestNodes(REGISTRATION_A).webview).toBe(first.webview);
       expect(first.webview.style.width).toBe("1280px");
       expect(first.webview.style.height).toBe("800px");
       expect(first.webview.style.transform).toBe("scale(1)");
+    });
+
+    it("keeps native viewport snapshots pending until the matching host state", async () => {
+      const bridge = new FakeBrowserViewBridge();
+      startHost(bridge, NOOP_ACTIVATE);
+      bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+      const owner = Symbol("tile");
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented: true,
+        viewport: {
+          width: 640,
+          height: 480,
+          scale: 1,
+          autoFit: false,
+          requestId: null,
+        },
+      });
+      const guest = guestNodes(REGISTRATION_A);
+      bridge.emitGuestViewportRequested({
+        requestId: "snapshot-fixed",
+        registrationId: REGISTRATION_A,
+        revision: 7,
+        width: 801,
+        height: 601,
+        intent: { mode: "fixed", width: 801, height: 601 },
+        zoom: 1.25,
+      });
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented: true,
+        viewport: {
+          width: 801,
+          height: 601,
+          scale: 0.8,
+          autoFit: false,
+          requestId: "snapshot-fixed",
+        },
+      });
+      setMeasuredGuestSize(guest.webview, 801, 601);
+      await waitForViewportRequest();
+
+      const pending = readBrowserGuestViewport(REGISTRATION_A);
+      expect(pending).toMatchObject({
+        confirmed: false,
+        height: 601,
+        requestId: "snapshot-fixed",
+        width: 801,
+        zoom: 1.25,
+      });
+      const olderState: BrowserViewportState = {
+        sessionId: "session-1",
+        tabId: "tab-1",
+        intent: { mode: "fixed", width: 801, height: 601 },
+        applied: { width: 801, height: 601, dpr: 1 },
+        revision: 6,
+        source: "user",
+        fitOwnerId: null,
+      };
+      confirmBrowserGuestViewport({
+        registrationId: REGISTRATION_A,
+        state: olderState,
+        zoom: 1.25,
+      });
+      expect(readBrowserGuestViewport(REGISTRATION_A)?.confirmed).toBe(false);
+
+      confirmBrowserGuestViewport({
+        registrationId: REGISTRATION_A,
+        state: { ...olderState, revision: 7 },
+        zoom: 1.25,
+      });
+      expect(readBrowserGuestViewport(REGISTRATION_A)).toMatchObject({
+        confirmed: true,
+        height: 601,
+        width: 801,
+        zoom: 1.25,
+      });
+
+      confirmBrowserGuestViewport({
+        registrationId: REGISTRATION_A,
+        state: {
+          ...olderState,
+          applied: null,
+          intent: { mode: "fit" },
+          revision: 8,
+        },
+        zoom: 1.25,
+      });
+      expect(readBrowserGuestViewport(REGISTRATION_A)).toBeNull();
+    });
+
+    it("waits for the matching presented placement before applying native layout", async () => {
+      const bridge = new FakeBrowserViewBridge();
+      startHost(bridge, NOOP_ACTIVATE);
+      bridge.emitGuestMountRequested(mountRequest(REGISTRATION_A, PARTITION_A));
+      const owner = Symbol("tile");
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented: true,
+        viewport: {
+          width: 640,
+          height: 480,
+          scale: 1,
+          autoFit: true,
+          requestId: null,
+        },
+      });
+      const guest = guestNodes(REGISTRATION_A);
+
+      bridge.emitGuestViewportRequested({
+        requestId: "viewport-layout",
+        registrationId: REGISTRATION_A,
+        revision: 1,
+        width: 800,
+        height: 600,
+        intent: { mode: "fixed", width: 800, height: 600 },
+        zoom: 1,
+      });
+      expect(bridge.guestViewportResultCalls).toHaveLength(0);
+      expect(guest.webview.style.width).toBe("640px");
+
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented: true,
+        viewport: {
+          width: 800,
+          height: 600,
+          scale: 1,
+          autoFit: true,
+          requestId: "viewport-layout",
+        },
+      });
+      setMeasuredGuestSize(guest.webview, 800, 600);
+      await waitForViewportRequest();
+      expect(guest.webview.style.width).toBe("800px");
+      expect(guest.webview.style.height).toBe("600px");
     });
 
     it("keeps a manual oversized scale while a native viewport request is pending", async () => {
@@ -269,7 +488,13 @@ describe("persistent browser guest host", () => {
         viewTabId: "view-1",
         paneId: "pane-1",
         presented: true,
-        viewport: { width: 640, height: 480, scale: 2, autoFit: false },
+        viewport: {
+          width: 640,
+          height: 480,
+          scale: 2,
+          autoFit: false,
+          requestId: null,
+        },
       });
       const manual = guestNodes(REGISTRATION_A);
       bridge.emitGuestViewportRequested({
@@ -278,18 +503,27 @@ describe("persistent browser guest host", () => {
         revision: 1,
         width: 800,
         height: 600,
+        intent: { mode: "fixed", width: 800, height: 600 },
+        zoom: 1,
       });
       expect(manual.webview.style.transform).toBe("scale(2)");
 
-      await waitForViewportRequest();
       setOwnedPlacement(owner, {
         registrationId: REGISTRATION_A,
         instanceId: INSTANCE_A,
         viewTabId: "view-1",
         paneId: "pane-1",
         presented: true,
-        viewport: { width: 800, height: 600, scale: 2, autoFit: false },
+        viewport: {
+          width: 800,
+          height: 600,
+          scale: 2,
+          autoFit: false,
+          requestId: "viewport-manual",
+        },
       });
+      setMeasuredGuestSize(manual.webview, 800, 600);
+      await waitForViewportRequest();
       Object.defineProperty(manual.wrapper, "clientWidth", {
         configurable: true,
         value: 640,
@@ -298,21 +532,34 @@ describe("persistent browser guest host", () => {
         configurable: true,
         value: 480,
       });
-      setOwnedPlacement(owner, {
-        registrationId: REGISTRATION_A,
-        instanceId: INSTANCE_A,
-        viewTabId: "view-1",
-        paneId: "pane-1",
-        presented: true,
-        viewport: { width: 800, height: 600, scale: 2, autoFit: true },
-      });
       bridge.emitGuestViewportRequested({
         requestId: "viewport-auto-fit",
         registrationId: REGISTRATION_A,
         revision: 2,
         width: 800,
         height: 600,
+        intent: { mode: "fit" },
+        zoom: 1,
       });
+      // A fit request cannot reuse the prior manual presentation. Until the
+      // matching React placement arrives, the stale scale remains in place.
+      expect(manual.webview.style.transform).toBe("scale(2)");
+
+      setOwnedPlacement(owner, {
+        registrationId: REGISTRATION_A,
+        instanceId: INSTANCE_A,
+        viewTabId: "view-1",
+        paneId: "pane-1",
+        presented: true,
+        viewport: {
+          width: 800,
+          height: 600,
+          scale: 0.8,
+          autoFit: true,
+          requestId: "viewport-auto-fit",
+        },
+      });
+      await waitForViewportRequest();
       expect(manual.webview.style.transform).toBe("scale(0.8)");
     });
 

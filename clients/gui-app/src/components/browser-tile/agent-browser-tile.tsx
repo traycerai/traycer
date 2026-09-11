@@ -159,6 +159,7 @@ export function ElectronTabSurface(props: ElectronTabSurfaceProps) {
     disabled: false,
     pageZoom: zoomPercent / 100,
     native: true,
+    registrationId: props.binding.registrationId,
   });
   const claimViewport = viewport.claim;
   const [surfaceAttachment, setSurfaceAttachment] =

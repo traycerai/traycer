@@ -43,10 +43,10 @@ function makeController(
     previewScale: 1,
     previewScaleSetting: null,
     setPreviewScale: vi.fn(),
+    previewOrigin: null,
     ratioLocked: false,
     ratio: null,
     resizeScale: 1,
-    resizeFromCenter: () => true,
     setRatio: vi.fn(),
     fitOwnedHere: true,
     open: vi.fn(),
@@ -69,6 +69,13 @@ function dimensionInput(axis: "width" | "height"): HTMLInputElement {
     throw new Error(`expected ${axis} viewport input`);
   }
   return input;
+}
+
+function handlesScrollRef(clientWidth: number): { current: HTMLDivElement } {
+  const element = document.createElement("div");
+  Object.defineProperty(element, "clientWidth", { value: clientWidth });
+  Object.defineProperty(element, "clientHeight", { value: 700 });
+  return { current: element };
 }
 
 afterEach(() => {
@@ -107,12 +114,12 @@ describe("BrowserViewportToolbar", () => {
     fireEvent.focus(width);
     fireEvent.change(width, { target: { value: "500" } });
     fireEvent.keyDown(width, { key: "Enter" });
-    expect(resize).toHaveBeenCalledWith(500, 844);
+    expect(resize).toHaveBeenCalledWith(500, 844, null);
 
     fireEvent.focus(width);
     fireEvent.change(width, { target: { value: "600" } });
     fireEvent.blur(width);
-    expect(resize).toHaveBeenCalledWith(600, 844);
+    expect(resize).toHaveBeenCalledWith(600, 844, null);
 
     fireEvent.focus(width);
     fireEvent.change(width, { target: { value: "700" } });
@@ -137,7 +144,7 @@ describe("BrowserViewportToolbar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Reset to Fit" }));
     await act(() => Promise.resolve());
     expect(reset).toHaveBeenCalledOnce();
-    expect(resize).not.toHaveBeenCalledWith(500, 844);
+    expect(resize).not.toHaveBeenCalledWith(500, 844, null);
 
     fireEvent.focus(width);
     fireEvent.change(width, { target: { value: "600" } });
@@ -147,7 +154,7 @@ describe("BrowserViewportToolbar", () => {
     );
     fireEvent.click(screen.getByRole("menuitem", { name: /Desktop/ }));
     await act(() => Promise.resolve());
-    expect(resize).toHaveBeenCalledWith(1440, 900);
+    expect(resize).toHaveBeenCalledWith(1440, 900, null);
   });
 
   it("latches ratio edits and rotates from the current host size", async () => {
@@ -181,7 +188,7 @@ describe("BrowserViewportToolbar", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Rotate viewport" }));
     await act(() => Promise.resolve());
-    expect(resize).toHaveBeenCalledWith(844, 390);
+    expect(resize).toHaveBeenCalledWith(844, 390, null);
   });
 
   it("ignores a superseded resize result", async () => {
@@ -224,7 +231,10 @@ describe("BrowserViewportToolbar", () => {
     render(
       <>
         <BrowserViewportToolbar controller={controller} />
-        <BrowserViewportHandles controller={controller} />
+        <BrowserViewportHandles
+          controller={controller}
+          scrollRef={handlesScrollRef(1048)}
+        />
       </>,
     );
 
@@ -260,7 +270,7 @@ describe("BrowserViewportToolbar", () => {
       flushFrame?.(0);
     });
     expect(resize).toHaveBeenCalledOnce();
-    expect(resize).toHaveBeenCalledWith(410, 844);
+    expect(resize).toHaveBeenCalledWith(400, 844, expect.any(Object));
   });
 
   it("flushes the final pointer move on pointerup and ignores its queued frame", () => {
@@ -276,7 +286,12 @@ describe("BrowserViewportToolbar", () => {
       Promise.resolve(),
     );
     const controller = makeController({ resize, resizeScale: 2 });
-    render(<BrowserViewportHandles controller={controller} />);
+    render(
+      <BrowserViewportHandles
+        controller={controller}
+        scrollRef={handlesScrollRef(1048)}
+      />,
+    );
     const handle = screen.getByRole("separator", {
       name: "Resize viewport width",
     });
@@ -295,7 +310,7 @@ describe("BrowserViewportToolbar", () => {
     fireEvent.pointerUp(handle, { pointerId: 1 });
 
     expect(resize).toHaveBeenCalledOnce();
-    expect(resize).toHaveBeenCalledWith(410, 844);
+    expect(resize).toHaveBeenCalledWith(400, 844, expect.any(Object));
     act(() => {
       flushFrame?.(0);
     });
@@ -321,7 +336,10 @@ describe("BrowserViewportToolbar", () => {
     render(
       <>
         <BrowserViewportToolbar controller={controller} />
-        <BrowserViewportHandles controller={controller} />
+        <BrowserViewportHandles
+          controller={controller}
+          scrollRef={handlesScrollRef(1048)}
+        />
       </>,
     );
     const handle = screen.getByRole("separator", {
@@ -347,7 +365,7 @@ describe("BrowserViewportToolbar", () => {
 
     expect(reset).toHaveBeenCalledOnce();
     expect(resize).toHaveBeenCalledOnce();
-    expect(resize).toHaveBeenCalledWith(410, 844);
+    expect(resize).toHaveBeenCalledWith(400, 844, expect.any(Object));
   });
 
   it("drops a queued move on pointercancel", () => {
@@ -363,7 +381,12 @@ describe("BrowserViewportToolbar", () => {
       Promise.resolve(),
     );
     const controller = makeController({ resize, resizeScale: 2 });
-    render(<BrowserViewportHandles controller={controller} />);
+    render(
+      <BrowserViewportHandles
+        controller={controller}
+        scrollRef={handlesScrollRef(1048)}
+      />,
+    );
     const handle = screen.getByRole("separator", {
       name: "Resize viewport width",
     });
@@ -400,7 +423,12 @@ describe("BrowserViewportToolbar", () => {
       Promise.resolve(),
     );
     const controller = makeController({ resize, resizeScale: 2 });
-    render(<BrowserViewportHandles controller={controller} />);
+    render(
+      <BrowserViewportHandles
+        controller={controller}
+        scrollRef={handlesScrollRef(1048)}
+      />,
+    );
     const handle = screen.getByRole("separator", {
       name: "Resize viewport width",
     });
@@ -437,7 +465,12 @@ describe("BrowserViewportToolbar", () => {
       Promise.resolve(),
     );
     const controller = makeController({ resize, resizeScale: 2 });
-    render(<BrowserViewportHandles controller={controller} />);
+    render(
+      <BrowserViewportHandles
+        controller={controller}
+        scrollRef={handlesScrollRef(1048)}
+      />,
+    );
     const handle = screen.getByRole("separator", {
       name: "Resize viewport width",
     });
@@ -459,7 +492,55 @@ describe("BrowserViewportToolbar", () => {
     });
 
     expect(resize).toHaveBeenCalledOnce();
-    expect(resize).toHaveBeenCalledWith(391, 844);
+    expect(resize).toHaveBeenCalledWith(391, 844, null);
+  });
+
+  it("increments keyboard steps from the pending size while acknowledgements are held", async () => {
+    const acknowledgements: Array<() => void> = [];
+    const rejectors: Array<(error: Error) => void> = [];
+    const resize = vi.fn<BrowserViewportController["resize"]>(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          acknowledgements.push(resolve);
+          rejectors.push(reject);
+        }),
+    );
+    const controller = makeController({ resize });
+    render(
+      <BrowserViewportHandles
+        controller={controller}
+        scrollRef={handlesScrollRef(1048)}
+      />,
+    );
+    const handle = screen.getByRole("separator", {
+      name: "Resize viewport width",
+    });
+
+    fireEvent.keyDown(handle, { key: "ArrowRight" });
+    fireEvent.keyDown(handle, { key: "ArrowRight" });
+    fireEvent.keyDown(handle, { key: "ArrowRight" });
+
+    expect(resize.mock.calls.map(([width, height]) => [width, height])).toEqual(
+      [
+        [391, 844],
+        [392, 844],
+        [393, 844],
+      ],
+    );
+    await act(async () => {
+      rejectors[0]?.(new Error("older keyboard request"));
+      await Promise.resolve();
+    });
+    fireEvent.keyDown(handle, { key: "ArrowRight" });
+    expect(resize).toHaveBeenLastCalledWith(394, 844, null);
+
+    await act(async () => {
+      acknowledgements[3]?.();
+      await Promise.resolve();
+    });
+    fireEvent.keyDown(handle, { key: "ArrowRight" });
+    expect(resize).toHaveBeenLastCalledWith(391, 844, null);
+    acknowledgements.forEach((resolve) => resolve());
   });
 
   it("resizes from the left and from an unlocked lower corner", () => {
@@ -475,7 +556,12 @@ describe("BrowserViewportToolbar", () => {
       Promise.resolve(),
     );
     const controller = makeController({ resize });
-    render(<BrowserViewportHandles controller={controller} />);
+    render(
+      <BrowserViewportHandles
+        controller={controller}
+        scrollRef={handlesScrollRef(1048)}
+      />,
+    );
 
     const left = screen.getByRole("separator", {
       name: "Resize viewport width from left",
@@ -494,7 +580,7 @@ describe("BrowserViewportToolbar", () => {
     act(() => {
       flushFrame?.(0);
     });
-    expect(resize).toHaveBeenCalledWith(410, 844);
+    expect(resize).toHaveBeenCalledWith(400, 844, expect.any(Object));
 
     const corner = screen.getByRole("button", {
       name: "Resize viewport from bottom left",
@@ -513,7 +599,7 @@ describe("BrowserViewportToolbar", () => {
     act(() => {
       flushFrame?.(0);
     });
-    expect(resize).toHaveBeenCalledWith(410, 854);
+    expect(resize).toHaveBeenCalledWith(400, 854, expect.any(Object));
   });
 
   it("uses the dominant axis to preserve ratio from a locked corner", () => {
@@ -533,7 +619,12 @@ describe("BrowserViewportToolbar", () => {
       ratioLocked: true,
       ratio: 390 / 844,
     });
-    render(<BrowserViewportHandles controller={controller} />);
+    render(
+      <BrowserViewportHandles
+        controller={controller}
+        scrollRef={handlesScrollRef(1048)}
+      />,
+    );
 
     const corner = screen.getByRole("button", {
       name: "Resize viewport from bottom right",
@@ -554,10 +645,10 @@ describe("BrowserViewportToolbar", () => {
     });
 
     expect(resize).toHaveBeenCalledOnce();
-    expect(resize).toHaveBeenCalledWith(410, 887);
+    expect(resize).toHaveBeenCalledWith(400, 866, expect.any(Object));
   });
 
-  it("halves horizontal drag deltas for an oversized preview", () => {
+  it("freezes AutoFit scale and preserves both horizontal drag edges", () => {
     let flushFrame: ((time: number) => void) | null = null;
     vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
       flushFrame = callback;
@@ -569,32 +660,117 @@ describe("BrowserViewportToolbar", () => {
     const resize = vi.fn<BrowserViewportController["resize"]>(() =>
       Promise.resolve(),
     );
+    const setPreviewScale = vi.fn();
     const controller = makeController({
       resize,
-      resizeScale: 2,
-      resizeFromCenter: () => false,
+      previewScale: 1,
+      previewScaleSetting: null,
+      size: { width: 300, height: 600 },
+      resizeScale: 1,
+      setPreviewScale,
     });
-    render(<BrowserViewportHandles controller={controller} />);
+    const scrollRef = handlesScrollRef(500);
+    render(
+      <div data-testid="viewport-frame">
+        <BrowserViewportHandles controller={controller} scrollRef={scrollRef} />
+      </div>,
+    );
+    const frame = screen.getByTestId("viewport-frame");
+    Object.defineProperty(frame, "getBoundingClientRect", {
+      value: () => ({
+        bottom: 700,
+        height: 600,
+        left: 100,
+        right: 400,
+        top: 100,
+        width: 300,
+        x: 100,
+        y: 100,
+      }),
+    });
 
-    const handle = screen.getByRole("separator", {
+    const right = screen.getByRole("separator", {
       name: "Resize viewport width",
     });
-    fireEvent.pointerDown(handle, {
+    fireEvent.pointerDown(right, {
       button: 0,
       pointerId: 1,
-      clientX: 10,
+      clientX: 100,
       clientY: 10,
     });
-    fireEvent.pointerMove(handle, {
+    fireEvent.pointerMove(right, {
       pointerId: 1,
-      clientX: 30,
+      clientX: 175,
+      clientY: 10,
+    });
+    act(() => {
+      flushFrame?.(0);
+    });
+    fireEvent.pointerUp(right, { pointerId: 1 });
+
+    expect(setPreviewScale).toHaveBeenCalledWith(1);
+    expect(resize).toHaveBeenCalledWith(
+      375,
+      600,
+      expect.objectContaining({
+        anchor: 0,
+        availableHeight: 652,
+        availableWidth: 452,
+        scrollLeft: 0,
+        scrollTop: 0,
+        x: 76,
+      }),
+    );
+
+    const left = screen.getByRole("separator", {
+      name: "Resize viewport width from left",
+    });
+    fireEvent.pointerDown(left, {
+      button: 0,
+      pointerId: 2,
+      clientX: 100,
+      clientY: 10,
+    });
+    fireEvent.pointerMove(left, {
+      pointerId: 2,
+      clientX: 75,
+      clientY: 10,
+    });
+    act(() => {
+      flushFrame?.(0);
+    });
+    fireEvent.pointerMove(left, {
+      pointerId: 2,
+      clientX: 125,
       clientY: 10,
     });
     act(() => {
       flushFrame?.(0);
     });
 
-    expect(resize).toHaveBeenCalledOnce();
-    expect(resize).toHaveBeenCalledWith(400, 844);
+    expect(resize).toHaveBeenCalledWith(
+      325,
+      600,
+      expect.objectContaining({
+        anchor: 1,
+        availableHeight: 652,
+        availableWidth: 452,
+        scrollLeft: 0,
+        scrollTop: 0,
+        x: 376,
+      }),
+    );
+    expect(resize).toHaveBeenLastCalledWith(
+      275,
+      600,
+      expect.objectContaining({
+        anchor: 1,
+        availableHeight: 652,
+        availableWidth: 452,
+        scrollLeft: 0,
+        scrollTop: 0,
+        x: 376,
+      }),
+    );
   });
 });

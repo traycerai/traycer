@@ -57,6 +57,8 @@ export interface BrowserViewGuestViewportRequested {
   readonly revision: number;
   readonly width: number;
   readonly height: number;
+  readonly intent: BrowserViewportIntent;
+  readonly zoom: number;
 }
 
 export interface BrowserViewGuestViewportResult {

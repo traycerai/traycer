@@ -9,6 +9,7 @@ import {
 } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { toHostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { BrowserViewGuestViewportRequested } from "@traycer-clients/shared/platform/browser-view";
 import {
   browserViewportSizeSchema,
   type BrowserViewportGeometry,
@@ -27,6 +28,22 @@ import {
 } from "@/lib/browser-tab-identity";
 import { useDesktopWindowId } from "@/lib/windows/desktop-window-id";
 import { toastFromHostError } from "@/lib/host-error-toast";
+import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
+import {
+  confirmBrowserGuestViewport,
+  readBrowserGuestViewport,
+  subscribeBrowserGuestViewport,
+  type BrowserGuestViewportPresentation,
+} from "@/lib/browser-view/guest/persistent-browser-guest-host";
+
+export interface BrowserViewportOrigin {
+  readonly x: number;
+  readonly anchor: 0 | 0.5 | 1;
+  readonly scrollLeft: number;
+  readonly scrollTop: number;
+  readonly availableWidth: number;
+  readonly availableHeight: number;
+}
 
 export interface BrowserViewportController {
   readonly state: BrowserViewportState;
@@ -39,15 +56,19 @@ export interface BrowserViewportController {
   readonly previewScale: number;
   readonly previewScaleSetting: number | null;
   readonly setPreviewScale: (scale: number | null) => void;
+  readonly previewOrigin: BrowserViewportOrigin | null;
   readonly ratioLocked: boolean;
   readonly ratio: number | null;
   readonly resizeScale: number;
-  readonly resizeFromCenter: () => boolean;
   readonly setRatio: (ratio: number) => void;
   readonly fitOwnedHere: boolean;
   readonly open: () => void;
   readonly reset: () => Promise<void>;
-  readonly resize: (width: number, height: number) => Promise<void>;
+  readonly resize: (
+    width: number,
+    height: number,
+    origin: BrowserViewportOrigin | null,
+  ) => Promise<void>;
   readonly setRatioLocked: (locked: boolean) => void;
   readonly claim: () => void;
   readonly setTrigger: (element: HTMLButtonElement | null) => void;
@@ -62,6 +83,7 @@ export interface BrowserViewportPresentation {
     readonly height: number;
     readonly scale: number;
     readonly autoFit: boolean;
+    readonly requestId: string | null;
   } | null;
   readonly paintedSize: {
     readonly width: number;
@@ -69,6 +91,12 @@ export interface BrowserViewportPresentation {
   } | null;
   readonly claim: () => void;
   readonly onInteraction: (event: SyntheticEvent) => void;
+}
+
+interface ViewportFailure {
+  readonly error: Error;
+  readonly revision: number;
+  readonly connectionGeneration: number;
 }
 
 /** The host owns layout; this hook owns only this surface's presentation. */
@@ -81,11 +109,18 @@ export function useBrowserViewport(input: {
   readonly disabled: boolean;
   readonly pageZoom: number;
   readonly native: boolean;
+  readonly registrationId: string | null;
 }): BrowserViewportPresentation {
   const sessions = useMaybeBrowserSessionsContext();
   const coordinatorKey = useMaybeBrowserSessionsCoordinatorKey();
   const observed = sessions?.viewports[input.tabId];
   const state = observed?.sessionId === input.sessionId ? observed : null;
+  const nativeViewport = useNativeViewportPresentation(
+    input.registrationId,
+    state,
+    input.pageZoom,
+  );
+  const paneFocused = usePaneFocused();
   const desktopWindowId = useDesktopWindowId();
   const readWindowId = useCallback(
     () => desktopWindowId ?? browserTabId(),
@@ -96,24 +131,42 @@ export function useBrowserViewport(input: {
   const viewerId = JSON.stringify([windowId, input.instanceId]);
   const [opened, setOpened] = useState(false);
   const [previewScaleSetting, setPreviewScale] = useState<number | null>(null);
+  const [previewOrigin, setPreviewOrigin] =
+    useState<BrowserViewportOrigin | null>(null);
   const [ratio, setRatio] = useState<number | null>(null);
   const [area, setArea] = useState({ width: 0, height: 0 });
-  const [failure, setFailure] = useState<{
-    error: Error;
-    revision: number;
-    connectionGeneration: number;
-  } | null>(null);
+  const [failure, setFailure] = useState<ViewportFailure | null>(null);
   const areaRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const geometryRef = useRef<BrowserViewportGeometry | null>(null);
   const actionRevision = useRef(0);
+  const activationPending = useRef(false);
   const report = sessions?.reportViewport;
   const supported = state !== null;
   const connectionGeneration = sessions?.connectionGeneration;
   const lifecycle = sessions?.lifecycle;
   const canChange = !input.disabled && lifecycle === "live";
-  const expanded = opened || state?.intent.mode === "fixed";
+  const { expanded, nativePending, resetPreferences, clearAgentOrigin } =
+    viewportControlState(state, nativeViewport, {
+      opened,
+      scale: previewScaleSetting,
+      origin: previewOrigin,
+    });
+
+  // Preview preferences belong to the responsive controls' lifetime, including
+  // when another viewer or agent exits that mode. Reset before children paint.
+  if (resetPreferences) {
+    setPreviewScale(null);
+    setPreviewOrigin(null);
+  }
+
+  useEffect(() => {
+    // Activation can precede the first nonzero measurement. Keep it pending
+    // across geometry changes without treating those changes as new activity.
+    activationPending.current =
+      input.visible && paneFocused && document.hasFocus();
+  }, [input.visible, paneFocused, viewerId]);
 
   useEffect(() => {
     const element = areaRef.current;
@@ -149,8 +202,9 @@ export function useBrowserViewport(input: {
           tabId: input.tabId,
           viewerId,
           geometry,
-          claim: false,
+          claim: activationPending.current && document.hasFocus(),
         });
+        activationPending.current = false;
       }
     };
     const observer = new ResizeObserver(measure);
@@ -168,6 +222,7 @@ export function useBrowserViewport(input: {
     connectionGeneration,
     canChange,
     expanded,
+    paneFocused,
   ]);
 
   const claim = useCallback(() => {
@@ -197,7 +252,13 @@ export function useBrowserViewport(input: {
       input.tabId,
     ),
     retry: false,
-    mutationFn: async (intent: BrowserViewportIntent): Promise<void> => {
+    mutationFn: async (action: {
+      readonly intent: BrowserViewportIntent;
+      readonly origin: BrowserViewportOrigin | null;
+      readonly revision: number;
+      readonly connectionGeneration: number | undefined;
+    }): Promise<void> => {
+      const { intent } = action;
       if (!canChange)
         throw new Error(
           "Viewport controls are unavailable for this browser view.",
@@ -215,13 +276,21 @@ export function useBrowserViewport(input: {
               "Enter a supported viewport size.",
           );
       }
+      // Invalid drafts must never take Fit ownership or reflow the page.
+      setPreviewOrigin(action.origin);
+      claim();
       await sessions.setViewport(input.sessionId, input.tabId, intent);
     },
-    onError: (error) => {
+    onError: (error, action) => {
       // Rollback can publish before the RPC rejects. Anchor the failure to
       // that confirmed state, rather than hiding it against its own rollback.
       const current =
         browserSessionsCoordinatorState(coordinatorKey) ?? sessions;
+      if (
+        action.revision !== actionRevision.current ||
+        action.connectionGeneration !== current?.connectionGeneration
+      )
+        return;
       setFailure({
         error,
         revision: current?.viewports[input.tabId]?.revision ?? 0,
@@ -234,15 +303,28 @@ export function useBrowserViewport(input: {
         );
     },
   });
-  const resize = async (width: number, height: number): Promise<void> => {
-    actionRevision.current += 1;
-    claim();
-    await mutation.mutateAsync({ mode: "fixed", width, height });
+  if (clearAgentOrigin && !mutation.isPending) setPreviewOrigin(null);
+  const apply = (
+    intent: BrowserViewportIntent,
+    origin: BrowserViewportOrigin | null,
+  ): Promise<void> =>
+    mutation.mutateAsync({
+      intent,
+      origin,
+      revision: ++actionRevision.current,
+      connectionGeneration,
+    });
+  const resize = async (
+    width: number,
+    height: number,
+    origin: BrowserViewportOrigin | null,
+  ): Promise<void> => {
+    await apply({ mode: "fixed", width, height }, origin);
   };
   const reset = async (): Promise<void> => {
-    const revision = ++actionRevision.current;
-    claim();
-    await mutation.mutateAsync({ mode: "fit" });
+    const applied = apply({ mode: "fit" }, null);
+    const revision = actionRevision.current;
+    await applied;
     if (actionRevision.current !== revision) return;
     setPreviewScale(null);
     setOpened(false);
@@ -250,11 +332,10 @@ export function useBrowserViewport(input: {
   };
   const open = (): void => {
     if (state === null || expanded || !canChange) return;
-    const revision = ++actionRevision.current;
-    claim();
+    const applied = apply(state.intent, previewOrigin);
+    const revision = actionRevision.current;
     // The native apply path preserves annotations before the row can reflow Fit.
-    void mutation
-      .mutateAsync(state.intent)
+    void applied
       .then(() => {
         if (actionRevision.current === revision) setOpened(true);
       })
@@ -281,7 +362,7 @@ export function useBrowserViewport(input: {
       paintedSize: null,
       controller: null,
     };
-  const { size, scale, fitOwnedHere, guestViewport, paintedSize } =
+  const { size, scale, resizeScale, fitOwnedHere, guestViewport, paintedSize } =
     viewportLayout({
       state,
       area,
@@ -290,6 +371,7 @@ export function useBrowserViewport(input: {
       viewerId,
       expanded,
       previewScaleSetting,
+      nativeViewport,
     });
   return {
     areaRef,
@@ -299,29 +381,31 @@ export function useBrowserViewport(input: {
     guestViewport,
     paintedSize,
     controller: {
-      state,
+      state:
+        nativeViewport === null
+          ? state
+          : { ...state, intent: nativeViewport.intent },
       size,
       expanded,
-      pending: mutation.isPending,
+      pending: mutation.isPending || nativePending,
       disabled: !canChange,
-      error:
-        failure !== null &&
-        failure.error === mutation.error &&
-        failure.revision === state.revision &&
-        failure.connectionGeneration === connectionGeneration
-          ? failure.error.message
-          : null,
+      error: viewportFailureMessage(
+        failure,
+        mutation.error,
+        state.revision,
+        connectionGeneration,
+      ),
       dismissError: () => setFailure(null),
       previewScale: scale,
       previewScaleSetting,
-      setPreviewScale,
+      setPreviewScale: (nextScale) => {
+        if (nextScale === null) setPreviewOrigin(null);
+        setPreviewScale(nextScale);
+      },
+      previewOrigin,
       ratioLocked: ratio !== null,
       ratio,
-      resizeScale: scale * input.pageZoom,
-      resizeFromCenter: () =>
-        paintedSize === null ||
-        paintedSize.width <=
-          (scrollRef.current?.clientWidth ?? area.width + 48) - 48,
+      resizeScale,
       setRatio: (nextRatio) => {
         if (ratio !== null) setRatio(nextRatio);
       },
@@ -339,6 +423,47 @@ export function useBrowserViewport(input: {
   };
 }
 
+function viewportControlState(
+  state: BrowserViewportState | null,
+  nativeViewport: BrowserGuestViewportPresentation | null,
+  preferences: {
+    readonly opened: boolean;
+    readonly scale: number | null;
+    readonly origin: BrowserViewportOrigin | null;
+  },
+): {
+  readonly expanded: boolean;
+  readonly nativePending: boolean;
+  readonly resetPreferences: boolean;
+  readonly clearAgentOrigin: boolean;
+} {
+  const expanded =
+    preferences.opened ||
+    state?.intent.mode === "fixed" ||
+    nativeViewport?.intent.mode === "fixed";
+  return {
+    expanded,
+    nativePending: nativeViewport?.confirmed === false,
+    resetPreferences:
+      !expanded && (preferences.scale !== null || preferences.origin !== null),
+    clearAgentOrigin: state?.source === "agent" && preferences.origin !== null,
+  };
+}
+
+function viewportFailureMessage(
+  failure: ViewportFailure | null,
+  error: Error | null,
+  revision: number,
+  connectionGeneration: number | undefined,
+): string | null {
+  return failure !== null &&
+    failure.error === error &&
+    failure.revision === revision &&
+    failure.connectionGeneration === connectionGeneration
+    ? failure.error.message
+    : null;
+}
+
 function viewportLayout(input: {
   readonly state: BrowserViewportState;
   readonly area: { readonly width: number; readonly height: number };
@@ -347,23 +472,22 @@ function viewportLayout(input: {
   readonly viewerId: string;
   readonly expanded: boolean;
   readonly previewScaleSetting: number | null;
+  readonly nativeViewport: BrowserViewGuestViewportRequested | null;
 }): {
   readonly size: BrowserViewportController["size"];
   readonly scale: number;
+  readonly resizeScale: number;
   readonly fitOwnedHere: boolean;
   readonly guestViewport: BrowserViewportPresentation["guestViewport"];
   readonly paintedSize: BrowserViewportPresentation["paintedSize"];
 } {
   const { state, area } = input;
-  const size =
-    state.applied ?? (state.intent.mode === "fixed" ? state.intent : null);
-  const intrinsic =
-    size === null
-      ? null
-      : {
-          width: size.width * input.pageZoom,
-          height: size.height * input.pageZoom,
-        };
+  const request = input.nativeViewport;
+  const { size, intrinsic, zoom } = viewportDimensions(
+    state,
+    input.pageZoom,
+    request,
+  );
   const scale =
     input.previewScaleSetting ??
     (intrinsic === null || area.width === 0 || area.height === 0
@@ -378,12 +502,14 @@ function viewportLayout(input: {
   const layout = {
     size,
     scale,
+    resizeScale: scale * zoom,
     fitOwnedHere,
     guestViewport: null,
     paintedSize: null,
   };
   if (
     input.native &&
+    request === null &&
     state.intent.mode === "fit" &&
     fitOwnedHere &&
     input.previewScaleSetting === null
@@ -397,10 +523,63 @@ function viewportLayout(input: {
       ...intrinsic,
       scale,
       autoFit: input.previewScaleSetting === null,
+      requestId: request?.requestId ?? null,
     },
     paintedSize: {
       width: intrinsic.width * scale,
       height: intrinsic.height * scale,
     },
   };
+}
+
+function viewportDimensions(
+  state: BrowserViewportState,
+  zoom: number,
+  request: BrowserViewGuestViewportRequested | null,
+): {
+  readonly size: BrowserViewportController["size"];
+  readonly intrinsic: BrowserViewportController["size"];
+  readonly zoom: number;
+} {
+  if (request !== null)
+    return {
+      size: nativeViewportSize(request),
+      intrinsic: { width: request.width, height: request.height },
+      zoom: request.zoom,
+    };
+  const size =
+    state.applied ?? (state.intent.mode === "fixed" ? state.intent : null);
+  return {
+    size,
+    intrinsic:
+      size === null
+        ? null
+        : { width: size.width * zoom, height: size.height * zoom },
+    zoom,
+  };
+}
+
+function nativeViewportSize(request: BrowserViewGuestViewportRequested): {
+  readonly width: number;
+  readonly height: number;
+} {
+  if (request.intent.mode === "fixed") return request.intent;
+  return {
+    width: Math.max(1, Math.round(request.width / request.zoom)),
+    height: Math.max(1, Math.round(request.height / request.zoom)),
+  };
+}
+
+function useNativeViewportPresentation(
+  registrationId: string | null,
+  state: BrowserViewportState | null,
+  zoom: number,
+): BrowserGuestViewportPresentation | null {
+  const request = useSyncExternalStore(subscribeBrowserGuestViewport, () =>
+    readBrowserGuestViewport(registrationId),
+  );
+  useEffect(() => {
+    confirmBrowserGuestViewport({ registrationId, state, zoom });
+  }, [registrationId, state, zoom, request]);
+  return request;
 }

@@ -21,6 +21,7 @@ export function usePublishBrowserGuestTile(input: {
     readonly height: number;
     readonly scale: number;
     readonly autoFit: boolean;
+    readonly requestId: string | null;
   } | null;
   readonly instanceId: string;
   readonly viewTabId: string;
@@ -47,6 +48,7 @@ export function usePublishBrowserGuestTile(input: {
   const height = viewport?.height ?? null;
   const scale = viewport?.scale ?? null;
   const autoFit = viewport?.autoFit ?? true;
+  const requestId = viewport?.requestId ?? null;
 
   useLayoutEffect(() => {
     const stage = stageRef?.current;
@@ -78,7 +80,7 @@ export function usePublishBrowserGuestTile(input: {
       viewport:
         width === null || height === null || scale === null
           ? null
-          : { width, height, scale, autoFit },
+          : { width, height, scale, autoFit, requestId },
     });
   }, [
     anchorName,
@@ -93,6 +95,7 @@ export function usePublishBrowserGuestTile(input: {
     height,
     scale,
     autoFit,
+    requestId,
   ]);
 
   // Geometry updates keep the guest bound. Only identity loss/unmount releases

@@ -4,6 +4,7 @@ import type {
   BrowserViewGuestReleaseRequested,
   BrowserViewGuestViewportRequested,
 } from "@traycer-clients/shared/platform/browser-view";
+import type { BrowserViewportState } from "@traycer/protocol/host/browser/viewport";
 import { runPresentationLossBlur } from "@/components/epic-tabs/pane-visibility-context";
 import {
   HOSTED_TILE_INSTANCE_ID_ATTRIBUTE,
@@ -43,6 +44,7 @@ export interface BrowserGuestTilePlacement {
     readonly height: number;
     readonly scale: number;
     readonly autoFit: boolean;
+    readonly requestId: string | null;
   } | null;
 }
 
@@ -80,14 +82,21 @@ interface PlacementRecord {
   readonly placement: BrowserGuestTilePlacement;
 }
 
+export interface BrowserGuestViewportPresentation extends BrowserViewGuestViewportRequested {
+  readonly confirmed: boolean;
+}
+
 interface GuestRecord {
   readonly registrationId: string;
   readonly clipper: HTMLElement;
   readonly wrapper: HTMLElement;
   readonly webview: HTMLElement;
-  viewportRequest: BrowserViewGuestViewportRequested | null;
-  latestViewportRequestId: string | null;
+  viewportRequest: BrowserGuestViewportPresentation | null;
   viewportAcknowledged: boolean;
+  pendingViewport: {
+    readonly resolve: (applied: boolean) => void;
+    observer: ResizeObserver | null;
+  } | null;
   retainedSize: { readonly width: number; readonly height: number } | null;
 }
 
@@ -97,8 +106,79 @@ interface RunningHost {
 
 const guests = new Map<string, GuestRecord>();
 const placements = new Map<string, PlacementRecord>();
+const viewportListeners = new Set<() => void>();
 let running: RunningHost | null = null;
 let onActivate: BrowserGuestActivate | null = null;
+
+export function subscribeBrowserGuestViewport(
+  listener: () => void,
+): () => void {
+  viewportListeners.add(listener);
+  return () => viewportListeners.delete(listener);
+}
+
+export function readBrowserGuestViewport(
+  registrationId: string | null,
+): BrowserGuestViewportPresentation | null {
+  return registrationId === null
+    ? null
+    : (guests.get(registrationId)?.viewportRequest ?? null);
+}
+
+/** A React placement cannot retire a request before its host confirmation. */
+export function confirmBrowserGuestViewport(input: {
+  readonly registrationId: string | null;
+  readonly state: BrowserViewportState | null;
+  readonly zoom: number;
+}): void {
+  if (input.registrationId === null || input.state === null) return;
+  const guest = guests.get(input.registrationId);
+  const request = guest?.viewportRequest;
+  if (
+    guest === undefined ||
+    request === undefined ||
+    request === null ||
+    input.state.revision < request.revision
+  )
+    return;
+  if (input.state.applied === null && input.state.revision > request.revision) {
+    finishViewportLayout(guest, false);
+    guest.viewportRequest = null;
+    notifyViewportListeners();
+    return;
+  }
+  if (request.confirmed || !guest.viewportAcknowledged) return;
+  if (!matchesViewportConfirmation(request, input.state, input.zoom)) return;
+  // Keep the exact intrinsic pixels chosen by native readback. Reconstructing
+  // them from CSS dimensions × zoom can undo its adjacent-pixel correction.
+  guest.viewportRequest =
+    request.intent.mode === "fixed" ? { ...request, confirmed: true } : null;
+  notifyViewportListeners();
+}
+
+function matchesViewportConfirmation(
+  request: BrowserGuestViewportPresentation,
+  state: BrowserViewportState,
+  zoom: number,
+): boolean {
+  const applied = state.applied;
+  if (applied === null) return false;
+  if (zoom !== request.zoom || state.intent.mode !== request.intent.mode)
+    return false;
+  if (request.intent.mode === "fixed")
+    return (
+      applied.width === request.intent.width &&
+      applied.height === request.intent.height
+    );
+  return (
+    Math.abs(applied.width - request.width / request.zoom) < 1 &&
+    Math.abs(applied.height - request.height / request.zoom) < 1
+  );
+}
+
+function notifyViewportListeners(): void {
+  for (const listener of viewportListeners) listener();
+}
 
 /** Arm the window-level host; the returned disposer tears it down. */
 export function startPersistentBrowserGuestHost(
@@ -146,8 +226,16 @@ export function setBrowserGuestTilePlacement(
   placements.set(placement.registrationId, { owner, placement });
   const guest = guests.get(placement.registrationId);
   if (guest !== undefined) {
-    releaseViewportOverride(guest, placement);
+    // The request and its frame must enter layout together. An older publisher
+    // cannot resize the guest while React is still rendering the new frame.
+    if (
+      placement.presented &&
+      guest.pendingViewport !== null &&
+      placement.viewport?.requestId !== guest.viewportRequest?.requestId
+    )
+      return;
     applyGuestPresentation(guest, placement);
+    observeViewportLayout(guest);
   }
 }
 
@@ -159,7 +247,10 @@ export function clearBrowserGuestTilePlacement(
   if (current === undefined || current.owner !== owner) return;
   placements.delete(registrationId);
   const guest = guests.get(registrationId);
-  if (guest !== undefined) applyGuestPresentation(guest, null);
+  if (guest !== undefined) {
+    applyGuestPresentation(guest, null);
+    observeViewportLayout(guest);
+  }
 }
 
 function handleMount(request: BrowserViewGuestMountRequested): void {
@@ -180,8 +271,8 @@ function handleMount(request: BrowserViewGuestMountRequested): void {
     wrapper,
     webview,
     viewportRequest: null,
-    latestViewportRequestId: null,
     viewportAcknowledged: false,
+    pendingViewport: null,
     retainedSize: null,
   };
   guests.set(request.registrationId, guest);
@@ -209,58 +300,59 @@ function handleRelease(request: BrowserViewGuestReleaseRequested): void {
   removeGuest(request.registrationId);
 }
 
-async function applyViewportRequest(
+function applyViewportRequest(
   request: BrowserViewGuestViewportRequested,
 ): Promise<boolean> {
   const guest = guests.get(request.registrationId);
-  if (guest === undefined) return false;
-  guest.viewportRequest = request;
-  guest.latestViewportRequestId = request.requestId;
+  if (guest === undefined) return Promise.resolve(false);
+  finishViewportLayout(guest, false);
+  guest.viewportRequest = { ...request, confirmed: false };
   guest.viewportAcknowledged = false;
-  applyGuestPresentation(
-    guest,
-    placements.get(request.registrationId)?.placement ?? null,
-  );
-  await new Promise<void>((resolve) => {
-    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  const applied = new Promise<boolean>((resolve) => {
+    guest.pendingViewport = { resolve, observer: null };
   });
-  if (
-    guests.get(request.registrationId) !== guest ||
-    guest.latestViewportRequestId !== request.requestId
-  )
-    return false;
-  guest.viewportAcknowledged = true;
+  notifyViewportListeners();
   const placement = placements.get(request.registrationId)?.placement ?? null;
-  if (placement !== null) {
-    releaseViewportOverride(guest, placement);
+  if (placement === null || !placement.presented) {
     applyGuestPresentation(guest, placement);
+    observeViewportLayout(guest);
   }
-  return true;
+  return applied;
 }
 
-function releaseViewportOverride(
-  guest: GuestRecord,
-  placement: BrowserGuestTilePlacement,
-): void {
+function observeViewportLayout(guest: GuestRecord): void {
+  const pending = guest.pendingViewport;
   const request = guest.viewportRequest;
-  if (request === null || !guest.viewportAcknowledged || !placement.presented)
-    return;
-  const width = placement.viewport?.width ?? guest.wrapper.clientWidth;
-  const height = placement.viewport?.height ?? guest.wrapper.clientHeight;
-  // A revision can be reused by page zoom or restart. Hand presentation back
-  // only when it describes the size main applied, including rollback to Fit.
-  if (
-    Math.abs(width - request.width) < 1 &&
-    Math.abs(height - request.height) < 1
-  ) {
-    guest.viewportRequest = null;
-  }
+  if (pending === null || pending.observer !== null || request === null) return;
+  pending.observer = new ResizeObserver(() => {
+    if (guest.pendingViewport !== pending) return;
+    if (
+      guest.webview.offsetWidth !== request.width ||
+      guest.webview.offsetHeight !== request.height
+    )
+      return;
+    guest.viewportAcknowledged = true;
+    // Notify the host-confirmation effect even for a reused revision/geometry.
+    guest.viewportRequest = { ...request };
+    finishViewportLayout(guest, true);
+    notifyViewportListeners();
+  });
+  pending.observer.observe(guest.webview);
+}
+
+function finishViewportLayout(guest: GuestRecord, applied: boolean): void {
+  const pending = guest.pendingViewport;
+  guest.pendingViewport = null;
+  pending?.observer?.disconnect();
+  pending?.resolve(applied);
 }
 
 function removeGuest(registrationId: string): void {
   const guest = guests.get(registrationId);
   if (guest === undefined) return;
   guests.delete(registrationId);
+  finishViewportLayout(guest, false);
+  notifyViewportListeners();
   relinquishGuestFocus(guest);
   guest.clipper.remove();
 }
@@ -396,18 +488,7 @@ function applyGuestViewport(
   guest.webview.style.width = `${dimensions.width}px`;
   guest.webview.style.height = `${dimensions.height}px`;
   guest.webview.style.transformOrigin = "top left";
-  let scale = placement?.viewport?.scale ?? 1;
-  if (
-    placement !== null &&
-    request !== null &&
-    placement.viewport?.autoFit !== false
-  ) {
-    scale = Math.min(
-      1,
-      guest.wrapper.clientWidth / dimensions.width,
-      guest.wrapper.clientHeight / dimensions.height,
-    );
-  }
+  const scale = placement?.viewport?.scale ?? 1;
   guest.webview.style.transform = `scale(${scale})`;
 }
 

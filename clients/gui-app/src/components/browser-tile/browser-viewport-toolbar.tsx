@@ -65,11 +65,19 @@ export function BrowserViewportToolbar({
 }: {
   readonly controller: BrowserViewportController | null;
 }) {
+  if (controller === null || !controller.expanded) return null;
+  return <ExpandedViewportToolbar controller={controller} />;
+}
+
+function ExpandedViewportToolbar({
+  controller,
+}: {
+  readonly controller: BrowserViewportController;
+}) {
   const [draft, setDraft] = useState<DimensionDraft | null>(null);
   const cancelled = useRef(false);
   const generation = useRef(0);
   const inputFocused = useRef(false);
-  if (controller === null || !controller.expanded) return null;
   const size = controller.size;
   const values = draft ?? dimensionDraft(size);
   const action = (run: () => Promise<void>): void => {
@@ -85,7 +93,7 @@ export function BrowserViewportToolbar({
     controller.dismissError();
     setDraft({ ...next, dirty: false });
     void controller
-      .resize(Number(next.width), Number(next.height))
+      .resize(Number(next.width), Number(next.height), null)
       .then(() => {
         if (generation.current === ownGeneration && !inputFocused.current)
           setDraft(null);
@@ -134,7 +142,7 @@ export function BrowserViewportToolbar({
   };
   const selectSize = async (width: number, height: number): Promise<void> => {
     const ownGeneration = generation.current;
-    await controller.resize(width, height);
+    await controller.resize(width, height, null);
     if (generation.current === ownGeneration)
       controller.setRatio(width / height);
   };

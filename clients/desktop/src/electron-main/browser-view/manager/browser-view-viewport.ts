@@ -6,6 +6,7 @@ import {
 import type {
   BrowserViewElectronViewport,
   BrowserViewGuestViewportResult,
+  BrowserViewGuestViewportRequested,
 } from "@traycer-clients/shared/platform/browser-view";
 import { RunnerHostEvent } from "../../../ipc-contracts/ipc-channels";
 import type { BrowserViewEntry, BrowserViewSend } from "./browser-view-entry";
@@ -243,37 +244,31 @@ export class BrowserViewViewport {
     const debug = this.debugSessions.ensure(entry);
     await debug.enableAfterCommit();
     signal.throwIfAborted();
-    await this.present(entry, input.revision, width, height);
+    // The guest's intrinsic CSS size is the native viewport authority. Clear
+    // stale agent/device metrics before changing that size, so Chromium never
+    // paints an old emulated layout into a differently scaled new surface.
+    await debug.sendCommand(
+      "Emulation.clearDeviceMetricsOverride",
+      {},
+      undefined,
+    );
     signal.throwIfAborted();
     if (!this.entries.isCurrent(entry))
       throw new Error("The browser tab closed during resize.");
-    if (input.intent.mode === "fit") {
-      await debug.sendCommand(
-        "Emulation.clearDeviceMetricsOverride",
-        {},
-        undefined,
-      );
-      signal.throwIfAborted();
-      return this.readGeometry(entry);
-    }
     // Chromium takes whole native pixels. Try the adjacent pixel if rounding
     // misses; below 100% some CSS widths have no exact native representation.
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      if (attempt > 0) await this.present(entry, input.revision, width, height);
-      signal.throwIfAborted();
-      await debug.sendCommand(
-        "Emulation.setDeviceMetricsOverride",
-        {
-          width,
-          height,
-          deviceScaleFactor: 0,
-          mobile: false,
-        },
-        undefined,
-      );
+      await this.present(entry, {
+        revision: input.revision,
+        intent: input.intent,
+        zoom,
+        width,
+        height,
+      });
       signal.throwIfAborted();
       const applied = await this.readGeometry(entry);
       signal.throwIfAborted();
+      if (input.intent.mode === "fit") return applied;
       if (
         applied.width === input.intent.width &&
         applied.height === input.intent.height
@@ -306,11 +301,13 @@ export class BrowserViewViewport {
 
   private present(
     entry: BrowserViewEntry,
-    revision: number,
-    width: number,
-    height: number,
+    presentation: Omit<
+      BrowserViewGuestViewportRequested,
+      "requestId" | "registrationId"
+    >,
   ): Promise<void> {
     const requestId = randomUUID();
+    const { revision } = presentation;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(requestId);
@@ -324,9 +321,7 @@ export class BrowserViewViewport {
           {
             requestId,
             registrationId: entry.identity.registrationId,
-            revision,
-            width,
-            height,
+            ...presentation,
           },
         )
       ) {
