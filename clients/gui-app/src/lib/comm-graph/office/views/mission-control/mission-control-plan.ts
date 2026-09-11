@@ -440,9 +440,6 @@ function firstAisleAlignedStart(
       return i;
     }
   }
-  for (let i = 0; i <= used.length - length; i += 1) {
-    if (rangeIsFree(used, i, length)) return i;
-  }
   return -1;
 }
 
@@ -461,7 +458,7 @@ function fillPacked(
   fills: SlotFill[],
   slots: ReadonlyArray<ConsoleSlot>,
   placements: ReadonlyArray<Placement>,
-): void {
+): boolean {
   const used: boolean[] = [];
   for (let i = 0; i < fills.length; i += 1) used.push(false);
 
@@ -477,7 +474,7 @@ function fillPacked(
         index += 1;
       }
       const start = firstAisleAlignedStart(slots, used, run.length);
-      if (start < 0) continue;
+      if (start < 0) return false;
       fillRun(fills, slots, start, run);
       markUsed(used, start, run.length);
       continue;
@@ -487,7 +484,7 @@ function fillPacked(
   }
   for (const placement of singles) {
     const free = firstUnused(used);
-    if (free < 0) break;
+    if (free < 0) return false;
     fills[free] = {
       agentId: placement.agentId,
       teamId: placement.teamId,
@@ -496,6 +493,7 @@ function fillPacked(
     };
     used[free] = true;
   }
+  return true;
 }
 
 function occupiedAgentIds(
@@ -541,17 +539,22 @@ function packFresh(input: OfficePlanInput): Packing {
   const hqId = podiumAgentId(input.partition, byId);
   const placements = placementsFor(input, hqId);
   const tierCounts = tiersToHold(placements.length);
-  const centerCol = initialCenterCol(tierCounts);
-  const cols = colsFor(tierCounts, centerCol);
-  const rows = rowsFor(tierCounts.length);
-  const slots = buildSlots(tierCounts, centerCol);
-  const fills = emptyFills(slots.length);
-  fillPacked(fills, slots, placements);
+  let centerCol = initialCenterCol(tierCounts);
+  let slots = buildSlots(tierCounts, centerCol);
+  let fills = emptyFills(slots.length);
+  let seated = fillPacked(fills, slots, placements);
+  while (!seated && tierCounts.length < 64) {
+    appendTiersUntil(tierCounts, slots.length + 1);
+    centerCol = initialCenterCol(tierCounts);
+    slots = buildSlots(tierCounts, centerCol);
+    fills = emptyFills(slots.length);
+    seated = fillPacked(fills, slots, placements);
+  }
   return finishPacking({
     tierCounts,
     centerCol,
-    cols,
-    rows,
+    cols: colsFor(tierCounts, centerCol),
+    rows: rowsFor(tierCounts.length),
     slots,
     fills,
     hqId,

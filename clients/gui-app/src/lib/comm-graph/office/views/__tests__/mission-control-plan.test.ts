@@ -93,6 +93,20 @@ function nextCreatedAt(agents: ReadonlyArray<OfficeAgentInput>): number {
   return max + 1;
 }
 
+function teamSizedEpic(sizes: ReadonlyArray<number>): OfficeTestEpic {
+  const sample = makeTestEpic("many-roots", 1, 1);
+  const root = sample.agents[0];
+  const agents: OfficeAgentInput[] = [root];
+  for (let t = 0; t < sizes.length; t += 1) {
+    const lead = childAgent(root, `team-${t}-lead`, agents.length);
+    agents.push(lead);
+    for (let m = 1; m < sizes[t]; m += 1) {
+      agents.push(childAgent(lead, `team-${t}-member-${m}`, agents.length));
+    }
+  }
+  return { agents, statusById: new Map() };
+}
+
 function childAgent(
   parent: OfficeAgentInput,
   id: string,
@@ -1106,5 +1120,39 @@ describe("mission-control cold-review findings", () => {
         0,
       ),
     ).toEqual([]);
+  });
+
+  it("seats every agent when aisle alignment fragments a row", () => {
+    const epic = teamSizedEpic([2, 2, 14]);
+    const planned = planFresh(epic, VIEWPORT_WIDE);
+    const scene = sceneOf(epic);
+    const layout = requireLayout(scene);
+    expect(planned.layout.desks.size).toBe(epic.agents.length);
+    expect(layout.desks.size).toBe(epic.agents.length);
+    expect(
+      spriteCount(frameDrawables(scene.frame(2, WHOLE_WORLD)), "character"),
+    ).toBe(epic.agents.length);
+    expect(scene.locate("team-2-lead")).not.toBeNull();
+  });
+
+  it("seats every agent across team-size mixes of 1 to 16", () => {
+    const mixes: ReadonlyArray<ReadonlyArray<number>> = [
+      [2, 2, 14],
+      [14, 2, 2],
+      [1, 16, 3],
+      [8, 8, 8],
+      [16, 1, 1, 1],
+      [3, 3, 3, 3, 3],
+      [1, 2, 3, 4, 5, 6],
+    ];
+    for (const sizes of mixes) {
+      const epic = teamSizedEpic(sizes);
+      const scene = sceneOf(epic);
+      const layout = requireLayout(scene);
+      expect(layout.desks.size).toBe(epic.agents.length);
+      for (const agent of epic.agents) {
+        expect(scene.locate(agent.id)).not.toBeNull();
+      }
+    }
   });
 });
