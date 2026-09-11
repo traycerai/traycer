@@ -454,6 +454,42 @@ describe("<StatusBarPreview />", () => {
       ).toBeTruthy();
     });
 
+    it("draws one mini bar per drawn limit, so the preview shows the strip's gauges", () => {
+      mocks.providers = [configuredProvider("codex", "ephemeralProcess")];
+      mocks.envelopes = {
+        codex: envelopeFor({
+          ...codexRateLimits({
+            usedPercent: 40,
+            resetsAt: null,
+            durationMinutes: 300,
+          }),
+          secondary: {
+            usedPercent: 10,
+            resetsAt: null,
+            durationMinutes: 7 * 24 * 60,
+          },
+        }),
+      };
+
+      renderPreview(false);
+
+      expect(
+        screen.getAllByTestId("status-bar-provider-mini-bar"),
+      ).toHaveLength(1);
+
+      act(() => {
+        useLayoutStore
+          .getState()
+          .toggleStatusBarProviderLimit("codex", "codex:secondary");
+      });
+
+      expect(
+        screen
+          .getAllByTestId("status-bar-provider-mini-bar")
+          .map((bar) => bar.getAttribute("data-window-key")),
+      ).toEqual(["codex:primary", "codex:secondary"]);
+    });
+
     it("showTimer: the countdown gives way to the static label when it is turned off", () => {
       // A real `resetsAt`, computed here rather than at module load and given
       // a five-second buffer, the same technique the cluster suite's own

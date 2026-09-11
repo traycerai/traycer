@@ -278,7 +278,7 @@ export const LAYOUT = defineSettingsSection("layout", {
     group: "usageLimits",
     search: { anchor: "layout-status-bar-mini-bar" },
     label: "Show mini bar",
-    description: "Draw a small fill bar ahead of each provider's limits.",
+    description: "Draw a small fill bar ahead of each limit.",
     availableWhen: isStatusBarControlsAvailable,
     keywords: ["fill bar", "gauge", "meter", "progress"],
   },

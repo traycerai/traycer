@@ -560,6 +560,212 @@ describe("<StatusBarProviderSegment />", () => {
 
       expect(screen.queryByTestId("status-bar-provider-mini-bar")).toBeNull();
     });
+
+    it("draws exactly one bar for a provider drawing one limit", () => {
+      const tightest = windowFixture({ windowKey: "codex:primary" });
+      const segment = segmentFixture({ windows: [tightest], tightest });
+      renderSegment({ segment, detail: "full", showBar: true });
+
+      expect(
+        screen.getAllByTestId("status-bar-provider-mini-bar"),
+      ).toHaveLength(1);
+    });
+
+    // A provider showing several limits is showing several independent gauges.
+    describe("one bar per drawn limit", () => {
+      function twoLimitSegment(): StatusBarProviderSegmentModel {
+        const primary = windowFixture({
+          windowKey: "codex:primary",
+          usedPercent: 30,
+          severity: "healthy",
+        });
+        const secondary = windowFixture({
+          windowKey: "codex:secondary",
+          label: "wk",
+          usedPercent: 92,
+          severity: "limited",
+        });
+        return segmentFixture({
+          windows: [primary, secondary],
+          shown: [primary, secondary],
+          tightest: secondary,
+        });
+      }
+
+      it("gives each drawn limit its own bar, filled and coloured from that window", () => {
+        renderSegment({
+          segment: twoLimitSegment(),
+          detail: "full",
+          showBar: true,
+        });
+
+        const bars = screen.getAllByTestId("status-bar-provider-mini-bar");
+        expect(bars.map((bar) => bar.getAttribute("data-window-key"))).toEqual([
+          "codex:primary",
+          "codex:secondary",
+        ]);
+        const fills = screen.getAllByTestId(
+          "status-bar-provider-mini-bar-fill",
+        );
+        expect(fills.map((fill) => fill.style.width)).toEqual(["30%", "92%"]);
+        // The severity is the WINDOW's, so two bars under one icon can - and
+        // here do - read as two different states.
+        expect(fills[0].className).toContain("bg-blue-500");
+        expect(fills[1].className).toContain("bg-red-500");
+      });
+
+      it("puts each bar immediately before the reading it measures", () => {
+        renderSegment({
+          segment: twoLimitSegment(),
+          detail: "full",
+          showBar: true,
+        });
+
+        for (const windowKey of ["codex:primary", "codex:secondary"]) {
+          const bar = screen
+            .getAllByTestId("status-bar-provider-mini-bar")
+            .find((candidate) => candidate.dataset.windowKey === windowKey);
+          expect(bar?.nextElementSibling).toBe(
+            screen.getByTestId(`status-bar-window-${windowKey}`),
+          );
+        }
+      });
+
+      it("drops every bar when the switch is off, however many limits are drawn", () => {
+        renderSegment({
+          segment: twoLimitSegment(),
+          detail: "full",
+          showBar: false,
+        });
+
+        expect(screen.queryAllByTestId("status-bar-provider-mini-bar")).toEqual(
+          [],
+        );
+        expect(
+          screen.getByTestId("status-bar-window-codex:primary"),
+        ).not.toBeNull();
+        expect(
+          screen.getByTestId("status-bar-window-codex:secondary"),
+        ).not.toBeNull();
+      });
+
+      it("keeps a bar per limit at three, in catalog order", () => {
+        const primary = windowFixture({
+          windowKey: "codex:primary",
+          usedPercent: 30,
+        });
+        const secondary = windowFixture({
+          windowKey: "codex:secondary",
+          label: "wk",
+          usedPercent: 60,
+          severity: "running_low",
+        });
+        const extra = windowFixture({
+          windowKey: "codex:extra:gpt-5-codex:primary",
+          label: "GPT-5 Codex 5h",
+          labelIsDuration: false,
+          usedPercent: 92,
+          severity: "limited",
+        });
+        const segment = segmentFixture({
+          windows: [primary, secondary, extra],
+          shown: [primary, secondary, extra],
+          tightest: extra,
+        });
+
+        renderSegment({ segment, detail: "full", showBar: true });
+
+        expect(
+          screen
+            .getAllByTestId("status-bar-provider-mini-bar")
+            .map((bar) => bar.getAttribute("data-window-key")),
+        ).toEqual([
+          "codex:primary",
+          "codex:secondary",
+          "codex:extra:gpt-5-codex:primary",
+        ]);
+        expect(
+          screen
+            .getAllByTestId("status-bar-provider-mini-bar-fill")
+            .map((fill) => fill.style.width),
+        ).toEqual(["30%", "60%", "92%"]);
+      });
+
+      // The rung above `no-bars` takes the mode word and nothing else, so the
+      // bars are all still there - one per reading, as at `full`.
+      it("keeps one bar per limit on the no-mode-word rung", () => {
+        renderSegment({
+          segment: twoLimitSegment(),
+          detail: "no-mode-word",
+          showBar: true,
+        });
+
+        expect(
+          screen
+            .getAllByTestId("status-bar-provider-mini-bar")
+            .map((bar) => bar.getAttribute("data-window-key")),
+        ).toEqual(["codex:primary", "codex:secondary"]);
+        expect(
+          screen.getByTestId("status-bar-window-codex:primary").textContent,
+        ).toBe("30% 5h");
+      });
+
+      it("drops every bar at once on the no-bars rung, keeping both readings", () => {
+        renderSegment({
+          segment: twoLimitSegment(),
+          detail: "no-bars",
+          showBar: true,
+        });
+
+        expect(screen.queryAllByTestId("status-bar-provider-mini-bar")).toEqual(
+          [],
+        );
+        expect(
+          screen.getByTestId("status-bar-window-codex:primary"),
+        ).not.toBeNull();
+        expect(
+          screen.getByTestId("status-bar-window-codex:secondary"),
+        ).not.toBeNull();
+      });
+
+      // `percent-only` narrows to the tightest whatever is selected, so at most
+      // one bar could ever be drawn there - and in fact none is, because the
+      // ladder took the bars away two rungs earlier.
+      it("narrows to the tightest reading alone at percent-only, with no bar", () => {
+        renderSegment({
+          segment: twoLimitSegment(),
+          detail: "percent-only",
+          showBar: true,
+        });
+
+        expect(screen.queryAllByTestId("status-bar-provider-mini-bar")).toEqual(
+          [],
+        );
+        expect(
+          screen.queryByTestId("status-bar-window-codex:primary"),
+        ).toBeNull();
+        expect(
+          screen.getByTestId("status-bar-window-codex:secondary").textContent,
+        ).toBe("92%");
+      });
+
+      // The bars are gauges, not readings: the segment's accessible content is
+      // the provider icon's tooltip and the percentages, and adding one bar
+      // per limit must not add anything a screen reader has to walk past.
+      it("keeps every bar out of the accessible tree", () => {
+        renderSegment({
+          segment: twoLimitSegment(),
+          detail: "full",
+          showBar: true,
+        });
+
+        for (const bar of screen.getAllByTestId(
+          "status-bar-provider-mini-bar",
+        )) {
+          expect(bar.getAttribute("aria-hidden")).toBe("true");
+        }
+      });
+    });
   });
 
   describe("segment states", () => {

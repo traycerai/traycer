@@ -1384,6 +1384,20 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     The group carries `aria-describedby` to its row description
     (`useSettingsRowDescriptionId`), since `disabled` takes the held entry out
     of the tab order and the rule that held it is stated there.
+  - **One mini bar per DRAWN limit**, immediately before the reading it
+    measures (`[bar] 57% used 4h 15m · [bar] 82% used wk`), filled and
+    coloured from that window's own severity - so a provider showing three
+    limits shows three independent gauges, which is what `Show mini bar`
+    promises. A single bar in front of several readings was one severity
+    colour with nothing on the row saying which limit it belonged to. The
+    SWITCH and the ladder's `bar` rung still govern them as ONE decision
+    (`showBar && parts.bar` in `status-bar-provider-segment.tsx`): a strip
+    that runs out of room drops every bar at once rather than thinning them
+    one at a time, and `percent-only` has already narrowed to the tightest
+    reading two rungs after the bars went. Each bar carries
+    `data-window-key`, since order is otherwise the only thing pairing a
+    gauge with its number, and every one stays `aria-hidden` - the accessible
+    content is the percentages and the provider tooltip, unchanged.
   - **Chat** (in `layout-settings-panel.tsx` itself). `Pin context breakdown`
     is a `SettingsSubgroup` whose title switch is the pin
     (`pinContextUsageBreakdown`); open, it shows one `Fields` chip row
