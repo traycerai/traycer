@@ -1,3 +1,4 @@
+import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 
 export type FocusPromptKind = "approval" | "interview" | "browser";
@@ -36,6 +37,10 @@ export interface FocusBackgroundRow {
   readonly taskTitle: string | null;
   readonly label: string; // managed command description or background item title
   readonly kind: "managed-command" | "background-item";
+  /** The background item's own kind, for the row's glyph. `null` for a managed
+   * command, which is a durable shell rather than a node of a turn and has no
+   * kind on that plane. Presentation only - nothing routes on it. */
+  readonly itemKind: BackgroundItem["kind"] | null;
   readonly startedAtMs: number | null; // managed commands only
   readonly stoppable: boolean;
 }

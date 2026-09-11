@@ -43,12 +43,16 @@ describe("buildFocusBackground", () => {
     expect(byEpic.get("epic-1")).toMatchObject({
       kind: "managed-command",
       label: "deploy watcher",
+      // A durable shell is not a node of a turn, so it has no kind on that
+      // plane and the row does not invent one.
+      itemKind: null,
       startedAtMs: 12_345,
       stoppable: true,
     });
     expect(byEpic.get("epic-2")).toMatchObject({
       kind: "managed-command",
       label: "build watcher",
+      itemKind: null,
       startedAtMs: 99_999,
       stoppable: false,
     });
@@ -79,9 +83,28 @@ describe("buildFocusBackground", () => {
     expect(rows[0]).toMatchObject({
       kind: "background-item",
       label: "Subagent",
+      itemKind: "subagent",
       startedAtMs: null,
       stoppable: false,
     });
+  });
+
+  // The row carries the item's own kind so Home can draw the same glyph the
+  // chat's Background panel draws for it. Presentation only - nothing routes
+  // on it - but it has to be the item's kind, not the plane's.
+  it("carries each background item's own kind onto its row", () => {
+    const chat = makeFocusBackgroundChat({
+      epicId: "epic-1",
+      chatId: "chat-1",
+      backgroundItems: [
+        makeRunningBackgroundItem({ taskId: "task-a", kind: "monitor" }),
+        makeRunningBackgroundItem({ taskId: "task-b", kind: "subagent" }),
+      ],
+    });
+
+    const rows = buildFocusBackground([chat], []);
+
+    expect(rows.map((row) => row.itemKind)).toEqual(["monitor", "subagent"]);
   });
 
   it("orders rows by epic asc, then chat asc, then managed-command before background-item, then key asc", () => {

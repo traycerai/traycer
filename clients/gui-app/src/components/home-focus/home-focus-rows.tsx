@@ -10,6 +10,11 @@
  * rather than a click handler on the `<li>`, so the row is reachable by Tab and
  * Enter opens it with no key handling of our own. Trailing controls are
  * SIBLINGS of that button, never nested inside it.
+ *
+ * There is no trailing `Open` button, and its absence is deliberate. The row
+ * body IS the open control and already spans the whole card, so a second
+ * control doing the same thing was one extra tab stop per row and a second
+ * announcement of a verb the row had already offered.
  */
 import { useState, type ReactNode } from "react";
 import { Globe, Layers, Square, Terminal } from "lucide-react";
@@ -31,6 +36,19 @@ import {
 } from "@/components/ui/dialog";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useReactiveLocalHostEntry } from "@/hooks/host/use-reactive-local-host-entry";
+import { useHomeDensity } from "@/hooks/home-focus/use-home-density";
+import {
+  homeChipRowClass,
+  homeRowClass,
+  ROW_BODY_CLASS,
+  TASK_TITLE_CLASS,
+} from "@/components/home-focus/home-focus-row-style";
+import { EPIC_NODE_ICONS } from "@/lib/artifacts/node-display";
+import { BACKGROUND_KIND_ICONS } from "@/lib/chat/background-kind-icon";
+import {
+  focusAgentDisplayName,
+  focusTaskTitleOf,
+} from "@/lib/home-focus/focus-row-labels";
 import {
   formatCompactRelativeTime,
   useRelativeTimestamp,
@@ -73,8 +91,6 @@ export interface HomeFocusRowActions {
   readonly stopping: ReadonlySet<string>;
 }
 
-const UNTITLED_TASK = "Untitled task";
-
 /** What a row whose stop cannot be ROUTED says instead of offering one: the
  * machine it runs on is not one this window can dial. */
 const UNREACHABLE_STOP_REASON = "Runs on another device";
@@ -93,27 +109,6 @@ function backgroundStopReason(row: FocusBackgroundRow): string | null {
   return row.kind === "background-item"
     ? BACKGROUND_ITEM_STOP_REASON
     : UNREACHABLE_STOP_REASON;
-}
-
-// `active:press-scrim pointer-coarse:touch-chrome` for the same reason the
-// History row card carries them: the row is a plain container, not a `Button`,
-// so it opts into the shared press scrim itself. Without it a tap on touch -
-// where `hover:` never fires - leaves the row inert for the whole open round
-// trip, and Home is a phone surface too.
-const ROW_CLASS =
-  "group/focus-row relative flex min-w-0 items-center gap-3 rounded-md p-3 text-ui-sm transition-colors hover:bg-accent/40 has-[:focus-visible]:bg-accent/40 active:press-scrim pointer-coarse:touch-chrome";
-
-/** The row's edge-to-edge open control. Stretched over the whole card by the
- * absolute overlay so a click anywhere that is not another control opens the
- * row, while the button itself stays an ordinary inline flex child for layout
- * and for the accessible name. */
-const ROW_BODY_CLASS =
-  "flex min-w-0 flex-1 items-center gap-2 rounded-sm text-left outline-none before:absolute before:inset-0 before:rounded-md before:content-[''] focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset";
-
-const TASK_TITLE_CLASS = "shrink-0 truncate font-medium text-foreground";
-
-function taskTitleOf(title: string | null): string {
-  return title ?? UNTITLED_TASK;
 }
 
 /** The tone registry entry a prompt kind reads as. Browser hand-offs have no
@@ -144,7 +139,7 @@ function PromptGlyph(props: { readonly kind: FocusPromptKind }): ReactNode {
 /** The attention glyph a task carries when something in it is waiting on the
  * user - the same registry the History rows and the tab strip read, so a task
  * that wants attention looks the same wherever it is listed. */
-function TaskAttentionGlyph(): ReactNode {
+export function TaskAttentionGlyph(): ReactNode {
   const Icon = APPROVAL_TONE.Icon;
   return (
     <Icon
@@ -152,6 +147,60 @@ function TaskAttentionGlyph(): ReactNode {
       role="img"
       className={cn("size-4 shrink-0", APPROVAL_TONE.className)}
       data-testid="home-focus-task-attention"
+    />
+  );
+}
+
+/**
+ * The glyph an agent row carries, read off the SAME registry the epic tree and
+ * the sidebars read (`EPIC_NODE_ICONS`): a chat is a `MessageSquare`, a
+ * terminal agent is a `Bot`. A terminal agent is deliberately not a `Terminal`
+ * - that glyph means "a shell" everywhere else on this page, and a TUI agent is
+ * not one.
+ *
+ * `null` when the surface is unknown, which is every agent in a task no tile in
+ * this window has open. A guessed glyph would be the one part of the row that
+ * looks equally confident whether or not anything is known.
+ */
+export function AgentGlyph(props: {
+  readonly surface: FocusAgentRow["surface"];
+  readonly className: string;
+}): ReactNode {
+  if (props.surface === null) return null;
+  const Icon = EPIC_NODE_ICONS[props.surface];
+  return (
+    <Icon
+      aria-hidden
+      className={cn("shrink-0 text-muted-foreground", props.className)}
+      data-testid="home-focus-agent-glyph"
+      data-surface={props.surface}
+    />
+  );
+}
+
+/**
+ * A background row's glyph: the chat Background panel's own per-kind map for a
+ * background item, and `Terminal` for a managed command.
+ *
+ * The map is shared rather than restated (`lib/chat/background-kind-icon.ts`),
+ * because the two surfaces list the same objects - a sub-agent that is a `Bot`
+ * in the chat has to be a `Bot` here. The managed-command case is not in that
+ * map on purpose: it is a durable shell the host owns across turns, not a node
+ * of a turn, and `Terminal` is what that plane has always read as.
+ */
+export function BackgroundGlyph(props: {
+  readonly row: FocusBackgroundRow;
+}): ReactNode {
+  const Icon =
+    props.row.itemKind === null
+      ? Terminal
+      : BACKGROUND_KIND_ICONS[props.row.itemKind];
+  return (
+    <Icon
+      aria-hidden
+      className="size-4 shrink-0 text-muted-foreground"
+      data-testid="home-focus-background-glyph"
+      data-item-kind={props.row.itemKind}
     />
   );
 }
@@ -172,7 +221,7 @@ function FocusRelativeTime(props: { readonly createdAt: number }): ReactNode {
 
 /** Elapsed time for a background job, on the same shared clock. "just started"
  * rather than "running now", which reads as a state rather than a duration. */
-function FocusRunningDuration(props: {
+export function FocusRunningDuration(props: {
   readonly startedAtMs: number;
 }): ReactNode {
   const now = useSampledNow();
@@ -222,17 +271,23 @@ export function HomeFocusPromptRow(props: {
   readonly actions: HomeFocusRowActions;
 }): ReactNode {
   const { row, actions } = props;
-  const open = (): void => actions.openPrompt(row);
+  const density = useHomeDensity();
   return (
-    <li className={ROW_CLASS} data-testid="home-focus-prompt-row">
+    <li
+      className={homeRowClass(density)}
+      data-density={density}
+      data-testid="home-focus-prompt-row"
+    >
       <button
         type="button"
-        onClick={open}
+        onClick={() => actions.openPrompt(row)}
         className={ROW_BODY_CLASS}
         data-testid="home-focus-prompt-open-body"
       >
         <PromptGlyph kind={row.kind} />
-        <span className={TASK_TITLE_CLASS}>{taskTitleOf(row.taskTitle)}</span>
+        <span className={TASK_TITLE_CLASS}>
+          {focusTaskTitleOf(row.taskTitle)}
+        </span>
         <span className="min-w-0 flex-1 truncate text-muted-foreground">
           <span className="text-foreground">{row.title}</span>
           {row.body === "" ? null : <span> — {row.body}</span>}
@@ -240,20 +295,6 @@ export function HomeFocusPromptRow(props: {
         <OriginHostChip originHostId={row.originHostId} />
         <FocusRelativeTime createdAt={row.createdAt} />
       </button>
-      <RowActions>
-        {/* Every row's trailing control says "Open"; the label is what tells
-            a screen reader which one it landed on. */}
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          aria-label={`Open ${row.title}`}
-          onClick={open}
-          data-testid="home-focus-prompt-open"
-        >
-          Open
-        </Button>
-      </RowActions>
     </li>
   );
 }
@@ -262,11 +303,21 @@ export function HomeFocusPromptRow(props: {
  * Trailing control cluster. `relative` lifts it above the body button's
  * stretched hit area so its own clicks land on it.
  *
- * That is an invariant, not a detail: the overlay is a positioned box early in
- * tree order, so ANY interactive element placed after the body button without
- * a position of its own paints under it and stops being clickable, silently.
- * Every control in a row belongs either here or inside a positioned wrapper of
- * its own (`AgentChip`).
+ * That is an invariant, not a detail, and it has two directions. The overlay is
+ * an absolutely positioned box belonging to the body button, so it stretches
+ * across the WHOLE row and paints in step 8 of the painting order along with
+ * every other `z-index: auto` positioned box - in tree order:
+ *
+ * - AFTER the body button (here, and `AgentChip`): the control is later in tree
+ *   order, so bare `relative` puts it above the overlay.
+ * - BEFORE the body button (the Tasks view's disclosure twisty): the overlay
+ *   belongs to a LATER sibling and paints last, so `relative` ties and loses.
+ *   Such a control needs a real `z-10`, the same way `epics-list-panel`'s row
+ *   content sits over its own stretched link.
+ *
+ * A control with no position at all paints in step 7 and is under the overlay
+ * from either side. Every control in a row belongs here, or in a positioned
+ * wrapper of its own, or - if it leads the row - carries `z-10`.
  */
 function RowActions(props: { readonly children: ReactNode }): ReactNode {
   return (
@@ -362,7 +413,7 @@ function stopAllRoots(
   );
 }
 
-function ActivityDot(props: {
+export function ActivityDot(props: {
   readonly tier: FocusAgentRow["tier"];
 }): ReactNode {
   return (
@@ -378,10 +429,6 @@ function ActivityDot(props: {
   );
 }
 
-function agentDisplayName(agent: FocusAgentRow): string {
-  return agent.title ?? "agent";
-}
-
 /** A task's tier at a glance: any agent taking a turn makes the task a turn. */
 function taskTier(agents: ReadonlyArray<FocusAgentRow>): FocusAgentRow["tier"] {
   return agents.some((agent) => agent.tier === "turn") ? "turn" : "background";
@@ -393,7 +440,7 @@ function AgentChip(props: {
   readonly actions: HomeFocusRowActions;
 }): ReactNode {
   const { epicId, agent, actions } = props;
-  const name = agentDisplayName(agent);
+  const name = focusAgentDisplayName(agent);
   return (
     <button
       type="button"
@@ -403,12 +450,7 @@ function AgentChip(props: {
       data-agent-id={agent.agentId}
     >
       <ActivityDot tier={agent.tier} />
-      {agent.surface === "terminal-agent" ? (
-        <Terminal
-          aria-hidden
-          className="size-3 shrink-0 text-muted-foreground"
-        />
-      ) : null}
+      <AgentGlyph surface={agent.surface} className="size-3" />
       <span className="truncate text-foreground">{name}</span>
       <span className="shrink-0 text-ui-xs text-muted-foreground">
         {agent.tier}
@@ -419,7 +461,7 @@ function AgentChip(props: {
 
 /** What a cold task can say about itself: a count and a tier, with no names,
  * because agent titles only exist for epics mounted in this window. */
-function ColdTaskAgents(props: {
+export function ColdTaskAgents(props: {
   readonly agents: ReadonlyArray<FocusAgentRow>;
 }): ReactNode {
   const count = props.agents.length;
@@ -445,10 +487,14 @@ export function HomeFocusTaskRow(props: {
   readonly actions: HomeFocusRowActions;
 }): ReactNode {
   const { row, actions } = props;
-  const [confirmingStopAll, setConfirmingStopAll] = useState<boolean>(false);
-  const title = taskTitleOf(row.taskTitle);
+  const density = useHomeDensity();
+  const title = focusTaskTitleOf(row.taskTitle);
   return (
-    <li className={ROW_CLASS} data-testid="home-focus-task-row">
+    <li
+      className={homeRowClass(density)}
+      data-density={density}
+      data-testid="home-focus-task-row"
+    >
       <button
         type="button"
         onClick={() => actions.openTask(row.epicId)}
@@ -469,7 +515,7 @@ export function HomeFocusTaskRow(props: {
           stay above this container so a click on the row's blank space opens
           the task, while each chip's own `relative` lifts it back above the
           overlay. */}
-      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
+      <div className={homeChipRowClass(density)}>
         {row.mountedHere ? (
           row.agents.map((agent) => (
             <AgentChip
@@ -483,17 +529,27 @@ export function HomeFocusTaskRow(props: {
           <ColdTaskAgents agents={row.agents} />
         )}
       </div>
+      <HomeFocusTaskStopCluster row={row} actions={actions} />
+    </li>
+  );
+}
+
+/**
+ * A task's stop control and the confirmation it may open, as one unit.
+ *
+ * Both views mount it, which is why the confirm state lives here rather than in
+ * either row: the dialog belongs to the decision, not to the shape of the row
+ * that offered it.
+ */
+export function HomeFocusTaskStopCluster(props: {
+  readonly row: FocusTaskRow;
+  readonly actions: HomeFocusRowActions;
+}): ReactNode {
+  const { row, actions } = props;
+  const [confirmingStopAll, setConfirmingStopAll] = useState<boolean>(false);
+  return (
+    <>
       <RowActions>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          aria-label={`Open ${title}`}
-          onClick={() => actions.openTask(row.epicId)}
-          data-testid="home-focus-task-open"
-        >
-          Open
-        </Button>
         <TaskStopControl
           row={row}
           actions={actions}
@@ -516,7 +572,7 @@ export function HomeFocusTaskRow(props: {
           }
         }}
       />
-    </li>
+    </>
   );
 }
 
@@ -535,7 +591,7 @@ function TaskStopControl(props: {
   readonly onRequestStopAll: () => void;
 }): ReactNode {
   const { row, actions } = props;
-  const title = taskTitleOf(row.taskTitle);
+  const title = focusTaskTitleOf(row.taskTitle);
   if (row.agents.length === 0) return null;
   const reason = row.stoppable ? null : UNREACHABLE_STOP_REASON;
   const only = row.agents.length === 1 ? row.agents[0] : undefined;
@@ -544,7 +600,7 @@ function TaskStopControl(props: {
     return (
       <FocusStopButton
         label="Stop"
-        ariaLabel={`Stop ${agentDisplayName(only)} in ${title}`}
+        ariaLabel={`Stop ${focusAgentDisplayName(only)} in ${title}`}
         reason={reason}
         disabled={pending || !row.stoppable}
         pending={pending}
@@ -584,7 +640,7 @@ function StopAllDialog(props: {
   readonly onConfirm: () => void;
 }): ReactNode {
   const { row } = props;
-  const title = taskTitleOf(row.taskTitle);
+  const title = focusTaskTitleOf(row.taskTitle);
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent
@@ -604,7 +660,7 @@ function StopAllDialog(props: {
           {row.agents.map((agent) => (
             <li key={agent.agentId} className="flex items-center gap-2">
               <ActivityDot tier={agent.tier} />
-              <span className="truncate">{agentDisplayName(agent)}</span>
+              <span className="truncate">{focusAgentDisplayName(agent)}</span>
               <span className="shrink-0 text-ui-xs text-muted-foreground">
                 {agent.tier}
               </span>
@@ -639,19 +695,23 @@ export function HomeFocusBackgroundRow(props: {
   readonly actions: HomeFocusRowActions;
 }): ReactNode {
   const { row, actions } = props;
+  const density = useHomeDensity();
   return (
-    <li className={ROW_CLASS} data-testid="home-focus-background-row">
+    <li
+      className={homeRowClass(density)}
+      data-density={density}
+      data-testid="home-focus-background-row"
+    >
       <button
         type="button"
         onClick={() => actions.openBackground(row)}
         className={ROW_BODY_CLASS}
         data-testid="home-focus-background-open-body"
       >
-        <Terminal
-          aria-hidden
-          className="size-4 shrink-0 text-muted-foreground"
-        />
-        <span className={TASK_TITLE_CLASS}>{taskTitleOf(row.taskTitle)}</span>
+        <BackgroundGlyph row={row} />
+        <span className={TASK_TITLE_CLASS}>
+          {focusTaskTitleOf(row.taskTitle)}
+        </span>
         <span className="min-w-0 flex-1 truncate text-foreground">
           {row.label}
         </span>
@@ -660,16 +720,6 @@ export function HomeFocusBackgroundRow(props: {
         )}
       </button>
       <RowActions>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          aria-label={`Open ${row.label}`}
-          onClick={() => actions.openBackground(row)}
-          data-testid="home-focus-background-open"
-        >
-          Open
-        </Button>
         <FocusStopButton
           label="Stop"
           ariaLabel={`Stop ${row.label}`}

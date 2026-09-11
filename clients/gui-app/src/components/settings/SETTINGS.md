@@ -1551,12 +1551,14 @@ md:top-0`): positioned against the nearest scrollport - the settings
     pinned child opaque inside a `bg-card/40` pane is what cost the
     model-providers tab its sticky search.
   - **Tabs** (`panels/layout/tabs-layout-group.tsx`) - what the top-level tab
-    strip carries. One row today: `Home tab`
+    strip carries. Two rows: `Home tab`
     (`settings-store.homeTabEnabled`, default off), the fixed Home tab and its
-    focus view. It is a GROUP with one row rather than a row inside Status bar,
+    focus view, and `Home density`
+    (`layout-store.home.density`, default `Comfortable`). It is a GROUP rather
+    than a row inside Status bar,
     because a tab is not part of the footer and the two collapse differently:
     nothing in this group keys on `isMobileApp()`, since that build has no
-    strip but does draw what the row governs, as the first entry in the nav
+    strip but does draw what the rows govern, as the first entry in the nav
     drawer. Parking it under Status bar would have made it the one row there
     that survives that group's collapse for a reason unrelated to the header -
     a second exception with a different argument behind it, in the group that
@@ -1722,6 +1724,65 @@ panel visibility` is enabled there - and reachable only from the rail.
     the viewport hook's own case. Gating on the build instead would hide a
     working list on a tablet running the installed app, which is wide enough to
     draw the rail. The relocated resource-chips row is unaffected either way.
+  - **Home tab behaviour** - NOT a group on this page; the only Settings
+    row Home owns is `Home density` above. Recorded here because this is
+    where a reader goes looking for what that row governs
+    (`components/home-focus/`, `lib/home-focus/`, `layout-store.home`).
+    - **View** (`focus` | `tasks`, default `focus`) is written by a segmented
+      control on the Home page itself and has NO Settings row. It persists its
+      last selection, so the page comes back as you left it, but the question
+      "which reading am I looking at" is answered where the reading is - a row
+      here would be a second answer to it, reachable only by leaving Home.
+      `Focus` is today's flat page (Needs you · Running · Background). `Tasks`
+      keeps Needs you global and first, then regroups Running and Background
+      under one collapsible row per task; there is no separate Background
+      section under it, because a job belongs to the task it runs in and
+      listing it twice would be the same row under two headings. That holds
+      only because `selectTaskGroups` groups on the UNION of task epics and job
+      epics: `model.tasks` covers epics with a RUNNING AGENT and
+      `model.background` covers epics with a WARM CHAT, and the two are not
+      nested - so a durable shell in an idle chat is a group of its own, with a
+      `N bg` badge and no `N active`. On an intersection it would have been a
+      row with nowhere to go, and on an account whose only activity is a dev
+      server the page would have been blank. Emptiness is asked of the chosen
+      VIEW for the same reason (`viewIsEmpty`), never of the model.
+    - **Density** (`Comfortable` | `Compact`, default `Comfortable`) IS the one
+      row this page owns, because it is a preference about the app's chrome
+      rather than about what is on screen right now. `Compact` tightens the
+      desktop row (`p-3` → `p-2`, chip gap with it); every tightened utility is
+      restored under `pointer-coarse:`, so a phone keeps the hit area H3 sized
+      for a thumb and the `touch-chrome` that goes with it. Comfortable renders
+      the identical class string it did before the slice existed.
+    - **Icon vocabulary is row-level only; section headings stay text**, which
+      is what keeps the screen-reader heading outline a list of names rather
+      than of glyphs. Agents read off `EPIC_NODE_ICONS` (chat `MessageSquare`,
+      terminal agent `Bot`) - a terminal agent is deliberately NOT `Terminal`,
+      which means "a shell" everywhere else on the page. A managed command is
+      `Terminal`; a background item uses the chat Background panel's own
+      per-kind map, shared through `lib/chat/background-kind-icon.ts` rather
+      than restated, so a sub-agent is a `Bot` in both places. Prompts keep the
+      notification tone glyphs. Colour is derived state only - there is no
+      colour setting here and no identity palette.
+    - **Nesting is task → work row, and stops there.** A task expands into its
+      agents and its mounted jobs; an agent started by another listed agent
+      says `via <parent>` instead of taking a third indent. A Needs-you row is
+      never nested or duplicated under its task - the task carries a
+      noninteractive attention glyph and a count of LOADED prompt rows
+      (`selectTaskGroups`, never the `needsYou` boolean, which is also true for
+      a prompt the feed has not paged in). A cold task degrades to one summary
+      row with no agent names and no exposed disclosure. `N bg` renders only
+      where this window can SEE the task's background - the warm-chat set the
+      jobs come from, never `mountedHere`, which is the wider "has a live Y.Doc
+      projection here" and would read `0 bg` at a task whose chats were simply
+      never opened. First entry expands all when there
+      are three tasks or fewer, otherwise all collapsed; the disclosure is each
+      row's own `useState`, which makes it session-lived and self-pruning - the
+      `<li>` is keyed by epic id, so a task leaving the model takes its
+      disclosure with it.
+    - **No row carries a trailing `Open`** in either view: the row body already
+      spans the card and opens the same thing, so the second control was one
+      extra tab stop per row announcing a verb the row had already offered.
+      Stop / Stop all stay.
 - `Providers` Per-provider CLI binary selection (Codex / Claude Code / OpenCode
   / Traycer / Cursor). Left rail picks the provider (brand icons via
   `HarnessIcon`); the

@@ -13,36 +13,74 @@
  * timestamps subscribe to the app's shared 60s clock inside their own leaves
  * rather than holding a timer here.
  */
-import { type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
+import {
+  SettingsSegmentedControl,
+  type SettingsSegmentedOption,
+} from "@/components/settings/controls/settings-segmented-control";
 import {
   HomeFocusBackgroundRow,
   HomeFocusPromptRow,
   HomeFocusTaskRow,
   type HomeFocusRowActions,
 } from "@/components/home-focus/home-focus-rows";
+import { HomeFocusTaskGroups } from "@/components/home-focus/home-focus-task-groups";
 import { useFocusActions } from "@/hooks/home-focus/use-focus-actions";
 import { useFocusModel } from "@/hooks/home-focus/use-focus-model";
+import { trackSettingChanged } from "@/lib/analytics";
 import { openNewEpicIntent } from "@/lib/commands/actions/new-epic";
+import {
+  selectTaskGroups,
+  type FocusTaskGroup,
+} from "@/lib/home-focus/focus-task-groups";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
 import { historyTabIntent } from "@/lib/tab-navigation/intents";
+import { useLayoutStore, type HomeView } from "@/stores/settings/layout-store";
 import type { FocusModel } from "@/lib/home-focus/focus-model";
 
 const BACKGROUND_CAPTION = "Only tasks open in this window";
+/**
+ * The same window-local limit, said the way the Tasks section needs it said.
+ *
+ * Focus's caption sits on a section that IS the background list, so "only tasks
+ * open in this window" scopes the rows under it. Under Tasks the heading covers
+ * every task, background or not, and the limit binds a PART of each row - the
+ * `N bg` badge and the job children - so the caption has to name what is
+ * bounded rather than appear to bound the task list itself.
+ */
+const TASKS_BACKGROUND_CAPTION =
+  "Background shown for tasks open in this window";
 const NOTIFICATIONS_LOCAL_CAPTION = "this host only";
 // Deliberately does not name other hosts: `disconnected` is also what THIS
 // client's own activity stream reports when it is closed, and then the Running
 // section can be empty outright rather than merely partial.
 const ACTIVITY_NOTICE = "Some activity may be missing";
 
+const HOME_VIEW_OPTIONS: ReadonlyArray<SettingsSegmentedOption<HomeView>> = [
+  { value: "focus", label: "Focus" },
+  { value: "tasks", label: "Tasks" },
+];
+
+/** What Focus hands `viewIsEmpty` and `HomeFocusSections` in place of a
+ * grouping neither of them reads. */
+const NO_TASK_GROUPS: ReadonlyArray<FocusTaskGroup> = Object.freeze([]);
+
 export function HomeFocusView(): ReactNode {
   const model = useFocusModel();
   const actions: HomeFocusRowActions = useFocusActions();
-  const isEmpty =
-    model.prompts.length === 0 &&
-    model.tasks.length === 0 &&
-    model.background.length === 0;
+  const view = useLayoutStore((state) => state.home.view);
+  const setHomeView = useLayoutStore((state) => state.setHomeView);
+  // Grouped only for the view that renders groups. Focus reads its emptiness
+  // off the model alone (`viewIsEmpty`) and draws none of these rows, so on the
+  // default view this is a pass over prompts and background rows that nothing
+  // consumes. The frozen empty array keeps the identity stable across Focus
+  // renders rather than handing consumers a fresh `[]` each time.
+  const groups = useMemo(
+    () => (view === "tasks" ? selectTaskGroups(model) : NO_TASK_GROUPS),
+    [model, view],
+  );
   return (
     // One landmark for the whole page - the inner groups are plain containers
     // with `h2` headings so a screen reader gets a heading outline rather than
@@ -50,24 +88,107 @@ export function HomeFocusView(): ReactNode {
     <section
       aria-label="Home"
       data-testid="home-focus-view"
+      data-view={view}
       className="h-full w-full overflow-y-auto"
     >
       {/* `pb-safe-bottom-gutter`, not `pb-6`: the page scrolls to its own end,
           so the last row has to clear the home indicator on a phone and still
           keep a real gutter on a desktop where every inset is zero. */}
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-2 px-4 pt-6 pb-safe-bottom-gutter">
+        {/* A control row rather than a title bar. Home's name is already on the
+            tab that opened it, so repeating it here would cost the first
+            section a line of vertical space and say nothing - the one thing
+            this row adds is the choice, and it is right-aligned so the page
+            still starts, visually, with Needs you. */}
+        <div className="flex items-center justify-end px-3">
+          <SettingsSegmentedControl
+            value={view}
+            options={HOME_VIEW_OPTIONS}
+            onChange={(next) => {
+              trackSettingChanged("layout", "layout.home.view");
+              setHomeView(next);
+            }}
+            ariaLabel="Home view"
+          />
+        </div>
         <ActivityCoverageNotice activity={model.coverage.activity} />
-        {isEmpty ? (
+        {viewIsEmpty(view, model, groups) ? (
           <HomeFocusEmptyState />
         ) : (
-          <>
-            <PromptsSection model={model} actions={actions} />
-            <TasksSection model={model} actions={actions} />
-            <BackgroundSection model={model} actions={actions} />
-          </>
+          <HomeFocusSections
+            view={view}
+            model={model}
+            groups={groups}
+            actions={actions}
+          />
         )}
       </div>
     </section>
+  );
+}
+
+/**
+ * Whether the CHOSEN VIEW has anything to draw - which is not the same question
+ * as whether the model is empty, and the difference is a blank page.
+ *
+ * The two views render different projections of the same model, so "nothing to
+ * show" has to be asked of the projection. Tasks draws prompts and groups and
+ * has no Background section, so a model whose only content is background work
+ * would pass a model-level emptiness check, suppress the empty state, and then
+ * render both of its sections as `null`: a page with a segmented control and
+ * nothing under it, saying neither what is running nor that anything is hidden.
+ *
+ * `selectTaskGroups` keeps the gap from being wide - it groups background-only
+ * epics too, so Tasks is genuinely empty far less often than it would be on an
+ * intersection - but "far less often" is not "never", and the empty state is
+ * the honest thing to draw when it is.
+ *
+ * `groups` is READ ON THE TASKS BRANCH ONLY, and that is a requirement rather
+ * than an accident: the caller does not compute a grouping for Focus, so under
+ * Focus the argument is an empty array that says nothing about the model.
+ * Focus's own answer comes off the model, exactly as it did before either view
+ * existed.
+ */
+function viewIsEmpty(
+  view: HomeView,
+  model: FocusModel,
+  groups: ReadonlyArray<FocusTaskGroup>,
+): boolean {
+  if (model.prompts.length > 0) return false;
+  if (view === "tasks") return groups.length === 0;
+  return model.tasks.length === 0 && model.background.length === 0;
+}
+
+/**
+ * What each view lists, and in what order.
+ *
+ * `Needs you` is FIRST AND GLOBAL in both, deliberately: the two views disagree
+ * about how running work is arranged, never about where the things waiting on
+ * the user live. Tasks has no Background section of its own - a job is listed
+ * under the task it belongs to, including when that task has nothing running
+ * and is on the page for its background work alone.
+ */
+function HomeFocusSections(props: {
+  readonly view: HomeView;
+  readonly model: FocusModel;
+  readonly groups: ReadonlyArray<FocusTaskGroup>;
+  readonly actions: HomeFocusRowActions;
+}): ReactNode {
+  const { model, actions } = props;
+  if (props.view === "tasks") {
+    return (
+      <>
+        <PromptsSection model={model} actions={actions} />
+        <TaskGroupsSection groups={props.groups} actions={actions} />
+      </>
+    );
+  }
+  return (
+    <>
+      <PromptsSection model={model} actions={actions} />
+      <TasksSection model={model} actions={actions} />
+      <BackgroundSection model={model} actions={actions} />
+    </>
   );
 }
 
@@ -167,6 +288,39 @@ function TasksSection(props: {
       {tasks.map((row) => (
         <HomeFocusTaskRow key={row.epicId} row={row} actions={props.actions} />
       ))}
+    </HomeFocusSection>
+  );
+}
+
+/**
+ * The Tasks view's regrouping of Running and Background.
+ *
+ * There is no separate Background section under this view: a job belongs to the
+ * task it runs in, and listing it twice would be the same row under two
+ * headings. That only holds because `selectTaskGroups` groups on the UNION of
+ * task epics and job epics - a task with a durable shell and no running agent
+ * is a group of its own rather than a row with nowhere to go.
+ *
+ * It carries a Background caption of its own, because this section makes the
+ * same window-local claim the Background section does and is the only place a
+ * reader can now see it stated. Every `N bg` badge and every job child under it
+ * is bounded by that sentence - and only those: the task list itself is not
+ * window-local, which is why the wording is not Focus's.
+ */
+function TaskGroupsSection(props: {
+  readonly groups: ReadonlyArray<FocusTaskGroup>;
+  readonly actions: HomeFocusRowActions;
+}): ReactNode {
+  const { groups } = props;
+  if (groups.length === 0) return null;
+  return (
+    <HomeFocusSection
+      title="Tasks"
+      count={groups.length === 1 ? "1 task" : `${groups.length} tasks`}
+      caption={TASKS_BACKGROUND_CAPTION}
+      testId="home-focus-section-task-groups"
+    >
+      <HomeFocusTaskGroups groups={groups} actions={props.actions} />
     </HomeFocusSection>
   );
 }

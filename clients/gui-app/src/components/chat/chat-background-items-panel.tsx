@@ -1,17 +1,8 @@
 import { useId, useMemo, useState } from "react";
 import { useDraggable } from "@dnd-kit/core";
-import {
-  AlarmClock,
-  Bot,
-  ChevronDown,
-  Monitor,
-  PauseCircle,
-  Plug,
-  Square,
-  TerminalSquare,
-  Workflow,
-} from "lucide-react";
+import { ChevronDown, PauseCircle, Square } from "lucide-react";
 import type { BackgroundItem } from "@traycer/protocol/host/agent/gui/subscribe";
+import { BACKGROUND_KIND_ICONS } from "@/lib/chat/background-kind-icon";
 import {
   Collapsible,
   CollapsibleContent,
@@ -94,33 +85,8 @@ function backgroundStopLabel(kind: BackgroundItem["kind"]): string {
 }
 
 function BackgroundKindIcon(props: { readonly kind: BackgroundItem["kind"] }) {
-  switch (props.kind) {
-    case "subagent":
-      return <Bot aria-hidden className="size-3.5 shrink-0 text-primary/80" />;
-    case "command":
-      return (
-        <TerminalSquare
-          aria-hidden
-          className="size-3.5 shrink-0 text-primary/80"
-        />
-      );
-    case "monitor":
-      return (
-        <Monitor aria-hidden className="size-3.5 shrink-0 text-primary/80" />
-      );
-    case "wakeup":
-      return (
-        <AlarmClock aria-hidden className="size-3.5 shrink-0 text-primary/80" />
-      );
-    case "workflow":
-      return (
-        <Workflow aria-hidden className="size-3.5 shrink-0 text-primary/80" />
-      );
-    case "mcp":
-      return <Plug aria-hidden className="size-3.5 shrink-0 text-primary/80" />;
-  }
-  const unreachableKind: never = props.kind;
-  return unreachableKind;
+  const Icon = BACKGROUND_KIND_ICONS[props.kind];
+  return <Icon aria-hidden className="size-3.5 shrink-0 text-primary/80" />;
 }
 
 function itemScheduledFor(item: BackgroundItem): number | null {

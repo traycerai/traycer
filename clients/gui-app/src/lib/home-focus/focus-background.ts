@@ -77,6 +77,7 @@ export function buildFocusBackground(
       taskTitle: chat.taskTitle,
       label: command.description,
       kind: "managed-command",
+      itemKind: null,
       startedAtMs:
         command.status.state === "running" ? command.status.startedAtMs : null,
       stoppable: chat.hostId !== null,
@@ -90,6 +91,7 @@ export function buildFocusBackground(
         taskTitle: chat.taskTitle,
         label: item.title,
         kind: "background-item",
+        itemKind: item.kind,
         startedAtMs: null,
         stoppable: false,
       })),

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CURRENT_PERSIST_VERSION, STORE_KEYS, persistKey } from "@/lib/persist";
 import {
   DEFAULT_COMPOSER_LAYOUT,
+  DEFAULT_HOME_LAYOUT,
   DEFAULT_STATUS_BAR_LAYOUT,
   useLayoutStore,
 } from "@/stores/settings/layout-store";
@@ -12,6 +13,7 @@ function resetStore(): void {
   useLayoutStore.setState({
     statusBar: DEFAULT_STATUS_BAR_LAYOUT,
     composer: DEFAULT_COMPOSER_LAYOUT,
+    home: DEFAULT_HOME_LAYOUT,
   });
   window.localStorage.clear();
 }
@@ -64,6 +66,7 @@ describe("useLayoutStore", () => {
             placement: "status-bar",
           },
           composer: DEFAULT_COMPOSER_LAYOUT,
+          home: DEFAULT_HOME_LAYOUT,
         },
         version: CURRENT_PERSIST_VERSION,
       });
@@ -521,6 +524,97 @@ describe("useLayoutStore", () => {
         ...DEFAULT_COMPOSER_LAYOUT,
         filesChanged: "compact",
       });
+    });
+  });
+
+  describe("home slice", () => {
+    it("starts on the flat Focus page at comfortable spacing", () => {
+      expect(useLayoutStore.getState().home).toEqual({
+        view: "focus",
+        density: "comfortable",
+      });
+    });
+
+    it("writes and persists the view the in-page control picked", async () => {
+      useLayoutStore.getState().setHomeView("tasks");
+
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+      expect(useLayoutStore.getState().home.view).toBe("tasks");
+      expect(
+        JSON.parse(window.localStorage.getItem(PERSIST_KEY) ?? "{}"),
+      ).toEqual({
+        state: {
+          statusBar: DEFAULT_STATUS_BAR_LAYOUT,
+          composer: DEFAULT_COMPOSER_LAYOUT,
+          home: { view: "tasks", density: "comfortable" },
+        },
+        version: CURRENT_PERSIST_VERSION,
+      });
+    });
+
+    it("writes and persists the density the Settings row picked", async () => {
+      useLayoutStore.getState().setHomeDensity("compact");
+
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+      expect(useLayoutStore.getState().home.density).toBe("compact");
+      expect(
+        JSON.parse(window.localStorage.getItem(PERSIST_KEY) ?? "{}"),
+      ).toEqual({
+        state: {
+          statusBar: DEFAULT_STATUS_BAR_LAYOUT,
+          composer: DEFAULT_COMPOSER_LAYOUT,
+          home: { view: "focus", density: "compact" },
+        },
+        version: CURRENT_PERSIST_VERSION,
+      });
+    });
+
+    it("does not mint a new slice when a setter is handed the value it already holds", () => {
+      const before = useLayoutStore.getState().home;
+      useLayoutStore.getState().setHomeView("focus");
+      useLayoutStore.getState().setHomeDensity("comfortable");
+      expect(useLayoutStore.getState().home).toBe(before);
+    });
+
+    it("restores a persisted slice field by field", async () => {
+      await rehydrateFrom({ home: { view: "tasks", density: "compact" } });
+      expect(useLayoutStore.getState().home).toEqual({
+        view: "tasks",
+        density: "compact",
+      });
+    });
+
+    // Both values pick a branch on the render path, so an unrecognized one
+    // falls back rather than reaching a switch with no case for it.
+    it("falls back per field on an unrecognized value", async () => {
+      await rehydrateFrom({ home: { view: "timeline", density: 3 } });
+      expect(useLayoutStore.getState().home).toEqual(DEFAULT_HOME_LAYOUT);
+    });
+
+    it("keeps a valid field when only its neighbour is corrupt", async () => {
+      await rehydrateFrom({ home: { view: "tasks", density: "cosy" } });
+      expect(useLayoutStore.getState().home).toEqual({
+        view: "tasks",
+        density: "comfortable",
+      });
+    });
+
+    it("takes its own defaults when the slice is not an object at all", async () => {
+      await rehydrateFrom({
+        home: "not an object",
+        composer: { filesChanged: "compact" },
+      });
+      expect(useLayoutStore.getState().home).toEqual(DEFAULT_HOME_LAYOUT);
+      expect(useLayoutStore.getState().composer.filesChanged).toBe("compact");
+    });
+
+    // The slice an existing install has never written: an untouched Home
+    // keeps reading exactly as it did before this slice existed.
+    it("takes its own defaults when a persisted state predates the slice", async () => {
+      await rehydrateFrom({ statusBar: { placement: "status-bar" } });
+      expect(useLayoutStore.getState().home).toEqual(DEFAULT_HOME_LAYOUT);
     });
   });
 });

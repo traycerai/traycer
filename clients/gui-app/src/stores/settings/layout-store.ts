@@ -95,9 +95,34 @@ export interface ComposerLayoutPreferences {
   readonly compactButton: ComposerHideableMode;
 }
 
+/**
+ * Which of the Home tab's two readings is showing. `focus` is the flat page -
+ * Needs you, Running, Background; `tasks` keeps Needs you global and first and
+ * regroups the rest under one collapsible row per task.
+ *
+ * Persisted even though it has no Settings row: the in-page control is the only
+ * writer, and "the view I left Home in" is the thing a user expects back, not a
+ * preference they went looking for.
+ */
+export type HomeView = "focus" | "tasks";
+
+/**
+ * How much room a Home row takes. `compact` tightens the DESKTOP row only - the
+ * touch chrome a coarse pointer needs is restored by the row's own
+ * `pointer-coarse:` variants, so this is a pointer-precision preference rather
+ * than a global shrink.
+ */
+export type HomeDensity = "comfortable" | "compact";
+
+export interface HomeLayoutPreferences {
+  readonly view: HomeView;
+  readonly density: HomeDensity;
+}
+
 interface LayoutStoreState {
   readonly statusBar: StatusBarLayoutPreferences;
   readonly composer: ComposerLayoutPreferences;
+  readonly home: HomeLayoutPreferences;
   // Setters stay flat and are namespaced by their slice, so a call site names
   // the surface it is configuring and two slices can never collide on a verb.
   readonly setStatusBarPlacement: (placement: UsageControlsPlacement) => void;
@@ -124,6 +149,8 @@ interface LayoutStoreState {
   readonly setComposerAccess: (mode: ComposerCompactableMode) => void;
   readonly setComposerMic: (mode: ComposerHideableMode) => void;
   readonly setComposerCompactButton: (mode: ComposerHideableMode) => void;
+  readonly setHomeView: (view: HomeView) => void;
+  readonly setHomeDensity: (density: HomeDensity) => void;
 }
 
 /**
@@ -170,6 +197,17 @@ export const DEFAULT_COMPOSER_LAYOUT: ComposerLayoutPreferences = {
   access: "visible",
   mic: "visible",
   compactButton: "visible",
+};
+
+/**
+ * Home as it reads today: the flat Focus page at comfortable spacing. `focus`
+ * is also the FIRST PAINT rather than merely the initial value - an install
+ * that has never touched the control sees exactly the page it saw before this
+ * slice existed.
+ */
+export const DEFAULT_HOME_LAYOUT: HomeLayoutPreferences = {
+  view: "focus",
+  density: "comfortable",
 };
 
 const LAYOUT_PERSIST_KEY = persistKey(STORE_KEYS.layout);
@@ -377,6 +415,32 @@ function resolvePersistedComposer(value: unknown): ComposerLayoutPreferences {
   };
 }
 
+// ── home slice ──────────────────────────────────────────────────────────────
+
+function isHomeView(value: unknown): value is HomeView {
+  return value === "focus" || value === "tasks";
+}
+
+function isHomeDensity(value: unknown): value is HomeDensity {
+  return value === "comfortable" || value === "compact";
+}
+
+/**
+ * Field by field, like the two slices above. Both values pick a branch on the
+ * render path - an unrecognized `view` would mount neither reading of the page,
+ * and an unrecognized `density` would leave the rows with no spacing class at
+ * all.
+ */
+function resolvePersistedHome(value: unknown): HomeLayoutPreferences {
+  const stored: Record<string, unknown> = isRecord(value) ? value : {};
+  return {
+    view: isHomeView(stored.view) ? stored.view : DEFAULT_HOME_LAYOUT.view,
+    density: isHomeDensity(stored.density)
+      ? stored.density
+      : DEFAULT_HOME_LAYOUT.density,
+  };
+}
+
 function toggledMembership<T>(
   entries: ReadonlyArray<T>,
   entry: T,
@@ -391,6 +455,7 @@ export const useLayoutStore = create<LayoutStoreState>()(
     (set, get) => ({
       statusBar: DEFAULT_STATUS_BAR_LAYOUT,
       composer: DEFAULT_COMPOSER_LAYOUT,
+      home: DEFAULT_HOME_LAYOUT,
       setStatusBarPlacement: (placement) => {
         const statusBar = get().statusBar;
         if (statusBar.placement === placement) return;
@@ -566,6 +631,16 @@ export const useLayoutStore = create<LayoutStoreState>()(
         if (composer.compactButton === mode) return;
         set({ composer: { ...composer, compactButton: mode } });
       },
+      setHomeView: (view) => {
+        const home = get().home;
+        if (home.view === view) return;
+        set({ home: { ...home, view } });
+      },
+      setHomeDensity: (density) => {
+        const home = get().home;
+        if (home.density === density) return;
+        set({ home: { ...home, density } });
+      },
     }),
     {
       ...basePersistOptions(LAYOUT_PERSIST_KEY),
@@ -580,11 +655,13 @@ export const useLayoutStore = create<LayoutStoreState>()(
           ...currentState,
           statusBar: resolvePersistedStatusBar(persisted.statusBar),
           composer: resolvePersistedComposer(persisted.composer),
+          home: resolvePersistedHome(persisted.home),
         };
       },
       partialize: (state) => ({
         statusBar: state.statusBar,
         composer: state.composer,
+        home: state.home,
       }),
     },
   ),

@@ -291,6 +291,11 @@ export type AnalyticsSetting =
   // they name a path into one persisted store's slice, not a flat
   // `settings-store` key: the surface is the middle segment, so a second
   // surface's rows read as siblings instead of colliding on a verb.
+  // `layout.home.view` is written by the Home page's own segmented control
+  // rather than by a Settings row - the surface is still Home's layout, so it
+  // reports under the same run as the row beside it.
+  | "layout.home.density"
+  | "layout.home.view"
   | "layout.sidebar.panelOrder"
   | "layout.sidebar.panelVisibility"
   | "layout.sidebar.resetOrder"
@@ -1207,6 +1212,8 @@ const ANALYTICS_SETTINGS = new Set<string>(
     diffViewerPreferences: true,
     glassOpacity: true,
     homeTabEnabled: true,
+    "layout.home.density": true,
+    "layout.home.view": true,
     "layout.sidebar.panelOrder": true,
     "layout.sidebar.panelVisibility": true,
     "layout.sidebar.resetOrder": true,
