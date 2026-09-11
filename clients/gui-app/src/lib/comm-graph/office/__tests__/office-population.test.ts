@@ -3,6 +3,7 @@ import {
   partitionOfficePopulation,
   type OfficePopulation,
 } from "@/lib/comm-graph/office/office-population";
+import { isOfficeHotStatus } from "@/lib/comm-graph/office/office-status";
 import {
   makeTestEpic,
   type OfficeTestEpicShape,
@@ -118,13 +119,16 @@ describe("partitionOfficePopulation", () => {
 
   // The recording's shape, at the counts the ticket pins: the team count is
   // `min(30, floor((n-1)/7))`, so it only reaches the cap of 30 once n is well
-  // past it - both 309 and 1000 are past that point and land on 30.
+  // past it - both 309 and 1000 are past that point and land on 30. Hot and
+  // archived are pinned too, straight from the fixture's own stated rates
+  // (`floor(n * .09)` hot, `floor(n * .04)` archived) rather than re-derived,
+  // so a change to either side goes noticed here.
   it.each([
-    { n: 309, hq: 1, teams: 30, solos: 224 },
-    { n: 1000, hq: 1, teams: 30, solos: 915 },
+    { n: 309, hq: 1, teams: 30, solos: 224, hot: 27, archived: 12 },
+    { n: 1000, hq: 1, teams: 30, solos: 915, hot: 90, archived: 40 },
   ])(
-    "gives triage at $n agents $hq HQ, $teams teams and $solos solos",
-    ({ n, hq, teams, solos }) => {
+    "gives triage at $n agents $hq HQ, $teams teams, $solos solos, $hot hot and $archived archived",
+    ({ n, hq, teams, solos, hot, archived }) => {
       const epic = makeTestEpic("triage", n, 1);
       const partition = partitionOfficePopulation({
         agents: epic.agents,
@@ -138,8 +142,52 @@ describe("partitionOfficePopulation", () => {
       expect(host.hqAgentId !== null ? 1 : 0).toBe(hq);
       expect(host.teams).toHaveLength(teams);
       expect(host.solos).toHaveLength(solos);
+
+      const hotCount = epic.agents.filter((candidate) =>
+        isOfficeHotStatus(epic.statusById.get(candidate.id)),
+      ).length;
+      const archivedCount = epic.agents.filter(
+        (candidate) => candidate.archived && candidate.archivedAt !== null,
+      ).length;
+      expect(hotCount).toBe(hot);
+      expect(archivedCount).toBe(archived);
     },
   );
+
+  it("repeats the same fixture deterministically for the same seed", () => {
+    const first = makeTestEpic("triage", 309, 1);
+    const second = makeTestEpic("triage", 309, 1);
+    expect(second.agents).toEqual(first.agents);
+    expect(second.statusById).toEqual(first.statusById);
+
+    const firstPartition = partitionOfficePopulation({
+      agents: first.agents,
+      statusById: first.statusById,
+      previous: null,
+    });
+    const secondPartition = partitionOfficePopulation({
+      agents: second.agents,
+      statusById: second.statusById,
+      previous: null,
+    });
+    expect(secondPartition.hosts).toEqual(firstPartition.hosts);
+    expect(secondPartition.members).toEqual(firstPartition.members);
+  });
+
+  it("gives a different seed a different solo count at the same scale", () => {
+    // The reviewer measured 220 solos at 309 agents for seed 2 - verified
+    // here rather than trusted, since team sizes (and so the solo count)
+    // depend on the seed's own random draws.
+    const epic = makeTestEpic("triage", 309, 2);
+    const partition = partitionOfficePopulation({
+      agents: epic.agents,
+      statusById: epic.statusById,
+      previous: null,
+    });
+    assertEveryAgentPlacedExactlyOnce(epic.agents, partition);
+    expect(partition.hosts[0].solos).toHaveLength(220);
+    expect(partition.hosts[0].solos.length).not.toBe(224);
+  });
 
   it("seats the straddling team's cross-host member as a solo on its own host", () => {
     // `two-hosts` sends team-0's lead to host-a and its one member to host-b,
@@ -294,5 +342,189 @@ describe("partitionOfficePopulation", () => {
     expect(after.members.get("lone-root")?.hot).toBe(true);
     // "lone-root" is a later, childless root: a solo, never a second HQ.
     expect(after.classOf("lone-root")).toBe("solo");
+  });
+
+  it("keeps a known agent's class fixed across a topology change, unlike a fresh partition", () => {
+    // A status-only flip cannot tell "frozen" from "fresh", because class
+    // derives from topology alone and neither pass touched it. A real
+    // topology change - "solo" receiving its first child - is the case that
+    // actually distinguishes the two: `previous` must keep it frozen, and a
+    // fresh partition of the SAME agents must classify it differently.
+    const before = partitionOfficePopulation({
+      agents: [
+        agent({ id: "root", createdAt: 0 }),
+        agent({ id: "solo", parentId: "root", createdAt: 1 }),
+      ],
+      statusById: statusMap([]),
+      previous: null,
+    });
+    expect(before.classOf("solo")).toBe("solo");
+
+    const grownAgents: ReadonlyArray<OfficeAgentInput> = [
+      agent({ id: "root", createdAt: 0 }),
+      agent({ id: "solo", parentId: "root", createdAt: 1 }),
+      agent({ id: "solo-child", parentId: "solo", createdAt: 2 }),
+    ];
+
+    const frozen = partitionOfficePopulation({
+      agents: grownAgents,
+      statusById: statusMap([]),
+      previous: before,
+    });
+    // "solo" already existed under `before`, so it keeps the class `before`
+    // gave it, even though it now has a child of its own that would make it
+    // a team lead on a fresh read. Freezing is per-KNOWN-agent, not a topology
+    // re-derivation, so this is the whole of what "keeps its class" pins.
+    expect(frozen.classOf("solo")).toBe("solo");
+
+    const fresh = partitionOfficePopulation({
+      agents: grownAgents,
+      statusById: statusMap([]),
+      previous: null,
+    });
+    // The same agents with no history read the topology as it is now: a
+    // solo that has a child is a team lead.
+    expect(fresh.classOf("solo")).toBe("team");
+    expect(fresh.teamOf("solo")?.teamId).toBe("solo");
+    expect(fresh.classOf("solo-child")).toBe("team");
+  });
+
+  describe("orphans never become HQ or a team lead", () => {
+    it("puts a childless orphan first among the input into solos, leaving the real root HQ", () => {
+      // "orphan" is created BEFORE "root" and would win HQ if a missing
+      // parent were treated as being a true root.
+      const partition = partitionOfficePopulation({
+        agents: [
+          agent({ id: "orphan", parentId: "missing", createdAt: 0 }),
+          agent({ id: "root", parentId: null, createdAt: 1 }),
+        ],
+        statusById: statusMap([]),
+        previous: null,
+      });
+      expect(partition.classOf("orphan")).toBe("solo");
+      expect(partition.hosts[0].hqAgentId).toBe("root");
+    });
+
+    it("folds an orphan's whole subtree into solos instead of making it a team lead", () => {
+      const partition = partitionOfficePopulation({
+        agents: [
+          agent({ id: "root", parentId: null, createdAt: 0 }),
+          agent({ id: "orphan", parentId: "missing", createdAt: 1 }),
+          agent({ id: "orphan-kid", parentId: "orphan", createdAt: 2 }),
+        ],
+        statusById: statusMap([]),
+        previous: null,
+      });
+      expect(partition.classOf("orphan")).toBe("solo");
+      expect(partition.classOf("orphan-kid")).toBe("solo");
+      expect(partition.teamOf("orphan")).toBeNull();
+      expect(partition.hosts[0].hqAgentId).toBe("root");
+    });
+
+    it("keeps a whole multi-generation orphan subtree as solos", () => {
+      // A grandchild under the orphan proves the fold recurses rather than
+      // stopping one level down.
+      const agents: ReadonlyArray<OfficeAgentInput> = [
+        agent({ id: "root", parentId: null, createdAt: 0 }),
+        agent({ id: "orphan", parentId: "missing", createdAt: 1 }),
+        agent({ id: "orphan-kid", parentId: "orphan", createdAt: 2 }),
+        agent({ id: "orphan-grandkid", parentId: "orphan-kid", createdAt: 3 }),
+      ];
+      const partition = partitionOfficePopulation({
+        agents,
+        statusById: statusMap([]),
+        previous: null,
+      });
+      expect(partition.classOf("orphan")).toBe("solo");
+      expect(partition.classOf("orphan-kid")).toBe("solo");
+      expect(partition.classOf("orphan-grandkid")).toBe("solo");
+      assertEveryAgentPlacedExactlyOnce(agents, partition);
+    });
+  });
+
+  it("makes a later TRUE root with children a team lead, while HQ stays the first true root", () => {
+    const agents: ReadonlyArray<OfficeAgentInput> = [
+      agent({ id: "root", parentId: null, createdAt: 0 }),
+      agent({ id: "root-leaf", parentId: "root", createdAt: 1 }),
+      agent({ id: "later-root", parentId: null, createdAt: 2 }),
+      agent({ id: "later-root-child", parentId: "later-root", createdAt: 3 }),
+    ];
+    const partition = partitionOfficePopulation({
+      agents,
+      statusById: statusMap([]),
+      previous: null,
+    });
+    expect(partition.hosts[0].hqAgentId).toBe("root");
+    expect(partition.classOf("root")).toBe("hq");
+    // A later true root with a child leads its own team rather than being a
+    // solo or a second HQ.
+    expect(partition.classOf("later-root")).toBe("team");
+    expect(partition.teamOf("later-root")?.teamId).toBe("later-root");
+    expect(partition.teamOf("later-root")?.memberAgentIds).toEqual([
+      "later-root",
+      "later-root-child",
+    ]);
+    assertEveryAgentPlacedExactlyOnce(agents, partition);
+  });
+
+  it("F5a: does not let an older-created arriving root displace the known HQ", () => {
+    const base: ReadonlyArray<OfficeAgentInput> = [
+      agent({ id: "R", parentId: null, createdAt: 5 }),
+      agent({ id: "L", parentId: "R", createdAt: 6 }),
+      agent({ id: "M", parentId: "L", createdAt: 7 }),
+    ];
+    const before = partitionOfficePopulation({
+      agents: base,
+      statusById: statusMap([]),
+      previous: null,
+    });
+    expect(before.hosts[0].hqAgentId).toBe("R");
+
+    const agents: ReadonlyArray<OfficeAgentInput> = [
+      ...base,
+      agent({ id: "Older", parentId: null, createdAt: 1 }),
+    ];
+    const after = partitionOfficePopulation({
+      agents,
+      statusById: statusMap([]),
+      previous: before,
+    });
+    // "Older" was created before R, but R is the known incumbent: the office
+    // does not change hands because an older record showed up late.
+    expect(after.hosts[0].hqAgentId).toBe("R");
+    expect(after.classOf("R")).toBe("hq");
+    // A childless arriving root is classified as the solo it is.
+    expect(after.classOf("Older")).toBe("solo");
+    assertEveryAgentPlacedExactlyOnce(agents, after);
+  });
+
+  it("F5b: keeps a removed lead's surviving members in the team, with the lead gone from the roster", () => {
+    const base: ReadonlyArray<OfficeAgentInput> = [
+      agent({ id: "R", parentId: null, createdAt: 0 }),
+      agent({ id: "L", parentId: "R", createdAt: 1 }),
+      agent({ id: "M", parentId: "L", createdAt: 2 }),
+    ];
+    const before = partitionOfficePopulation({
+      agents: base,
+      statusById: statusMap([]),
+      previous: null,
+    });
+    expect(before.classOf("M")).toBe("team");
+
+    // L is removed from the roster; R and M survive.
+    const agents: ReadonlyArray<OfficeAgentInput> = [base[0], base[2]];
+    const after = partitionOfficePopulation({
+      agents,
+      statusById: statusMap([]),
+      previous: before,
+    });
+    expect(after.classOf("M")).toBe("team");
+    expect(after.teamOf("M")?.teamId).toBe("L");
+    // L is not in the current roster at all - not as lead, not as a member.
+    expect(after.teamOf("M")?.memberAgentIds).toEqual(["M"]);
+    expect(after.classOf("L")).toBeNull();
+
+    // Every surviving agent is still in exactly one of HQ, a team, or solos.
+    assertEveryAgentPlacedExactlyOnce(agents, after);
   });
 });

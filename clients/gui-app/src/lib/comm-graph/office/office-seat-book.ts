@@ -105,6 +105,7 @@ export class OfficeSeatBook {
     this.reassign(layout);
     this.dropStaleClaims(layout);
     this.refresh();
+    this.reconcileShortfall();
 
     const moved: string[] = [];
     for (const agentId of this.known) {
@@ -157,10 +158,16 @@ export class OfficeSeatBook {
    * where somebody is.
    */
   occupancy(): ReadonlyMap<string, string> {
-    const spoken = new Map(this.occupantBySeat);
+    const spoken = new Map<string, string>();
+    // ASSIGNMENTS FIRST, and this is the whole point: an agent away on a claim
+    // still owns the seat it will walk back to. Leaving its home seat out of
+    // this map advertises it as free, and then a plan hands somebody's cubby
+    // to an arrival, or a second wake claims the desk its owner is coming
+    // back to - and two agents answer `effectiveSeat` with one seat.
+    for (const [agentId, seatId] of this.seatIdOf) spoken.set(seatId, agentId);
+    // Then both kinds of claim. A held claim is where its agent is now; a
+    // releasing one is a seat its agent has not finished leaving.
     for (const [agentId, claim] of this.claims) {
-      if (claim.state !== "releasing") continue;
-      if (spoken.has(claim.seatId)) continue;
       spoken.set(claim.seatId, agentId);
     }
     return spoken;
@@ -205,7 +212,17 @@ export class OfficeSeatBook {
     const layout = this.layout;
     if (layout === null) return null;
     const existing = this.claims.get(agentId);
-    if (existing !== undefined && existing.state === "held") {
+    if (existing !== undefined) {
+      // An agent that goes hot again before it has finished walking home takes
+      // ITS OWN seat back rather than shopping for another one. Picking a
+      // second seat here would abandon a reservation that only `vacated` may
+      // end, and the seat the agent is still standing in would go to somebody
+      // else while it is in it.
+      if (existing.state === "releasing") {
+        this.claims.set(agentId, { ...existing, state: "held" });
+        this.claimShortfall.delete(agentId);
+        this.refresh();
+      }
       return layout.seats.get(existing.seatId) ?? null;
     }
     const seat = this.firstFreeSeat(layout, agentId, preference);
@@ -360,6 +377,22 @@ export class OfficeSeatBook {
     }
   }
 
+  /**
+   * A plan can answer a wake with a real desk instead of a reserve seat. When
+   * it does, the agent is seated and has no reason to call `claim` again, so
+   * nothing else would ever take it back out of the shortfall - and every
+   * later sync would keep asking the plan to grow an office that already has
+   * room. A failed wake that is still in a cubby stays in the set, because
+   * that one does still need a live seat.
+   */
+  private reconcileShortfall(): void {
+    for (const agentId of Array.from(this.claimShortfall)) {
+      const seat = this.effectiveSeat(agentId);
+      if (seat === null || seat.kind === "cubby") continue;
+      this.claimShortfall.delete(agentId);
+    }
+  }
+
   /** A claim survives a re-plan only while its seat is still free to hold. */
   private dropStaleClaims(layout: OfficeLayout): void {
     const owners = new Map<string, string>();
@@ -385,18 +418,60 @@ export class OfficeSeatBook {
     this.occupantBySeat = occupants;
   }
 
+  /**
+   * Which BUILDING this agent belongs to, from its own seat where it has one
+   * and from the floor it is waking on where it does not.
+   *
+   * `null` means the question has no answer - an unseated agent whose
+   * preference names a floor with no seats on it - and an agent with no
+   * building has no seat to be offered, which is the safe direction: it asks
+   * the plan for capacity instead of being sent somewhere impossible.
+   */
+  private owningHostOf(
+    layout: OfficeLayout,
+    agentId: string,
+    preference: OfficeSeatPreference,
+  ): { readonly resolved: boolean; readonly hostId: string | null } {
+    const assigned = this.assignedSeat(agentId);
+    if (assigned !== null) return { resolved: true, hostId: assigned.hostId };
+    for (const seatId of Array.from(layout.seats.keys()).sort(compareIds)) {
+      const seat = layout.seats.get(seatId);
+      if (seat === undefined) continue;
+      if (seat.floorIndex !== preference.floorIndex) continue;
+      return { resolved: true, hostId: seat.hostId };
+    }
+    return { resolved: false, hostId: null };
+  }
+
+  /**
+   * The seat a wake should take: the agent's own room first, then its floor's
+   * bullpen, then anywhere ON ITS OWN HOST, in seat-id order so two runs of
+   * the same wake agree.
+   *
+   * "Anywhere" stops at the host. Hosts are separate buildings with no walkable
+   * route between them, so a free desk in another one is not a seat this agent
+   * can reach - offering it would strand the character mid-walk AND silence
+   * the capacity demand that should have grown its own building.
+   *
+   * A cubby is never a target either. It is where a cold agent waits, so
+   * waking into one would be a walk to nowhere.
+   */
   private firstFreeSeat(
     layout: OfficeLayout,
     agentId: string,
     preference: OfficeSeatPreference,
   ): OfficeSeat | null {
+    const owner = this.owningHostOf(layout, agentId, preference);
+    if (!owner.resolved) return null;
     const spoken = this.occupancy();
     const free: OfficeSeat[] = [];
     for (const seatId of Array.from(layout.seats.keys()).sort(compareIds)) {
       const seat = layout.seats.get(seatId);
       if (seat === undefined || seat.kind === "cubby") continue;
-      const holder = spoken.get(seatId);
-      if (holder !== undefined && holder !== agentId) continue;
+      if (seat.hostId !== owner.hostId) continue;
+      // Spoken for is spoken for, including by this agent: a renewed wake
+      // reactivates its own reservation above and never reaches here.
+      if (spoken.has(seatId)) continue;
       free.push(seat);
     }
     if (preference.roomId !== null) {

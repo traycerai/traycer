@@ -28,6 +28,8 @@ interface SeatSpec {
   readonly roomId: string | null;
   readonly floorIndex: number;
   readonly deskTile: OfficeTilePos;
+  /** Omitted specs default to `null`, the single-host shape most cases want. */
+  readonly hostId?: string | null;
 }
 
 function tile(col: number, row: number): OfficeTilePos {
@@ -47,7 +49,7 @@ function makeSeat(spec: SeatSpec): OfficeSeat {
       spec.kind === "cubby" ? { width: 1, height: 1 } : { width: 2, height: 2 },
     floorIndex: spec.floorIndex,
     roomId: spec.roomId,
-    hostId: null,
+    hostId: spec.hostId ?? null,
     manager: false,
   };
 }
@@ -610,7 +612,13 @@ describe("OfficeSeatBook", () => {
     // compare against yet - the first plan seats everybody without a walk.
     expect(firstMoved).toEqual([]);
 
-    const repacked = buildLayout({
+    // BOTH original seat ids survive here - only who is assigned to each one
+    // swaps. Removing a seat id (as a stable re-adopt would too, since a
+    // vanished seat drops its holder) makes the moved set identical whether
+    // unstable adoption truly follows `layout.desks` or merely notices a
+    // missing seat; keeping both alive is what proves it reads the new
+    // assignments rather than reacting to a disappearance.
+    const swapped = buildLayout({
       seats: [
         {
           seatId: "desk-1",
@@ -619,26 +627,82 @@ describe("OfficeSeatBook", () => {
           floorIndex: 0,
           deskTile: tile(0, 0),
         },
-        // B's chair tile changed; A's did not.
         {
-          seatId: "desk-3",
+          seatId: "desk-2",
           kind: "desk",
           roomId: ROOM,
           floorIndex: 0,
-          deskTile: tile(6, 0),
+          deskTile: tile(2, 0),
+        },
+      ],
+      desks: new Map([
+        ["A", "desk-2"],
+        ["B", "desk-1"],
+      ]),
+      stable: false,
+    });
+    const moved = book.adopt(swapped, ["A", "B"]);
+    expect(moved.slice().sort()).toEqual(["A", "B"]);
+    expect(book.effectiveSeat("A")?.seatId).toBe("desk-2");
+    expect(book.effectiveSeat("B")?.seatId).toBe("desk-1");
+    assertNoDoubleBooking(book);
+
+    // The same swap under `stable: true` must NOT move anybody: a stable
+    // layout keeps a known agent in the seat it already has, so the plan's
+    // new (and here, contradictory) assignment is simply ignored for A and B.
+    const stableBook = new OfficeSeatBook();
+    const stableBefore = buildLayout({
+      seats: [
+        {
+          seatId: "desk-1",
+          kind: "desk",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(0, 0),
+        },
+        {
+          seatId: "desk-2",
+          kind: "desk",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(2, 0),
         },
       ],
       desks: new Map([
         ["A", "desk-1"],
-        ["B", "desk-3"],
+        ["B", "desk-2"],
       ]),
-      stable: false,
+      stable: true,
     });
-    const moved = book.adopt(repacked, ["A", "B"]);
-    expect(moved).toEqual(["B"]);
-    expect(book.effectiveSeat("A")?.seatId).toBe("desk-1");
-    expect(book.effectiveSeat("B")?.seatId).toBe("desk-3");
-    assertNoDoubleBooking(book);
+    stableBook.adopt(stableBefore, ["A", "B"]);
+    const stableSwapped = buildLayout({
+      seats: [
+        {
+          seatId: "desk-1",
+          kind: "desk",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(0, 0),
+        },
+        {
+          seatId: "desk-2",
+          kind: "desk",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(2, 0),
+        },
+      ],
+      desks: new Map([
+        ["A", "desk-2"],
+        ["B", "desk-1"],
+      ]),
+      stable: true,
+    });
+    const stableMoved = stableBook.adopt(stableSwapped, ["A", "B"]);
+    expect(stableMoved).toEqual([]);
+    expect(stableBook.effectiveSeat("A")?.seatId).toBe("desk-1");
+    expect(stableBook.effectiveSeat("B")?.seatId).toBe("desk-2");
+    assertNoDoubleBooking(stableBook);
   });
 
   it("locates a seated agent, a walking agent and a cubby agent through the projector", () => {
@@ -705,6 +769,557 @@ describe("OfficeSeatBook", () => {
       y: walkerOrigin.y + (OFFICE_TILE - OFFICE_CHARACTER_HEIGHT),
       width: OFFICE_CHARACTER_WIDTH,
       height: OFFICE_CHARACTER_HEIGHT,
+    });
+  });
+
+  it("reactivates a still-releasing claim on a renewed wake instead of shopping for a new seat", () => {
+    // A, B, C are cubby agents sharing one room with two reserve desks.
+    const layout = buildLayout({
+      seats: [
+        {
+          seatId: "c-a",
+          kind: "cubby",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(0, 0),
+        },
+        {
+          seatId: "c-b",
+          kind: "cubby",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(2, 0),
+        },
+        {
+          seatId: "c-c",
+          kind: "cubby",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(4, 0),
+        },
+        {
+          seatId: "r1",
+          kind: "desk",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(6, 0),
+        },
+        {
+          seatId: "r2",
+          kind: "desk",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(8, 0),
+        },
+      ],
+      desks: new Map([
+        ["A", "c-a"],
+        ["B", "c-b"],
+        ["C", "c-c"],
+      ]),
+      stable: true,
+    });
+    const book = new OfficeSeatBook();
+    book.adopt(layout, ["A", "B", "C"]);
+    const preference = { roomId: ROOM, floorIndex: 0 };
+
+    expect(book.claim("B", preference)?.seatId).toBe("r1");
+    expect(book.claim("A", preference)?.seatId).toBe("r2");
+    assertNoDoubleBooking(book);
+
+    book.endClaim("A");
+    book.endClaim("B");
+    // B has actually left; A is still walking home when it wakes again.
+    book.vacated("B");
+    assertNoDoubleBooking(book);
+
+    // A renewed wake reactivates A's OWN reservation - it must not pick the
+    // now-free r1, which would silently drop A's still-releasing claim on r2
+    // and let a third agent claim r2 out from under it.
+    expect(book.claim("A", preference)?.seatId).toBe("r2");
+    expect(book.claim("C", preference)?.seatId).toBe("r1");
+    assertNoDoubleBooking(book);
+  });
+
+  it("never advertises an away agent's own assignment as free, even across an unstable re-adopt", () => {
+    const before = buildLayout({
+      seats: [
+        {
+          seatId: "c-a",
+          kind: "cubby",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(0, 0),
+        },
+        {
+          seatId: "c-b",
+          kind: "cubby",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(2, 0),
+        },
+        {
+          seatId: "R",
+          kind: "desk",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(4, 0),
+        },
+        {
+          seatId: "H",
+          kind: "desk",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(6, 0),
+        },
+      ],
+      desks: new Map([
+        ["A", "c-a"],
+        ["B", "c-b"],
+      ]),
+      stable: true,
+    });
+    const book = new OfficeSeatBook();
+    book.adopt(before, ["A", "B"]);
+    expect(book.claim("A", { roomId: ROOM, floorIndex: 0 })?.seatId).toBe("H");
+    assertNoDoubleBooking(book);
+
+    // An unstable re-plan moves A's home assignment onto R while A's claim on
+    // H is still held. A is not sitting at R - it is away on its claim - so R
+    // must still read as spoken for.
+    const after = buildLayout({
+      seats: [
+        {
+          seatId: "c-a",
+          kind: "cubby",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(0, 0),
+        },
+        {
+          seatId: "c-b",
+          kind: "cubby",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(2, 0),
+        },
+        {
+          seatId: "R",
+          kind: "desk",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(4, 0),
+        },
+        {
+          seatId: "H",
+          kind: "desk",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(6, 0),
+        },
+      ],
+      desks: new Map([
+        ["A", "R"],
+        ["B", "c-b"],
+      ]),
+      stable: false,
+    });
+    book.adopt(after, ["A", "B"]);
+    expect(book.occupancy().get("R")).toBe("A");
+    expect(book.claim("B", { roomId: ROOM, floorIndex: 0 })).toBeNull();
+    expect(book.needsCapacity()).toContain("B");
+    assertNoDoubleBooking(book);
+
+    // A finally goes home: only now is R free for the wake that was shut out.
+    book.endClaim("A");
+    book.vacated("A");
+    expect(book.effectiveSeat("A")?.seatId).toBe("R");
+    const seated = book.claim("B", { roomId: ROOM, floorIndex: 0 });
+    expect(seated?.seatId).toBe("H");
+    assertNoDoubleBooking(book);
+  });
+
+  describe("host-scoped exhaustion", () => {
+    const HOST_1 = "host-1";
+    const HOST_2 = "host-2";
+
+    it("stays on the agent's own host even when the only free seat is on another", () => {
+      const layout = buildLayout({
+        seats: [
+          {
+            seatId: "a-cubby",
+            kind: "cubby",
+            roomId: ROOM,
+            floorIndex: 0,
+            deskTile: tile(0, 0),
+            hostId: HOST_1,
+          },
+          {
+            seatId: "b-desk",
+            kind: "desk",
+            roomId: "other",
+            floorIndex: 1,
+            deskTile: tile(0, 0),
+            hostId: HOST_2,
+          },
+        ],
+        desks: new Map([["A", "a-cubby"]]),
+        stable: true,
+      });
+      const book = new OfficeSeatBook();
+      book.adopt(layout, ["A"]);
+      // The only candidate is on host-2; A lives on host-1, so this must not
+      // walk it across buildings - it must ask the plan for local capacity.
+      expect(book.claim("A", { roomId: null, floorIndex: 0 })).toBeNull();
+      expect(book.needsCapacity()).toEqual(["A"]);
+      assertNoDoubleBooking(book);
+    });
+
+    it("finds a free seat on the agent's own host when one exists there too", () => {
+      const layout = buildLayout({
+        seats: [
+          {
+            seatId: "a-cubby",
+            kind: "cubby",
+            roomId: ROOM,
+            floorIndex: 0,
+            deskTile: tile(0, 0),
+            hostId: HOST_1,
+          },
+          {
+            seatId: "a-desk",
+            kind: "desk",
+            roomId: ROOM,
+            floorIndex: 0,
+            deskTile: tile(2, 0),
+            hostId: HOST_1,
+          },
+          {
+            seatId: "b-desk",
+            kind: "desk",
+            roomId: "other",
+            floorIndex: 1,
+            deskTile: tile(0, 0),
+            hostId: HOST_2,
+          },
+        ],
+        desks: new Map([["A", "a-cubby"]]),
+        stable: true,
+      });
+      const book = new OfficeSeatBook();
+      book.adopt(layout, ["A"]);
+      const seat = book.claim("A", { roomId: ROOM, floorIndex: 0 });
+      expect(seat?.seatId).toBe("a-desk");
+      expect(book.needsCapacity()).toEqual([]);
+      assertNoDoubleBooking(book);
+    });
+  });
+
+  it("orders candidates by room, then floor bullpen, then anywhere local, against a seat-id order that would pick wrong", () => {
+    const OTHER_ROOM = "other-room";
+    // Seat ids are named so plain seat-id order disagrees with every tier:
+    // the same-room seat sorts LAST, the bullpen seat sorts BEFORE the other
+    // room's seat even though the tiers rank the opposite way. If the book
+    // ever fell back to bare seat-id order, at least one of the three
+    // assertions below would pick the wrong seat.
+    const layout = buildLayout({
+      seats: [
+        {
+          seatId: "cubby",
+          kind: "cubby",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(0, 0),
+        },
+        {
+          seatId: "z-same-room",
+          kind: "desk",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(2, 0),
+        },
+        {
+          seatId: "m-bullpen",
+          kind: "desk",
+          roomId: null,
+          floorIndex: 0,
+          deskTile: tile(4, 0),
+        },
+        {
+          seatId: "a-other-room",
+          kind: "desk",
+          roomId: OTHER_ROOM,
+          floorIndex: 0,
+          deskTile: tile(6, 0),
+        },
+      ],
+      desks: new Map([["A", "cubby"]]),
+      stable: true,
+    });
+    const book = new OfficeSeatBook();
+    book.adopt(layout, ["A", "B", "C"]);
+    const preference = { roomId: ROOM, floorIndex: 0 };
+
+    // A's own room wins over both other tiers, despite sorting last by id.
+    expect(book.claim("A", preference)?.seatId).toBe("z-same-room");
+    assertNoDoubleBooking(book);
+
+    // With the room seat gone, the floor's bullpen wins over the other local
+    // room's seat, even though "a-other-room" sorts before "m-bullpen".
+    expect(book.claim("B", preference)?.seatId).toBe("m-bullpen");
+    assertNoDoubleBooking(book);
+
+    // Only the other room's seat is left.
+    expect(book.claim("C", preference)?.seatId).toBe("a-other-room");
+    assertNoDoubleBooking(book);
+  });
+
+  it("reconciles the shortfall with a direct desk assignment, no further claim() call needed", () => {
+    // F6: a failed wake that later gets a REAL desk straight from the plan
+    // (not through another claim()) must leave needsCapacity, or a hot agent
+    // already at a desk keeps demanding growth forever.
+    const small = buildLayout({
+      seats: [
+        {
+          seatId: "c",
+          kind: "cubby",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(0, 0),
+        },
+      ],
+      desks: new Map([["A", "c"]]),
+      stable: true,
+    });
+    const book = new OfficeSeatBook();
+    book.adopt(small, ["A"]);
+    expect(book.claim("A", { roomId: ROOM, floorIndex: 0 })).toBeNull();
+    expect(book.needsCapacity()).toEqual(["A"]);
+
+    const grown = buildLayout({
+      seats: [
+        {
+          seatId: "D",
+          kind: "desk",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(2, 0),
+        },
+      ],
+      desks: new Map([["A", "D"]]),
+      stable: true,
+    });
+    book.adopt(grown, ["A"]);
+    expect(book.effectiveSeat("A")?.seatId).toBe("D");
+    expect(book.needsCapacity()).toEqual([]);
+    assertNoDoubleBooking(book);
+  });
+
+  it("treats vacated before endClaim as a no-op: the claim is still held", () => {
+    const layout = buildLayout({
+      seats: [
+        {
+          seatId: "cubby-a",
+          kind: "cubby",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(0, 0),
+        },
+        {
+          seatId: "desk-1",
+          kind: "desk",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(2, 0),
+        },
+      ],
+      desks: new Map([["A", "cubby-a"]]),
+      stable: true,
+    });
+    const book = new OfficeSeatBook();
+    book.adopt(layout, ["A"]);
+    book.claim("A", { roomId: ROOM, floorIndex: 0 });
+    expect(book.effectiveSeat("A")?.seatId).toBe("desk-1");
+
+    // `vacated` before `endClaim` answers a question that has not been asked
+    // yet: the agent never said it wanted to leave, so its claim is still
+    // held and the seat is still its effective one.
+    book.vacated("A");
+    expect(book.effectiveSeat("A")?.seatId).toBe("desk-1");
+    expect(book.occupant("desk-1")).toBe("A");
+    assertNoDoubleBooking(book);
+
+    // The normal path still works afterwards.
+    book.endClaim("A");
+    expect(book.effectiveSeat("A")?.seatId).toBe("cubby-a");
+    book.vacated("A");
+    expect(book.occupant("desk-1")).toBeNull();
+    assertNoDoubleBooking(book);
+  });
+
+  it("frees a held claim's seat immediately when the agent is removed", () => {
+    const layout = buildLayout({
+      seats: [
+        {
+          seatId: "cubby-a",
+          kind: "cubby",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(0, 0),
+        },
+        {
+          seatId: "desk-1",
+          kind: "desk",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(2, 0),
+        },
+      ],
+      desks: new Map([["A", "cubby-a"]]),
+      stable: true,
+    });
+    const book = new OfficeSeatBook();
+    book.adopt(layout, ["A"]);
+    book.claim("A", { roomId: ROOM, floorIndex: 0 });
+    expect(book.effectiveSeat("A")?.seatId).toBe("desk-1");
+
+    // A is removed from the roster entirely, still holding its claim.
+    book.adopt(layout, []);
+    expect(book.occupant("desk-1")).toBeNull();
+    expect(book.knownAgentIds()).toEqual([]);
+    assertNoDoubleBooking(book);
+  });
+
+  it("frees a releasing claim's seat immediately when the agent is removed", () => {
+    const layout = buildLayout({
+      seats: [
+        {
+          seatId: "cubby-a",
+          kind: "cubby",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(0, 0),
+        },
+        {
+          seatId: "desk-1",
+          kind: "desk",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(2, 0),
+        },
+      ],
+      desks: new Map([["A", "cubby-a"]]),
+      stable: true,
+    });
+    const book = new OfficeSeatBook();
+    book.adopt(layout, ["A"]);
+    book.claim("A", { roomId: ROOM, floorIndex: 0 });
+    // A has stopped wanting the seat but has not vacated it yet.
+    book.endClaim("A");
+    expect(book.occupancy().get("desk-1")).toBe("A");
+
+    book.adopt(layout, []);
+    expect(book.occupant("desk-1")).toBeNull();
+    expect(book.knownAgentIds()).toEqual([]);
+    assertNoDoubleBooking(book);
+  });
+
+  it("lets the caller's order decide which of two competing hot cubby agents gets the seat on scrub", () => {
+    const layout = buildLayout({
+      seats: [
+        {
+          seatId: "cubby-a",
+          kind: "cubby",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(0, 0),
+        },
+        {
+          seatId: "cubby-b",
+          kind: "cubby",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(2, 0),
+        },
+        // Exactly one non-cubby seat: A and B cannot both get one.
+        {
+          seatId: "desk-1",
+          kind: "desk",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(4, 0),
+        },
+      ],
+      desks: new Map([
+        ["A", "cubby-a"],
+        ["B", "cubby-b"],
+      ]),
+      stable: true,
+    });
+    const hot: ReadonlyMap<string, OfficeAgentStatus> = new Map([
+      ["A", "working"],
+      ["B", "working"],
+    ]);
+
+    const aFirst = new OfficeSeatBook();
+    aFirst.adopt(layout, ["A", "B"]);
+    aFirst.recomputeClaims(hot, ["A", "B"]);
+    expect(aFirst.effectiveSeat("A")?.seatId).toBe("desk-1");
+    expect(aFirst.effectiveSeat("B")?.seatId).toBe("cubby-b");
+    expect(aFirst.needsCapacity()).toEqual(["B"]);
+    assertNoDoubleBooking(aFirst);
+
+    const bFirst = new OfficeSeatBook();
+    bFirst.adopt(layout, ["A", "B"]);
+    bFirst.recomputeClaims(hot, ["B", "A"]);
+    expect(bFirst.effectiveSeat("B")?.seatId).toBe("desk-1");
+    expect(bFirst.effectiveSeat("A")?.seatId).toBe("cubby-a");
+    expect(bFirst.needsCapacity()).toEqual(["A"]);
+    assertNoDoubleBooking(bFirst);
+  });
+
+  it("locates an adopted agent by its held claim, not its underlying assignment", () => {
+    // Unlike the walker case above, this agent IS adopted and holds a real
+    // claim: `locate` must read `effectiveSeat`. Reading `assignedSeat`
+    // instead would silently point the camera at the empty cubby.
+    const layout = buildLayout({
+      seats: [
+        {
+          seatId: "cubby-a",
+          kind: "cubby",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(0, 0),
+        },
+        {
+          seatId: "desk-1",
+          kind: "desk",
+          roomId: ROOM,
+          floorIndex: 0,
+          deskTile: tile(3, 2),
+        },
+      ],
+      desks: new Map([["A", "cubby-a"]]),
+      stable: true,
+    });
+    const book = new OfficeSeatBook();
+    book.adopt(layout, ["A"]);
+    book.claim("A", { roomId: ROOM, floorIndex: 0 });
+    expect(book.effectiveSeat("A")?.seatId).toBe("desk-1");
+    expect(book.assignedSeat("A")?.seatId).toBe("cubby-a");
+
+    const projector: OfficeProjector = {
+      project: (col, row) => ({ x: col * 16 + 100, y: row * 16 + 7 }),
+      bounds: { x: 0, y: 0, width: 1, height: 1 },
+      seatLift: () => 0,
+    };
+    const box = book.locate("A", projector, null);
+    const deskOrigin = projector.project(3, 2);
+    expect(box).toEqual({
+      x: deskOrigin.x,
+      y: deskOrigin.y,
+      width: 2 * OFFICE_TILE,
+      height: 2 * OFFICE_TILE,
     });
   });
 });

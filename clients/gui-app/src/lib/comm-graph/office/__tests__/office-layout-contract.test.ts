@@ -10,8 +10,10 @@ import { layoutOffice } from "@/lib/comm-graph/office/office-layout";
 import { findOfficePath } from "@/lib/comm-graph/office/office-path";
 import { makeTestEpic } from "@/lib/comm-graph/office/office-test-epic";
 import type {
+  OfficeErrandKind,
   OfficeFloor,
   OfficeLayout,
+  OfficeSpriteName,
   OfficeTilePos,
   OfficeTileRect,
 } from "@/lib/comm-graph/office/office-types";
@@ -121,17 +123,134 @@ describe("layoutOffice contract", () => {
         expect(agentIds.has(sign.ownerAgentId)).toBe(true);
       }
     });
+
+    // Universal assertions that only check `.length >= 0`, or check nothing
+    // once a set is empty, pass on an accidentally-empty implementation just
+    // as happily as a correct one. These pin the sets as genuinely non-empty
+    // at every scale, so an accidental regression to "always empty" fails.
+    it("carries a non-empty signs list and a non-empty corridorTiles list per floor", () => {
+      expect(layout.signs.length).toBeGreaterThan(0);
+      for (const floor of layout.floors) {
+        expect(floor.corridorTiles.length).toBeGreaterThan(0);
+      }
+    });
+
+    it("gives at least one room a non-null visitTile", () => {
+      expect(layout.rooms.length).toBeGreaterThan(0);
+      const withVisit = layout.rooms.filter((room) => room.visitTile !== null);
+      expect(withVisit.length).toBeGreaterThan(0);
+    });
   });
 
-  it("carries each floor's own hostId on every seat that floor owns, on the two-host shape", () => {
+  describe("action anchors", () => {
+    const epic = makeTestEpic("triage", 309, 1);
+    const layout = layoutOffice(epic.agents);
+
+    // Every non-garden action kind maps to exactly one sprite, straight from
+    // `actionSpriteOf`. A spot's `actionTile` must be that exact sprite,
+    // standing directly above the spot in the same column.
+    const ACTION_ANCHORS: ReadonlyArray<{
+      readonly kind: OfficeErrandKind;
+      readonly sprite: OfficeSpriteName;
+    }> = [
+      { kind: "bin", sprite: "bin" },
+      { kind: "darts", sprite: "dartboard" },
+      { kind: "water-plant", sprite: "plant" },
+      { kind: "arcade", sprite: "arcade" },
+      { kind: "console", sprite: "tv" },
+    ];
+
+    it.each(ACTION_ANCHORS)(
+      "anchors every $kind spot with a non-null actionTile on the exact $sprite prop above it",
+      ({ kind, sprite }) => {
+        const spots = layout.floors.flatMap((floor) =>
+          floor.errandSpots.filter((spot) => spot.kind === kind),
+        );
+        expect(spots.length).toBeGreaterThan(0);
+        // At least one spot must actually resolve an anchor - otherwise the
+        // loop below is vacuously true over an all-null set, exactly the
+        // universal-assertion trap this suite exists to close.
+        const anchored = spots.filter((spot) => spot.actionTile !== null);
+        expect(anchored.length).toBeGreaterThan(0);
+        for (const spot of anchored) {
+          const tile = spot.actionTile;
+          if (tile === null) continue;
+          expect(tile.col).toBe(spot.tile.col);
+          expect(tile.row).toBeLessThan(spot.tile.row);
+          const propStandsThere = layout.props.some(
+            (prop) =>
+              prop.sprite.name === sprite &&
+              prop.tile.col === tile.col &&
+              prop.tile.row === tile.row,
+          );
+          expect(propStandsThere).toBe(true);
+        }
+      },
+    );
+
+    it("gives the garden BOTH outcomes: spots with a bench anchor and spots without one", () => {
+      const garden = layout.floors.flatMap((floor) =>
+        floor.errandSpots.filter((spot) => spot.kind === "garden"),
+      );
+      expect(garden.length).toBeGreaterThan(0);
+
+      const withBench = garden.filter((spot) => spot.actionTile !== null);
+      const withoutBench = garden.filter((spot) => spot.actionTile === null);
+      // Both outcomes exist at this fixture: some garden spots sit under a
+      // bench and are sat in, others are bare stroll tiles.
+      expect(withBench.length).toBeGreaterThan(0);
+      expect(withoutBench.length).toBeGreaterThan(0);
+
+      for (const spot of withBench) {
+        const tile = spot.actionTile;
+        if (tile === null) continue;
+        expect(tile.col).toBe(spot.tile.col);
+        expect(tile.row).toBeLessThan(spot.tile.row);
+        const benchStandsThere = layout.props.some(
+          (prop) =>
+            prop.sprite.name === "bench" &&
+            prop.tile.col === tile.col &&
+            prop.tile.row === tile.row,
+        );
+        expect(benchStandsThere).toBe(true);
+      }
+    });
+  });
+
+  describe("the two-host shape", () => {
     const epic = makeTestEpic("two-hosts", 60, 1);
     const layout = layoutOffice(epic.agents);
-    expect(layout.floors.length).toBeGreaterThanOrEqual(2);
 
-    for (const seat of layout.seats.values()) {
-      const floor = layout.floors[seat.floorIndex];
-      expect(floor).toBeDefined();
-      expect(seat.hostId).toBe(floor.hostId);
-    }
+    it("carries each floor's own hostId on every seat that floor owns", () => {
+      expect(layout.floors.length).toBeGreaterThanOrEqual(2);
+      for (const seat of layout.seats.values()) {
+        const floor = layout.floors[seat.floorIndex];
+        expect(floor).toBeDefined();
+        expect(seat.hostId).toBe(floor.hostId);
+      }
+    });
+
+    it("keeps every desk's tile inside its own floor's physical band", () => {
+      for (const desk of layout.desks.values()) {
+        const floor = layout.floors[desk.floorIndex];
+        expect(floor).toBeDefined();
+        expect(floorBandContains(floor, desk.deskTile.row)).toBe(true);
+        expect(withinRect(floor.bounds, desk.deskTile)).toBe(true);
+      }
+    });
+
+    it("seats the fixture's original root agent on the host the fixture gave it", () => {
+      const rootAgent = epic.agents.find((agent) => agent.id === "agent-root");
+      expect(rootAgent).toBeDefined();
+      expect(rootAgent?.hostId).toBe("host-a");
+
+      const rootDesk = layout.desks.get("agent-root");
+      expect(rootDesk).toBeDefined();
+      if (rootDesk === undefined) return;
+      expect(rootDesk.hostId).toBe("host-a");
+      const floor = layout.floors[rootDesk.floorIndex];
+      expect(floor.hostId).toBe("host-a");
+      expect(floorBandContains(floor, rootDesk.deskTile.row)).toBe(true);
+    });
   });
 });

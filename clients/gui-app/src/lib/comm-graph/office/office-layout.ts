@@ -2733,6 +2733,13 @@ function actionSpriteOf(
   if (kind === "water-plant") return "plant";
   if (kind === "arcade") return "arcade";
   if (kind === "console") return "tv";
+  // The garden is the one kind that is BOTH a seat and a stroll: its bench
+  // seats and its wandering spots are the same errand kind, and the scene
+  // tells them apart by looking for the bench standing over the tile
+  // (`onSeatedErrand`). So a garden spot's anchor is that bench where there is
+  // one, and null where there is not - which is exactly the sitting decision,
+  // carried as a field instead of re-derived.
+  if (kind === "garden") return "bench";
   return null;
 }
 
