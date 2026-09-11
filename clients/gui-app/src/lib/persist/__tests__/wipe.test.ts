@@ -28,6 +28,24 @@ vi.mock("@/lib/tab-recovery/history", () => ({
   resetTabRecoveryHistory: () => resetTabRecoveryHistory(),
 }));
 
+// The real module reaches `idb-keyval` on first use, which jsdom has no
+// native support for. Mocked wholesale; the wipe's OWN handling of it
+// (calling it, tolerating its rejection, and deleting its fixed db name
+// unconditionally) is what this file tests.
+// `vi.mock` factories run during import resolution - which, for ES modules,
+// happens BEFORE any of this file's own top-level `const`s execute (imports
+// hoist above regular statements). A factory that closes over a later
+// `const` in this same file hits its temporal dead zone; `vi.hoisted` runs
+// before the mock factory needs it instead.
+const { clearAppearanceCache, APPEARANCE_DB_NAME } = vi.hoisted(() => ({
+  clearAppearanceCache: vi.fn<() => Promise<void>>(() => Promise.resolve()),
+  APPEARANCE_DB_NAME: "traycer-gui-app:appearance",
+}));
+vi.mock("@/lib/appearance/appearance-cache", () => ({
+  APPEARANCE_DB_NAME,
+  clearAppearanceCache: () => clearAppearanceCache(),
+}));
+
 import { clearAllPersistedStores } from "@/lib/persist/wipe";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
 
@@ -115,6 +133,8 @@ beforeEach(() => {
   publishPromptStashReset.mockClear();
   resetTabRecoveryHistory.mockReset();
   resetTabRecoveryHistory.mockResolvedValue(undefined);
+  clearAppearanceCache.mockClear();
+  clearAppearanceCache.mockResolvedValue(undefined);
 
   localStorageMock = createMockStorage(LOCAL_SEED);
   sessionStorageMock = createMockStorage(SESSION_SEED);
@@ -334,12 +354,14 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
 
     await clearAllPersistedStores({ hostClear: null });
 
-    // Landing partitions come from enumeration; prompt-stash is always deleted
-    // by exact fixed name even when enumeration never lists it.
+    // Landing partitions come from enumeration; prompt-stash and the fixed
+    // appearance db are always deleted by exact name even when enumeration
+    // never lists them.
     expect(deleted.sort()).toEqual(
       [
         "traycer-gui-app:default:landing-images",
         "traycer-gui-app:prompt-stash",
+        "traycer-gui-app:appearance",
         "traycer-gui-app:window-7:landing-images",
         "traycer-gui-app:default:file-edit-recovery",
         "traycer-gui-app:window-7:file-edit-recovery",
@@ -348,6 +370,63 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
     );
     expect(reloadSpy).toHaveBeenCalledTimes(1);
     expect(publishPromptStashReset).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears the appearance cache during the wipe", async () => {
+    installIndexedDB({ databases: () => Promise.resolve([]) });
+
+    await clearAllPersistedStores({ hostClear: null });
+
+    expect(clearAppearanceCache).toHaveBeenCalledTimes(1);
+  });
+
+  it("deletes the fixed appearance database by name even when nothing enumerates it", async () => {
+    const { deleted } = installIndexedDB({
+      databases: () => Promise.resolve([]),
+    });
+
+    await clearAllPersistedStores({ hostClear: null });
+
+    expect(deleted).toContain(APPEARANCE_DB_NAME);
+  });
+
+  it("still reloads when clearAppearanceCache rejects (best-effort, does not abort the wipe)", async () => {
+    installIndexedDB({ databases: () => Promise.resolve([]) });
+    clearAppearanceCache.mockRejectedValueOnce(
+      new Error("appearance clear failed"),
+    );
+
+    await clearAllPersistedStores({ hostClear: null });
+
+    expect(reloadSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears the appearance cache BEFORE dropping renderer databases and reloading", async () => {
+    const order: string[] = [];
+    clearAppearanceCache.mockImplementation(() => {
+      order.push("appearance-clear");
+      return Promise.resolve();
+    });
+    const value = {
+      databases: vi.fn(() => Promise.resolve([])),
+      deleteDatabase: vi.fn((name: string) => {
+        order.push(`deleteDatabase:${name}`);
+        const { request, fire } = fakeDeleteRequest();
+        queueMicrotask(fire);
+        return request;
+      }),
+    };
+    Object.defineProperty(globalThis, "indexedDB", {
+      configurable: true,
+      writable: true,
+      value,
+    });
+    reloadSpy.mockImplementation(() => order.push("reload"));
+
+    await clearAllPersistedStores({ hostClear: null });
+
+    expect(order[0]).toBe("appearance-clear");
+    expect(order[order.length - 1]).toBe("reload");
   });
 
   it("notifies peer windows only after the prompt-stash database is deleted", async () => {
@@ -375,6 +454,7 @@ describe("clearAllPersistedStores — renderer IndexedDB drop", () => {
     expect(order).toEqual([
       "deleted:traycer-gui-app:prompt-stash",
       "deleted:traycer-gui-app:tab-recovery",
+      "deleted:traycer-gui-app:appearance",
       "reset",
     ]);
   });

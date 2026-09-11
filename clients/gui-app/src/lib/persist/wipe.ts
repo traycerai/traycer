@@ -22,6 +22,10 @@ import { resetTabRecoveryHistory } from "@/lib/tab-recovery/history";
 //      state without racing a pending write.
 
 import { PERSIST_PREFIX, persistKey } from "@/lib/persist/keys";
+import {
+  APPEARANCE_DB_NAME,
+  clearAppearanceCache,
+} from "@/lib/appearance/appearance-cache";
 import { flushActiveDesktopPerWindowProjection } from "@/lib/windows/per-window-projection-debounce";
 import { drainDesktopTabsPersistence } from "@/stores/tabs/desktop-tabs-persistence";
 import { appLogger, describeLogError } from "@/lib/logger";
@@ -143,6 +147,7 @@ async function deleteRendererDatabases(): Promise<boolean> {
   const names = new Set(enumerated);
   names.add(PROMPT_STASH_DB_NAME);
   names.add(persistKey("tab-recovery"));
+  names.add(APPEARANCE_DB_NAME);
   // Best-effort per partition: a single db whose delete errors must not abort
   // the rest of the wipe or - critically - the reload (step 4), which is the
   // real recovery and tears down every connection anyway. The bytes are
@@ -231,6 +236,11 @@ export async function clearAllPersistedStores(args: {
   //    The localStorage sweep above already removed the draft keys that point
   //    at some of these bytes; this reclaims the bytes themselves so nothing
   //    leaks past the wipe.
+  await clearAppearanceCache().catch((error: unknown) => {
+    appLogger.warn("[persist] appearance cache clear failed", {
+      error: describeLogError(error),
+    });
+  });
   const promptStashDeleted = await deleteRendererDatabases();
   if (promptStashDeleted) publishPromptStashReset();
 

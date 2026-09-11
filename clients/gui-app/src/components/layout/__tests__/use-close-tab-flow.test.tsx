@@ -5,8 +5,10 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import { selectHostFocusedRef } from "@/stores/tabs/selectors";
+import { tabItemId, tabRefKey } from "@/stores/tabs/layout";
 import { executeTabSplitCommand } from "@/stores/tabs/tab-split-commands";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
+import { useTabRecoveryHistory } from "@/lib/tab-recovery/history";
 import * as TabNav from "@/lib/tab-navigation";
 import type { HeaderTab } from "@/stores/tabs/types";
 
@@ -60,6 +62,7 @@ vi.mock("@/lib/registries/epic-session-registry", () => ({
     peek: () => null,
   }),
   getEpicSessionHandleHostId: () => null,
+  getEpicSessionHostId: () => null,
 }));
 
 function resetStores(): void {
@@ -69,6 +72,7 @@ function resetStores(): void {
     stripOrder: [],
     systemTabs: { history: null, settings: null },
   });
+  useTabRecoveryHistory.setState({ entries: [], ready: true });
 }
 
 function draftHeaderTab(draftId: string): HeaderTab {
@@ -80,6 +84,7 @@ function draftHeaderTab(draftId: string): HeaderTab {
     icon: null,
     canDuplicate: false,
     canOpenInNewWindow: false,
+    appearance: null,
   };
 }
 
@@ -283,6 +288,7 @@ describe("useCloseTabFlow", () => {
         canClose: true,
         canDuplicate: true,
         canOpenInNewWindow: true,
+        appearance: null,
       });
     });
 
@@ -331,6 +337,7 @@ describe("useCloseTabFlow", () => {
         canClose: true,
         canDuplicate: true,
         canOpenInNewWindow: true,
+        appearance: null,
       });
     });
 
@@ -339,5 +346,60 @@ describe("useCloseTabFlow", () => {
       expect.objectContaining({ id: "split-ab", kind: "split" }),
     ]);
     expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("batches recovery entries when closing a tab group", () => {
+    const a = useEpicCanvasStore.getState().openEpicTab("epic-a", "Alpha");
+    const b = useEpicCanvasStore.getState().openEpicTab("epic-b", "Beta");
+    const c = useEpicCanvasStore.getState().openEpicTab("epic-c", "Gamma");
+    const refA = { kind: "epic" as const, id: a };
+    const refB = { kind: "epic" as const, id: b };
+    const refC = { kind: "epic" as const, id: c };
+    const refs = [refA, refB, refC];
+    useTabsStore.setState({
+      version: 2,
+      items: refs.map((ref) => ({
+        kind: "tab" as const,
+        id: tabItemId(ref),
+        ref,
+      })),
+      activeItemId: tabItemId(refA),
+      stripOrder: refs,
+      systemTabs: { history: null, settings: null },
+      customizations: {
+        [tabRefKey(refA)]: { color: null, icon: null, groupId: "group-a" },
+        [tabRefKey(refB)]: { color: null, icon: null, groupId: "group-a" },
+        [tabRefKey(refC)]: { color: null, icon: null, groupId: null },
+      },
+      groups: {
+        "group-a": {
+          name: "Group A",
+          color: "#8ab4f8",
+          collapsed: false,
+        },
+      },
+    });
+    routerState.pathname = `/epics/epic-a/${a}`;
+
+    const { result } = renderHook(() => useCloseTabFlow());
+    act(() => {
+      result.current.closeGroup("group-a");
+    });
+
+    expect(useTabRecoveryHistory.getState().entries).toHaveLength(1);
+    const recovery = useTabRecoveryHistory.getState().entries.at(0);
+    if (recovery === undefined || recovery.kind !== "header") {
+      throw new Error("expected one bulk header recovery entry");
+    }
+    expect(recovery.bulk).toBe(true);
+    expect(recovery.items.map((item) => item.kind)).toEqual(["epic", "epic"]);
+    expect(
+      new Set(
+        recovery.items.flatMap((item) =>
+          item.kind === "epic" ? [item.tab.tabId] : [],
+        ),
+      ),
+    ).toEqual(new Set([a, b]));
+    expect(useTabsStore.getState().stripOrder).toEqual([refC]);
   });
 });

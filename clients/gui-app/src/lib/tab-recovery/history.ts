@@ -279,10 +279,14 @@ export async function configureTabRecoveryHistory(
   const previous = bucket;
   bucket = next;
   const token = ++generation;
-  pendingEpicPrunes.clear();
-  pendingDraftPrunes.clear();
-  pendingTilePrunes = [];
-  useTabRecoveryHistory.setState({ entries: [], ready: next === null });
+  // A retry for this bucket must retain closes and deletions captured while
+  // storage was unavailable. Only an identity change starts a fresh session.
+  if (previous !== next || next === null) {
+    pendingEpicPrunes.clear();
+    pendingDraftPrunes.clear();
+    pendingTilePrunes = [];
+    useTabRecoveryHistory.setState({ entries: [], ready: next === null });
+  }
   if (next === null) {
     if (previous !== null) {
       persistedHistories.delete(previous);
@@ -311,6 +315,9 @@ export async function configureTabRecoveryHistory(
     appLogger.warn("[tab-recovery] history restore failed", {
       error: describeLogError(error),
     });
+    // Remain unhydrated: neither this call nor subsequent closes may replace
+    // an unread journal. Reconfiguration can retry and merge pending changes.
+    return;
   }
   if (token !== generation) return;
   useTabRecoveryHistory.setState({

@@ -12,6 +12,9 @@ One eligible close creates one entry, including bulk closes. A task close
 captures one task view and its canvas, not individual child closes. Moves,
 submission of a new-task draft, and confirmed content deletions are excluded.
 Confirmed deletions prune saved references; unavailability is not deletion.
+A failed history read leaves persistence disabled for that bucket until a
+successful hydration. Retrying configuration merges pending closes and applies
+pending deletions without overwriting the unread journal.
 
 Single recovery selects the restored view. Bulk recovery in the current task
 preserves focus; bulk recovery in another task selects that task. Bulk header

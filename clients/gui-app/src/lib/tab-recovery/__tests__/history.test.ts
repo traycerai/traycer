@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { createStore, set } from "idb-keyval";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as idbKeyval from "idb-keyval";
+import { createStore, get as idbGet, set } from "idb-keyval";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { landingLiveImageRootHashes } from "@/lib/composer/landing-image-budget";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/prompt-stash-fake-idb";
@@ -31,6 +32,14 @@ import {
   type LegacyRecoveryDraft,
   type TabRecoveryEntry,
 } from "../history";
+
+vi.mock("idb-keyval", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("idb-keyval")>();
+  return {
+    ...actual,
+    get: vi.fn(actual.get),
+  };
+});
 
 const WINDOW_ONE = "recovery-window-one";
 const WINDOW_TWO = "recovery-window-two";
@@ -197,7 +206,68 @@ beforeEach(async () => {
   await prepareHistory(WINDOW_ONE);
 });
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe("tab recovery history", () => {
+  it("keeps the persisted journal intact across a failed same-identity hydration retry", async () => {
+    const persistedOne = draft("persisted-one", textContent("keep one"));
+    const persistedTwo = draft("persisted-two", textContent("delete later"));
+    recordClosedHeaderTab(persistedOne);
+    recordClosedHeaderTab(persistedTwo);
+    await flushTabRecoveryHistory();
+
+    const store = createStore(persistKey("tab-recovery"), "history");
+    const key = tabRecoveryKey(ACCOUNT_ONE, WINDOW_ONE);
+    const diskBeforeFailure = await idbGet<unknown>(key, store);
+    expect(diskBeforeFailure).toEqual(expect.objectContaining({ version: 2 }));
+
+    await resetTabRecoveryHistory();
+    setWindow(WINDOW_ONE);
+    vi.mocked(idbKeyval.get).mockRejectedValueOnce(
+      new Error("temporary IndexedDB read failure"),
+    );
+    await configureTabRecoveryHistory(ACCOUNT_ONE);
+
+    expect(useTabRecoveryHistory.getState().ready).toBe(false);
+
+    const pending = draft("pending-after-failure", textContent("keep pending"));
+    recordClosedHeaderTab(pending);
+    pruneRecoveryDraft(persistedTwo.draftId);
+
+    // The failed restore must not persist the in-memory, incomplete view over
+    // the last good disk snapshot, even when a close and permanent prune land
+    // while the retry is waiting.
+    expect(await idbGet<unknown>(key, store)).toEqual(diskBeforeFailure);
+
+    await configureTabRecoveryHistory(ACCOUNT_ONE);
+    await flushTabRecoveryHistory();
+
+    const recoveredDraftIds = useTabRecoveryHistory
+      .getState()
+      .entries.flatMap((entry) =>
+        entry.kind === "header"
+          ? entry.items.flatMap((item) =>
+              item.kind === "draft" ? [item.draftId] : [],
+            )
+          : [],
+      );
+    expect(recoveredDraftIds).toEqual([persistedOne.draftId, pending.draftId]);
+    expect(useTabRecoveryHistory.getState().ready).toBe(true);
+    const diskAfterRetry = await idbGet<unknown>(key, store);
+    expect(diskAfterRetry).toEqual(expect.objectContaining({ version: 2 }));
+    if (
+      typeof diskAfterRetry !== "object" ||
+      diskAfterRetry === null ||
+      !("entries" in diskAfterRetry) ||
+      !Array.isArray(diskAfterRetry.entries)
+    ) {
+      throw new Error("expected the retried journal to contain entries");
+    }
+    expect(diskAfterRetry.entries).toHaveLength(2);
+  });
+
   it("batches header closes into one bulk entry and suppresses internal closes", () => {
     const one = draft("draft-one", textContent("one"));
     const two = draft("draft-two", textContent("two"));

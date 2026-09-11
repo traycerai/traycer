@@ -147,6 +147,8 @@ export const SplitTabItem = memo(function SplitTabItem(
       className="relative flex w-[min(60vw,31rem)] min-w-[min(60vw,26.25rem)] max-w-[min(60vw,31rem)] flex-[1_1_min(60vw,31rem)] items-end [container-type:inline-size]"
     >
       <SplitTabLayout
+        leftColor={memberTab(props.item.left)?.appearance?.color ?? null}
+        rightColor={memberTab(props.item.right)?.appearance?.color ?? null}
         splitId={props.item.id}
         selectedSide={props.isActive ? props.item.focusedSide : null}
         control={

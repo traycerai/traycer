@@ -42,7 +42,7 @@ function localThemePack(): File {
 function resetThemeStores(): void {
   window.localStorage.clear();
   useThemeLibraryStore.setState({
-    version: 1,
+    version: 2,
     themes: [],
     selected: { light: null, dark: null },
     glassOpacity: 100,
@@ -88,7 +88,7 @@ describe("theme import flow", () => {
 
     await user.click(screen.getByRole("button", { name: "Import theme" }));
     const dialog = await screen.findByRole("dialog", {
-      name: "Find your next palette",
+      name: "Import themes",
     });
     expect(
       within(dialog).getByRole("tab", { name: "Browse themes" }),
@@ -164,7 +164,7 @@ describe("theme import flow", () => {
     renderThemes();
     await user.click(screen.getByRole("button", { name: "Import theme" }));
     const dialog = await screen.findByRole("dialog", {
-      name: "Find your next palette",
+      name: "Import themes",
     });
     await user.click(within(dialog).getByRole("tab", { name: "Import files" }));
     const input = within(dialog).getByLabelText("Choose theme files");
@@ -203,7 +203,7 @@ describe("theme import flow", () => {
     await user.upload(input, localThemePack());
     await within(dialog).findByText(/Updating replaces 1 installed theme/);
     await user.click(
-      within(dialog).getByRole("button", { name: "Save copies" }),
+      within(dialog).getByRole("button", { name: "Import as copies" }),
     );
     await waitFor(() => {
       const themes = useThemeLibraryStore.getState().themes;
@@ -213,5 +213,36 @@ describe("theme import flow", () => {
       ).toBe("#123456ff");
       expect(themes.some((theme) => theme.id !== imported.id)).toBe(true);
     });
+  });
+
+  it("renders malformed color errors in the dialog header", async () => {
+    const user = userEvent.setup();
+    renderThemes();
+
+    await user.click(screen.getByRole("button", { name: "Import theme" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Import themes",
+    });
+    await user.click(within(dialog).getByRole("tab", { name: "Import files" }));
+    await user.click(within(dialog).getByText("Paste theme JSON"));
+    fireEvent.change(within(dialog).getByLabelText("Theme JSON"), {
+      target: {
+        value: JSON.stringify({
+          name: "Malformed fixture",
+          type: "dark",
+          colors: { "editor.background": "var(--unsupported)" },
+        }),
+      },
+    });
+
+    await user.click(
+      within(dialog).getByRole("button", { name: "Preview import" }),
+    );
+    const alert = await within(dialog).findByRole("alert");
+    expect(alert.textContent).toBe(
+      "The theme contains unsupported values. Check its colors and syntax rules.",
+    );
+    expect(alert.closest('[data-slot="dialog-header"]')).not.toBeNull();
+    expect(alert.closest('[class*="overflow-y-auto"]')).toBeNull();
   });
 });
