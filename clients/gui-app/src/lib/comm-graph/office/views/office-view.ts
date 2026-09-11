@@ -19,6 +19,10 @@
  */
 import type { GuiHarnessId } from "@traycer/protocol/persistence/epic/foundation";
 import type { OfficePopulation } from "@/lib/comm-graph/office/office-population";
+import {
+  TOWERS_VIEW,
+  BUILDING_VIEW,
+} from "@/lib/comm-graph/office/views/oblique/oblique-plan";
 import { floorPainter } from "@/lib/comm-graph/office/views/floor/floor-painter";
 import { measureFloor } from "@/lib/comm-graph/office/views/floor/floor-measure";
 import { planFloor } from "@/lib/comm-graph/office/views/floor/floor-plan";
@@ -189,6 +193,8 @@ export const OFFICE_VIEWS: Readonly<Record<OfficeViewId, OfficeView>> = {
     measure: measureFloor,
     painter: floorPainter,
   },
+  towers: TOWERS_VIEW,
+  building: BUILDING_VIEW,
 };
 
 /**

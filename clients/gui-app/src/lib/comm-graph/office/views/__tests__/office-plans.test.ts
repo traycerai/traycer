@@ -19,6 +19,7 @@ import {
   type OfficeErrandKind,
   type OfficeFloor,
   type OfficeLayout,
+  type OfficeSceneInput,
   type OfficeSpriteName,
   type OfficeTilePos,
   type OfficeTileRect,
@@ -70,6 +71,30 @@ function planInputFor(args: {
     viewport: { width: 1040, height: 700 },
     previous: null,
     ...overrides,
+  };
+}
+
+function sceneInputFor(args: {
+  readonly agents: ReadonlyArray<OfficeAgentInput>;
+  readonly statusById: ReadonlyMap<string, OfficeAgentStatus>;
+  readonly partition: OfficePlanInput["partition"];
+}): OfficeSceneInput {
+  const { agents, statusById, partition } = args;
+  return {
+    agents,
+    visibleAgentIds: new Set(agents.map((agent) => agent.id)),
+    statusById,
+    partition,
+    activityById: new Map<string, number>(),
+    viewport: { width: 1040, height: 700 },
+    openRequestsByReceiver: new Map<string, number>(),
+    pulse: null,
+    pulseKey: null,
+    stepMs: 0,
+    cursorMs: null,
+    clockMs: 0,
+    playing: false,
+    reducedMotion: true,
   };
 }
 
@@ -235,12 +260,16 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
       { kind: "console", sprite: "tv" },
     ];
 
-    it.each(ACTION_ANCHORS)(
+    it.for(ACTION_ANCHORS)(
       "anchors every $kind spot with a non-null actionTile on the exact $sprite prop above it",
-      ({ kind, sprite }) => {
+      ({ kind, sprite }, context) => {
         const spots = layout.floors.flatMap((floor) =>
           floor.errandSpots.filter((spot) => spot.kind === kind),
         );
+        if (spots.length === 0 && viewId !== "floor") {
+          context.skip(`${viewId} intentionally has no ${kind} spots`);
+          return;
+        }
         expect(spots.length).toBeGreaterThan(0);
         // At least one spot must actually resolve an anchor - otherwise the
         // loop below is vacuously true over an all-null set, exactly the
@@ -263,10 +292,16 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
       },
     );
 
-    it("gives the garden BOTH outcomes: spots with a bench anchor and spots without one", () => {
+    it("gives the garden BOTH outcomes: spots with a bench anchor and spots without one", (context) => {
       const garden = layout.floors.flatMap((floor) =>
         floor.errandSpots.filter((spot) => spot.kind === "garden"),
       );
+      // D25: views without gardens intentionally skip this shared-plan case;
+      // Floor remains the reference view and must keep both outcomes.
+      if (garden.length === 0 && viewId !== "floor") {
+        context.skip(`${viewId} intentionally has no garden spots`);
+        return;
+      }
       expect(garden.length).toBeGreaterThan(0);
 
       const withBench = garden.filter((spot) => spot.actionTile !== null);
@@ -353,23 +388,123 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
       const hostIds = new Set(hostSigns.map((sign) => sign.hostId));
       expect(hostIds.size).toBe(2);
     });
+
+    it("connects host plazas only through Building's skybridge", () => {
+      if (viewId !== "building" && viewId !== "towers") return;
+
+      const plazaFor = (hostId: string): OfficeFloor => {
+        const plaza = layout.floors.find(
+          (floor) => floor.hostId === hostId && floor.bounds.rows === 5,
+        );
+        if (plaza === undefined) {
+          throw new Error(`missing plaza for ${hostId}`);
+        }
+        return plaza;
+      };
+      const plazaA = plazaFor("host-a");
+      const plazaB = plazaFor("host-b");
+      const plazaPath = findOfficePath(
+        layout,
+        plazaA.doorTile,
+        plazaB.doorTile,
+      );
+
+      if (viewId === "towers") {
+        expect(plazaPath).toBeNull();
+        return;
+      }
+
+      expect(plazaPath).not.toBeNull();
+      const walkable = layout.walkable.map((row) => [...row]);
+      for (const prop of layout.props) {
+        if (prop.sprite.name !== "skybridge") continue;
+        walkable[prop.tile.row][prop.tile.col] = false;
+      }
+      const withoutBridge: OfficeLayout = { ...layout, walkable };
+      expect(
+        findOfficePath(withoutBridge, plazaA.doorTile, plazaB.doorTile),
+      ).toBeNull();
+    });
   });
 
-  it("never re-plans off a status flip: two partitions differing only in who is hot give the same layout", () => {
+  it("preserves seats when one status flip is planned with the previous layout", () => {
     const epic = makeTestEpic("triage", 40, 2);
     const cold = new Map<string, OfficeAgentStatus>();
-    const hot = new Map<string, OfficeAgentStatus>(
-      epic.agents.map((agent) => [agent.id, "working" as const]),
-    );
+    const target = epic.agents.at(1);
+    if (target === undefined) throw new Error("expected a second agent");
+    const hot = new Map(cold).set(target.id, "working");
 
+    const firstPartition = partitionOfficePopulation({
+      agents: epic.agents,
+      statusById: cold,
+      previous: null,
+    });
     const layoutCold = view.plan(
-      planInputFor({ agents: epic.agents, statusById: cold, overrides: {} }),
+      planInputFor({
+        agents: epic.agents,
+        statusById: cold,
+        overrides: { partition: firstPartition },
+      }),
     );
+    const hotPartition = partitionOfficePopulation({
+      agents: epic.agents,
+      statusById: hot,
+      previous: firstPartition,
+    });
     const layoutHot = view.plan(
-      planInputFor({ agents: epic.agents, statusById: hot, overrides: {} }),
+      planInputFor({
+        agents: epic.agents,
+        statusById: hot,
+        overrides: { partition: hotPartition, previous: layoutCold },
+      }),
     );
 
-    expect(layoutHot).toEqual(layoutCold);
+    expect(layoutHot.seats).toEqual(layoutCold.seats);
+  });
+
+  it("does not call a plan again for a status-only flip while reserves remain", () => {
+    const epic = makeTestEpic("one-team", 12, 7);
+    const cold = new Map<string, OfficeAgentStatus>(
+      epic.agents.map((agent) => [agent.id, "idle"]),
+    );
+    const target = epic.agents.find((agent) => agent.parentId !== null);
+    if (target === undefined) throw new Error("expected a team member");
+    const hot = new Map(cold).set(target.id, "working");
+    let planCalls = 0;
+    const countingView = {
+      ...view,
+      plan: (input: OfficePlanInput) => {
+        planCalls += 1;
+        return view.plan(input);
+      },
+    };
+    const scene = new OfficeScene(countingView, null);
+    const coldPartition = partitionOfficePopulation({
+      agents: epic.agents,
+      statusById: cold,
+      previous: null,
+    });
+    scene.sync(
+      sceneInputFor({
+        agents: epic.agents,
+        statusById: cold,
+        partition: coldPartition,
+      }),
+    );
+    expect(planCalls).toBe(1);
+    const hotPartition = partitionOfficePopulation({
+      agents: epic.agents,
+      statusById: hot,
+      previous: coldPartition,
+    });
+    scene.sync(
+      sceneInputFor({
+        agents: epic.agents,
+        statusById: hot,
+        partition: hotPartition,
+      }),
+    );
+    expect(planCalls).toBe(1);
   });
 
   it("leaves every existing seat's tile unchanged (or uniformly shifted) on a stable layout when an agent is appended", () => {

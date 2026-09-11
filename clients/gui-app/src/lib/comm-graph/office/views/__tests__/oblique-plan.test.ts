@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { agentAppearance } from "@/lib/comm-graph/office/office-appearance";
 import { findOfficePath } from "@/lib/comm-graph/office/office-path";
 import { officeSpriteSize } from "@/lib/comm-graph/office/office-pixel-art";
 import {
@@ -309,6 +310,8 @@ function assertWorldSpriteInBounds(
 function idleDeskState(agentId: string | null): OfficeDeskState {
   return {
     agentId,
+    name: agentId,
+    accentId: null,
     status: "idle",
     sheeted: false,
     openRequests: 0,
@@ -687,6 +690,9 @@ describe("oblique painters", () => {
     expect(cubby).toBeDefined();
     if (cubby === undefined) return;
     const painter = BUILDING_VIEW.painter;
+    expect(
+      painter.seatProps(layout, cubby, idleDeskState(cubby.agentId), 0),
+    ).toEqual([]);
     const overview = painter.seatProps(
       layout,
       cubby,
@@ -750,6 +756,112 @@ describe("oblique painters", () => {
         entry.entry.spot.floorIndex !== canonical.entry.spot.floorIndex,
     )) {
       expect(alias.props).toEqual([]);
+    }
+  });
+
+  it("clips the overview block map to the requested tile chunk", () => {
+    const epic = makeTestEpic("triage", 309, 1);
+    for (const view of [TOWERS_VIEW, BUILDING_VIEW]) {
+      const layout = view.plan(
+        initialInput(epic, canvasViewport(VIEWPORTS[0])),
+      );
+      const tiles = { col: 5, row: 5, cols: 8, rows: 8 };
+      const blocks = view.painter.floor(layout, tiles, 0);
+      expect(blocks.length).toBeGreaterThan(0);
+      expect(
+        blocks.some(
+          (block) => block.kind === "block" && block.fill === "building",
+        ),
+      ).toBe(true);
+      expect(
+        blocks.some(
+          (block) => block.kind === "block" && block.fill === "storey",
+        ),
+      ).toBe(true);
+      for (const block of blocks) {
+        expect(block.kind).toBe("block");
+        if (block.kind !== "block") continue;
+        expect(block.x).toBeGreaterThanOrEqual(tiles.col * OFFICE_TILE);
+        expect(block.y).toBeGreaterThanOrEqual(tiles.row * OFFICE_TILE);
+        expect(block.x + block.width).toBeLessThanOrEqual(
+          (tiles.col + tiles.cols) * OFFICE_TILE,
+        );
+        expect(block.y + block.height).toBeLessThanOrEqual(
+          (tiles.row + tiles.rows) * OFFICE_TILE,
+        );
+      }
+    }
+  });
+
+  it("uses the occupant team accent on cubbies", () => {
+    const layout = planBuilding(
+      initialInput(
+        makeTestEpic("triage", 309, 1),
+        canvasViewport(VIEWPORTS[0]),
+      ),
+    );
+    const cubby = [...layout.seats.values()].find(
+      (seat) => seat.kind === "cubby",
+    );
+    if (cubby === undefined) throw new Error("Expected a cubby");
+    const state = { ...idleDeskState("occupant"), accentId: "team-lead" };
+    const props = BUILDING_VIEW.painter.seatProps(layout, cubby, state, 1);
+    const frame = props.find(
+      (item) =>
+        item.drawable.kind === "sprite" &&
+        item.drawable.sprite.name === "cubby",
+    );
+    if (frame?.drawable.kind !== "sprite")
+      throw new Error("Expected a cubby frame");
+    expect(frame.drawable.sprite.tint).toBe(
+      agentAppearance("team-lead", "chat", null).shirt,
+    );
+    expect(
+      props.find(
+        (item) =>
+          item.drawable.kind === "sprite" &&
+          item.drawable.sprite.name === "silhouette",
+      )?.ownerAgentId,
+    ).toBe("occupant");
+  });
+
+  it("aliases lead-only HQ boards across live storeys within each host", () => {
+    for (const view of [TOWERS_VIEW, BUILDING_VIEW]) {
+      const layout = view.plan(
+        initialInput(
+          makeTestEpic("two-hosts", 309, 1),
+          canvasViewport(VIEWPORTS[0]),
+        ),
+      );
+      for (const [floorIndex, floor] of layout.floors.entries()) {
+        const boards = floor.errandSpots.filter(
+          (spot) => spot.kind === "whiteboard",
+        );
+        const desks = [...layout.seats.values()].filter(
+          (seat) => seat.floorIndex === floorIndex && seat.kind === "desk",
+        );
+        if (desks.length === 0) {
+          expect(boards).toHaveLength(0);
+          continue;
+        }
+        if (floor.bounds.row > 2) expect(boards).toHaveLength(3);
+        for (const board of boards) {
+          expect(board.audience).toEqual({ kind: "leads" });
+          const canonical = layout.floors.find(
+            (candidate) =>
+              candidate.bounds.row <= board.tile.row &&
+              candidate.bounds.row + candidate.bounds.rows > board.tile.row &&
+              candidate.bounds.col <= board.tile.col &&
+              candidate.bounds.col + candidate.bounds.cols > board.tile.col,
+          );
+          expect(canonical?.hostId).toBe(floor.hostId);
+          expect(
+            canonical?.errandSpots.some(
+              (spot) => spot.fixtureId === board.fixtureId,
+            ),
+          ).toBe(true);
+        }
+      }
     }
   });
 

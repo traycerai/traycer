@@ -581,7 +581,11 @@ interface SpotPlacement {
   readonly floorIndex: number;
 }
 function spot(placement: SpotPlacement): OfficeErrandSpot {
-  return { ...placement, approachTile: placement.tile };
+  return {
+    ...placement,
+    approachTile: placement.tile,
+    audience: { kind: placement.kind === "whiteboard" ? "leads" : "floor" },
+  };
 }
 function plazaProps(
   geometry: Geometry,
@@ -838,6 +842,16 @@ function paintAisle(
   const { packing, geometry } = context;
   const { building, left, quiet, plaza, bounds, aisle } = location;
   const corridors: OfficeTilePos[] = [];
+  if (plaza) {
+    // Beyond the door and reception queue, the plaza has its own stroll lane.
+    for (
+      let col = building.col + 10;
+      col < building.col + building.width - 1;
+      col += 1
+    ) {
+      corridors.push({ col, row: aisle });
+    }
+  }
   if (!plaza) {
     const start =
       packing.mode === "building" || quiet ? building.col + 1 : left - 2;
@@ -1023,6 +1037,26 @@ function materializeStorey(context: PlanContext, storey: Storey): void {
     ),
   );
 }
+function aliasHqBoards(packing: ObliquePacking, geometry: Geometry): void {
+  for (const storey of packing.storeys) {
+    if (storey.kind !== "live") continue;
+    const hq = packing.storeys.find(
+      (candidate) =>
+        candidate.building === storey.building &&
+        candidate.kind === "hq" &&
+        candidate.wing === 0,
+    );
+    if (hq === undefined) continue;
+    const aliases = geometry.floors[hq.id].errandSpots
+      .filter((item) => item.kind === "whiteboard")
+      .map((item) => ({ ...item, floorIndex: storey.id }));
+    const floor = geometry.floors[storey.id];
+    geometry.floors[storey.id] = {
+      ...floor,
+      errandSpots: [...floor.errandSpots, ...aliases],
+    };
+  }
+}
 function materialize(
   packing: ObliquePacking,
   input: OfficePlanInput,
@@ -1061,6 +1095,7 @@ function materialize(
     plazas,
   };
   for (const storey of packing.storeys) materializeStorey(context, storey);
+  aliasHqBoards(packing, geometry);
 
   return {
     view: packing.mode,

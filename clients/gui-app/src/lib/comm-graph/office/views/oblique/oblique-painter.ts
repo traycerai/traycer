@@ -1,7 +1,9 @@
 /** Oblique art shares the simulation's tile grid; only foreground depth differs. */
+import { agentAppearance } from "@/lib/comm-graph/office/office-appearance";
 import { officeSpriteSize } from "@/lib/comm-graph/office/office-pixel-art";
 import { OFFICE_TILE } from "@/lib/comm-graph/office/office-types";
 import type {
+  OfficeBlockFill,
   OfficeDrawable,
   OfficeErrandSpot,
   OfficeLayout,
@@ -46,13 +48,65 @@ function projector(layout: OfficeLayout): OfficeProjector {
     seatLift: () => 0,
   };
 }
+interface BlockRegion {
+  readonly col: number;
+  readonly row: number;
+  readonly cols: number;
+  readonly rows: number;
+  readonly fill: OfficeBlockFill;
+}
+function clippedBlock(
+  region: BlockRegion,
+  tiles: OfficeTileRect,
+): OfficeDrawable[] {
+  const col = Math.max(region.col, tiles.col);
+  const row = Math.max(region.row, tiles.row);
+  const right = Math.min(region.col + region.cols, tiles.col + tiles.cols);
+  const bottom = Math.min(region.row + region.rows, tiles.row + tiles.rows);
+  if (right <= col || bottom <= row) return [];
+  return [
+    {
+      kind: "block",
+      x: col * OFFICE_TILE,
+      y: row * OFFICE_TILE,
+      width: (right - col) * OFFICE_TILE,
+      height: (bottom - row) * OFFICE_TILE,
+      fill: region.fill,
+    },
+  ];
+}
+function overviewBlocks(
+  layout: OfficeLayout,
+  tiles: OfficeTileRect,
+): OfficeDrawable[] {
+  const buildings = layout.signs
+    .filter((sign) => sign.kind === "host")
+    .flatMap((sign) =>
+      clippedBlock(
+        {
+          col: sign.tile.col,
+          row: 0,
+          cols: sign.widthTiles,
+          rows: sign.tile.row + 1,
+          fill: "building",
+        },
+        tiles,
+      ),
+    );
+  const storeys = layout.floors.flatMap((floor) =>
+    clippedBlock(
+      { ...floor.bounds, fill: floor.bounds.rows === 5 ? "plaza" : "storey" },
+      tiles,
+    ),
+  );
+  return [...buildings, ...storeys];
+}
 function floor(
   layout: OfficeLayout,
   tiles: OfficeTileRect,
   lod: OfficeLod,
 ): OfficeDrawable[] {
-  // T2 owns the block drawable; phase 2 fills the overview through that seam.
-  if (lod === 0) return [];
+  if (lod === 0) return overviewBlocks(layout, tiles);
   return layout.props
     .filter(
       (prop) =>
@@ -108,16 +162,28 @@ function seatProps(
   state: OfficeDeskState,
   lod: OfficeLod,
 ): OfficeWorldDrawable[] {
+  if (lod === 0) return [];
   const x = seat.deskTile.col * OFFICE_TILE;
   const y = seat.deskTile.row * OFFICE_TILE;
   const foot = (seat.chairTile.row + 1) * OFFICE_TILE;
   const owner = state.agentId;
   if (seat.kind === "cubby") {
     const cubby = [
-      entry({ name: "cubby" }, { x: x, y: y }, foot + 0.1, {
-        ownerAgentId: owner,
-        alpha: 1,
-      }),
+      entry(
+        {
+          name: "cubby",
+          tint:
+            state.accentId === null
+              ? undefined
+              : agentAppearance(state.accentId, "chat", null).shirt,
+        },
+        { x: x, y: y },
+        foot + 0.1,
+        {
+          ownerAgentId: owner,
+          alpha: 1,
+        },
+      ),
     ];
     if (state.sheeted)
       cubby.push(
@@ -136,7 +202,6 @@ function seatProps(
     // The scene supplies the dimmed, front-facing character at close-up.
     return cubby;
   }
-  if (lod === 0) return [];
   const result: OfficeWorldDrawable[] = [
     entry({ name: "desk-front" }, { x: x, y: y + 24 }, foot + 0.1, {
       ownerAgentId: owner,
@@ -149,6 +214,7 @@ function seatProps(
         drawable: {
           kind: "label",
           text: "reserve",
+          ownerAgentId: null,
           x: x + 16,
           y: y + 34,
           tone: "muted",

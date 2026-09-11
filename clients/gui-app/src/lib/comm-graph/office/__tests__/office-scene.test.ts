@@ -5,6 +5,7 @@ import { findOfficePath } from "@/lib/comm-graph/office/office-path";
 import { officeSpriteSize } from "@/lib/comm-graph/office/office-pixel-art";
 import { partitionOfficePopulation } from "@/lib/comm-graph/office/office-population";
 import { OfficeScene } from "@/lib/comm-graph/office/office-scene";
+import { makeTestEpic } from "@/lib/comm-graph/office/office-test-epic";
 import {
   OFFICE_VIEW_IDS,
   OFFICE_VIEWS,
@@ -287,6 +288,12 @@ function sprites(
     }
   }
   return found;
+}
+
+/** The channel a renderer actually draws: one depth stream or two layers. */
+function visibleDrawables(frame: OfficeFrame): ReadonlyArray<OfficeDrawable> {
+  if (frame.world !== null) return frame.world.map((entry) => entry.drawable);
+  return [...frame.props, ...frame.actors];
 }
 
 /** Every unanswered-request pile currently drawn, whatever its height. */
@@ -3717,7 +3724,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
     for (let step = 0; step < 150; step += 1) scene.tick(100);
     const gone = frameOf(scene);
     expect(hasCharacter(gone, "alpha")).toBe(false);
-    expect(sprites(gone.props, "dust-sheet")).toHaveLength(1);
+    expect(sprites(visibleDrawables(gone), "dust-sheet")).toHaveLength(1);
   });
 
   it("settles motion instantly under reduced motion, and starts an arrival that way too", () => {
@@ -3838,16 +3845,144 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
       const scene = newScene();
       scene.sync(sceneInput({ agents: AGENTS, visibleAgentIds: BOTH }));
       const seen: string[] = [];
+      let sawCharacter = false;
       for (let step = 0; step < 100; step += 1) {
         scene.tick(100);
         const frame = scene.frame(2, { x: 0, y: 0, width: 500, height: 500 });
+        const drawables = visibleDrawables(frame);
+        sawCharacter ||= drawables.some(
+          (drawable) =>
+            drawable.kind === "sprite" && drawable.sprite.name === "character",
+        );
         seen.push(
-          frame.actors.map((drawable) => JSON.stringify(drawable)).join("|"),
+          JSON.stringify({
+            actors: frame.actors,
+            world: frame.world,
+            props: frame.props,
+            hitRegions: frame.hitRegions,
+          }),
         );
       }
+      expect(sawCharacter).toBe(true);
       return seen.join("\n");
     };
     expect(run()).toEqual(run());
+  });
+
+  it("wakes a Building cubby into a real reserve and returns it when cold", (context) => {
+    if (viewId !== "building") {
+      context.skip("only Building has cubby-to-reserve wake semantics");
+      return;
+    }
+    const epic = makeTestEpic("one-team", 12, 9);
+    const cold = new Map<string, OfficeAgentStatus>(
+      epic.agents.map((person) => [person.id, "idle"]),
+    );
+    const target = epic.agents.find((person) => person.parentId !== null);
+    if (target === undefined) throw new Error("expected a team member");
+    const scene = newScene();
+    scene.sync(
+      sceneInput({
+        agents: epic.agents,
+        visibleAgentIds: new Set(epic.agents.map((person) => person.id)),
+        statusById: cold,
+        reducedMotion: true,
+      }),
+    );
+    const coldLayout = layoutOf(scene);
+    const cubby = coldLayout.desks.get(target.id);
+    if (cubby === undefined) throw new Error("expected a cubby assignment");
+    expect(cubby.kind).toBe("cubby");
+
+    const assignedSeatIds = new Set(
+      Array.from(coldLayout.desks.values()).map((desk) => desk.seatId),
+    );
+    const reserves = Array.from(coldLayout.seats.values()).filter(
+      (seat) => seat.kind === "desk" && !assignedSeatIds.has(seat.seatId),
+    );
+    expect(reserves.length).toBeGreaterThan(0);
+    const projector = view.painter.projector(coldLayout);
+    const rectFor = (seat: (typeof reserves)[number]): OfficeRect => {
+      const origin = projector.project(seat.deskTile.col, seat.deskTile.row);
+      return {
+        x: origin.x,
+        y: origin.y,
+        width: seat.hitTiles.width * OFFICE_TILE,
+        height: seat.hitTiles.height * OFFICE_TILE,
+      };
+    };
+
+    const hot = new Map(cold).set(target.id, "working");
+    scene.sync(
+      sceneInput({
+        agents: epic.agents,
+        visibleAgentIds: new Set(epic.agents.map((person) => person.id)),
+        statusById: hot,
+        reducedMotion: true,
+      }),
+    );
+    expect(scene.whereabouts(target.id)).not.toBe("Quiet stack");
+    const hotLocation = scene.locate(target.id);
+    expect(hotLocation).not.toBeNull();
+    if (hotLocation === null) throw new Error("expected a reserve location");
+    expect(reserves.map(rectFor)).toContainEqual(hotLocation);
+
+    scene.sync(
+      sceneInput({
+        agents: epic.agents,
+        visibleAgentIds: new Set(epic.agents.map((person) => person.id)),
+        statusById: cold,
+        reducedMotion: true,
+      }),
+    );
+    expect(scene.whereabouts(target.id)).toBe("Quiet stack");
+    expect(scene.locate(target.id)).toEqual({
+      x: projector.project(cubby.deskTile.col, cubby.deskTile.row).x,
+      y: projector.project(cubby.deskTile.col, cubby.deskTile.row).y,
+      width: cubby.hitTiles.width * OFFICE_TILE,
+      height: cubby.hitTiles.height * OFFICE_TILE,
+    });
+  });
+
+  it("keeps host plazas disconnected without Building's skybridge", (context) => {
+    if (viewId !== "building" && viewId !== "towers") {
+      context.skip("only Towers and Building have host-plaza connectivity");
+      return;
+    }
+    const epic = makeTestEpic("two-hosts", 60, 1);
+    const scene = newScene();
+    scene.sync(
+      sceneInput({
+        agents: epic.agents,
+        visibleAgentIds: new Set(epic.agents.map((person) => person.id)),
+        statusById: epic.statusById,
+        reducedMotion: true,
+      }),
+    );
+    const layout = layoutOf(scene);
+    const plazaFor = (hostId: string): OfficeFloor => {
+      const plaza = layout.floors.find(
+        (floor) => floor.hostId === hostId && floor.bounds.rows === 5,
+      );
+      if (plaza === undefined) throw new Error(`missing plaza for ${hostId}`);
+      return plaza;
+    };
+    const plazaA = plazaFor("host-a");
+    const plazaB = plazaFor("host-b");
+    const path = findOfficePath(layout, plazaA.doorTile, plazaB.doorTile);
+    if (viewId === "towers") {
+      expect(path).toBeNull();
+      return;
+    }
+    expect(path).not.toBeNull();
+    const walkable = layout.walkable.map((row) => [...row]);
+    for (const prop of layout.props) {
+      if (prop.sprite.name !== "skybridge") continue;
+      walkable[prop.tile.row][prop.tile.col] = false;
+    }
+    expect(
+      findOfficePath({ ...layout, walkable }, plazaA.doorTile, plazaB.doorTile),
+    ).toBeNull();
   });
 });
 

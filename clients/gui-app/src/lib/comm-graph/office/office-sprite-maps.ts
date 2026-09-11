@@ -677,7 +677,10 @@ export function officeTorsoMap(
   return TORSO_FRONT_STAND;
 }
 
-export function officeSeatedMap(pose: OfficeSeatedPose, facing: "up" | "down"): SpriteMap {
+export function officeSeatedMap(
+  pose: OfficeSeatedPose,
+  facing: "up" | "down",
+): SpriteMap {
   if (facing === "down") {
     if (pose === "type1") return SEATED_TYPE1_DOWN;
     if (pose === "type2") return SEATED_TYPE2_DOWN;
