@@ -26,6 +26,7 @@ function chip(
     glyph: section === "background" ? "mixed" : section,
     working: false,
     text,
+    lineDeltas: null,
     label: `${section} label`,
     pulseToken: null,
   };
@@ -300,6 +301,29 @@ describe("<ChatDockCompactStrip />", () => {
       );
     },
   );
+
+  // The model carries the deltas; the strip only has to hand them on, and
+  // must not invent them for a chip that has none.
+  it("passes a chip's line deltas through to the chip it renders", () => {
+    renderStrip({
+      chips: [
+        {
+          ...chip("filesChanged", "3"),
+          lineDeltas: { additions: 12, deletions: 4 },
+        },
+        chip("activeAgents", "2"),
+      ],
+      expanded: new Set(),
+      onToggle: vi.fn(),
+    });
+
+    expect(screen.getByTestId("chat-dock-chip-filesChanged").textContent).toBe(
+      "3+12−4",
+    );
+    expect(screen.getByTestId("chat-dock-chip-activeAgents").textContent).toBe(
+      "2",
+    );
+  });
 
   it("calls onToggle with the clicked chip's section", () => {
     const onToggle = vi.fn();

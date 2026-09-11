@@ -57,6 +57,7 @@ import {
   lowerScrollRegionMaxHeightClass,
 } from "@/lib/chat/chat-lower-scroll-budget";
 import { accumulatedDiffTotals } from "@/lib/chat/accumulated-change-rows";
+import type { DiffLineCounts } from "@/lib/file-change-diff-hunks";
 import {
   backgroundHeaderSummary,
   backgroundKind,
@@ -752,8 +753,13 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
         section: "filesChanged",
         glyph: "filesChanged",
         working: false,
-        text: changeCountsShortForm(changeTotals, changedFileCount),
-        label: `Files changed. ${fileCountPhrase(changedFileCount)}, ${changeTotals.additions} added and ${changeTotals.deletions} removed.`,
+        // The file count leads and the line counts follow, the same order and
+        // the same tones the panel's own header uses - the chip stands in for
+        // that header, so reading one after the other should feel like reading
+        // the same row twice, not like two different measurements.
+        text: `${changedFileCount}`,
+        lineDeltas: changeTotals,
+        label: filesChangedLabel(changedFileCount, changeTotals),
         // Constant, so this fires on the chip's arrival and never again -
         // which is the first change of the chat, since the chip exists only
         // once there is one. Keying it on the line counts instead reads well
@@ -768,6 +774,7 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
         section: "activeAgents",
         glyph: "activeAgents",
         working: agentsWorking,
+        lineDeltas: null,
         text:
           receivedAgentCount > 0
             ? `${agentsRunningCount} · ${receivedAgentCount}`
@@ -787,6 +794,7 @@ function useChatDockChrome(input: ChatDockChromeInput): ChatDockChrome {
         section: "background",
         glyph: backgroundGlyph,
         working: backgroundRunning > 0,
+        lineDeltas: null,
         text: `${backgroundRunning}`,
         // The number on the chip is the running count, but the section can be
         // on screen for a held shell or a pending wake with nothing running at
@@ -894,18 +902,33 @@ function fileCountPhrase(count: number): string {
 }
 
 /**
- * Line counts only, as the panel's own header prints them - and the file count
- * instead when there are none to print, which is the state a summary stream
- * still in flight (or a set of changes with no diff to count) leaves behind.
+ * The chip's accessible name, spelling out what it draws: the `+` and `−` on
+ * screen are two colours and a pair of signs, and neither reads aloud.
+ *
+ * A zero side is dropped here exactly as it is dropped on screen, so the name
+ * and the chip say the same thing - and with both zero the sentence stops
+ * after the file count rather than claiming "0 lines added".
  */
-function changeCountsShortForm(
-  totals: { readonly additions: number; readonly deletions: number },
-  fileCount: number,
-): string {
-  const parts: string[] = [];
-  if (totals.additions > 0) parts.push(`+${totals.additions}`);
-  if (totals.deletions > 0) parts.push(`−${totals.deletions}`);
-  return parts.length > 0 ? parts.join(" ") : `${fileCount}`;
+function filesChangedLabel(fileCount: number, totals: DiffLineCounts): string {
+  const parts = [fileCountPhrase(fileCount)];
+  if (totals.additions > 0) {
+    parts.push(`${totals.additions} ${lineWord(totals.additions)} added`);
+  }
+  // The noun rides on whichever clause comes first: "12 lines added, 4
+  // removed" says what it means, and repeating "lines" in the second clause
+  // only makes the sentence longer.
+  if (totals.deletions > 0) {
+    parts.push(
+      totals.additions > 0
+        ? `${totals.deletions} removed`
+        : `${totals.deletions} ${lineWord(totals.deletions)} removed`,
+    );
+  }
+  return `Files changed. ${parts.join(", ")}.`;
+}
+
+function lineWord(count: number): string {
+  return count === 1 ? "line" : "lines";
 }
 
 function approvalSurfaceVisible(

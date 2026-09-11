@@ -150,7 +150,7 @@ const TAB_ID = "tab-1";
 const CHAT_ID = "chat-1";
 const HOST_ID = "host-1";
 
-// U+2212 MINUS SIGN, not a hyphen - `changeCountsShortForm` prints deletions
+// U+2212 MINUS SIGN, not a hyphen - `DiffLineDeltas` prints deletions
 // with it, and a plain "-" would silently pass a test that checked the wrong
 // character.
 const MINUS = "−";
@@ -460,9 +460,103 @@ describe("useChatDockChrome via ChatDockCompactStrip", () => {
     );
 
     const chip = screen.getByTestId("chat-dock-chip-filesChanged");
-    expect(chipText("filesChanged")).toBe(`+5 ${MINUS}3`);
+    // The file count leads, the panel header's own totals follow. `chipText`
+    // now reads the WHOLE chip, so the next line is the same assertion with
+    // the deltas included rather than a second, narrower one.
+    expect(chip.textContent).toBe(`2+5${MINUS}3`);
     expect(chip.getAttribute("aria-label")).toBe(
-      "Files changed. 2 files, 5 added and 3 removed.",
+      "Files changed. 2 files, 5 lines added, 3 removed.",
+    );
+  });
+
+  // A turn that only adds, and a set whose summaries have not landed yet: the
+  // chip drops the side it has nothing to say about rather than printing a
+  // zero, and falls back to the count alone when it has neither.
+  it("omits a zero side of the files-changed chip, and its label with it", () => {
+    useLayoutStore.setState({
+      composer: { ...DEFAULT_COMPOSER_LAYOUT, filesChanged: "compact" },
+    });
+    const addedOnly = surfacesProps({
+      restoreContext: {
+        ...EMPTY_RESTORE,
+        accumulatedFileChanges: [fileChangeRow("/repo/src/a.ts", 5, 0)],
+      },
+      queueItems: [],
+      backgroundItems: [],
+    });
+    const noCounts = surfacesProps({
+      restoreContext: {
+        ...EMPTY_RESTORE,
+        accumulatedFileChanges: [fileChangeRow("/repo/src/a.ts", 0, 0)],
+      },
+      queueItems: [],
+      backgroundItems: [],
+    });
+
+    const deletedOnly = surfacesProps({
+      restoreContext: {
+        ...EMPTY_RESTORE,
+        accumulatedFileChanges: [fileChangeRow("/repo/src/a.ts", 0, 4)],
+      },
+      queueItems: [],
+      backgroundItems: [],
+    });
+
+    const { rerender } = renderSurfaces(addedOnly);
+
+    const chip = screen.getByTestId("chat-dock-chip-filesChanged");
+    expect(chip.textContent).toBe("1+5");
+    expect(chip.getAttribute("aria-label")).toBe(
+      "Files changed. 1 file, 5 lines added.",
+    );
+
+    rerender(tile(deletedOnly));
+
+    // With nothing added, the noun rides on the removal clause instead.
+    expect(chip.textContent).toBe(`1${MINUS}4`);
+    expect(chip.getAttribute("aria-label")).toBe(
+      "Files changed. 1 file, 4 lines removed.",
+    );
+
+    rerender(tile(noCounts));
+
+    expect(chip.textContent).toBe("1");
+    expect(chip.getAttribute("aria-label")).toBe("Files changed. 1 file.");
+  });
+
+  // One line each way: the sentence has to say "line", not "1 lines".
+  it("names a single added or removed line in the singular", () => {
+    useLayoutStore.setState({
+      composer: { ...DEFAULT_COMPOSER_LAYOUT, filesChanged: "compact" },
+    });
+    const oneEachWay = surfacesProps({
+      restoreContext: {
+        ...EMPTY_RESTORE,
+        accumulatedFileChanges: [fileChangeRow("/repo/src/a.ts", 1, 1)],
+      },
+      queueItems: [],
+      backgroundItems: [],
+    });
+    const oneRemoved = surfacesProps({
+      restoreContext: {
+        ...EMPTY_RESTORE,
+        accumulatedFileChanges: [fileChangeRow("/repo/src/a.ts", 0, 1)],
+      },
+      queueItems: [],
+      backgroundItems: [],
+    });
+
+    const { rerender } = renderSurfaces(oneEachWay);
+
+    const chip = screen.getByTestId("chat-dock-chip-filesChanged");
+    expect(chip.getAttribute("aria-label")).toBe(
+      "Files changed. 1 file, 1 line added, 1 removed.",
+    );
+
+    rerender(tile(oneRemoved));
+
+    expect(chip.getAttribute("aria-label")).toBe(
+      "Files changed. 1 file, 1 line removed.",
     );
   });
 

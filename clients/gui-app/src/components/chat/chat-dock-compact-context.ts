@@ -1,5 +1,6 @@
 import { createContext, useContext } from "react";
 import type { BackgroundItemKind } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { DiffLineCounts } from "@/lib/file-change-diff-hunks";
 
 /** The three dock rows Layout ▸ Composer can fold into a chip. */
 export type ChatDockSection = "filesChanged" | "activeAgents" | "background";
@@ -36,6 +37,14 @@ export interface ChatDockCompactChipModel {
   readonly working: boolean;
   /** The short form the chip prints: `+395 −12`, `3`, `2 · 1`. */
   readonly text: string;
+  /**
+   * Line counts to draw after the number, in the tones the panel uses - the
+   * Files changed chip, and nothing else so far. `null` is a chip with no
+   * second measurement to show, not a chip whose counts are zero: zero counts
+   * are a `DiffLineCounts` that simply prints nothing, so a summary still in
+   * flight collapses to the file count on its own.
+   */
+  readonly lineDeltas: DiffLineCounts | null;
   /** The whole sentence it stands for - the chip's accessible name. */
   readonly label: string;
   readonly pulseToken: string | null;

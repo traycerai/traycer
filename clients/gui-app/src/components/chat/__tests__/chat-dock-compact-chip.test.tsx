@@ -3,10 +3,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { ChatDockCompactChip } from "@/components/chat/chat-dock-compact-chip";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import type { DiffLineCounts } from "@/lib/file-change-diff-hunks";
 
 interface ChipProps {
   readonly icon: ReactElement;
   readonly text: string;
+  readonly lineDeltas: DiffLineCounts | null;
   readonly label: string;
   readonly pulseToken: string | null;
   readonly expanded: boolean;
@@ -18,6 +20,7 @@ function baseProps(): ChipProps {
   return {
     icon: <span data-testid="chip-icon" />,
     text: "3",
+    lineDeltas: null,
     label: "3 agents running. Show the active agents.",
     pulseToken: null,
     expanded: false,
@@ -68,6 +71,57 @@ describe("<ChatDockCompactChip />", () => {
 
     expect(screen.getByTestId("chip-icon")).not.toBeNull();
     expect(screen.getByText("3")).not.toBeNull();
+  });
+
+  // The Files changed chip prints two measurements: the count, then the lines,
+  // in the panel's own tones. `null` is every other chip, which counts one
+  // thing and must gain no second span for it.
+  it("prints the line deltas after the short form, in the panel's tones", () => {
+    renderChip({
+      ...baseProps(),
+      text: "3",
+      lineDeltas: { additions: 12, deletions: 4 },
+    });
+
+    const chip = screen.getByTestId("chip");
+    expect(chip.textContent).toBe("3+12−4");
+    expect(screen.getByText("+12").getAttribute("class")).toContain(
+      "text-emerald-600",
+    );
+    expect(screen.getByText("−4").getAttribute("class")).toContain(
+      "text-destructive",
+    );
+  });
+
+  it("omits a zero side, and the whole delta group for a chip with none", () => {
+    const { rerender } = renderChip({
+      ...baseProps(),
+      text: "3",
+      lineDeltas: { additions: 12, deletions: 0 },
+    });
+    const chip = screen.getByTestId("chip");
+    expect(chip.textContent).toBe("3+12");
+
+    rerenderChip(rerender, {
+      ...baseProps(),
+      text: "3",
+      lineDeltas: { additions: 0, deletions: 4 },
+    });
+    expect(chip.textContent).toBe("3−4");
+
+    // Both zero draws NO span, not an empty one: a chip is a few characters
+    // wide, so an empty counts group is a visible gap after the number.
+    rerenderChip(rerender, {
+      ...baseProps(),
+      text: "3",
+      lineDeltas: { additions: 0, deletions: 0 },
+    });
+    expect(chip.textContent).toBe("3");
+    expect(chip.childElementCount).toBe(2);
+
+    rerenderChip(rerender, { ...baseProps(), text: "3", lineDeltas: null });
+    expect(chip.textContent).toBe("3");
+    expect(chip.childElementCount).toBe(2);
   });
 
   it("uses the whole sentence as the accessible name", () => {

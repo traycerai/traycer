@@ -26,6 +26,7 @@ function renderRow() {
               glyph: "activeAgents",
               working: false,
               text: "2",
+              lineDeltas: null,
               label: "Active agents. 2 running.",
               pulseToken: null,
             },

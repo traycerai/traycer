@@ -1711,6 +1711,11 @@ md:top-0`): positioned against the nearest scrollport - the settings
     draws its own icon (`Bot`, or Background's per-kind glyph) and shows
     activity by pulsing that icon rather than replacing it, falling back under
     `prefers-reduced-motion` to a small filled dot at the icon's corner.
+    A chip prints what its row's own header prints - Files changed
+    reads `3  +12 −4`, the file count then the accumulated line counts in the
+    panel's added / removed tones, with a zero side omitted and the counts
+    dropped entirely until a summary lands (`DiffLineDeltas`, shared with the
+    panel so the two can never disagree).
     `Visible / Hidden` only for a control whose job has a second route:
     paste and drag-drop attach images, the dictation chord starts voice input
     (`Hidden` here is NOT `voiceInputEnabled` off), and the palette and

@@ -1,12 +1,21 @@
 import { useState, type ReactNode } from "react";
+import { DiffLineDeltas } from "@/components/chat/diff-line-deltas";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import type { DiffLineCounts } from "@/lib/file-change-diff-hunks";
 import { cn } from "@/lib/utils";
 
 interface ChatDockCompactChipProps {
   /** Icon only - the sentence a screen reader gets is `label`. */
   readonly icon: ReactNode;
-  /** The short form: `+395 −12`, `3`. Never a sentence. */
+  /** The short form: `3`, `2 · 1`. Never a sentence. */
   readonly text: ReactNode;
+  /**
+   * Added and removed lines to print after the short form, in the same tones
+   * the accumulated-changes panel gives them, or `null` for a chip that counts
+   * one thing only. Drawn from the shared component, so the chip and the panel
+   * it stands for can never disagree on a colour or on how a zero reads.
+   */
+  readonly lineDeltas: DiffLineCounts | null;
   /**
    * The whole sentence the short form stands for - what the row is, and what
    * its number means ("Active agents. 3 running."). It is the chip's accessible
@@ -94,6 +103,15 @@ export function ChatDockCompactChip(props: ChatDockCompactChipProps) {
         <span className="font-mono text-code-xs tabular-nums">
           {props.text}
         </span>
+        {/* Gated here rather than inside the component: the panel's header
+            and rows keep an empty counts span so their row geometry does not
+            twitch as summaries land, but on a chip it would be a bare `gap-1`
+            of nothing after the number. */}
+        {props.lineDeltas === null ||
+        (props.lineDeltas.additions === 0 &&
+          props.lineDeltas.deletions === 0) ? null : (
+          <DiffLineDeltas counts={props.lineDeltas} className="tabular-nums" />
+        )}
       </button>
     </TooltipWrapper>
   );

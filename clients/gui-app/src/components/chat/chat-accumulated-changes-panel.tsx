@@ -32,6 +32,7 @@ import {
 } from "@/components/chat/chat-diff-target";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
 import { useChatDockSectionRevealed } from "@/components/chat/chat-dock-compact-context";
+import { DiffLineDeltas } from "@/components/chat/diff-line-deltas";
 import { FileChangeHeader } from "@/components/chat/segments/file-change-segment";
 import { RevertArtifactsCheckbox } from "@/components/chat/segments/revert-artifacts-checkbox";
 import { useArtifactRowDisplay } from "@/components/chat/segments/use-artifact-row-display";
@@ -182,16 +183,7 @@ export function ChatAccumulatedChangesPanel(
             <span className="min-w-0 truncate text-ui-xs font-medium text-foreground/85">
               {fileCount} {fileCount === 1 ? "file changed" : "files changed"}
             </span>
-            <span className="flex shrink-0 items-center gap-1.5 font-mono text-code-xs">
-              {totals.additions > 0 ? (
-                <span className="text-emerald-600 dark:text-emerald-400">
-                  +{totals.additions}
-                </span>
-              ) : null}
-              {totals.deletions > 0 ? (
-                <span className="text-destructive">−{totals.deletions}</span>
-              ) : null}
-            </span>
+            <DiffLineDeltas counts={totals} className={undefined} />
             <span aria-hidden className="flex-1" />
           </CollapsibleTrigger>
           <div className="flex shrink-0 items-center gap-1 pr-1.5">
@@ -495,16 +487,10 @@ function ArtifactAccumulatedHeader(props: {
           {display.title}
         </StartTruncatedText>
       )}
-      <span className="@max-[28rem]:hidden flex shrink-0 items-center gap-1.5 font-mono text-code-xs">
-        {additions > 0 ? (
-          <span className="text-emerald-600 dark:text-emerald-400">
-            +{additions}
-          </span>
-        ) : null}
-        {deletions > 0 ? (
-          <span className="text-destructive">−{deletions}</span>
-        ) : null}
-      </span>
+      <DiffLineDeltas
+        counts={{ additions, deletions }}
+        className="@max-[28rem]:hidden"
+      />
     </>
   );
 }

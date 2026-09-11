@@ -157,6 +157,7 @@ export function ChatDockCompactStrip(): ReactNode {
           key={chip.section}
           icon={<ChipGlyph glyph={chip.glyph} working={chip.working} />}
           text={chip.text}
+          lineDeltas={chip.lineDeltas}
           label={chip.label}
           pulseToken={chip.pulseToken}
           expanded={value.expanded.has(chip.section)}
