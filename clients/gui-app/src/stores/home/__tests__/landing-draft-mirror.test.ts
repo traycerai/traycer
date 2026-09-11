@@ -442,6 +442,34 @@ describe("landing draft host-mirror bookkeeping", () => {
     expect(useLandingDraftStore.getState().drafts).toEqual([]);
   });
 
+  it("keeps recovery when deleteDraft has no local mirror to destroy", () => {
+    const id = "missing-local-draft";
+    recordClosedHeaderTab({
+      kind: "draft",
+      draftId: id,
+      hostId: "host-a",
+      index: 0,
+    });
+
+    useLandingDraftStore.getState().deleteDraft(id);
+
+    expect(useTabRecoveryHistory.getState().entries).toHaveLength(1);
+  });
+
+  it("prunes recovery when an authoritative host tombstone has no local mirror", () => {
+    const id = "host-deleted-draft";
+    recordClosedHeaderTab({
+      kind: "draft",
+      draftId: id,
+      hostId: "host-a",
+      index: 0,
+    });
+
+    useLandingDraftStore.getState().applyHostDelete(id);
+
+    expect(useTabRecoveryHistory.getState().entries).toEqual([]);
+  });
+
   it("inbound closed:true hides the draft locally and clears activeDraftId", () => {
     const id = useLandingDraftStore.getState().createDraft(null);
     useLandingDraftStore.getState().setDraftContent(

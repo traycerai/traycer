@@ -463,13 +463,18 @@ try {
     ),
   );
 } catch (error) {
-  console.error("TAB RECOVERY BROWSER REGRESSION FAILED:", error);
+  console.error(
+    "TAB RECOVERY BROWSER REGRESSION FAILED:",
+    JSON.stringify(
+      error instanceof Error ? (error.stack ?? error.message) : String(error),
+    ),
+  );
   if (viteError.trim() !== "")
-    console.error("VITE STDERR (latest output):\n" + viteError);
+    console.error("VITE STDERR (latest output):", JSON.stringify(viteError));
   if (runtimeExceptions.length > 0)
     console.error(
-      "CDP RUNTIME EXCEPTIONS (latest output):\n" +
-        runtimeExceptions.join("\n---\n"),
+      "CDP RUNTIME EXCEPTIONS (latest output):",
+      JSON.stringify(runtimeExceptions),
     );
   process.exitCode = 1;
 } finally {

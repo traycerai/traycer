@@ -42,26 +42,31 @@ export function useCloseTabFlow(): CloseTabFlow {
     select: (s) => s.location.pathname,
   });
 
-  const requestCloseTab = useCallback(
+  const finalizeCloseTab = useCallback(
     (tab: HeaderTab) => {
       if (windowsBridge !== null && isOnlyBlankStartPage(tab)) {
         void windowsBridge.requestClose(windowsBridge.windowId);
         return;
       }
       const captured = picker.capture(tab);
-      const finalize = () => {
-        closeTab(tab);
-        if (tab.kind === "epic") {
-          Analytics.getInstance().track(AnalyticsEvent.TabClosed, {
-            target: "task",
-          });
-        }
-        picker.navigateToCaptured(captured);
-      };
+      closeTab(tab);
+      if (tab.kind === "epic") {
+        Analytics.getInstance().track(AnalyticsEvent.TabClosed, {
+          target: "task",
+        });
+      }
+      picker.navigateToCaptured(captured);
+    },
+    [closeTab, picker, windowsBridge],
+  );
+
+  const requestCloseTab = useCallback(
+    (tab: HeaderTab) => {
+      const finalize = () => finalizeCloseTab(tab);
       if (dialog.promptOrConfirm(tab, finalize)) return;
       finalize();
     },
-    [closeTab, dialog, picker, windowsBridge],
+    [dialog, finalizeCloseTab],
   );
 
   const closeOtherTabs = useCallback(
@@ -110,24 +115,38 @@ export function useCloseTabFlow(): CloseTabFlow {
         (tab) => layout.customizations?.[tabRefKey(tab)]?.groupId === groupId,
       );
       const active = members.find((tab) => tabMatchesPath(tab, activePathname));
-      let skipped = 0;
-      batchHeaderTabRecovery(() => {
-        for (const tab of members) {
-          if (tab === active) continue;
-          if (tabRequiresCloseConfirm(tab)) {
-            skipped += 1;
-            continue;
+      const finalize = () => {
+        let skipped = 0;
+        // Do not keep a global batch open while the dialog waits: unrelated
+        // closes must stay separate. Only confirmed group closes run here.
+        batchHeaderTabRecovery(() => {
+          for (const tab of members) {
+            if (tab === active) continue;
+            if (tabRequiresCloseConfirm(tab)) {
+              skipped += 1;
+              continue;
+            }
+            closeTab(tab);
           }
-          closeTab(tab);
-        }
-        if (active !== undefined) requestCloseTab(active);
-      });
-      if (skipped > 0)
-        toast.warning(`Kept ${skipped} tabs open with unsynced edits`, {
-          description: "Close those tabs individually to discard their edits.",
+          if (
+            active !== undefined &&
+            getHeaderTabs().some((tab) => tabRefKey(tab) === tabRefKey(active))
+          ) {
+            // Capture the neighbor after the other group members are gone.
+            finalizeCloseTab(active);
+          }
         });
+        if (skipped > 0)
+          toast.warning(`Kept ${skipped} tabs open with unsynced edits`, {
+            description:
+              "Close those tabs individually to discard their edits.",
+          });
+      };
+      if (active !== undefined && dialog.promptOrConfirm(active, finalize))
+        return;
+      finalize();
     },
-    [activePathname, closeTab, requestCloseTab],
+    [activePathname, closeTab, dialog, finalizeCloseTab],
   );
 
   const closeActiveTab = useCallback(() => {

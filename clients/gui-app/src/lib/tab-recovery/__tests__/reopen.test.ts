@@ -32,6 +32,10 @@ const mocks = vi.hoisted(() => {
       vi.fn<
         (item: ClosedHeaderTab, stillCurrent: () => boolean) => Promise<boolean>
       >(),
+    landingDrafts: [] as Array<{
+      readonly id: string;
+      readonly closed: boolean;
+    }>,
     scheduleLandingImageReconcile: vi.fn<() => void>(),
     toastInfo: vi.fn<(message: string, options: unknown) => void>(),
     canvasState: {
@@ -68,7 +72,7 @@ vi.mock("@/stores/epics/canvas/store", () => ({
 
 vi.mock("@/stores/home/landing-draft-store", () => ({
   useLandingDraftStore: {
-    getState: vi.fn(() => ({ drafts: [] })),
+    getState: vi.fn(() => ({ drafts: mocks.landingDrafts })),
   },
 }));
 
@@ -246,6 +250,7 @@ beforeEach(() => {
   mocks.navigateToTabIntent.mockReset();
   mocks.prepareSavedDraft.mockReset();
   mocks.prepareSavedDraft.mockResolvedValue(true);
+  mocks.landingDrafts.length = 0;
   mocks.scheduleLandingImageReconcile.mockReset();
   mocks.toastInfo.mockReset();
   mocks.canvasState.openTabOrder.length = 0;
@@ -318,6 +323,40 @@ describe("reopenClosedTab", () => {
     expect(mocks.restoreClosedHeaderTabs).toHaveBeenCalledWith([item], null);
     expect(item).not.toHaveProperty("legacyDraft");
     expect(useTabRecoveryHistory.getState().entries).toHaveLength(0);
+  });
+
+  it("restores navigation after preparing an open host draft as a closed mirror", async () => {
+    const item: Extract<ClosedHeaderTab, { kind: "draft" }> = {
+      kind: "draft",
+      draftId: "host-open-draft",
+      hostId: "host-1",
+      index: 0,
+    };
+    const entry: TabRecoveryEntry = {
+      id: "entry-1",
+      kind: "header",
+      bulk: false,
+      items: [item],
+    };
+    useTabRecoveryHistory.setState({ entries: [entry], ready: true });
+    mocks.prepareSavedDraft.mockImplementation((draftItem, current) => {
+      if (draftItem.kind !== "draft") return Promise.resolve(false);
+      expect(draftItem.hostId).toBe("host-1");
+      if (!current()) return Promise.resolve(false);
+      mocks.landingDrafts.push({ id: draftItem.draftId, closed: true });
+      return Promise.resolve(true);
+    });
+
+    await reopenClosedTab(router("/", undefined));
+
+    expect(mocks.landingDrafts).toEqual([
+      { id: "host-open-draft", closed: true },
+    ]);
+    expect(mocks.restoreClosedHeaderTabs).toHaveBeenCalledWith([item], null);
+    expect(mocks.navigateToTabIntent).toHaveBeenCalledWith({
+      kind: "draft",
+      draftId: "host-open-draft",
+    });
   });
 
   it("keeps the recovery entry when a draft image cannot be restored", async () => {

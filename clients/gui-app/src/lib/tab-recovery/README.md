@@ -8,10 +8,14 @@ tabs are excluded at capture and when loading older journals. Text and
 image-only drafts remain recoverable; task tabs remain recoverable even when
 their canvases are empty.
 
-One eligible close creates one entry, including bulk closes. A task close
+One eligible close creates one entry, including bulk closes. Group close waits
+for an active tab’s unsynced-edits confirmation before closing any member;
+cancelling leaves the group intact, and unrelated closes are separate actions. A task close
 captures one task view and its canvas, not individual child closes. Moves,
 submission of a new-task draft, and confirmed content deletions are excluded.
 Confirmed deletions prune saved references; unavailability is not deletion.
+Host-confirmed deletion also prunes an evicted local mirror; an unknown local
+delete request does not remove recovery history.
 A failed history read leaves persistence disabled for that bucket until a
 successful hydration. Retrying configuration merges pending closes and applies
 pending deletions without overwriting the unread journal.

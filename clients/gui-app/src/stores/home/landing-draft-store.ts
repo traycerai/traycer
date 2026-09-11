@@ -473,9 +473,12 @@ function destroyLandingDraft(
   id: string,
   routeHostDelete: boolean,
 ): void {
-  pruneRecoveryDraft(id);
   const { drafts, activeDraftId } = get();
   const closing = drafts.find((d) => d.id === id);
+  // A local delete needs a row to route its host request. A host tombstone is
+  // already authoritative even when its local mirror was evicted.
+  if (closing === undefined && routeHostDelete) return;
+  pruneRecoveryDraft(id);
   if (closing === undefined) return;
   draftRuntimeRegistry.close(id);
   // Route the host delete while the row still exists: `routeLocalDelete`

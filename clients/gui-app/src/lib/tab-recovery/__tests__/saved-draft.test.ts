@@ -181,6 +181,15 @@ function landingDocument(
   content: JsonContent,
   blobHashes: readonly string[],
 ): Extract<DraftDocument, { kind: "landing" }> {
+  return landingDocumentWithClosed(draftId, content, blobHashes, true);
+}
+
+function landingDocumentWithClosed(
+  draftId: string,
+  content: JsonContent,
+  blobHashes: readonly string[],
+  closed: boolean,
+): Extract<DraftDocument, { kind: "landing" }> {
   return {
     draftId,
     kind: "landing",
@@ -203,7 +212,7 @@ function landingDocument(
       runSettings: null,
       composerMode: "chat",
       blobHashes: [...blobHashes],
-      closed: true,
+      closed,
     },
   };
 }
@@ -259,6 +268,7 @@ function localDraft(draftId: string, content: JsonContent): LandingDraftTab {
     composerMode: "chat",
     workspace: emptyLandingDraftWorkspaceSnapshot(),
     ...freshLandingMirrorState(),
+    closed: false,
   };
 }
 
@@ -283,6 +293,8 @@ async function sha256Hex(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
   ).join("");
 }
 
+let originalCreateObjectURLDescriptor: PropertyDescriptor | undefined;
+
 describe("prepareSavedDraft", () => {
   beforeEach(async () => {
     for (const hash of await imageHashKeys()) {
@@ -295,10 +307,31 @@ describe("prepareSavedDraft", () => {
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
     useTabRecoveryHistory.setState({ entries: [], ready: true });
     mocks.resolveNamedHostClient.mockReset();
-    URL.createObjectURL = vi.fn(() => "blob:saved-draft");
+    originalCreateObjectURLDescriptor = Object.getOwnPropertyDescriptor(
+      URL,
+      "createObjectURL",
+    );
+    if (typeof URL.createObjectURL !== "function") {
+      Object.defineProperty(URL, "createObjectURL", {
+        configurable: true,
+        writable: true,
+        value: () => "blob:saved-draft",
+      });
+    }
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:saved-draft");
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
+    if (originalCreateObjectURLDescriptor === undefined)
+      Reflect.deleteProperty(URL, "createObjectURL");
+    else
+      Object.defineProperty(
+        URL,
+        "createObjectURL",
+        originalCreateObjectURLDescriptor,
+      );
+    originalCreateObjectURLDescriptor = undefined;
     useLandingDraftStore.setState({ drafts: [], activeDraftId: null });
     useTabRecoveryHistory.setState({ entries: [], ready: true });
     resetLandingImageBudgetReservationsForTesting();
@@ -557,6 +590,61 @@ describe("prepareSavedDraft", () => {
     const restored = useLandingDraftStore.getState().drafts[0];
     expect(restored.content).toEqual(document.portable.content);
     expect(restored.confirmedHostBlobHashes).toEqual([hash]);
+  });
+
+  it("installs a closed local mirror when the host record is open", async () => {
+    const draftId = "host-open-draft";
+    const document = landingDocumentWithClosed(
+      draftId,
+      textDocument("host content"),
+      [],
+      false,
+    );
+    const fixture = createHostFixture({
+      list: () => Promise.resolve(listResponse([document], [])),
+      readBlob: () => Promise.reject(new Error("unexpected blob read")),
+    });
+    mocks.resolveNamedHostClient.mockReturnValue(fixture.client);
+
+    await expect(
+      prepareSavedDraft(recoveryItem(draftId, HOST_ID, undefined), () => true),
+    ).resolves.toBe(true);
+
+    const restored = useLandingDraftStore.getState().drafts[0];
+    expect(restored.content).toEqual(document.portable.content);
+    expect(restored.closed).toBe(true);
+  });
+
+  it("keeps a local draft opened while the host mirror is being read", async () => {
+    const draftId = "concurrent-local-draft";
+    const list = deferred<DraftsListResponse>();
+    const document = landingDocument(draftId, textDocument("host content"), []);
+    const fixture = createHostFixture({
+      list: () => list.promise,
+      readBlob: () => Promise.reject(new Error("unexpected blob read")),
+    });
+    mocks.resolveNamedHostClient.mockReturnValue(fixture.client);
+
+    const pending = prepareSavedDraft(
+      recoveryItem(draftId, HOST_ID, undefined),
+      () => true,
+    );
+    await vi.waitFor(() => {
+      expect(fixture.messenger.calls.map((call) => call.method)).toEqual([
+        "drafts.list",
+      ]);
+    });
+    const localContent = textDocument("concurrent local content");
+    useLandingDraftStore.setState({
+      drafts: [localDraft(draftId, localContent)],
+      activeDraftId: draftId,
+    });
+    list.resolve(listResponse([document], []));
+
+    await expect(pending).resolves.toBe(true);
+    const retained = useLandingDraftStore.getState().drafts[0];
+    expect(retained.content).toEqual(localContent);
+    expect(retained.closed).toBe(false);
   });
 
   it("propagates a temporary host list failure", async () => {

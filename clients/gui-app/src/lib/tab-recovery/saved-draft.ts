@@ -135,7 +135,12 @@ export async function prepareSavedDraft(
       .getState()
       .drafts.some((draft) => draft.id === item.draftId)
   ) {
-    applyLandingHostDocument(document, document.portable.content);
+    // Loading the host record prepares a local mirror; the coordinator still
+    // owns reopening its tab. The host's open state is not local tab presence.
+    applyLandingHostDocument(
+      { ...document, portable: { ...document.portable, closed: true } },
+      document.portable.content,
+    );
     rememberLandingBlobsOnHost(item.draftId, [...images.keys()]);
   }
   return true;
