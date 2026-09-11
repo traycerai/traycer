@@ -43,6 +43,8 @@ function fakeSession(): FakeSession {
     start: vi.fn(),
     isClosed: () => false,
     isReady: () => true,
+    // Structural member: this fake models readiness, never silence.
+    isSilentFor: () => false,
     sendUnary: ((method: string) => {
       session.statusCalls += 1;
       if (method !== "host.status") {
