@@ -26,7 +26,7 @@ export function TabStripSkeleton({ count }: TabStripSkeletonProps) {
       aria-busy
       aria-label="Restoring open tabs"
       className={cn(
-        "flex h-10 w-full min-w-0 items-center gap-1 px-2",
+        "flex h-9 w-full min-w-0 items-center gap-1 px-2",
         "[-webkit-app-region:drag]",
       )}
     >
