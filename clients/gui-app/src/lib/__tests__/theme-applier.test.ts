@@ -11,7 +11,7 @@ import { useThemeLibraryStore } from "@/stores/settings/theme-library-store";
 function resetThemeState(): void {
   window.localStorage.clear();
   useThemeLibraryStore.setState({
-    version: 1,
+    version: 2,
     themes: [],
     selected: { light: null, dark: null },
     glassOpacity: 100,
@@ -79,4 +79,19 @@ describe("theme applier", () => {
       document.documentElement.style.getPropertyValue("--term-ansi-red"),
     ).toBe(builtins["term-ansi-red"]);
   });
+
+  it("marks glass-enabled state only below fully opaque glass", () => {
+    const root = document.documentElement;
+
+    expect(root.hasAttribute("data-glass-enabled")).toBe(false);
+    expect(useThemeLibraryStore.getState().setGlassOpacity(50)).toBe(true);
+    expect(root.hasAttribute("data-glass-enabled")).toBe(true);
+    expect(useThemeLibraryStore.getState().setGlassOpacity(100)).toBe(true);
+    expect(root.hasAttribute("data-glass-enabled")).toBe(false);
+  });
+
+  // Border visibility repair now runs once, at VS Code import time
+  // (`theme-import.ts`), not a second time here keyed off "has syntax
+  // colors" - see `lib/themes/__tests__/theme-customization.test.ts` for
+  // coverage of the import-time fix-up itself.
 });

@@ -1,9 +1,13 @@
-import { AppearanceDetails } from "@/components/settings/themes/appearance-details";
+import {
+  AppearanceDetails,
+  AppearanceFontRows,
+} from "@/components/settings/themes/appearance-details";
 import { useMemo } from "react";
 import { RotateCcw } from "lucide-react";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { SettingsGroup } from "@/components/settings/settings-group";
+import { StartPageSettingsSection } from "@/components/settings/start-page-settings-section";
 import { useSettingsDensity } from "@/providers/settings-density-context";
 import { EpicNodeIconColorPicker } from "@/components/settings/controls/node-icon-color-picker";
 import { SettingsNumberInput } from "@/components/settings/controls/settings-number-input";
@@ -123,14 +127,15 @@ export function AppearanceSettingsPanel() {
   return (
     <SettingsPanelShell
       title="Appearance"
-      description="Themes, typography, and display preferences."
+      description="Themes, fonts, and display preferences."
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
       <div
         className={cn("@container flex flex-col", compact ? "gap-5" : "gap-8")}
       >
         <ThemeGallery />
-        <AppearanceDetails />
+
+        <StartPageSettingsSection />
 
         <SettingsGroup
           title="Interface"
@@ -141,9 +146,9 @@ export function AppearanceSettingsPanel() {
         >
           <DesktopZoomSettingsRow />
           <SettingsRow
-            label="Use pointer cursors"
+            label="Show a hand cursor over clickable controls"
             anchor="appearance-pointer-cursors"
-            description="Change the cursor to a pointer when hovering over interactive elements."
+            description="Use a hand cursor over buttons, links, and other clickable controls."
             control={
               <Switch
                 checked={pointerCursors}
@@ -151,14 +156,14 @@ export function AppearanceSettingsPanel() {
                   "pointerCursors",
                   setPointerCursors,
                 )}
-                aria-label="Use pointer cursors"
+                aria-label="Show a hand cursor over clickable controls"
               />
             }
           />
           <SettingsRow
-            label="Minimap side"
+            label="Minimap position"
             anchor="appearance-minimap-side"
-            description="Place chat and artifact minimaps on the left or right, or hide both."
+            description="Minimaps are compact overviews for navigating chats and artifacts. Choose where they appear, or hide them."
             control={
               <Select
                 value={chatTurnMinimapSide}
@@ -176,7 +181,7 @@ export function AppearanceSettingsPanel() {
               >
                 <SelectTrigger
                   size="sm"
-                  aria-label="Minimap side"
+                  aria-label="Minimap position"
                   className="w-[min(40vw,8rem)]"
                 >
                   <SelectValue />
@@ -184,7 +189,7 @@ export function AppearanceSettingsPanel() {
                 <SelectContent>
                   <SelectItem value="right">Right</SelectItem>
                   <SelectItem value="left">Left</SelectItem>
-                  <SelectItem value="hide">Hide</SelectItem>
+                  <SelectItem value="hide">Hidden</SelectItem>
                 </SelectContent>
               </Select>
             }
@@ -192,14 +197,14 @@ export function AppearanceSettingsPanel() {
         </SettingsGroup>
 
         <SettingsGroup
-          title="Typography"
+          title="Fonts and text"
           anchor="appearance-typography"
           tone="default"
           dataTestId={undefined}
           fill={false}
         >
           <SettingsRow
-            label="UI font"
+            label="Interface font"
             anchor="appearance-ui-font"
             description="Font and size used across the Traycer interface."
             control={
@@ -213,7 +218,7 @@ export function AppearanceSettingsPanel() {
                   options={installedFonts}
                   defaultLabel="Figtree (Default)"
                   resetTooltip="Reset to default"
-                  ariaLabel="UI font"
+                  ariaLabel="Interface font"
                 />
                 <SettingsNumberInput
                   value={uiFontSize}
@@ -224,7 +229,7 @@ export function AppearanceSettingsPanel() {
                   min={10}
                   max={20}
                   unit="px"
-                  ariaLabel="UI font size"
+                  ariaLabel="Interface font size"
                   defaultValue={DEFAULT_UI_FONT_SIZE}
                   resetTooltip="Reset to default"
                 />
@@ -234,7 +239,7 @@ export function AppearanceSettingsPanel() {
           <SettingsRow
             label="Code font"
             anchor="appearance-code-font"
-            description="Font and size used for code across agents and diffs."
+            description="Font and size used for code blocks and diffs."
             control={
               <div className="flex flex-col items-end gap-2">
                 <FontPicker
@@ -264,7 +269,10 @@ export function AppearanceSettingsPanel() {
               </div>
             }
           />
+          <AppearanceFontRows />
         </SettingsGroup>
+
+        <AppearanceDetails />
 
         <SettingsGroup
           title="Terminal"
@@ -351,16 +359,16 @@ export function AppearanceSettingsPanel() {
         </SettingsGroup>
 
         <SettingsGroup
-          title="Artifact icons"
+          title="Icon colors"
           anchor="appearance-artifact-icons"
           tone="default"
           dataTestId={undefined}
           fill={false}
         >
           <SettingsRow
-            label="Artifact icon colors"
+            label="Color icons by type"
             anchor="appearance-artifact-icon-colors"
-            description="Turn on type-specific colors, or leave node icons neutral."
+            description="Give chats, agents, terminals, and artifacts distinct icon colors. Turn off to use neutral icons."
             control={
               <EpicNodeIconColorPicker
                 enabled={artifactIconColorMode === "byType"}

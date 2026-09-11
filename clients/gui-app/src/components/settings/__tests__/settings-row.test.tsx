@@ -15,7 +15,7 @@ describe("SettingsRow", () => {
     // under the label at the leading edge.
     render(
       <SettingsRow
-        label="Artifact icon colors"
+        label="Color icons by type"
         description="Pick colors used for artifact type icons."
         control={
           <div className="w-80" data-testid="wide-control">
@@ -25,7 +25,7 @@ describe("SettingsRow", () => {
       />,
     );
 
-    const label = screen.getByText("Artifact icon colors");
+    const label = screen.getByText("Color icons by type");
     const labelBlock = label.parentElement;
     if (labelBlock === null) throw new Error("expected label block parent");
 

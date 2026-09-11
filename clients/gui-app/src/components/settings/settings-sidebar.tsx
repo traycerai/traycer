@@ -1,3 +1,4 @@
+import { SidebarArtwork } from "@/components/layout/sidebar-artwork";
 import { Fragment, useEffect, useMemo, type ReactNode } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { ChevronRight } from "lucide-react";
@@ -100,6 +101,7 @@ export function SettingsSidebar(props: SettingsSidebarProps) {
           : "w-full",
       )}
     >
+      <SidebarArtwork />
       <SettingsSearch query={query} onQueryChange={setQuery} />
       {/* The results took this space. Keeping the section list under them
           would put two competing lists in one column, and the top one already

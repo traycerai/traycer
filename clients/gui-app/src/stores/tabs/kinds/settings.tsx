@@ -53,6 +53,7 @@ export const settingsTabModule: TabKindModule<"settings", SystemTab> = {
       route: canonicalPath ?? SETTINGS_DEFAULT_PATH,
       name: source.name.length > 0 ? source.name : SETTINGS_TAB_LABEL,
       icon: Settings,
+      appearance: null,
       canDuplicate: false,
       canOpenInNewWindow: true,
       lastPath: canonicalPath,
