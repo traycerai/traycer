@@ -116,7 +116,7 @@ describe("settings search", () => {
   it("finds a setting by a word its label does not contain", () => {
     // The keyword list earning its keep. None of these queries appear in the
     // label of the thing they must reach.
-    // The theme gallery is bespoke, so "dark mode" lands on the page.
+    // "dark mode" is the page's vocabulary, not a row's, so it lands on the page.
     expect(landingFor("dark mode", DESKTOP)).toBe("appearance#<top>");
     expect(landingFor("caffeinate", DESKTOP)).toBe(
       "general#general-prevent-sleep",

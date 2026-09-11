@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/sheet";
 import { Switch } from "@/components/ui/switch";
 import { ImportLoginsDialog } from "@/components/settings/import-logins-dialog";
+import { GENERAL } from "@/components/settings/panels/general-settings.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import {
@@ -56,14 +57,14 @@ export function BrowserSettingsSection(): ReactNode {
           origins the card would be a heading over an empty box. */}
       {browserDevOrigins.length > 0 ? (
         <SettingsGroup
-          title="Browser"
+          group={GENERAL.definitions.browser}
+          showTitle
           tone="default"
           dataTestId={undefined}
           fill={false}
         >
           <SettingsRow
-            label="Detected dev origins"
-            description="Terminal URLs with local hosts or explicit ports are kept for browser-origin classification."
+            row={GENERAL.definitions.detectedDevOrigins}
             control={
               <BrowserDevOriginsControl
                 origins={browserDevOrigins}
@@ -179,7 +180,8 @@ function BrowserSavedLoginsRows(props: {
   return (
     <>
       <SettingsGroup
-        title="Website sessions"
+        group={GENERAL.definitions.websiteSessions}
+        showTitle
         tone="default"
         dataTestId="settings-saved-logins"
         fill={false}
@@ -235,8 +237,8 @@ function SavedLoginsToggleRow(props: {
   return (
     <>
       <SettingsRow
-        label="Save website sessions on this computer"
-        description={
+        row={GENERAL.definitions.saveWebsiteSessions}
+        status={
           props.enabled
             ? "Keep session data from Traycer browser tabs so sites can stay signed in."
             : "Saving is paused on this computer. Existing sessions stay available to manage."
@@ -282,8 +284,7 @@ function ImportLoginsRow(props: {
   const { enabled, triggerRef, onOpen } = props;
   return (
     <SettingsRow
-      label="Bring in existing sessions"
-      description="Choose a browser or cookie file, then review the sites before importing."
+      row={GENERAL.definitions.bringInExistingSessions}
       hint={enabled ? null : "Turn on Save website sessions first."}
       control={
         <Button
@@ -318,9 +319,6 @@ async function confirmedByMain(
     return false;
   });
 }
-
-const SAVED_WEBSITE_SESSIONS_DESCRIPTION =
-  "Shared with connected Traycer hosts. Removing a site may sign you out there.";
 
 function siteCountLabel(count: number): string {
   return `${count} ${count === 1 ? "site" : "sites"}`;
@@ -436,8 +434,7 @@ function SavedWebsiteSessionsState(props: {
   return (
     <div className="border-b border-border/40">
       <SettingsRow
-        label="Saved website sessions"
-        description={SAVED_WEBSITE_SESSIONS_DESCRIPTION}
+        row={GENERAL.definitions.savedWebsiteSessions}
         control={
           <span className="text-ui-sm text-muted-foreground" role="status">
             {props.status}
@@ -513,8 +510,7 @@ function SavedWebsiteSessionsManager(props: {
     <Sheet open={open} onOpenChange={changeOpen}>
       <div className="border-b border-border/40">
         <SettingsRow
-          label="Saved website sessions"
-          description={SAVED_WEBSITE_SESSIONS_DESCRIPTION}
+          row={GENERAL.definitions.savedWebsiteSessions}
           control={
             <span className="tabular-nums text-ui-sm text-muted-foreground">
               {siteCountLabel(props.sites.length)}

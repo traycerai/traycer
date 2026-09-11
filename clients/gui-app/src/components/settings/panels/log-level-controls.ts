@@ -1,7 +1,10 @@
 import { useMemo } from "react";
 import type { LogLevel } from "@traycer/protocol/config/log-level";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import { APP_DIAGNOSTICS } from "@/components/settings/panels/app-diagnostics-settings.definitions";
+import { HOST_DIAGNOSTICS } from "@/components/settings/panels/diagnostics-settings.definitions";
 import type { HostRpcRegistry } from "@/lib/host";
+import type { SettingsRowDefinition } from "@/lib/settings-search/settings-definitions";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { useRunnerLogLevelsQuery } from "@/hooks/runner/use-runner-log-levels-query";
@@ -27,8 +30,8 @@ import {
  */
 export interface LogLevelControl {
   readonly scope: LogLevelScope;
-  readonly label: string;
-  readonly description: string;
+  /** The row's label and description, from the page the control belongs to. */
+  readonly row: SettingsRowDefinition;
   /** `undefined` until the level has loaded. */
   readonly level: LogLevel | undefined;
   /** This control's own transport is loading, failed, or writing. */
@@ -36,15 +39,6 @@ export interface LogLevelControl {
   /** Rejects on failure; each transport has already toasted its own error. */
   readonly set: (level: LogLevel) => Promise<void>;
 }
-
-const DESKTOP_DESCRIPTION =
-  "Verbosity of the desktop app's own logs. Applies to this app, not to a host.";
-// Named per machine, not per host: the store is `~/.traycer/cli/config.json`,
-// shared by every Traycer host environment this OS user runs.
-const CLI_DESCRIPTION =
-  "Verbosity of the Traycer CLI's logs. Applies to every Traycer host environment on this machine.";
-const HOST_DESCRIPTION =
-  "Verbosity of the background host process's logs. Applies to every Traycer host environment on this machine.";
 
 /**
  * The `desktop` row: this window's threshold, always local, offered for every
@@ -57,8 +51,7 @@ export function useDesktopLogLevelControl(): LogLevelControl {
   const snapshot = query.data;
   return {
     scope: "desktop",
-    label: "App log level",
-    description: DESKTOP_DESCRIPTION,
+    row: APP_DIAGNOSTICS.definitions.appLogLevel,
     level: snapshot === undefined ? undefined : snapshot.desktopLogLevel,
     busy: query.isPending || query.isError || setMutation.isPending,
     set: async (level: LogLevel): Promise<void> => {
@@ -103,8 +96,7 @@ export function useHostLogLevelControls(props: {
     return [
       {
         scope: "cli",
-        label: "CLI log level",
-        description: CLI_DESCRIPTION,
+        row: HOST_DIAGNOSTICS.definitions.cliLogLevel,
         level: levels?.cliLogLevel,
         busy,
         set: async (level: LogLevel): Promise<void> => {
@@ -113,8 +105,7 @@ export function useHostLogLevelControls(props: {
       },
       {
         scope: "host",
-        label: "Host log level",
-        description: HOST_DESCRIPTION,
+        row: HOST_DIAGNOSTICS.definitions.hostLogLevel,
         level: levels?.hostLogLevel,
         busy,
         set: async (level: LogLevel): Promise<void> => {
@@ -143,8 +134,10 @@ export function useBridgeHostLogLevelControls(): readonly LogLevelControl[] {
     if (!available) return [];
     return (["cli", "host"] as const).map((scope) => ({
       scope,
-      label: scope === "cli" ? "CLI log level" : "Host log level",
-      description: scope === "cli" ? CLI_DESCRIPTION : HOST_DESCRIPTION,
+      row:
+        scope === "cli"
+          ? HOST_DIAGNOSTICS.definitions.cliLogLevel
+          : HOST_DIAGNOSTICS.definitions.hostLogLevel,
       level:
         snapshot === undefined ? undefined : selectScopeLevel(snapshot, scope),
       busy,

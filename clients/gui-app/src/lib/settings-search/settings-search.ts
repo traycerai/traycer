@@ -7,11 +7,11 @@ import {
   searchFuzzyMatches,
 } from "@/lib/composer/fuzzy-ranking";
 import type { SettingsAvailabilityContext } from "@/lib/settings/settings-availability";
-import {
-  SETTINGS_SEARCH_ENTRIES,
-  type SettingsSearchEntry,
-  type SettingsSearchEntryKind,
-} from "@/lib/settings-search/settings-search-entries";
+import type {
+  SettingsSearchEntry,
+  SettingsSearchEntryKind,
+} from "@/lib/settings-search/settings-definitions";
+import { SETTINGS_SEARCH_ENTRIES } from "@/lib/settings-search/settings-search-entries";
 import {
   SETTINGS_SECTION_GROUPS,
   visibleSettingsSections,

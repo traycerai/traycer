@@ -1,6 +1,7 @@
 import { NotificationChimeSettingsSection } from "@/components/settings/panels/notification-chime-settings-section";
 import { PushPermissionSection } from "@/components/settings/panels/push-permission-section";
 import { SystemNotificationSettingsSection } from "@/components/settings/panels/system-notification-settings-section";
+import { APP_NOTIFICATIONS } from "@/components/settings/panels/app-notifications-settings.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
@@ -23,16 +24,14 @@ export function AppNotificationsSettingsPanel() {
         <SystemNotificationSettingsSection />
         <PushPermissionSection />
         <SettingsGroup
-          title="Events"
-          anchor="app-notifications-events"
+          group={APP_NOTIFICATIONS.definitions.events}
+          showTitle
           tone="default"
           dataTestId="notification-event-settings-section"
           fill={false}
         >
           <SettingsRow
-            label="Notification events"
-            anchor="app-notification-events"
-            description="Choose which events alert you for the host selected in Settings."
+            row={APP_NOTIFICATIONS.definitions.notificationEvents}
             control={
               <Button
                 type="button"

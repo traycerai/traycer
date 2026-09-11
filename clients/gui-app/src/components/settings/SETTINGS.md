@@ -62,31 +62,128 @@ variants at no extra cost. While a query is non-empty the results REPLACE the
 section list — two lists in one column would compete, and every result already
 names the section it belongs to.
 
-Five parts:
+Six parts:
 
-| Part           | File                                                    | Owns                                           |
-| -------------- | ------------------------------------------------------- | ---------------------------------------------- |
-| Index          | `lib/settings-search/settings-search-entries.ts`        | Every page, group and row a query can land on  |
-| Availability   | `lib/settings/settings-availability.ts`                 | One predicate per row gate, shared with panels |
-| Ranking        | `lib/settings-search/settings-search.ts`                | Fuse pass, field weights, kind tie-break       |
-| Reveal request | `stores/settings/settings-search-store.ts`              | The one pending "scroll here" handoff          |
-| Reveal         | `use-settings-anchor-reveal.ts` + `settings-search.css` | Finding the element, scrolling, flashing       |
+| Part         | File                                                                                                | Owns                                                            |
+| ------------ | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| Definitions  | `components/settings/panels/*.definitions.ts`                                                       | One collection per section: every row, group and page           |
+| Model        | `lib/settings-search/settings-definitions.ts`                                                       | `defineSettingsSection`, folding, the entry type                |
+| Assembly     | `lib/settings-search/settings-search-entries.ts`                                                    | The list of sixteen collections — nothing else                  |
+| Availability | `lib/settings/settings-availability.ts`                                                             | One predicate per row gate, shared with panels                  |
+| Ranking      | `lib/settings-search/settings-search.ts`                                                            | Fuse pass, field weights, kind tie-break                        |
+| Reveal       | `stores/settings/settings-search-store.ts`, `use-settings-anchor-reveal.ts` + `settings-search.css` | The pending "scroll here" handoff; finding, scrolling, flashing |
 
-**The index is hand-written, and cannot not be.** There is no schema behind
-these settings — a "setting" is a hand-authored row in one of sixteen panels,
-and the largest panels (Providers' per-provider tab bar, the Worktrees
-inventory, the Host overview) are bespoke JSX with no row primitive to walk.
-So the index is maintained by hand, and the join between an entry and the thing
-it points at is guarded by
-`lib/settings-search/__tests__/settings-search-index.test.ts`: every anchor in
-the index must be written somewhere under `components/settings/`, and every
-anchor written there must be indexed. Both directions, because a row that grows
-an anchor and never gets an entry is a row search cannot reach.
+**A setting is written once.** Each section has one collection, in a
+React-free `*.definitions.ts` module beside its panel, built by
+`defineSettingsSection(sectionId, { page, ...members })` from a plain keyed
+object. The function enumerates that object: every member becomes a definition
+(`GENERAL.definitions.preventSleep`) and the page plus every entry-owning
+member become the collection's search entries (`GENERAL.entries`). There is no
+second value to keep in step with the first — `SettingsRow` and `SettingsGroup`
+take a definition as their only content (`row=` / `group=`), so a row cannot
+render without the value the index reads, and its label, static description
+and anchor come from there. `settings-search-entries.ts` only lists the
+collections. A collection module may import the model and the availability
+predicates; it never imports the assembled index or the search consumer.
 
-That test **cannot** see whether an entry's LABEL still matches its row's. That
-half is reviewer discipline, which is why entries copy labels from the surface
-verbatim rather than paraphrasing them: a result whose words differ from the
-row it lands on reads as the wrong result.
+- `page` is a required member of every input — the section's own entry.
+- `kind: "row" | "group"`. A row names its group by key (`group: "runningAgents"`,
+  compile-checked to be a group-kind member) or `null` for a row that sits in
+  no group.
+- `search` is exactly one of `{ anchor: string | null }` — its own entry;
+  `null` is a bespoke region with nothing stable to point at (Providers' seven
+  concept groups), landing at the top of the page — or `{ contributesTo: key |
+"page" }` — no entry; its label and keywords fold into the target's keywords
+  (case-insensitive duplicates dropped, own keywords first, then contributors
+  in input order). A target is an entry-owning member of the same collection
+  or the page: `contributesTo` is typed to exactly those keys, so a dangling
+  key, the member itself and another contributor are compile errors. A
+  `search` naming both placements is a compile error on that member when it
+  is written inline (a union alone would accept it); a value annotated with a
+  widened placement type can slip past that conditional, so the index test's
+  raw-input invariant — every member has exactly one placement — is the check
+  that covers every shape. Row targets are allowed — the per-kind Link rows fold into **Open links**, the
+  per-category Tile rows into **Open new tiles**.
+- A group's `breadcrumb` is the group segment of its result's breadcrumb —
+  `null` for a rendered card, `"Providers"` for that page's region groups.
+- **Availability composes for containment only.** A row's effective
+  `availableWhen` is its own AND its group's (Agent roles is gated by
+  Experimental, not by its own predicate). A contribution target is not a
+  container: contributing never changes the target's availability.
+- **`status` replaces the static description.** `SettingsRow` takes
+  an optional `status?: ReactNode`, selected by `!== undefined` — omitted and
+  `undefined` are the same, never truthiness, never `status ?? description`,
+  because `null` / `false` / `""` are a deliberate suppression. A status renders INSTEAD of the definition's
+  description, in the same described-by region (a `div`, since it is arbitrary
+  content) with the same muted style, and the `aria-describedby` id follows
+  whichever region rendered. The definition's `description` stays the
+  searchable copy. Agent roles keeps its static help and replaces it with the
+  repair copy on a read error; rows whose only sentence is live — the narrow
+  viewport notice on Open new tiles, the phone's push state, Import your work
+  and Data migration progress, the host-named File edit snapshots and Remove
+  from account copy, the saving state of Save website sessions, the start
+  page's wallpaper name — have `description: null` and pass the whole
+  sentence as `status`. Its label-line twin is `labelStatus`: a live badge the
+  row renders after the definition's label, in the same label element and
+  behind the row's own " · " separator, selected by `!== undefined` with
+  `null` / `false` / `""` rendering the bare label. The theme slots pass
+  `"Active"` there ("Light theme · Active"); the definition's label stays the
+  searchable copy.
+- **Hand-built regions read the definition too.** The branch-prefix row keeps
+  its bespoke layout (the input and its live preview share a line) and writes
+  `data-settings-anchor={GENERAL.definitions.branchPrefix.anchor}` and its
+  label from the definition. The index test also scans the settings tree for
+  the common literal form (`anchor="…"` / `data-settings-anchor="…"`) as a
+  hygiene check; it cannot see an expression or a variable, so reachability
+  and membership rest on the fixture executor and reverse membership, not on
+  the scan.
+- Shared rendering components take definitions through typed props:
+  `LogDetailGroup` takes its page's `group` (anchored on App Diagnostics,
+  folded into the page on host Diagnostics), each `LogLevelControl` carries
+  its `row`, and the chime / severity / link-kind rows are keyed members of
+  their owning collection.
+- `MOD_ENTER_LABEL` lives in `general-settings.definitions.ts`: the steering
+  row's label and description are built from it there, and the panel imports
+  it for the switch's accessible name, so the result and the row print the
+  same chord.
+
+**What is guaranteed, and by what.**
+
+| Claim                                                                                                                                                                    | Established by                                                                                                                                                                                                                                                                                                        |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A `SettingsRow` / `SettingsGroup` cannot render without a definition                                                                                                     | the type of its only content prop                                                                                                                                                                                                                                                                                     |
+| Every definition belongs to its collection                                                                                                                               | `defineSettingsSection` creates every output by enumerating its input; the index test checks definitions against the input key for key                                                                                                                                                                                |
+| Exactly one collection per section, each assembled once                                                                                                                  | assembly test against `SETTINGS_SECTIONS`, plus every `*.definitions.ts` export found by `import.meta.glob` must be in the assembly by identity                                                                                                                                                                       |
+| Every anchored entry has exactly one unconcealed target in every registered shell where its gate is on, none where off, and at least one registered shell where it is on | the fixture executor (`__tests__/settings-search-fixtures.test.tsx`) mounts every `section × shell` in `__tests__/settings-search-fixture-registry.ts` and runs `assertSettingsSearchTargets`; the index test asserts every anchored section is registered and every anchored entry is available in one of its shells |
+| Every rendered anchor is an indexed anchor of that section                                                                                                               | reverse membership inside `assertSettingsSearchTargets`                                                                                                                                                                                                                                                               |
+| Every contributor's words reach an entry                                                                                                                                 | the coverage test: its label and keywords appear in its target entry's document; no dangling, self or contributor target                                                                                                                                                                                              |
+| Every member has exactly one placement                                                                                                                                   | `CheckedSectionInput` rejects a `search` with both; the index test checks the input member by member                                                                                                                                                                                                                  |
+| Host-scoped sections index no anchor                                                                                                                                     | an exhaustive index test                                                                                                                                                                                                                                                                                              |
+
+**Not guaranteed:**
+
+- A bespoke `<div>` that uses no primitive and writes no anchor is invisible to
+  all of this. Providers, Worktrees and the Host overview's own cards are
+  indexed at page and region level for that reason.
+- TypeScript is structural: the types enforce a definition's SHAPE; the
+  collection, reference and DOM tests establish COVERAGE. Types are not
+  provenance — nothing stops a panel rendering another section's definition.
+  Reverse membership sees anchors only, so a foreign or null-anchor definition
+  rendered in the wrong panel is not caught by it.
+- The DOM tests run in jsdom: existence, uniqueness, count and the absence of a
+  `[hidden]` ancestor — never CSS or layout visibility (a collapsed disclosure).
+- State combinations no registered shell mounts (a bridge-present shell with no
+  host runtime bound, an unreachable or vanished selected host), and a
+  capability that vanishes between the search and the navigation.
+- Whether a `contributesTo` target is the right PRODUCT destination: it is
+  type-valid; a human still chooses it.
+- Ranking for queries the ranking suite does not pin, after vocabulary folding.
+  The ranking suite (`__tests__/settings-search.test.ts`) is the contract, not
+  every query.
+
+What stays human: keywords, the sixteen `page` blocks, a region group's
+`breadcrumb`, and the `contributesTo` target of a row that cannot promise its
+element.
 
 **Keyboard.** The input keeps focus the whole time, so it is a `combobox`
 whose `aria-activedescendant` names the highlighted `option` and whose
@@ -114,12 +211,11 @@ near-ties toward the more specific hit, so typing "theme" lands on the ROW
 rather than the page — and it is small enough that a page still wins on its own
 name.
 
-**Anchors.** `SettingsRow` and `SettingsGroup` take an `anchor` prop and emit
-`data-settings-anchor`; a hand-built row writes the attribute directly (see
-`worktree-branch-prefix-section.tsx`). `LogDetailGroup` takes its anchor as a
-required `string | null` prop because the same card is the "Log detail" group
-on two different pages, and only the app's is indexed — the host page passes
-`null`.
+**Anchors.** `SettingsRow` and `SettingsGroup` write their definition's
+anchor as `data-settings-anchor`; a contributor has none. The same
+`LogDetailGroup` card is the "Log detail" group on two pages, so it takes its
+page's group definition: the app's owns `app-diagnostics-log-detail`, the
+host's contributes to its page.
 Anchors are unique across the whole index — the lookup is a bare attribute
 selector with no section in it.
 
@@ -133,19 +229,25 @@ this.
 different answers:
 
 - **Gated on a MODE** (the per-kind Link rows, the per-category Tile rows,
-  which render only once their parent is switched off the default) — not
-  indexed; the vocabulary rides on the parent row's keywords.
+  which render only once their parent is switched off the default) —
+  `contributesTo` the parent row (or the page); no entry of their own.
 - **Gated on DATA** ("Detected dev origins" and its Browser card, which render
-  only once a terminal has printed a local URL) — not indexed. No shell can
-  promise the row, so no shell offers it. This one shipped as a result that
-  navigated to General and lit nothing.
+  only once a terminal has printed a local URL; the start page's Wallpaper
+  effect, Effect strength and Tint rows, which render only once a wallpaper is
+  chosen and each only for the effects it adjusts) — `contributesTo: "page"`.
+  No shell can promise the row, so no shell offers it. "Detected dev origins"
+  shipped as a result that navigated to General and lit nothing.
 - **Gated on the SHELL** (Zoom, Experimental and OS notifications need a
   desktop bridge; This phone needs `pushPermission`; Voice input needs a local
-  host and Prevent sleep the desktop power bridge) — indexed, with
+  host and Prevent sleep the desktop power bridge) — indexed, with the
+  definition's
   `availableWhen` set to the gate's **named predicate** in
-  `lib/settings/settings-availability.ts`. The panel calls the SAME function to
-  decide whether to render the row, so a gate is written in exactly one place
-  and the index and the surface cannot disagree. Both reach it through
+  `lib/settings/settings-availability.ts`. The panel gates the row (or group)
+  on that definition's own `availableWhen` — the composed predicate the entry
+  carries — so a gate is written in exactly one place and the index and the
+  surface cannot disagree. The gate stays a component boundary: Zoom, This
+  phone and System check it in an outer component and mount their hooks only
+  once it passes. Both reach the context through
   `useSettingsAvailabilityContext()` (`hooks/settings/`), which reads the
   runner host, the desktop feature-settings bridge and `isMobileApp()` at
   render time — never a module constant, so a module evaluated before the
@@ -164,8 +266,9 @@ different answers:
   shell-level context cannot decide selected-host identity or a capability
   negotiated over host RPC, and a predicate that pretended to would be a
   second, wrong model of the panel. The rule is **stable destinations**: index
-  the PAGE, which renders whatever state the selected host is in, and fold
-  the vocabulary of everything on it into the page entry's keywords, so
+  the PAGE, which renders whatever state the selected host is in, and let
+  every definition on it `contributesTo: "page"` — its label folds into the
+  page entry's keywords beside the page's own vocabulary — so
   "uninstall", "snapshots", "import", "installation", "log level", "startup
   flags" and "wsl" still land on the right page. The invariant that follows:
   **no host-scoped section indexes an anchor.**
@@ -173,30 +276,33 @@ different answers:
   host runtime and a successful first read of the browser bridge; host
   Notifications' two groups, which the page's scope gate conceals while the
   host connects or is unreachable and drops for a vanished host) — not
-  indexed as groups or rows either. Their vocabulary rides on the General and
-  host Notifications page entries.
+  entries either: they contribute to the General and host Notifications page
+  entries.
 
 Bespoke pages are indexed at page/region level for the same reason: their
 content exists only once a host answers an RPC.
 
-**DOM contract tests.** The source scan proves an anchor is WRITTEN; it cannot
+**DOM contract tests.** Types prove a definition is well-formed; they cannot
 prove it renders. `__tests__/settings-search-targets.ts`
 (`assertSettingsSearchTargets(section, context, container)`) closes that for a
 mounted panel: every anchored entry for the section must resolve to exactly
-ONE element when its `availableWhen(context)` is true and to ZERO when false.
-It is wired into the existing panel suites, not a separate one, and each suite
-turns on one gate at a time — every bridge absent, each bridge alone, mobile
-and not. The zero half is the point: a row wrongly left `alwaysAvailable`
-while its panel gates it passes a fully bridged mount and fails only the case
-whose gate is off. No host-scoped section indexes an anchor, so the host
-panels have nothing to assert and the helper, which refuses a section with no
-anchored entries, is wired into the application panels only.
-
-What these tests cannot catch: state combinations no suite mounts (a
-bridge-present shell with no host runtime bound, an unreachable or vanished
-selected host), whether a label still matches its row, whether the
-target is VISIBLE (CSS, a collapsed disclosure), and a capability that
-vanishes between the search and the navigation.
+ONE element outside any `[hidden]` ancestor when its `availableWhen(context)`
+is true and to ZERO when false, and every anchor the panel renders must be one
+of that section's indexed anchors. The always-included executor
+(`__tests__/settings-search-fixtures.test.tsx`) iterates the registry
+(`__tests__/settings-search-fixture-registry.ts` — `{ section, shells }`, data
+only), mounts each section's panel in each shell, checks that the shell the
+panel resolved through `useSettingsAvailabilityContext()` is the one the
+registry describes, runs the contract, and finally asserts it mounted every
+registered shell. Each shell turns on one gate at a time — every bridge
+absent, each bridge alone, mobile and not. The zero half is the point: a
+definition wrongly left `alwaysAvailable` while its panel gates it passes a
+fully bridged mount and fails only the shell whose gate is off. The index test
+closes the registry from the other side: every section with an anchored entry
+must be registered, and every anchored entry must be available in at least one
+of its shells — otherwise it is only ever asserted absent, which a row that
+never renders passes too. No host-scoped section indexes an anchor, so the
+host panels are not registered.
 
 **Reveal.** A click arms the store, then navigates through
 `lib/settings-navigation.ts` (surface-agnostic — the modal deliberately uses no
@@ -411,16 +517,18 @@ Supporting pieces, all viewport-agnostic where possible:
 - `settings-row-layout.ts` The `max-md:` label floor shared by every
   label-beside-control row, `SettingsRow`'s and the bespoke ones alike - what
   decides, per row width, which controls stack and which stay inline.
-- `settings-row.tsx` Shared label/description/control row - also density-aware.
+- `settings-row.tsx` Shared label/description/control row, rendered from a
+  `SettingsRowDefinition` (see Search) - also density-aware.
   The label owns the flexible width; controls stay pinned to the trailing edge.
   If a wide control wraps, it remains right-aligned on its new line instead of
   falling under the label at the leading edge.
-  The description `<p>` carries a `useId()` id and a `max-w-[72ch] text-pretty`
-  reading measure, and the row publishes that id to its control through
+  The description `<p>` - or the `status` `<div>` shown in its place - carries a
+  `useId()` id and a `max-w-[72ch] text-pretty` reading measure, and the row
+  publishes that id to its control through
   `settings-row-description.ts`'s context - `useSettingsRowDescriptionId()`,
   passed straight into `aria-describedby`, so a screen reader gets the row's
-  second line instead of a bare label. It reads `undefined` when the row has
-  no description, which DROPS the attribute rather than pointing it at
+  second line instead of a bare label. It reads `undefined` when the row
+  renders neither, which DROPS the attribute rather than pointing it at
   nothing. A context and not a `control` render prop for two reasons: the
   control arrives already built, so the row cannot reach into it; and a
   function prop returning JSX reads as a component definition during render to
@@ -430,9 +538,11 @@ Supporting pieces, all viewport-agnostic where possible:
   / `react(only-export-components)`), the same split `settings-row-layout.ts`
   already makes.
 - `settings-group.tsx` A named group of rows: a small, quiet label OUTSIDE a
-  bordered card (never a row-shaped band inside one). Used by General; `tone:
-"danger"` gives Danger Zone its restrained-red card without a separate
-  component.
+  bordered card (never a row-shaped band inside one), rendered from a
+  `SettingsGroupDefinition`; `showTitle={false}` drops the label where the page
+  heading already names the card. `tone: "danger"` gives Danger Zone its
+  restrained-red card without a separate component.
+- `panels/*.definitions.ts` One section's search collection each - see Search.
 - `panels/*.tsx` Route-mounted settings sections.
 - `controls/settings-select.tsx` Shared select wrapper used by settings rows.
 - `src/stores/settings/settings-store.ts` Persisted local settings state.
@@ -3249,7 +3359,8 @@ level`, `Host log level` and the host's log tails described the selected host.
 - `Diagnostics` (Host, `diagnostics-settings-panel.tsx`) `CLI log level`,
   `Host log level` and that host's own log files, over its
   `config.logLevels.*` / `diagnostics.logs.*` RPCs. Each row arrives as a
-  `LogLevelControl` with its transport already resolved
+  `LogLevelControl` carrying its row definition and with its transport already
+  resolved
   (`log-level-controls.ts`), so `LogLevelRow` stays presentational and the sweep
   walks RPC and bridge rows without knowing which is which.
   - **Log detail.** Two rows (`LogLevelRow`, a `Select` over the full
