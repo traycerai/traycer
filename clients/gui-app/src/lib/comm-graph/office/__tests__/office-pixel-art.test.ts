@@ -110,6 +110,20 @@ const ALL_SPRITE_NAMES: Readonly<Record<OfficeSpriteName, true>> = {
   "tier-step": true,
   podium: true,
   console: true,
+  "floor-iso-a": true,
+  "floor-iso-b": true,
+  "floor-grass-iso-a": true,
+  "floor-grass-iso-b": true,
+  "wall-iso-left": true,
+  "wall-iso-right": true,
+  "door-iso": true,
+  "desk-iso": true,
+  "block-left": true,
+  "block-right": true,
+  "block-top": true,
+  "window-lit": true,
+  "window-dark": true,
+  spire: true,
 };
 
 function mapNamed(name: OfficeSpriteName): ReadonlyArray<string> {

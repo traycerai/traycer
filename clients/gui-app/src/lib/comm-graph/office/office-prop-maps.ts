@@ -1778,3 +1778,353 @@ export const CONSOLE_MAP: SpriteMap = [
   "OMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMO",
   "OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO",
 ];
+
+// ---- Isometric ------------------------------------------------------- //
+//
+// A tile projects to a 32 x 16 diamond, so every ground piece here is that
+// diamond and every upright piece is a parallelogram sheared to match its
+// edge. The two faces of a City storey are 8 px of vertical rise each, which
+// is the pitch `ISO_STOREY_HEIGHT` stacks them at; a Campus back wall is the
+// same shear carried 24 px up.
+
+/** Paving, seen from the corner; the rim is the neighbouring tone. */
+export const FLOOR_ISO_A_MAP: SpriteMap = [
+  "...............FF...............",
+  ".............FffffF.............",
+  "...........FffffffffF...........",
+  ".........FffffffffffffF.........",
+  ".......FffffffffffffffffF.......",
+  ".....FffffffffffffffffffffF.....",
+  "...FffffffffffffffffffffffffF...",
+  ".FffffffffffffffffffffffffffffF.",
+  ".FffffffffffffffffffffffffffffF.",
+  "...FffffffffffffffffffffffffF...",
+  ".....FffffffffffffffffffffF.....",
+  ".......FffffffffffffffffF.......",
+  ".........FffffffffffffF.........",
+  "...........FffffffffF...........",
+  ".............FffffF.............",
+  "...............FF...............",
+];
+
+/** The checker's other square: the same diamond with the tones swapped. */
+export const FLOOR_ISO_B_MAP: SpriteMap = [
+  "...............ff...............",
+  ".............fFFFFf.............",
+  "...........fFFFFFFFFf...........",
+  ".........fFFFFFFFFFFFFf.........",
+  ".......fFFFFFFFFFFFFFFFFf.......",
+  ".....fFFFFFFFFFFFFFFFFFFFFf.....",
+  "...fFFFFFFFFFFFFFFFFFFFFFFFFf...",
+  ".fFFFFFFFFFFFFFFFFFFFFFFFFFFFFf.",
+  ".fFFFFFFFFFFFFFFFFFFFFFFFFFFFFf.",
+  "...fFFFFFFFFFFFFFFFFFFFFFFFFf...",
+  ".....fFFFFFFFFFFFFFFFFFFFFf.....",
+  ".......fFFFFFFFFFFFFFFFFf.......",
+  ".........fFFFFFFFFFFFFf.........",
+  "...........fFFFFFFFFf...........",
+  ".............fFFFFf.............",
+  "...............ff...............",
+];
+
+/** A courtyard's lawn, in leaf tones rather than a palette letter of its own. */
+export const FLOOR_GRASS_ISO_A_MAP: SpriteMap = [
+  "...............GG...............",
+  ".............GggggG.............",
+  "...........GggggggggG...........",
+  ".........GggggggggggggG.........",
+  ".......GggggggggggggggggG.......",
+  ".....GggggggggggggggggggggG.....",
+  "...GggggggggggggggggggggggggG...",
+  ".GggggggggggggggggggggggggggggG.",
+  ".GggggggggggggggggggggggggggggG.",
+  "...GggggggggggggggggggggggggG...",
+  ".....GggggggggggggggggggggG.....",
+  ".......GggggggggggggggggG.......",
+  ".........GggggggggggggG.........",
+  "...........GggggggggG...........",
+  ".............GggggG.............",
+  "...............GG...............",
+];
+
+/** The lawn's other square. */
+export const FLOOR_GRASS_ISO_B_MAP: SpriteMap = [
+  "...............gg...............",
+  ".............gGGGGg.............",
+  "...........gGGGGGGGGg...........",
+  ".........gGGGGGGGGGGGGg.........",
+  ".......gGGGGGGGGGGGGGGGGg.......",
+  ".....gGGGGGGGGGGGGGGGGGGGGg.....",
+  "...gGGGGGGGGGGGGGGGGGGGGGGGGg...",
+  ".gGGGGGGGGGGGGGGGGGGGGGGGGGGGGg.",
+  ".gGGGGGGGGGGGGGGGGGGGGGGGGGGGGg.",
+  "...gGGGGGGGGGGGGGGGGGGGGGGGGg...",
+  ".....gGGGGGGGGGGGGGGGGGGGGg.....",
+  ".......gGGGGGGGGGGGGGGGGg.......",
+  ".........gGGGGGGGGGGGGg.........",
+  "...........gGGGGGGGGg...........",
+  ".............gGGGGg.............",
+  "...............gg...............",
+];
+
+/**
+ * The back wall along a room's top-LEFT edge: a 24 px slab sheared so its foot
+ * follows the diamond's upper-left edge, rising to the right.
+ */
+export const WALL_ISO_LEFT_MAP: SpriteMap = [
+  "...............l",
+  ".............lll",
+  "...........lllll",
+  ".........lllllll",
+  ".......lllllllll",
+  ".....lllllllllll",
+  "...lllllllllllll",
+  ".lllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "lllllllllllllllL",
+  "lllllllllllllLL.",
+  "lllllllllllLL...",
+  "lllllllllLL.....",
+  "lllllllLL.......",
+  "lllllLL.........",
+  "lllLL...........",
+  "lLL.............",
+  "L...............",
+];
+
+/** The same wall along the top-RIGHT edge: the mirror of it. */
+export const WALL_ISO_RIGHT_MAP: SpriteMap = [
+  "l...............",
+  "lll.............",
+  "lllll...........",
+  "lllllll.........",
+  "lllllllll.......",
+  "lllllllllll.....",
+  "lllllllllllll...",
+  "lllllllllllllll.",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "llllllllllllllll",
+  "Llllllllllllllll",
+  ".LLlllllllllllll",
+  "...LLlllllllllll",
+  ".....LLlllllllll",
+  ".......LLlllllll",
+  ".........LLlllll",
+  "...........LLlll",
+  ".............LLl",
+  "...............L",
+];
+
+/**
+ * The gate a district is entered through. It stands free on its own tile, so
+ * the opening is transparent and the ground under it shows through.
+ */
+export const DOOR_ISO_MAP: SpriteMap = [
+  "WWWWWWWWWWWWWWWW",
+  "WWWWWWWWWWWWWWWW",
+  "WWWWWWWWWWWWWWWW",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+  "ww............ww",
+];
+
+/**
+ * A campus desk: the diamond of its surface raised over a skirt that follows
+ * the tile's front edges. The monitor is a separate sprite the painter stands
+ * on the surface's back edge.
+ */
+export const DESK_ISO_MAP: SpriteMap = [
+  "...............WW...............",
+  ".............WwwwwW.............",
+  "...........WwwwwwwwwW...........",
+  ".........WwwwwwwwwwwwwW.........",
+  ".......WwwwwwwwwwwwwwwwwW.......",
+  ".....WwwwwwwwwwwwwwwwwwwwwW.....",
+  "...WwwwwwwwwwwwwwwwwwwwwwwwwW...",
+  ".WwwwwwwwwwwwwwwwwwwwwwwwwwwwwW.",
+  ".WwwwwwwwwwwwwwwwwwwwwwwwwwwwwW.",
+  ".WWWwwwwwwwwwwwwwwwwwwwwwwwwWWW.",
+  ".WWWWWwwwwwwwwwwwwwwwwwwwwWWWWW.",
+  ".WWWWWWWwwwwwwwwwwwwwwwwWWWWWWW.",
+  ".WWWWWWWWWwwwwwwwwwwwwWWWWWWWWW.",
+  ".WWWWWWWWWWWwwwwwwwwWWWWWWWWWWW.",
+  ".WWWWWWWWWWWWWwwwwWWWWWWWWWWWWW.",
+  ".WWWWWWWWWWWWWWWWWWWWWWWWWWWWWW.",
+  ".WWWWWWWWWWWWWWWWWWWWWWWWWWWWWW.",
+  "...WWWWWWWWWWWWWWWWWWWWWWWWWW...",
+  ".....WWWWWWWWWWWWWWWWWWWWWW.....",
+  ".......WWWWWWWWWWWWWWWWWW.......",
+  ".........WWWWWWWWWWWWWW.........",
+  "...........WWWWWWWWWW...........",
+  ".............WWWWWW.............",
+  "...............WW...............",
+];
+
+/**
+ * One storey of a City building's lower-LEFT face: 8 px of rise, sheared to
+ * the diamond's edge, with its own top line shaded so a stack of seven reads
+ * as seven floors rather than one column.
+ */
+export const BLOCK_LEFT_MAP: SpriteMap = [
+  "Ll..............",
+  "Llll............",
+  "Llllll..........",
+  "Llllllll........",
+  "Llllllllll......",
+  "Llllllllllll....",
+  "Llllllllllllll..",
+  "Llllllllllllllll",
+  "Llllllllllllllll",
+  "..Llllllllllllll",
+  "....Llllllllllll",
+  "......Llllllllll",
+  "........Llllllll",
+  "..........Llllll",
+  "............Llll",
+  "..............Ll",
+];
+
+/** The same storey's lower-RIGHT face, darker: one light source, two sides. */
+export const BLOCK_RIGHT_MAP: SpriteMap = [
+  "..............Ll",
+  "............LLLl",
+  "..........LLLLLl",
+  "........LLLLLLLl",
+  "......LLLLLLLLLl",
+  "....LLLLLLLLLLLl",
+  "..LLLLLLLLLLLLLl",
+  "LLLLLLLLLLLLLLLl",
+  "LLLLLLLLLLLLLLLl",
+  "LLLLLLLLLLLLLl..",
+  "LLLLLLLLLLLl....",
+  "LLLLLLLLLl......",
+  "LLLLLLLl........",
+  "LLLLLl..........",
+  "LLLl............",
+  "Ll..............",
+];
+
+/** A roof: the tile's own diamond in metal, capping the column under it. */
+export const BLOCK_TOP_MAP: SpriteMap = [
+  "...............MM...............",
+  ".............MmmmmM.............",
+  "...........MmmmmmmmmM...........",
+  ".........MmmmmmmmmmmmmM.........",
+  ".......MmmmmmmmmmmmmmmmmM.......",
+  ".....MmmmmmmmmmmmmmmmmmmmmM.....",
+  "...MmmmmmmmmmmmmmmmmmmmmmmmmM...",
+  ".MmmmmmmmmmmmmmmmmmmmmmmmmmmmmM.",
+  ".MmmmmmmmmmmmmmmmmmmmmmmmmmmmmM.",
+  "...MmmmmmmmmmmmmmmmmmmmmmmmmM...",
+  ".....MmmmmmmmmmmmmmmmmmmmmM.....",
+  ".......MmmmmmmmmmmmmmmmmM.......",
+  ".........MmmmmmmmmmmmmM.........",
+  "...........MmmmmmmmmM...........",
+  ".............MmmmmM.............",
+  "...............MM...............",
+];
+
+/** A lit window on a City storey. */
+export const WINDOW_LIT_MAP: SpriteMap = [
+  "OOOOOOOO",
+  "OccccccO",
+  "OccccccO",
+  "OccccccO",
+  "OccccccO",
+  "OccccccO",
+  "OccccccO",
+  "OOOOOOOO",
+];
+
+/** An unlit one. */
+export const WINDOW_DARK_MAP: SpriteMap = [
+  "OOOOOOOO",
+  "OddddddO",
+  "OddddddO",
+  "OddddddO",
+  "OddddddO",
+  "OddddddO",
+  "OddddddO",
+  "OOOOOOOO",
+];
+
+/** The mast on the HQ tower: the one building that is taller than the rule. */
+export const SPIRE_MAP: SpriteMap = [
+  "...mm...",
+  "...mm...",
+  "...mm...",
+  "...mm...",
+  "...mM...",
+  "...mM...",
+  "...mM...",
+  "...mM...",
+  "...mM...",
+  "...mM...",
+  "...mM...",
+  "...mM...",
+  "...mM...",
+  "...mM...",
+  "...mM...",
+  "...mM...",
+  "..mmMM..",
+  "..mmMM..",
+  "..mmMM..",
+  "..mmMM..",
+  "..mmMM..",
+  "..mmMM..",
+  "..mmMM..",
+  "..mmMM..",
+];

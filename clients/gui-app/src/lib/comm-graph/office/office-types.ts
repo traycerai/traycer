@@ -206,7 +206,28 @@ export type OfficeSpriteName =
   /** The orchestrator's two-tile station below the big board. */
   | "podium"
   /** Amphitheatre workstation: two tiles, metal, facing the board. */
-  | "console";
+  | "console"
+  /** Paving and lawn seen from the corner: one 32x16 diamond per tile. */
+  | "floor-iso-a"
+  | "floor-iso-b"
+  | "floor-grass-iso-a"
+  | "floor-grass-iso-b"
+  /** A campus room's back walls, on its top-left and top-right edges. */
+  | "wall-iso-left"
+  | "wall-iso-right"
+  /** The gate a district is entered through; it stands free on its tile. */
+  | "door-iso"
+  /** A campus desk, seen from the corner. */
+  | "desk-iso"
+  /** One storey of a city building: its two visible faces, and its roof. */
+  | "block-left"
+  | "block-right"
+  | "block-top"
+  /** A storey's windows, lit by what the agent inside is doing. */
+  | "window-lit"
+  | "window-dark"
+  /** The mast that marks the HQ tower. */
+  | "spire";
 
 /**
  * Names one rasterized sprite. `facing`, `pose` and `appearance` only apply to
@@ -260,7 +281,13 @@ export interface OfficeTileRect {
  * the picker, the persisted choice and the shared suites all follow one list
  * and a half-registered view cannot exist.
  */
-export type OfficeViewId = "floor" | "towers" | "building" | "mission-control";
+export type OfficeViewId =
+  | "floor"
+  | "towers"
+  | "building"
+  | "mission-control"
+  | "campus"
+  | "city";
 
 /**
  * Semantic zoom, decided by the camera: `0` overview (pips with state glyphs),
