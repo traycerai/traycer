@@ -492,6 +492,22 @@ describe("updateCommGraphTileView", () => {
     expect(ref.view.officeAutoView).toBe("building");
     expect(next).not.toBe(state);
   });
+
+  it("stores a write that changes only officeCameraView", () => {
+    // R2: this comparison used to cover six fields, dropping a write that
+    // changed only the seventh - a whole-view write differing solely in the
+    // camera's framing record would compare equal and vanish.
+    const state = stateWith();
+    const next = updateCommGraphTileView(state, commGraphTileId(EPIC_ID), {
+      ...DEFAULT_COMM_GRAPH_VIEW,
+      officeCameraView: "towers",
+    });
+    const ref = Object.values(next.tilesByInstanceId)[0];
+    expect(ref?.type).toBe("comm-graph");
+    if (ref === undefined || ref.type !== "comm-graph") return;
+    expect(ref.view.officeCameraView).toBe("towers");
+    expect(next).not.toBe(state);
+  });
 });
 
 describe("updateCommGraphTileCamera", () => {

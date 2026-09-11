@@ -122,6 +122,7 @@ import {
 } from "vitest";
 import * as Y from "yjs";
 import { CommGraphTile } from "@/components/epic-canvas/renderers/comm-graph-tile";
+import * as commGraphCanvasModule from "@/components/epic-canvas/comm-graph/comm-graph-canvas";
 import * as officeAutoModule from "@/lib/comm-graph/office/office-auto";
 import { OfficeScene } from "@/lib/comm-graph/office/office-scene";
 import { makeTestEpic } from "@/lib/comm-graph/office/office-test-epic";
@@ -159,6 +160,8 @@ import {
 } from "@/stores/epics/canvas/tile-schema";
 import { partitionOfficePopulation } from "@/lib/comm-graph/office/office-population";
 import type { CommGraphEvent } from "@/lib/comm-graph/comm-graph-events";
+import type { OfficeRect } from "@/lib/comm-graph/office/office-types";
+import { useCommGraphAgents } from "@/components/epic-canvas/comm-graph/use-comm-graph-agents";
 
 const EPIC_ID = "epic-comm-graph";
 const CHAT_ID = "chat-1";
@@ -486,6 +489,187 @@ function caughtUp(): void {
     openedByHost.get(HOST_A)?.onSnapshot([], null);
     openedByHost.get(HOST_B)?.onSnapshot([], null);
   });
+}
+
+/**
+ * A real 2d context (recording nothing usable, but not throwing) plus a
+ * controllable `requestAnimationFrame`, so the frame loop actually RUNS in
+ * jsdom instead of being gated off by `get2dContext`'s null. Ported from
+ * `comm-graph-office-canvas.test.tsx`'s helper of the same purpose: the R1
+ * regression is about what the RUNTIME actually framed on its first frame,
+ * not merely what the store says, so the loop has to run for real.
+ */
+function installCanvas(): { readonly step: () => void } {
+  const noop = () => undefined;
+  // Typed at the proxy's SOURCE rather than asserted onto afterwards: a
+  // literal carrying three of this interface's hundred-odd members does not
+  // overlap it enough for a single assertion, and widening through `unknown`
+  // is what the type rules forbid. Anything the painter reaches for that is
+  // not answered here is a no-op.
+  const blank = {} as CanvasRenderingContext2D;
+  const context = new Proxy(blank, {
+    get: (_target, key): unknown => {
+      if (key === "measureText") {
+        return (text: string) => ({ width: text.length * 6 });
+      }
+      if (key === "createImageData") {
+        return (width: number, height: number) => ({
+          data: new Uint8ClampedArray(width * height * 4),
+        });
+      }
+      return noop;
+    },
+    set: () => true,
+  });
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(
+    () => context,
+  );
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+    () => new DOMRect(0, 0, 1040, 700),
+  );
+  let nextId = 0;
+  const callbacks = new Map<number, FrameRequestCallback>();
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    nextId += 1;
+    callbacks.set(nextId, callback);
+    return nextId;
+  });
+  vi.stubGlobal("cancelAnimationFrame", (id: number) => callbacks.delete(id));
+  let now = performance.now();
+  return {
+    step: () =>
+      act(() => {
+        now += 100;
+        const pending = [...callbacks.values()];
+        callbacks.clear();
+        for (const callback of pending) callback(now);
+      }),
+  };
+}
+
+/**
+ * What a `vi.spyOn` actually recorded, read back through a type guard.
+ *
+ * A spy's `calls`/`contexts` are `any`, and lint refuses a field read off
+ * one - narrowing at this boundary is the route that works (see
+ * `comm-graph-office-canvas.test.tsx`'s `isOfficeRect`/`lastFramedRect`,
+ * which this mirrors).
+ */
+interface SpiedCalls {
+  readonly mock: { readonly calls: ReadonlyArray<ReadonlyArray<unknown>> };
+}
+interface SpiedContexts {
+  readonly mock: { readonly contexts: ReadonlyArray<unknown> };
+}
+
+function isOfficeRect(value: unknown): value is OfficeRect {
+  if (typeof value !== "object" || value === null) return false;
+  if (!("x" in value && "y" in value)) return false;
+  if (!("width" in value && "height" in value)) return false;
+  return (
+    typeof value.x === "number" &&
+    typeof value.y === "number" &&
+    typeof value.width === "number" &&
+    typeof value.height === "number"
+  );
+}
+
+interface TileCamera {
+  readonly x: number;
+  readonly y: number;
+  readonly zoom: number;
+}
+
+function isTileCamera(value: unknown): value is TileCamera {
+  if (typeof value !== "object" || value === null) return false;
+  if (!("x" in value && "y" in value && "zoom" in value)) return false;
+  return (
+    typeof value.x === "number" &&
+    typeof value.y === "number" &&
+    typeof value.zoom === "number"
+  );
+}
+
+/** The `view` prop most recently handed to a spied-on canvas component. */
+function lastCanvasCamera(spy: SpiedCalls): TileCamera | null {
+  const props = spy.mock.calls.at(-1)?.[0];
+  if (typeof props !== "object" || props === null || !("view" in props)) {
+    return null;
+  }
+  return isTileCamera(props.view) ? props.view : null;
+}
+
+/**
+ * The most recent real frame the runtime drew, and the bounds of the view it
+ * drew - both from the ACTUAL scene, not the store. R1 is exactly the gap
+ * between what the store says and what the runtime already framed on its
+ * first frame, so this is the reading that can tell the two apart.
+ */
+function lastFrameAndBounds(
+  frames: SpiedCalls,
+  sync: SpiedContexts,
+): { readonly frame: OfficeRect; readonly bounds: OfficeRect } {
+  const frame = frames.mock.calls.at(-1)?.[1];
+  const scene = sync.mock.contexts.at(-1);
+  if (!isOfficeRect(frame) || !(scene instanceof OfficeScene)) {
+    throw new Error("no real scene frame");
+  }
+  const layout = scene.layout();
+  if (layout === null) throw new Error("no layout");
+  return {
+    frame,
+    bounds: OFFICE_VIEWS[layout.view].painter.projector(layout).bounds,
+  };
+}
+
+/**
+ * Gates the tile behind the epic's own agent load, so a mount that should
+ * witness a Settings change actually has agents by the time its effects
+ * run. A cold mount (agents still empty on the first render) can mask R1's
+ * "unmounted" reproduction entirely - the effect that resets the camera
+ * closes over an empty `node.view` update cycle no differently, but the
+ * render-time decision this fixup added reads `agents.length` nowhere, so
+ * the real risk is a probe that never reaches a truthful `inputsReady`
+ * because the office canvas measured before agents existed. Loading first is
+ * what the reviewer's own probe does to rule that out.
+ */
+function LoadedTileGate(props: { readonly show: boolean }) {
+  const { nodes } = useCommGraphAgents();
+  return (
+    <>
+      <div data-testid="loaded-agent-count">{nodes.length}</div>
+      {props.show ? <TileFromStore /> : null}
+    </>
+  );
+}
+
+async function renderSeededOfficeInLoadedSession(
+  view: CommGraphTileViewState,
+): Promise<void> {
+  useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
+  const store = useEpicCanvasStore.getState();
+  store.openEpicTabWithId(AUTO_TAB_ID, EPIC_ID, undefined);
+  const ref = makeCommGraphTileRef(EPIC_ID);
+  const restored = parseTileRef(serializeTileRef({ ...ref, view }));
+  if (restored === null || restored.type !== "comm-graph") {
+    throw new Error("failed tile restore");
+  }
+  store.openTileInTab(AUTO_TAB_ID, restored);
+  const element = (show: boolean) => (
+    <QueryClientProvider client={queryClient}>
+      <TestEpicSessionWrapper epicId={EPIC_ID}>
+        <LoadedTileGate show={show} />
+      </TestEpicSessionWrapper>
+    </QueryClientProvider>
+  );
+  const mount = render(element(false));
+  await waitFor(() =>
+    expect(screen.getByTestId("loaded-agent-count").textContent).toBe("4"),
+  );
+  mount.rerender(element(true));
+  await waitFor(() =>
+    expect(Array.from(openedByHost.keys()).sort()).toEqual([HOST_A, HOST_B]),
+  );
 }
 
 /**
@@ -1104,6 +1288,214 @@ describe("CommGraphTile", () => {
       });
 
       expect(storedView()?.officeCameraView).toBe("floor");
+    });
+  });
+
+  describe("actual runtime camera on a default change (fixup 2, R1)", () => {
+    // The store's own reset used to run in an EFFECT, which is one commit too
+    // late: the replacement canvas already built its one-time runtime from
+    // the OLD camera on its first render, framing far outside the new view's
+    // world. The store said neutral while the runtime kept the stale
+    // framing, and the next wheel gesture persisted THAT, stamped with the
+    // new view. Asserting the store alone is exactly what let this through -
+    // every case below reads the real scene's frame instead.
+    it.each(["mounted", "unmounted"] as const)(
+      "resets the actual runtime camera for a %s default change",
+      async (kind) => {
+        const { step } = installCanvas();
+        const frames = vi.spyOn(OfficeScene.prototype, "frame");
+        const sync = vi.spyOn(OfficeScene.prototype, "sync");
+        useSettingsStore
+          .getState()
+          .setAgentOfficeDefaultView(kind === "mounted" ? "floor" : "towers");
+        await renderSeededOfficeInLoadedSession({
+          ...DEFAULT_COMM_GRAPH_VIEW,
+          x: -10000,
+          y: -20000,
+          zoom: 4,
+          officeCameraView: "floor",
+        });
+        setOfficeCanvasSize({ width: 1040, height: 700 });
+        setIntersecting(true);
+        caughtUp();
+        step();
+        if (kind === "mounted") {
+          // The default moves WHILE this tile watches - the case the effect
+          // itself witnesses.
+          act(() =>
+            useSettingsStore.getState().setAgentOfficeDefaultView("towers"),
+          );
+          setOfficeCanvasSize({ width: 1040, height: 700 });
+          setIntersecting(true);
+          step();
+        }
+        // "unmounted" needs no further action: the tile mounted AFTER the
+        // default already moved, so the record disagreeing at render is the
+        // only evidence there ever was.
+
+        const cameraBeforePan = storedView();
+        expect(cameraBeforePan).toMatchObject({
+          x: 0,
+          y: 0,
+          zoom: 1,
+          officeCameraView: "towers",
+        });
+        // The ACTUAL claim: the runtime's own frame, built from whatever
+        // camera the replacement canvas actually started with, has to
+        // contain the Towers world it is supposedly showing - not a Floor
+        // camera's numbers reinterpreted as Towers.
+        const state = lastFrameAndBounds(frames, sync);
+        const center = {
+          x: state.bounds.x + state.bounds.width / 2,
+          y: state.bounds.y + state.bounds.height / 2,
+        };
+        expect(center.x).toBeGreaterThanOrEqual(state.frame.x);
+        expect(center.x).toBeLessThanOrEqual(state.frame.x + state.frame.width);
+        expect(center.y).toBeGreaterThanOrEqual(state.frame.y);
+        expect(center.y).toBeLessThanOrEqual(
+          state.frame.y + state.frame.height,
+        );
+
+        // A wheel from here has to land somewhere - the write side must not
+        // throw or silently drop, now that the runtime actually started
+        // neutral rather than carrying the stale Floor framing forward.
+        fireEvent.wheel(screen.getByTestId("comm-graph-office-canvas"), {
+          deltaX: 20,
+          deltaY: 30,
+        });
+        step();
+        await act(async () => {
+          await new Promise((resolve) => window.setTimeout(resolve, 180));
+        });
+        expect(storedView()?.officeCameraView).toBe("towers");
+      },
+    );
+
+    it("preserves the actual runtime camera when the stored view and unchanged default agree", async () => {
+      const { step } = installCanvas();
+      const frames = vi.spyOn(OfficeScene.prototype, "frame");
+      const sync = vi.spyOn(OfficeScene.prototype, "sync");
+      useSettingsStore.getState().setAgentOfficeDefaultView("floor");
+      await renderSeededOfficeInLoadedSession({
+        ...DEFAULT_COMM_GRAPH_VIEW,
+        x: -10000,
+        y: -20000,
+        zoom: 4,
+        officeCameraView: "floor",
+      });
+      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setIntersecting(true);
+      caughtUp();
+      step();
+
+      const state = lastFrameAndBounds(frames, sync);
+      expect(storedView()).toMatchObject({
+        x: -10000,
+        y: -20000,
+        zoom: 4,
+        officeCameraView: "floor",
+      });
+      // The runtime kept the persisted framing too - a control against the
+      // case above, proving the render-time decision only intervenes when
+      // the record actually disagrees.
+      expect(state.frame).toEqual({
+        x: 2500,
+        y: 5000,
+        width: 260,
+        height: 175,
+      });
+    });
+  });
+
+  describe("graph camera untouched by an office default change (fixup 2, R3)", () => {
+    it("leaves the active graph camera alone, and Office resumes framing neutral once it is active again", async () => {
+      useSettingsStore.getState().setAgentOfficeDefaultView("floor");
+      await renderSeededOffice({
+        ...DEFAULT_COMM_GRAPH_VIEW,
+        mode: "graph",
+        officeCameraView: null,
+      });
+      act(() => {
+        useEpicCanvasStore
+          .getState()
+          .updateCommGraphTileCameraInTab(
+            AUTO_TAB_ID,
+            commGraphTileId(EPIC_ID),
+            { x: 155, y: 266, zoom: 2 },
+          );
+      });
+
+      // The default moves while GRAPH is the active mode - the office has no
+      // canvas mounted to reset, and the record disagreeing afterwards must
+      // not spill onto the graph's own camera.
+      act(() =>
+        useSettingsStore.getState().setAgentOfficeDefaultView("towers"),
+      );
+
+      expect(storedView()).toMatchObject({
+        mode: "graph",
+        x: 155,
+        y: 266,
+        zoom: 2,
+        officeCameraView: null,
+      });
+
+      // Switching back to Office resets the viewport (camera AND the
+      // framing record) the same way any mode toggle does - it must not
+      // carry the graph's coordinates in as if they were an office camera.
+      fireEvent.click(screen.getByTestId("comm-graph-mode-office"));
+
+      expect(storedView()).toMatchObject({
+        mode: "office",
+        x: 0,
+        y: 0,
+        zoom: 1,
+        officeCameraView: null,
+      });
+    });
+
+    /**
+     * FAILS AGAINST THE CURRENT TREE, unmodified - not a mutation-only
+     * probe. `officeViewForCanvas`'s `mode !== "office"` gate (the one the
+     * coordinator asked this case to guard) is not the thing that trips it:
+     * that gate is intact and does its job for the render-time `view` prop.
+     * A SEPARATE effect - "THE CAMERA IS ABOUT A VIEW" in
+     * `comm-graph-tile.tsx` (the `resolvedViewId`/`officeCameraView`
+     * mismatch writer just above the Auto effect) - has no such gate. It
+     * compares `node.view.officeCameraView` against `resolvedViewId`
+     * unconditionally, and `resolvedViewId` is computed independent of
+     * `node.view.mode` - so a stale office record mismatching the CURRENT
+     * office default fires this effect and overwrites the GRAPH's own
+     * camera with `NEUTRAL_CAMERA` even while Graph is the active mode and
+     * the office canvas is not even mounted. Reported to the coordinator
+     * rather than adjusted here - this exact scenario should fail today,
+     * and the actual failure is:
+     *   expected { x: 0, y: 0, zoom: 1, ... } to match object
+     *   { x: 155, y: 266, zoom: 2 }
+     */
+    it("hands the Graph canvas its own stored camera untouched, even when the office record is stale", async () => {
+      const canvasSpy = vi.spyOn(commGraphCanvasModule, "CommGraphCanvas");
+      useSettingsStore.getState().setAgentOfficeDefaultView("towers");
+      await renderSeededOffice({
+        ...DEFAULT_COMM_GRAPH_VIEW,
+        mode: "graph",
+        x: 155,
+        y: 266,
+        zoom: 2,
+        // Stale: framed under Floor while Office (unseen, since Graph is
+        // active) now resolves to Towers via the changed default.
+        officeCameraView: "floor",
+      });
+
+      // Reading what the CANVAS was given, not the store - the store is
+      // untouched in the R3 scenario either way, so asserting
+      // `storedView()` there is the right read; here it is NOT untouched,
+      // which is exactly the finding above.
+      const camera = lastCanvasCamera(canvasSpy);
+      if (camera === null) {
+        throw new Error("no camera prop was passed to the Graph canvas");
+      }
+      expect(camera).toMatchObject({ x: 155, y: 266, zoom: 2 });
     });
   });
 

@@ -85,6 +85,39 @@ const NEUTRAL_CAMERA: CommGraphTileCamera = {
   zoom: DEFAULT_COMM_GRAPH_VIEW.zoom,
 };
 
+/**
+ * THE CAMERA THE CANVAS IS BUILT WITH - decided here, in render, not in an
+ * effect.
+ *
+ * A view change swaps the canvas's key, and the replacement builds its
+ * one-time runtime from the camera it is handed on its FIRST render
+ * (`createOfficeRuntime` reads x/y/zoom once and keeps them). An effect that
+ * resets the store afterwards is too late: the runtime is already framing
+ * `{2500, 5000}` in a world that ends at `{1376, 320}`, and the next wheel
+ * persists those coordinates stamped with the new view. The store writes that
+ * follow this merely make the record agree with what the canvas already has.
+ *
+ * The record is the only evidence available at render, and it is enough: a
+ * default change necessarily leaves it naming the view being left, so one test
+ * covers both the change nobody saw and the change that just happened. A
+ * `null` record means nobody framed this camera, which for any tile created
+ * since the field existed means it is neutral already.
+ *
+ * OFFICE ONLY. The same view object is handed to the Graph canvas, where the
+ * camera belongs to the Graph - neutralising it there would erase a framing
+ * the office has no claim on.
+ */
+function officeViewForCanvas(
+  view: CommGraphTileViewState,
+  resolvedViewId: OfficeViewId | null,
+): CommGraphTileViewState {
+  if (view.mode !== "office") return view;
+  if (resolvedViewId === null) return view;
+  if (view.officeCameraView === null) return view;
+  if (view.officeCameraView === resolvedViewId) return view;
+  return { ...view, ...NEUTRAL_CAMERA, officeCameraView: resolvedViewId };
+}
+
 const EMPTY_COMM_GRAPH_FIND_RENDERER: CommGraphFindRenderer = {
   getNodes: () => [],
   showMatches: () => undefined,
@@ -262,6 +295,11 @@ export function CommGraphTile(props: CommGraphTileProps) {
     // office canvas, and the last one's numbers describe a box that is gone.
     node.view.mode === "office";
 
+  const viewForCanvas = useMemo(
+    () => officeViewForCanvas(node.view, resolvedViewId),
+    [node.view, resolvedViewId],
+  );
+
   /**
    * A default that changes WHILE THIS TILE WATCHES owes the camera the same
    * reset a pick does.
@@ -282,6 +320,11 @@ export function CommGraphTile(props: CommGraphTileProps) {
     const previous = followedDefaultRef.current;
     if (previous === settingsDefaultView) return;
     followedDefaultRef.current = settingsDefaultView;
+    // NOT while the Graph is on screen. The camera in the store is the
+    // Graph's, and neutralising it here would throw away a framing the office
+    // has no claim on. The mismatch this leaves in the record is the carrier:
+    // the next office mount reads it and resets at render, above.
+    if (node.view.mode !== "office") return;
     if (node.view.officeView !== null) return;
     const before = previous === "auto" ? node.view.officeAutoView : previous;
     const after =
@@ -322,6 +365,14 @@ export function CommGraphTile(props: CommGraphTileProps) {
    * records the view, and a default change seen while mounted resets anyway.
    */
   useEffect(() => {
+    // NOT while the Graph owns the camera. `resolvedViewId` is derived from
+    // the choice and the Settings default, neither of which knows what mode
+    // this tile is in - so a stale office record mismatching the current
+    // office default would fire here and neutralise the GRAPH's stored
+    // camera, with no office canvas even mounted. The render-time decision is
+    // gated the same way; this is the store-side half of the same rule, and
+    // the mismatch it declines to act on is carried to the next office mount.
+    if (node.view.mode !== "office") return;
     if (resolvedViewId === null) return;
     if (node.view.officeCameraView === null) return;
     if (node.view.officeCameraView === resolvedViewId) return;
@@ -477,7 +528,9 @@ export function CommGraphTile(props: CommGraphTileProps) {
         className={node.view.mode === "office" ? "static" : undefined}
       />
     ),
-    view: node.view,
+    // NOT `node.view`: a camera framed under another office is neutralised
+    // before the canvas is built from it, never after.
+    view: viewForCanvas,
     onCameraChange: handleCameraChange,
     canOpenAgentForEvent,
     canJump,

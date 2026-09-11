@@ -1762,7 +1762,11 @@ export function updateCommGraphTileView(
         ref.view.zoom === view.zoom &&
         ref.view.mode === view.mode &&
         ref.view.officeView === view.officeView &&
-        ref.view.officeAutoView === view.officeAutoView
+        ref.view.officeAutoView === view.officeAutoView &&
+        // The SEVENTH field. Left out, a write that only re-stamps which view
+        // the camera frames is read as a no-op and dropped - which is exactly
+        // the shape of the reset on a tile whose camera is already neutral.
+        ref.view.officeCameraView === view.officeCameraView
       ) {
         return ref;
       }
