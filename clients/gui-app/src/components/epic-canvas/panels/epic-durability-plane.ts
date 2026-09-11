@@ -14,13 +14,24 @@ import type {
 
 /**
  * Host routing truth as ONE plane of the connection pill: where the epic
- * lives (local, promoting, a locally served cloud mirror, paused), whether
- * this session's edits are held anywhere, and how current the local copy is.
+ * stands (not synced yet, syncing, offline against its mirror, paused),
+ * whether this session's edits are held anywhere, and how current the served
+ * copy is.
+ *
+ * ## The clauses never say "cloud" or "local"
+ *
+ * The person reading the pill knows their epic; which side of the sync each
+ * fact came from is not a thing they hold in their head, and a sentence built
+ * from that vocabulary ("Cloud mirror — offline · Local copy — may be out of
+ * date") reads as plumbing. Every clause below names the condition as the
+ * person experiences it (offline, not synced, not backed up, may be out of
+ * date) and, where there is one, what to do. The task list follows the same
+ * rule (`history-pin-availability.ts`).
  *
  * ## A plane, not a badge
  *
  * This used to be its own pill beside the connection dot, and it said
- * everything inline: "Cloud mirror — offline · Local copy — may be out of
+ * everything inline: "Offline — sync paused · Saved copy — may be out of
  * date · synced 3d" sat in the status row for the whole of an outage. Three
  * clauses is the honest reading of that state, and rendered inline it was a
  * banner, which reads as an alarm rather than a status. So the whole reading
@@ -37,11 +48,11 @@ import type {
 export interface EpicDurabilityPlane {
   /**
    * The pill's severity vocabulary. `danger` is a stated fact about work that
-   * will be lost (no local backup, sync blocked, cloud copy deleted under
-   * local edits); `warning` is a statement the host could not make, or a
+   * will be lost (not backed up, sync blocked, deleted under unsynced
+   * edits); `warning` is a statement the host could not make, or a
    * mirror that may be behind; `activity` is a promotion or a reconciliation
-   * in flight; `steady` is a fact with nothing to worry about (stored
-   * locally, a local copy, delete bookkeeping). A reading with several
+   * in flight; `steady` is a fact with nothing to worry about (not synced
+   * yet, a saved copy, delete bookkeeping). A reading with several
    * things to say takes the strongest, because the dot is what a glance reads
    * and a glance must not see calm over a loss.
    */
@@ -207,7 +218,7 @@ function cloudFreshnessCopy(
       return null;
     case "local-copy":
       return {
-        label: "Local copy",
+        label: "Saved copy",
         severity: "steady",
         reconciledAtEpochMs,
         noTimestampLabel: null,
@@ -224,7 +235,7 @@ function cloudFreshnessCopy(
         // Names the consequence rather than the mechanism, and does not
         // pretend to know HOW far behind: the host knows when it last
         // reconciled, not what changed since.
-        label: "Local copy — may be out of date",
+        label: "Saved copy — may be out of date",
         severity: "warning",
         reconciledAtEpochMs,
         // A closed mirror with no recorded reconciliation is the
@@ -296,19 +307,33 @@ interface DurabilityClause {
  */
 function durabilityRiskCopy(view: EpicDurabilityView): DurabilityClause | null {
   if (view.kind !== "stated" && view.kind !== "cloudDurable") return null;
+  // Scoped to NEW edits, and prospective, on purpose. Beside `cloudDurable`
+  // the task itself is backed up, and only what is typed here while the WAL
+  // is unarmed lives nowhere but this window until it syncs - so "Not backed
+  // up" without a subject read as a claim about the whole task, and "Recent
+  // changes only in this window" claimed edits this plane cannot see exist
+  // (it receives no dirty signal; a read-only or freshly opened task is in
+  // this state with nothing typed). The clause names the risk to what WILL be
+  // typed, which is what the protocol value actually states.
   if (view.protection === "unavailable") {
-    return { label: "No local backup", severity: "danger" };
+    return {
+      label: "New edits only in this window until synced",
+      severity: "danger",
+    };
   }
   // The `stated` sibling of `statusCopy`'s cloudDurable unknown arm, and the
   // reason that arm was not enough on its own: a stated status answers WHERE
   // the epic lives, `localProtection` answers whether this session's edits are
   // held anywhere, and `unknown` on the second beside `local` on the first is
-  // the exact reading `@1.6` exists to forbid - "Stored locally" telling the
-  // reader their work is on this disk when no WAL is known to hold it.
+  // the exact reading `@1.6` exists to forbid - "Not synced yet" telling the
+  // reader their work is safely held when no WAL is known to hold it.
   // `cloudDurable` is excluded because `statusCopy` names it there already,
   // and one sentence saying it twice is worse than saying it once.
+  // Same subject as the arm above: it is the protection of NEW edits that is
+  // unknown, never the task's copy - which a stated status beside this clause
+  // has already described.
   if (view.kind === "stated" && view.protection === "unknown") {
-    return { label: "Local backup status unknown", severity: "warning" };
+    return { label: "New edits — backup status unknown", severity: "warning" };
   }
   return null;
 }
@@ -336,20 +361,26 @@ function statusCopy(
     // asked and contradict the `"cloud"` the host sent.
     //
     // Except when the PROTECTION leg is the unknown one. The label names that
-    // axis specifically rather than reusing "Storage status unknown", which
-    // would read as doubt about the cloud statement the host just made.
-    // `unavailable` is not here because it is already the risk copy's job.
+    // axis specifically - and its subject, NEW edits - rather than reusing
+    // "Storage status unknown" or an unqualified "Backup status unknown",
+    // either of which would read as doubt about the durable copy the host
+    // just positively reported. `unavailable` is not here because it is
+    // already the risk copy's job.
     return view.protection === "unknown"
-      ? { label: "Local backup status unknown", severity: "warning" }
+      ? { label: "New edits — backup status unknown", severity: "warning" }
       : null;
   }
   if (view.kind === "indeterminate") {
     // `unavailable` is a stated FACT about risk, not an absence, so it gets
     // the stronger treatment and names the consequence rather than the
-    // mechanism - "no local backup" is what a person can act on; "the WAL is
-    // unarmed" is not.
+    // mechanism - "new edits only in this window" is what a person can act
+    // on; "the WAL is unarmed" is not. Same subject and tense as the risk
+    // clause below: what will be typed, never the task.
     return view.protection === "unavailable"
-      ? { label: "No local backup", severity: "danger" }
+      ? {
+          label: "New edits only in this window until synced",
+          severity: "danger",
+        }
       : { label: "Storage status unknown", severity: "warning" };
   }
   const status = viewStatus(view);
@@ -357,15 +388,19 @@ function statusCopy(
     return { label: "Storage status unknown", severity: "warning" };
   }
   if (status === "promoting" && promotionState === "pending") {
-    return { label: "Promotion pending", severity: "warning" };
+    return { label: "Sync pending", severity: "warning" };
   }
   switch (status) {
     case "local":
-      return { label: "Stored locally", severity: "steady" };
+      return { label: "Not synced yet", severity: "steady" };
     case "promoting":
-      return { label: "Promoting to cloud", severity: "activity" };
+      return { label: "Syncing", severity: "activity" };
+    // The epic HAS a synced copy and this host is serving its mirror of it
+    // while the link is down. "Offline" is the condition; "sync paused" is
+    // what it means for edits made now, and the freshness clause beside it
+    // says how current the served copy is.
     case "offline":
-      return { label: "Cloud mirror — offline", severity: "warning" };
+      return { label: "Offline — sync paused", severity: "warning" };
     case "paused":
       return pausedCopy(pauseReason);
   }
@@ -389,7 +424,9 @@ function pausedCopy(
       return { label: "Sync blocked — access revoked", severity: "danger" };
     case "orphaned-local-edits-after-cloud-delete":
       return {
-        label: "Deleted in cloud — local edits kept here",
+        // The same sentence the task list's preserved-orphan section wears,
+        // so the row and the open epic agree.
+        label: "Deleted — unsynced edits kept",
         severity: "danger",
       };
     case "delete-pending-acknowledgement":
