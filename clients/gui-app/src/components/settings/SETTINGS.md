@@ -78,7 +78,7 @@ Five parts:
 | Reveal         | `use-settings-anchor-reveal.ts` + `settings-search.css` | Finding the element, scrolling, flashing       |
 
 **The index is hand-written, and cannot not be.** There is no schema behind
-these settings — a "setting" is a hand-authored row in one of sixteen panels,
+these settings — a "setting" is a hand-authored row in one of seventeen panels,
 and the largest panels (Providers' per-provider tab bar, the Worktrees
 inventory, the Host overview) are bespoke JSX with no row primitive to walk.
 So the index is maintained by hand, and the join between an entry and the thing
@@ -177,9 +177,11 @@ different answers:
 - **Gated on the HOST RUNTIME** (Website sessions, which also needs a bound
   host runtime and a successful first read of the browser bridge; host
   Notifications' two groups, which the page's scope gate conceals while the
-  host connects or is unreachable and drops for a vanished host) — not
-  indexed as groups or rows either. Their vocabulary rides on the General and
-  host Notifications page entries.
+  host connects or is unreachable and drops for a vanished host; and every
+  Fallback group, behind the same kind of scope gate and rendered only once
+  the host answers the policy read) — not indexed as groups or rows either.
+  Their vocabulary rides on the General, host Notifications and Fallback page
+  entries.
 
 Bespoke pages are indexed at page/region level for the same reason: their
 content exists only once a host answers an RPC.

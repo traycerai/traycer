@@ -1038,6 +1038,46 @@ export const SETTINGS_SEARCH_ENTRIES: ReadonlyArray<SettingsSearchEntry> = [
     ],
   },
 
+  // --------------------------------------------------------------- Fallback
+  {
+    section: "fallback",
+    anchor: null,
+    kind: "section",
+    availableWhen: alwaysAvailable,
+    label: "Fallback",
+    description: "When a turn fails on a provider error, try these in order.",
+    group: null,
+    // Nothing below the page is indexed on its own: the page's scope gate
+    // conceals its groups while the host connects or cannot be reached, and
+    // every group renders only once the host answers the policy read. Their
+    // words land on the page instead - the master switch's included, whose
+    // row reads "Automatic fallback".
+    keywords: [
+      "automatic",
+      "rate limit",
+      "usage limit",
+      "limit reached",
+      "session limit",
+      "switch account",
+      "switch model",
+      "failover",
+      "backup model",
+      "recovery",
+      "retry",
+      "outage",
+      "wait for reset",
+      "grace period",
+      "countdown",
+      "equivalent models",
+      "similar model",
+      "tier",
+      "allowed destinations",
+      "exclude provider",
+      "per-failure overrides",
+      "reset",
+    ],
+  },
+
   // ------------------------------------------------------------------ Shell
   // The page's two cards are not indexed on their own: both are replaced by a
   // notice for a remote host too old to answer the shell config RPC, and by a
