@@ -13,11 +13,17 @@
  * be forgotten here and silently stop being recognised as a settings route -
  * `devices` was, from the day it was added until `app-diagnostics` arrived and
  * the omission was noticed next to it; `link-phone` was, until the two copies
- * of this set were folded into one and compared against the section table.
+ * of this set were folded into one; and `app-notifications` was, until the set
+ * was finally compared against the section table entry by entry. Three misses,
+ * each found by eye, which is why the comparison is no longer left to one:
+ * `__tests__/settings-kind.test.ts` asserts every `SETTINGS_SECTIONS` id is in
+ * here. Containment only - the `service` alias belongs to no section, so this
+ * set is a superset by construction and equality would fail on it.
  */
 export const SETTINGS_PATHS = new Set([
   "agents",
   "app-diagnostics",
+  "app-notifications",
   "appearance",
   "devices",
   "diagnostics",

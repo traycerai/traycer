@@ -50,10 +50,16 @@ union or over `FileRouteTypes["fullPaths"]`, so a compile error catches them.
 `lib/analytics.ts` is exhaustive only because `ANALYTICS_SETTINGS_SECTIONS` is
 built through `satisfies Record<AnalyticsSettingsSection, true>` - that
 `satisfies` is doing real work, and without it a missing id silently drops the
-navigation event. The two `SETTINGS_PATHS` sets (`stores/tabs/store.ts` and
-`stores/tabs/desktop-tabs-persistence.ts`) are hand-written string sets with no
-gate at all: a section absent from them stops being recognised as a settings
-route for persistence. `devices` was missing from both for its whole life.
+navigation event. `SETTINGS_PATHS` (`stores/tabs/settings-paths.ts`, imported by both
+`stores/tabs/store.ts` and `stores/tabs/desktop-tabs-persistence.ts`, which
+used to hold a copy each) is a hand-written string set: a section absent from
+it stops being recognised as a settings route for persistence. It cannot be
+derived from the section table, because it also accepts the retired `service`
+alias - so it is a superset, and three ids went missing before anyone noticed
+(`devices` for its whole life, then `link-phone`, then `app-notifications`).
+The gate now exists and is a test rather than the compiler:
+`stores/tabs/__tests__/settings-kind.test.ts` asserts every section id is in
+the set.
 
 ## Search
 
