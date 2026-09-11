@@ -24,6 +24,16 @@ import {
 } from "@/lib/comm-graph/office/office-types";
 import {
   BOX_MAP,
+  FACE_MAP,
+  SLAB_MAP,
+  DESK_FRONT_MAP,
+  LAMP_MAP,
+  STAIRS_SIDE_MAP,
+  CUBBY_MAP,
+  SILHOUETTE_MAP,
+  SKYBRIDGE_MAP,
+  BOARD_MAP,
+  ROOF_EDGE_MAP,
   BUBBLE_ATTENTION_MAP,
   BUBBLE_AWAITING_MAP,
   BUBBLE_HELLO_MAP,
@@ -272,6 +282,17 @@ const EYE_COLOR = "#20242c";
 
 const SPRITE_SIZES: Readonly<Record<OfficeSpriteName, OfficeSize>> = {
   character: { width: 16, height: 20 },
+  face: { width: 16, height: 16 },
+  slab: { width: 16, height: 16 },
+  "desk-front": { width: 32, height: 16 },
+  lamp: { width: 8, height: 8 },
+  "stairs-side": { width: 16, height: 16 },
+  cubby: { width: 16, height: 16 },
+  silhouette: { width: 16, height: 16 },
+  skybridge: { width: 16, height: 16 },
+  board: { width: 16, height: 12 },
+  "roof-edge": { width: 16, height: 8 },
+
   desk: { width: 32, height: 16 },
   "monitor-on": { width: 16, height: 12 },
   "monitor-on-b": { width: 16, height: 12 },
@@ -347,6 +368,17 @@ const SPRITE_SIZES: Readonly<Record<OfficeSpriteName, OfficeSize>> = {
 const PROP_MAPS: Readonly<Record<OfficeSpriteName, SpriteMap>> = {
   character: [],
   desk: DESK_MAP,
+  face: FACE_MAP,
+  slab: SLAB_MAP,
+  "desk-front": DESK_FRONT_MAP,
+  lamp: LAMP_MAP,
+  "stairs-side": STAIRS_SIDE_MAP,
+  cubby: CUBBY_MAP,
+  silhouette: SILHOUETTE_MAP,
+  skybridge: SKYBRIDGE_MAP,
+  board: BOARD_MAP,
+  "roof-edge": ROOF_EDGE_MAP,
+
   "monitor-on": MONITOR_ON_MAP,
   "monitor-on-b": MONITOR_ON_B_MAP,
   "monitor-off": MONITOR_OFF_MAP,
@@ -667,9 +699,9 @@ function selectCharacterMap(ref: OfficeSpriteRef): SelectedMap {
     // rather than floating above the scalp.
     return {
       map: dressHead(
-        officeSeatedMap(pose),
+        officeSeatedMap(pose, ref.facing === "down" ? "down" : "up"),
         ref,
-        "up",
+        ref.facing === "down" ? "down" : "up",
         officeHeadOffsetOf(pose),
       ),
       mirror: false,

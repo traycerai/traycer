@@ -444,16 +444,161 @@ export const OFFICE_TORSO_MAPS: ReadonlyArray<{
   { label: "torso-side-walk2", map: TORSO_SIDE_WALK2 },
 ];
 
+const SEATED_SIT_DOWN: SpriteMap = [
+  "................",
+  "................",
+  "....OOOOOOOO....",
+  "...OSSSSSSSSO...",
+  "..OSSSSSSSSSSO..",
+  "..OSSESSSSESSO..",
+  "..OSSSSSSSSSSO..",
+  "...OSSSSSSSSO...",
+  "....OSSSSSSO....",
+  ".....OSSSSO.....",
+  ".OTTTTTTTTTTTTO.",
+  ".OTtTTTTTTTTtTO.",
+  ".OSsTTTTTTTTsSO.",
+  ".OTTTTTTTTTTTTO.",
+  "..OPPPPPPPPPPO..",
+  "..OPPPP..PPPPO..",
+  "...OPPO..OPPO...",
+  "...OOOO..OOOO...",
+  "................",
+  "................",
+];
+
+const SEATED_TYPE1_DOWN: SpriteMap = [
+  "................",
+  "................",
+  "....OOOOOOOO....",
+  "...OSSSSSSSSO...",
+  "..OSSSSSSSSSSO..",
+  "..OSSESSSSESSO..",
+  "..OSSSSSSSSSSO..",
+  "...OSSSSSSSSO...",
+  "....OSSSSSSO....",
+  ".....OSSSSO.....",
+  ".OTTTTTTTTTTTTO.",
+  ".OSsTTTTTTTTtTO.",
+  ".OTtTTTTTTTTsSO.",
+  ".OTTTTTTTTTTTTO.",
+  "..OPPPPPPPPPPO..",
+  "..OPPPP..PPPPO..",
+  "...OPPO..OPPO...",
+  "...OOOO..OOOO...",
+  "................",
+  "................",
+];
+
+const SEATED_TYPE2_DOWN: SpriteMap = [
+  "................",
+  "................",
+  "....OOOOOOOO....",
+  "...OSSSSSSSSO...",
+  "..OSSSSSSSSSSO..",
+  "..OSSESSSSESSO..",
+  "..OSSSSSSSSSSO..",
+  "...OSSSSSSSSO...",
+  "....OSSSSSSO....",
+  ".....OSSSSO.....",
+  ".OTTTTTTTTTTTTO.",
+  ".OTtTTTTTTTTsSO.",
+  ".OSsTTTTTTTTtTO.",
+  ".OTTTTTTTTTTTTO.",
+  "..OPPPPPPPPPPO..",
+  "..OPPPP..PPPPO..",
+  "...OPPO..OPPO...",
+  "...OOOO..OOOO...",
+  "................",
+  "................",
+];
+
+const SEATED_LEAN_DOWN: SpriteMap = [
+  "................",
+  "....OOOOOOOO....",
+  "...OSSSSSSSSO...",
+  "..OSSSSSSSSSSO..",
+  "..OSSESSSSESSO..",
+  "..OSSSSSSSSSSO..",
+  "..OSSSSSSSSSSO..",
+  "..OSSSSSSSSSSO..",
+  "...OSSSSSSSSO...",
+  ".....OSSSSO.....",
+  ".....OSSSSO.....",
+  ".OTTTTTTTTTTTTO.",
+  ".OSsTTTTTTTTsSO.",
+  ".OTtTTTTTTTTtTO.",
+  ".OTtTTTTTTTTtTO.",
+  ".OTtTTTTTTTTtTO.",
+  ".OTTTTTTTTTTTTO.",
+  ".OOOOOOOOOOOOOO.",
+  "................",
+  "................",
+];
+
+const SEATED_HAND_UP_DOWN: SpriteMap = [
+  "................",
+  "................",
+  "....OOOOOOOO....",
+  "...OSSSSSSSSO...",
+  "..OSSSSSSSSSSO..",
+  "..OSSESSSSESSO..",
+  "..OSSSSSSSSSSO..",
+  "..OSSSSSSSSSSO.O",
+  "..OSSSSSSSSSSOSO",
+  "...OSSSSSSSSO.SO",
+  ".....OSSSSO..OSO",
+  ".OTTTTTTTTTTTTSO",
+  ".OTtTTTTTTTTTTsO",
+  ".OTtTTTTTTTTtTO.",
+  ".OTtTTTTTTTTtTO.",
+  ".OSsTTTTTTTTtTO.",
+  ".OTTTTTTTTTTTTO.",
+  ".OOOOOOOOOOOOOO.",
+  "................",
+  "................",
+];
+
+const SEATED_CRASH_DOWN: SpriteMap = [
+  "................",
+  "................",
+  "................",
+  "....OOOOOOOO....",
+  "...OSSSSSSSSO...",
+  "..OSSSSSSSSSSO..",
+  "..OSSESSSSESSO..",
+  "..OSSSSSSSSSSO..",
+  "..OSSSSSSSSSSO..",
+  "...OSSSSSSSSO...",
+  "..OSsOSSSSOsSO..",
+  ".OTTTTTTTTTTTTO.",
+  ".OTtTTTTTTTTtTO.",
+  ".OTtTTTTTTTTtTO.",
+  ".OTtTTTTTTTTtTO.",
+  ".OTtTTTTTTTTtTO.",
+  ".OTTTTTTTTTTTTO.",
+  ".OOOOOOOOOOOOOO.",
+  "................",
+  "................",
+];
+
 export const OFFICE_SEATED_MAPS: ReadonlyArray<{
+  readonly facing: "up" | "down";
   readonly label: string;
   readonly map: SpriteMap;
 }> = [
-  { label: "seated-sit", map: SEATED_SIT },
-  { label: "seated-type1", map: SEATED_TYPE1 },
-  { label: "seated-type2", map: SEATED_TYPE2 },
-  { label: "seated-lean", map: SEATED_LEAN },
-  { label: "seated-hand-up", map: SEATED_HAND_UP },
-  { label: "seated-crash", map: SEATED_CRASH },
+  { label: "seated-sit", facing: "up", map: SEATED_SIT },
+  { label: "seated-type1", facing: "up", map: SEATED_TYPE1 },
+  { label: "seated-type2", facing: "up", map: SEATED_TYPE2 },
+  { label: "seated-lean", facing: "up", map: SEATED_LEAN },
+  { label: "seated-hand-up", facing: "up", map: SEATED_HAND_UP },
+  { label: "seated-crash", facing: "up", map: SEATED_CRASH },
+  { label: "seated-sit-down", facing: "down", map: SEATED_SIT_DOWN },
+  { label: "seated-type1-down", facing: "down", map: SEATED_TYPE1_DOWN },
+  { label: "seated-type2-down", facing: "down", map: SEATED_TYPE2_DOWN },
+  { label: "seated-lean-down", facing: "down", map: SEATED_LEAN_DOWN },
+  { label: "seated-hand-up-down", facing: "down", map: SEATED_HAND_UP_DOWN },
+  { label: "seated-crash-down", facing: "down", map: SEATED_CRASH_DOWN },
 ];
 
 export const OFFICE_ACCESSORY_MAPS: ReadonlyArray<{
@@ -532,7 +677,15 @@ export function officeTorsoMap(
   return TORSO_FRONT_STAND;
 }
 
-export function officeSeatedMap(pose: OfficeSeatedPose): SpriteMap {
+export function officeSeatedMap(pose: OfficeSeatedPose, facing: "up" | "down"): SpriteMap {
+  if (facing === "down") {
+    if (pose === "type1") return SEATED_TYPE1_DOWN;
+    if (pose === "type2") return SEATED_TYPE2_DOWN;
+    if (pose === "lean") return SEATED_LEAN_DOWN;
+    if (pose === "hand-up") return SEATED_HAND_UP_DOWN;
+    if (pose === "crash") return SEATED_CRASH_DOWN;
+    return SEATED_SIT_DOWN;
+  }
   if (pose === "type1") {
     return SEATED_TYPE1;
   }

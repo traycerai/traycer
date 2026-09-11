@@ -26,6 +26,17 @@ import type {
  */
 const ALL_SPRITE_NAMES: Readonly<Record<OfficeSpriteName, true>> = {
   character: true,
+  face: true,
+  slab: true,
+  "desk-front": true,
+  lamp: true,
+  "stairs-side": true,
+  cubby: true,
+  silhouette: true,
+  skybridge: true,
+  board: true,
+  "roof-edge": true,
+
   desk: true,
   "monitor-on": true,
   "monitor-on-b": true,

@@ -82,6 +82,16 @@ export interface OfficeAppearance {
 export type OfficeSpriteName =
   | "character"
   | "desk"
+  | "face"
+  | "slab"
+  | "desk-front"
+  | "lamp"
+  | "stairs-side"
+  | "cubby"
+  | "silhouette"
+  | "skybridge"
+  | "board"
+  | "roof-edge"
   | "monitor-on"
   /** Second frame of a lit screen; the scene alternates it with `monitor-on` while the agent works. */
   | "monitor-on-b"
@@ -244,7 +254,7 @@ export interface OfficeTileRect {
  * the picker, the persisted choice and the shared suites all follow one list
  * and a half-registered view cannot exist.
  */
-export type OfficeViewId = "floor";
+export type OfficeViewId = "floor" | "towers" | "building";
 
 /**
  * Semantic zoom, decided by the camera: `0` overview (pips with state glyphs),
