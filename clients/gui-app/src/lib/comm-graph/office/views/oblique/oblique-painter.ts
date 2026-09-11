@@ -353,4 +353,10 @@ export const OBLIQUE_PAINTER: OfficePainter = {
   floor,
   seatProps,
   spotProps,
+  /**
+   * NONE. This painter's block is the tile rect itself, scaled by the tile
+   * size under an identity projector, so a query tight to the tiles finds
+   * every block that covers it.
+   */
+  blockOverhangPx: () => 0,
 };

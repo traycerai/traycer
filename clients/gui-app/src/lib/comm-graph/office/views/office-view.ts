@@ -160,6 +160,26 @@ export interface OfficePainter {
     spot: OfficeErrandSpot,
     lod: OfficeLod,
   ) => ReadonlyArray<OfficeWorldDrawable>;
+  /**
+   * How far this painter's lod-0 BLOCKS reach beyond the tiles they stand for,
+   * in projected pixels, on this layout.
+   *
+   * The scene asks a painter for the floor of a rectangle by running the
+   * projection backwards into tiles, which assumes a block is drawn where its
+   * tiles are. Three of the four painters draw exactly that - the block IS the
+   * tile rect - and answer zero. The isometric one cannot: a tile rect projects
+   * to a diamond, a block is one axis-aligned rectangle, and the rectangle of
+   * equal area has corners outside the diamond's slanted sides. A block can
+   * therefore be painted over a pixel none of its own tiles projects to, and a
+   * query tight to the tiles finds no block for a corner that is plainly on
+   * screen.
+   *
+   * Declared per painter rather than added as a blanket margin because the two
+   * are not the same question: a sprite bleed widens every query at every band
+   * and would hand Mission control's tier counters rows they can see nothing
+   * of. A painter that draws inside its tiles pays nothing for this.
+   */
+  readonly blockOverhangPx: (layout: OfficeLayout) => number;
 }
 
 /** One view, whole. Stateless: the registry hands the same value out forever. */

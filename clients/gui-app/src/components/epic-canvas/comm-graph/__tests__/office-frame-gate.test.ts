@@ -8,6 +8,18 @@ import {
   OFFICE_RESUME_CATCH_UP_MS,
   type OfficeFloorMotion,
 } from "@/components/epic-canvas/comm-graph/office/office-frame-gate";
+import { commGraphPairId } from "@/lib/comm-graph/comm-graph-model";
+import { partitionOfficePopulation } from "@/lib/comm-graph/office/office-population";
+import { OfficeScene } from "@/lib/comm-graph/office/office-scene";
+import { makeTestEpic } from "@/lib/comm-graph/office/office-test-epic";
+import type {
+  OfficeAgentInput,
+  OfficeAgentStatus,
+  OfficeFrame,
+  OfficeRect,
+  OfficeSceneInput,
+} from "@/lib/comm-graph/office/office-types";
+import { OFFICE_VIEWS } from "@/lib/comm-graph/office/views/office-view";
 
 const MOVING: OfficeFloorMotion = {
   animating: true,
@@ -227,5 +239,255 @@ describe("isElementVisible", () => {
     // jsdom lays nothing out, so every element reports no boxes - which is
     // the fallback's "not rendered" answer, reached without throwing.
     expect(isElementVisible(element)).toBe(false);
+  });
+});
+
+/**
+ * The scene input the office canvas builds, trimmed to what these cases
+ * change: the agent set, their statuses, and whether motion is reduced.
+ */
+function input(
+  agents: ReadonlyArray<OfficeAgentInput>,
+  statuses: ReadonlyMap<string, OfficeAgentStatus>,
+  reducedMotion: boolean,
+): OfficeSceneInput {
+  return {
+    agents,
+    statusById: statuses,
+    partition: partitionOfficePopulation({
+      agents,
+      statusById: statuses,
+      previous: null,
+    }),
+    visibleAgentIds: new Set(agents.map((agent) => agent.id)),
+    activityById: new Map(),
+    viewport: { width: 1280, height: 700 },
+    openRequestsByReceiver: new Map(),
+    pulse: null,
+    pulseKey: null,
+    stepMs: 0,
+    cursorMs: null,
+    clockMs: 0,
+    playing: false,
+    reducedMotion,
+  };
+}
+
+function whole(scene: OfficeScene): OfficeRect {
+  return { x: 0, y: 0, ...scene.worldSize() };
+}
+
+interface Motion {
+  readonly agentId: string;
+  readonly seated: boolean;
+  readonly col: number;
+  readonly row: number;
+}
+
+function isMotion(value: unknown): value is Motion {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "agentId" in value &&
+    typeof value.agentId === "string" &&
+    "seated" in value &&
+    typeof value.seated === "boolean" &&
+    "col" in value &&
+    typeof value.col === "number" &&
+    "row" in value &&
+    typeof value.row === "number"
+  );
+}
+
+/**
+ * The scene's private walker state. Nothing public reports WHERE a walker is,
+ * only whether it is seated and where its pip lands in a built frame - and the
+ * cases below need to drive a walk to a known point (away from its chair)
+ * before watching it settle, which needs the position too.
+ */
+function motions(scene: OfficeScene): Motion[] {
+  const raw: unknown = Reflect.get(scene, "characters");
+  if (!(raw instanceof Map)) throw new Error("characters missing");
+  const result: Motion[] = [];
+  for (const value of raw.values()) {
+    if (!isMotion(value)) throw new Error("motion shape changed");
+    result.push({
+      agentId: value.agentId,
+      seated: value.seated,
+      col: value.col,
+      row: value.row,
+    });
+  }
+  return result;
+}
+
+/**
+ * The gate driven the way the canvas actually drives it, not through
+ * `shouldDraw` alone: `gate.elapsed` gates the tick, `scene.tick` advances the
+ * simulation, `scene.isAnimating` reads the state THAT tick just produced, and
+ * only then does `gate.shouldDraw` decide whether this frame paints. F1 lived
+ * in that order - the tick that lands a walker in its chair or takes an
+ * envelope off the floor is the tick after which `isAnimating` answers false,
+ * so a gate asked only the fresh answer refuses the very frame that would show
+ * the change, leaving the canvas a frame short of it. `OfficeFrameGate`'s
+ * `wasAnimating` latch (see its own file) is what these cases pin.
+ */
+describe("OfficeFrameGate through the scene's real tick-then-ask loop", () => {
+  it("paints an envelope's delivery, not a frame still holding it in flight", () => {
+    const epic = makeTestEpic("triage", 2, 1);
+    const scene = new OfficeScene(OFFICE_VIEWS.floor, null);
+    const from = epic.agents[0].id;
+    const to = epic.agents[1].id;
+    const initial = input(
+      epic.agents,
+      new Map(epic.agents.map((agent) => [agent.id, "working" as const])),
+      false,
+    );
+    scene.sync(initial);
+    scene.sync({
+      ...initial,
+      pulse: {
+        kind: "edge",
+        edgeId: commGraphPairId(from, to),
+        pulseKind: "request",
+        fromAgentId: from,
+        toAgentId: to,
+      },
+      pulseKey: "request-1",
+    });
+    expect(scene.isAnimating(0)).toBe(true);
+
+    const gate = new OfficeFrameGate();
+    let drawn = scene.frame(0, whole(scene));
+    for (let step = 0; step < 100; step += 1) {
+      const elapsed = gate.elapsed(100);
+      if (elapsed === null) continue;
+      scene.tick(elapsed);
+      if (
+        gate.shouldDraw({
+          animating: scene.isAnimating(0),
+          minute: 0,
+          panning: false,
+        })
+      ) {
+        drawn = scene.frame(0, whole(scene));
+      }
+    }
+
+    // Anti-vacuity: the envelope has to have actually been delivered, or the
+    // comparison below is comparing a still frame to itself.
+    expect(scene.isAnimating(0)).toBe(false);
+    const settled = scene.frame(0, whole(scene));
+    expect(drawn.overlay).toEqual(settled.overlay);
+  });
+
+  it("shows a returning walker's pip in its chair on the last frame drawn", () => {
+    const epic = makeTestEpic("triage", 1, 1);
+    const scene = new OfficeScene(OFFICE_VIEWS.floor, null);
+    scene.sync(input(epic.agents, new Map(), false));
+    const id = epic.agents[0].id;
+    // An idle agent takes unprompted errands away from its desk; run the
+    // floor until this one is genuinely away, which is the walk this case
+    // needs to watch settle.
+    for (let step = 0; step < 400; step += 1) {
+      scene.frame(0, whole(scene));
+      scene.tick(100);
+      const moving = motions(scene)[0];
+      const chairCol =
+        scene.layout()?.desks.get(id)?.chairTile.col ?? moving.col;
+      if (!moving.seated && Math.abs(moving.col - chairCol) > 1) break;
+    }
+    expect(motions(scene)[0].seated).toBe(false);
+    scene.sync(input(epic.agents, new Map([[id, "working"]]), false));
+
+    const gate = new OfficeFrameGate();
+    let drawn: OfficeFrame | null = null;
+    let movingFrames = 0;
+    for (let step = 0; step < 1000; step += 1) {
+      const elapsed = gate.elapsed(100);
+      if (elapsed === null) continue;
+      scene.tick(elapsed);
+      const animating = scene.isAnimating(0);
+      if (gate.shouldDraw({ animating, minute: 0, panning: false })) {
+        drawn = scene.frame(0, whole(scene));
+      }
+      if (!motions(scene)[0].seated) movingFrames += 1;
+      else break;
+    }
+    // Anti-vacuity: there has to have been a walk in progress to settle, or
+    // this proves nothing about the settling frame.
+    expect(movingFrames).toBeGreaterThan(0);
+    const settled = scene.frame(0, whole(scene));
+    expect(drawn?.actors).toEqual(settled.actors);
+  });
+
+  it("goes quiescent once the floor settles, rather than drawing forever", () => {
+    // THE NEGATIVE. "Draw every frame at overview" would also make the two
+    // cases above pass, so this pins the other half: once the floor is
+    // genuinely still, the gate keeps refusing it on every later ask, not
+    // just the first one - a count over many iterations, not a single read.
+    const epic = makeTestEpic("triage", 2, 1);
+    const scene = new OfficeScene(OFFICE_VIEWS.floor, null);
+    const from = epic.agents[0].id;
+    const to = epic.agents[1].id;
+    const initial = input(
+      epic.agents,
+      new Map(epic.agents.map((agent) => [agent.id, "working" as const])),
+      false,
+    );
+    scene.sync(initial);
+    scene.sync({
+      ...initial,
+      pulse: {
+        kind: "edge",
+        edgeId: commGraphPairId(from, to),
+        pulseKind: "request",
+        fromAgentId: from,
+        toAgentId: to,
+      },
+      pulseKey: "request-1",
+    });
+
+    const gate = new OfficeFrameGate();
+    let draws = 0;
+    for (let step = 0; step < 400; step += 1) {
+      const elapsed = gate.elapsed(100);
+      if (elapsed === null) continue;
+      scene.tick(elapsed);
+      if (
+        gate.shouldDraw({
+          animating: scene.isAnimating(0),
+          minute: 0,
+          panning: false,
+        })
+      ) {
+        draws += 1;
+      }
+    }
+    const drawsOnceSettled = draws;
+    expect(scene.isAnimating(0)).toBe(false);
+    // More than one: the envelope's arrival drew, and the settling frame drew
+    // after it - a gate stuck refusing from the first ask would also read 0
+    // or 1 here, which is why a single `false` cannot stand in for this.
+    expect(drawsOnceSettled).toBeGreaterThan(1);
+
+    // The same length of time again with nothing left to animate. A "draw
+    // every frame" stand-in for the fix passes both cases above and fails
+    // exactly here.
+    for (let step = 0; step < 400; step += 1) {
+      const elapsed = gate.elapsed(100);
+      if (elapsed === null) continue;
+      scene.tick(elapsed);
+      if (
+        gate.shouldDraw({
+          animating: scene.isAnimating(0),
+          minute: 0,
+          panning: false,
+        })
+      ) {
+        draws += 1;
+      }
+    }
+    expect(draws).toBe(drawsOnceSettled);
   });
 });

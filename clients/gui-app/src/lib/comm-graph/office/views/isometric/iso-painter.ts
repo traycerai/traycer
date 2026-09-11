@@ -313,6 +313,49 @@ function tileRectsOverlap(
  */
 const DIAMOND_TO_RECT = Math.SQRT1_2;
 
+/**
+ * How far the widest block on this layout reaches past its own tile diamond.
+ *
+ * THE CORNERS ARE THE PROBLEM. The rect above has the diamond's area but not
+ * its shape: its corners sit outside the diamond's slanted sides, so a block
+ * paints over pixels that none of the tiles it stands for projects to. The
+ * scene finds the floor for a rectangle by running the projection backwards
+ * into tiles, and a query tight to the tiles therefore finds no block at all
+ * for a corner that is plainly on screen - a storey's lower-right shoulder on
+ * a panned Campus, drawn by a whole-world frame and missing from a real one.
+ *
+ * The distance is geometry, not a guess. A block corner sits at
+ * `(SQRT1_2·halfWidth, SQRT1_2·halfHeight)` from the centre, and the diamond's
+ * edge is the line `x/halfWidth + y/halfHeight = 1`; the corner evaluates to
+ * `SQRT2`, so it is `SQRT2 - 1` past the edge, and dividing by the line's own
+ * normal turns that into pixels. It scales with the REGION, which is why this
+ * is a function of the layout and not a constant: the storey is the widest
+ * block a plan draws, and a hundred-tile storey overhangs by a couple of
+ * hundred pixels where a six-tile cabin overhangs by ten.
+ */
+function isoBlockOverhang(layout: OfficeLayout): number {
+  let worst = 0;
+  for (const floor of layout.floors) {
+    worst = Math.max(worst, cornerOverhangOf(floor.bounds));
+    for (const amenity of floor.amenities) {
+      worst = Math.max(worst, cornerOverhangOf(amenity.bounds));
+    }
+  }
+  for (const room of layout.rooms) {
+    worst = Math.max(worst, cornerOverhangOf(room.bounds));
+  }
+  return worst;
+}
+
+function cornerOverhangOf(bounds: OfficeTileRect): number {
+  const span = bounds.cols + bounds.rows;
+  const halfWidth = (span * ISO_HALF_WIDTH) / 2;
+  const halfHeight = (span * ISO_HALF_HEIGHT) / 2;
+  if (halfWidth <= 0 || halfHeight <= 0) return 0;
+  const beyond = Math.SQRT2 - 1;
+  return (beyond * halfWidth * halfHeight) / Math.hypot(halfWidth, halfHeight);
+}
+
 function blockOf(
   projector: OfficeProjector,
   bounds: OfficeTileRect,
@@ -707,4 +750,5 @@ export const ISO_PAINTER: OfficePainter = {
   floor: paintFloor,
   seatProps: paintSeat,
   spotProps: paintSpot,
+  blockOverhangPx: isoBlockOverhang,
 };

@@ -197,8 +197,8 @@ export function planOfficeStaticChunks(
   if (budget < 1) return NO_CHUNKS;
   if (world.width <= 0 || world.height <= 0) return NO_CHUNKS;
   if (view.width <= 0 || view.height <= 0) return NO_CHUNKS;
-  const lastCol = chunkIndexOf(world.width - 1);
-  const lastRow = chunkIndexOf(world.height - 1);
+  const lastCol = lastChunkIndexOf(world.width);
+  const lastRow = lastChunkIndexOf(world.height);
   const seen = clampedSpan({ view, lastCol, lastRow });
   if (seen === null) return NO_CHUNKS;
   if (spanCount(seen) > budget) return NO_CHUNKS;
@@ -230,6 +230,22 @@ function chunkIndexOf(pixel: number): number {
   return Math.floor(pixel / OFFICE_STATIC_CHUNK_PX);
 }
 
+/**
+ * The last chunk of a span that ENDS at `edge`, which the span does not itself
+ * include.
+ *
+ * Not `chunkIndexOf(edge - 1)`. A camera is at a fractional world position and
+ * a zoomed viewport is a fractional width, so an edge at 3072.5 lies one pixel
+ * into chunk 6 while `edge - 1` lands at 3071.5, back in chunk 5 - and the
+ * caller, believing its plan complete, suppresses the per-frame sprite path
+ * over the half pixel nobody baked. Half-open arithmetic answers both: an edge
+ * exactly on a boundary belongs to the chunk before it, and anything past one
+ * belongs to the chunk it reaches into.
+ */
+function lastChunkIndexOf(edge: number): number {
+  return Math.ceil(edge / OFFICE_STATIC_CHUNK_PX) - 1;
+}
+
 function spanCount(span: ChunkSpan): number {
   return (
     (span.lastCol - span.firstCol + 1) * (span.lastRow - span.firstRow + 1)
@@ -254,8 +270,8 @@ function clampedSpan(args: {
     firstRow,
     // Never behind the first: a view under a pixel wide still touches the one
     // chunk it is standing in.
-    lastCol: Math.max(firstCol, Math.min(lastCol, chunkIndexOf(right - 1))),
-    lastRow: Math.max(firstRow, Math.min(lastRow, chunkIndexOf(bottom - 1))),
+    lastCol: Math.max(firstCol, Math.min(lastCol, lastChunkIndexOf(right))),
+    lastRow: Math.max(firstRow, Math.min(lastRow, lastChunkIndexOf(bottom))),
   };
 }
 
@@ -272,6 +288,12 @@ export function officeStaticChunkRect(
     width: Math.ceil(Math.min(OFFICE_STATIC_CHUNK_PX, world.width - x)),
     height: Math.ceil(Math.min(OFFICE_STATIC_CHUNK_PX, world.height - y)),
   };
+}
+
+/** A chunk this frame wants, with the work of addressing it done once. */
+interface WantedChunk {
+  readonly id: string;
+  readonly rect: OfficeRect;
 }
 
 /** One chunk of the floor, painted. */
@@ -294,12 +316,19 @@ export class OfficeStaticLayer {
   private readonly held = new Map<string, HeldChunk>();
   private key: OfficeStaticLayerKey | null = null;
   /**
-   * Set once the factory has answered `null` for a real size: a platform with
-   * no offscreen 2D context does not grow one between frames, so asking again
-   * at frame cadence would only allocate a canvas per frame to throw away.
-   * `release()` forgets it, in case the layer is reused somewhere it works.
+   * The chunk keys the factory has already refused, BY KEY rather than as one
+   * latch over the layer.
+   *
+   * A platform with no offscreen 2D context does not grow one between frames,
+   * so a square that could not be made is not asked for again at frame
+   * cadence - that would allocate a canvas a second to throw away. But a
+   * refusal is not evidence about the OTHER squares: latching the whole layer
+   * meant one null answer retired the cache for the life of the mount, and
+   * every later frame returned before it had looked at the camera, the key or
+   * the factory at all. `release()` forgets them, in case the layer is reused
+   * somewhere they work.
    */
-  private unsupported = false;
+  private readonly unsupportedChunks = new Set<string>();
   /** Counts chunk repaints, so a test can prove a frame did NOT cause one. */
   private paints = 0;
 
@@ -340,7 +369,6 @@ export class OfficeStaticLayer {
    */
   sync(args: OfficeStaticSyncArgs): ReadonlyArray<OfficeStaticChunkDraw> {
     const { chunks, key, paint } = args;
-    if (this.unsupported) return NO_DRAWS;
     if (key.width <= 0 || key.height <= 0) {
       this.releaseChunks();
       return NO_DRAWS;
@@ -356,20 +384,41 @@ export class OfficeStaticLayer {
       return NO_DRAWS;
     }
     const world: OfficeSize = { width: key.width, height: key.height };
-    const draws: OfficeStaticChunkDraw[] = [];
+    const wanted: WantedChunk[] = [];
     for (const chunk of chunks) {
       const rect = officeStaticChunkRect(chunk, world);
       // Outside the world entirely: nothing to paint, and nothing to blit.
       if (rect.width <= 0 || rect.height <= 0) continue;
-      const held = this.hold(chunk, rect, paint);
+      const id = chunkIdOf(chunk);
+      // A chunk this host has already failed to make. Asked for again at frame
+      // cadence it would allocate and throw away a canvas a second and still
+      // leave the frame a hole, so the whole frame draws itself instead.
+      if (this.unsupportedChunks.has(id)) return NO_DRAWS;
+      wanted.push({ id, rect });
+    }
+    // FREED BEFORE ALLOCATED. The budget is a ceiling on the pixels that
+    // EXIST, not on the ones still held when the frame is over: baking this
+    // frame's chunks while the ones they replace are still in hand doubles the
+    // live backing stores for the width of a pan, which is exactly the moment
+    // the office can least afford the memory.
+    this.evictFor(wanted);
+    const draws: OfficeStaticChunkDraw[] = [];
+    for (const entry of wanted) {
+      const held = this.hold(entry, paint);
       if (held === null) {
-        this.unsupported = true;
-        this.releaseChunks();
+        // ISOLATED TO THE CHUNK. Whatever else is in hand stays: a frame that
+        // does not need this square is still entitled to its cached floor, and
+        // a host that cannot make one 512-square has not thereby lost the
+        // ability to make the others.
+        this.unsupportedChunks.add(entry.id);
         return NO_DRAWS;
       }
-      draws.push({ canvas: held.surface.canvas, x: rect.x, y: rect.y });
+      draws.push({
+        canvas: held.surface.canvas,
+        x: entry.rect.x,
+        y: entry.rect.y,
+      });
     }
-    this.evict();
     return draws;
   }
 
@@ -377,16 +426,15 @@ export class OfficeStaticLayer {
   release(): void {
     this.releaseChunks();
     this.key = null;
-    this.unsupported = false;
+    this.unsupportedChunks.clear();
   }
 
   /** The chunk in hand, baked first if this is the first frame to want it. */
   private hold(
-    chunk: OfficeStaticChunk,
-    rect: OfficeRect,
+    entry: WantedChunk,
     paint: (ctx: CanvasRenderingContext2D, chunk: OfficeRect) => void,
   ): HeldChunk | null {
-    const id = chunkIdOf(chunk);
+    const { id, rect } = entry;
     const existing = this.held.get(id);
     if (existing !== undefined) {
       // Re-inserted, so this one is now the youngest; see `held`.
@@ -411,13 +459,35 @@ export class OfficeStaticLayer {
     return held;
   }
 
-  private evict(): void {
-    while (this.held.size > OFFICE_STATIC_CHUNK_BUDGET) {
-      const oldest = this.held.entries().next();
-      if (oldest.done === true) return;
-      const [id, chunk] = oldest.value;
+  /**
+   * Frees enough of what is NOT wanted this frame that the whole frame fits
+   * inside the budget once it has been baked.
+   *
+   * The frame's own chunks are never candidates, so a pan that re-asks for a
+   * square it already holds cannot evict it to make room for itself. What is
+   * left over is kept in least-recently-drawn order, which is what makes a pan
+   * back the way it came cheap.
+   */
+  private evictFor(wanted: ReadonlyArray<WantedChunk>): void {
+    const keep = new Set(wanted.map((entry) => entry.id));
+    const spare = Math.max(0, OFFICE_STATIC_CHUNK_BUDGET - keep.size);
+    let extras = 0;
+    for (const id of this.held.keys()) {
+      if (!keep.has(id)) extras += 1;
+    }
+    // OLDEST FIRST, and only as many as the frame's own chunks need room for.
+    // `held` is in least-recently-drawn order, so walking it forwards and
+    // stopping once `spare` are left evicts the ones nothing has asked for in
+    // longest - not the ones asked for most recently, which is what iterating
+    // to a quota from the front would do.
+    for (const id of [...this.held.keys()]) {
+      if (extras <= spare) return;
+      if (keep.has(id)) continue;
+      const chunk = this.held.get(id);
+      if (chunk === undefined) continue;
       this.held.delete(id);
       zeroSurface(chunk.surface);
+      extras -= 1;
     }
   }
 

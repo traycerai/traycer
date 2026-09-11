@@ -904,4 +904,10 @@ export const floorPainter: OfficePainter = {
     _spot: OfficeErrandSpot,
     _lod: OfficeLod,
   ) => NO_SPOT_PROPS,
+  /**
+   * NONE. This painter's block is the tile rect itself, scaled by the tile
+   * size under an identity projector, so a query tight to the tiles finds
+   * every block that covers it.
+   */
+  blockOverhangPx: () => 0,
 };

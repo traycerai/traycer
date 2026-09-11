@@ -1656,12 +1656,16 @@ export class OfficeScene {
         cols: layout.cols,
         rows: layout.rows,
         rect,
-        // The bleed is a question about SPRITES - art anchored at a tile just
-        // outside the rect that reaches into it - and at overview there are
-        // none. The floor there is a block map whose rects are their own
-        // extent, so reaching past the rect would only ask a painter for
-        // regions nobody can see.
-        bleedPx: lod === 0 ? 0 : OFFICE_PROJECTION_BLEED_PX,
+        // TWO DIFFERENT QUESTIONS, one per band. Above overview the bleed is
+        // about SPRITES: art anchored at a tile just outside the rect that
+        // reaches into it. At overview there are no sprites - the floor is a
+        // block map - but a block is not always drawn where its tiles are, and
+        // the painter is the only thing that knows by how much. Three of the
+        // four answer zero and pay nothing.
+        bleedPx:
+          lod === 0
+            ? this.view.painter.blockOverhangPx(layout)
+            : OFFICE_PROJECTION_BLEED_PX,
       }),
       lod,
     );

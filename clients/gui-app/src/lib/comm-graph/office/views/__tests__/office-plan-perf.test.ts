@@ -13,7 +13,7 @@
  * Every case runs once per registered view, so a view added tomorrow inherits
  * the whole budget for free.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   findOfficePath,
   officePathScratch,
@@ -342,6 +342,16 @@ function blockRegionsOf(layout: OfficeLayout): number {
   return regions;
 }
 
+/** Whether two rects, in the same projected space, share any area. */
+function rectsOverlap(a: OfficeRect, b: OfficeRect): boolean {
+  return (
+    a.x < b.x + b.width &&
+    b.x < a.x + a.width &&
+    a.y < b.y + b.height &&
+    b.y < a.y + a.height
+  );
+}
+
 /** The camera positions a sweep looks at, across the whole world. */
 function viewRectsOver(world: OfficeSize): ReadonlyArray<OfficeRect> {
   const rects: OfficeRect[] = [];
@@ -623,19 +633,219 @@ describe.each(OFFICE_VIEW_IDS)("%s at a thousand agents", (viewId) => {
     const seats = [...layout.seats.values()].slice(0, 24);
     const door = layout.floors[0].doorTile;
     // The first search is the one allowed to grow: after it the grids are the
-    // size of this office and every walk on it reuses them.
+    // size of this office and every walk on it reuses them. The counters
+    // below are the scratch's own bookkeeping and stay green for a version
+    // that went back to allocating a fresh Int32Array and Uint8Array per
+    // search while leaving that bookkeeping alone, so a transparent
+    // constructor proxy watches the allocation itself over the walks below,
+    // not only the counters a correct implementation happens to also produce.
     findOfficePath(layout, door, seats[0].chairTile);
     const first = officePathScratch();
 
-    for (const seat of seats) {
-      findOfficePath(layout, door, seat.chairTile);
-      findOfficePath(layout, seat.chairTile, door);
+    const intCtor = Int32Array;
+    const byteCtor = Uint8Array;
+    let ints = 0;
+    let bytes = 0;
+    vi.stubGlobal(
+      "Int32Array",
+      countingArrayCtor(intCtor, () => {
+        ints += 1;
+      }),
+    );
+    vi.stubGlobal(
+      "Uint8Array",
+      countingArrayCtor(byteCtor, () => {
+        bytes += 1;
+      }),
+    );
+    try {
+      for (const seat of seats) {
+        findOfficePath(layout, door, seat.chairTile);
+        findOfficePath(layout, seat.chairTile, door);
+      }
+    } finally {
+      // A stub left in place breaks every later suite's typed arrays, so this
+      // has to come off even if an assertion above throws.
+      vi.unstubAllGlobals();
     }
 
     expect(officePathScratch().growths).toBe(first.growths);
     expect(officePathScratch().capacity).toBeGreaterThanOrEqual(
       layout.cols * layout.rows,
     );
+    // THE ACTUAL ALLOCATION: zero of each type, once the first search above
+    // has already sized the buffers to this layout.
+    expect({ ints, bytes }).toEqual({ ints: 0, bytes: 0 });
+  });
+
+  it("finds the same topmost block locally that the whole-world map has at every sample point", () => {
+    // THE INVERSE QUERY, PROVED POINT BY POINT. `frame(0, rect)` runs the
+    // projection backwards to decide which tiles a screen rect could have
+    // drawn from, and a query even slightly tighter than the tiles a block
+    // was actually painted from drops that block's corner out of a partial
+    // frame while the whole-world map still shows it there. A WHOLE-WORLD
+    // block COUNT cannot catch this - the frame returns something either
+    // way - so this samples nine points across every block the whole-world
+    // map emits (its corners and its centre, on each axis) and asks a
+    // one-pixel frame at each one. Before the fix this found 11 misses
+    // across the six views; this view's share of that has to be zero.
+    const scene = new OfficeScene(view, null);
+    scene.sync(
+      sceneInputFor({ agents: EPIC.agents, statusById: EPIC.statusById }),
+    );
+    const layout = layoutOf(scene);
+    const all = view.painter.floor(
+      layout,
+      { col: 0, row: 0, cols: layout.cols, rows: layout.rows },
+      0,
+    );
+    let samples = 0;
+    let misses = 0;
+    for (const block of all) {
+      if (block.kind !== "block") continue;
+      for (const fx of [0.001, 0.5, 0.999]) {
+        for (const fy of [0.001, 0.5, 0.999]) {
+          samples += 1;
+          const rect: OfficeRect = {
+            x: block.x + block.width * fx,
+            y: block.y + block.height * fy,
+            width: 1,
+            height: 1,
+          };
+          const local = scene.frame(0, rect).floor;
+          const expected = all.findLast(
+            (drawable) =>
+              drawable.kind === "block" && rectsOverlap(drawable, rect),
+          );
+          const actual = local.findLast(
+            (drawable) =>
+              drawable.kind === "block" && rectsOverlap(drawable, rect),
+          );
+          if (
+            expected?.kind === "block" &&
+            (actual?.kind !== "block" || actual.fill !== expected.fill)
+          ) {
+            misses += 1;
+          }
+        }
+      }
+    }
+    // Anti-vacuity: a view with no blocks at all would pass trivially.
+    expect(samples).toBeGreaterThan(0);
+    expect(misses).toBe(0);
+  });
+});
+
+describe.each(["campus", "city"] as const)(
+  "%s keeps the corner block visible during a real-sized overview pan",
+  (viewId) => {
+    it("covers a storey block pinned near the lower-right corner of a partial frame", () => {
+      // THE REAL REGRESSION, not a synthetic one: a 1280x700 CSS canvas at
+      // zoom 0.5 panned so a storey block sits in the lower-right corner of
+      // the camera, on the review's real thousand-agent Campus fixture. A
+      // WHOLE-WORLD block count cannot show this either - `frame(0, ...)`
+      // over the whole world returns blocks whether or not the corner query
+      // is broken - so the case has to use this partial rect. Before the
+      // fix this pan returned zero floor blocks for Campus; pinned on both
+      // isometric views, since they share one painter and one query.
+      const view = OFFICE_VIEWS[viewId];
+      const scene = new OfficeScene(view, null);
+      scene.sync(
+        sceneInputFor({ agents: EPIC.agents, statusById: EPIC.statusById }),
+      );
+      const layout = layoutOf(scene);
+      const all = view.painter.floor(
+        layout,
+        { col: 0, row: 0, cols: layout.cols, rows: layout.rows },
+        0,
+      );
+      const block = all.find(
+        (drawable) => drawable.kind === "block" && drawable.fill === "storey",
+      );
+      if (block?.kind !== "block") throw new Error("expected a storey block");
+      const point: OfficeRect = {
+        x: block.x + 20,
+        y: block.y + 20,
+        width: 1,
+        height: 1,
+      };
+      const camera: OfficeRect = {
+        x: point.x + 10 - 2560,
+        y: point.y + 10 - 1400,
+        width: 2560,
+        height: 1400,
+      };
+      const visible = scene.frame(0, camera).floor;
+      const expected = all.findLast(
+        (drawable) =>
+          drawable.kind === "block" && rectsOverlap(drawable, point),
+      );
+      const actual = visible.findLast(
+        (drawable) =>
+          drawable.kind === "block" && rectsOverlap(drawable, point),
+      );
+      // Anti-vacuity: the pan has to see SOMETHING, or the equality below
+      // would pass on two empty lists.
+      expect(visible.length).toBeGreaterThan(0);
+      expect(actual).toEqual(expected);
+    });
+  },
+);
+
+/**
+ * A stand-in for a typed-array constructor that counts how often it is
+ * actually constructed, and behaves exactly like the real one otherwise.
+ *
+ * The counting is the point: the scratch's own capacity and growth counters
+ * are bookkeeping that a version allocating a fresh pair of buffers per
+ * search leaves perfectly intact, so a guard reading only those counters
+ * passes the very regression it exists to catch. This watches the
+ * constructor itself.
+ *
+ * Everything but construction falls through the proxy untouched, statics
+ * included, so the code under test cannot tell the difference.
+ */
+function countingArrayCtor<T extends object>(
+  ctor: new (length: number) => T,
+  onConstruct: () => void,
+): new (length: number) => T {
+  return new Proxy(ctor, {
+    construct(target, argArray) {
+      onConstruct();
+      const first: unknown = argArray[0];
+      return new target(typeof first === "number" ? first : 0);
+    },
+  });
+}
+
+describe("the Campus pan the cold review actually found", () => {
+  it("draws a block over the corner point the review reported empty", () => {
+    // THE LITERAL REPRODUCTION, kept beside the derived one above because
+    // they fail differently. The case above builds its own camera from
+    // whatever storey the plan happens to emit first, which keeps it honest
+    // for City as well - and means a change to the packing quietly moves what
+    // it is looking at. These numbers are the ones a person reported from a
+    // real 1280x700 canvas at zoom 0.5, on this exact fixture, where the
+    // office drew a storey's lower-right shoulder and the frame that was
+    // supposed to contain it came back with no floor at all.
+    const scene = new OfficeScene(OFFICE_VIEWS.campus, null);
+    scene.sync(
+      sceneInputFor({ agents: EPIC.agents, statusById: EPIC.statusById }),
+    );
+    const camera: OfficeRect = {
+      x: -2009.8216433873085,
+      y: -1085.9108216936543,
+      width: 2560,
+      height: 1400,
+    };
+    const corner: OfficeRect = { x: 540.178, y: 304.089, width: 1, height: 1 };
+
+    const floor = scene.frame(0, camera).floor;
+
+    const covering = floor.filter(
+      (drawable) => drawable.kind === "block" && rectsOverlap(drawable, corner),
+    );
+    expect(covering.length).toBeGreaterThan(0);
   });
 });
 

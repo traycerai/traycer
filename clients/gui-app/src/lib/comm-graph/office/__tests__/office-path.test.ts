@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { layoutOffice } from "@/lib/comm-graph/office/office-layout";
 import {
   findOfficePath,
@@ -64,6 +64,32 @@ function sealedLayout(): OfficeLayout {
 
 function isAdjacent(left: OfficeTilePos, right: OfficeTilePos): boolean {
   return Math.abs(left.col - right.col) + Math.abs(left.row - right.row) === 1;
+}
+
+/**
+ * A stand-in for a typed-array constructor that counts how often it is
+ * actually constructed, and behaves exactly like the real one otherwise.
+ *
+ * The counting is the point: the scratch's own capacity and growth counters
+ * are bookkeeping that a version allocating a fresh pair of buffers per
+ * search leaves perfectly intact, so a guard reading only those counters
+ * passes the very regression it exists to catch. This watches the
+ * constructor itself.
+ *
+ * Everything but construction falls through the proxy untouched, statics
+ * included, so the code under test cannot tell the difference.
+ */
+function countingArrayCtor<T extends object>(
+  ctor: new (length: number) => T,
+  onConstruct: () => void,
+): new (length: number) => T {
+  return new Proxy(ctor, {
+    construct(target, argArray) {
+      onConstruct();
+      const first: unknown = argArray[0];
+      return new target(typeof first === "number" ? first : 0);
+    },
+  });
 }
 
 describe("findOfficePath", () => {
@@ -170,19 +196,50 @@ describe("findOfficePath", () => {
 
   it("grows its working grids once for a layout, not once per search", () => {
     // A search used to allocate two full-grid typed arrays every time it ran,
-    // and a sync of a live office runs dozens of them.
+    // and a sync of a live office runs dozens of them. The capacity and
+    // growth counters below are the scratch's own bookkeeping, and stay green
+    // for a version that reverted to `new Int32Array(cellCount)` and
+    // `new Uint8Array(cellCount)` at the two working-buffer bindings while
+    // leaving that bookkeeping untouched - so a transparent constructor proxy
+    // watches for the allocation itself over several warmed searches, not
+    // only the counters a correct implementation happens to also produce.
     const desks = [...layout.desks.values()];
     findOfficePath(layout, layout.doorTile, desks[0].chairTile);
     const first = officePathScratch();
 
-    for (const desk of desks) {
-      findOfficePath(layout, layout.doorTile, desk.chairTile);
-      findOfficePath(layout, desk.chairTile, layout.lobbyTile);
+    const intCtor = Int32Array;
+    const byteCtor = Uint8Array;
+    let ints = 0;
+    let bytes = 0;
+    vi.stubGlobal(
+      "Int32Array",
+      countingArrayCtor(intCtor, () => {
+        ints += 1;
+      }),
+    );
+    vi.stubGlobal(
+      "Uint8Array",
+      countingArrayCtor(byteCtor, () => {
+        bytes += 1;
+      }),
+    );
+    try {
+      for (const desk of desks) {
+        findOfficePath(layout, layout.doorTile, desk.chairTile);
+        findOfficePath(layout, desk.chairTile, layout.lobbyTile);
+      }
+    } finally {
+      // A stub left in place breaks every later suite's typed arrays, so this
+      // has to come off even if an assertion above throws.
+      vi.unstubAllGlobals();
     }
 
     const after = officePathScratch();
     expect(after.growths).toBe(first.growths);
     expect(after.capacity).toBeGreaterThanOrEqual(layout.cols * layout.rows);
+    // THE ACTUAL ALLOCATION: zero of each type, once the first search above
+    // has already sized the buffers to this layout.
+    expect({ ints, bytes }).toEqual({ ints: 0, bytes: 0 });
   });
 
   it("keeps a grid big enough for the largest office it has searched", () => {

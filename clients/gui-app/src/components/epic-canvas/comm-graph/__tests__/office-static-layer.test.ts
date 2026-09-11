@@ -283,6 +283,64 @@ describe("OfficeStaticLayer", () => {
     expect(paint).toHaveBeenCalledTimes(OFFICE_STATIC_CHUNK_BUDGET + 2);
   });
 
+  it("never lets live surfaces exceed the budget while a sync is allocating, not only once it returns", () => {
+    // THE PEAK DURING SYNC, not the retained total after. `sync()` used to
+    // create every newly requested surface BEFORE evicting the ones the new
+    // camera no longer needs, so the simultaneously live backing stores at
+    // their worst moment could be nearly double the budget - three ordinary
+    // views panned in turn plan 12, 12 and 24 chunks here, and before the fix
+    // the peak measured 48 against this 24-chunk ceiling. Counting inside
+    // the FACTORY is what catches this: `heldPixels`, read only after each
+    // `sync()` returns, is the number the shipped "never holds more pixels"
+    // case below already asserted, and it was green throughout.
+    const made: HTMLCanvasElement[] = [];
+    let peak = 0;
+    const create = (width: number, height: number): OfficeStaticSurface => {
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      if (ctx === null) throw new Error("the stub returned no context");
+      made.push(canvas);
+      // A zeroed canvas (`evictFor` sets width and height to 0) contributes
+      // nothing to this sum, so a surface freed before the next one is made
+      // is not counted as still live.
+      peak = Math.max(
+        peak,
+        made.reduce((sum, c) => sum + c.width * c.height, 0),
+      );
+      return { canvas, ctx };
+    };
+    const layer = new OfficeStaticLayer(create);
+    const world: OfficeSize = { width: 12000, height: 12000 };
+    const plannedCounts: number[] = [];
+
+    for (const at of [1000, 5000, 9000]) {
+      const chunks = planOfficeStaticChunks({
+        world,
+        view: { x: at, y: at, width: 1280, height: 700 },
+        lod: 1,
+        budget: OFFICE_STATIC_CHUNK_BUDGET,
+      });
+      plannedCounts.push(chunks.length);
+      layer.sync({
+        key: { ...world, staticVersion: 1, theme: "dark" },
+        chunks,
+        paint: () => undefined,
+      });
+    }
+
+    // Anti-vacuity: the review's own fixture, which is what makes 24 a
+    // ceiling actually under pressure rather than one no view here reaches.
+    expect(plannedCounts).toEqual([12, 12, 24]);
+    expect(peak).toBeLessThanOrEqual(
+      OFFICE_STATIC_CHUNK_BUDGET * OFFICE_STATIC_CHUNK_PX ** 2,
+    );
+    expect(layer.heldPixels).toBeLessThanOrEqual(
+      OFFICE_STATIC_CHUNK_BUDGET * OFFICE_STATIC_CHUNK_PX ** 2,
+    );
+  });
+
   it("never holds more pixels than the budget allows", () => {
     const { create } = fakeSurfaces();
     const layer = new OfficeStaticLayer(create);
@@ -390,7 +448,65 @@ describe("OfficeStaticLayer", () => {
     });
 
     expect(drawn).toEqual([]);
-    expect(layer.heldPixels).toBe(0);
+    // THE SQUARE THAT WORKED IS KEPT, and this is the half of the rule that
+    // changed: a refusal is evidence about ONE chunk, not about the layer. The
+    // frame that needed both draws itself, and the bitmap that was made stays
+    // in hand for the frame that needs only it - which the case below is.
+    expect(layer.chunkCount).toBe(1);
+  });
+
+  it("isolates a refusal to the chunk that was refused", () => {
+    // A whole cache retired by one null answer was the defect: every later
+    // frame returned before it had looked at the camera, the key or the
+    // factory, so an office whose second square happened to fail drew every
+    // sprite of its floor by hand for the life of the mount.
+    let made = 0;
+    const attempted: string[] = [];
+    const layer = new OfficeStaticLayer((width, height) => {
+      made += 1;
+      attempted.push(`${width}x${height}`);
+      // The second square, and only the second.
+      if (made === 2) return null;
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      if (ctx === null) throw new Error("the stub returned no context");
+      return { canvas, ctx };
+    });
+    const key = { ...KEY, width: 2048, height: 600 };
+
+    const first = layer.sync({
+      key,
+      chunks: [{ chunkCol: 0, chunkRow: 0 }],
+      paint: () => undefined,
+    });
+    const refused = layer.sync({
+      key,
+      chunks: [{ chunkCol: 1, chunkRow: 0 }],
+      paint: () => undefined,
+    });
+    const again = layer.sync({
+      key,
+      chunks: [{ chunkCol: 1, chunkRow: 0 }],
+      paint: () => undefined,
+    });
+    const elsewhere = layer.sync({
+      key,
+      chunks: [{ chunkCol: 2, chunkRow: 0 }],
+      paint: () => undefined,
+    });
+
+    expect(first).toHaveLength(1);
+    // The frame that needs the refused square draws itself, whole.
+    expect(refused).toEqual([]);
+    expect(again).toEqual([]);
+    // And is not asked for a second time: two attempts for the two squares
+    // that were tried once each, and a third for the unrelated one - never a
+    // fourth for the one already known to fail.
+    expect(attempted).toHaveLength(3);
+    // The square nothing is wrong with is cached like any other.
+    expect(elsewhere).toHaveLength(1);
   });
 });
 
@@ -603,6 +719,73 @@ describe("planOfficeStaticChunks", () => {
         budget: OFFICE_STATIC_CHUNK_BUDGET,
       }),
     ).toEqual([]);
+  });
+
+  it("covers a fractional viewport edge even where the margin is dropped for the budget", () => {
+    // NOT `chunkIndexOf(edge - 1)`. A camera sits at a fractional world
+    // position and a zoomed viewport is a fractional width, so an edge at x
+    // 3072.5 lies one pixel into chunk 6 while `edge - 1` lands at 3071.5,
+    // back in chunk 5 - and the caller, believing its plan complete,
+    // suppresses the per-frame sprite path over the half pixel nobody baked.
+    // World 12000x12000 at zoom 0.7 pushes the margin over the 24-chunk
+    // budget, so this is the plan's raw visible span with no margin to paper
+    // over a shortfall - exactly where the bug showed a background pixel.
+    const world: OfficeSize = { width: 12000, height: 12000 };
+    const rect: OfficeRect = {
+      x: 1243.9285714285713,
+      y: 1100,
+      width: 1828.5714285714287,
+      height: 1000.0000000000001,
+    };
+
+    const chunks = planOfficeStaticChunks({
+      world,
+      view: rect,
+      lod: 1,
+      budget: 24,
+    });
+    const right = Math.max(
+      ...chunks.map((chunk) => (chunk.chunkCol + 1) * OFFICE_STATIC_CHUNK_PX),
+    );
+    const bottom = Math.max(
+      ...chunks.map((chunk) => (chunk.chunkRow + 1) * OFFICE_STATIC_CHUNK_PX),
+    );
+
+    expect(chunks.length).toBeGreaterThan(0);
+    expect(right).toBeGreaterThanOrEqual(rect.x + rect.width);
+    expect(bottom).toBeGreaterThanOrEqual(rect.y + rect.height);
+  });
+
+  it("covers an integer viewport edge that lands exactly on a chunk boundary", () => {
+    // The other direction from the fractional case above: an edge exactly ON
+    // a chunk boundary belongs to the chunk BEFORE it, so the plan must not
+    // reach one chunk further than the view needs. Half-open coverage is a
+    // claim about BOTH directions, and a fixture whose edges are all
+    // fractional cannot show a plan that over-covers by rounding the wrong
+    // way at an exact boundary.
+    const world: OfficeSize = { width: 12000, height: 12000 };
+    const rect: OfficeRect = { x: 1024, y: 1024, width: 2048, height: 1536 };
+
+    const chunks = planOfficeStaticChunks({
+      world,
+      view: rect,
+      lod: 1,
+      budget: 24,
+    });
+    const right = Math.max(
+      ...chunks.map((chunk) => (chunk.chunkCol + 1) * OFFICE_STATIC_CHUNK_PX),
+    );
+    const bottom = Math.max(
+      ...chunks.map((chunk) => (chunk.chunkRow + 1) * OFFICE_STATIC_CHUNK_PX),
+    );
+
+    expect(chunks.length).toBeGreaterThan(0);
+    expect(right).toBeGreaterThanOrEqual(rect.x + rect.width);
+    expect(bottom).toBeGreaterThanOrEqual(rect.y + rect.height);
+    // Tight, not just sufficient - the boundary must not pull in the chunk
+    // past it.
+    expect(right).toBe(rect.x + rect.width);
+    expect(bottom).toBe(rect.y + rect.height);
   });
 });
 
