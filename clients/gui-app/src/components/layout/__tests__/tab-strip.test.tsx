@@ -1629,11 +1629,10 @@ describe("<TabStrip />", () => {
     expect(item.getAttribute("aria-disabled")).toBe("true");
     expect(item.getAttribute("data-disabled")).toBeNull();
     // States the condition; does not promise a cloud sync that may never come.
-    // "the connected device": the epic lives on the host serving it, not
-    // necessarily the machine rendering this menu.
     expect(item.textContent).toContain(
-      "Pin Task in History — stored on the connected device",
+      "Pin Task in History — needs a newer host",
     );
+    expect(item.textContent).not.toMatch(/cloud|device/i);
 
     fireEvent.click(item);
 

@@ -12,6 +12,7 @@ import {
 } from "@/components/notifications/notification-indicator-tones";
 import type { NotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { useStatusGlyphTooltipOpen } from "@/components/notifications/status-glyph-focus";
 import { cn } from "@/lib/utils";
 
 export const BACKGROUND_ACTIVITY_TITLE = "Background activity — agent idle";
@@ -198,12 +199,17 @@ function IndicatorSpan(props: {
   readonly tooltip: string;
   readonly children: ReactNode;
 }): ReactNode {
+  // Held open while the containing history row's target has keyboard focus
+  // (`StatusGlyphFocusContext`); plain hover everywhere else.
+  const tooltipOpen = useStatusGlyphTooltipOpen();
   return (
     <TooltipWrapper
       label={props.tooltip}
       side="top"
       sideOffset={undefined}
       align={undefined}
+      open={tooltipOpen.open}
+      onOpenChange={tooltipOpen.onOpenChange}
     >
       <span
         role="status"
