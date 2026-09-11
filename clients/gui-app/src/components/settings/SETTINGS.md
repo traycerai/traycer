@@ -281,11 +281,6 @@ different answers:
 Bespoke pages are indexed at page/region level for the same reason: their
 content exists only once a host answers an RPC.
 
-Appearance's Themes, Start page and Motion and readability groups, and the
-Prompt font and ligature rows inside Fonts and text, carry no anchor either:
-every one `contributesTo: "page"`, so their labels land on the Appearance page
-beside its own vocabulary ("theme mode", "background opacity", "contrast").
-
 **DOM contract tests.** Types prove a definition is well-formed; they cannot
 prove it renders. `__tests__/settings-search-targets.ts`
 (`assertSettingsSearchTargets(section, context, container)`) closes that for a
