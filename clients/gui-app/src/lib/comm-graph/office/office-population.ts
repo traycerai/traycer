@@ -358,17 +358,21 @@ function settleHqs(
  * freezing that can change that reading.
  */
 function adoptedUnder(parent: Draft): Draft {
-  // Inheriting the parent's team is what keeps an arrival in the room its
-  // creator is sitting in, even when the fresh topology cannot see that team -
-  // a lead that has since been archived leaves a team nobody's parent points
-  // at any more.
-  if (parent.agentClass === "team" && parent.teamId !== null) {
+  // WHAT IS INHERITED IS THE TEAM, NOT THE PARENT'S CLASS. A parent carrying a
+  // team id is in that team whatever it reads as locally: a member sits in its
+  // room, and a member STRANDED in another building is a solo over there that
+  // still belongs to it. Both pass the same team down, and the cross-host pass
+  // below decides which of the two the arrival turns out to be - by asking
+  // where the arrival itself lives, which is the only thing that can answer it.
+  // Reading the parent's class instead is what dropped a stranded parent's
+  // accent and made its children look like they belonged to nobody.
+  if (parent.teamId !== null) {
     return { agentClass: "team", teamId: parent.teamId };
   }
-  // Under a solo, and under anything that is a member of no team: a solo. A
-  // frozen solo is somebody the office has already seated on its own; it does
-  // not acquire a room, and a lead by construction sits in the team it leads,
-  // so no team is ever fabricated around an agent who is not in it.
+  // Under a solo that is in no team at all: a solo in no team at all. A frozen
+  // solo is somebody the office has already seated on its own; it does not
+  // acquire a room, and a lead by construction sits in the team it leads, so
+  // no team is ever fabricated around an agent who is not in it.
   return { agentClass: "solo", teamId: null };
 }
 
@@ -447,10 +451,54 @@ function strandCrossHostMembers(
     const draft = drafts.get(agent.id);
     if (draft === undefined || draft.agentClass !== "team") continue;
     if (draft.teamId === null) continue;
-    const lead = lineage.byId.get(draft.teamId);
-    if (lead === undefined || lead.hostId === agent.hostId) continue;
+    const home = teamHomeHostOf(lineage, drafts, draft.teamId, previous);
+    // A team whose building cannot be established at all - its lead gone and
+    // nobody left actually sitting in it - is not a room anybody can be seated
+    // in. The arrival sits where it really is and keeps the colour, which is
+    // also exactly what happened to the stranded parent it inherited from.
+    if (home.resolved && home.hostId === agent.hostId) continue;
     draft.agentClass = "solo";
   }
+}
+
+/**
+ * WHICH BUILDING A TEAM IS IN, asked of the drafts, before anything is sealed.
+ *
+ * The lead answers it while the lead is here. When it is not, the team is not
+ * homeless - it is still sitting wherever its surviving members are sitting,
+ * and asking only the lead is what let a remote arrival into a lead-less team's
+ * roster and left its own building with no placement for it at all.
+ *
+ * Only agents `previous` already knew count as surviving members. An arrival is
+ * exactly the thing being placed by the caller, so letting arrivals vote here
+ * would let one decide it is in the right building by showing up.
+ *
+ * `buildTeams` asks the same question of the sealed members once stranding has
+ * run (`teamHostOf`), and the two agree by construction: stranding only moves
+ * agents OUT of a team, never the team itself.
+ */
+function teamHomeHostOf(
+  lineage: Lineage,
+  drafts: ReadonlyMap<string, Draft>,
+  teamId: string,
+  previous: OfficePopulation | null,
+): { readonly resolved: boolean; readonly hostId: string | null } {
+  const lead = lineage.byId.get(teamId);
+  if (lead !== undefined) return { resolved: true, hostId: lead.hostId };
+  for (const candidate of lineage.ordered) {
+    if (previous === null || !previous.members.has(candidate.id)) continue;
+    const draft = drafts.get(candidate.id);
+    if (draft === undefined || draft.teamId !== teamId) continue;
+    if (draft.agentClass !== "team") continue;
+    return { resolved: true, hostId: candidate.hostId };
+  }
+  // A team the previous partition remembered but that nobody here is in any
+  // more. Its host is still on the record, and a `null` one is a real answer.
+  const remembered = previous?.members.get(teamId);
+  if (remembered !== undefined) {
+    return { resolved: true, hostId: remembered.hostId };
+  }
+  return { resolved: false, hostId: null };
 }
 
 interface HostGroup {
