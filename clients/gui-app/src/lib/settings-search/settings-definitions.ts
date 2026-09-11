@@ -163,8 +163,13 @@ interface HybridPlacement {
 
 /**
  * What a hybrid's `search` is checked against. An object with a required
- * property the hybrid cannot have, so the compiler reports it as missing and
+ * property no real placement has, so the compiler reports it as missing and
  * prints the reason on the offending member.
+ *
+ * This rejects the INFERRED hybrid — the literal or spread a person writes.
+ * A value annotated with a widened placement type can carry both fields
+ * past the conditional, so the index test's raw-input invariant is the check
+ * that covers every shape; this one exists to fail at the keyboard.
  */
 interface ExclusivePlacementError {
   readonly placementError: "search takes exactly one of { anchor } or { contributesTo }";

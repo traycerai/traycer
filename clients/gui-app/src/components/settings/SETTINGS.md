@@ -98,9 +98,11 @@ predicates; it never imports the assembled index or the search consumer.
   in input order). A target is an entry-owning member of the same collection
   or the page: `contributesTo` is typed to exactly those keys, so a dangling
   key, the member itself and another contributor are compile errors. A
-  `search` naming both placements is a compile error on that member too (a
-  union alone would accept it), and the index test checks every member has
-  exactly one. Row targets are allowed — the per-kind Link rows fold into **Open links**, the
+  `search` naming both placements is a compile error on that member when it
+  is written inline (a union alone would accept it); a value annotated with a
+  widened placement type can slip past that conditional, so the index test's
+  raw-input invariant — every member has exactly one placement — is the check
+  that covers every shape. Row targets are allowed — the per-kind Link rows fold into **Open links**, the
   per-category Tile rows into **Open new tiles**.
 - A group's `breadcrumb` is the group segment of its result's breadcrumb —
   `null` for a rendered card, `"Providers"` for that page's region groups.
