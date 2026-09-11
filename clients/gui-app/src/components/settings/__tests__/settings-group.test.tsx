@@ -1,6 +1,49 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { SettingsGroup } from "@/components/settings/settings-group";
+import { alwaysAvailable } from "@/lib/settings/settings-availability";
+import { defineSettingsSection } from "@/lib/settings-search/settings-definitions";
+
+/** Groups shaped like the real ones; the section id is incidental. */
+const GROUPS = defineSettingsSection("appearance", {
+  page: { label: "Appearance", description: "Page.", keywords: ["page"] },
+  general: {
+    kind: "group",
+    search: { contributesTo: "page" },
+    label: "General",
+    description: null,
+    breadcrumb: null,
+    availableWhen: alwaysAvailable,
+    keywords: [],
+  },
+  hooks: {
+    kind: "group",
+    search: { contributesTo: "page" },
+    label: "Notification hooks",
+    description: null,
+    breadcrumb: null,
+    availableWhen: alwaysAvailable,
+    keywords: [],
+  },
+  theme: {
+    kind: "group",
+    search: { contributesTo: "page" },
+    label: "Theme",
+    description: null,
+    breadcrumb: null,
+    availableWhen: alwaysAvailable,
+    keywords: [],
+  },
+  interface: {
+    kind: "group",
+    search: { anchor: "test-appearance-interface" },
+    label: "Interface",
+    description: null,
+    breadcrumb: null,
+    availableWhen: alwaysAvailable,
+    keywords: ["layout"],
+  },
+});
 
 describe("SettingsGroup", () => {
   afterEach(() => {
@@ -10,7 +53,8 @@ describe("SettingsGroup", () => {
   it("does not stretch when fill is false", () => {
     render(
       <SettingsGroup
-        title="General"
+        group={GROUPS.definitions.general}
+        showTitle
         tone="default"
         dataTestId="settings-group-general"
         fill={false}
@@ -40,7 +84,8 @@ describe("SettingsGroup", () => {
   it("fills remaining height when fill is true", () => {
     render(
       <SettingsGroup
-        title="Notification hooks"
+        group={GROUPS.definitions.hooks}
+        showTitle
         tone="default"
         dataTestId="settings-group-hooks"
         fill
@@ -76,7 +121,8 @@ describe("SettingsGroup", () => {
   it("forwards data-testid onto the section", () => {
     render(
       <SettingsGroup
-        title="Theme"
+        group={GROUPS.definitions.theme}
+        showTitle
         tone="default"
         dataTestId="settings-group-theme"
         fill={false}
@@ -101,11 +147,11 @@ describe("SettingsGroup", () => {
     // contents. The card is the shape the group already has at rest.
     render(
       <SettingsGroup
-        title="Interface"
+        group={GROUPS.definitions.interface}
+        showTitle
         tone="default"
         dataTestId="settings-group-interface"
         fill={false}
-        anchor="appearance-interface"
       >
         <div>row</div>
       </SettingsGroup>,
@@ -115,7 +161,7 @@ describe("SettingsGroup", () => {
     expect(section.hasAttribute("data-settings-anchor")).toBe(false);
 
     const anchored = section.querySelector(
-      '[data-settings-anchor="appearance-interface"]',
+      '[data-settings-anchor="test-appearance-interface"]',
     );
     expect(anchored).not.toBeNull();
     // The heading is a sibling of the anchored card, never inside it.
@@ -130,7 +176,8 @@ describe("SettingsGroup", () => {
   it("omits the group heading when the page title already names the card", () => {
     render(
       <SettingsGroup
-        title={undefined}
+        group={GROUPS.definitions.theme}
+        showTitle={false}
         tone="default"
         dataTestId="settings-group-untitled"
         fill={false}

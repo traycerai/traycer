@@ -21,6 +21,7 @@ import {
   type HostScope,
 } from "@/components/settings/host-scope/use-host-scope";
 import { LogDetailGroup } from "@/components/settings/panels/diagnostics-log-detail-group";
+import { HOST_DIAGNOSTICS } from "@/components/settings/panels/diagnostics-settings.definitions";
 import {
   BridgeLogEntry,
   DiagnosticsLogEntryFrame,
@@ -185,7 +186,7 @@ function DiagnosticsPanelOverRpc(props: {
           skeleton={<HostScopeConnecting hostName={scope.hostLabel} />}
         >
           <LogDetailGroup
-            anchor={null}
+            group={HOST_DIAGNOSTICS.definitions.logDetail}
             controls={hostControls}
             // CALLED, not rendered as `<HostLogDetailEmptyReason />`. An
             // element is truthy however it renders, so as JSX this prop could
@@ -284,7 +285,7 @@ function DiagnosticsPanelOverLocalStore(props: {
           has no log-levels bridge", which is what the empty state says.
         */}
         <LogDetailGroup
-          anchor={null}
+          group={HOST_DIAGNOSTICS.definitions.logDetail}
           controls={hostControls}
           emptyState={
             <LogInfoLine>

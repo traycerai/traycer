@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { APPEARANCE } from "@/components/settings/panels/appearance-settings.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { Button } from "@/components/ui/button";
@@ -94,16 +95,15 @@ export function StartPageSettingsSection() {
 
   return (
     <SettingsGroup
-      title="Start page"
+      group={APPEARANCE.definitions.startPage}
+      showTitle
       tone="default"
       dataTestId="start-page-settings-group"
       fill={false}
     >
       <SettingsRow
-        label="Wallpaper"
-        description={
-          image.name ?? (image.url === null ? "None" : "Custom image")
-        }
+        row={APPEARANCE.definitions.wallpaper}
+        status={image.name ?? (image.url === null ? "None" : "Custom image")}
         control={
           <div className="flex items-center gap-2.5">
             {image.url === null ? null : (
@@ -146,8 +146,7 @@ export function StartPageSettingsSection() {
       {wallpaper === null ? null : (
         <>
           <SettingsRow
-            label="Wallpaper effect"
-            description="Keep the original photo, turn it into a dot pattern, or add film grain."
+            row={APPEARANCE.definitions.wallpaperEffect}
             control={
               <div className="inline-flex items-center gap-1 rounded-md border border-border bg-foreground/3 p-0.5">
                 {STYLES.map((style) => (
@@ -175,8 +174,7 @@ export function StartPageSettingsSection() {
 
           {wallpaper.style === "photo" ? null : (
             <SettingsRow
-              label="Effect strength"
-              description="Adjust how strongly the effect changes the photo."
+              row={APPEARANCE.definitions.effectStrength}
               control={
                 <div className="space-y-1">
                   <input
@@ -211,7 +209,7 @@ export function StartPageSettingsSection() {
 
           {wallpaper.style !== "dither" ? null : (
             <SettingsRow
-              label="Tint wallpaper with theme accent color"
+              row={APPEARANCE.definitions.tintWallpaper}
               control={
                 <Switch
                   checked={wallpaper.tintWithAccent}
@@ -228,7 +226,7 @@ export function StartPageSettingsSection() {
       )}
 
       <SettingsRow
-        label="Show greeting"
+        row={APPEARANCE.definitions.showGreeting}
         control={
           <Switch
             checked={showGreeting}
@@ -241,7 +239,7 @@ export function StartPageSettingsSection() {
         }
       />
       <SettingsRow
-        label="Show recent tasks"
+        row={APPEARANCE.definitions.showRecentTasks}
         control={
           <Switch
             checked={showRecentHistory}

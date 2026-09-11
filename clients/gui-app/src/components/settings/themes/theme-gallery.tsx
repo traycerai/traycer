@@ -14,6 +14,7 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
+import { APPEARANCE } from "@/components/settings/panels/appearance-settings.definitions";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { Button } from "@/components/ui/button";
@@ -111,14 +112,14 @@ export function ThemeGallery() {
   return (
     <section className="space-y-5" aria-label="Theme">
       <SettingsGroup
-        title="Themes"
+        group={APPEARANCE.definitions.themes}
+        showTitle
         tone="default"
         dataTestId={undefined}
         fill={false}
       >
         <SettingsRow
-          label="Theme mode"
-          description="Choose separate light and dark themes below. Follow device switches between them with your device’s appearance."
+          row={APPEARANCE.definitions.themeMode}
           control={
             <div
               role="group"
@@ -247,7 +248,12 @@ function ThemeSlot({
   };
   return (
     <SettingsRow
-      label={`${appearance === "light" ? "Light theme" : "Dark theme"}${active ? " · Active" : ""}`}
+      row={
+        appearance === "light"
+          ? APPEARANCE.definitions.lightTheme
+          : APPEARANCE.definitions.darkTheme
+      }
+      labelStatus={active ? "Active" : undefined}
       control={
         <div className="flex w-[min(40cqw,24rem)] min-w-0 items-center gap-1">
           <ThemePicker
@@ -697,8 +703,7 @@ function GlassControl() {
   const setOpacity = useThemeLibraryStore((state) => state.setGlassOpacity);
   return (
     <SettingsRow
-      label="Background opacity"
-      description="Opacity of menu, dialog, and prompt backgrounds. Lower values let more show through; 100% is solid."
+      row={APPEARANCE.definitions.backgroundOpacity}
       control={
         <div className="flex min-w-0 items-center gap-3">
           <input

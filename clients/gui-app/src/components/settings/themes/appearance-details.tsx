@@ -1,4 +1,5 @@
 import { useShallow } from "zustand/react/shallow";
+import { APPEARANCE } from "@/components/settings/panels/appearance-settings.definitions";
 import { FontPicker } from "@/components/settings/controls/font-picker";
 import { SettingsNumberInput } from "@/components/settings/controls/settings-number-input";
 import { SettingsGroup } from "@/components/settings/settings-group";
@@ -21,8 +22,7 @@ export function AppearanceFontRows() {
   return (
     <>
       <SettingsRow
-        label="Prompt font"
-        description="The font used where you write prompts."
+        row={APPEARANCE.definitions.promptFont}
         control={
           <div className="flex flex-wrap justify-end gap-2">
             <FontPicker
@@ -51,8 +51,7 @@ export function AppearanceFontRows() {
         }
       />
       <SettingsRow
-        label="Use font ligatures"
-        description="Join characters such as != into a single symbol in prompts and code, when supported by the font. The underlying text stays the same."
+        row={APPEARANCE.definitions.fontLigatures}
         control={
           <Switch
             checked={preferences.fontLigatures}
@@ -78,14 +77,14 @@ export function AppearanceDetails() {
   );
   return (
     <SettingsGroup
-      title="Motion and readability"
+      group={APPEARANCE.definitions.motionAndReadability}
+      showTitle
       tone="default"
       dataTestId={undefined}
       fill={false}
     >
       <SettingsRow
-        label="Panel animations"
-        description="Animate sidebars, menus, and dialogs as they open and close."
+        row={APPEARANCE.definitions.panelAnimations}
         control={
           <Switch
             checked={preferences.panelAnimations}
@@ -97,8 +96,7 @@ export function AppearanceDetails() {
         }
       />
       <SettingsRow
-        label="Animation duration"
-        description="Lower values are faster; 0 ms is instant. Applies when panel animations are on."
+        row={APPEARANCE.definitions.panelAnimationDuration}
         control={
           <fieldset
             disabled={!preferences.panelAnimations}
@@ -122,8 +120,7 @@ export function AppearanceDetails() {
         }
       />
       <SettingsRow
-        label="Text and border contrast"
-        description="100% uses the theme’s original colors. Increase it to make text and borders stand out more."
+        row={APPEARANCE.definitions.contrast}
         control={
           <div className="flex flex-wrap items-center justify-end gap-2">
             <output className="text-ui-xs tabular-nums">
