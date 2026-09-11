@@ -2,6 +2,58 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { SettingsRow } from "@/components/settings/settings-row";
 import { useSettingsRowDescriptionId } from "@/components/settings/settings-row-description";
+import { alwaysAvailable } from "@/lib/settings/settings-availability";
+import { defineSettingsSection } from "@/lib/settings-search/settings-definitions";
+
+/** Rows shaped like the real ones; the section id is incidental. */
+const ROWS = defineSettingsSection("appearance", {
+  page: { label: "Appearance", description: "Page.", keywords: ["page"] },
+  artifactIconColors: {
+    kind: "row",
+    group: null,
+    search: { anchor: "test-artifact-icon-colors" },
+    label: "Color icons by type",
+    description: "Pick colors used for artifact type icons.",
+    availableWhen: alwaysAvailable,
+    keywords: ["icons"],
+  },
+  wideControl: {
+    kind: "row",
+    group: null,
+    search: { contributesTo: "page" },
+    label: "Wide control row",
+    description: null,
+    availableWhen: alwaysAvailable,
+    keywords: [],
+  },
+  someLabel: {
+    kind: "row",
+    group: null,
+    search: { contributesTo: "page" },
+    label: "Some label",
+    description: null,
+    availableWhen: alwaysAvailable,
+    keywords: [],
+  },
+  openNewTiles: {
+    kind: "row",
+    group: null,
+    search: { contributesTo: "page" },
+    label: "Open new tiles",
+    description: "Narrow windows show one tile at a time.",
+    availableWhen: alwaysAvailable,
+    keywords: [],
+  },
+  openLinks: {
+    kind: "row",
+    group: null,
+    search: { contributesTo: "page" },
+    label: "Open links",
+    description: null,
+    availableWhen: alwaysAvailable,
+    keywords: [],
+  },
+});
 
 describe("SettingsRow", () => {
   afterEach(() => {
@@ -15,8 +67,7 @@ describe("SettingsRow", () => {
     // under the label at the leading edge.
     render(
       <SettingsRow
-        label="Artifact icon colors"
-        description="Pick colors used for artifact type icons."
+        row={ROWS.definitions.artifactIconColors}
         control={
           <div className="w-80" data-testid="wide-control">
             Wide control
@@ -25,7 +76,7 @@ describe("SettingsRow", () => {
       />,
     );
 
-    const label = screen.getByText("Artifact icon colors");
+    const label = screen.getByText("Color icons by type");
     const labelBlock = label.parentElement;
     if (labelBlock === null) throw new Error("expected label block parent");
 
@@ -71,7 +122,7 @@ describe("SettingsRow", () => {
     // in markup; the wrapper forces max-width:100% onto that child via CSS.
     render(
       <SettingsRow
-        label="Wide control row"
+        row={ROWS.definitions.wideControl}
         control={
           <div className="w-80" data-testid="overflow-risk-control">
             wide
@@ -112,7 +163,7 @@ describe("SettingsRow", () => {
     // control trailing-aligned.
     render(
       <SettingsRow
-        label="Some label"
+        row={ROWS.definitions.someLabel}
         control={<div data-testid="control">Control</div>}
       />,
     );
@@ -152,8 +203,7 @@ describe("SettingsRow", () => {
     // plain ReactNode, so no existing call site changes shape.
     render(
       <SettingsRow
-        label="Open new tiles"
-        description="Narrow windows show one tile at a time."
+        row={ROWS.definitions.openNewTiles}
         control={<DescribedControl>In this pane</DescribedControl>}
       />,
     );
@@ -173,7 +223,7 @@ describe("SettingsRow", () => {
   it("describes nothing when the row has no description", () => {
     render(
       <SettingsRow
-        label="Open links"
+        row={ROWS.definitions.openLinks}
         control={<DescribedControl>In Traycer</DescribedControl>}
       />,
     );
@@ -184,6 +234,165 @@ describe("SettingsRow", () => {
         .getAttribute("aria-describedby"),
     ).toBeNull();
   });
+
+  it("shows a status instead of the static description, in the same described-by region", () => {
+    render(
+      <SettingsRow
+        row={ROWS.definitions.openNewTiles}
+        status="Couldn't read this setting."
+        control={<DescribedControl>In this pane</DescribedControl>}
+      />,
+    );
+
+    expect(
+      screen.queryByText("Narrow windows show one tile at a time."),
+    ).toBeNull();
+    const describedBy = screen
+      .getByRole("button", { name: "In this pane" })
+      .getAttribute("aria-describedby");
+    if (describedBy === null) throw new Error("expected aria-describedby");
+    const region = document.getElementById(describedBy);
+    expect(region?.textContent).toBe("Couldn't read this setting.");
+    // Arbitrary content, so a `div` — with the description's own muted style.
+    expect(region?.tagName).toBe("DIV");
+    expect(region?.className).toContain("text-muted-foreground");
+    expect(region?.className).toContain("max-w-[72ch]");
+  });
+
+  it("describes a row whose only sentence is its status", () => {
+    // The row's definition has no static description; the described-by id has
+    // to follow the status, not the missing description.
+    render(
+      <SettingsRow
+        row={ROWS.definitions.openLinks}
+        status="Checking…"
+        control={<DescribedControl>In Traycer</DescribedControl>}
+      />,
+    );
+
+    const describedBy = screen
+      .getByRole("button", { name: "In Traycer" })
+      .getAttribute("aria-describedby");
+    if (describedBy === null) throw new Error("expected aria-describedby");
+    expect(document.getElementById(describedBy)?.textContent).toBe("Checking…");
+  });
+
+  // `status ?? description` would bring the static sentence back for `null`,
+  // and a truthiness test would for `false` and `""`. All three are a
+  // deliberate "say nothing here".
+  for (const [name, suppression] of [
+    ["null", null],
+    ["false", false],
+    ["an empty string", ""],
+  ] as const) {
+    it(`treats ${name} as suppressing the description, not as absent`, () => {
+      render(
+        <SettingsRow
+          row={ROWS.definitions.openNewTiles}
+          status={suppression}
+          control={<DescribedControl>In this pane</DescribedControl>}
+        />,
+      );
+
+      expect(
+        screen.queryByText("Narrow windows show one tile at a time."),
+      ).toBeNull();
+      expect(
+        screen
+          .getByRole("button", { name: "In this pane" })
+          .getAttribute("aria-describedby"),
+      ).toBeNull();
+    });
+  }
+
+  it("restores the static description when a status goes back to undefined", () => {
+    const { rerender } = render(
+      <SettingsRow
+        row={ROWS.definitions.openNewTiles}
+        status="Couldn't read this setting."
+        control={<DescribedControl>In this pane</DescribedControl>}
+      />,
+    );
+    expect(
+      screen.queryByText("Narrow windows show one tile at a time."),
+    ).toBeNull();
+
+    rerender(
+      <SettingsRow
+        row={ROWS.definitions.openNewTiles}
+        status={undefined}
+        control={<DescribedControl>In this pane</DescribedControl>}
+      />,
+    );
+
+    expect(screen.queryByText("Couldn't read this setting.")).toBeNull();
+    const describedBy = screen
+      .getByRole("button", { name: "In this pane" })
+      .getAttribute("aria-describedby");
+    if (describedBy === null) throw new Error("expected aria-describedby");
+    const region = document.getElementById(describedBy);
+    expect(region?.tagName).toBe("P");
+    expect(region?.textContent).toBe("Narrow windows show one tile at a time.");
+  });
+
+  it("writes its definition's anchor, and none for a contributor", () => {
+    const { container } = render(
+      <>
+        <SettingsRow
+          row={ROWS.definitions.artifactIconColors}
+          control={<span>control</span>}
+        />
+        <SettingsRow
+          row={ROWS.definitions.openLinks}
+          control={<span>control</span>}
+        />
+      </>,
+    );
+
+    const anchored = container.querySelectorAll("[data-settings-anchor]");
+    expect(anchored.length).toBe(1);
+    expect(anchored[0]?.getAttribute("data-settings-anchor")).toBe(
+      "test-artifact-icon-colors",
+    );
+    expect(anchored[0]?.textContent).toContain("Color icons by type");
+  });
+
+  it("badges the label line with a label status, behind its own separator", () => {
+    render(
+      <SettingsRow
+        row={ROWS.definitions.openLinks}
+        labelStatus="Active"
+        control={<span>control</span>}
+      />,
+    );
+
+    // One label element carries both: the definition's label, then the badge.
+    expect(screen.getByText("Open links · Active").className).toContain(
+      "font-medium",
+    );
+  });
+
+  // Like `status`: omitted and `undefined` show the bare label, and `null`,
+  // `false` and `""` are a deliberate "no badge" — never a dangling separator.
+  for (const [name, labelStatus] of [
+    ["undefined", undefined],
+    ["null", null],
+    ["false", false],
+    ["an empty string", ""],
+  ] as const) {
+    it(`renders the bare label for a ${name} label status`, () => {
+      render(
+        <SettingsRow
+          row={ROWS.definitions.openLinks}
+          labelStatus={labelStatus}
+          control={<span>control</span>}
+        />,
+      );
+
+      const label = screen.getByText("Open links");
+      expect(label.textContent).toBe("Open links");
+    });
+  }
 });
 
 /** Stands in for a real settings control that opts into the description. */

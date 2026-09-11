@@ -306,7 +306,7 @@ export function AddProviderProfileDialog({
   return (
     <Dialog open={open} onOpenChange={close}>
       <DialogContent
-        className="max-h-[min(85dvh,42rem)] w-[min(92vw,30rem)] gap-0 overflow-y-auto p-0 sm:max-w-none"
+        className="flex max-h-[min(85dvh,42rem)] w-[min(92vw,30rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-none"
         showCloseButton={!linking}
         onEscapeKeyDown={(event) => {
           if (dismissalLocked) event.preventDefault();
@@ -325,7 +325,7 @@ export function AddProviderProfileDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex flex-col gap-5 px-5 pb-5">
+        <div className="flex min-h-0 flex-col gap-5 overflow-y-auto px-5 pb-5">
           <ProviderProfileCard
             profile={null}
             profiles={state.profiles}

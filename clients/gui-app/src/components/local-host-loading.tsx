@@ -188,8 +188,8 @@ export function LocalHostLoadingContent(
 
   return (
     <LocalHostBodyShell>
-      <BrandEntrance size="compact">
-        <p className="brand-entrance-copy font-heading text-title-lg font-medium tracking-tight text-foreground">
+      <BrandEntrance size="boot">
+        <p className="brand-entrance-copy font-heading text-title-xs font-medium tracking-tight text-foreground">
           traycer
         </p>
       </BrandEntrance>

@@ -230,7 +230,10 @@ function FolderLocationMenu(props: {
                 <Check className="size-4 text-primary" aria-hidden />
               ) : null}
             </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent className="w-[min(90vw,22rem)]">
+            <DropdownMenuSubContent
+              container={props.boundaryEl ?? undefined}
+              className="w-[min(90vw,22rem)]"
+            >
               <ExistingWorktreeList
                 rows={importRows}
                 promoteRowId={

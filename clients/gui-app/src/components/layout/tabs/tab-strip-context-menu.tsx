@@ -1,3 +1,4 @@
+import { TabAppearanceMenu } from "./tab-appearance-menu";
 import { useCallback, useSyncExternalStore } from "react";
 import {
   ArrowLeftRight,
@@ -305,6 +306,7 @@ export function TabContextMenuContent(
 
   return (
     <ContextMenuContent onCloseAutoFocus={(event) => event.preventDefault()}>
+      <TabAppearanceMenu tab={tab} />
       {tab.kind === "epic" ? (
         <EpicTabMenuItems
           tabId={tab.id}

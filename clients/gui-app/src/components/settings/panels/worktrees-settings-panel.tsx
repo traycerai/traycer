@@ -3285,13 +3285,14 @@ function WorktreeScriptReviewDialog(props: {
       testId="worktree-script-review-dialog"
       title="Manage setup and teardown scripts"
       description={`Edit the setup and teardown scripts for ${branchLabel(target)}.`}
-      pathLabel="Worktree path"
-      pathValue={target.worktreePath}
+      path={{ label: "Worktree path", value: target.worktreePath }}
       scriptSeed={props.scriptSeed}
       seedPending={false}
       errorNote={null}
       scriptsNote={null}
       repositoryDefaultsSlot={null}
+      // Reviewing one worktree's scripts before deletion - no repository to
+      // identify here.
       inUseNote={
         target.inUse ? "This worktree is in use by an active agent." : null
       }

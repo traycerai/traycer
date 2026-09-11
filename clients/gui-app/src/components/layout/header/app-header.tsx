@@ -94,7 +94,7 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
         // The height is a shared token: the boot surfaces reserve this exact
         // slot so their card does not move when the header appears under it.
         APP_HEADER_HEIGHT_CLASS,
-        "relative z-20 flex shrink-0 items-center bg-canvas text-canvas-foreground after:absolute after:inset-x-0 after:bottom-0 after:z-1 after:h-px after:bg-border/90 after:content-['']",
+        "relative z-20 flex shrink-0 items-center bg-canvas text-canvas-foreground after:absolute after:inset-x-0 after:bottom-0 after:z-1 after:h-[1.5px] after:bg-border/90 after:content-['']",
         { "after:inset-x-[var(--radius-xl)]": showTabStrip },
         framelessDesktop
           ? cn(

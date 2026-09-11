@@ -97,7 +97,12 @@ export class BrowserViewAnnotationHost {
         if (entry.annotationSession !== session) {
           return Promise.resolve(false);
         }
-        this.send(
+        const acknowledged = this.waitForAttachResult({
+          windowId: surface.windowId,
+          registrationId: entry.identity.registrationId,
+          annotationId: result.payload.annotationId,
+        });
+        const sent = this.send(
           surface.windowId,
           RunnerHostEvent.browserViewAnnotationAttached,
           {
@@ -107,11 +112,8 @@ export class BrowserViewAnnotationHost {
             pngBytes: new Uint8Array(result.pngBytes),
           },
         );
-        return this.waitForAttachResult({
-          windowId: surface.windowId,
-          registrationId: entry.identity.registrationId,
-          annotationId: result.payload.annotationId,
-        });
+        if (!sent) this.finishAttachResult(result.payload.annotationId, false);
+        return acknowledged;
       },
     });
     entry.annotationSession = session;
@@ -127,6 +129,18 @@ export class BrowserViewAnnotationHost {
     const entry = this.entries.getTile(windowId, input);
     if (entry === undefined) return;
     this.end(entry, "cancelled");
+  }
+
+  async preserveBeforeViewportChange(entry: BrowserViewEntry): Promise<void> {
+    const session = entry.annotationSession;
+    if (session === null) return;
+    await session.preserveBeforeViewportChange();
+    if (entry.annotationSession !== session) {
+      throw new Error(
+        "The annotation changed while preparing the viewport. Try again.",
+      );
+    }
+    this.end(entry, "replaced");
   }
 
   reportAttachResult(

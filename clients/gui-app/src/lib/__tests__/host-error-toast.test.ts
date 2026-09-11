@@ -96,16 +96,17 @@ describe("toastFromHostError", () => {
   });
 
   // The host's epic role gates state the missing role in a fixed phrase
-  // (`auth-helpers.ts`: "User 'x' does not have editor|owner access to ...").
-  // Branching on it turns "You don't have permission to do that." - the toast
-  // a viewer got for clicking Clone on a shared agent, indistinguishable from
-  // a bug - into the reason. The raw ids in the host text stay out of the
+  // (`auth-helpers.ts`: "This request does not have editor|owner access to
+  // ..."). Branching on it turns "You don't have permission to do that." - the
+  // toast a viewer got for clicking Clone on a shared agent, indistinguishable
+  // from a bug - into the reason. The host text carries no account id (that is
+  // the host's own log rule), and the epic id it does carry stays out of the
   // toast.
   it("names view-only access when the host's editor gate refused", () => {
     toastFromHostError(
       makeError(
         "FORBIDDEN",
-        "User 'user-2' does not have editor access to epic 'epic-1'",
+        "This request does not have editor access to epic 'epic-1'",
       ),
       "Couldn't create agent.",
     );
@@ -113,7 +114,7 @@ describe("toastFromHostError", () => {
       "You have view-only access to this task, so you can't make changes to it.",
     );
     expect(toast.error).not.toHaveBeenCalledWith(
-      expect.stringContaining("user-2"),
+      expect.stringContaining("epic-1"),
     );
   });
 
@@ -121,7 +122,7 @@ describe("toastFromHostError", () => {
     toastFromHostError(
       makeError(
         "FORBIDDEN",
-        "User 'user-2' does not have owner access to epic 'epic-1'",
+        "This request does not have owner access to epic 'epic-1'",
       ),
       "fallback",
     );

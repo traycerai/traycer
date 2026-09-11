@@ -400,6 +400,8 @@ describe("createElectronTabs", () => {
       acceptTab: () => Promise.resolve(),
       releaseTab: () => Promise.resolve(true),
       dispatchElectronTabCdp: () => Promise.reject(new Error("not used")),
+      applyElectronTabViewport: () =>
+        Promise.resolve({ width: 1, height: 1, dpr: 1 }),
       onNativeTabStatusChange: () => () => undefined,
       onNativeTabTransferred: () => () => undefined,
     };
@@ -507,6 +509,8 @@ describe("createElectronTabs", () => {
         return Promise.resolve(true);
       },
       dispatchElectronTabCdp: () => Promise.reject(new Error("not used")),
+      applyElectronTabViewport: () =>
+        Promise.resolve({ width: 1, height: 1, dpr: 1 }),
       onNativeTabStatusChange: () => () => undefined,
       onNativeTabTransferred: () => () => undefined,
     };
@@ -546,6 +550,8 @@ describe("createElectronTabs", () => {
         return Promise.resolve(true);
       },
       dispatchElectronTabCdp: () => Promise.reject(new Error("not used")),
+      applyElectronTabViewport: () =>
+        Promise.resolve({ width: 1, height: 1, dpr: 1 }),
       onNativeTabStatusChange: () => () => undefined,
       onNativeTabTransferred: () => () => undefined,
     };
@@ -593,6 +599,8 @@ describe("createElectronTabs", () => {
       acceptTab: () => Promise.resolve(),
       releaseTab: () => Promise.resolve(true),
       dispatchElectronTabCdp: () => Promise.reject(new Error("not used")),
+      applyElectronTabViewport: () =>
+        Promise.resolve({ width: 1, height: 1, dpr: 1 }),
       onNativeTabStatusChange: () => () => undefined,
       onNativeTabTransferred: () => () => undefined,
     };
@@ -664,6 +672,8 @@ describe("createElectronTabs", () => {
           frames: [],
         });
       },
+      applyElectronTabViewport: () =>
+        Promise.resolve({ width: 1, height: 1, dpr: 1 }),
       onNativeTabStatusChange: () => () => undefined,
       onNativeTabTransferred: () => () => undefined,
     };
@@ -748,6 +758,8 @@ describe("createElectronTabs", () => {
       acceptTab: () => Promise.resolve(),
       releaseTab: () => Promise.resolve(true),
       dispatchElectronTabCdp: () => dispatch.promise,
+      applyElectronTabViewport: () =>
+        Promise.resolve({ width: 1, height: 1, dpr: 1 }),
       onNativeTabStatusChange: () => () => undefined,
       onNativeTabTransferred: () => () => undefined,
     };

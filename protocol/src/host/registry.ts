@@ -641,7 +641,9 @@ import {
 import {
   browserSavedLoginSitesV10,
   browserScreencastV20,
+  browserScreencastV21,
   browserSessionsV20,
+  browserSessionsV21,
 } from "@traycer/protocol/host/browser/contracts";
 import {
   browserScreencastV10,
@@ -10629,10 +10631,13 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
     2: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: browserSessionsV20,
+        },
+        1: {
+          contract: browserSessionsV21,
         },
       },
     },
@@ -10647,10 +10652,13 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
     2: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: browserScreencastV20,
+        },
+        1: {
+          contract: browserScreencastV21,
         },
       },
     },

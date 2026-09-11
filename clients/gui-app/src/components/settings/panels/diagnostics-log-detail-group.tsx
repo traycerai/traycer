@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { LogLevelRow } from "@/components/settings/panels/log-level-row";
 import type { LogLevelControl } from "@/components/settings/panels/log-level-controls";
+import type { SettingsGroupDefinition } from "@/lib/settings-search/settings-definitions";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 
@@ -28,13 +29,13 @@ import { Button } from "@/components/ui/button";
  */
 export function LogDetailGroup(props: {
   /**
-   * The settings-search anchor for this card, or `null` where the card is not
-   * a search target. Supplied by the caller, not fixed here: the SAME card is
-   * the "Log detail" group on two different pages, and only the app's is
-   * indexed - the host's is dropped for a host too old to answer the config
-   * RPC, so search points at that page instead of a card it may not draw.
+   * This card's definition on the caller's page. Supplied by the caller, not
+   * fixed here: the SAME card is the "Log detail" group on two different
+   * pages, and only the app's owns a search anchor - the host's is dropped for
+   * a host too old to answer the config RPC, so it folds into that page
+   * instead of naming a card the page may not draw.
    */
-  readonly anchor: string | null;
+  readonly group: SettingsGroupDefinition;
   readonly controls: readonly LogLevelControl[];
   /**
    * Why there are no rows, in the caller's own words — or `null` to render
@@ -114,8 +115,8 @@ export function LogDetailGroup(props: {
     if (props.emptyState === null) return null;
     return (
       <SettingsGroup
-        title="Log detail"
-        anchor={props.anchor ?? undefined}
+        group={props.group}
+        showTitle
         tone="default"
         dataTestId={undefined}
         fill={false}
@@ -127,8 +128,8 @@ export function LogDetailGroup(props: {
 
   return (
     <SettingsGroup
-      title="Log detail"
-      anchor={props.anchor ?? undefined}
+      group={props.group}
+      showTitle
       tone="default"
       dataTestId={undefined}
       fill={false}

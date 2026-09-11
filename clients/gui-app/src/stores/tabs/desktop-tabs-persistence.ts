@@ -296,6 +296,8 @@ function createDesktopTabsPersistenceController(
       state.items !== previous.items ||
       state.activeItemId !== previous.activeItemId ||
       state.activationHistory !== previous.activationHistory ||
+      state.customizations !== previous.customizations ||
+      state.groups !== previous.groups ||
       state.systemTabs !== previous.systemTabs
     ) {
       schedule();
@@ -374,6 +376,8 @@ function currentLayout(): PersistedTabStripLayout {
     activeItemId: state.activeItemId,
     systemTabs: state.systemTabs,
     activationHistory: state.activationHistory,
+    customizations: state.customizations,
+    groups: state.groups,
   };
 }
 
@@ -643,6 +647,18 @@ function desktopLayoutJson(layout: PersistedTabStripLayout): DesktopJsonValue {
     items: layout.items.map(desktopStripItemJson),
     activeItemId: layout.activeItemId,
     activationHistory: (layout.activationHistory ?? []).map(desktopRefJson),
+    customizations: Object.fromEntries(
+      Object.entries(layout.customizations ?? {}).map(([key, value]) => [
+        key,
+        { ...value },
+      ]),
+    ),
+    groups: Object.fromEntries(
+      Object.entries(layout.groups ?? {}).map(([key, value]) => [
+        key,
+        { ...value },
+      ]),
+    ),
     systemTabs: {
       history: desktopSystemTabJson(layout.systemTabs.history),
       settings: desktopSystemTabJson(layout.systemTabs.settings),
