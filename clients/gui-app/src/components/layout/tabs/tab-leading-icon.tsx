@@ -3,6 +3,12 @@ import { NotificationIndicatorIcon } from "@/components/notifications/notificati
 import type { NotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
 import type { EpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
 import type { HeaderTabAppearance, TabIcon } from "@/stores/tabs/types";
+import { cn } from "@/lib/utils";
+
+const iconSegmenter = new Intl.Segmenter(undefined, {
+  granularity: "grapheme",
+});
+
 /** Paints custom identity beside the resolved activity and notification state. */
 export function TabLeadingIcon(props: {
   readonly icon: TabIcon | null;
@@ -13,6 +19,9 @@ export function TabLeadingIcon(props: {
   readonly tabId: string;
 }) {
   const identity = props.identity;
+  const iconCharacters = Array.from(
+    iconSegmenter.segment(identity?.icon?.trim() ?? ""),
+  ).slice(0, 2);
   let defaultIcon: React.ReactNode = null;
   if (props.titleGenerationPending) {
     defaultIcon = (
@@ -22,7 +31,7 @@ export function TabLeadingIcon(props: {
         variant="dots2"
       />
     );
-  } else if (props.icon !== null && (identity?.icon ?? null) === null) {
+  } else if (props.icon !== null && iconCharacters.length === 0) {
     const Icon = props.icon;
     defaultIcon = <Icon className="size-3.5 shrink-0" />;
   }
@@ -52,13 +61,21 @@ export function TabLeadingIcon(props: {
           agentSurface="gui"
         />
       </span>
-      {identity !== null && identity.icon !== null ? (
+      {iconCharacters.length > 0 ? (
         <span
           data-slot="tab-custom-icon"
-          className="inline-flex size-5 shrink-0 items-center justify-center"
+          className="inline-flex size-5 shrink-0 items-center justify-center overflow-hidden"
         >
-          <span aria-hidden="true" className="text-lg leading-none">
-            {identity.icon}
+          <span
+            aria-hidden="true"
+            className={cn(
+              "whitespace-nowrap leading-none",
+              iconCharacters.length === 1
+                ? "text-base"
+                : "text-micro font-medium",
+            )}
+          >
+            {iconCharacters.map(({ segment }) => segment).join("")}
           </span>
         </span>
       ) : null}

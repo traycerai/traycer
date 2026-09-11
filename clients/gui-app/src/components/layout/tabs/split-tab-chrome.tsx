@@ -6,7 +6,8 @@ const SPLIT_ROW_PADDING_CLASS = "pr-[clamp(0.75rem,5%,1.5rem)] pl-2";
 const SPLIT_CONTROL_WIDTH_CLASS = "w-11";
 
 interface SplitTabLayoutProps {
-  readonly color: string | null;
+  readonly leftColor: string | null;
+  readonly rightColor: string | null;
   readonly splitId: string;
   readonly selectedSide: "left" | "right" | null;
   readonly control: ReactNode;
@@ -47,7 +48,8 @@ export function SplitTabLayout(props: SplitTabLayoutProps): ReactNode {
         </div>
       </div>
       <SplitGroupUnderline
-        color={props.color}
+        leftColor={props.leftColor}
+        rightColor={props.rightColor}
         splitId={props.splitId}
         selectedSide={props.selectedSide}
       />
@@ -56,7 +58,8 @@ export function SplitTabLayout(props: SplitTabLayoutProps): ReactNode {
 }
 
 function SplitGroupUnderline(props: {
-  readonly color: string | null;
+  readonly leftColor: string | null;
+  readonly rightColor: string | null;
   readonly splitId: string;
   readonly selectedSide: "left" | "right" | null;
 }): ReactNode {
@@ -64,7 +67,7 @@ function SplitGroupUnderline(props: {
     <span
       aria-hidden="true"
       data-testid={`split-tab-group-underline-${props.splitId}`}
-      style={{ color: props.color ?? "var(--color-primary)" }}
+      style={{ color: "var(--color-primary)" }}
       className={cn(
         "pointer-events-none absolute inset-x-0 bottom-0 z-30 flex h-px",
         SPLIT_ROW_PADDING_CLASS,
@@ -81,6 +84,7 @@ function SplitGroupUnderline(props: {
       />
       <span
         data-testid={`split-tab-group-underline-left-${props.splitId}`}
+        style={{ color: props.leftColor ?? "var(--color-primary)" }}
         className={cn(
           "relative min-w-0 flex-1 rounded-l-full",
           props.selectedSide !== "left" && "bg-current",
@@ -96,6 +100,7 @@ function SplitGroupUnderline(props: {
       />
       <span
         data-testid={`split-tab-group-underline-right-${props.splitId}`}
+        style={{ color: props.rightColor ?? "var(--color-primary)" }}
         className={cn(
           "relative min-w-0 flex-1 rounded-r-full",
           props.selectedSide !== "right" && "bg-current",

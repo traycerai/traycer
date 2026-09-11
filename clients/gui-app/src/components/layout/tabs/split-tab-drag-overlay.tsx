@@ -66,10 +66,8 @@ export function SplitTabDragOverlay(props: SplitTabDragOverlayProps) {
       member.tab.kind === tabKind &&
       member.tab.id === tabId,
   );
-  const firstMember = [item.left, item.right].find(
-    (member) => member.kind === "tab",
-  );
-  const firstTab = firstMember?.kind === "tab" ? firstMember.tab : null;
+  const leftGhost = item.left === draggedMember ? props.ghost : null;
+  const rightGhost = item.right === draggedMember ? props.ghost : null;
   return (
     <div
       ref={overlayRef}
@@ -88,7 +86,8 @@ export function SplitTabDragOverlay(props: SplitTabDragOverlayProps) {
         </div>
       ) : (
         <SplitTabLayout
-          color={firstTab?.appearance?.color ?? null}
+          leftColor={splitMemberColor(item.left, leftGhost)}
+          rightColor={splitMemberColor(item.right, rightGhost)}
           splitId={item.id}
           selectedSide={props.isActive ? item.focusedSide : null}
           control={
@@ -109,14 +108,14 @@ export function SplitTabDragOverlay(props: SplitTabDragOverlayProps) {
           left={
             <SplitMemberOverlay
               member={item.left}
-              ghost={item.left === draggedMember ? props.ghost : null}
+              ghost={leftGhost}
               focused={props.isActive ? item.focusedSide === "left" : false}
             />
           }
           right={
             <SplitMemberOverlay
               member={item.right}
-              ghost={item.right === draggedMember ? props.ghost : null}
+              ghost={rightGhost}
               focused={props.isActive ? item.focusedSide === "right" : false}
             />
           }
@@ -152,4 +151,12 @@ function SplitMemberOverlay(props: {
       />
     </div>
   );
+}
+
+function splitMemberColor(
+  member: HeaderStripMember,
+  ghost: HeaderTabDragGhost | null,
+): string | null {
+  if (ghost !== null) return ghost.appearance?.color ?? null;
+  return member.kind === "tab" ? (member.tab.appearance?.color ?? null) : null;
 }

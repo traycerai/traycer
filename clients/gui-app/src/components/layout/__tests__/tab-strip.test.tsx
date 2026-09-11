@@ -1,7 +1,10 @@
 import type { TaskPinnedState } from "@/hooks/epic/use-epic-task-pinned-states-query";
 import { INERT_ROOT_STATE_PORT } from "@/stores/epics/open-epic/test-support/root-state-port-fixture";
 import { TabStrip } from "@/components/layout/tabs/tab-strip";
-import { SplitMemberChrome } from "@/components/layout/tabs/split-tab-chrome";
+import {
+  SplitMemberChrome,
+  SplitTabLayout,
+} from "@/components/layout/tabs/split-tab-chrome";
 import { TabChrome } from "@/components/layout/tabs/header-tab-visual";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { paneTabRefs } from "@/stores/epics/canvas/actions";
@@ -726,6 +729,51 @@ describe("<TabStrip />", () => {
       "group-hover/tab:bg-accent/20",
     );
   });
+
+  it.each([
+    {
+      side: "left",
+      leftColor: "#f97316",
+      rightColor: null,
+      expectedLeft: "rgb(249, 115, 22)",
+      expectedRight: "var(--color-primary)",
+    },
+    {
+      side: "right",
+      leftColor: null,
+      rightColor: "#f97316",
+      expectedLeft: "var(--color-primary)",
+      expectedRight: "rgb(249, 115, 22)",
+    },
+  ])(
+    "keeps the $side split member underline color independent",
+    ({ leftColor, rightColor, expectedLeft, expectedRight }) => {
+      render(
+        <SplitTabLayout
+          leftColor={leftColor}
+          rightColor={rightColor}
+          splitId="split-colors"
+          selectedSide={null}
+          control={<span data-testid="split-control" />}
+          left={<span data-testid="split-left" />}
+          right={<span data-testid="split-right" />}
+        />,
+      );
+
+      expect(
+        screen.getByTestId("split-tab-group-underline-split-colors").style
+          .color,
+      ).toBe("var(--color-primary)");
+      expect(
+        screen.getByTestId("split-tab-group-underline-left-split-colors").style
+          .color,
+      ).toBe(expectedLeft);
+      expect(
+        screen.getByTestId("split-tab-group-underline-right-split-colors").style
+          .color,
+      ).toBe(expectedRight);
+    },
+  );
 
   it("shows the pair highlight on the approach half during a merge", async () => {
     openEpicFixture(EPIC_A);

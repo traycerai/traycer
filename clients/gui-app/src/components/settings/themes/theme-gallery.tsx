@@ -72,7 +72,7 @@ const ThemeImportDialog = lazy(() =>
   })),
 );
 const modes = [
-  { value: "system", label: "System", icon: Monitor },
+  { value: "system", label: "Follow device", icon: Monitor },
   { value: "light", label: "Light", icon: Sun },
   { value: "dark", label: "Dark", icon: Moon },
 ] as const;
@@ -117,16 +117,12 @@ export function ThemeGallery() {
         fill={false}
       >
         <SettingsRow
-          label="Color scheme"
-          description={
-            mode === "system"
-              ? "Follows your device’s appearance."
-              : "Light and dark themes are saved separately."
-          }
+          label="Theme mode"
+          description="Choose separate light and dark themes below. Follow device switches between them with your device’s appearance."
           control={
             <div
               role="group"
-              aria-label="Color scheme"
+              aria-label="Theme mode"
               className="inline-flex rounded-md bg-foreground/5 p-0.5"
             >
               {modes.map(({ value, label, icon: Icon }) => (
@@ -194,7 +190,7 @@ export function ThemeGallery() {
               open={resetOpen}
               onOpenChange={setResetOpen}
               title="Reset theme library?"
-              description="This deletes your saved themes and resets theme options. Built-in themes remain available. This cannot be undone."
+              description="This deletes all saved custom and imported themes and resets your light and dark theme choices, background opacity, prompt font and size, font ligatures, panel animations and duration, and text and border contrast. Built-in themes remain available. This cannot be undone."
               cascadeSummary={null}
               actionLabel="Reset library"
               isPending={false}
@@ -328,7 +324,7 @@ function ThemePicker({
           <PaletteSwatch colors={colors} />
           <span
             id={`${pickerId}-value`}
-            className="min-w-0 flex-1 truncate text-start"
+            className="min-w-0 flex-1 break-words text-start"
           >
             {name}
           </span>
@@ -380,7 +376,7 @@ function ThemePicker({
                         ...theme.colors,
                       }}
                     />
-                    <span className="min-w-0 flex-1 truncate">
+                    <span className="min-w-0 flex-1 break-words">
                       {theme.name}
                     </span>
                   </CommandItem>
@@ -400,7 +396,7 @@ function ThemePicker({
                   <PaletteSwatch
                     colors={getBuiltinThemeColors(preset.id, appearance)}
                   />
-                  <span className="min-w-0 flex-1 truncate">
+                  <span className="min-w-0 flex-1 break-words">
                     {preset.label}
                   </span>
                 </CommandItem>
@@ -541,7 +537,7 @@ function SavedThemeGroup({
   return (
     <section className="space-y-1">
       <div className="flex items-center justify-between gap-2 px-2">
-        <h3 className="min-w-0 truncate text-ui-xs font-medium text-muted-foreground">
+        <h3 className="min-w-0 break-words text-ui-xs font-medium text-muted-foreground">
           {collection?.name ?? "Custom themes"}
         </h3>
         {collection ? (
@@ -573,7 +569,7 @@ function SavedThemeGroup({
                 ...theme.colors,
               }}
             />
-            <span className="min-w-0 flex-1 truncate text-ui-sm">
+            <span className="min-w-0 flex-1 break-words text-ui-sm">
               {theme.name}
             </span>
             <span className="text-ui-xs text-muted-foreground">
@@ -665,8 +661,8 @@ function ThemeActions({
           className="col-span-full flex flex-wrap items-center justify-between gap-3 rounded-lg bg-destructive/5 p-3"
         >
           <p className="text-ui-xs">
-            Delete {theme.name}? Active appearances return to the default
-            palette.
+            Delete {theme.name}? If selected, its light or dark mode switches
+            back to a built-in theme.
           </p>
           <div className="flex gap-2">
             <Button
@@ -701,11 +697,12 @@ function GlassControl() {
   const setOpacity = useThemeLibraryStore((state) => state.setGlassOpacity);
   return (
     <SettingsRow
-      label="Glass opacity"
+      label="Background opacity"
+      description="Opacity of menu, dialog, and prompt backgrounds. Lower values let more show through; 100% is solid."
       control={
         <div className="flex min-w-0 items-center gap-3">
           <input
-            aria-label="Glass opacity"
+            aria-label="Background opacity"
             type="range"
             min={30}
             max={100}

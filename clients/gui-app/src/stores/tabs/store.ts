@@ -26,7 +26,6 @@ import {
   emptyTabStripLayout,
   findStripItemForRef,
   flattenLayoutRefs,
-  flattenStripItemRefs,
   focusLayoutRef,
   focusSplitSide,
   pairLayoutRefs,
@@ -645,15 +644,6 @@ export const useTabsStore = create<TabsStoreState>()(
               ...patch,
             },
           };
-          if (patch.color !== undefined) {
-            for (const member of flattenStripItemRefs(item)) {
-              const memberKey = tabRefKey(member);
-              customizations[memberKey] = {
-                ...(customizations[memberKey] ?? DEFAULT_TAB_CUSTOMIZATION),
-                color: patch.color,
-              };
-            }
-          }
           return committedLayout({ ...layout, customizations });
         });
       },

@@ -1,6 +1,6 @@
 import {
   repairTabGroups,
-  inheritTabColorAndGroup,
+  inheritTabGroup,
   type TabCustomizations,
   type TabGroups,
 } from "./tab-groups";
@@ -187,7 +187,7 @@ export function pairLayoutRefs(
   const rightIndex = findFlatItemIndex(layout.items, args.right);
   if (leftIndex === -1 || rightIndex === -1) return layout;
   const targetRef = args.targetRef ?? args.left;
-  const coloredLayout = inheritTabColorAndGroup(
+  const groupedLayout = inheritTabGroup(
     layout,
     targetRef,
     refsEqual(targetRef, args.left) ? args.right : args.left,
@@ -207,7 +207,7 @@ export function pairLayoutRefs(
       item !== layout.items[leftIndex] && item !== layout.items[rightIndex],
   );
   return {
-    ...coloredLayout,
+    ...groupedLayout,
     items: [
       ...retained.slice(0, insertionIndex),
       split,
@@ -264,11 +264,11 @@ export function replaceFillableSide(
       item.focusedSide === args.side ? args.side : item.routeBackingSide,
   };
   const partner = args.side === "left" ? item.right : item.left;
-  const coloredLayout =
+  const groupedLayout =
     partner.kind === "tab"
-      ? inheritTabColorAndGroup(layout, partner.ref, args.ref)
+      ? inheritTabGroup(layout, partner.ref, args.ref)
       : layout;
-  return replaceItem(coloredLayout, nextItem);
+  return replaceItem(groupedLayout, nextItem);
 }
 
 export function focusLayoutRef(

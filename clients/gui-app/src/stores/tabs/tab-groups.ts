@@ -88,7 +88,7 @@ export function setLayoutTabGroup(
   };
 }
 
-export function inheritTabColorAndGroup(
+export function inheritTabGroup(
   layout: PersistedTabStripLayout,
   sourceRef: TabRef,
   targetRef: TabRef,
@@ -97,18 +97,17 @@ export function inheritTabColorAndGroup(
     layout.customizations?.[tabRefKey(sourceRef)] ?? DEFAULT_TAB_CUSTOMIZATION;
   const key = tabRefKey(targetRef);
   const target = layout.customizations?.[key] ?? DEFAULT_TAB_CUSTOMIZATION;
-  if (source.color === target.color && source.groupId === target.groupId)
-    return layout;
+  if (source.groupId === target.groupId) return layout;
   return {
     ...layout,
     customizations: {
       ...layout.customizations,
-      [key]: { ...target, color: source.color, groupId: source.groupId },
+      [key]: { ...target, groupId: source.groupId },
     },
   };
 }
 
-/** Keep membership and split colors consistent across closes, splits and restores. */
+/** Keep group membership consistent across closes, splits and restores. */
 export function repairTabGroups(
   layout: PersistedTabStripLayout,
 ): PersistedTabStripLayout {
@@ -148,23 +147,16 @@ function collectItemCustomizations(
   groups: Record<string, TabGroup>,
 ): void {
   const refs = flattenStripItemRefs(item);
-  const splitColor =
-    item.kind === "split"
-      ? (refs
-          .map((ref) => layout.customizations?.[tabRefKey(ref)]?.color)
-          .find((color) => color !== undefined && color !== null) ?? null)
-      : null;
   const groupId = stripItemGroupId(item, layout.customizations);
   const group = groupId === null ? undefined : layout.groups?.[groupId];
   if (groupId !== null && group !== undefined) groups[groupId] = group;
   for (const ref of refs) {
     const key = tabRefKey(ref);
     const existing = layout.customizations?.[key];
-    if (existing !== undefined || group !== undefined || splitColor !== null) {
+    if (existing !== undefined || group !== undefined) {
       const current = existing ?? DEFAULT_TAB_CUSTOMIZATION;
       customizations[key] = {
         ...current,
-        color: item.kind === "split" ? splitColor : current.color,
         groupId: group === undefined ? null : groupId,
       };
     }

@@ -24,6 +24,46 @@ const DefaultTabIcon: TabIcon = (props) => (
 afterEach(() => cleanup());
 
 describe("TabLeadingIcon status and manual icon", () => {
+  it("shows the first two graphemes of a long manual icon", () => {
+    const identity: HeaderTabAppearance = {
+      color: "#112233",
+      icon: "TRAYCER",
+    };
+    render(
+      <TabLeadingIcon
+        icon={null}
+        identity={identity}
+        titleGenerationPending={false}
+        activityStatus="idle"
+        indicatorState={idleState()}
+        tabId="tab-long-icon"
+      />,
+    );
+    const manual = document.querySelector('[data-slot="tab-custom-icon"]');
+    if (manual === null) throw new Error("expected manual icon slot");
+    expect(manual.textContent).toBe("TR");
+    expect(identity.icon).toBe("TRAYCER");
+  });
+
+  it.each([
+    ["a family ZWJ emoji", "👨‍👩‍👧‍👦"],
+    ["a flag emoji", "🇺🇸"],
+  ])("keeps %s together as one manual icon", (_name, icon) => {
+    render(
+      <TabLeadingIcon
+        icon={null}
+        identity={{ color: "#112233", icon }}
+        titleGenerationPending={false}
+        activityStatus="idle"
+        indicatorState={idleState()}
+        tabId="tab-grapheme-icon"
+      />,
+    );
+    const manual = document.querySelector('[data-slot="tab-custom-icon"]');
+    if (manual === null) throw new Error("expected manual icon slot");
+    expect(manual.textContent).toBe(icon);
+  });
+
   it("keeps the status slot first and the readable manual icon second", () => {
     render(
       <TabLeadingIcon

@@ -53,7 +53,7 @@ describe("StartPageSettingsSection", () => {
     cleanup();
   });
 
-  it("hides Style and Intensity until a wallpaper is set", () => {
+  it("hides wallpaper effects until a wallpaper is set", () => {
     render(<StartPageSettingsSection />);
     expect(rowLabels()).toEqual([
       "Wallpaper",
@@ -63,7 +63,24 @@ describe("StartPageSettingsSection", () => {
     expect(screen.getByText("None")).not.toBeNull();
   });
 
-  it("shows Style and Intensity once a dithered wallpaper is set", () => {
+  it("names a stored wallpaper with no filename as a custom image", () => {
+    wallpaperMocks.image = { url: "blob:wallpaper", name: null };
+    useSettingsStore.setState({
+      startPageWallpaper: {
+        style: "photo",
+        intensity: 0.6,
+        tintWithAccent: true,
+        name: null,
+      },
+    });
+
+    render(<StartPageSettingsSection />);
+
+    expect(screen.getByText("Custom image")).not.toBeNull();
+    expect(screen.queryByText("None")).toBeNull();
+  });
+
+  it("shows wallpaper effect controls once a dithered wallpaper is set", () => {
     wallpaperMocks.image = { url: "blob:wallpaper", name: "ridge.png" };
     useSettingsStore.setState({
       startPageWallpaper: {
@@ -76,24 +93,28 @@ describe("StartPageSettingsSection", () => {
     render(<StartPageSettingsSection />);
     expect(rowLabels()).toEqual([
       "Wallpaper",
-      "Style",
-      "Intensity",
-      "Use accent color",
+      "Wallpaper effect",
+      "Effect strength",
+      "Tint wallpaper with theme accent color",
       "Show greeting",
       "Show recent tasks",
     ]);
     expect(
       screen
-        .getByRole("switch", { name: "Use accent color" })
+        .getByRole("switch", { name: "Tint wallpaper with theme accent color" })
         .getAttribute("aria-checked"),
     ).toBe("true");
     expect(screen.getByText("ridge.png")).not.toBeNull();
     expect(
-      screen.getByRole("slider", { name: "Intensity" }).getAttribute("value"),
+      screen
+        .getByRole("slider", { name: "Effect strength" })
+        .getAttribute("value"),
     ).toBe("60");
+    expect(screen.getByText("Subtle")).not.toBeNull();
+    expect(screen.getByText("Strong")).not.toBeNull();
   });
 
-  it("keeps Style but drops Intensity for the photo treatment", () => {
+  it("keeps the effect picker but drops strength for the photo treatment", () => {
     wallpaperMocks.image = { url: "blob:wallpaper", name: "ridge.png" };
     useSettingsStore.setState({
       startPageWallpaper: {
@@ -106,7 +127,7 @@ describe("StartPageSettingsSection", () => {
     render(<StartPageSettingsSection />);
     expect(rowLabels()).toEqual([
       "Wallpaper",
-      "Style",
+      "Wallpaper effect",
       "Show greeting",
       "Show recent tasks",
     ]);
@@ -125,8 +146,8 @@ describe("StartPageSettingsSection", () => {
     render(<StartPageSettingsSection />);
     expect(rowLabels()).toEqual([
       "Wallpaper",
-      "Style",
-      "Intensity",
+      "Wallpaper effect",
+      "Effect strength",
       "Show greeting",
       "Show recent tasks",
     ]);

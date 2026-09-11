@@ -78,41 +78,44 @@ describe("manual tab groups", () => {
 
   it.each([
     {
-      name: "the first member's color",
+      name: "both member colors",
       leftColor: "#ef4444",
-      expectedColor: "#ef4444",
+      rightColor: "#f97316",
     },
     {
-      name: "the other populated member's color when the first is unset",
+      name: "the populated member's color when the first is unset",
       leftColor: null,
-      expectedColor: "#f97316",
+      rightColor: "#f97316",
     },
-  ])("repairs split colors from $name", ({ leftColor, expectedColor }) => {
-    const split = {
-      kind: "split" as const,
-      id: "split-repair-colors",
-      left: { kind: "tab" as const, ref: a },
-      right: { kind: "tab" as const, ref: b },
-      focusedSide: "left" as const,
-      routeBackingSide: "left" as const,
-      leftRatio: 0.5,
-    };
-    const repaired = repairLayout(
-      layout({
-        items: [split],
-        customizations: {
-          [tabRefKey(a)]: { color: leftColor, icon: "A", groupId: null },
-          [tabRefKey(b)]: { color: "#f97316", icon: "B", groupId: null },
-        },
-      }),
-      (kind): kind is "epic" => kind === "epic",
-    );
+  ])(
+    "repairs each split member color from $name",
+    ({ leftColor, rightColor }) => {
+      const split = {
+        kind: "split" as const,
+        id: "split-repair-colors",
+        left: { kind: "tab" as const, ref: a },
+        right: { kind: "tab" as const, ref: b },
+        focusedSide: "left" as const,
+        routeBackingSide: "left" as const,
+        leftRatio: 0.5,
+      };
+      const repaired = repairLayout(
+        layout({
+          items: [split],
+          customizations: {
+            [tabRefKey(a)]: { color: leftColor, icon: "A", groupId: null },
+            [tabRefKey(b)]: { color: rightColor, icon: "B", groupId: null },
+          },
+        }),
+        (kind): kind is "epic" => kind === "epic",
+      );
 
-    expect(repaired.customizations).toMatchObject({
-      [tabRefKey(a)]: { color: expectedColor, icon: "A" },
-      [tabRefKey(b)]: { color: expectedColor, icon: "B" },
-    });
-  });
+      expect(repaired.customizations).toMatchObject({
+        [tabRefKey(a)]: { color: leftColor, icon: "A" },
+        [tabRefKey(b)]: { color: rightColor, icon: "B" },
+      });
+    },
+  );
 
   it("transfers customization when a draft ref is replaced", () => {
     const draft = { kind: "draft" as const, id: "draft-1" };
@@ -165,7 +168,7 @@ describe("manual tab groups", () => {
   });
 
   it.each(["left", "right"] as const)(
-    "copies the destination color to a dropped tab on the %s side while preserving icons",
+    "preserves each member color when pairing on the %s side",
     (destinationSide) => {
       const droppedSide = destinationSide === "left" ? "right" : "left";
       useTabsStore.setState({
@@ -199,14 +202,50 @@ describe("manual tab groups", () => {
         ).toMatchObject({ color: "#ef4444", icon: "D" });
         expect(
           useTabsStore.getState().customizations?.[tabRefKey(dropped.ref)],
-        ).toMatchObject({ color: "#ef4444", icon: "O" });
+        ).toMatchObject({ color: "#f97316", icon: "O" });
       }
 
       useTabsStore.setState(useTabsStore.getInitialState(), true);
     },
   );
 
-  it("propagates split color changes through either member while keeping icons independent", () => {
+  it.each(["left", "right"] as const)(
+    "keeps orange and plain appearances through pair then separate (%s orange)",
+    (orangeSide) => {
+      useTabsStore.setState({
+        ...layout({
+          customizations: {
+            [tabRefKey(a)]: { color: "#f97316", icon: "A", groupId: null },
+            [tabRefKey(b)]: { color: null, icon: "B", groupId: null },
+          },
+        }),
+        stripOrder: [a, b, c],
+      });
+
+      useTabsStore.getState().pair({
+        left: orangeSide === "left" ? a : b,
+        right: orangeSide === "left" ? b : a,
+        splitId: `split-orange-${orangeSide}`,
+        leftRatio: 0.5,
+        targetRef: b,
+      });
+
+      expect(useTabsStore.getState().customizations).toMatchObject({
+        [tabRefKey(a)]: { color: "#f97316", icon: "A" },
+        [tabRefKey(b)]: { color: null, icon: "B" },
+      });
+
+      useTabsStore.getState().separateSplit(`split-orange-${orangeSide}`);
+
+      expect(useTabsStore.getState().customizations).toMatchObject({
+        [tabRefKey(a)]: { color: "#f97316", icon: "A" },
+        [tabRefKey(b)]: { color: null, icon: "B" },
+      });
+      useTabsStore.setState(useTabsStore.getInitialState(), true);
+    },
+  );
+
+  it("changes only the customized split member while keeping icons independent", () => {
     const split = {
       kind: "split" as const,
       id: "split-colors",
@@ -230,18 +269,18 @@ describe("manual tab groups", () => {
     useTabsStore.getState().setTabCustomization(a, { color: "#3b82f6" });
     expect(useTabsStore.getState().customizations).toMatchObject({
       [tabRefKey(a)]: { color: "#3b82f6", icon: "A" },
-      [tabRefKey(b)]: { color: "#3b82f6", icon: "B" },
+      [tabRefKey(b)]: { color: "#ef4444", icon: "B" },
     });
 
     useTabsStore.getState().setTabCustomization(b, { color: "#22c55e" });
     expect(useTabsStore.getState().customizations).toMatchObject({
-      [tabRefKey(a)]: { color: "#22c55e", icon: "A" },
+      [tabRefKey(a)]: { color: "#3b82f6", icon: "A" },
       [tabRefKey(b)]: { color: "#22c55e", icon: "B" },
     });
     useTabsStore.setState(useTabsStore.getInitialState(), true);
   });
 
-  it("inherits the populated member color when filling an empty split side", () => {
+  it("keeps the populated member color when filling an empty split side", () => {
     const split = {
       kind: "split" as const,
       id: "split-empty",
@@ -268,8 +307,11 @@ describe("manual tab groups", () => {
     });
 
     expect(
+      useTabsStore.getState().customizations?.[tabRefKey(a)],
+    ).toMatchObject({ color: "#ef4444", icon: "A" });
+    expect(
       useTabsStore.getState().customizations?.[tabRefKey(b)],
-    ).toMatchObject({ color: "#ef4444" });
+    ).toBeUndefined();
     useTabsStore.setState(useTabsStore.getInitialState(), true);
   });
 

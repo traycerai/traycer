@@ -946,17 +946,13 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
   - The pre-refactor keys (`browserLinkDefaultMode`,
     `{terminal,markdown}BrowserLinkOpenMode`, `agentTabSurfacingMode`) are
     migrated once in the store's persist `merge` and then dropped.
-- `Appearance` Broad-to-specialized in one column: the theme library
-  (`themes/theme-gallery.tsx`) and **More appearance options**
-  (`themes/appearance-details.tsx`) lead, then five preference groups via
-  `settings-group.tsx` - **Start page**, **Interface**, **Typography**,
-  **Terminal**, **Artifact icons** - each a quiet `<h2>` label outside its own
-  bordered card; changes apply live, the surrounding app stays the primary
-  preview. A design pass (`settings-related-panels-core-flows` artifact,
-  extending the compact Settings language past General/Worktrees to five more
-  panels - Appearance, Notifications, Diagnostics, Shell, Host) introduced
-  this grouping; the controls themselves are unchanged except where noted
-  below.
+- `Appearance`: the theme library (`themes/theme-gallery.tsx`) leads,
+  followed by **Start page**, **Interface**, **Fonts and text**, **Motion and
+  readability**, **Terminal**, and **Icon colors** via `settings-group.tsx`.
+  Each group has an `<h2>` label outside its bordered card. Settings apply
+  immediately; the theme editor previews a draft until Save theme or Cancel.
+  `themes/appearance-details.tsx` supplies the prompt font and ligature rows
+  inside Fonts and text, plus the separate Motion and readability group.
   - **Theme**: light/dark/system mode (`theme`/`setTheme`) plus the theme
     library - selection, editing, import/export - lives in `ThemeGallery`,
     backed by `stores/settings/theme-library-store.ts` and applied by
@@ -970,10 +966,12 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
   - **Start page** (`start-page-settings-section.tsx`): the personal landing
     backdrop. Plain rows only, like every other group here - the start page
     itself is the preview. Rows: Wallpaper (56x34 thumbnail + "Choose
-    image..." + Remove; secondary text is the stored file name, or "None"),
-    Style (segmented Photo / Dither / Grain, only once a wallpaper is set),
-    Intensity (0..100 range input, only for Dither and Grain), Tint with
-    accent colour (`Switch`, Dither only; off dithers each RGB channel on its
+    image..." + Remove; secondary text is the stored file name, "Custom image"
+    when the image has no stored name, or "None" when no image is loaded),
+    Wallpaper effect (segmented Photo / Dot pattern / Film grain, only once
+    a wallpaper is set), Effect strength (0..100 range input with Subtle /
+    Strong endpoints, only for dot pattern and film grain), Tint wallpaper
+    with theme accent color (`Switch`, dot pattern only; off dithers each RGB channel on its
     own so the image keeps its own colours), Greeting and
     Recent tasks (`showGreeting` / `showRecentHistory` switches). The style,
     intensity, tint and the chosen file's `name` all live in the settings store
@@ -988,9 +986,9 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
   - **Interface**: Zoom (`DesktopZoomSettingsRow` - desktop-only, renders
     nothing without a zoom bridge; backed by
     `useRunnerZoomPercentQuery`/`SetMutation`/`ResetMutation` against host/OS
-    state, not a settings-store field) and Use pointer cursors
+    state, not a settings-store field) and Show a hand cursor over clickable controls
     (`pointerCursors` `Switch`, default on).
-  - **Typography.** Two structurally identical rows - `UI font` and
+  - **Fonts and text.** Two structurally identical rows - `Interface font` and
     `Code font` - each pairing a font picker with its size input stacked
     directly below. `Terminal font` moved out to its own **Terminal** group
     below (it pairs with the cursor rows and the live preview, not with UI/Code

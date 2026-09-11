@@ -133,7 +133,7 @@ function readLibrary(): Library {
     return librarySchema.parse(migrateLibraryToV2(JSON.parse(raw)));
   } catch {
     throw new Error(
-      "Your saved theme library could not be read. Reset the library to start again, or recover the stored data before resetting.",
+      "Your saved theme library could not be read. You can reset the library to start again. Resetting permanently deletes saved themes and restores the theme-related preferences listed in the confirmation.",
     );
   }
 }

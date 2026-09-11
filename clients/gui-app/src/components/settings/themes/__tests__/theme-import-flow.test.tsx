@@ -88,7 +88,7 @@ describe("theme import flow", () => {
 
     await user.click(screen.getByRole("button", { name: "Import theme" }));
     const dialog = await screen.findByRole("dialog", {
-      name: "Find your next palette",
+      name: "Import themes",
     });
     expect(
       within(dialog).getByRole("tab", { name: "Browse themes" }),
@@ -164,7 +164,7 @@ describe("theme import flow", () => {
     renderThemes();
     await user.click(screen.getByRole("button", { name: "Import theme" }));
     const dialog = await screen.findByRole("dialog", {
-      name: "Find your next palette",
+      name: "Import themes",
     });
     await user.click(within(dialog).getByRole("tab", { name: "Import files" }));
     const input = within(dialog).getByLabelText("Choose theme files");
@@ -203,7 +203,7 @@ describe("theme import flow", () => {
     await user.upload(input, localThemePack());
     await within(dialog).findByText(/Updating replaces 1 installed theme/);
     await user.click(
-      within(dialog).getByRole("button", { name: "Save copies" }),
+      within(dialog).getByRole("button", { name: "Import as copies" }),
     );
     await waitFor(() => {
       const themes = useThemeLibraryStore.getState().themes;
@@ -221,7 +221,7 @@ describe("theme import flow", () => {
 
     await user.click(screen.getByRole("button", { name: "Import theme" }));
     const dialog = await screen.findByRole("dialog", {
-      name: "Find your next palette",
+      name: "Import themes",
     });
     await user.click(within(dialog).getByRole("tab", { name: "Import files" }));
     await user.click(within(dialog).getByText("Paste theme JSON"));

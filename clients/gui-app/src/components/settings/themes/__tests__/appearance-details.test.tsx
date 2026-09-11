@@ -31,34 +31,34 @@ afterEach(() => {
   resetThemeLibrary();
 });
 
-describe("AppearanceDetails advanced options", () => {
-  it("uses a closed disclosure and preserves preferences when collapsed", () => {
+describe("AppearanceDetails motion and readability", () => {
+  it("keeps motion and readability controls visible and gates duration on animations", () => {
     render(<AppearanceDetails />);
 
     expect(
-      screen.queryByRole("switch", { name: "Advanced options" }),
-    ).toBeNull();
-    expect(screen.queryByRole("switch", { name: "Font ligatures" })).toBeNull();
-
-    fireEvent.click(screen.getByRole("button", { name: "Advanced options" }));
-
-    expect(screen.getByRole("switch", { name: "Font ligatures" })).toBeTruthy();
-    expect(
-      screen.getByRole("switch", { name: "Panel animations" }),
+      screen.getByRole("heading", {
+        level: 2,
+        name: "Motion and readability",
+      }),
     ).toBeTruthy();
-    expect(screen.getByLabelText("Panel animation duration")).toBeTruthy();
-    expect(screen.getByLabelText("Appearance contrast")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Advanced options" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("switch", { name: "Use font ligatures" }),
+    ).toBeNull();
+    expect(screen.queryByText("Prompt font")).toBeNull();
 
-    const beforeCollapse = useThemeLibraryStore.getState();
-    fireEvent.click(screen.getByRole("button", { name: "Advanced options" }));
+    const animations = screen.getByRole("switch", { name: "Panel animations" });
+    const duration = screen.getByLabelText("Animation duration");
+    expect(duration.matches(":disabled")).toBe(false);
+    expect(screen.getByLabelText("Text and border contrast")).toBeTruthy();
 
-    expect(screen.queryByRole("switch", { name: "Font ligatures" })).toBeNull();
-    const afterCollapse = useThemeLibraryStore.getState();
-    expect(afterCollapse.fontLigatures).toBe(beforeCollapse.fontLigatures);
-    expect(afterCollapse.panelAnimations).toBe(beforeCollapse.panelAnimations);
-    expect(afterCollapse.panelAnimationDuration).toBe(
-      beforeCollapse.panelAnimationDuration,
-    );
-    expect(afterCollapse.contrast).toBe(beforeCollapse.contrast);
+    fireEvent.click(animations);
+
+    const durationFieldset = duration.closest("fieldset");
+    expect(durationFieldset).not.toBeNull();
+    expect((durationFieldset as HTMLFieldSetElement).disabled).toBe(true);
+    expect(useThemeLibraryStore.getState().panelAnimations).toBe(false);
   });
 });

@@ -23,8 +23,8 @@ const STYLES: ReadonlyArray<{
   readonly label: string;
 }> = [
   { id: "photo", label: "Photo" },
-  { id: "dither", label: "Dither" },
-  { id: "grain", label: "Grain" },
+  { id: "dither", label: "Dot pattern" },
+  { id: "grain", label: "Film grain" },
 ];
 
 /**
@@ -101,7 +101,9 @@ export function StartPageSettingsSection() {
     >
       <SettingsRow
         label="Wallpaper"
-        description={image.name ?? "None"}
+        description={
+          image.name ?? (image.url === null ? "None" : "Custom image")
+        }
         control={
           <div className="flex items-center gap-2.5">
             {image.url === null ? null : (
@@ -144,7 +146,8 @@ export function StartPageSettingsSection() {
       {wallpaper === null ? null : (
         <>
           <SettingsRow
-            label="Style"
+            label="Wallpaper effect"
+            description="Keep the original photo, turn it into a dot pattern, or add film grain."
             control={
               <div className="inline-flex items-center gap-1 rounded-md border border-border bg-foreground/3 p-0.5">
                 {STYLES.map((style) => (
@@ -172,33 +175,43 @@ export function StartPageSettingsSection() {
 
           {wallpaper.style === "photo" ? null : (
             <SettingsRow
-              label="Intensity"
+              label="Effect strength"
+              description="Adjust how strongly the effect changes the photo."
               control={
-                <input
-                  type="range"
-                  min={0}
-                  max={100}
-                  step={1}
-                  aria-label="Intensity"
-                  value={Math.round(wallpaper.intensity * 100)}
-                  onChange={(event) => {
-                    setWallpaper({
-                      ...wallpaper,
-                      intensity: event.target.valueAsNumber / 100,
-                    });
-                  }}
-                  onPointerUp={() =>
-                    trackSettingChanged("appearance", "startPageWallpaper")
-                  }
-                  className="w-[min(40vw,10rem)] accent-primary"
-                />
+                <div className="space-y-1">
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={1}
+                    aria-label="Effect strength"
+                    value={Math.round(wallpaper.intensity * 100)}
+                    onChange={(event) => {
+                      setWallpaper({
+                        ...wallpaper,
+                        intensity: event.target.valueAsNumber / 100,
+                      });
+                    }}
+                    onPointerUp={() =>
+                      trackSettingChanged("appearance", "startPageWallpaper")
+                    }
+                    className="w-[min(40vw,10rem)] accent-primary"
+                  />
+                  <div
+                    aria-hidden
+                    className="flex justify-between text-ui-xs text-muted-foreground"
+                  >
+                    <span>Subtle</span>
+                    <span>Strong</span>
+                  </div>
+                </div>
               }
             />
           )}
 
           {wallpaper.style !== "dither" ? null : (
             <SettingsRow
-              label="Use accent color"
+              label="Tint wallpaper with theme accent color"
               control={
                 <Switch
                   checked={wallpaper.tintWithAccent}
@@ -206,7 +219,7 @@ export function StartPageSettingsSection() {
                     trackSettingChanged("appearance", "startPageWallpaperTint");
                     setWallpaper({ ...wallpaper, tintWithAccent: next });
                   }}
-                  aria-label="Use accent color"
+                  aria-label="Tint wallpaper with theme accent color"
                 />
               }
             />

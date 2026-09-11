@@ -159,6 +159,9 @@ export function TabAppearanceMenu(props: { readonly tab: HeaderTab }) {
               })
             }
           />
+          <p className="mt-1 text-ui-xs text-muted-foreground">
+            Displays up to two characters.
+          </p>
           <ContextMenuSeparator className="my-2" />
           <ContextMenuItem
             onSelect={() =>

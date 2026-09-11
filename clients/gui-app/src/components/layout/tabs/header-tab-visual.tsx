@@ -131,7 +131,7 @@ export function TabChrome(props: {
         {props.color !== null ? (
           <span
             aria-hidden
-            className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5"
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-px"
             style={{ backgroundColor: props.color }}
           />
         ) : null}
