@@ -95,6 +95,14 @@ interface DirectorySection {
   readonly key: string;
   readonly hostId: string | null;
   readonly title: string;
+  /**
+   * The agent this floor is anchored on, where it is visible.
+   *
+   * It is a real agent at a real desk - counted in the footer, findable by
+   * search - but it is in no team and no bullpen, so without a row of its own
+   * the one agent that anchors each floor is the one nobody can browse to.
+   */
+  readonly hq: DirectoryMember | null;
   readonly teams: ReadonlyArray<DirectoryTeamRow>;
   /** Hot solos: the people with no team, at work right now. */
   readonly bullpen: ReadonlyArray<DirectoryMember>;
@@ -104,6 +112,16 @@ interface DirectorySection {
 
 export interface OfficeDirectoryPanelProps {
   readonly partition: OfficePopulation;
+  /**
+   * Who exists AS OF THE CURSOR.
+   *
+   * The partition seats every agent the epic ever had, because the layout has
+   * to keep a desk for somebody the cursor has not reached yet. What is on the
+   * floor is the smaller set - so the list beside it is that set too, or
+   * scrubbing back leaves rows pointing at empty desks and opening a panel
+   * about an agent the rest of the tile says does not exist.
+   */
+  readonly visibleAgentIds: ReadonlySet<string>;
   readonly statusById: ReadonlyMap<string, OfficeAgentStatus>;
   readonly nameById: ReadonlyMap<string, string>;
   readonly hostNameById: ReadonlyMap<string, string>;
@@ -142,10 +160,12 @@ function byHeat(a: DirectoryMember, b: DirectoryMember): number {
 
 function teamRow(args: {
   readonly team: OfficeTeam;
+  readonly visibleAgentIds: ReadonlySet<string>;
   readonly nameById: ReadonlyMap<string, string>;
   readonly statusById: ReadonlyMap<string, OfficeAgentStatus>;
 }): DirectoryTeamRow {
   const members = args.team.memberAgentIds
+    .filter((agentId) => args.visibleAgentIds.has(agentId))
     .map((agentId) =>
       memberRow({
         agentId,
@@ -174,37 +194,54 @@ function accentColor(teamId: string | null): string | undefined {
 
 function buildSections(args: {
   readonly partition: OfficePopulation;
+  readonly visibleAgentIds: ReadonlySet<string>;
   readonly nameById: ReadonlyMap<string, string>;
   readonly statusById: ReadonlyMap<string, OfficeAgentStatus>;
   readonly hostNameById: ReadonlyMap<string, string>;
 }): ReadonlyArray<DirectorySection> {
-  return args.partition.hosts.map((host) => {
+  const sections = args.partition.hosts.map((host) => {
     const teams = host.teams
       .map((team) =>
         teamRow({
           team,
+          visibleAgentIds: args.visibleAgentIds,
           nameById: args.nameById,
           statusById: args.statusById,
         }),
       )
+      // A team nobody has been created into yet is not a team on this floor.
+      .filter((team) => team.members.length > 0)
       .sort((a, b) =>
         a.rank === b.rank ? a.name.localeCompare(b.name) : a.rank - b.rank,
       );
-    const solos = host.solos.map((member) =>
-      memberRow({
-        agentId: member.agentId,
-        teamId: member.teamId,
-        nameById: args.nameById,
-        statusById: args.statusById,
-      }),
-    );
+    const solos = host.solos
+      .filter((member) => args.visibleAgentIds.has(member.agentId))
+      .map((member) =>
+        memberRow({
+          agentId: member.agentId,
+          teamId: member.teamId,
+          nameById: args.nameById,
+          statusById: args.statusById,
+        }),
+      );
     const live = teams.filter((team) =>
       team.members.some((member) => isOfficeHotStatus(member.status)),
     );
+    const hqId = host.hqAgentId;
+    const hq =
+      hqId === null || !args.visibleAgentIds.has(hqId)
+        ? null
+        : memberRow({
+            agentId: hqId,
+            teamId: args.partition.members.get(hqId)?.teamId ?? null,
+            nameById: args.nameById,
+            statusById: args.statusById,
+          });
     return {
       key: host.hostId ?? "unattributed",
       hostId: host.hostId,
       title: officeFloorName(host.hostId, args.hostNameById),
+      hq,
       teams: live,
       bullpen: solos
         .filter((member) => isOfficeHotStatus(member.status))
@@ -219,6 +256,16 @@ function buildSections(args: {
       quietTeams: teams.length - live.length,
     };
   });
+  // A floor the cursor has not populated yet is a heading over nothing. The
+  // partition keeps the host because the LAYOUT still owes it a building; the
+  // list is about who is in one.
+  return sections.filter(
+    (section) =>
+      section.hq !== null ||
+      section.teams.length > 0 ||
+      section.bullpen.length > 0 ||
+      section.quietAgents > 0,
+  );
 }
 
 export function OfficeDirectoryPanel(props: OfficeDirectoryPanelProps) {
@@ -231,29 +278,40 @@ export function OfficeDirectoryPanel(props: OfficeDirectoryPanelProps) {
     partition,
     selectedAgentId,
     statusById,
+    visibleAgentIds,
   } = props;
   const [query, setQuery] = useState("");
   const { resolvedTheme } = useResolvedTheme();
   const palette = useMemo(() => officePalette(resolvedTheme), [resolvedTheme]);
 
   const sections = useMemo(
-    () => buildSections({ partition, nameById, statusById, hostNameById }),
-    [hostNameById, nameById, partition, statusById],
+    () =>
+      buildSections({
+        partition,
+        visibleAgentIds,
+        nameById,
+        statusById,
+        hostNameById,
+      }),
+    [hostNameById, nameById, partition, statusById, visibleAgentIds],
   );
 
-  // The whole population, for the search and the footer. `members` is the
-  // partition's own map, so nobody the floor seats can be missing from it.
+  // Everyone on the floor right now, for the search and the footer - the
+  // partition's own map, minus whoever the cursor has not reached. Searching
+  // the full map would find agents the floor cannot show you.
   const everyone = useMemo<ReadonlyArray<DirectoryMember>>(
     () =>
-      [...partition.members.values()].map((member) =>
-        memberRow({
-          agentId: member.agentId,
-          teamId: member.teamId,
-          nameById,
-          statusById,
-        }),
-      ),
-    [nameById, partition.members, statusById],
+      [...partition.members.values()]
+        .filter((member) => visibleAgentIds.has(member.agentId))
+        .map((member) =>
+          memberRow({
+            agentId: member.agentId,
+            teamId: member.teamId,
+            nameById,
+            statusById,
+          }),
+        ),
+    [nameById, partition.members, statusById, visibleAgentIds],
   );
 
   // The SAME normalisation tile Find uses, so a query that matches on the
@@ -391,6 +449,9 @@ export function OfficeDirectoryPanel(props: OfficeDirectoryPanelProps) {
                   {section.title}
                 </p>
               ) : null}
+              {section.hq === null ? null : (
+                <ul className="flex flex-col">{renderAgentRow(section.hq)}</ul>
+              )}
               {section.teams.length === 0 ? null : (
                 <>
                   <p className="px-1.5 py-0.5 text-ui-xs text-muted-foreground">

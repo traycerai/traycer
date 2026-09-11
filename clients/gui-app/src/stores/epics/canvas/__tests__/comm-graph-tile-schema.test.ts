@@ -94,7 +94,10 @@ describe("comm-graph tile schema", () => {
         y: -220,
         zoom: 3,
         mode: "office",
-        officeView: "city",
+        // A view id no build ships: the case is about a value from a BUILD
+        // this one is older than, and every id in the contract is registered
+        // here now.
+        officeView: "atrium",
         officeAutoView: "building",
       },
     });
@@ -123,7 +126,7 @@ describe("comm-graph tile schema", () => {
         zoom: 3,
         mode: "office",
         officeView: "towers",
-        officeAutoView: "city",
+        officeAutoView: "atrium",
       },
     });
     expect(parsed?.type).toBe("comm-graph");

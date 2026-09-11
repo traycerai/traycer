@@ -73,6 +73,17 @@ export interface CommGraphTileProps {
  */
 const MEASURING_VIEW_ID: OfficeViewId = "floor";
 
+/**
+ * The framing a tile gets when the office under it changes out from under the
+ * camera. Pan and zoom are in the ARRIVING view's coordinates, and a Floor's
+ * numbers read as empty space in a Building, so they are not carried across.
+ */
+const NEUTRAL_CAMERA: CommGraphTileCamera = {
+  x: DEFAULT_COMM_GRAPH_VIEW.x,
+  y: DEFAULT_COMM_GRAPH_VIEW.y,
+  zoom: DEFAULT_COMM_GRAPH_VIEW.zoom,
+};
+
 const EMPTY_COMM_GRAPH_FIND_RENDERER: CommGraphFindRenderer = {
   getNodes: () => [],
   showMatches: () => undefined,
@@ -177,12 +188,14 @@ export function CommGraphTile(props: CommGraphTileProps) {
    * the real ones.
    *
    * Three conditions, each of which was wrong on its own. The agent snapshot
-   * has loaded (`EmptyCommGraph` above is what distinguishes an empty epic
-   * from a pending one), the comm-graph feed has replayed its initial batch,
-   * and the canvas has reported a box - which it only does once it is eligible
-   * and laid out, after the directory and any panel have taken their width.
+   * has loaded (a non-empty set: `EmptyCommGraph` below is what distinguishes
+   * an empty epic from a pending one), the comm-graph feed has replayed its
+   * initial batch, and the canvas has reported a probe - which it only does
+   * once it is eligible and laid out, after the directory and any panel have
+   * taken their width.
    */
-  const inputsReady = snapshot.initialHistoryCaughtUp && probeReady;
+  const inputsReady =
+    agents.length > 0 && snapshot.initialHistoryCaughtUp && probeReady;
 
   /**
    * AUTO, run ONCE per decision and persisted.
@@ -207,11 +220,7 @@ export function CommGraphTile(props: CommGraphTileProps) {
     const camera: CommGraphTileCamera =
       decision.view === "floor"
         ? { x: node.view.x, y: node.view.y, zoom: node.view.zoom }
-        : {
-            x: DEFAULT_COMM_GRAPH_VIEW.x,
-            y: DEFAULT_COMM_GRAPH_VIEW.y,
-            zoom: DEFAULT_COMM_GRAPH_VIEW.zoom,
-          };
+        : NEUTRAL_CAMERA;
     updateView(viewTabId, node.id, {
       ...node.view,
       ...camera,
@@ -226,26 +235,37 @@ export function CommGraphTile(props: CommGraphTileProps) {
    */
   const handleOfficeViewChange = useCallback(
     (next: OfficeViewChoice) => {
-      if (next === node.view.officeView && next !== "auto") return;
       if (next === "auto") {
         setAutoDecision(null);
         // What makes a re-pick that lands on the SAME view still remount: the
         // key carries this, so the office is re-partitioned from scratch
         // rather than kept because the answer happened not to change.
         setAutoRevision((revision) => revision + 1);
+        updateView(viewTabId, node.id, {
+          ...node.view,
+          ...NEUTRAL_CAMERA,
+          officeView: "auto",
+          officeAutoView: null,
+        });
+        return;
       }
-      // The camera is RESET: it framed the view being left, and its numbers
-      // mean nothing in the one arriving.
+      if (next === node.view.officeView) return;
+      // Picking the view that is ALREADY on screen pins it without moving
+      // anything: this tile was following the settings default, or Auto had
+      // landed here, and the person is nailing that down. The camera frames
+      // that same office, so only a view that genuinely changes invalidates
+      // it - the same reason the mode toggle guards its own reset.
+      const camera: CommGraphTileCamera =
+        next === resolvedViewId
+          ? { x: node.view.x, y: node.view.y, zoom: node.view.zoom }
+          : NEUTRAL_CAMERA;
       updateView(viewTabId, node.id, {
         ...node.view,
-        x: DEFAULT_COMM_GRAPH_VIEW.x,
-        y: DEFAULT_COMM_GRAPH_VIEW.y,
-        zoom: DEFAULT_COMM_GRAPH_VIEW.zoom,
+        ...camera,
         officeView: next,
-        officeAutoView: next === "auto" ? null : node.view.officeAutoView,
       });
     },
-    [node.id, node.view, updateView, viewTabId],
+    [node.id, node.view, resolvedViewId, updateView, viewTabId],
   );
 
   const handleModeChange = useCallback(

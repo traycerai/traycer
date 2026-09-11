@@ -47,6 +47,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { CommGraphOfficeCanvas } from "@/components/epic-canvas/comm-graph/office/comm-graph-office-canvas";
+import { OfficeAutoChip } from "@/components/epic-canvas/comm-graph/office/office-auto-chip";
+import type { OfficeAutoDecision } from "@/lib/comm-graph/office/office-auto";
 import { useCommGraphTimelineStore } from "@/stores/epics/comm-graph-timeline-store";
 import {
   commGraphPairId,
@@ -68,6 +70,7 @@ import type {
 } from "@/lib/comm-graph/office/office-types";
 import type { CommGraphTileViewState } from "@/stores/epics/canvas/types";
 import type { TileFindAdapter } from "@/stores/tile-find";
+import type { CommGraphOfficeCanvasProps } from "@/components/epic-canvas/comm-graph/office/comm-graph-office-canvas";
 
 const OFFICE_VIEW: CommGraphTileViewState = {
   x: 0,
@@ -143,6 +146,41 @@ function agent(id: string, name: string): CommGraphAgentNode {
 
 const ORCHESTRATOR = agent("agent-1", "Orchestrator");
 const REVIEWER = agent("agent-2", "Reviewer");
+/** Never part of the default fixture's agents; opted into by name via `agents`. */
+const OFFSCREEN = agent("agent-3", "Offscreen scout");
+/**
+ * A second host with two agents rather than one: a lone root on a host
+ * settles as that host's HQ - never listed in the directory regardless of
+ * visibility - so exercising the visible-set filter on a REAL solo row needs
+ * a lead (the HQ) and a member under it (the solo the filter actually acts
+ * on).
+ */
+const HOST_B_LEAD: CommGraphAgentNode = {
+  ...agent("agent-4", "Bay lead"),
+  hostId: "host-2",
+};
+const HOST_B_MEMBER: CommGraphAgentNode = {
+  ...agent("agent-5", "Bay member"),
+  hostId: "host-2",
+  parentId: HOST_B_LEAD.id,
+};
+/**
+ * A THIRD host, kept fully visible: with only host-1 and a dropped host-2,
+ * a single surviving section renders no heading at all ("one host needs no
+ * header"), which would make host-1's own heading absent too and undercut
+ * "host-2 is missing" as a claim about FILTERING rather than about there
+ * only ever being one section. A second surviving section is what makes
+ * host-1's heading a real positive control.
+ */
+const HOST_C_LEAD: CommGraphAgentNode = {
+  ...agent("agent-6", "Dock lead"),
+  hostId: "host-3",
+};
+const HOST_C_MEMBER: CommGraphAgentNode = {
+  ...agent("agent-7", "Dock member"),
+  hostId: "host-3",
+  parentId: HOST_C_LEAD.id,
+};
 
 interface OfficeRenderOptions {
   readonly events: ReadonlyArray<CommGraphEvent>;
@@ -160,6 +198,7 @@ const STATIC_OFFICE: OfficeRenderOptions = {
 function officeElement(
   visibleIds: ReadonlySet<string>,
   options: OfficeRenderOptions,
+  overrides: Partial<CommGraphOfficeCanvasProps> = {},
 ) {
   return (
     <CommGraphOfficeCanvas
@@ -191,12 +230,22 @@ function officeElement(
       canJumpToCreated={() => false}
       onJumpToCreated={vi.fn()}
       onOpenAgent={vi.fn()}
+      {...overrides}
     />
   );
 }
 
 function renderOffice(visibleIds: ReadonlySet<string>) {
   return render(withQueryClient(officeElement(visibleIds, STATIC_OFFICE)));
+}
+
+/** Stubs the office canvas container's measured box and re-triggers the resize path that reads it. */
+function setCanvasSize(size: { width: number; height: number }): void {
+  const container = screen.getByTestId("comm-graph-office-canvas");
+  vi.spyOn(container, "getBoundingClientRect").mockReturnValue(
+    DOMRect.fromRect(size),
+  );
+  fireEvent(window, new Event("resize"));
 }
 
 function withQueryClient(children: ReactNode) {
@@ -322,6 +371,7 @@ afterEach(() => {
   registerFindAdapterMock.mockClear();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
   useCommGraphTimelineStore.setState({ stateByEpicId: {} });
 });
 
@@ -668,5 +718,334 @@ describe("CommGraphOfficeCanvas", () => {
     expect(glyphOf(failure.id)).toBe("bang");
     expect(glyphOf(awaiting.id)).toBe("ring");
     expect(glyphOf(archived.id)).toBe("hollow");
+  });
+
+  it("renders the given view picker inside its chrome, beside the mode toggle", () => {
+    // The office is the ONLY mode this canvas draws - the graph canvas
+    // (`CommGraphCanvas`) has no `viewPicker` prop at all, so there is no
+    // runtime toggle to exercise on that side; this pins the positive half,
+    // that whatever picker the tile hands over is rendered where it belongs.
+    const marker = <div data-testid="marker-view-picker">Marker</div>;
+    render(
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id]), STATIC_OFFICE, {
+          viewPicker: marker,
+        }),
+      ),
+    );
+
+    const surface = screen.getByTestId("comm-graph-office-canvas");
+    expect(surface.contains(screen.getByTestId("marker-view-picker"))).toBe(
+      true,
+    );
+  });
+
+  it("shows Auto's chip text for the decision it was given", () => {
+    const decision: OfficeAutoDecision = {
+      view: "towers",
+      fits: [
+        { view: "floor", zoom: 0.12 },
+        { view: "towers", zoom: 0.83 },
+      ],
+      agents: 42,
+    };
+    render(
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id]), STATIC_OFFICE, {
+          autoChip: <OfficeAutoChip decision={decision} />,
+        }),
+      ),
+    );
+
+    expect(screen.getByTestId("comm-graph-office-auto-chip").textContent).toBe(
+      "Auto · Towers · measured at 42 agents · Floor would be 0.12×",
+    );
+  });
+
+  it("shows the measuring placeholder while Auto has not decided yet", () => {
+    render(
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id]), STATIC_OFFICE, {
+          autoChip: <OfficeAutoChip decision={null} />,
+        }),
+      ),
+    );
+
+    expect(screen.getByTestId("comm-graph-office-auto-chip").textContent).toBe(
+      "Auto · measuring…",
+    );
+  });
+
+  it("reads the LOD chip as Office at 1x and Overview once zoomed out past 0.7x", () => {
+    renderOffice(new Set([ORCHESTRATOR.id]));
+
+    expect(screen.getByTestId("comm-graph-office-lod-chip").textContent).toBe(
+      "Office",
+    );
+
+    // Two clicks: 1 / 1.25 / 1.25 = 0.64, below the 0.7x office-detail floor.
+    fireEvent.click(screen.getByTestId("comm-graph-office-zoom-out"));
+    fireEvent.click(screen.getByTestId("comm-graph-office-zoom-out"));
+
+    expect(screen.getByTestId("comm-graph-office-lod-chip").textContent).toBe(
+      "Overview",
+    );
+  });
+
+  it("pans on a plain wheel and persists the camera after the debounce", () => {
+    vi.useFakeTimers();
+    const onCameraChange = vi.fn();
+    render(
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id]), STATIC_OFFICE, {
+          onCameraChange,
+        }),
+      ),
+    );
+    const surface = screen.getByTestId("comm-graph-office-canvas");
+
+    fireEvent.wheel(surface, { deltaX: 40, deltaY: 25 });
+    // Not yet - the write is debounced, so a still-pending pan must not have
+    // reached the store.
+    expect(onCameraChange).not.toHaveBeenCalled();
+
+    act(() => {
+      vi.advanceTimersByTime(150);
+    });
+
+    expect(onCameraChange).toHaveBeenCalledWith({ x: -40, y: -25, zoom: 1 });
+  });
+
+  it("zooms about the cursor on ctrl-wheel instead of panning", () => {
+    vi.useFakeTimers();
+    const onCameraChange = vi.fn();
+    render(
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id]), STATIC_OFFICE, {
+          onCameraChange,
+        }),
+      ),
+    );
+    const surface = screen.getByTestId("comm-graph-office-canvas");
+
+    // A pinch arrives as ctrl-wheel; a negative deltaY is a zoom IN.
+    fireEvent.wheel(surface, {
+      deltaY: -300,
+      ctrlKey: true,
+      clientX: 0,
+      clientY: 0,
+    });
+
+    act(() => {
+      vi.advanceTimersByTime(150);
+    });
+
+    expect(onCameraChange).toHaveBeenCalledTimes(1);
+    const camera = onCameraChange.mock.calls[0][0] as { zoom: number };
+    // Anchored at (0, 0) with the camera already at (0, 0), so only the zoom
+    // moves - the pan half of the same gesture is covered above.
+    expect(camera.zoom).toBeGreaterThan(1);
+  });
+
+  it("fits the whole floor to the tile on F, and persists it after the debounce", () => {
+    vi.useFakeTimers();
+    const onCameraChange = vi.fn();
+    render(
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id, REVIEWER.id]), STATIC_OFFICE, {
+          onCameraChange,
+        }),
+      ),
+    );
+    // Eligible first, so a scene exists for `fitToFloor` to read a world size
+    // from - `peekScene()` returns null otherwise and F would be a no-op.
+    setIntersecting(true);
+    // Big enough that the fit zoom hits its cap (6x) on this fixture's tiny
+    // two-agent floor, which makes the expected camera an exact, round number
+    // instead of a packing-dependent fraction.
+    setCanvasSize({ width: 4200, height: 1900 });
+
+    const surface = screen.getByRole("img", {
+      name: "Office view of the communication graph",
+    });
+    fireEvent.keyDown(surface, { key: "F" });
+
+    act(() => {
+      vi.advanceTimersByTime(150);
+    });
+
+    expect(onCameraChange).toHaveBeenCalledWith({ x: 36, y: 38, zoom: 6 });
+  });
+
+  it("returns to 1x on 0, from the centre of the tile", () => {
+    vi.useFakeTimers();
+    const onCameraChange = vi.fn();
+    render(
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id]), STATIC_OFFICE, {
+          onCameraChange,
+        }),
+      ),
+    );
+    const surface = screen.getByRole("img", {
+      name: "Office view of the communication graph",
+    });
+
+    fireEvent.keyDown(surface, { key: "+" });
+    fireEvent.keyDown(surface, { key: "0" });
+
+    act(() => {
+      vi.advanceTimersByTime(150);
+    });
+
+    const last = onCameraChange.mock.calls.at(-1)?.[0] as { zoom: number };
+    expect(last.zoom).toBeCloseTo(1, 5);
+  });
+
+  it("cancels a pending camera persist on unmount, leaving no stale write behind", () => {
+    // The same unmount a view pick's remount performs (T6's own claim: "the
+    // unmount cancels the debounce"). A pan mid-flight when that happens must
+    // not land after the fact.
+    vi.useFakeTimers();
+    const onCameraChange = vi.fn();
+    const view = render(
+      withQueryClient(
+        officeElement(new Set([ORCHESTRATOR.id]), STATIC_OFFICE, {
+          onCameraChange,
+        }),
+      ),
+    );
+    const surface = screen.getByTestId("comm-graph-office-canvas");
+
+    fireEvent.wheel(surface, { deltaX: 40, deltaY: 0 });
+    view.unmount();
+
+    act(() => {
+      vi.advanceTimersByTime(150);
+    });
+
+    expect(onCameraChange).not.toHaveBeenCalled();
+  });
+
+  it("renders directory rows from the partition and statusById", () => {
+    renderOffice(new Set([ORCHESTRATOR.id, REVIEWER.id]));
+
+    // Both agents are idle in this fixture (no hot signal is wired into this
+    // suite's mocks), so nothing shows under Teams at work or the Bullpen.
+    // The Quiet count is 1, not 2: the first root (Orchestrator) settles as
+    // this host's HQ, and the HQ row is shown rather than counted into
+    // Quiet - only Reviewer's solo goes there. The footer counts both,
+    // straight off the partition this canvas derives.
+    expect(
+      screen.getByTestId("comm-graph-office-directory-quiet").textContent,
+    ).toBe("Quiet · 1 idle or archived");
+    expect(
+      screen.getByTestId("comm-graph-office-directory-footer").textContent,
+    ).toBe("2 agents · 0 at work");
+  });
+
+  it("gives the host's HQ its own directory row, selectable like any other", () => {
+    // Orchestrator settles as host-1's HQ (the epic's root) - it used to be
+    // in no team and no bullpen, and so had no row at all, which made it the
+    // one agent this panel could not browse to.
+    renderOffice(new Set([ORCHESTRATOR.id, REVIEWER.id]));
+
+    fireEvent.click(
+      screen.getByTestId(
+        `comm-graph-office-directory-agent-${ORCHESTRATOR.id}`,
+      ),
+    );
+
+    expect(screen.getByTestId("comm-graph-agent-panel")).toBeDefined();
+    expect(screen.getAllByText("Orchestrator").length).toBeGreaterThan(0);
+  });
+
+  it("pans to an agent found in the directory search through scene.locate, not a pixel result", () => {
+    // jsdom never runs the animation loop that would actually move the
+    // camera (no 2d context), so the observable claim here is that the pan
+    // is AIMED FROM THE SEAT BOOK - `scene.locate` - not that a pixel moved.
+    const locateSpy = vi.spyOn(OfficeScene.prototype, "locate");
+    const both = new Set([ORCHESTRATOR.id, REVIEWER.id, OFFSCREEN.id]);
+    render(
+      withQueryClient(
+        officeElement(both, STATIC_OFFICE, {
+          agents: [ORCHESTRATOR, REVIEWER, OFFSCREEN],
+        }),
+      ),
+    );
+    // A scene has to exist before there is anything for `locate` to read.
+    setIntersecting(true);
+
+    fireEvent.change(screen.getByTestId("comm-graph-office-directory-search"), {
+      target: { value: "Offscreen" },
+    });
+    fireEvent.click(
+      screen.getByTestId(`comm-graph-office-directory-agent-${OFFSCREEN.id}`),
+    );
+
+    expect(locateSpy).toHaveBeenCalledWith(OFFSCREEN.id);
+    // The same click also selects the agent, which is the other half of
+    // "select AND take the camera to it" the panel's own contract promises.
+    expect(screen.getByTestId("comm-graph-agent-panel")).toBeDefined();
+  });
+
+  it("filters the directory to the visible set, dropping a host section with nothing left in it", () => {
+    // The partition seats every agent the epic ever had, but the floor only
+    // draws the as-of-cursor set - so a host whose only VISIBLE agent has not
+    // been revealed yet must not leave a heading over nothing. Host B's lead
+    // settles as that host's HQ and, being invisible, gets no row of its own
+    // either - the filter applies to the HQ row exactly like any other; its
+    // member is the real solo row that would otherwise have kept the section
+    // alive. Host C stays fully visible so a SECOND section survives - with
+    // only one section left, headers are omitted entirely ("one host needs
+    // no header"), which would make host-1's own heading absent too and hide
+    // the difference between "filtered out" and "there's only one host".
+    const visible = new Set([
+      ORCHESTRATOR.id,
+      REVIEWER.id,
+      HOST_C_LEAD.id,
+      HOST_C_MEMBER.id,
+    ]);
+    render(
+      withQueryClient(
+        officeElement(visible, STATIC_OFFICE, {
+          agents: [
+            ORCHESTRATOR,
+            REVIEWER,
+            HOST_B_LEAD,
+            HOST_B_MEMBER,
+            HOST_C_LEAD,
+            HOST_C_MEMBER,
+          ],
+        }),
+      ),
+    );
+
+    // The negative, with a positive control beside it: host-2's heading is
+    // gone, not merely quiet, while host-1's (and host-3's) are still there.
+    expect(screen.queryByText("host-2")).toBeNull();
+    expect(screen.getByText("host-1")).toBeDefined();
+    expect(screen.getByText("host-3")).toBeDefined();
+    // Host B's HQ row is gone too - the same visible-set filter that removes
+    // any other row.
+    expect(
+      screen.queryByTestId(
+        `comm-graph-office-directory-agent-${HOST_B_LEAD.id}`,
+      ),
+    ).toBeNull();
+    expect(screen.queryByText(HOST_B_MEMBER.name)).toBeNull();
+    expect(
+      screen.getByTestId("comm-graph-office-directory-footer").textContent,
+    ).toBe("4 agents · 0 at work");
+
+    fireEvent.change(screen.getByTestId("comm-graph-office-directory-search"), {
+      target: { value: "Bay member" },
+    });
+    expect(
+      screen.queryByTestId(
+        `comm-graph-office-directory-agent-${HOST_B_MEMBER.id}`,
+      ),
+    ).toBeNull();
+    expect(screen.getByText("Nobody here by that name.")).toBeDefined();
   });
 });

@@ -3300,6 +3300,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       {!directoryOpen ? null : (
         <OfficeDirectoryPanel
           partition={partition}
+          visibleAgentIds={agentIds}
           statusById={statusById}
           nameById={nameById}
           hostNameById={hostNameById}

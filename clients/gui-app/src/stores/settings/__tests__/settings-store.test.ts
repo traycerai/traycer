@@ -246,9 +246,9 @@ describe("useSettingsStore", () => {
 
   it("repairs a persisted agent office default view naming an unregistered view to auto", async () => {
     useSettingsStore.setState({ agentOfficeDefaultView: "towers" });
-    // "city" is not in OFFICE_VIEW_IDS at this build - a value a newer build
-    // wrote and this one cannot plan.
-    await rehydrateFrom({ agentOfficeDefaultView: "city" });
+    // Not in OFFICE_VIEW_IDS at any build - a value a newer one wrote and this
+    // one cannot plan.
+    await rehydrateFrom({ agentOfficeDefaultView: "atrium" });
 
     expect(useSettingsStore.getState().agentOfficeDefaultView).toBe("auto");
   });
