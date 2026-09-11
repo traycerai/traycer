@@ -459,6 +459,14 @@ function lastFailedAttemptFixture() {
     // fixture pairing `wait_once` with any other disposition would be
     // asserting a state the producer cannot emit.
     waitDisposition: "eligible" as const,
+    // The same rule one field up, applied to the switch half: `switch` is in
+    // `eligibleRungs`, and `eligible` is the one disposition the producer can
+    // pair with that.
+    switchDisposition: "eligible" as const,
+    // Non-null on purpose. `null` is the degraded arm (no replay envelope), so
+    // a fixture that used it would round-trip the ABSENCE of a tuple and never
+    // prove the nested `chatRunSettings` shape survives this line.
+    failedTuple: chatRunSettingsFixture("claude-sonnet-5"),
   };
 }
 

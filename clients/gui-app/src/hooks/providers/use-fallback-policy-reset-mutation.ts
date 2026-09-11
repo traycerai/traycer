@@ -6,6 +6,7 @@ import type {
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
+import { fallbackPolicyWriteScope } from "@/hooks/providers/use-fallback-policy-set-mutation";
 import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
 
 interface FallbackPolicyResetContext {
@@ -72,6 +73,12 @@ export function useFallbackPolicyResetMutation(): UseMutationResult<
     mapVariables: (variables) => variables,
     options: {
       mutationKey: providersMutationKeys.resetFallbackPolicy(),
+      // The SAME scope the save and the restore take - three methods writing
+      // one row, and the coordinator's queue key cannot order two methods
+      // against each other at all. It matters most on this one: a reset
+      // INVALIDATES where the save writes in place, so a save landing after a
+      // reset leaves the panel showing a policy the row no longer holds.
+      scope: fallbackPolicyWriteScope(client.getActiveHostId()),
       // Captured before dispatch, as on the save: the host can change under a
       // slow call, and writing the result into the new host's cache slot would
       // show one machine's policy under another's name.

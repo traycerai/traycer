@@ -9,6 +9,7 @@ import { formatClockTime } from "@/lib/relative-time";
 import {
   CHOOSE_DIFFERENTLY_LABEL,
   COUNTDOWN_NOT_PAUSED_LABEL,
+  HOST_UNREACHABLE_LABEL,
   SWITCH_INSTEAD_LABEL,
   describeFallbackOutcome,
   switchConsequencesText,
@@ -223,6 +224,27 @@ export function FallbackGraceMenu({
             }
             setRefusal(message);
           },
+          // The one answer this menu had NO line for. Every `outcome` above
+          // arrives in a successful response; a request that got no response at
+          // all left `refusal` unset, `picking` fell back to false, the rows
+          // re-enabled, and the surface the click came from said nothing at all
+          // about a click that failed.
+          //
+          // Beside, not instead of, `useHostScopedMutationForClient`'s toast.
+          // The two are complementary rather than duplicated, because a per-call
+          // handler is the OBSERVER's: TanStack runs this one only while this
+          // popover is still mounted, which is exactly when the inline line is
+          // the right channel, and the toast is what remains when the traversal
+          // has already taken this surface away. The cost is that both speak
+          // while the menu IS open - accepted, because a silent popover in front
+          // of the user is the worse half of that trade.
+          //
+          // `HOST_UNREACHABLE_LABEL` rather than a second wording: this menu
+          // already prints exactly this sentence when the LISTING cannot reach
+          // the host, and one unreachable host is one fact.
+          onError: () => {
+            setRefusal(HOST_UNREACHABLE_LABEL);
+          },
         },
       );
     },
@@ -348,6 +370,12 @@ export function FallbackWaitingMenu({
               return;
             }
             setRefusal(message);
+          },
+          // The transport half, on the same terms as the grace menu's - see the
+          // note there. Same defect, same channel: an unanswered pick used to
+          // leave this popover looking exactly as it did before the click.
+          onError: () => {
+            setRefusal(HOST_UNREACHABLE_LABEL);
           },
         },
       );

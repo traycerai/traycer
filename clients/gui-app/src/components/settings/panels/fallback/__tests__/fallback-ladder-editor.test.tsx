@@ -43,6 +43,7 @@ function renderLadder(
       onToggle={onToggle}
       onMove={onMove}
       profileStepHint={null}
+      tierStepHint={null}
     />,
   );
   return { onMove, onToggle };
@@ -234,6 +235,7 @@ describe("FallbackLadderEditor - F19 notify has no switch", () => {
         onToggle={vi.fn()}
         onMove={vi.fn()}
         profileStepHint={null}
+        tierStepHint={null}
       />,
     );
     // Falsification: render `<Switch>` for the fixed step too (undo the
@@ -264,6 +266,7 @@ describe("FallbackLadderEditor - F19 notify has no switch", () => {
         onToggle={onToggle}
         onMove={vi.fn()}
         profileStepHint={null}
+        tierStepHint={null}
       />,
     );
     const addBack = screen.getByRole("button", {
@@ -286,6 +289,7 @@ describe("FallbackLadderEditor - F19 notify has no switch", () => {
         onToggle={vi.fn()}
         onMove={vi.fn()}
         profileStepHint={null}
+        tierStepHint={null}
       />,
     );
     expect(screen.getByTestId("fallback-step-always-on")).not.toBeNull();

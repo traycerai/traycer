@@ -309,6 +309,12 @@ describe("F11: exactly one recovery group reaches the document for a split turn"
       failure: { reason: "rate_limit" },
       eligibleRungs: ["retry"],
       waitDisposition: "no_verified_reset",
+      // This suite is about WHICH ROW the affordances anchor to, never about
+      // which of them the host admits. `unknown` is the value that claims
+      // nothing and renders no explanatory sentence, so it keeps the rendered
+      // output here exactly what these assertions were written against.
+      switchDisposition: "unknown",
+      failedTuple: null,
     };
     const assistant = {
       ...assistantMessage("turn-split", 2000),

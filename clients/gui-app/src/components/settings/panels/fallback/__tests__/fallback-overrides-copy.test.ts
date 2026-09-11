@@ -34,7 +34,7 @@ describe("MATRIX_REASONS", () => {
 describe("RUNG_INELIGIBILITY_COPY", () => {
   it("is null exactly where REASON_ELIGIBLE_RUNGS lists the rung, over the window the matrix actually reads (MATRIX_REASONS x FALLBACK_MATRIX_RUNGS)", () => {
     // Deliberately scoped to this window and not the whole record: the
-    // `notify` column and the five excluded reasons are null-throughout for a
+    // `notify` column and the excluded reasons are null-throughout for a
     // DIFFERENT reason (unreachable cells, not "eligible everywhere"), which
     // the doc comment on the constant calls out by name. Stating the
     // invariant over the whole record would be false for those two

@@ -31,8 +31,23 @@ export type FallbackTargetsResult = UseQueryResult<
  * **`enabled` is the menu's open state.** The list is a snapshot of a world
  * that moves (a gauge refreshes, a sibling chat takes the account), so it is
  * fetched when the menu opens rather than held warm behind every card. That is
- * also why `staleTime` is zero: a menu reopened a minute later must not paint
- * rows from the last time it was open.
+ * also why `staleTime` is zero: every open re-asks, rather than reusing the
+ * last open's answer as fresh.
+ *
+ * What `staleTime: 0` does NOT do - and this doc used to say it did - is keep
+ * the previous open's rows off the screen. A stale entry is refetched AND
+ * returned: within `gcTime` a reopen resolves `status: "success"` with the old
+ * `data` on the very first render, and only `isFetching` says a newer answer is
+ * on its way. So the "must not paint rows from the last time it was open" rule
+ * is a RENDER gate, not a cache setting, and it lives at the consumer -
+ * `MenuBody` in `fallback-destination-menu.tsx`, whose `isPending` branch is
+ * false in exactly that state.
+ *
+ * `gcTime: 0` is not the alternative and is deliberately not set here: under
+ * StrictMode's double mount a zero-`gcTime` query is evicted between the paired
+ * mounts while its fetch is in flight, the completion lands observer-less, and
+ * the menu spins forever (`use-link-login-code-query.ts` carries the same note
+ * for the same reason).
  *
  * **The selector is part of the cache identity**, through `params`. The grace
  * card and the error card can ask about the same chat in the same second and

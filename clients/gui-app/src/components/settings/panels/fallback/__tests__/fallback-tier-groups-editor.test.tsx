@@ -11,6 +11,7 @@ import {
   createDefaultFallbackPolicy,
   type FallbackPolicy,
   type TierCandidate,
+  type TierCandidatePreview,
   type TierGroup,
 } from "@traycer/protocol/host/fallback-policy";
 import {
@@ -551,5 +552,102 @@ describe("FallbackTierGroupsEditor - FC9: preview failure vs absence", () => {
     expect(regions[0].textContent).toContain(
       "Couldn't check what these models resolve to.",
     );
+  });
+});
+
+describe("FallbackTierGroupsEditor - a duplicated group NAME withholds the preview", () => {
+  function previewRow(
+    groupId: string,
+    candidateIndex: number,
+    resolvedModel: string,
+  ): TierCandidatePreview {
+    return {
+      groupId,
+      candidateIndex,
+      harnessId: "claude",
+      modelFamily: "opus",
+      reasoningEffort: null,
+      resolvedModel,
+      profileId: null,
+      skipReason: null,
+      skipLabel: null,
+      warnings: [],
+    };
+  }
+
+  /**
+   * The editor alone, not the stateful `Harness` above: this asserts one
+   * render's output, and the harness exists to feed edited groups back in.
+   */
+  function renderGroups(
+    groups: readonly TierGroup[],
+    preview: readonly TierCandidatePreview[],
+  ): void {
+    render(
+      <FallbackTierGroupsEditor
+        policy={createDefaultFallbackPolicy()}
+        groups={toKeyedGroups(groups)}
+        preview={preview}
+        labelFor={(profileId) => profileId}
+        effortOptions={NO_EFFORT_OPTIONS}
+        previewPending={false}
+        previewUnavailable={false}
+        onRetryPreview={() => {}}
+        onChange={() => {}}
+        onCommit={() => {}}
+        onUndo={() => {}}
+        onRestoreDefaults={() => {}}
+        restorePending={false}
+        status={null}
+      />,
+    );
+  }
+
+  it("two groups answering to one name render NO verdict, rather than each other's", () => {
+    // The state a rename passes through: "fast" being retyped over "fastest"
+    // hits "fast" on the way, and `fallback-tier-group-keys.ts` documents that
+    // intermediate duplicates are allowed rather than rejected.
+    //
+    // Preview rows are identified by `(groupId, candidateIndex)`, so both
+    // cards match both rows here and the card's own `previewFor` then picks by
+    // `candidateIndex` alone. Without the guard, the SECOND group's single row
+    // renders "resolves to claude-opus-4" - the verdict the host computed for
+    // the FIRST group's row, on a model family the second group does not even
+    // name.
+    //
+    // Falsification: drop the `ambiguousNames.has(groupId)` line from
+    // `previewForGroup`. Two preview lines appear, and the `haiku` row claims
+    // to resolve to `claude-opus-4`.
+    renderGroups(
+      [
+        tierGroup("fast", [candidate("opus")]),
+        tierGroup("fast", [candidate("haiku")]),
+      ],
+      [previewRow("fast", 0, "claude-opus-4")],
+    );
+    expect(
+      screen.queryAllByTestId("fallback-tier-candidate-preview"),
+    ).toHaveLength(0);
+  });
+
+  it("a group whose name is unique still renders its verdict while a SIBLING pair is ambiguous", () => {
+    // The control the suppression needs, and the reason it is keyed per NAME
+    // rather than per list: suppressing the whole preview whenever any two
+    // names collide would blank verdicts on rows nothing is ambiguous about,
+    // and the assertion above cannot tell that apart from the fix.
+    renderGroups(
+      [
+        tierGroup("fast", [candidate("opus")]),
+        tierGroup("fast", [candidate("haiku")]),
+        tierGroup("slow", [candidate("sonnet")]),
+      ],
+      [
+        previewRow("fast", 0, "claude-opus-4"),
+        previewRow("slow", 0, "claude-sonnet-4"),
+      ],
+    );
+    const lines = screen.queryAllByTestId("fallback-tier-candidate-preview");
+    expect(lines).toHaveLength(1);
+    expect(lines[0].textContent).toContain("claude-sonnet-4");
   });
 });

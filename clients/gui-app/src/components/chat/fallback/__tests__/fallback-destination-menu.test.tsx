@@ -1018,8 +1018,20 @@ describe("FallbackDestinationMenu", () => {
         failedTuple: FAILED_CLAUDE_TUPLE,
         profileTargets: [],
         modelTargets: [],
+        // `family-unmatched`, not `no-group`, and the swap is deliberate.
+        //
+        // This case is about the wire contract: a host-supplied `label` beats
+        // the client's generic sentence. `no-group` used to be the example and
+        // is now the ONE carve-out from it - it describes an absence rather
+        // than a candidate, and the host cannot write its sentence because that
+        // sentence has to name the chat ("Claude Code · default") while the
+        // host names tuples `claude/default`. So the rule this case pins is
+        // demonstrated on a reason that still obeys it, and the carve-out plus
+        // its own boundary are pinned in "the no-destination empty state"
+        // below. Using the carved-out reason here would have made this case a
+        // test of the exception rather than of the rule.
         modelTargetsSkip: fallbackSkip({
-          reason: "no-group",
+          reason: "family-unmatched",
           label: "<host words>",
         }),
       }),
@@ -2160,6 +2172,112 @@ describe("FallbackWaitingMenu", () => {
       revision: 8,
       target: TARGET_CODEX_TUPLE,
       leaseToken: null,
+    });
+  });
+
+  /**
+   * The rung-level `no-group` empty state - the commonest empty menu there is,
+   * and the one whose sentence a host-side string cannot write.
+   *
+   * The host sends the REASON and a degraded label; the words a user reads are
+   * resolved here, because the provider display name lives on this side. So
+   * these cases pin the substitution (the identity replaces the label) and its
+   * boundary (every OTHER reason still renders the label verbatim, which is the
+   * wire contract this surface must not quietly stop honouring).
+   */
+  describe("the no-destination empty state", () => {
+    const DEFAULT_SHAPED_TUPLE = chatRunSettings({
+      harnessId: "claude",
+      model: "default",
+      profileId: null,
+    });
+
+    function renderEmptyMenu(skip: FallbackTargetSkip | null) {
+      renderMenu({
+        data: listed({
+          failedTuple: DEFAULT_SHAPED_TUPLE,
+          // BOTH lists empty, which is what the defect actually looks like once
+          // the chat's only account is the one that failed: no rows to explain
+          // themselves, so this line is the entire contents of the popover.
+          profileTargets: [],
+          modelTargets: [],
+          modelTargetsSkip: skip,
+        }),
+        open: true,
+        preparing: false,
+        picking: false,
+        refusal: null,
+        header: null,
+        emptyStateActions: null,
+        onPick: vi.fn(),
+        onOpenChange: () => undefined,
+      });
+    }
+
+    it("names the chat instead of repeating the host's degraded label", () => {
+      renderEmptyMenu({
+        reason: "no-group",
+        // The host's own words, which a current client is expected to REPLACE.
+        // Kept deliberately distinct from anything the identity sentence says,
+        // so "the label was rendered" and "the sentence was rendered" cannot
+        // both be satisfied by one string.
+        label: "No other model is set up as equivalent to this one.",
+      });
+      expect(
+        screen.getByText("No other model is set up for Claude Code · default"),
+      ).toBeDefined();
+      expect(
+        screen.queryByText(
+          "No other model is set up as equivalent to this one.",
+        ),
+      ).toBeNull();
+      // The generic fallbacks must NOT also appear - the specific sentence
+      // replaces them rather than joining them.
+      expect(screen.queryByText(NO_DESTINATIONS_LABEL)).toBeNull();
+      expect(screen.queryByText(NO_SELECTABLE_DESTINATIONS_LABEL)).toBeNull();
+    });
+
+    it("renders the host's label verbatim for every other reason", () => {
+      // The boundary case, and the one a careless implementation breaks: the
+      // wire contract is that `label` is always safe to show and that this
+      // surface does not re-word a reason. Only `no-group` is carved out, and
+      // only because it is the one reason that describes an ABSENCE rather
+      // than a candidate.
+      renderEmptyMenu({
+        reason: "already-tried",
+        label: "already tried",
+      });
+      expect(screen.getByText("already tried")).toBeDefined();
+      expect(screen.queryByText(/No other model is set up for/)).toBeNull();
+    });
+
+    it("falls back to the host's label when no failed tuple came back", () => {
+      // `failedTuple: null` leaves nothing to name. The host's label is then
+      // the better of the two - a sentence trailing off into an empty identity
+      // is worse than a generic one.
+      renderMenu({
+        data: listed({
+          failedTuple: null,
+          profileTargets: [],
+          modelTargets: [],
+          modelTargetsSkip: {
+            reason: "no-group",
+            label: "No other model is set up as equivalent to this one.",
+          },
+        }),
+        open: true,
+        preparing: false,
+        picking: false,
+        refusal: null,
+        header: null,
+        emptyStateActions: null,
+        onPick: vi.fn(),
+        onOpenChange: () => undefined,
+      });
+      expect(
+        screen.getByText("No other model is set up as equivalent to this one."),
+      ).toBeDefined();
+      expect(screen.queryByText(/No other model is set up for/)).toBeNull();
     });
   });
 });

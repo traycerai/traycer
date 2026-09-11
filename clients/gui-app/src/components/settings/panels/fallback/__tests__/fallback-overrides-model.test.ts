@@ -67,7 +67,10 @@ describe("togglePolicyOverrideRung - order comes from rungOrder, not from the ro
       rung: "profile",
       rungOrder,
     });
-    expect(afterProfile.reasonOverrides?.auth).toEqual(["profile"]);
+    // "notify" rides along from the base ladder (see the `"off"` suite below)
+    // and lands LAST because that is where this rungOrder puts it - not
+    // because anything appends it.
+    expect(afterProfile.reasonOverrides?.auth).toEqual(["profile", "notify"]);
 
     const afterWaitToo = togglePolicyOverrideRung({
       policy: afterProfile,
@@ -77,8 +80,12 @@ describe("togglePolicyOverrideRung - order comes from rungOrder, not from the ro
     });
     // "tier" was clicked SECOND, but rungOrder places it before "profile" -
     // if order were taken from click order the result would be
-    // ["profile", "tier"] instead.
-    expect(afterWaitToo.reasonOverrides?.auth).toEqual(["tier", "profile"]);
+    // ["profile", "tier", "notify"] instead.
+    expect(afterWaitToo.reasonOverrides?.auth).toEqual([
+      "tier",
+      "profile",
+      "notify",
+    ]);
   });
 });
 
@@ -117,7 +124,7 @@ describe("togglePolicyOverrideRung - an override equal to the base ladder is rem
     });
   });
 
-  it("starts from nothing, not from the base ladder, when turning a chip on for an 'off' row", () => {
+  it("does not restore the whole base ladder when turning a chip on for an 'off' row", () => {
     const offRow = policy({ reasonOverrides: { auth: "off" } });
     const next = togglePolicyOverrideRung({
       policy: offRow,
@@ -125,7 +132,65 @@ describe("togglePolicyOverrideRung - an override equal to the base ladder is rem
       rung: "tier",
       rungOrder: BASE_LADDER,
     });
-    // Only "tier" runs - not the whole base ladder restored.
+    // "tier" is the only STEP that runs - "profile" and "wait" stay out. The
+    // terminal "notify" is not a step the chips author; see the suite below.
+    expect(next.reasonOverrides?.auth).toEqual(["tier", "notify"]);
+  });
+});
+
+describe("togglePolicyOverrideRung - the 'off' row keeps its terminal notify", () => {
+  it("carries notify through the FIRST chip turned on for a stored 'off' reason", () => {
+    // The bug this pins: `desired` seeded empty for `"off"`, and `notify` has
+    // no chip and no other writer on this page - so one click on an "off" row
+    // stored a ladder with no terminal hold and left the user no control to
+    // put it back. `FALLBACK_OVERRIDES_DISCLOSURE` promises "Notify stays
+    // last"; without the carry that sentence is false the moment it matters.
+    const offRow = policy({ reasonOverrides: { auth: "off" } });
+    const next = togglePolicyOverrideRung({
+      policy: offRow,
+      reason: "auth",
+      rung: "profile",
+      rungOrder: BASE_LADDER,
+    });
+    expect(next.reasonOverrides?.auth).toEqual(["profile", "notify"]);
+  });
+
+  it("leaves the terminal notify standing when that one chip is turned back off", () => {
+    // The round trip out of "off" and back to "nothing chosen". The
+    // disclosure's other half - "turning every chip off preserves that
+    // failure's ... terminal Notify" - is what this is; an empty array here
+    // would arm and exhaust silently.
+    const offRow = policy({ reasonOverrides: { auth: "off" } });
+    const on = togglePolicyOverrideRung({
+      policy: offRow,
+      reason: "auth",
+      rung: "profile",
+      rungOrder: BASE_LADDER,
+    });
+    const backOff = togglePolicyOverrideRung({
+      policy: on,
+      reason: "auth",
+      rung: "profile",
+      rungOrder: BASE_LADDER,
+    });
+    expect(backOff.reasonOverrides?.auth).toEqual(["notify"]);
+  });
+
+  it("does not invent notify for a user whose own ladder has none", () => {
+    // The carry reads the BASE ladder rather than adding a rung
+    // unconditionally: a user who took the terminal hold out of their main
+    // order is not given it back by clicking a per-failure chip. Without this
+    // arm the fix above would pass just as well written as `["notify"]`.
+    const noNotify = policy({
+      ladder: ["profile", "tier", "wait"],
+      reasonOverrides: { auth: "off" },
+    });
+    const next = togglePolicyOverrideRung({
+      policy: noNotify,
+      reason: "auth",
+      rung: "tier",
+      rungOrder: BASE_LADDER,
+    });
     expect(next.reasonOverrides?.auth).toEqual(["tier"]);
   });
 });

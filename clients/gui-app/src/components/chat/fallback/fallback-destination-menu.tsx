@@ -32,11 +32,13 @@ import {
   PAUSING_COUNTDOWN_LABEL,
   RECOMMENDED_LABEL,
   describeListTargetsOutcome,
+  noSwitchDestinationText,
 } from "./fallback-copy";
 import {
   fallbackDestinationOfModelTarget,
   fallbackDestinationRowTitle,
   fallbackKnownHarnessFor,
+  fallbackProviderModelLabel,
   useFallbackProfileLabels,
 } from "./fallback-identity";
 import { FallbackNoticeSettingsLink } from "./fallback-notice-attribution";
@@ -307,6 +309,7 @@ export function FallbackDestinationMenu({
             preparing,
             refusal,
             isPending: targets.isPending,
+            isFetching: targets.isFetching,
             isError: targets.isError,
             data,
           })}
@@ -316,6 +319,7 @@ export function FallbackDestinationMenu({
           preparing={preparing}
           refusal={refusal}
           isPending={targets.isPending}
+          isFetching={targets.isFetching}
           isError={targets.isError}
           failedTuple={failedTuple}
           labelFor={labelFor}
@@ -338,10 +342,13 @@ export function FallbackDestinationMenu({
  * - **A refusal.** Spoken by its own region above, which is simultaneously the
  *   visible line. Repeating it here would be the same sentence from two live
  *   regions in the same popover.
- * - **Preparing or loading.** A spinner is not a result. The user asked for
- *   this by opening the menu, the visible line says which wait it is, and an
- *   announcement per intermediate state turns the arrival of the real answer
- *   into the third thing they heard rather than the first.
+ * - **Preparing, loading, or REFETCHING.** A spinner is not a result. The user
+ *   asked for this by opening the menu, the visible line says which wait it
+ *   is, and an announcement per intermediate state turns the arrival of the
+ *   real answer into the third thing they heard rather than the first. The
+ *   third of those is the one that reads as already settled and is not:
+ *   `isFetching` over retained `data` is the reopen case below, where the
+ *   count would be LAST open's count, announced as this open's answer.
  *
  * Everything after that speaks, including the two states that used to be
  * silent on the theory that a visible line was enough. It is not: nothing here
@@ -356,11 +363,12 @@ function menuStatusAnnouncement(input: {
   readonly preparing: boolean;
   readonly refusal: string | null;
   readonly isPending: boolean;
+  readonly isFetching: boolean;
   readonly isError: boolean;
   readonly data: ChatFallbackListTargetsResponse | undefined;
 }): string {
   if (input.refusal !== null) return "";
-  if (input.preparing || input.isPending) return "";
+  if (input.preparing || input.isPending || input.isFetching) return "";
   // The transport failed. Same words the body prints, for the reason given at
   // the call site: one wording per fact, even at the cost of saying it twice.
   if (input.isError || input.data === undefined) return HOST_UNREACHABLE_LABEL;
@@ -390,6 +398,7 @@ function MenuBody({
   preparing,
   refusal,
   isPending,
+  isFetching,
   isError,
   failedTuple,
   labelFor,
@@ -401,6 +410,13 @@ function MenuBody({
   readonly preparing: boolean;
   readonly refusal: string | null;
   readonly isPending: boolean;
+  /**
+   * A fetch is in flight for the CURRENT query key - which, on a reopen, is
+   * true at the same time as `data` holding last open's answer. See the
+   * `isPending || isFetching` branch below; this is the render gate
+   * `use-fallback-targets.ts` documents and `staleTime: 0` cannot supply.
+   */
+  readonly isFetching: boolean;
   readonly isError: boolean;
   readonly failedTuple: ChatRunSettings | null;
   readonly labelFor: (profileId: string | null) => string;
@@ -426,7 +442,29 @@ function MenuBody({
       </div>
     );
   }
-  if (isPending) {
+  // `isFetching` beside `isPending`, and it is the half that actually bites.
+  //
+  // `isPending` is only ever true when there is NO data - the first open, or a
+  // disabled query. The state this menu must not paint is the other one: a
+  // reopen inside `gcTime` resolves `status: "success"` carrying the PREVIOUS
+  // open's rows on the very first render, with the refetch still in flight. So
+  // `isPending` is false, `data` is defined, and every branch below would have
+  // rendered a list of destinations computed against a world that has since
+  // moved - and, worse, accepted a pick against one of them, because the rows'
+  // `disabled` reads that same stale `selectable`.
+  //
+  // `staleTime: 0` does not close this and was never able to: a stale entry is
+  // refetched AND returned. The gate has to be here, at the consumer, which is
+  // what `use-fallback-targets.ts`'s doc now says. `gcTime: 0` is NOT the
+  // alternative - under StrictMode's double mount a zero-`gcTime` query is
+  // evicted between the paired mounts while its fetch is in flight, the
+  // completion lands observer-less, and the menu spins forever
+  // (`use-link-login-code-query.ts` carries the same note).
+  //
+  // Any in-flight fetch counts, not only a reopen's. A background refetch is
+  // by definition an answer we are about to replace, and "Finding
+  // destinations…" for its duration is the honest report of that.
+  if (isPending || isFetching) {
     return (
       <div className="px-1 py-2 text-ui-xs text-muted-foreground">
         {FINDING_DESTINATIONS_LABEL}
@@ -473,19 +511,7 @@ function MenuBody({
       <div className="flex flex-col gap-2">
         <div className="flex flex-col gap-2 px-1 py-2">
           <span className="text-ui-xs text-muted-foreground">
-            {/*
-             * The host's own words when it gave them. `modelTargetsSkip` sits
-             * BESIDE the array rather than inside it because it describes the
-             * absence of candidates rather than a candidate - and `no-group`,
-             * the commonest ineligibility, is exactly the case a generic
-             * sentence would fail. Rendered verbatim per the contract: `label`
-             * is always safe to show, and re-wording it here would be a second
-             * voice.
-             */}
-            {data.modelTargetsSkip?.label ??
-              (hasRows
-                ? NO_SELECTABLE_DESTINATIONS_LABEL
-                : NO_DESTINATIONS_LABEL)}
+            {emptyStateText(data, failedTuple, hasRows)}
           </span>
           {emptyStateActions}
           <FallbackNoticeSettingsLink />
@@ -519,6 +545,51 @@ function MenuBody({
       onPick={onPick}
     />
   );
+}
+
+/**
+ * The one line an empty menu leads with.
+ *
+ * Three sources, most specific first.
+ *
+ * **The chat's own identity, for `no-group`.** That reason is the rung-level
+ * one - it sits BESIDE the arrays rather than inside them because it describes
+ * the absence of candidates rather than a candidate - and it is the commonest
+ * ineligibility there is: it is what every `claude/default` chat gets, since
+ * group membership matches the model SLUG and `default`'s family lives only in
+ * its catalog label. The host cannot write this sentence itself. It names a
+ * tuple `claude/default`, while every surface a user reads names it "Claude
+ * Code · default", and the mapping lives here. So the reason travels on the
+ * wire and the words are resolved locally, through the same identity module
+ * that titles the rows - which is also what keeps this line and the error
+ * card's identical, since both call `noSwitchDestinationText`.
+ *
+ * **The host's own label, for every other reason.** Rendered verbatim per the
+ * wire contract: `skip.reason` is an open string beside a rendered `label`
+ * precisely so a reason a released client has never heard of still says
+ * something, and re-wording a reason we DO know would be a second voice.
+ *
+ * **A generic line when the host gave no rung-level reason at all**, choosing
+ * between "there is nothing" and "none of these works" by whether rows are
+ * about to render underneath.
+ */
+function emptyStateText(
+  data: ChatFallbackListTargetsResponse,
+  failedTuple: ChatRunSettings | null,
+  hasRows: boolean,
+): string {
+  const skip = data.modelTargetsSkip;
+  if (skip === null) {
+    return hasRows ? NO_SELECTABLE_DESTINATIONS_LABEL : NO_DESTINATIONS_LABEL;
+  }
+  // Parsed rather than string-compared, exactly as `skipIsCurrentDeadEvidence`
+  // does and for the same contractual reason - an unrecognised reason has to
+  // degrade to its label, never to a guess.
+  const parsed = tierRungSkipReasonSchema.safeParse(skip.reason);
+  if (parsed.success && parsed.data === "no-group" && failedTuple !== null) {
+    return noSwitchDestinationText(fallbackProviderModelLabel(failedTuple));
+  }
+  return skip.label;
 }
 
 function TargetSections({

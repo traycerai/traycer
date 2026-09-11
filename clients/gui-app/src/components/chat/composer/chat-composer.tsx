@@ -126,6 +126,19 @@ interface ChatComposerProps {
    * view) should pass `true`.
    */
   readonly isActive: boolean;
+  /**
+   * The caller's "this surface may not dispatch against this chat" flag, and
+   * therefore the chat's ACT CAPABILITY as this composer sees it: the only
+   * mount (`chat-tile-lower-surfaces.tsx`) passes `!access.canAct`, which folds
+   * role, chat-stream connection and sign-in exactly as the session store's
+   * `canSendAction` does for the stream-side hold/release lease.
+   *
+   * It is read as that capability, not only as a button state — the
+   * provider-fallback controls below gate on it (`fallbackControlsCanAct`). A
+   * caller that sets this for a reason OTHER than the chat's act capability
+   * would silence those controls too; block send from inside the composer
+   * instead, the way the profile/reauth/pack gates do.
+   */
   readonly sendDisabled: boolean | undefined;
   /**
    * Why `sendDisabled` is true, shown as the send button's hover/focus
@@ -673,7 +686,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
         chatId={taskId}
         epicId={currentEpicId}
         hostId={tabHostId}
-        canAct={onSubmitMessage !== null}
+        canAct={fallbackControlsCanAct(sendDisabled)}
       />
       {topBannerKind === "rate-limit" ? (
         <ChatComposerBannerPortal>
@@ -1014,6 +1027,32 @@ function resolveSendBlockedHint(args: {
   if (args.packPreparingHint !== null) return args.packPreparingHint;
   if (args.sendDisabled === true) return args.sendDisabledHint ?? null;
   return null;
+}
+
+/**
+ * Whether the provider-fallback controls (cancel a wait, choose a different
+ * destination, run a manual rung, switch back) may dispatch.
+ *
+ * The four verbs behind those controls are plain host RPCs
+ * (`components/chat/fallback/use-fallback-actions.ts`) — unlike the choice
+ * LEASE beside them, which goes through the session store and is refused by
+ * `canSendAction` when `access.canAct !== true`. Nothing refuses the unary
+ * verbs client-side, so this is the whole gate, and it has to be the real
+ * capability. It used to be `onSubmitMessage !== null`, which is a constant:
+ * the tile's `onSubmitMessage` is non-nullable and returns `false` on its own
+ * `canAct` check, so a viewer — or an owner on a dropped chat stream — got
+ * enabled buttons issuing actions the host cannot accept.
+ *
+ * `sendDisabled`, not `sendBlocked`. `sendBlocked` widens the caller's flag
+ * with reasons a fallback action is the ESCAPE from — the profile is disabled,
+ * the provider is signed out, a managed pack is preparing — and gating on it
+ * would strand a chat on a destination it is no longer allowed to leave.
+ *
+ * `!== true` rather than `!`: `undefined` is "the caller has no opinion", which
+ * is not a refusal.
+ */
+function fallbackControlsCanAct(sendDisabled: boolean | undefined): boolean {
+  return sendDisabled !== true;
 }
 
 function canSubmitDraft(args: CanSubmitDraftArgs): boolean {

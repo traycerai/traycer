@@ -2,7 +2,10 @@ import type {
   ChatFallbackListTargetsResponse,
   FallbackActionOutcome,
 } from "@traycer/protocol/host/chat-fallback";
-import type { FallbackWaitDisposition } from "@traycer/protocol/host/agent/gui/subscribe";
+import type {
+  FallbackSwitchDisposition,
+  FallbackWaitDisposition,
+} from "@traycer/protocol/host/agent/gui/subscribe";
 import { FALLBACK_REASON_LABELS } from "@traycer/protocol/host/notifications/presentation";
 import { limitedFamilyQualifier } from "@/lib/rate-limits/rate-limit-copy";
 import type { ProfileRateLimitSeverity } from "@/lib/rate-limits/rate-limit-scope-match";
@@ -358,6 +361,71 @@ export function describeWaitDisposition(
       // button. What the host actually withheld is the wait rung; why is not
       // ours to state.
       return "Waiting isn't available for this message.";
+  }
+}
+
+/**
+ * "No other model is set up for Claude Code · default".
+ *
+ * The ONE sentence for "this chat has nowhere to switch to", rendered on both
+ * surfaces that have to say it: the error card, where it explains a missing
+ * "Switch…" button, and the destination menu's empty state, where it explains
+ * an empty list. One function because they are explaining one host verdict, and
+ * a card and the menu it opens disagreeing about why would be worse than either
+ * of them saying nothing.
+ *
+ * NAMES THE CHAT, which is the whole difference from a generic line. "No
+ * destinations available" tells a user nothing they cannot already see; naming
+ * the provider and model tells them which setting to go and look at, and it is
+ * the only form in which the sentence is checkable by the person reading it.
+ *
+ * No trailing full stop, deliberately: the sentence ends in an identity, and a
+ * stop after a model slug reads as part of the slug.
+ *
+ * The vocabulary table governs every word here. Not "group" - that is policy
+ * STRUCTURE, banned for the same reason "tier", "ladder" and "rung" are - and
+ * not "equivalence" either. "Set up" is what the user did, or did not do.
+ */
+export function noSwitchDestinationText(providerModelLabel: string): string {
+  return `No other model is set up for ${providerModelLabel}`;
+}
+
+/**
+ * Why the failed attempt is offering no switch, or `null` when it is.
+ *
+ * The counterpart to {@link describeWaitDisposition} and held to the same rule:
+ * every branch renders a HOST-ESTABLISHED fact, and the client infers none of
+ * them. It cannot - the question is whether this user's fallback policy and
+ * accounts name any other destination for the model that failed, and a renderer
+ * holds neither.
+ *
+ * `null` under `unknown` as well as under `eligible`, and the two share it for
+ * one reason: the button is present in both. `unknown` means the host could not
+ * check, so the control is offered and nothing is claimed - a sentence there
+ * would be the card narrating a doubt at a user who has a working button in
+ * front of them.
+ *
+ * `providerModelLabel` is `null` when the failed attempt's tuple did not reach
+ * this client, and the sentence is then omitted rather than rendered
+ * subject-less. That absence travels WITH `unknown` on the same frame (both
+ * come from a missing replay envelope), so the null arm is belt-and-braces
+ * rather than a state the card meets.
+ *
+ * Exhaustive with no `default`, so a new disposition is a compile error here
+ * rather than a silently unexplained card.
+ */
+export function describeSwitchDisposition(
+  disposition: FallbackSwitchDisposition,
+  providerModelLabel: string | null,
+): string | null {
+  switch (disposition) {
+    case "eligible":
+    case "unknown":
+      return null;
+    case "no_destination":
+      return providerModelLabel === null
+        ? null
+        : noSwitchDestinationText(providerModelLabel);
   }
 }
 

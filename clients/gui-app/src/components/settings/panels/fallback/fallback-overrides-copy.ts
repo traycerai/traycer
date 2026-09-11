@@ -25,7 +25,7 @@ export const MATRIX_REASONS: readonly HostNotificationStoppedReason[] =
     (reason) => !EXCLUDED_FALLBACK_REASONS.has(reason),
   );
 
-/** The five the matrix collapses into one read-only row. */
+/** The excluded reasons, which the matrix collapses into one read-only row. */
 export const EXCLUDED_MATRIX_REASONS: readonly HostNotificationStoppedReason[] =
   HOST_NOTIFICATION_STOPPED_REASONS.filter((reason) =>
     EXCLUDED_FALLBACK_REASONS.has(reason),
@@ -55,7 +55,7 @@ export const EXCLUDED_MATRIX_REASONS: readonly HostNotificationStoppedReason[] =
  *   - the `notify` column has no chip (it is eligible everywhere and the ladder
  *     filter admits it unconditionally), so it appears in no eligible row and
  *     its cells are null throughout;
- *   - the five excluded reasons draw no row at all, so their cells are null
+ *   - the excluded reasons draw no row at all, so their cells are null
  *     throughout while their eligible sets are empty.
  *
  * Both are null-where-not-eligible, which is the shape the invariant forbids -
@@ -99,8 +99,8 @@ export const RUNG_INELIGIBILITY_COPY: Readonly<
     wait: "no reset time",
     notify: null,
   },
-  // The five excluded reasons never render chips, so their cells are never
-  // read. They are here only because the record is total; see the window the
+  // The excluded reasons never render chips, so their cells are never read.
+  // They are here only because the record is total; see the window the
   // correspondence is stated over, above.
   context_exhausted: { profile: null, tier: null, wait: null, notify: null },
   request_rejected: { profile: null, tier: null, wait: null, notify: null },
@@ -117,6 +117,7 @@ export const RUNG_INELIGIBILITY_COPY: Readonly<
     wait: null,
     notify: null,
   },
+  session_budget: { profile: null, tier: null, wait: null, notify: null },
 };
 
 /**
@@ -142,8 +143,27 @@ export const REASON_ROW_NOTES: Readonly<
   turn_start_timeout: null,
   missing_terminal_event: null,
   background_work_failed: null,
+  session_budget: null,
 };
 
-/** D142/D146: the matrix authors rung choices, not every wire policy value. */
+/**
+ * D142/D146: the matrix authors step choices, not every wire policy value.
+ *
+ * The first clause used to promise the HOLD survived an all-off row -
+ * *"preserves that failure's pre-retry/hold behavior and terminal Notify"* -
+ * and that is no longer true. A non-transient failure whose row is all off
+ * narrows to `Notify` alone and no longer arms anything, so there is no
+ * cancellation window: the chat takes the terminal path and the user acts from
+ * the error card's own steps.
+ *
+ * What genuinely survives is two things, and the sentence now names exactly
+ * those: the brief same-tuple retry the two outage-shaped failures do before
+ * anything else (which is not a step and has no chip), and the notification at
+ * the end. The two clauses that were already true are kept word for word -
+ * "does not author" is the D146 scope limit, and "Notify stays last" is a
+ * promise `togglePolicyOverrideRung` is built to keep.
+ *
+ * "Cancellation window", never "grace": the vocabulary table bans the latter.
+ */
 export const FALLBACK_OVERRIDES_DISCLOSURE =
-  "Turning every chip off preserves that failure’s pre-retry/hold behavior and terminal Notify; this editor does not author the wire’s per-reason off value, and Notify stays last.";
+  "Turning every chip off leaves the brief retry that outages and connection failures start with, and the notification at the end - but no cancellation window; this editor does not author the wire’s per-reason off value, and Notify stays last.";

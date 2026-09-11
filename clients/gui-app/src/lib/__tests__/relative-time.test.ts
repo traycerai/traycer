@@ -25,6 +25,36 @@ const DAY_MS = 24 * HOUR_MS;
 // per-describe `now` constants above so nothing here reads as tied to those.
 const BASE = Date.parse("2026-06-01T00:00:00.000Z");
 
+/**
+ * One named part of a date/time, rendered by the SAME resolved locale the
+ * formatters under test use (`undefined`).
+ *
+ * `vitest.config.ts` pins no locale, so a fixture written as a Latin literal -
+ * `/[AP]M/`, `"2026"` - asserts ENGLISH rather than the property it means, and
+ * goes red on a formatter that is behaving correctly: ja-JP renders "午後3:00"
+ * (the designator leads, and is never "AM"/"PM"), th-TH prints the Buddhist
+ * year 2569, ar-EG uses Arabic-Indic digits. Deriving the token keeps the claim
+ * about the FORMAT. Same anchor the `formatFullTimestamp` case at the bottom of
+ * this file builds inline, for the same reason.
+ *
+ * Throws rather than returning null when the part is absent: a missing
+ * `dayPeriod` under `hour12: true` means the assertion below has nothing to
+ * check, which is a broken test, not a passing one.
+ */
+function dateTimePart(
+  timestamp: number,
+  options: Intl.DateTimeFormatOptions,
+  type: Intl.DateTimeFormatPartTypes,
+): string {
+  const part = new Intl.DateTimeFormat(undefined, options)
+    .formatToParts(new Date(timestamp))
+    .find((candidate) => candidate.type === type);
+  if (part === undefined) {
+    throw new Error(`the format produced no ${type} part to anchor on`);
+  }
+  return part.value;
+}
+
 describe("formatRelativeTimestamp", () => {
   const now = Date.parse("2026-04-23T12:00:00.000Z");
 
@@ -123,22 +153,64 @@ describe("isFarReset", () => {
   });
 });
 
+const RESET_FULL_OPTIONS: Intl.DateTimeFormatOptions = {
+  weekday: "short",
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+  hour12: true,
+};
+
 describe("formatResetDateTime", () => {
   it("renders a short weekday followed by the time, with no calendar date", () => {
-    const formatted = formatResetDateTime(
-      Date.parse("2026-07-11T10:35:00.000Z"),
+    const resetsAt = Date.parse("2026-07-11T10:35:00.000Z");
+    const formatted = formatResetDateTime(resetsAt);
+    // Composed from the same locale-resolved pieces the source uses rather
+    // than matched against `/^[A-Za-z]{3} \d{1,2}:\d{2} ?[AP]M$/`: that regex
+    // requires a LATIN weekday and an ENGLISH designator, so under ja-JP
+    // ("土 午後7:35") every assertion here failed on a correct formatter. The
+    // options are restated rather than imported, so an option drifting in the
+    // source (a long weekday, a dropped `hour12`, a date creeping back in)
+    // still shows up as a difference.
+    const expectedWeekday = new Date(resetsAt).toLocaleDateString(undefined, {
+      weekday: "short",
+    });
+    const expectedTime = new Date(resetsAt).toLocaleTimeString(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    });
+    expect(formatted).toBe(`${expectedWeekday} ${expectedTime}`);
+    // Anchored independently of the equality above, which still passes if the
+    // source and this fixture ever drift to the same wrong options. The
+    // designator is what the explicit `hour12: true` exists for.
+    expect(formatted).toContain(
+      dateTimePart(
+        resetsAt,
+        { hour: "numeric", minute: "2-digit", hour12: true },
+        "dayPeriod",
+      ),
     );
-    // Exact weekday/time is TZ/locale-dependent, so assert structure rather
-    // than a literal string: a three-letter weekday, then a time with an
-    // AM/PM designator, and no year/date digits leaking back in.
-    expect(formatted).toMatch(/^[A-Za-z]{3} \d{1,2}:\d{2}\s?[AP]M$/i);
-    expect(formatted).not.toContain("2026");
+    // No year/date leaking back in - the point of the shorter form. Read out
+    // of the formatter rather than written as "2026": under th-TH the year is
+    // 2569 and under ar-EG it is ٢٠٢٦, so the ASCII literal was a negative
+    // that could never fail there.
+    expect(formatted).not.toContain(
+      dateTimePart(resetsAt, { year: "numeric" }, "year"),
+    );
   });
 
   it("renders the calendar date on roomy surfaces", () => {
     const timestamp = Date.parse("2026-07-11T10:35:00.000Z");
     const formatted = formatResetFullDateTime(timestamp);
-    expect(formatted).toContain("2026");
+    // Same year anchor as above, in the positive direction: this is the form
+    // that restores the year, and a hard-coded "2026" appears nowhere in it
+    // under a non-Gregorian calendar or a non-Latin numbering system.
+    expect(formatted).toContain(
+      dateTimePart(timestamp, RESET_FULL_OPTIONS, "year"),
+    );
     expect(formatted).not.toBe(formatResetDateTime(timestamp));
   });
 });
@@ -195,6 +267,35 @@ describe("useGraceCountdown", () => {
     expect(result.current).toBeNull();
   });
 
+  // Deliberately NOT pinned to a fixed system time, which reads like the
+  // hermetic choice and is the one edit that would break this.
+  //
+  // `useGraceCountdown` reads the module-level `secondClock`, but
+  // `vi.setSystemTime` moves the SYSTEM clock, not any `SharedClock`'s
+  // `sampledNow`: an instance re-samples only inside its own `subscribe`,
+  // `startIfNeeded` or interval fire. Every `BASE` suite in this file builds
+  // fresh instances with `createSharedClock(...)` and never subscribes
+  // `secondClock` or `minuteClock`, so no suite order can hand this one a
+  // `BASE` sample. And `secondClock` is idle here - every consumer above
+  // unmounts through `cleanup()` - so `startIfNeeded` re-samples at THIS
+  // test's `Date.now()` on the way in. The `now > sampleTheRenderSaw` guard
+  // decides whether the newcomer RE-RENDERS, not whether the sample is fresh.
+  //
+  // What the first render (before subscribe) does read is the sample the
+  // previous test left, and that only shows through when the carried sample is
+  // not strictly older than `Date.now()` - no re-render, so the first label
+  // stands. The only thing here that can push `secondClock` ahead of the real
+  // clock is the 1s fake advance in the minute/second suite, and real time
+  // elapses between tests, so the carried skew stays under one second and the
+  // rounded-up label is still "5s". A future test that advances `secondClock`
+  // by a second or more under fake timers would break that bound - re-sample
+  // it through a throwaway mount rather than pinning a system time.
+  //
+  // Pinning one is what fails: `BASE` is a FIXED instant while every sample
+  // this file leaves behind comes from the real clock, so their order depends
+  // on when the run happens. With `BASE` in the past (it is), the guard never
+  // fires, nothing re-renders, and the only render computes a 5s deadline
+  // against a sample months past it - `GRACE_COUNTDOWN_IMMINENT`, not "5s".
   it("re-renders with a new label after one second on the shared clock", () => {
     vi.useFakeTimers();
     const now = Date.now();
@@ -207,14 +308,41 @@ describe("useGraceCountdown", () => {
   });
 });
 
+const CLOCK_OPTIONS: Intl.DateTimeFormatOptions = {
+  hour: "numeric",
+  minute: "2-digit",
+  hour12: true,
+};
+
 describe("formatClockTime", () => {
-  it("renders a 12-hour time with an AM/PM designator and no zero-padded hour", () => {
-    const formatted = formatClockTime(
-      new Date(2026, 6, 11, 15, 0, 0).getTime(),
+  it("renders a 12-hour time with a day-period designator and no zero-padded hour", () => {
+    const at = new Date(2026, 6, 11, 15, 0, 0).getTime();
+    const formatted = formatClockTime(at);
+    // The old fixtures were `/^\d{1,2}:\d{2} ?[AP]M$/`, `not /^0\d:/` and
+    // `/[AP]M/`. `formatClockTime` passes `undefined` as its locale and this
+    // file pins none, so all three asserted an ENGLISH render: ja-JP produces
+    // "午後3:00" - designator first, no "AM"/"PM", and the leading character
+    // is not a digit - and all three went red on a formatter doing exactly
+    // what it is documented to do.
+    //
+    // The equality carries the whole option set, so a source switched to
+    // `hour: "2-digit"` ("03:00 PM"), given a weekday, or stripped of
+    // `hour12` diverges from this fixture wherever the locale renders the
+    // difference at all. Whether the `hour12` half is discriminating depends
+    // on the runner's locale - the same limitation the `formatMessageTime`
+    // suite below states for its own `hour12` contract.
+    expect(formatted).toBe(
+      new Date(at).toLocaleTimeString(undefined, CLOCK_OPTIONS),
     );
-    expect(formatted).toMatch(/^\d{1,2}:\d{2}\s?[AP]M$/i);
-    expect(formatted).not.toMatch(/^0\d:/);
-    expect(formatted).toMatch(/[AP]M/i);
+    // Anchored independently of that equality, which survives the source and
+    // this fixture drifting together. Without `hour12: true` a 24-hour-default
+    // locale renders "15:00" and carries no day period at all - the exact
+    // ambiguity the resume-time card exists to remove.
+    expect(formatted).toContain(dateTimePart(at, CLOCK_OPTIONS, "dayPeriod"));
+    // 15:00 renders as the 12-hour hour, unpadded. Compared against the
+    // locale's own hour token so this survives a non-Latin numbering system,
+    // where a literal "3" appears nowhere in a correct render.
+    expect(formatted).toContain(dateTimePart(at, CLOCK_OPTIONS, "hour"));
   });
 });
 

@@ -2477,6 +2477,25 @@ export function createChatSessionStoreWithNotificationDependencies(
   // event itself: a wobble that reconnects cancels nothing by itself.
   let connectionEpoch = 0;
   /**
+   * Whether {@link store} has been ASSIGNED - false for the whole of the
+   * `create()` initializer below, and false forever if that initializer throws.
+   *
+   * Not a redundant reading of `store`: until `create()` returns, `store` is in
+   * its temporal dead zone, so touching it at all throws a `ReferenceError`
+   * rather than yielding `undefined`. A flag is the only thing that can be
+   * asked the question.
+   *
+   * The window is real and reachable, not defensive tidiness. The factory runs
+   * INSIDE the initializer and `LogicalStream.onStatusChange` replays a terminal
+   * `closed` SYNCHRONOUSLY to a handler installed after the transition - which
+   * is exactly what `ChatStreamClient`'s constructor does - so a remote chat
+   * dialled against an already-closed stream runs this store's status handler
+   * from inside its own initializer. The factory-throw rollback below already
+   * records the general shape of this: "that ordering would depend on no factory
+   * callback settling synchronously, which nothing enforces".
+   */
+  let storeReady = false;
+  /**
    * The ONLY writer of {@link connectionEpoch}.
    *
    * A function rather than the two `+= 1` sites it replaces, because the
@@ -2487,12 +2506,21 @@ export function createChatSessionStoreWithNotificationDependencies(
    * from outside, since a stale generation still reads as a plausible number.
    *
    * Reaching `store` from out here is the file's existing shape (see the
-   * `store.getState()` calls in the handle): this closure is built before the
-   * store, but nothing calls it until long after - the bump sites are a
-   * transport status callback and a client replacement, both post-construction.
+   * `store.getState()` calls in the handle). The `storeReady` gate states the
+   * relationship the two halves actually have rather than assuming a caller:
+   * the COUNTER is authoritative and the state field is only its mirror, so a
+   * bump with no store yet still counts, and the initial state below publishes
+   * it by seeding from this variable rather than from a literal `0`.
+   *
+   * SECOND line, not the first. The one construction-time caller - a status
+   * replayed synchronously by the factory - is deferred at the callback so the
+   * whole handler runs against a real store; this is what keeps a future bump
+   * site added inside the initializer from throwing a `ReferenceError` on
+   * `store` instead of simply counting.
    */
   const bumpConnectionEpoch = (): void => {
     connectionEpoch += 1;
+    if (!storeReady) return;
     store.setState({ connectionEpoch });
   };
   const surfaceVisibility = new Map<string, boolean>();
@@ -6854,6 +6882,49 @@ export function createChatSessionStoreWithNotificationDependencies(
         handler: (...args: TArgs) => void,
       ): ((...args: TArgs) => void) =>
         guardHandler(streamGuard, streamGeneration, handler);
+      /**
+       * Everything this store does with a status, split out from the callback so
+       * the callback can hold ONE extra decision: whether there is a store yet.
+       *
+       * Every line here needs one. `get()` below reads state zustand assigns
+       * only after the initializer RETURNS, the epoch mirror writes
+       * `store.setState`, and `callbacks.onConnectionStatus` ends in a `set()`
+       * whose updater is handed `undefined` during construction. Splitting keeps
+       * that one decision at the boundary instead of growing a second,
+       * construction-time copy of this logic.
+       */
+      const applyConnectionStatus = (
+        status: StreamConnectionStatus,
+        reason: StreamCloseReason | null,
+      ): void => {
+        if (!streamGuard.isCurrent(streamGeneration)) return;
+        // A RETRYABLE fatalError is the transport saying "not now" - the client
+        // is already reconnecting on its own backoff and the user needs to do
+        // nothing. Notifying on it turned an overnight sleep into a stack of
+        // "Agent stream closed unexpectedly" rows (one per dark wake), which
+        // read as data loss when nothing was lost. Only an adjudicated close -
+        // one the user must act on - is worth a notification.
+        if (
+          status === "closed" &&
+          reason?.kind === "fatalError" &&
+          reason.details.retryable !== true &&
+          fatalCloseNotificationGeneration !== streamGeneration
+        ) {
+          fatalCloseNotificationGeneration = streamGeneration;
+          fatalCloseTurnId = get().activeTurn?.turnId ?? null;
+          notificationDependencies.appLocalNotifications
+            .getState()
+            .upsertRecurringFailure(
+              chatStreamErrorNotification({
+                hostId: options.hostId,
+                epicId: options.epicId,
+                chatId: options.chatId,
+                details: reason.details,
+              }),
+            );
+        }
+        callbacks.onConnectionStatus(status, reason);
+      };
       return {
         onSnapshot: (frame) => {
           if (!streamGuard.isCurrent(streamGeneration)) return;
@@ -6902,34 +6973,44 @@ export function createChatSessionStoreWithNotificationDependencies(
         onRestoreProgress: guarded(callbacks.onRestoreProgress),
         onRestoreCompleted: guarded(callbacks.onRestoreCompleted),
         onErrorNotice: guarded(callbacks.onErrorNotice),
+        // The one frame that can arrive before this store EXISTS.
+        //
+        // `createStreamClient()` runs inside the `create()` initializer, and
+        // `LogicalStream.onStatusChange` replays a terminal `closed`
+        // SYNCHRONOUSLY to a handler installed after that transition - which is
+        // precisely how `ChatStreamClient`'s constructor installs its own. So a
+        // remote chat dialled against an already-closed logical stream lands
+        // here from inside the initializer, where `get()` returns `undefined`,
+        // `set()`'s updater is handed `undefined`, and `store` is in its
+        // temporal dead zone. It threw, the factory's `catch` rolled the store
+        // back and rethrew, and the tile got no session at all - a crash where
+        // the honest answer was a closed chat.
+        //
+        // Deferred to a microtask rather than reimplemented for the
+        // construction case: `create()` is synchronous, so by the time this
+        // runs the store exists and the SAME handler applies the status through
+        // the same path. It is also the answer this transport stack already
+        // gives to this hazard - `createInertStreamSession` in
+        // `ws-stream-client.ts` defers its terminal status for one microtask
+        // "so a wrapper constructor finishes wiring its handlers first".
+        //
+        // Nothing can interleave in the gap: construction runs to completion in
+        // one task, so the only thing this reorders against is the rest of that
+        // construction, and the epoch bump inside is counted either way.
         onConnectionStatus: (status, reason) => {
-          if (!streamGuard.isCurrent(streamGeneration)) return;
-          // A RETRYABLE fatalError is the transport saying "not now" - the client
-          // is already reconnecting on its own backoff and the user needs to do
-          // nothing. Notifying on it turned an overnight sleep into a stack of
-          // "Agent stream closed unexpectedly" rows (one per dark wake), which
-          // read as data loss when nothing was lost. Only an adjudicated close -
-          // one the user must act on - is worth a notification.
-          if (
-            status === "closed" &&
-            reason?.kind === "fatalError" &&
-            reason.details.retryable !== true &&
-            fatalCloseNotificationGeneration !== streamGeneration
-          ) {
-            fatalCloseNotificationGeneration = streamGeneration;
-            fatalCloseTurnId = get().activeTurn?.turnId ?? null;
-            notificationDependencies.appLocalNotifications
-              .getState()
-              .upsertRecurringFailure(
-                chatStreamErrorNotification({
-                  hostId: options.hostId,
-                  epicId: options.epicId,
-                  chatId: options.chatId,
-                  details: reason.details,
-                }),
-              );
+          if (storeReady) {
+            applyConnectionStatus(status, reason);
+            return;
           }
-          callbacks.onConnectionStatus(status, reason);
+          queueMicrotask(() => {
+            // Construction can also FAIL - the factory throws, `create()` never
+            // returns, and `storeReady` never flips. Re-read rather than assume:
+            // a status deferred out of a doomed construction has nothing to land
+            // on, and running it would trade a synchronous throw for an
+            // unhandled one in a microtask.
+            if (!storeReady) return;
+            applyConnectionStatus(status, reason);
+          });
         },
       };
     };
@@ -6979,7 +7060,15 @@ export function createChatSessionStoreWithNotificationDependencies(
       snapshotLoaded: false,
       preSnapshotRetries: null,
       transcriptBaselineEpoch: NO_TRANSCRIPT_BASELINE,
-      connectionEpoch: 0,
+      // The live counter, not a literal `0`, because this field IS that
+      // counter's mirror and the two must not be able to disagree. They are
+      // equal here today - the one construction-time bump path is deferred at
+      // the status callback - so this is the statement of the invariant rather
+      // than the repair of a live drift: a bump that ever lands before the
+      // store exists writes no mirror, and a literal seed would then publish an
+      // epoch one BEHIND the stamps `sendAction` is already writing, which
+      // reads as pending actions belonging to a future connection.
+      connectionEpoch,
       transcriptHydrationSequence: 0,
       transcriptRowContext: {},
       chat: null,
@@ -8303,6 +8392,10 @@ export function createChatSessionStoreWithNotificationDependencies(
       },
     };
   });
+  // The first statement after the assignment, deliberately: everything between
+  // here and the `create()` above is the window `storeReady` exists to name, and
+  // anything inserted before this line silently joins it.
+  storeReady = true;
 
   if (notificationUserId !== null) {
     unsubscribeLiveCompletionAcknowledgements =

@@ -77,6 +77,34 @@ export const transcriptRowContextSchema = z.object({
    */
   sessionAnchor: chatSessionAnchorSchema.optional(),
   /**
+   * The anchor above must NOT be relied on for this turn's account, and neither
+   * may the reader's own walk - render no profile label at all.
+   *
+   * A provider fallback hop re-dispatches one user message as a second attempt
+   * and rewrites that user row's `sessionAnchor` to the REPLACEMENT's, so the
+   * original attempt's walked anchor names an account it never ran on. A
+   * profile-only hop keeps `harnessId` identical, so the renderer's
+   * harness-agreement gate does not catch it. The walk is provably correct only
+   * where a user row has ONE attempt hanging off it; this says the projection
+   * looked at whole history and found more (or found an autonomous turn, whose
+   * account the anchor never spoke for).
+   *
+   * This is the only field here that is a REFUSAL rather than an answer, and it
+   * exists because absence could not carry it. The two would collide: the
+   * projection expresses "do not trust the walk" by withholding `sessionAnchor`,
+   * and a row whose context then holds nothing else is not serialized at all
+   * (`read-range.ts` charges and emits context only when
+   * `Object.keys(context).length > 0`). The refusal would arrive at the client
+   * as silence, and silence is the renderer falling back to exactly the walk
+   * being refused. Carrying a `true` keeps the object non-empty, which is what
+   * gets the refusal onto the wire in the first place.
+   *
+   * Whole-history by nature, so a client cannot re-derive it: a bounded window
+   * holding one of two attempts counts one and walks. Carried only when TRUE,
+   * like the other flags here - `false` is what a reader concludes anyway.
+   */
+  profileWalkUnprovable: z.boolean().optional(),
+  /**
    * Whether any LATER checkpoint rewrites a file this row's checkpoint also
    * touches, computed over whole history.
    *

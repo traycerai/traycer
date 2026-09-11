@@ -130,6 +130,7 @@ import {
   type FallbackAnnouncement,
   type FallbackAnnouncementObserver,
   type FallbackAnnouncementPlan,
+  type FallbackNoticeAnnouncement,
 } from "@/stores/chats/chat-announcements";
 import {
   fallbackDestinationOfTuple,
@@ -1106,6 +1107,110 @@ function observeUnattendedFallbackOutcome(
   };
 }
 
+/**
+ * `fallbackNoticeAnnouncements(messages)`, held at its PREVIOUS reference for
+ * as long as the notices it produces have not changed.
+ *
+ * `messages` is rebuilt wholesale on every store update - which is every
+ * streamed token; `useStableChatTimelineRows` in `chat-timeline.tsx` exists for
+ * that same fact and says so. So a plain `useMemo` on `messages` handed out a
+ * fresh array per token even for a transcript whose notices had not moved, and
+ * the observation effect below lists this among its dependencies: an otherwise
+ * idle chat re-ran `observer.observe` and the whole announcement pipeline once
+ * per token, over the whole transcript, to recompute exactly what it had the
+ * token before.
+ *
+ * Reuse is taken only on a field-for-field match of everything the observer
+ * reads, so a reused reference always agrees with the transcript on screen.
+ *
+ * **The carry is `useState`, not `useRef`, and that is not a style choice.**
+ * A ref read and written during render is what the React Compiler's
+ * `Cannot access refs during render` rejects, and the reason it rejects it is
+ * exactly the case this cache lives in: React may discard a render, and a ref
+ * written by a discarded render is NOT rolled back, so the next attempt starts
+ * from a "previous" value that never reached the screen. `setState` during
+ * render is the sanctioned form of the same carry - React re-runs this
+ * component with the new state and commits nothing from the discarded pass.
+ */
+function useStableFallbackNotices(
+  messages: ReadonlyArray<ChatMessageModel>,
+): ReadonlyArray<FallbackNoticeAnnouncement> {
+  const next = useMemo(() => fallbackNoticeAnnouncements(messages), [messages]);
+  const [stable, setStable] =
+    useState<ReadonlyArray<FallbackNoticeAnnouncement>>(next);
+  if (stable !== next && !fallbackNoticeListsEqual(stable, next)) {
+    setStable(next);
+    // The re-render this schedules returns `stable`, which will BE `next` by
+    // then. Returning it here keeps this pass self-consistent rather than
+    // handing the observer one render of a list it is about to replace.
+    return next;
+  }
+  return stable;
+}
+
+function fallbackNoticeListsEqual(
+  left: ReadonlyArray<FallbackNoticeAnnouncement>,
+  right: ReadonlyArray<FallbackNoticeAnnouncement>,
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((notice, index) => {
+      // `noUncheckedIndexedAccess` is off, and the lengths already match, so
+      // this index is a value rather than a value-or-undefined.
+      const other = right[index];
+      return (
+        notice.key === other.key &&
+        notice.messageId === other.messageId &&
+        notice.text === other.text
+      );
+    })
+  );
+}
+
+/**
+ * The resident message-id set, on the same hot path and the same terms as
+ * {@link useStableFallbackNotices} - with one extra thing at stake.
+ *
+ * The observer RETAINS this set and compares the next observation against it
+ * (`priorResidentMessageIds`, which decides whether a hydrated notice is news
+ * or history). What that comparison needs is the SET, not the object: a reused
+ * reference carries exactly the same ids, and the only observation this skips
+ * is one where the ids did not move - in which case the prior set and the
+ * current set are the same set either way.
+ *
+ * Carried in state rather than a ref for the reason given on
+ * {@link useStableFallbackNotices}.
+ */
+function useStableResidentMessageIds(
+  messages: ReadonlyArray<ChatMessageModel>,
+): ReadonlySet<string> {
+  const next = useMemo(
+    () => new Set(messages.map((message) => message.id)),
+    [messages],
+  );
+  const [stable, setStable] = useState<ReadonlySet<string>>(next);
+  if (stable !== next && !residentMessageIdsEqual(stable, next)) {
+    setStable(next);
+    return next;
+  }
+  return stable;
+}
+
+/**
+ * Size plus membership IS set equality here, because both sides are sets of
+ * transcript message ids and a `Set` already collapsed any duplicate.
+ */
+function residentMessageIdsEqual(
+  left: ReadonlySet<string>,
+  right: ReadonlySet<string>,
+): boolean {
+  if (left.size !== right.size) return false;
+  for (const id of right) {
+    if (!left.has(id)) return false;
+  }
+  return true;
+}
+
 function ChatFallbackAnnouncementSource(
   props: ChatLiveAnnouncementsProps & {
     readonly hostId: string;
@@ -1130,14 +1235,8 @@ function ChatFallbackAnnouncementSource(
   const observerRef = useRef<FallbackAnnouncementObserver | null>(null);
   const lastManualSequence = useRef(0);
   const lastUnattendedSequence = useRef(0);
-  const notices = useMemo(
-    () => fallbackNoticeAnnouncements(props.messages),
-    [props.messages],
-  );
-  const residentMessageIds = useMemo(
-    () => new Set(props.messages.map((message) => message.id)),
-    [props.messages],
-  );
+  const notices = useStableFallbackNotices(props.messages);
+  const residentMessageIds = useStableResidentMessageIds(props.messages);
 
   const observeState = useEffectEvent((state: ChatSessionState) => {
     const observer = observerRef.current;

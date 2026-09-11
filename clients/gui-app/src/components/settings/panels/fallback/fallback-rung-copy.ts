@@ -30,8 +30,14 @@ export const FALLBACK_RUNG_COPY: Record<FallbackRungKind, FallbackRungCopy> = {
   },
   tier: {
     label: "Switch to an equivalent model on another provider",
+    // "the equivalent models below", NOT "the model groups below". A group is
+    // policy STRUCTURE, and the vocabulary table bans naming it for the same
+    // reason it bans "tier", "ladder" and "rung" - this line was the last place
+    // the word survived in shipped copy, and it sat directly above a section
+    // whose own heading is "Equivalent models", so the page named one thing two
+    // ways.
     description:
-      "Uses the model groups below to find a model you have said is interchangeable.",
+      "Uses the equivalent models below to find one you have said is interchangeable.",
     chipLabel: "equivalent model",
   },
   wait: {

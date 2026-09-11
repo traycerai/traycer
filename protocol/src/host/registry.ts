@@ -5607,7 +5607,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
-  // The three external fallback actions. All off-floor: a client meeting a host
+  // The four external fallback actions. All off-floor: a client meeting a host
   // without the fallback engine must simply not render the affordance, which is
   // exactly what `unsupported` degradation gives it. Unary rather than stream
   // actions because they name a traversal rather than a subscription - the two

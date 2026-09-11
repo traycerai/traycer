@@ -156,6 +156,42 @@ export function fallbackHarnessLabelFor(harnessId: string): string {
     : providerDisplayName(known.providerId);
 }
 
+/**
+ * The provider display name for a GUI harness - "Claude Code", never `claude`.
+ *
+ * Pulled out of {@link fallbackTupleIdentity} so a surface that needs the words
+ * and nothing else can have them without a providers read: the account label is
+ * what forces that query, and a sentence about a MODEL does not name an
+ * account. Same rule, one definition, so a card cannot call one provider two
+ * things.
+ */
+function fallbackProviderLabelForHarness(harnessId: GuiHarnessId): string {
+  const providerId = guiHarnessIdToProviderId(harnessId);
+  // A harness outside `ORDERED_PROVIDERS` has no display name to give, so the
+  // harness id is the honest fallback rather than a blank. This is the
+  // degradation for a future harness, not a case a user meets today.
+  return providerId === null ? harnessId : providerDisplayName(providerId);
+}
+
+/**
+ * "Claude Code · default" - a chat's provider and model, and nothing else.
+ *
+ * The subject of every sentence about what a chat IS rather than where it is
+ * going: the error card's explanation of a withheld switch, and the destination
+ * menu's empty state. Deliberately WITHOUT the account and without the effort
+ * that {@link fallbackDestinationRowTitle} and
+ * {@link fallbackDestinationSentence} carry - "No other model is set up for
+ * Claude Code · opus · high on work" reads as a claim about that account at
+ * that effort, when the fact is about the model.
+ *
+ * One function for both surfaces on purpose. They are explaining one host
+ * verdict, and the rule this file exists to enforce is that two surfaces
+ * describing one thing must not describe it in two ways.
+ */
+export function fallbackProviderModelLabel(tuple: ChatRunSettings): string {
+  return `${fallbackProviderLabelForHarness(tuple.harnessId)} · ${tuple.model}`;
+}
+
 export interface FallbackTupleIdentity {
   /** "Claude Code" - `PROVIDER_DISPLAY_NAMES`, never a harness id. */
   readonly providerLabel: string;
@@ -441,15 +477,8 @@ export function fallbackTupleIdentity(
   // the honest answer for `traycer` is no. Reading one from the other would
   // either print a harness id in the copy or offer a sign-in that leads
   // nowhere.
-  const labelProviderId = guiHarnessIdToProviderId(harnessId);
   return {
-    // A harness outside `ORDERED_PROVIDERS` has no display name to give, so
-    // the harness id is the honest fallback rather than a blank chip. This is
-    // the degradation for a future harness, not a case a user meets today.
-    providerLabel:
-      labelProviderId === null
-        ? harnessId
-        : providerDisplayName(labelProviderId),
+    providerLabel: fallbackProviderLabelForHarness(harnessId),
     profileLabel: labelFor(tuple.profileId),
     harnessId,
     model: tuple.model,

@@ -10,7 +10,10 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { FallbackPolicy } from "@traycer/protocol/host/fallback-policy";
+import {
+  tierGroupsNameDestinationFor,
+  type FallbackPolicy,
+} from "@traycer/protocol/host/fallback-policy";
 import {
   HostRpcError,
   HostTransportFailureError,
@@ -40,6 +43,13 @@ import { useFallbackPolicyPreviewTierGroupsQuery } from "@/hooks/providers/use-f
 import { useFallbackSettingsProfileLabels } from "@/components/settings/panels/fallback/fallback-profile-labels";
 import { useFallbackEffortOptions } from "@/components/settings/panels/fallback/fallback-effort-options";
 import { useProvidersList } from "@/hooks/providers/use-providers-list-query";
+import { useAddressableHostId } from "@/hooks/host/use-addressable-host-id";
+import {
+  selectGlobalLastRunSettings,
+  useComposerRunSettingsStore,
+} from "@/stores/composer/composer-run-settings-store";
+import { fallbackProviderModelLabel } from "@/components/chat/fallback/fallback-identity";
+import { noSwitchDestinationText } from "@/components/chat/fallback/fallback-copy";
 import { providerSupportsManagedProfiles } from "@/components/settings/panels/provider-settings-tabs";
 import { FallbackLadderEditor } from "@/components/settings/panels/fallback/fallback-ladder-editor";
 import { FallbackBehaviorGroup } from "@/components/settings/panels/fallback/fallback-behavior-group";
@@ -818,6 +828,12 @@ function FallbackPolicyEditor(props: {
               );
             }}
             profileStepHint={<ProfileStepHint />}
+            // The DRAFT, not the persisted policy, and that is the whole reason
+            // this evaluates client-side: the hint has to answer for what is on
+            // screen, so editing the equivalent models below clears it the
+            // moment the user adds a destination for their own model. A host
+            // call could only answer for what is saved.
+            tierStepHint={<TierStepHint policy={state.draft} />}
           />
           {saveStatusFor("ladder", "mt-3")}
         </div>
@@ -940,20 +956,44 @@ function MasterFallbackToggle(props: {
 }
 
 /**
- * The master toggle's helper.
+ * What the master switch does, in three sentences - and the third is the one
+ * that is not obvious.
+ *
+ * Fixed copy, agreed as written. Each sentence answers a question the previous
+ * wording left open:
+ *
+ *  - **what stops** - NEW recovery, not the feature's effects;
+ *  - **what does not** - work already in progress runs to its end, and the
+ *    place to stop THAT is the chat's own card, which has the stop action. A
+ *    user who reads "turning this off stops fallback" and then watches a chat
+ *    go on waiting has been told something false by omission;
+ *  - **what this switch is not.** Claude Code, Codex and the rest have their
+ *    own retry and fallback behaviour, and this page does not reach it. Without
+ *    the sentence, a user turning this off can reasonably believe they have
+ *    stopped ALL automatic recovery on their machine, and then be surprised by
+ *    their coding agent's own. That belief is the expensive one, because the
+ *    remedy for it is in a different product.
+ *
+ * "Traycer recovery" rather than "fallback" as the subject of the first
+ * sentence, for the same reason: the noun has to be ours specifically, or the
+ * third sentence has nothing to contrast with.
+ */
+const MASTER_TOGGLE_DESCRIPTION =
+  "Stops new Traycer recovery. Recovery already in progress continues; stop it from the chat. Your coding agent's own recovery settings are unchanged.";
+
+/**
+ * The master toggle's helper, plus the count the decision turns on.
  *
  * The count is the policy read's `inFlightCount` and is deliberately a plain
  * number with no link: every chat that is holding or waiting already shows its
  * own card with its own stop action, and a list here would be a second place
- * to act on them. What the number is for is the toggle decision - turning
- * fallback off stops NEW failures from switching and leaves these to finish.
+ * to act on them. It is APPENDED to the fixed copy rather than woven into it -
+ * "stop it from the chat" is where a reader is sent, and how many there are is
+ * a separate fact that is absent when it is zero.
  */
 function masterToggleDescription(inFlightCount: number): string {
-  const base =
-    "Turning this off stops new failures from switching. Chats already waiting or switching finish on their own";
-  if (inFlightCount === 0) return `${base}.`;
-  if (inFlightCount === 1) return `${base} - 1 in progress right now.`;
-  return `${base} - ${inFlightCount} in progress right now.`;
+  if (inFlightCount === 0) return MASTER_TOGGLE_DESCRIPTION;
+  return `${MASTER_TOGGLE_DESCRIPTION} ${inFlightCount} in progress right now.`;
 }
 
 /**
@@ -1275,6 +1315,76 @@ function ProfileStepHint(): ReactNode {
       >
         Add a profile in Providers
       </Button>
+    </p>
+  );
+}
+
+/**
+ * Why the "equivalent model" step may be inert FOR THIS USER, said on the step.
+ *
+ * ## The subject problem, and how it is answered rather than dodged
+ *
+ * `ProfileStepHint` above can be provider-neutral because its fact is global:
+ * no managed accounts anywhere means that step can never fire for any chat.
+ * This step's inertness is PER MODEL - a user can have a full page of
+ * equivalent models and still have a step that never fires, because the model
+ * their chats actually run belongs to none of them. `claude/default` is that
+ * case and it is the commonest Claude setup there is: group membership matches
+ * the model SLUG, and `default`'s family lives only in its catalog label.
+ *
+ * Settings has no failed tuple to name, so the subject is the one the user
+ * would recognise: **the model they last started a chat with on this host**.
+ * That is a narrower claim than "your equivalent models are useless", and the
+ * sentence says so out loud rather than letting the reader over-read it. It can
+ * UNDER-warn - a user who last ran sonnet but whose other chats run `default`
+ * sees nothing - and that is the right direction to be wrong in: the error card
+ * catches them at the moment it matters, with the same sentence.
+ *
+ * Host-scoped deliberately (`useAddressableHostId`, which beneath this panel is
+ * the panel's own host): the store buckets last-run settings per host because
+ * hosts have different catalogs, and reading another host's tuple would name a
+ * model this one may not serve.
+ *
+ * Silent when there is no remembered tuple - a fresh install, or a host nothing
+ * has run on. Nothing is known, so nothing is claimed.
+ *
+ * ## Why the predicate is not a query
+ *
+ * `tierGroupsNameDestinationFor` is the protocol's, shared with the engine and
+ * with the error card's verdict, so this cannot tell a user their step is inert
+ * while the engine would have found them a destination. It moved into the
+ * protocol FOR this call site: the question is asked about a draft that has
+ * never been saved, which no RPC can answer.
+ */
+function TierStepHint({
+  policy,
+}: {
+  readonly policy: FallbackPolicy;
+}): ReactNode {
+  const hostId = useAddressableHostId();
+  const lastRun = useComposerRunSettingsStore((state) =>
+    selectGlobalLastRunSettings(state, hostId),
+  );
+  if (lastRun === null) return null;
+  if (
+    tierGroupsNameDestinationFor({
+      groups: policy.tierGroups,
+      destinationExclusions: policy.destinationExclusions,
+      harnessId: lastRun.harnessId,
+      model: lastRun.model,
+    })
+  ) {
+    return null;
+  }
+  return (
+    <p className="text-ui-sm text-muted-foreground">
+      {/* The SAME sentence the error card prints when it withholds "Switch…",
+          from the same function, so a user who meets both is told one thing
+          once. What is added here is only the subject clause - Settings is
+          speaking about a model the user is not currently looking at, and a
+          bare claim would read as a claim about all of them. */}
+      {noSwitchDestinationText(fallbackProviderModelLabel(lastRun))} — the model
+      you last started a chat with on this host.
     </p>
   );
 }

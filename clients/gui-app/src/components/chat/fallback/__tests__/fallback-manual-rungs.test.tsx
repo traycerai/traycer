@@ -7,6 +7,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  ChatRunSettings,
   FallbackWaitDisposition,
   LastFailedAttempt,
 } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -19,6 +20,7 @@ import {
   BANNED_VOCABULARY,
   FAILED_CLAUDE_TUPLE,
   TARGET_CODEX_TUPLE,
+  chatRunSettings,
   fallbackModelTarget,
   lastFailedAttempt,
   listTargetsResponse,
@@ -60,13 +62,26 @@ const harness = vi.hoisted(() => {
   // `use-confirmed-manual-action.ts` - a fixture gap wearing a production
   // stack trace, which is the same class as the under-modelled `onSuccess`
   // below.
+  //
+  // `access` and `connectionStatus` are the chat's ACT CAPABILITY, and they
+  // are part of the slice for the same reason the two publishers are: the
+  // component reaches them through `handle.store`, so a slice that omitted
+  // them would answer `undefined` and silently disable every affordance in
+  // this file - a fixture gap that reads as "the feature is broken" rather
+  // than "the double is short". The default is the state every case here
+  // assumed before the gate existed: this user owns the chat and its stream is
+  // up. The two cases where it is not are pinned explicitly below.
   type Slice = {
     lastFailedAttempt: LastFailedAttempt | undefined;
+    access: { readonly canAct: boolean } | null;
+    connectionStatus: "connecting" | "open" | "reconnecting" | "closed";
     publishConfirmedManualFallbackAction: (input: unknown) => void;
     publishUnattendedFallbackOutcome: (input: unknown) => void;
   };
   const initialSlice = (): Slice => ({
     lastFailedAttempt: undefined,
+    access: { canAct: true },
+    connectionStatus: "open",
     publishConfirmedManualFallbackAction: (input: unknown): void => {
       publishedActions.push(input);
     },
@@ -245,8 +260,61 @@ function positiveAttempt(input: {
           },
     eligibleRungs: input.eligibleRungs,
     waitDisposition: input.waitDisposition,
+    // Derived, and ONLY across the two values that explain nothing.
+    //
+    // Every call site of this helper predates the switch verdict and none of
+    // them is about it, so the two "there is a button, or there is no claim"
+    // values keep their rendered output exactly what those assertions were
+    // written against. `no_destination` - the value under test, and the only
+    // one that renders a sentence - is never produced here: a test that wants
+    // it uses {@link withheldSwitchAttempt} and says so. A fixture that could
+    // derive the value under test would pass with the rule deleted.
+    switchDisposition: input.eligibleRungs.includes("switch")
+      ? "eligible"
+      : "unknown",
+    failedTuple: FAILED_CLAUDE_TUPLE,
   });
 }
+
+/**
+ * The attempt shape this lane is about: a chat the host found no destination
+ * for, so `switch` is absent from `eligibleRungs` AND the disposition says why.
+ *
+ * Separate from {@link positiveAttempt} rather than a parameter on it, so the
+ * pairing of those two facts is written out at the one place it is asserted
+ * instead of computed by a builder the assertions would then be testing.
+ */
+function withheldSwitchAttempt(
+  failedTuple: ChatRunSettings | null,
+): LastFailedAttempt {
+  return lastFailedAttempt({
+    userMessageId: USER_MESSAGE_ID,
+    turnId: TURN_ID,
+    failure: { reason: "rate_limit" },
+    // `retry` stays. The point of the row is that ONE control went away and
+    // the others did not - a bare card would be explained by any number of
+    // rules, and would pass with the switch gate deleted and the whole DTO
+    // withheld instead.
+    eligibleRungs: ["retry"],
+    waitDisposition: "no_verified_reset",
+    switchDisposition: "no_destination",
+    failedTuple,
+  });
+}
+
+/**
+ * A Default-shaped Claude chat: the exact tuple the defect is about.
+ *
+ * `default` is a real slug the Claude SDK advertises, and its model family
+ * lives only in the catalog LABEL (`Default (Sonnet 4.5)`) - which is why it
+ * belongs to no equivalence class the host matches on a slug, and why a chat
+ * on it has nowhere to switch.
+ */
+const DEFAULT_SHAPED_TUPLE: ChatRunSettings = chatRunSettings({
+  harnessId: "claude",
+  model: "default",
+  profileId: null,
+});
 
 const ALL_RUNGS: ReadonlyArray<"retry" | "switch" | "wait_once"> = [
   "retry",
@@ -256,6 +324,34 @@ const ALL_RUNGS: ReadonlyArray<"retry" | "switch" | "wait_once"> = [
 
 function seedAttempt(attempt: LastFailedAttempt | undefined): void {
   harness.store.setState({ lastFailedAttempt: attempt });
+}
+
+/**
+ * The chat's act capability, exactly as the session store publishes it -
+ * `access.canAct` for the role, `connectionStatus` for the stream.
+ *
+ * Both, and separately, because the component ANDs them and a single flag
+ * could not tell the two refusals apart: a viewer is refused permanently, an
+ * owner mid-reconnect is refused for a moment. A pin that only ever moved one
+ * of them would leave the other term free to be deleted.
+ */
+function seedActCapability(input: {
+  readonly canAct: boolean;
+  readonly connectionStatus: "connecting" | "open" | "reconnecting" | "closed";
+}): void {
+  harness.store.setState({
+    access: { canAct: input.canAct },
+    connectionStatus: input.connectionStatus,
+  });
+}
+
+/** Narrows a queried control to the element whose `disabled` is the answer. */
+function buttonNamed(name: string): HTMLButtonElement {
+  const element = screen.getByRole("button", { name });
+  if (!(element instanceof HTMLButtonElement)) {
+    throw new Error(`expected "${name}" to be a button`);
+  }
+  return element;
 }
 
 function renderActions(turnId: string) {
@@ -283,6 +379,11 @@ describe("FallbackManualRungActions", () => {
     harness.publishedUnattended.length = 0;
     harness.deferResponses = false;
     harness.pendingResponses.length = 0;
+    // Restored per test, not merely seeded once: `setState` MERGES, so a case
+    // that drops the capability would otherwise leave every later case running
+    // as a viewer - and they would fail as "the button isn't there", which is
+    // the wrong diagnosis entirely.
+    seedActCapability({ canAct: true, connectionStatus: "open" });
     seedAttempt(undefined);
   });
 
@@ -313,6 +414,78 @@ describe("FallbackManualRungActions", () => {
     const text = root?.textContent ?? "";
     expect(text).not.toMatch(BANNED_VOCABULARY);
     expect(text).not.toContain("rate_limit");
+  });
+
+  // The negative twins of the case above, and the reason this card needed a
+  // gate at all: `ErrorSegment` is DURABLE TRANSCRIPT, so these affordances
+  // mount for anyone who can open the chat, and `chat.fallback.runManualRung`
+  // is a plain unary RPC with nothing client-side in front of it. Before the
+  // `useChatFallbackActionsCanAct` gate, `busy` was `runManualRung.isPending`
+  // and nothing else, so both rows below rendered ENABLED buttons that really
+  // dispatched.
+  //
+  // Same fixture as the fully-eligible case above - the attempt, the rungs and
+  // the disposition are identical, and only the capability moves. That is what
+  // makes these two a control pair rather than two spot checks: neither can
+  // pass because the buttons happened not to render.
+  it("disables every affordance for a VIEWER, and dispatches nothing", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    // The stream is UP. This row is about the role alone, so a gate that only
+    // read `connectionStatus` would leave it red.
+    seedActCapability({ canAct: false, connectionStatus: "open" });
+    renderActions(TURN_ID);
+
+    const retry = buttonNamed("Retry");
+    // Falsification: drop the `|| !canAct` term from `busy` and all three of
+    // these go red, because the buttons are still RENDERED either way - the
+    // host said this failure admits all three rungs, and that is unchanged by
+    // who is looking at it.
+    expect(retry.disabled).toBe(true);
+    expect(buttonNamed("Switch…").disabled).toBe(true);
+    expect(
+      buttonNamed(`Wait until ${formatClockTime(RESETS_AT)}`).disabled,
+    ).toBe(true);
+
+    fireEvent.click(retry);
+    // The assertion that makes the three above mean something: a disabled
+    // button is only a claim about the DOM, this is the claim about the wire.
+    expect(harness.mutate).not.toHaveBeenCalled();
+  });
+
+  it("disables every affordance for an OWNER whose chat stream has dropped", () => {
+    seedAttempt(
+      positiveAttempt({
+        userMessageId: USER_MESSAGE_ID,
+        turnId: TURN_ID,
+        reason: "rate_limit",
+        eligibleRungs: ALL_RUNGS,
+        resetsAt: RESETS_AT,
+        waitDisposition: "eligible",
+      }),
+    );
+    // The role is fine; the transport is not. `canSendAction` refuses the
+    // stream-side hold in exactly this state, and this card now agrees with
+    // it. Falsification: drop the `connectionStatus === "open"` term from
+    // `useChatFallbackActionsCanAct` and this cell goes red while the viewer
+    // cell above stays green.
+    seedActCapability({ canAct: true, connectionStatus: "reconnecting" });
+    renderActions(TURN_ID);
+
+    const retry = buttonNamed("Retry");
+    expect(retry.disabled).toBe(true);
+    expect(buttonNamed("Switch…").disabled).toBe(true);
+
+    fireEvent.click(retry);
+    expect(harness.mutate).not.toHaveBeenCalled();
   });
 
   // F10: this card always calls `switchConsequencesText(null)` - a failed
@@ -1087,5 +1260,104 @@ describe("FallbackManualRungActions", () => {
       }),
     );
     expect(harness.toast).toHaveBeenCalledWith(RUNG_UNAVAILABLE_LABEL);
+  });
+
+  /**
+   * The switch verdict: a control withheld must be a control EXPLAINED.
+   *
+   * The three cases are a matrix over one host field, not three spot checks,
+   * and the middle one is the control that makes the other two mean something:
+   * the same component, the same row, the same everything except
+   * `switchDisposition`, so neither the presence nor the absence of the button
+   * can be explained by anything else on the frame.
+   *
+   * Every assertion is on the RULE - "a chat with no destination offers no
+   * switch and says why" - rather than on this quarter's wording, except the
+   * one that has to be literal: the sentence must name the chat, and only a
+   * substring check can prove a generic line did not creep back in.
+   */
+  describe("the switch verdict", () => {
+    it("offers no Switch… and names the chat when the host found no destination", () => {
+      seedAttempt(withheldSwitchAttempt(DEFAULT_SHAPED_TUPLE));
+      renderActions(TURN_ID);
+
+      expect(screen.queryByRole("button", { name: "Switch…" })).toBeNull();
+      // The row is not merely bare - `retry` survives. A card that lost every
+      // control would satisfy the line above with the whole DTO withheld.
+      expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
+
+      const root = screen.getByRole("button", { name: "Retry" }).parentElement;
+      const text = root?.textContent ?? "";
+      // The chat's own identity, resolved the way every other fallback surface
+      // resolves one: the PROVIDER DISPLAY NAME, never the harness id that the
+      // host's own transcript copy uses. A sentence reading "claude/default"
+      // would pass a looser check and be the wrong voice entirely.
+      expect(text).toContain("Claude Code · default");
+      expect(text).not.toContain("claude/default");
+      // Engine words, "group" included - the reason this sentence could not be
+      // the host's own `no-group` label.
+      expect(text).not.toMatch(BANNED_VOCABULARY);
+    });
+
+    it("still offers Switch… when the host named a destination", () => {
+      seedAttempt(
+        positiveAttempt({
+          userMessageId: USER_MESSAGE_ID,
+          turnId: TURN_ID,
+          reason: "rate_limit",
+          eligibleRungs: ["retry", "switch"],
+          resetsAt: undefined,
+          waitDisposition: "no_verified_reset",
+        }),
+      );
+      renderActions(TURN_ID);
+
+      expect(screen.getByRole("button", { name: "Switch…" })).toBeDefined();
+      const root = screen.getByRole("button", { name: "Retry" }).parentElement;
+      // No explanation beside a working button. The sentence exists to explain
+      // an ABSENCE, and one printed next to the control it describes would be
+      // the card contradicting itself.
+      expect(root?.textContent ?? "").not.toContain("No other model is set up");
+    });
+
+    it("offers Switch… and claims nothing when the host could not check", () => {
+      // The unreadable-policy / never-recorded arm, and the one that would be
+      // a lie in the other direction: telling a user their setup is empty when
+      // the truth is we could not look. `unknown` OFFERS, and stays silent.
+      //
+      // Built literally rather than through `positiveAttempt`, whose derivation
+      // cannot reach this pairing: a failed tuple IS in hand here - the envelope
+      // survived and only the verdict is missing - so a sentence would have had
+      // every ingredient it needed and must still not be printed.
+      seedAttempt(
+        lastFailedAttempt({
+          userMessageId: USER_MESSAGE_ID,
+          turnId: TURN_ID,
+          failure: { reason: "rate_limit" },
+          eligibleRungs: ["retry", "switch"],
+          waitDisposition: "no_verified_reset",
+          switchDisposition: "unknown",
+          failedTuple: DEFAULT_SHAPED_TUPLE,
+        }),
+      );
+      renderActions(TURN_ID);
+
+      expect(screen.getByRole("button", { name: "Switch…" })).toBeDefined();
+      const root = screen.getByRole("button", { name: "Retry" }).parentElement;
+      expect(root?.textContent ?? "").not.toContain("No other model is set up");
+    });
+
+    it("says nothing rather than a subject-less sentence with no failed tuple", () => {
+      // `failedTuple: null` travels with a missing replay envelope. There is
+      // nothing to name, and "No other model is set up for" trailing into
+      // nothing is worse than silence - so the control is still withheld (the
+      // host said so) and the sentence is dropped.
+      seedAttempt(withheldSwitchAttempt(null));
+      renderActions(TURN_ID);
+
+      expect(screen.queryByRole("button", { name: "Switch…" })).toBeNull();
+      const root = screen.getByRole("button", { name: "Retry" }).parentElement;
+      expect(root?.textContent ?? "").not.toContain("No other model is set up");
+    });
   });
 });

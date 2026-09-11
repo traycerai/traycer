@@ -112,7 +112,21 @@ export function FallbackGraceCard({
   const reasonLabel = fallbackReasonLabelFor(pending.reason);
   // "Sign in instead" belongs only to a signed-out traversal: for any other
   // reason it would send the user to fix an account that is working.
-  const signedOut = pending.reason === "auth";
+  //
+  // And only to one that HAS somewhere to sign in. `providerId === null` means
+  // this harness has no provider-CLI account behind it - `fallbackTupleIdentity`
+  // calls that field the thing "the sign-in affordance routes on", and names
+  // "a sign-in that leads nowhere" as the failure it exists to prevent. That
+  // check used to live inside the armed closure below and nowhere else, so the
+  // button rendered for such a tuple, its press CANCELLED the traversal, and the
+  // closure then returned before opening anything: the user gave up the switch
+  // and got no sign-in surface in exchange. A gate the render condition does not
+  // share is not a gate, it is a dead end one click in.
+  //
+  // One variable rather than a second condition at the button, so the helper
+  // line at the foot of the card follows it too - it promises what
+  // "Sign in instead" does, and a card with no such button must not.
+  const signedOut = pending.reason === "auth" && failed.providerId !== null;
 
   const onCancel = useCallback(() => {
     // Disarm first. A sign-in click whose cancel died in transport never
@@ -143,20 +157,31 @@ export function FallbackGraceCard({
     // hook's `onSuccess` in ADDITION to this one - so saying anything would
     // report one refusal twice.
     pendingSignInRef.current = () => {
-      // The chat's OWN host, on both branches. The managed-profile branch
-      // carries it through `setProfileFocus`, but the ambient branch below
-      // writes only a harness id - `setFocusHarnessId` explicitly clears the
-      // host halves - so a signed-out Terminal account on host B used to open
-      // sign-in on whichever host Settings last showed. This is the same carry
-      // every other fallback settings link makes.
-      carryViewedHostIntoSettingsScope(hostId);
       // The gate is on the PROVIDER id, the focus is written with the HARNESS
       // id. `providerId === null` means this harness has no provider-CLI
       // account to sign into, so there is nothing for Settings to open;
       // everywhere else the tuple's own harness is the right key, and
       // re-deriving it from the provider would be a round trip that can only
       // lose.
+      //
+      // Unreachable while `signedOut` holds the same check, which is the point:
+      // the gate that DECIDES is now the render condition, and this one is what
+      // keeps a future change to `signedOut` from quietly restoring the dead end
+      // instead of failing here. It runs FIRST for the same reason - everything
+      // below it is a side effect of navigating, and nothing below it navigates.
       if (failed.providerId === null) return;
+      // The chat's OWN host, on both branches. The managed-profile branch
+      // carries it through `setProfileFocus`, but the ambient branch below
+      // writes only a harness id - `setFocusHarnessId` explicitly clears the
+      // host halves - so a signed-out Terminal account on host B used to open
+      // sign-in on whichever host Settings last showed. This is the same carry
+      // every other fallback settings link makes.
+      //
+      // Below the gate, not above it: it rewrites the APP-WIDE Settings scope,
+      // so running it on a path that opens no Settings re-points a surface the
+      // user never navigated to and will meet later, pointed at this chat's
+      // host for no reason they can see.
+      carryViewedHostIntoSettingsScope(hostId);
       const focus = useProvidersFocusStore.getState();
       const profileId = pending.failedTuple.profileId;
       if (profileId !== null) {

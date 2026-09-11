@@ -20,11 +20,27 @@ export type OverrideChipState = "runs" | "off" | "impossible";
 /**
  * The ladder this failure actually walks, given the policy.
  *
- * `"off"` is a third thing, not an empty ladder: it means no traversal arms at
- * all - no cancel window, no notify hold - while an empty ARRAY still arms and
- * exhausts. The panel never writes `"off"` (the matrix has no control for it),
- * but the wire allows it and a programmatic writer can produce it, so this
- * answers it distinctly rather than rendering it as "everything turned off".
+ * `"off"` is a third thing, not an empty ladder - but NOT for the reason this
+ * comment used to give. It claimed `"off"` armed nothing "while an empty ARRAY
+ * still arms and exhausts", and the second half was never true: an empty array
+ * hits the host's own `ladder.length === 0` refusal and arms nothing either.
+ * The engine now reports the difference in its refusal reason and nowhere else
+ * - `reason_override_off` for this value, `empty_ladder` for `[]`, and
+ * `notify_only` for a non-transient failure left with `Notify` alone. Three
+ * distinct diagnoses, one identical outcome.
+ *
+ * So the distinction this function keeps is about AUTHORSHIP, not behaviour:
+ * `"off"` is a statement the user made about this failure, `[]` is a row that
+ * happens to be empty, and rendering the first as "everything turned off" would
+ * put words in their mouth. The panel never writes `"off"` (the matrix has no
+ * control for it), but the wire allows it and a programmatic writer can produce
+ * it, so this answers it distinctly.
+ *
+ * The one thing `Notify`'s presence still buys, and the only behavioural
+ * difference left in this area: a TRANSIENT reason (`provider_unavailable`,
+ * `provider_connection_failed`) with `["notify"]` does arm, for its short
+ * same-tuple retry series, and settles at `notify` with no countdown. Empty it
+ * and those retries are gone.
  */
 export function effectiveLadderFor(
   policy: FallbackPolicy,
@@ -50,8 +66,21 @@ export function overrideChipState(
  * Three things this has to get right, each of which was a way to lose data:
  *
  *  1. **`notify` is carried through.** It has no column, so rebuilding the row
- *     from the chips on screen would silently drop it and turn a failure that
- *     holds and notifies into one that just exhausts.
+ *     from the chips on screen would silently drop it - and the cost of that is
+ *     not what this note used to say. "Turn a failure that holds and notifies
+ *     into one that just exhausts" described an engine that armed a hold for a
+ *     notify-only plan; it no longer does. What dropping it actually costs is
+ *     the two TRANSIENT failures (an outage, a connection failure): their row
+ *     narrows to `notify` alone, so losing it takes the row to `[]` and their
+ *     short same-tuple retry series stops arming at all. For every other
+ *     failure the loss is invisible today - and that is the weaker reason to
+ *     keep it, not a reason to stop. `FALLBACK_OVERRIDES_DISCLOSURE` promises
+ *     the user in writing that "Notify stays last", and a promise on screen is
+ *     its own requirement regardless of what the engine currently does with it.
+ *     On BOTH entry paths: from a ladder it rides in on `current`, and from a
+ *     stored `"off"` it is seeded from the base ladder below. The `"off"` path
+ *     used to seed nothing at all, which reached the same loss in ONE click and
+ *     left it there - see the note on `desired`.
  *  2. **Order comes from `rungOrder`, not from the row.** The user's step order
  *     is a preference they set once; a per-failure narrowing must not reorder
  *     it. `rungOrder` is the editor's four-row order, so a step the base ladder
@@ -69,10 +98,30 @@ export function togglePolicyOverrideRung(input: {
 }): FallbackPolicy {
   const { policy, reason, rung, rungOrder } = input;
   const current = effectiveLadderFor(policy, reason);
-  // `"off"` starts from nothing: the user is turning a step back on for a
-  // failure that had been opted out entirely, and the honest reading of that
-  // click is "run this one step", not "restore the whole ladder".
-  const desired = new Set<FallbackRungKind>(current === "off" ? [] : current);
+  // `"off"` starts from nothing BUT THE TERMINAL STEP: the user is turning a
+  // step back on for a failure that had been opted out entirely, and the honest
+  // reading of that click is "run this one step", not "restore the whole
+  // ladder".
+  //
+  // `notify` is the one exception, because it is the one rung with no chip
+  // (`REASON_ELIGIBLE_RUNGS`' own doc: "notify never appears in a row"). Seeding
+  // it out here dropped it permanently: nothing on this page writes `notify` or
+  // `"off"` back, so a single click on a stored `"off"` row removed the terminal
+  // step for good, with no control left to undo it. For the two transient
+  // failures that is the loss of their same-tuple retry series (see claim 1);
+  // for the rest it is invisible in today's engine and still breaks
+  // `FALLBACK_OVERRIDES_DISCLOSURE`'s "Notify stays last" - a promise this
+  // surface makes to the user in writing, and one that must hold whether or not
+  // the engine currently acts on the step.
+  //
+  // Read off the BASE ladder rather than added unconditionally: the row is being
+  // rebuilt out of the user's own step order, and a user who took the terminal
+  // hold out of that order did not ask for it back here.
+  const desired = new Set<FallbackRungKind>(
+    current === "off"
+      ? policy.ladder.filter((candidate) => candidate === "notify")
+      : current,
+  );
   if (desired.has(rung)) {
     desired.delete(rung);
   } else {

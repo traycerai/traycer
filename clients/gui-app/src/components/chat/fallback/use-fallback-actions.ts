@@ -18,8 +18,9 @@ import type { UnattendedFallbackOutcomePublisher } from "./use-unattended-fallba
 /**
  * The fallback verbs, as mutations.
  *
- * Three things are common to all four and are why they share this module rather
- * than living beside their cards.
+ * The headings below are common to all four and are why they share this module
+ * rather than living beside their cards. Unnumbered on purpose - the count
+ * here already read "three" over four of them.
  *
  * **No invalidation.** Every one of them changes state the CHAT STREAM
  * republishes - the pending-fallback DTO is derived per frame and the host
@@ -38,6 +39,52 @@ import type { UnattendedFallbackOutcomePublisher } from "./use-unattended-fallba
  * **Keyed per chat.** Several chats can hold a grace window at once, and a
  * chat-blind mutation key would let one card's in-flight press disable the
  * buttons on every other card.
+ *
+ * **No shared `MutationScope`, and that is a decision rather than an
+ * omission.** `host-method-policy-table.ts` points here for it - `fifo` buys
+ * these four LANDING and never order, and "a surface that does need arrival
+ * order has to ask for it where the ordering primitive lives - a shared
+ * `MutationScope` on the hooks in `use-fallback-actions.ts`". This surface
+ * does not need it, and taking it would be a regression. Four reasons, in the
+ * order they bite:
+ *
+ * 1. **The repeat case is already ordered, one layer down.**
+ *    `HostRequestCoordinator.keyFor` is `[hostId, userId, method,
+ *    stableWireJson(params)]`, so two sends with IDENTICAL params are ONE
+ *    queue, and `fifo` runs them one at a time and answers each separately
+ *    rather than coalescing. The double-click - the only race a client-side
+ *    order could plausibly protect - is therefore already serialized, and the
+ *    host's own guard chain refuses the second (a retry whose twin already
+ *    launched a turn answers `rung_unavailable`).
+ *
+ * 2. **The differing-params case is decided by the HOST, not by arrival
+ *    order.** Two sends that differ do so precisely in the `revision`, or the
+ *    attempt, that they name; a request naming a superseded one is refused
+ *    whenever it arrives. Ordering them changes which refusal gets printed,
+ *    never which press applies.
+ *
+ * 3. **Across two verbs a client FIFO makes the WRONG press win.** That race
+ *    is real - the grace card renders "Don't switch" and the destination menu
+ *    side by side and neither disables the other - but a shared scope resolves
+ *    it by letting the EARLIER press land, so a user who picks a destination
+ *    and then changes their mind loses to their own previous click BY
+ *    CONSTRUCTION. The policy table's argument is that the later press carries
+ *    the newer intent; a scope is the mechanism that guarantees it never gets
+ *    it.
+ *
+ * 4. **A scope adds a failure mode these verbs do not have.** Scoped mutations
+ *    are held in the CLIENT until the one ahead of them settles, so an earlier
+ *    request stuck in flight would stop a later "Don't switch" from being
+ *    dispatched at all - trading "the host refused your second press" for
+ *    "your second press was never sent".
+ *
+ * The asymmetry with `providers.fallbackPolicy.*`, which DID take a shared
+ * host-keyed scope, is the first heading above. Those three fold their
+ * response into a query cache with `setQueriesData`, so an unordered pair
+ * leaves the cache holding whichever response LANDED last - a durable wrong
+ * answer with no authority to correct it. These four write no cache at all:
+ * the chat stream republishes the state after every committed transition, so
+ * what the UI reads is the authoritative frame and never a response.
  *
  * **Every report is HOOK-level.** Which channel answers a refusal is still a
  * per-call fact, but the choosing happens here, because a per-call

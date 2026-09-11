@@ -10,6 +10,7 @@ import {
   type HostNotificationStoppedReason,
 } from "@traycer/protocol/host/notifications/payloads";
 import type { AgentFailureReason } from "@traycer/protocol/persistence/epic/content-blocks";
+import type { FallbackRungKind } from "@traycer/protocol/host/fallback-policy";
 import { providerSignedOutMessage } from "@traycer/protocol/host/provider-display";
 import {
   PROVIDER_DISPLAY_NAMES,
@@ -389,6 +390,7 @@ export const FALLBACK_REASON_LABELS: Record<
   turn_start_timeout: "Provider did not start in time",
   missing_terminal_event: "Provider stopped responding",
   background_work_failed: "Background work stopped",
+  session_budget: "Session limit reached",
 };
 
 /**
@@ -403,6 +405,37 @@ export const FALLBACK_REASON_LABELS: Record<
  */
 export function fallbackReasonLabel(reason: AgentFailureReason): string {
   return FALLBACK_REASON_LABELS[reason];
+}
+
+/**
+ * What a ladder step is called in USER-FACING text.
+ *
+ * `"rung"` and `"ladder"` are engine words on the ux-surfaces never-say list,
+ * and so are the step ids themselves - a notice row reading `Rung: tier` is
+ * two of them in four characters. The settings panel already resolved this for
+ * its own surfaces (`FALLBACK_RUNG_COPY`, which calls the concept a "step");
+ * this map exists because a notice's `details` value is built HOST-side and the
+ * GUI cannot fix it on the way out. That is the same constraint that put
+ * {@link FALLBACK_REASON_LABELS} here rather than in the client: a `details`
+ * value is an open `string`, so a GUI-side lookup would be a string-indexed
+ * cast that fails open on anything it has not heard of.
+ *
+ * `"manual"` is not a ladder step - it is what the cursor reads as when the
+ * user picked the destination themselves, so the ladder index names no rung.
+ *
+ * `Record<…, string>` over the union, so a fifth step cannot ship without copy.
+ */
+export const FALLBACK_RUNG_LABELS: Record<FallbackRungKind | "manual", string> =
+  {
+    profile: "Another profile",
+    tier: "Equivalent model",
+    wait: "Waiting for reset",
+    notify: "Notify only",
+    manual: "Chosen by you",
+  };
+
+export function fallbackRungLabel(rung: FallbackRungKind | "manual"): string {
+  return FALLBACK_RUNG_LABELS[rung];
 }
 
 function agentStoppedFailureStatus(
@@ -454,6 +487,13 @@ function agentStoppedFailureStatus(
       return "Provider stopped responding";
     case "background_work_failed":
       return "Background work stopped";
+    // Provider-NEUTRAL even though only one provider emits the code today, and
+    // for the same reason `context_exhausted` is: the limit is a property of
+    // this conversation, not of the account or the vendor's capacity. Naming
+    // the provider here would read as a provider-side condition, which is
+    // precisely the misreading that made this a `rate_limit` in the first place.
+    case "session_budget":
+      return "Session limit reached";
     case null:
     default:
       return "Failed";

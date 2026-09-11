@@ -2,6 +2,7 @@ import type {
   BackgroundItem,
   ChatRunSettings,
   FallbackImpendingAction,
+  FallbackSwitchDisposition,
   FallbackWaitDisposition,
   LastFailedAttempt,
   PendingFallback,
@@ -170,7 +171,16 @@ export const PREFERRED_CLAUDE_TUPLE = chatRunSettings({
   profileId: "prefer01-profile",
 });
 
-export const BANNED_VOCABULARY = /\b(tier|ladder|rung|grace|inherit)\b/i;
+/**
+ * Words no fallback surface may print.
+ *
+ * `group` joined the engine words for exactly their reason: a model group is
+ * policy STRUCTURE, and naming it in front of a user is "tier" in a friendlier
+ * suit. It is not hypothetical - the rung-level `no-group` skip reason used to
+ * put "no group contains this model" on the destination menu's empty state,
+ * which is the commonest empty menu there is.
+ */
+export const BANNED_VOCABULARY = /\b(tier|ladder|rung|grace|inherit|group)\b/i;
 
 export function lastFailedAttempt(input: {
   readonly userMessageId: string;
@@ -178,6 +188,16 @@ export function lastFailedAttempt(input: {
   readonly failure: AgentFailure;
   readonly eligibleRungs: ReadonlyArray<"retry" | "switch" | "wait_once">;
   readonly waitDisposition: FallbackWaitDisposition;
+  /**
+   * Passed in rather than derived from `eligibleRungs`, even though the
+   * producer keeps the two in step. A fixture that computed it would make
+   * every assertion about the switch explanation an assertion about this
+   * builder's arithmetic, which is the shape that passes with the rule under
+   * test deleted.
+   */
+  readonly switchDisposition: FallbackSwitchDisposition;
+  /** The subject of the switch explanation; `null` for "no replay envelope". */
+  readonly failedTuple: ChatRunSettings | null;
 }): LastFailedAttempt {
   return {
     userMessageId: input.userMessageId,
@@ -185,6 +205,8 @@ export function lastFailedAttempt(input: {
     failure: input.failure,
     eligibleRungs: [...input.eligibleRungs],
     waitDisposition: input.waitDisposition,
+    switchDisposition: input.switchDisposition,
+    failedTuple: input.failedTuple,
   };
 }
 

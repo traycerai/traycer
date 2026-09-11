@@ -1927,8 +1927,17 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     believes is the switch. They read it as a notification preference; it is
     nothing of the kind. Turning it off suppresses no notification (exhaustion
     ends in the same terminal consequences and the error card is always
-    published) - it changes engine traversal configuration, whether a
-    notify-only grace hold arms, which this page has no way to explain. So the
+    published). What it changes is narrower than the line that used to sit here
+    ("whether a notify-only grace hold arms"), which is now false: a
+    non-transient failure whose plan narrows to `notify` alone **does not arm at
+    all**, so there is no countdown for the step to add or remove - the chat
+    takes the terminal path and the user gets the error card's manual steps. The
+    step still buys something for the two TRANSIENT reasons
+    (`provider_unavailable`, `provider_connection_failed`): their plan narrows
+    to `notify` alone, they arm for a short same-tuple retry series, and they
+    settle at `notify` with no countdown at any point. Remove the step from
+    their plan and nothing arms, so the retries are lost with it. Neither is a
+    choice this page can explain on a switch. So the
     ordinary state renders a static `Always`, matching the reserved gutters the
     row already draws in place of a handle and arrows: absence says "this cannot
     be changed" once, where a disabled switch invites the reader to look for the
@@ -1989,7 +1998,7 @@ dialog.tsx` / `notification-hook-draft.ts`, unchanged by this pass).
     order from the editor's four-row display order, never from the chips on
     screen; an override that ends up equal to the base ladder is **removed**
     rather than stored, so a later change to the main order keeps applying to
-    that failure. The five excluded reasons collapse into one read-only line -
+    that failure. The excluded reasons collapse into one read-only line -
     exclusion is not a preference - and `Reset overrides only` clears
     `reasonOverrides` alone, leaving the ladder and Behavior untouched.
     **What the matrix cannot express, disclosed rather than left to be

@@ -7,6 +7,7 @@ import type {
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
+import { fallbackPolicyWriteScope } from "@/hooks/providers/use-fallback-policy-set-mutation";
 import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
 
 interface FallbackRestoreContext {
@@ -47,6 +48,11 @@ export function useFallbackPolicyRestoreTierGroupsMutation(): UseMutationResult<
     mapVariables: (variables) => variables,
     options: {
       mutationKey: providersMutationKeys.restoreFallbackTierGroups(),
+      // The SAME scope as the save and the reset - see
+      // `fallbackPolicyWriteScope`. This one writes the get-cache in place
+      // like the save does, so an unordered restore and save simply overwrite
+      // each other's `policy` with whichever answer arrived second.
+      scope: fallbackPolicyWriteScope(client.getActiveHostId()),
       onMutate: () => ({ hostId: client.getActiveHostId() ?? null }),
       onSuccess: (data, _variables, ctx) => {
         if (ctx.hostId === null) return;

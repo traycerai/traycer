@@ -904,6 +904,17 @@ export const AGENT_FAILURE_REASONS = [
   "turn_start_timeout",
   "missing_terminal_event",
   "background_work_failed",
+  // EXEMPT from the rule stated directly above, and only because it ships in
+  // the SAME release as `failure` itself. The rule binds a member added to a
+  // list a released peer parses; no released peer parses this one yet. `failure`
+  // joined the error block at `chat.subscribe@1.10`, every released 1.0-1.9 line
+  // binds `errorBlockSchemaPreFallback` / `errorEventSchemaPreFallback`, and
+  // those are hand-written `z.object`s that omit `failure` outright rather than
+  // aliases over the live schema - so there is no shipped reader to hand a
+  // reason it has never heard of. Do NOT copy this exemption for the next
+  // member: once 1.10 is released, that one needs the frozen pre-image and the
+  // emission gate the rule asks for.
+  "session_budget",
 ] as const;
 export const agentFailureReasonSchema = z.enum(AGENT_FAILURE_REASONS);
 export type AgentFailureReason = z.infer<typeof agentFailureReasonSchema>;
@@ -922,7 +933,9 @@ export type AgentFailureReason = z.infer<typeof agentFailureReasonSchema>;
  *     boundary the PROVIDER reported or an authoritative PROBE read. A gauge
  *     estimate (a synthesized `now + window duration`) never reaches the wire -
  *     it exists only to age out a host-side hard-limit mark. A consumer may
- *     therefore render `resetsAt` as a time without qualifying it.
+ *     therefore render `resetsAt` as a time without qualifying it. The
+ *     refinement below is what makes that safe to rely on rather than a habit
+ *     the emitters happen to keep.
  *   - `scope` names the limiting window that SET `resetsAt` (e.g.
  *     `"five_hour"`, a model-scoped bucket's display name, a codex limit id) -
  *     free text, because the window vocabulary is per provider and is not a
@@ -930,13 +943,55 @@ export type AgentFailureReason = z.infer<typeof agentFailureReasonSchema>;
  *   - `providerDetail` is bounded, charset-safe host-built text
  *     (`describeErrorBody` discipline), never a raw provider body.
  */
-export const agentFailureSchema = z.object({
-  reason: agentFailureReasonSchema,
-  resetsAt: z.number().optional(),
-  resetsAtSource: z.enum(["provider", "probe"]).optional(),
-  scope: z.string().optional(),
-  providerDetail: z.string().optional(),
-});
+export const agentFailureSchema = z
+  .object({
+    reason: agentFailureReasonSchema,
+    resetsAt: z.number().optional(),
+    resetsAtSource: z.enum(["provider", "probe"]).optional(),
+    scope: z.string().optional(),
+    providerDetail: z.string().optional(),
+  })
+  .superRefine((failure, ctx) => {
+    // The pair is what makes the `resetsAt` bullet above true for a CONSUMER,
+    // and a consumer is already spending it: the error card reads
+    // `attempt.failure.resetsAt` straight into a clock time
+    // (`fallback-manual-rungs.tsx`) and never looks at `resetsAtSource`. That
+    // is correct only while the source is what certifies the boundary - a
+    // `resetsAt` arriving alone renders as a verified time with nothing behind
+    // it, which is exactly the gauge estimate this payload exists to keep off
+    // the wire.
+    //
+    // Refused in both directions, not only the dangerous one: a
+    // `resetsAtSource` with no boundary names who verified a time that is not
+    // there, which no reader can act on either.
+    //
+    // Deliberately NOT extended to `scope`. It is documented as free text
+    // labelling the window, not as part of the boundary's proof, and the
+    // vocabulary is per provider - binding it here would hold emitters to a
+    // rule this contract has never stated.
+    //
+    // Narrowing a PERSISTED schema is normally breaking (see
+    // `src/persistence/COMPATIBILITY.md`); it is free here because nothing has
+    // shipped. `failure` joined the error block for `chat.subscribe@1.10`, and
+    // every released `1.0`-`1.9` line binds `errorBlockSchemaPreFallback` /
+    // `errorEventSchemaPreFallback` instead, so no shipped peer reaches this
+    // schema and no released host has ever written the key to disk. The frozen
+    // JSON-Schema surfaces do not move either - a Zod refinement has no
+    // JSON-Schema form, which is why `providerNoticeMetadataSchema`'s own
+    // `superRefine` leaves no trace in `epic-schema-surface.ts`. After a
+    // release pins the record, the same edit needs a new major.
+    if (
+      (failure.resetsAt === undefined) ===
+      (failure.resetsAtSource === undefined)
+    ) {
+      return;
+    }
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "resetsAt and resetsAtSource must be present together",
+      path: [failure.resetsAt === undefined ? "resetsAt" : "resetsAtSource"],
+    });
+  });
 export type AgentFailure = z.infer<typeof agentFailureSchema>;
 
 export const errorBlockSchema = z.object({

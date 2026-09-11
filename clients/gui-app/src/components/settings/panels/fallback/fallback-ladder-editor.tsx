@@ -35,6 +35,19 @@ export interface FallbackLadderEditorProps {
    * three states - the user turns it on and it silently never fires.
    */
   readonly profileStepHint: ReactNode;
+  /**
+   * Rendered on the equivalent-model step when the user's own settings name no
+   * destination for the model they actually run.
+   *
+   * The same principle as {@link profileStepHint}, applied to the step that
+   * needed it more. The profile step is inert when a user has no second account
+   * anywhere - a global fact. This one is inert PER MODEL, which is worse,
+   * because it looks configured: a user with a full page of equivalent models
+   * whose chats run `claude/default` has a step that is on, looks ready, and can
+   * never fire for them. Nothing said so; the editor's empty state covers
+   * "nothing set up at all" and this is the opposite case.
+   */
+  readonly tierStepHint: ReactNode;
 }
 
 /**
@@ -64,7 +77,14 @@ export interface FallbackLadderEditorProps {
 export function FallbackLadderEditor(
   props: FallbackLadderEditorProps,
 ): ReactNode {
-  const { displayOrder, enabled, onToggle, onMove, profileStepHint } = props;
+  const {
+    displayOrder,
+    enabled,
+    onToggle,
+    onMove,
+    profileStepHint,
+    tierStepHint,
+  } = props;
   const headingId = useId();
   const instructionsId = useId();
   const movable = displayOrder.filter((rung) => rung !== "notify");
@@ -135,7 +155,10 @@ export function FallbackLadderEditor(
                     movableCount={movable.length}
                     movableBoundary={boundary}
                     onMove={onMove}
-                    hint={rung === "profile" ? profileStepHint : null}
+                    hint={stepHintFor(rung, {
+                      profileStepHint,
+                      tierStepHint,
+                    })}
                   />
                 </li>
               );
@@ -156,6 +179,39 @@ export function FallbackLadderEditor(
       </p>
     </div>
   );
+}
+
+/**
+ * Which hint, if any, belongs on a step.
+ *
+ * A lookup rather than a chain of ternaries in the JSX, and exhaustive over the
+ * four steps with no `default`, so a fifth rung is a compile error here instead
+ * of a row that silently never gets the hint someone wrote for it. That is the
+ * failure this file already had once: the editor took a hint prop, rendered it
+ * on `profile` alone, and its own doc argued the principle - *"an inert step
+ * that says nothing is the worst of the three states"* - for the step the
+ * `claude/default` gap does NOT kill, while the step it does kill said nothing.
+ *
+ * `wait` and `notify` have none and it is not an omission: `wait` is gated on a
+ * provider-reported reset boundary, which is a fact about a failure rather than
+ * about configuration and so cannot be known here, and `notify` always runs.
+ */
+function stepHintFor(
+  rung: FallbackRungKind,
+  hints: {
+    readonly profileStepHint: ReactNode;
+    readonly tierStepHint: ReactNode;
+  },
+): ReactNode {
+  switch (rung) {
+    case "profile":
+      return hints.profileStepHint;
+    case "tier":
+      return hints.tierStepHint;
+    case "wait":
+    case "notify":
+      return null;
+  }
 }
 
 /**
@@ -352,9 +408,20 @@ function FallbackLadderRow(props: {
  * true, and the one a first-time user believes is the switch. They read it as a
  * notification preference; it is nothing of the kind. Turning it off does not
  * suppress a single notification: exhaustion still ends in the same terminal
- * consequences and the error card is always published. What it actually changes
- * is engine traversal configuration - whether a notify-only grace hold arms -
- * which is not a choice this page has any way to explain.
+ * consequences and the error card is always published.
+ *
+ * What it actually changes is narrower than it used to be, and the old wording
+ * here ("whether a notify-only grace hold arms") is now false. A plan whose
+ * surviving steps are only this one no longer arms anything: there is no
+ * countdown to remove, because a non-transient failure in that shape takes the
+ * terminal path directly and the user gets the error card's manual steps. What
+ * removing the step still costs is the two TRANSIENT failures - an outage and a
+ * connection failure - whose plan narrows to this step alone and which arm for
+ * a short same-tuple retry series before settling here, with no countdown at
+ * any point. Take the step out of their plan and there is nothing left to arm,
+ * so the retries go too.
+ *
+ * Neither of those is a choice this page has any way to explain on a switch.
  *
  * So the ordinary state offers no control at all, matching the reserved gutters
  * this row already renders in place of a drag handle and arrows: absence says

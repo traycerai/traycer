@@ -5162,7 +5162,8 @@ export const epicSchemaSurfaceBaseline = {
                                             "request_rejected",
                                             "turn_start_timeout",
                                             "missing_terminal_event",
-                                            "background_work_failed"
+                                            "background_work_failed",
+                                            "session_budget"
                                           ]
                                         },
                                         "resetsAt": {
@@ -6557,6 +6558,35 @@ export const epicSchemaSurfaceBaseline = {
                             }
                           ]
                         }
+                      },
+                      "turnProfile": {
+                        "type": "object",
+                        "properties": {
+                          "profileId": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "labelSnapshot": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "profileId",
+                          "labelSnapshot"
+                        ]
                       }
                     },
                     "required": [
@@ -13952,7 +13982,8 @@ export const epicSchemaSurfaceBaseline = {
                                             "request_rejected",
                                             "turn_start_timeout",
                                             "missing_terminal_event",
-                                            "background_work_failed"
+                                            "background_work_failed",
+                                            "session_budget"
                                           ]
                                         },
                                         "resetsAt": {
@@ -15350,6 +15381,36 @@ export const epicSchemaSurfaceBaseline = {
                             }
                           ]
                         }
+                      },
+                      "turnProfile": {
+                        "type": "object",
+                        "properties": {
+                          "profileId": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "labelSnapshot": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "profileId",
+                          "labelSnapshot"
+                        ],
+                        "additionalProperties": false
                       }
                     },
                     "required": [

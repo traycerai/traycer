@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Chat } from "@traycer/protocol/persistence/epic/schemas";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
+import type { StreamCloseReason } from "@traycer-clients/shared/host-transport/i-stream-session";
 import {
   createChatSessionStore,
   type ChatSessionStoreHandle,
@@ -204,6 +205,102 @@ describe("chat-session-store connectionEpoch", () => {
       expect(observed).toContain(before + 1);
     } finally {
       harness.handle.dispose();
+    }
+  });
+});
+
+/**
+ * A status that settles INSIDE `streamClientFactory`, i.e. inside the store's
+ * own zustand initializer, before `create()` has returned and bound `store`.
+ *
+ * Not hypothetical and not test-only: `LogicalStream.onStatusChange`
+ * (`protocol/src/host-transport/remote/logical-stream.ts`) REPLAYS a terminal
+ * `closed` synchronously to a handler installed after the transition, and
+ * installing one after the transition is exactly what `ChatStreamClient`'s
+ * constructor does. So a REMOTE chat dialled against an already-closed logical
+ * stream reaches the store's status handler from construction.
+ *
+ * Before the fix that throws: `bumpConnectionEpoch()` touches `store` in its
+ * temporal dead zone (`ReferenceError`) on a `{kind: "caller"}` close, and the
+ * fatal-close notification branch reads `get().activeTurn` off a `state`
+ * zustand has not assigned (`TypeError`) on a non-retryable `fatalError` one.
+ * Either way the factory's own `catch` rolls the store back and rethrows, so
+ * `createChatSessionStore` throws and the tile gets NO session - a crash where
+ * the honest answer was a closed chat.
+ */
+describe("chat-session-store - a connection status that settles during construction", () => {
+  function createWithSynchronousClose(
+    reason: StreamCloseReason,
+  ): ChatSessionStoreHandle {
+    return createChatSessionStore({
+      environment: CHAT_STORE_TEST_ENVIRONMENT,
+      hostId: "host-a",
+      epicId: EPIC_ID,
+      chatId: CHAT_ID,
+      userId: OWNER_ID,
+      onAuthError: null,
+      onProviderAuthError: null,
+      wakeTransport: null,
+      streamFlushCoordinator: IMMEDIATE_STREAM_FLUSH_COORDINATOR,
+      streamClientFactory: (_epicId, _chatId, nextCallbacks) => {
+        nextCallbacks.onConnectionStatus("closed", reason);
+        return {
+          sendAction: () => undefined,
+          sameTurnSteeringProtocolSupported: () => true,
+          requestTranscriptRange: () => undefined,
+          requestResnapshot: () => undefined,
+          close: () => undefined,
+        };
+      },
+    });
+  }
+
+  // The `{kind: "caller"}` close, which skips the notification branch and
+  // reaches `bumpConnectionEpoch` - the `ReferenceError` arm.
+  it("THE REDDENING ONE - a caller close replayed inside the factory still builds a store", async () => {
+    // Reds by THROWING here, not by an assertion: before the fix this call
+    // never returns a handle at all.
+    const handle = createWithSynchronousClose({ kind: "caller" });
+    try {
+      // Synchronously the status has NOT been applied, and that is the honest
+      // reading rather than a gap: the handler was deferred by exactly one
+      // microtask, so nothing has told this store anything yet.
+      expect(handle.store.getState().connectionStatus).toBe("connecting");
+
+      await Promise.resolve();
+
+      // And then it lands through the SAME path every other status takes -
+      // the status itself, and the epoch bump a `closed` carries.
+      expect(handle.store.getState().connectionStatus).toBe("closed");
+      expect(handle.store.getState().connectionEpoch).toBe(1);
+    } finally {
+      handle.dispose();
+    }
+  });
+
+  // The non-retryable `fatalError` close, which enters the notification branch
+  // FIRST and reads `get().activeTurn` - the `TypeError` arm, and the one a fix
+  // that only guarded the epoch mirror would still crash on.
+  it("a non-retryable fatal close replayed inside the factory still builds a store", async () => {
+    const handle = createWithSynchronousClose({
+      kind: "fatalError",
+      details: {
+        code: "CLIENT_CLOSED",
+        reason: "stream client was already closed",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+      },
+    });
+    try {
+      await Promise.resolve();
+
+      const settled = handle.store.getState();
+      expect(settled.connectionStatus).toBe("closed");
+      // The host's reason survives the deferral, so the tile can say WHY
+      // instead of spinning - the whole point of capturing `fatalClose`.
+      expect(settled.fatalClose?.code).toBe("CLIENT_CLOSED");
+    } finally {
+      handle.dispose();
     }
   });
 });

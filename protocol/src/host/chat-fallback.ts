@@ -195,9 +195,10 @@ export type ChatFallbackChooseTargetResponse = z.infer<
  * refused.
  *
  * `target` is null for `retry` (the same tuple, again) and required for
- * `switch`. An accepted rung SUPERSEDES a pending return in the same serialized
- * transition - the chat has one record slot, and a user asking for something
- * new has answered the return prompt by implication.
+ * `switch`, and the refinement below is what MAKES that true rather than
+ * merely documenting it. An accepted rung SUPERSEDES a pending return in the
+ * same serialized transition - the chat has one record slot, and a user asking
+ * for something new has answered the return prompt by implication.
  *
  * `wait_once` ("Wait until 3:00 PM" on the error card) is the one rung that
  * starts nothing immediately: it ARMS a fresh one-rung traversal parked on the
@@ -208,15 +209,71 @@ export type ChatFallbackChooseTargetResponse = z.infer<
  * cannot re-read a verified reset: a card offering a wait whose boundary has
  * since passed is stale, and honouring it would park the chat on nothing.
  */
-export const chatFallbackRunManualRungRequestSchema = z.object({
-  epicId: z.string().trim().min(1),
-  chatId: z.string().trim().min(1),
-  rung: z.enum(["retry", "switch", "wait_once"]),
-  target: chatRunSettingsSchema.nullable(),
-  /** The failed attempt's identity. Both fields, for the reason above. */
-  userMessageId: z.string().trim().min(1),
-  turnId: z.string().trim().min(1),
-});
+export const chatFallbackRunManualRungRequestSchema = z
+  .object({
+    epicId: z.string().trim().min(1),
+    chatId: z.string().trim().min(1),
+    rung: z.enum(["retry", "switch", "wait_once"]),
+    /**
+     * The key is present on every rung and non-null on `switch` alone - see the
+     * refinement below, which is what enforces the pairing.
+     *
+     * A `rung`-discriminated union would carry that rule in the TYPE, and was
+     * rejected for what it costs the two peers, neither of which wants the
+     * fork: it splits {@link ChatFallbackRunManualRungRequest} into three
+     * branches, and both ends hold this request as ONE value. The GUI sends all
+     * three rungs through a single mutation and its `onSuccess` reads
+     * `variables.rung` and `variables.target` off the same object, after the
+     * surface that sent them has unmounted; the host resolver forwards
+     * `params.target` into the domain action without inspecting the rung at
+     * all. A union would make both of them narrow in order to read a field
+     * neither branches on, and it refuses exactly the same wire values this
+     * does - so the fork buys nothing at the boundary and costs at every read.
+     */
+    target: chatRunSettingsSchema.nullable(),
+    /** The failed attempt's identity. Both fields, for the reason above. */
+    userMessageId: z.string().trim().min(1),
+    turnId: z.string().trim().min(1),
+  })
+  .superRefine((request, ctx) => {
+    // Both halves of the coupling, because both halves fail SILENTLY without it.
+    //
+    // `{ rung: "switch", target: null }` parsed and reached the engine, which
+    // had nothing to switch to and could only answer `rung_unavailable` - the
+    // NEUTRAL residue, whose entry in {@link FALLBACK_ACTION_OUTCOMES} promises
+    // the host is not claiming to know why. Spending it on a request that was
+    // malformed is exactly the conflation that value was split out to end, and
+    // it renders as "that action isn't available right now" over a menu the user
+    // just picked from.
+    //
+    // The other direction never even produced an outcome: `retry` re-sends the
+    // failed tuple and `wait_once` parks on that tuple's reset boundary, so both
+    // read the chat's own settings and DISCARD anything sent here. A client that
+    // believed it had chosen a destination would instead watch the chat carry on
+    // against the tuple that just failed, with no refusal to contradict it.
+    //
+    // Free to tighten only because nothing has shipped: `chat.fallback.*` is off
+    // the released floor and this is its first line, so no released peer can be
+    // emitting the combinations this now refuses. Once a release pins v1.0 the
+    // same edit becomes a breaking narrowing and needs a new major.
+    if (request.rung === "switch") {
+      if (request.target === null) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "rung 'switch' requires a target",
+          path: ["target"],
+        });
+      }
+      return;
+    }
+    if (request.target !== null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `rung '${request.rung}' must carry a null target`,
+        path: ["target"],
+      });
+    }
+  });
 export type ChatFallbackRunManualRungRequest = z.infer<
   typeof chatFallbackRunManualRungRequestSchema
 >;

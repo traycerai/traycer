@@ -7,6 +7,7 @@ import type {
   ChatSessionAnchor,
   ContentBlock,
   Message,
+  ProviderNoticeKind,
   UserMessageSender,
 } from "@traycer/protocol/persistence/epic/schemas";
 import type { TurnCheckpointManifest } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
@@ -1465,6 +1466,60 @@ describe("useRenderedMessages", () => {
       throw new Error("expected a provider_notice segment");
     }
     expect(secondSegment.title).toBe("Model re-verified");
+  });
+
+  it("invalidates the cached provider_notice segment when only its noticeKind changes", () => {
+    // The kind is NOT a block identity: `provider_notice.upsert` replaces the
+    // whole `providerNotice` object for an existing `blockId`, so a repeat
+    // upsert can land a different kind on the same block. Everything else the
+    // turn signature hashes is pinned equal here - same `text` (so the
+    // ordinary length signature is blind), same `timestamp`, same `status`,
+    // same tone/title/message/details - which is the only shape that can
+    // reach the stale-cache path: two upserts inside one millisecond.
+    //
+    // Falsification: drop `notice.noticeKind` from `textBlockContentVersion`
+    // and the second read returns the CACHED segment, so this reads
+    // "fallback_applied" while the block says "fallback_wait_resumed".
+    const providerNoticeBlock = (noticeKind: ProviderNoticeKind) => ({
+      type: "text" as const,
+      blockId: "text-1",
+      text: "Notice.",
+      status: "completed" as const,
+      timestamp: 2001,
+      providerNotice: {
+        harnessId: "codex" as const,
+        noticeKind,
+        tone: "info" as const,
+        title: "Fallback",
+        message: null,
+        details: [],
+        metadata: null,
+      },
+    });
+    const before: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [providerNoticeBlock("fallback_applied")],
+    };
+    const after: Message = {
+      ...assistantMessage("turn-1", 2000),
+      blocks: [providerNoticeBlock("fallback_wait_resumed")],
+    };
+    const input = renderedMessagesInput({ messages: [before] });
+
+    const driver = renderRenderedMessages(input);
+    const firstSegment = driver.result.current[0]?.segments[0];
+    if (firstSegment.kind !== "provider_notice") {
+      throw new Error("expected a provider_notice segment");
+    }
+    expect(firstSegment.noticeKind).toBe("fallback_applied");
+
+    driver.patch({ messages: [after] });
+
+    const secondSegment = driver.result.current[0]?.segments[0];
+    if (secondSegment.kind !== "provider_notice") {
+      throw new Error("expected a provider_notice segment");
+    }
+    expect(secondSegment.noticeKind).toBe("fallback_wait_resumed");
   });
 
   it("uses host-supplied blocksVersion to invalidate assistant turn cache", () => {

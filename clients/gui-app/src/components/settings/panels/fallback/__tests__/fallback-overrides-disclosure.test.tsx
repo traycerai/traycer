@@ -21,8 +21,14 @@ afterEach(() => {
 
 describe("FallbackOverridesMatrix disclosure", () => {
   it("renders the RF5 disclosure only after opening the per-failure editor", () => {
+    // Literal, and it has already earned the literalness once: this sentence
+    // promised that an all-off row "preserves that failure's pre-retry/HOLD
+    // behavior", and the engine stopped arming a non-transient notify-only
+    // plan - so the page was promising a cancellation window that no longer
+    // exists. A pin on the string is what makes the next such divergence a
+    // failing test rather than a sentence nobody re-reads.
     expect(FALLBACK_OVERRIDES_DISCLOSURE).toBe(
-      "Turning every chip off preserves that failure’s pre-retry/hold behavior and terminal Notify; this editor does not author the wire’s per-reason off value, and Notify stays last.",
+      "Turning every chip off leaves the brief retry that outages and connection failures start with, and the notification at the end - but no cancellation window; this editor does not author the wire’s per-reason off value, and Notify stays last.",
     );
     const policy: FallbackPolicy = createDefaultFallbackPolicy();
     render(

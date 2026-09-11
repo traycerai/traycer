@@ -1167,6 +1167,95 @@ describe("errorBlockSchema.failure round-trip and defaulting", () => {
     expect(agentFailureSchema.parse(full)).toEqual(full);
     expect(agentFailureSchema.safeParse({}).success).toBe(false);
   });
+
+  // `resetsAt` + `resetsAtSource` are documented as a PAIR, and the error card
+  // spends that: it formats `failure.resetsAt` as a clock time and never reads
+  // the source. Before the refinement each field was independently optional, so
+  // a boundary with nothing certifying it parsed cleanly and rendered as a
+  // verified time - the one thing the payload's doc promises cannot happen.
+  describe("agentFailureSchema reset-metadata pairing", () => {
+    const base = { reason: "rate_limit" as const };
+
+    it("rejects a boundary with no source, naming the MISSING field", () => {
+      const result = agentFailureSchema.safeParse({ ...base, resetsAt: 1000 });
+      expect(result.success).toBe(false);
+      // The path, not just the rejection: an arm that fired on the wrong half
+      // would still refuse this input, and refusing for the wrong reason is
+      // what makes a later inversion invisible.
+      expect(
+        result.success ? [] : result.error.issues.map((issue) => issue.path),
+      ).toEqual([["resetsAtSource"]]);
+    });
+
+    it("rejects a source with no boundary, naming the MISSING field", () => {
+      const result = agentFailureSchema.safeParse({
+        ...base,
+        resetsAtSource: "probe",
+      });
+      expect(result.success).toBe(false);
+      expect(
+        result.success ? [] : result.error.issues.map((issue) => issue.path),
+      ).toEqual([["resetsAt"]]);
+    });
+
+    it("accepts neither and both - the pair is optional, not required", () => {
+      expect(agentFailureSchema.safeParse(base).success).toBe(true);
+      expect(
+        agentFailureSchema.safeParse({
+          ...base,
+          resetsAt: 1000,
+          resetsAtSource: "provider",
+        }).success,
+      ).toBe(true);
+    });
+
+    // The must-NOT-flag control. `scope` is a per-provider free-text label, not
+    // part of the boundary's proof, so it is deliberately outside the pairing;
+    // this cell reddens if someone widens the rule to cover it.
+    it("leaves `scope` and `providerDetail` uncoupled from the pair", () => {
+      expect(
+        agentFailureSchema.safeParse({
+          ...base,
+          scope: "five_hour",
+          providerDetail: "usage_limit_exceeded",
+        }).success,
+      ).toBe(true);
+    });
+
+    // The refinement has to survive the wrappers the persisted block puts on
+    // it (`.nullable().default(null)`); a future refactor that rebuilt the
+    // failure shape inline in the block would drop it silently otherwise.
+    it("propagates through errorBlockSchema's nullable+defaulted failure", () => {
+      const block = {
+        type: "error",
+        blockId: "err-pair",
+        status: "completed",
+        timestamp: 1,
+        message: "rate limited",
+        recoverable: true,
+        code: "usage_limit_exceeded",
+      };
+      expect(
+        errorBlockSchema.safeParse({
+          ...block,
+          failure: { reason: "rate_limit", resetsAt: 1000 },
+        }).success,
+      ).toBe(false);
+      // The positive control. Without it a typo anywhere else in `block` would
+      // reject the line above for a reason that has nothing to do with the
+      // pairing, and the cell would read as a pass.
+      expect(
+        errorBlockSchema.safeParse({
+          ...block,
+          failure: {
+            reason: "rate_limit",
+            resetsAt: 1000,
+            resetsAtSource: "provider",
+          },
+        }).success,
+      ).toBe(true);
+    });
+  });
 });
 
 describe("providerNoticeKindSchemaPreFallback rejects an unknown enum VALUE (not merely an unknown key)", () => {

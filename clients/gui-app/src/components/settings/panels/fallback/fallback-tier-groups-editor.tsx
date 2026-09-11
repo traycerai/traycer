@@ -169,6 +169,9 @@ export function FallbackTierGroupsEditor(
   };
 
   const { containerRef, focusAfterRemoval } = useRemovalFocus();
+  // Computed once for the whole list rather than per card: the question is
+  // about the list, and asking it per card would be quadratic for no gain.
+  const ambiguousNames = ambiguousGroupNames(groups);
 
   return (
     <SettingsGroup
@@ -200,7 +203,7 @@ export function FallbackTierGroupsEditor(
                 // `fallback-tier-group-keys.ts`.
                 key={group.draftKey}
                 group={group}
-                preview={previewForGroup(preview, group.id)}
+                preview={previewForGroup(preview, group.id, ambiguousNames)}
                 labelFor={labelFor}
                 effortOptions={effortOptions}
                 onUndo={onUndo}
@@ -455,12 +458,54 @@ function groupDeleteSelectorAt(
   ];
 }
 
+/**
+ * This card's preview rows, or `null` when they cannot be attributed to it.
+ *
+ * A preview row is identified by `(groupId, candidateIndex)` and `groupId` is
+ * the group's NAME - the editable text field, which this editor explicitly
+ * allows to be duplicated or empty while a rename is in progress (see
+ * `fallback-tier-group-keys.ts`). Two cards sharing a name therefore match the
+ * same rows, and the card then picks one by `candidateIndex` alone
+ * (`previewFor` in `fallback-tier-group-card.tsx`) - so row 0 of one group
+ * would render the resolution the host computed for row 0 of the OTHER. That is
+ * exactly the mispairing that helper's doc says it refuses to make; matching by
+ * index rather than by array position defends against the host SKIPPING a
+ * candidate, not against two groups answering to one name.
+ *
+ * Withholding is the documented safe state rather than a new one: `null` renders
+ * no verdict line at all, which is already what this surface shows for a host
+ * that has not answered. A wrong verdict on the surface whose whole job is to
+ * say what a row will do is worse than no verdict.
+ */
 function previewForGroup(
   preview: readonly TierCandidatePreview[] | null,
   groupId: string,
+  ambiguousNames: ReadonlySet<string>,
 ): readonly TierCandidatePreview[] | null {
   if (preview === null) return null;
+  if (ambiguousNames.has(groupId)) return null;
   return preview.filter((row) => row.groupId === groupId);
+}
+
+/**
+ * Group names carried by MORE THAN ONE card in the current draft.
+ *
+ * Reachable by ordinary editing, not only by a bad save: "Add a group" mints a
+ * distinct name, but a rename passes through every prefix of the name being
+ * typed, and one of those can equal a sibling's. The draft is never rejected for
+ * it either - the panel's validator refuses the SAVE, and the cards keep
+ * rendering while the user fixes it.
+ */
+function ambiguousGroupNames(
+  groups: readonly KeyedGroup[],
+): ReadonlySet<string> {
+  const seen = new Set<string>();
+  const duplicated = new Set<string>();
+  for (const group of groups) {
+    if (seen.has(group.id)) duplicated.add(group.id);
+    seen.add(group.id);
+  }
+  return duplicated;
 }
 
 /**

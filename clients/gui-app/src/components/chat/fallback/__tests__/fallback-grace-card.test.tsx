@@ -507,6 +507,44 @@ describe("FallbackGraceCard", () => {
     expect(useSettingsHostScopeStore.getState().scopedHostId).toBe(TAB_HOST);
   });
 
+  // The gate every case above rides past because `claude` HAS a provider CLI.
+  // `traycer` is the one harness that does not
+  // (`HARNESS_IDS_WITHOUT_PROVIDER_CLI`), so `fallbackTupleIdentity` answers
+  // `providerId: null` for it and there is no sign-in surface to open.
+  it("offers no Sign in instead for an auth failure whose harness has no provider-CLI account", () => {
+    renderCard({
+      pending: gracePending({
+        state: "hold",
+        reason: "auth",
+        targetTuple: TARGET_CODEX_TUPLE,
+        deadline: Date.now() + 12_000,
+        failedTuple: chatRunSettings({
+          harnessId: "traycer",
+          model: "traycer-default",
+          profileId: null,
+        }),
+      }),
+    });
+    // Falsification: revert `signedOut` to `pending.reason === "auth"` alone,
+    // leaving the `providerId === null` check inside the armed closure. The
+    // button comes back, and pressing it CANCELS the traversal and then
+    // returns without opening anything - the user trades the switch for
+    // nothing. Every other case in this file stays green under that revert,
+    // which is why this one exists.
+    expect(
+      screen.queryByRole("button", { name: "Sign in instead" }),
+    ).toBeNull();
+    // The card is still usable, and its helper line says what the button it
+    // DOES have will do - the sign-in wording would promise a control that is
+    // not on screen.
+    expect(screen.getByRole("button", { name: "Don't switch" })).not.toBeNull();
+    expect(
+      screen.getByText(
+        "Don't switch keeps the error — you can retry from the message.",
+      ),
+    ).not.toBeNull();
+  });
+
   it("omits Choose differently… when the handler is null", () => {
     renderCard({
       pending: gracePending({

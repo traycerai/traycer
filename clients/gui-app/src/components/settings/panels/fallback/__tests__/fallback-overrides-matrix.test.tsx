@@ -61,7 +61,7 @@ describe("FallbackOverridesMatrix - the 'off' third state", () => {
     ).not.toBeNull();
   });
 
-  it("keeps an 'off' row's chips clickable, and turning one on starts from nothing rather than restoring the base ladder", () => {
+  it("keeps an 'off' row's chips clickable, and turning one on runs that step plus the terminal notify - not the rest of the base ladder", () => {
     const onChange = vi.fn();
     renderMatrix(policy({ reasonOverrides: { auth: "off" } }), onChange);
     const label = FALLBACK_REASON_LABELS.auth;
@@ -70,8 +70,19 @@ describe("FallbackOverridesMatrix - the 'off' third state", () => {
     );
     expect(onChange).toHaveBeenCalledTimes(1);
     const next = onChange.mock.calls[0]?.[0] as FallbackPolicy;
-    // Only "profile" runs now - not the whole base ladder.
-    expect(next.reasonOverrides?.auth).toEqual(["profile"]);
+    // "profile" plus the terminal "notify", and nothing else from the base
+    // ladder: `tier` and `wait` stay off, which is the point of starting an
+    // "off" row from scratch. `notify` is the one exception because it has no
+    // chip on this page, so an override written without it could never get it
+    // back - and "Notify stays last" is a promise `FALLBACK_OVERRIDES_DISCLOSURE`
+    // makes to the user in writing. This expectation used to be ["profile"],
+    // which pinned the very bug the model fix removed.
+    //
+    // The exact equality is load-bearing in both directions. The other half -
+    // a user whose own ladder has no notify does not get one invented - is
+    // pinned in the model's "the 'off' row keeps its terminal notify" suite,
+    // where the base ladder can vary; this fixture's ladder always includes it.
+    expect(next.reasonOverrides?.auth).toEqual(["profile", "notify"]);
   });
 });
 
@@ -109,7 +120,7 @@ describe("FallbackOverridesMatrix - ineligible chips are not buttons", () => {
 });
 
 describe("FallbackOverridesMatrix - the excluded reasons", () => {
-  it("collapses the five excluded reasons into one read-only line, drawing no row for any of them", () => {
+  it("collapses every excluded reason into one read-only line, drawing no row for any of them", () => {
     renderMatrix(policy({}), vi.fn());
     expect(
       screen.queryByTestId("fallback-override-row-context_exhausted"),

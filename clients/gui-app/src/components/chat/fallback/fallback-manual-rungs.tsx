@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { create, useStore } from "zustand";
 import type {
   ChatRunSettings,
   LastFailedAttempt,
@@ -8,14 +9,19 @@ import { Button } from "@/components/ui/button";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useMaybeChatTranscript } from "@/components/chat/chat-transcript-context";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
+import { useExistingChatSessionHandle } from "@/lib/registries/chat-session-registry";
 import { useMaybeOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import { formatClockTime } from "@/lib/relative-time";
+import type { ChatSessionState } from "@/stores/chats/chat-session-store";
 import {
+  HOST_UNREACHABLE_LABEL,
   SWITCH_LABEL,
   describeFallbackOutcome,
+  describeSwitchDisposition,
   describeWaitDisposition,
   switchConsequencesText,
 } from "./fallback-copy";
+import { fallbackProviderModelLabel } from "./fallback-identity";
 import { FallbackDestinationMenu } from "./fallback-destination-menu";
 import { FallbackNoticeSettingsLink } from "./fallback-notice-attribution";
 import { useFallbackRunManualRung } from "./use-fallback-actions";
@@ -124,6 +130,71 @@ function ManualRungActions({
   );
 }
 
+type ChatActSlice = Pick<ChatSessionState, "access" | "connectionStatus">;
+
+/**
+ * Stand-in for a chat with no live session - the same shape and the same
+ * reason as `useChatLastFailedAttempt`'s `emptySlice`, and the same answer a
+ * closed session gives: nothing may be dispatched.
+ *
+ * Unreachable in practice, because a chat with no session also has no
+ * `lastFailedAttempt` and the gate above this component has already returned
+ * `null`. It exists so the hook below is unconditional rather than because the
+ * state is expected.
+ */
+const noSessionActSlice = create<ChatActSlice>()(() => ({
+  access: null,
+  connectionStatus: "closed",
+}));
+
+/**
+ * Whether this chat would accept a fallback action right now - the ACT
+ * CAPABILITY, read off the chat's own session.
+ *
+ * The error card's affordances dispatch `chat.fallback.runManualRung`, a plain
+ * unary RPC, and nothing on the client refused it: the buttons were gated on
+ * `runManualRung.isPending` and on nothing else, so a VIEWER of someone else's
+ * chat - or its owner while the chat stream is down - could fire a retry, a
+ * wait, or a whole provider switch straight out of durable transcript. The
+ * composer's copy of that hole was the same shape and was closed by reading
+ * the capability it was already being handed under the name `sendDisabled`
+ * (`fallbackControlsCanAct` in `chat-composer.tsx`).
+ *
+ * There is no such prop here. `ErrorSegment` is durable transcript rendered
+ * from a message list, so nothing upstream of it knows the chat's access at
+ * all - which is exactly why the three ids this component already resolves are
+ * the right source: the SESSION knows. This reproduces `canSendAction`'s own
+ * rule (`chat-session-store.ts`) rather than a paraphrase of it, so the card
+ * refuses precisely what the stream-side lease refuses.
+ *
+ * Both halves, and neither is redundant. `access.canAct` is the role answer, a
+ * settled fact about this user. `connectionStatus === "open"` is the transport
+ * one, and it is what makes an OWNER'S buttons go quiet while the host is
+ * reconnecting - the state the composer's `chatSendDisabledHint` calls
+ * "Reconnecting to the host - sending is paused".
+ *
+ * Deliberately NOT the composer's third term (`profile !== null`, the signed-in
+ * account): that is the tile's own send precondition and has no bearing on
+ * whether this chat's fallback may be steered. Nor `sendBlocked`'s widenings -
+ * a disabled profile or a signed-out provider is what a fallback action is the
+ * ESCAPE from, and gating on it would strand a chat on a destination it is no
+ * longer allowed to leave.
+ */
+function useChatFallbackActionsCanAct(input: {
+  readonly epicId: string;
+  readonly chatId: string;
+  readonly hostId: string;
+}): boolean {
+  const { epicId, chatId, hostId } = input;
+  const handle = useExistingChatSessionHandle(epicId, chatId, hostId);
+  const store = handle === null ? noSessionActSlice : handle.store;
+  return useStore(
+    store,
+    (state) =>
+      state.connectionStatus === "open" && state.access?.canAct === true,
+  );
+}
+
 /**
  * The affordances themselves, and the pick's in-flight state with them.
  *
@@ -181,6 +252,7 @@ function ManualRungAffordances({
     chatId,
     hostId,
   });
+  const canAct = useChatFallbackActionsCanAct({ epicId, chatId, hostId });
   const [menuOpen, setMenuOpen] = useState(false);
   const [refusal, setRefusal] = useState<string | null>(null);
   const runManualRung = useFallbackRunManualRung(
@@ -256,6 +328,26 @@ function ManualRungAffordances({
             // frame time and already stale when this click arrived.
             setRefusal(message);
           },
+          // The answer this menu had NO line for, exactly as on the two card
+          // menus in `fallback-card-menus.tsx` - every `outcome` above arrives
+          // in a SUCCESSFUL response, so a request that got no response at all
+          // left `refusal` unset, `picking` fell back to false, the rows
+          // re-enabled, and the surface the click came from said nothing
+          // whatever about a click that failed.
+          //
+          // Beside, not instead of, the hook's `errorMessage` toast: a per-call
+          // handler is the OBSERVER's, so this one runs only while the popover
+          // is still mounted - which is precisely when the inline line is the
+          // right channel - and the toast is what remains once the row has
+          // gone.
+          //
+          // `HOST_UNREACHABLE_LABEL` rather than a second wording, for the
+          // reason the card menus give: this menu already prints exactly this
+          // sentence when the LISTING cannot reach the host, and one
+          // unreachable host is one fact.
+          onError: () => {
+            setRefusal(HOST_UNREACHABLE_LABEL);
+          },
         },
       );
     },
@@ -264,7 +356,18 @@ function ManualRungAffordances({
 
   const rungs = attempt.eligibleRungs;
   const waitUntil = waitUntilLabel(attempt);
-  const busy = runManualRung.isPending;
+  // `!canAct` folded in, not checked separately, so every control this
+  // component draws is gated by construction rather than one at a time - the
+  // bare Retry / Wait buttons, their duplicates inside the empty menu, and the
+  // Switch… trigger all already read this one value. See
+  // {@link useChatFallbackActionsCanAct}: without it a viewer, or an owner on
+  // a dropped chat stream, dispatched a manual rung straight from transcript.
+  //
+  // DISABLED rather than hidden, which is the choice the composer's cards
+  // already made (`triggerDisabled={!canAct}`): the affordances are what the
+  // host said this failure admits, and that is still true - what is missing is
+  // this reader's standing to use them.
+  const busy = runManualRung.isPending || !canAct;
   // Why there is no wait button, in the host's own terms. Never inferred from
   // the failure payload: `resetsAt` is PRESENT for a boundary past the user's
   // cap and ABSENT for one nobody verified, so the two states a user can act
@@ -275,6 +378,20 @@ function ManualRungAffordances({
     attempt.failure.resetsAt === undefined
       ? null
       : formatClockTime(attempt.failure.resetsAt),
+  );
+  // Why there is no Switch… button, in the host's own terms - the exact
+  // counterpart to `waitExplanation`, and added for the same reason F6 added
+  // that one: a control that simply vanishes reads as a broken product, and a
+  // user cannot act on an absence.
+  //
+  // The subject is the FAILED tuple the host named, resolved through the same
+  // module every other fallback surface names a tuple with. Never the chat's
+  // current settings: this row is bound to an attempt, and a chat reconfigured
+  // since would be explained in terms of a model that never ran.
+  const failedTuple = attempt.failedTuple;
+  const switchExplanation = describeSwitchDisposition(
+    attempt.switchDisposition,
+    failedTuple === null ? null : fallbackProviderModelLabel(failedTuple),
   );
 
   return (
@@ -317,7 +434,13 @@ function ManualRungAffordances({
           open={menuOpen}
           onOpenChange={onMenuOpenChange}
           onPick={onPickTarget}
-          picking={runManualRung.isPending}
+          // `busy`, not `runManualRung.isPending`: `picking` is the channel the
+          // menu ORs into every row's own `disabled`, and the trigger going
+          // quiet is not enough on its own. A stream that drops while this
+          // popover is already OPEN leaves the rows behind it clickable, and
+          // each of them sends the same `runManualRung` the buttons outside
+          // were just refused.
+          picking={busy}
           // No hold to take: there is no countdown here to freeze.
           preparing={false}
           refusal={refusal}
@@ -394,6 +517,16 @@ function ManualRungAffordances({
        * the difference is that the link is not the consolation prize for it.
        */}
       <FallbackNoticeSettingsLink />
+      {switchExplanation === null ? null : (
+        // ABOVE the wait sentence, and full-width for the same reason. Ordered
+        // this way because the two are not peers on a row that has neither
+        // control: this one names the chat and is what the Settings link beside
+        // it is the remedy for, while the wait sentence is about a provider's
+        // reset boundary. A reader with both wants the actionable one first.
+        <div className="w-full text-ui-xs text-muted-foreground">
+          {switchExplanation}
+        </div>
+      )}
       {waitExplanation === null ? null : (
         // Full-width below the buttons rather than inline beside them: it is a
         // sentence, not a control, and `beyond_cap`'s version names a time the

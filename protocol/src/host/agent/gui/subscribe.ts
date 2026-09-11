@@ -1157,6 +1157,62 @@ export type FallbackWaitDisposition = z.infer<
   typeof fallbackWaitDispositionSchema
 >;
 
+/**
+ * Whether this chat has anywhere to switch TO (`chat.subscribe@1.10`).
+ *
+ * HOST-AUTHORED and, unlike {@link fallbackWaitDispositionSchema}, decided ONCE
+ * when the failure was recorded rather than per frame. It has to be: answering
+ * it means walking the user's equivalence groups against live provider
+ * catalogs, which is async, and the DTO is derived synchronously per frame.
+ * The verdict is stored on the failed attempt's durable envelope beside the
+ * rest of its replay facts, so a chat that was idle-evicted and reopened still
+ * carries it.
+ *
+ * ## Why a client must not derive this
+ *
+ * The question is "does this user's setup name any other destination for the
+ * model that just failed" - the answer lives in the fallback policy's model
+ * groups and in the set of enabled accounts on the failed provider, neither of
+ * which a renderer holds. The shipped default makes it matter: Claude Code's
+ * `default` row is a real, extremely common chat tuple whose model FAMILY lives
+ * only in its catalog label (`Default (Sonnet 4.5)`), while group membership is
+ * matched on the slug alone - so `default` belongs to no group, and a chat on
+ * it has no equivalent-model destination at all. Without this field the error
+ * card offered "Switch…" onto a menu that could list nothing, and said nothing
+ * about why.
+ */
+export const fallbackSwitchDispositionSchema = z.enum([
+  /** A destination exists - `switch` is in `eligibleRungs`. */
+  "eligible",
+  /**
+   * This chat's own setup names NO destination: no other enabled account on
+   * the failed provider, and the failed model belongs to no equivalence group.
+   * `switch` is withheld and the surface says so in the user's own terms.
+   *
+   * A statement about CONFIGURATION, never about the world - deliberately, and
+   * it is what makes a verdict frozen at failure time sound. "Signed out",
+   * "rate limited" and "provider not runnable" can all become false while the
+   * card is on screen, so none of them reaches this value; a destination that
+   * merely cannot be used right now still counts as a destination, and its
+   * menu row carries the host's own reason.
+   */
+  "no_destination",
+  /**
+   * No verdict is available for this attempt: it was recorded by a build that
+   * predates the field, the envelope is missing, a catalog or account registry
+   * could not be read, or the chat carries no settings to switch from.
+   *
+   * `switch` is still OFFERED here (where the chat has settings at all).
+   * "We could not check" is not "you have nothing set up", and a card that
+   * withheld the control on doubt would tell a user their setup is incomplete
+   * on no evidence.
+   */
+  "unknown",
+]);
+export type FallbackSwitchDisposition = z.infer<
+  typeof fallbackSwitchDispositionSchema
+>;
+
 export const lastFailedAttemptSchema = z.object({
   /** The persisted user message the attempt ran. */
   userMessageId: z.string(),
@@ -1231,6 +1287,34 @@ export const lastFailedAttemptSchema = z.object({
    * {@link eligibleRungs} gives.
    */
   waitDisposition: fallbackWaitDispositionSchema,
+  /**
+   * Why `switch` is absent from {@link eligibleRungs}, or `eligible` when it is
+   * present - {@link fallbackSwitchDispositionSchema}.
+   *
+   * The same shape as {@link waitDisposition} and the same invariant: `switch`
+   * is in the array iff this is not `no_destination` (and the chat has settings
+   * to switch from, which is also what removes `retry`). `unknown` OFFERS the
+   * control, because a check the host could not complete is not evidence about
+   * the user's setup.
+   */
+  switchDisposition: fallbackSwitchDispositionSchema,
+  /**
+   * The tuple the failed attempt ran on, or `null` when its replay envelope is
+   * gone (the same absence {@link waitDisposition}'s `attempt_unavailable`
+   * reports).
+   *
+   * Carried so a surface explaining a withheld `switch` can NAME the chat's
+   * provider and model - "No other model is set up for Claude Code · default" -
+   * instead of a subject-less sentence. Resolved client-side through
+   * `fallback-identity.ts`, which is where every other fallback surface turns a
+   * tuple into words, so the card and the destination menu cannot end up
+   * calling one chat two things.
+   *
+   * The FAILED tuple specifically, never the chat's current settings: the card
+   * is bound to an attempt, and a chat reconfigured since the failure would
+   * otherwise be explained in terms of a model that never ran.
+   */
+  failedTuple: chatRunSettingsSchema.nullable(),
 });
 export type LastFailedAttempt = z.infer<typeof lastFailedAttemptSchema>;
 

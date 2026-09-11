@@ -50,6 +50,10 @@ function attempt(input: {
     failure: { reason: "rate_limit" },
     eligibleRungs: ["retry", "switch"],
     waitDisposition: "no_verified_reset",
+    // `switch` is in `eligibleRungs` above, so `eligible` is the one value the
+    // producer could have paired with it - the two are one host decision.
+    switchDisposition: "eligible",
+    failedTuple: null,
   };
 }
 
@@ -384,11 +388,26 @@ describe("chat-session-store lastFailedAttempt F14", () => {
     try {
       const callbacks = harness.callbacks();
       callbacks.onWindowedSnapshot(deferredWindowedSnapshot(ATTEMPT_A));
+
+      // The same precondition the clear-on-supersession case above states, and
+      // for a sharper reason here: `emitTurnState` writes ATTEMPT_B into LIVE
+      // state, so both assertions below pass whether or not the snapshot was
+      // ever deferred. Without this line a fixture that stopped producing an
+      // unhydrated tail would leave this case green while proving nothing about
+      // the aux path it is named for - the trap
+      // `chat-session-store-last-fallback-outcome.test.ts` documents on its own
+      // deferred fixture.
+      expect(
+        isTailHydrated(harness.handle.store.getState().transcriptWindow),
+      ).toBe(false);
+
       emitTurnState(callbacks, ATTEMPT_B);
       expect(harness.handle.store.getState().lastFailedAttempt).toBe(ATTEMPT_B);
 
       completeTail(harness);
 
+      // The aux fold has now run: the value that survives it is the one the
+      // LATEST frame carried, not the ATTEMPT_A the held snapshot arrived with.
       expect(harness.handle.store.getState().lastFailedAttempt).toBe(ATTEMPT_B);
     } finally {
       harness.handle.dispose();
