@@ -556,25 +556,86 @@ describe("hostLocatorForJumpTarget: a `receipt` target", () => {
 });
 
 describe("an `approval` jump target", () => {
-  it("does not ask the host to locate a row", () => {
+  it("does not ask the host when the approval is already in the composer queue", () => {
     expect(
       hostLocatorForJumpTarget({
-        target: { kind: "approval", approvalId: "a-1" },
+        target: { kind: "approval", approvalId: "tool-1" },
         transcriptWindow: windowNaming(["m-1"]),
         messages: [],
+        pendingInterviewBlockId: null,
+        pendingApprovals: [
+          {
+            approvalId: "tool-1",
+            toolName: "Bash",
+            description: "run",
+            input: null,
+            requestedAt: 1,
+            kind: "tool",
+            planId: null,
+            actions: [],
+          },
+        ],
+      }),
+    ).toBeNull();
+  });
+
+  it("does not ask the host when the inline plan card is already rendered", () => {
+    const messages = [
+      messageWithSegments("m-1", [
+        {
+          id: "plan-block",
+          kind: "plan",
+          planId: "p1",
+          planStatus: "awaiting_approval",
+          harnessId: "claude",
+          source: {
+            harnessId: "claude",
+            sessionId: "s1",
+            turnId: "t1",
+            kind: "approval-plan",
+          },
+          title: "Plan",
+          summary: null,
+          markdownPreview: "",
+          fullContentRef: null,
+          steps: [],
+          actions: [],
+          approvalId: "approval-plan",
+          supersededByPlanId: null,
+          isStreaming: false,
+          contentIdentity: "id",
+        },
+      ]),
+    ];
+    expect(
+      hostLocatorForJumpTarget({
+        target: { kind: "approval", approvalId: "approval-plan" },
+        transcriptWindow: windowNaming(["m-1"]),
+        messages,
         pendingInterviewBlockId: null,
       }),
     ).toBeNull();
   });
 
-  it("has no transcript ordinal", () => {
+  it("asks the host to locate a cold inline plan approval", () => {
+    expect(
+      hostLocatorForJumpTarget({
+        target: { kind: "approval", approvalId: "approval-plan" },
+        transcriptWindow: windowNaming(["m-1"]),
+        messages: [],
+        pendingInterviewBlockId: null,
+      }),
+    ).toEqual({ kind: "approval", approvalId: "approval-plan" });
+  });
+
+  it("uses the host's ordinal for a cold plan card", () => {
     expect(
       coldJumpOrdinal(
         windowNaming(["m-1"]),
         { kind: "approval", approvalId: "a-1" },
         4,
       ),
-    ).toBeNull();
+    ).toBe(4);
   });
 });
 

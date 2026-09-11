@@ -159,6 +159,8 @@ export interface ChatLowerInterviewState {
   readonly onFork: ((mode: ChatForkMode) => void) | null;
   /** External jump targeting the pending composer card, or null when none. */
   readonly highlightedBlockId: string | null;
+  /** Advances on each jump so a repeat to the same card restarts the pulse. */
+  readonly highlightedGeneration?: number;
 }
 
 export interface ChatLowerApprovalsState {
@@ -168,6 +170,8 @@ export interface ChatLowerApprovalsState {
   readonly onApprovalDecision: (approvalId: string, approved: boolean) => void;
   /** External jump targeting a pending composer approval row, or null. */
   readonly highlightedApprovalId: string | null;
+  /** Advances on each jump so a repeat to the same row restarts the pulse. */
+  readonly highlightedGeneration?: number;
 }
 
 export interface ChatLowerQueueState {
@@ -502,6 +506,7 @@ function RuntimeGatedApprovalSurface(props: {
         onFileEditDecision={model.approvals.onFileEditDecision}
         onApprovalDecision={model.approvals.onApprovalDecision}
         highlightedApprovalId={model.approvals.highlightedApprovalId}
+        highlightedGeneration={model.approvals.highlightedGeneration}
       />
     </ComposerSlotShell>
   );
@@ -591,6 +596,7 @@ function ComposerSurface(props: {
               model.interview.highlightedBlockId ===
               model.interview.pending.blockId
             }
+            highlightGeneration={model.interview.highlightedGeneration}
           />
         </ComposerSlotShell>
       </>
@@ -656,6 +662,7 @@ function PendingApprovalQueues(props: {
   readonly onFileEditDecision: (approvalId: string, approved: boolean) => void;
   readonly onApprovalDecision: (approvalId: string, approved: boolean) => void;
   readonly highlightedApprovalId: string | null;
+  readonly highlightedGeneration?: number;
 }) {
   return (
     <div className="flex flex-col gap-2">
@@ -664,12 +671,14 @@ function PendingApprovalQueues(props: {
         canAct={props.canAct}
         onDecision={props.onFileEditDecision}
         highlightedApprovalId={props.highlightedApprovalId}
+        highlightedGeneration={props.highlightedGeneration}
       />
       <ComposerSlotApprovalQueue
         approvals={props.pendingApprovals}
         canAct={props.canAct}
         onDecision={props.onApprovalDecision}
         highlightedApprovalId={props.highlightedApprovalId}
+        highlightedGeneration={props.highlightedGeneration}
       />
     </div>
   );

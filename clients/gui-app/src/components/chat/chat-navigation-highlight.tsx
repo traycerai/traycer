@@ -10,6 +10,7 @@ import {
   useSyncExternalStore,
   type ReactElement,
   type ReactNode,
+  type RefObject,
 } from "react";
 import {
   queryMountedChatBlock,
@@ -28,6 +29,26 @@ export const CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME =
   "bg-primary/15 ring-2 ring-inset ring-primary/80 motion-safe:animate-pulse";
 
 export const CHAT_NAVIGATION_HIGHLIGHT_DURATION_MS = 3_000;
+
+/**
+ * Restarts `animate-pulse` when `generation` advances so a repeated jump to
+ * the same composer card flashes again. Does not remount the element — the
+ * interview card keeps focus and draft state.
+ */
+export function useRestartHighlightPulse(
+  highlighted: boolean,
+  generation: number,
+  elementRef: RefObject<HTMLElement | null>,
+): void {
+  useLayoutEffect(() => {
+    if (!highlighted) return;
+    const node = elementRef.current;
+    if (node === null) return;
+    node.style.animation = "none";
+    void node.offsetWidth;
+    node.style.animation = "";
+  }, [elementRef, generation, highlighted]);
+}
 
 export interface ChatNavigationHighlightTarget {
   readonly messageId: string;

@@ -1,8 +1,12 @@
+import { useRef } from "react";
 import { Check, FilePenLine, X } from "lucide-react";
 import type { ChatFileEditApprovalState } from "@traycer/protocol/host/agent/gui/subscribe";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME } from "@/components/chat/chat-navigation-highlight";
+import {
+  CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME,
+  useRestartHighlightPulse,
+} from "@/components/chat/chat-navigation-highlight";
 import { cn } from "@/lib/utils";
 
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -11,6 +15,7 @@ interface ComposerSlotFileEditApprovalQueueProps {
   readonly canAct: boolean;
   readonly onDecision: (approvalId: string, approved: boolean) => void;
   readonly highlightedApprovalId: string | null;
+  readonly highlightedGeneration?: number;
 }
 
 export function ComposerSlotFileEditApprovalQueue(
@@ -83,6 +88,7 @@ export function ComposerSlotFileEditApprovalQueue(
             navigationHighlighted={
               props.highlightedApprovalId === approval.approvalId
             }
+            highlightGeneration={props.highlightedGeneration ?? 0}
           />
         ))}
       </div>
@@ -95,18 +101,31 @@ interface FileEditApprovalRowProps {
   readonly canAct: boolean;
   readonly onDecision: (approvalId: string, approved: boolean) => void;
   readonly navigationHighlighted: boolean;
+  readonly highlightGeneration: number;
 }
 
 function FileEditApprovalRow(props: FileEditApprovalRowProps) {
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  useRestartHighlightPulse(
+    props.navigationHighlighted,
+    props.highlightGeneration,
+    rowRef,
+  );
   const headline =
     props.approval.description.length > 0
       ? props.approval.description
       : props.approval.toolName;
   return (
     <div
+      ref={rowRef}
       data-approval-id={props.approval.approvalId}
       data-navigation-highlighted={
         props.navigationHighlighted ? "true" : undefined
+      }
+      data-navigation-highlight-generation={
+        props.navigationHighlighted
+          ? String(props.highlightGeneration)
+          : undefined
       }
       className={cn(
         "flex min-w-0 flex-col gap-1.5 rounded-md py-2 first:pt-0 last:pb-0 transition-[background-color,box-shadow] duration-300",

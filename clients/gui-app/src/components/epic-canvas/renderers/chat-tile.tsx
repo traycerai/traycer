@@ -795,11 +795,65 @@ function transcriptJumpCardKind(
   return backgroundItemCardKind(item.kind);
 }
 
+function useComposerNavigationHighlight(): {
+  readonly blockId: string | null;
+  readonly generation: number;
+  readonly highlightComposerBlock: (blockId: string) => void;
+  readonly clearComposerHighlight: () => void;
+} {
+  const [composerHighlight, setComposerHighlight] = useState<{
+    readonly id: string;
+    readonly generation: number;
+  } | null>(null);
+  const timeoutRef = useRef<number | null>(null);
+  const clearComposerHighlight = useCallback((): void => {
+    if (timeoutRef.current !== null) {
+      window.clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+    setComposerHighlight(null);
+  }, []);
+  const highlightComposerBlock = useCallback((blockId: string): void => {
+    if (timeoutRef.current !== null) {
+      window.clearTimeout(timeoutRef.current);
+    }
+    setComposerHighlight((current) => ({
+      id: blockId,
+      generation: (current?.generation ?? 0) + 1,
+    }));
+    timeoutRef.current = window.setTimeout(() => {
+      timeoutRef.current = null;
+      setComposerHighlight(null);
+    }, CHAT_NAVIGATION_HIGHLIGHT_DURATION_MS);
+  }, []);
+  useEffect(
+    () => () => {
+      if (timeoutRef.current !== null) {
+        window.clearTimeout(timeoutRef.current);
+      }
+    },
+    [],
+  );
+  return {
+    blockId: composerHighlight?.id ?? null,
+    generation: composerHighlight?.generation ?? 0,
+    highlightComposerBlock,
+    clearComposerHighlight,
+  };
+}
+
 export function ChatTileSessionView(props: ChatTileSessionViewProps) {
-  const [composerHighlightBlockId, setComposerHighlightBlockId] = useState<
-    string | null
-  >(null);
-  const view = useChatTileSessionViewModel(props, composerHighlightBlockId);
+  const {
+    blockId: composerHighlightBlockId,
+    generation: composerHighlightGeneration,
+    highlightComposerBlock,
+    clearComposerHighlight,
+  } = useComposerNavigationHighlight();
+  const view = useChatTileSessionViewModel(
+    props,
+    composerHighlightBlockId,
+    composerHighlightGeneration,
+  );
   // Viewport → hydration bridge: `ChatMessages` computes which ordinals the
   // reader is looking at; the session store turns that into range requests.
   // Keyed on the handle so a reconnected store keeps receiving reports.
@@ -856,32 +910,6 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
   const [backgroundScrollRequest, setBackgroundScrollRequest] =
     useState<ChatMessageScrollRequest | null>(null);
   const backgroundScrollRequestIdRef = useRef(0);
-  const composerHighlightTimeoutRef = useRef<number | null>(null);
-  const clearComposerHighlight = useCallback((): void => {
-    if (composerHighlightTimeoutRef.current !== null) {
-      window.clearTimeout(composerHighlightTimeoutRef.current);
-      composerHighlightTimeoutRef.current = null;
-    }
-    setComposerHighlightBlockId(null);
-  }, []);
-  const highlightComposerBlock = useCallback((blockId: string): void => {
-    if (composerHighlightTimeoutRef.current !== null) {
-      window.clearTimeout(composerHighlightTimeoutRef.current);
-    }
-    setComposerHighlightBlockId(blockId);
-    composerHighlightTimeoutRef.current = window.setTimeout(() => {
-      composerHighlightTimeoutRef.current = null;
-      setComposerHighlightBlockId(null);
-    }, CHAT_NAVIGATION_HIGHLIGHT_DURATION_MS);
-  }, []);
-  useEffect(
-    () => () => {
-      if (composerHighlightTimeoutRef.current !== null) {
-        window.clearTimeout(composerHighlightTimeoutRef.current);
-      }
-    },
-    [],
-  );
   const pendingComposerInterviewBlockId =
     view.lower.interview.pending?.blockId ?? null;
   // The composer + queue/pinned/agents/background dock now overlays the
@@ -1003,10 +1031,14 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
       transcriptWindow: view.transcriptWindow,
       messages: view.messages,
       pendingInterviewBlockId: pendingComposerInterviewBlockId,
+      pendingApprovals: view.lower.approvals.pendingApprovals,
+      pendingFileEditApprovals: view.lower.approvals.pendingFileEditApprovals,
     });
   }, [
     pendingComposerInterviewBlockId,
     transcriptJump,
+    view.lower.approvals.pendingApprovals,
+    view.lower.approvals.pendingFileEditApprovals,
     view.messages,
     view.snapshotLoaded,
     view.transcriptWindow,
@@ -1055,8 +1087,15 @@ export function ChatTileSessionView(props: ChatTileSessionViewProps) {
         messages: view.messages,
       });
       if (landing.kind === "hold") {
-        // Not in the composer queue and no plan card yet: hold until one
-        // appears, same as every other unresolved jump.
+        // Not in the composer queue and no plan card in the hydrated
+        // window: a cold inline plan is the same deadlock as a cold block,
+        // so name the ordinal (once the host answers) and retry when the
+        // row lands. A tool approval that has not streamed in yet also
+        // holds; locate misses and the pending-approvals update is the
+        // retry.
+        requestTranscriptOrdinal(
+          coldJumpOrdinal(view.transcriptWindow, target, hostLocatedOrdinal),
+        );
         return;
       }
       if (landing.kind === "composer") {
@@ -1522,6 +1561,7 @@ const NO_LIVE_SEND_REFUSAL = (): string | null => null;
 function useChatTileSessionViewModel(
   props: ChatTileSessionViewProps,
   composerHighlightBlockId: string | null,
+  composerHighlightGeneration: number,
 ) {
   const { handle, node, viewTabId, tileId, isActive, currentEpicId } = props;
   const viewModelHostId = useTabHostId();
@@ -3090,9 +3130,11 @@ function useChatTileSessionViewModel(
       onSkip: handleInterviewSkip,
       onFork: forkFromPendingInterview,
       highlightedBlockId: composerHighlightBlockId,
+      highlightedGeneration: composerHighlightGeneration,
     }),
     [
       composerHighlightBlockId,
+      composerHighlightGeneration,
       pendingInterview,
       interviewBusy,
       unanswerableInterviews,
@@ -3110,9 +3152,11 @@ function useChatTileSessionViewModel(
       onFileEditDecision: dispatchFileEditApprovalDecision,
       onApprovalDecision: dispatchApprovalDecision,
       highlightedApprovalId: composerHighlightBlockId,
+      highlightedGeneration: composerHighlightGeneration,
     }),
     [
       composerHighlightBlockId,
+      composerHighlightGeneration,
       state.pendingFileEditApprovals,
       state.pendingApprovals,
       dispatchFileEditApprovalDecision,

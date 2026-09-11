@@ -10,7 +10,10 @@ import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { PrimaryActionShortcutHint } from "@/components/ui/primary-action-shortcut-hint";
 import { ShortcutHint } from "@/components/ui/shortcut-hint";
-import { CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME } from "@/components/chat/chat-navigation-highlight";
+import {
+  CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME,
+  useRestartHighlightPulse,
+} from "@/components/chat/chat-navigation-highlight";
 import { InterviewForkActions } from "@/components/chat/segments/interview-fork-actions";
 import {
   InterviewQuestionHeader,
@@ -65,6 +68,8 @@ interface PendingInterviewCardProps {
   readonly hostId?: string | null;
   /** External jump (interview notification) landed on this pending card. */
   readonly navigationHighlighted: boolean;
+  /** Advances on each jump so a repeat to the same card restarts the pulse. */
+  readonly highlightGeneration?: number;
 }
 
 export function PendingInterviewCard(props: PendingInterviewCardProps) {
@@ -102,6 +107,11 @@ export function PendingInterviewCard(props: PendingInterviewCardProps) {
     onSubmit: props.onSubmit,
     onSkip: props.onSkip,
   });
+  useRestartHighlightPulse(
+    props.navigationHighlighted,
+    props.highlightGeneration ?? 0,
+    containerRef,
+  );
 
   return (
     <section
@@ -111,6 +121,11 @@ export function PendingInterviewCard(props: PendingInterviewCardProps) {
       data-block-id={props.blockId}
       data-navigation-highlighted={
         props.navigationHighlighted ? "true" : undefined
+      }
+      data-navigation-highlight-generation={
+        props.navigationHighlighted
+          ? String(props.highlightGeneration ?? 0)
+          : undefined
       }
       tabIndex={-1}
       className={cn(

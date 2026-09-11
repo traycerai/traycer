@@ -359,9 +359,13 @@ export function coldJumpOrdinal(
     case "first-message":
       return transcriptWindow.skeleton[0] === undefined ? null : 0;
     case "end":
-    case "approval":
-      // Composer-slot (or plan-card) landing: no transcript ordinal to fetch.
       return null;
+    case "approval":
+      // Composer-pending tool/file-edit approvals never reach here with a
+      // host answer: `hostLocatorForJumpTarget` returns null for those.
+      // A cold inline plan card is the same deadlock as a cold block — the
+      // host names the ordinal, the planner hydrates it.
+      return hostLocatedOrdinal;
   }
 }
 
@@ -395,11 +399,32 @@ function skeletonOrdinalOf(
  * Module scope for the same reason {@link coldJumpOrdinal} is, and so the
  * decision can be tested without the tile.
  */
+function hostLocatorForApprovalTarget(input: {
+  readonly approvalId: string;
+  readonly messages: ReadonlyArray<ChatMessageModel>;
+  readonly pendingApprovals: ReadonlyArray<ChatApprovalState>;
+  readonly pendingFileEditApprovals: ReadonlyArray<ChatFileEditApprovalState>;
+}): TranscriptRowLocator | null {
+  if (
+    isComposerPendingApproval(
+      input.pendingApprovals,
+      input.pendingFileEditApprovals,
+      input.approvalId,
+    ) ||
+    planSegmentIdForApproval(input.messages, input.approvalId) !== null
+  ) {
+    return null;
+  }
+  return { kind: "approval", approvalId: input.approvalId };
+}
+
 export function hostLocatorForJumpTarget(input: {
   readonly target: ChatTranscriptJumpTarget;
   readonly transcriptWindow: TranscriptWindow | null;
   readonly messages: ReadonlyArray<ChatMessageModel>;
   readonly pendingInterviewBlockId: string | null;
+  readonly pendingApprovals?: ReadonlyArray<ChatApprovalState>;
+  readonly pendingFileEditApprovals?: ReadonlyArray<ChatFileEditApprovalState>;
 }): TranscriptRowLocator | null {
   const { messages, pendingInterviewBlockId, target, transcriptWindow } = input;
   if (transcriptWindow === null) return null;
@@ -429,7 +454,14 @@ export function hostLocatorForJumpTarget(input: {
       ? { kind: "receipt", messageId: target.messageId }
       : null;
   }
-  if (target.kind === "approval") return null;
+  if (target.kind === "approval") {
+    return hostLocatorForApprovalTarget({
+      approvalId: target.approvalId,
+      messages,
+      pendingApprovals: input.pendingApprovals ?? [],
+      pendingFileEditApprovals: input.pendingFileEditApprovals ?? [],
+    });
+  }
   if (target.kind === "message") {
     // BOTH client reads have to miss before the host is worth asking, and they
     // miss for different reasons. The skeleton read covers a cold USER row,
