@@ -124,7 +124,9 @@ import * as Y from "yjs";
 import { CommGraphTile } from "@/components/epic-canvas/renderers/comm-graph-tile";
 import * as officeAutoModule from "@/lib/comm-graph/office/office-auto";
 import { OfficeScene } from "@/lib/comm-graph/office/office-scene";
+import { makeTestEpic } from "@/lib/comm-graph/office/office-test-epic";
 import type { OfficeViewId } from "@/lib/comm-graph/office/office-types";
+import { OFFICE_BENCH_SEED } from "@/components/epic-canvas/comm-graph/office/office-bench";
 import {
   OFFICE_VIEWS,
   OFFICE_VIEW_IDS,
@@ -378,6 +380,26 @@ async function reachAutoFloor(): Promise<void> {
   });
   await waitFor(() => {
     expect(storedView()?.officeAutoView).toBe("floor");
+  });
+}
+
+/**
+ * Picks a view through the REAL picker - the dropdown a person opens and the
+ * radio item they click - and settles the canvas that results.
+ *
+ * Shared by the switch cases and the bench, which both need a scene in hand:
+ * a pick is what puts one there, the view Auto already chose included.
+ */
+async function pickView(viewId: OfficeViewId): Promise<void> {
+  openPicker();
+  await act(async () => {
+    fireEvent.click(screen.getByTestId(`comm-graph-office-view-${viewId}`));
+    await Promise.resolve();
+  });
+  setIntersecting(true);
+  setOfficeCanvasSize({ width: 1040, height: 700 });
+  await act(async () => {
+    await Promise.resolve();
   });
 }
 
@@ -1332,19 +1354,6 @@ describe("CommGraphTile", () => {
      * needs to be alive: a remount starts with no intersection state and no
      * measured box of its own.
      */
-    async function pickView(viewId: OfficeViewId): Promise<void> {
-      openPicker();
-      await act(async () => {
-        fireEvent.click(screen.getByTestId(`comm-graph-office-view-${viewId}`));
-        await Promise.resolve();
-      });
-      setIntersecting(true);
-      setOfficeCanvasSize({ width: 1040, height: 700 });
-      await act(async () => {
-        await Promise.resolve();
-      });
-    }
-
     /** The distinct scene instances a spy has seen sync. */
     function scenesSeen(spy: MockInstance<OfficeScene["sync"]>): number {
       return new Set(spy.mock.contexts).size;
@@ -1459,6 +1468,42 @@ describe("CommGraphTile", () => {
           12,
         );
       } finally {
+        restore();
+      }
+    });
+
+    it("dresses a benched office in the fixture's own statuses", async () => {
+      // THE MOVING BENCH. Everything the canvas derives a status from is keyed
+      // by agents that exist on a host, so a synthetic population reads as a
+      // floor of idle agents - and a still office cannot answer a p95 frame
+      // time or a long-task profile. Read off the SCENE's input, because that
+      // is where the branch has to land: statuses reach nothing else.
+      //
+      // On the SEEDED epic, which is how a bench is actually opened: a real
+      // epic with the parameter added to its address. An empty document never
+      // opens a subscription, so its inputs never settle and its office never
+      // syncs a scene to read.
+      const restore = benchAt("?officeBench=12");
+      const synced = vi.spyOn(OfficeScene.prototype, "sync");
+      try {
+        await reachAutoFloor();
+        // Pinning the view Auto already chose is what puts a scene in hand
+        // here: it writes the choice without moving the canvas's key, and the
+        // scene syncs on the input that follows. The same step the switch
+        // cases above take for the same reason.
+        await pickView("floor");
+
+        await waitFor(() => {
+          expect(synced.mock.calls.length).toBeGreaterThan(0);
+        });
+        const fixture = makeTestEpic("triage", 12, OFFICE_BENCH_SEED);
+        const input = synced.mock.calls[synced.mock.calls.length - 1][0];
+        expect([...input.statusById]).toEqual([...fixture.statusById]);
+        // Anti-vacuity: an empty map is what the epic's own derivation gives a
+        // population it has never heard of, which is the bug this case is for.
+        expect(input.statusById.size).toBeGreaterThan(0);
+      } finally {
+        synced.mockRestore();
         restore();
       }
     });

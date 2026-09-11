@@ -15,15 +15,21 @@
  * ?officeBench=1000&officeBenchShape=many-roots   the review's 101 MiB case
  * ```
  *
- * WHAT THE BENCH DOES NOT CARRY: statuses. An agent reads as `working`,
- * `awaiting`, `attention` or `failure` through the activity store, the open
- * requests in the event feed and the notification indicators - none of which
- * the tile owns, and all of which a synthetic agent set has no entry in. So a
- * bench office is a still one, minus the archived agents (4 % of the fixture),
- * whose `archivedAt` rides on the agent record and does sheet their desks. It
- * is the right subject for a cold open, a heap plateau and a static budget,
- * and the wrong one for measuring motion; the 309-agent staging epic is the
- * live one.
+ * THE BENCH ALSO MOVES, because a still office is the wrong subject for a p95
+ * frame time and a long-task profile. An agent reads as `working`, `awaiting`,
+ * `attention` or `failure` through the activity store, the open requests in the
+ * event feed and the notification indicators - none of which the tile owns, and
+ * none of which a synthetic agent set has an entry in - so the canvas takes the
+ * bench's statuses from `officeBenchStatuses` instead, the FIXTURE's own map:
+ * about 9 % of the population hot, and the same 9 % on every run, because a
+ * bench whose busy agents were a dice roll would not be a bench.
+ *
+ * WHAT IT STILL DOES NOT CARRY is the event feed: no envelopes fly, nobody is
+ * summoned to reception and no desk collects an open request, since all three
+ * are read off rows the bench has no source for. So the 309-agent staging epic
+ * stays the real-data row of the acceptance pass, and the bench answers the
+ * question it can answer honestly - what a thousand agents cost when a tenth of
+ * them are animating and the rest are strolling.
  *
  * DEV ONLY, and gone from production rather than merely unreachable:
  * `officeBenchOverride` returns on `import.meta.env.DEV` before it touches
@@ -36,6 +42,7 @@ import {
   makeTestEpic,
   type OfficeTestEpicShape,
 } from "@/lib/comm-graph/office/office-test-epic";
+import type { OfficeAgentStatus } from "@/lib/comm-graph/office/office-types";
 
 export const OFFICE_BENCH_PARAM = "officeBench";
 export const OFFICE_BENCH_SHAPE_PARAM = "officeBenchShape";
@@ -99,54 +106,85 @@ function benchKeyOf(request: OfficeBenchRequest): string {
   return `${request.shape}/${request.agents}`;
 }
 
+/** One bench, built once: the agents the tile draws and the statuses they wear. */
+interface BuiltBench {
+  readonly agents: ReadonlyArray<CommGraphAgentNode>;
+  readonly statusById: ReadonlyMap<string, OfficeAgentStatus>;
+}
+
 /**
  * The last bench built, kept for the life of the page.
  *
  * Building a thousand agents is real work, and the tile asks for them on every
  * render - and again on every remount, which a view switch is. One entry
- * rather than a map: a window benches one office at a time.
+ * rather than a map: a window benches one office at a time. The statuses are
+ * held with the agents rather than beside them, so the two halves of a bench
+ * can never come from different fixtures.
  */
 let builtKey: string | null = null;
-let builtAgents: ReadonlyArray<CommGraphAgentNode> = [];
+let built: BuiltBench = { agents: [], statusById: new Map() };
 
 /**
- * The bench's agents as the comm-graph projects them - the SAME node shape the
- * epic's own chats and terminal agents become, so everything downstream is on
- * its ordinary path.
+ * The bench a URL asks for, built or remembered. Its agents are in the SAME
+ * node shape the epic's own chats and terminal agents become, so everything
+ * downstream is on its ordinary path.
  */
-export function officeBenchAgents(
-  request: OfficeBenchRequest,
-): ReadonlyArray<CommGraphAgentNode> {
+export function officeBench(request: OfficeBenchRequest): BuiltBench {
   const key = benchKeyOf(request);
-  if (builtKey === key) return builtAgents;
+  if (builtKey === key) return built;
   const epic = makeTestEpic(request.shape, request.agents, OFFICE_BENCH_SEED);
-  builtAgents = epic.agents.map<CommGraphAgentNode>((agent) => ({
-    id: agent.id,
-    kind: agent.kind,
-    name: agent.name,
-    hostId: agent.hostId,
-    parentId: agent.parentId,
-    harnessId: agent.harnessId,
-    model: agent.model,
-    archived: agent.archived,
-    archivedAt: agent.archivedAt,
-    createdAt: agent.createdAt,
-  }));
+  built = {
+    agents: epic.agents.map<CommGraphAgentNode>((agent) => ({
+      id: agent.id,
+      kind: agent.kind,
+      name: agent.name,
+      hostId: agent.hostId,
+      parentId: agent.parentId,
+      harnessId: agent.harnessId,
+      model: agent.model,
+      archived: agent.archived,
+      archivedAt: agent.archivedAt,
+      createdAt: agent.createdAt,
+    })),
+    statusById: epic.statusById,
+  };
   builtKey = key;
-  return builtAgents;
+  return built;
 }
 
 /**
- * What this window's address bar asks the tile to draw instead of the epic, or
- * `null` in every build and every URL that asks for nothing.
+ * What this window's address bar asks for, or `null` in every build and every
+ * URL that asks for nothing.
  *
  * Read from `window.location` rather than the router's search: the bench is a
  * dev instrument, and putting it in the route's validated search would add a
- * parameter to the typed contract of a screen that ships.
+ * parameter to the typed contract of a screen that ships. The DEV gate is the
+ * FIRST line of both readers below, which is what makes the fixtures fall out
+ * of a production bundle rather than merely sitting there unreachable.
  */
-export function officeBenchOverride(): ReadonlyArray<CommGraphAgentNode> | null {
+function requestedBench(): BuiltBench | null {
   if (!import.meta.env.DEV) return null;
   const request = parseOfficeBenchSearch(window.location.search);
   if (request === null) return null;
-  return officeBenchAgents(request);
+  return officeBench(request);
+}
+
+/** The agents the tile draws instead of the epic's, or `null` for no bench. */
+export function officeBenchOverride(): ReadonlyArray<CommGraphAgentNode> | null {
+  return requestedBench()?.agents ?? null;
+}
+
+/**
+ * The statuses the canvas dresses a bench office in instead of deriving them,
+ * or `null` for no bench.
+ *
+ * The FIXTURE's map, not a fresh roll: the same tenth of the population is hot
+ * on every run at a given seed and size, so two profiles of the same bench are
+ * comparable and a regression is the code's rather than the dice's.
+ */
+export function officeBenchStatuses(): ReadonlyMap<
+  string,
+  OfficeAgentStatus
+> | null {
+  return requestedBench()?.statusById ?? null;
 }

@@ -5,13 +5,22 @@
  * `comm-graph-tile.test.tsx`, where there is a tile to draw one.
  */
 import { describe, expect, it } from "vitest";
+import type { CommGraphAgentNode } from "@/lib/comm-graph/comm-graph-model";
 import { makeTestEpic } from "@/lib/comm-graph/office/office-test-epic";
 import {
-  officeBenchAgents,
+  officeBench,
   parseOfficeBenchSearch,
   OFFICE_BENCH_MAX_AGENTS,
   OFFICE_BENCH_SEED,
+  type OfficeBenchRequest,
 } from "@/components/epic-canvas/comm-graph/office/office-bench";
+
+/** The bench's agents alone, which most of these cases are about. */
+function benchAgents(
+  request: OfficeBenchRequest,
+): ReadonlyArray<CommGraphAgentNode> {
+  return officeBench(request).agents;
+}
 
 describe("parseOfficeBenchSearch", () => {
   it("reads the count, and defaults to the shape every estimate is quoted at", () => {
@@ -57,11 +66,11 @@ describe("parseOfficeBenchSearch", () => {
   });
 });
 
-describe("officeBenchAgents", () => {
+describe("officeBench", () => {
   it("projects the fixture as the comm-graph's own nodes", () => {
     const fixture = makeTestEpic("triage", 12, OFFICE_BENCH_SEED);
 
-    const nodes = officeBenchAgents({ shape: "triage", agents: 12 });
+    const nodes = benchAgents({ shape: "triage", agents: 12 });
 
     expect(nodes).toHaveLength(12);
     // The same agents, in the same order, carrying every field the tile's own
@@ -88,7 +97,7 @@ describe("officeBenchAgents", () => {
   });
 
   it("carries the archived agents, which are the ones a still bench can show", () => {
-    const nodes = officeBenchAgents({ shape: "triage", agents: 309 });
+    const nodes = benchAgents({ shape: "triage", agents: 309 });
 
     // 4 % of the fixture, and the one status that rides on the agent record
     // rather than on a store the bench has no entry in.
@@ -99,18 +108,58 @@ describe("officeBenchAgents", () => {
     // The tile calls this on every render and again on every remount, and a
     // view switch is a remount; rebuilding a thousand agents each time would
     // make the bench the thing being measured.
-    const first = officeBenchAgents({ shape: "many-roots", agents: 50 });
-    const second = officeBenchAgents({ shape: "many-roots", agents: 50 });
+    const first = benchAgents({ shape: "many-roots", agents: 50 });
+    const second = benchAgents({ shape: "many-roots", agents: 50 });
 
     expect(second).toBe(first);
   });
 
   it("rebuilds when the bench asked for changes", () => {
-    const triage = officeBenchAgents({ shape: "triage", agents: 50 });
-    const roots = officeBenchAgents({ shape: "many-roots", agents: 50 });
+    const triage = benchAgents({ shape: "triage", agents: 50 });
+    const roots = benchAgents({ shape: "many-roots", agents: 50 });
 
     expect(roots).not.toBe(triage);
     // Every root of its own, which is the shape's whole point.
     expect(roots.every((node) => node.parentId === null)).toBe(true);
+  });
+
+  it("dresses the bench in the fixture's own statuses, so it MOVES", () => {
+    // A still office answers a cold open and a heap plateau and cannot answer
+    // a p95 frame time. These are what put screens mid-alternation, hands up
+    // and bubbles over desks at a thousand agents.
+    const fixture = makeTestEpic("triage", 309, OFFICE_BENCH_SEED);
+
+    const bench = officeBench({ shape: "triage", agents: 309 });
+
+    expect(bench.statusById).toEqual(fixture.statusById);
+    const hot = [...bench.statusById.values()].filter(
+      (status) => status !== "idle",
+    );
+    expect(hot.length).toBeGreaterThan(0);
+    // About a tenth of the floor, which is what an epic under way looks like.
+    expect(hot.length).toBeLessThan(309 / 2);
+  });
+
+  it("is the same tenth of the floor on every run, not a fresh roll", () => {
+    // The point of a bench: two profiles of one URL are comparable, so a
+    // difference between them is the code's and not the dice's.
+    const first = officeBench({ shape: "one-team", agents: 120 }).statusById;
+    const rebuilt = officeBench({ shape: "triage", agents: 120 }).statusById;
+    const again = officeBench({ shape: "one-team", agents: 120 }).statusById;
+
+    expect(rebuilt).not.toBe(first);
+    expect([...again]).toEqual([...first]);
+  });
+
+  it("keeps a bench's agents and statuses from two different fixtures apart", () => {
+    // Held together rather than beside each other: a status map built from one
+    // fixture and an agent set from another would name agents that are not
+    // there and leave the ones that are reading idle.
+    const bench = officeBench({ shape: "two-hosts", agents: 80 });
+
+    const ids = new Set(bench.agents.map((node) => node.id));
+    for (const agentId of bench.statusById.keys()) {
+      expect(ids.has(agentId)).toBe(true);
+    }
   });
 });

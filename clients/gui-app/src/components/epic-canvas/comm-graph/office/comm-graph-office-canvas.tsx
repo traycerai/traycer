@@ -86,6 +86,7 @@ import {
   planOfficeStaticChunks,
   type OfficeStaticChunkDraw,
 } from "@/components/epic-canvas/comm-graph/office/office-static-layer";
+import { officeBenchStatuses } from "@/components/epic-canvas/comm-graph/office/office-bench";
 import {
   officeTileRectOf,
   OFFICE_PROJECTION_BLEED_PX,
@@ -2154,8 +2155,19 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     return { attentionAgentIds: attention, failureAgentIds: failure };
   }, [flaggedIdList]);
 
+  // THE DEV BENCH'S ONE BRANCH IN THIS FILE, and the whole of it.
+  //
+  // Every input `officeAgentStatuses` reads - the activity store, the event
+  // feed, the notification indicators - is keyed by agents that exist on a
+  // host, so a synthetic population reads as a thousand idle agents and a
+  // still office is the wrong thing to profile. The bench's own fixture
+  // carries the statuses instead. `null` in production, where the reader
+  // returns before it touches anything and takes the fixtures out of the
+  // bundle with it.
+  const benchStatusById = officeBenchStatuses();
   const statusById = useMemo(
     () =>
+      benchStatusById ??
       officeAgentStatuses({
         agents: officeAgents,
         // The cursor, so a scrub back BEFORE an agent was archived reads it as
@@ -2171,6 +2183,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
       activityTiers,
       agentIds,
       attentionAgentIds,
+      benchStatusById,
       cursorMs,
       events,
       failureAgentIds,
