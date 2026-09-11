@@ -4,15 +4,15 @@ import { LocalHostLoadingContent } from "@/components/local-host-loading";
 import { usePressStartActivation } from "@/lib/host/press-start-activation";
 
 /**
- * The WHOLE boot card - headline, progress bar, details disclosure and
+ * The WHOLE boot card - mark, headline, details disclosure and
  * `Open settings` - for the phases that precede the window narrator.
  *
  * It is the narrator's own healthy body (`LocalHostLoadingContent`) with no
  * lane, drawn in the shared card. Not "the same headline and controls" - the
- * SAME BODY, bar included, so the card the runtime fallback draws before the
- * router exists is, to the pixel, the card the narrator draws once a lane is
- * reporting: same box, same rows, and the only things that change across a
- * healthy launch are the sentence and the bar's fill. There is deliberately
+ * SAME BODY, so the card the runtime fallback draws before the router exists
+ * is, to the pixel, the card the narrator draws before a lane reports: same
+ * box, same rows. Across a healthy launch only the sentence changes, plus the
+ * progress bar while a stage reports a percentage. There is deliberately
  * no `message` prop: every wait face says the body's idle heading
  * (`HOST_PROGRESS_IDLE_HEADING`) until a lane says something new, and a prop
  * would be a way for one phase to say it differently.
@@ -22,10 +22,7 @@ import { usePressStartActivation } from "@/lib/host/press-start-activation";
  * `Open settings`; the first two were bare. So the card visibly GREW controls
  * partway through a wait, which reads as a different dialog replacing the
  * first rather than one surface progressing - the "why do we have these 2
- * modals" report. The bar followed the same rule one review later: it used
- * to appear only once a lane reported, and a fresh install showed "3-4
- * different modals … a modal shows some progress bar in the middle … the UI
- * feels jumpy when the modal size keeps changing".
+ * modals" report.
  *
  * Both controls are genuinely LIVE here, which is why they are rendered rather
  * than stubbed disabled:
