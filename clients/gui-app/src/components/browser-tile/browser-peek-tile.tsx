@@ -1,3 +1,6 @@
+import { useBrowserViewport } from "./use-browser-viewport";
+import { BrowserViewportToolbar } from "./browser-viewport-toolbar";
+import { BrowserViewportFrame } from "./browser-viewport-frame";
 import { useLayoutEffect, useMemo, useState, type ReactElement } from "react";
 import { AlertTriangle, Monitor, Pause, Radio, WifiOff } from "lucide-react";
 import type { HostResourceScope } from "@traycer/protocol/host/resource-scope";
@@ -163,6 +166,17 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
     browserSessions?.items.find((item) => item.sessionId === node.sessionId)
       ?.profile ?? "primary";
   const { image, navState, armedEpoch, dialog, readOnly } = session;
+  const viewport = useBrowserViewport({
+    hostId: node.hostId,
+    sessionId: node.sessionId,
+    tabId: node.tabId,
+    instanceId: node.instanceId,
+    visible,
+    disabled: client === null || readOnly,
+    pageZoom: 1,
+    native: false,
+    registrationId: null,
+  });
   const { tileRef, viewportRef } = session.refs;
   useRetainLastBrowserPeekFrame(frameCacheKey, image);
   const inputOwnerId =
@@ -221,6 +235,7 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
   // the screencast, so typing a URL does not reach the remote page.
   const controller: TileController = {
     ...chrome.controller,
+    viewport: viewport.controller,
     onAddressFocusChange: (focused: boolean) => {
       if (focused) session.releaseForwardedPageKeys();
       chrome.onAddressFocusChange(focused);
@@ -234,6 +249,9 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
     <div
       ref={tileRef}
       className="flex h-full w-full flex-col bg-canvas text-foreground"
+      onPointerDownCapture={viewport.onInteraction}
+      onFocusCapture={viewport.onInteraction}
+      onKeyDownCapture={viewport.onInteraction}
       data-testid={`browser-peek-tile-${node.instanceId}`}
     >
       {coarsePointer ? (
@@ -259,36 +277,39 @@ export function BrowserPeekTile(props: BrowserPeekTileProps) {
           onRelease={session.disarm}
         />
       )}
-      <div
-        ref={viewportRef}
-        className={cn(
-          "relative min-h-0 flex-1 cursor-default overflow-hidden bg-background p-0 text-left outline-none",
-          armedEpoch !== null && "ring-2 ring-primary ring-inset",
-        )}
-      >
-        {showStartPage ? (
-          <BrowserStartPage
-            scope={props.scope}
-            hostId={node.hostId}
-            browserRunsOnHost
-            visible={visible}
-            onNavigate={chrome.navigateToUrl}
+      <BrowserViewportToolbar controller={viewport.controller} />
+      <BrowserViewportFrame viewport={viewport} surfaceRef={null}>
+        <div
+          ref={viewportRef}
+          className={cn(
+            "relative h-full w-full min-h-0 cursor-default overflow-hidden bg-background p-0 text-left outline-none",
+            armedEpoch !== null && "ring-2 ring-primary ring-inset",
+          )}
+        >
+          {showStartPage ? (
+            <BrowserStartPage
+              scope={props.scope}
+              hostId={node.hostId}
+              browserRunsOnHost
+              visible={visible}
+              onNavigate={chrome.navigateToUrl}
+            />
+          ) : null}
+          <ScreencastPeekSurface
+            session={session}
+            overlay={status.overlay}
+            showStartPage={showStartPage}
           />
-        ) : null}
-        <ScreencastPeekSurface
-          session={session}
-          overlay={status.overlay}
-          showStartPage={showStartPage}
-        />
-        {showStartPage || dialog === null ? null : (
-          <BrowserDialogOverlay
-            key={dialog.generation}
-            dialog={dialog}
-            sheet={coarsePointer}
-            onRespond={session.respondToDialog}
-          />
-        )}
-      </div>
+          {showStartPage || dialog === null ? null : (
+            <BrowserDialogOverlay
+              key={dialog.generation}
+              dialog={dialog}
+              sheet={coarsePointer}
+              onRespond={session.respondToDialog}
+            />
+          )}
+        </div>
+      </BrowserViewportFrame>
     </div>
   );
 }

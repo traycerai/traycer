@@ -2,6 +2,7 @@ import {
   AppearanceDetails,
   AppearanceFontRows,
 } from "@/components/settings/themes/appearance-details";
+import { APPEARANCE } from "@/components/settings/panels/appearance-settings.definitions";
 import { useMemo } from "react";
 import { RotateCcw } from "lucide-react";
 import { SettingsPanelShell } from "@/components/settings/settings-panel-shell";
@@ -26,7 +27,6 @@ import {
 } from "@/components/ui/select";
 import { useDesktopZoomBridge } from "@/hooks/runner/use-desktop-zoom-bridge";
 import { useSettingsAvailabilityContext } from "@/hooks/settings/use-settings-availability-context";
-import { isZoomRowAvailable } from "@/lib/settings/settings-availability";
 import {
   useRunnerZoomChangeSubscription,
   useRunnerZoomPercentQuery,
@@ -138,17 +138,15 @@ export function AppearanceSettingsPanel() {
         <StartPageSettingsSection />
 
         <SettingsGroup
-          title="Interface"
-          anchor="appearance-interface"
+          group={APPEARANCE.definitions.interface}
+          showTitle
           tone="default"
           dataTestId={undefined}
           fill={false}
         >
           <DesktopZoomSettingsRow />
           <SettingsRow
-            label="Show a hand cursor over clickable controls"
-            anchor="appearance-pointer-cursors"
-            description="Use a hand cursor over buttons, links, and other clickable controls."
+            row={APPEARANCE.definitions.pointerCursors}
             control={
               <Switch
                 checked={pointerCursors}
@@ -161,9 +159,7 @@ export function AppearanceSettingsPanel() {
             }
           />
           <SettingsRow
-            label="Minimap position"
-            anchor="appearance-minimap-side"
-            description="Minimaps are compact overviews for navigating chats and artifacts. Choose where they appear, or hide them."
+            row={APPEARANCE.definitions.minimapSide}
             control={
               <Select
                 value={chatTurnMinimapSide}
@@ -197,16 +193,14 @@ export function AppearanceSettingsPanel() {
         </SettingsGroup>
 
         <SettingsGroup
-          title="Fonts and text"
-          anchor="appearance-typography"
+          group={APPEARANCE.definitions.typography}
+          showTitle
           tone="default"
           dataTestId={undefined}
           fill={false}
         >
           <SettingsRow
-            label="Interface font"
-            anchor="appearance-ui-font"
-            description="Font and size used across the Traycer interface."
+            row={APPEARANCE.definitions.uiFont}
             control={
               <div className="flex flex-col items-end gap-2">
                 <FontPicker
@@ -237,9 +231,7 @@ export function AppearanceSettingsPanel() {
             }
           />
           <SettingsRow
-            label="Code font"
-            anchor="appearance-code-font"
-            description="Font and size used for code blocks and diffs."
+            row={APPEARANCE.definitions.codeFont}
             control={
               <div className="flex flex-col items-end gap-2">
                 <FontPicker
@@ -275,8 +267,8 @@ export function AppearanceSettingsPanel() {
         <AppearanceDetails />
 
         <SettingsGroup
-          title="Terminal"
-          anchor="appearance-terminal-group"
+          group={APPEARANCE.definitions.terminal}
+          showTitle
           tone="default"
           dataTestId={undefined}
           fill={false}
@@ -285,9 +277,7 @@ export function AppearanceSettingsPanel() {
             <div className="grid grid-cols-1 @min-[32rem]:grid-cols-[7fr_5fr]">
               <div className="flex flex-col">
                 <SettingsRow
-                  label="Terminal font"
-                  anchor="appearance-terminal-font"
-                  description="Font and size used in the terminal. Follows the code font until you set them."
+                  row={APPEARANCE.definitions.terminalFont}
                   control={
                     <div className="flex flex-col items-end gap-2">
                       <FontPicker
@@ -317,9 +307,7 @@ export function AppearanceSettingsPanel() {
                   }
                 />
                 <SettingsRow
-                  label="Terminal cursor"
-                  anchor="appearance-terminal-cursor"
-                  description="Shape of the cursor in the terminal."
+                  row={APPEARANCE.definitions.terminalCursor}
                   control={
                     <TerminalCursorStylePicker
                       value={terminalCursorStyle}
@@ -331,9 +319,7 @@ export function AppearanceSettingsPanel() {
                   }
                 />
                 <SettingsRow
-                  label="Blink cursor"
-                  anchor="appearance-blink-cursor"
-                  description="Blink the terminal cursor while the terminal is focused."
+                  row={APPEARANCE.definitions.blinkCursor}
                   control={
                     <Switch
                       checked={terminalCursorBlink}
@@ -359,16 +345,14 @@ export function AppearanceSettingsPanel() {
         </SettingsGroup>
 
         <SettingsGroup
-          title="Icon colors"
-          anchor="appearance-artifact-icons"
+          group={APPEARANCE.definitions.artifactIcons}
+          showTitle
           tone="default"
           dataTestId={undefined}
           fill={false}
         >
           <SettingsRow
-            label="Color icons by type"
-            anchor="appearance-artifact-icon-colors"
-            description="Give chats, agents, terminals, and artifacts distinct icon colors. Turn off to use neutral icons."
+            row={APPEARANCE.definitions.artifactIconColors}
             control={
               <EpicNodeIconColorPicker
                 enabled={artifactIconColorMode === "byType"}
@@ -402,7 +386,7 @@ export function AppearanceSettingsPanel() {
  */
 function DesktopZoomSettingsRow() {
   const availability = useSettingsAvailabilityContext();
-  if (!isZoomRowAvailable(availability)) return null;
+  if (!APPEARANCE.definitions.zoom.availableWhen(availability)) return null;
   return <AvailableDesktopZoomSettingsRow />;
 }
 
@@ -420,9 +404,7 @@ function AvailableDesktopZoomSettingsRow() {
 
   return (
     <SettingsRow
-      label="Zoom"
-      anchor="appearance-zoom"
-      description="Scales the whole app; font sizes only adjust typography."
+      row={APPEARANCE.definitions.zoom}
       control={
         <div className="flex items-center gap-2">
           <Select

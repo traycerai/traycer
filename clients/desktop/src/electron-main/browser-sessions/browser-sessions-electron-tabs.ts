@@ -2,12 +2,14 @@ import type {
   BrowserCdpResult,
   BrowserSessionsClientFrame,
   BrowserSessionsServerFrame,
+  BrowserViewportGeometry,
 } from "@traycer/protocol/host/browser/contracts";
 import {
   browserViewNativeTabKeyId,
   type BrowserViewNativeTabCapability,
   type BrowserViewNativeTabKey,
   type BrowserViewNativeTabStatusChange,
+  type BrowserViewElectronViewport,
 } from "@traycer-clients/shared/platform/browser-view";
 import type {
   BrowserViewElectronTabCdpDispatch,
@@ -32,6 +34,10 @@ type CdpRequestFrame = Extract<
   BrowserSessionsServerFrame,
   { readonly kind: "cdpRequest" }
 >;
+type ElectronViewportRequest = Extract<
+  BrowserSessionsServerFrame,
+  { readonly kind: "electronViewportRequest" }
+>;
 
 /**
  * The native surface this lifecycle drives, which is the `BrowserViewManager`
@@ -48,6 +54,9 @@ export interface BrowserSessionsTabPort {
   dispatchElectronTabCdp(
     input: BrowserViewElectronTabCdpDispatch,
   ): Promise<BrowserCdpResult>;
+  applyElectronTabViewport(
+    input: BrowserViewElectronViewport,
+  ): Promise<BrowserViewportGeometry>;
   onNativeTabStatusChange(
     listener: (change: BrowserViewNativeTabStatusChange) => void,
   ): () => void;
@@ -509,6 +518,68 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
     }
   }
 
+  const handleViewportFrame = (frame: ElectronViewportRequest): void => {
+    if (!connected || disposed) return;
+    const generation = connectionGeneration;
+    const connectionId = options.connectionId();
+    const birth = findProvisionedBirthByTabId(
+      birthByRequestId.values(),
+      frame.tabId,
+    );
+    const apply = async (): Promise<
+      Extract<
+        BrowserSessionsClientFrame,
+        { readonly kind: "electronViewportResult" }
+      >["result"]
+    > => {
+      if (
+        connectionId === null ||
+        birth === null ||
+        birth.create.sessionId !== frame.sessionId ||
+        birth.provisioned?.registrationId !== frame.registrationId
+      ) {
+        return {
+          ok: false,
+          message: "Electron tab incarnation is not active on this desktop.",
+        };
+      }
+      try {
+        const applied = await options.tabs.applyElectronTabViewport({
+          hostId: options.hostId,
+          sessionId: frame.sessionId,
+          tabId: frame.tabId,
+          registrationId: frame.registrationId,
+          connectionId,
+          revision: frame.revision,
+          intent: frame.intent,
+          geometry: frame.geometry,
+        });
+        return { ok: true, applied };
+      } catch (error) {
+        return {
+          ok: false,
+          message:
+            error instanceof Error
+              ? error.message.slice(0, 2048)
+              : "Viewport resize failed.",
+        };
+      }
+    };
+    void apply().then((result) => {
+      if (!isCurrentConnection(generation)) return;
+      options.sendFrame({
+        kind: "electronViewportResult",
+        hasBinaryPayload: false,
+        requestId: frame.requestId,
+        sessionId: frame.sessionId,
+        tabId: frame.tabId,
+        registrationId: frame.registrationId,
+        revision: frame.revision,
+        result,
+      });
+    });
+  };
+
   const handleAccepted = (frame: ElectronTabAcceptedFrame): void => {
     const birth = birthByRequestId.get(frame.requestId);
     if (
@@ -546,6 +617,9 @@ export function createElectronTabs(options: ElectronTabsOptions): ElectronTabs {
           return;
         case "cdpRequest":
           handleCdpFrame(frame);
+          return;
+        case "electronViewportRequest":
+          handleViewportFrame(frame);
           return;
         default:
           return;

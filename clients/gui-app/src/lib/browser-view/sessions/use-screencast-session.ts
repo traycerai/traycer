@@ -178,6 +178,7 @@ function scopedToClient<T>(
 }
 
 interface ScreencastRenderState {
+  readonly logicalViewport: ScreencastFrameSize | null;
   readonly client: ScreencastHostClient | null;
   readonly image: ScreencastImage | null;
   readonly lifecycle: ScreencastLifecycle;
@@ -417,6 +418,7 @@ export function useScreencastSession(
     lifecycle: "connecting",
     details: null,
     frameSize: null,
+    logicalViewport: null,
     navState: EMPTY_SCREENCAST_NAV_STATE,
   }));
   // Bumped when a handoff token is recorded for this tab AFTER a stream is
@@ -661,6 +663,7 @@ export function useScreencastSession(
         controller.noteFrameArrived(frame.sequence);
       } else if (frame.kind === "viewportEpoch") {
         controller.noteViewportEpoch(frame.epoch);
+        patchStreamState({ logicalViewport: frame.logicalViewport });
       } else if (frame.kind === "rttProbe") {
         // Answered before anything else this frame could imply: the host is
         // timing this reply, so any work in between would be measured as link
@@ -1134,7 +1137,9 @@ function deriveScreencastPlaneView(input: {
   // The video plane's own geometry wins only while it is painting, so a
   // fallback to JPEG reverts the hit-test box with no restore step (G4).
   const jpegFrameSize = current ? streamState.frameSize : null;
-  const frameSize = video.active ? input.videoFrameSize : jpegFrameSize;
+  const frameSize = video.active
+    ? ((current ? streamState.logicalViewport : null) ?? input.videoFrameSize)
+    : jpegFrameSize;
   return {
     image: current ? streamState.image : null,
     video,
@@ -1173,6 +1178,7 @@ function resetScreencastStateForClient(
     lifecycle: "connecting",
     details: clientlessDetails(client === null),
     frameSize: null,
+    logicalViewport: null,
     navState: EMPTY_SCREENCAST_NAV_STATE,
   };
 }

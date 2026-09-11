@@ -165,6 +165,9 @@ function sessionsContextValue() {
     canMaterializeElectron: harness.canMaterializeElectron,
     connectionGeneration: harness.connectionGeneration,
     items: harness.items,
+    viewports: {},
+    setViewport: () => Promise.reject(new Error("not used")),
+    reportViewport: () => undefined,
     errorMessage: null,
     retry: vi.fn(),
     openTab: harness.openTab,
@@ -189,6 +192,7 @@ vi.mock("sonner", () => ({
 vi.mock("@/components/epic-canvas/renderers/browser-sessions-context", () => ({
   useBrowserSessionsContext: () => sessionsContextValue(),
   useMaybeBrowserSessionsContext: () => sessionsContextValue(),
+  useMaybeBrowserSessionsCoordinatorKey: () => null,
 }));
 // Both exports, for the reason the sibling `use-runner-host` mock in
 // `tile-render-browser-link-host.test.tsx` documents: a factory REPLACES the

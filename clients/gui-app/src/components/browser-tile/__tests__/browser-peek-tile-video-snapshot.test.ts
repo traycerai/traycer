@@ -91,7 +91,7 @@ describe("snapshotVideoFrameIntoPeekCache", () => {
     expect(getLastBrowserPeekFrame(KEY)?.src).toBe(
       "data:image/jpeg;base64,FAKE",
     );
-    expect(drawImage).toEqual([[video, 0, 0, 640, 480]]);
+    expect(drawImage).toEqual([[video, 0, 0, 640, 480, 0, 0, 640, 480]]);
     expect(requestedQuality).toBe(0.7);
   });
 
@@ -194,7 +194,35 @@ describe("snapshotVideoFrameIntoPeekCache", () => {
 
     // 960 / 2560 = 0.375 -> 960x600.
     expect(sizes).toEqual([{ width: 960, height: 600 }]);
-    expect(drawImage).toEqual([[expect.anything(), 0, 0, 960, 600]]);
+    expect(drawImage).toEqual([
+      [expect.anything(), 0, 0, 2560, 1600, 0, 0, 960, 600],
+    ]);
+  });
+
+  it("crops padded video to the logical viewport aspect before scaling", () => {
+    const drawImage: unknown[][] = [];
+    const sizes: { width: number; height: number }[] = [];
+    stubCanvasPrototype({
+      getContext: function getContext(this: HTMLCanvasElement) {
+        sizes.push({ width: this.width, height: this.height });
+        return {
+          drawImage: (...args: unknown[]) => {
+            drawImage.push(args);
+          },
+        };
+      },
+      toDataURL: () => "data:image/jpeg;base64,CROPPED",
+    });
+    const video = fakeVideo(500, 500);
+    video.dataset.viewportWidth = "390";
+    video.dataset.viewportHeight = "312";
+
+    snapshotVideoFrameIntoPeekCache(KEY, video, true);
+
+    // The 500px source is retained at native resolution, but its 100px
+    // vertical padding is excluded by the 390x312 logical viewport ratio.
+    expect(sizes).toEqual([{ width: 500, height: 400 }]);
+    expect(drawImage).toEqual([[video, 0, 0, 500, 400, 0, 0, 500, 400]]);
   });
 });
 
