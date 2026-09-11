@@ -66,6 +66,13 @@
   }
 }
 
+/* The boot mark's shimmer wrapper is a box, not a line box: an inline span
+   around an SVG reserves descender space under it and would shift the card by
+   a few pixels depending on whether the motion rule below is applied. */
+.brand-entrance-mark-shimmer {
+  display: flex;
+}
+
 @media (prefers-reduced-motion: no-preference) {
   .brand-entrance-mark g > path {
     transform-box: fill-box;
@@ -101,6 +108,36 @@
 
   .brand-entrance-copy {
     animation: brand-copy-arrive 600ms 120ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  /* The boot card mark's highlight sweep - the STATIC half. The mask is three
+     times the box wide: the mark at a lowered alpha throughout, rising to full
+     in a narrow diagonal band around the centre (~30% of the mark's width
+     once the 115deg lean is accounted for). `BootMarkShimmer` slides
+     `mask-position` from 100% to 0% as an inline style from the shared status
+     animation clock; there is deliberately no `animation:` here - see
+     `status-animation-clock.ts` for what an always-on CSS animation costs on a
+     card that can stay up for minutes. 0% parks the band off the right edge,
+     which is where it rests between sweeps and before the first write.
+
+     Inside the no-preference block on purpose: under reduced motion nothing
+     writes the position, and a mask that never moves would hold the mark at
+     the lowered alpha for the whole wait. No rule here means no mask, so the
+     mark is simply drawn in full. */
+  .brand-entrance-mark-shimmer {
+    --boot-mark-rest: rgb(0 0 0 / 0.75);
+
+    mask-image: linear-gradient(
+      115deg,
+      var(--boot-mark-rest) 0%,
+      var(--boot-mark-rest) 45%,
+      #000 50%,
+      var(--boot-mark-rest) 55%,
+      var(--boot-mark-rest) 100%
+    );
+    mask-size: 300% 100%;
+    mask-repeat: no-repeat;
+    mask-position: 0% center;
   }
 
   .auth-splash {
