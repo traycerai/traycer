@@ -1069,10 +1069,14 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     (`providers.list` only; a judge choice cannot change availability).
     Rendered ONLY for a provider whose `useGuiHarnessesQuery` row reports
     `nativeAutoJudge: true` - a switch with one option is not a switch, and
-    every other provider runs Traycer's judge with nothing to choose. **No
-    provider reports it yet**, so the row is currently never drawn; the flag
-    also stands in for a method gate, because it rides the same catalog minor
-    as the setter, so a host too old to accept the write reports it `false`.
+    every other provider runs Traycer's judge with nothing to choose. **Claude
+    Code is the only provider that reports it**, so it is the only row drawn;
+    the flag also stands in for a method gate, because it rides the same
+    catalog minor as the setter, so a host too old to accept the write reports
+    it `false`. Drawing the row is not the same as the provider judging: the
+    host's own store answers `traycer` for a provider nobody has switched, and
+    `resolveAutoJudgeForTurn` resolves anything that is not exactly `provider`
+    to Traycer's judge.
     The stored value is read back through `ProviderCliState.autoJudge`, which is
     `.optional()` on the wire rather than defaulted (a host that predates auto
     mode omits the key, and absent must stay distinguishable at the protocol
