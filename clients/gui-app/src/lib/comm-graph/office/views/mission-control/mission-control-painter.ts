@@ -5,7 +5,6 @@
 import { officeSpriteSize } from "@/lib/comm-graph/office/office-pixel-art";
 import { OFFICE_TILE } from "@/lib/comm-graph/office/office-types";
 import {
-  frozenOf,
   originColFor,
   ROWS_PER_TIER,
   seatingWidth,
@@ -172,17 +171,32 @@ function tileRectsOverlap(
   );
 }
 
+function overviewGeometry(layout: OfficeLayout): {
+  readonly tierSeatCounts: ReadonlyArray<number>;
+  readonly centerCol: number;
+} | null {
+  const frozen = layout.frozen;
+  if (frozen === null || typeof frozen !== "object") return null;
+  if (!("tierSeatCounts" in frozen) || !("centerCol" in frozen)) return null;
+  if (!Array.isArray(frozen.tierSeatCounts)) return null;
+  if (typeof frozen.centerCol !== "number") return null;
+  return {
+    tierSeatCounts: frozen.tierSeatCounts,
+    centerCol: frozen.centerCol,
+  };
+}
+
 function blockMap(
   layout: OfficeLayout,
   tiles: OfficeTileRect,
 ): ReadonlyArray<OfficeDrawable> {
-  const frozen = frozenOf(layout);
-  if (frozen === null) return [];
+  const geometry = overviewGeometry(layout);
+  if (geometry === null) return [];
   const blocks: OfficeDrawable[] = [];
-  for (let tier = 0; tier < frozen.tierSeatCounts.length; tier += 1) {
-    const count = frozen.tierSeatCounts[tier];
+  for (let tier = 0; tier < geometry.tierSeatCounts.length; tier += 1) {
+    const count = geometry.tierSeatCounts[tier];
     const bounds: OfficeTileRect = {
-      col: originColFor(count, frozen.centerCol),
+      col: originColFor(count, geometry.centerCol),
       row: TIERS_ORIGIN_ROW + tier * ROWS_PER_TIER,
       cols: seatingWidth(count),
       rows: ROWS_PER_TIER,

@@ -392,10 +392,19 @@ function fillRun(
   const end = start + run.length - 1;
   const left = slots[start];
   const right = slots[end];
-  const leadPlacement = run.find(
+  const namedLead = run.find(
     (placement) =>
-      placement.agentId !== null && placement.reserveForTeamId === null,
+      placement.agentId !== null &&
+      placement.reserveForTeamId === null &&
+      placement.agentId === placement.teamId,
   );
+  const leadPlacement =
+    namedLead === undefined
+      ? run.find(
+          (placement) =>
+            placement.agentId !== null && placement.reserveForTeamId === null,
+        )
+      : namedLead;
   const reserve = run.find((placement) => placement.reserveForTeamId !== null);
   const members = run.filter(
     (placement) => placement !== leadPlacement && placement !== reserve,
@@ -803,6 +812,26 @@ function seatOneArrival(request: {
   }
 }
 
+function membersInTeamOrder(
+  input: OfficePlanInput,
+  teamId: string,
+  members: ReadonlyArray<OfficeAgentInput>,
+): ReadonlyArray<OfficeAgentInput> {
+  const remaining = new Map(members.map((agent) => [agent.id, agent] as const));
+  const ordered: OfficeAgentInput[] = [];
+  const team = input.partition.teamOf(teamId);
+  const roster =
+    team === null ? members.map((agent) => agent.id) : team.memberAgentIds;
+  for (const id of roster) {
+    const agent = remaining.get(id);
+    if (agent === undefined) continue;
+    ordered.push(agent);
+    remaining.delete(id);
+  }
+  for (const leftover of remaining.values()) ordered.push(leftover);
+  return ordered;
+}
+
 function placeNewTeamRun(request: {
   readonly input: OfficePlanInput;
   readonly teamId: string;
@@ -814,8 +843,13 @@ function placeNewTeamRun(request: {
   readonly takenAgents: Set<string>;
   readonly reserveByTeam: Map<string, number>;
 }): void {
-  const { teamId, members, fills, slots, takenAgents, reserveByTeam } = request;
-  const hostId = hostOfAgent(request.input, members[0].id);
+  const members = membersInTeamOrder(
+    request.input,
+    request.teamId,
+    request.members,
+  );
+  const { teamId, fills, slots, takenAgents, reserveByTeam } = request;
+  const hostId = hostOfAgent(request.input, teamId);
   const length = members.length + 1;
   let start = firstAisleAlignedStart(slots, fillOccupied(fills), length);
   while (start < 0 && request.counts.length < 64) {

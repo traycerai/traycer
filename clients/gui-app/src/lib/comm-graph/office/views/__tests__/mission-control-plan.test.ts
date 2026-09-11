@@ -1289,4 +1289,74 @@ describe("mission-control cold-review findings", () => {
     expect(counts[1].bandReads).toBeLessThanOrEqual(counts[0].bandReads);
     expect(counts[1].podReads).toBeLessThanOrEqual(counts[0].podReads);
   });
+
+  it("puts the partition lead at an aisle end for every arrival permutation", () => {
+    const input = planFresh(
+      makeTestEpic("many-roots", 2, 1),
+      VIEWPORT_WIDE,
+    ).input;
+    const parent = input.agents[0];
+    const lead = childAgent(parent, "late-list-lead", 10_000);
+    const firstChild = childAgent(lead, "early-list-member", 10_001);
+    const secondChild = childAgent(lead, "other-member", 10_002);
+    const permutations: ReadonlyArray<ReadonlyArray<OfficeAgentInput>> = [
+      [lead, firstChild, secondChild],
+      [firstChild, lead, secondChild],
+      [secondChild, firstChild, lead],
+    ];
+    const tiles: Array<{ col: number; row: number }> = [];
+    for (const arrivals of permutations) {
+      const after = MISSION_CONTROL_VIEW.plan(
+        grownFrom(input, MISSION_CONTROL_VIEW.plan(input), arrivals),
+      );
+      expect(aisleIndexOf(after, lead.id)).toBe(-1);
+      const desk = after.desks.get(lead.id);
+      if (desk === undefined) throw new Error("lead unseated");
+      tiles.push(desk.deskTile);
+    }
+    expect(tiles[0]).toEqual(tiles[1]);
+    expect(tiles[1]).toEqual(tiles[2]);
+  });
+
+  it("does not scan hostBands on an empty lod-0 pan at 12 or 1000 agents", () => {
+    let bandReads = 0;
+    const tracked: OfficeView = {
+      ...MISSION_CONTROL_VIEW,
+      plan: (input) => {
+        const layout = MISSION_CONTROL_VIEW.plan(input);
+        const frozen = frozenOf(layout);
+        if (frozen === null) throw new Error("no frozen");
+        return {
+          ...layout,
+          frozen: {
+            ...frozen,
+            hostBands: countingReads(frozen.hostBands, () => {
+              bandReads += 1;
+            }),
+          },
+        };
+      },
+    };
+    const full = makeTestEpic("triage", 1000, 1).agents.map((agent) => ({
+      ...agent,
+      hostId: "host-a",
+    }));
+    const counts: number[] = [];
+    for (const n of [12, 1000, 12]) {
+      const hosted: OfficeTestEpic = {
+        agents: full.slice(0, n),
+        statusById: new Map(),
+      };
+      const scene = new OfficeScene(tracked, null);
+      scene.sync(sceneInputFor(planFresh(hosted, VIEWPORT_WIDE).input));
+      scene.frame(0, { x: 0, y: 0, width: 1, height: 1 });
+      bandReads = 0;
+      const frame = scene.frame(0, { x: 16, y: 0, width: 1, height: 1 });
+      expect(frame.floor.length).toBe(0);
+      expect(frame.actors.length).toBe(0);
+      counts.push(bandReads);
+    }
+    expect(counts[1]).toBeLessThanOrEqual(counts[0]);
+    expect(counts[2]).toBeLessThanOrEqual(counts[0]);
+  });
 });
