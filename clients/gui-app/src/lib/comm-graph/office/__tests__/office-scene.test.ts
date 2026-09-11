@@ -4399,7 +4399,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
       context.skip("only Building has cubby-to-reserve wake semantics");
       return;
     }
-    const epic = makeTestEpic("triage", 24, 9);
+    const epic = makeTestEpic("triage", 60, 9);
     const cold = new Map<string, OfficeAgentStatus>(
       epic.agents.map((person) => [person.id, "idle"]),
     );
@@ -4426,6 +4426,15 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
     const cubby = coldLayout.desks.get(target.id);
     if (cubby === undefined) throw new Error("expected a cubby assignment");
     expect(cubby.kind).toBe("cubby");
+    const requiredTeamRoom = coldLayout.desks.get("team-0-lead")?.roomId;
+    expect(requiredTeamRoom).toBe("team-0-lead/room/0");
+    const seatBookContext: unknown = occupancySpy.mock.contexts.at(-1);
+    const currentOccupancy = (): ReadonlyMap<string, string> => {
+      if (!(seatBookContext instanceof OfficeSeatBook)) {
+        throw new Error("expected the scene seat book");
+      }
+      return seatBookContext.occupancy();
+    };
 
     const assignedSeatIds = new Set(
       Array.from(coldLayout.desks.values()).map((desk) => desk.seatId),
@@ -4434,6 +4443,77 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
       (seat) => seat.kind === "desk" && !assignedSeatIds.has(seat.seatId),
     );
     expect(reserves.length).toBeGreaterThan(0);
+    const occupyOtherReserves = () => {
+      const blockerStatus = new Map(cold);
+      const blockers = epic.agents.filter(
+        (person) =>
+          person.id !== target.id &&
+          person.id !== secondTarget.id &&
+          person.id !== "team-0-lead" &&
+          !person.archived,
+      );
+      let freeReserves = reserves;
+      let teamRoomFiller: { agentId: string; seatId: string } | null = null;
+      for (const blocker of blockers) {
+        if (freeReserves.length === 0) break;
+        blockerStatus.set(blocker.id, "working");
+        scene.sync(
+          sceneInput({
+            agents: epic.agents,
+            visibleAgentIds,
+            statusById: blockerStatus,
+            reducedMotion: false,
+          }),
+        );
+        const claimedReserve = reserves.find(
+          (seat) => currentOccupancy().get(seat.seatId) === blocker.id,
+        );
+        if (
+          claimedReserve !== undefined &&
+          claimedReserve.roomId === requiredTeamRoom
+        ) {
+          teamRoomFiller = {
+            agentId: blocker.id,
+            seatId: claimedReserve.seatId,
+          };
+        }
+        freeReserves = reserves.filter(
+          (seat) => currentOccupancy().get(seat.seatId) === undefined,
+        );
+      }
+      if (teamRoomFiller === null) {
+        throw new Error(
+          "expected a filler to claim the live team room reserve",
+        );
+      }
+      const cooledStatus = new Map(blockerStatus).set(
+        teamRoomFiller.agentId,
+        "idle",
+      );
+      scene.sync(
+        sceneInput({
+          agents: epic.agents,
+          visibleAgentIds,
+          statusById: cooledStatus,
+          reducedMotion: true,
+        }),
+      );
+      expect(currentOccupancy().get(teamRoomFiller.seatId)).toBeUndefined();
+      freeReserves = reserves.filter(
+        (seat) => currentOccupancy().get(seat.seatId) === undefined,
+      );
+      expect(freeReserves).toHaveLength(1);
+      const remainingReserve = freeReserves.at(0);
+      if (remainingReserve === undefined) {
+        throw new Error("expected one remaining reserve");
+      }
+      expect(remainingReserve.roomId).toBe(requiredTeamRoom);
+      expect(Array.from(layoutOf(scene).seats.keys())).toEqual(
+        Array.from(coldLayout.seats.keys()),
+      );
+      return { cooledStatus, remainingReserve };
+    };
+    const { cooledStatus, remainingReserve } = occupyOtherReserves();
     const cubbyRect = footRect(coldLayout, cubby.chairTile);
     const reserveRects = reserves.map((seat) =>
       footRect(coldLayout, seat.chairTile),
@@ -4449,7 +4529,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
     for (const lod of [1, 2] as const) {
       const reserveEntry = reserveFront(
         scene.frame(lod, WHOLE_WORLD),
-        reserves[0],
+        remainingReserve,
       );
       if (reserveEntry === undefined) {
         throw new Error(`expected an empty reserve at lod ${lod}`);
@@ -4460,7 +4540,8 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
       sprites(visibleDrawables(scene.frame(0, WHOLE_WORLD)), "desk-front"),
     ).toHaveLength(0);
 
-    const hot = new Map(cold).set(target.id, "working");
+    const hot = new Map(cooledStatus).set(target.id, "working");
+    const targetColdStatus = new Map(cooledStatus).set(target.id, "idle");
     scene.sync(
       sceneInput({
         agents: epic.agents,
@@ -4522,13 +4603,8 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
     expect(reserveFurnitureSeenWhileWalking.has(chosenReserve.seatId)).toBe(
       true,
     );
-    const observedSeatBook: unknown = occupancySpy.mock.contexts.at(0);
-    if (!(observedSeatBook instanceof OfficeSeatBook)) {
-      throw new Error("expected the scene seat book");
-    }
-    const currentOccupancy = (): ReadonlyMap<string, string> =>
-      observedSeatBook.occupancy();
     expect(currentOccupancy().get(chosenReserve.seatId)).toBe(target.id);
+    expect(chosenReserve.roomId).toBe(requiredTeamRoom);
     const reservePath = findOfficePath(
       coldLayout,
       cubby.chairTile,
@@ -4548,7 +4624,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
       sceneInput({
         agents: epic.agents,
         visibleAgentIds,
-        statusById: cold,
+        statusById: targetColdStatus,
         reducedMotion: false,
       }),
     );
@@ -4604,7 +4680,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
       sceneInput({
         agents: epic.agents,
         visibleAgentIds,
-        statusById: new Map(cold).set(secondTarget.id, "working"),
+        statusById: new Map(targetColdStatus).set(secondTarget.id, "working"),
         reducedMotion: false,
       }),
     );
