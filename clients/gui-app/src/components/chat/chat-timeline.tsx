@@ -5,8 +5,6 @@ import {
   useCallback,
   useLayoutEffect,
   useMemo,
-  useState,
-  useSyncExternalStore,
   type RefObject,
 } from "react";
 import {
@@ -21,6 +19,12 @@ import {
   ChatMessage,
   type ChatMessageActions,
 } from "@/components/chat/chat-message";
+import {
+  CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME,
+  NavigationHighlightStoreContext,
+  useNavigationHighlightStore,
+  useRowNavigationHighlight,
+} from "@/components/chat/chat-navigation-highlight";
 import type { NextStepActionHandler } from "@/components/chat/segments/next-steps-action-group";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import { chatTimelineGetItemType } from "@/components/chat/chat-messages-scroll-helpers";
@@ -46,91 +50,14 @@ import {
 } from "./chat-timeline-follow-latch";
 
 /**
- * Ticket 24 (painted-chat lifecycle audit, finding 5): a row-local
- * subscription for the navigation highlight, kept OUT of
- * `ChatTimelineRowSharedState`. That context's value is a single object
- * shared by every mounted row - React forces every context consumer to
- * re-render whenever the value changes, bypassing each row's own `memo`
- * bailout entirely (a probe confirmed 8/8 mounted rows re-rendering on one
- * highlight move). `useSyncExternalStore` lets each row subscribe with its
- * own selector (`id === message.id`); React re-renders a given subscriber
- * only when ITS boolean actually flips, so a highlight move re-renders
- * exactly the old and new highlighted rows.
- */
-interface NavigationHighlightStore {
-  readonly subscribe: (listener: () => void) => () => void;
-  readonly getSnapshot: () => string | null;
-  readonly setHighlightedId: (id: string | null) => void;
-}
-
-function createNavigationHighlightStore(
-  initialHighlightedId: string | null,
-): NavigationHighlightStore {
-  let highlightedId = initialHighlightedId;
-  const listeners = new Set<() => void>();
-  return {
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
-    },
-    getSnapshot() {
-      return highlightedId;
-    },
-    setHighlightedId(next) {
-      if (next === highlightedId) return;
-      highlightedId = next;
-      for (const listener of listeners) listener();
-    },
-  };
-}
-
-function useIsNavigationHighlighted(
-  store: NavigationHighlightStore,
-  messageId: string,
-): boolean {
-  return useSyncExternalStore(
-    store.subscribe,
-    () => store.getSnapshot() === messageId,
-  );
-}
-
-/** Owns the store's lifetime and keeps it synced with the latest prop -
- *  pulled out of `ChatTimeline`'s own body (alongside
- *  `resolveChatTimelineSizePreservationEnabled` below) to keep that
- *  component's cyclomatic complexity under the lint limit. */
-function useNavigationHighlightStore(
-  navigationHighlightedMessageId: string | null | undefined,
-): NavigationHighlightStore {
-  const [store] = useState<NavigationHighlightStore>(() =>
-    createNavigationHighlightStore(navigationHighlightedMessageId ?? null),
-  );
-
-  // Review round 1, finding 1: a PASSIVE effect here runs after paint unless
-  // the update happens to originate inside a parent `useLayoutEffect` (the
-  // external-jump activation path) - the 3s highlight-timeout clear
-  // (`setTimeout`) and the real-gesture clear (a plain callback, not a
-  // layout effect) have no such guarantee, so a paint could commit the new
-  // prop while the store - and therefore every row's boolean - still holds
-  // the old id, and a row mounting in that window would read the stale
-  // snapshot. `useLayoutEffect` publishes synchronously before the browser
-  // paints on EVERY producer path uniformly, not just the ones that happen
-  // to chain off another layout effect. The mutation itself is still
-  // outside render (it runs in the commit/layout phase, not the render
-  // phase), so `useSyncExternalStore`'s purity contract is unaffected.
-  useLayoutEffect(() => {
-    store.setHighlightedId(navigationHighlightedMessageId ?? null);
-  }, [store, navigationHighlightedMessageId]);
-
-  return store;
-}
-
-/**
  * Shared, closure-free row context. Row components read business-logic
  * callbacks from context instead of a per-item closure, so `renderItem`
  * stays referentially stable and LegendList's own memo boundary is never
  * invalidated by it.
+ *
+ * Navigation highlight is NOT in this object: a shared context value would
+ * re-render every mounted row on a highlight move. Rows subscribe to
+ * {@link NavigationHighlightStoreContext} with a per-row selector instead.
  */
 interface ChatTimelineRowSharedState {
   readonly taskTitle: string;
@@ -139,7 +66,6 @@ interface ChatTimelineRowSharedState {
     message: ChatMessageModel,
   ) => ChatMessageActions | null;
   readonly nextStepActions: NextStepActionHandler | null;
-  readonly navigationHighlightStore: NavigationHighlightStore;
   readonly onRowMount: ((messageId: string) => void) | undefined;
 }
 
@@ -261,6 +187,12 @@ export interface ChatTimelineProps {
   /** Message row receiving the temporary external-navigation highlight. */
   readonly navigationHighlightedMessageId?: string | null;
   /**
+   * Card inside that row to flash instead of the whole message. `null` (or
+   * omitted) paints the row, which is correct for delivered A2A, user prompts,
+   * and event rows.
+   */
+  readonly navigationHighlightedBlockId?: string | null;
+  /**
    * Where this transcript's measured row heights are kept, so a placeholder for
    * a row the list has already drawn stands at the height that row really
    * takes. `null` on the legacy line, which holds every body and never draws a
@@ -314,6 +246,7 @@ export const ChatTimeline = memo(function ChatTimeline({
   isFollowCorrectionSuppressed,
   resolveSuppressedEndLanding,
   navigationHighlightedMessageId,
+  navigationHighlightedBlockId,
   rowHeightMemory = null,
   onItemSizeChanged,
   onRowMount,
@@ -349,6 +282,7 @@ export const ChatTimeline = memo(function ChatTimeline({
 
   const navigationHighlightStore = useNavigationHighlightStore(
     navigationHighlightedMessageId,
+    navigationHighlightedBlockId,
   );
 
   const sharedState = useMemo<ChatTimelineRowSharedState>(
@@ -357,7 +291,6 @@ export const ChatTimeline = memo(function ChatTimeline({
       backgroundToolBlockIds,
       getMessageActions,
       nextStepActions,
-      navigationHighlightStore,
       onRowMount,
     }),
     [
@@ -365,7 +298,6 @@ export const ChatTimeline = memo(function ChatTimeline({
       backgroundToolBlockIds,
       getMessageActions,
       nextStepActions,
-      navigationHighlightStore,
       onRowMount,
     ],
   );
@@ -477,83 +409,85 @@ export const ChatTimeline = memo(function ChatTimeline({
   }
 
   return (
-    <ChatTimelineRowCtx value={sharedState}>
-      <LegendList<TranscriptListRow>
-        ref={listRef}
-        data={rows}
-        keyExtractor={chatTimelineKeyExtractor}
-        getItemType={chatTimelineGetItemType}
-        renderItem={renderItem}
-        estimatedItemSize={90}
-        // Keep LegendList's proximity threshold explicit for onEndReached and
-        // presentation consumers. Follow ownership deliberately reads only
-        // fresh DOM geometry inside the latch; this 10% band can never
-        // re-attach a detached reader.
-        onEndReachedThreshold={CHAT_TIMELINE_NEAR_END_THRESHOLD}
-        initialScrollAtEnd={initialScrollAtEnd}
-        initialScrollIndex={initialScrollIndex ?? undefined}
-        contentInsetEndAdjustment={contentInsetEndAdjustment}
-        // Fixup (callback-synchronous-follow): the library's own
-        // `maintainScrollAtEnd` is never passed - every one of its internal
-        // call sites (data/item/footer/layout) no-ops when this prop is
-        // falsy, so leaving it unset makes them categorically unreachable.
-        // Bottom-follow is reimplemented in `chat-timeline-follow-latch.ts`
-        // and driven imperatively from the callbacks below instead - see
-        // that module's doc comment for why the library's own cached
-        // threshold could not be trusted, render-gated or not.
-        //
-        // The explicit zero still narrows `isWithinMaintainScrollAtEndThreshold`
-        // (used internally by the library's own content-inset compensation)
-        // to `distanceFromEnd <= 0` rather than its 10%-of-viewport default.
-        // The separate `isAtEnd` calculation owns the 1px edge tolerance.
-        maintainScrollAtEndThreshold={0}
-        // SIZE is always on: it keeps a detached reader pixel-stable when
-        // content above the viewport changes HEIGHT - a nested chain-open in
-        // find, a row remeasuring above the reader.
-        //
-        // DATA rides the key sequence, because the two things it is asked to
-        // tell apart arrive on the same signal. The library treats any row
-        // object it cannot prove equal as a structural data change, and while
-        // that channel is on it arms an MVCP anchor lock on every such pass.
-        // A held lock stops the library recalculating item positions inline
-        // and defers them to an animation frame; a row that grows is laid out
-        // by the browser immediately while the offsets of the rows after it
-        // are only rewritten a frame later, so the frame in between paints
-        // those rows inside the grown row's band. A streaming reply hands over
-        // a changed array on every token, well inside the lock's 300ms expiry,
-        // so leaving DATA on holds that lock - and that overlap - for the
-        // whole stream.
-        //
-        // The rows themselves distinguish the two: a streaming token changes a
-        // row's CONTENT in place, while an insert, a removal, or a move
-        // changes the sequence of row KEYS. Only the latter can shift what a
-        // detached reader is looking at, and only the latter needs the anchor,
-        // so the channel is on for exactly those commits. Off, positions are
-        // recalculated inline and stay coherent before the browser paints.
-        //
-        // Deliberately NOT `itemsAreEqual`: the library reuses that same
-        // comparator to decide whether a mounted container refreshes its item
-        // data, so calling same-key rows equal would freeze a streaming row's
-        // rendered content in place.
-        maintainVisibleContentPosition={resolveChatTimelineMvcp(
-          keySequenceChanged,
-        )}
-        onItemSizeChanged={handleItemSizeChanged}
-        onScroll={handleScroll}
-        onMetricsChange={handleMetricsChange}
-        onViewableItemsChanged={handleViewableItemsChanged}
-        showsVerticalScrollIndicator
-        className={cn(
-          // The Legend List node is the sole scroll owner. It deliberately uses
-          // the app-wide thin, transparent-track scrollbar theme from index.css.
-          "h-full overflow-x-hidden overflow-y-auto overscroll-y-contain [overflow-anchor:none]",
-          className,
-        )}
-        ListHeaderComponent={CHAT_TIMELINE_LIST_HEADER}
-        ListFooterComponent={CHAT_TIMELINE_LIST_FOOTER}
-        {...rest}
-      />
-    </ChatTimelineRowCtx>
+    <NavigationHighlightStoreContext value={navigationHighlightStore}>
+      <ChatTimelineRowCtx value={sharedState}>
+        <LegendList<TranscriptListRow>
+          ref={listRef}
+          data={rows}
+          keyExtractor={chatTimelineKeyExtractor}
+          getItemType={chatTimelineGetItemType}
+          renderItem={renderItem}
+          estimatedItemSize={90}
+          // Keep LegendList's proximity threshold explicit for onEndReached and
+          // presentation consumers. Follow ownership deliberately reads only
+          // fresh DOM geometry inside the latch; this 10% band can never
+          // re-attach a detached reader.
+          onEndReachedThreshold={CHAT_TIMELINE_NEAR_END_THRESHOLD}
+          initialScrollAtEnd={initialScrollAtEnd}
+          initialScrollIndex={initialScrollIndex ?? undefined}
+          contentInsetEndAdjustment={contentInsetEndAdjustment}
+          // Fixup (callback-synchronous-follow): the library's own
+          // `maintainScrollAtEnd` is never passed - every one of its internal
+          // call sites (data/item/footer/layout) no-ops when this prop is
+          // falsy, so leaving it unset makes them categorically unreachable.
+          // Bottom-follow is reimplemented in `chat-timeline-follow-latch.ts`
+          // and driven imperatively from the callbacks below instead - see
+          // that module's doc comment for why the library's own cached
+          // threshold could not be trusted, render-gated or not.
+          //
+          // The explicit zero still narrows `isWithinMaintainScrollAtEndThreshold`
+          // (used internally by the library's own content-inset compensation)
+          // to `distanceFromEnd <= 0` rather than its 10%-of-viewport default.
+          // The separate `isAtEnd` calculation owns the 1px edge tolerance.
+          maintainScrollAtEndThreshold={0}
+          // SIZE is always on: it keeps a detached reader pixel-stable when
+          // content above the viewport changes HEIGHT - a nested chain-open in
+          // find, a row remeasuring above the reader.
+          //
+          // DATA rides the key sequence, because the two things it is asked to
+          // tell apart arrive on the same signal. The library treats any row
+          // object it cannot prove equal as a structural data change, and while
+          // that channel is on it arms an MVCP anchor lock on every such pass.
+          // A held lock stops the library recalculating item positions inline
+          // and defers them to an animation frame; a row that grows is laid out
+          // by the browser immediately while the offsets of the rows after it
+          // are only rewritten a frame later, so the frame in between paints
+          // those rows inside the grown row's band. A streaming reply hands over
+          // a changed array on every token, well inside the lock's 300ms expiry,
+          // so leaving DATA on holds that lock - and that overlap - for the
+          // whole stream.
+          //
+          // The rows themselves distinguish the two: a streaming token changes a
+          // row's CONTENT in place, while an insert, a removal, or a move
+          // changes the sequence of row KEYS. Only the latter can shift what a
+          // detached reader is looking at, and only the latter needs the anchor,
+          // so the channel is on for exactly those commits. Off, positions are
+          // recalculated inline and stay coherent before the browser paints.
+          //
+          // Deliberately NOT `itemsAreEqual`: the library reuses that same
+          // comparator to decide whether a mounted container refreshes its item
+          // data, so calling same-key rows equal would freeze a streaming row's
+          // rendered content in place.
+          maintainVisibleContentPosition={resolveChatTimelineMvcp(
+            keySequenceChanged,
+          )}
+          onItemSizeChanged={handleItemSizeChanged}
+          onScroll={handleScroll}
+          onMetricsChange={handleMetricsChange}
+          onViewableItemsChanged={handleViewableItemsChanged}
+          showsVerticalScrollIndicator
+          className={cn(
+            // The Legend List node is the sole scroll owner. It deliberately uses
+            // the app-wide thin, transparent-track scrollbar theme from index.css.
+            "h-full overflow-x-hidden overflow-y-auto overscroll-y-contain [overflow-anchor:none]",
+            className,
+          )}
+          ListHeaderComponent={CHAT_TIMELINE_LIST_HEADER}
+          ListFooterComponent={CHAT_TIMELINE_LIST_FOOTER}
+          {...rest}
+        />
+      </ChatTimelineRowCtx>
+    </NavigationHighlightStoreContext>
   );
 });
 
@@ -716,14 +650,16 @@ const ChatTimelineRow = memo(function ChatTimelineRow({
   message: ChatMessageModel;
 }) {
   const ctx = use(ChatTimelineRowCtx);
+  const highlightStore = use(NavigationHighlightStoreContext);
+  const navigationHighlight = useRowNavigationHighlight(
+    highlightStore,
+    message.id,
+  );
   if (ctx === null) {
     throw new Error("ChatTimelineRow must render inside ChatTimeline");
   }
   const { onRowMount } = ctx;
-  const isNavigationHighlighted = useIsNavigationHighlighted(
-    ctx.navigationHighlightStore,
-    message.id,
-  );
+  const highlightRow = navigationHighlight === "row";
 
   // LegendList's size callback is not a mount callback: a recycled row whose
   // cached height is unchanged does not report a size delta. Find needs this
@@ -735,11 +671,10 @@ const ChatTimelineRow = memo(function ChatTimelineRow({
   return (
     <div
       data-message-id={message.id}
-      data-navigation-highlighted={isNavigationHighlighted ? "true" : undefined}
+      data-navigation-highlighted={highlightRow ? "true" : undefined}
       className={cn(
         "mx-auto w-full max-w-3xl rounded-lg px-6 pb-6 transition-[background-color,box-shadow] duration-300 [contain:layout_paint_style] [.traycer-panel-resizing_&:not([data-panel-resize-visible])]:[content-visibility:hidden]",
-        isNavigationHighlighted &&
-          "bg-primary/15 ring-2 ring-inset ring-primary/80 motion-safe:animate-pulse",
+        highlightRow && CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME,
         chatTimelineRowSizeHintClassName(message.role),
       )}
     >
