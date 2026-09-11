@@ -70,6 +70,12 @@ export interface OfficeFloorSignToDraw {
 export type OfficePlateMeasure = (text: string) => number;
 
 /**
+ * The mark a board falls back to when not even a bare count fits its pixels.
+ * One character, so it fits the narrowest plate any real board ever has.
+ */
+const BOARD_OVERFLOW_GLYPH = "…";
+
+/**
  * THE FACE A PLATE IS SET IN, declared here rather than in the renderer.
  *
  * The resolver decides a board's reading by measuring it, so the typography
@@ -129,9 +135,14 @@ function countRoster(
 }
 
 /**
- * The same reading at three lengths, widest first. Every one of them says all
- * four numbers: a board that dropped a category to fit would be lying about the
- * room rather than abbreviating.
+ * The same reading at decreasing lengths, widest first. Every rung down to the
+ * last pair says all four numbers: a board that dropped a category to fit would
+ * be lying about the room rather than abbreviating.
+ *
+ * The separators go before the words do - " · " to " " to nothing at all, which
+ * a letter-suffixed count survives unambiguously ("1D1W1I1A" cannot be read any
+ * other way). Below that the categories genuinely cannot be kept, and the tail
+ * is what any board can always show.
  */
 function boardRenderings(counts: BoardCounts): ReadonlyArray<string> {
   const { archived, doing, idle, waiting } = counts;
@@ -141,7 +152,28 @@ function boardRenderings(counts: BoardCounts): ReadonlyArray<string> {
     full.push(`${archived} archived`);
     short.push(`${archived}A`);
   }
-  return [full.join(" · "), short.join(" · "), short.join(" ")];
+  return [
+    full.join(" · "),
+    short.join(" · "),
+    short.join(" "),
+    short.join(""),
+    ...lastResortRungs(doing + waiting + idle + archived),
+  ];
+}
+
+/**
+ * What is left when no reading of the roster fits: how many there are, then a
+ * mark saying the board has something on it, then nothing at all.
+ *
+ * THE EMPTY RUNG IS WHAT MAKES THIS A GUARANTEE. The narrowest board a plan
+ * emits is the oblique views' per-team board, which is ONE tile - 11.2px at
+ * zoom 0.7, the lowest zoom that draws lettering at all - and a single glyph
+ * needs 14.8px of it. There is no reading of a roster that fits there, so the
+ * last rung has to be the absence of one; a board with nothing it can say is
+ * dropped by the resolver rather than painted as a bare plate.
+ */
+function lastResortRungs(total: number): ReadonlyArray<string> {
+  return [`${total}`, BOARD_OVERFLOW_GLYPH, ""];
 }
 
 /** The widest rendering that fits, or the narrowest when none does. */
@@ -161,13 +193,17 @@ function widestThatFits(args: {
  * One name at three lengths, widest first: as written, its first word, its
  * initials. A name is shortened rather than dropped, because the board exists
  * to say WHO needs the lead and half a roster does not say it.
+ *
+ * A ONE-WORD NAME SHORTENS TOO. It used to be exempted, on the reasoning that
+ * "Zeta" cut to "Z" names nobody - but a plate that overflows its board names
+ * nobody either, and it does so while covering the room next door. Five
+ * one-word names ran 213px across a 128px board with no rung left to take,
+ * because holding the word meant the separators were the only width left to
+ * give back. An initial is a poor name and a legible one.
  */
 function nameRungs(name: string): ReadonlyArray<string> {
   const words = name.split(" ").filter((word) => word !== "");
-  // A ONE-WORD name keeps its word at every rung. "Zeta" abbreviated to "Z"
-  // names nobody, and a board of single letters is a board of no names at all
-  // - the separators are where the last of the width comes from instead.
-  if (words.length <= 1) return [name, name, name];
+  if (words.length === 0) return [name, name, name];
   const initials = words.map((word) => word.slice(0, 1)).join("");
   return [name, words[0], initials];
 }
@@ -228,6 +264,8 @@ function hqBoardText(args: {
     rungs.map((rung) => rung[1]).join(" · "),
     rungs.map((rung) => rung[2]).join(" · "),
     rungs.map((rung) => rung[2]).join(" "),
+    rungs.map((rung) => rung[2]).join(""),
+    ...lastResortRungs(named.length),
   ];
   return widestThatFits({ renderings, available, measure });
 }
@@ -338,16 +376,22 @@ export function officeSignsToDraw(args: {
     if (owner !== null && !visibleAgentIds.has(owner)) continue;
     const anchor = projector.project(sign.tile.col, sign.tile.row);
     if (sign.kind === "board" || sign.kind === "hq-board") {
+      const text = officeBoardText({
+        sign,
+        statusById,
+        visibleAgentIds,
+        nameById,
+        available: officeBoardWidthPx(sign, zoom),
+        measure,
+      });
+      // A one-tile board at the lowest lettered zoom has room for no reading
+      // of its roster, not even a glyph. It draws NOTHING rather than an empty
+      // plate: a plate is only its padding at that point, and a box painted
+      // over the room next door says less than the board art already does.
+      if (text === "") continue;
       out.push({
         sign,
-        text: officeBoardText({
-          sign,
-          statusById,
-          visibleAgentIds,
-          nameById,
-          available: officeBoardWidthPx(sign, zoom),
-          measure,
-        }),
+        text,
         subtext: null,
         anchor,
       });

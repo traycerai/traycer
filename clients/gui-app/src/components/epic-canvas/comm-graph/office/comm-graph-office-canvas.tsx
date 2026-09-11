@@ -1797,34 +1797,127 @@ function drawOfficeFrame(args: DrawFrameArgs): void {
     color: palette.text,
     backing: labelBackings.default,
   });
-  if (searchMatchIds.size > 0) {
-    for (const region of frame.hitRegions) {
-      if (!searchMatchIds.has(region.agentId)) continue;
-      const left = region.rect.x * camera.zoom + camera.x;
-      const top = region.rect.y * camera.zoom + camera.y;
-      ctx.save();
-      ctx.strokeStyle = palette.bright;
-      ctx.lineWidth = 2;
-      ctx.strokeRect(
-        left,
-        top,
-        region.rect.width * camera.zoom,
-        region.rect.height * camera.zoom,
-      );
-      ctx.restore();
-      const name = nameById.get(region.agentId);
-      if (name === undefined) continue;
-      drawScreenLabel(ctx, {
-        text: name,
-        screenX: left + (region.rect.width * camera.zoom) / 2,
-        screenY: top - HOVER_LABEL_FONT_PX / 2,
-        fontPx: HOVER_LABEL_FONT_PX,
-        color: palette.text,
-        backing: labelBackings.default,
-        alpha: 1,
-      });
-    }
+  drawFindOverlay({
+    ctx,
+    regions: frame.hitRegions,
+    labels,
+    camera,
+    palette,
+    backing: labelBackings.default,
+    nameById,
+    searchMatchIds,
+    lod,
+  });
+}
+
+/**
+ * What Find draws over the agents it matched: one ring and one name EACH.
+ *
+ * This used to walk `frame.hitRegions` and annotate every entry. A hit region
+ * is one clickable PART of a drawable, and since parts became individually
+ * hit-testable a City building contributes its roof, its windows, its body and
+ * its seat backstop - so one matched agent drew thirty-two rings and thirty-two
+ * copies of its own name, stacked four pixels apart over the same building.
+ * The regions are right; treating each of them as another agent was not.
+ *
+ * The name also came out here unconditionally, which put a name on the screen
+ * at overview zoom - where the office draws none, because a name there is a
+ * smear over a five-pixel pip. Find is a reason to QUALIFY for a name tag, not
+ * a way around the band that decides whether names exist at all.
+ *
+ * The ring is not a name and stays at every zoom: at overview it is the only
+ * thing that can say where a match is.
+ */
+function drawFindOverlay(args: {
+  readonly ctx: CanvasRenderingContext2D;
+  readonly regions: ReadonlyArray<OfficeHitRegion>;
+  readonly labels: ReadonlyArray<OfficeLabelDrawable>;
+  readonly camera: OfficeCamera;
+  readonly palette: OfficePalette;
+  readonly backing: string;
+  readonly nameById: ReadonlyMap<string, string>;
+  readonly searchMatchIds: ReadonlySet<string>;
+  readonly lod: OfficeLod;
+}): void {
+  const {
+    backing,
+    camera,
+    ctx,
+    labels,
+    lod,
+    nameById,
+    palette,
+    regions,
+    searchMatchIds,
+  } = args;
+  if (searchMatchIds.size === 0) return;
+  // One box an agent, grown to cover every part it owns, in draw order so two
+  // matched agents ring in the same order their parts arrived.
+  const bounds = new Map<string, OfficeRect>();
+  for (const region of regions) {
+    if (!searchMatchIds.has(region.agentId)) continue;
+    const grown = bounds.get(region.agentId);
+    bounds.set(
+      region.agentId,
+      grown === undefined ? region.rect : unionRect(grown, region.rect),
+    );
   }
+  // The anchor a name tag would use, so Find's label and the office's own
+  // lettering agree about where this agent's name belongs.
+  const anchors = new Map<string, OfficePoint>();
+  for (const label of labels) {
+    const owner = label.ownerAgentId;
+    if (owner === null || anchors.has(owner)) continue;
+    if (!searchMatchIds.has(owner)) continue;
+    anchors.set(owner, { x: label.x, y: label.y });
+  }
+  for (const [agentId, rect] of bounds) {
+    const left = rect.x * camera.zoom + camera.x;
+    const top = rect.y * camera.zoom + camera.y;
+    ctx.save();
+    ctx.strokeStyle = palette.bright;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(
+      left,
+      top,
+      rect.width * camera.zoom,
+      rect.height * camera.zoom,
+    );
+    ctx.restore();
+    // NO NAMES AT OVERVIEW, the same rule every other name on this canvas
+    // obeys. The ring above has already said where the match is.
+    if (lod === 0) continue;
+    const name = nameById.get(agentId);
+    if (name === undefined) continue;
+    const anchor = anchors.get(agentId);
+    drawScreenLabel(ctx, {
+      text: name,
+      screenX:
+        anchor === undefined
+          ? left + (rect.width * camera.zoom) / 2
+          : anchor.x * camera.zoom + camera.x,
+      screenY:
+        anchor === undefined
+          ? top - HOVER_LABEL_FONT_PX / 2
+          : anchor.y * camera.zoom + camera.y,
+      fontPx: HOVER_LABEL_FONT_PX,
+      color: palette.text,
+      backing,
+      alpha: 1,
+    });
+  }
+}
+
+/** The smallest box covering both - one agent's parts, gathered. */
+function unionRect(left: OfficeRect, right: OfficeRect): OfficeRect {
+  const x = Math.min(left.x, right.x);
+  const y = Math.min(left.y, right.y);
+  return {
+    x,
+    y,
+    width: Math.max(left.x + left.width, right.x + right.width) - x,
+    height: Math.max(left.y + left.height, right.y + right.height) - y,
+  };
 }
 
 /**

@@ -1729,7 +1729,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     const boardSign: OfficeSign = {
       kind: "board",
       tile: { col: 2, row: 2 },
-      widthTiles: 2,
+      widthTiles: 8,
       text: "",
       ownerAgentId: null,
       hostId: null,
@@ -1775,22 +1775,23 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     flushRaf(3);
 
     const fillTextCalls = calls.filter((call) => call.method === "fillText");
-    // A TWO-tile board is thirty-two screen pixels, and the plate for even
-    // the abbreviated reading does not fit that, so the board takes the
-    // narrowest rung it has: the counts with no separators. Matched on that
-    // rather than on a word, because what this case is about is WHERE the
-    // text lands, not which rung the width picked.
+    // An EIGHT-tile board is 128 screen pixels, which the abbreviated reading
+    // fits and the spelt-out one does not. Matched on the abbreviation rather
+    // than on a word, because what this case is about is WHERE the text lands,
+    // not which rung the width picked. It used to be two tiles, which is
+    // thirty-two pixels - below every reading of a roster, so the board fell
+    // to a bare total and there was no "0D" on the canvas to find.
     const boardTextCall = fillTextCalls.find(
       (call) =>
         typeof call.args[0] === "string" && call.args[0].startsWith("0D"),
     );
     expect(boardTextCall).toBeDefined();
     // Fixed camera (zoom 1, x=5, y=0): the projected anchor for tile (2,2)
-    // with a two-tile board centred on it is x = 2048 + (2+1)*16 = 2096,
-    // screenX = 2096 * 1 + 5 = 2101. The unfixed renderer instead multiplies
-    // the raw tile by OFFICE_TILE with no projector at all, landing at
-    // screenX = 3 * 16 + 5 = 53.
-    expect(boardTextCall?.args[1]).toBe(2101);
+    // with an eight-tile board centred on it is
+    // x = 2048 + 2*16 + (8*16)/2 = 2144, screenX = 2144 * 1 + 5 = 2149. The
+    // unfixed renderer instead multiplies the raw tile by OFFICE_TILE with no
+    // projector at all, landing four figures short at screenX = 101.
+    expect(boardTextCall?.args[1]).toBe(2149);
   });
 
   it("F10: an unhovered, unselected, unmatched agent's name tag draws nothing at LOD 1", () => {
@@ -2118,19 +2119,23 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     // FIVE ENTRIES. The sixth (Zeta Idle) is outside the five hottest and
     // stays off; the fifth is the one the old character budget dropped.
     expect(plate).toBe("AB BQ GS DA ED");
-    // And it fits: this suite's canvas reports six pixels a character (jsdom
-    // has no font metrics of its own), so the plate is 14*6 + 8 = 92px on a
-    // board that is 8 tiles * 16px * zoom 1 = 128px wide.
-    const measured = (plate?.length ?? 0) * 6 + 8;
+    // And it fits. This canvas answers `measureText` in the face the caller
+    // set, so a tracked bold 10px plate advances 6.8px a character: the plate
+    // is 14*6.8 + 8 = 103.2px on a board 8 tiles * 16px * zoom 1 = 128px wide.
+    const measured = (plate?.length ?? 0) * 6.8 + 8;
     expect(measured).toBeLessThanOrEqual(8 * OFFICE_TILE);
   });
 
   it("F11: gives an HQ board a different summary than an ordinary board over the same roster", () => {
     const roster = ["a", "b", "c", "d", "e"];
+    // EIGHT tiles each, the width a real board has. At two the pair is not
+    // comparable: 32px is below every reading of this roster, so both fall to
+    // the same bare total and "5" is a true thing to say about five agents
+    // whether or not the board names them.
     const ordinaryBoard: OfficeSign = {
       kind: "board",
       tile: { col: 2, row: 2 },
-      widthTiles: 2,
+      widthTiles: 8,
       text: "",
       ownerAgentId: null,
       hostId: null,
@@ -2139,7 +2144,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     const hqBoard: OfficeSign = {
       kind: "hq-board",
       tile: { col: 8, row: 2 },
-      widthTiles: 2,
+      widthTiles: 8,
       text: "",
       ownerAgentId: null,
       hostId: null,
@@ -2185,6 +2190,127 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     // same over an identical roster - the unfixed renderer gives both boards
     // the same officeBoardSummary text.
     expect(plateTexts[0]).not.toBe(plateTexts[1]);
+  });
+
+  describe("CommGraphOfficeCanvas fixup 3 - N1 Find annotates an agent, not its parts", () => {
+    /**
+     * The reviewer's reproduction: a real City office, everybody working, Find
+     * matching the first agent. City builds its agents out of many parts, and
+     * since F4 each part is separately hit-testable - so this is the scene where
+     * "one region, one label" and "one agent, one label" differ by thirty.
+     */
+    /**
+     * One agent is given a name no other agent shares a substring with, so the
+     * query matches exactly one. The fixture's own names run "Agent 1",
+     * "Agent 10", ... - searching one of those matches several agents and the
+     * counts below stop being about one agent's parts.
+     */
+    const ONLY_MATCH = "Quilfeather Zarrowmere";
+
+    function realCity() {
+      const fixture = makeTestEpic("one-team", 12, 9);
+      const agents = fixture.agents.map(canvasAgent);
+      const matched = { ...agents[0], name: ONLY_MATCH };
+      return {
+        agents: [matched, ...agents.slice(1)],
+        matched,
+        ids: new Set(agents.map((a) => a.id)),
+      };
+    }
+
+    /** One `drawScreenLabel` is four backing passes plus one text pass. */
+    const PASSES_PER_LABEL = 5;
+
+    function renderCity(zoom: number) {
+      const { agents, ids, matched } = realCity();
+      render(
+        withQueryClient(
+          cloneElement(
+            officeElementWithView(OFFICE_VIEWS.city, ids, agents, {}),
+            { view: { ...FIXED_CAMERA_VIEW, zoom } },
+          ),
+        ),
+      );
+      setIntersecting(true);
+      flushRaf(3);
+      return matched;
+    }
+
+    async function findFor(query: string) {
+      await act(async () => {
+        await latestFindAdapter().search({
+          requestId: 1,
+          query,
+          matchCase: false,
+        });
+      });
+    }
+
+    /** Every `fillText` call carrying this exact name. */
+    function namePaints(name: string): number {
+      return paintedText().filter((text) => text === name).length;
+    }
+
+    it("paints a matched agent's name once, not once per hit region", async () => {
+      const matched = renderCity(1);
+      await findFor(matched.name);
+      calls.length = 0;
+      // ONE frame. Every count below is per frame, and a flush is a frame.
+      flushRaf(1);
+
+      // ONE label. The old path walked `frame.hitRegions` and drew a label for
+      // every entry, which on a real City building is its roof, its windows,
+      // its body and its seat backstop - thirty-two labels stacked four pixels
+      // apart, 160 passes where the reviewer allowed ten.
+      expect(namePaints(matched.name)).toBe(PASSES_PER_LABEL);
+      // City emits no name-tag drawable for this agent, so Find's label is the
+      // only name it has - which is why Find keeps a label of its own rather
+      // than deferring wholesale to the name-tag path. What it borrows from
+      // that path is the RULE, not the drawing.
+      expect(namePaints(matched.name)).toBeGreaterThan(0);
+    });
+
+    it("draws no Find name at overview, where the office draws no names at all", async () => {
+      const matched = renderCity(0.5);
+      await findFor(matched.name);
+      calls.length = 0;
+      // ONE frame. Every count below is per frame, and a flush is a frame.
+      flushRaf(1);
+
+      // Overview bans name tags outright - a name there is a smear over a
+      // five-pixel pip. Find used to print straight past that rule.
+      expect(namePaints(matched.name)).toBe(0);
+      // The ring is not a name and stays: at this zoom it is the only thing
+      // that can say where the match is.
+      const rings = calls.filter((call) => call.method === "strokeRect");
+      expect(rings.length).toBeGreaterThan(0);
+    });
+
+    it("paints nothing for an empty match", async () => {
+      const matched = renderCity(1);
+      await findFor("no-such-agent-anywhere");
+      calls.length = 0;
+      // ONE frame. Every count below is per frame, and a flush is a frame.
+      flushRaf(1);
+
+      // The control: unhovered, unselected and unmatched, this agent has no
+      // name on the canvas at all, so the positive above is Find's doing.
+      expect(namePaints(matched.name)).toBe(0);
+    });
+
+    it("rings a matched agent once over all of its parts", async () => {
+      const matched = renderCity(1);
+      await findFor(matched.name);
+      calls.length = 0;
+      // ONE frame. Every count below is per frame, and a flush is a frame.
+      flushRaf(1);
+
+      // One ring an agent, not one a part. F4's regions are untouched - the
+      // pointer still resolves to whichever part was clicked - but an agent is
+      // annotated as the one thing a reader is looking for.
+      const rings = calls.filter((call) => call.method === "strokeRect");
+      expect(rings).toHaveLength(1);
+    });
   });
 });
 

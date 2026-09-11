@@ -244,10 +244,15 @@ describe("officeBoardText - F11 roster filtering and width", () => {
   });
 
   it("gives an HQ board a names ranking instead of the doing/waiting/idle counts", () => {
+    // EIGHT TILES, the width a real HQ board has. This used to be two, which
+    // is thirty-two pixels and holds three characters: below the last name
+    // rung both boards fall to a bare total, and "5" is a true thing to say
+    // about five agents whether or not they are named. The distinction this
+    // case is about only exists at a width some name rung survives.
     const sign = boardSign({
       kind: "hq-board",
       agentIds: ["a", "b", "c", "d", "e"],
-      widthTiles: 2,
+      widthTiles: 8,
     });
     const statusById = new Map<string, OfficeAgentStatus>([
       ["a", "attention"],
@@ -268,7 +273,7 @@ describe("officeBoardText - F11 roster filtering and width", () => {
       statusById,
       visibleAgentIds: new Set(["a", "b", "c", "d", "e"]),
       nameById,
-      available: boardWidthPx(2),
+      available: boardWidthPx(8),
       measure,
     });
     const hqText = officeBoardText({
@@ -276,10 +281,17 @@ describe("officeBoardText - F11 roster filtering and width", () => {
       statusById,
       visibleAgentIds: new Set(["a", "b", "c", "d", "e"]),
       nameById,
-      available: boardWidthPx(2),
+      available: boardWidthPx(8),
       measure,
     });
     expect(hqText).not.toBe(ordinaryEquivalent);
+    // And what each of them actually says. The HQ board keeps all five
+    // identities by cutting every one-word name to its initial - the exemption
+    // that used to hold those words whole had no rung left to take and ran
+    // 212.61px across these 128.
+    expect(hqText).toBe("A · B · G · D · E");
+    expect(ordinaryEquivalent).toBe("1D · 1W · 3I");
+    expect(measure(hqText)).toBeLessThanOrEqual(boardWidthPx(8));
   });
 });
 
@@ -603,3 +615,152 @@ for (const viewId of ["towers", "building"] as const) {
     expect(resolvedOwner.text).toBe("Renamed owner");
   });
 }
+
+describe("officeBoardText - fixup 3 F11 the ladder never overflows its board", () => {
+  const FIVE = ["a", "b", "c", "d", "e"];
+  const visible = new Set(FIVE);
+
+  /**
+   * The reviewer's first reproduction: five SINGLE-WORD names on the eight-tile
+   * board a real HQ has. The old ladder held every one-word name whole at all
+   * three rungs, so the separators were the only width it could give back, and
+   * the widest reading was also the narrowest: 212.61px against 128.
+   */
+  it("cuts single-word names to initials rather than overflowing an eight-tile board", () => {
+    const sign = boardSign({
+      kind: "hq-board",
+      agentIds: FIVE,
+      widthTiles: 8,
+    });
+    const statusById = new Map<string, OfficeAgentStatus>([
+      ["a", "attention"],
+      ["b", "failure"],
+      ["c", "working"],
+      ["d", "awaiting"],
+      ["e", "background"],
+    ]);
+    const nameById = new Map([
+      ["a", "Alpha"],
+      ["b", "Beta"],
+      ["c", "Gamma"],
+      ["d", "Delta"],
+      ["e", "Epsilon"],
+    ]);
+    const available = boardWidthPx(8);
+    const text = officeBoardText({
+      sign,
+      statusById,
+      visibleAgentIds: visible,
+      nameById,
+      available,
+      measure,
+    });
+    // All five still named, hottest first, at the widest rung that fits.
+    expect(text).toBe("A · B · G · D · E");
+    expect(measure(text)).toBeLessThanOrEqual(available);
+    // The reading the exemption used to force, and what it measured.
+    expect(measure("Alpha Beta Gamma Delta Epsilon")).toBeGreaterThan(
+      available,
+    );
+  });
+
+  /**
+   * The reviewer's other two: zoom 0.7, the included lower boundary of lod 1,
+   * where every rung the ladder had ran wider than the board.
+   */
+  it("steps a six-tile count board below its last rung at the 0.7 zoom boundary", () => {
+    const sign = boardSign({
+      kind: "board",
+      agentIds: ["a", "b", "c", "d"],
+      widthTiles: 6,
+    });
+    const statusById = new Map<string, OfficeAgentStatus>([
+      ["a", "working"],
+      ["b", "attention"],
+      ["c", "idle"],
+      ["d", "archived"],
+    ]);
+    const available = boardWidthPx(6) * 0.7;
+    const text = officeBoardText({
+      sign,
+      statusById,
+      visibleAgentIds: new Set(["a", "b", "c", "d"]),
+      nameById: new Map(),
+      available,
+      measure,
+    });
+    // Separator-free, and every one of the four numbers still said: a letter
+    // after each count is what lets the separators go without ambiguity.
+    expect(text).toBe("1D1W1I1A");
+    expect(measure(text)).toBeLessThanOrEqual(available);
+    // What the old last rung was, and that it did not fit these 67.2px.
+    expect(measure("1D 1W 1I 1A")).toBeGreaterThan(available);
+  });
+
+  it("steps a five-name HQ board below its last rung at the 0.7 zoom boundary", () => {
+    const sign = boardSign({
+      kind: "hq-board",
+      agentIds: FIVE,
+      widthTiles: 8,
+    });
+    const statusById = new Map<string, OfficeAgentStatus>([
+      ["a", "attention"],
+      ["b", "failure"],
+      ["c", "working"],
+      ["d", "awaiting"],
+      ["e", "background"],
+    ]);
+    const nameById = new Map([
+      ["a", "Priya Raman"],
+      ["b", "Marcus Webb"],
+      ["c", "Ines Duarte"],
+      ["d", "Omar Haddad"],
+      ["e", "Lena Fischer"],
+    ]);
+    const available = boardWidthPx(8) * 0.7;
+    const text = officeBoardText({
+      sign,
+      statusById,
+      visibleAgentIds: visible,
+      nameById,
+      available,
+      measure,
+    });
+    // All five identities survive the step down; only the spacing goes.
+    expect(text).toBe("PRMWIDOHLF");
+    expect(measure(text)).toBeLessThanOrEqual(available);
+    expect(measure("PR MW ID OH LF")).toBeGreaterThan(available);
+  });
+
+  /**
+   * The guarantee itself, at the worst case a real office can present: the
+   * narrowest board any plan emits, at the lowest zoom lod 1 includes.
+   */
+  it("fits the narrowest board at the lowest zoom, whatever the roster", () => {
+    const sign = boardSign({
+      kind: "hq-board",
+      agentIds: FIVE,
+      widthTiles: 2,
+    });
+    const statusById = new Map<string, OfficeAgentStatus>(
+      FIVE.map((id) => [id, "working"] as const),
+    );
+    const nameById = new Map(
+      FIVE.map((id) => [id, "Bartholomew Fitzwilliam"] as const),
+    );
+    const available = boardWidthPx(2) * 0.7;
+    const text = officeBoardText({
+      sign,
+      statusById,
+      visibleAgentIds: visible,
+      nameById,
+      available,
+      measure,
+    });
+    // Two tiles at 0.7 is 22.4px, which holds one character and its padding.
+    // Nothing about these five names can be said in it, and the board says so
+    // rather than painting over the room next door.
+    expect(measure(text)).toBeLessThanOrEqual(available);
+    expect(text.length).toBeLessThanOrEqual(2);
+  });
+});
