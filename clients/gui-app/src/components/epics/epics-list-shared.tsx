@@ -28,18 +28,34 @@ import {
   useAuthStore,
 } from "@/stores/auth/auth-store";
 import type { HistoryItem } from "@/components/home/data/home-page.data";
+import {
+  historyRowProvenance,
+  historyRowProvenanceTitle,
+  type HistoryRowProvenance,
+} from "@/components/epics/history-row-provenance";
+import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { useStatusGlyphTooltipOpen } from "@/components/notifications/status-glyph-focus";
+import { cn } from "@/lib/utils";
 
 /**
  * A task row's status: the epic's notification indicator when it has one, its
- * running state when an agent is working, and `defaultIcon` otherwise. Every
- * surface that lists tasks reads the same two sources through this one
- * component, so a task that is running or wants attention looks the same in
- * the desktop list, the phone's history and the phone's nav drawer. Phases
- * have no live agent activity and are never looked up for it.
+ * running state when an agent is working, its provenance when that has a
+ * consequence, and `defaultIcon` otherwise. Every surface that lists tasks
+ * reads the same sources through this one component, so a task that is
+ * running, wants attention, was deleted with edits kept, or is not synced yet
+ * looks the same in the desktop list, the phone's history and the phone's nav
+ * drawer. Phases have no live agent activity and are never looked up for it.
  *
- * `defaultIcon` is what an idle, unread-free row shows: a glyph where the
- * surface wants every row to carry one, or `null` where a row without status
- * should carry nothing at all.
+ * Provenance takes the `defaultIcon` slot, below every notification tone and
+ * the running state, on purpose: those are things happening NOW that the
+ * person may need to act on this minute, while "deleted, edits kept" and "not
+ * synced yet" are standing conditions the row keeps until they act on them.
+ * A row that is both running and unsynced shows the spinner; the provenance
+ * glyph returns when the agent goes idle.
+ *
+ * `defaultIcon` is what an idle, unread-free, ordinary row shows: a glyph
+ * where the surface wants every row to carry one, or `null` where a row
+ * without status should carry nothing at all.
  */
 export function HistoryRowStatusIcon(props: {
   readonly item: HistoryItem;
@@ -54,6 +70,7 @@ export function HistoryRowStatusIcon(props: {
     { epicId: props.item.epicId },
     null,
   );
+  const provenance = historyRowProvenance(props.item);
   return (
     <NotificationIndicatorIcon
       state={indicatorState}
@@ -67,10 +84,83 @@ export function HistoryRowStatusIcon(props: {
       className={props.className}
       style={undefined}
       runningTitle="Task activity in progress"
-      defaultIcon={props.defaultIcon}
+      defaultIcon={
+        provenance === null ? (
+          props.defaultIcon
+        ) : (
+          <HistoryRowProvenanceGlyph
+            provenance={provenance}
+            epicId={props.item.epicId}
+            testIdPrefix={props.testIdPrefix}
+            className={props.className}
+          />
+        )
+      }
       statusPresentation="message"
       agentSurface="gui"
     />
+  );
+}
+
+/**
+ * The provenance dot: a hollow ring for a task that is not synced yet, a
+ * filled destructive dot for one that was deleted with its edits kept. The
+ * same `role="status"` + accessible-name + tooltip leaf the notification
+ * glyphs render, so a screen reader and a hover read the same sentence.
+ *
+ * Colour carries the severity, not the shape alone: the hollow ring stays in
+ * the row's muted text colour because on a plan without sync EVERY row wears
+ * it, and a warning tint on all of them would be noise the person cannot
+ * act on.
+ */
+function HistoryRowProvenanceGlyph(props: {
+  readonly provenance: HistoryRowProvenance;
+  readonly epicId: string;
+  readonly testIdPrefix: string;
+  readonly className: string | undefined;
+}): ReactNode {
+  const cloudAuthorized = useAuthStore((state) =>
+    authorizesCloudCapability(state.status),
+  );
+  const title = historyRowProvenanceTitle(props.provenance, cloudAuthorized);
+  // The desktop row's activation target is an overlay link, and this span is
+  // deliberately not a second tab stop - so keyboard focus on the row holds
+  // the tooltip open (`StatusGlyphFocusContext`), or a sighted keyboard user
+  // would reach the row and see a dot that nothing on screen explains.
+  const tooltipOpen = useStatusGlyphTooltipOpen();
+  return (
+    <TooltipWrapper
+      label={title}
+      side="top"
+      sideOffset={undefined}
+      align={undefined}
+      open={tooltipOpen.open}
+      onOpenChange={tooltipOpen.onOpenChange}
+    >
+      <span
+        role="status"
+        aria-label={title}
+        data-testid={`${props.testIdPrefix}-provenance-${props.provenance}-${props.epicId}`}
+        data-provenance={props.provenance}
+        // After `props.className` so the destructive tint displaces the
+        // surface's muted colour AND its hover colour - a deleted task's dot
+        // does not turn neutral because the pointer is over the row.
+        className={cn(
+          "inline-flex size-3.5 shrink-0 items-center justify-center",
+          props.className,
+          props.provenance === "preserved-orphan" &&
+            "text-destructive group-hover/list-row:text-destructive",
+        )}
+      >
+        <span
+          aria-hidden
+          className={cn(
+            "size-2 rounded-full border-[1.5px] border-current",
+            props.provenance === "preserved-orphan" && "bg-current",
+          )}
+        />
+      </span>
+    </TooltipWrapper>
   );
 }
 
@@ -155,15 +245,16 @@ export function EpicsListChatHostFilterUnsupported(): ReactNode {
  * the negotiated host predates the local-first `epic.listTasks` leg, so the
  * only listing it can produce is one that spends the account's credential.
  *
- * The copy names the HOST's missing capability, and every other phrasing this
- * state could take is a false statement, which is why the wording is fenced
- * here rather than left to a call site:
+ * The copy names the two remedies and nothing else, and every other phrasing
+ * this state could take is a false statement, which is why the wording is
+ * fenced here rather than left to a call site:
  *
  *  - a spinner claims something is in flight; nothing is, and nothing will be;
  *  - "No tasks yet" claims the account is empty, which is unknown;
- *  - "Showing what the connected device holds" claims the device is empty, and
- *    on this exact host it is not - the epics are there, the host simply has no
- *    way to list them without the cloud.
+ *  - anything about what the host holds versus what the cloud holds narrates
+ *    a split the person never asked about - they know their tasks, not where
+ *    each copy lives - and on this exact host it would also be wrong: the
+ *    epics are there, the host simply cannot list them without a sign-in.
  *
  * It also does not say the cloud is unreachable. The cloud may be perfectly
  * fine; this client is declining to spend it on an unverified session.
@@ -175,12 +266,11 @@ export function EpicsListHostRequiresCloudToList(): ReactNode {
       data-testid="epics-list-host-requires-cloud-to-list"
     >
       <p className="font-medium text-foreground">
-        This host needs cloud access to list Epics
+        Couldn&apos;t load your tasks
       </p>
       <p className="max-w-full">
-        It&apos;s running a version that can&apos;t list Epics from the
-        connected device alone, and your sign-in couldn&apos;t be confirmed.
-        Update the host, or sign in again, to see them.
+        Your sign-in couldn&apos;t be confirmed, and this host version needs it
+        to list tasks. They&apos;ll show once it is, or update the host.
       </p>
     </div>
   );
@@ -207,7 +297,11 @@ export function EpicsListEmpty(): ReactNode {
  * `useCloudEpicTasksQuery` settles the page as unavailable without dispatching
  * the cloud leg while the session holds no verdict, and its guarded `refetch`
  * resolves without a request under the same condition, so a Retry there is a
- * button that does nothing. Sign-in is what changes the verdict.
+ * button that does nothing. A confirmed sign-in is what changes the verdict,
+ * and the copy states that CONDITION rather than telling the person to sign
+ * in again: `unverified` also covers authn being unreachable (which recovers
+ * on its own) and an unavailable account (which a re-sign-in cannot fix), and
+ * this component holds only the boolean - see `stores/auth/auth-store.ts`.
  */
 export function EpicsListUnavailable(props: {
   readonly onRetry: () => void;
@@ -237,7 +331,7 @@ export function EpicsListUnavailable(props: {
         </Button>
       ) : (
         <p>
-          Your sign-in couldn&apos;t be confirmed. Sign in again to see them.
+          Your sign-in couldn&apos;t be confirmed. They&apos;ll load once it is.
         </p>
       )}
     </div>
@@ -403,7 +497,7 @@ function errorHeadline(error: Error): string {
       return "You don't have permission to view these epics.";
     }
   }
-  return "Couldn't reach Traycer Cloud";
+  return "Couldn't load your tasks";
 }
 
 function formatError(error: Error): string {

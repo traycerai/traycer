@@ -60,7 +60,7 @@ export type BrowserSessionsStreamClientOptions = BrowserSessionsOpenRequest & {
  * ## Two majors, one caller-facing shape
  *
  * `browser.sessions` is served on `@1.0` (what the v1.3.0 release shipped,
- * addressed by `epicId`) and `@2.0` (the live line, addressed by a scope). This
+ * addressed by `epicId`) and `@2.x` (the live line, addressed by a scope). This
  * client speaks both and hides the difference completely: callers pass the live
  * `scope` options and receive live frames, and everything version-dependent -
  * which open request goes on the wire, which schema parses a server frame, what
@@ -74,11 +74,8 @@ export type BrowserSessionsStreamClientOptions = BrowserSessionsOpenRequest & {
  * siblings keep the version they had. Parsing at a sibling session's version is
  * exactly the skew this placement prevents.
  *
- * The `independent` scope is the one thing `@1` cannot express, and it is not
- * projected: {@link requireScopeAddressedSubscribe} pins `@2` for it, so a
- * v1.3.0 host fails the open through the ordinary fatal path (which the GUI
- * coordinator already renders as `lifecycle: "failed"`) rather than quietly
- * serving some epic's inventory under the Start Page's name.
+ * The independent scope uses the newest compatible minor. A @1 host refuses
+ * its strict scope-shaped request, so it cannot open an unrelated inventory.
  */
 export class BrowserSessionsStreamClient {
   private readonly session: IStreamSession;
@@ -100,6 +97,26 @@ export class BrowserSessionsStreamClient {
 
   sendClientFrame(frame: BrowserSessionsClientFrame): void {
     if (this.closed) return;
+    const version = this.session.getNegotiatedSchemaVersion();
+    const viewportSupported =
+      version !== null &&
+      (version.major > 2 || (version.major === 2 && version.minor >= 1));
+    if (
+      !viewportSupported &&
+      (frame.kind === "setViewport" ||
+        frame.kind === "reportViewport" ||
+        frame.kind === "electronViewportResult")
+    ) {
+      if (frame.kind === "setViewport")
+        this.callbacks.onServerFrame({
+          kind: "actionAck",
+          hasBinaryPayload: false,
+          requestId: frame.requestId,
+          ok: false,
+          reason: "Update this host to change browser dimensions.",
+        });
+      return;
+    }
     if (!this.servingFrozenLine()) {
       this.session.sendClientFrame(frame, null);
       return;
@@ -109,6 +126,7 @@ export class BrowserSessionsStreamClient {
       this.session.sendClientFrame(projected.frame, null);
       return;
     }
+    if (projected.kind === "ignored") return;
     // `attachTab` / `moveTab` reach a host that has no such frame. Sending one
     // is worse than useless - the frozen schema is `.strict()`, so a v1.3.0
     // host drops it at the parse and the coordinator's pending request waits

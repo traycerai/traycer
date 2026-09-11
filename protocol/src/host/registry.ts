@@ -182,6 +182,7 @@ import {
   agentActivitySubscribeV10,
   agentActivitySubscribeV11,
   agentActivitySubscribeV12,
+  agentActivitySubscribeV13,
 } from "@traycer/protocol/host/agent/activity";
 import {
   agentRolesClaimUpgradeV10ToV11,
@@ -643,7 +644,9 @@ import {
 import {
   browserSavedLoginSitesV10,
   browserScreencastV20,
+  browserScreencastV21,
   browserSessionsV20,
+  browserSessionsV21,
 } from "@traycer/protocol/host/browser/contracts";
 import {
   browserScreencastV10,
@@ -10740,10 +10743,13 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
     2: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: browserSessionsV20,
+        },
+        1: {
+          contract: browserSessionsV21,
         },
       },
     },
@@ -10758,10 +10764,13 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
       },
     },
     2: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: browserScreencastV20,
+        },
+        1: {
+          contract: browserScreencastV21,
         },
       },
     },
@@ -10916,7 +10925,7 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // registered verbatim so a newer client bridges down to an older host.
   "agent.activity.subscribe": {
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: agentActivitySubscribeV10,
@@ -10926,6 +10935,9 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         },
         2: {
           contract: agentActivitySubscribeV12,
+        },
+        3: {
+          contract: agentActivitySubscribeV13,
         },
       },
     },

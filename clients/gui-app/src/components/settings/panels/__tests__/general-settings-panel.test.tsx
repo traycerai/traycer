@@ -7,6 +7,7 @@ import {
   within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import { toast } from "sonner";
 import {
   afterEach,
@@ -17,7 +18,15 @@ import {
   vi,
   type Mock,
 } from "vitest";
+import { assertSettingsSearchTargets } from "@/components/settings/__tests__/settings-search-targets";
 import { GeneralSettingsPanel } from "@/components/settings/panels/general-settings-panel";
+import { setMobileApp } from "@/lib/mobile-app";
+import {
+  isExperimentalGroupAvailable,
+  isPreventSleepRowAvailable,
+  isVoiceInputRowAvailable,
+  type SettingsAvailabilityContext,
+} from "@/lib/settings/settings-availability";
 import { modLabel } from "@/lib/keybindings/platform";
 import { clearAllPersistedStores } from "@/lib/persist";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -763,6 +772,63 @@ describe("GeneralSettingsPanel", () => {
     screen.getByRole("textbox", { name: "Branch prefix" });
     screen.getByText("Default branch prefix");
   });
+
+  // Every anchored General entry the search index offers must land on exactly
+  // one element in the shell that offers it, and on none where it is
+  // withheld. Each case turns on ONE gate, so an entry left always-available
+  // while its row is gated fails the case whose gate is off.
+  describe("search targets", () => {
+    afterEach(() => {
+      setMobileApp(false);
+    });
+
+    it("matches the index with every bridge absent", () => {
+      const context: SettingsAvailabilityContext = {
+        runnerHost: null,
+        featureSettings: null,
+        mobileApp: false,
+      };
+      expect(isExperimentalGroupAvailable(context)).toBe(false);
+      const { container } = render(panelTree());
+
+      assertSettingsSearchTargets("general", context, container);
+    });
+
+    it("matches the index with only the feature-settings bridge", () => {
+      const featureSettings: TestFeatureSettingsBridge = {
+        get: vi.fn(() => Promise.resolve({ agentRoles: false })),
+        setAgentRolesEnabled: vi.fn((enabled: boolean) =>
+          Promise.resolve({ agentRoles: enabled }),
+        ),
+      };
+      (globalThis as { runnerHost?: unknown }).runnerHost = {
+        platform: { featureSettings },
+      };
+      const context: SettingsAvailabilityContext = {
+        runnerHost: null,
+        featureSettings,
+        mobileApp: false,
+      };
+      expect(isExperimentalGroupAvailable(context)).toBe(true);
+      const { container } = render(panelTree());
+
+      assertSettingsSearchTargets("general", context, container);
+    });
+
+    it("matches the index in the installed mobile app", () => {
+      setMobileApp(true);
+      const context: SettingsAvailabilityContext = {
+        runnerHost: null,
+        featureSettings: null,
+        mobileApp: true,
+      };
+      expect(isVoiceInputRowAvailable(context)).toBe(false);
+      expect(isPreventSleepRowAvailable(context)).toBe(false);
+      const { container } = render(panelTree());
+
+      assertSettingsSearchTargets("general", context, container);
+    });
+  });
 });
 
 function documentPosition(
@@ -794,4 +860,16 @@ function renderPanel(): QueryClient {
     </QueryClientProvider>,
   );
   return queryClient;
+}
+
+/** The panel alone, with no runner host above it. */
+function panelTree(): ReactNode {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  return (
+    <QueryClientProvider client={queryClient}>
+      <GeneralSettingsPanel />
+    </QueryClientProvider>
+  );
 }

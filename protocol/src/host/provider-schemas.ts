@@ -1259,13 +1259,11 @@ const providerProfileShapeV70 = {
   // blocked (see the decision log's "Identity key" row); the GUI renders
   // "same account as <label>".
   duplicateOfProfileId: z.string().nullable().catch(null),
-  // Only ever non-null on the ambient profile entry. Set when the ambient
-  // login's identity changed behind Traycer's back (a user ran `/login` in a
-  // terminal) - carries the pre-change email and when the drift was detected
-  // so the GUI can rebadge and show a one-time dismissable notice ("Terminal
-  // account is now bob@, was alice@"). See the decision log's "Ambient
-  // identity drift" row; dismissal handling is host/GUI-side, this field only
-  // carries the notice.
+  // Only ever non-null on the ambient profile entry historically. Current
+  // hosts always project `null`: the GUI no longer renders ambient identity
+  // drift. The field stays on the wire so older peers still parse. Dismissal
+  // via `acknowledgeAmbientDrift` remains a no-op-capable host action for
+  // those older clients.
   ambientDriftNotice: z
     .object({
       previousEmail: z.string().nullable(),
@@ -1434,7 +1432,8 @@ export type ProvidersClearProfileApiKeyResponse = z.infer<
  * Rename/recolor apply to managed profiles and the ambient profile sentinel;
  * remove remains managed-only. `acknowledgeAmbientDrift` durably clears the
  * ambient profile's pending
- * `ambientDriftNotice` (see that field's comment below). No `profileId`:
+ * `ambientDriftNotice`. Current GUI never sends it (no drift UI); the
+ * variant stays so older clients can still ack. No `profileId`:
  * there is exactly one ambient identity per provider. It rides the same
  * `@2.1` minor as the other actions because
  * `@2.1` was still unreleased WHEN THIS LANDED (the released surface was then

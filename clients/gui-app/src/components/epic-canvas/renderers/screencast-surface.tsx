@@ -56,18 +56,36 @@ export function ScreencastPixels(props: {
         />
       )}
       {props.videoMounted ? (
-        <video
-          ref={videoRef}
-          data-testid={props.videoTestId}
-          autoPlay
-          playsInline
-          muted
-          className={cn(
-            "absolute inset-0 h-full w-full object-contain",
-            props.videoActive ? null : "opacity-0",
-          )}
-          onLoadedData={props.onVideoLoadedData ?? undefined}
-        />
+        <div
+          className="pointer-events-none absolute inset-0 overflow-hidden"
+          style={{ containerType: "size" }}
+        >
+          <video
+            ref={videoRef}
+            data-testid={props.videoTestId}
+            data-viewport-width={props.frameSize?.width}
+            data-viewport-height={props.frameSize?.height}
+            style={
+              props.frameSize === null
+                ? undefined
+                : {
+                    width: `min(100cqw, ${String((100 * props.frameSize.width) / props.frameSize.height)}cqh)`,
+                    height: `min(100cqh, ${String((100 * props.frameSize.height) / props.frameSize.width)}cqw)`,
+                    left: "50%",
+                    top: "50%",
+                    transform: "translate(-50%, -50%)",
+                  }
+            }
+            autoPlay
+            playsInline
+            muted
+            className={cn(
+              "absolute inset-0 h-full w-full object-cover object-left-top",
+              props.videoActive ? null : "opacity-0",
+            )}
+            onLoadedData={props.onVideoLoadedData ?? undefined}
+          />
+        </div>
       ) : null}
       <AgentCursorOverlay cursor={props.cursor} frameSize={props.frameSize} />
     </>

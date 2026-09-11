@@ -1,6 +1,11 @@
 import type { TaskPinnedState } from "@/hooks/epic/use-epic-task-pinned-states-query";
 import { INERT_ROOT_STATE_PORT } from "@/stores/epics/open-epic/test-support/root-state-port-fixture";
 import { TabStrip } from "@/components/layout/tabs/tab-strip";
+import {
+  SplitMemberChrome,
+  SplitTabLayout,
+} from "@/components/layout/tabs/split-tab-chrome";
+import { TabChrome } from "@/components/layout/tabs/header-tab-visual";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { paneTabRefs } from "@/stores/epics/canvas/actions";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
@@ -177,6 +182,11 @@ const pinLocalHomeSupportedTestState = vi.hoisted(
 );
 vi.mock("@/hooks/epic/use-epic-pin-local-home-support", () => ({
   useEpicPinLocalHomeSupported: () => pinLocalHomeSupportedTestState.supported,
+}));
+
+// No host transport in this strip fixture; appearance queries remain disabled.
+vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
+  useHostClientForHostId: () => null,
 }));
 
 /**
@@ -679,6 +689,92 @@ describe("<TabStrip />", () => {
     expect(screen.getByTestId("tab-new")).toBeDefined();
   });
 
+  it("uses the project color for the active outline while keeping the neutral fill", () => {
+    render(<TabChrome isActive color="#12ab34" />);
+
+    const center = screen.getByTestId("tab-chrome-center");
+    expect(center.style.backgroundColor).toBe("var(--color-background)");
+    expect(center.style.borderTopColor).toBe("rgb(18, 171, 52)");
+  });
+
+  it("keeps the project color on an inactive tab", () => {
+    const { container } = render(
+      <TabChrome isActive={false} color="#12ab34" />,
+    );
+
+    expect(
+      container.querySelector("span[style]")?.getAttribute("style"),
+    ).toContain("background-color: rgb(18, 171, 52);");
+  });
+
+  it("uses the manual color for a focused split member and retains the primary fallback", () => {
+    const { rerender, container } = render(
+      <SplitMemberChrome focused color="#12ab34" />,
+    );
+    expect(screen.getByTestId("tab-chrome-center").style.borderTopColor).toBe(
+      "rgb(18, 171, 52)",
+    );
+
+    rerender(<SplitMemberChrome focused color={null} />);
+    expect(screen.getByTestId("tab-chrome-center").style.borderTopColor).toBe(
+      "var(--color-primary)",
+    );
+
+    rerender(<SplitMemberChrome focused={false} color="#12ab34" />);
+    expect(screen.queryByTestId("tab-chrome-center")).toBeNull();
+    expect(screen.queryByTestId("tab-baseline-cover")).toBeNull();
+    expect(screen.queryByTestId("tab-cap-left")).toBeNull();
+    expect(screen.queryByTestId("tab-cap-right")).toBeNull();
+    expect(container.querySelector("span")?.className).toContain(
+      "group-hover/tab:bg-accent/20",
+    );
+  });
+
+  it.each([
+    {
+      side: "left",
+      leftColor: "#f97316",
+      rightColor: null,
+      expectedLeft: "rgb(249, 115, 22)",
+      expectedRight: "var(--color-primary)",
+    },
+    {
+      side: "right",
+      leftColor: null,
+      rightColor: "#f97316",
+      expectedLeft: "var(--color-primary)",
+      expectedRight: "rgb(249, 115, 22)",
+    },
+  ])(
+    "keeps the $side split member underline color independent",
+    ({ leftColor, rightColor, expectedLeft, expectedRight }) => {
+      render(
+        <SplitTabLayout
+          leftColor={leftColor}
+          rightColor={rightColor}
+          splitId="split-colors"
+          selectedSide={null}
+          control={<span data-testid="split-control" />}
+          left={<span data-testid="split-left" />}
+          right={<span data-testid="split-right" />}
+        />,
+      );
+
+      expect(
+        screen.getByTestId("split-tab-group-underline-split-colors").style
+          .color,
+      ).toBe("var(--color-primary)");
+      expect(
+        screen.getByTestId("split-tab-group-underline-left-split-colors").style
+          .color,
+      ).toBe(expectedLeft);
+      expect(
+        screen.getByTestId("split-tab-group-underline-right-split-colors").style
+          .color,
+      ).toBe(expectedRight);
+    },
+  );
+
   it("shows the pair highlight on the approach half during a merge", async () => {
     openEpicFixture(EPIC_A);
     openEpicFixture(EPIC_B);
@@ -697,6 +793,7 @@ describe("<TabStrip />", () => {
           index: 0,
         },
         120,
+        null,
       );
       // Dragging rightward onto B: the dragged tab's centre is on B's
       // approach (left) half, so the merge is live immediately with the
@@ -740,6 +837,7 @@ describe("<TabStrip />", () => {
           index: 0,
         },
         120,
+        null,
       );
       dndStore.headerStripDragStateChanged({
         kind: "reorder",
@@ -773,6 +871,7 @@ describe("<TabStrip />", () => {
           index: 0,
         },
         120,
+        null,
       );
       // Dragging leftward back onto B: the dragged tab's centre is on B's
       // approach (right) half, so the dragged tab would take the pair's
@@ -856,7 +955,7 @@ describe("<TabStrip />", () => {
     const frame = tab.parentElement;
     if (frame === null) throw new Error("Expected tab frame");
 
-    expect(frame.className).toContain("min-w-[120px]");
+    expect(frame.className).toContain("min-w-[min(40vw,12rem)]");
     expect(frame.className).toContain("w-56");
     expect(frame.className).toContain("max-w-56");
     expect(frame.className).toContain("flex-[1_1_14rem]");
@@ -952,10 +1051,10 @@ describe("<TabStrip />", () => {
     expect(screen.getByTestId("split-tab-divider-split-a")).toBeDefined();
     expect(
       screen.getByTestId("split-tab-group-underline-left-split-a").className,
-    ).toContain("bg-primary");
+    ).toContain("bg-current");
     expect(
       screen.getByTestId("split-tab-group-underline-right-split-a").className,
-    ).toContain("bg-primary");
+    ).toContain("bg-current");
 
     const plainC = screen.getByTestId(`tab-epic-${EPIC_C.id}`);
     const plainD = screen.getByTestId(`tab-epic-${tabD.id}`);
@@ -1056,10 +1155,10 @@ describe("<TabStrip />", () => {
     const rightTab = screen.getByTestId("tab-epic-e-b");
     const leftPane = indicator.querySelector('[data-split-pane="left"]');
     const rightPane = indicator.querySelector('[data-split-pane="right"]');
-    expect(controlUnderline.className).toContain("bg-primary");
+    expect(controlUnderline.className).toContain("bg-current");
     expect(screen.queryByTestId("split-tab-divider-split-a")).toBeNull();
-    expect(leftUnderline.className).not.toContain("bg-primary");
-    expect(rightUnderline.className).toContain("bg-primary");
+    expect(leftUnderline.className).not.toContain("bg-current");
+    expect(rightUnderline.className).toContain("bg-current");
     expect(
       within(leftTab).getByTestId("tab-chrome-center").style.borderTopColor,
     ).toBe("var(--color-primary)");
@@ -1092,9 +1191,9 @@ describe("<TabStrip />", () => {
     expect(rightPane?.getAttribute("width")).toBe("8");
     expect(leftPane?.getAttribute("fill")).toBe("none");
     expect(rightPane?.getAttribute("fill")).toBe("currentColor");
-    expect(leftUnderline.className).toContain("bg-primary");
-    expect(rightUnderline.className).not.toContain("bg-primary");
-    expect(leftTab.className).toContain("px-1.5");
+    expect(leftUnderline.className).toContain("bg-current");
+    expect(rightUnderline.className).not.toContain("bg-current");
+    expect(leftTab.className).toContain("px-5");
     expect(rightTab.className).toContain("px-5");
     expect(within(leftTab).queryByTestId("tab-chrome-center")).toBeNull();
     expect(
@@ -1209,9 +1308,15 @@ describe("<TabStrip />", () => {
 
     const tab = await screen.findByTestId("tab-epic-e-a");
     const title = screen.getByTestId("tab-title-epic-e-a");
+    const closeButton = screen.getByTestId("tab-close-epic-e-a");
+
+    const trigger = tab.querySelector('[data-slot="tooltip-trigger"]');
+    if (trigger === null) throw new Error("Expected a tooltip trigger");
 
     expect(tab.getAttribute("data-slot")).not.toBe("tooltip-trigger");
-    expect(title.getAttribute("data-slot")).toBe("tooltip-trigger");
+    expect(trigger).not.toBe(tab);
+    expect(trigger.contains(title)).toBe(true);
+    expect(trigger.contains(closeButton)).toBe(false);
   });
 
   it("shows a spinner while epic title generation is pending", async () => {
@@ -1526,11 +1631,10 @@ describe("<TabStrip />", () => {
     expect(item.getAttribute("aria-disabled")).toBe("true");
     expect(item.getAttribute("data-disabled")).toBeNull();
     // States the condition; does not promise a cloud sync that may never come.
-    // "the connected device": the epic lives on the host serving it, not
-    // necessarily the machine rendering this menu.
     expect(item.textContent).toContain(
-      "Pin Task in History — stored on the connected device",
+      "Pin Task in History — needs a newer host",
     );
+    expect(item.textContent).not.toMatch(/cloud|device/i);
 
     fireEvent.click(item);
 

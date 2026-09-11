@@ -8,6 +8,10 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { HistoryRowStatusIcon } from "@/components/epics/epics-list-shared";
+import {
+  historyRowProvenance,
+  historyRowProvenanceLabel,
+} from "@/components/epics/history-row-provenance";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import "@/components/layout/shell/mobile-shell-touch-targets.css";
@@ -260,6 +264,30 @@ interface DrawerTaskListProps {
  * the list the way the user last filtered it, with no filter/sort/selection
  * chrome of its own; the full surface stays one tap away on the landing page.
  */
+/**
+ * The visible half of a drawer row's provenance: "Not synced" or "Deleted,
+ * edits kept" after the timestamp, on the rows that have one. Rendered as
+ * plain text rather than a tooltip because this row's tap opens the task,
+ * which leaves a tooltip nothing to open on.
+ */
+function DrawerRowProvenanceLabel(props: {
+  readonly item: HistoryItem;
+}): ReactNode {
+  const provenance = historyRowProvenance(props.item);
+  if (provenance === null) return null;
+  return (
+    <span
+      data-testid={`mobile-nav-task-provenance-label-${provenance}`}
+      className={cn(
+        "shrink-0 text-ui-xs text-muted-foreground",
+        provenance === "preserved-orphan" && "text-destructive",
+      )}
+    >
+      {historyRowProvenanceLabel(provenance)}
+    </span>
+  );
+}
+
 function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
@@ -438,6 +466,10 @@ function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
             <span className="shrink-0 text-ui-xs text-muted-foreground">
               {formatRelativeTimestamp(item.updatedAtMs, now)}
             </span>
+            {/* A tap on this row opens the task, so the status dot's sentence
+                has no hover to live in. The two-word label is the visible
+                half; the dot keeps the full sentence as its accessible name. */}
+            <DrawerRowProvenanceLabel item={item} />
           </Button>
         ))}
         {hasNextPage ? (

@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { SettingsGroup } from "@/components/settings/settings-group";
 import { LogLevelRow } from "@/components/settings/panels/log-level-row";
 import type { LogLevelControl } from "@/components/settings/panels/log-level-controls";
+import type { SettingsGroupDefinition } from "@/lib/settings-search/settings-definitions";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 
@@ -27,6 +28,14 @@ import { Button } from "@/components/ui/button";
  * below is already saying so.
  */
 export function LogDetailGroup(props: {
+  /**
+   * This card's definition on the caller's page. Supplied by the caller, not
+   * fixed here: the SAME card is the "Log detail" group on two different
+   * pages, and only the app's owns a search anchor - the host's is dropped for
+   * a host too old to answer the config RPC, so it folds into that page
+   * instead of naming a card the page may not draw.
+   */
+  readonly group: SettingsGroupDefinition;
   readonly controls: readonly LogLevelControl[];
   /**
    * Why there are no rows, in the caller's own words — or `null` to render
@@ -106,7 +115,8 @@ export function LogDetailGroup(props: {
     if (props.emptyState === null) return null;
     return (
       <SettingsGroup
-        title="Log detail"
+        group={props.group}
+        showTitle
         tone="default"
         dataTestId={undefined}
         fill={false}
@@ -118,7 +128,8 @@ export function LogDetailGroup(props: {
 
   return (
     <SettingsGroup
-      title="Log detail"
+      group={props.group}
+      showTitle
       tone="default"
       dataTestId={undefined}
       fill={false}

@@ -645,7 +645,7 @@ describe("<EpicsList />", () => {
 
     const errorBlock = await screen.findByTestId("epics-list-error");
     expect(errorBlock).not.toBeNull();
-    expect(screen.getByText("Couldn't reach Traycer Cloud")).not.toBeNull();
+    expect(screen.getByText("Couldn't load your tasks")).not.toBeNull();
     expect(screen.getByTestId("epics-list-error-retry")).not.toBeNull();
     const toggle = screen.getByTestId("epics-list-error-toggle-details");
     fireEvent.click(toggle);

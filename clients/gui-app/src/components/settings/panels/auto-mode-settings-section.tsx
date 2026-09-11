@@ -19,6 +19,7 @@ import { useAutoJudgeQuery } from "@/hooks/auto-mode/use-auto-judge-query";
 import { useAutoJudgeSetMutation } from "@/hooks/auto-mode/use-auto-judge-set-mutation";
 import { useAutoPolicyQuery } from "@/hooks/auto-mode/use-auto-policy-query";
 import { useAutoPolicySetMutation } from "@/hooks/auto-mode/use-auto-policy-set-mutation";
+import { AGENT_SELECTION } from "@/components/settings/panels/agents-settings.definitions";
 import { AutoJudgePicker } from "@/components/settings/panels/auto-judge-picker";
 import { AutoPolicyEditorDialog } from "@/components/settings/panels/auto-policy-editor-dialog";
 import { AutoPolicyShippedDialog } from "@/components/settings/panels/auto-policy-shipped-dialog";
@@ -120,18 +121,9 @@ function AutoJudgeRow(props: { readonly hostId: string | null }): ReactNode {
     [mutateJudge],
   );
 
-  // "Traycer's auto mode judge", not "Auto mode judge": the OTHER row of that
-  // name lives under Settings ▸ Providers and is the one that WINS
-  // (`isProviderJudgedExecution` reads the provider's own `autoJudge` alone),
-  // so both rows now name whose judge they are about and state the precedence.
-  // The dropped clause - that a tool-less provider runs the judge as a full
-  // agent session in an empty scratch directory - is true and is an
-  // implementation note; it was the longest sentence in Settings and it
-  // answered a question no first-time user has.
   return (
     <SettingsRow
-      label="Traycer's auto mode judge"
-      description="The agent that runs Traycer's judge on this machine. Traycer's default judge runs on Traycer's own inference and uses your credits. Pick another provider to move that cost onto your own subscription instead. A provider set to use its own classifier (Settings ▸ Providers) doesn't use this judge."
+      row={AGENT_SELECTION.definitions.autoModeJudge}
       hint={
         query.isError
           ? "Couldn't read this machine's judge. Reopen Settings to try again."
@@ -186,13 +178,7 @@ function AutoPolicyRow(): ReactNode {
   return (
     <>
       <SettingsRow
-        label="Auto mode policy"
-        // "Every machine's judge follows it" was false twice over: a
-        // repository with its own policy file displaces this one, and a
-        // provider switched to its own classifier never reads a Traycer policy
-        // at all. Both exceptions are now named where the promise is made,
-        // rather than one of them a sentence later and the other nowhere.
-        description="Extra rules for Traycer's judge: what this machine is, what to approve without asking, and what to never approve. Stored on your account, so Traycer's judge picks it up on every machine. A repository with a .traycer/auto-policy.md file uses that file instead, and a provider set to use its own classifier (Settings ▸ Providers) doesn't follow a policy at all."
+        row={AGENT_SELECTION.definitions.autoModePolicy}
         hint={
           query.isError
             ? "Couldn't read your policy. Reopen Settings to try again."
@@ -208,8 +194,7 @@ function AutoPolicyRow(): ReactNode {
       />
       {hasShippedAutoPolicySections(shipped) ? (
         <SettingsRow
-          label="What the judge already blocks"
-          description="Traycer's own rules, before any policy of yours: what it allows without asking, what it always asks you about, and what your policy cannot turn off. The same on every machine."
+          row={AGENT_SELECTION.definitions.autoModeShippedRules}
           control={
             <Button
               type="button"

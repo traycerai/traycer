@@ -60,6 +60,7 @@ vi.mock("@/lib/registries/epic-session-registry", () => ({
     peek: () => null,
   }),
   getEpicSessionHandleHostId: () => null,
+  getEpicSessionHostId: () => null,
 }));
 
 function resetStores(): void {
@@ -80,6 +81,7 @@ function draftHeaderTab(draftId: string): HeaderTab {
     icon: null,
     canDuplicate: false,
     canOpenInNewWindow: false,
+    appearance: null,
   };
 }
 
@@ -283,6 +285,7 @@ describe("useCloseTabFlow", () => {
         canClose: true,
         canDuplicate: true,
         canOpenInNewWindow: true,
+        appearance: null,
       });
     });
 
@@ -331,6 +334,7 @@ describe("useCloseTabFlow", () => {
         canClose: true,
         canDuplicate: true,
         canOpenInNewWindow: true,
+        appearance: null,
       });
     });
 
