@@ -393,6 +393,8 @@ function fakeRemoteSession(): FakeRemoteSession {
     start: vi.fn(),
     isClosed: () => closeCalls > 0,
     isReady: () => true,
+    // Structural member: this fake models readiness, never silence.
+    isSilentFor: () => false,
     sendUnary: vi.fn(() => Promise.resolve({}) as never),
     subscribe: vi.fn(() => {
       throw new Error("not exercised by this test");

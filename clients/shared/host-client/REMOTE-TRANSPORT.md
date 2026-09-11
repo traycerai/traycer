@@ -263,16 +263,36 @@ sequenceDiagram
   ack watermark — that is **T13**; the mux only guarantees per-stream FIFO +
   re-subscribe and reserves `seq` for the watermark.
 
-### Host blip is NOT a resume
+### Host blip is NOT a resume — a re-attach RE-HANDSHAKES
 
 `host_detached` (relay control) → the client **pauses** the scheduler (holding
-frames, not losing them to a host-less relay) and marks streams reconnecting;
-`host_attached` → resume on the **same** Noise session (no re-handshake). Only a
-socket drop or `peer_gone`/`killed` triggers a full attach. `peer_gone`/`killed`
-reason `revoked` is **terminal**. `host_gone` / `reauth_timeout` → full-resume
-with ordinary backoff. `policy_violation` and every unknown/future reason →
-full-resume at the capped backoff rung and report an indeterminate relay loss,
-never a host refusal.
+frames, not losing them to a host-less relay) and marks streams reconnecting.
+
+`host_attached` → **full attach, always**: fresh `NoiseChannel`, fresh relay
+dial, fresh `open{bearer}`. The host discards every client Noise session on any
+uplink close, and the relay emits this frame from exactly one site — the host's
+re-attach — so the frame is proof that the responder this session was built
+against is gone. That holds whether or not this client ever saw the matching
+`host_detached`: a client that missed it is left holding a channel nothing can
+answer, and its only other exit is the 15-min standing watchdog (§10). It holds
+mid-handshake too, where the rebuild replaces a phase timeout that would
+otherwise land as a _refusal_. The loss is reported `indeterminate`, never a
+host refusal: the frame says the host is ATTACHED, and it is the redial's own
+outcome that speaks about the host.
+
+A socket drop, a `peer_gone`/`killed`, and a proven session silence (§11) reach
+the same full attach. `peer_gone`/`killed` reason `revoked` is **terminal**.
+`host_gone` / `reauth_timeout` → full-resume with ordinary backoff. These two
+name the HOST's leg — it left, or it failed to re-present standing — so they are
+the only relay kills reported on the `host-transport-plane`, and a handshake
+timeout on the redial that follows is a refusal.
+`session_reset` (the host asked the relay to drop this client leg because it can
+no longer serve the Noise session behind it) → full-resume at the ladder's
+**current** rung: the host is alive and waiting for a re-handshake.
+`policy_violation` and every unknown/future reason → full-resume at the capped
+backoff rung. `session_reset`, `policy_violation` and the unknown reasons report
+an indeterminate relay loss, never a host refusal: they describe the relay's
+handling of this leg, not the host's willingness to serve it.
 
 ## 10. Re-auth & peer-enforced host standing (R4-D2)
 
@@ -280,20 +300,44 @@ never a host refusal.
   re-presents it in-band via the relay `reauth{grant}` control frame at
   ~45 min ± jitter, under the relay's 60-min client-leg deadline.
 - **Host leg (≤15 min), peer-enforced:** a revoked host will not enforce its own
-  death, so the client runs a 15-min **host-standing watchdog**, reset by any
-  evidence the host is alive + bridging: any inbound frame, a relay
-  `host_attached`, or a `REAUTH_NOTICE` mux frame. On lapse the client fails the
-  session itself. **⚠️ reconcile:** T11 SHOULD emit `REAUTH_NOTICE{standingUntil}`
-  after each successful relay re-auth so the client has an explicit host-standing
-  signal (the future P2P swap turns this into a CS-signed assertion); absent it,
-  the client falls back to `host_attached` / inbound-frame liveness.
+  death, so the client runs a 15-min **host-standing watchdog**, reset ONLY by
+  **in-channel** evidence that the host is alive: a frame through the Noise
+  channel (the handshake reply, any established inbound frame, the `OPEN_ACK`),
+  including a `REAUTH_NOTICE` mux frame. On lapse the client fails the session
+  itself. Relay control frames deliberately do **not** feed it: the relay
+  answers keepalives at its own edge and re-announces host attachment on every
+  burst, so a client that let those reset the clock would re-arm its own
+  watchdog forever against a host that had stopped answering. (A relay
+  `host_attached` now rebuilds the session anyway — §9 — so there is nothing
+  left to reset.) **⚠️ reconcile:** T11 SHOULD emit
+  `REAUTH_NOTICE{standingUntil}` after each successful relay re-auth so the
+  client has an explicit host-standing signal (the future P2P swap turns this
+  into a CS-signed assertion); absent it, the client falls back to
+  inbound-frame liveness.
 
-## 11. Keepalive
+## 11. Keepalive, and the on-demand liveness probe
 
 Relay `relay-ping` / `relay-pong` strings only (auto-responded by the relay
 without waking the DO). **No E2E idle ping** (R4-C1) — the idle liveness floor is
 the re-auth exchange. The client sends `relay-ping` on an interval and drops the
 socket on missed pongs.
+
+**The session-silence probe is not a ping.** It is sent ON DEMAND and only when
+a symptom has already fired on a session that has been in-channel silent for
+`SESSION_SILENCE_TIMEOUT_MS` (20s): a unary timed out, a stream's reassembly
+watchdog fired, or a subscribe received no first frame. The session then sends
+ONE cheap unary (the desktop client uses `host.status`; the session itself is
+registry-agnostic and a composition may pass `null` to make no silence claims
+at all) and arms a verdict timer for `SESSION_LIVENESS_PROBE_TIMEOUT_MS` (5s).
+
+**Only the verdict timer decides**, and only on one question: has any
+in-channel frame arrived, on any stream, since the probe went out? The probe's
+own promise never decides — an answer, an error envelope and a per-stream FATAL
+all arrive in-channel and are all counted, while a rejection with the counter
+unchanged means the probe was never asked (a method this host does not
+advertise, an enqueue that threw) and cancels the verdict instead. A session
+that is still silent when the timer fires is dropped `indeterminate` and
+redialed. An idle session with nothing outstanding never probes.
 
 ## 12. Reserved / deferred (do not build in v1, keep additive)
 

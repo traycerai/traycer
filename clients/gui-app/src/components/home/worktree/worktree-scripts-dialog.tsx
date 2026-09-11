@@ -23,15 +23,7 @@ import {
   type WorktreeStagingKey,
 } from "@/stores/worktree/worktree-intent-staging-store";
 
-/**
- * The surface-level context a scripts edit needs to resolve its save target.
- * Pre-create surfaces (landing / launcher / fork) pass `epicId: ""`,
- * `ownerId: null`, `binding: null` - the edit can only ride the staged intent or
- * write the repo's own file (Local). In-epic surfaces pass the real owner + live
- * binding so an edit can target a bound worktree's own
- * `.traycer/environment.json`.
- */
-export interface WorktreeScriptsContext {
+export type WorktreeScriptsContext = {
   readonly epicId: string;
   readonly ownerId: string | null;
   readonly ownerKind: WorktreeBindingOwnerKind | null;
@@ -39,24 +31,25 @@ export interface WorktreeScriptsContext {
   readonly stagingKey: WorktreeStagingKey;
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   /**
-   * Composes the branch name `workspacePath` would get for `prefixState` at
-   * `suffix` - the SAME production composition path (multi-repo repository
-   * slugging + truncation included) real branch staging uses, given an
-   * explicit caller-supplied suffix instead of a fresh random one. Branch
-   * naming's live preview and its Apply/Remove candidate capture both call
-   * this with the SAME stable suffix, so whatever candidate is displayed is
-   * exactly what "Use new prefix" later stages - never a second, independent
-   * random pick. Deliberately synchronous and independent of the
-   * summary-invalidation refetch a save also triggers - that refetch lands
-   * on its own time and this must not wait on it. `null` when the workspace
-   * isn't known to the picker.
+   * Composes the branch name `workspacePath` would get for `prefixState`
+   * at `suffix` - the SAME production composition path (multi-repo
+   * repository slugging + truncation included) real branch staging
+   * uses, given an explicit caller-supplied suffix instead of a fresh
+   * random one. Branch naming's live preview and its Apply/Remove
+   * candidate capture both call this with the SAME stable suffix, so
+   * whatever candidate is displayed is exactly what "Use new prefix"
+   * later stages - never a second, independent random pick.
+   * Deliberately synchronous and independent of the
+   * summary-invalidation refetch a save also triggers - that refetch
+   * lands on its own time and this must not wait on it. `null` when the
+   * workspace isn't known to the picker.
    */
   readonly regenerateBranchNameForWorkspace: (
     workspacePath: string,
     freshRepoBranchPrefix: RepoBranchPrefixState,
     suffix: string,
   ) => string | null;
-}
+};
 
 /** The folder a scripts edit targets, captured when the footer is clicked. */
 export interface WorktreeScriptsTarget {
@@ -65,8 +58,9 @@ export interface WorktreeScriptsTarget {
 }
 
 /**
- * Per-folder setup/teardown editor, opened from the workspace picker's
- * Environment footer. The modal stacks on the still-open picker (the picker's
+ * The per-folder "Repository settings" dialog, opened from the workspace
+ * picker's ⚙. It edits setup/teardown scripts and branch naming.
+ * The modal stacks on the still-open picker (the picker's
  * `preserveWhenNestedOverlay` keeps it from dismissing), so closing the modal
  * returns to the picker. Reuses the Settings ▸ Worktrees modal design
  * (`ScriptsReviewDialog`). Where the edit lands follows what the folder is set
@@ -147,10 +141,7 @@ function WorktreeScriptsDialogBody(props: {
       ) ?? null,
   );
   const effectiveStagedEntry = useHeldStagedEntry(stagedEntry, workspacePath);
-  const bindingEntry =
-    context.binding?.entries.find(
-      (entry) => entry.workspacePath === workspacePath,
-    ) ?? null;
+  const bindingEntry = resolveBindingEntry(context, workspacePath);
 
   const resolved = resolveScriptsTarget({
     stagedEntry: effectiveStagedEntry,
@@ -237,7 +228,6 @@ function WorktreeScriptsDialogBody(props: {
   const seedPending = !branchReadSettled && stagedScripts === null;
 
   const saveMutation = useWorktreeSetRepoScriptsFor(context.hostClient);
-
   // Radix's Dialog dismissable layer listens for Escape on `document` in the
   // capture phase - before any bubbling `onKeyDown` inside the content ever
   // runs - so an inline editor cannot reliably turn Escape into "cancel just
@@ -271,7 +261,6 @@ function WorktreeScriptsDialogBody(props: {
       resolved.kind === "new-branch-worktree" ||
       resolved.kind === "checkout-branch-worktree"
     ) {
-      // Staging a worktree intent is a synchronous store write that cannot fail.
       stageScripts(context.stagingKey, workspacePath, scripts);
       return Promise.resolve();
     }
@@ -303,10 +292,9 @@ function WorktreeScriptsDialogBody(props: {
     <ScriptsReviewDialog
       key={seedKey}
       testId="worktree-scripts-dialog"
-      title="Worktree environment"
+      title="Repository settings"
       description={environmentDialogDescription(summary, workspacePath)}
-      pathLabel={descriptor.pathLabel}
-      pathValue={descriptor.pathValue}
+      path={descriptor.path}
       scriptSeed={scriptSeed}
       seedPending={seedPending}
       errorNote={
@@ -338,7 +326,7 @@ function WorktreeScriptsDialogBody(props: {
         ) : null
       }
       inUseNote={null}
-      saveLabel="Save scripts"
+      saveLabel="Save"
       onSave={handleSave}
       onEscapeKeyDown={(event) => {
         if (cancelBranchEditingRef.current === null) return;
@@ -365,7 +353,7 @@ function environmentDialogDescription(
       ? `${summary.repoIdentifier.owner}/${summary.repoIdentifier.repo}`
       : lastPathSegment(workspacePath);
   return summary.isGitRepo
-    ? `Configure lifecycle scripts and branch prefix for ${label}.`
+    ? `Identity, lifecycle scripts, and branch prefix for ${label}.`
     : `Configure lifecycle scripts for ${label}.`;
 }
 
@@ -579,6 +567,17 @@ type ResolvedScriptsTarget =
   | { readonly kind: "existing-worktree"; readonly worktreePath: string }
   | { readonly kind: "local" };
 
+function resolveBindingEntry(
+  context: WorktreeScriptsContext,
+  workspacePath: string,
+): WorktreeBindingEntry | null {
+  return (
+    context.binding?.entries.find(
+      (entry) => entry.workspacePath === workspacePath,
+    ) ?? null
+  );
+}
+
 /**
  * Resolve which worktree (if any) a scripts edit targets, by the same precedence
  * the picker uses: a staged choice wins over the live binding.
@@ -710,16 +709,13 @@ function describeTarget(input: {
   readonly resolved: ResolvedScriptsTarget;
   readonly workspacePath: string;
 }): {
-  readonly pathLabel: string | null;
-  readonly pathValue: string | null;
+  readonly path: { readonly label: string; readonly value: string } | null;
   readonly scriptsNote: string;
 } {
   if (input.resolved.kind === "existing-worktree") {
     return {
-      pathLabel: "Worktree path",
-      pathValue: input.resolved.worktreePath,
-      scriptsNote:
-        "Edit the setup and teardown scripts for this worktree. Saved to its own environment file, never the source checkout.",
+      path: { label: "Worktree path", value: input.resolved.worktreePath },
+      scriptsNote: "Changes apply to this worktree only.",
     };
   }
   if (input.resolved.kind === "new-branch-worktree") {
@@ -728,24 +724,20 @@ function describeTarget(input: {
     // - the branch name it would show is already covered by Branch naming's
     // own effective-branch preview above.
     return {
-      pathLabel: null,
-      pathValue: null,
+      path: null,
       scriptsNote:
-        "These scripts ride the worktree request - the host writes them into the new worktree when the agent starts.",
+        "Saved for the new worktree. Setup runs when the agent starts.",
     };
   }
   if (input.resolved.kind === "checkout-branch-worktree") {
     return {
-      pathLabel: "Existing branch",
-      pathValue: input.resolved.branchName,
-      scriptsNote:
-        "This branch is checked out into a new worktree. The scripts ride the request - written into the new worktree at create.",
+      path: { label: "Existing branch", value: input.resolved.branchName },
+      scriptsNote: "Saved for the new worktree created from this branch.",
     };
   }
   return {
-    pathLabel: "Folder",
-    pathValue: input.workspacePath,
+    path: { label: "Folder", value: input.workspacePath },
     scriptsNote:
-      "This folder runs in your checkout. Saved to the repo's own environment file - commit it to share.",
+      "Saved in this checkout. Commit the environment file to share these scripts.",
   };
 }

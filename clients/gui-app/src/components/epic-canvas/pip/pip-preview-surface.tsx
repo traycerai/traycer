@@ -22,6 +22,11 @@ export function PipPreviewSurface(props: {
   const { preview, stream } = props;
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [decoded, setDecoded] = useState(false);
+  const videoActive = stream !== null && decoded;
+  const frameSize =
+    videoActive && preview.logicalViewport !== null
+      ? preview.logicalViewport
+      : preview.frameSize;
 
   useEffect(() => {
     const element = videoRef.current;
@@ -48,7 +53,7 @@ export function PipPreviewSurface(props: {
       onImageLoad={null}
       videoRef={videoRef}
       videoMounted={stream !== null}
-      videoActive={stream !== null && decoded}
+      videoActive={videoActive}
       videoTestId="agent-browser-pip-video"
       onVideoLoadedData={() => setDecoded(true)}
       loader={
@@ -61,7 +66,7 @@ export function PipPreviewSurface(props: {
         </span>
       }
       cursor={preview.cursor}
-      frameSize={preview.frameSize}
+      frameSize={frameSize}
     />
   );
 }

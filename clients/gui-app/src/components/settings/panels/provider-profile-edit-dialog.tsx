@@ -384,6 +384,7 @@ function ProfileEditAccountSection(props: {
   readonly profile: ProviderProfile;
   readonly switchingAccount: boolean;
   readonly startInReauth: boolean;
+  readonly isLocalHost: boolean;
   readonly canOauth: boolean;
   readonly savePending: boolean;
   readonly invalid: boolean;
@@ -397,6 +398,7 @@ function ProfileEditAccountSection(props: {
       <ProviderProfileReauthPanel
         state={props.state}
         profile={props.profile}
+        isLocalHost={props.isLocalHost}
         onSameAccountReconnected={
           props.startInReauth ? props.onFinishSignIn : null
         }
@@ -459,6 +461,7 @@ export function ProfileEditDialog(props: {
   readonly profiles: readonly ProviderProfile[];
   readonly canOauth: boolean;
   readonly startInReauth: boolean;
+  readonly isLocalHost: boolean;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly remainingProfilesAfterRemoval: ReadonlyArray<ProviderProfile>;
@@ -582,7 +585,7 @@ export function ProfileEditDialog(props: {
         }}
       >
         <DialogContent
-          className="max-h-[min(85dvh,40rem)] w-[min(92vw,30rem)] gap-0 overflow-y-auto p-0 sm:max-w-none"
+          className="flex max-h-[min(85dvh,40rem)] w-[min(92vw,30rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-none"
           showCloseButton={!switchingAccount}
         >
           <DialogHeader className="gap-1.5 px-5 pt-5 pr-12 pb-4">
@@ -594,7 +597,7 @@ export function ProfileEditDialog(props: {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="flex flex-col gap-5 px-5 pb-5">
+          <div className="flex min-h-0 flex-col gap-5 overflow-y-auto px-5 pb-5">
             <ProviderProfileCard
               key={props.profile.profileId}
               profile={props.profile}
@@ -636,6 +639,7 @@ export function ProfileEditDialog(props: {
               profile={props.profile}
               switchingAccount={switchingAccount}
               startInReauth={props.startInReauth}
+              isLocalHost={props.isLocalHost}
               canOauth={props.canOauth}
               savePending={savePending}
               invalid={invalid}
