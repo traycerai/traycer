@@ -410,6 +410,7 @@ function adoptArrivals(
   lineage: Lineage,
   drafts: Map<string, Draft>,
   previous: OfficePopulation | null,
+  alreadySettled: ReadonlySet<string>,
 ): void {
   if (previous === null) return;
   // Walk DOWN the lineage rather than along creation order, so a parent is
@@ -419,11 +420,15 @@ function adoptArrivals(
   const walked = new Set<string>();
   for (const agent of lineage.ordered) {
     // The agents this pass cannot move, and therefore starts from: the known,
-    // and the arrivals with nobody above them HERE - a true root or an orphan,
-    // whose fresh reading is the only one there is.
+    // the arrivals with nobody above them HERE - a true root or an orphan,
+    // whose fresh reading is the only one there is - and the returning leads
+    // another rule has already placed. That last group matters: a lead that
+    // has just rejoined its own waiting team must not then be adopted into
+    // whatever team its own parent happens to have ended up in.
     const parentId = agent.parentId;
     const settled =
       previous.members.has(agent.id) ||
+      alreadySettled.has(agent.id) ||
       parentId === null ||
       !lineage.byId.has(parentId);
     if (!settled) continue;
@@ -515,12 +520,75 @@ function teamHomeHostOf(
   if (lead !== undefined && isMemberOfTeam(drafts.get(teamId), teamId)) {
     return { resolved: true, hostId: lead.hostId };
   }
+  const surviving = survivingMemberHostOf(lineage, drafts, teamId, previous);
+  if (surviving.resolved) return surviving;
+  return rememberedTeamHomeOf(previous, teamId);
+}
+
+/**
+ * Where the people still in this team are sitting, if any of them are.
+ *
+ * Only agents `previous` already knew count. An arrival is exactly the thing
+ * being placed by whoever is asking, so letting arrivals vote here would let
+ * one decide it is in the right building by showing up - and would let a
+ * returning lead carry its whole team across to wherever it came back.
+ */
+function survivingMemberHostOf(
+  lineage: Lineage,
+  drafts: ReadonlyMap<string, Draft>,
+  teamId: string,
+  previous: OfficePopulation | null,
+): { readonly resolved: boolean; readonly hostId: string | null } {
+  if (previous === null) return { resolved: false, hostId: null };
   for (const candidate of lineage.ordered) {
-    if (previous === null || !previous.members.has(candidate.id)) continue;
+    if (!previous.members.has(candidate.id)) continue;
     if (!isMemberOfTeam(drafts.get(candidate.id), teamId)) continue;
     return { resolved: true, hostId: candidate.hostId };
   }
-  return rememberedTeamHomeOf(previous, teamId);
+  return { resolved: false, hostId: null };
+}
+
+/**
+ * A LEAD THAT COMES BACK REJOINS THE TEAM THAT WAITED FOR IT.
+ *
+ * An agent removed and then returned is an arrival - `previous` has never seen
+ * it - so it is classified from scratch, and with its own parent long gone it
+ * reads as an orphan solo. Meanwhile its people are still at their desks in a
+ * team that is still named after it, because their classes are frozen. The two
+ * halves are each following their own correct rule and together they produce a
+ * team whose lead is standing outside it: the same broken shape three earlier
+ * fixups closed, arrived at from a direction none of them covered.
+ *
+ * The team's surviving members are what makes this safe to do. They establish
+ * that the team is real and, between them, where it is - so a lead that comes
+ * back into that building rejoins at the front of the roster, and one that
+ * comes back into a different building is a solo over there carrying its own
+ * team's colour, exactly as any other member would be. With nobody left in the
+ * team there is nothing to rejoin, and the returning lead is the solo its
+ * fresh classification already made it.
+ */
+function reconcileReturningLeads(
+  lineage: Lineage,
+  drafts: Map<string, Draft>,
+  previous: OfficePopulation | null,
+): ReadonlySet<string> {
+  const settled = new Set<string>();
+  if (previous === null) return settled;
+  for (const agent of lineage.ordered) {
+    // Only a RETURNING agent: one `previous` knew is frozen, and one that has
+    // always been here is already whatever it has always been.
+    if (previous.members.has(agent.id)) continue;
+    const draft = drafts.get(agent.id);
+    // An agent that has come back into an empty corner office is HQ again,
+    // and HQ leads no team.
+    if (draft === undefined || draft.agentClass === "hq") continue;
+    const home = survivingMemberHostOf(lineage, drafts, agent.id, previous);
+    if (!home.resolved) continue;
+    draft.agentClass = home.hostId === agent.hostId ? "team" : "solo";
+    draft.teamId = agent.id;
+    settled.add(agent.id);
+  }
+  return settled;
 }
 
 /**
@@ -647,10 +715,14 @@ export function partitionOfficePopulation(
   // deciding one for it against the office these known agents make up.
   freezeAgainstPrevious(lineage, drafts, input.previous);
   const hqs = settleHqs(lineage, drafts);
+  // Before the arrivals are adopted, so a returning lead's own arriving
+  // children read the team it has just rejoined rather than the orphan
+  // classification it briefly had.
+  const rejoined = reconcileReturningLeads(lineage, drafts, input.previous);
   // After the HQs settle, so an arrival reads a parent whose class nothing
   // further can change; before the cross-host pass, so an arrival that
   // inherits a team in another building is stranded like any other member.
-  adoptArrivals(lineage, drafts, input.previous);
+  adoptArrivals(lineage, drafts, input.previous, rejoined);
   strandCrossHostMembers(lineage, drafts, input.previous);
 
   const members = sealMembers(lineage, drafts, input);
@@ -736,7 +808,7 @@ function buildTeams(
       leadAgentId: teamId,
       // `ordered` is never empty: a roster exists only because a member put
       // an id in it, so the fallback member below is a real lookup.
-      hostId: teamHostOf(lineage, teamId, members.get(ordered[0]), previous),
+      hostId: teamHostOf(teamId, members.get(ordered[0]), previous),
       memberAgentIds: ordered,
       live: ordered.some((id) => members.get(id)?.hot === true),
     });
@@ -745,20 +817,27 @@ function buildTeams(
 }
 
 /**
- * Which building a team is in. The lead's host while the lead is here; the
- * host the PREVIOUS partition recorded for it once it is gone, so a team does
- * not appear to move buildings on the day its lead is archived; and the first
- * surviving member's host as the last resort.
+ * Which building a team is in, asked of the sealed members.
+ *
+ * THE HEAD OF THE ROSTER ANSWERS, and it answers because it is IN the team:
+ * it is the lead exactly when the lead is a member, and the earliest surviving
+ * member when it is not. Asking the lead by id instead - "is there an agent
+ * called L?" - is the mistake `teamHomeHostOf` was corrected for, and it lands
+ * here too: a lead that comes back in ANOTHER building would drag its team
+ * across to a host where none of its people sit.
+ *
+ * A roster only ever holds members on the team's own host, so whichever of
+ * them is asked gives the same answer.
  */
 function teamHostOf(
-  lineage: Lineage,
   teamId: string,
-  firstMember: OfficePopulationMember | undefined,
+  rosterHead: OfficePopulationMember | undefined,
   previous: OfficePopulation | null,
 ): string | null {
-  const lead = lineage.byId.get(teamId);
-  if (lead !== undefined) return lead.hostId;
+  if (rosterHead !== undefined) return rosterHead.hostId;
+  // Unreachable while rosters are non-empty, and kept honest rather than
+  // asserted: what the last partition knew of the lead beats inventing one.
   const remembered = previous?.members.get(teamId);
   if (remembered !== undefined) return remembered.hostId;
-  return firstMember === undefined ? null : firstMember.hostId;
+  return null;
 }
