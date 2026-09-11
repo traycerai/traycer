@@ -1023,6 +1023,7 @@ describe("<LayoutSettingsPanel />", () => {
       ).toBeTruthy();
 
       const order = [
+        within(chatGroup).getByTestId("context-usage-preview-block"),
         subgroup,
         within(chatGroup).getByRole("group", { name: "Context indicator" }),
         within(chatGroup).getByRole("combobox", { name: "Minimap position" }),
@@ -1033,6 +1034,62 @@ describe("<LayoutSettingsPanel />", () => {
             Node.DOCUMENT_POSITION_FOLLOWING,
         ).toBeTruthy();
       }
+    });
+
+    it("previews the context indicator at the top of the Chat group, following the controls under it", () => {
+      render(<LayoutSettingsPanel />);
+      const chatGroup = screen.getByTestId("layout-chat-group");
+      const frame = within(chatGroup).getByTestId(
+        "context-usage-preview-frame",
+      );
+
+      // The real chip, from the sample usage - so the destructive tone the
+      // sample was chosen for is what a reader sees first.
+      expect(within(frame).getByTestId("context-usage-chip").textContent).toBe(
+        "5% context left",
+      );
+
+      fireEvent.click(
+        within(
+          within(chatGroup).getByRole("group", { name: "Context indicator" }),
+        ).getByRole("button", { name: "Ring only" }),
+      );
+      expect(within(frame).getByTestId("context-usage-ring")).toBeTruthy();
+
+      fireEvent.click(
+        within(chatGroup).getByRole("switch", {
+          name: "Pin context breakdown",
+        }),
+      );
+      expect(
+        within(frame).getByTestId("context-usage-pinned-strip"),
+      ).toBeTruthy();
+
+      const fieldChips = within(chatGroup).getByRole("group", {
+        name: "Pinned breakdown fields",
+      });
+      fireEvent.click(
+        within(fieldChips).getByRole("button", { name: "Cache write" }),
+      );
+      expect(within(frame).queryByText("Cache write")).toBeNull();
+
+      // Back on through the same chip: the strip prints it again, in place.
+      fireEvent.click(
+        within(fieldChips).getByRole("button", { name: "Cache write" }),
+      );
+      expect(within(frame).getByText("Cache write")).toBeTruthy();
+
+      // Unpinning returns the chip to the STYLE that was chosen, not to the
+      // default the group started at.
+      fireEvent.click(
+        within(chatGroup).getByRole("switch", {
+          name: "Pin context breakdown",
+        }),
+      );
+      expect(
+        within(frame).queryByTestId("context-usage-pinned-strip"),
+      ).toBeNull();
+      expect(within(frame).getByTestId("context-usage-ring")).toBeTruthy();
     });
 
     it("renders and writes 'Minimap position' in the Chat group", () => {

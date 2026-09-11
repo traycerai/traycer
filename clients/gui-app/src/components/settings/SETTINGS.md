@@ -1398,7 +1398,29 @@ codeFontSize` in muted styling while `null`; any tick/type pins an
     `data-window-key`, since order is otherwise the only thing pairing a
     gauge with its number, and every one stays `aria-hidden` - the accessible
     content is the percentages and the provider tooltip, unchanged.
-  - **Chat** (in `layout-settings-panel.tsx` itself). `Pin context breakdown`
+  - **Chat** (in `layout-settings-panel.tsx` itself). It opens with a
+    **preview** (`panels/layout/context-usage-preview.tsx`), the same
+    construction as the status bar's: an `inert` + `aria-hidden` frame and a
+    caption (`Sample figures — the real strip reads the open chat's usage.`).
+    It renders the REAL `ContextUsageChip` from one fixed module-private
+    sample (`CONTEXT_USAGE_PREVIEW_SAMPLE` - 946,956 of 1M used, 945.8k cache read,
+    1.1k cache write, 3 output, so the strip reads
+    `Context 5% left · Used 947K / 1M · Fresh 56 · …` and the destructive tone
+    is what a reader sees first), which is why every control under it is
+    answered by the component that answers it in a chat rather than by a second
+    drawing that could drift. **There is no preview-only rendering path and the
+    chip takes no preview prop.** It needs no chat: the chip's only inputs are
+    the usage it is handed and the two settings stores, so a sample usage is
+    the whole substitution - no session handle, no host client, no query, no
+    fetch. `onCompact` is a no-op rather than `null`, because the compaction
+    shortcut is part of what the strip looks like and Layout ▸ Composer can
+    remove it; `inert` is what makes that button, the popover trigger and the
+    unpin action unreachable. Inside the frame the chip is mounted in
+    `ComposerWorkspaceRow` itself rather than in a copy of its classes, since
+    the pinned strip spans that row, the inline chip is `justify-self-end`, and
+    both collapse at CONTAINER widths - reusing the row is what keeps a change
+    to those tracks arriving here too.
+    `Pin context breakdown`
     is a `SettingsSubgroup` whose title switch is the pin
     (`pinContextUsageBreakdown`); open, it shows one `Fields` chip row
     (`SettingsToggleChips`, `pinnedContextBreakdownFields`) listing every row

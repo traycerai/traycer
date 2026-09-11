@@ -11,6 +11,7 @@ import { SettingsSegmentedControl } from "@/components/settings/controls/setting
 import { SettingsSubgroup } from "@/components/settings/controls/settings-subgroup";
 import { SettingsToggleChips } from "@/components/settings/controls/settings-toggle-chips";
 import { ComposerLayoutGroup } from "@/components/settings/panels/layout/composer-layout-group";
+import { ContextUsagePreview } from "@/components/settings/panels/layout/context-usage-preview";
 import { SidebarLayoutGroup } from "@/components/settings/panels/layout/sidebar-layout-group";
 import { StatusBarLayoutGroup } from "@/components/settings/panels/layout/status-bar-layout-group";
 import { TabsLayoutGroup } from "@/components/settings/panels/layout/tabs-layout-group";
@@ -99,6 +100,10 @@ function ChatLayoutGroup(): ReactNode {
       dataTestId="layout-chat-group"
       fill={false}
     >
+      {/* First in the group, so the controls under it are read against the
+        thing they change - the same order the Status bar group puts its own
+        preview in. */}
+      <ContextUsagePreview />
       <SettingsSubgroup
         group={LAYOUT.definitions.pinContextBreakdown}
         icon={null}
