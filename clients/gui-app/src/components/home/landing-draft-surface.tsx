@@ -12,6 +12,8 @@ import { parseSystemTabOverlayView } from "@/lib/system-tab-overlay-search";
 import { useDraftSurfaceId } from "@/providers/draft-surface-hooks";
 import { useLandingDraftShell } from "@/stores/home/landing-draft-store";
 import { LandingTerminalPaneAnchor } from "@/components/home/terminal-panel/landing-terminal-host";
+import { CloudDraftsSection } from "@/components/drafts/cloud-drafts-section";
+import { useOptionalHostClient } from "@/lib/host";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
 import "./home-touch-targets.css";
@@ -38,28 +40,17 @@ export function LandingDraftSurface() {
   const showRecentHistory = useSettingsStore(
     (state) => state.showRecentHistory,
   );
+  // Optional on purpose: the top-level tab host mounts this surface without a
+  // `HostRuntimeProvider`, and the cloud-drafts section is the only consumer
+  // here that wants a client at all - it already treats `null` as "no
+  // directory to read". A throwing read would make one section's data need
+  // decide whether the landing page can render.
+  const hostClient = useOptionalHostClient();
+  const hostId = hostClient?.getActiveHostId() ?? null;
   const paneActivationFocusIntent = usePaneActivationFocusIntent();
   const layout = startPageLayout(showGreeting, showRecentHistory);
 
-  // Pre-mint the mount identity for the null-draft landing so the first
-  // substantive edit (which creates a draft and flips this surface's id
-  // null->id) does not remount the Tiptap editor and throw the caret to the
-  // document end. Switching between existing drafts still remounts via a
-  // changing key.
-  //
-  // Bound->null rotation is a render-phase state adjustment (React docs
-  // pattern): a passive effect would leave one committed frame still keyed by
-  // the retired draft id (a stale interactive editor). Adjusting here
-  // re-renders synchronously before commit, so the new pending id is the first
-  // key after the transition - exactly one remount, no stale frame.
-  const [pendingDraftId, setPendingDraftId] = useState(() => uuidv4());
-  const [prevDraftId, setPrevDraftId] = useState<string | null>(draftId);
-  if (draftId !== prevDraftId) {
-    setPrevDraftId(draftId);
-    if (draftId === null) {
-      setPendingDraftId(uuidv4());
-    }
-  }
+  const pendingDraftId = usePendingDraftId(draftId);
   const composerMountId = draftId ?? pendingDraftId;
   const systemModalOpen = useRouterState({
     select: (state) => {
@@ -195,9 +186,7 @@ export function LandingDraftSurface() {
           )}
         >
           <div className="shrink-0">
-            <SurfaceActivityProvider
-              active={Boolean(activity.focused && !systemModalOpen)}
-            >
+            <SurfaceActivityProvider active={surfaceEffectivelyFocused}>
               <LandingComposer
                 key={composerMountId}
                 draftId={draftId}
@@ -208,6 +197,15 @@ export function LandingDraftSurface() {
             </SurfaceActivityProvider>
           </div>
 
+          {/* Drafts another host owns, read from the cloud backup. Rendered at
+              every width: the phone is the reader this section exists for.
+              Mounted only with a host runtime above us: with no client there
+              is no directory to read, and the section's own host query would
+              otherwise demand a Query client from a surface that renders
+              bare. */}
+          {hostClient === null ? null : (
+            <CloudDraftsSection client={hostClient} hostId={hostId} />
+          )}
           {showRecentHistory && isMobile ? (
             /* Recent tasks live in the hamburger drawer at this width, which is
                not discoverable from a landing page that is otherwise empty
@@ -248,6 +246,29 @@ export function LandingDraftSurface() {
       )}
     </div>
   );
+}
+
+function usePendingDraftId(draftId: string | null): string {
+  // Pre-mint the mount identity for the null-draft landing so the first
+  // substantive edit (which creates a draft and flips this surface's id
+  // null->id) does not remount the Tiptap editor and throw the caret to the
+  // document end. Switching between existing drafts still remounts via a
+  // changing key.
+  //
+  // Bound->null rotation is a render-phase state adjustment (React docs
+  // pattern): a passive effect would leave one committed frame still keyed by
+  // the retired draft id (a stale interactive editor). Adjusting here
+  // re-renders synchronously before commit, so the new pending id is the first
+  // key after the transition - exactly one remount, no stale frame.
+  const [pendingDraftId, setPendingDraftId] = useState(() => uuidv4());
+  const [prevDraftId, setPrevDraftId] = useState<string | null>(draftId);
+  if (draftId !== prevDraftId) {
+    setPrevDraftId(draftId);
+    if (draftId === null) {
+      setPendingDraftId(uuidv4());
+    }
+  }
+  return pendingDraftId;
 }
 
 /**

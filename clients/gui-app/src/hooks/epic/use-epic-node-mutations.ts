@@ -1,8 +1,11 @@
+import { useQueryClient } from "@tanstack/react-query";
+
 import { useHostMutation } from "@/hooks/host/use-host-query";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { toastFromHostError } from "@/lib/host-error-toast";
 import { appLogger } from "@/lib/logger";
 import { Analytics, AnalyticsEvent } from "@/lib/analytics";
+import { hostQueryKeys } from "@/lib/query-keys";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
 import type { CommandRecord } from "@traycer-clients/shared/replica-runtime";
 import type { EpicWriteCommandIntent } from "@/stores/epics/open-epic/runtime/epic-write-command";
@@ -115,6 +118,12 @@ export function useEpicCreateArtifact() {
  */
 export function useEpicDeleteArtifact(artifactId: string | null) {
   const handle = useOpenEpicHandle();
+  // The delete itself rides the write-command queue, but the tombstone list is
+  // a host QUERY (`epic.deletedArtifacts.list`) rather than a projected slice,
+  // so a committed command does not refresh it. This is what the scoped-mutation
+  // `invalidateMethods` did before the queue took the write over.
+  const client = useEpicSessionHostClient();
+  const queryClient = useQueryClient();
   const isPending = useStore(handle.store, (state) =>
     state.writeCommands.some(
       (command) =>
@@ -137,6 +146,15 @@ export function useEpicDeleteArtifact(artifactId: string | null) {
         artifactId: variables.artifactId,
       });
       Analytics.getInstance().track(AnalyticsEvent.ArtifactDeleted, null);
+      const hostId = client?.getActiveHostId() ?? null;
+      if (hostId !== null) {
+        void queryClient.invalidateQueries({
+          queryKey: hostQueryKeys.methodScope(
+            hostId,
+            "epic.deletedArtifacts.list",
+          ),
+        });
+      }
       return { deleted: true };
     } catch (error: unknown) {
       const normalized =

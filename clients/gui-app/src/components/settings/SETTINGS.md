@@ -714,7 +714,15 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
     (`conversation`) and **Browsers** (`browser`) - product nouns for what the
     user opens, not the store's category words. Browser alone adds **Picture
     in picture** (`BrowserTilePlacement`) because the other two have no PiP
-    host. Defaults content=tab, conversation=tab, browser=split;
+    host. A fourth row, **Side chats** (`sideChat`), covers the `/btw` /
+    `/side` aside: it is a plain `chat` tile, so no tile kind maps to the
+    row - the open carries it as a `beside` placement
+    (`ExplicitTilePlacement`) naming the source chat's pane, and the row
+    decides only how "beside" is drawn ("As a tab of the source chat" /
+    "In a split beside the source chat"). Its own row rather than Agents &
+    terminals because an aside is read next to its conversation whatever
+    the user chose for new agents. Defaults content=tab, conversation=tab,
+    browser=split, sideChat=split;
     `tilePlacementForCategory` resolves a category against the default. On a
     single-tile viewport (`useIsMobileViewport()`) the row gains the
     DESCRIPTION "Narrow windows show one tile at a time, so everything opens
@@ -2115,6 +2123,157 @@ aria-live="polite"` carrying the equivalent text for
       call sites in `host-workspace-selector.tsx` and the cached-default path
       in `use-landing-composer-actions.ts`; entirely client-local, no host
       RPC or protocol change.
+  - **Automatic cleanup** (`worktree-auto-cleanup-chip.tsx`) — ONE chip in the
+    inventory toolbar's leading slot, opening a popover that holds the opt-in
+    letting this host delete proven-safe, long-idle worktrees unattended.
+    **Default off**, per HOST identity (not per signed-in user), and backed
+    entirely by the host: `worktree.getAutoCleanupPolicy` /
+    `setAutoCleanupPolicy` through `useHostQuery` / `useHostMutation`. Nothing
+    here schedules, retries, or simulates cleanup client-side — deletion
+    authority is the host's, and a local fallback would be a second scheduler
+    nobody asked for.
+    - **Why a chip.** This was a card above the inventory (a two-line summary
+      over a `Collapsible` threshold). The panel is a fixed height, so every
+      row that card spent was a worktree the list below could not show — and it
+      spent them unconditionally, for a policy consulted rarely and changed
+      almost never. A chip costs the list nothing: it rides in a toolbar row
+      that already exists. The panel header's subtitle went with it, so the
+      list card is the only child of the fill-height column in BOTH views
+      (inventory and cleanup history).
+    - **Five states, decided by one pure function** (`resolveAutoCleanupGate`,
+      exported for its own test): `absent` (no resolved host — the inventory's
+      own `HostScopeGate` names that state, and a second copy of it in the
+      toolbar would be two answers to one question, so the chip renders
+      nothing), `checking`, `offline`, `unsupported`, `ready`. The ladder fails
+      OPEN into `checking` on `useHostMethodSupport`'s `null`: telling someone
+      their host is too old because no handshake has completed yet is a claim
+      about a fact not in evidence. In the standalone-toolbar path the chip
+      sits ABOVE the gate, so it makes the gate's two checks — scope usability
+      and reachability — itself before mounting any host read. The three
+      non-`ready`, non-`absent` states render the chip INERT with their
+      sentence in a Tooltip and no popover; `offline` and `unsupported` stay
+      deliberately different sentences, one calling for starting a machine and
+      the other for updating it. Inertness is `aria-disabled`, not the
+      `disabled` attribute: a disabled button takes neither pointer events nor
+      focus, which would make the one sentence the chip exists to deliver
+      unreachable by mouse AND by keyboard.
+    - **The chip states the policy at a glance**: `Cleanup · On · 7d` with a
+      green dot, `Cleanup off` with a grey one, and a bare `Cleanup` with NO
+      dot until the read lands — an unknown policy must not paint "off", which
+      is a real state. So the policy read is mounted eagerly with the chip
+      rather than on open, and a read that FAILS leaves the chip live (the
+      error is a line inside the popover, not a reason to withhold the
+      control). Accessible name is `Automatic cleanup settings`, and
+      `aria-expanded` comes from the Radix trigger.
+    - **Writes carry the revision they read.** `expectedRevision` is required by
+      the contract, so the toggle stays disabled until the policy read lands.
+      A mismatch comes back as `AUTO_CLEANUP_POLICY_REVISION_CONFLICT`, which
+      is NOT toasted as a transport error: the hook re-reads the policy and the
+      popover explains inline that the setting moved somewhere else. The
+      success response IS the fresh policy state, so it is written straight
+      into the read query's slot and no second round trip is needed.
+    - **The popover** (Radix `Popover`, `align="start"`, `w-[min(88vw,20rem)]`)
+      is: the title + the switch on one row (plus the pending-write spinner);
+      then, enabled only, the safety sentence, the threshold, and a footer
+      carrying the schedule and a **History** link. Switched off it collapses
+      to one muted line, "Nothing is deleted automatically." — a policy that
+      deletes nothing has nothing to configure, so the threshold and the
+      footer are ABSENT rather than disabled controls over an inert setting.
+      Toggling the switch does not close the popover. Open state is
+      component-local (`useState(false)`) and never persisted, and the chip is
+      keyed by host: a remount, a host switch or a re-entry into Settings
+      starts closed.
+    - **Threshold** (in the popover, under the safety explanation): presets
+      7 / 14 / 30 / 60 / 90 days plus a free value validated against the host's
+      own `bounds` (`autoCleanupDaysError`), never a constant here — a host
+      that moves its bounds needs no client release, and the control can never
+      offer a value the host is about to refuse. The presets wrap to two rows
+      inside the popover; that is the intended shape, not an overflow.
+    - **Arriving from a Sweep.** The per-Task **Sweep worktrees** dialog
+      (`components/epics/sweep-worktrees-dialog.tsx`) shows one muted line in
+      its Choose state — "Proven-safe worktrees can be removed automatically."
+      plus a link-styled **Set up automatic cleanup** button — only while the
+      census settled with at least one `defaultChecked` row AND that dialog's
+      latched host both advertises `worktree.getAutoCleanupPolicy` and reads
+      back `enabled: false`. A loading, failed, unsupported or enabled policy
+      renders nothing, and the capability is checked BEFORE the read is
+      mounted, so nothing about the sweep ever waits on it. Enabling the policy
+      is the whole frequency cap: no dismissal, nothing persisted. The link
+      goes through `lib/worktree/open-auto-cleanup-settings.ts`, which reuses
+      the notification router's three seams in the same order —
+      `carryViewedHostIntoSettingsScope` (the policy is per host),
+      `selectWorktreeCleanupView("settings", null)` (the inventory, never
+      history), and then `ensureSettingsTab` — plus a third hint of its own,
+      `requestAutoCleanupFocus(hostId)`. That request is one-shot exactly like
+      `focusedRunId`, and it NAMES ITS HOST (`autoCleanupFocusHostId`, not a
+      bare boolean): the policy is per host and the chip administers exactly
+      one, so a request whose host never mounts a chip — offline, too old, or
+      Settings never opened — must not be spent on whichever host is scoped
+      next. The chip consumes it only while `scope.hostId` matches, by OPENING
+      its popover (Radix's mount autofocus then puts the caret on the switch,
+      the first tabbable inside), and clears it immediately after. The open is
+      applied during RENDER rather than in an effect — `react-hooks/
+set-state-in-effect` forbids the effect form, and an effect would also
+      arrive a commit too late for the mount autofocus — while the store clear
+      stays in an effect, where an external write belongs. `openHistory` drops
+      the request because a chip-focus request is stale the moment the panel
+      leaves the inventory, and a caller with no host to name asks for no focus
+      at all.
+      The line's own `useNavigate` lives in the innermost component, which
+      mounts only once the capability is proven AND the policy came back off —
+      so a Sweep dialog rendered without a `RouterProvider` never reaches the
+      router hook, rather than relying on TanStack warning and carrying on.
+    - **Paused** states render the reason in plain English
+      (`AUTO_CLEANUP_PAUSED_COPY`, a `Record` over the closed wire enum so a new
+      arm fails to compile rather than rendering as silence) and offer NO repair
+      affordance: every arm clears without the user acting. `nextEvaluationAt`
+      is `null` while paused, and reads as "Next check: paused" — a real state,
+      not a missing timestamp. That line is why the pause copy exists at all: a
+      stale "last checked" must never be the only evidence nothing is happening.
+  - **Cleanup history** (`worktree-cleanup-history.tsx`) — a SUB-VIEW, not a
+    second card: it replaces the panel body and carries a back control. Reached
+    from the cleanup popover's **History** link (which closes the popover on
+    the way, since history is the full-panel view), or arrived at directly from
+    an automatic-cleanup notification. Cursor-paginated newest-first over
+    `worktree.listAutoCleanupRuns` with an explicit **Load more** (no
+    auto-advance: history holds up to 200 runs and the user asked for the newest
+    ones); expanding a run fetches its targets through
+    `worktree.getAutoCleanupRun`, so a page costs one request rather than one
+    per row.
+    - **The presentation rule is a product decision, not styling**
+      (`worktree-auto-cleanup-copy.ts`). A `skipped` target is the safety engine
+      WORKING — it lost eligibility between selection and deletion — so it reads
+      "No longer eligible" in neutral styling. An `interrupted` one is honestly
+      unconfirmed ("Unconfirmed — Host stopped during cleanup"): the row may not
+      claim a deletion just because the directory is gone now, nor a failure
+      that never happened. **Only `failed` wears failure styling.** Putting the
+      other two in red trains people to ignore the one state that means Traycer
+      could not do something it was authorized to do.
+    - The host's `displayMessage` wins wherever it exists: `reasonCode` is an
+      OPEN string by contract, so a code this build has never heard of still
+      renders host-composed prose.
+    - **Every target row stands alone.** A later re-selection of the same path is
+      an ordinary new row, never folded into the attempt before it.
+      `worktreePath` renders verbatim — it names a directory on the very host
+      the panel is already talking to, which is why history never leaves it.
+    - **Arriving from a notification.** A `worktree_auto_cleanup` row routes
+      through the `hostSurface` family with `view: "cleanupHistory"`, the run id
+      as its focus hint, AND the run's `hostId`.
+      `routeHostSurfaceNotification` applies both BEFORE navigating, so the
+      panel reads them on its first render rather than flashing the wrong host
+      or the wrong sub-view: `carryViewedHostIntoSettingsScope` (history is
+      host-local, so the destination is only well defined once Settings is
+      administering the host the run happened on) and `selectWorktreeCleanupView`
+      (`stores/settings/worktree-cleanup-view-store` — not persisted, mirroring
+      `settings-host-scope-store`). The focus hint is consumed ONCE, on arrival,
+      so re-entering history later never silently re-expands a run the user
+      closed. Manual `worktree_deletion` rows carry NEITHER field, which is
+      exactly why their behavior is unchanged: they select the inventory for
+      whichever host is already being administered.
+    - `run: null` from `getAutoCleanupRun` is an ordinary outcome, not an error:
+      retention GC bounds history, so a notification can outlive the run it
+      names and the honest answer is "this run is no longer in this host's
+      history".
   - **Worktree inventory.** Host-wide management of the git worktrees Traycer
     creates under `~/.traycer/worktrees/`, presented as a calm
     inspection-and-cleanup list, not a delete console - own bordered card,

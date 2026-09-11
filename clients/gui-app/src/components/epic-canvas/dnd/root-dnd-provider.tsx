@@ -632,6 +632,7 @@ function updateHeaderTabSourcePreview(input: {
       : resolveLiveTopLevelDrop(headerTab, topLevelTarget);
   if (validDrop !== null) {
     headerTearOffActive = false;
+    dndStore.headerTearOffPreviewChanged(false);
     dndStore.headerStripDropIndexChanged(null);
     dndStore.headerStripDragStateChanged(null);
     dndStore.headerStripOffsetsChanged(EMPTY_HEADER_OFFSETS);
@@ -650,12 +651,16 @@ function updateHeaderTabSourcePreview(input: {
       activeHeaderStripGeometry?.stripBottom ?? null,
     )
   ) {
+    dndStore.headerTearOffPreviewChanged(
+      readTabDetachHandler()?.isAvailable === true,
+    );
     dndStore.headerStripDropIndexChanged(null);
     dndStore.headerStripDragStateChanged(null);
     dndStore.headerStripOffsetsChanged(EMPTY_HEADER_OFFSETS);
     dndStore.topLevelStripPairPreviewChanged(null);
     return;
   }
+  dndStore.headerTearOffPreviewChanged(false);
   if (point === null) {
     dndStore.headerStripDropIndexChanged(null);
     dndStore.headerStripDragStateChanged(null);

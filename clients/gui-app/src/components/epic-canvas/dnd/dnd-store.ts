@@ -228,22 +228,25 @@ function headerStripDragStateEqual(
  */
 function isDragStateIdle(state: EpicDndState): boolean {
   return (
-    state.activeSource === null &&
-    state.activeOverlayTile === null &&
-    state.activeHeaderTab === null &&
-    state.activeHeaderTabGhost === null &&
-    state.dropPreview === null &&
-    state.headerStripDropIndex === null &&
-    state.headerStripDragState === null &&
-    state.headerStripSourceWidth === null &&
+    !state.headerTearOffPreview &&
     state.headerStripOffsets.size === 0 &&
     state.tileStripOffsets.size === 0 &&
-    state.tileSourceWidth === null &&
-    state.topLevelStripPairPreview === null &&
-    state.reparentTargetNodeId === null &&
-    state.reparentTargetViewTabId === null &&
-    state.reparentRootPanelId === null &&
-    state.reparentRootViewTabId === null
+    [
+      state.activeSource,
+      state.activeOverlayTile,
+      state.activeHeaderTab,
+      state.activeHeaderTabGhost,
+      state.dropPreview,
+      state.headerStripDropIndex,
+      state.headerStripDragState,
+      state.headerStripSourceWidth,
+      state.tileSourceWidth,
+      state.topLevelStripPairPreview,
+      state.reparentTargetNodeId,
+      state.reparentTargetViewTabId,
+      state.reparentRootPanelId,
+      state.reparentRootViewTabId,
+    ].every((value) => value === null)
   );
 }
 
@@ -264,6 +267,8 @@ interface EpicDndState {
    * the gesture, mirroring `activeOverlayTile`.
    */
   readonly activeHeaderTabGhost: HeaderTabDragGhost | null;
+  /** Whether the header preview depicts a detached member. */
+  readonly headerTearOffPreview: boolean;
   /** Current canvas-side drop preview (strip / body / empty-shell / rail). */
   readonly dropPreview: EpicCanvasDropPreview;
   /**
@@ -329,6 +334,7 @@ interface EpicDndState {
     sourceWidth: number | null,
     ghost: HeaderTabDragGhost | null,
   ) => void;
+  readonly headerTearOffPreviewChanged: (active: boolean) => void;
   readonly dropPreviewChanged: (preview: EpicCanvasDropPreview) => void;
   readonly headerStripDropIndexChanged: (index: number | null) => void;
   readonly headerStripDragStateChanged: (state: StripDragState | null) => void;
@@ -359,6 +365,7 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
   activeOverlayTile: null,
   activeHeaderTab: null,
   activeHeaderTabGhost: null,
+  headerTearOffPreview: false,
   dropPreview: null,
   headerStripDropIndex: null,
   headerStripDragState: null,
@@ -377,6 +384,7 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
       activeOverlayTile: overlayTile,
       activeHeaderTab: null,
       activeHeaderTabGhost: null,
+      headerTearOffPreview: false,
       dropPreview: null,
       headerStripDropIndex: null,
       headerStripDragState: null,
@@ -397,6 +405,7 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
       activeOverlayTile: null,
       activeHeaderTab: tab,
       activeHeaderTabGhost: ghost,
+      headerTearOffPreview: false,
       dropPreview: null,
       headerStripDropIndex: null,
       headerStripDragState: null,
@@ -410,6 +419,10 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
       reparentRootPanelId: null,
       reparentRootViewTabId: null,
     });
+  },
+  headerTearOffPreviewChanged: (active) => {
+    if (get().headerTearOffPreview === active) return;
+    set({ headerTearOffPreview: active });
   },
   dropPreviewChanged: (preview) => {
     if (epicCanvasDropPreviewEqual(get().dropPreview, preview)) return;
@@ -486,6 +499,7 @@ export const useEpicDndStore = create<EpicDndState>()((set, get) => ({
       activeOverlayTile: null,
       activeHeaderTab: null,
       activeHeaderTabGhost: null,
+      headerTearOffPreview: false,
       dropPreview: null,
       headerStripDropIndex: null,
       headerStripDragState: null,

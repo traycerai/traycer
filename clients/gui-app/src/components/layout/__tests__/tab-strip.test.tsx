@@ -1,10 +1,8 @@
 import type { TaskPinnedState } from "@/hooks/epic/use-epic-task-pinned-states-query";
 import { INERT_ROOT_STATE_PORT } from "@/stores/epics/open-epic/test-support/root-state-port-fixture";
 import { TabStrip } from "@/components/layout/tabs/tab-strip";
-import {
-  SplitMemberChrome,
-  TabChrome,
-} from "@/components/layout/tabs/tab-strip-item";
+import { SplitMemberChrome } from "@/components/layout/tabs/split-tab-chrome";
+import { TabChrome } from "@/components/layout/tabs/header-tab-visual";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { paneTabRefs } from "@/stores/epics/canvas/actions";
 import { createEmptyCanvas } from "@/stores/epics/canvas/canvas-state";
@@ -909,7 +907,7 @@ describe("<TabStrip />", () => {
     const frame = tab.parentElement;
     if (frame === null) throw new Error("Expected tab frame");
 
-    expect(frame.className).toContain("min-w-[120px]");
+    expect(frame.className).toContain("min-w-[min(40vw,12rem)]");
     expect(frame.className).toContain("w-56");
     expect(frame.className).toContain("max-w-56");
     expect(frame.className).toContain("flex-[1_1_14rem]");
@@ -1147,7 +1145,7 @@ describe("<TabStrip />", () => {
     expect(rightPane?.getAttribute("fill")).toBe("currentColor");
     expect(leftUnderline.className).toContain("bg-current");
     expect(rightUnderline.className).not.toContain("bg-current");
-    expect(leftTab.className).toContain("px-1.5");
+    expect(leftTab.className).toContain("px-5");
     expect(rightTab.className).toContain("px-5");
     expect(within(leftTab).queryByTestId("tab-chrome-center")).toBeNull();
     expect(
@@ -1262,9 +1260,15 @@ describe("<TabStrip />", () => {
 
     const tab = await screen.findByTestId("tab-epic-e-a");
     const title = screen.getByTestId("tab-title-epic-e-a");
+    const closeButton = screen.getByTestId("tab-close-epic-e-a");
+
+    const trigger = tab.querySelector('[data-slot="tooltip-trigger"]');
+    if (trigger === null) throw new Error("Expected a tooltip trigger");
 
     expect(tab.getAttribute("data-slot")).not.toBe("tooltip-trigger");
-    expect(title.getAttribute("data-slot")).toBe("tooltip-trigger");
+    expect(trigger).not.toBe(tab);
+    expect(trigger.contains(title)).toBe(true);
+    expect(trigger.contains(closeButton)).toBe(false);
   });
 
   it("shows a spinner while epic title generation is pending", async () => {

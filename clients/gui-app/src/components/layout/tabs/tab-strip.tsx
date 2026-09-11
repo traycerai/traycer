@@ -50,10 +50,9 @@ import { TabItem } from "@/components/layout/tabs/tab-strip-item";
 import { SplitTabItem } from "@/components/layout/tabs/split-tab-item";
 import { TabStripNewButton } from "@/components/layout/tabs/tab-strip-new-button";
 import { useHorizontalWheelScroll } from "@/hooks/use-horizontal-wheel-scroll";
-import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
+import { useHeaderTabIndicators } from "./header-tab-presentation";
 import { NotificationIndicatorsProvider } from "@/components/notifications/notification-indicators-provider";
 import { ChatIndicatorHostScopes } from "@/components/notifications/chat-indicator-host-scopes";
-import { chatIndicatorHostScopes } from "@/lib/notifications/chat-indicator-scopes";
 import {
   executeTabSplitCommand,
   preparePairTabsCommand,
@@ -71,7 +70,6 @@ import {
   useEpicTaskPinnedStates,
   type TaskPinnedState,
 } from "@/hooks/epic/use-epic-task-pinned-states-query";
-import { useLiveChatEpicIdsForEpics } from "@/lib/registries/epic-session-registry";
 
 export function TabStrip() {
   const hasHydrated = useWindowsBridgeHydrated();
@@ -115,56 +113,12 @@ function TabStripBody() {
   });
 
   const isLandingPage = activePathname === "/";
-  const indicatorEpicIds = useMemo(
-    () => allTabs.flatMap((tab) => (tab.kind === "epic" ? [tab.epicId] : [])),
-    [allTabs],
-  );
-  const indicatorChatEpicIds = useLiveChatEpicIdsForEpics(indicatorEpicIds);
-  const indicatorChatIds = useMemo(
-    () => Object.keys(indicatorChatEpicIds),
-    [indicatorChatEpicIds],
-  );
-  const indicatorEpicHostIds = useMemo(() => {
-    const hostIds: Map<string, ReadonlySet<string>> = new Map();
-    for (const tab of allTabs) {
-      if (tab.kind !== "epic" || tab.hostId === null) continue;
-      const epicHostIds = hostIds.get(tab.epicId);
-      hostIds.set(
-        tab.epicId,
-        new Set(
-          epicHostIds === undefined
-            ? [tab.hostId]
-            : [...epicHostIds, tab.hostId],
-        ),
-      );
-    }
-    return hostIds;
-  }, [allTabs]);
-  const indicatorChatScopes = useMemo(
-    () =>
-      chatIndicatorHostScopes(
-        indicatorChatIds.flatMap((chatId) => {
-          const epicId = indicatorChatEpicIds[chatId];
-          const hostIds = indicatorEpicHostIds.get(epicId);
-          return hostIds === undefined
-            ? []
-            : [...hostIds].map((hostId) => ({ hostId, chatId }));
-        }),
-      ),
-    [indicatorChatEpicIds, indicatorChatIds, indicatorEpicHostIds],
-  );
-  const notificationIndicators = useNotificationIndicators({
-    // Epic ids only, so the notification host is the right one to ask: an
-    // Epic is a shared cloud entity, not a host-owned record, and the strip's
-    // lights should agree with the feed the notification centre renders.
-    hostId: null,
+  const {
     epicIds: indicatorEpicIds,
-    // Chats are host-owned, so a single serving-host request cannot answer for
-    // this strip. `ChatIndicatorHostScopes` below fans them out by each tab's
-    // lifetime host binding instead.
-    chatIds: [],
-    enabled: indicatorEpicIds.length > 0,
-  });
+    indicators: notificationIndicators,
+    chatEpicIds: indicatorChatEpicIds,
+    chatScopes: indicatorChatScopes,
+  } = useHeaderTabIndicators(allTabs);
   const taskPinnedStates = useEpicTaskPinnedStates(indicatorEpicIds);
   const pendingSetPinnedEpicIds = usePendingSetPinnedEpicIds();
   const { mutate: setEpicPinned } = useEpicSetPinned();
@@ -378,7 +332,7 @@ function TabStripBody() {
                 ref={trailingSlotRef}
                 data-testid="header-tab-strip-scroll"
                 onWheel={handleWheel}
-                className="no-scrollbar flex min-w-0 max-w-full flex-[0_1_auto] touch-pan-x items-end overflow-x-auto overscroll-x-contain"
+                className="no-scrollbar flex min-w-0 max-w-full flex-[0_1_auto] touch-pan-x items-end overflow-x-auto overscroll-x-contain [-webkit-app-region:no-drag]"
               >
                 {headerItemIds.map((itemId, index) => {
                   const layoutItem = layoutItems.at(index);

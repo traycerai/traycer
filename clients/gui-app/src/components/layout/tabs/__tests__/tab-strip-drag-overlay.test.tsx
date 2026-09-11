@@ -25,6 +25,7 @@ vi.mock("@/hooks/epic/use-epic-activity-status", () => ({
 }));
 vi.mock("@/lib/epic-selectors", () => ({
   useRegisteredEpicTitleGenerating: mocks.useRegisteredEpicTitleGenerating,
+  useRegisteredEpicTitle: () => null,
 }));
 
 function epicTab(): Extract<HeaderTab, { kind: "epic" }> {
@@ -84,8 +85,9 @@ describe("HeaderTabDragOverlay: ghost-carried identity + indicator state", () =>
 
     render(<HeaderTabDragOverlay tab={tab} ghost={ghost} width={200} />);
 
-    const chip = screen.getByTestId("header-tab-drag-overlay");
-    expect(chip.style.borderColor).toBe("rgb(101, 67, 33)");
+    expect(screen.getByTestId("tab-chrome-center").style.borderTopColor).toBe(
+      "rgb(101, 67, 33)",
+    );
     // Identity icon (emoji) and the running-activity status render together.
     expect(screen.getByText("\u{1f680}")).toBeTruthy();
     expect(screen.getByTestId("header-tab-activity-tab-1")).toBeTruthy();
@@ -123,9 +125,9 @@ describe("HeaderTabDragOverlay: ghost-carried identity + indicator state", () =>
     render(<HeaderTabDragOverlay tab={tab} ghost={ghost} width={200} />);
 
     expect(screen.getByTestId("header-tab-approval-tab-1")).toBeTruthy();
-    expect(
-      screen.getByTestId("header-tab-drag-overlay").style.borderColor,
-    ).toBe("rgb(51, 68, 85)");
+    expect(screen.getByTestId("tab-chrome-center").style.borderTopColor).toBe(
+      "rgb(51, 68, 85)",
+    );
   });
 
   it("falls back to no identity and an empty badge when the ghost is null", () => {

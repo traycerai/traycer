@@ -162,7 +162,8 @@ describe("useCloseTabFlow", () => {
     });
 
     expect(requestCloseWindowSpy).not.toHaveBeenCalled();
-    expect(useLandingDraftStore.getState().drafts).toHaveLength(0);
+    expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+    expect(useLandingDraftStore.getState().drafts[0].closed).toBe(true);
     expect(navigateSpy).toHaveBeenCalledWith({ to: "/" });
   });
 
@@ -204,7 +205,8 @@ describe("useCloseTabFlow", () => {
     });
 
     expect(requestCloseWindowSpy).not.toHaveBeenCalled();
-    expect(useLandingDraftStore.getState().drafts).toHaveLength(0);
+    expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+    expect(useLandingDraftStore.getState().drafts[0].closed).toBe(true);
     expect(navigateSpy).toHaveBeenCalledWith({ to: "/" });
   });
 

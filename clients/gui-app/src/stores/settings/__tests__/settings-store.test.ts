@@ -468,10 +468,12 @@ describe("useSettingsStore", () => {
       content: "tab",
       conversation: "tab",
       browser: "split",
+      sideChat: "split",
     });
     const placement = useSettingsStore.getState().tilePlacement;
     expect(tilePlacementForCategory(placement, "content")).toBe("tab");
     expect(tilePlacementForCategory(placement, "browser")).toBe("split");
+    expect(tilePlacementForCategory(placement, "side-chat")).toBe("split");
   });
 
   it("lets an explicit default override the per-kind and per-category rows", () => {
@@ -492,8 +494,23 @@ describe("useSettingsStore", () => {
           content: "tab",
           conversation: "tab",
           browser: "pip",
+          sideChat: "tab",
         },
         "browser",
+      ),
+    ).toBe("split");
+    // A flat default answers for the side-chat row too - it is not exempt
+    // from "default" the way `pip` is exempt from `alt`.
+    expect(
+      tilePlacementForCategory(
+        {
+          default: "split",
+          content: "tab",
+          conversation: "tab",
+          browser: "pip",
+          sideChat: "tab",
+        },
+        "side-chat",
       ),
     ).toBe("split");
   });
@@ -519,6 +536,39 @@ describe("useSettingsStore", () => {
       ...DEFAULT_TILE_PLACEMENT_SETTINGS,
       browser: "pip",
     });
+  });
+
+  it("fills a missing sideChat row on a pre-row persisted blob with the default", async () => {
+    await rehydrateFrom({
+      tilePlacement: {
+        default: "per-category",
+        content: "tab",
+        conversation: "tab",
+        browser: "split",
+      },
+    });
+
+    expect(useSettingsStore.getState().tilePlacement).toEqual({
+      default: "per-category",
+      content: "tab",
+      conversation: "tab",
+      browser: "split",
+      sideChat: "split",
+    });
+  });
+
+  it("repairs an invalid persisted sideChat value to the default", async () => {
+    await rehydrateFrom({
+      tilePlacement: {
+        default: "per-category",
+        content: "tab",
+        conversation: "tab",
+        browser: "split",
+        sideChat: "pip",
+      },
+    });
+
+    expect(useSettingsStore.getState().tilePlacement.sideChat).toBe("split");
   });
 
   it("defaults agent tab surfacing to off", () => {

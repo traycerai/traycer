@@ -3,14 +3,7 @@ import { NotificationIndicatorIcon } from "@/components/notifications/notificati
 import type { NotificationIndicatorState } from "@/stores/notifications/notification-indicator-state";
 import type { EpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
 import type { HeaderTabAppearance, TabIcon } from "@/stores/tabs/types";
-/**
- * Takes `indicatorState` as a resolved prop rather than reading
- * `NotificationIndicatorsContext` itself - both callers (the strip's
- * `TabItem` and the drag ghost's `HeaderTabDragOverlay`) already have it
- * resolved by the time they render this, and the drag ghost in particular
- * cannot reach that context at all (it renders in a sibling subtree of the
- * strip - see `tab-strip-drag-overlay.tsx`).
- */
+/** Paints custom identity beside the resolved activity and notification state. */
 export function TabLeadingIcon(props: {
   readonly icon: TabIcon | null;
   readonly identity: HeaderTabAppearance | null;

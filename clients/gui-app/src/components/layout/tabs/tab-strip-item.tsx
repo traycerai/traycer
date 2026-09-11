@@ -29,24 +29,16 @@ import {
 import { useDragSourceDisabled } from "@/components/epic-canvas/dnd/use-drag-source-disabled";
 import { Button } from "@/components/ui/button";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { DropLine } from "@/components/ui/drop-line";
 import {
   useRegisteredEpicLocalHome,
   useRegisteredEpicPermissionRole,
-  useRegisteredEpicTitle,
-  useRegisteredEpicTitleGenerating,
 } from "@/lib/epic-selectors";
 import {
   authorizesCloudCapability,
   useAuthStore,
 } from "@/stores/auth/auth-store";
-import { displayTitle } from "@/lib/display-title";
 import type { TaskPinnedState } from "@/hooks/epic/use-epic-task-pinned-states-query";
 import { isEditableRole } from "@/lib/epic-permissions";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
@@ -71,9 +63,11 @@ import {
   type HeaderTabDragGhost,
 } from "@/components/epic-canvas/dnd/dnd-store";
 import { useSurfaceNotificationIndicatorState } from "@/components/notifications/notification-indicator-context";
+import { HeaderTabVisual } from "./header-tab-visual";
+import { useHeaderTabTitle } from "./header-tab-presentation";
 import {
   useHeaderTabDisplacementTransition,
-  TAB_CLASS_BASE,
+  headerTabClassName,
 } from "@/components/layout/tabs/tab-chrome-tokens";
 import { mergeRefs } from "@/lib/merge-refs";
 import { TabContextMenuContent } from "@/components/layout/tabs/tab-strip-context-menu";
@@ -85,8 +79,6 @@ import { tabAppearance, type HeaderTab } from "@/stores/tabs/types";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
-import { useEpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
-import { TabLeadingIcon } from "./tab-leading-icon";
 import { reportableErrorToast } from "@/lib/reportable-error-toast";
 
 const NO_DRAG_CLASS = "[-webkit-app-region:no-drag]";
@@ -204,7 +196,6 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
   } = props;
   const tabEpicId = tab.kind === "epic" ? tab.epicId : null;
   const appearance = tabAppearance(tab);
-  const tabColor = appearance?.color ?? null;
   // Read once here rather than inside `TabLeadingIcon`, so the SAME resolved
   // value can also ride the drag payload below - the strip item is the drag
   // source, and at the moment a drag starts it already holds everything the
@@ -273,13 +264,8 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
   const modifier = useTabLeaderModifierForIndex(index);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  // Every registry read below is keyed by the epic, or by nothing for the
-  // other tab kinds; resolve that once rather than per hook.
+  const { resolvedTabName, displayName } = useHeaderTabTitle(tab);
   const registeredEpicId = tab.kind === "epic" ? tab.epicId : null;
-  const liveEpicTitle = useRegisteredEpicTitle(registeredEpicId);
-  const titleGenerationPending =
-    useRegisteredEpicTitleGenerating(registeredEpicId);
-  const activityStatus = useEpicActivityStatus(registeredEpicId);
   const permissionRole = useRegisteredEpicPermissionRole(registeredEpicId);
   const localHome = useRegisteredEpicLocalHome(registeredEpicId);
   const cloudAuthorized = useAuthStore((state) =>
@@ -292,13 +278,6 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
     cloudAuthorized,
   });
   const canClose = tab.kind !== "epic" || tab.canClose;
-  // Epic tabs can carry an empty name; render through `displayTitle` so it falls
-  // back to "Untitled task". Other kinds render their name verbatim.
-  const resolvedTabName = liveEpicTitle ?? tab.name;
-  const displayName =
-    tab.kind === "epic"
-      ? displayTitle(resolvedTabName, "epic")
-      : resolvedTabName;
   const displayTab = useMemo(
     () =>
       resolvedTabName === tab.name
@@ -510,12 +489,7 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
           onTouchMove={cancelLongPress}
           onTouchStart={handleTouchStart}
           className={cn(
-            TAB_CLASS_BASE,
-            // A split half shares the group's silhouette and only has half the
-            // width, so it trades the tab's generous side padding for enough
-            // room to still show an icon plus a readable title.
-            chrome === "member" && cn("gap-1", isActive ? "px-5" : "px-1.5"),
-            tabStateClass(isActive),
+            headerTabClassName(chrome, isActive),
             NO_DRAG_CLASS,
             "cursor-pointer",
           )}
@@ -524,54 +498,36 @@ export const TabItem = memo(function TabItem(props: TabItemProps) {
             visible={showDropIndicatorBefore}
             side="left"
           />
-          {chrome === "own" ? (
-            <TabChrome isActive={isActive} color={tabColor} />
-          ) : (
-            <SplitMemberChrome focused={isActive} color={tabColor} />
-          )}
-          <StripPairPreview tabKind={tab.kind} tabId={tab.id} />
-          <span className="relative z-20 flex min-w-0 flex-1 items-center justify-center gap-1.5 outline-none">
-            <TabLeadingIcon
-              icon={tab.icon}
-              identity={appearance}
-              titleGenerationPending={titleGenerationPending}
-              activityStatus={activityStatus}
-              indicatorState={indicatorState}
-              tabId={tab.id}
-            />
-            {rename.isEditing ? (
-              <input
-                {...rename.inputProps}
-                aria-label="Edit epic title"
-                data-testid={`tab-title-input-${tab.kind}-${tab.id}`}
-                className="min-w-0 flex-1 rounded-sm border border-border bg-background px-1 text-center text-ui-sm text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring [-webkit-app-region:no-drag]"
-              />
-            ) : (
-              <>
-                <span className="min-w-0 flex-1 text-center">
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span
-                        data-testid={`tab-title-${tab.kind}-${tab.id}`}
-                        className="inline-block max-w-full truncate align-bottom"
-                      >
-                        {displayName}
-                      </span>
-                    </TooltipTrigger>
-                    <TooltipContent>{displayName}</TooltipContent>
-                  </Tooltip>
-                </span>
-                <TabTrailingSlot
-                  label={`Close ${displayName}`}
-                  testId={`tab-close-${tab.kind}-${tab.id}`}
-                  onClose={() => onClose(displayTab)}
-                  leaderBadge={leaderBadge}
-                  active={isActive}
-                  disabled={!canClose}
+          <HeaderTabVisual
+            tab={tab}
+            appearance={appearance}
+            indicatorState={indicatorState}
+            displayName={displayName}
+            chrome={chrome}
+            isActive={isActive}
+            titleControl={
+              rename.isEditing ? (
+                <input
+                  {...rename.inputProps}
+                  aria-label="Edit epic title"
+                  data-testid={`tab-title-input-${tab.kind}-${tab.id}`}
+                  className="min-w-0 flex-1 rounded-sm border border-border bg-background px-1 text-left text-ui-sm text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring [-webkit-app-region:no-drag]"
                 />
-              </>
-            )}
-          </span>
+              ) : null
+            }
+            trailingControl={
+              <TabTrailingSlot
+                label={`Close ${displayName}`}
+                testId={`tab-close-${tab.kind}-${tab.id}`}
+                onClose={() => onClose(displayTab)}
+                leaderBadge={leaderBadge}
+                active={isActive}
+                disabled={!canClose}
+              />
+            }
+            leaderVisible={leaderBadge !== null}
+          />
+          <StripPairPreview tabKind={tab.kind} tabId={tab.id} />
           <HeaderTabSeparator visible={showSeparatorAfter} />
           <HeaderTabDropIndicator
             visible={showDropIndicatorAfter}
@@ -750,17 +706,11 @@ function HeaderTabMotionFrame(props: {
       data-strip-item-mergeable="true"
       // Keep the 14rem cap in sync with TAB_WIDTH_CAP_PX in the desktop
       // resolution harness.
-      className="relative flex w-56 min-w-[120px] max-w-56 flex-[1_1_14rem] items-end [container-type:inline-size]"
+      className="relative flex w-56 min-w-[min(40vw,12rem)] max-w-56 flex-[1_1_14rem] items-end [container-type:inline-size]"
     >
       {props.children}
     </m.div>
   );
-}
-
-function tabStateClass(isActive: boolean): string {
-  return isActive
-    ? "z-10 font-medium text-foreground"
-    : "text-muted-foreground hover:text-foreground";
 }
 
 interface LeaderBadge {
@@ -779,16 +729,8 @@ interface TabTrailingSlotProps {
 }
 
 /**
- * Inline trailing slot that defaults to zero width so compact tabs stay
- * icon-first. A container query reveals the close button only after the tab is
- * wide enough to spare the room, and only when one of:
- * - the user hovers a non-compact tab
- * - keyboard focus enters a non-compact tab
- * - the leader modifier is held (renders the digit badge)
- *
- * The collapsed close button stays mounted (just zero-width and
- * hidden) so the same `<Button>` keeps its focus + click behavior
- * across the hover transition.
+ * Close controls overlay the label; leader badges reserve their intrinsic width.
+ * The title's tooltip anchor keeps a stable width across hover.
  */
 function TabTrailingSlot(props: TabTrailingSlotProps) {
   const { label, testId, onClose, leaderBadge, active, disabled } = props;
@@ -796,8 +738,10 @@ function TabTrailingSlot(props: TabTrailingSlotProps) {
   return (
     <span
       className={cn(
-        "z-20 flex shrink-0 items-center justify-center overflow-hidden transition-[width,opacity] duration-150 ease-spring [-webkit-app-region:no-drag]",
-        showLeader ? "w-fit opacity-100" : "header-tab-trailing-slot",
+        "z-20 flex shrink-0 items-center justify-center overflow-hidden transition-opacity duration-150 ease-spring [-webkit-app-region:no-drag]",
+        showLeader
+          ? "relative w-fit opacity-100"
+          : "header-tab-trailing-slot absolute right-0 top-1/2 -translate-y-1/2",
       )}
     >
       <AnimatePresence initial={false}>
@@ -856,38 +800,6 @@ export function HeaderTabSeparator(props: { readonly visible: boolean }) {
   );
 }
 
-export function TabChrome(props: {
-  readonly isActive: boolean;
-  readonly color: string | null;
-}) {
-  if (!props.isActive) {
-    return (
-      <>
-        {props.color !== null ? (
-          <span
-            aria-hidden
-            className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5"
-            style={{ backgroundColor: props.color }}
-          />
-        ) : null}
-        <span
-          aria-hidden
-          className="pointer-events-none absolute inset-x-2 inset-y-1 rounded-md bg-accent/45 opacity-0 transition-opacity duration-150 ease-out group-focus-visible/tab:opacity-100 group-has-[:focus-visible]/tab:opacity-100 group-hover/tab:opacity-100"
-        />
-      </>
-    );
-  }
-
-  return (
-    <TabChromeBackground
-      fill="var(--color-background)"
-      borderColor={props.color ?? "var(--color-border)"}
-      coversBaseline
-      className="transition-opacity duration-300 ease-spring"
-    />
-  );
-}
-
 /**
  * Shown on the tab a pair-into-split drop would combine with, the moment the
  * pointer is on its approach half. The highlight covers ONLY the half the
@@ -912,113 +824,5 @@ function StripPairPreview(props: {
         side === "left" ? "left-1 right-1/2" : "left-1/2 right-1",
       )}
     />
-  );
-}
-
-/**
- * Selection treatment for one member of a split group. The focused member uses
- * the same raised silhouette as an ordinary selected tab; group membership is
- * communicated independently by the split group's accent underline.
- */
-export function SplitMemberChrome(props: {
-  readonly focused: boolean;
-  readonly color: string | null;
-}) {
-  if (props.focused) {
-    return (
-      <TabChromeBackground
-        fill="var(--color-background)"
-        borderColor={props.color ?? "var(--color-primary)"}
-        coversBaseline
-      />
-    );
-  }
-
-  return (
-    <span
-      aria-hidden
-      className="pointer-events-none absolute inset-x-px inset-y-1 rounded-sm transition-colors duration-200 ease-out group-hover/tab:bg-accent/20"
-    />
-  );
-}
-
-interface TabChromeBackgroundProps {
-  fill: string;
-  borderColor: string | undefined;
-  coversBaseline: boolean;
-  className?: string;
-}
-
-function TabChromeBackground({
-  fill,
-  borderColor,
-  coversBaseline,
-  className,
-}: TabChromeBackgroundProps) {
-  return (
-    <span
-      aria-hidden
-      className={cn("pointer-events-none absolute inset-0 flex", className)}
-    >
-      <TabCap side="left" fill={fill} borderColor={borderColor} />
-      <span
-        data-testid="tab-chrome-center"
-        className={cn("-mx-px h-full flex-1", borderColor && "border-t")}
-        style={{ backgroundColor: fill, borderTopColor: borderColor }}
-      />
-      <TabCap side="right" fill={fill} borderColor={borderColor} />
-      {coversBaseline ? (
-        <span
-          aria-hidden
-          data-testid="tab-baseline-cover"
-          className="absolute inset-x-0 bottom-0 z-0 h-px"
-          style={{ backgroundColor: fill }}
-        />
-      ) : null}
-    </span>
-  );
-}
-
-function TabCap({
-  side,
-  fill,
-  borderColor,
-}: {
-  side: "left" | "right";
-  fill: string;
-  borderColor: string | undefined;
-}) {
-  const d =
-    side === "left"
-      ? "M 20 0 L 15 0 C 10.6 0 8 2.8 8 7 L 8 32 C 8 36.8 4.8 40 0 40 L 20 40 Z"
-      : "M 0 0 L 5 0 C 9.4 0 12 2.8 12 7 L 12 32 C 12 36.8 15.2 40 20 40 L 0 40 Z";
-  // SVG strokes are centered on their path. Inset the top edge by half the
-  // stroke width so it occupies the same inside pixel row as the center's CSS
-  // border; placing it at y=0 clips the outer half and makes the center look
-  // like a second line at display scaling.
-  const outline =
-    side === "left"
-      ? "M -2 39.5 L 0 39.5 C 4.8 39.5 8 36.8 8 32 L 8 7 C 8 2.8 10.6 0.5 15 0.5 L 20 0.5"
-      : "M 0 0.5 L 5 0.5 C 9.4 0.5 12 2.8 12 7 L 12 32 C 12 36.8 15.2 39.5 20 39.5 L 22 39.5";
-  return (
-    <svg
-      data-testid={`tab-cap-${side}`}
-      viewBox="0 0 20 40"
-      preserveAspectRatio="none"
-      className="relative z-10 h-full w-5 shrink-0 overflow-visible"
-    >
-      <path d={d} fill={fill} />
-      {borderColor ? (
-        <path
-          data-testid={`tab-cap-outline-${side}`}
-          d={outline}
-          fill="none"
-          stroke={borderColor}
-          strokeWidth="1"
-          strokeLinecap="square"
-          vectorEffect="non-scaling-stroke"
-        />
-      ) : null}
-    </svg>
   );
 }

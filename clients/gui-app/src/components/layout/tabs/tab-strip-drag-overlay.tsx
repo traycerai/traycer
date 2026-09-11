@@ -4,12 +4,10 @@ import {
   useEpicDndStore,
   type HeaderTabDragGhost,
 } from "@/components/epic-canvas/dnd/dnd-store";
-import { displayTitle } from "@/lib/display-title";
+import { cn } from "@/lib/utils";
 import type { HeaderTab } from "@/stores/tabs/types";
-import { EMPTY_NOTIFICATION_INDICATOR_STATE } from "@/stores/notifications/notification-indicator-state";
-import { TabLeadingIcon } from "./tab-leading-icon";
-import { useEpicActivityStatus } from "@/hooks/epic/use-epic-activity-status";
-import { useRegisteredEpicTitleGenerating } from "@/lib/epic-selectors";
+import { HeaderTabPreview } from "./header-tab-visual";
+import { headerTabClassName } from "./tab-chrome-tokens";
 
 const HEADER_TAB_OVERLAY_TRANSITION = {
   type: "spring",
@@ -19,11 +17,6 @@ const HEADER_TAB_OVERLAY_TRANSITION = {
 } satisfies Transition;
 
 interface HeaderTabDragOverlayProps {
-  /**
-   * The UNRESOLVED base tab (name/icon/route/id) - `useHeaderTabForRef`'s
-   * projection, resolved via the strip's ordinary source-store subscription.
-   * Carries no `appearance` of its own; that comes from `ghost`.
-   */
   readonly tab: HeaderTab;
   /**
    * Render-ready enrichment (`appearance`, `indicatorState`)
@@ -40,22 +33,12 @@ interface HeaderTabDragOverlayProps {
 /** Captured appearance and notifications with live activity status. */
 export function HeaderTabDragOverlay(props: HeaderTabDragOverlayProps) {
   const tab = props.tab;
-  const epicId = tab.kind === "epic" ? tab.epicId : null;
-  const activityStatus = useEpicActivityStatus(epicId);
-  const titleGenerationPending = useRegisteredEpicTitleGenerating(epicId);
-  const appearance = props.ghost?.appearance ?? null;
-  const indicatorState =
-    props.ghost?.indicatorState ?? EMPTY_NOTIFICATION_INDICATOR_STATE;
   // While a merge target is highlighted the overlay ghosts: the highlight sits
   // on the approach half of the target tab, which is exactly where this
   // overlay is - opaque, it would cover the one signal the gesture shows.
   const mergeTargeted = useEpicDndStore(
     (state) => state.topLevelStripPairPreview !== null,
   );
-  // Epic tabs can carry an empty name; render through `displayTitle`. Render
-  // only - never mutate the tab.
-  const displayName =
-    tab.kind === "epic" ? displayTitle(tab.name, "epic") : tab.name;
   return (
     <m.div
       // Named so an instrument can find it by identity rather than by a
@@ -68,22 +51,13 @@ export function HeaderTabDragOverlay(props: HeaderTabDragOverlayProps) {
       initial={false}
       animate={{ opacity: mergeTargeted ? 0.45 : 1 }}
       transition={HEADER_TAB_OVERLAY_TRANSITION}
-      style={{
-        width: props.width ?? undefined,
-        backgroundColor: "var(--color-background)",
-        borderColor: appearance?.color ?? undefined,
-      }}
-      className="pointer-events-none flex h-10 cursor-grabbing select-none items-center gap-2 rounded-t-md border border-b-0 border-border/80 bg-background px-[clamp(0.75rem,10%,1.5rem)] text-ui-sm font-medium text-foreground shadow-lg"
+      style={props.width === null ? undefined : { width: props.width }}
+      className={cn(
+        headerTabClassName("own", true),
+        "pointer-events-none cursor-grabbing select-none",
+      )}
     >
-      <TabLeadingIcon
-        icon={tab.icon}
-        identity={appearance}
-        titleGenerationPending={titleGenerationPending}
-        activityStatus={activityStatus}
-        indicatorState={indicatorState}
-        tabId={tab.id}
-      />
-      <span className="min-w-0 truncate">{displayName}</span>
+      <HeaderTabPreview tab={tab} ghost={props.ghost} chrome="own" isActive />
     </m.div>
   );
 }
