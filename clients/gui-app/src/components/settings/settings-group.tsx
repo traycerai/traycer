@@ -22,6 +22,19 @@ interface SettingsGroupProps {
    * Off by default - most groups size to their content.
    */
   readonly fill: boolean;
+  /**
+   * The token settings search scrolls to and flashes when a result names this
+   * group.
+   *
+   * It goes on the CARD, not on the `<section>` that also holds the heading.
+   * The heading sits outside the card by design (see below) with its own
+   * spacing, so a mark spanning the section drew a filled box around the
+   * label and a strip of empty gutter beneath it — the group's contents and
+   * its name lit up as one shape, which is not the shape the group has at
+   * rest. Marking the card alone matches what the border already draws, and
+   * the heading a line above stays legible without being part of the flash.
+   */
+  readonly anchor?: string;
 }
 
 /**
@@ -32,7 +45,7 @@ interface SettingsGroupProps {
  * tone for Danger Zone instead of a separate component.
  */
 export function SettingsGroup(props: SettingsGroupProps): ReactNode {
-  const { title, tone, dataTestId, children, fill } = props;
+  const { title, tone, dataTestId, children, fill, anchor } = props;
   const compact = useSettingsDensity() === "compact";
   return (
     <section
@@ -52,6 +65,7 @@ export function SettingsGroup(props: SettingsGroupProps): ReactNode {
         </h2>
       )}
       <div
+        data-settings-anchor={anchor}
         className={cn(
           "overflow-hidden rounded-lg border border-border/60 bg-card/40",
           tone === "danger" && "border-destructive/30 bg-destructive/5",

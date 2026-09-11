@@ -8,6 +8,7 @@ import {
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { assertSettingsSearchTargets } from "@/components/settings/__tests__/settings-search-targets";
 import { AppDiagnosticsSettingsPanel } from "@/components/settings/panels/app-diagnostics-settings-panel";
 import {
   chooseLogLevelOption,
@@ -675,5 +676,33 @@ describe("<AppDiagnosticsSettingsPanel />", () => {
     await waitFor(() => {
       expect(measureJsHeaps).toHaveBeenCalledTimes(1);
     });
+  });
+
+  // Both groups render in every shell — with their own "only on desktop"
+  // line when a bridge is missing — so the search index offers them always.
+  // Both ends: a bridge-dependent anchor would fail the absent case.
+  it("matches the search index with every bridge absent", () => {
+    const host = makeHost(null);
+    renderPanel(host);
+
+    assertSettingsSearchTargets(
+      "app-diagnostics",
+      { runnerHost: host, featureSettings: null, mobileApp: false },
+      document.body,
+    );
+  });
+
+  it("matches the search index with every bridge present", async () => {
+    installLogLevelsBridge(defaultSnapshot());
+    installHeapSnapshotBridge(() => Promise.resolve(null));
+    const host = makeHost(makeSupportBridge({}));
+    renderPanel(host);
+    await screen.findByTestId("settings-log-level-desktop");
+
+    assertSettingsSearchTargets(
+      "app-diagnostics",
+      { runnerHost: host, featureSettings: null, mobileApp: false },
+      document.body,
+    );
   });
 });

@@ -27,6 +27,14 @@ import { Button } from "@/components/ui/button";
  * below is already saying so.
  */
 export function LogDetailGroup(props: {
+  /**
+   * The settings-search anchor for this card, or `null` where the card is not
+   * a search target. Supplied by the caller, not fixed here: the SAME card is
+   * the "Log detail" group on two different pages, and only the app's is
+   * indexed - the host's is dropped for a host too old to answer the config
+   * RPC, so search points at that page instead of a card it may not draw.
+   */
+  readonly anchor: string | null;
   readonly controls: readonly LogLevelControl[];
   /**
    * Why there are no rows, in the caller's own words — or `null` to render
@@ -107,6 +115,7 @@ export function LogDetailGroup(props: {
     return (
       <SettingsGroup
         title="Log detail"
+        anchor={props.anchor ?? undefined}
         tone="default"
         dataTestId={undefined}
         fill={false}
@@ -119,6 +128,7 @@ export function LogDetailGroup(props: {
   return (
     <SettingsGroup
       title="Log detail"
+      anchor={props.anchor ?? undefined}
       tone="default"
       dataTestId={undefined}
       fill={false}
