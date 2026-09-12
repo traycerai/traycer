@@ -16,9 +16,13 @@ export function VoiceSettingsSection(): ReactNode {
     })),
   );
 
-  // `useDictationAvailability` refuses dictation outright in the mobile app, so
-  // this row would be a toggle for something the build will not do - and the
-  // description below makes a promise that build cannot keep. Hide it there.
+  // `useDictationAvailability` refuses dictation outright without a local host,
+  // so this row would be a toggle for something the shell will not do - and the
+  // description below promises on-device transcription that a shell whose every
+  // reachable host is a remote machine cannot deliver. The gate itself is the
+  // row definition's `availableWhen` (`isVoiceInputRowAvailable`), which search
+  // reads from the same definition: same capability, same gate, so the row and
+  // the result pointing at it cannot disagree.
   if (!GENERAL.definitions.voiceInput.availableWhen(availability)) return null;
 
   return (

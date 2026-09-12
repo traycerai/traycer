@@ -238,8 +238,9 @@ different answers:
   No shell can promise the row, so no shell offers it. "Detected dev origins"
   shipped as a result that navigated to General and lit nothing.
 - **Gated on the SHELL** (Zoom, Experimental and OS notifications need a
-  desktop bridge; This phone needs `pushPermission`; Voice input and Prevent
-  sleep hide in the mobile app) — indexed, with the definition's
+  desktop bridge; This phone needs `pushPermission`; Voice input needs a local
+  host and Prevent sleep the desktop power bridge) — indexed, with the
+  definition's
   `availableWhen` set to the gate's **named predicate** in
   `lib/settings/settings-availability.ts`. The panel gates the row (or group)
   on that definition's own `availableWhen` — the composed predicate the entry
@@ -377,19 +378,26 @@ History keeps its modal on every viewport.
 
 Everything above is VIEWPORT (`useIsMobileViewport()`) - it flips when a window
 is resized, and a narrow desktop window gets all of it. A separate, smaller set
-of rows is gated on the BUILD (`isMobileApp()`, the Capacitor bundle), because
-what they need is either a capability the shell does not have at any width or a
-product role that build does not play. Do not reach for the viewport hook for
-these: a narrow desktop window still has a power bridge and a hardware
-keyboard, and is still the end of a pairing that shows the code.
+of rows is gated on the SHELL rather than the window - on a CAPABILITY the
+shell does not have at any width, or on a product role that BUILD does not
+play. Do not reach for the viewport hook for these: a narrow desktop window
+still has a power bridge and a hardware keyboard, and is still the end of a
+pairing that shows the code.
 
-- **Voice input** (`voice-settings-section.tsx`) - the build refuses dictation.
+Prefer the capability where one exists. `isMobileApp()` names the Capacitor
+bundle, and a browser tab is not it while having exactly the same machine
+limits, so a build-keyed gate shows these rows there and promises what that
+shell cannot do.
+
+- **Voice input** (`voice-settings-section.tsx`) - dictation is host-executed
+  and `useDictationAvailability` refuses it without a LOCAL host, so the row
+  is keyed on `hasLocalHost`.
 - **Prevent sleep while running** (`prevent-sleep-settings-section.tsx`) - the
   setting's only consumer, `PreventSleepController`, holds an OS power-save
-  blocker through the desktop power bridge, and `resolveDesktopPowerBridge`
-  returns null there. Extracted from `general-settings-panel.tsx` for exactly
-  this reason; the Running-agents group keeps two other rows, so it never
-  empties.
+  blocker through the desktop power bridge, so the row is keyed on the same
+  `resolveDesktopPowerBridge` that consumer calls. Extracted from
+  `general-settings-panel.tsx` for exactly this reason; the Running-agents
+  group keeps two other rows, so it never empties.
 - **The Keybindings SECTION** - chord capture is `window` `keydown` only
   (`chord-capture-core.tsx`): a tap arms the chip to "Press chord…" and nothing
   can commit it, and a binding clears only with Backspace.
@@ -956,8 +964,9 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       bridge's `forgetLogins()` directly and therefore speaks for every host
       with a live browser stream; main owns both native destructive confirms.
   - **Running agents**: Prevent sleep while running
-    (`prevent-sleep-settings-section.tsx`, hidden in the mobile app - see
-    "Two different mobile questions"), Show global resources button, Show
+    (`prevent-sleep-settings-section.tsx`, hidden without the desktop power
+    bridge - see "Two different mobile questions"), Show global resources
+    button, Show
     navigator resource stats (these stay out of Appearance - they change
     information visibility, not styling).
   - **Onboarding**: Product tour (replay onboarding), and nothing else. Import

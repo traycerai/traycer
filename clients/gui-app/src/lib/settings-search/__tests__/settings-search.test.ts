@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
 import { FakeBrowserViewBridge } from "@/lib/browser-view/__tests__/fake-browser-view-bridge";
+import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
+import type { DesktopPowerBridge } from "@/lib/windows/types";
 import type { SettingsAvailabilityContext } from "@/lib/settings/settings-availability";
 import { searchSettings } from "@/lib/settings-search/settings-search";
 
@@ -21,23 +23,41 @@ const FAKE_RUNNER_HOST = createFakeRunnerHost({});
  * The Electron desktop app: every desktop bridge carried on the runner host,
  * not the mobile bundle. The feature-settings bridge is left out so the one
  * case about it can add it and show the difference.
+ *
+ * `power` is spread on rather than passed as an override because it is a
+ * duck-typed extra a shell installs and not a typed `IRunnerHost` field - the
+ * same shape `resolveDesktopPowerBridge` feature-detects at runtime.
  */
+function createDesktopRunnerHost(): IRunnerHost {
+  const host: IRunnerHost & { readonly power: DesktopPowerBridge } = {
+    ...createFakeRunnerHost({
+      browserView: new FakeBrowserViewBridge(),
+      zoom: DESKTOP_ZOOM,
+      notifications: {
+        ...FAKE_RUNNER_HOST.notifications,
+        systemSettings: { open: () => Promise.resolve() },
+      },
+    }),
+    power: { setSleepBlocked: () => Promise.resolve() },
+  };
+  return host;
+}
+
 const DESKTOP: SettingsAvailabilityContext = {
-  runnerHost: createFakeRunnerHost({
-    browserView: new FakeBrowserViewBridge(),
-    zoom: DESKTOP_ZOOM,
-    notifications: {
-      ...FAKE_RUNNER_HOST.notifications,
-      systemSettings: { open: () => Promise.resolve() },
-    },
-  }),
+  runnerHost: createDesktopRunnerHost(),
   featureSettings: null,
   mobileApp: false,
 };
 
-/** The installed mobile app: no desktop bridges, push permission present. */
+/**
+ * The installed mobile app: no desktop bridges, push permission present, and
+ * no LOCAL host - every host a phone can reach is another machine. That is
+ * what withholds the host-executed rows here; the product flag only happens to
+ * agree on this shell.
+ */
 const MOBILE: SettingsAvailabilityContext = {
   runnerHost: createFakeRunnerHost({
+    hasLocalHost: false,
     pushPermission: {
       get: () => Promise.resolve("granted"),
       request: () => Promise.resolve("granted"),

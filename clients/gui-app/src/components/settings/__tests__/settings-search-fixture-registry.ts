@@ -1,9 +1,15 @@
-import type { IPushPermissionHost } from "@traycer-clients/shared/platform/runner-host";
+import type {
+  IPushPermissionHost,
+  IRunnerHost,
+} from "@traycer-clients/shared/platform/runner-host";
 import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
 import type { FeatureSettingsBridge } from "@/lib/desktop-feature-settings";
 import type { SettingsAvailabilityContext } from "@/lib/settings/settings-availability";
 import type { SettingsSectionId } from "@/lib/settings-sections";
-import type { DesktopZoomBridge } from "@/lib/windows/types";
+import type {
+  DesktopPowerBridge,
+  DesktopZoomBridge,
+} from "@/lib/windows/types";
 
 /**
  * Every shell each anchored section's panel is mounted in by the fixture
@@ -80,6 +86,32 @@ const NO_BRIDGES: SettingsAvailabilityContext = {
   mobileApp: false,
 };
 
+/**
+ * The Electron desktop shell, as the two host facts General's capability-gated
+ * rows read: a LOCAL host (Voice input, since dictation is host-executed) and
+ * the duck-typed `power` bridge (Prevent sleep, whose controller drives it).
+ *
+ * Needed as its own shell because every other General fixture is bridge-less,
+ * and a gate keyed on a capability is off in all of them - which would leave
+ * those two rows asserted only ever ABSENT. `power` is spread on rather than
+ * passed as an override: it is an extra a shell installs, not an
+ * `IRunnerHost` field, which is the same shape `resolveDesktopPowerBridge`
+ * feature-detects at runtime.
+ */
+function createDesktopHost(): IRunnerHost {
+  const host: IRunnerHost & { readonly power: DesktopPowerBridge } = {
+    ...createFakeRunnerHost({ hasLocalHost: true }),
+    power: { setSleepBlocked: () => Promise.resolve() },
+  };
+  return host;
+}
+
+const DESKTOP_HOST_SHELL: SettingsAvailabilityContext = {
+  runnerHost: createDesktopHost(),
+  featureSettings: null,
+  mobileApp: false,
+};
+
 export const SETTINGS_SEARCH_FIXTURES = [
   {
     section: "general",
@@ -92,6 +124,10 @@ export const SETTINGS_SEARCH_FIXTURES = [
       {
         name: "the installed mobile app",
         context: { ...NO_BRIDGES, mobileApp: true },
+      },
+      {
+        name: "a local host with the power bridge",
+        context: DESKTOP_HOST_SHELL,
       },
     ],
   },

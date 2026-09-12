@@ -23,7 +23,10 @@
  */
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import type { FeatureSettingsBridge } from "@/lib/desktop-feature-settings";
-import { resolveDesktopZoomBridge } from "@/lib/windows/desktop-capabilities";
+import {
+  resolveDesktopPowerBridge,
+  resolveDesktopZoomBridge,
+} from "@/lib/windows/desktop-capabilities";
 
 export interface SettingsAvailabilityContext {
   /** `null` in host-less shells, where every bridge-gated row is absent. */
@@ -50,23 +53,37 @@ export function alwaysAvailable(
 }
 
 /**
- * Voice input — the mobile app refuses dictation outright
- * (`useDictationAvailability`), so the toggle would control nothing.
+ * Voice input — dictation is host-executed and `useDictationAvailability`
+ * refuses it outright without a LOCAL host, so in a shell whose every
+ * reachable host is another machine the toggle would control nothing and the
+ * row's description would promise on-device transcription that shell cannot
+ * deliver.
+ *
+ * Keyed on the capability rather than the product flag: a browser tab has the
+ * phone's lack of a local host and the desktop's `mobileApp === false`, so the
+ * flag answers this question wrongly there.
  */
 export function isVoiceInputRowAvailable(
   context: SettingsAvailabilityContext,
 ): boolean {
-  return !context.mobileApp;
+  return context.runnerHost !== null && context.runnerHost.hasLocalHost;
 }
 
 /**
  * Prevent sleep — its only consumer holds an OS power-save blocker through
- * the desktop power bridge, which the mobile app does not have.
+ * the desktop power bridge, so the row is keyed on the very bridge that
+ * consumer resolves. Feature-detected rather than read as a field, because
+ * `power` is a duck-typed extra a shell installs and not a typed
+ * `IRunnerHost` member; keyed on the bridge rather than the product flag for
+ * the same reason as voice input, since a browser tab has no bridge either.
  */
 export function isPreventSleepRowAvailable(
   context: SettingsAvailabilityContext,
 ): boolean {
-  return !context.mobileApp;
+  return (
+    context.runnerHost !== null &&
+    resolveDesktopPowerBridge(context.runnerHost) !== null
+  );
 }
 
 /** General › Experimental — the desktop feature-settings bridge. */
