@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { StatusBarProviderSegment } from "@/components/layout/status-bar/status-bar-provider-segment";
@@ -15,6 +15,21 @@ import {
 } from "@/lib/rate-limits/window-severity";
 import type { RateLimitWindowSeverity } from "@/lib/rate-limits/window-severity";
 import type { PercentMode } from "@/stores/settings/layout-store";
+
+/**
+ * A reset instant `hours:minutes` out, sampled when the TEST runs.
+ *
+ * A function rather than a `describe`-scoped constant, and that is the whole
+ * point of it: a `describe` body runs at COLLECTION, so a constant there is
+ * already minutes old by the time the last case in the block renders. The
+ * 5-second cushion keeps the countdown off a minute boundary for the render
+ * itself; it was never a budget for the suite's own runtime, and on a slower
+ * runner that is exactly what it was being spent on - flipping `4h 15m` to
+ * `4h 14m` in a case that had asserted the former.
+ */
+function resetsAtIn(hours: number, minutes: number): number {
+  return Date.now() + (hours * 60 + minutes) * 60_000 + 5_000;
+}
 
 function windowFixture(overrides: {
   readonly windowKey: string;
@@ -205,7 +220,7 @@ describe("<StatusBarProviderSegment />", () => {
     });
 
     it("prints a countdown when the timer is on and a resetsAt is present", () => {
-      const resetsAt = Date.now() + (4 * 60 + 15) * 60_000 + 5_000;
+      const resetsAt = resetsAtIn(4, 15);
       const segment = segmentFixture({
         windows: [
           windowFixture({ windowKey: "codex:primary", label: "5h", resetsAt }),
@@ -235,7 +250,7 @@ describe("<StatusBarProviderSegment />", () => {
   });
 
   it("keeps a model-scoped window's name and appends the countdown", () => {
-    const resetsAt = Date.now() + (2 * 60 + 5) * 60_000 + 5_000;
+    const resetsAt = resetsAtIn(2, 5);
     const segment = segmentFixture({
       windows: [
         windowFixture({
@@ -265,7 +280,10 @@ describe("<StatusBarProviderSegment />", () => {
   // indistinguishable string. Every fixture here therefore carries a sibling;
   // a provider with one visible limit is the block below.
   describe("label rule: countdown replaces a duration, joins everything else", () => {
-    const resetsAt = Date.now() + (4 * 60 + 15) * 60_000 + 5_000;
+    let resetsAt = 0;
+    beforeEach(() => {
+      resetsAt = resetsAtIn(4, 15);
+    });
 
     it("a duration label (labelIsDuration: true) renders the countdown alone", () => {
       const segment = segmentFixture({
@@ -450,7 +468,10 @@ describe("<StatusBarProviderSegment />", () => {
   // visible limit prints none - and gets it straight back the moment there is
   // no countdown, since a bare percentage under an icon names no limit at all.
   describe("naming rule: one visible limit prints no name", () => {
-    const resetsAt = Date.now() + (4 * 60 + 15) * 60_000 + 5_000;
+    let resetsAt = 0;
+    beforeEach(() => {
+      resetsAt = resetsAtIn(4, 15);
+    });
 
     it("a grok period - the one window that provider reports - is the countdown alone", () => {
       const segment = segmentFixture({
@@ -795,7 +816,7 @@ describe("<StatusBarProviderSegment />", () => {
       expect(screen.queryByTestId("status-bar-provider-cold-track")).toBeNull();
     });
 
-    it("degraded renders the warning glyph and dims the segment", () => {
+    it("degraded renders the warning glyph and leaves the reading undimmed", () => {
       const segment = segmentFixture({
         state: "degraded",
         reason: "usage_fetch_failed",
@@ -803,8 +824,20 @@ describe("<StatusBarProviderSegment />", () => {
       });
       renderSegment({ segment });
 
+      // Not on the segment: it composites the percentage, whose severity shade
+      // was chosen to clear 4.5:1 and has no contrast left to spend.
       const outer = screen.getByTestId("status-bar-provider-segment-codex");
-      expect(outer.className).toContain("opacity-60");
+      expect(outer.className).not.toContain("opacity-60");
+      const percent = screen.getByTestId(
+        "status-bar-window-percent-codex:primary",
+      );
+      for (
+        let node: HTMLElement | null = percent;
+        node !== null;
+        node = node.parentElement
+      ) {
+        expect(node.className).not.toContain("opacity-60");
+      }
       const glyph = screen.getByTestId("status-bar-provider-degraded");
       expect(glyph).not.toBeNull();
       // The same amber a running_low percentage prints - the two sit inches
@@ -822,10 +855,14 @@ describe("<StatusBarProviderSegment />", () => {
   // The collapse ladder's own rungs: each one takes away exactly one thing
   // from the reading, down to nothing at all. `resetsAt` sits comfortably
   // inside the hour band `formatResetCountdown` renders as `Xh Ym`, far
-  // enough from any minute boundary that the suite's own runtime cannot flip
-  // the string mid-assertion.
+  // enough from any minute boundary that the render itself cannot flip the
+  // string mid-assertion - and re-sampled per case (`resetsAtIn`), so the
+  // cushion is not spent on the suite's own runtime before the case starts.
   describe("the collapse ladder", () => {
-    const resetsAt = Date.now() + (4 * 60 + 15) * 60_000 + 5_000;
+    let resetsAt = 0;
+    beforeEach(() => {
+      resetsAt = resetsAtIn(4, 15);
+    });
 
     function stableWindow(): StatusBarRateLimitWindow {
       return windowFixture({

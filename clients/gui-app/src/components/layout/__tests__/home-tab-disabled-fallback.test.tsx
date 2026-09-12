@@ -107,6 +107,21 @@ describe("turning the Home tab off while Home is active", () => {
     expect(useLandingDraftStore.getState().drafts[0]?.id).toBe(firstDraftId);
   });
 
+  it("replaces the Home entry rather than pushing over it", () => {
+    // The entry being left is Home's own, and Home has just stopped existing -
+    // so a push leaves a destination that renders nothing one Back press away,
+    // which is the gesture a user reaches for when a surface changes under
+    // them.
+    setHomeTabEnabled(true);
+    render(<TopLevelTabHost />);
+    navigated.options = [];
+
+    setHomeTabEnabled(false);
+
+    expect(navigated.options).toHaveLength(1);
+    expect(navigated.options[0]?.replace).toBe(true);
+  });
+
   it("leaves a window that never had Home alone", () => {
     render(<TopLevelTabHost />);
 

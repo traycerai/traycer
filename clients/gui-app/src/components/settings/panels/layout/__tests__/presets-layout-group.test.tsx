@@ -265,6 +265,29 @@ describe("<PresetsLayoutGroup />", () => {
     expect(reset().hasAttribute("disabled")).toBe(false);
   });
 
+  it("keeps Reset live for a page whose only change is the mobile footer", () => {
+    // The third structural setting, and the one with no segment of its own:
+    // `matchLayoutPreset` does not read `mobileFooter`, so `match` stays
+    // `default` - while `resetLayoutToDefaults` DOES restore it. Left out of
+    // the predicate, Reset went dead on the one setting it still had to undo.
+    render(<PresetsLayoutGroup />);
+    const reset = () =>
+      screen.getByRole("button", { name: "Reset to defaults" });
+    expect(reset().hasAttribute("disabled")).toBe(true);
+
+    act(() => {
+      useLayoutStore.getState().setStatusBarMobileFooter(true);
+    });
+
+    expect(pressed()).toEqual(["Default"]);
+    expect(reset().hasAttribute("disabled")).toBe(false);
+
+    fireEvent.click(reset());
+
+    expect(useLayoutStore.getState().statusBar.mobileFooter).toBe(false);
+    expect(reset().hasAttribute("disabled")).toBe(true);
+  });
+
   it("leaves placement and the rail where they are when Default is picked", () => {
     // The segment is the density bundle; only the button is the whole page.
     render(<PresetsLayoutGroup />);

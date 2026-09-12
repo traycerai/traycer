@@ -423,7 +423,11 @@ function useHomeTabDisabledFallback(
       existingDraftId === null
         ? openNewEpicIntent()
         : draftTabIntent(existingDraftId),
-      undefined,
+      // REPLACE, because the entry being left is Home's own and Home has just
+      // stopped existing. Pushing over it puts a destination that renders
+      // nothing one Back press away, and Back is the one gesture a user
+      // reaches for when a surface changes under them.
+      { replace: true },
     );
   }, [activeItemId, enabled, navigate]);
 }

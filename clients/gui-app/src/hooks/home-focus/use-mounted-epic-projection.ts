@@ -1,4 +1,4 @@
-import { useMemo, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
 import { getOpenEpicRegistry } from "@/lib/registries/epic-session-registry";
 import type { OpenEpicSessionRegistry } from "@/stores/epics/open-epic/session-registry";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
@@ -53,8 +53,15 @@ export function useMountedEpicProjection(
   refs: ReadonlyArray<MountedEpicRef>,
 ): MountedEpicProjection {
   const registry = getOpenEpicRegistry();
-  const encoded = useSyncExternalStore(
-    (listener) => {
+  // Memoized on the two things it closes over, because `useSyncExternalStore`
+  // keys its subscription on this function's IDENTITY: a fresh closure per
+  // render tore down the registry subscription and every handle subscription
+  // under it, then rebuilt them all, on every render of a page that re-renders
+  // on each activity tick. Nothing is lost by holding them - a handle
+  // appearing or disappearing arrives through `registry.subscribe`, which is
+  // what `reconcileHandleSubscriptions` has always run on.
+  const subscribe = useCallback(
+    (listener: () => void) => {
       const unsubscribeByHandle = new Map<OpenEpicStoreHandle, () => void>();
       const reconcileHandleSubscriptions = (): void => {
         const currentHandles = new Set<OpenEpicStoreHandle>();
@@ -82,6 +89,10 @@ export function useMountedEpicProjection(
         for (const unsubscribe of unsubscribeByHandle.values()) unsubscribe();
       };
     },
+    [refs, registry],
+  );
+  const encoded = useSyncExternalStore(
+    subscribe,
     () => projectionSnapshot(registry, refs),
     () => EMPTY_SNAPSHOT,
   );

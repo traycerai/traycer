@@ -1,4 +1,4 @@
-import { act, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserSessionsState } from "@/lib/browser-view/sessions/browser-sessions-coordinator";
 import {
@@ -114,6 +114,12 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Explicit, because `vitest.config.ts` sets `globals: false` and the setup
+  // file registers no `cleanup()` - so Testing Library never finds the global
+  // `afterEach` its auto-cleanup hooks into. Clearing the mock's listener set
+  // is not a substitute: it drops the registry's side of the wiring while the
+  // `renderHook` roots stay mounted and their unsubscribes are never called.
+  cleanup();
   registryMock.listeners.clear();
 });
 

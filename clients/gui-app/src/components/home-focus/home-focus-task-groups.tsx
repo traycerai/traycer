@@ -22,7 +22,7 @@
  * other - a key is stable within a parent, not across two - and row-local
  * state collapsed a task at the exact moment the user answered its prompt.
  */
-import { type ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import { ChevronRight, Globe, Layers } from "lucide-react";
 import {
   AgentGlyph,
@@ -130,7 +130,11 @@ function HomeFocusTaskGroupRow(props: {
     body.jobs.length > 0 ||
     body.browsers.length > 0;
   const showBody = hasBody && expanded;
-  const bodyId = `home-focus-task-group-${group.epicId}`;
+  // Per MOUNT, not per epic. A task worked from two machines is drawn once
+  // under each, and both draws carry the same `epicId` - so an id built from it
+  // put two elements in the document under one id and pointed both twisties'
+  // `aria-controls` at whichever the reader's AT resolved first.
+  const bodyId = useId();
   return (
     <li
       className="flex flex-col"
@@ -357,8 +361,14 @@ function TaskGroupBody(props: {
   );
 }
 
-/** Indented on the LEFT only, so a nested row's right edge is its parent's and
- * the status and actions tracks stay one column down the whole page.
+/** Indented on the INLINE-START edge only, so a nested row's inline-end edge is
+ * its parent's and the status and actions tracks stay one column down the whole
+ * page.
+ *
+ * Logical rather than physical throughout (`ms`/`border-s`/`ps`), because the
+ * three have to stay on the same edge as each other: `ms-*` already flips under
+ * `dir="rtl"`, so a `border-l` and a `pl-*` beside it would put the margin on
+ * one side of the row and the guide plus its padding on the other.
  *
  * 2rem per level is a desktop number. On a phone three levels of it spend a
  * quarter of the row before the deepest name starts, which is the same width
@@ -366,7 +376,7 @@ function TaskGroupBody(props: {
  * 0.75rem below `@max-[30rem]`, split the same way (margin, then the border,
  * then padding) so the vertical track still reads as one continuous line. */
 const NESTED_LIST_CLASS =
-  "ms-5 flex flex-col border-l border-border/60 pl-3 @max-[30rem]:ms-1.5 @max-[30rem]:pl-1.5";
+  "ms-5 flex flex-col border-s border-border/60 ps-3 @max-[30rem]:ms-1.5 @max-[30rem]:ps-1.5";
 const BODY_TEST_ID = "home-focus-task-group-body";
 
 /**

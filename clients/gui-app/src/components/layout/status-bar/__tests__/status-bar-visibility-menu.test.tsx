@@ -5,6 +5,11 @@ import {
   useLayoutStore,
 } from "@/stores/settings/layout-store";
 
+const viewport = vi.hoisted(() => ({ mobile: false }));
+vi.mock("@/hooks/ui/use-mobile-viewport", () => ({
+  useIsMobileViewport: () => viewport.mobile,
+}));
+
 const navigateToSettingsSectionMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/settings-navigation", () => ({
   navigateToSettingsSection: navigateToSettingsSectionMock,
@@ -19,6 +24,7 @@ import {
 function resetStore(): void {
   useLayoutStore.setState({ statusBar: DEFAULT_STATUS_BAR_LAYOUT });
   window.localStorage.clear();
+  viewport.mobile = false;
 }
 
 const PROVIDERS: ReadonlyArray<StatusBarMenuProvider> = [
@@ -136,6 +142,25 @@ describe("<StatusBarVisibilityMenu />", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Move to header" }));
 
     expect(useLayoutStore.getState().statusBar.placement).toBe("header");
+  });
+
+  it("drops 'Move to header' on a narrow viewport, where it would move nothing", () => {
+    // Below `md` the shell answers with `mobileFooter` and ignores `placement`
+    // altogether, while the mobile header draws its usage controls whatever
+    // `placement` says. The item would write a preference the user cannot see
+    // the effect of, and leave it waiting for the next desktop window - so it
+    // takes the same gate the Layout page puts on the placement row.
+    viewport.mobile = true;
+    renderMenu();
+    openMenu();
+
+    expect(
+      screen.queryByRole("menuitem", { name: "Move to header" }),
+    ).toBeNull();
+    // The gate is on that one item, not on the menu.
+    expect(
+      screen.getByRole("menuitem", { name: "Status bar settings…" }),
+    ).not.toBeNull();
   });
 
   it("does not open the menu for a right-click on an exempt subtree", () => {

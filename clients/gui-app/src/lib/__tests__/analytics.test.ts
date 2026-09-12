@@ -749,7 +749,17 @@ describe("analytics", () => {
 
       for (const category of ["task", "collaboration", "system"] as const) {
         for (const section of ["attention", "recent"] as const) {
-          for (const surface of ["center", "toast", "native"] as const) {
+          // `home` is the fourth surface and it is a REGRESSION guard, not a
+          // completeness one: Home's prompt rows go through the same
+          // `activationResultHandler`, and while the validator listed only the
+          // other three the whole event failed here and never reached
+          // `posthog.capture` - invisibly, because the TYPE already allowed it.
+          for (const surface of [
+            "center",
+            "toast",
+            "native",
+            "home",
+          ] as const) {
             for (const outcome of ["success", "failure"] as const) {
               expect(
                 sanitizeAnalyticsProperties(

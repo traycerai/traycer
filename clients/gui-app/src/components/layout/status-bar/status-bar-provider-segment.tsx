@@ -49,9 +49,17 @@ export interface StatusBarProviderSegmentProps {
  *   was; the track says "this provider has a place in the bar" and nothing more.
  * - **unavailable** — the icon and a dash. The provider answered and said it
  *   cannot report usage, which is a fact about the account, not a blip.
- * - **degraded** — the last good numbers, dimmed, behind a warning glyph whose
- *   tooltip names the failure. Showing them undimmed would date-stamp nothing;
- *   hiding them would throw away the only reading there is.
+ * - **degraded** — the last good numbers behind a dimmed provider icon and a
+ *   warning glyph whose tooltip names the failure. Hiding them would throw
+ *   away the only reading there is.
+ *
+ * The dim is on the ICON alone and never on the segment, which is a contrast
+ * decision rather than a stylistic one. `rateLimitWindowSeverityTextClassName`
+ * picks a per-tier shade for the sole purpose of clearing 4.5:1 on a light
+ * canvas — amber goes as far as `700` for it — and `opacity` on an ancestor
+ * composites that shade back down through the floor it was chosen to clear.
+ * So what carries "this reading is stale" is the glyph and its sentence, which
+ * cost the numbers nothing.
  */
 export function StatusBarProviderSegment(
   props: StatusBarProviderSegmentProps,
@@ -60,15 +68,12 @@ export function StatusBarProviderSegment(
   const icon = (
     <HarnessIcon
       harnessId={providerIdToGuiHarnessId(segment.providerId)}
-      className="size-3"
+      className={cn("size-3", segment.state === "degraded" && "opacity-60")}
     />
   );
   return (
     <span
-      className={cn(
-        "inline-flex min-w-0 items-center gap-1",
-        segment.state === "degraded" && "opacity-60",
-      )}
+      className="inline-flex min-w-0 items-center gap-1"
       data-testid={`status-bar-provider-segment-${segment.providerId}`}
       data-state={segment.state}
     >

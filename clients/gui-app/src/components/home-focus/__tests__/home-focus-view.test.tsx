@@ -1890,6 +1890,37 @@ describe("<HomeFocusView /> host grouping", () => {
     ).toEqual(["a", "b"]);
   });
 
+  it("gives each host's share of one task its own body id", () => {
+    // The two slices carry the SAME `epicId`, so an id derived from it put two
+    // elements in the document under one id and left both twisties'
+    // `aria-controls` pointing at whichever the reader's AT resolved first.
+    twoHosts();
+    modelMock.value = model({
+      tasks: [
+        taskRow({
+          epicId: "epic-shared",
+          agents: [
+            agentRow({ agentId: "a", hostId: "host-local" }),
+            agentRow({ agentId: "b", hostId: "host-remote" }),
+          ],
+        }),
+      ],
+    });
+    render(<HomeFocusView />);
+    openEveryTask();
+
+    const bodyIds = screen
+      .getAllByTestId("home-focus-task-group-body")
+      .map((element) => element.getAttribute("id"));
+    expect(bodyIds).toHaveLength(2);
+    expect(new Set(bodyIds).size).toBe(2);
+    expect(
+      screen
+        .getAllByTestId("home-focus-task-group-disclosure")
+        .map((element) => element.getAttribute("aria-controls")),
+    ).toEqual(bodyIds);
+  });
+
   it("groups inside each section separately", () => {
     twoHosts();
     modelMock.value = model({
@@ -2938,10 +2969,12 @@ describe("<HomeFocusView /> narrow rows", () => {
 
     for (const list of screen.getAllByTestId("home-focus-task-group-body")) {
       expect(list.className).toContain("@max-[30rem]:ms-1.5");
-      expect(list.className).toContain("@max-[30rem]:pl-1.5");
+      expect(list.className).toContain("@max-[30rem]:ps-1.5");
       // The vertical track survives the shrink - it is what says "this row
-      // belongs to the one above it".
-      expect(list.className).toContain("border-l");
+      // belongs to the one above it". Logical, so it stays on the same edge as
+      // the `ms-*` that already flips under `dir="rtl"`.
+      expect(list.className).toContain("border-s");
+      expect(list.className).not.toContain("border-l");
     }
   });
 });

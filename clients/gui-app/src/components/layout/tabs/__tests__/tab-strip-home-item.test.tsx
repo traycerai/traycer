@@ -138,6 +138,27 @@ describe("<TabStripHomeItem />", () => {
     );
   });
 
+  // The threshold itself, from both sides. `badgeLabel` clamps on `>`, so 99
+  // is the last exact count and 100 the first clamped one - an off-by-one
+  // there would either print a four-character badge or lose a real 99.
+  it("prints the threshold count exactly", () => {
+    renderHomeItem(false, vi.fn(), 99);
+
+    expect(screen.getByTestId("tab-home-badge").textContent).toBe("99");
+    expect(screen.getByTestId("tab-home").getAttribute("aria-label")).toBe(
+      "Home, 99 waiting on you",
+    );
+  });
+
+  it("clamps the first count past the threshold", () => {
+    renderHomeItem(false, vi.fn(), 100);
+
+    expect(screen.getByTestId("tab-home-badge").textContent).toBe("99+");
+    expect(screen.getByTestId("tab-home").getAttribute("aria-label")).toBe(
+      "Home, 99+ waiting on you",
+    );
+  });
+
   it("clamps to 99+ once the count passes the threshold", () => {
     renderHomeItem(false, vi.fn(), 150);
 

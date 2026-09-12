@@ -274,7 +274,13 @@
   );
 }
 
-.reasoning-effort-slider:dir(rtl)[data-max="true"] .reasoning-effort-max-tail {
+/* `[dir="rtl"]` rather than `:dir(rtl)`: Tailwind v4's floor is Chrome 111 and
+   `:dir()` did not ship until Chrome 120, so the pseudo-class silently left
+   111-119 on the left-to-right gradient. The attribute is what the document
+   sets anyway, and matches every descendant of it. */
+[dir="rtl"]
+  .reasoning-effort-slider[data-max="true"]
+  .reasoning-effort-max-tail {
   background: linear-gradient(
     to left,
     transparent 35%,

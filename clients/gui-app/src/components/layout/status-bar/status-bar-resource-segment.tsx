@@ -60,7 +60,13 @@ export function StatusBarResourceSegment(props: StatusBarResourceSegmentProps) {
       // announced. In the empty state the readout is the only thing that could
       // have explained the glyph, and there is none — so the explanation has to
       // be the name itself.
-      aria-label={noMetrics ? "Resources, no metrics selected" : "Resources"}
+      //
+      // For the same reason the readings have to be IN the name rather than
+      // beside it: the numbers are the segment's whole content, and a bare
+      // "Resources" replaced every one of them — including `StatusBarMetric`'s
+      // own `sr-only` unavailable sentence, which was unreachable at every
+      // density, not only the ones that drop the visible label.
+      aria-label={statusBarResourceSegmentLabel(views)}
       data-testid="status-bar-resource-segment"
       data-density={density}
       {...buttonProps}
@@ -108,6 +114,25 @@ export function StatusBarResourceSegment(props: StatusBarResourceSegmentProps) {
       )}
     </button>
   );
+}
+
+/**
+ * The button's whole accessible name: what it is, then each metric the strip is
+ * showing and what it currently reads.
+ *
+ * `label: value` per metric, in the order they are drawn, so the name matches
+ * the readout left to right. An unavailable metric says so rather than being
+ * dropped — a name that silently omitted it would leave a reader who turned
+ * the metric on with no way to tell it from one this build never draws.
+ */
+function statusBarResourceSegmentLabel(
+  views: ReadonlyArray<StatusBarResourceMetricView>,
+): string {
+  if (views.length === 0) return "Resources, no metrics selected";
+  const readings = views
+    .map((view) => `${view.label} ${view.value ?? "unavailable"}`)
+    .join(", ");
+  return `Resources: ${readings}`;
 }
 
 /**

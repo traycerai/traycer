@@ -177,6 +177,11 @@ const PRESET_ANALYTICS_SETTINGS: Readonly<
  */
 function useLayoutIsFullyDefault(match: LayoutPresetMatch): boolean {
   const placement = useLayoutStore((state) => state.statusBar.placement);
+  // Its own slice, because the bundles do not carry it and `matchLayoutPreset`
+  // does not read it - so a page whose ONLY change is the mobile footer still
+  // matches `default`, and Reset would go dead on the one setting it would
+  // have restored.
+  const mobileFooter = useLayoutStore((state) => state.statusBar.mobileFooter);
   const reasoningFooterControl = useLayoutStore(
     (state) => state.composer.reasoningFooterControl,
   );
@@ -187,6 +192,7 @@ function useLayoutIsFullyDefault(match: LayoutPresetMatch): boolean {
   return (
     match === "default" &&
     placement === DEFAULT_STATUS_BAR_LAYOUT.placement &&
+    mobileFooter === DEFAULT_STATUS_BAR_LAYOUT.mobileFooter &&
     reasoningFooterControl === DEFAULT_COMPOSER_LAYOUT.reasoningFooterControl &&
     areLeftPanelGroupsEqual(panelGroups, DEFAULT_LEFT_PANEL_GROUPS) &&
     Object.keys(visibilityOverrides).length === 0

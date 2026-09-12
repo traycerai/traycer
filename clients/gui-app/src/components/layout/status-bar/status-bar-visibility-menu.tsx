@@ -7,6 +7,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { trackSettingChanged } from "@/lib/analytics";
 import type { RateLimitProviderId } from "@/lib/rate-limit-providers";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
@@ -61,6 +62,12 @@ export function StatusBarVisibilityMenu(
     (state) => state.setStatusBarResourcesEnabled,
   );
   const setPlacement = useLayoutStore((state) => state.setStatusBarPlacement);
+  // The same gate `StatusBarLayoutGroupContent` puts on the placement row, and
+  // for the same reason: below `md` the shell answers with `mobileFooter` and
+  // ignores `placement` entirely, while `MobileAppHeader` draws its usage
+  // controls whatever `placement` says. So the item would write a preference
+  // that moves nothing, and leave it waiting for the next desktop window.
+  const narrowViewport = useIsMobileViewport();
 
   return (
     <ContextMenu>
@@ -114,14 +121,16 @@ export function StatusBarVisibilityMenu(
         >
           Status bar settings…
         </ContextMenuItem>
-        <ContextMenuItem
-          onSelect={() => {
-            trackSettingChanged("layout", "layout.statusBar.placement");
-            setPlacement("header");
-          }}
-        >
-          Move to header
-        </ContextMenuItem>
+        {narrowViewport ? null : (
+          <ContextMenuItem
+            onSelect={() => {
+              trackSettingChanged("layout", "layout.statusBar.placement");
+              setPlacement("header");
+            }}
+          >
+            Move to header
+          </ContextMenuItem>
+        )}
       </ContextMenuContent>
     </ContextMenu>
   );

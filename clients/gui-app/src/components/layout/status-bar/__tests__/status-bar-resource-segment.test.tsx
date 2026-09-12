@@ -200,4 +200,37 @@ describe("<StatusBarResourceSegment />", () => {
     // Still the resource panel's trigger: the numbers are one click away.
     expect(screen.getByTestId("status-bar-resource-segment")).not.toBeNull();
   });
+
+  it("names every metric and its reading, so the numbers survive the label", () => {
+    // The same `aria-label` rule the empty state relies on cuts the other way
+    // once there IS a readout: the name REPLACES the flattened contents, so a
+    // bare "Resources" hid every figure in the segment from a screen reader at
+    // every density - not only the ones that drop the visible label.
+    registry.projection = liveProjection("host-b");
+
+    renderSegment({ hasExplicitPick: true });
+
+    const name = screen
+      .getByTestId("status-bar-resource-segment")
+      .getAttribute("aria-label");
+    expect(name).toContain("Resources:");
+    expect(name).toContain("cpu 12%");
+    expect(name).toContain("procs 14");
+  });
+
+  it("names a metric it cannot read as unavailable rather than dropping it", () => {
+    // `StatusBarMetric` writes that sentence as `sr-only` text INSIDE the
+    // button, where the label makes it unreachable - so the name has to carry
+    // it, or a reader who turned the metric on cannot tell it from one this
+    // build never draws.
+    registry.projection = liveProjection("host-a");
+
+    renderSegment({ hasExplicitPick: true });
+
+    expect(
+      screen
+        .getByTestId("status-bar-resource-segment")
+        .getAttribute("aria-label"),
+    ).toContain("cpu unavailable");
+  });
 });

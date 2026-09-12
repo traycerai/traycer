@@ -1859,7 +1859,12 @@ const EVENT_EXACT_PROPERTY_VALUES = new Map<string, ReadonlySet<string>>([
   ...eventValueEntries(
     [AnalyticsEvent.NotificationActivationCompleted],
     "surface",
-    new Set(["center", "toast", "native"]),
+    // `home` is the fourth, and it is not optional: Home's prompt rows activate
+    // through the same `activationResultHandler` and pass it. Left out here the
+    // whole event failed validation and never reached `posthog.capture`, so
+    // every activation from Home was silently unrecorded while the TYPE
+    // (`AnalyticsNotificationSurface`) said it was a legal value.
+    new Set(["center", "toast", "native", "home"]),
   ),
   ...eventValueEntries(
     [AnalyticsEvent.SessionImportStarted],

@@ -136,6 +136,13 @@ describe("<EpicSessionLifecycleBridge />", () => {
     // travel between the cases below and the assertions would stop meaning
     // anything.
     useSettingsHostScopeStore.getState().setScopedHostId(null);
+    // This one PERSISTS, so it needs both halves and in this order: the store
+    // first, then the storage the persist middleware just rewrote. Two cases
+    // below set it and rely on the bridge's own transition to clear it - a
+    // case that fails or exits before that transition would otherwise hand the
+    // next one a pick, and the sign-out assertions would pass on a leak.
+    useWatchHostStore.setState({ scopedHostId: null });
+    window.localStorage.clear();
     useAddHostDialogStore.getState().closeDialog();
     useProvidersFocusStore.getState().clearFocusHarnessId();
     useProvidersFocusStore.getState().clearFocusTab();

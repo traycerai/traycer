@@ -87,6 +87,11 @@ describe("actionsSource", () => {
 
   it("omits desktop-only actions in the installed mobile app", () => {
     setMobileApp(true);
+    // Home ON, so the row this test cares most about is actually in the list:
+    // the suite's default is off, and under it `app.home.open` never reached
+    // the `desktopOnly` loop below - the one row whose surface most obviously
+    // invites a `desktopOnly` that would take Home off the phone.
+    useSettingsStore.setState({ homeTabEnabled: true });
 
     const items = captureItems();
     const ids = items.map((item) => item.id);
@@ -102,6 +107,12 @@ describe("actionsSource", () => {
     // The flag drops the desktop-only rows, not the source: everything else
     // still lists.
     expect(ids).toContain("action:app.settings.open");
+    // Home named explicitly rather than left to the loop above. Home has a
+    // SECOND gate (`homeTabEnabled`), so if it ever fell out of the list the
+    // loop would go quiet about it instead of failing - and `desktopOnly` is
+    // exactly the flag that would take the phone's Home command away.
+    expect(ids).toContain("action:app.home.open");
+    expect(ACTION_META["app.home.open"].desktopOnly).toBe(false);
   });
 
   it("reads the live shortcut from the keybinding store", () => {
