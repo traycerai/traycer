@@ -460,6 +460,182 @@ describe("formatAgentListResponse categorization", () => {
   });
 });
 
+describe("session state token", () => {
+  it("renders sleeping with a last-exit parenthetical, and without one when lastExit is null", () => {
+    const caller = agent({ id: "caller", isSelf: true });
+    const withExit = {
+      ...agent({ id: "napping", parentId: "caller" }),
+      sessionState: "sleeping" as const,
+      lastExit: "user-stop" as const,
+    };
+    const withoutExit = {
+      ...agent({ id: "dozing", parentId: "caller" }),
+      sessionState: "sleeping" as const,
+      lastExit: null,
+    };
+    const output = formatAgentListResponse(
+      response([caller, withExit, withoutExit], "caller"),
+    );
+
+    expect(agentLine(output, "napping gui/")).toContain(
+      "session: sleeping (last exit: user-stop)",
+    );
+    const dozingLine = agentLine(output, "dozing gui/");
+    expect(dozingLine).toContain("session: sleeping");
+    expect(dozingLine).not.toContain("last exit");
+  });
+
+  it("renders stopped and running with no last-exit token, even when lastExit is set", () => {
+    const caller = agent({ id: "caller", isSelf: true });
+    const stopped = {
+      ...agent({ id: "done", parentId: "caller" }),
+      sessionState: "stopped" as const,
+      lastExit: "user-stop" as const,
+    };
+    const running = {
+      ...agent({ id: "busy", parentId: "caller" }),
+      sessionState: "running" as const,
+      lastExit: "reaped" as const,
+    };
+    const output = formatAgentListResponse(
+      response([caller, stopped, running], "caller"),
+    );
+
+    const stoppedLine = agentLine(output, "done gui/");
+    expect(stoppedLine).toContain("session: stopped");
+    expect(stoppedLine).not.toContain("last exit");
+    const runningLine = agentLine(output, "busy gui/");
+    expect(runningLine).toContain("session: running");
+    expect(runningLine).not.toContain("last exit");
+  });
+
+  it("renders no session token and omits the legend entry when every row's sessionState is null", () => {
+    const caller = agent({ id: "caller", isSelf: true });
+    const unknown = agent({ id: "unknowable", parentId: "caller" });
+    const output = formatAgentListResponse(
+      response([caller, unknown], "caller"),
+    );
+
+    expect(output).not.toContain("session:");
+    expect(output).not.toContain("session: <state>");
+  });
+
+  it("degrades a state this build cannot explain to absent, token and legend alike", () => {
+    // Unreachable by type today - the enum is CLOSED, and widening it is a new
+    // minor - so this stands in for the two ways a value the legend cannot
+    // describe still arrives: a newer host that widened the enum, and a summary
+    // hand-built past the schema, which leaves the key off entirely.
+    //
+    // The legend half is the one that needs its own row: gating on
+    // `sessionState !== null` instead of on the narrowing would print the
+    // explanation for a marker that appears on no line.
+    const caller = agent({ id: "caller", isSelf: true });
+    const future = { ...agent({ id: "future", parentId: "caller" }) };
+    (future as { sessionState: unknown }).sessionState = "hibernating";
+    const absent = { ...agent({ id: "keyless", parentId: "caller" }) };
+    delete (absent as { sessionState?: unknown }).sessionState;
+    const output = formatAgentListResponse(
+      response([caller, future, absent], "caller"),
+    );
+
+    expect(agentLine(output, "future gui/")).not.toContain("session:");
+    expect(agentLine(output, "future gui/")).not.toContain("hibernating");
+    expect(agentLine(output, "keyless gui/")).not.toContain("session:");
+    expect(output).not.toContain("undefined");
+    expect(output).not.toContain("session: <state>");
+  });
+
+  it("explains the token and says a sleeping agent resumes and is not dead, once at least one row carries a state", () => {
+    const caller = agent({ id: "caller", isSelf: true });
+    const sleeping = {
+      ...agent({ id: "napping", parentId: "caller" }),
+      sessionState: "sleeping" as const,
+      lastExit: "reaped" as const,
+    };
+    const output = formatAgentListResponse(
+      response([caller, sleeping], "caller"),
+    );
+
+    expect(output).toContain("session: <state>: the agent's own session");
+    expect(output).toContain(
+      "sleeping (no live session; it RESUMES on your next message or when the agent is opened, so a sleeping peer is still addressable and is not dead)",
+    );
+  });
+
+  it("says an archived agent is still addressable rather than that a stopped agent is over", () => {
+    // The clause this pins shipped as "the agent is over as a record: archived
+    // or deleted", which is false about the only case a reader can actually
+    // meet. `stopped` is written by the ARCHIVE mutation; the one other writer
+    // is the `delete` exit arm, whose record is tombstoned out of the listing
+    // before it can be enumerated. And archiving is explicitly recoverable -
+    // the archive tool's own description promises that a later user or A2A
+    // message unarchives the agent - so the catalog was telling a model both
+    // that the peer was finished and that it could still be woken.
+    //
+    // LITERAL, like the `sleeping` clause above: a paraphrase is what let the
+    // finality claim reach a released build CI-green, and a legend that only
+    // has to contain the word "archived" would go green on the broken copy.
+    const caller = agent({ id: "caller", isSelf: true });
+    const stopped = {
+      ...agent({ id: "done", parentId: "caller" }),
+      sessionState: "stopped" as const,
+      lastExit: null,
+    };
+    const output = formatAgentListResponse(
+      response([caller, stopped], "caller"),
+    );
+
+    expect(output).toContain(
+      "stopped (the agent was archived, or deleted; a stopped row you can still see is almost always the archived case, because a deleted record drops out of the listing. An ARCHIVED agent is not over - it stays addressable, and your next message unarchives and wakes it; a deleted one is gone)",
+    );
+    expect(output).not.toContain("the agent is over as a record");
+  });
+
+  it("says running means a live process, not a mid-turn agent", () => {
+    // `active` is the executing-right-now field and this formatter never
+    // renders it, so `running` is the listing's ONLY liveness word - and the
+    // natural reading of it for an agent is "mid-turn", which it does not mean.
+    // An agent idle at a prompt for an hour reads `running`.
+    const caller = agent({ id: "caller", isSelf: true });
+    const running = {
+      ...agent({ id: "busy", parentId: "caller" }),
+      sessionState: "running" as const,
+      lastExit: null,
+    };
+    const output = formatAgentListResponse(
+      response([caller, running], "caller"),
+    );
+
+    expect(output).toContain(
+      "running (a live session exists on that host - the agent's process is up; it does NOT say the agent is mid-turn)",
+    );
+  });
+
+  it("keeps the two sentences that stop a caller misreading an absent state or branching on lastExit", () => {
+    // Neither of these was pinned, and both are the load-bearing half of their
+    // sentence. Without the first, a row this host cannot observe reads as a
+    // dead one - the exact collapse the facet exists to prevent, one arm over.
+    // Without the second, a caller branches on `lastExit` to decide whether a
+    // peer is revivable, which re-introduces the confusion one level down.
+    const caller = agent({ id: "caller", isSelf: true });
+    const sleeping = {
+      ...agent({ id: "napping", parentId: "caller" }),
+      sessionState: "sleeping" as const,
+      lastExit: "reaped" as const,
+    };
+    const output = formatAgentListResponse(
+      response([caller, sleeping], "caller"),
+    );
+
+    expect(output).toContain(
+      "A row with no session token is one this host cannot observe (another machine's agent, a GUI chat, or a record older than the field), which is not the same as stopped",
+    );
+    expect(output).toContain(
+      "is display detail only: all four resume identically",
+    );
+  });
+});
+
 describe("formatAgentSelf", () => {
   it("reports the agent's own working directory", () => {
     const output = formatAgentSelf(
