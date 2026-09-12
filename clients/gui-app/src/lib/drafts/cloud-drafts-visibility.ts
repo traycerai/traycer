@@ -45,7 +45,7 @@ export function openableCloudDrafts(input: {
   if (hostId === null) return [];
   return input.chats.filter((chat) => {
     if (chat.ownerHostId === hostId) return false;
-    const kind = input.kinds.get(cloudDraftIdentityKey(chat.identity));
+    const kind = input.kinds.get(cloudDraftIdentityKey(chat));
     return kind !== undefined && !draftKindIsHostBound(kind);
   });
 }

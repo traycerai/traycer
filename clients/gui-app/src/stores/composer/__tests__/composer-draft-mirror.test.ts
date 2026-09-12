@@ -43,7 +43,7 @@ describe("composer draft host-mirror bookkeeping", () => {
   it("renames the store key to chatId and withholds upserts until targetEpicId is bound", () => {
     bindComposerDraftHost("chat-1", "host-a");
     // Typed, not `EMPTY`: an empty draft with no host row is withheld by its
-    // own rule (`isUnbackedEmptyComposerDraft`), which would make the
+    // own rule (`isNeverTypedEmptyComposerDraft`), which would make the
     // `targetEpicId` gate below pass for the wrong reason.
     useComposerDraftStore.getState().setSnapshot("chat-1", TYPED, null);
     expect(collectDraftMirrorDirtyWrites("host-a")).toEqual([]);

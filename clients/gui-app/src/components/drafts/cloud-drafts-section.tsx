@@ -55,7 +55,7 @@ export function CloudDraftsSection(props: {
           const title = chat.title ?? "Untitled draft";
           return (
             <li
-              key={cloudDraftIdentityKey(chat.identity)}
+              key={cloudDraftIdentityKey(chat)}
               className="rounded-md px-2 py-1.5 text-ui-sm"
             >
               <span className="text-foreground">{title}</span>

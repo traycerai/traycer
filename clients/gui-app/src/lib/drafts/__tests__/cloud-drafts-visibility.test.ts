@@ -129,7 +129,7 @@ describe("openableCloudDrafts", () => {
   it("excludes a row owned by the calling hostId", () => {
     const row = chat({ identity: identityA, ownerHostId: "host-b" });
     const kinds = new Map<string, DraftKind>([
-      [cloudDraftIdentityKey(identityA), "landing"],
+      [cloudDraftIdentityKey(row), "landing"],
     ]);
 
     expect(
@@ -141,8 +141,8 @@ describe("openableCloudDrafts", () => {
     const composerRow = chat({ identity: identityA, ownerHostId: "host-a" });
     const interviewRow = chat({ identity: identityB, ownerHostId: "host-a" });
     const kinds = new Map<string, DraftKind>([
-      [cloudDraftIdentityKey(identityA), "chat-composer"],
-      [cloudDraftIdentityKey(identityB), "interview"],
+      [cloudDraftIdentityKey(composerRow), "chat-composer"],
+      [cloudDraftIdentityKey(interviewRow), "interview"],
     ]);
 
     expect(
@@ -158,8 +158,8 @@ describe("openableCloudDrafts", () => {
     const landingRow = chat({ identity: identityA, ownerHostId: "host-a" });
     const newChatRow = chat({ identity: identityB, ownerHostId: "host-a" });
     const kinds = new Map<string, DraftKind>([
-      [cloudDraftIdentityKey(identityA), "landing"],
-      [cloudDraftIdentityKey(identityB), "new-chat"],
+      [cloudDraftIdentityKey(landingRow), "landing"],
+      [cloudDraftIdentityKey(newChatRow), "new-chat"],
     ]);
 
     expect(
@@ -186,7 +186,7 @@ describe("openableCloudDrafts", () => {
   it("returns an empty list when hostId is null", () => {
     const row = chat({ identity: identityA, ownerHostId: "host-a" });
     const kinds = new Map<string, DraftKind>([
-      [cloudDraftIdentityKey(identityA), "landing"],
+      [cloudDraftIdentityKey(row), "landing"],
     ]);
 
     expect(openableCloudDrafts({ chats: [row], hostId: null, kinds })).toEqual(

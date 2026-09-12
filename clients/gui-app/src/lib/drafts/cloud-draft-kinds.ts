@@ -21,11 +21,27 @@ const kindByIdentity = new Map<string, DraftKind>();
 const listeners = new Set<() => void>();
 
 /**
- * Chat ids are host-minted, so identity is the `(task, owner, chat)` TRIPLE -
- * two hosts can mint the same chat id under one task.
+ * One published row, as both the registry and the listing address it.
+ * `CloudChatSummary` satisfies this, so callers pass the summary itself.
  */
-export function cloudDraftIdentityKey(identity: CloudChatIdentity): string {
-  return `${identity.taskId}\u0000${identity.ownerUserId}\u0000${identity.chatId}`;
+export interface CloudDraftRowRef {
+  readonly ownerHostId: string;
+  readonly identity: CloudChatIdentity;
+}
+
+/**
+ * Chat ids are host-minted, so identity is the `(task, owner, chat)` TRIPLE -
+ * two hosts can mint the same chat id under one task. `ownerHostId` leads it
+ * here because that triple identifies a row to the SERVER, which resolves one
+ * row per identity, while this map caches MANY hosts' rows at once: two hosts'
+ * rows arriving under one triple would otherwise overwrite each other's kind,
+ * and a host-bound draft could be listed as portable. The listing's React key
+ * is this same string, which is what keeps it unique across hosts and stable
+ * across head revisions.
+ */
+export function cloudDraftIdentityKey(row: CloudDraftRowRef): string {
+  const { identity } = row;
+  return `${row.ownerHostId}:${identity.taskId}:${identity.ownerUserId}:${identity.chatId}`;
 }
 
 /**
@@ -38,10 +54,10 @@ export function cloudDraftIdentityKey(identity: CloudChatIdentity): string {
 let snapshot: ReadonlyMap<string, DraftKind> = new Map();
 
 export function recordCloudDraftKind(
-  identity: CloudChatIdentity,
+  row: CloudDraftRowRef,
   kind: DraftKind,
 ): void {
-  const key = cloudDraftIdentityKey(identity);
+  const key = cloudDraftIdentityKey(row);
   if (kindByIdentity.get(key) === kind) return;
   kindByIdentity.set(key, kind);
   snapshot = new Map(kindByIdentity);

@@ -665,16 +665,27 @@ export function collectComposerDirtyWrites(): ReadonlyArray<{
  * is one cloud row per idle composer per host, and every one of them showed up
  * on the landing page as "Untitled draft" under Drafts from other devices.
  *
- * The condition is `revision === 0` - no content edit has EVER been recorded -
- * and deliberately not "has no host row yet". The two differ exactly where it
- * matters: type, have that first upsert commit with its reply lost, then erase.
- * A draft keyed on the missing host row would be withheld from then on, and
- * the cloud would go on serving content the user deleted, because bootstrap
- * suppresses the host's revision for a draft this store still holds dirty.
- * `revision` was bumped by the typing, so that draft publishes its erasure.
+ * The condition is `revision === 0` - no content edit recorded on this chat's
+ * composer yet - and deliberately not "has no host row yet". The two differ
+ * exactly where it matters: type, have that first upsert commit with
+ * its reply lost, then erase. A draft keyed on the missing host row would be
+ * withheld from then on, and the cloud would go on serving content the user
+ * deleted, because bootstrap suppresses the host's revision for a draft this
+ * store still holds dirty. `revision` was bumped by the typing, so that draft
+ * publishes its erasure.
  *
  * Nothing re-arms a withheld draft and nothing needs to: it stays dirty, and
  * the first real edit bumps `revision` and schedules it through the usual path.
+ *
+ * KNOWN LIMIT: `revision` counts the CHAT's composer lifetime, not one draft
+ * id's. `clearDraft` bumps it on submit and `fenceAndDetachSubmittedDraft`
+ * preserves it, so a fresh id minted after a send starts at `revision > 0` and
+ * an empty row for it is still published. Closing that needs per-draft
+ * bookkeeping (a "revision when this id was minted" stamp), NOT resetting
+ * `revision` on detach: the prompt stash captures `{chatId, revision}` as a
+ * compare-and-swap token and `clearIfUnchanged` compares nothing else, so
+ * making revisions repeat across sends lets an in-flight stash save match a
+ * LATER draft and erase it. Monotonic is what makes that token safe.
  */
 function isNeverTypedEmptyComposerDraft(draft: DraftState): boolean {
   return draft.revision === 0 && isEmptyLandingDraftContent(draft.content);
