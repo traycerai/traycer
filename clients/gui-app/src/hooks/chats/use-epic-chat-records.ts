@@ -36,8 +36,12 @@ interface ChatRecordListAnswer {
    * A host on an older minor upgrades with `head` absent, which the head
    * plane treats as "nothing to say about the head" rather than as a
    * retraction.
+   *
+   * `null` means the answer carried NO rows to apply - the `@1.3`
+   * `unchanged` arm. Distinct from `[]`, which is the positive claim that
+   * this epic has no chats and retracts everything the fence allows.
    */
-  readonly chats: readonly ChatRecordSummaryV12[];
+  readonly chats: readonly ChatRecordSummaryV12[] | null;
   /**
    * Always this store's own counter, because the store GENERATION is part of
    * the cache key - see the `cacheKeyIdentity` this hook builds. An entry
@@ -108,8 +112,20 @@ export function useEpicSyncChatRecords(epicId: string): void {
   // remainder - see `GUI_PROJECTS_EPIC_DOC_REPLICA`. Declared by us because
   // only we know it: the host would have to infer it from `epic.subscribe`'s
   // negotiated major, which this method's own version cannot see.
+  //
+  // `knownRevision` is pinned to `null` - "I hold no list stamp" - so the host
+  // always answers with a full `snapshot`, which is exactly what it answered
+  // before `@1.3` existed. Sending the stamp this hook could hold is the
+  // revision-gated polling change, and it needs a dispatch-time request seam
+  // (`params` is both the query KEY and the wire payload today, and the stamp
+  // must vary per dispatch without changing the key), so it does not belong
+  // in a constant memo.
   const params = useMemo(
-    () => ({ epicId, hasDocReplica: GUI_PROJECTS_EPIC_DOC_REPLICA }),
+    () => ({
+      epicId,
+      hasDocReplica: GUI_PROJECTS_EPIC_DOC_REPLICA,
+      knownRevision: null,
+    }),
     [epicId],
   );
   // Viewer-scoped, exactly like the cloud-chat reads: the response is one
@@ -173,7 +189,14 @@ export function useEpicSyncChatRecords(epicId: string): void {
     mapResponse: ({ response, requestContext }) => {
       const context = requestContext ?? null;
       return {
-        chats: response.chats,
+        // `unchanged` is UNREACHABLE while `knownRevision` is `null` above -
+        // the host emits that arm only when a stamp the caller SENT matched -
+        // and it maps to `null`, never to `[]`. An empty array is not the
+        // neutral value here: the store merges omissions against the dispatch
+        // fence, so an empty answer RETRACTS every row that landed before it.
+        // "Nothing changed" and "you have no chats" must not share a
+        // representation.
+        chats: response.kind === "snapshot" ? response.chats : null,
         issuedAtSeq: context === null ? null : context.seq,
       };
     },
@@ -185,7 +208,7 @@ export function useEpicSyncChatRecords(epicId: string): void {
     (query.isError && query.error.code === "E_HOST_UNSUPPORTED");
   useEffect(() => {
     if (store === null || !recordListAuthoritative) return;
-    if (answer !== null) {
+    if (answer !== null && answer.chats !== null) {
       // The fence is used as captured. It was read from THIS store, because
       // the generation is in the cache key - see `ChatRecordListAnswer`.
       store.getState().applyChatRecords(answer.chats, answer.issuedAtSeq);

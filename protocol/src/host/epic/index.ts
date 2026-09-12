@@ -4,6 +4,9 @@ export * from "./artifact-versions";
 export * from "./artifact-attachment";
 export * from "./chat-publication-identity";
 export * from "./chat-backup-status";
+// Shared by both record LIST reads and the record delta stream, so it is
+// exported before the three modules that consume it.
+export * from "./record-list-revision";
 export * from "./chat-records";
 export * from "./tui-agent-records";
 export * from "./chat-replica-read";

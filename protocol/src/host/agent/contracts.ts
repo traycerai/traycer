@@ -33,6 +33,7 @@ import {
   listAgentsResponseSchemaV60,
   listAgentsResponseSchemaV70,
   listAgentsResponseSchemaV80,
+  listAgentsResponseSchemaV90,
   agentSummarySchemaV10,
   agentSummarySchemaV20,
   agentSummarySchemaV30,
@@ -1017,7 +1018,7 @@ export const agentListV90 = defineRpcContract({
   method: "agent.list",
   schemaVersion: { major: 9, minor: 0 } as const,
   requestSchema: listAgentsRequestSchema,
-  responseSchema: listAgentsResponseSchema,
+  responseSchema: listAgentsResponseSchemaV90,
 });
 
 export const agentListUpgradeV8ToV9 = defineUpgradePath<
@@ -1032,11 +1033,52 @@ export const agentListUpgradeV8ToV9 = defineUpgradePath<
   upgradeResponse: (response) => response,
 });
 
-export const agentListDowngradeV9ToV8 = defineDowngradePath<
+// @9.1 puts the terminal-agent session facet on the row, so an orchestrator
+// can tell a peer that is ASLEEP (idle-reaped, stopped, restarting - all
+// resumable on the next message) from one that is over. Two plain added keys
+// on a non-strict row, so a @9.0 peer's schema strips them; the reasoning
+// lives on `agentSummarySchemaV91`.
+export const agentListV91 = defineRpcContract({
+  method: "agent.list",
+  schemaVersion: { major: 9, minor: 1 } as const,
+  requestSchema: listAgentsRequestSchema,
+  // The CANONICAL alias, which this head must name - see
+  // `head-names-canonical-alias.test.ts`. `@9.0` holds the suffixed copy.
+  responseSchema: listAgentsResponseSchema,
+});
+
+/**
+ * REQUEST: unchanged, so the fill is the identity.
+ *
+ * RESPONSE, both fields `null`: a `@9.0` host was never asked. `null` is that
+ * row's own vocabulary for "this host cannot know" - the value a cross-host
+ * row and a GUI chat already carry - so writing it here states a fact about
+ * the older peer rather than putting an affirmative session claim in its
+ * mouth. A caller reads a `@9.0` host exactly as it read one before the facet
+ * existed.
+ */
+export const agentListUpgradeV90ToV91 = defineUpgradePath<
   typeof agentListV90,
+  typeof agentListV91
+>({
+  from: agentListV90.schemaVersion,
+  to: agentListV91.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    agents: response.agents.map((agent) => ({
+      ...agent,
+      sessionState: null,
+      lastExit: null,
+    })),
+  }),
+});
+
+export const agentListDowngradeV9ToV8 = defineDowngradePath<
+  typeof agentListV91,
   typeof agentListV80
 >({
-  from: { major: 9, minor: 0 },
+  from: { major: 9, minor: 1 },
   to: { major: 8, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   // Drop Antigravity agents so an already-shipped v8.0 client's strict decode
@@ -1053,10 +1095,10 @@ export const agentListDowngradeV9ToV8 = defineDowngradePath<
 });
 
 export const agentListDowngradeV9ToV7 = defineDowngradePath<
-  typeof agentListV90,
+  typeof agentListV91,
   typeof agentListV70
 >({
-  from: { major: 9, minor: 0 },
+  from: { major: 9, minor: 1 },
   to: { major: 7, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1071,10 +1113,10 @@ export const agentListDowngradeV9ToV7 = defineDowngradePath<
 });
 
 export const agentListDowngradeV9ToV6 = defineDowngradePath<
-  typeof agentListV90,
+  typeof agentListV91,
   typeof agentListV60
 >({
-  from: { major: 9, minor: 0 },
+  from: { major: 9, minor: 1 },
   to: { major: 6, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1089,10 +1131,10 @@ export const agentListDowngradeV9ToV6 = defineDowngradePath<
 });
 
 export const agentListDowngradeV9ToV5 = defineDowngradePath<
-  typeof agentListV90,
+  typeof agentListV91,
   typeof agentListV50
 >({
-  from: { major: 9, minor: 0 },
+  from: { major: 9, minor: 1 },
   to: { major: 5, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1107,10 +1149,10 @@ export const agentListDowngradeV9ToV5 = defineDowngradePath<
 });
 
 export const agentListDowngradeV9ToV4 = defineDowngradePath<
-  typeof agentListV90,
+  typeof agentListV91,
   typeof agentListV40
 >({
-  from: { major: 9, minor: 0 },
+  from: { major: 9, minor: 1 },
   to: { major: 4, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1125,10 +1167,10 @@ export const agentListDowngradeV9ToV4 = defineDowngradePath<
 });
 
 export const agentListDowngradeV9ToV3 = defineDowngradePath<
-  typeof agentListV90,
+  typeof agentListV91,
   typeof agentListV30
 >({
-  from: { major: 9, minor: 0 },
+  from: { major: 9, minor: 1 },
   to: { major: 3, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1143,10 +1185,10 @@ export const agentListDowngradeV9ToV3 = defineDowngradePath<
 });
 
 export const agentListDowngradeV9ToV2 = defineDowngradePath<
-  typeof agentListV90,
+  typeof agentListV91,
   typeof agentListV20
 >({
-  from: { major: 9, minor: 0 },
+  from: { major: 9, minor: 1 },
   to: { major: 2, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({
@@ -1161,10 +1203,10 @@ export const agentListDowngradeV9ToV2 = defineDowngradePath<
 });
 
 export const agentListDowngradeV9ToV1 = defineDowngradePath<
-  typeof agentListV90,
+  typeof agentListV91,
   typeof agentListV10
 >({
-  from: { major: 9, minor: 0 },
+  from: { major: 9, minor: 1 },
   to: { major: 1, minor: 0 },
   downgradeRequest: (request) => ({ ok: true, value: request }),
   downgradeResponse: (response) => ({

@@ -68,6 +68,7 @@ import {
   agentListUpgradeV6ToV7,
   agentListUpgradeV7ToV8,
   agentListUpgradeV8ToV9,
+  agentListUpgradeV90ToV91,
   agentListV10,
   agentListV20,
   agentListV30,
@@ -77,6 +78,7 @@ import {
   agentListV70,
   agentListV80,
   agentListV90,
+  agentListV91,
   agentSelectionGuideV10,
   agentSelectionGuideGlobalGetV10,
   agentSelectionGuideGlobalOnboardingDraftGetV10,
@@ -476,9 +478,11 @@ import {
   epicFetchArtifactAttachmentV10,
   epicListChatRecordsUpgradeV10ToV11,
   epicListChatRecordsUpgradeV11ToV12,
+  epicListChatRecordsUpgradeV12ToV13,
   epicListChatRecordsV10,
   epicListChatRecordsV11,
   epicListChatRecordsV12,
+  epicListChatRecordsV13,
   epicGetChatRunSettingsDowngradeV20ToV10,
   epicGetChatRunSettingsDowngradeV30ToV10,
   epicGetChatRunSettingsDowngradeV30ToV20,
@@ -562,9 +566,11 @@ import {
 import {
   epicListTuiAgentsUpgradeV10ToV11,
   epicListTuiAgentsUpgradeV11ToV12,
+  epicListTuiAgentsUpgradeV12ToV13,
   epicListTuiAgentsV10,
   epicListTuiAgentsV11,
   epicListTuiAgentsV12,
+  epicListTuiAgentsV13,
 } from "@traycer/protocol/host/epic/tui-agent-records";
 import {
   epicStateSubscribeV10,
@@ -778,6 +784,7 @@ import {
   hostChatRecordsSubscribeV11,
   hostChatRecordsSubscribeV12,
   hostChatRecordsSubscribeV13,
+  hostChatRecordsSubscribeV14,
 } from "@traycer/protocol/host/epic/chat-records";
 import {
   editorOpenPathsUpgradeV10ToV11,
@@ -6142,12 +6149,23 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         7: agentListDowngradeV8ToV7,
       },
     },
+    // @9.1 adds the terminal-agent session facet (`sessionState` /
+    // `lastExit`) to the row, so an orchestrator can tell a peer that is
+    // asleep and resumable from one that is over. Two plain added keys, which
+    // a @9.0 peer's schema strips - no growth to gate - and the eight
+    // downgrade bridges below now start at 9.1 because they must originate at
+    // the line's LATEST minor. Each still parses through its frozen summary,
+    // which drops the keys on the way out.
     9: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: agentListV90,
           upgradeFromPreviousVersion: agentListUpgradeV8ToV9,
+        },
+        1: {
+          contract: agentListV91,
+          upgradeFromPreviousVersion: agentListUpgradeV90ToV91,
         },
       },
       downgradePathsFromLatest: {
@@ -7522,9 +7540,13 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   // `chats[]`, which an older peer's schema strips, so the additivity check
   // admits it as a MINOR; @1.1 stays installed on the pre-`head` response and
   // its rows upgrade with the key absent.
+  // @1.3 gates the whole answer on a list revision the caller sends back, so a
+  // poll that has nothing to report costs a few hundred bytes instead of the
+  // re-encoded registry. @1.2 stays installed and its callers keep receiving
+  // the unconditional snapshot.
   "epic.listChatRecords": {
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: epicListChatRecordsV10,
@@ -7565,6 +7587,33 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
           // reason rather than 1.1's subtle one: `head` is an OPTIONAL added
           // key, which an older peer's schema strips unconditionally. Nothing
           // about the response can be refused by a 1.1 validator.
+        },
+        3: {
+          contract: epicListChatRecordsV13,
+          upgradeFromPreviousVersion: epicListChatRecordsUpgradeV12ToV13,
+          // 1.3 DOES declare it, and the contrast with 1.1 and 1.2 above is
+          // the whole rule rather than an inconsistency - the same contrast
+          // `epic.listTuiAgents@1.2` draws against its own 1.1.
+          //
+          // 1.1 and 1.2 added object KEYS, which zod strips unconditionally.
+          // 1.3 replaces the response OBJECT with a discriminated `kind`
+          // union whose second arm (`unchanged`) carries `touched` where the
+          // 1.2 shape a 1.1/1.2 peer validates against requires `chats`. That
+          // is response VALUE GROWTH an older peer actively refuses, and the
+          // annotation is the reviewed claim that its emission is gated: the
+          // resolver answers `unchanged` only when `ctx.schemaVersion` is at
+          // least 1.3 AND the caller's `knownRevision` matched, so a 1.2
+          // caller receives a `snapshot` every time and keeps parsing every
+          // answer it is handed. The `snapshot` arm is the 1.2 object plus
+          // added keys, which is why the older shape still projects.
+          //
+          // The gate is the NEGOTIATED VERSION, like 1.2 of the TUI list and
+          // unlike this method's own 1.1: the question is what the caller can
+          // PARSE, not what it already holds. `knownRevision` is a second,
+          // independent condition on the same emission - a 1.3 caller that
+          // sends `null` is served a snapshot too - and neither replaces the
+          // other.
+          responseGrowthProjectionGated: true,
         },
       },
       downgradePathsFromLatest: {},
@@ -7720,9 +7769,15 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   // DOC-ONLY - that host still writes the `tuiAgents` map, which is exactly
   // the projection the renderer already renders - so the degrade arm needs no
   // surface of its own. Never on the unary released floor.
+  // @1.3 carries two changes on one bump: the same revision gating
+  // `epic.listChatRecords@1.3` takes, and the session facet
+  // (`sessionState` / `lastExit`) that makes a reaped agent read as asleep
+  // rather than as gone. They ship together because the facet is a registry
+  // fact - stamping it moves the list revision - so a host serving one
+  // without the other would pay for the second twice.
   "epic.listTuiAgents": {
     1: {
-      latestMinor: 2,
+      latestMinor: 3,
       versions: {
         0: {
           contract: epicListTuiAgentsV10,
@@ -7786,6 +7841,26 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
           // the question is what the caller can PARSE rather than what it
           // already holds - `hasDocReplica` answers the second and is
           // untouched by this minor.
+          responseGrowthProjectionGated: true,
+        },
+        3: {
+          contract: epicListTuiAgentsV13,
+          upgradeFromPreviousVersion: epicListTuiAgentsUpgradeV12ToV13,
+          // Declared for the ROOT union, not for the row.
+          //
+          // `sessionState` / `lastExit` are plain added keys on all three
+          // `origin` arms, which zod strips for a 1.2 peer - 1.1's paragraph
+          // above is the argument, and on its own they would need no
+          // annotation and declaring one would throw.
+          //
+          // What grows is the RESPONSE ROOT: 1.3 replaces the object with a
+          // discriminated `kind` union whose `unchanged` arm carries
+          // `touched` where the 1.2 shape requires `tuiAgents`. A 1.2 peer
+          // refuses that outright, so the emission is gated on
+          // `ctx.schemaVersion` being at least 1.3 AND the caller's
+          // `knownRevision` matching, and this is the reviewed claim that it
+          // is. The `snapshot` arm is the 1.2 object plus added keys, which
+          // is what keeps the older shape projecting.
           responseGrowthProjectionGated: true,
         },
       },
@@ -10894,9 +10969,17 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
   // carries by the chat's cloud publication head - the live-sync half of the
   // published-copy tile. @1.0-@1.2 stay installed and FROZEN on the
   // pre-`head` row; the host gates emission on the negotiated version.
+  // @1.4 stamps the LIST revision on every record delta and grows the
+  // `tuiUpsert` row by the session facet. It is stage 2 of the revision
+  // gating on `epic.listChatRecords` / `epic.listTuiAgents`: with the stamp
+  // on the delta a client advances its own revision as it applies one, so a
+  // change no longer forces the next poll back to a full snapshot. @1.0-@1.3
+  // stay installed and FROZEN on their unstamped frames; the host gates
+  // emission on the negotiated version exactly as it does for the @1.1 kinds,
+  // the @1.2 cloud arm and the @1.3 head.
   "host.chatRecords.subscribe": {
     1: {
-      latestMinor: 3,
+      latestMinor: 4,
       versions: {
         0: {
           contract: hostChatRecordsSubscribeV10,
@@ -10909,6 +10992,9 @@ const HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION = {
         },
         3: {
           contract: hostChatRecordsSubscribeV13,
+        },
+        4: {
+          contract: hostChatRecordsSubscribeV14,
         },
       },
     },
