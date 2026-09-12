@@ -7678,3 +7678,339 @@ function standingByTileGeneric(
   }
   return byTile;
 }
+
+describe("OfficeScene fixup 8c - the plan the settled feed owes (P2)", () => {
+  /**
+   * The floor an explicit view draws while the feed is still replaying is a
+   * FIRST DRAFT: every status is the one the epic already knew, so no team
+   * reads live, their members are planned into the quiet cubbies, and the
+   * rooms a live team would have had are not there.
+   *
+   * Nothing used to replace it. The agent set does not change when a status
+   * arrives, and a status flip alone deliberately never re-plans, so the draft
+   * was the floor for the life of the mount - the cold reviewer's P2. The feed
+   * settling is now a trigger of its own, and this is the shape of the floor
+   * it owes: not "somebody got a desk", but the same floor a scene that had
+   * waited for the feed would have planned in the first place.
+   *
+   * Asserted against that fresh plan rather than against `"desk"`, because a
+   * half-fix has a shape: unpin the woken lead alone and it takes a desk while
+   * its team-mate stays in the quiet stack, which is one desk and one cubby in
+   * one room where a settled office has two desks in two rooms.
+   */
+  it("re-plans the provisional floor into the one a settled first sync would have planned", () => {
+    const fixture = makeTestEpic("triage", 40, 1);
+    const agents = fixture.agents;
+    const visibleAgentIds = new Set(agents.map((agent) => agent.id));
+    const idle = new Map<string, OfficeAgentStatus>(
+      agents.map((agent) => [agent.id, "idle" as const]),
+    );
+    const scene = new OfficeScene(OFFICE_VIEWS.building, null);
+    // The provisional sync: a real first plan, from statuses nobody has
+    // confirmed, with the feed still behind.
+    scene.sync(sceneInput({ agents, visibleAgentIds, statusById: idle }));
+    const provisional = layoutOf(scene);
+
+    // The feed settles, and what it brings with it is one woken lead - which
+    // is what makes its whole team live, and its members desk-worthy.
+    const woken = "team-0-lead";
+    if (!idle.has(woken)) throw new Error("fixture has no team-0-lead");
+    const settledStatuses = new Map(idle);
+    settledStatuses.set(woken, "awaiting");
+    const settled = sceneInput({
+      agents,
+      visibleAgentIds,
+      statusById: settledStatuses,
+      feedSettled: true,
+    });
+    const team = settled.partition.hosts
+      .flatMap((host) => host.teams)
+      .find((candidate) => candidate.leadAgentId === woken);
+    if (team === undefined) throw new Error("the woken lead leads no team");
+    scene.sync(settled);
+    const after = layoutOf(scene);
+
+    // The floor a scene that had waited would have drawn: the same view, the
+    // same settled partition, nothing spoken for and nothing owed.
+    const fresh = OFFICE_VIEWS.building.plan({
+      agents,
+      partition: settled.partition,
+      occupancy: new Map<string, string>(),
+      needsCapacity: [],
+      activityById: new Map<string, number>(),
+      viewport: settled.viewport,
+      previous: null,
+    });
+    const kindsOf = (layout: OfficeLayout): ReadonlyArray<string | undefined> =>
+      team.memberAgentIds.map((id) => layout.desks.get(id)?.kind);
+
+    // The control: the draft really was the cold floor, so the equality below
+    // is a change and not a coincidence.
+    expect(kindsOf(provisional)).toEqual(["cubby", "cubby"]);
+    expect(provisional.rooms.length).toBe(1);
+
+    expect(kindsOf(after)).toEqual(kindsOf(fresh));
+    expect(after.rooms.length).toBe(fresh.rooms.length);
+    expect(after.rooms.length).toBe(2);
+  });
+});
+
+describe("OfficeScene fixup 8c - the settle trigger fires once and never again (R3)", () => {
+  /**
+   * The settle is a LATCH, not an edge: `sync` sets `feedSettled` on the
+   * first sync that carries it and never clears it, so a later sync that
+   * still says `feedSettled: true` finds the flag already up and owes the
+   * planner nothing. Count `plan` calls with a wrapper around the real
+   * Building view - so the counted calls are the ones a real scene would
+   * make - across a provisional sync, the settle sync, and a third sync that
+   * repeats `feedSettled: true` with unchanged statuses: the third has to
+   * cost zero.
+   */
+  it("re-plans on the settle sync and never again for a later settled sync", () => {
+    let calls = 0;
+    const countingView: OfficeView = {
+      ...OFFICE_VIEWS.building,
+      plan: (input) => {
+        calls += 1;
+        return OFFICE_VIEWS.building.plan(input);
+      },
+    };
+    const scene = new OfficeScene(countingView, null);
+    const idle = new Map<string, OfficeAgentStatus>([
+      ["alpha", "idle"],
+      ["beta", "idle"],
+    ]);
+
+    // The provisional sync: an ordinary first plan.
+    scene.sync(
+      sceneInput({ agents: AGENTS, visibleAgentIds: BOTH, statusById: idle }),
+    );
+    expect(calls).toBe(1);
+
+    // The settle: the flag's first `true`, so it is the trigger firing.
+    scene.sync(
+      sceneInput({
+        agents: AGENTS,
+        visibleAgentIds: BOTH,
+        statusById: idle,
+        feedSettled: true,
+      }),
+    );
+    expect(calls).toBe(2);
+
+    // A third sync, still `feedSettled: true` and nothing else changed: the
+    // latch is already up, so this owes the planner nothing.
+    scene.sync(
+      sceneInput({
+        agents: AGENTS,
+        visibleAgentIds: BOTH,
+        statusById: idle,
+        feedSettled: true,
+      }),
+    );
+    expect(calls).toBe(2);
+  });
+
+  /**
+   * The standing contract, restated here because the new trigger is the
+   * place a regression would most plausibly reopen it: a status flip alone
+   * never re-plans, and that has to hold even on a scene the settle has
+   * already visited - otherwise the settle would read as a second door back
+   * in for status flips rather than a one-time trigger of its own.
+   */
+  it("a status flip on an already-settled scene still never re-plans", () => {
+    let calls = 0;
+    const countingView: OfficeView = {
+      ...OFFICE_VIEWS.building,
+      plan: (input) => {
+        calls += 1;
+        return OFFICE_VIEWS.building.plan(input);
+      },
+    };
+    const scene = new OfficeScene(countingView, null);
+    const idle = new Map<string, OfficeAgentStatus>([
+      ["alpha", "idle"],
+      ["beta", "idle"],
+    ]);
+    scene.sync(
+      sceneInput({
+        agents: AGENTS,
+        visibleAgentIds: BOTH,
+        statusById: idle,
+        feedSettled: true,
+      }),
+    );
+    expect(calls).toBe(1);
+
+    const flipped = new Map(idle);
+    flipped.set("alpha", "awaiting");
+    scene.sync(
+      sceneInput({
+        agents: AGENTS,
+        visibleAgentIds: BOTH,
+        statusById: flipped,
+        feedSettled: true,
+      }),
+    );
+    expect(calls).toBe(1);
+  });
+
+  /**
+   * The healthy-feed case: a scene whose FIRST sync already carries
+   * `feedSettled: true` needs nothing extra - its ordinary first plan IS the
+   * settled one, per the latch's own reasoning in `office-scene.ts`. This is
+   * the case a naive "settling means always plan again" reading would cost a
+   * second layout for no reason; pin that it does not.
+   */
+  it("a scene whose first sync is already settled plans exactly once", () => {
+    let calls = 0;
+    const countingView: OfficeView = {
+      ...OFFICE_VIEWS.building,
+      plan: (input) => {
+        calls += 1;
+        return OFFICE_VIEWS.building.plan(input);
+      },
+    };
+    const scene = new OfficeScene(countingView, null);
+    const idle = new Map<string, OfficeAgentStatus>([
+      ["alpha", "idle"],
+      ["beta", "idle"],
+    ]);
+    scene.sync(
+      sceneInput({
+        agents: AGENTS,
+        visibleAgentIds: BOTH,
+        statusById: idle,
+        feedSettled: true,
+      }),
+    );
+    expect(calls).toBe(1);
+
+    scene.sync(
+      sceneInput({
+        agents: AGENTS,
+        visibleAgentIds: BOTH,
+        statusById: idle,
+        feedSettled: true,
+      }),
+    );
+    expect(calls).toBe(1);
+  });
+
+  /**
+   * THE RECONNECT, which is why the trigger is a latch and not an edge.
+   *
+   * A transport that blinks re-replays its history: the flag goes false and
+   * true again, and an edge-triggered rule would read that as a second settle
+   * and re-lay out an office somebody is reading. The question the latch asks
+   * is "has this office ever been planned from a settled feed", and a second
+   * replay does not re-open it.
+   */
+  it("never settles twice, even when the feed goes behind and catches up again", () => {
+    let calls = 0;
+    const countingView: OfficeView = {
+      ...OFFICE_VIEWS.building,
+      plan: (input) => {
+        calls += 1;
+        return OFFICE_VIEWS.building.plan(input);
+      },
+    };
+    const scene = new OfficeScene(countingView, null);
+    const idle = new Map<string, OfficeAgentStatus>([
+      ["alpha", "idle"],
+      ["beta", "idle"],
+    ]);
+    const syncWith = (feedSettled: boolean): void => {
+      scene.sync(
+        sceneInput({
+          agents: AGENTS,
+          visibleAgentIds: BOTH,
+          statusById: idle,
+          feedSettled,
+        }),
+      );
+    };
+    syncWith(false);
+    syncWith(true);
+    // The provisional plan and the settle plan, which is the whole budget.
+    expect(calls).toBe(2);
+
+    // The transport drops, replays, and catches up a second time.
+    syncWith(false);
+    syncWith(true);
+    expect(calls).toBe(2);
+  });
+});
+
+describe("OfficeScene fixup 8c - the settle plan walks people, it does not pop them (R4)", () => {
+  interface SettledScene {
+    readonly scene: OfficeScene;
+    readonly movedId: string;
+  }
+
+  /**
+   * The same fixture and the same woken-lead premise as the R2 settle case
+   * above, parameterized on `reducedMotion` so both branches below sync
+   * against an identical, verified premise: a team member the settle
+   * actually moved off a cubby, never an assumed one.
+   */
+  function settledScene(reducedMotion: boolean): SettledScene {
+    const fixture = makeTestEpic("triage", 40, 1);
+    const agents = fixture.agents;
+    const visibleAgentIds = new Set(agents.map((one) => one.id));
+    const idle = new Map<string, OfficeAgentStatus>(
+      agents.map((one) => [one.id, "idle" as const]),
+    );
+    const scene = new OfficeScene(OFFICE_VIEWS.building, null);
+    scene.sync(
+      sceneInput({ agents, visibleAgentIds, statusById: idle, reducedMotion }),
+    );
+    const provisional = layoutOf(scene);
+
+    const woken = "team-0-lead";
+    if (!idle.has(woken)) throw new Error("fixture has no team-0-lead");
+    const settledStatuses = new Map(idle);
+    settledStatuses.set(woken, "awaiting");
+    const settled = sceneInput({
+      agents,
+      visibleAgentIds,
+      statusById: settledStatuses,
+      feedSettled: true,
+      reducedMotion,
+    });
+    const team = settled.partition.hosts
+      .flatMap((host) => host.teams)
+      .find((candidate) => candidate.leadAgentId === woken);
+    if (team === undefined) throw new Error("the woken lead leads no team");
+    const moved = team.memberAgentIds.find(
+      (id) => provisional.desks.get(id)?.kind === "cubby",
+    );
+    if (moved === undefined) {
+      throw new Error("no team member started in a cubby to move out of");
+    }
+
+    scene.sync(settled);
+    const after = layoutOf(scene);
+    if (after.desks.get(moved)?.kind === "cubby") {
+      throw new Error("expected the settle to move this member off its cubby");
+    }
+    return { scene, movedId: moved };
+  }
+
+  // Motion on: teleporting the moved agent into its new chair is exactly the
+  // defect this pins against. `awayAgentIds` is the scene's own word for "not
+  // in its own chair" (see the waking-cubby fixture above), so the moved
+  // agent has to be in it on the very sync that moved it.
+  it("with motion on, the settle sends the moved agent walking rather than dropping it into its new chair", () => {
+    const { scene, movedId } = settledScene(false);
+    expect(frameOf(scene).awayAgentIds.has(movedId)).toBe(true);
+  });
+
+  // Motion reduced: the walk collapses into sitting down, so the same moved
+  // agent is already in its chair on the sync that moved it - no separate
+  // walk to catch up on afterward.
+  it("with reduced motion, the settle lands the moved agent on its new chair immediately", () => {
+    const { scene, movedId } = settledScene(true);
+    expect(frameOf(scene).awayAgentIds.has(movedId)).toBe(false);
+  });
+});

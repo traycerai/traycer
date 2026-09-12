@@ -133,6 +133,7 @@ import { OFFICE_BENCH_SEED } from "@/components/epic-canvas/comm-graph/office/of
 import {
   OFFICE_VIEWS,
   OFFICE_VIEW_IDS,
+  type OfficePlanInput,
 } from "@/lib/comm-graph/office/views/office-view";
 import { __setCommGraphSubscriptionOpenerForTests } from "@/lib/comm-graph/comm-graph-opener-override";
 import type {
@@ -163,9 +164,19 @@ import {
 } from "@/stores/epics/canvas/tile-schema";
 import { partitionOfficePopulation } from "@/lib/comm-graph/office/office-population";
 import type { CommGraphEvent } from "@/lib/comm-graph/comm-graph-events";
-import type { OfficeRect } from "@/lib/comm-graph/office/office-types";
+import type {
+  OfficeLayout,
+  OfficeRect,
+} from "@/lib/comm-graph/office/office-types";
 import { useCommGraphAgents } from "@/components/epic-canvas/comm-graph/use-comm-graph-agents";
 import { __resetCommGraphRegistryForTests } from "@/lib/comm-graph/comm-graph-registry";
+
+/**
+ * The Building's REAL planner, captured at import before any spy can replace
+ * it - so a case that spies on `plan` to record what was drawn can still ask
+ * what a plan of its own would have come to.
+ */
+const BUILDING_PLAN = OFFICE_VIEWS.building.plan;
 
 const EPIC_ID = "epic-comm-graph";
 const CHAT_ID = "chat-1";
@@ -2158,6 +2169,116 @@ describe("CommGraphTile", () => {
         fresh.members.get(ARCHIVED_CHAT_ID)?.hotAtArrival,
       );
       expect(actual?.hotAtArrival).toBe(true);
+    });
+  });
+
+  describe("the plan the settled feed owes (fixup 8c, P2)", () => {
+    /**
+     * FIXUP 8 DREW THE OFFICE EARLY AND THEN LEFT IT THERE.
+     *
+     * The floor an explicit view draws while the feed is behind is planned
+     * from statuses that are still arriving, so nobody is busy and the woken
+     * agent's desk does not exist yet. The case above proves the PARTITION
+     * settles - that is F3's half, and it passed all along - while this one
+     * proves the drawn floor does too, which it did not: the agent set does
+     * not change when a status finally arrives, and a status flip alone
+     * deliberately never re-plans, so the rendered plan stayed the draft for
+     * the life of the mount. That is the cold reviewer's P2, reproduced here
+     * through the real tile.
+     *
+     * Read off the PLANNER's own calls rather than the store or the frame:
+     * the claim is about the plan the canvas is drawing, and the last plan the
+     * view was asked for is exactly that.
+     */
+    it("re-plans the rendered floor from the settled partition, so the woken agent's seat is the desk a settled plan gives it", async () => {
+      const sync = vi.spyOn(OfficeScene.prototype, "sync");
+      const planned: Array<{
+        readonly input: OfficePlanInput;
+        readonly layout: OfficeLayout;
+      }> = [];
+      const plan = vi
+        .spyOn(OFFICE_VIEWS.building, "plan")
+        .mockImplementation((input) => {
+          const layout = BUILDING_PLAN(input);
+          planned.push({ input, layout });
+          return layout;
+        });
+      await renderSeededOffice({
+        ...DEFAULT_COMM_GRAPH_VIEW,
+        officeView: "building",
+      });
+      setOfficeCanvasSize({ width: 1040, height: 700 });
+      setIntersecting(true);
+      // The draft: drawn, and drawn from a feed that has told nobody
+      // anything yet.
+      expect(plan).toHaveBeenCalled();
+      const draft = planned.at(-1);
+      if (draft === undefined) throw new Error("nothing was planned");
+      expect(draft.input.previous).toBeNull();
+
+      const event: CommGraphEvent = {
+        id: 1,
+        timestamp: 10,
+        hostId: HOST_A,
+        kind: "a2a_message",
+        senderAgentId: ARCHIVED_CHAT_ID,
+        receiverAgentId: CHAT_ID,
+        responseId: "request-settle-probe",
+        inReplyTo: null,
+        expectReply: true,
+        messageText: "Review",
+        noticeReason: null,
+        originKind: null,
+        originChatId: null,
+        originRefId: null,
+      };
+      act(() => {
+        openedByHost.get(HOST_A)?.onSnapshot([event], 1);
+        openedByHost.get(HOST_B)?.onSnapshot([], null);
+      });
+
+      // The same wait the case above takes, and for the same reason: the
+      // snapshot lands, the tile re-renders, the probe re-reports, and only
+      // then does the scene sync.
+      await waitFor(() => {
+        expect(
+          sync.mock.calls.at(-1)?.[0].statusById.get(ARCHIVED_CHAT_ID),
+        ).toBe("awaiting");
+      });
+      const last = sync.mock.calls.at(-1)?.[0];
+      if (last === undefined) throw new Error("scene never synced");
+      // NO SECOND WAIT for a plan. The settle is reported by the very sync
+      // whose argument the wait above just read, and a sync plans inside
+      // itself - so the last plan is already the settled one if there is
+      // going to be one at all. Waiting for a second plan would turn the
+      // defect into a five-second timeout instead of the one-line
+      // disagreement it is.
+      const rendered = planned.at(-1);
+      if (rendered === undefined) throw new Error("nothing was planned");
+
+      // The floor a scene that had waited for the feed would have drawn.
+      const settledPlan = BUILDING_PLAN({
+        agents: last.agents,
+        partition: last.partition,
+        occupancy: new Map<string, string>(),
+        needsCapacity: [],
+        activityById: last.activityById,
+        viewport: last.viewport,
+        previous: null,
+      });
+      expect(rendered.layout.desks.get(ARCHIVED_CHAT_ID)?.kind).toBe(
+        settledPlan.desks.get(ARCHIVED_CHAT_ID)?.kind,
+      );
+      expect(rendered.layout.desks.get(ARCHIVED_CHAT_ID)?.kind).toBe("desk");
+      // And it was planned from the settled population, not merely re-planned
+      // from the provisional one: the classification the rendered floor was
+      // built on is the classification the sync is carrying.
+      expect(
+        rendered.input.partition.members.get(ARCHIVED_CHAT_ID)?.hotAtArrival,
+      ).toBe(last.partition.members.get(ARCHIVED_CHAT_ID)?.hotAtArrival);
+      expect(
+        rendered.input.partition.members.get(ARCHIVED_CHAT_ID)?.hotAtArrival,
+      ).toBe(true);
     });
   });
 
