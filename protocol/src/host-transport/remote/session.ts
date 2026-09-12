@@ -39,6 +39,7 @@ import type {
   StreamConnectionStatus,
   StreamFrameEnvelope,
 } from "../stream-session";
+import { isRetryableSessionLifecycleFatal } from "../stream-session";
 import type { TimerHandle } from "../timers";
 import {
   HostMethodVersionUnsatisfiedError,
@@ -1795,7 +1796,7 @@ export class RemoteSession<
     if (this.phase === "ready" && this.connection !== null) {
       this.openSubscription(this.connection, stream);
     } else {
-      stream.notifyStatus("connecting", null);
+      stream.notifyStatus("connecting", null, null);
     }
     return stream;
   }
@@ -1986,7 +1987,7 @@ export class RemoteSession<
     this.clearAllTimers();
     this.teardownConnection("closed-by-caller");
     for (const stream of this.subscriptions.values()) {
-      stream.notifyStatus("closed", { kind: "caller" });
+      stream.notifyStatus("closed", { kind: "caller" }, null);
     }
     this.subscriptions.clear();
     this.rejectAllPendingUnary(
@@ -2703,7 +2704,18 @@ export class RemoteSession<
       // flag, believed a recovery was in flight. Re-open it on the shared
       // backoff instead and keep it in `subscriptions`, so a later session
       // reconnect replays it like any other live stream.
-      if (parsed.data.details.retryable === true && this.phase !== "closed") {
+      //
+      // A chat session's lifecycle refusal is the same answer from a host
+      // released before it flagged those codes, and the local socket reads it
+      // the same way (`isRetryableSessionLifecycleFatal`). Without this arm,
+      // remote hosts alone would still turn a Try again pressed mid-open into
+      // a terminal close.
+      const details = parsed.data.details;
+      if (
+        (details.retryable === true ||
+          isRetryableSessionLifecycleFatal(stream.method, details)) &&
+        this.phase !== "closed"
+      ) {
         this.restoredStreamIds.delete(message.streamId);
         this.outboundSeq.delete(message.streamId);
         // The verdict just tombstoned this id on BOTH peers: the host marks a
@@ -2737,10 +2749,10 @@ export class RemoteSession<
         if (reopenAttempts !== undefined) {
           this.streamReopenAttempts.set(freshStreamId, reopenAttempts);
         }
-        this.scheduleStreamReopen(stream);
+        this.scheduleStreamReopen(stream, details);
         return;
       }
-      stream.goFatal(parsed.data.details);
+      stream.goFatal(details);
       this.subscriptions.delete(message.streamId);
       this.restoredStreamIds.delete(message.streamId);
       this.outboundSeq.delete(message.streamId);
@@ -2756,7 +2768,7 @@ export class RemoteSession<
       if (stream === undefined) {
         return;
       }
-      stream.notifyStatus("closed", { kind: "caller" });
+      stream.notifyStatus("closed", { kind: "caller" }, null);
       this.subscriptions.delete(message.streamId);
       this.restoredStreamIds.delete(message.streamId);
       this.outboundSeq.delete(message.streamId);
@@ -3129,7 +3141,8 @@ export class RemoteSession<
     // that grants (and carries) the first-evidence deadline license.
     this.stallReopenedStreamIds.delete(streamId);
     this.stallReopenedStreamIds.add(freshStreamId);
-    this.scheduleStreamReopen(stream);
+    // `null`: this client's own stall verdict, not a close the host explained.
+    this.scheduleStreamReopen(stream, null);
   }
 
   private clearReassemblyWatchdog(streamId: number): void {
@@ -3708,7 +3721,7 @@ export class RemoteSession<
     }
     connection.hostAttached = false;
     connection.scheduler.pause();
-    this.markStreamsReconnecting();
+    this.markStreamsReconnecting(null);
     this.retractSession();
     // A detach is a DOWN edge even though the socket survives, so the two
     // things every other loss edge does through `handleConnectionLost` have to
@@ -3825,10 +3838,31 @@ export class RemoteSession<
     cause: string,
     provenance: ConnectionLossProvenance,
   ): void {
+    this.handleConnectionLostWithRetryCause(
+      generation,
+      cause,
+      provenance,
+      null,
+    );
+  }
+
+  /**
+   * {@link handleConnectionLost} for a loss the host EXPLAINED: `retryCause` is
+   * the retryable session fatal that caused it, published to every stream on
+   * the `reconnecting` transition this loss causes (see `StatusChangeHandler`).
+   * Its one caller is `handleSessionFatal`; every other loss goes through
+   * `handleConnectionLost`, which has no cause to give.
+   */
+  private handleConnectionLostWithRetryCause(
+    generation: number,
+    cause: string,
+    provenance: ConnectionLossProvenance,
+    retryCause: FatalErrorDetails | null,
+  ): void {
     if (!this.isCurrent(generation) || this.phase === "closed") {
       return;
     }
-    this.dropConnection(cause);
+    this.dropConnection(cause, retryCause);
     this.syncReadinessLatch();
     const retryInMs = this.scheduleReconnectForFailedGeneration(generation);
     this.dialFailures.recordFailure({ cause, context: "", retryInMs });
@@ -3880,7 +3914,10 @@ export class RemoteSession<
    * earned, and this is when the outage clock starts - so they belong with the
    * drop rather than with one caller's choice of what to do next.
    */
-  private dropConnection(cause: string): void {
+  private dropConnection(
+    cause: string,
+    retryCause: FatalErrorDetails | null,
+  ): void {
     // Before anything else: a connection that is being lost never earned its
     // ladder reset, however close it came.
     this.clearStableResetTimer();
@@ -3909,7 +3946,7 @@ export class RemoteSession<
     // their retry license - but they must be released rather than left to
     // ride an unbounded number of further attempts inside one call.
     this.settleReadyWaiters(false);
-    this.markStreamsReconnecting();
+    this.markStreamsReconnecting(retryCause);
     // The DOWN edge, from the funnel every drop passes through. `isReady()`
     // is false the moment `connection` is nulled above; publishing that here
     // means no caller can forget. `handleUnauthorizedSessionFatal` had - the
@@ -3967,10 +4004,14 @@ export class RemoteSession<
       // A transient host blip must not count toward the credential give-up
       // bound - clear any streak left by a prior genuine UNAUTHORIZED episode.
       this.noProgressUnauthorizedReconnects = 0;
-      this.handleConnectionLost(
+      // The details travel on as every stream's retry cause, as the local
+      // socket's retryable fatal does: there, each stream's own socket
+      // carries this same frame.
+      this.handleConnectionLostWithRetryCause(
         generation,
         "session-fatal-retryable",
         provenance,
+        details,
       );
       return;
     }
@@ -4012,7 +4053,7 @@ export class RemoteSession<
     // after revalidation we can tell whether the next attach would present a
     // DIFFERENT token (progress) or the same rejected one (no progress).
     const rejectedBearer = this.openFrameBearer;
-    this.dropConnection("session-fatal-unauthorized");
+    this.dropConnection("session-fatal-unauthorized", null);
     void this.revalidateThenReconnect(
       generation,
       auth,
@@ -4714,7 +4755,7 @@ export class RemoteSession<
       if (this.phase === "closed" || generation !== this.connectGeneration) {
         return;
       }
-      this.dropConnection("connect-path-threw");
+      this.dropConnection("connect-path-threw", null);
       const retryInMs = this.scheduleReconnectForFailedGeneration(generation);
       this.dialFailures.recordFailure({
         cause: `the connect path threw before dialing: ${
@@ -5030,9 +5071,9 @@ export class RemoteSession<
 
   // ---- Small helpers ----------------------------------------------------- //
 
-  private markStreamsReconnecting(): void {
+  private markStreamsReconnecting(retryCause: FatalErrorDetails | null): void {
     for (const stream of this.subscriptions.values()) {
-      stream.notifyStatus("reconnecting", null);
+      stream.notifyStatus("reconnecting", null, retryCause);
     }
   }
 
@@ -5403,15 +5444,21 @@ export class RemoteSession<
    * reading true here. The stream stays in `subscriptions` throughout, so a
    * session-level reconnect landing first simply replays it and the pending
    * timer is dropped as redundant.
+   *
+   * `retryCause` is the fatal's details, or `null` for a stall re-open.
    */
-  private scheduleStreamReopen(stream: LogicalStream): void {
+  private scheduleStreamReopen(
+    stream: LogicalStream,
+    retryCause: FatalErrorDetails | null,
+  ): void {
     const streamId = stream.streamId;
     const attempt = this.streamReopenAttempts.get(streamId) ?? 0;
     this.streamReopenAttempts.set(streamId, attempt + 1);
-    // `null`, like the session-wide reconnect projection at `notifyStatus`
-    // above: `StreamCloseReason` describes a CLOSE, and this stream is not
-    // closed. The reason travels in the log line instead.
-    stream.notifyStatus("reconnecting", null);
+    // No close reason, like the session-wide reconnect projection above:
+    // `StreamCloseReason` describes a CLOSE, and this stream is not closed.
+    // The host's details ride as the transition's `retryCause` instead, so a
+    // consumer counting failed attempts can name the code.
+    stream.notifyStatus("reconnecting", null, retryCause);
     const existing = this.streamReopenTimers.get(streamId);
     if (existing !== null && existing !== undefined) {
       clearTimeout(existing);

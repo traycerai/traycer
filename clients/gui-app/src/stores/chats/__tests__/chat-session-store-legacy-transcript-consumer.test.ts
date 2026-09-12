@@ -101,7 +101,7 @@ class FakeChatWireSession implements IStreamSession {
   }
 
   close(): void {
-    this.statusChangeHandler?.("closed", { kind: "caller" });
+    this.statusChangeHandler?.("closed", { kind: "caller" }, null);
   }
 
   /** Feed a raw wire envelope through the REAL `ChatStreamClient` parse. */
@@ -116,7 +116,7 @@ class FakeChatWireSession implements IStreamSession {
     status: "connecting" | "open" | "reconnecting" | "closed",
     reason: StreamCloseReason | null,
   ): void {
-    this.statusChangeHandler?.(status, reason);
+    this.statusChangeHandler?.(status, reason, null);
   }
 }
 

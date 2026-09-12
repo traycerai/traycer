@@ -24,6 +24,7 @@ import {
   createWorkerBridgeEndpoint,
 } from "../bridge-endpoint";
 import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import {
   isStreamProxyEvent,
   isWorkerToMainFrame,
@@ -99,6 +100,7 @@ function connect() {
           event.status.streamId,
           event.status.status,
           event.status.reason,
+          event.status.retryCause,
         );
         return;
       case "stream/manifest":
@@ -411,6 +413,36 @@ describe("stream proxy — opening", () => {
           : null,
       ).not.toBe("INCOMPATIBLE");
     }
+  });
+
+  it("carries a reconnect's retry cause to the worker session intact", () => {
+    const { recording, worker } = connect();
+    const session = worker.client.subscribe("epic.status.subscribe", {
+      epicId: "epic-1",
+    });
+    const heard: Array<{
+      readonly status: string;
+      readonly reason: unknown;
+      readonly retryCause: FatalErrorDetails | null;
+    }> = [];
+    session.onStatusChange((status, reason, retryCause) => {
+      heard.push({ status, reason, retryCause });
+    });
+    const retryCause: FatalErrorDetails = {
+      code: "EPIC_INIT_FAILED",
+      reason: "cloud unreachable while opening",
+      incompatibleMethods: null,
+      upgradeGuidance: null,
+      retryable: true,
+    };
+
+    recording.opened()[0]?.emitRetryableReconnect(retryCause);
+
+    // Across the real serialization boundary: the worker's listener gets the
+    // host's details, and still no close reason on a reconnect.
+    expect(heard).toEqual([
+      { status: "reconnecting", reason: null, retryCause },
+    ]);
   });
 });
 
