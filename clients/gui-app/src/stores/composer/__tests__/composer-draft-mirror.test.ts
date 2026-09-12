@@ -42,7 +42,10 @@ describe("composer draft host-mirror bookkeeping", () => {
 
   it("renames the store key to chatId and withholds upserts until targetEpicId is bound", () => {
     bindComposerDraftHost("chat-1", "host-a");
-    useComposerDraftStore.getState().setSnapshot("chat-1", EMPTY, null);
+    // Typed, not `EMPTY`: an empty draft with no host row is withheld by its
+    // own rule (`isUnbackedEmptyComposerDraft`), which would make the
+    // `targetEpicId` gate below pass for the wrong reason.
+    useComposerDraftStore.getState().setSnapshot("chat-1", TYPED, null);
     expect(collectDraftMirrorDirtyWrites("host-a")).toEqual([]);
     useComposerDraftStore.getState().bindTarget("chat-1", "epic-1");
     const dirty = collectDraftMirrorDirtyWrites("host-a");
@@ -100,5 +103,118 @@ describe("composer draft host-mirror bookkeeping", () => {
     const after = useComposerDraftStore.getState().drafts["chat-window-b"];
     expect(after?.content).toEqual(EMPTY);
     expect(after?.resetEpoch).toBe(before.resetEpoch + 1);
+  });
+});
+
+/**
+ * `collectComposerDirtyWrites` withholds a dirty draft that is EMPTY and has
+ * never been typed into (`revision === 0`): a caret move alone mints a
+ * `draftId` and bumps `generation`, so publishing it would mint a cloud row
+ * for an idle composer - the "Untitled draft" junk rows the fix removes.
+ *
+ * The gate is keyed on `revision`, not on "has no host row yet": a draft whose
+ * first upsert committed with its reply lost still reads `hostRevision === 0`,
+ * and keying on that would withhold its erasure forever while the cloud went
+ * on serving the deleted content.
+ */
+describe("collectComposerDirtyWrites: never-typed empty draft gate", () => {
+  beforeEach(() => {
+    useComposerDraftStore.setState({
+      drafts: {},
+      pendingSubmittedDraftDeletes: {},
+    });
+  });
+
+  afterEach(() => {
+    useComposerDraftStore.setState({
+      drafts: {},
+      pendingSubmittedDraftDeletes: {},
+    });
+  });
+
+  it("does not collect a dirty draft that is empty and has never been typed into", () => {
+    useComposerDraftStore.setState({
+      drafts: {
+        "chat-empty": {
+          content: EMPTY,
+          selection: null,
+          browserAnnotations: [],
+          resetEpoch: 0,
+          // A caret move alone: `generation` bumped, `revision` did not.
+          revision: 0,
+          draftId: "draft-empty",
+          hostRevision: 0,
+          targetEpicId: "epic-1",
+          lastTouchedAt: 1,
+          generation: 1,
+          syncedGeneration: 0,
+          ownerHostId: null,
+          origin: null,
+          publication: null,
+        },
+      },
+    });
+
+    expect(collectComposerDirtyWrites()).toEqual([]);
+  });
+
+  it("collects the same draft once it has typed content", () => {
+    useComposerDraftStore.setState({
+      drafts: {
+        "chat-empty": {
+          content: TYPED,
+          selection: null,
+          browserAnnotations: [],
+          resetEpoch: 0,
+          revision: 1,
+          draftId: "draft-empty",
+          hostRevision: 0,
+          targetEpicId: "epic-1",
+          lastTouchedAt: 1,
+          generation: 1,
+          syncedGeneration: 0,
+          ownerHostId: null,
+          origin: null,
+          publication: null,
+        },
+      },
+    });
+
+    const dirty = collectComposerDirtyWrites();
+    expect(dirty).toHaveLength(1);
+    expect(dirty[0]?.chatId).toBe("chat-empty");
+    expect(dirty[0]?.draft.content).toEqual(TYPED);
+  });
+
+  // The lost-ACK case: typed once (so `revision` moved), that first upsert
+  // committed on the host but its reply never arrived (so `hostRevision` is
+  // still 0), then erased. A gate keyed on `hostRevision` would withhold this
+  // forever and leave the deleted content published.
+  it("still collects an erased draft whose first upsert never acked", () => {
+    useComposerDraftStore.setState({
+      drafts: {
+        "chat-synced": {
+          content: EMPTY,
+          selection: null,
+          browserAnnotations: [],
+          resetEpoch: 1,
+          revision: 2,
+          draftId: "draft-synced",
+          hostRevision: 0,
+          targetEpicId: "epic-1",
+          lastTouchedAt: 1,
+          generation: 2,
+          syncedGeneration: 1,
+          ownerHostId: "host-a",
+          origin: "own",
+          publication: null,
+        },
+      },
+    });
+
+    const dirty = collectComposerDirtyWrites();
+    expect(dirty).toHaveLength(1);
+    expect(dirty[0]?.chatId).toBe("chat-synced");
+    expect(dirty[0]?.draft.content).toEqual(EMPTY);
   });
 });

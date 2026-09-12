@@ -7,9 +7,14 @@ import {
   authorizesCloudCapability,
   useAuthStore,
 } from "@/stores/auth/auth-store";
-import { readCloudDraft } from "@/lib/drafts/cloud-draft-reader";
+import {
+  readCloudDraft,
+  type CloudDraftReadOutcome,
+} from "@/lib/drafts/cloud-draft-reader";
+import { appLogger, describeLogError } from "@/lib/logger";
 import { draftDocumentFromCloudHead } from "@/lib/drafts/cloud-draft-apply";
 import { ingestCloudDraftSummary } from "@/lib/drafts/draft-mirror-coordinator";
+import { recordCloudDraftKind } from "@/lib/drafts/cloud-draft-kinds";
 import { useCloudDraftsDirectory } from "./use-cloud-drafts-directory";
 
 /**
@@ -49,13 +54,37 @@ export function useCloudDraftsIngest(
       if (ingested.current.has(key)) continue;
       ingested.current.add(key);
       void (async () => {
-        const outcome = await readCloudDraft({
-          identity: summary.identity,
-          port,
-          sha256Hex: webCryptoSha256Hex,
-        });
-        if (scope.signal.aborted || outcome.kind !== "ok") return;
+        let outcome: CloudDraftReadOutcome;
+        try {
+          outcome = await readCloudDraft({
+            identity: summary.identity,
+            port,
+            sha256Hex: webCryptoSha256Hex,
+          });
+        } catch (error: unknown) {
+          // A transport failure must not leave this head marked handled. The
+          // listing hides a row whose kind it does not know, so a guard that
+          // survived a transient failure would hide a healthy draft for the
+          // lifetime of this mount. Releasing the key lets the next run of
+          // this effect ask again. (A SETTLED refusal - unpublished, corrupt,
+          // needs-newer-app - stays marked: it is terminal for this head, and
+          // a head that later publishes arrives under a new `headSha256`.)
+          ingested.current.delete(key);
+          appLogger.warn("[cloud-drafts] head read failed", {
+            error: describeLogError(error),
+          });
+          return;
+        }
+        if (scope.signal.aborted) {
+          ingested.current.delete(key);
+          return;
+        }
+        if (outcome.kind !== "ok") return;
         const document = draftDocumentFromCloudHead(summary, outcome.record);
+        // The head is the only place a row's surface kind is written, and this
+        // is the only read of it - record before the ingest decides, so a
+        // host-bound row the ingest declines is still known to the listing.
+        recordCloudDraftKind(summary.identity, document.kind);
         await ingestCloudDraftSummary({ hostId, summary, document });
       })();
     }
